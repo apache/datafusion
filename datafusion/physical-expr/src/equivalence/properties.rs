@@ -1123,7 +1123,6 @@ impl EquivalenceProperties {
         let mut eq_classes = vec![];
         for eq_class in self.eq_group.classes {
             let new_eq_exprs = eq_class
-                .into_vec()
                 .into_iter()
                 .map(|expr| with_new_schema(expr, &schema))
                 .collect::<Result<_>>()?;

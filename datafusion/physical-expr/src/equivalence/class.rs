@@ -27,6 +27,7 @@ use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::JoinType;
 use datafusion_physical_expr_common::physical_expr::format_physical_expr_list;
 
+use indexmap::set::IntoIter;
 use indexmap::IndexSet;
 
 /// A structure representing a expression known to be constant in a physical execution plan.
@@ -198,6 +199,15 @@ impl PartialEq for EquivalenceClass {
     /// of bags (multi-sets), disregarding their orderings.
     fn eq(&self, other: &Self) -> bool {
         self.exprs.eq(&other.exprs)
+    }
+}
+
+impl IntoIterator for EquivalenceClass {
+    type Item = Arc<dyn PhysicalExpr>;
+    type IntoIter = IntoIter<Arc<dyn PhysicalExpr>>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.exprs.into_iter()
     }
 }
 
