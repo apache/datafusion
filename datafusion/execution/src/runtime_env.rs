@@ -28,7 +28,7 @@ use crate::{
 
 use crate::cache::cache_manager::{CacheManager, CacheManagerConfig};
 use crate::dedicated_executor::DedicatedExecutor;
-use datafusion_common::{internal_datafusion_err, DataFusionError, Result};
+use datafusion_common::{DataFusionError, Result};
 use object_store::ObjectStore;
 use std::future::Future;
 use std::path::PathBuf;
@@ -37,7 +37,6 @@ use std::{
     fmt::{Debug, Formatter},
     num::NonZeroUsize,
 };
-use futures::TryFutureExt;
 use url::Url;
 
 #[derive(Clone)]
@@ -206,19 +205,18 @@ impl RuntimeEnv {
     {
         if let Some(dedicated_executor) = self.dedicated_executor() {
             println!("Running CPU on dedicated executor");
-            dedicated_executor.spawn(fut)
-                .await
-                .map_err( |e| DataFusionError::Context(
+            dedicated_executor.spawn(fut).await.map_err(|e| {
+                DataFusionError::Context(
                     "Join Error (panic)".to_string(),
                     Box::new(DataFusionError::External(e.into())),
-                ))
+                )
+            })
         } else {
             // otherwise run on the current runtime
             println!("Running CPU on current runtime");
             Ok(fut.await)
         }
     }
-
 }
 
 impl Default for RuntimeEnv {

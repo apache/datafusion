@@ -21,7 +21,6 @@
 //!
 //! [InfluxDB 3.0]: https://github.com/influxdata/influxdb3_core/tree/6fcbb004232738d55655f32f4ad2385523d10696/executor
 use crate::cross_rt_stream::CrossRtStream;
-use crate::io_object_store::IoObjectStore;
 use crate::stream::RecordBatchStreamAdapter;
 use crate::SendableRecordBatchStream;
 use datafusion_common::DataFusionError;
@@ -30,7 +29,6 @@ use futures::{
     Future, FutureExt, Stream, TryFutureExt,
 };
 use log::{info, warn};
-use object_store::ObjectStore;
 use parking_lot::RwLock;
 use std::cell::RefCell;
 use std::pin::Pin;
@@ -218,19 +216,6 @@ impl DedicatedExecutor {
         // wait for completion while not holding the mutex to avoid
         // deadlocks
         handle.await.expect("Thread died?")
-    }
-
-    /// Returns an ObjectStore instance that will always perform I/O work on the
-    /// IO_RUNTIME.
-    ///
-    /// Note that this object store will only work correctly if run on this
-    /// dedicated executor. If you try and use it on another executor, it will
-    /// panic with "no IO runtime registered" type error.
-    pub fn wrap_object_store(
-        &self,
-        object_store: Arc<dyn ObjectStore>,
-    ) -> Arc<IoObjectStore> {
-        Arc::new(IoObjectStore::new(self.clone(), object_store))
     }
 
     /// Returns a SendableRecordBatchStream that will run on this executor's thread pool

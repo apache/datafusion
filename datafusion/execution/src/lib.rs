@@ -25,7 +25,6 @@ pub mod config;
 pub mod cross_rt_stream;
 pub mod dedicated_executor;
 pub mod disk_manager;
-pub mod io_object_store;
 pub mod memory_pool;
 pub mod object_store;
 pub mod runtime_env;
