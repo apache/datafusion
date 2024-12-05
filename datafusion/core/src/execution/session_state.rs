@@ -43,6 +43,7 @@ use datafusion_common::{
     ResolvedTableReference, TableReference,
 };
 use datafusion_execution::config::SessionConfig;
+use datafusion_execution::dedicated_executor::{DedicatedExecutor, IO_RUNTIME};
 use datafusion_execution::runtime_env::RuntimeEnv;
 use datafusion_execution::TaskContext;
 use datafusion_expr::execution_props::ExecutionProps;
@@ -74,6 +75,7 @@ use std::any::Any;
 use std::collections::hash_map::Entry;
 use std::collections::{HashMap, HashSet};
 use std::fmt::Debug;
+use std::future::Future;
 use std::sync::Arc;
 use url::Url;
 use uuid::Uuid;
@@ -766,6 +768,17 @@ impl SessionState {
     /// Return the runtime env
     pub fn runtime_env(&self) -> &Arc<RuntimeEnv> {
         &self.runtime_env
+    }
+
+    /// Spawn a future that will do IO operations.
+    ///
+    /// See [`RuntimeEnv::spawn_io`] for more details
+    pub async fn spawn_io<Fut>(&self, fut: Fut) -> Fut::Output
+    where
+        Fut: Future + Send + 'static,
+        Fut::Output: Send,
+    {
+        self.runtime_env.spawn_io(fut).await
     }
 
     /// Return the execution properties

@@ -27,8 +27,10 @@ use crate::{
 };
 
 use crate::cache::cache_manager::{CacheManager, CacheManagerConfig};
+use crate::dedicated_executor::DedicatedExecutor;
 use datafusion_common::{DataFusionError, Result};
 use object_store::ObjectStore;
+use std::future::Future;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::{
@@ -76,6 +78,8 @@ pub struct RuntimeEnv {
     pub cache_manager: Arc<CacheManager>,
     /// Object Store Registry
     pub object_store_registry: Arc<dyn ObjectStoreRegistry>,
+    /// Optional dedicated executor
+    pub dedicated_executor: Option<DedicatedExecutor>,
 }
 
 impl Debug for RuntimeEnv {
@@ -155,6 +159,30 @@ impl RuntimeEnv {
             .get_store(url.as_ref())
             .map_err(DataFusionError::from)
     }
+
+    /// Return the current DedicatedExecutor
+    pub fn dedicated_executor(&self) -> Option<&DedicatedExecutor> {
+        self.dedicated_executor.as_ref()
+    }
+
+    /// Spawn a future that will do IO operations on the IO thread pool
+    /// if there is a [`DedicatedExecutor`] registered
+    ///
+    /// See [`DedicatedExecutor`] for more details
+    pub async fn spawn_io<Fut>(&self, fut: Fut) -> Fut::Output
+    where
+        Fut: Future + Send + 'static,
+        Fut::Output: Send,
+    {
+        if self.dedicated_executor().is_some() {
+            // TODO it is strange that the io thread is tied directly to a thread
+            // local rather than bound to an instance
+            DedicatedExecutor::spawn_io(fut).await
+        } else {
+            // otherwise run on the current runtime
+            fut.await
+        }
+    }
 }
 
 impl Default for RuntimeEnv {
@@ -183,6 +211,8 @@ pub struct RuntimeEnvBuilder {
     pub cache_manager: CacheManagerConfig,
     /// ObjectStoreRegistry to get object store based on url
     pub object_store_registry: Arc<dyn ObjectStoreRegistry>,
+    /// Optional dedicated executor
+    pub dedicated_executor: Option<DedicatedExecutor>,
 }
 
 impl Default for RuntimeEnvBuilder {
@@ -199,6 +229,7 @@ impl RuntimeEnvBuilder {
             memory_pool: Default::default(),
             cache_manager: Default::default(),
             object_store_registry: Arc::new(DefaultObjectStoreRegistry::default()),
+            dedicated_executor: None,
         }
     }
 
@@ -229,6 +260,15 @@ impl RuntimeEnvBuilder {
         self
     }
 
+    /// Customize [`DedicatedExecutor`] to be used for running queries
+    pub fn with_dedicated_executor(
+        mut self,
+        dedicated_executor: DedicatedExecutor,
+    ) -> Self {
+        self.dedicated_executor = Some(dedicated_executor);
+        self
+    }
+
     /// Specify the total memory to use while running the DataFusion
     /// plan to `max_memory * memory_fraction` in bytes.
     ///
@@ -255,6 +295,7 @@ impl RuntimeEnvBuilder {
             memory_pool,
             cache_manager,
             object_store_registry,
+            dedicated_executor,
         } = self;
         let memory_pool =
             memory_pool.unwrap_or_else(|| Arc::new(UnboundedMemoryPool::default()));
@@ -264,6 +305,7 @@ impl RuntimeEnvBuilder {
             disk_manager: DiskManager::try_new(disk_manager)?,
             cache_manager: CacheManager::try_new(&cache_manager)?,
             object_store_registry,
+            dedicated_executor,
         })
     }
 

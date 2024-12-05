@@ -121,6 +121,8 @@ impl From<Builder> for DedicatedExecutorBuilder {
 /// happens when a runtime is dropped from within an asynchronous
 /// context.', .../tokio-1.4.0/src/runtime/blocking/shutdown.rs:51:21
 ///
+/// TODO: make this an Arc<..> rather than an cloneable thing (to follow the smae
+/// pattern as the rest of the system)
 #[derive(Clone, Debug)]
 pub struct DedicatedExecutor {
     state: Arc<RwLock<State>>,
@@ -284,7 +286,7 @@ impl DedicatedExecutor {
     }
 
     /// Runs `fut` on the runtime registered by [`register_io_runtime`] if any,
-    /// otherwise awaits on the current thread
+    /// otherwise panics.
     ///
     /// # Panic
     /// Needs a IO runtime [registered](register_io_runtime).
