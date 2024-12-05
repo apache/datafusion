@@ -619,7 +619,7 @@ mod tests {
 
     use arrow::datatypes::{DataType as ArrowDataType, Field, Schema};
     use arrow_schema::Fields;
-    use datafusion_common::{Column, DFSchema, IndexMap, Result};
+    use datafusion_common::{Column, DFSchema, Result};
     use datafusion_expr::{
         col, lit, unnest, ColumnUnnestList, EmptyRelation, LogicalPlan,
     };
@@ -627,6 +627,7 @@ mod tests {
     use datafusion_functions_aggregate::expr_fn::count;
 
     use crate::utils::{resolve_positions_to_exprs, rewrite_recursive_unnest_bottom_up};
+    use indexmap::IndexMap;
 
     fn column_unnests_eq(
         l: Vec<&str>,
