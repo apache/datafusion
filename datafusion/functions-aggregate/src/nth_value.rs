@@ -28,7 +28,7 @@ use arrow_schema::{DataType, Field, Fields};
 
 use datafusion_common::utils::{get_row_at_idx, SingleRowListArrayBuilder};
 use datafusion_common::{exec_err, internal_err, not_impl_err, Result, ScalarValue};
-use datafusion_expr::aggregate_doc_sections::DOC_SECTION_STATISTICAL;
+use datafusion_doc::DocSection;
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::utils::format_state_name;
 use datafusion_expr::{
@@ -37,6 +37,7 @@ use datafusion_expr::{
 };
 use datafusion_functions_aggregate_common::merge_arrays::merge_ordered_arrays;
 use datafusion_functions_aggregate_common::utils::ordering_fields;
+use datafusion_macros::user_doc;
 use datafusion_physical_expr::expressions::Literal;
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
 
@@ -60,6 +61,32 @@ pub fn nth_value(
     }
 }
 
+#[user_doc(
+    doc_section(label = "Statistical Functions"),
+    description = "Returns the nth value in a group of values.",
+    syntax_example = "nth_value(expression, n ORDER BY expression)",
+    sql_example = r#"```sql
+> SELECT dept_id, salary, NTH_VALUE(salary, 2) OVER (PARTITION BY dept_id ORDER BY salary ASC) AS second_salary_by_dept
+  FROM employee;
++---------+--------+-------------------------+
+| dept_id | salary | second_salary_by_dept   |
++---------+--------+-------------------------+
+| 1       | 30000  | NULL                    |
+| 1       | 40000  | 40000                   |
+| 1       | 50000  | 40000                   |
+| 2       | 35000  | NULL                    |
+| 2       | 45000  | 45000                   |
++---------+--------+-------------------------+
+```"#,
+    argument(
+        name = "expression",
+        description = "The column or expression to retrieve the nth value from."
+    ),
+    argument(
+        name = "n",
+        description = "The position (nth) of the value to retrieve, based on the ordering."
+    )
+)]
 /// Expression for a `NTH_VALUE(... ORDER BY ..., ...)` aggregation. In a multi
 /// partition setting, partial aggregations are computed for every partition,
 /// and then their results are merged.
@@ -165,36 +192,8 @@ impl AggregateUDFImpl for NthValueAgg {
     }
 
     fn documentation(&self) -> Option<&Documentation> {
-        Some(get_nth_value_doc())
+        self.doc()
     }
-}
-
-static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
-
-fn get_nth_value_doc() -> &'static Documentation {
-    DOCUMENTATION.get_or_init(|| {
-        Documentation::builder(
-            DOC_SECTION_STATISTICAL,
-                "Returns the nth value in a group of values.",
-
-            "nth_value(expression, n ORDER BY expression)")
-            .with_sql_example(r#"```sql
-> SELECT dept_id, salary, NTH_VALUE(salary, 2) OVER (PARTITION BY dept_id ORDER BY salary ASC) AS second_salary_by_dept
-  FROM employee;
-+---------+--------+-------------------------+
-| dept_id | salary | second_salary_by_dept   |
-+---------+--------+-------------------------+
-| 1       | 30000  | NULL                    |
-| 1       | 40000  | 40000                   |
-| 1       | 50000  | 40000                   |
-| 2       | 35000  | NULL                    |
-| 2       | 45000  | 45000                   |
-+---------+--------+-------------------------+
-```"#)
-            .with_argument("expression", "The column or expression to retrieve the nth value from.")
-            .with_argument("n", "The position (nth) of the value to retrieve, based on the ordering.")
-            .build()
-    })
 }
 
 #[derive(Debug)]
