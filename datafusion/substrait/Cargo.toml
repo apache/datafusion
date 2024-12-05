@@ -26,7 +26,7 @@ repository = { workspace = true }
 license = { workspace = true }
 authors = { workspace = true }
 # Specify MSRV here as `cargo msrv` doesn't support workspace version
-rust-version = "1.80"
+rust-version = "1.80.1"
 
 [lints]
 workspace = true
@@ -42,9 +42,7 @@ object_store = { workspace = true }
 pbjson-types = "0.7"
 # TODO use workspace version
 prost = "0.13"
-# The MSRV of substrait@0.49.5 is 1.80.1, which is higher than ours.
-# TODO: Update this version constraint when DataFusion updates its MSRV.
-substrait = { version = ">=0.49.0, <0.49.5", features = ["serde"] }
+substrait = { version = "0.49", features = ["serde"] }
 url = { workspace = true }
 
 [dev-dependencies]
