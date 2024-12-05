@@ -518,7 +518,7 @@ impl EquivalenceGroup {
                 // and the equivalence class `(a, b)`, expression `b` projects to `a1`.
                 if self
                     .get_equivalence_class(source)
-                    .map_or(false, |group| group.contains(expr))
+                    .is_some_and(|group| group.contains(expr))
                 {
                     return Some(Arc::clone(target));
                 }
