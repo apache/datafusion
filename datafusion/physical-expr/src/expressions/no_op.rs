@@ -18,7 +18,7 @@
 //! NoOp placeholder for physical operations
 
 use std::any::Any;
-use std::hash::Hash;
+use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
 use arrow::{
@@ -27,6 +27,7 @@ use arrow::{
 };
 
 use crate::PhysicalExpr;
+use datafusion_common::cse::HashNode;
 use datafusion_common::{internal_err, Result};
 use datafusion_expr::ColumnarValue;
 
@@ -77,4 +78,8 @@ impl PhysicalExpr for NoOp {
     ) -> Result<Arc<dyn PhysicalExpr>> {
         Ok(self)
     }
+}
+
+impl HashNode for NoOp {
+    fn hash_node<H: Hasher>(&self, _state: &mut H) {}
 }
