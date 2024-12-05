@@ -65,6 +65,9 @@ impl Documentation {
     }
 
     /// Output the `Documentation` struct in form of custom Rust documentation attributes
+    /// It is useful to semi automate during tmigration of UDF documentation
+    /// generation from code based to attribute based and can be safely removed after
+    /// Temporary method useful to semi automate
     pub fn to_doc_attribute(&self) -> String {
         let mut result = String::new();
 
