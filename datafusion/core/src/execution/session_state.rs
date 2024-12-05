@@ -43,7 +43,6 @@ use datafusion_common::{
     ResolvedTableReference, TableReference,
 };
 use datafusion_execution::config::SessionConfig;
-use datafusion_execution::dedicated_executor::{DedicatedExecutor, IO_RUNTIME};
 use datafusion_execution::runtime_env::RuntimeEnv;
 use datafusion_execution::TaskContext;
 use datafusion_expr::execution_props::ExecutionProps;

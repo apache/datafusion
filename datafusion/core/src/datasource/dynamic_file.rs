@@ -63,7 +63,6 @@ impl UrlTableFactory for DynamicListTableFactory {
 
         let runtime_env = Arc::clone(&session.read().runtime_env());
 
-        // Do remove catalog operations
         let Some(state) = session
             .read()
             .as_any()
@@ -72,34 +71,26 @@ impl UrlTableFactory for DynamicListTableFactory {
         else {
             return internal_err!("Expected SessionState, got something else");
         };
-        let config = runtime_env
+
+        // Do remove catalog operations on a different runtime
+        runtime_env
             .spawn_io(async move {
-                ListingTableConfig::new(table_url.clone())
+                match ListingTableConfig::new(table_url.clone())
                     .infer_options(&state)
                     .await
+                {
+                    Ok(cfg) => {
+                        let cfg = cfg
+                            .infer_partitions_from_path(&state)
+                            .await?
+                            .infer_schema(&state)
+                            .await?;
+                        ListingTable::try_new(cfg)
+                            .map(|table| Some(Arc::new(table) as Arc<dyn TableProvider>))
+                    }
+                    Err(_) => Ok(None),
+                }
             })
-            .await;
-
-        let Some(state) = session
-            .read()
-            .as_any()
-            .downcast_ref::<SessionState>()
-            .cloned()
-        else {
-            return internal_err!("Expected SessionState, got something else");
-        };
-
-        match config {
-            Ok(cfg) => {
-                let cfg = cfg
-                    .infer_partitions_from_path(&state)
-                    .await?
-                    .infer_schema(&state)
-                    .await?;
-                ListingTable::try_new(cfg)
-                    .map(|table| Some(Arc::new(table) as Arc<dyn TableProvider>))
-            }
-            Err(_) => Ok(None),
-        }
+            .await
     }
 }
