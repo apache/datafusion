@@ -251,7 +251,7 @@ async fn test_row_mismatch_error_in_scalar_udf() -> Result<()> {
             .err()
             .unwrap()
             .to_string(),
-        "UDF returned a different number of rows than expected"
+        "Internal error: UDF buggy_func returned a different number of rows than expected. Expected: 2, Got: 1"
     );
     Ok(())
 }
