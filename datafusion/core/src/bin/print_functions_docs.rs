@@ -88,6 +88,7 @@ fn print_window_docs() -> Result<String> {
 // the migration of UDF documentation generation from code based
 // to attribute based
 // To be removed
+#[allow(dead_code)]
 fn save_doc_code_text(documentation: &Documentation, name: &str) {
     let attr_text = documentation.to_doc_attribute();
 
