@@ -131,9 +131,10 @@ Rust versions](https://releases.rs) OR the stable minor Rust version as of 4 mon
 
 For example, given the releases `1.78.0`, `1.79.0`, `1.80.0`, `1.80.1` and `1.81.0` DataFusion will support 1.78.0, which is 3 minor versions prior to the most minor recent `1.81`.
 
-If a hotfix is released for the minimum supported Rust version (MSRV), the MSRV will be the minor version with all hotfixes, even if it surpasses the four-month window.
+Note: If a Rust hotfix is released for the currently supported Minimum Supported Rust Version (MSRV), the MSRV will be updated to the specific minor version that includes all applicable hotfixes. This adjustment will apply even if the release of the hotfix occurs earlier the stipulated four-month support window for a given Rust version.
+This approach ensures that DataFusion operates on the most stable Rust version available for the supported major version
 
-We enforce this policy using a [MSRV CI Check](https://github.com/search?q=repo%3Aapache%2Fdatafusion+rust-version+language%3ATOML+path%3A%2F%5ECargo.toml%2F&type=code)
+DataFusion enforces MSRV policy using a [MSRV CI Check](https://github.com/search?q=repo%3Aapache%2Fdatafusion+rust-version+language%3ATOML+path%3A%2F%5ECargo.toml%2F&type=code)
 
 ## DataFusion API evolution policy
 
