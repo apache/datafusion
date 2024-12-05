@@ -130,12 +130,12 @@ The Rust toolchain releases are tracked at [Rust Versions](https://releases.rs) 
 [semantic versioning](https://semver.org/). A Rust toolchain release can be identified
 by a version string like `1.80.0`, or more generally `major.minor.patch`.
 
-The Minimum Supported Rust Version (MSRV) policy defines the MSRV as the earliest stable Rust version released either 
+The Minimum Supported Rust Version (MSRV) policy defines the MSRV as the earliest stable Rust version released either
 within the last four months or from the last four stable [Rust releases](https://releases.rs), whichever has the older release date.
 
 For example, given the releases `1.78.0`, `1.79.0`, `1.80.0`, `1.80.1` and `1.81.0` DataFusion will support 1.78.0, which is 3 minor versions prior to the most minor recent `1.81`.
 
-Note: If a Rust hotfix is released for the current MSRV, the MSRV will be updated to the specific minor version that includes all applicable hotfixes preceding other policies. 
+Note: If a Rust hotfix is released for the current MSRV, the MSRV will be updated to the specific minor version that includes all applicable hotfixes preceding other policies.
 
 DataFusion enforces MSRV policy using a [MSRV CI Check](https://github.com/search?q=repo%3Aapache%2Fdatafusion+rust-version+language%3ATOML+path%3A%2F%5ECargo.toml%2F&type=code)
 
