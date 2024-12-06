@@ -39,7 +39,7 @@ use datafusion_expr::{Documentation, ScalarUDFImpl, Signature, Volatility};
 use regex::Regex;
 use std::any::Any;
 use std::collections::HashMap;
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, LazyLock, OnceLock};
 
 #[derive(Debug)]
 pub struct RegexpReplaceFunc {
@@ -188,11 +188,9 @@ fn regexp_replace_func(args: &[ColumnarValue]) -> Result<ArrayRef> {
 /// replace POSIX capture groups (like \1) with Rust Regex group (like ${1})
 /// used by regexp_replace
 fn regex_replace_posix_groups(replacement: &str) -> String {
-    fn capture_groups_re() -> &'static Regex {
-        static CAPTURE_GROUPS_RE_LOCK: OnceLock<Regex> = OnceLock::new();
-        CAPTURE_GROUPS_RE_LOCK.get_or_init(|| Regex::new(r"(\\)(\d*)").unwrap())
-    }
-    capture_groups_re()
+    static CAPTURE_GROUPS_RE_LOCK: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r"(\\)(\d*)").unwrap());
+    CAPTURE_GROUPS_RE_LOCK
         .replace_all(replacement, "$${$2}")
         .into_owned()
 }
