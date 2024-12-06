@@ -19,6 +19,7 @@
 // of the Spark-specific compatibility features that we need (including
 // being able to specify Spark-compatible cast from all types to string)
 
+use crate::cast::SparkCastOptions;
 use crate::{spark_cast, EvalMode};
 use arrow_array::builder::StringBuilder;
 use arrow_array::{Array, ArrayRef, RecordBatch, StringArray, StructArray};
@@ -117,9 +118,7 @@ fn array_to_json_string(arr: &Arc<dyn Array>, timezone: &str) -> Result<ArrayRef
         spark_cast(
             ColumnarValue::Array(Arc::clone(arr)),
             &DataType::Utf8,
-            EvalMode::Legacy,
-            timezone,
-            false,
+            &SparkCastOptions::new(EvalMode::Legacy, timezone, false),
         )?
         .into_array(arr.len())
     }

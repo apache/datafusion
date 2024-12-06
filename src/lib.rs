@@ -34,7 +34,7 @@ pub mod timezone;
 mod to_json;
 pub mod utils;
 
-pub use cast::{spark_cast, Cast};
+pub use cast::{spark_cast, Cast, SparkCastOptions};
 pub use error::{SparkError, SparkResult};
 pub use if_expr::IfExpr;
 pub use list::{ArrayInsert, GetArrayStructFields, ListExtract};
@@ -47,7 +47,7 @@ pub use to_json::ToJson;
 /// the behavior when processing input values that are invalid or would result in an
 /// error, such as divide by zero errors, and also affects behavior when converting
 /// between types.
-#[derive(Debug, Hash, PartialEq, Clone, Copy)]
+#[derive(Debug, Hash, PartialEq, Eq, Clone, Copy)]
 pub enum EvalMode {
     /// Legacy is the default behavior in Spark prior to Spark 4.0. This mode silently ignores
     /// or replaces errors during SQL operations. Operations resulting in errors (like
