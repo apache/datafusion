@@ -101,14 +101,14 @@ fn regex_match_benchmark(c: &mut Criterion) {
                 let mut group = c.benchmark_group(group_name.as_str());
                 // binary expr match benchmarks
                 group.bench_function("binary_expr_match", |b| {
-                    let expr = binary(
-                        string_col.clone(),
-                        Operator::RegexMatch,
-                        regexp_lit.clone(),
-                        &schema,
-                    )
-                    .unwrap();
                     b.iter(|| {
+                        let expr = binary(
+                            string_col.clone(),
+                            Operator::RegexMatch,
+                            regexp_lit.clone(),
+                            &schema,
+                        )
+                        .unwrap();
                         for _ in 0..run_time {
                             expr.evaluate(black_box(batch)).unwrap();
                         }
@@ -116,15 +116,15 @@ fn regex_match_benchmark(c: &mut Criterion) {
                 });
                 // scalar regex match benchmarks
                 group.bench_function("scalar_regex_match", |b| {
-                    let expr = scalar_regex_match(
-                        false,
-                        false,
-                        string_col.clone(),
-                        regexp_lit.clone(),
-                        &schema,
-                    )
-                    .unwrap();
                     b.iter(|| {
+                        let expr = scalar_regex_match(
+                            false,
+                            false,
+                            string_col.clone(),
+                            regexp_lit.clone(),
+                            &schema,
+                        )
+                        .unwrap();
                         for _ in 0..run_time {
                             expr.evaluate(black_box(batch)).unwrap();
                         }
