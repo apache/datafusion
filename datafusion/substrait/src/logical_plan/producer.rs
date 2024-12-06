@@ -56,6 +56,7 @@ use datafusion::prelude::Expr;
 use pbjson_types::Any as ProtoAny;
 use substrait::proto::exchange_rel::{ExchangeKind, RoundRobin, ScatterFields};
 use substrait::proto::expression::cast::FailureBehavior;
+use substrait::proto::expression::field_reference::{RootReference, RootType};
 use substrait::proto::expression::literal::interval_day_to_second::PrecisionMode;
 use substrait::proto::expression::literal::map::KeyValue;
 use substrait::proto::expression::literal::{
@@ -70,7 +71,6 @@ use substrait::proto::rel_common::EmitKind::Emit;
 use substrait::proto::{
     rel_common, ExchangeRel, ExpressionReference, ExtendedExpression, RelCommon,
 };
-use substrait::proto::expression::field_reference::{RootReference, RootType};
 use substrait::{
     proto::{
         aggregate_function::AggregationInvocation,
@@ -2151,7 +2151,7 @@ fn try_to_substrait_field_reference(
                         }),
                     )),
                 })),
-                root_type: Some(RootType::RootReference(RootReference{}) ),
+                root_type: Some(RootType::RootReference(RootReference {})),
             })
         }
         _ => substrait_err!("Expect a `Column` expr, but found {expr:?}"),
@@ -2193,7 +2193,7 @@ fn substrait_field_ref(index: usize) -> Result<Expression> {
                     }),
                 )),
             })),
-            root_type: Some(RootType::RootReference(RootReference{}) ),
+            root_type: Some(RootType::RootReference(RootReference {})),
         }))),
     })
 }
@@ -2424,18 +2424,16 @@ mod test {
         Ok(())
     }
 
-
     #[test]
-    fn to_field_reference() -> Result<()>{
-        let expression = substrait_field_ref(2)? ;
+    fn to_field_reference() -> Result<()> {
+        let expression = substrait_field_ref(2)?;
 
         match &expression.rex_type {
             Some(RexType::Selection(field_ref)) => {
                 assert_ne!(field_ref.root_type, None);
-                
-            },
+            }
 
-            _ => assert!(false),
+            _ => panic!("Should not be anything other than field reference"),
         }
         Ok(())
     }
