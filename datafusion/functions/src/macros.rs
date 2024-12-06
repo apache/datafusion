@@ -74,7 +74,7 @@ macro_rules! make_udf_function {
         #[doc = "Return a [`ScalarUDF`](datafusion_expr::ScalarUDF) implementation "]
         #[doc = stringify!($UDF)]
         pub fn $NAME() -> std::sync::Arc<datafusion_expr::ScalarUDF> {
-            /// Singleton instance of the function
+            // Singleton instance of the function
             static $GNAME: std::sync::LazyLock<
                 std::sync::Arc<datafusion_expr::ScalarUDF>,
             > = std::sync::LazyLock::new(|| {

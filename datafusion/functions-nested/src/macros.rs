@@ -88,7 +88,7 @@ macro_rules! create_func {
             #[doc = concat!("ScalarFunction that returns a [`ScalarUDF`](datafusion_expr::ScalarUDF) for ")]
             #[doc = stringify!($UDF)]
             pub fn $SCALAR_UDF_FN() -> std::sync::Arc<datafusion_expr::ScalarUDF> {
-                /// Singleton instance of [`$UDF`], ensures the UDF is only created once
+                // Singleton instance of [`$UDF`], ensures the UDF is only created once
                 static INSTANCE: std::sync::LazyLock<std::sync::Arc<datafusion_expr::ScalarUDF>> =
                     std::sync::LazyLock::new(|| {
                         std::sync::Arc::new(datafusion_expr::ScalarUDF::new_from_impl(

@@ -67,7 +67,7 @@ macro_rules! create_func {
         paste::paste! {
             #[doc = concat!("AggregateFunction that returns a [`AggregateUDF`](datafusion_expr::AggregateUDF) for [`", stringify!($UDAF), "`]")]
             pub fn $AGGREGATE_UDF_FN() -> std::sync::Arc<datafusion_expr::AggregateUDF> {
-                /// Singleton instance of [$UDAF], ensures the UDAF is only created once
+                // Singleton instance of [$UDAF], ensures the UDAF is only created once
                 static INSTANCE: std::sync::LazyLock<std::sync::Arc<datafusion_expr::AggregateUDF>> =
                     std::sync::LazyLock::new(|| {
                         std::sync::Arc::new(datafusion_expr::AggregateUDF::from($CREATE))
