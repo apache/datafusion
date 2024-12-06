@@ -110,7 +110,7 @@ async fn query_parquet_demo() -> Result<()> {
         .filter(df.parse_sql_expr("int_col < 5 OR double_col = 8.0")?)?
         .aggregate(
             vec![df.parse_sql_expr("double_col")?],
-            vec![df.parse_sql_expr("SUM(int_col)")?],
+            vec![df.parse_sql_expr("SUM(int_col) as sum_int_col")?],
         )?
         // Directly parsing the SQL text into a sort expression is not supported yet, so
         // construct it programmatically
@@ -121,11 +121,11 @@ async fn query_parquet_demo() -> Result<()> {
 
     assert_batches_eq!(
         &[
-            "+------------+----------------------+",
-            "| double_col | sum(?table?.int_col) |",
-            "+------------+----------------------+",
-            "| 10.1       | 4                    |",
-            "+------------+----------------------+",
+            "+------------+-------------+",
+            "| double_col | sum_int_col |",
+            "+------------+-------------+",
+            "| 10.1       | 4           |",
+            "+------------+-------------+",
         ],
         &result
     );
