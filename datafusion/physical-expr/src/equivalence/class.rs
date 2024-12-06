@@ -17,8 +17,8 @@
 
 use super::{add_offset_to_expr, collapse_lex_req, ProjectionMapping};
 use crate::{
-    expressions::Column, LexOrdering, LexRequirement,
-    PhysicalExpr, PhysicalExprRef, PhysicalSortExpr, PhysicalSortRequirement,
+    expressions::Column, LexOrdering, LexRequirement, PhysicalExpr, PhysicalExprRef,
+    PhysicalSortExpr, PhysicalSortRequirement,
 };
 use std::fmt::Display;
 use std::sync::Arc;
@@ -253,10 +253,7 @@ impl EquivalenceClass {
 
     /// Inserts all the expressions from other into this class
     pub fn extend(&mut self, other: Self) {
-        for expr in other.exprs {
-            // use push so entries are deduplicated
-            self.push(expr);
-        }
+        self.exprs.extend(other.exprs);
     }
 
     /// Returns true if this equivalence class contains t expression

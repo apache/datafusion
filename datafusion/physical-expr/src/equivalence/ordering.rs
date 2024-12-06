@@ -264,7 +264,6 @@ mod tests {
     use crate::utils::tests::TestScalarUDF;
     use crate::{ConstExpr, PhysicalExpr, PhysicalSortExpr};
 
-    use arrow::compute::kernels::cmp::eq;
     use arrow::datatypes::{DataType, Field, Schema};
     use arrow_schema::SortOptions;
     use datafusion_common::{DFSchema, Result};
