@@ -1,4 +1,4 @@
-CREATE EXTERNAL TABLE cars
+CREATE EXTERNAL TABLE CARS
 STORED AS CSV
 OPTIONS(
     'aws.access_key_id' 'test',
@@ -9,4 +9,4 @@ OPTIONS(
 )
 LOCATION 's3://test-bucket/cars.csv';
 
-select * from cars limit 1;
+SELECT * FROM CARS limit 1;

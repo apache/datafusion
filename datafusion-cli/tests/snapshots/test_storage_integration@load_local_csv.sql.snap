@@ -1,9 +1,9 @@
 ---
-source: tests/snaphots.rs
+source: tests/cli_integration.rs
 info:
   program: datafusion-cli
   args: []
-  stdin: "CREATE EXTERNAL TABLE cars\nSTORED AS CSV\nLOCATION '../datafusion/core/tests/data/cars.csv'\nOPTIONS ('has_header' 'TRUE');\n\nselect * from cars limit 1;"
+  stdin: "CREATE EXTERNAL TABLE CARS\nSTORED AS CSV\nLOCATION '../datafusion/core/tests/data/cars.csv'\nOPTIONS ('has_header' 'TRUE');\n\nSELECT * FROM CARS limit 1;"
 input_file: tests/sql/load_local_csv.sql
 ---
 success: true
