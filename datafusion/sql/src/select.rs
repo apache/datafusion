@@ -22,10 +22,13 @@ use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 use crate::utils::{
     check_columns_satisfy_exprs, extract_aliases, rebase_expr, resolve_aliases_to_exprs,
     resolve_columns, resolve_positions_to_exprs, rewrite_recursive_unnests_bottom_up,
+    CheckColumnsSatisfyExprsPurpose,
 };
 
 use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
-use datafusion_common::{not_impl_err, plan_err, Result};
+use datafusion_common::{
+    not_impl_err, plan_err, Diagnostic, DiagnosticEntry, DiagnosticEntryKind, Result,
+};
 use datafusion_common::{RecursionUnnestOption, UnnestOptions};
 use datafusion_expr::expr::{Alias, PlannedReplaceSelectItem, WildcardOptions};
 use datafusion_expr::expr_rewriter::{
@@ -44,6 +47,7 @@ use sqlparser::ast::{
     WildcardAdditionalOptions, WindowType,
 };
 use sqlparser::ast::{NamedWindowDefinition, Select, SelectItem, TableWithJoins};
+use sqlparser::tokenizer::Span;
 
 impl<S: ContextProvider> SqlToRel<'_, S> {
     /// Generate a logic plan from an SQL select
@@ -803,8 +807,17 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         check_columns_satisfy_exprs(
             &column_exprs_post_aggr,
             &select_exprs_post_aggr,
-            "Projection references non-aggregate values",
-        )?;
+            CheckColumnsSatisfyExprsPurpose::GroupBy,
+        )
+        .map_err(|err| {
+            err.with_diagnostic(|_| {
+                Diagnostic::new([DiagnosticEntry::new(
+                    "GROUP BY clause is here",
+                    DiagnosticEntryKind::Note,
+                    Span::union_iter(group_by_exprs.iter().filter_map(|e| e.get_span())),
+                )])
+            })
+        })?;
 
         // Rewrite the HAVING expression to use the columns produced by the
         // aggregation.
@@ -815,7 +828,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             check_columns_satisfy_exprs(
                 &column_exprs_post_aggr,
                 std::slice::from_ref(&having_expr_post_aggr),
-                "HAVING clause references non-aggregate values",
+                CheckColumnsSatisfyExprsPurpose::Having,
             )?;
 
             Some(having_expr_post_aggr)

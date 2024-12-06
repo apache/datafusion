@@ -204,7 +204,7 @@ fn signature<'a>(
                     if lhs.span == Span::empty() || rhs.span == Span::empty() {
                         err
                     } else {
-                        err.with_diagnostic(Diagnostic {
+                        err.with_diagnostic(|_| Diagnostic {
                             entries: vec![
                                 DiagnosticEntry {
                                     kind: DiagnosticEntryKind::Error,

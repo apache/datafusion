@@ -26,8 +26,8 @@ use datafusion_common::tree_node::{
     Transformed, TransformedResult, TreeNode, TreeNodeRecursion, TreeNodeRewriter,
 };
 use datafusion_common::{
-    exec_err, internal_err, plan_err, Column, DFSchemaRef, DataFusionError, HashMap,
-    Result, ScalarValue,
+    exec_err, internal_err, plan_err, Column, DFSchemaRef, DataFusionError, Diagnostic,
+    DiagnosticEntry, DiagnosticEntryKind, HashMap, Result, ScalarValue,
 };
 use datafusion_expr::builder::get_struct_unnested_columns;
 use datafusion_expr::expr::{Alias, GroupingSet, Unnest, WindowFunction};
@@ -37,6 +37,7 @@ use datafusion_expr::{
 };
 use indexmap::IndexMap;
 use sqlparser::ast::{Ident, Value};
+use sqlparser::tokenizer::Span;
 
 /// Make a best-effort attempt at resolving all columns in the expression tree
 pub(crate) fn resolve_columns(expr: &Expr, plan: &LogicalPlan) -> Result<Expr> {
@@ -89,12 +90,29 @@ pub(crate) fn rebase_expr(
         .data()
 }
 
+/// Why [`check_columns_satisfy_exprs`] is called. Helps build better error
+/// messages.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CheckColumnsSatisfyExprsPurpose {
+    GroupBy,
+    Having,
+}
+
+impl CheckColumnsSatisfyExprsPurpose {
+    fn get_error_message(&self) -> &'static str {
+        match self {
+            CheckColumnsSatisfyExprsPurpose::GroupBy => "Projection references non-aggregate values",
+            CheckColumnsSatisfyExprsPurpose::Having => "HAVING clause references non-aggregate values",
+        }
+    }
+}
+
 /// Determines if the set of `Expr`'s are a valid projection on the input
 /// `Expr::Column`'s.
 pub(crate) fn check_columns_satisfy_exprs(
     columns: &[Expr],
     exprs: &[Expr],
-    message_prefix: &str,
+    call_purpose: CheckColumnsSatisfyExprsPurpose,
 ) -> Result<()> {
     columns.iter().try_for_each(|c| match c {
         Expr::Column(_) => Ok(()),
@@ -105,22 +123,22 @@ pub(crate) fn check_columns_satisfy_exprs(
         match e {
             Expr::GroupingSet(GroupingSet::Rollup(exprs)) => {
                 for e in exprs {
-                    check_column_satisfies_expr(columns, e, message_prefix)?;
+                    check_column_satisfies_expr(columns, e, call_purpose)?;
                 }
             }
             Expr::GroupingSet(GroupingSet::Cube(exprs)) => {
                 for e in exprs {
-                    check_column_satisfies_expr(columns, e, message_prefix)?;
+                    check_column_satisfies_expr(columns, e, call_purpose)?;
                 }
             }
             Expr::GroupingSet(GroupingSet::GroupingSets(lists_of_exprs)) => {
                 for exprs in lists_of_exprs {
                     for e in exprs {
-                        check_column_satisfies_expr(columns, e, message_prefix)?;
+                        check_column_satisfies_expr(columns, e, call_purpose)?;
                     }
                 }
             }
-            _ => check_column_satisfies_expr(columns, e, message_prefix)?,
+            _ => check_column_satisfies_expr(columns, e, call_purpose)?,
         }
     }
     Ok(())
@@ -129,15 +147,32 @@ pub(crate) fn check_columns_satisfy_exprs(
 fn check_column_satisfies_expr(
     columns: &[Expr],
     expr: &Expr,
-    message_prefix: &str,
+    call_purpose: CheckColumnsSatisfyExprsPurpose,
 ) -> Result<()> {
     if !columns.contains(expr) {
         return plan_err!(
             "{}: Expression {} could not be resolved from available columns: {}",
-            message_prefix,
+            call_purpose.get_error_message(),
             expr,
             expr_vec_fmt!(columns)
-        );
+        )
+        .map_err(|err| {
+            let message = match call_purpose {
+                CheckColumnsSatisfyExprsPurpose::GroupBy => format!("'{}' in projection does not appear in GROUP BY clause", expr.to_string()),
+                CheckColumnsSatisfyExprsPurpose::Having => format!("'{}' in HAVING clause does not appear in GROUP BY clause", expr.to_string()),
+            };
+            err.with_diagnostic(|_| {
+                Diagnostic::new([DiagnosticEntry::new(
+                    message,
+                    DiagnosticEntryKind::Error,
+                    expr.get_span().unwrap_or(Span::empty()),
+                ),DiagnosticEntry::new(
+                    format!("Add '{}' to GROUP BY clause", expr.to_string()),
+                    DiagnosticEntryKind::Help,
+                    Span::empty(),
+                )])
+            })
+        });
     }
     Ok(())
 }

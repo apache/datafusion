@@ -12,10 +12,47 @@ pub struct DiagnosticEntry {
     pub kind: DiagnosticEntryKind,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DiagnosticEntryKind {
     Error,
     Warning,
     Note,
     Help,
+}
+
+impl Diagnostic {
+    pub fn new(entries: impl IntoIterator<Item = DiagnosticEntry>) -> Self {
+        Diagnostic {
+            entries: entries.into_iter().collect(),
+        }
+    }
+}
+
+impl FromIterator<DiagnosticEntry> for Diagnostic {
+    fn from_iter<T: IntoIterator<Item = DiagnosticEntry>>(iter: T) -> Self {
+        Diagnostic {
+            entries: iter.into_iter().collect(),
+        }
+    }
+}
+
+impl DiagnosticEntry {
+    pub fn new(
+        message: impl Into<String>,
+        kind: DiagnosticEntryKind,
+        span: Span,
+    ) -> Self {
+        DiagnosticEntry {
+            span,
+            message: message.into(),
+            kind,
+        }
+    }
+
+    pub fn new_without_span(
+        message: impl Into<String>,
+        kind: DiagnosticEntryKind,
+    ) -> Self {
+        Self::new(message, kind, Span::empty())
+    }
 }

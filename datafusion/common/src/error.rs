@@ -28,7 +28,7 @@ use std::sync::Arc;
 
 use crate::diagnostic::Diagnostic;
 use crate::utils::quote_identifier;
-use crate::{Column, DFSchema, TableReference};
+use crate::{Column, DFSchema, DiagnosticEntry, DiagnosticEntryKind, TableReference};
 #[cfg(feature = "avro")]
 use apache_avro::Error as AvroError;
 use arrow::error::ArrowError;
@@ -376,8 +376,12 @@ impl DataFusionError {
     }
 
     /// wraps self in Self::Diagnostic with a [`Diagnostic`]
-    pub fn with_diagnostic(self, diag: Diagnostic) -> Self {
-        Self::Diagnostic(diag, Box::new(self))
+    pub fn with_diagnostic<F: FnOnce(&DataFusionError) -> Diagnostic>(
+        self,
+        f: F,
+    ) -> Self {
+        let diagnostic = f(&self);
+        Self::Diagnostic(diagnostic, Box::new(self))
     }
 
     /// Strips backtrace out of the error message
