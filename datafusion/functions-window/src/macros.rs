@@ -102,18 +102,16 @@ macro_rules! get_or_init_udwf {
             #[doc = concat!(" Singleton instance of [`", stringify!($OUT_FN_NAME), "`], ensures the user-defined")]
             #[doc = concat!(" window function is only created once.")]
             #[allow(non_upper_case_globals)]
-            static [<STATIC_ $UDWF>]: std::sync::OnceLock<std::sync::Arc<datafusion_expr::WindowUDF>> =
-                std::sync::OnceLock::new();
+            static [<STATIC_ $UDWF>]: std::sync::LazyLock<std::sync::Arc<datafusion_expr::WindowUDF>> =
+                std::sync::LazyLock::new(|| {
+                    std::sync::Arc::new(datafusion_expr::WindowUDF::from($CTOR()))
+                });
 
             #[doc = concat!(" Returns a [`WindowUDF`](datafusion_expr::WindowUDF) for [`", stringify!($OUT_FN_NAME), "`].")]
             #[doc = ""]
             #[doc = concat!(" ", $DOC)]
             pub fn [<$OUT_FN_NAME _udwf>]() -> std::sync::Arc<datafusion_expr::WindowUDF> {
-                [<STATIC_ $UDWF>]
-                    .get_or_init(|| {
-                        std::sync::Arc::new(datafusion_expr::WindowUDF::from($CTOR()))
-                    })
-                    .clone()
+                std::sync::Arc::clone(&[<STATIC_ $UDWF>])
             }
         }
     };

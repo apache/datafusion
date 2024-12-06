@@ -20,7 +20,7 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::sync::OnceLock;
+use std::sync::LazyLock;
 use structopt::StructOpt;
 
 use arrow::record_batch::RecordBatch;
@@ -91,7 +91,13 @@ struct QueryResult {
 /// Memory limits to run: 64MiB, 32MiB, 16MiB
 /// Q2 requires 250MiB for aggregation
 /// Memory limits to run: 512MiB, 256MiB, 128MiB, 64MiB, 32MiB
-static QUERY_MEMORY_LIMITS: OnceLock<HashMap<usize, Vec<u64>>> = OnceLock::new();
+static QUERY_MEMORY_LIMITS: LazyLock<HashMap<usize, Vec<u64>>> = LazyLock::new(|| {
+    use units::*;
+    let mut map = HashMap::new();
+    map.insert(1, vec![64 * MB, 32 * MB, 16 * MB]);
+    map.insert(2, vec![512 * MB, 256 * MB, 128 * MB, 64 * MB, 32 * MB]);
+    map
+});
 
 impl ExternalAggrConfig {
     const AGGR_TABLES: [&'static str; 1] = ["lineitem"];
@@ -113,16 +119,6 @@ impl ExternalAggrConfig {
         )
         "#,
     ];
-
-    fn init_query_memory_limits() -> &'static HashMap<usize, Vec<u64>> {
-        use units::*;
-        QUERY_MEMORY_LIMITS.get_or_init(|| {
-            let mut map = HashMap::new();
-            map.insert(1, vec![64 * MB, 32 * MB, 16 * MB]);
-            map.insert(2, vec![512 * MB, 256 * MB, 128 * MB, 64 * MB, 32 * MB]);
-            map
-        })
-    }
 
     /// If `--query` and `--memory-limit` is not speicified, run all queries
     /// with pre-configured memory limits
@@ -161,8 +157,7 @@ impl ExternalAggrConfig {
                     query_executions.push((query_id, limit));
                 }
                 None => {
-                    let memory_limits_table = Self::init_query_memory_limits();
-                    let memory_limits = memory_limits_table.get(&query_id).unwrap();
+                    let memory_limits = QUERY_MEMORY_LIMITS.get(&query_id).unwrap();
                     for limit in memory_limits {
                         query_executions.push((query_id, *limit));
                     }
