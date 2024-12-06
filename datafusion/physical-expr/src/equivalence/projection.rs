@@ -96,7 +96,7 @@ impl ProjectionMapping {
         ProjectionMapping::try_new(&projection_exprs, schema)
     }
 
-    /// Iterate over the mapping.
+    /// Iterate over pairs of (source, target) expressions
     pub fn iter(
         &self,
     ) -> impl Iterator<Item = (&Arc<dyn PhysicalExpr>, &Arc<dyn PhysicalExpr>)> {
