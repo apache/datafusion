@@ -27,7 +27,7 @@ use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::JoinType;
 use datafusion_physical_expr_common::physical_expr::format_physical_expr_list;
 
-use indexmap::IndexSet;
+use indexmap::{IndexMap, IndexSet};
 
 /// A structure representing a expression known to be constant in a physical execution plan.
 ///
@@ -546,20 +546,15 @@ impl EquivalenceGroup {
                 .collect::<Vec<_>>();
             (new_class.len() > 1).then_some(EquivalenceClass::new(new_class))
         });
-        // TODO: Convert the algorithm below to a version that uses `HashMap`.
-        //       once `Arc<dyn PhysicalExpr>` can be stored in `HashMap`.
-        // See issue: https://github.com/apache/datafusion/issues/8027
-        let mut new_classes = vec![];
+        let mut new_classes: IndexMap<Arc<dyn PhysicalExpr>, Vec<Arc<dyn PhysicalExpr>>> =
+            IndexMap::new();
         for (source, target) in mapping.iter() {
-            if new_classes.is_empty() {
-                new_classes.push((source, vec![Arc::clone(target)]));
-            }
-            if let Some((_, values)) =
-                new_classes.iter_mut().find(|(key, _)| *key == source)
-            {
+            if let Some(values) = new_classes.get_mut(source) {
                 if !physical_exprs_contains(values, target) {
                     values.push(Arc::clone(target));
                 }
+            } else {
+                new_classes.insert(Arc::clone(source), vec![Arc::clone(target)]);
             }
         }
         // Only add equivalence classes with at least two members as singleton
