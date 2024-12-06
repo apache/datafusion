@@ -1124,9 +1124,8 @@ impl EquivalenceProperties {
         for eq_class in self.eq_group.classes {
             let new_eq_exprs = eq_class
                 .into_iter()
-                .map(|expr| with_new_schema(expr, &schema))
-                .collect::<Result<_>>()?;
-            eq_classes.push(EquivalenceClass::new(new_eq_exprs));
+                .map(|expr| with_new_schema(expr, &schema).unwrap());
+            eq_classes.push(EquivalenceClass::from_iter(new_eq_exprs));
         }
 
         // Construct the resulting equivalence properties:

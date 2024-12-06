@@ -17,7 +17,7 @@
 
 use super::{add_offset_to_expr, collapse_lex_req, ProjectionMapping};
 use crate::{
-    expressions::Column, physical_exprs_contains, LexOrdering, LexRequirement,
+    expressions::Column, LexOrdering, LexRequirement,
     PhysicalExpr, PhysicalExprRef, PhysicalSortExpr, PhysicalSortRequirement,
 };
 use std::fmt::Display;
@@ -211,6 +211,14 @@ impl IntoIterator for EquivalenceClass {
     }
 }
 
+impl FromIterator<Arc<dyn PhysicalExpr>> for EquivalenceClass {
+    fn from_iter<T: IntoIterator<Item = Arc<dyn PhysicalExpr>>>(iter: T) -> Self {
+        Self {
+            exprs: iter.into_iter().collect(),
+        }
+    }
+}
+
 impl EquivalenceClass {
     /// Create a new empty equivalence class
     pub fn new_empty() -> Self {
@@ -279,13 +287,12 @@ impl EquivalenceClass {
     /// Return a new equivalence class that have the specified offset added to
     /// each expression (used when schemas are appended such as in joins)
     pub fn with_offset(&self, offset: usize) -> Self {
-        let new_exprs = self
+        let new_exprs_iter = self
             .exprs
             .iter()
             .cloned()
-            .map(|e| add_offset_to_expr(e, offset))
-            .collect();
-        Self::new(new_exprs)
+            .map(|e| add_offset_to_expr(e, offset));
+        Self::from_iter(new_exprs_iter)
     }
 }
 
@@ -562,22 +569,20 @@ impl EquivalenceGroup {
         let mut new_classes = vec![];
         for (source, target) in mapping.iter() {
             if new_classes.is_empty() {
-                new_classes.push((source, vec![Arc::clone(target)]));
+                new_classes
+                    .push((source, EquivalenceClass::new(vec![Arc::clone(target)])));
             }
             if let Some((_, values)) =
                 new_classes.iter_mut().find(|(key, _)| *key == source)
             {
-                if !physical_exprs_contains(values, target) {
-                    values.push(Arc::clone(target));
-                }
+                values.push(Arc::clone(target));
             }
         }
         // Only add equivalence classes with at least two members as singleton
         // equivalence classes are meaningless.
         let new_classes = new_classes
             .into_iter()
-            .filter_map(|(_, values)| (values.len() > 1).then_some(values))
-            .map(EquivalenceClass::new);
+            .filter_map(|(_, values)| (values.len() > 1).then_some(values));
 
         let classes = projected_classes.chain(new_classes).collect();
         Self::new(classes)
