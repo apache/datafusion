@@ -43,6 +43,8 @@ use datafusion_expr::{
     expr::{Alias, Exists, InList, ScalarFunction, Sort, WindowFunction},
     Between, BinaryExpr, Case, Cast, Expr, GroupingSet, Like, Operator, TryCast,
 };
+use sqlparser::ast::helpers::attached_token::AttachedToken;
+use sqlparser::tokenizer::Span;
 
 /// Convert a DataFusion [`Expr`] to [`ast::Expr`]
 ///
@@ -233,6 +235,7 @@ impl Unparser<'_> {
                     name: ObjectName(vec![Ident {
                         value: func_name.to_string(),
                         quote_style: None,
+                        span: Span::empty(),
                     }]),
                     args: ast::FunctionArguments::List(ast::FunctionArgumentList {
                         duplicate_treatment: None,
@@ -278,6 +281,7 @@ impl Unparser<'_> {
                     name: ObjectName(vec![Ident {
                         value: func_name.to_string(),
                         quote_style: None,
+                        span: Span::empty(),
                     }]),
                     args: ast::FunctionArguments::List(ast::FunctionArgumentList {
                         duplicate_treatment: agg
@@ -404,12 +408,16 @@ impl Unparser<'_> {
             }
             // TODO: unparsing wildcard addition options
             Expr::Wildcard { qualifier, .. } => {
+                let attached_token = AttachedToken::empty();
                 if let Some(qualifier) = qualifier {
                     let idents: Vec<Ident> =
                         qualifier.to_vec().into_iter().map(Ident::new).collect();
-                    Ok(ast::Expr::QualifiedWildcard(ObjectName(idents)))
+                    Ok(ast::Expr::QualifiedWildcard(
+                        ObjectName(idents),
+                        attached_token,
+                    ))
                 } else {
-                    Ok(ast::Expr::Wildcard)
+                    Ok(ast::Expr::Wildcard(attached_token))
                 }
             }
             Expr::GroupingSet(grouping_set) => match grouping_set {
@@ -480,6 +488,7 @@ impl Unparser<'_> {
             name: ObjectName(vec![Ident {
                 value: func_name.to_string(),
                 quote_style: None,
+                span: Span::empty(),
             }]),
             args: ast::FunctionArguments::List(ast::FunctionArgumentList {
                 duplicate_treatment: None,
@@ -709,6 +718,7 @@ impl Unparser<'_> {
         Ident {
             value: ident,
             quote_style,
+            span: Span::empty(),
         }
     }
 
@@ -716,6 +726,7 @@ impl Unparser<'_> {
         Ident {
             value: str,
             quote_style: None,
+            span: Span::empty(),
         }
     }
 
@@ -1481,6 +1492,7 @@ impl Unparser<'_> {
             name: ObjectName(vec![Ident {
                 value: "UNNEST".to_string(),
                 quote_style: None,
+                span: Span::empty(),
             }]),
             args: ast::FunctionArguments::List(ast::FunctionArgumentList {
                 duplicate_treatment: None,

@@ -42,7 +42,7 @@ use datafusion_expr::{
     expr::Alias, BinaryExpr, Distinct, Expr, JoinConstraint, JoinType, LogicalPlan,
     LogicalPlanBuilder, Operator, Projection, SortExpr, TableScan,
 };
-use sqlparser::ast::{self, Ident, SetExpr};
+use sqlparser::ast::{self, Ident, SetExpr, TableAliasColumnDef};
 use std::sync::Arc;
 
 /// Convert a DataFusion [`LogicalPlan`] to [`ast::Statement`]
@@ -1018,6 +1018,13 @@ impl Unparser<'_> {
     }
 
     fn new_table_alias(&self, alias: String, columns: Vec<Ident>) -> ast::TableAlias {
+        let columns = columns
+            .into_iter()
+            .map(|ident| TableAliasColumnDef {
+                name: ident,
+                data_type: None,
+            })
+            .collect();
         ast::TableAlias {
             name: self.new_ident_quoted_if_needs(alias),
             columns,
