@@ -17,8 +17,8 @@
 
 use super::{add_offset_to_expr, collapse_lex_req, ProjectionMapping};
 use crate::{
-    expressions::Column, physical_exprs_contains, LexOrdering, LexRequirement,
-    PhysicalExpr, PhysicalExprRef, PhysicalSortExpr, PhysicalSortRequirement,
+    expressions::Column, LexOrdering, LexRequirement, PhysicalExpr, PhysicalExprRef,
+    PhysicalSortExpr, PhysicalSortRequirement,
 };
 use std::fmt::Display;
 use std::sync::Arc;
@@ -546,25 +546,20 @@ impl EquivalenceGroup {
                 .collect::<Vec<_>>();
             (new_class.len() > 1).then_some(EquivalenceClass::new(new_class))
         });
-        // the key is the source expression and the value is the target expression from the ProjectionMapping
-        let mut new_classes: IndexMap<Arc<dyn PhysicalExpr>, Vec<Arc<dyn PhysicalExpr>>> =
+        // the key is the source expression and the value is the EquivalenceClass that contains the target expression of the source expression.
+        let mut new_classes: IndexMap<Arc<dyn PhysicalExpr>, EquivalenceClass> =
             IndexMap::new();
-        for (source, target) in mapping.iter() {
-            // Check if the source expression already exists in the new_classes map
-            if let Some(values) = new_classes.get_mut(source) {
-                if !physical_exprs_contains(values, target) {
-                    values.push(Arc::clone(target));
-                }
-            } else {
-                new_classes.insert(Arc::clone(source), vec![Arc::clone(target)]);
-            }
-        }
+        mapping.iter().for_each(|(source, target)| {
+            new_classes
+                .entry(Arc::clone(source))
+                .or_insert_with(EquivalenceClass::new_empty)
+                .push(Arc::clone(target));
+        });
         // Only add equivalence classes with at least two members as singleton
         // equivalence classes are meaningless.
         let new_classes = new_classes
             .into_iter()
-            .filter_map(|(_, values)| (values.len() > 1).then_some(values))
-            .map(EquivalenceClass::new);
+            .filter_map(|(_, cls)| (cls.len() > 1).then_some(cls));
 
         let classes = projected_classes.chain(new_classes).collect();
         Self::new(classes)
