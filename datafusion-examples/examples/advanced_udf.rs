@@ -290,7 +290,7 @@ async fn main() -> Result<()> {
         .unwrap_err();
     assert_eq!(
         err.to_string(),
-        "Execution error: Could not reuse array for pow_in_place"
+        "Execution error: Could not reuse array for maybe_pow_in_place"
     );
 
     Ok(())
