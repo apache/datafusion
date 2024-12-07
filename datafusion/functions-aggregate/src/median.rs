@@ -22,8 +22,9 @@ use std::sync::Arc;
 
 use arrow::array::{
     downcast_integer, ArrowNumericType, BooleanArray, GenericListBuilder,
-    GenericListViewArray,
+    GenericListViewArray, ListArray, ListBuilder, PrimitiveArray, PrimitiveBuilder,
 };
+use arrow::buffer::{OffsetBuffer, ScalarBuffer};
 use arrow::{
     array::{ArrayRef, AsArray},
     datatypes::{
@@ -235,21 +236,23 @@ impl<T: ArrowNumericType> Accumulator for MedianAccumulator<T> {
     }
 }
 
-/// The median accumulator accumulates the raw input values
-/// as `ScalarValue`s
+/// The median groups accumulator accumulates the raw input values
 ///
-/// The intermediate state is represented as a List of scalar values updated by
-/// `merge_batch` and a `Vec` of `ArrayRef` that are converted to scalar values
-/// in the final evaluation step so that we avoid expensive conversions and
-/// allocations during `update_batch`.
+/// For calculating the accurate medians of groups, we need to store all values
+/// of groups before final evaluation.
+/// And values in each group will be stored in a `Vec<T>`, so the total group values
+/// will be actually organized as a `Vec<Vec<T>>`.
+///
+/// In partial aggregation stage, the `values`
+///
 #[derive(Debug)]
-struct MedianGroupAccumulator<T: ArrowNumericType + Send> {
+struct MedianGroupsAccumulator<T: ArrowNumericType + Send> {
     data_type: DataType,
     group_values: Vec<Vec<T::Native>>,
     null_state: NullState,
 }
 
-impl<T: ArrowNumericType + Send> MedianGroupAccumulator<T> {
+impl<T: ArrowNumericType + Send> MedianGroupsAccumulator<T> {
     pub fn new(data_type: DataType) -> Self {
         Self {
             data_type,
@@ -259,7 +262,7 @@ impl<T: ArrowNumericType + Send> MedianGroupAccumulator<T> {
     }
 }
 
-impl<T: ArrowNumericType + Send> GroupsAccumulator for MedianGroupAccumulator<T> {
+impl<T: ArrowNumericType + Send> GroupsAccumulator for MedianGroupsAccumulator<T> {
     fn update_batch(
         &mut self,
         values: &[ArrayRef],
@@ -295,7 +298,7 @@ impl<T: ArrowNumericType + Send> GroupsAccumulator for MedianGroupAccumulator<T>
     ) -> Result<()> {
         assert_eq!(values.len(), 1, "one argument to merge_batch");
 
-        // The merged values should be organized like as a `ListArray` like:
+        // The merged values should be organized like as a `non-nullable ListArray` like:
         //
         // ```text
         //   group 0: [1, 2, 3]
@@ -306,26 +309,55 @@ impl<T: ArrowNumericType + Send> GroupsAccumulator for MedianGroupAccumulator<T>
         // ```
         //
         let input_group_values = values[0].as_list::<i32>();
+        assert!(input_group_values.null_count() == 0);
 
-        // Adds the counts with the partial counts
+        // Ensure group values big enough
+        self.group_values.resize(total_num_groups, Vec::new());
+
+        // Extend values to related groups
         group_indices
             .iter()
             .zip(input_group_values.iter())
             .for_each(|(&group_index, values_opt)| {
-                if let Some(values) = values_opt {
-                    let values = values.as_primitive::<T>();
-                    self.group_values[group_index].extend(values.values().iter());
-                }
+                let values = values_opt.unwrap();
+                let values = values.as_primitive::<T>();
+                self.group_values[group_index].extend(values.values().iter());
             });
 
         Ok(())
     }
 
-    fn evaluate(&mut self, emit_to: EmitTo) -> Result<ArrayRef> {
-        todo!()
+    fn state(&mut self, emit_to: EmitTo) -> Result<Vec<ArrayRef>> {
+        let emit_group_values = emit_to.take_needed(&mut self.group_values);
+
+        // Build offsets
+        let mut offsets = Vec::with_capacity(self.group_values.len() + 1);
+        offsets.push(0);
+        let mut cur_len = 0;
+        for group_value in &emit_group_values {
+            cur_len += group_value.len() as i32;
+            offsets.push(cur_len);
+        }
+        let offsets = OffsetBuffer::new(ScalarBuffer::from(offsets));
+
+        // Build inner array
+        let flatten_group_values =
+            emit_group_values.into_iter().flatten().collect::<Vec<_>>();
+        let group_values_array =
+            PrimitiveArray::<T>::new(ScalarBuffer::from(flatten_group_values), None);
+
+        // Build the result list array
+        let result_list_array = ListArray::new(
+            Arc::new(Field::new_list_field(self.data_type.clone(), false)),
+            offsets,
+            Arc::new(group_values_array),
+            None,
+        );
+
+        Ok(vec![Arc::new(result_list_array)])
     }
 
-    fn state(&mut self, emit_to: EmitTo) -> Result<Vec<ArrayRef>> {
+    fn evaluate(&mut self, emit_to: EmitTo) -> Result<ArrayRef> {
         todo!()
     }
 
