@@ -85,7 +85,7 @@ impl ScalarUDFImpl for PowUdf {
         Ok(DataType::Float64)
     }
 
-    /// This function actually calculates the results of the scalar argument
+    /// This function actually calculates the results of the scalar function.
     ///
     /// This is the same way that functions provided with DataFusion are invoked,
     /// which permits important special cases:
@@ -164,7 +164,7 @@ impl ScalarUDFImpl for PowUdf {
             ) => {
                 let res = match base {
                     None => new_null_array(exp_array.data_type(), exp_array.len()),
-                    Some(base) => pow_in_place(base, exp_array)?,
+                    Some(base) => maybe_pow_in_place(base, exp_array)?,
                 };
                 Ok(ColumnarValue::Array(res))
             }
@@ -172,7 +172,7 @@ impl ScalarUDFImpl for PowUdf {
             // for every row
             //
             // Note this could also be done in place using `binary_mut` as
-            // is done in `pow_in_place` but here we use binary for simplicity
+            // is done in `maybe_pow_in_place` but here we use binary for simplicity
             (ColumnarValue::Array(base_array), ColumnarValue::Array(exp_array)) => {
                 let res: Float64Array = compute::binary(
                     base_array.as_primitive::<Float64Type>(),
@@ -200,7 +200,7 @@ impl ScalarUDFImpl for PowUdf {
 }
 
 /// Evaluate `base ^ exp` *without* allocating a new array, if possible
-fn pow_in_place(base: f64, exp_array: ArrayRef) -> Result<ArrayRef> {
+fn maybe_pow_in_place(base: f64, exp_array: ArrayRef) -> Result<ArrayRef> {
     // Calling `unary` creates a new array for the results. Avoiding
     // allocations is a common optimization in performance critical code.
     // arrow-rs allows this optimization via the `unary_mut`
@@ -209,7 +209,7 @@ fn pow_in_place(base: f64, exp_array: ArrayRef) -> Result<ArrayRef> {
     // These kernels can only be used if there are no other references to
     // the arrays (exp_array has to be the last remaining reference).
     let owned_array = exp_array
-        // as before we downcast to Float64Array
+        // as in the previous example, we first downcast to &Float64Array
         .as_primitive::<Float64Type>()
         // non-obviously, we call clone here to get an owned `Float64Array`.
         // Calling clone() is relatively inexpensive as it increments
@@ -219,15 +219,16 @@ fn pow_in_place(base: f64, exp_array: ArrayRef) -> Result<ArrayRef> {
         // exp_array (untyped) reference
         .clone();
 
-    // We *MUST* drop this reference explicitly so that owned_array
-    // is the last remaining reference
+    // We *MUST* drop the reference to `exp_array` explicitly so that
+    // owned_array is the only reference remaining in this function.
+    //
+    // Note that depending on the query there may still be other references
+    // to the underlying buffers, which would prevent reuse. The only way to
+    // know for sure is the result of `compute::unary_mut`
     drop(exp_array);
 
-    // at this point, exp_array is the only reference in this function. However,
-    // depending on the query there may be other references to this array.
-    //
-    // If we have the only reference, compute the result
-    // directly into the same allocation as was used for the input array
+    // If we have the only reference, compute the result directly into the same
+    // allocation as was used for the input array
     match compute::unary_mut(owned_array, |exp| base.powf(exp)) {
         Err(_orig_array) => {
             // unary_mut will return the original array if there are other
@@ -235,9 +236,9 @@ fn pow_in_place(base: f64, exp_array: ArrayRef) -> Result<ArrayRef> {
             // impossible)
             //
             // In a real implementation, this case should fall back to
-            // calling `unary` and allocate a new array; In our example
+            // calling `unary` and allocate a new array; In this example
             // we will return an error for demonstration purposes
-            exec_err!("Could not reuse array for pow_in_place")
+            exec_err!("Could not reuse array for maybe_pow_in_place")
         }
         // a result of OK means the operation was run successfully
         Ok(res) => Ok(Arc::new(res)),
