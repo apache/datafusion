@@ -161,8 +161,8 @@ impl PhysicalExpr for ScalarFunctionExpr {
                 return if preserve_scalar {
                     ScalarValue::try_from_array(array, 0).map(ColumnarValue::Scalar)
                 } else {
-                    internal_err!("UDF returned a different number of rows than expected. Expected: {}, Got: {}",
-                            batch.num_rows(), array.len())
+                    internal_err!("UDF {} returned a different number of rows than expected. Expected: {}, Got: {}",
+                            self.name, batch.num_rows(), array.len())
                 };
             }
         }

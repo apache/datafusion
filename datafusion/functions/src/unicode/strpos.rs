@@ -173,13 +173,13 @@ where
                 // the sub vector in the main vector. This is faster than string.find() method.
                 if ascii_only {
                     // If the substring is empty, the result is 1.
-                    if substring.as_bytes().is_empty() {
+                    if substring.is_empty() {
                         T::Native::from_usize(1)
                     } else {
                         T::Native::from_usize(
                             string
                                 .as_bytes()
-                                .windows(substring.as_bytes().len())
+                                .windows(substring.len())
                                 .position(|w| w == substring.as_bytes())
                                 .map(|x| x + 1)
                                 .unwrap_or(0),

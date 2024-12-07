@@ -32,7 +32,7 @@ use datafusion::datasource::listing::{
 };
 use datafusion::datasource::{MemTable, TableProvider};
 use datafusion::error::Result;
-use datafusion::execution::runtime_env::RuntimeConfig;
+use datafusion::execution::SessionStateBuilder;
 use datafusion::physical_plan::display::DisplayableExecutionPlan;
 use datafusion::physical_plan::{displayable, execute_stream};
 use datafusion::prelude::*;
@@ -188,9 +188,11 @@ impl RunOpt {
     /// Benchmark query `query_id` in `SORT_QUERIES`
     async fn benchmark_query(&self, query_id: usize) -> Result<Vec<QueryResult>> {
         let config = self.common.config();
-
-        let runtime_config = RuntimeConfig::new().build_arc()?;
-        let ctx = SessionContext::new_with_config_rt(config, runtime_config);
+        let state = SessionStateBuilder::new()
+            .with_config(config)
+            .with_default_features()
+            .build();
+        let ctx = SessionContext::from(state);
 
         // register tables
         self.register_tables(&ctx).await?;

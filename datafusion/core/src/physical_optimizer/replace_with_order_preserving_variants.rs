@@ -162,7 +162,7 @@ fn plan_with_order_breaking_variants(
         // not required by intermediate operators:
         if maintains
             && (is_sort_preserving_merge(plan)
-                || !required_ordering.map_or(false, |required_ordering| {
+                || !required_ordering.is_some_and(|required_ordering| {
                     node.plan
                         .equivalence_properties()
                         .ordering_satisfy_requirement(&required_ordering)

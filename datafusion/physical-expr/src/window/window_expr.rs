@@ -28,11 +28,13 @@ use arrow::compute::SortOptions;
 use arrow::datatypes::Field;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::utils::compare_rows;
-use datafusion_common::{internal_err, DataFusionError, IndexMap, Result, ScalarValue};
+use datafusion_common::{internal_err, DataFusionError, Result, ScalarValue};
 use datafusion_expr::window_state::{
     PartitionBatchState, WindowAggState, WindowFrameContext, WindowFrameStateGroups,
 };
 use datafusion_expr::{Accumulator, PartitionEvaluator, WindowFrame, WindowFrameBound};
+
+use indexmap::IndexMap;
 
 /// Common trait for [window function] implementations
 ///

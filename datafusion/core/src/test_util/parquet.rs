@@ -103,7 +103,17 @@ impl TestParquetFile {
 
         let size = std::fs::metadata(&path)?.len() as usize;
 
-        let canonical_path = path.canonicalize()?;
+        let mut canonical_path = path.canonicalize()?;
+
+        if cfg!(target_os = "windows") {
+            canonical_path = canonical_path
+                .to_str()
+                .unwrap()
+                .replace("\\", "/")
+                .strip_prefix("//?/")
+                .unwrap()
+                .into();
+        };
 
         let object_store_url =
             ListingTableUrl::parse(canonical_path.to_str().unwrap_or_default())?
