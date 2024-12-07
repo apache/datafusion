@@ -19,46 +19,63 @@ use std::sync::Arc;
 
 use arrow_array::{RecordBatch, StringArray};
 use arrow_schema::{DataType, Field, Schema};
-use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use criterion::{criterion_group, criterion_main, Criterion};
 use datafusion_expr_common::operator::Operator;
 use datafusion_physical_expr::{
     expressions::{binary, col, lit, scalar_regex_match},
     PhysicalExpr,
 };
-use rand::distributions::{Alphanumeric, DistString};
+use rand::{
+    distributions::{Alphanumeric, DistString},
+    rngs::StdRng,
+    SeedableRng,
+};
 
 /// make a record batch with one column and n rows
 /// this record batch is single string column is used for
 /// scalar regex match benchmarks
-fn make_record_batch(rows: usize, string_length: usize, schema: Schema) -> RecordBatch {
-    let mut rng = rand::thread_rng();
-    let mut array = Vec::with_capacity(rows);
-    for _ in 0..rows {
-        let data_line = Alphanumeric.sample_string(&mut rng, string_length);
-        array.push(Some(data_line));
+fn make_record_batch(
+    batch_iter: usize,
+    batch_size: usize,
+    string_len: usize,
+    schema: &Schema,
+) -> Vec<RecordBatch> {
+    let mut rng = StdRng::from_seed([123; 32]);
+    let mut batches = vec![];
+    for _ in 0..batch_iter {
+        let array = (0..batch_size)
+            .map(|_| Some(Alphanumeric.sample_string(&mut rng, string_len)))
+            .collect::<Vec<_>>();
+        let array = StringArray::from(array);
+        let batch = RecordBatch::try_new(Arc::new(schema.clone()), vec![Arc::new(array)])
+            .unwrap();
+        batches.push(batch);
     }
-    let array = StringArray::from(array);
-    RecordBatch::try_new(Arc::new(schema), vec![Arc::new(array)]).unwrap()
+    batches
 }
 
 /// initialize benchmark data and pattern literals
 #[allow(clippy::type_complexity)]
 fn init_benchmark() -> (
-    Vec<(usize, RecordBatch)>,
+    Vec<(usize, usize, Vec<RecordBatch>)>,
     Schema,
     Arc<dyn PhysicalExpr>,
     Vec<(String, Arc<dyn PhysicalExpr>)>,
 ) {
     // make common schema
-    let column = "string";
+    let column = "s";
     let schema = Schema::new(vec![Field::new(column, DataType::Utf8, true)]);
 
     // meke test record batch
     let batch_data = vec![
-        // (10_usize, make_record_batch(10, 100, schema.clone())),
-        // (100_usize, make_record_batch(100, 100, schema.clone())),
-        // (1000_usize, make_record_batch(1000, 100, schema.clone())),
-        (2000_usize, make_record_batch(2000, 100, schema.clone())),
+        // (20, 10_usize, make_record_batch(20, 10, 100, schema.clone())),
+        // (20, 100_usize, make_record_batch(20, 100, 100, schema.clone())),
+        // (20, 1000_usize, make_record_batch(20, 1000, 100, schema.clone())),
+        (
+            128_usize,
+            4096_usize,
+            make_record_batch(128, 4096, 100, &schema),
+        ),
     ];
 
     // string column
@@ -91,47 +108,45 @@ fn init_benchmark() -> (
 
 fn regex_match_benchmark(c: &mut Criterion) {
     let (batch_data, schema, string_col, pattern_lit) = init_benchmark();
-    // let record_batch_run_times = [10, 20, 50, 100];
-    let record_batch_run_times = [10];
     for (name, regexp_lit) in pattern_lit.iter() {
-        for (rows, batch) in batch_data.iter() {
-            for run_time in record_batch_run_times {
-                let group_name =
-                    format!("regex_{}_rows_{}_run_time_{}", name, rows, run_time);
-                let mut group = c.benchmark_group(group_name.as_str());
-                // binary expr match benchmarks
-                group.bench_function("binary_expr_match", |b| {
-                    b.iter(|| {
-                        let expr = binary(
-                            string_col.clone(),
-                            Operator::RegexMatch,
-                            regexp_lit.clone(),
-                            &schema,
-                        )
-                        .unwrap();
-                        for _ in 0..run_time {
-                            expr.evaluate(black_box(batch)).unwrap();
-                        }
-                    });
+        for (batch_iter, batch_size, batches) in batch_data.iter() {
+            let group_name = format!(
+                "regex_{}_batch_iter_{}_batch_size_{}",
+                name, batch_iter, batch_size
+            );
+            let mut group = c.benchmark_group(group_name.as_str());
+            // binary expr match benchmarks
+            group.bench_function("binary_expr_match", |b| {
+                b.iter(|| {
+                    let expr = binary(
+                        string_col.clone(),
+                        Operator::RegexMatch,
+                        regexp_lit.clone(),
+                        &schema,
+                    )
+                    .unwrap();
+                    for batch in batches.iter() {
+                        expr.evaluate(batch).unwrap();
+                    }
                 });
-                // scalar regex match benchmarks
-                group.bench_function("scalar_regex_match", |b| {
-                    b.iter(|| {
-                        let expr = scalar_regex_match(
-                            false,
-                            false,
-                            string_col.clone(),
-                            regexp_lit.clone(),
-                            &schema,
-                        )
-                        .unwrap();
-                        for _ in 0..run_time {
-                            expr.evaluate(black_box(batch)).unwrap();
-                        }
-                    });
+            });
+            // scalar regex match benchmarks
+            group.bench_function("scalar_regex_match", |b| {
+                b.iter(|| {
+                    let expr = scalar_regex_match(
+                        false,
+                        false,
+                        string_col.clone(),
+                        regexp_lit.clone(),
+                        &schema,
+                    )
+                    .unwrap();
+                    for batch in batches.iter() {
+                        expr.evaluate(batch).unwrap();
+                    }
                 });
-                group.finish();
-            }
+            });
+            group.finish();
         }
     }
 }
