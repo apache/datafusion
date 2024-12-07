@@ -20,7 +20,10 @@ use std::fmt::{Debug, Formatter};
 use std::mem::{size_of, size_of_val};
 use std::sync::Arc;
 
-use arrow::array::{downcast_integer, ArrowNumericType};
+use arrow::array::{
+    downcast_integer, ArrowNumericType, BooleanArray, GenericListBuilder,
+    GenericListViewArray,
+};
 use arrow::{
     array::{ArrayRef, AsArray},
     datatypes::{
@@ -39,8 +42,10 @@ use datafusion_expr::{
     function::AccumulatorArgs, utils::format_state_name, Accumulator, AggregateUDFImpl,
     Documentation, Signature, Volatility,
 };
+use datafusion_expr::{EmitTo, GroupsAccumulator};
 use datafusion_functions_aggregate_common::utils::Hashable;
 use datafusion_macros::user_doc;
+use datafusion_physical_expr::NullState;
 
 make_udaf_expr_and_func!(
     Median,
@@ -227,6 +232,117 @@ impl<T: ArrowNumericType> Accumulator for MedianAccumulator<T> {
 
     fn size(&self) -> usize {
         size_of_val(self) + self.all_values.capacity() * size_of::<T::Native>()
+    }
+}
+
+/// The median accumulator accumulates the raw input values
+/// as `ScalarValue`s
+///
+/// The intermediate state is represented as a List of scalar values updated by
+/// `merge_batch` and a `Vec` of `ArrayRef` that are converted to scalar values
+/// in the final evaluation step so that we avoid expensive conversions and
+/// allocations during `update_batch`.
+#[derive(Debug)]
+struct MedianGroupAccumulator<T: ArrowNumericType + Send> {
+    data_type: DataType,
+    group_values: Vec<Vec<T::Native>>,
+    null_state: NullState,
+}
+
+impl<T: ArrowNumericType + Send> MedianGroupAccumulator<T> {
+    pub fn new(data_type: DataType) -> Self {
+        Self {
+            data_type,
+            group_values: Vec::new(),
+            null_state: NullState::new(),
+        }
+    }
+}
+
+impl<T: ArrowNumericType + Send> GroupsAccumulator for MedianGroupAccumulator<T> {
+    fn update_batch(
+        &mut self,
+        values: &[ArrayRef],
+        group_indices: &[usize],
+        opt_filter: Option<&BooleanArray>,
+        total_num_groups: usize,
+    ) -> Result<()> {
+        assert_eq!(values.len(), 1, "single argument to update_batch");
+        let values = values[0].as_primitive::<T>();
+
+        // increment counts, update sums
+        self.group_values.resize(total_num_groups, Vec::new());
+        self.null_state.accumulate(
+            group_indices,
+            values,
+            opt_filter,
+            total_num_groups,
+            |group_index, new_value| {
+                self.group_values[group_index].push(new_value);
+            },
+        );
+
+        Ok(())
+    }
+
+    fn merge_batch(
+        &mut self,
+        values: &[ArrayRef],
+        group_indices: &[usize],
+        // Since aggregate filter should be applied in partial stage, in final stage there should be no filter
+        _opt_filter: Option<&BooleanArray>,
+        total_num_groups: usize,
+    ) -> Result<()> {
+        assert_eq!(values.len(), 1, "one argument to merge_batch");
+
+        // The merged values should be organized like as a `ListArray` like:
+        //
+        // ```text
+        //   group 0: [1, 2, 3]
+        //   group 1: [4, 5]
+        //   group 2: [6, 7, 8]
+        //   ...
+        //   group n: [...]
+        // ```
+        //
+        let input_group_values = values[0].as_list::<i32>();
+
+        // Adds the counts with the partial counts
+        group_indices
+            .iter()
+            .zip(input_group_values.iter())
+            .for_each(|(&group_index, values_opt)| {
+                if let Some(values) = values_opt {
+                    let values = values.as_primitive::<T>();
+                    self.group_values[group_index].extend(values.values().iter());
+                }
+            });
+
+        Ok(())
+    }
+
+    fn evaluate(&mut self, emit_to: EmitTo) -> Result<ArrayRef> {
+        todo!()
+    }
+
+    fn state(&mut self, emit_to: EmitTo) -> Result<Vec<ArrayRef>> {
+        todo!()
+    }
+
+    fn convert_to_state(
+        &self,
+        values: &[ArrayRef],
+        opt_filter: Option<&BooleanArray>,
+    ) -> Result<Vec<ArrayRef>> {
+        todo!()
+    }
+
+    fn supports_convert_to_state(&self) -> bool {
+        todo!()
+    }
+
+    fn size(&self) -> usize {
+        todo!()
     }
 }
 
