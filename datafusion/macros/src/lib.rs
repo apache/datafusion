@@ -26,7 +26,7 @@ use syn::{parse_macro_input, DeriveInput, LitStr};
 /// declared on `AggregateUDF`, `WindowUDFImpl`, `ScalarUDFImpl` traits.
 ///
 /// Example:
-/// ```
+/// ```ingore
 /// #[user_doc(
 ///     doc_section(include = "true", label = "Time and Date Functions"),
 ///     description = r"Converts a value to a date (`YYYY-MM-DD`).",
@@ -54,7 +54,7 @@ use syn::{parse_macro_input, DeriveInput, LitStr};
 /// ```
 /// will generate the following code
 ///
-/// ```
+/// ```ingore
 /// pub struct ToDateFunc {
 ///     signature: Signature,
 /// }
