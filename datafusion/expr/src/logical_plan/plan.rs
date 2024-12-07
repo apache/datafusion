@@ -21,7 +21,7 @@ use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
 use std::fmt::{self, Debug, Display, Formatter};
 use std::hash::{Hash, Hasher};
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, LazyLock};
 
 use super::dml::CopyTo;
 use super::DdlStatement;
@@ -51,9 +51,10 @@ use datafusion_common::tree_node::{
 use datafusion_common::{
     aggregate_functional_dependencies, internal_err, plan_err, Column, Constraints,
     DFSchema, DFSchemaRef, DataFusionError, Dependency, FunctionalDependence,
-    FunctionalDependencies, IndexSet, ParamValues, Result, ScalarValue, TableReference,
+    FunctionalDependencies, ParamValues, Result, ScalarValue, TableReference,
     UnnestOptions,
 };
+use indexmap::IndexSet;
 
 // backwards compatibility
 use crate::display::PgJsonVisitor;
@@ -3066,12 +3067,12 @@ impl Aggregate {
 
     /// Get the output expressions.
     fn output_expressions(&self) -> Result<Vec<&Expr>> {
-        static INTERNAL_ID_EXPR: OnceLock<Expr> = OnceLock::new();
+        static INTERNAL_ID_EXPR: LazyLock<Expr> = LazyLock::new(|| {
+            Expr::Column(Column::from_name(Aggregate::INTERNAL_GROUPING_ID))
+        });
         let mut exprs = grouping_set_to_exprlist(self.group_expr.as_slice())?;
         if self.is_grouping_set() {
-            exprs.push(INTERNAL_ID_EXPR.get_or_init(|| {
-                Expr::Column(Column::from_name(Self::INTERNAL_GROUPING_ID))
-            }));
+            exprs.push(&INTERNAL_ID_EXPR);
         }
         exprs.extend(self.aggr_expr.iter());
         debug_assert!(exprs.len() == self.schema.fields().len());
