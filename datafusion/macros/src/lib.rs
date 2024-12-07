@@ -26,7 +26,7 @@ use syn::{parse_macro_input, DeriveInput, LitStr};
 /// declared on `AggregateUDF`, `WindowUDFImpl`, `ScalarUDFImpl` traits.
 ///
 /// Example:
-/// ```ingore
+/// ```ignore
 /// #[user_doc(
 ///     doc_section(include = "true", label = "Time and Date Functions"),
 ///     description = r"Converts a value to a date (`YYYY-MM-DD`).",
