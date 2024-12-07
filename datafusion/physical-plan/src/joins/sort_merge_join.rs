@@ -1434,6 +1434,7 @@ impl SortMergeJoinStream {
                         | JoinType::RightSemi
                         | JoinType::Full
                         | JoinType::LeftAnti
+                        | JoinType::RightAnti
                         | JoinType::LeftMark
                 ) {
                     join_streamed = !self.streamed_joined;
@@ -1650,7 +1651,10 @@ impl SortMergeJoinStream {
             let right_indices: UInt64Array = chunk.buffered_indices.finish();
             let mut right_columns = if matches!(self.join_type, JoinType::LeftMark) {
                 vec![Arc::new(is_not_null(&right_indices)?) as ArrayRef]
-            } else if matches!(self.join_type, JoinType::LeftSemi | JoinType::LeftAnti) {
+            } else if matches!(
+                self.join_type,
+                JoinType::LeftSemi | JoinType::LeftAnti | JoinType::RightAnti
+            ) {
                 vec![]
             } else if let Some(buffered_idx) = chunk.buffered_batch_idx {
                 fetch_right_columns_by_idxs(
@@ -2369,7 +2373,7 @@ mod tests {
     use crate::joins::utils::JoinOn;
     use crate::joins::SortMergeJoinExec;
     use crate::memory::MemoryExec;
-    use crate::test::build_table_i32;
+    use crate::test::{build_table_i32, build_table_i32_two_cols};
     use crate::{common, ExecutionPlan};
 
     fn build_table(
@@ -2457,6 +2461,15 @@ mod tests {
             ],
         )
         .unwrap();
+        Arc::new(MemoryExec::try_new(&[vec![batch]], schema, None).unwrap())
+    }
+
+    pub fn build_table_two_cols(
+        a: (&str, &Vec<i32>),
+        b: (&str, &Vec<i32>),
+    ) -> Arc<dyn ExecutionPlan> {
+        let batch = build_table_i32_two_cols(a, b);
+        let schema = batch.schema();
         Arc::new(MemoryExec::try_new(&[vec![batch]], schema, None).unwrap())
     }
 
@@ -2907,6 +2920,61 @@ mod tests {
         ];
         // The output order is important as SMJ preserves sortedness
         assert_batches_eq!(expected, &batches);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn join_right_anti() -> Result<()> {
+        let left = build_table(
+            ("a1", &vec![1, 2, 2]),
+            ("b1", &vec![4, 5, 5]),
+            ("c1", &vec![7, 8, 8]),
+        );
+        let right =
+            build_table_two_cols(("a2", &vec![10, 20, 30]), ("b1", &vec![4, 5, 6]));
+        let mut on = vec![(
+            Arc::new(Column::new_with_schema("b1", &left.schema())?) as _,
+            Arc::new(Column::new_with_schema("b1", &right.schema())?) as _,
+        )];
+
+        let (_, batches) = join_collect(left, right, on, RightAnti).await?;
+        let expected = [
+            "+----+----+",
+            "| a2 | b1 |",
+            "+----+----+",
+            "| 30 | 6  |",
+            "+----+----+",
+        ];
+        // The output order is important as SMJ preserves sortedness
+        assert_batches_eq!(expected, &batches);
+
+        let left2 = build_table(
+            ("a1", &vec![1, 2, 2]),
+            ("b1", &vec![4, 5, 5]),
+            ("c1", &vec![7, 8, 8]),
+        );
+        let right2 = build_table(
+            ("a2", &vec![10, 20, 30]),
+            ("b1", &vec![4, 5, 6]),
+            ("c2", &vec![70, 80, 90]),
+        );
+
+        let on = vec![(
+            Arc::new(Column::new_with_schema("b1", &left2.schema())?) as _,
+            Arc::new(Column::new_with_schema("b1", &right2.schema())?) as _,
+        )];
+
+        let (_, batches2) = join_collect(left2, right2, on, RightAnti).await?;
+        let expected2 = [
+            "+----+----+----+",
+            "| a2 | b1 | c2 |",
+            "+----+----+----+",
+            "| 30 | 6  | 90 |",
+            "+----+----+----+",
+        ];
+        // The output order is important as SMJ preserves sortedness
+        assert_batches_eq!(expected2, &batches2);
+
         Ok(())
     }
 
