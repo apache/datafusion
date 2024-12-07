@@ -353,6 +353,16 @@ AS VALUES
 ;
 
 statement ok
+CREATE TABLE array_has_table_null
+AS VALUES
+  (make_array(1, 2), 1),
+  (make_array(1, NULL), 1),
+  (make_array(3, 4, 5), 2),
+  (make_array(3, NULL, 5), 2),
+  (make_array(NULL, NULL, NULL), 2)
+;
+
+statement ok
 CREATE TABLE array_distinct_table_1D
 AS VALUES
   (make_array(1, 1, 2, 2, 3)),
@@ -5260,6 +5270,13 @@ select array_has([], null),
 ----
 NULL NULL NULL
 
+# If lhs is has any Nulls, we return Null instead of false
+query BB
+select array_has([1, null, 2], 3),
+       array_has([null, null, null], 3);
+----
+NULL NULL
+
 #TODO: array_has_all and array_has_any cannot handle NULL
 #query BBBB
 #select array_has_any([], null),
@@ -5337,6 +5354,16 @@ from array_has_table_1D;
 ----
 true true true
 false false false
+
+query B
+select array_has(column1, column2)
+from array_has_table_null;
+----
+true
+true
+false
+NULL
+NULL
 
 query B
 select array_has(column1, column2)
@@ -5541,9 +5568,9 @@ select array_has(column1, make_array(5, 6)),
 from arrays;
 ----
 false false false true
-true false true false
+true false true NULL
 true false false true
-false true false false
+false true NULL false
 NULL NULL false false
 false false NULL false
 false false false NULL
@@ -5556,9 +5583,9 @@ select array_has(arrow_cast(column1, 'LargeList(List(Int64))'), make_array(5, 6)
 from arrays;
 ----
 false false false true
-true false true false
+true false true NULL
 true false false true
-false true false false
+false true NULL false
 NULL NULL false false
 false false NULL false
 false false false NULL
@@ -5571,9 +5598,9 @@ select array_has(column1, make_array(5, 6)),
 from fixed_size_arrays;
 ----
 false false false true
-true false true false
+true false true NULL
 true false false true
-false true false false
+false true NULL false
 NULL NULL false false
 false false NULL false
 false false false NULL
