@@ -43,11 +43,8 @@ use std::sync::Arc;
 use tempfile::NamedTempFile;
 
 mod custom_reader;
-// Don't run on windows as tempfiles don't seem to work the same
-#[cfg(not(target_os = "windows"))]
 mod external_access_plan;
 mod file_statistics;
-#[cfg(not(target_family = "windows"))]
 mod filter_pushdown;
 mod page_pruning;
 mod row_group_pruning;

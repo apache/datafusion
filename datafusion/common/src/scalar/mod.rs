@@ -39,9 +39,7 @@ use crate::cast::{
 };
 use crate::error::{DataFusionError, Result, _exec_err, _internal_err, _not_impl_err};
 use crate::hash_utils::create_hashes;
-use crate::utils::{
-    array_into_fixed_size_list_array, array_into_large_list_array, array_into_list_array,
-};
+use crate::utils::SingleRowListArrayBuilder;
 use arrow::compute::kernels::numeric::*;
 use arrow::util::display::{array_value_to_string, ArrayFormatter, FormatOptions};
 use arrow::{
@@ -2090,7 +2088,11 @@ impl ScalarValue {
         } else {
             Self::iter_to_array(values.iter().cloned()).unwrap()
         };
-        Arc::new(array_into_list_array(values, nullable))
+        Arc::new(
+            SingleRowListArrayBuilder::new(values)
+                .with_nullable(nullable)
+                .build_list_array(),
+        )
     }
 
     /// Same as [`ScalarValue::new_list`] but with nullable set to true.
@@ -2146,7 +2148,11 @@ impl ScalarValue {
         } else {
             Self::iter_to_array(values).unwrap()
         };
-        Arc::new(array_into_list_array(values, nullable))
+        Arc::new(
+            SingleRowListArrayBuilder::new(values)
+                .with_nullable(nullable)
+                .build_list_array(),
+        )
     }
 
     /// Converts `Vec<ScalarValue>` where each element has type corresponding to
@@ -2183,7 +2189,7 @@ impl ScalarValue {
         } else {
             Self::iter_to_array(values.iter().cloned()).unwrap()
         };
-        Arc::new(array_into_large_list_array(values))
+        Arc::new(SingleRowListArrayBuilder::new(values).build_large_list_array())
     }
 
     /// Converts a scalar value into an array of `size` rows.
@@ -2663,29 +2669,27 @@ impl ScalarValue {
                 let list_array = array.as_list::<i32>();
                 let nested_array = list_array.value(index);
                 // Produces a single element `ListArray` with the value at `index`.
-                let arr =
-                    Arc::new(array_into_list_array(nested_array, field.is_nullable()));
-
-                ScalarValue::List(arr)
+                SingleRowListArrayBuilder::new(nested_array)
+                    .with_field(field)
+                    .build_list_scalar()
             }
-            DataType::LargeList(_) => {
+            DataType::LargeList(field) => {
                 let list_array = as_large_list_array(array);
                 let nested_array = list_array.value(index);
                 // Produces a single element `LargeListArray` with the value at `index`.
-                let arr = Arc::new(array_into_large_list_array(nested_array));
-
-                ScalarValue::LargeList(arr)
+                SingleRowListArrayBuilder::new(nested_array)
+                    .with_field(field)
+                    .build_large_list_scalar()
             }
             // TODO: There is no test for FixedSizeList now, add it later
-            DataType::FixedSizeList(_, _) => {
+            DataType::FixedSizeList(field, _) => {
                 let list_array = as_fixed_size_list_array(array)?;
                 let nested_array = list_array.value(index);
-                // Produces a single element `ListArray` with the value at `index`.
+                // Produces a single element `FixedSizeListArray` with the value at `index`.
                 let list_size = nested_array.len();
-                let arr =
-                    Arc::new(array_into_fixed_size_list_array(nested_array, list_size));
-
-                ScalarValue::FixedSizeList(arr)
+                SingleRowListArrayBuilder::new(nested_array)
+                    .with_field(field)
+                    .build_fixed_size_list_scalar(list_size)
             }
             DataType::Date32 => typed_cast!(array, index, Date32Array, Date32)?,
             DataType::Date64 => typed_cast!(array, index, Date64Array, Date64)?,
@@ -3884,7 +3888,6 @@ mod tests {
     };
 
     use crate::assert_batches_eq;
-    use crate::utils::array_into_list_array_nullable;
     use arrow::buffer::OffsetBuffer;
     use arrow::compute::{is_null, kernels};
     use arrow::error::ArrowError;
@@ -4026,7 +4029,7 @@ mod tests {
     #[test]
     fn test_to_array_of_size_for_fsl() {
         let values = Int32Array::from_iter([Some(1), None, Some(2)]);
-        let field = Arc::new(Field::new("item", DataType::Int32, true));
+        let field = Arc::new(Field::new_list_field(DataType::Int32, true));
         let arr = FixedSizeListArray::new(Arc::clone(&field), 3, Arc::new(values), None);
         let sv = ScalarValue::FixedSizeList(Arc::new(arr));
         let actual_arr = sv
@@ -4060,12 +4063,13 @@ mod tests {
 
         let result = ScalarValue::new_list_nullable(scalars.as_slice(), &DataType::Utf8);
 
-        let expected = array_into_list_array_nullable(Arc::new(StringArray::from(vec![
-            "rust",
-            "arrow",
-            "data-fusion",
-        ])));
+        let expected = single_row_list_array(vec!["rust", "arrow", "data-fusion"]);
         assert_eq!(*result, expected);
+    }
+
+    fn single_row_list_array(items: Vec<&str>) -> ListArray {
+        SingleRowListArrayBuilder::new(Arc::new(StringArray::from(items)))
+            .build_list_array()
     }
 
     fn build_list<O: OffsetSizeTrait>(
@@ -4082,8 +4086,7 @@ mod tests {
                     )
                 } else if O::IS_LARGE {
                     new_null_array(
-                        &DataType::LargeList(Arc::new(Field::new(
-                            "item",
+                        &DataType::LargeList(Arc::new(Field::new_list_field(
                             DataType::Int64,
                             true,
                         ))),
@@ -4091,8 +4094,7 @@ mod tests {
                     )
                 } else {
                     new_null_array(
-                        &DataType::List(Arc::new(Field::new(
-                            "item",
+                        &DataType::List(Arc::new(Field::new_list_field(
                             DataType::Int64,
                             true,
                         ))),
@@ -4111,7 +4113,7 @@ mod tests {
 
     #[test]
     fn test_iter_to_array_fixed_size_list() {
-        let field = Arc::new(Field::new("item", DataType::Int32, true));
+        let field = Arc::new(Field::new_list_field(DataType::Int32, true));
         let f1 = Arc::new(FixedSizeListArray::new(
             Arc::clone(&field),
             3,
@@ -4272,12 +4274,8 @@ mod tests {
 
     #[test]
     fn iter_to_array_string_test() {
-        let arr1 = array_into_list_array_nullable(Arc::new(StringArray::from(vec![
-            "foo", "bar", "baz",
-        ])));
-        let arr2 = array_into_list_array_nullable(Arc::new(StringArray::from(vec![
-            "rust", "world",
-        ])));
+        let arr1 = single_row_list_array(vec!["foo", "bar", "baz"]);
+        let arr2 = single_row_list_array(vec!["rust", "world"]);
 
         let scalars = vec![
             ScalarValue::List(Arc::new(arr1)),
@@ -4950,7 +4948,7 @@ mod tests {
         let null_list_scalar = ScalarValue::try_from_array(&list, 1).unwrap();
 
         let data_type =
-            DataType::List(Arc::new(Field::new("item", DataType::Int32, true)));
+            DataType::List(Arc::new(Field::new_list_field(DataType::Int32, true)));
 
         assert_eq!(non_null_list_scalar.data_type(), data_type);
         assert_eq!(null_list_scalar.data_type(), data_type);
@@ -4958,7 +4956,7 @@ mod tests {
 
     #[test]
     fn scalar_try_from_list_datatypes() {
-        let inner_field = Arc::new(Field::new("item", DataType::Int32, true));
+        let inner_field = Arc::new(Field::new_list_field(DataType::Int32, true));
 
         // Test for List
         let data_type = &DataType::List(Arc::clone(&inner_field));
@@ -4999,9 +4997,8 @@ mod tests {
 
     #[test]
     fn scalar_try_from_list_of_list() {
-        let data_type = DataType::List(Arc::new(Field::new(
-            "item",
-            DataType::List(Arc::new(Field::new("item", DataType::Int32, true))),
+        let data_type = DataType::List(Arc::new(Field::new_list_field(
+            DataType::List(Arc::new(Field::new_list_field(DataType::Int32, true))),
             true,
         )));
         let data_type = &data_type;
@@ -5009,9 +5006,11 @@ mod tests {
 
         let expected = ScalarValue::List(
             new_null_array(
-                &DataType::List(Arc::new(Field::new(
-                    "item",
-                    DataType::List(Arc::new(Field::new("item", DataType::Int32, true))),
+                &DataType::List(Arc::new(Field::new_list_field(
+                    DataType::List(Arc::new(Field::new_list_field(
+                        DataType::Int32,
+                        true,
+                    ))),
                     true,
                 ))),
                 1,
@@ -5027,13 +5026,12 @@ mod tests {
     #[test]
     fn scalar_try_from_not_equal_list_nested_list() {
         let list_data_type =
-            DataType::List(Arc::new(Field::new("item", DataType::Int32, true)));
+            DataType::List(Arc::new(Field::new_list_field(DataType::Int32, true)));
         let data_type = &list_data_type;
         let list_scalar: ScalarValue = data_type.try_into().unwrap();
 
-        let nested_list_data_type = DataType::List(Arc::new(Field::new(
-            "item",
-            DataType::List(Arc::new(Field::new("item", DataType::Int32, true))),
+        let nested_list_data_type = DataType::List(Arc::new(Field::new_list_field(
+            DataType::List(Arc::new(Field::new_list_field(DataType::Int32, true))),
             true,
         )));
         let data_type = &nested_list_data_type;
@@ -5667,7 +5665,7 @@ mod tests {
         let field_a = Arc::new(Field::new("A", DataType::Utf8, false));
         let field_primitive_list = Arc::new(Field::new(
             "primitive_list",
-            DataType::List(Arc::new(Field::new("item", DataType::Int32, true))),
+            DataType::List(Arc::new(Field::new_list_field(DataType::Int32, true))),
             false,
         ));
 
@@ -5734,13 +5732,13 @@ mod tests {
         // Define list-of-structs scalars
 
         let nl0_array = ScalarValue::iter_to_array(vec![s0, s1.clone()]).unwrap();
-        let nl0 = ScalarValue::List(Arc::new(array_into_list_array_nullable(nl0_array)));
+        let nl0 = SingleRowListArrayBuilder::new(nl0_array).build_list_scalar();
 
         let nl1_array = ScalarValue::iter_to_array(vec![s2]).unwrap();
-        let nl1 = ScalarValue::List(Arc::new(array_into_list_array_nullable(nl1_array)));
+        let nl1 = SingleRowListArrayBuilder::new(nl1_array).build_list_scalar();
 
         let nl2_array = ScalarValue::iter_to_array(vec![s1]).unwrap();
-        let nl2 = ScalarValue::List(Arc::new(array_into_list_array_nullable(nl2_array)));
+        let nl2 = SingleRowListArrayBuilder::new(nl2_array).build_list_scalar();
 
         // iter_to_array for list-of-struct
         let array = ScalarValue::iter_to_array(vec![nl0, nl1, nl2]).unwrap();
@@ -5868,9 +5866,8 @@ mod tests {
     fn build_2d_list(data: Vec<Option<i32>>) -> ListArray {
         let a1 = ListArray::from_iter_primitive::<Int32Type, _, _>(vec![Some(data)]);
         ListArray::new(
-            Arc::new(Field::new(
-                "item",
-                DataType::List(Arc::new(Field::new("item", DataType::Int32, true))),
+            Arc::new(Field::new_list_field(
+                DataType::List(Arc::new(Field::new_list_field(DataType::Int32, true))),
                 true,
             )),
             OffsetBuffer::<i32>::from_lengths([1]),
@@ -5969,6 +5966,51 @@ mod tests {
         check_scalar_cast(
             ScalarValue::from("larger than 12 bytes string"),
             DataType::Utf8View,
+        );
+        check_scalar_cast(
+            {
+                let element_field =
+                    Arc::new(Field::new("element", DataType::Int32, true));
+
+                let mut builder =
+                    ListBuilder::new(Int32Builder::new()).with_field(element_field);
+                builder.append_value([Some(1)]);
+                builder.append(true);
+
+                ScalarValue::List(Arc::new(builder.finish()))
+            },
+            DataType::List(Arc::new(Field::new("element", DataType::Int64, true))),
+        );
+        check_scalar_cast(
+            {
+                let element_field =
+                    Arc::new(Field::new("element", DataType::Int32, true));
+
+                let mut builder = FixedSizeListBuilder::new(Int32Builder::new(), 1)
+                    .with_field(element_field);
+                builder.values().append_value(1);
+                builder.append(true);
+
+                ScalarValue::FixedSizeList(Arc::new(builder.finish()))
+            },
+            DataType::FixedSizeList(
+                Arc::new(Field::new("element", DataType::Int64, true)),
+                1,
+            ),
+        );
+        check_scalar_cast(
+            {
+                let element_field =
+                    Arc::new(Field::new("element", DataType::Int32, true));
+
+                let mut builder =
+                    LargeListBuilder::new(Int32Builder::new()).with_field(element_field);
+                builder.append_value([Some(1)]);
+                builder.append(true);
+
+                ScalarValue::LargeList(Arc::new(builder.finish()))
+            },
+            DataType::LargeList(Arc::new(Field::new("element", DataType::Int64, true))),
         );
     }
 
@@ -6820,8 +6862,7 @@ mod tests {
         assert_eq!(1, arr.len());
         assert_eq!(
             arr.data_type(),
-            &DataType::List(Arc::new(Field::new(
-                "item",
+            &DataType::List(Arc::new(Field::new_list_field(
                 DataType::Timestamp(TimeUnit::Millisecond, Some(s.into())),
                 true,
             )))

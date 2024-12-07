@@ -18,7 +18,7 @@
 //! Signature module contains foundational types that are used to represent signatures, types,
 //! and return types of functions in DataFusion.
 
-use crate::type_coercion::aggregates::{NUMERICS, STRINGS};
+use crate::type_coercion::aggregates::NUMERICS;
 use arrow::datatypes::DataType;
 use datafusion_common::types::{LogicalTypeRef, NativeType};
 use itertools::Itertools;
@@ -113,6 +113,15 @@ pub enum TypeSignature {
     /// arguments like `vec![DataType::Int32]` or `vec![DataType::Float32]`
     /// since i32 and f32 can be casted to f64
     Coercible(Vec<LogicalTypeRef>),
+    /// The arguments will be coerced to a single type based on the comparison rules.
+    /// For example, i32 and i64 has coerced type Int64.
+    ///
+    /// Note:
+    /// - If compares with numeric and string, numeric is preferred for numeric string cases. For example, nullif('2', 1) has coerced types Int64.
+    /// - If the result is Null, it will be coerced to String (Utf8View).
+    ///
+    /// See `comparison_coercion_numeric` for more details.
+    Comparable(usize),
     /// Fixed number of arguments of arbitrary types, number should be larger than 0
     Any(usize),
     /// Matches exactly one of a list of [`TypeSignature`]s. Coercion is attempted to match
@@ -136,6 +145,13 @@ pub enum TypeSignature {
     String(usize),
     /// Zero argument
     NullAry,
+}
+
+impl TypeSignature {
+    #[inline]
+    pub fn is_one_of(&self) -> bool {
+        matches!(self, TypeSignature::OneOf(_))
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Hash)]
@@ -209,6 +225,9 @@ impl TypeSignature {
             }
             TypeSignature::Numeric(num) => {
                 vec![format!("Numeric({num})")]
+            }
+            TypeSignature::Comparable(num) => {
+                vec![format!("Comparable({num})")]
             }
             TypeSignature::Coercible(types) => {
                 vec![Self::join_types(types, ", ")]
@@ -284,13 +303,13 @@ impl TypeSignature {
                 .cloned()
                 .map(|numeric_type| vec![numeric_type; *arg_count])
                 .collect(),
-            TypeSignature::String(arg_count) => STRINGS
-                .iter()
-                .cloned()
-                .map(|string_type| vec![string_type; *arg_count])
-                .collect(),
+            TypeSignature::String(arg_count) => get_data_types(&NativeType::String)
+                .into_iter()
+                .map(|dt| vec![dt; *arg_count])
+                .collect::<Vec<_>>(),
             // TODO: Implement for other types
             TypeSignature::Any(_)
+            | TypeSignature::Comparable(_)
             | TypeSignature::NullAry
             | TypeSignature::VariadicAny
             | TypeSignature::ArraySignature(_)
@@ -408,6 +427,14 @@ impl Signature {
     pub fn coercible(target_types: Vec<LogicalTypeRef>, volatility: Volatility) -> Self {
         Self {
             type_signature: TypeSignature::Coercible(target_types),
+            volatility,
+        }
+    }
+
+    /// Used for function that expects comparable data types, it will try to coerced all the types into single final one.
+    pub fn comparable(arg_count: usize, volatility: Volatility) -> Self {
+        Self {
+            type_signature: TypeSignature::Comparable(arg_count),
             volatility,
         }
     }

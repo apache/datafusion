@@ -27,12 +27,13 @@ use arrow::array::{
 use arrow::datatypes::DataType;
 use arrow::error::ArrowError;
 use datafusion_common::{exec_err, not_impl_err, DataFusionError, Result};
+use datafusion_doc::DocSection;
 use datafusion_expr::interval_arithmetic::Interval;
-use datafusion_expr::scalar_doc_sections::DOC_SECTION_MATH;
 use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
 };
+use datafusion_macros::user_doc;
 
 type MathArrayFunction = fn(&Vec<ArrayRef>) -> Result<ArrayRef>;
 
@@ -103,6 +104,12 @@ fn create_abs_function(input_data_type: &DataType) -> Result<MathArrayFunction> 
         other => not_impl_err!("Unsupported data type {other:?} for function abs"),
     }
 }
+#[user_doc(
+    doc_section(label = "Math Functions"),
+    description = "Returns the absolute value of a number.",
+    syntax_example = "abs(numeric_expression)",
+    standard_argument(name = "numeric_expression", prefix = "Numeric")
+)]
 #[derive(Debug)]
 pub struct AbsFunc {
     signature: Signature,
@@ -160,7 +167,11 @@ impl ScalarUDFImpl for AbsFunc {
         }
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         let args = ColumnarValue::values_to_arrays(args)?;
 
         if args.len() != 1 {
@@ -189,20 +200,6 @@ impl ScalarUDFImpl for AbsFunc {
     }
 
     fn documentation(&self) -> Option<&Documentation> {
-        Some(get_abs_doc())
+        self.doc()
     }
-}
-
-static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
-
-fn get_abs_doc() -> &'static Documentation {
-    DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_MATH)
-            .with_description("Returns the absolute value of a number.")
-            .with_syntax_example("abs(numeric_expression)")
-            .with_standard_argument("numeric_expression", Some("Numeric"))
-            .build()
-            .unwrap()
-    })
 }

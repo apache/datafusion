@@ -787,7 +787,7 @@ async fn roundtrip_logical_plan_unnest() -> Result<()> {
         Field::new("a", DataType::Int64, true),
         Field::new(
             "b",
-            DataType::List(Arc::new(Field::new("item", DataType::Int32, false))),
+            DataType::List(Arc::new(Field::new_list_field(DataType::Int32, false))),
             true,
         ),
     ]);
@@ -1611,7 +1611,7 @@ fn round_trip_scalar_types() {
     ];
 
     for test_case in should_pass.into_iter() {
-        let field = Field::new("item", test_case, true);
+        let field = Field::new_list_field(test_case, true);
         let proto: protobuf::Field = (&field).try_into().unwrap();
         let roundtrip: Field = (&proto).try_into().unwrap();
         assert_eq!(format!("{field:?}"), format!("{roundtrip:?}"));

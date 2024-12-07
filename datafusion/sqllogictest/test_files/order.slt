@@ -1260,3 +1260,49 @@ limit 2;
 
 statement ok
 drop table ordered_table;
+
+query TT
+EXPLAIN SELECT
+    CASE
+        WHEN name = 'name1' THEN 0.0
+        WHEN name = 'name2' THEN 0.5
+    END AS a
+FROM (
+    SELECT 'name1' AS name
+    UNION ALL
+    SELECT 'name2'
+)
+ORDER BY a DESC;
+----
+logical_plan
+01)Sort: a DESC NULLS FIRST
+02)--Projection: CASE WHEN name = Utf8("name1") THEN Float64(0) WHEN name = Utf8("name2") THEN Float64(0.5) END AS a
+03)----Union
+04)------Projection: Utf8("name1") AS name
+05)--------EmptyRelation
+06)------Projection: Utf8("name2") AS name
+07)--------EmptyRelation
+physical_plan
+01)SortPreservingMergeExec: [a@0 DESC]
+02)--ProjectionExec: expr=[CASE WHEN name@0 = name1 THEN 0 WHEN name@0 = name2 THEN 0.5 END as a]
+03)----UnionExec
+04)------ProjectionExec: expr=[name1 as name]
+05)--------PlaceholderRowExec
+06)------ProjectionExec: expr=[name2 as name]
+07)--------PlaceholderRowExec
+
+query R
+SELECT
+    CASE
+        WHEN name = 'name1' THEN 0.0
+        WHEN name = 'name2' THEN 0.5
+    END AS a
+FROM (
+    SELECT 'name1' AS name
+    UNION ALL
+    SELECT 'name2'
+)
+ORDER BY a DESC;
+----
+0.5
+0

@@ -31,7 +31,7 @@ use datafusion_common::{
     downcast_value, plan_err, unwrap_or_internal_err, DataFusionError, Result,
     ScalarValue,
 };
-use datafusion_expr::aggregate_doc_sections::DOC_SECTION_STATISTICAL;
+use datafusion_doc::DocSection;
 use datafusion_expr::{
     function::{AccumulatorArgs, StateFieldsArgs},
     type_coercion::aggregates::NUMERICS,
@@ -39,6 +39,7 @@ use datafusion_expr::{
     Accumulator, AggregateUDFImpl, Documentation, Signature, Volatility,
 };
 use datafusion_functions_aggregate_common::stats::StatsType;
+use datafusion_macros::user_doc;
 
 make_udaf_expr_and_func!(
     CovarianceSample,
@@ -56,6 +57,21 @@ make_udaf_expr_and_func!(
     covar_pop_udaf
 );
 
+#[user_doc(
+    doc_section(label = "Statistical Functions"),
+    description = "Returns the sample covariance of a set of number pairs.",
+    syntax_example = "covar_samp(expression1, expression2)",
+    sql_example = r#"```sql
+> SELECT covar_samp(column1, column2) FROM table_name;
++-----------------------------------+
+| covar_samp(column1, column2)      |
++-----------------------------------+
+| 8.25                              |
++-----------------------------------+
+```"#,
+    standard_argument(name = "expression1", prefix = "First"),
+    standard_argument(name = "expression2", prefix = "Second")
+)]
 pub struct CovarianceSample {
     signature: Signature,
     aliases: Vec<String>,
@@ -129,20 +145,15 @@ impl AggregateUDFImpl for CovarianceSample {
     }
 
     fn documentation(&self) -> Option<&Documentation> {
-        Some(get_covar_samp_doc())
+        self.doc()
     }
 }
 
-static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
-
-fn get_covar_samp_doc() -> &'static Documentation {
-    DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_STATISTICAL)
-            .with_description("Returns the sample covariance of a set of number pairs.")
-            .with_syntax_example("covar_samp(expression1, expression2)")
-            .with_sql_example(
-                r#"```sql
+#[user_doc(
+    doc_section(label = "Statistical Functions"),
+    description = "Returns the sample covariance of a set of number pairs.",
+    syntax_example = "covar_samp(expression1, expression2)",
+    sql_example = r#"```sql
 > SELECT covar_samp(column1, column2) FROM table_name;
 +-----------------------------------+
 | covar_samp(column1, column2)      |
@@ -150,14 +161,9 @@ fn get_covar_samp_doc() -> &'static Documentation {
 | 8.25                              |
 +-----------------------------------+
 ```"#,
-            )
-            .with_standard_argument("expression1", Some("First"))
-            .with_standard_argument("expression2", Some("Second"))
-            .build()
-            .unwrap()
-    })
-}
-
+    standard_argument(name = "expression1", prefix = "First"),
+    standard_argument(name = "expression2", prefix = "Second")
+)]
 pub struct CovariancePopulation {
     signature: Signature,
 }
@@ -227,33 +233,8 @@ impl AggregateUDFImpl for CovariancePopulation {
     }
 
     fn documentation(&self) -> Option<&Documentation> {
-        Some(get_covar_pop_doc())
+        self.doc()
     }
-}
-
-fn get_covar_pop_doc() -> &'static Documentation {
-    DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_STATISTICAL)
-            .with_description(
-                "Returns the population covariance of a set of number pairs.",
-            )
-            .with_syntax_example("covar_pop(expression1, expression2)")
-            .with_sql_example(
-                r#"```sql
-> SELECT covar_pop(column1, column2) FROM table_name;
-+-----------------------------------+
-| covar_pop(column1, column2)       |
-+-----------------------------------+
-| 7.63                              |
-+-----------------------------------+
-```"#,
-            )
-            .with_standard_argument("expression1", Some("First"))
-            .with_standard_argument("expression2", Some("Second"))
-            .build()
-            .unwrap()
-    })
 }
 
 /// An accumulator to compute covariance

@@ -35,7 +35,7 @@ use arrow::datatypes::{
 };
 use arrow::{array::ArrayRef, datatypes::Field};
 use datafusion_common::{exec_err, not_impl_err, Result, ScalarValue};
-use datafusion_expr::aggregate_doc_sections::DOC_SECTION_GENERAL;
+use datafusion_doc::DocSection;
 use datafusion_expr::function::AccumulatorArgs;
 use datafusion_expr::function::StateFieldsArgs;
 use datafusion_expr::utils::format_state_name;
@@ -45,6 +45,7 @@ use datafusion_expr::{
 };
 use datafusion_functions_aggregate_common::aggregate::groups_accumulator::prim_op::PrimitiveGroupsAccumulator;
 use datafusion_functions_aggregate_common::utils::Hashable;
+use datafusion_macros::user_doc;
 
 make_udaf_expr_and_func!(
     Sum,
@@ -79,6 +80,20 @@ macro_rules! downcast_sum {
     };
 }
 
+#[user_doc(
+    doc_section(label = "General Functions"),
+    description = "Returns the sum of all values in the specified column.",
+    syntax_example = "sum(expression)",
+    sql_example = r#"```sql
+> SELECT sum(column_name) FROM table_name;
++-----------------------+
+| sum(column_name)       |
++-----------------------+
+| 12345                 |
++-----------------------+
+```"#,
+    standard_argument(name = "expression",)
+)]
 #[derive(Debug)]
 pub struct Sum {
     signature: Signature,
@@ -183,7 +198,7 @@ impl AggregateUDFImpl for Sum {
             Ok(vec![Field::new_list(
                 format_state_name(args.name, "sum distinct"),
                 // See COMMENTS.md to understand why nullable is set to true
-                Field::new("item", args.return_type.clone(), true),
+                Field::new_list_field(args.return_type.clone(), true),
                 false,
             )])
         } else {
@@ -239,32 +254,8 @@ impl AggregateUDFImpl for Sum {
     }
 
     fn documentation(&self) -> Option<&Documentation> {
-        Some(get_sum_doc())
+        self.doc()
     }
-}
-
-static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
-
-fn get_sum_doc() -> &'static Documentation {
-    DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_GENERAL)
-            .with_description("Returns the sum of all values in the specified column.")
-            .with_syntax_example("sum(expression)")
-            .with_sql_example(
-                r#"```sql
-> SELECT sum(column_name) FROM table_name;
-+-----------------------+
-| sum(column_name)       |
-+-----------------------+
-| 12345                 |
-+-----------------------+
-```"#,
-            )
-            .with_standard_argument("expression", None)
-            .build()
-            .unwrap()
-    })
 }
 
 /// This accumulator computes SUM incrementally

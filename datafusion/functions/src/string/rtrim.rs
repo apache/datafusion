@@ -78,7 +78,11 @@ impl ScalarUDFImpl for RtrimFunc {
         }
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         match args[0].data_type() {
             DataType::Utf8 | DataType::Utf8View => make_scalar_function(
                 rtrim::<i32>,
@@ -104,10 +108,10 @@ static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
 
 fn get_rtrim_doc() -> &'static Documentation {
     DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_STRING)
-            .with_description("Trims the specified trim string from the end of a string. If no trim string is provided, all whitespace is removed from the end of the input string.")
-            .with_syntax_example("rtrim(str[, trim_str])")
+        Documentation::builder(
+            DOC_SECTION_STRING,
+            "Trims the specified trim string from the end of a string. If no trim string is provided, all whitespace is removed from the end of the input string.",
+            "rtrim(str[, trim_str])")
             .with_sql_example(r#"```sql
 > select rtrim('  datafusion  ');
 +-------------------------------+
@@ -128,7 +132,6 @@ fn get_rtrim_doc() -> &'static Documentation {
             .with_related_udf("btrim")
             .with_related_udf("ltrim")
             .build()
-            .unwrap()
     })
 }
 

@@ -101,10 +101,10 @@ static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
 
 fn get_to_unixtime_doc() -> &'static Documentation {
     DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_DATETIME)
-            .with_description("Converts a value to seconds since the unix epoch (`1970-01-01T00:00:00Z`). Supports strings, dates, timestamps and double types as input. Strings are parsed as RFC3339 (e.g. '2023-07-20T05:44:00') if no [Chrono formats](https://docs.rs/chrono/latest/chrono/format/strftime/index.html) are provided.")
-            .with_syntax_example("to_unixtime(expression[, ..., format_n])")
+        Documentation::builder(
+            DOC_SECTION_DATETIME,
+            "Converts a value to seconds since the unix epoch (`1970-01-01T00:00:00Z`). Supports strings, dates, timestamps and double types as input. Strings are parsed as RFC3339 (e.g. '2023-07-20T05:44:00') if no [Chrono formats](https://docs.rs/chrono/latest/chrono/format/strftime/index.html) are provided.",
+            "to_unixtime(expression[, ..., format_n])")
             .with_argument(
                 "expression",
                 "Expression to operate on. Can be a constant, column, or function, and any combination of arithmetic operators."
@@ -128,6 +128,5 @@ fn get_to_unixtime_doc() -> &'static Documentation {
 ```
 "#)
             .build()
-            .unwrap()
     })
 }

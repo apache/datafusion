@@ -70,7 +70,6 @@ postgres = [
 
 [dev-dependencies]
 env_logger = { workspace = true }
-num_cpus = { workspace = true }
 tokio = { workspace = true, features = ["rt-multi-thread"] }
 
 [[test]]

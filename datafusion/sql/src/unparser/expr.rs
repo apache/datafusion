@@ -464,6 +464,7 @@ impl Unparser<'_> {
             "array_element" => self.array_element_to_sql(args),
             "named_struct" => self.named_struct_to_sql(args),
             "get_field" => self.get_field_to_sql(args),
+            "map" => self.map_to_sql(args),
             // TODO: support for the construct and access functions of the `map` type
             _ => self.scalar_function_to_sql_internal(func_name, args),
         }
@@ -565,6 +566,39 @@ impl Unparser<'_> {
         id.push(field);
 
         Ok(ast::Expr::CompoundIdentifier(id))
+    }
+
+    fn map_to_sql(&self, args: &[Expr]) -> Result<ast::Expr> {
+        if args.len() != 2 {
+            return internal_err!("map must have exactly 2 arguments");
+        }
+
+        let ast::Expr::Array(Array { elem: keys, .. }) = self.expr_to_sql(&args[0])?
+        else {
+            return internal_err!(
+                "map expects first argument to be an array, but received: {:?}",
+                &args[0]
+            );
+        };
+
+        let ast::Expr::Array(Array { elem: values, .. }) = self.expr_to_sql(&args[1])?
+        else {
+            return internal_err!(
+                "map expects second argument to be an array, but received: {:?}",
+                &args[1]
+            );
+        };
+
+        let entries = keys
+            .into_iter()
+            .zip(values)
+            .map(|(key, value)| ast::MapEntry {
+                key: Box::new(key),
+                value: Box::new(value),
+            })
+            .collect();
+
+        Ok(ast::Expr::Map(ast::Map { entries }))
     }
 
     pub fn sort_to_sql(&self, sort: &Sort) -> Result<ast::OrderByExpr> {
@@ -848,7 +882,7 @@ impl Unparser<'_> {
             Operator::Plus => Ok(BinaryOperator::Plus),
             Operator::Minus => Ok(BinaryOperator::Minus),
             Operator::Multiply => Ok(BinaryOperator::Multiply),
-            Operator::Divide => Ok(BinaryOperator::Divide),
+            Operator::Divide => Ok(self.dialect.division_operator()),
             Operator::Modulo => Ok(BinaryOperator::Modulo),
             Operator::And => Ok(BinaryOperator::And),
             Operator::Or => Ok(BinaryOperator::Or),
@@ -1581,6 +1615,7 @@ mod tests {
     use datafusion_functions_aggregate::count::count_udaf;
     use datafusion_functions_aggregate::expr_fn::sum;
     use datafusion_functions_nested::expr_fn::{array_element, make_array};
+    use datafusion_functions_nested::map::map;
     use datafusion_functions_window::row_number::row_number_udwf;
 
     use crate::unparser::dialect::{
@@ -1621,7 +1656,11 @@ mod tests {
             Ok(DataType::Int32)
         }
 
-        fn invoke(&self, _args: &[ColumnarValue]) -> Result<ColumnarValue> {
+        fn invoke_batch(
+            &self,
+            _args: &[ColumnarValue],
+            _number_rows: usize,
+        ) -> Result<ColumnarValue> {
             unimplemented!("DummyUDF::invoke")
         }
     }
@@ -1996,6 +2035,10 @@ mod tests {
                 "{a: '1', b: 2}",
             ),
             (get_field(col("a.b"), "c"), "a.b.c"),
+            (
+                map(vec![lit("a"), lit("b")], vec![lit(1), lit(2)]),
+                "MAP {'a': 1, 'b': 2}",
+            ),
         ];
 
         for (expr, expected) in tests {
@@ -2535,6 +2578,32 @@ mod tests {
 
             let actual = format!("{}", ast);
             let expected = format!(r#"CAST(a AS {identifier})"#);
+
+            assert_eq!(actual, expected);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn custom_dialect_division_operator() -> Result<()> {
+        let default_dialect = CustomDialectBuilder::new().build();
+        let duckdb_dialect = CustomDialectBuilder::new()
+            .with_division_operator(BinaryOperator::DuckIntegerDivide)
+            .build();
+
+        for (dialect, expected) in
+            [(default_dialect, "(a / b)"), (duckdb_dialect, "(a // b)")]
+        {
+            let unparser = Unparser::new(&dialect);
+            let expr = Expr::BinaryExpr(BinaryExpr {
+                left: Box::new(col("a")),
+                op: Operator::Divide,
+                right: Box::new(col("b")),
+            });
+            let ast = unparser.expr_to_sql(&expr)?;
+
+            let actual = format!("{}", ast);
+            let expected = expected.to_string();
 
             assert_eq!(actual, expected);
         }

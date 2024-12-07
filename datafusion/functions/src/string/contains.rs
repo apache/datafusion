@@ -66,7 +66,11 @@ impl ScalarUDFImpl for ContainsFunc {
         Ok(Boolean)
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         make_scalar_function(contains, vec![])(args)
     }
 
@@ -79,14 +83,13 @@ static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
 
 fn get_contains_doc() -> &'static Documentation {
     DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_STRING)
-            .with_description(
-                "Return true if search_str is found within string (case-sensitive).",
-            )
-            .with_syntax_example("contains(str, search_str)")
-            .with_sql_example(
-                r#"```sql
+        Documentation::builder(
+            DOC_SECTION_STRING,
+            "Return true if search_str is found within string (case-sensitive).",
+            "contains(str, search_str)",
+        )
+        .with_sql_example(
+            r#"```sql
 > select contains('the quick brown fox', 'row');
 +---------------------------------------------------+
 | contains(Utf8("the quick brown fox"),Utf8("row")) |
@@ -94,11 +97,10 @@ fn get_contains_doc() -> &'static Documentation {
 | true                                              |
 +---------------------------------------------------+
 ```"#,
-            )
-            .with_standard_argument("str", Some("String"))
-            .with_argument("search_str", "The string to search for in str.")
-            .build()
-            .unwrap()
+        )
+        .with_standard_argument("str", Some("String"))
+        .with_argument("search_str", "The string to search for in str.")
+        .build()
     })
 }
 
@@ -145,6 +147,7 @@ mod test {
             Some("yyy?()"),
         ])));
         let scalar = ColumnarValue::Scalar(ScalarValue::Utf8(Some("x?(".to_string())));
+        #[allow(deprecated)] // TODO migrate UDF to invoke
         let actual = udf.invoke_batch(&[array, scalar], 2).unwrap();
         let expect = ColumnarValue::Array(Arc::new(BooleanArray::from(vec![
             Some(true),
