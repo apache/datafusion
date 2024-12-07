@@ -546,9 +546,11 @@ impl EquivalenceGroup {
                 .collect::<Vec<_>>();
             (new_class.len() > 1).then_some(EquivalenceClass::new(new_class))
         });
+        // the key is the source expression and the value is the target expression from the ProjectionMapping
         let mut new_classes: IndexMap<Arc<dyn PhysicalExpr>, Vec<Arc<dyn PhysicalExpr>>> =
             IndexMap::new();
         for (source, target) in mapping.iter() {
+            // Check if the source expression already exists in the new_classes map
             if let Some(values) = new_classes.get_mut(source) {
                 if !physical_exprs_contains(values, target) {
                     values.push(Arc::clone(target));
