@@ -19,13 +19,11 @@
 
 use std::any::Any;
 use std::fmt::Debug;
-use std::sync::OnceLock;
 
 use arrow::{datatypes::DataType, datatypes::Field};
 use arrow_schema::DataType::{Float64, UInt64};
 
 use datafusion_common::{not_impl_err, plan_err, Result};
-use datafusion_doc::DocSection;
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::type_coercion::aggregates::NUMERICS;
 use datafusion_expr::utils::format_state_name;

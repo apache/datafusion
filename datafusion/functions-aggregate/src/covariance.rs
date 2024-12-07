@@ -19,7 +19,6 @@
 
 use std::fmt::Debug;
 use std::mem::size_of_val;
-use std::sync::OnceLock;
 
 use arrow::{
     array::{ArrayRef, Float64Array, UInt64Array},
@@ -31,7 +30,6 @@ use datafusion_common::{
     downcast_value, plan_err, unwrap_or_internal_err, DataFusionError, Result,
     ScalarValue,
 };
-use datafusion_doc::DocSection;
 use datafusion_expr::{
     function::{AccumulatorArgs, StateFieldsArgs},
     type_coercion::aggregates::NUMERICS,
