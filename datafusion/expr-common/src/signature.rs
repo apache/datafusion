@@ -124,8 +124,7 @@ pub enum TypeSignature {
     ///
     /// See `comparison_coercion_numeric` for more details.
     Comparable(usize),
-    /// Fixed number of arguments of arbitrary types
-    /// If a function takes 0 argument, its `TypeSignature` should be `Any(0)`
+    /// Fixed number of arguments of arbitrary types, number should be larger than 0
     Any(usize),
     /// Matches exactly one of a list of [`TypeSignature`]s. Coercion is attempted to match
     /// the signatures in order, and stops after the first success, if any.
