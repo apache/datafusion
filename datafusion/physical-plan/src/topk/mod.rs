@@ -95,9 +95,7 @@ pub struct TopK {
 impl TopK {
     /// Create a new [`TopK`] that stores the top `k` values, as
     /// defined by the sort expressions in `expr`.
-    // TODO: make a builder or some other nicer API to avoid the
-    // clippy warning
-    #[allow(clippy::too_many_arguments)]
+    // TODO: make a builder or some other nicer API
     pub fn try_new(
         partition_id: usize,
         schema: SchemaRef,
@@ -106,7 +104,6 @@ impl TopK {
         batch_size: usize,
         runtime: Arc<RuntimeEnv>,
         metrics: &ExecutionPlanMetricsSet,
-        partition: usize,
     ) -> Result<Self> {
         let reservation = MemoryConsumer::new(format!("TopK[{partition_id}]"))
             .register(&runtime.memory_pool);
@@ -133,7 +130,7 @@ impl TopK {
 
         Ok(Self {
             schema: Arc::clone(&schema),
-            metrics: TopKMetrics::new(metrics, partition),
+            metrics: TopKMetrics::new(metrics, partition_id),
             reservation,
             batch_size,
             expr,

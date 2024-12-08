@@ -62,7 +62,11 @@ impl ScalarUDFImpl for LowerFunc {
         utf8_to_str_type(&arg_types[0], "lower")
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         to_lower(args, "lower")
     }
 
@@ -75,12 +79,13 @@ static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
 
 fn get_lower_doc() -> &'static Documentation {
     DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_STRING)
-            .with_description("Converts a string to lower-case.")
-            .with_syntax_example("lower(str)")
-            .with_sql_example(
-                r#"```sql
+        Documentation::builder(
+            DOC_SECTION_STRING,
+            "Converts a string to lower-case.",
+            "lower(str)",
+        )
+        .with_sql_example(
+            r#"```sql
 > select lower('Ångström');
 +-------------------------+
 | lower(Utf8("Ångström")) |
@@ -88,25 +93,25 @@ fn get_lower_doc() -> &'static Documentation {
 | ångström                |
 +-------------------------+
 ```"#,
-            )
-            .with_standard_argument("str", Some("String"))
-            .with_related_udf("initcap")
-            .with_related_udf("upper")
-            .build()
-            .unwrap()
+        )
+        .with_standard_argument("str", Some("String"))
+        .with_related_udf("initcap")
+        .with_related_udf("upper")
+        .build()
     })
 }
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow::array::{ArrayRef, StringArray};
+    use arrow::array::{Array, ArrayRef, StringArray};
     use std::sync::Arc;
 
     fn to_lower(input: ArrayRef, expected: ArrayRef) -> Result<()> {
         let func = LowerFunc::new();
+        let batch_len = input.len();
         let args = vec![ColumnarValue::Array(input)];
-        #[allow(deprecated)] // TODO migrate UDF invoke to invoke_batch
-        let result = match func.invoke(&args)? {
+        #[allow(deprecated)] // TODO migrate UDF to invoke
+        let result = match func.invoke_batch(&args, batch_len)? {
             ColumnarValue::Array(result) => result,
             _ => unreachable!("lower"),
         };

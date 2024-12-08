@@ -35,6 +35,7 @@ use datafusion_expr::utils::{expr_as_column_expr, find_column_exprs};
 use datafusion_expr::{
     col, expr_vec_fmt, ColumnUnnestList, Expr, ExprSchemable, LogicalPlan,
 };
+
 use indexmap::IndexMap;
 use sqlparser::ast::{Ident, Value};
 
@@ -259,7 +260,7 @@ pub(crate) fn make_decimal_type(
     }
 }
 
-// Normalize an owned identifier to a lowercase string unless the identifier is quoted.
+/// Normalize an owned identifier to a lowercase string, unless the identifier is quoted.
 pub(crate) fn normalize_ident(id: Ident) -> String {
     match id.quote_style {
         Some(_) => id.value,
@@ -328,7 +329,7 @@ struct RecursiveUnnestRewriter<'a> {
     columns_unnestings: &'a mut IndexMap<Column, Option<Vec<ColumnUnnestList>>>,
     transformed_root_exprs: Option<Vec<Expr>>,
 }
-impl<'a> RecursiveUnnestRewriter<'a> {
+impl RecursiveUnnestRewriter<'_> {
     /// This struct stores the history of expr
     /// during its tree-traversal with a notation of
     /// \[None,**Unnest(exprA)**,**Unnest(exprB)**,None,None\]
@@ -416,7 +417,7 @@ impl<'a> RecursiveUnnestRewriter<'a> {
     }
 }
 
-impl<'a> TreeNodeRewriter for RecursiveUnnestRewriter<'a> {
+impl TreeNodeRewriter for RecursiveUnnestRewriter<'_> {
     type Node = Expr;
 
     /// This downward traversal needs to keep track of:
@@ -624,9 +625,9 @@ mod tests {
     };
     use datafusion_functions::core::expr_ext::FieldAccessor;
     use datafusion_functions_aggregate::expr_fn::count;
-    use indexmap::IndexMap;
 
     use crate::utils::{resolve_positions_to_exprs, rewrite_recursive_unnest_bottom_up};
+    use indexmap::IndexMap;
 
     fn column_unnests_eq(
         l: Vec<&str>,
@@ -763,8 +764,7 @@ mod tests {
             ),
             Field::new(
                 "array_col",
-                ArrowDataType::List(Arc::new(Field::new(
-                    "item",
+                ArrowDataType::List(Arc::new(Field::new_list_field(
                     ArrowDataType::Int64,
                     true,
                 ))),

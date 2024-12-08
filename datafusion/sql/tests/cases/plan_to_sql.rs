@@ -20,11 +20,14 @@ use std::vec;
 
 use arrow_schema::*;
 use datafusion_common::{DFSchema, Result, TableReference};
-use datafusion_expr::test::function_stub::{count_udaf, max_udaf, min_udaf, sum_udaf};
+use datafusion_expr::test::function_stub::{
+    count_udaf, max_udaf, min_udaf, sum, sum_udaf,
+};
 use datafusion_expr::{col, lit, table_scan, wildcard, LogicalPlanBuilder};
 use datafusion_functions::unicode;
 use datafusion_functions_aggregate::grouping::grouping_udaf;
 use datafusion_functions_nested::make_array::make_array_udf;
+use datafusion_functions_nested::map::map_udf;
 use datafusion_functions_window::rank::rank_udwf;
 use datafusion_sql::planner::{ContextProvider, PlannerContext, SqlToRel};
 use datafusion_sql::unparser::dialect::{
@@ -38,6 +41,8 @@ use datafusion_expr::builder::{
     table_scan_with_filter_and_fetch, table_scan_with_filters,
 };
 use datafusion_functions::core::planner::CoreFunctionPlanner;
+use datafusion_functions_nested::extract::array_element_udf;
+use datafusion_functions_nested::planner::{FieldAccessPlanner, NestedFunctionPlanner};
 use sqlparser::dialect::{Dialect, GenericDialect, MySqlDialect};
 use sqlparser::parser::Parser;
 
@@ -180,6 +185,14 @@ fn roundtrip_statement() -> Result<()> {
             SUM(id) OVER (ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS running_total
             FROM person
             GROUP BY GROUPING SETS ((id, first_name, last_name), (first_name, last_name), (last_name))"#,
+            "SELECT ARRAY[1, 2, 3]",
+            "SELECT ARRAY[1, 2, 3][1]",
+            "SELECT [1, 2, 3]",
+            "SELECT [1, 2, 3][1]",
+            "SELECT left[1] FROM array",
+            "SELECT {a:1, b:2}",
+            "SELECT s.a FROM (SELECT {a:1, b:2} AS s)",
+            "SELECT MAP {'a': 1, 'b': 2}"
     ];
 
     // For each test sql string, we transform as follows:
@@ -193,10 +206,15 @@ fn roundtrip_statement() -> Result<()> {
             .try_with_sql(query)?
             .parse_statement()?;
         let state = MockSessionState::default()
+            .with_scalar_function(make_array_udf())
+            .with_scalar_function(array_element_udf())
+            .with_scalar_function(map_udf())
             .with_aggregate_function(sum_udaf())
             .with_aggregate_function(count_udaf())
             .with_aggregate_function(max_udaf())
-            .with_expr_planner(Arc::new(CoreFunctionPlanner::default()));
+            .with_expr_planner(Arc::new(CoreFunctionPlanner::default()))
+            .with_expr_planner(Arc::new(NestedFunctionPlanner))
+            .with_expr_planner(Arc::new(FieldAccessPlanner));
         let context = MockContextProvider { state };
         let sql_to_rel = SqlToRel::new(&context);
         let plan = sql_to_rel.sql_statement_to_plan(statement).unwrap();
@@ -283,7 +301,7 @@ fn roundtrip_statement_with_dialect() -> Result<()> {
         TestStatementWithDialect {
             sql: "select min(ta.j1_id) as j1_min, max(tb.j1_max) from j1 ta, (select distinct max(ta.j1_id) as j1_max from j1 ta order by max(ta.j1_id)) tb order by min(ta.j1_id) limit 10;",
             expected:
-                "SELECT `j1_min`, `max(tb.j1_max)` FROM (SELECT min(`ta`.`j1_id`) AS `j1_min`, max(`tb`.`j1_max`), min(`ta`.`j1_id`) FROM `j1` AS `ta` JOIN (SELECT `j1_max` FROM (SELECT DISTINCT max(`ta`.`j1_id`) AS `j1_max` FROM `j1` AS `ta`) AS `derived_distinct`) AS `tb` ORDER BY min(`ta`.`j1_id`) ASC) AS `derived_sort` LIMIT 10",
+                "SELECT `j1_min`, `max(tb.j1_max)` FROM (SELECT min(`ta`.`j1_id`) AS `j1_min`, max(`tb`.`j1_max`), min(`ta`.`j1_id`) FROM `j1` AS `ta` CROSS JOIN (SELECT `j1_max` FROM (SELECT DISTINCT max(`ta`.`j1_id`) AS `j1_max` FROM `j1` AS `ta`) AS `derived_distinct`) AS `tb` ORDER BY min(`ta`.`j1_id`) ASC) AS `derived_sort` LIMIT 10",
             parser_dialect: Box::new(MySqlDialect {}),
             unparser_dialect: Box::new(UnparserMySqlDialect {}),
         },
@@ -559,6 +577,32 @@ Projection: unnest_placeholder(unnest_table.struct_col).field1, unnest_placehold
       TableScan: unnest_table"#.trim_start();
 
     assert_eq!(plan.to_string(), expected);
+
+    Ok(())
+}
+
+#[test]
+fn test_aggregation_without_projection() -> Result<()> {
+    let schema = Schema::new(vec![
+        Field::new("name", DataType::Utf8, false),
+        Field::new("age", DataType::UInt8, false),
+    ]);
+
+    let plan = LogicalPlanBuilder::from(
+        table_scan(Some("users"), &schema, Some(vec![0, 1]))?.build()?,
+    )
+    .aggregate(vec![col("name")], vec![sum(col("age"))])?
+    .build()?;
+
+    let unparser = Unparser::default();
+    let statement = unparser.plan_to_sql(&plan)?;
+
+    let actual = &statement.to_string();
+
+    assert_eq!(
+        actual,
+        r#"SELECT sum(users.age), users."name" FROM users GROUP BY users."name""#
+    );
 
     Ok(())
 }
@@ -882,12 +926,25 @@ fn test_table_scan_pushdown() -> Result<()> {
     let query_from_table_scan_with_projection = LogicalPlanBuilder::from(
         table_scan(Some("t1"), &schema, Some(vec![0, 1]))?.build()?,
     )
-    .project(vec![wildcard()])?
+    .project(vec![col("id"), col("age")])?
     .build()?;
     let query_from_table_scan_with_projection =
         plan_to_sql(&query_from_table_scan_with_projection)?;
     assert_eq!(
         query_from_table_scan_with_projection.to_string(),
+        "SELECT t1.id, t1.age FROM t1"
+    );
+
+    let query_from_table_scan_with_two_projections = LogicalPlanBuilder::from(
+        table_scan(Some("t1"), &schema, Some(vec![0, 1]))?.build()?,
+    )
+    .project(vec![col("id"), col("age")])?
+    .project(vec![wildcard()])?
+    .build()?;
+    let query_from_table_scan_with_two_projections =
+        plan_to_sql(&query_from_table_scan_with_two_projections)?;
+    assert_eq!(
+        query_from_table_scan_with_two_projections.to_string(),
         "SELECT * FROM (SELECT t1.id, t1.age FROM t1)"
     );
 
@@ -1118,6 +1175,36 @@ fn test_join_with_table_scan_filters() -> Result<()> {
 
     assert_eq!(sql.to_string(), expected_sql);
 
+    let right_plan_with_filter_schema = table_scan_with_filters(
+        Some("right_table"),
+        &schema_right,
+        None,
+        vec![
+            col("right_table.age").gt(lit(10)),
+            col("right_table.age").lt(lit(11)),
+        ],
+    )?
+    .build()?;
+    let right_plan_with_duplicated_filter =
+        LogicalPlanBuilder::from(right_plan_with_filter_schema.clone())
+            .filter(col("right_table.age").gt(lit(10)))?
+            .build()?;
+
+    let join_plan_duplicated_filter = LogicalPlanBuilder::from(left_plan)
+        .join(
+            right_plan_with_duplicated_filter,
+            datafusion_expr::JoinType::Inner,
+            (vec!["left.id"], vec!["right_table.id"]),
+            Some(col("left.id").gt(lit(5))),
+        )?
+        .build()?;
+
+    let sql = plan_to_sql(&join_plan_duplicated_filter)?;
+
+    let expected_sql = r#"SELECT * FROM left_table AS "left" JOIN right_table ON "left".id = right_table.id AND (("left".id > 5) AND (("left"."name" LIKE 'some_name' AND (right_table.age > 10)) AND (right_table.age < 11)))"#;
+
+    assert_eq!(sql.to_string(), expected_sql);
+
     Ok(())
 }
 
@@ -1211,6 +1298,20 @@ fn test_unnest_to_sql() {
     sql_round_trip(
         GenericDialect {},
         r#"SELECT unnest(make_array(1, 2, 2, 5, NULL)) as u1"#,
-        r#"SELECT UNNEST(make_array(1, 2, 2, 5, NULL)) AS u1"#,
+        r#"SELECT UNNEST([1, 2, 2, 5, NULL]) AS u1"#,
+    );
+}
+
+#[test]
+fn test_join_with_no_conditions() {
+    sql_round_trip(
+        GenericDialect {},
+        "SELECT * FROM j1 JOIN j2",
+        "SELECT * FROM j1 CROSS JOIN j2",
+    );
+    sql_round_trip(
+        GenericDialect {},
+        "SELECT * FROM j1 CROSS JOIN j2",
+        "SELECT * FROM j1 CROSS JOIN j2",
     );
 }

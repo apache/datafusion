@@ -507,24 +507,9 @@ message ScalarUDFExprNode {
   optional bytes fun_definition = 3;
 }
 
-enum BuiltInWindowFunction {
-  UNSPECIFIED = 0; // https://protobuf.dev/programming-guides/dos-donts/#unspecified-enum
-  // ROW_NUMBER = 0;
-  //  RANK = 1;
-  //  DENSE_RANK = 2;
-  //  PERCENT_RANK = 3;
-  //  CUME_DIST = 4;
-  //  NTILE = 5;
-  // LAG = 6;
-  // LEAD = 7;
-  FIRST_VALUE = 8;
-  LAST_VALUE = 9;
-  NTH_VALUE = 10;
-}
-
 message WindowExprNode {
   oneof window_function {
-    BuiltInWindowFunction built_in_function = 2;
+    // BuiltInWindowFunction built_in_function = 2;
     string udaf = 3;
     string udwf = 9;
   }
@@ -843,6 +828,8 @@ message PhysicalExprNode {
     PhysicalLikeExprNode like_expr = 18;
 
     PhysicalExtensionExprNode extension = 19;
+
+    UnknownColumn unknown_column = 20;
   }
 }
 
@@ -866,8 +853,9 @@ message PhysicalAggregateExprNode {
 
 message PhysicalWindowExprNode {
   oneof window_function {
-    BuiltInWindowFunction built_in_function = 2;
+    // BuiltInWindowFunction built_in_function = 2;
     string user_defined_aggr_function = 3;
+    string user_defined_window_function = 10;
   }
   repeated PhysicalExprNode args = 4;
   repeated PhysicalExprNode partition_by = 5;
@@ -1079,6 +1067,10 @@ message CrossJoinExecNode {
 message PhysicalColumn {
   string name = 1;
   uint32 index = 2;
+}
+
+message UnknownColumn {
+  string name = 1;
 }
 
 message JoinOn {

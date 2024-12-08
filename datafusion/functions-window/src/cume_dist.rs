@@ -94,14 +94,8 @@ static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
 
 fn get_cume_dist_doc() -> &'static Documentation {
     DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_RANKING)
-            .with_description(
-                "Relative rank of the current row: (number of rows preceding or peer with current row) / (total rows).",
-            )
-            .with_syntax_example("cume_dist()")
+        Documentation::builder(DOC_SECTION_RANKING, "Relative rank of the current row: (number of rows preceding or peer with current row) / (total rows).", "cume_dist()")
             .build()
-            .unwrap()
     })
 }
 

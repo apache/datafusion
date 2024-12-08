@@ -72,6 +72,7 @@ blake2 = { version = "^0.10.2", optional = true }
 blake3 = { version = "1.0", optional = true }
 chrono = { workspace = true }
 datafusion-common = { workspace = true }
+datafusion-doc = { workspace = true }
 datafusion-execution = { workspace = true }
 datafusion-expr = { workspace = true }
 datafusion-expr-common = { workspace = true }
@@ -91,7 +92,6 @@ uuid = { version = "1.7", features = ["v4"], optional = true }
 arrow = { workspace = true, features = ["test_utils"] }
 criterion = "0.5"
 rand = { workspace = true }
-rstest = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt", "sync"] }
 
 [[bench]]

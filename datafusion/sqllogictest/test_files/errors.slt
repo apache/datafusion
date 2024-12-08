@@ -70,7 +70,7 @@ SELECT COUNT(*) FROM nonexistentschema.aggregate_test_100
 statement error Error during planning: table 'nonexistentcatalog\.public\.aggregate_test_100' not found
 SELECT COUNT(*) FROM nonexistentcatalog.public.aggregate_test_100
 
-statement error Error during planning: Unsupported compound identifier '\[Ident \{ value: "way", quote_style: None \}, Ident \{ value: "too", quote_style: None \}, Ident \{ value: "many", quote_style: None \}, Ident \{ value: "namespaces", quote_style: None \}, Ident \{ value: "as", quote_style: None \}, Ident \{ value: "ident", quote_style: None \}, Ident \{ value: "prefixes", quote_style: None \}, Ident \{ value: "aggregate_test_100", quote_style: None \}\]'
+statement error DataFusion error: Error during planning: Unsupported compound identifier 'way\.too\.many\.namespaces\.as\.ident\.prefixes\.aggregate_test_100'\. Expected 1, 2 or 3 parts, got 8
 SELECT COUNT(*) FROM way.too.many.namespaces.as.ident.prefixes.aggregate_test_100
 
 
@@ -108,24 +108,41 @@ query error
 select avg(c1, c12) from aggregate_test_100;
 
 # AggregateFunction with wrong argument type
-statement error Coercion
+statement error DataFusion error: Error during planning: Error during planning: Failed to coerce arguments to satisfy a call to regr_slope function: coercion from
 select regr_slope(1, '2');
 
 # WindowFunction using AggregateFunction wrong signature
-statement error Coercion
+statement error DataFusion error: Error during planning: Error during planning: Failed to coerce arguments to satisfy a call to regr_slope function: coercion from
 select
 c9,
 regr_slope(c11, '2') over () as min1
 from aggregate_test_100
 order by c9
 
-# WindowFunction with BuiltInWindowFunction wrong signature
-statement error DataFusion error: Error during planning: No function matches the given name and argument types 'NTH_VALUE\(Int32, Int64, Int64\)'\. You might need to add explicit type casts\.\n\tCandidate functions:\n\tNTH_VALUE\(Any, Any\)
+# WindowFunction wrong signature
+statement error DataFusion error: Error during planning: Error during planning: Failed to coerce arguments to satisfy a call to nth_value function: coercion from \[Int32, Int64, Int64\] to the signature OneOf\(\[Any\(0\), Any\(1\), Any\(2\)\]\) failed
 select
 c9,
 nth_value(c5, 2, 3) over (order by c9) as nv1
 from aggregate_test_100
 order by c9
+
+
+# nth_value with wrong name
+statement error DataFusion error: Error during planning: Invalid function 'nth_vlue'.\nDid you mean 'nth_value'?
+SELECT
+   NTH_VLUE(c4, 2) OVER()
+   FROM aggregate_test_100
+   ORDER BY c9
+   LIMIT 5;
+
+# first_value with wrong name
+statement error DataFusion error: Error during planning: Invalid function 'frst_value'.\nDid you mean 'first_value'?
+SELECT
+   FRST_VALUE(c4, 2) OVER()
+   FROM aggregate_test_100
+   ORDER BY c9
+   LIMIT 5;
 
 
 query error DataFusion error: Arrow error: Cast error: Cannot cast string 'foo' to value of Int64 type

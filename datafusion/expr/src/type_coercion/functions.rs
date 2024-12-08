@@ -68,7 +68,12 @@ pub fn data_types_with_scalar_udf(
         return Ok(current_types.to_vec());
     }
 
-    try_coerce_types(valid_types, current_types, &signature.type_signature)
+    try_coerce_types(
+        func.name(),
+        valid_types,
+        current_types,
+        &signature.type_signature,
+    )
 }
 
 /// Performs type coercion for aggregate function arguments.
@@ -104,7 +109,12 @@ pub fn data_types_with_aggregate_udf(
         return Ok(current_types.to_vec());
     }
 
-    try_coerce_types(valid_types, current_types, &signature.type_signature)
+    try_coerce_types(
+        func.name(),
+        valid_types,
+        current_types,
+        &signature.type_signature,
+    )
 }
 
 /// Performs type coercion for window function arguments.
@@ -137,7 +147,12 @@ pub fn data_types_with_window_udf(
         return Ok(current_types.to_vec());
     }
 
-    try_coerce_types(valid_types, current_types, &signature.type_signature)
+    try_coerce_types(
+        func.name(),
+        valid_types,
+        current_types,
+        &signature.type_signature,
+    )
 }
 
 /// Performs type coercion for function arguments.
@@ -148,6 +163,7 @@ pub fn data_types_with_window_udf(
 /// For more details on coercion in general, please see the
 /// [`type_coercion`](crate::type_coercion) module.
 pub fn data_types(
+    function_name: impl AsRef<str>,
     current_types: &[DataType],
     signature: &Signature,
 ) -> Result<Vec<DataType>> {
@@ -170,7 +186,12 @@ pub fn data_types(
         return Ok(current_types.to_vec());
     }
 
-    try_coerce_types(valid_types, current_types, &signature.type_signature)
+    try_coerce_types(
+        function_name,
+        valid_types,
+        current_types,
+        &signature.type_signature,
+    )
 }
 
 fn is_well_supported_signature(type_signature: &TypeSignature) -> bool {
@@ -186,10 +207,12 @@ fn is_well_supported_signature(type_signature: &TypeSignature) -> bool {
             | TypeSignature::Coercible(_)
             | TypeSignature::Any(_)
             | TypeSignature::NullAry
+            | TypeSignature::Comparable(_)
     )
 }
 
 fn try_coerce_types(
+    function_name: impl AsRef<str>,
     valid_types: Vec<Vec<DataType>>,
     current_types: &[DataType],
     type_signature: &TypeSignature,
@@ -209,6 +232,7 @@ fn try_coerce_types(
             return Ok(t);
         }
     } else {
+        // TODO: Deprecate this branch after all signatures are well-supported (aka coercion has happened already)
         // Try and coerce the argument types to match the signature, returning the
         // coerced types from the first matching signature.
         for valid_types in valid_types {
@@ -220,7 +244,8 @@ fn try_coerce_types(
 
     // none possible -> Error
     plan_err!(
-        "Coercion from {:?} to the signature {:?} failed.",
+        "Failed to coerce arguments to satisfy a call to {} function: coercion from {:?} to the signature {:?} failed.",
+        function_name.as_ref(),
         current_types,
         type_signature
     )
@@ -522,6 +547,23 @@ fn get_valid_types(
             }
 
             vec![vec![valid_type; *number]]
+        }
+        TypeSignature::Comparable(num) => {
+            function_length_check(current_types.len(), *num)?;
+            let mut target_type = current_types[0].to_owned();
+            for data_type in current_types.iter().skip(1) {
+                if let Some(dt) = comparison_coercion_numeric(&target_type, data_type) {
+                    target_type = dt;
+                } else {
+                    return plan_err!("{target_type} and {data_type} is not comparable");
+                }
+            }
+            // Convert null to String type.
+            if target_type.is_null() {
+                vec![vec![DataType::Utf8View; *num]]
+            } else {
+                vec![vec![target_type; *num]]
+            }
         }
         TypeSignature::Coercible(target_types) => {
             function_length_check(current_types.len(), target_types.len())?;
@@ -967,7 +1009,7 @@ mod tests {
 
     #[test]
     fn test_fixed_list_wildcard_coerce() -> Result<()> {
-        let inner = Arc::new(Field::new("item", DataType::Int32, false));
+        let inner = Arc::new(Field::new_list_field(DataType::Int32, false));
         let current_types = vec![
             DataType::FixedSizeList(Arc::clone(&inner), 2), // able to coerce for any size
         ];
@@ -980,7 +1022,7 @@ mod tests {
             Volatility::Stable,
         );
 
-        let coerced_data_types = data_types(&current_types, &signature).unwrap();
+        let coerced_data_types = data_types("test", &current_types, &signature).unwrap();
         assert_eq!(coerced_data_types, current_types);
 
         // make sure it can't coerce to a different size
@@ -988,7 +1030,7 @@ mod tests {
             vec![DataType::FixedSizeList(Arc::clone(&inner), 3)],
             Volatility::Stable,
         );
-        let coerced_data_types = data_types(&current_types, &signature);
+        let coerced_data_types = data_types("test", &current_types, &signature);
         assert!(coerced_data_types.is_err());
 
         // make sure it works with the same type.
@@ -996,7 +1038,7 @@ mod tests {
             vec![DataType::FixedSizeList(Arc::clone(&inner), 2)],
             Volatility::Stable,
         );
-        let coerced_data_types = data_types(&current_types, &signature).unwrap();
+        let coerced_data_types = data_types("test", &current_types, &signature).unwrap();
         assert_eq!(coerced_data_types, current_types);
 
         Ok(())
@@ -1005,10 +1047,9 @@ mod tests {
     #[test]
     fn test_nested_wildcard_fixed_size_lists() -> Result<()> {
         let type_into = DataType::FixedSizeList(
-            Arc::new(Field::new(
-                "item",
+            Arc::new(Field::new_list_field(
                 DataType::FixedSizeList(
-                    Arc::new(Field::new("item", DataType::Int32, false)),
+                    Arc::new(Field::new_list_field(DataType::Int32, false)),
                     FIXED_SIZE_LIST_WILDCARD,
                 ),
                 false,
@@ -1017,10 +1058,9 @@ mod tests {
         );
 
         let type_from = DataType::FixedSizeList(
-            Arc::new(Field::new(
-                "item",
+            Arc::new(Field::new_list_field(
                 DataType::FixedSizeList(
-                    Arc::new(Field::new("item", DataType::Int8, false)),
+                    Arc::new(Field::new_list_field(DataType::Int8, false)),
                     4,
                 ),
                 false,
@@ -1031,10 +1071,9 @@ mod tests {
         assert_eq!(
             coerced_from(&type_into, &type_from),
             Some(DataType::FixedSizeList(
-                Arc::new(Field::new(
-                    "item",
+                Arc::new(Field::new_list_field(
                     DataType::FixedSizeList(
-                        Arc::new(Field::new("item", DataType::Int32, false)),
+                        Arc::new(Field::new_list_field(DataType::Int32, false)),
                         4,
                     ),
                     false,

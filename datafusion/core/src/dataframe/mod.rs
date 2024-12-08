@@ -50,7 +50,8 @@ use arrow::datatypes::{DataType, Field};
 use arrow_schema::{Schema, SchemaRef};
 use datafusion_common::config::{CsvOptions, JsonOptions};
 use datafusion_common::{
-    plan_err, Column, DFSchema, DataFusionError, ParamValues, SchemaError, UnnestOptions,
+    exec_err, not_impl_err, plan_err, Column, DFSchema, DataFusionError, ParamValues,
+    SchemaError, UnnestOptions,
 };
 use datafusion_expr::dml::InsertOp;
 use datafusion_expr::{case, is_null, lit, SortExpr};
@@ -869,16 +870,16 @@ impl DataFrame {
             for result in describe_record_batch.iter() {
                 let array_ref = match result {
                     Ok(df) => {
-                        let batchs = df.clone().collect().await;
-                        match batchs {
-                            Ok(batchs)
-                                if batchs.len() == 1
-                                    && batchs[0]
+                        let batches = df.clone().collect().await;
+                        match batches {
+                            Ok(batches)
+                                if batches.len() == 1
+                                    && batches[0]
                                         .column_by_name(field.name())
                                         .is_some() =>
                             {
                                 let column =
-                                    batchs[0].column_by_name(field.name()).unwrap();
+                                    batches[0].column_by_name(field.name()).unwrap();
 
                                 if column.data_type().is_null() {
                                     Arc::new(StringArray::from(vec!["null"]))
@@ -901,9 +902,7 @@ impl DataFrame {
                     {
                         Arc::new(StringArray::from(vec!["null"]))
                     }
-                    Err(other_err) => {
-                        panic!("{other_err}")
-                    }
+                    Err(e) => return exec_err!("{}", e),
                 };
                 array_datas.push(array_ref);
             }
@@ -1564,10 +1563,10 @@ impl DataFrame {
         writer_options: Option<CsvOptions>,
     ) -> Result<Vec<RecordBatch>, DataFusionError> {
         if options.insert_op != InsertOp::Append {
-            return Err(DataFusionError::NotImplemented(format!(
+            return not_impl_err!(
                 "{} is not implemented for DataFrame::write_csv.",
                 options.insert_op
-            )));
+            );
         }
 
         let format = if let Some(csv_opts) = writer_options {
@@ -1625,10 +1624,10 @@ impl DataFrame {
         writer_options: Option<JsonOptions>,
     ) -> Result<Vec<RecordBatch>, DataFusionError> {
         if options.insert_op != InsertOp::Append {
-            return Err(DataFusionError::NotImplemented(format!(
+            return not_impl_err!(
                 "{} is not implemented for DataFrame::write_json.",
                 options.insert_op
-            )));
+            );
         }
 
         let format = if let Some(json_opts) = writer_options {
@@ -1671,7 +1670,7 @@ impl DataFrame {
     /// # }
     /// ```
     pub fn with_column(self, name: &str, expr: Expr) -> Result<DataFrame> {
-        let window_func_exprs = find_window_exprs(&[expr.clone()]);
+        let window_func_exprs = find_window_exprs(std::slice::from_ref(&expr));
 
         let (window_fn_str, plan) = if window_func_exprs.is_empty() {
             (None, self.plan)
@@ -1946,12 +1945,12 @@ mod tests {
     use datafusion_common_runtime::SpawnedTask;
     use datafusion_expr::expr::WindowFunction;
     use datafusion_expr::{
-        cast, create_udf, lit, BuiltInWindowFunction, ExprFunctionExt,
-        ScalarFunctionImplementation, Volatility, WindowFrame, WindowFrameBound,
-        WindowFrameUnits, WindowFunctionDefinition,
+        cast, create_udf, lit, ExprFunctionExt, ScalarFunctionImplementation, Volatility,
+        WindowFrame, WindowFrameBound, WindowFrameUnits, WindowFunctionDefinition,
     };
     use datafusion_functions_aggregate::expr_fn::{array_agg, count_distinct};
     use datafusion_functions_window::expr_fn::row_number;
+    use datafusion_functions_window::nth_value::first_value_udwf;
     use datafusion_physical_expr::expressions::Column;
     use datafusion_physical_plan::{get_plan_string, ExecutionPlanProperties};
     use sqlparser::ast::NullTreatment;
@@ -2177,9 +2176,7 @@ mod tests {
         // build plan using Table API
         let t = test_table().await?;
         let first_row = Expr::WindowFunction(WindowFunction::new(
-            WindowFunctionDefinition::BuiltInWindowFunction(
-                BuiltInWindowFunction::FirstValue,
-            ),
+            WindowFunctionDefinition::WindowUDF(first_value_udwf()),
             vec![col("aggregate_test_100.c1")],
         ))
         .partition_by(vec![col("aggregate_test_100.c2")])

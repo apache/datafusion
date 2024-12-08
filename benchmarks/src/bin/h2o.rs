@@ -27,6 +27,7 @@ use datafusion::datasource::MemTable;
 use datafusion::prelude::CsvReadOptions;
 use datafusion::{arrow::util::pretty, error::Result, prelude::SessionContext};
 use datafusion_benchmarks::util::BenchmarkRun;
+use datafusion_common::utils::get_available_parallelism;
 use std::path::PathBuf;
 use std::sync::Arc;
 use structopt::StructOpt;
@@ -91,7 +92,7 @@ async fn group_by(opt: &GroupBy) -> Result<()> {
             .with_listing_options(ListingOptions::new(Arc::new(CsvFormat::default())))
             .with_schema(Arc::new(schema));
         let csv = ListingTable::try_new(listing_config)?;
-        let partition_size = num_cpus::get();
+        let partition_size = get_available_parallelism();
         let memtable =
             MemTable::load(Arc::new(csv), Some(partition_size), &ctx.state()).await?;
         ctx.register_table("x", Arc::new(memtable))?;

@@ -15,8 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Manages files generated during query execution, files are
-//! hashed among the directories listed in RuntimeConfig::local_dirs.
+//! [`DiskManager`]: Manages files generated during query execution
 
 use datafusion_common::{resources_datafusion_err, DataFusionError, Result};
 use log::debug;
@@ -139,7 +138,7 @@ impl DiskManager {
 
         let dir_index = thread_rng().gen_range(0..local_dirs.len());
         Ok(RefCountedTempFile {
-            parent_temp_dir: Arc::clone(&local_dirs[dir_index]),
+            _parent_temp_dir: Arc::clone(&local_dirs[dir_index]),
             tempfile: Builder::new()
                 .tempfile_in(local_dirs[dir_index].as_ref())
                 .map_err(DataFusionError::IoError)?,
@@ -153,8 +152,7 @@ impl DiskManager {
 pub struct RefCountedTempFile {
     /// The reference to the directory in which temporary files are created to ensure
     /// it is not cleaned up prior to the NamedTempFile
-    #[allow(dead_code)]
-    parent_temp_dir: Arc<TempDir>,
+    _parent_temp_dir: Arc<TempDir>,
     tempfile: NamedTempFile,
 }
 

@@ -31,7 +31,7 @@ use std::{fmt::Debug, sync::Arc};
 use datafusion_common::{
     downcast_value, not_impl_err, plan_err, DataFusionError, Result, ScalarValue,
 };
-use datafusion_expr::aggregate_doc_sections::DOC_SECTION_GENERAL;
+use datafusion_doc::DocSection;
 use datafusion_expr::{
     function::{AccumulatorArgs, StateFieldsArgs},
     utils::format_state_name,
@@ -41,6 +41,7 @@ use datafusion_expr::{
 use datafusion_functions_aggregate_common::{
     aggregate::groups_accumulator::accumulate::accumulate, stats::StatsType,
 };
+use datafusion_macros::user_doc;
 
 make_udaf_expr_and_func!(
     VarianceSample,
@@ -58,6 +59,12 @@ make_udaf_expr_and_func!(
     var_pop_udaf
 );
 
+#[user_doc(
+    doc_section(label = "General Functions"),
+    description = "Returns the statistical sample variance of a set of numbers.",
+    syntax_example = "var(expression)",
+    standard_argument(name = "expression", prefix = "Numeric")
+)]
 pub struct VarianceSample {
     signature: Signature,
     aliases: Vec<String>,
@@ -137,26 +144,16 @@ impl AggregateUDFImpl for VarianceSample {
     }
 
     fn documentation(&self) -> Option<&Documentation> {
-        Some(get_variance_sample_doc())
+        self.doc()
     }
 }
 
-static VARIANCE_SAMPLE_DOC: OnceLock<Documentation> = OnceLock::new();
-
-fn get_variance_sample_doc() -> &'static Documentation {
-    VARIANCE_SAMPLE_DOC.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_GENERAL)
-            .with_description(
-                "Returns the statistical sample variance of a set of numbers.",
-            )
-            .with_syntax_example("var(expression)")
-            .with_standard_argument("expression", Some("Numeric"))
-            .build()
-            .unwrap()
-    })
-}
-
+#[user_doc(
+    doc_section(label = "General Functions"),
+    description = "Returns the statistical population variance of a set of numbers.",
+    syntax_example = "var_pop(expression)",
+    standard_argument(name = "expression", prefix = "Numeric")
+)]
 pub struct VariancePopulation {
     signature: Signature,
     aliases: Vec<String>,
@@ -243,24 +240,8 @@ impl AggregateUDFImpl for VariancePopulation {
         )))
     }
     fn documentation(&self) -> Option<&Documentation> {
-        Some(get_variance_population_doc())
+        self.doc()
     }
-}
-
-static VARIANCE_POPULATION_DOC: OnceLock<Documentation> = OnceLock::new();
-
-fn get_variance_population_doc() -> &'static Documentation {
-    VARIANCE_POPULATION_DOC.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_GENERAL)
-            .with_description(
-                "Returns the statistical population variance of a set of numbers.",
-            )
-            .with_syntax_example("var_pop(expression)")
-            .with_standard_argument("expression", Some("Numeric"))
-            .build()
-            .unwrap()
-    })
 }
 
 /// An accumulator to compute variance
@@ -460,7 +441,7 @@ impl VarianceGroupsAccumulator {
         counts: &UInt64Array,
         means: &Float64Array,
         m2s: &Float64Array,
-        opt_filter: Option<&BooleanArray>,
+        _opt_filter: Option<&BooleanArray>,
         mut value_fn: F,
     ) where
         F: FnMut(usize, u64, f64, f64) + Send,
@@ -469,33 +450,14 @@ impl VarianceGroupsAccumulator {
         assert_eq!(means.null_count(), 0);
         assert_eq!(m2s.null_count(), 0);
 
-        match opt_filter {
-            None => {
-                group_indices
-                    .iter()
-                    .zip(counts.values().iter())
-                    .zip(means.values().iter())
-                    .zip(m2s.values().iter())
-                    .for_each(|(((&group_index, &count), &mean), &m2)| {
-                        value_fn(group_index, count, mean, m2);
-                    });
-            }
-            Some(filter) => {
-                group_indices
-                    .iter()
-                    .zip(counts.values().iter())
-                    .zip(means.values().iter())
-                    .zip(m2s.values().iter())
-                    .zip(filter.iter())
-                    .for_each(
-                        |((((&group_index, &count), &mean), &m2), filter_value)| {
-                            if let Some(true) = filter_value {
-                                value_fn(group_index, count, mean, m2);
-                            }
-                        },
-                    );
-            }
-        }
+        group_indices
+            .iter()
+            .zip(counts.values().iter())
+            .zip(means.values().iter())
+            .zip(m2s.values().iter())
+            .for_each(|(((&group_index, &count), &mean), &m2)| {
+                value_fn(group_index, count, mean, m2);
+            });
     }
 
     pub fn variance(
@@ -554,7 +516,8 @@ impl GroupsAccumulator for VarianceGroupsAccumulator {
         &mut self,
         values: &[ArrayRef],
         group_indices: &[usize],
-        opt_filter: Option<&BooleanArray>,
+        // Since aggregate filter should be applied in partial stage, in final stage there should be no filter
+        _opt_filter: Option<&BooleanArray>,
         total_num_groups: usize,
     ) -> Result<()> {
         assert_eq!(values.len(), 3, "two arguments to merge_batch");
@@ -569,7 +532,7 @@ impl GroupsAccumulator for VarianceGroupsAccumulator {
             partial_counts,
             partial_means,
             partial_m2s,
-            opt_filter,
+            None,
             |group_index, partial_count, partial_mean, partial_m2| {
                 if partial_count == 0 {
                     return;

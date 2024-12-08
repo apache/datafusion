@@ -38,7 +38,7 @@ use datafusion::logical_expr::WindowFunctionDefinition;
 use datafusion::physical_expr::{LexOrdering, PhysicalSortExpr, ScalarFunctionExpr};
 use datafusion::physical_plan::expressions::{
     in_list, BinaryExpr, CaseExpr, CastExpr, Column, IsNotNullExpr, IsNullExpr, LikeExpr,
-    Literal, NegativeExpr, NotExpr, TryCastExpr,
+    Literal, NegativeExpr, NotExpr, TryCastExpr, UnKnownColumn,
 };
 use datafusion::physical_plan::windows::{create_window_expr, schema_add_window_field};
 use datafusion::physical_plan::{Partitioning, PhysicalExpr, WindowExpr};
@@ -146,19 +146,16 @@ pub fn parse_physical_window_expr(
 
     let fun = if let Some(window_func) = proto.window_function.as_ref() {
         match window_func {
-            protobuf::physical_window_expr_node::WindowFunction::BuiltInFunction(n) => {
-                let f = protobuf::BuiltInWindowFunction::try_from(*n).map_err(|_| {
-                    proto_error(format!(
-                        "Received an unknown window builtin function: {n}"
-                    ))
-                })?;
-
-                WindowFunctionDefinition::BuiltInWindowFunction(f.into())
-            }
             protobuf::physical_window_expr_node::WindowFunction::UserDefinedAggrFunction(udaf_name) => {
                 WindowFunctionDefinition::AggregateUDF(match &proto.fun_definition {
                     Some(buf) => codec.try_decode_udaf(udaf_name, buf)?,
                     None => registry.udaf(udaf_name)?
+                })
+            }
+            protobuf::physical_window_expr_node::WindowFunction::UserDefinedWindowFunction(udwf_name) => {
+                WindowFunctionDefinition::WindowUDF(match &proto.fun_definition {
+                    Some(buf) => codec.try_decode_udwf(udwf_name, buf)?,
+                    None => registry.udwf(udwf_name)?
                 })
             }
         }
@@ -222,6 +219,7 @@ pub fn parse_physical_expr(
             let pcol: Column = c.into();
             Arc::new(pcol)
         }
+        ExprType::UnknownColumn(c) => Arc::new(UnKnownColumn::new(&c.name)),
         ExprType::Literal(scalar) => Arc::new(Literal::new(scalar.try_into()?)),
         ExprType::BinaryExpr(binary_expr) => Arc::new(BinaryExpr::new(
             parse_required_physical_expr(

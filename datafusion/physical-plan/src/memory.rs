@@ -17,6 +17,7 @@
 
 //! Execution plan for reading in-memory batches of data
 
+use parking_lot::RwLock;
 use std::any::Any;
 use std::fmt;
 use std::sync::Arc;
@@ -178,12 +179,24 @@ impl MemoryExec {
         self
     }
 
+    /// Ref to partitions
     pub fn partitions(&self) -> &[Vec<RecordBatch>] {
         &self.partitions
     }
 
+    /// Ref to projection
     pub fn projection(&self) -> &Option<Vec<usize>> {
         &self.projection
+    }
+
+    /// Show sizes
+    pub fn show_sizes(&self) -> bool {
+        self.show_sizes
+    }
+
+    /// Ref to sort information
+    pub fn sort_information(&self) -> &[LexOrdering] {
+        &self.sort_information
     }
 
     /// A memory table can be ordered by multiple expressions simultaneously.
@@ -261,6 +274,7 @@ impl MemoryExec {
         Ok(self)
     }
 
+    /// Arc clone of ref to original schema
     pub fn original_schema(&self) -> SchemaRef {
         Arc::clone(&self.schema)
     }
@@ -352,8 +366,165 @@ impl RecordBatchStream for MemoryStream {
     }
 }
 
+pub trait LazyBatchGenerator: Send + Sync + fmt::Debug + fmt::Display {
+    /// Generate the next batch, return `None` when no more batches are available
+    fn generate_next_batch(&mut self) -> Result<Option<RecordBatch>>;
+}
+
+/// Execution plan for lazy in-memory batches of data
+///
+/// This plan generates output batches lazily, it doesn't have to buffer all batches
+/// in memory up front (compared to `MemoryExec`), thus consuming constant memory.
+pub struct LazyMemoryExec {
+    /// Schema representing the data
+    schema: SchemaRef,
+    /// Functions to generate batches for each partition
+    batch_generators: Vec<Arc<RwLock<dyn LazyBatchGenerator>>>,
+    /// Plan properties cache storing equivalence properties, partitioning, and execution mode
+    cache: PlanProperties,
+}
+
+impl LazyMemoryExec {
+    /// Create a new lazy memory execution plan
+    pub fn try_new(
+        schema: SchemaRef,
+        generators: Vec<Arc<RwLock<dyn LazyBatchGenerator>>>,
+    ) -> Result<Self> {
+        let cache = PlanProperties::new(
+            EquivalenceProperties::new(Arc::clone(&schema)),
+            Partitioning::RoundRobinBatch(generators.len()),
+            ExecutionMode::Bounded,
+        );
+        Ok(Self {
+            schema,
+            batch_generators: generators,
+            cache,
+        })
+    }
+}
+
+impl fmt::Debug for LazyMemoryExec {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.debug_struct("LazyMemoryExec")
+            .field("schema", &self.schema)
+            .field("batch_generators", &self.batch_generators)
+            .finish()
+    }
+}
+
+impl DisplayAs for LazyMemoryExec {
+    fn fmt_as(&self, t: DisplayFormatType, f: &mut fmt::Formatter) -> fmt::Result {
+        match t {
+            DisplayFormatType::Default | DisplayFormatType::Verbose => {
+                write!(
+                    f,
+                    "LazyMemoryExec: partitions={}, batch_generators=[{}]",
+                    self.batch_generators.len(),
+                    self.batch_generators
+                        .iter()
+                        .map(|g| g.read().to_string())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                )
+            }
+        }
+    }
+}
+
+impl ExecutionPlan for LazyMemoryExec {
+    fn name(&self) -> &'static str {
+        "LazyMemoryExec"
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn schema(&self) -> SchemaRef {
+        Arc::clone(&self.schema)
+    }
+
+    fn properties(&self) -> &PlanProperties {
+        &self.cache
+    }
+
+    fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
+        vec![]
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        if children.is_empty() {
+            Ok(self)
+        } else {
+            internal_err!("Children cannot be replaced in LazyMemoryExec")
+        }
+    }
+
+    fn execute(
+        &self,
+        partition: usize,
+        _context: Arc<TaskContext>,
+    ) -> Result<SendableRecordBatchStream> {
+        if partition >= self.batch_generators.len() {
+            return internal_err!(
+                "Invalid partition {} for LazyMemoryExec with {} partitions",
+                partition,
+                self.batch_generators.len()
+            );
+        }
+
+        Ok(Box::pin(LazyMemoryStream {
+            schema: Arc::clone(&self.schema),
+            generator: Arc::clone(&self.batch_generators[partition]),
+        }))
+    }
+
+    fn statistics(&self) -> Result<Statistics> {
+        Ok(Statistics::new_unknown(&self.schema))
+    }
+}
+
+/// Stream that generates record batches on demand
+pub struct LazyMemoryStream {
+    schema: SchemaRef,
+    /// Generator to produce batches
+    ///
+    /// Note: Idiomatically, DataFusion uses plan-time parallelism - each stream
+    /// should have a unique `LazyBatchGenerator`. Use RepartitionExec or
+    /// construct multiple `LazyMemoryStream`s during planning to enable
+    /// parallel execution.
+    /// Sharing generators between streams should be used with caution.
+    generator: Arc<RwLock<dyn LazyBatchGenerator>>,
+}
+
+impl Stream for LazyMemoryStream {
+    type Item = Result<RecordBatch>;
+
+    fn poll_next(
+        self: std::pin::Pin<&mut Self>,
+        _: &mut Context<'_>,
+    ) -> Poll<Option<Self::Item>> {
+        let batch = self.generator.write().generate_next_batch();
+
+        match batch {
+            Ok(Some(batch)) => Poll::Ready(Some(Ok(batch))),
+            Ok(None) => Poll::Ready(None),
+            Err(e) => Poll::Ready(Some(Err(e))),
+        }
+    }
+}
+
+impl RecordBatchStream for LazyMemoryStream {
+    fn schema(&self) -> SchemaRef {
+        Arc::clone(&self.schema)
+    }
+}
+
 #[cfg(test)]
-mod tests {
+mod memory_exec_tests {
     use std::sync::Arc;
 
     use crate::memory::MemoryExec;
@@ -400,6 +571,126 @@ mod tests {
         let eq_properties = mem_exec.properties().equivalence_properties();
         assert!(eq_properties.oeq_class().contains(&sort1));
         assert!(eq_properties.oeq_class().contains(&sort2));
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod lazy_memory_tests {
+    use super::*;
+    use arrow::array::Int64Array;
+    use arrow::datatypes::{DataType, Field, Schema};
+    use futures::StreamExt;
+
+    #[derive(Debug, Clone)]
+    struct TestGenerator {
+        counter: i64,
+        max_batches: i64,
+        batch_size: usize,
+        schema: SchemaRef,
+    }
+
+    impl fmt::Display for TestGenerator {
+        fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+            write!(
+                f,
+                "TestGenerator: counter={}, max_batches={}, batch_size={}",
+                self.counter, self.max_batches, self.batch_size
+            )
+        }
+    }
+
+    impl LazyBatchGenerator for TestGenerator {
+        fn generate_next_batch(&mut self) -> Result<Option<RecordBatch>> {
+            if self.counter >= self.max_batches {
+                return Ok(None);
+            }
+
+            let array = Int64Array::from_iter_values(
+                (self.counter * self.batch_size as i64)
+                    ..(self.counter * self.batch_size as i64 + self.batch_size as i64),
+            );
+            self.counter += 1;
+            Ok(Some(RecordBatch::try_new(
+                Arc::clone(&self.schema),
+                vec![Arc::new(array)],
+            )?))
+        }
+    }
+
+    #[tokio::test]
+    async fn test_lazy_memory_exec() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int64, false)]));
+        let generator = TestGenerator {
+            counter: 0,
+            max_batches: 3,
+            batch_size: 2,
+            schema: Arc::clone(&schema),
+        };
+
+        let exec =
+            LazyMemoryExec::try_new(schema, vec![Arc::new(RwLock::new(generator))])?;
+
+        // Test schema
+        assert_eq!(exec.schema().fields().len(), 1);
+        assert_eq!(exec.schema().field(0).name(), "a");
+
+        // Test execution
+        let stream = exec.execute(0, Arc::new(TaskContext::default()))?;
+        let batches: Vec<_> = stream.collect::<Vec<_>>().await;
+
+        assert_eq!(batches.len(), 3);
+
+        // Verify batch contents
+        let batch0 = batches[0].as_ref().unwrap();
+        let array0 = batch0
+            .column(0)
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .unwrap();
+        assert_eq!(array0.values(), &[0, 1]);
+
+        let batch1 = batches[1].as_ref().unwrap();
+        let array1 = batch1
+            .column(0)
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .unwrap();
+        assert_eq!(array1.values(), &[2, 3]);
+
+        let batch2 = batches[2].as_ref().unwrap();
+        let array2 = batch2
+            .column(0)
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .unwrap();
+        assert_eq!(array2.values(), &[4, 5]);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_lazy_memory_exec_invalid_partition() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int64, false)]));
+        let generator = TestGenerator {
+            counter: 0,
+            max_batches: 1,
+            batch_size: 1,
+            schema: Arc::clone(&schema),
+        };
+
+        let exec =
+            LazyMemoryExec::try_new(schema, vec![Arc::new(RwLock::new(generator))])?;
+
+        // Test invalid partition
+        let result = exec.execute(1, Arc::new(TaskContext::default()));
+
+        // partition is 0-indexed, so there only should be partition 0
+        assert!(matches!(
+            result,
+            Err(e) if e.to_string().contains("Invalid partition 1 for LazyMemoryExec with 1 partitions")
+        ));
+
         Ok(())
     }
 }

@@ -43,10 +43,17 @@ make_udf_expr_and_func!(
 );
 
 #[derive(Debug)]
-pub(super) struct ArrayLength {
+pub struct ArrayLength {
     signature: Signature,
     aliases: Vec<String>,
 }
+
+impl Default for ArrayLength {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ArrayLength {
     pub fn new() -> Self {
         Self {
@@ -77,7 +84,11 @@ impl ScalarUDFImpl for ArrayLength {
         })
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         make_scalar_function(array_length_inner)(args)
     }
 
@@ -94,12 +105,11 @@ static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
 
 fn get_array_length_doc() -> &'static Documentation {
     DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_ARRAY)
-            .with_description(
+        Documentation::builder(
+            DOC_SECTION_ARRAY,
                 "Returns the length of the array dimension.",
-            )
-            .with_syntax_example("array_length(array, dimension)")
+
+            "array_length(array, dimension)")
             .with_sql_example(
                 r#"```sql
 > select array_length([1, 2, 3, 4, 5], 1);
@@ -119,7 +129,6 @@ fn get_array_length_doc() -> &'static Documentation {
                 "Array dimension.",
             )
             .build()
-            .unwrap()
     })
 }
 

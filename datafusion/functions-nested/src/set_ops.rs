@@ -98,7 +98,11 @@ impl ScalarUDFImpl for ArrayUnion {
         }
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         make_scalar_function(array_union_inner)(args)
     }
 
@@ -115,12 +119,11 @@ static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
 
 fn get_array_union_doc() -> &'static Documentation {
     DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_ARRAY)
-            .with_description(
+        Documentation::builder(
+            DOC_SECTION_ARRAY,
                 "Returns an array of elements that are present in both arrays (all elements from both arrays) with out duplicates.",
-            )
-            .with_syntax_example("array_union(array1, array2)")
+
+            "array_union(array1, array2)")
             .with_sql_example(
                 r#"```sql
 > select array_union([1, 2, 3, 4], [5, 6, 3, 4]);
@@ -146,7 +149,6 @@ fn get_array_union_doc() -> &'static Documentation {
                 "Array expression. Can be a constant, column, or function, and any combination of array operators.",
             )
             .build()
-            .unwrap()
     })
 }
 
@@ -186,7 +188,11 @@ impl ScalarUDFImpl for ArrayIntersect {
         }
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         make_scalar_function(array_intersect_inner)(args)
     }
 
@@ -201,12 +207,11 @@ impl ScalarUDFImpl for ArrayIntersect {
 
 fn get_array_intersect_doc() -> &'static Documentation {
     DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_ARRAY)
-            .with_description(
+        Documentation::builder(
+            DOC_SECTION_ARRAY,
                 "Returns an array of elements in the intersection of array1 and array2.",
-            )
-            .with_syntax_example("array_intersect(array1, array2)")
+
+            "array_intersect(array1, array2)")
             .with_sql_example(
                 r#"```sql
 > select array_intersect([1, 2, 3, 4], [5, 6, 3, 4]);
@@ -232,7 +237,6 @@ fn get_array_intersect_doc() -> &'static Documentation {
                 "Array expression. Can be a constant, column, or function, and any combination of array operators.",
             )
             .build()
-            .unwrap()
     })
 }
 
@@ -266,13 +270,10 @@ impl ScalarUDFImpl for ArrayDistinct {
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
         match &arg_types[0] {
-            List(field) | FixedSizeList(field, _) => Ok(List(Arc::new(Field::new(
-                "item",
-                field.data_type().clone(),
-                true,
-            )))),
-            LargeList(field) => Ok(LargeList(Arc::new(Field::new(
-                "item",
+            List(field) | FixedSizeList(field, _) => Ok(List(Arc::new(
+                Field::new_list_field(field.data_type().clone(), true),
+            ))),
+            LargeList(field) => Ok(LargeList(Arc::new(Field::new_list_field(
                 field.data_type().clone(),
                 true,
             )))),
@@ -282,7 +283,11 @@ impl ScalarUDFImpl for ArrayDistinct {
         }
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         make_scalar_function(array_distinct_inner)(args)
     }
 
@@ -297,12 +302,11 @@ impl ScalarUDFImpl for ArrayDistinct {
 
 fn get_array_distinct_doc() -> &'static Documentation {
     DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_ARRAY)
-            .with_description(
+        Documentation::builder(
+            DOC_SECTION_ARRAY,
                 "Returns distinct values from the array after removing duplicates.",
-            )
-            .with_syntax_example("array_distinct(array)")
+
+            "array_distinct(array)")
             .with_sql_example(
                 r#"```sql
 > select array_distinct([1, 3, 2, 3, 1, 2, 4]);
@@ -318,7 +322,6 @@ fn get_array_distinct_doc() -> &'static Documentation {
                 "Array expression. Can be a constant, column, or function, and any combination of array operators.",
             )
             .build()
-            .unwrap()
     })
 }
 
@@ -370,10 +373,10 @@ fn generic_set_lists<OffsetSize: OffsetSizeTrait>(
     set_op: SetOp,
 ) -> Result<ArrayRef> {
     if matches!(l.value_type(), Null) {
-        let field = Arc::new(Field::new("item", r.value_type(), true));
+        let field = Arc::new(Field::new_list_field(r.value_type(), true));
         return general_array_distinct::<OffsetSize>(r, &field);
     } else if matches!(r.value_type(), Null) {
-        let field = Arc::new(Field::new("item", l.value_type(), true));
+        let field = Arc::new(Field::new_list_field(l.value_type(), true));
         return general_array_distinct::<OffsetSize>(l, &field);
     }
 

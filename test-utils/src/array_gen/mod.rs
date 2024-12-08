@@ -16,12 +16,14 @@
 // under the License.
 
 mod binary;
+mod boolean;
 mod decimal;
 mod primitive;
 mod random_data;
 mod string;
 
 pub use binary::BinaryArrayGenerator;
+pub use boolean::BooleanArrayGenerator;
 pub use decimal::DecimalArrayGenerator;
 pub use primitive::PrimitiveArrayGenerator;
 pub use string::StringArrayGenerator;

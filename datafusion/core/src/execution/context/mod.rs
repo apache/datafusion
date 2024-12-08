@@ -30,9 +30,8 @@ use crate::{
     catalog_common::memory::MemorySchemaProvider,
     catalog_common::MemoryCatalogProvider,
     dataframe::DataFrame,
-    datasource::{
-        function::{TableFunction, TableFunctionImpl},
-        listing::{ListingOptions, ListingTable, ListingTableConfig, ListingTableUrl},
+    datasource::listing::{
+        ListingOptions, ListingTable, ListingTableConfig, ListingTableUrl,
     },
     datasource::{provider_as_source, MemTable, ViewTable},
     error::{DataFusionError, Result},
@@ -74,7 +73,9 @@ use crate::datasource::dynamic_file::DynamicListTableFactory;
 use crate::execution::session_state::SessionStateBuilder;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use datafusion_catalog::{DynamicFileCatalog, SessionStore, UrlTableFactory};
+use datafusion_catalog::{
+    DynamicFileCatalog, SessionStore, TableFunction, TableFunctionImpl, UrlTableFactory,
+};
 pub use datafusion_execution::config::SessionConfig;
 pub use datafusion_execution::TaskContext;
 pub use datafusion_expr::execution_props::ExecutionProps;
@@ -1428,8 +1429,8 @@ impl SessionContext {
     /// Registers a [`TableProvider`] as a table that can be
     /// referenced from SQL statements executed against this context.
     ///
-    /// Returns the [`TableProvider`] previously registered for this
-    /// reference, if any
+    /// If a table of the same name was already registered, returns "Table
+    /// already exists" error.
     pub fn register_table(
         &self,
         table_ref: impl Into<TableReference>,
@@ -1764,7 +1765,7 @@ impl<'a> BadPlanVisitor<'a> {
     }
 }
 
-impl<'n, 'a> TreeNodeVisitor<'n> for BadPlanVisitor<'a> {
+impl<'n> TreeNodeVisitor<'n> for BadPlanVisitor<'_> {
     type Node = LogicalPlan;
 
     fn f_down(&mut self, node: &'n Self::Node) -> Result<TreeNodeRecursion> {
@@ -1788,15 +1789,14 @@ impl<'n, 'a> TreeNodeVisitor<'n> for BadPlanVisitor<'a> {
 
 #[cfg(test)]
 mod tests {
-    use std::env;
-    use std::path::PathBuf;
-
     use super::{super::options::CsvReadOptions, *};
     use crate::assert_batches_eq;
     use crate::execution::memory_pool::MemoryConsumer;
-    use crate::execution::runtime_env::RuntimeEnvBuilder;
     use crate::test;
     use crate::test_util::{plan_and_collect, populate_csv_partitions};
+    use arrow_schema::{DataType, TimeUnit};
+    use std::env;
+    use std::path::PathBuf;
 
     use datafusion_common_runtime::SpawnedTask;
 
@@ -1804,6 +1804,8 @@ mod tests {
     use crate::execution::session_state::SessionStateBuilder;
     use crate::physical_planner::PhysicalPlanner;
     use async_trait::async_trait;
+    use datafusion_expr::planner::TypePlanner;
+    use sqlparser::ast;
     use tempfile::TempDir;
 
     #[tokio::test]
@@ -1929,14 +1931,12 @@ mod tests {
         let path = path.join("tests/tpch-csv");
         let url = format!("file://{}", path.display());
 
-        let runtime = RuntimeEnvBuilder::new().build_arc()?;
         let cfg = SessionConfig::new()
             .set_str("datafusion.catalog.location", url.as_str())
             .set_str("datafusion.catalog.format", "CSV")
             .set_str("datafusion.catalog.has_header", "true");
         let session_state = SessionStateBuilder::new()
             .with_config(cfg)
-            .with_runtime_env(runtime)
             .with_default_features()
             .build();
         let ctx = SessionContext::new_with_state(session_state);
@@ -2200,6 +2200,29 @@ mod tests {
         Ok(())
     }
 
+    #[tokio::test]
+    async fn custom_type_planner() -> Result<()> {
+        let state = SessionStateBuilder::new()
+            .with_default_features()
+            .with_type_planner(Arc::new(MyTypePlanner {}))
+            .build();
+        let ctx = SessionContext::new_with_state(state);
+        let result = ctx
+            .sql("SELECT DATETIME '2021-01-01 00:00:00'")
+            .await?
+            .collect()
+            .await?;
+        let expected = [
+            "+-----------------------------+",
+            "| Utf8(\"2021-01-01 00:00:00\") |",
+            "+-----------------------------+",
+            "| 2021-01-01T00:00:00         |",
+            "+-----------------------------+",
+        ];
+        assert_batches_eq!(expected, &result);
+        Ok(())
+    }
+
     struct MyPhysicalPlanner {}
 
     #[async_trait]
@@ -2259,5 +2282,26 @@ mod tests {
         .await?;
 
         Ok(ctx)
+    }
+
+    #[derive(Debug)]
+    struct MyTypePlanner {}
+
+    impl TypePlanner for MyTypePlanner {
+        fn plan_type(&self, sql_type: &ast::DataType) -> Result<Option<DataType>> {
+            match sql_type {
+                ast::DataType::Datetime(precision) => {
+                    let precision = match precision {
+                        Some(0) => TimeUnit::Second,
+                        Some(3) => TimeUnit::Millisecond,
+                        Some(6) => TimeUnit::Microsecond,
+                        None | Some(9) => TimeUnit::Nanosecond,
+                        _ => unreachable!(),
+                    };
+                    Ok(Some(DataType::Timestamp(precision, None)))
+                }
+                _ => Ok(None),
+            }
+        }
     }
 }

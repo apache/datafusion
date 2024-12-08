@@ -143,7 +143,7 @@ pub enum TypeSignature {
     Numeric(usize),
     /// Fixed number of arguments of all the same string types.
     /// The precedence of type from high to low is Utf8View, LargeUtf8 and Utf8.
-    /// Null is considerd as `Utf8` by default
+    /// Null is considered as `Utf8` by default
     /// Dictionary with string value type is also handled.
     String(usize),
     /// Zero argument
@@ -264,6 +264,9 @@ impl TypeSignature {
             TypeSignature::Numeric(num) => {
                 vec![format!("Numeric({num})")]
             }
+            TypeSignature::Comparable(num) => {
+                vec![format!("Comparable({num})")]
+            }
             TypeSignature::Coercible(types) => {
                 vec![Self::join_types(types, ", ")]
             }
@@ -355,13 +358,13 @@ impl TypeSignature {
                 .cloned()
                 .map(|numeric_type| vec![numeric_type; *arg_count])
                 .collect(),
-            TypeSignature::String(arg_count) => STRINGS
-                .iter()
-                .cloned()
-                .map(|string_type| vec![string_type; *arg_count])
-                .collect(),
+            TypeSignature::String(arg_count) => get_data_types(&NativeType::String)
+                .into_iter()
+                .map(|dt| vec![dt; *arg_count])
+                .collect::<Vec<_>>(),
             // TODO: Implement for other types
             TypeSignature::Any(_)
+            | TypeSignature::Comparable(_)
             | TypeSignature::NullAry
             | TypeSignature::VariadicAny
             | TypeSignature::ArraySignature(_)
@@ -482,6 +485,14 @@ impl Signature {
     ) -> Self {
         Self {
             type_signature: TypeSignature::Coercible(target_types),
+            volatility,
+        }
+    }
+
+    /// Used for function that expects comparable data types, it will try to coerced all the types into single final one.
+    pub fn comparable(arg_count: usize, volatility: Volatility) -> Self {
+        Self {
+            type_signature: TypeSignature::Comparable(arg_count),
             volatility,
         }
     }

@@ -21,13 +21,13 @@ use arrow_schema::TimeUnit;
 use datafusion_expr::Expr;
 use regex::Regex;
 use sqlparser::{
-    ast::{self, Function, Ident, ObjectName, TimezoneInfo},
+    ast::{self, BinaryOperator, Function, Ident, ObjectName, TimezoneInfo},
     keywords::ALL_KEYWORDS,
 };
 
 use datafusion_common::Result;
 
-use super::{utils::date_part_to_sql, Unparser};
+use super::{utils::character_length_to_sql, utils::date_part_to_sql, Unparser};
 
 /// `Dialect` to use for Unparsing
 ///
@@ -80,6 +80,11 @@ pub trait Dialect: Send + Sync {
         DateFieldExtractStyle::DatePart
     }
 
+    /// The character length extraction style to use: `CharacterLengthStyle`
+    fn character_length_style(&self) -> CharacterLengthStyle {
+        CharacterLengthStyle::CharacterLength
+    }
+
     /// The SQL type to use for Arrow Int64 unparsing
     /// Most dialects use BigInt, but some, like MySQL, require SIGNED
     fn int64_cast_dtype(&self) -> ast::DataType {
@@ -124,6 +129,13 @@ pub trait Dialect: Send + Sync {
     /// This affects behavior when deriving logical plans for Sort, Limit, etc.
     fn requires_derived_table_alias(&self) -> bool {
         false
+    }
+
+    /// The division operator for the dialect
+    /// Most dialect uses ` BinaryOperator::Divide` (/)
+    /// But DuckDB dialect uses `BinaryOperator::DuckIntegerDivide` (//)
+    fn division_operator(&self) -> BinaryOperator {
+        BinaryOperator::Divide
     }
 
     /// Allows the dialect to override scalar function unparsing if the dialect has specific rules.
@@ -174,6 +186,17 @@ pub enum DateFieldExtractStyle {
     DatePart,
     Extract,
     Strftime,
+}
+
+/// `CharacterLengthStyle` to use for unparsing
+///
+/// Different DBMSs uses different names for function calculating the number of characters in the string
+/// `Length` style uses length(x)
+/// `SQLStandard` style uses character_length(x)
+#[derive(Clone, Copy, PartialEq)]
+pub enum CharacterLengthStyle {
+    Length,
+    CharacterLength,
 }
 
 pub struct DefaultDialect {}
@@ -271,6 +294,39 @@ impl PostgreSqlDialect {
     }
 }
 
+pub struct DuckDBDialect {}
+
+impl Dialect for DuckDBDialect {
+    fn identifier_quote_style(&self, _: &str) -> Option<char> {
+        Some('"')
+    }
+
+    fn character_length_style(&self) -> CharacterLengthStyle {
+        CharacterLengthStyle::Length
+    }
+
+    fn division_operator(&self) -> BinaryOperator {
+        BinaryOperator::DuckIntegerDivide
+    }
+
+    fn scalar_function_to_sql_overrides(
+        &self,
+        unparser: &Unparser,
+        func_name: &str,
+        args: &[Expr],
+    ) -> Result<Option<ast::Expr>> {
+        if func_name == "character_length" {
+            return character_length_to_sql(
+                unparser,
+                self.character_length_style(),
+                args,
+            );
+        }
+
+        Ok(None)
+    }
+}
+
 pub struct MySqlDialect {}
 
 impl Dialect for MySqlDialect {
@@ -347,6 +403,10 @@ impl Dialect for SqliteDialect {
         ast::DataType::Text
     }
 
+    fn character_length_style(&self) -> CharacterLengthStyle {
+        CharacterLengthStyle::Length
+    }
+
     fn supports_column_alias_in_table_alias(&self) -> bool {
         false
     }
@@ -357,11 +417,15 @@ impl Dialect for SqliteDialect {
         func_name: &str,
         args: &[Expr],
     ) -> Result<Option<ast::Expr>> {
-        if func_name == "date_part" {
-            return date_part_to_sql(unparser, self.date_field_extract_style(), args);
+        match func_name {
+            "date_part" => {
+                date_part_to_sql(unparser, self.date_field_extract_style(), args)
+            }
+            "character_length" => {
+                character_length_to_sql(unparser, self.character_length_style(), args)
+            }
+            _ => Ok(None),
         }
-
-        Ok(None)
     }
 }
 
@@ -374,6 +438,7 @@ pub struct CustomDialect {
     utf8_cast_dtype: ast::DataType,
     large_utf8_cast_dtype: ast::DataType,
     date_field_extract_style: DateFieldExtractStyle,
+    character_length_style: CharacterLengthStyle,
     int64_cast_dtype: ast::DataType,
     int32_cast_dtype: ast::DataType,
     timestamp_cast_dtype: ast::DataType,
@@ -381,6 +446,7 @@ pub struct CustomDialect {
     date32_cast_dtype: ast::DataType,
     supports_column_alias_in_table_alias: bool,
     requires_derived_table_alias: bool,
+    division_operator: BinaryOperator,
     full_qualified_col: bool,
 }
 
@@ -395,6 +461,7 @@ impl Default for CustomDialect {
             utf8_cast_dtype: ast::DataType::Varchar(None),
             large_utf8_cast_dtype: ast::DataType::Text,
             date_field_extract_style: DateFieldExtractStyle::DatePart,
+            character_length_style: CharacterLengthStyle::CharacterLength,
             int64_cast_dtype: ast::DataType::BigInt(None),
             int32_cast_dtype: ast::DataType::Integer(None),
             timestamp_cast_dtype: ast::DataType::Timestamp(None, TimezoneInfo::None),
@@ -405,6 +472,7 @@ impl Default for CustomDialect {
             date32_cast_dtype: ast::DataType::Date,
             supports_column_alias_in_table_alias: true,
             requires_derived_table_alias: false,
+            division_operator: BinaryOperator::Divide,
             full_qualified_col: false,
         }
     }
@@ -412,7 +480,7 @@ impl Default for CustomDialect {
 
 impl CustomDialect {
     // Create a CustomDialect
-    #[deprecated(note = "please use `CustomDialectBuilder` instead")]
+    #[deprecated(since = "41.0.0", note = "please use `CustomDialectBuilder` instead")]
     pub fn new(identifier_quote_style: Option<char>) -> Self {
         Self {
             identifier_quote_style,
@@ -454,6 +522,10 @@ impl Dialect for CustomDialect {
         self.date_field_extract_style
     }
 
+    fn character_length_style(&self) -> CharacterLengthStyle {
+        self.character_length_style
+    }
+
     fn int64_cast_dtype(&self) -> ast::DataType {
         self.int64_cast_dtype.clone()
     }
@@ -488,15 +560,23 @@ impl Dialect for CustomDialect {
         func_name: &str,
         args: &[Expr],
     ) -> Result<Option<ast::Expr>> {
-        if func_name == "date_part" {
-            return date_part_to_sql(unparser, self.date_field_extract_style(), args);
+        match func_name {
+            "date_part" => {
+                date_part_to_sql(unparser, self.date_field_extract_style(), args)
+            }
+            "character_length" => {
+                character_length_to_sql(unparser, self.character_length_style(), args)
+            }
+            _ => Ok(None),
         }
-
-        Ok(None)
     }
 
     fn requires_derived_table_alias(&self) -> bool {
         self.requires_derived_table_alias
+    }
+
+    fn division_operator(&self) -> BinaryOperator {
+        self.division_operator.clone()
     }
 
     fn full_qualified_col(&self) -> bool {
@@ -527,6 +607,7 @@ pub struct CustomDialectBuilder {
     utf8_cast_dtype: ast::DataType,
     large_utf8_cast_dtype: ast::DataType,
     date_field_extract_style: DateFieldExtractStyle,
+    character_length_style: CharacterLengthStyle,
     int64_cast_dtype: ast::DataType,
     int32_cast_dtype: ast::DataType,
     timestamp_cast_dtype: ast::DataType,
@@ -534,6 +615,7 @@ pub struct CustomDialectBuilder {
     date32_cast_dtype: ast::DataType,
     supports_column_alias_in_table_alias: bool,
     requires_derived_table_alias: bool,
+    division_operator: BinaryOperator,
     full_qualified_col: bool,
 }
 
@@ -554,6 +636,7 @@ impl CustomDialectBuilder {
             utf8_cast_dtype: ast::DataType::Varchar(None),
             large_utf8_cast_dtype: ast::DataType::Text,
             date_field_extract_style: DateFieldExtractStyle::DatePart,
+            character_length_style: CharacterLengthStyle::CharacterLength,
             int64_cast_dtype: ast::DataType::BigInt(None),
             int32_cast_dtype: ast::DataType::Integer(None),
             timestamp_cast_dtype: ast::DataType::Timestamp(None, TimezoneInfo::None),
@@ -564,6 +647,7 @@ impl CustomDialectBuilder {
             date32_cast_dtype: ast::DataType::Date,
             supports_column_alias_in_table_alias: true,
             requires_derived_table_alias: false,
+            division_operator: BinaryOperator::Divide,
             full_qualified_col: false,
         }
     }
@@ -578,6 +662,7 @@ impl CustomDialectBuilder {
             utf8_cast_dtype: self.utf8_cast_dtype,
             large_utf8_cast_dtype: self.large_utf8_cast_dtype,
             date_field_extract_style: self.date_field_extract_style,
+            character_length_style: self.character_length_style,
             int64_cast_dtype: self.int64_cast_dtype,
             int32_cast_dtype: self.int32_cast_dtype,
             timestamp_cast_dtype: self.timestamp_cast_dtype,
@@ -586,6 +671,7 @@ impl CustomDialectBuilder {
             supports_column_alias_in_table_alias: self
                 .supports_column_alias_in_table_alias,
             requires_derived_table_alias: self.requires_derived_table_alias,
+            division_operator: self.division_operator,
             full_qualified_col: self.full_qualified_col,
         }
     }
@@ -617,6 +703,15 @@ impl CustomDialectBuilder {
     /// Customize the dialect with a specific interval style listed in `IntervalStyle`
     pub fn with_interval_style(mut self, interval_style: IntervalStyle) -> Self {
         self.interval_style = interval_style;
+        self
+    }
+
+    /// Customize the dialect with a specific character_length_style listed in `CharacterLengthStyle`
+    pub fn with_character_length_style(
+        mut self,
+        character_length_style: CharacterLengthStyle,
+    ) -> Self {
+        self.character_length_style = character_length_style;
         self
     }
 
@@ -692,6 +787,11 @@ impl CustomDialectBuilder {
         requires_derived_table_alias: bool,
     ) -> Self {
         self.requires_derived_table_alias = requires_derived_table_alias;
+        self
+    }
+
+    pub fn with_division_operator(mut self, division_operator: BinaryOperator) -> Self {
+        self.division_operator = division_operator;
         self
     }
 

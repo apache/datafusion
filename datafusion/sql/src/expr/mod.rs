@@ -49,7 +49,7 @@ mod substring;
 mod unary_op;
 mod value;
 
-impl<'a, S: ContextProvider> SqlToRel<'a, S> {
+impl<S: ContextProvider> SqlToRel<'_, S> {
     pub(crate) fn sql_expr_to_logical_expr(
         &self,
         sql: SQLExpr,
@@ -140,7 +140,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     ) -> Result<Expr> {
         let mut expr = self.sql_expr_to_logical_expr(sql, schema, planner_context)?;
         expr = self.rewrite_partial_qualifier(expr, schema);
-        self.validate_schema_satisfies_exprs(schema, &[expr.clone()])?;
+        self.validate_schema_satisfies_exprs(schema, std::slice::from_ref(&expr))?;
         let (expr, _) = expr.infer_placeholder_types(schema)?;
         Ok(expr)
     }
@@ -367,6 +367,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 expr,
                 pattern,
                 escape_char,
+                any,
             } => self.sql_like_to_expr(
                 negated,
                 *expr,
@@ -375,6 +376,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 schema,
                 planner_context,
                 false,
+                any,
             ),
 
             SQLExpr::ILike {
@@ -382,6 +384,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 expr,
                 pattern,
                 escape_char,
+                any,
             } => self.sql_like_to_expr(
                 negated,
                 *expr,
@@ -390,6 +393,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 schema,
                 planner_context,
                 true,
+                any,
             ),
 
             SQLExpr::SimilarTo {
@@ -532,6 +536,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 left,
                 compare_op,
                 right,
+                // ANY/SOME are equivalent, this field specifies which the user
+                // specified but it doesn't affect the plan so ignore the field
+                is_some: _,
             } => {
                 let mut binary_expr = RawBinaryExpr {
                     op: compare_op,
@@ -779,7 +786,11 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         schema: &DFSchema,
         planner_context: &mut PlannerContext,
         case_insensitive: bool,
+        any: bool,
     ) -> Result<Expr> {
+        if any {
+            return not_impl_err!("ANY in LIKE expression");
+        }
         let pattern = self.sql_expr_to_logical_expr(pattern, schema, planner_context)?;
         let pattern_type = pattern.get_type(schema)?;
         if pattern_type != DataType::Utf8 && pattern_type != DataType::Null {

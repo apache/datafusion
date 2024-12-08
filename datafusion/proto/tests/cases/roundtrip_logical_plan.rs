@@ -49,6 +49,7 @@ use datafusion::functions_aggregate::expr_fn::{
 };
 use datafusion::functions_aggregate::min_max::max_udaf;
 use datafusion::functions_nested::map::map;
+use datafusion::functions_window;
 use datafusion::functions_window::expr_fn::{
     cume_dist, dense_rank, lag, lead, ntile, percent_rank, rank, row_number,
 };
@@ -786,7 +787,7 @@ async fn roundtrip_logical_plan_unnest() -> Result<()> {
         Field::new("a", DataType::Int64, true),
         Field::new(
             "b",
-            DataType::List(Arc::new(Field::new("item", DataType::Int32, false))),
+            DataType::List(Arc::new(Field::new_list_field(DataType::Int32, false))),
             true,
         ),
     ]);
@@ -912,6 +913,9 @@ async fn roundtrip_expr_api() -> Result<()> {
         count_distinct(lit(1)),
         first_value(lit(1), None),
         first_value(lit(1), Some(vec![lit(2).sort(true, true)])),
+        functions_window::nth_value::first_value(lit(1)),
+        functions_window::nth_value::last_value(lit(1)),
+        functions_window::nth_value::nth_value(lit(1), 1),
         avg(lit(1.5)),
         covar_samp(lit(1.5), lit(2.2)),
         covar_pop(lit(1.5), lit(2.2)),
@@ -1607,7 +1611,7 @@ fn round_trip_scalar_types() {
     ];
 
     for test_case in should_pass.into_iter() {
-        let field = Field::new("item", test_case, true);
+        let field = Field::new_list_field(test_case, true);
         let proto: protobuf::Field = (&field).try_into().unwrap();
         let roundtrip: Field = (&proto).try_into().unwrap();
         assert_eq!(format!("{field:?}"), format!("{roundtrip:?}"));

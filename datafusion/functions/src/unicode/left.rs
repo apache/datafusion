@@ -81,7 +81,11 @@ impl ScalarUDFImpl for LeftFunc {
         utf8_to_str_type(&arg_types[0], "left")
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         match args[0].data_type() {
             DataType::Utf8 | DataType::Utf8View => {
                 make_scalar_function(left::<i32>, vec![])(args)
@@ -103,23 +107,25 @@ static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
 
 fn get_left_doc() -> &'static Documentation {
     DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_STRING)
-            .with_description("Returns a specified number of characters from the left side of a string.")
-            .with_syntax_example("left(str, n)")
-            .with_sql_example(r#"```sql
+        Documentation::builder(
+            DOC_SECTION_STRING,
+            "Returns a specified number of characters from the left side of a string.",
+            "left(str, n)",
+        )
+        .with_sql_example(
+            r#"```sql
 > select left('datafusion', 4);
 +-----------------------------------+
 | left(Utf8("datafusion"),Int64(4)) |
 +-----------------------------------+
 | data                              |
 +-----------------------------------+
-```"#)
-            .with_standard_argument("str", Some("String"))
-            .with_argument("n", "Number of characters to return.")
-            .with_related_udf("right")
-            .build()
-            .unwrap()
+```"#,
+        )
+        .with_standard_argument("str", Some("String"))
+        .with_argument("n", "Number of characters to return.")
+        .with_related_udf("right")
+        .build()
     })
 }
 

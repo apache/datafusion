@@ -339,10 +339,10 @@ NULL 1
 statement error DataFusion error: SQL error: ParserError\("Expected: \(, found: EOF"\)
 VALUES
 
-statement error DataFusion error: SQL error: ParserError\("Expected: an expression:, found: \)"\)
+statement error DataFusion error: SQL error: ParserError\("Expected: an expression, found: \)"\)
 VALUES ()
 
-statement error DataFusion error: SQL error: ParserError\("Expected: an expression:, found: \)"\)
+statement error DataFusion error: SQL error: ParserError\("Expected: an expression, found: \)"\)
 VALUES (1),()
 
 statement error DataFusion error: Error during planning: Inconsistent data length across values list: got 2 values in row 1 but expected 1

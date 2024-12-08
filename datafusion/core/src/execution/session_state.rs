@@ -24,7 +24,6 @@ use crate::catalog_common::information_schema::{
 use crate::catalog_common::MemoryCatalogProviderList;
 use crate::datasource::cte_worktable::CteWorkTable;
 use crate::datasource::file_format::{format_as_file_type, FileFormatFactory};
-use crate::datasource::function::{TableFunction, TableFunctionImpl};
 use crate::datasource::provider_as_source;
 use crate::execution::context::{EmptySerializerRegistry, FunctionFactory, QueryPlanner};
 use crate::execution::SessionStateDefaults;
@@ -33,7 +32,7 @@ use crate::physical_planner::{DefaultPhysicalPlanner, PhysicalPlanner};
 use arrow_schema::{DataType, SchemaRef};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use datafusion_catalog::Session;
+use datafusion_catalog::{Session, TableFunction, TableFunctionImpl};
 use datafusion_common::alias::AliasGenerator;
 use datafusion_common::config::{ConfigExtension, ConfigOptions, TableOptions};
 use datafusion_common::display::{PlanType, StringifiedPlan, ToStringifiedPlan};
@@ -48,7 +47,7 @@ use datafusion_execution::runtime_env::RuntimeEnv;
 use datafusion_execution::TaskContext;
 use datafusion_expr::execution_props::ExecutionProps;
 use datafusion_expr::expr_rewriter::FunctionRewrite;
-use datafusion_expr::planner::ExprPlanner;
+use datafusion_expr::planner::{ExprPlanner, TypePlanner};
 use datafusion_expr::registry::{FunctionRegistry, SerializerRegistry};
 use datafusion_expr::simplify::SimplifyInfo;
 use datafusion_expr::var_provider::{is_system_variables, VarType};
@@ -128,6 +127,8 @@ pub struct SessionState {
     analyzer: Analyzer,
     /// Provides support for customising the SQL planner, e.g. to add support for custom operators like `->>` or `?`
     expr_planners: Vec<Arc<dyn ExprPlanner>>,
+    /// Provides support for customising the SQL type planning
+    type_planner: Option<Arc<dyn TypePlanner>>,
     /// Responsible for optimizing a logical plan
     optimizer: Optimizer,
     /// Responsible for optimizing a physical execution plan
@@ -192,6 +193,7 @@ impl Debug for SessionState {
             .field("table_factories", &self.table_factories)
             .field("function_factory", &self.function_factory)
             .field("expr_planners", &self.expr_planners)
+            .field("type_planner", &self.type_planner)
             .field("query_planners", &self.query_planner)
             .field("analyzer", &self.analyzer)
             .field("optimizer", &self.optimizer)
@@ -293,7 +295,9 @@ impl SessionState {
             .resolve(&catalog.default_catalog, &catalog.default_schema)
     }
 
-    pub(crate) fn schema_for_ref(
+    /// Retrieve the [`SchemaProvider`] for a specific [`TableReference`], if it
+    /// esists.
+    pub fn schema_for_ref(
         &self,
         table_ref: impl Into<TableReference>,
     ) -> datafusion_common::Result<Arc<dyn SchemaProvider>> {
@@ -955,6 +959,7 @@ pub struct SessionStateBuilder {
     session_id: Option<String>,
     analyzer: Option<Analyzer>,
     expr_planners: Option<Vec<Arc<dyn ExprPlanner>>>,
+    type_planner: Option<Arc<dyn TypePlanner>>,
     optimizer: Option<Optimizer>,
     physical_optimizers: Option<PhysicalOptimizer>,
     query_planner: Option<Arc<dyn QueryPlanner + Send + Sync>>,
@@ -984,6 +989,7 @@ impl SessionStateBuilder {
             session_id: None,
             analyzer: None,
             expr_planners: None,
+            type_planner: None,
             optimizer: None,
             physical_optimizers: None,
             query_planner: None,
@@ -1031,6 +1037,7 @@ impl SessionStateBuilder {
             session_id: None,
             analyzer: Some(existing.analyzer),
             expr_planners: Some(existing.expr_planners),
+            type_planner: existing.type_planner,
             optimizer: Some(existing.optimizer),
             physical_optimizers: Some(existing.physical_optimizers),
             query_planner: Some(existing.query_planner),
@@ -1066,6 +1073,7 @@ impl SessionStateBuilder {
             .with_scalar_functions(SessionStateDefaults::default_scalar_functions())
             .with_aggregate_functions(SessionStateDefaults::default_aggregate_functions())
             .with_window_functions(SessionStateDefaults::default_window_functions())
+            .with_table_function_list(SessionStateDefaults::default_table_functions())
     }
 
     /// Set the session id.
@@ -1125,6 +1133,12 @@ impl SessionStateBuilder {
         self
     }
 
+    /// Set the [`TypePlanner`] used to customize the behavior of the SQL planner.
+    pub fn with_type_planner(mut self, type_planner: Arc<dyn TypePlanner>) -> Self {
+        self.type_planner = Some(type_planner);
+        self
+    }
+
     /// Set the [`PhysicalOptimizerRule`]s used to optimize plans.
     pub fn with_physical_optimizer_rules(
         mut self,
@@ -1171,6 +1185,19 @@ impl SessionStateBuilder {
         table_functions: HashMap<String, Arc<TableFunction>>,
     ) -> Self {
         self.table_functions = Some(table_functions);
+        self
+    }
+
+    /// Set the list of [`TableFunction`]s
+    pub fn with_table_function_list(
+        mut self,
+        table_functions: Vec<Arc<TableFunction>>,
+    ) -> Self {
+        let functions = table_functions
+            .into_iter()
+            .map(|f| (f.name().to_string(), f))
+            .collect();
+        self.table_functions = Some(functions);
         self
     }
 
@@ -1318,6 +1345,7 @@ impl SessionStateBuilder {
             session_id,
             analyzer,
             expr_planners,
+            type_planner,
             optimizer,
             physical_optimizers,
             query_planner,
@@ -1346,6 +1374,7 @@ impl SessionStateBuilder {
             session_id: session_id.unwrap_or(Uuid::new_v4().to_string()),
             analyzer: analyzer.unwrap_or_default(),
             expr_planners: expr_planners.unwrap_or_default(),
+            type_planner,
             optimizer: optimizer.unwrap_or_default(),
             physical_optimizers: physical_optimizers.unwrap_or_default(),
             query_planner: query_planner.unwrap_or(Arc::new(DefaultQueryPlanner {})),
@@ -1454,6 +1483,11 @@ impl SessionStateBuilder {
     /// Returns the current expr_planners value
     pub fn expr_planners(&mut self) -> &mut Option<Vec<Arc<dyn ExprPlanner>>> {
         &mut self.expr_planners
+    }
+
+    /// Returns the current type_planner value
+    pub fn type_planner(&mut self) -> &mut Option<Arc<dyn TypePlanner>> {
+        &mut self.type_planner
     }
 
     /// Returns the current optimizer value
@@ -1578,6 +1612,7 @@ impl Debug for SessionStateBuilder {
             .field("table_factories", &self.table_factories)
             .field("function_factory", &self.function_factory)
             .field("expr_planners", &self.expr_planners)
+            .field("type_planner", &self.type_planner)
             .field("query_planners", &self.query_planner)
             .field("analyzer_rules", &self.analyzer_rules)
             .field("analyzer", &self.analyzer)
@@ -1614,9 +1649,17 @@ struct SessionContextProvider<'a> {
     tables: HashMap<ResolvedTableReference, Arc<dyn TableSource>>,
 }
 
-impl<'a> ContextProvider for SessionContextProvider<'a> {
+impl ContextProvider for SessionContextProvider<'_> {
     fn get_expr_planners(&self) -> &[Arc<dyn ExprPlanner>] {
         &self.state.expr_planners
+    }
+
+    fn get_type_planner(&self) -> Option<Arc<dyn TypePlanner>> {
+        if let Some(type_planner) = &self.state.type_planner {
+            Some(Arc::clone(type_planner))
+        } else {
+            None
+        }
     }
 
     fn get_table_source(
@@ -1901,7 +1944,7 @@ impl<'a> SessionSimplifyProvider<'a> {
     }
 }
 
-impl<'a> SimplifyInfo for SessionSimplifyProvider<'a> {
+impl SimplifyInfo for SessionSimplifyProvider<'_> {
     fn is_boolean_type(&self, expr: &Expr) -> datafusion_common::Result<bool> {
         Ok(expr.get_type(self.df_schema)? == DataType::Boolean)
     }

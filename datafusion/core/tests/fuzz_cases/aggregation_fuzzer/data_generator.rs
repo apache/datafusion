@@ -18,9 +18,9 @@
 use std::sync::Arc;
 
 use arrow::datatypes::{
-    BinaryType, BinaryViewType, ByteArrayType, ByteViewType, Date32Type, Date64Type,
-    Decimal128Type, Decimal256Type, Float32Type, Float64Type, Int16Type, Int32Type,
-    Int64Type, Int8Type, IntervalDayTimeType, IntervalMonthDayNanoType,
+    BinaryType, BinaryViewType, BooleanType, ByteArrayType, ByteViewType, Date32Type,
+    Date64Type, Decimal128Type, Decimal256Type, Float32Type, Float64Type, Int16Type,
+    Int32Type, Int64Type, Int8Type, IntervalDayTimeType, IntervalMonthDayNanoType,
     IntervalYearMonthType, LargeBinaryType, LargeUtf8Type, StringViewType,
     Time32MillisecondType, Time32SecondType, Time64MicrosecondType, Time64NanosecondType,
     TimestampMicrosecondType, TimestampMillisecondType, TimestampNanosecondType,
@@ -38,8 +38,8 @@ use rand::{
 };
 use test_utils::{
     array_gen::{
-        BinaryArrayGenerator, DecimalArrayGenerator, PrimitiveArrayGenerator,
-        StringArrayGenerator,
+        BinaryArrayGenerator, BooleanArrayGenerator, DecimalArrayGenerator,
+        PrimitiveArrayGenerator, StringArrayGenerator,
     },
     stagger_batch,
 };
@@ -261,6 +261,26 @@ macro_rules! generate_decimal_array {
             scale: $SCALE,
             num_decimals: $NUM_ROWS,
             num_distinct_decimals: $MAX_NUM_DISTINCT,
+            null_pct,
+            rng: $ARRAY_GEN_RNG,
+        };
+
+        generator.gen_data::<$ARROW_TYPE>()
+    }};
+}
+
+// Generating `BooleanArray` due to it being a special type in Arrow (bit-packed)
+macro_rules! generate_boolean_array {
+    ($SELF:ident, $NUM_ROWS:ident, $MAX_NUM_DISTINCT:expr, $BATCH_GEN_RNG:ident, $ARRAY_GEN_RNG:ident, $ARROW_TYPE: ident) => {{
+        // Select a null percentage from the candidate percentages
+        let null_pct_idx = $BATCH_GEN_RNG.gen_range(0..$SELF.candidate_null_pcts.len());
+        let null_pct = $SELF.candidate_null_pcts[null_pct_idx];
+
+        let num_distinct_booleans = if $MAX_NUM_DISTINCT >= 2 { 2 } else { 1 };
+
+        let mut generator = BooleanArrayGenerator {
+            num_booleans: $NUM_ROWS,
+            num_distinct_booleans,
             null_pct,
             rng: $ARRAY_GEN_RNG,
         };
@@ -688,6 +708,16 @@ impl RecordBatchGenerator {
                     array_gen_rng,
                     StringViewType
                 )
+            }
+            DataType::Boolean => {
+                generate_boolean_array! {
+                    self,
+                    num_rows,
+                    max_num_distinct,
+                    batch_gen_rng,
+                    array_gen_rng,
+                    BooleanType
+                }
             }
             _ => {
                 panic!("Unsupported data generator type: {}", col.column_type)

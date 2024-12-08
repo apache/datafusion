@@ -41,9 +41,9 @@ use datafusion_common::stats::Precision;
 use datafusion_common::{
     downcast_value, exec_err, internal_err, ColumnStatistics, DataFusionError, Result,
 };
-use datafusion_expr::aggregate_doc_sections::DOC_SECTION_GENERAL;
 use datafusion_functions_aggregate_common::aggregate::groups_accumulator::prim_op::PrimitiveGroupsAccumulator;
 use datafusion_physical_expr::expressions;
+use std::cmp::Ordering;
 use std::fmt::Debug;
 
 use arrow::datatypes::i256;
@@ -55,11 +55,13 @@ use arrow::datatypes::{
 
 use crate::min_max::min_max_bytes::MinMaxBytesAccumulator;
 use datafusion_common::ScalarValue;
+use datafusion_doc::DocSection;
 use datafusion_expr::{
     function::AccumulatorArgs, Accumulator, AggregateUDFImpl, Documentation, Signature,
     Volatility,
 };
 use datafusion_expr::{GroupsAccumulator, StatisticsArgs};
+use datafusion_macros::user_doc;
 use half::f16;
 use std::mem::size_of_val;
 use std::ops::Deref;
@@ -86,6 +88,20 @@ fn get_min_max_result_type(input_types: &[DataType]) -> Result<Vec<DataType>> {
     }
 }
 
+#[user_doc(
+    doc_section(label = "General Functions"),
+    description = "Returns the maximum value in the specified column.",
+    syntax_example = "max(expression)",
+    sql_example = r#"```sql
+> SELECT max(column_name) FROM table_name;
++----------------------+
+| max(column_name)      |
++----------------------+
+| 150                  |
++----------------------+
+```"#,
+    standard_argument(name = "expression",)
+)]
 // MAX aggregate UDF
 #[derive(Debug)]
 pub struct Max {
@@ -113,8 +129,12 @@ macro_rules! primitive_max_accumulator {
     ($DATA_TYPE:ident, $NATIVE:ident, $PRIMTYPE:ident) => {{
         Ok(Box::new(
             PrimitiveGroupsAccumulator::<$PRIMTYPE, _>::new($DATA_TYPE, |cur, new| {
-                if *cur < new {
-                    *cur = new
+                match (new).partial_cmp(cur) {
+                    Some(Ordering::Greater) | None => {
+                        // new is Greater or None
+                        *cur = new
+                    }
+                    _ => {}
                 }
             })
             // Initialize each accumulator to $NATIVE::MIN
@@ -132,8 +152,12 @@ macro_rules! primitive_min_accumulator {
     ($DATA_TYPE:ident, $NATIVE:ident, $PRIMTYPE:ident) => {{
         Ok(Box::new(
             PrimitiveGroupsAccumulator::<$PRIMTYPE, _>::new(&$DATA_TYPE, |cur, new| {
-                if *cur > new {
-                    *cur = new
+                match (new).partial_cmp(cur) {
+                    Some(Ordering::Less) | None => {
+                        // new is Less or NaN
+                        *cur = new
+                    }
+                    _ => {}
                 }
             })
             // Initialize each accumulator to $NATIVE::MAX
@@ -337,32 +361,8 @@ impl AggregateUDFImpl for Max {
     }
 
     fn documentation(&self) -> Option<&Documentation> {
-        Some(get_max_doc())
+        self.doc()
     }
-}
-
-static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
-
-fn get_max_doc() -> &'static Documentation {
-    DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_GENERAL)
-            .with_description("Returns the maximum value in the specified column.")
-            .with_syntax_example("max(expression)")
-            .with_sql_example(
-                r#"```sql
-> SELECT max(column_name) FROM table_name;
-+----------------------+
-| max(column_name)      |
-+----------------------+
-| 150                  |
-+----------------------+
-```"#,
-            )
-            .with_standard_argument("expression", None)
-            .build()
-            .unwrap()
-    })
 }
 
 // Statically-typed version of min/max(array) -> ScalarValue for string types
@@ -988,6 +988,20 @@ impl Accumulator for SlidingMaxAccumulator {
     }
 }
 
+#[user_doc(
+    doc_section(label = "General Functions"),
+    description = "Returns the minimum value in the specified column.",
+    syntax_example = "min(expression)",
+    sql_example = r#"```sql
+> SELECT min(column_name) FROM table_name;
++----------------------+
+| min(column_name)      |
++----------------------+
+| 12                   |
++----------------------+
+```"#,
+    standard_argument(name = "expression",)
+)]
 #[derive(Debug)]
 pub struct Min {
     signature: Signature,
@@ -1169,30 +1183,8 @@ impl AggregateUDFImpl for Min {
     }
 
     fn documentation(&self) -> Option<&Documentation> {
-        Some(get_min_doc())
+        self.doc()
     }
-}
-
-fn get_min_doc() -> &'static Documentation {
-    DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_GENERAL)
-            .with_description("Returns the minimum value in the specified column.")
-            .with_syntax_example("min(expression)")
-            .with_sql_example(
-                r#"```sql
-> SELECT min(column_name) FROM table_name;
-+----------------------+
-| min(column_name)      |
-+----------------------+
-| 12                   |
-+----------------------+
-```"#,
-            )
-            .with_standard_argument("expression", None)
-            .build()
-            .unwrap()
-    })
 }
 
 /// An accumulator to compute the minimum value

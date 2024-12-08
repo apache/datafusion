@@ -89,7 +89,7 @@ pub struct CsvReadOptions<'a> {
     pub file_sort_order: Vec<Vec<SortExpr>>,
 }
 
-impl<'a> Default for CsvReadOptions<'a> {
+impl Default for CsvReadOptions<'_> {
     fn default() -> Self {
         Self::new()
     }
@@ -243,7 +243,7 @@ pub struct ParquetReadOptions<'a> {
     pub file_sort_order: Vec<Vec<SortExpr>>,
 }
 
-impl<'a> Default for ParquetReadOptions<'a> {
+impl Default for ParquetReadOptions<'_> {
     fn default() -> Self {
         Self {
             file_extension: DEFAULT_PARQUET_EXTENSION,
@@ -260,6 +260,12 @@ impl<'a> ParquetReadOptions<'a> {
     /// Create a new ParquetReadOptions with default values
     pub fn new() -> Self {
         Default::default()
+    }
+
+    /// Specify file_extension
+    pub fn file_extension(mut self, file_extension: &'a str) -> Self {
+        self.file_extension = file_extension;
+        self
     }
 
     /// Specify parquet_pruning
@@ -317,7 +323,7 @@ pub struct ArrowReadOptions<'a> {
     pub table_partition_cols: Vec<(String, DataType)>,
 }
 
-impl<'a> Default for ArrowReadOptions<'a> {
+impl Default for ArrowReadOptions<'_> {
     fn default() -> Self {
         Self {
             schema: None,
@@ -362,7 +368,7 @@ pub struct AvroReadOptions<'a> {
     pub table_partition_cols: Vec<(String, DataType)>,
 }
 
-impl<'a> Default for AvroReadOptions<'a> {
+impl Default for AvroReadOptions<'_> {
     fn default() -> Self {
         Self {
             schema: None,
@@ -414,7 +420,7 @@ pub struct NdJsonReadOptions<'a> {
     pub file_sort_order: Vec<Vec<SortExpr>>,
 }
 
-impl<'a> Default for NdJsonReadOptions<'a> {
+impl Default for NdJsonReadOptions<'_> {
     fn default() -> Self {
         Self {
             schema: None,

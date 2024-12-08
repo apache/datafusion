@@ -25,13 +25,14 @@ use arrow::{datatypes::DataType, datatypes::Field};
 use arrow_schema::DataType::{Float64, UInt64};
 
 use datafusion_common::{not_impl_err, plan_err, Result};
-use datafusion_expr::aggregate_doc_sections::DOC_SECTION_APPROXIMATE;
+use datafusion_doc::DocSection;
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::type_coercion::aggregates::NUMERICS;
 use datafusion_expr::utils::format_state_name;
 use datafusion_expr::{
     Accumulator, AggregateUDFImpl, Documentation, Signature, Volatility,
 };
+use datafusion_macros::user_doc;
 
 use crate::approx_percentile_cont::ApproxPercentileAccumulator;
 
@@ -44,6 +45,20 @@ make_udaf_expr_and_func!(
 );
 
 /// APPROX_MEDIAN aggregate expression
+#[user_doc(
+    doc_section(label = "Approximate Functions"),
+    description = "Returns the approximate median (50th percentile) of input values. It is an alias of `approx_percentile_cont(x, 0.5)`.",
+    syntax_example = "approx_median(expression)",
+    sql_example = r#"```sql
+> SELECT approx_median(column_name) FROM table_name;
++-----------------------------------+
+| approx_median(column_name)        |
++-----------------------------------+
+| 23.5                              |
++-----------------------------------+
+```"#,
+    standard_argument(name = "expression",)
+)]
 pub struct ApproxMedian {
     signature: Signature,
 }
@@ -87,7 +102,7 @@ impl AggregateUDFImpl for ApproxMedian {
             Field::new(format_state_name(args.name, "min"), Float64, false),
             Field::new_list(
                 format_state_name(args.name, "centroids"),
-                Field::new("item", Float64, true),
+                Field::new_list_field(Float64, true),
                 false,
             ),
         ])
@@ -122,31 +137,6 @@ impl AggregateUDFImpl for ApproxMedian {
     }
 
     fn documentation(&self) -> Option<&Documentation> {
-        Some(get_approx_median_doc())
+        self.doc()
     }
-}
-
-static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
-
-fn get_approx_median_doc() -> &'static Documentation {
-    DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_APPROXIMATE)
-            .with_description(
-                "Returns the approximate median (50th percentile) of input values. It is an alias of `approx_percentile_cont(x, 0.5)`.",
-            )
-            .with_syntax_example("approx_median(expression)")
-            .with_sql_example(r#"```sql
-> SELECT approx_median(column_name) FROM table_name;
-+-----------------------------------+
-| approx_median(column_name)        |
-+-----------------------------------+
-| 23.5                              |
-+-----------------------------------+
-```"#,
-            )
-            .with_standard_argument("expression", None)
-            .build()
-            .unwrap()
-    })
 }

@@ -39,7 +39,7 @@ use datafusion_expr::{Documentation, ScalarUDFImpl, Signature, Volatility};
 use regex::Regex;
 use std::any::Any;
 use std::collections::HashMap;
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, LazyLock, OnceLock};
 
 #[derive(Debug)]
 pub struct RegexpReplaceFunc {
@@ -106,7 +106,11 @@ impl ScalarUDFImpl for RegexpReplaceFunc {
             }
         })
     }
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         let len = args
             .iter()
             .fold(Option::<usize>::None, |acc, arg| match arg {
@@ -134,10 +138,10 @@ static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
 
 fn get_regexp_replace_doc() -> &'static Documentation {
     DOCUMENTATION.get_or_init(|| {
-    Documentation::builder()
-        .with_doc_section(DOC_SECTION_REGEX)
-        .with_description("Replaces substrings in a string that match a [regular expression](https://docs.rs/regex/latest/regex/#syntax).")
-        .with_syntax_example("regexp_replace(str, regexp, replacement[, flags])")
+    Documentation::builder(
+        DOC_SECTION_REGEX,
+        "Replaces substrings in a string that match a [regular expression](https://docs.rs/regex/latest/regex/#syntax).",
+        "regexp_replace(str, regexp, replacement[, flags])")
         .with_sql_example(r#"```sql
 > select regexp_replace('foobarbaz', 'b(..)', 'X\\1Y', 'g');
 +------------------------------------------------------------------------+
@@ -167,7 +171,6 @@ Additional examples can be found [here](https://github.com/apache/datafusion/blo
 - **R**: enables CRLF mode: when multi-line mode is enabled, \r\n is used
 - **U**: swap the meaning of x* and x*?"#)
         .build()
-        .unwrap()
 })
 }
 
@@ -185,11 +188,9 @@ fn regexp_replace_func(args: &[ColumnarValue]) -> Result<ArrayRef> {
 /// replace POSIX capture groups (like \1) with Rust Regex group (like ${1})
 /// used by regexp_replace
 fn regex_replace_posix_groups(replacement: &str) -> String {
-    fn capture_groups_re() -> &'static Regex {
-        static CAPTURE_GROUPS_RE_LOCK: OnceLock<Regex> = OnceLock::new();
-        CAPTURE_GROUPS_RE_LOCK.get_or_init(|| Regex::new(r"(\\)(\d*)").unwrap())
-    }
-    capture_groups_re()
+    static CAPTURE_GROUPS_RE_LOCK: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r"(\\)(\d*)").unwrap());
+    CAPTURE_GROUPS_RE_LOCK
         .replace_all(replacement, "$${$2}")
         .into_owned()
 }
@@ -572,7 +573,7 @@ pub fn specialize_regexp_replace<T: OffsetSizeTrait>(
                         Hint::AcceptsSingular => 1,
                         Hint::Pad => inferred_length,
                     };
-                    arg.clone().into_array(expansion_len)
+                    arg.to_array(expansion_len)
                 })
                 .collect::<Result<Vec<_>>>()?;
             _regexp_replace_static_pattern_replace::<T>(&args)
@@ -583,7 +584,7 @@ pub fn specialize_regexp_replace<T: OffsetSizeTrait>(
         (_, _, _, _) => {
             let args = args
                 .iter()
-                .map(|arg| arg.clone().into_array(inferred_length))
+                .map(|arg| arg.to_array(inferred_length))
                 .collect::<Result<Vec<_>>>()?;
 
             match args[0].data_type() {
