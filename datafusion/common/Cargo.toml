@@ -61,7 +61,7 @@ libc = "0.2.140"
 object_store = { workspace = true, optional = true }
 parquet = { workspace = true, optional = true, default-features = true }
 paste = "1.0.15"
-pyo3 = { version = "0.22.0", optional = true }
+pyo3 = { version = "0.23.3", optional = true }
 recursive = { workspace = true }
 sqlparser = { workspace = true }
 tokio = { workspace = true }
