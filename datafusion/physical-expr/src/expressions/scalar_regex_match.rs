@@ -16,11 +16,10 @@
 // under the License.
 
 use super::Literal;
-use arrow::array::ArrayData;
 use arrow_array::{
     Array, ArrayAccessor, BooleanArray, LargeStringArray, StringArray, StringViewArray,
 };
-use arrow_buffer::BooleanBufferBuilder;
+use arrow_buffer::{BooleanBuffer, BooleanBufferBuilder};
 use arrow_schema::{DataType, Schema};
 use datafusion_common::{Result as DFResult, ScalarValue};
 use datafusion_expr::ColumnarValue;
@@ -144,6 +143,8 @@ impl ScalarRegexMatchExpr {
         &self,
         array: &Arc<dyn Array>,
     ) -> datafusion_common::Result<ColumnarValue> {
+        /// downcast_string_array downcast a [`ArrayRef`] to specific array type
+        /// example: [`StringArray`], [`LargeStringArray`], [`StringViewArray`]
         macro_rules! downcast_string_array {
             ($ARRAY:expr, $ARRAY_TYPE:ident, $ERR_MSG:expr) => {
                 &($ARRAY
@@ -157,7 +158,7 @@ impl ScalarRegexMatchExpr {
                 Ok(ColumnarValue::Scalar(ScalarValue::Boolean(None)))
             },
             DataType::Utf8 => array_regexp_match(
-                downcast_string_array!(array, StringArray, "Failed to downcast StringArray"), 
+                downcast_string_array!(array, StringArray, "Failed to downcast StringArray"),
                 self.compiled.as_ref().unwrap(),
                 self.negated,
             ),
@@ -285,26 +286,6 @@ impl PhysicalExpr for ScalarRegexMatchExpr {
             Arc::clone(&children[1]),
         )))
     }
-
-    fn evaluate_selection(
-        &self,
-        batch: &arrow_array::RecordBatch,
-        selection: &BooleanArray,
-    ) -> DFResult<ColumnarValue> {
-        let tmp_batch = arrow::compute::filter_record_batch(batch, selection)?;
-
-        let tmp_result = self.evaluate(&tmp_batch)?;
-
-        if batch.num_rows() == tmp_batch.num_rows() {
-            // All values from the `selection` filter are true.
-            Ok(tmp_result)
-        } else if let ColumnarValue::Array(a) = tmp_result {
-            datafusion_physical_expr_common::utils::scatter(selection, a.as_ref())
-                .map(ColumnarValue::Array)
-        } else {
-            Ok(tmp_result)
-        }
-    }
 }
 
 /// It is used for scalar regexp matching and copy from arrow-rs
@@ -313,31 +294,20 @@ fn array_regexp_match(
     regex: &Regex,
     negated: bool,
 ) -> DFResult<ColumnarValue> {
-    let null_bit_buffer = array.nulls().map(|x| x.inner().sliced());
-    let mut buffer_builder = BooleanBufferBuilder::new(array.len());
-
-    if regex.as_str().is_empty() {
-        buffer_builder.append_n(array.len(), true);
+    let null_buffer = array.logical_nulls();
+    let bool_buffer = if regex.as_str().is_empty() {
+        BooleanBuffer::new_set(array.len())
     } else {
+        let mut bool_buffer_builder = BooleanBufferBuilder::new(array.len());
+        bool_buffer_builder.advance(array.len());
         for i in 0..array.len() {
-            let value = array.value(i);
-            buffer_builder.append(regex.is_match(value));
+            let value = unsafe { array.value_unchecked(i) };
+            bool_buffer_builder.set_bit(i, regex.is_match(value));
         }
-    }
+        bool_buffer_builder.finish()
+    };
 
-    let buffer = buffer_builder.into();
-    let bool_array = BooleanArray::from(unsafe {
-        ArrayData::new_unchecked(
-            DataType::Boolean,
-            array.len(),
-            None,
-            null_bit_buffer,
-            0,
-            vec![buffer],
-            vec![],
-        )
-    });
-
+    let bool_array = BooleanArray::new(bool_buffer, null_buffer);
     let bool_array = if negated {
         arrow::compute::kernels::boolean::not(&bool_array)
     } else {

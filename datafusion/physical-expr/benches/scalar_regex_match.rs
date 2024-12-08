@@ -38,14 +38,18 @@ fn make_record_batch(
     batch_iter: usize,
     batch_size: usize,
     string_len: usize,
+    matched_str: &[&str],
     schema: &Schema,
 ) -> Vec<RecordBatch> {
-    let mut rng = StdRng::from_seed([123; 32]);
+    let mut rng = StdRng::seed_from_u64(12345);
     let mut batches = vec![];
     for _ in 0..batch_iter {
-        let array = (0..batch_size)
+        let mut array = (0..batch_size)
             .map(|_| Some(Alphanumeric.sample_string(&mut rng, string_len)))
             .collect::<Vec<_>>();
+        for v in matched_str {
+            array.push(Some(v.to_string()));
+        }
         let array = StringArray::from(array);
         let batch = RecordBatch::try_new(Arc::new(schema.clone()), vec![Arc::new(array)])
             .unwrap();
@@ -74,7 +78,19 @@ fn init_benchmark() -> (
         (
             128_usize,
             4096_usize,
-            make_record_batch(128, 4096, 100, &schema),
+            make_record_batch(
+                128,
+                4096,
+                100,
+                &[
+                    "example@email.com",
+                    "http://example.com",
+                    "123.4.5.6",
+                    "1236787788",
+                    "55555",
+                ],
+                &schema,
+            ),
         ),
     ];
 
