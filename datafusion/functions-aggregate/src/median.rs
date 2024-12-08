@@ -21,8 +21,8 @@ use std::mem::{size_of, size_of_val};
 use std::sync::Arc;
 
 use arrow::array::{
-    downcast_integer, ArrowNumericType, BooleanArray, GenericListBuilder,
-    GenericListViewArray, ListArray, ListBuilder, PrimitiveArray, PrimitiveBuilder,
+    downcast_integer, ArrowNumericType, BooleanArray, ListArray, PrimitiveArray,
+    PrimitiveBuilder,
 };
 use arrow::buffer::{OffsetBuffer, ScalarBuffer};
 use arrow::{
@@ -44,9 +44,10 @@ use datafusion_expr::{
     Documentation, Signature, Volatility,
 };
 use datafusion_expr::{EmitTo, GroupsAccumulator};
+use datafusion_functions_aggregate_common::aggregate::groups_accumulator::accumulate::accumulate;
+use datafusion_functions_aggregate_common::aggregate::groups_accumulator::nulls::filtered_null_mask;
 use datafusion_functions_aggregate_common::utils::Hashable;
 use datafusion_macros::user_doc;
-use datafusion_physical_expr::NullState;
 
 make_udaf_expr_and_func!(
     Median,
@@ -249,7 +250,6 @@ impl<T: ArrowNumericType> Accumulator for MedianAccumulator<T> {
 struct MedianGroupsAccumulator<T: ArrowNumericType + Send> {
     data_type: DataType,
     group_values: Vec<Vec<T::Native>>,
-    null_state: NullState,
 }
 
 impl<T: ArrowNumericType + Send> MedianGroupsAccumulator<T> {
@@ -257,7 +257,6 @@ impl<T: ArrowNumericType + Send> MedianGroupsAccumulator<T> {
         Self {
             data_type,
             group_values: Vec::new(),
-            null_state: NullState::new(),
         }
     }
 }
@@ -275,11 +274,10 @@ impl<T: ArrowNumericType + Send> GroupsAccumulator for MedianGroupsAccumulator<T
 
         // increment counts, update sums
         self.group_values.resize(total_num_groups, Vec::new());
-        self.null_state.accumulate(
+        accumulate(
             group_indices,
             values,
             opt_filter,
-            total_num_groups,
             |group_index, new_value| {
                 self.group_values[group_index].push(new_value);
             },
@@ -328,6 +326,7 @@ impl<T: ArrowNumericType + Send> GroupsAccumulator for MedianGroupsAccumulator<T
     }
 
     fn state(&mut self, emit_to: EmitTo) -> Result<Vec<ArrayRef>> {
+        // Emit values
         let emit_group_values = emit_to.take_needed(&mut self.group_values);
 
         // Build offsets
@@ -358,7 +357,17 @@ impl<T: ArrowNumericType + Send> GroupsAccumulator for MedianGroupsAccumulator<T
     }
 
     fn evaluate(&mut self, emit_to: EmitTo) -> Result<ArrayRef> {
-        todo!()
+        // Emit values
+        let emit_group_values = emit_to.take_needed(&mut self.group_values);
+
+        // Calculate median for each group
+        let mut evaluate_result_builder = PrimitiveBuilder::<T>::new();
+        for values in emit_group_values {
+            let median = calculate_median::<T>(values);
+            evaluate_result_builder.append_option(median);
+        }
+
+        Ok(Arc::new(evaluate_result_builder.finish()))
     }
 
     fn convert_to_state(
@@ -366,15 +375,48 @@ impl<T: ArrowNumericType + Send> GroupsAccumulator for MedianGroupsAccumulator<T
         values: &[ArrayRef],
         opt_filter: Option<&BooleanArray>,
     ) -> Result<Vec<ArrayRef>> {
-        todo!()
+        assert_eq!(values.len(), 1, "one argument to merge_batch");
+
+        let input_array = values[0].as_primitive::<T>();
+
+        // Directly convert the input array to states, each row will be
+        // seen as a respective group.
+        // For detail, the `input_array` will be converted to a `ListArray`.
+        // And if row is `not null + not filtered`, it will be converted to a list
+        // with only one element; otherwise, this row in `ListArray` will be set
+        // to null.
+
+        // Reuse values buffer in `input_array` to build `values` in `ListArray`
+        let values = PrimitiveArray::<T>::new(input_array.values().clone(), None);
+
+        // `offsets` in `ListArray`, each row as a list element
+        let offsets = (0..=input_array.len() as i32)
+            .into_iter()
+            .collect::<Vec<_>>();
+        let offsets = OffsetBuffer::new(ScalarBuffer::from(offsets));
+
+        // `nulls` for converted `ListArray`
+        let nulls = filtered_null_mask(opt_filter, input_array);
+
+        let converted_list_array = Arc::new(ListArray::new(
+            Arc::new(Field::new_list_field(self.data_type.clone(), false)),
+            offsets,
+            Arc::new(values),
+            nulls,
+        ));
+
+        Ok(vec![converted_list_array])
     }
 
     fn supports_convert_to_state(&self) -> bool {
-        todo!()
+        true
     }
 
     fn size(&self) -> usize {
-        todo!()
+        self.group_values
+            .iter()
+            .map(|values| values.capacity() * size_of::<T>())
+            .sum::<usize>()
     }
 }
 
