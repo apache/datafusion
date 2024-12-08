@@ -1000,6 +1000,7 @@ fn project_with_column_index(
             Expr::Column(Column {
                 relation: _,
                 ref name,
+                span: _,
             }) if name != schema.field(i).name() => e.alias(schema.field(i).name()),
             Expr::Alias { .. } | Expr::Column { .. } => e,
             _ => e.alias(schema.field(i).name()),

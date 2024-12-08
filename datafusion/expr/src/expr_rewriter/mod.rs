@@ -160,6 +160,7 @@ pub fn unnormalize_col(expr: Expr) -> Expr {
                 let col = Column {
                     relation: None,
                     name: c.name,
+                    span: c.span,
                 };
                 Transformed::yes(Expr::Column(col))
             } else {
@@ -181,10 +182,10 @@ pub fn create_col_from_scalar_expr(
             Some::<TableReference>(subqry_alias.into()),
             name,
         )),
-        Expr::Column(Column { relation: _, name }) => Ok(Column::new(
+        Expr::Column(Column { relation: _, name, span }) => Ok(Column::new(
             Some::<TableReference>(subqry_alias.into()),
             name,
-        )),
+        ).with_span(*span)),
         _ => {
             let scalar_column = scalar_expr.schema_name().to_string();
             Ok(Column::new(

@@ -54,13 +54,13 @@ use datafusion_expr::{
     TransactionConclusion, TransactionEnd, TransactionIsolationLevel, TransactionStart,
     Volatility, WriteOp,
 };
-use sqlparser::ast::{self, SqliteOnConflict};
+use sqlparser::ast::{self, ShowStatementIn, ShowStatementOptions, SqliteOnConflict};
 use sqlparser::ast::{
     Assignment, AssignmentTarget, ColumnDef, CreateIndex, CreateTable,
     CreateTableOptions, Delete, DescribeAlias, Expr as SQLExpr, FromTable, Ident, Insert,
     ObjectName, ObjectType, OneOrManyWithParens, Query, SchemaName, SetExpr,
-    ShowCreateObject, ShowStatementFilter, Statement, TableConstraint, TableFactor,
-    TableWithJoins, TransactionMode, UnaryOperator, Value,
+    ShowCreateObject, Statement, TableConstraint, TableFactor, TableWithJoins,
+    TransactionMode, UnaryOperator, Value,
 };
 use sqlparser::parser::ParserError::ParserError;
 
@@ -685,19 +685,99 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             Statement::ShowTables {
                 extended,
                 full,
-                db_name,
-                filter,
-                // SHOW TABLES IN/FROM are equivalent, this field specifies which the user
-                // specified, but it doesn't affect the plan so ignore the field
-                clause: _,
-            } => self.show_tables_to_plan(extended, full, db_name, filter),
+                terse,
+                history,
+                external,
+                show_options,
+            } => {
+                // We only support the basic "SHOW TABLES"
+                // https://github.com/apache/datafusion/issues/3188
+                if extended {
+                    return not_impl_err!("SHOW TABLES EXTENDED not supported")?;
+                }
+                if full {
+                    return not_impl_err!("SHOW FULL TABLES not supported")?;
+                }
+                if terse {
+                    return not_impl_err!("SHOW TERSE TABLES not supported")?;
+                }
+                if history {
+                    return not_impl_err!("SHOW TABLES HISTORY not supported")?;
+                }
+                if external {
+                    return not_impl_err!("SHOW EXTERNAL TABLES not supported")?;
+                }
+                let ShowStatementOptions {
+                    show_in,
+                    starts_with,
+                    limit,
+                    limit_from,
+                    filter_position,
+                } = show_options;
+                if show_in.is_some() {
+                    return not_impl_err!("SHOW TABLES IN not supported")?;
+                }
+                if starts_with.is_some() {
+                    return not_impl_err!("SHOW TABLES LIKE not supported")?;
+                }
+                if limit.is_some() {
+                    return not_impl_err!("SHOW TABLES LIMIT not supported")?;
+                }
+                if limit_from.is_some() {
+                    return not_impl_err!("SHOW TABLES LIMIT FROM not supported")?;
+                }
+                if filter_position.is_some() {
+                    return not_impl_err!("SHOW TABLES FILTER not supported")?;
+                }
+                self.show_tables_to_plan()
+            }
 
             Statement::ShowColumns {
                 extended,
                 full,
-                table_name,
-                filter,
-            } => self.show_columns_to_plan(extended, full, table_name, filter),
+                show_options,
+            } => {
+                let ShowStatementOptions {
+                    show_in,
+                    starts_with,
+                    limit,
+                    limit_from,
+                    filter_position,
+                } = show_options;
+                if starts_with.is_some() {
+                    return not_impl_err!("SHOW COLUMNS LIKE not supported")?;
+                }
+                if limit.is_some() {
+                    return not_impl_err!("SHOW COLUMNS LIMIT not supported")?;
+                }
+                if limit_from.is_some() {
+                    return not_impl_err!("SHOW COLUMNS LIMIT FROM not supported")?;
+                }
+                if filter_position.is_some() {
+                    return not_impl_err!(
+                        "SHOW COLUMNS with WHERE or LIKE is not supported"
+                    )?;
+                }
+                let Some(ShowStatementIn {
+                    // specifies if the syntax was `SHOW COLUMNS IN` or `SHOW
+                    // COLUMNS FROM` which is not different in DataFusion
+                    clause: _,
+                    parent_type,
+                    parent_name,
+                }) = show_in
+                else {
+                    return plan_err!("SHOW COLUMNS requires a table name");
+                };
+
+                if let Some(parent_type) = parent_type {
+                    return not_impl_err!("SHOW COLUMNS IN {parent_type} not supported");
+                }
+                let Some(table_name) = parent_name else {
+                    return plan_err!("SHOW COLUMNS requires a table name");
+                };
+
+                self.show_columns_to_plan(extended, full, table_name)
+            }
 
             Statement::Insert(Insert {
                 or,
@@ -766,9 +846,13 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 from,
                 selection,
                 returning,
+                or,
             } => {
                 if returning.is_some() {
                     plan_err!("Update-returning clause not yet supported")?;
+                }
+                if or.is_some() {
+                    plan_err!("ON conflict not supported")?;
                 }
                 self.update_to_plan(table, assignments, from, selection)
             }
@@ -1065,24 +1149,12 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
     }
 
     /// Generate a logical plan from a "SHOW TABLES" query
-    fn show_tables_to_plan(
-        &self,
-        extended: bool,
-        full: bool,
-        db_name: Option<Ident>,
-        filter: Option<ShowStatementFilter>,
-    ) -> Result<LogicalPlan> {
+    fn show_tables_to_plan(&self) -> Result<LogicalPlan> {
         if self.has_table("information_schema", "tables") {
-            // We only support the basic "SHOW TABLES"
-            // https://github.com/apache/datafusion/issues/3188
-            if db_name.is_some() || filter.is_some() || full || extended {
-                plan_err!("Unsupported parameters to SHOW TABLES")
-            } else {
-                let query = "SELECT * FROM information_schema.tables;";
-                let mut rewrite = DFParser::parse_sql(query)?;
-                assert_eq!(rewrite.len(), 1);
-                self.statement_to_plan(rewrite.pop_front().unwrap()) // length of rewrite is 1
-            }
+            let query = "SELECT * FROM information_schema.tables;";
+            let mut rewrite = DFParser::parse_sql(query)?;
+            assert_eq!(rewrite.len(), 1);
+            self.statement_to_plan(rewrite.pop_front().unwrap()) // length of rewrite is 1
         } else {
             plan_err!("SHOW TABLES is not supported unless information_schema is enabled")
         }
@@ -1842,22 +1914,18 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         extended: bool,
         full: bool,
         sql_table_name: ObjectName,
-        filter: Option<ShowStatementFilter>,
     ) -> Result<LogicalPlan> {
-        if filter.is_some() {
-            return plan_err!("SHOW COLUMNS with WHERE or LIKE is not supported");
-        }
+        // Figure out the where clause
+        let where_clause = object_name_to_qualifier(
+            &sql_table_name,
+            self.options.enable_ident_normalization,
+        );
 
         if !self.has_table("information_schema", "columns") {
             return plan_err!(
                 "SHOW COLUMNS is not supported unless information_schema is enabled"
             );
         }
-        // Figure out the where clause
-        let where_clause = object_name_to_qualifier(
-            &sql_table_name,
-            self.options.enable_ident_normalization,
-        );
 
         // Do a table lookup to verify the table exists
         let table_ref = self.object_name_to_table_reference(sql_table_name)?;

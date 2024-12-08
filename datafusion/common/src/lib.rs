@@ -47,6 +47,8 @@ pub mod test_util;
 pub mod tree_node;
 pub mod types;
 pub mod utils;
+pub mod diagnostic;
+pub mod with_span;
 
 /// Reexport arrow crate
 pub use arrow;
@@ -76,6 +78,8 @@ pub use stats::{ColumnStatistics, Statistics};
 pub use table_reference::{ResolvedTableReference, TableReference};
 pub use unnest::{RecursionUnnestOption, UnnestOptions};
 pub use utils::project_schema;
+pub use diagnostic::{Diagnostic, DiagnosticEntry, DiagnosticEntryKind};
+pub use with_span::WithSpan;
 
 // These are hidden from docs purely to avoid polluting the public view of what this crate exports.
 // These are just re-exports of macros by the same name, which gets around the 'cannot refer to

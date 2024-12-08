@@ -29,7 +29,7 @@ use arrow::compute::can_cast_types;
 use arrow::datatypes::{DataType, Field};
 use datafusion_common::{
     not_impl_err, plan_datafusion_err, plan_err, Column, ExprSchema, Result,
-    TableReference,
+    TableReference, WithSpan,
 };
 use datafusion_functions_window_common::field::WindowUDFFieldArgs;
 use recursive::recursive;
@@ -403,9 +403,26 @@ impl ExprSchemable for Expr {
                 ref right,
                 ref op,
             }) => {
-                let left = left.data_type_and_nullable(schema)?;
-                let right = right.data_type_and_nullable(schema)?;
-                Ok((get_result_type(&left.0, op, &right.0)?, left.1 || right.1))
+                let (left_type, left_is_nullable) =
+                    left.data_type_and_nullable(schema)?;
+                let left_type = if let Some(span) = left.get_span() {
+                    WithSpan::new(&left_type, span)
+                } else {
+                    (&left_type).into()
+                };
+
+                let (right_type, right_is_nullable) =
+                    right.data_type_and_nullable(schema)?;
+                let right_type = if let Some(span) = right.get_span() {
+                    WithSpan::new(&right_type, span)
+                } else {
+                    (&right_type).into()
+                };
+
+                Ok((
+                    get_result_type(left_type, op, right_type)?,
+                    left_is_nullable || right_is_nullable,
+                ))
             }
             Expr::WindowFunction(window_function) => {
                 self.data_type_and_nullable_with_window_function(schema, window_function)

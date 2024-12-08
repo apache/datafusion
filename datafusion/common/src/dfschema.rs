@@ -32,6 +32,7 @@ use crate::{
 use arrow::compute::can_cast_types;
 use arrow::datatypes::{DataType, Field, FieldRef, Fields, Schema, SchemaRef};
 use arrow_schema::SchemaBuilder;
+use sqlparser::tokenizer::Span;
 
 /// A reference-counted reference to a [DFSchema].
 pub type DFSchemaRef = Arc<DFSchema>;
@@ -505,6 +506,7 @@ impl DFSchema {
                         field: Column {
                             relation: None,
                             name: name.to_string(),
+                            span: Span::empty(),
                         },
                     })
                 }
