@@ -55,7 +55,6 @@ use arrow::datatypes::{
 
 use crate::min_max::min_max_bytes::MinMaxBytesAccumulator;
 use datafusion_common::ScalarValue;
-use datafusion_doc::DocSection;
 use datafusion_expr::{
     function::AccumulatorArgs, Accumulator, AggregateUDFImpl, Documentation, Signature,
     Volatility,
@@ -65,7 +64,6 @@ use datafusion_macros::user_doc;
 use half::f16;
 use std::mem::size_of_val;
 use std::ops::Deref;
-use std::sync::OnceLock;
 
 fn get_min_max_result_type(input_types: &[DataType]) -> Result<Vec<DataType>> {
     // make sure that the input types only has one element.

@@ -21,14 +21,13 @@
 use std::any::Any;
 use std::collections::VecDeque;
 use std::mem::{size_of, size_of_val};
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
 use arrow::array::{new_empty_array, ArrayRef, AsArray, StructArray};
 use arrow_schema::{DataType, Field, Fields};
 
 use datafusion_common::utils::{get_row_at_idx, SingleRowListArrayBuilder};
 use datafusion_common::{exec_err, internal_err, not_impl_err, Result, ScalarValue};
-use datafusion_doc::DocSection;
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::utils::format_state_name;
 use datafusion_expr::{
