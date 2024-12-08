@@ -54,7 +54,7 @@ use syn::{parse_macro_input, DeriveInput, LitStr};
 /// ```
 /// will generate the following code
 ///
-/// ```ingore
+/// ```ignore
 /// pub struct ToDateFunc {
 ///     signature: Signature,
 /// }
