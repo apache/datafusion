@@ -19,7 +19,6 @@
 
 use std::any::Any;
 use std::mem::size_of_val;
-use std::sync::OnceLock;
 
 use arrow::array::ArrayRef;
 use arrow::array::BooleanArray;
@@ -38,7 +37,6 @@ use datafusion_expr::{
     Signature, Volatility,
 };
 
-use datafusion_doc::DocSection;
 use datafusion_functions_aggregate_common::aggregate::groups_accumulator::bool_op::BooleanGroupsAccumulator;
 use datafusion_macros::user_doc;
 

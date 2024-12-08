@@ -22,7 +22,6 @@ use datafusion_expr::utils::AggregateOrderSensitivity;
 use std::any::Any;
 use std::collections::HashSet;
 use std::mem::{size_of, size_of_val};
-use std::sync::OnceLock;
 
 use arrow::array::Array;
 use arrow::array::ArrowNativeTypeOp;
@@ -35,7 +34,6 @@ use arrow::datatypes::{
 };
 use arrow::{array::ArrayRef, datatypes::Field};
 use datafusion_common::{exec_err, not_impl_err, Result, ScalarValue};
-use datafusion_doc::DocSection;
 use datafusion_expr::function::AccumulatorArgs;
 use datafusion_expr::function::StateFieldsArgs;
 use datafusion_expr::utils::format_state_name;
