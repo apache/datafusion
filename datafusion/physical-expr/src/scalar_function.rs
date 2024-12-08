@@ -134,20 +134,20 @@ impl PhysicalExpr for ScalarFunctionExpr {
     }
 
     fn evaluate(&self, batch: &RecordBatch) -> Result<ColumnarValue> {
-        let inputs = self
+        let args = self
             .args
             .iter()
             .map(|e| e.evaluate(batch))
             .collect::<Result<Vec<_>>>()?;
 
-        let input_empty = inputs.is_empty();
-        let input_all_scalar = inputs
+        let input_empty = args.is_empty();
+        let input_all_scalar = args
             .iter()
             .all(|arg| matches!(arg, ColumnarValue::Scalar(_)));
 
         // evaluate the function
         let output = self.fun.invoke_with_args(ScalarFunctionArgs {
-            args: inputs.as_slice(),
+            args,
             number_rows: batch.num_rows(),
             return_type: &self.return_type,
         })?;
