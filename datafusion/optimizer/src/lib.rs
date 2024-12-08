@@ -55,11 +55,11 @@ pub mod replace_distinct_aggregate;
 pub mod scalar_subquery_to_join;
 pub mod simplify_expressions;
 pub mod single_distinct_to_groupby;
-pub mod unwrap_cast_in_comparison;
-pub mod utils;
-
 #[cfg(test)]
 pub mod test;
+pub mod unwrap_cast_in_comparison;
+pub mod utils;
+pub mod eliminate_unnecessary_group_by_keys;
 
 pub use analyzer::{Analyzer, AnalyzerRule};
 pub use optimizer::{Optimizer, OptimizerConfig, OptimizerContext, OptimizerRule};
