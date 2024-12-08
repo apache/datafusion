@@ -241,10 +241,8 @@ impl<T: ArrowNumericType> Accumulator for MedianAccumulator<T> {
 ///
 /// For calculating the accurate medians of groups, we need to store all values
 /// of groups before final evaluation.
-/// And values in each group will be stored in a `Vec<T>`, so the total group values
+/// So values in each group will be stored in a `Vec<T>`, so the total group values
 /// will be actually organized as a `Vec<Vec<T>>`.
-///
-/// In partial aggregation stage, the `values`
 ///
 #[derive(Debug)]
 struct MedianGroupsAccumulator<T: ArrowNumericType + Send> {
@@ -272,7 +270,7 @@ impl<T: ArrowNumericType + Send> GroupsAccumulator for MedianGroupsAccumulator<T
         assert_eq!(values.len(), 1, "single argument to update_batch");
         let values = values[0].as_primitive::<T>();
 
-        // increment counts, update sums
+        // Push the `not nulls + not filtered` row into its group
         self.group_values.resize(total_num_groups, Vec::new());
         accumulate(
             group_indices,
@@ -296,30 +294,43 @@ impl<T: ArrowNumericType + Send> GroupsAccumulator for MedianGroupsAccumulator<T
     ) -> Result<()> {
         assert_eq!(values.len(), 1, "one argument to merge_batch");
 
-        // The merged values should be organized like as a `non-nullable ListArray` like:
+        // The merged values should be organized like as a `ListArray` which is nullable,
+        // but `values` in it is `non-nullable`(`values` with nulls usually generated
+        // from `convert_to_state`).
         //
+        // Following is the possible and impossible input `values`:
+        //
+        // # Possible values
         // ```text
         //   group 0: [1, 2, 3]
-        //   group 1: [4, 5]
+        //   group 1: null (list array is nullable)
         //   group 2: [6, 7, 8]
         //   ...
         //   group n: [...]
         // ```
         //
+        // # Impossible values
+        // ```text
+        //   group x: [1, 2, null] (values in list array is non-nullable)
+        // ```
+        //
         let input_group_values = values[0].as_list::<i32>();
-        assert!(input_group_values.null_count() == 0);
 
         // Ensure group values big enough
         self.group_values.resize(total_num_groups, Vec::new());
 
         // Extend values to related groups
+        // TODO: avoid using iterator of the `ListArray`, this will lead to
+        // many calls of `slice` of its `values` array, and `slice` is not
+        // so efficient.
         group_indices
             .iter()
             .zip(input_group_values.iter())
             .for_each(|(&group_index, values_opt)| {
-                let values = values_opt.unwrap();
-                let values = values.as_primitive::<T>();
-                self.group_values[group_index].extend(values.values().iter());
+                if let Some(values) = values_opt {
+                    let values = values.as_primitive::<T>();
+                    self.group_values[group_index].extend(values.values().iter());
+                }
             });
 
         Ok(())
