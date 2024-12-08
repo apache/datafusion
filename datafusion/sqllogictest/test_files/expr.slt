@@ -560,7 +560,7 @@ select repeat('-1.2', arrow_cast(3, 'Int32'));
 ----
 -1.2-1.2-1.2
 
-query error DataFusion error: Error during planning: Error during planning: Failed to coerce arguments to satisfy a call to repeat function: coercion from \[Utf8, Float64\] to the signature
+query error DataFusion error: Error during planning: Internal error: Expect TypeSignatureClass::Native\(LogicalType\(Native\(Int64\), Int64\)\) but received Float64
 select repeat('-1.2', 3.2);
 
 query T
@@ -1100,24 +1100,22 @@ SELECT date_part('microsecond', timestamp '2020-09-08T12:00:12.12345678+00:00')
 query error DataFusion error: Internal error: unit Nanosecond not supported
 SELECT date_part('nanosecond', timestamp '2020-09-08T12:00:12.12345678+00:00')
 
+# Second argument should not be string, failed in postgres too.
+query error
+SELECT date_part('second', '2020-09-08T12:00:12.12345678+00:00')
 
 query I
-SELECT date_part('second', '2020-09-08T12:00:12.12345678+00:00')
+SELECT date_part('second', timestamp '2020-09-08T12:00:12.12345678+00:00')
 ----
 12
 
 query I
-SELECT date_part('millisecond', '2020-09-08T12:00:12.12345678+00:00')
-----
-12123
-
-query I
-SELECT date_part('microsecond', '2020-09-08T12:00:12.12345678+00:00')
+SELECT date_part('microsecond', timestamp '2020-09-08T12:00:12.12345678+00:00')
 ----
 12123456
 
 query error DataFusion error: Internal error: unit Nanosecond not supported
-SELECT date_part('nanosecond', '2020-09-08T12:00:12.12345678+00:00')
+SELECT date_part('nanosecond', timestamp '2020-09-08T12:00:12.12345678+00:00')
 
 # test_date_part_time
 
@@ -1339,13 +1337,17 @@ SELECT date_part('second', arrow_cast('23:32:50.123456789'::time, 'Time64(Nanose
 ----
 50
 
+# Second argument should not be string, failed in postgres too
+query error
+select extract(second from '2024-08-09T12:13:14');
+
 query I
-select extract(second from '2024-08-09T12:13:14')
+select extract(second from timestamp '2024-08-09T12:13:14');
 ----
 14
 
 query I
-select extract(seconds from '2024-08-09T12:13:14')
+select extract(seconds from timestamp '2024-08-09T12:13:14')
 ----
 14
 
