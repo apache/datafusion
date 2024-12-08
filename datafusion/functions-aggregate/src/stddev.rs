@@ -20,14 +20,13 @@
 use std::any::Any;
 use std::fmt::{Debug, Formatter};
 use std::mem::align_of_val;
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
 use arrow::array::Float64Array;
 use arrow::{array::ArrayRef, datatypes::DataType, datatypes::Field};
 
 use datafusion_common::{internal_err, not_impl_err, Result};
 use datafusion_common::{plan_err, ScalarValue};
-use datafusion_doc::DocSection;
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::utils::format_state_name;
 use datafusion_expr::{
