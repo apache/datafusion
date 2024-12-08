@@ -156,7 +156,7 @@ impl TypeSignature {
     }
 }
 
-#[derive(Debug, Clone, Eq, PartialOrd)]
+#[derive(Debug, Clone, Eq, PartialEq, PartialOrd, Hash)]
 pub enum TypeSignatureClass {
     Timestamp,
     Date,
@@ -167,22 +167,6 @@ pub enum TypeSignatureClass {
     // Numeric
     // Integer
     Native(LogicalTypeRef),
-}
-
-// TODO: MSRV issue: Default macro doesn't work in 1.79. Use default PartialEq macro after it is able to compile
-impl PartialEq for TypeSignatureClass {
-    fn eq(&self, other: &Self) -> bool {
-        match (self, other) {
-            (Self::Native(l0), Self::Native(r0)) => l0 == r0,
-            _ => core::mem::discriminant(self) == core::mem::discriminant(other),
-        }
-    }
-}
-
-impl std::hash::Hash for TypeSignatureClass {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        core::mem::discriminant(self).hash(state);
-    }
 }
 
 impl Display for TypeSignatureClass {

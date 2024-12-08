@@ -4281,7 +4281,7 @@ EXPLAIN SELECT extract(month from ts) as months
 logical_plan
 01)Sort: months DESC NULLS FIRST, fetch=5
 02)--Projection: date_part(Utf8("MONTH"),csv_with_timestamps.ts) AS months
-03)----Aggregate: groupBy=[[date_part(Utf8View("MONTH"), csv_with_timestamps.ts) AS date_part(Utf8("MONTH"),csv_with_timestamps.ts)]], aggr=[[]]
+03)----Aggregate: groupBy=[[date_part(Utf8("MONTH"), csv_with_timestamps.ts)]], aggr=[[]]
 04)------TableScan: csv_with_timestamps projection=[ts]
 physical_plan
 01)SortPreservingMergeExec: [months@0 DESC], fetch=5
