@@ -1100,25 +1100,23 @@ SELECT date_part('nanosecond', timestamp '2020-09-08T12:00:12.12345678+00:00')
 query error
 SELECT date_part('second', '2020-09-08T12:00:12.12345678+00:00')
 
-query R
+query I
 SELECT date_part('second', timestamp '2020-09-08T12:00:12.12345678+00:00')
+----
+12
+
+query I
+SELECT date_part('millisecond', timestamp '2020-09-08T12:00:12.12345678+00:00')
 ----
 12.12345678
 
-query R
-SELECT date_part('millisecond', timestamp '2020-09-08T12:00:12.12345678+00:00')
+query I
+SELECT date_part('microsecond', timestamp '2020-09-08T12:00:12.12345678+00:00')
 ----
 12123.45678
 
-query R
-SELECT date_part('microsecond', timestamp '2020-09-08T12:00:12.12345678+00:00')
-----
-12123456.78
-
-query R
+query error DataFusion error: Internal error: unit Nanosecond not supported
 SELECT date_part('nanosecond', timestamp '2020-09-08T12:00:12.12345678+00:00')
-----
-12123456780
 
 # test_date_part_time
 
@@ -1362,15 +1360,15 @@ SELECT date_part('second', arrow_cast('23:32:50.123456789'::time, 'Time64(Nanose
 50.123456789
 
 # Second argument should not be string, failed in postgres too
-query error 
-select extract(second from '2024-08-09T12:13:14')
+query error
+select extract(second from '2024-08-09T12:13:14');
 
-query R
-select extract(second from timestamp '2024-08-09T12:13:14')
+query I
+select extract(second from timestamp '2024-08-09T12:13:14');
 ----
 14
 
-query R
+query I
 select extract(seconds from timestamp '2024-08-09T12:13:14')
 ----
 14

@@ -32,6 +32,7 @@ use datafusion_expr_common::{
         ArrayFunctionSignature, TypeSignatureClass, FIXED_SIZE_LIST_WILDCARD,
         TIMEZONE_WILDCARD,
     },
+    type_coercion::binary::comparison_coercion_numeric,
     type_coercion::binary::string_coercion,
 };
 use std::sync::Arc;

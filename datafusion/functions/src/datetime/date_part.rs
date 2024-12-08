@@ -23,23 +23,25 @@ use arrow::array::{Array, ArrayRef, Float64Array};
 use arrow::compute::kernels::cast_utils::IntervalUnit;
 use arrow::compute::{binary, cast, date_part, DatePart};
 use arrow::datatypes::DataType::{
-    Date32, Date64, Duration, Float64, Interval, Time32, Time64, Timestamp,
+    Date32, Date64, Duration, Interval, Time32, Time64, Timestamp,
 };
 use arrow::datatypes::TimeUnit::{Microsecond, Millisecond, Nanosecond, Second};
 use arrow::datatypes::{DataType, TimeUnit};
 
-use datafusion_common::cast::{
-    as_date32_array, as_date64_array, as_int32_array, as_time32_millisecond_array,
-    as_time32_second_array, as_time64_microsecond_array, as_time64_nanosecond_array,
-    as_timestamp_microsecond_array, as_timestamp_millisecond_array,
-    as_timestamp_nanosecond_array, as_timestamp_second_array,
+use datafusion_common::{
+    cast::{
+        as_date32_array, as_date64_array, as_int32_array, as_time32_millisecond_array,
+        as_time32_second_array, as_time64_microsecond_array, as_time64_nanosecond_array,
+        as_timestamp_microsecond_array, as_timestamp_millisecond_array,
+        as_timestamp_nanosecond_array, as_timestamp_second_array,
+    },
+    exec_err, internal_err,
+    types::logical_string,
+    ExprSchema, Result, ScalarValue,
 };
-use datafusion_common::types::logical_string;
-use datafusion_common::{exec_err, Result, ScalarValue};
-use datafusion_expr::scalar_doc_sections::DOC_SECTION_DATETIME;
-use datafusion_expr::TypeSignature;
 use datafusion_expr::{
-    ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
+    scalar_doc_sections::DOC_SECTION_DATETIME, ColumnarValue, Documentation, Expr,
+    ScalarUDFImpl, Signature, TypeSignature, Volatility,
 };
 use datafusion_expr_common::signature::TypeSignatureClass;
 

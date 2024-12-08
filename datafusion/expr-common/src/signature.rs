@@ -20,7 +20,7 @@
 
 use std::fmt::Display;
 
-use crate::type_coercion::aggregates::{NUMERICS, STRINGS};
+use crate::type_coercion::aggregates::NUMERICS;
 use arrow::datatypes::{DataType, IntervalUnit, TimeUnit};
 use datafusion_common::types::{LogicalTypeRef, NativeType};
 use itertools::Itertools;
@@ -115,6 +115,15 @@ pub enum TypeSignature {
     /// arguments like `vec![DataType::Int32]` or `vec![DataType::Float32]`
     /// since i32 and f32 can be casted to f64
     Coercible(Vec<TypeSignatureClass>),
+    /// The arguments will be coerced to a single type based on the comparison rules.
+    /// For example, i32 and i64 has coerced type Int64.
+    ///
+    /// Note:
+    /// - If compares with numeric and string, numeric is preferred for numeric string cases. For example, nullif('2', 1) has coerced types Int64.
+    /// - If the result is Null, it will be coerced to String (Utf8View).
+    ///
+    /// See `comparison_coercion_numeric` for more details.
+    Comparable(usize),
     /// Fixed number of arguments of arbitrary types
     /// If a function takes 0 argument, its `TypeSignature` should be `Any(0)`
     Any(usize),

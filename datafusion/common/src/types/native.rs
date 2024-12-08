@@ -245,6 +245,8 @@ impl LogicalType for NativeType {
             (Self::FixedSizeBinary(size), _) => FixedSizeBinary(*size),
             (Self::String, LargeBinary) => LargeUtf8,
             (Self::String, BinaryView) => Utf8View,
+            // We don't cast to another kind of string type if the origin one is already a string type
+            (Self::String, Utf8 | LargeUtf8 | Utf8View) => origin.to_owned(),
             (Self::String, data_type) if can_cast_types(data_type, &Utf8View) => Utf8View,
             (Self::String, data_type) if can_cast_types(data_type, &LargeUtf8) => {
                 LargeUtf8
