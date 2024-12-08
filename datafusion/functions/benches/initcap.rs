@@ -49,26 +49,32 @@ fn criterion_benchmark(c: &mut Criterion) {
     let initcap = string::initcap();
     for size in [1024, 4096] {
         let args = create_args::<i32>(size, 8, true);
-        c.bench_function(format!("initcap string view shorter than 12 [size={}]", size).as_str(), |b| {
-            b.iter(|| {
-                black_box(initcap.invoke_with_args(ScalarFunctionArgs {
-                    args: args.clone(),
-                    number_rows: size,
-                    return_type: &DataType::Utf8View,
-                }))
-            })
-        });
+        c.bench_function(
+            format!("initcap string view shorter than 12 [size={}]", size).as_str(),
+            |b| {
+                b.iter(|| {
+                    black_box(initcap.invoke_with_args(ScalarFunctionArgs {
+                        args: args.clone(),
+                        number_rows: size,
+                        return_type: &DataType::Utf8View,
+                    }))
+                })
+            },
+        );
 
         let args = create_args::<i32>(size, 16, true);
-        c.bench_function(format!("initcap string view longer than 12 [size={}]", size).as_str(), |b| {
-            b.iter(|| {
-                black_box(initcap.invoke_with_args(ScalarFunctionArgs {
-                    args: args.clone(),
-                    number_rows: size,
-                    return_type: &DataType::Utf8View,
-                }))
-            })
-        });
+        c.bench_function(
+            format!("initcap string view longer than 12 [size={}]", size).as_str(),
+            |b| {
+                b.iter(|| {
+                    black_box(initcap.invoke_with_args(ScalarFunctionArgs {
+                        args: args.clone(),
+                        number_rows: size,
+                        return_type: &DataType::Utf8View,
+                    }))
+                })
+            },
+        );
 
         let args = create_args::<i32>(size, 16, false);
         c.bench_function(format!("initcap string [size={}]", size).as_str(), |b| {
