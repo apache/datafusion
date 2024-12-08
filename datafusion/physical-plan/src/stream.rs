@@ -33,9 +33,11 @@ use datafusion_execution::TaskContext;
 use futures::stream::BoxStream;
 use futures::{Future, Stream, StreamExt};
 use log::debug;
-use pin_project_lite::pin_project;
 use tokio::sync::mpsc::{Receiver, Sender};
 use tokio::task::JoinSet;
+
+// Backwards compatibility
+pub use datafusion_execution::stream::RecordBatchStreamAdapter;
 
 /// Creates a stream from a collection of producing tasks, routing panics to the stream.
 ///
@@ -332,56 +334,6 @@ impl RecordBatchReceiverStream {
         capacity: usize,
     ) -> RecordBatchReceiverStreamBuilder {
         RecordBatchReceiverStreamBuilder::new(schema, capacity)
-    }
-}
-
-pin_project! {
-    /// Combines a [`Stream`] with a [`SchemaRef`] implementing
-    /// [`RecordBatchStream`] for the combination
-    pub struct RecordBatchStreamAdapter<S> {
-        schema: SchemaRef,
-
-        #[pin]
-        stream: S,
-    }
-}
-
-impl<S> RecordBatchStreamAdapter<S> {
-    /// Creates a new [`RecordBatchStreamAdapter`] from the provided schema and stream
-    pub fn new(schema: SchemaRef, stream: S) -> Self {
-        Self { schema, stream }
-    }
-}
-
-impl<S> std::fmt::Debug for RecordBatchStreamAdapter<S> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("RecordBatchStreamAdapter")
-            .field("schema", &self.schema)
-            .finish()
-    }
-}
-
-impl<S> Stream for RecordBatchStreamAdapter<S>
-where
-    S: Stream<Item = Result<RecordBatch>>,
-{
-    type Item = Result<RecordBatch>;
-
-    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        self.project().stream.poll_next(cx)
-    }
-
-    fn size_hint(&self) -> (usize, Option<usize>) {
-        self.stream.size_hint()
-    }
-}
-
-impl<S> RecordBatchStream for RecordBatchStreamAdapter<S>
-where
-    S: Stream<Item = Result<RecordBatch>>,
-{
-    fn schema(&self) -> SchemaRef {
-        Arc::clone(&self.schema)
     }
 }
 

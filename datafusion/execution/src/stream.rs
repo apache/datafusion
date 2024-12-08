@@ -18,7 +18,10 @@
 use arrow::{datatypes::SchemaRef, record_batch::RecordBatch};
 use datafusion_common::Result;
 use futures::Stream;
+use pin_project_lite::pin_project;
 use std::pin::Pin;
+use std::sync::Arc;
+use std::task::{Context, Poll};
 
 /// Trait for types that stream [RecordBatch]
 ///
@@ -51,3 +54,53 @@ pub trait RecordBatchStream: Stream<Item = Result<RecordBatch>> {
 /// [`Stream`]s there is no mechanism to prevent callers polling  so returning
 /// `Ready(None)` is recommended.
 pub type SendableRecordBatchStream = Pin<Box<dyn RecordBatchStream + Send>>;
+
+pin_project! {
+    /// Combines a [`Stream`] with a [`SchemaRef`] implementing
+    /// [`RecordBatchStream`] for the combination
+    pub struct RecordBatchStreamAdapter<S> {
+        schema: SchemaRef,
+
+        #[pin]
+        stream: S,
+    }
+}
+
+impl<S> RecordBatchStreamAdapter<S> {
+    /// Creates a new [`RecordBatchStreamAdapter`] from the provided schema and stream
+    pub fn new(schema: SchemaRef, stream: S) -> Self {
+        Self { schema, stream }
+    }
+}
+
+impl<S> std::fmt::Debug for RecordBatchStreamAdapter<S> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RecordBatchStreamAdapter")
+            .field("schema", &self.schema)
+            .finish()
+    }
+}
+
+impl<S> Stream for RecordBatchStreamAdapter<S>
+where
+    S: Stream<Item = Result<RecordBatch>>,
+{
+    type Item = Result<RecordBatch>;
+
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        self.project().stream.poll_next(cx)
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        self.stream.size_hint()
+    }
+}
+
+impl<S> RecordBatchStream for RecordBatchStreamAdapter<S>
+where
+    S: Stream<Item = Result<RecordBatch>>,
+{
+    fn schema(&self) -> SchemaRef {
+        Arc::clone(&self.schema)
+    }
+}
