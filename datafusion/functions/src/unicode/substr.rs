@@ -21,8 +21,8 @@ use std::sync::{Arc, OnceLock};
 use crate::strings::{make_and_append_view, StringArrayType};
 use crate::utils::{make_scalar_function, utf8_to_str_type};
 use arrow::array::{
-    Array, ArrayIter, ArrayRef, AsArray, GenericStringArray, Int64Array, OffsetSizeTrait,
-    StringViewArray,
+    Array, ArrayIter, ArrayRef, AsArray, GenericStringBuilder, Int64Array,
+    OffsetSizeTrait, StringViewArray,
 };
 use arrow::datatypes::DataType;
 use arrow_buffer::{NullBufferBuilder, ScalarBuffer};
@@ -448,10 +448,9 @@ where
     match args.len() {
         1 => {
             let iter = ArrayIter::new(string_array);
-
-            let result = iter
-                .zip(start_array.iter())
-                .map(|(string, start)| match (string, start) {
+            let mut result_builder = GenericStringBuilder::<T>::new();
+            for (string, start) in iter.zip(start_array.iter()) {
+                match (string, start) {
                     (Some(string), Some(start)) => {
                         let (start, end) = get_true_start_end(
                             string,
@@ -460,47 +459,51 @@ where
                             enable_ascii_fast_path,
                         ); // start, end is byte-based
                         let substr = &string[start..end];
-                        Some(substr.to_string())
+                        result_builder.append_value(substr);
                     }
-                    _ => None,
-                })
-                .collect::<GenericStringArray<T>>();
-            Ok(Arc::new(result) as ArrayRef)
+                    _ => {
+                        result_builder.append_null();
+                    }
+                }
+            }
+            Ok(Arc::new(result_builder.finish()) as ArrayRef)
         }
         2 => {
             let iter = ArrayIter::new(string_array);
             let count_array = count_array_opt.unwrap();
+            let mut result_builder = GenericStringBuilder::<T>::new();
 
-            let result = iter
-                .zip(start_array.iter())
-                .zip(count_array.iter())
-                .map(|((string, start), count)| {
-                    match (string, start, count) {
-                        (Some(string), Some(start), Some(count)) => {
-                            if count < 0 {
-                                exec_err!(
+            for ((string, start), count) in
+                iter.zip(start_array.iter()).zip(count_array.iter())
+            {
+                match (string, start, count) {
+                    (Some(string), Some(start), Some(count)) => {
+                        if count < 0 {
+                            return exec_err!(
                                 "negative substring length not allowed: substr(<str>, {start}, {count})"
-                            )
-                            } else {
-                                if start == i64::MIN {
-                                    return exec_err!("negative overflow when calculating skip value");
-                                }
-                                let (start, end) = get_true_start_end(
-                                    string,
-                                    start,
-                                    Some(count as u64),
-                                    enable_ascii_fast_path,
-                                ); // start, end is byte-based
-                                let substr = &string[start..end];
-                                Ok(Some(substr.to_string()))
+                            );
+                        } else {
+                            if start == i64::MIN {
+                                return exec_err!(
+                                    "negative overflow when calculating skip value"
+                                );
                             }
+                            let (start, end) = get_true_start_end(
+                                string,
+                                start,
+                                Some(count as u64),
+                                enable_ascii_fast_path,
+                            ); // start, end is byte-based
+                            let substr = &string[start..end];
+                            result_builder.append_value(substr);
                         }
-                        _ => Ok(None),
                     }
-                })
-                .collect::<Result<GenericStringArray<T>>>()?;
-
-            Ok(Arc::new(result) as ArrayRef)
+                    _ => {
+                        result_builder.append_null();
+                    }
+                }
+            }
+            Ok(Arc::new(result_builder.finish()) as ArrayRef)
         }
         other => {
             exec_err!("substr was called with {other} arguments. It requires 2 or 3.")
