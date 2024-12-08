@@ -20,7 +20,7 @@
 use std::any::Any;
 use std::fmt::Debug;
 use std::mem::size_of_val;
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
 use arrow::compute::{and, filter, is_not_null};
 use arrow::{
@@ -31,7 +31,6 @@ use arrow::{
 use crate::covariance::CovarianceAccumulator;
 use crate::stddev::StddevAccumulator;
 use datafusion_common::{plan_err, Result, ScalarValue};
-use datafusion_doc::DocSection;
 use datafusion_expr::{
     function::{AccumulatorArgs, StateFieldsArgs},
     type_coercion::aggregates::NUMERICS,
