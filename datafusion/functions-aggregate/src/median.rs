@@ -38,7 +38,6 @@ use arrow::array::ArrowNativeTypeOp;
 use arrow::datatypes::{ArrowNativeType, ArrowPrimitiveType};
 
 use datafusion_common::{internal_err, DataFusionError, HashSet, Result, ScalarValue};
-use datafusion_doc::DocSection;
 use datafusion_expr::function::StateFieldsArgs;
 use datafusion_expr::{
     function::AccumulatorArgs, utils::format_state_name, Accumulator, AggregateUDFImpl,
