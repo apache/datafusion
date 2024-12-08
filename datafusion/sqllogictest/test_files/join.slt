@@ -1221,8 +1221,13 @@ from t1
 right outer join t1
 on t1.v1 > 0;
 
-query error DataFusion error: Schema error: Schema contains duplicate qualified field name t1\.v1
+query error
 select t1.v1 from t1 join t1 using(v1) cross join (select struct('foo' as v1) as t1);
+----
+DataFusion error: Optimizer rule 'eliminate_cross_join' failed
+caused by
+Schema error: Schema contains duplicate qualified field name t1.v1
+
 
 statement ok
 drop table t1;

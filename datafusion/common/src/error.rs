@@ -150,6 +150,11 @@ pub enum SchemaError {
         qualifier: Box<TableReference>,
         name: String,
     },
+    /// Schema duplicate qualified fields with duplicate unqualified names
+    QualifiedFieldWithDuplicateName {
+        qualifier: Box<TableReference>,
+        name: String,
+    },
     /// Schema contains duplicate unqualified field name
     DuplicateUnqualifiedField { name: String },
     /// No field with this name
@@ -184,6 +189,14 @@ impl Display for SchemaError {
                 write!(
                     f,
                     "Schema contains duplicate qualified field name {}.{}",
+                    qualifier.to_quoted_string(),
+                    quote_identifier(name)
+                )
+            }
+            Self::QualifiedFieldWithDuplicateName { qualifier, name } => {
+                write!(
+                    f,
+                    "Schema contains qualified fields with duplicate unqualified names {}.{}",
                     qualifier.to_quoted_string(),
                     quote_identifier(name)
                 )

@@ -84,6 +84,10 @@ CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV FOOBAR BARBAR BARFOO LOCATION 'foo
 statement error DataFusion error: Arrow error: Schema error: Unable to get field named "c2". Valid fields: \["c1"\]
 create EXTERNAL TABLE t(c1 int) STORED AS CSV PARTITIONED BY (c2) LOCATION 'foo.csv'
 
+# Duplicate Column
+statement error DataFusion error: Schema error: Schema contains duplicate unqualified field name c1
+create EXTERNAL TABLE t(c1 int, c1 int) STORED AS CSV LOCATION 'foo.csv'
+
 # Duplicate Column in `PARTITIONED BY` clause
 statement error DataFusion error: Schema error: Schema contains duplicate unqualified field name c1
 create EXTERNAL TABLE t(c1 int, c2 int) STORED AS CSV PARTITIONED BY (c1 int) LOCATION 'foo.csv'

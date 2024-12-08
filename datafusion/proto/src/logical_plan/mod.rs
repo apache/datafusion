@@ -62,9 +62,9 @@ use datafusion_expr::{
     dml,
     logical_plan::{
         builder::project, Aggregate, CreateCatalog, CreateCatalogSchema,
-        CreateExternalTable, CreateView, DdlStatement, Distinct, EmptyRelation,
-        Extension, Join, JoinConstraint, Prepare, Projection, Repartition, Sort,
-        SubqueryAlias, TableScan, Values, Window,
+        CreateExternalTable, CreateExternalTableFields, CreateView, CreateViewFields,
+        DdlStatement, Distinct, EmptyRelation, Extension, Join, JoinConstraint, Prepare,
+        Projection, Repartition, Sort, SubqueryAlias, TableScan, Values, Window,
     },
     DistinctOn, DropView, Expr, LogicalPlan, LogicalPlanBuilder, ScalarUDF, SortExpr,
     Statement, WindowUDF,
@@ -568,7 +568,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                 }
 
                 Ok(LogicalPlan::Ddl(DdlStatement::CreateExternalTable(
-                    CreateExternalTable {
+                    CreateExternalTable::new(CreateExternalTableFields {
                         schema: pb_schema.try_into()?,
                         name: from_table_reference(
                             create_extern_table.name.as_ref(),
@@ -587,7 +587,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                         options: create_extern_table.options.clone(),
                         constraints: constraints.into(),
                         column_defaults,
-                    },
+                    })?,
                 )))
             }
             LogicalPlanType::CreateView(create_view) => {
@@ -602,13 +602,18 @@ impl AsLogicalPlan for LogicalPlanNode {
                     None
                 };
 
-                Ok(LogicalPlan::Ddl(DdlStatement::CreateView(CreateView {
-                    name: from_table_reference(create_view.name.as_ref(), "CreateView")?,
-                    temporary: create_view.temporary,
-                    input: Arc::new(plan),
-                    or_replace: create_view.or_replace,
-                    definition,
-                })))
+                Ok(LogicalPlan::Ddl(DdlStatement::CreateView(CreateView::new(
+                    CreateViewFields {
+                        name: from_table_reference(
+                            create_view.name.as_ref(),
+                            "CreateView",
+                        )?,
+                        temporary: create_view.temporary,
+                        input: Arc::new(plan),
+                        or_replace: create_view.or_replace,
+                        definition,
+                    },
+                )?)))
             }
             LogicalPlanType::CreateCatalogSchema(create_catalog_schema) => {
                 let pb_schema = (create_catalog_schema.schema.clone()).ok_or_else(|| {
@@ -1398,7 +1403,9 @@ impl AsLogicalPlan for LogicalPlanNode {
                 )),
             }),
             LogicalPlan::Ddl(DdlStatement::CreateExternalTable(
-                CreateExternalTable {
+                create_external_table,
+            )) => {
+                let CreateExternalTableFields {
                     name,
                     location,
                     file_type,
@@ -1412,12 +1419,11 @@ impl AsLogicalPlan for LogicalPlanNode {
                     constraints,
                     column_defaults,
                     temporary,
-                },
-            )) => {
+                } = create_external_table.clone().into_fields();
                 let mut converted_order_exprs: Vec<SortExprNodeCollection> = vec![];
                 for order in order_exprs {
                     let temp = SortExprNodeCollection {
-                        sort_expr_nodes: serialize_sorts(order, extension_codec)?,
+                        sort_expr_nodes: serialize_sorts(&order, extension_codec)?,
                     };
                     converted_order_exprs.push(temp);
                 }
@@ -1425,8 +1431,10 @@ impl AsLogicalPlan for LogicalPlanNode {
                 let mut converted_column_defaults =
                     HashMap::with_capacity(column_defaults.len());
                 for (col_name, expr) in column_defaults {
-                    converted_column_defaults
-                        .insert(col_name.clone(), serialize_expr(expr, extension_codec)?);
+                    converted_column_defaults.insert(
+                        col_name.clone(),
+                        serialize_expr(&expr, extension_codec)?,
+                    );
                 }
 
                 Ok(LogicalPlanNode {
@@ -1435,13 +1443,13 @@ impl AsLogicalPlan for LogicalPlanNode {
                             name: Some(name.clone().into()),
                             location: location.clone(),
                             file_type: file_type.clone(),
-                            schema: Some(df_schema.try_into()?),
+                            schema: Some(df_schema.as_ref().try_into()?),
                             table_partition_cols: table_partition_cols.clone(),
-                            if_not_exists: *if_not_exists,
-                            temporary: *temporary,
+                            if_not_exists,
+                            temporary,
                             order_exprs: converted_order_exprs,
                             definition: definition.clone().unwrap_or_default(),
-                            unbounded: *unbounded,
+                            unbounded,
                             options: options.clone(),
                             constraints: Some(constraints.clone().into()),
                             column_defaults: converted_column_defaults,
@@ -1449,26 +1457,31 @@ impl AsLogicalPlan for LogicalPlanNode {
                     )),
                 })
             }
-            LogicalPlan::Ddl(DdlStatement::CreateView(CreateView {
-                name,
-                input,
-                or_replace,
-                definition,
-                temporary,
-            })) => Ok(LogicalPlanNode {
-                logical_plan_type: Some(LogicalPlanType::CreateView(Box::new(
-                    protobuf::CreateViewNode {
-                        name: Some(name.clone().into()),
-                        input: Some(Box::new(LogicalPlanNode::try_from_logical_plan(
-                            input,
-                            extension_codec,
-                        )?)),
-                        or_replace: *or_replace,
-                        temporary: *temporary,
-                        definition: definition.clone().unwrap_or_default(),
-                    },
-                ))),
-            }),
+            LogicalPlan::Ddl(DdlStatement::CreateView(create_view)) => {
+                let CreateViewFields {
+                    name,
+                    input,
+                    or_replace,
+                    definition,
+                    temporary,
+                } = create_view.clone().into_fields();
+                Ok(LogicalPlanNode {
+                    logical_plan_type: Some(LogicalPlanType::CreateView(Box::new(
+                        protobuf::CreateViewNode {
+                            name: Some(name.clone().into()),
+                            input: Some(Box::new(
+                                LogicalPlanNode::try_from_logical_plan(
+                                    &input,
+                                    extension_codec,
+                                )?,
+                            )),
+                            or_replace,
+                            temporary,
+                            definition: definition.clone().unwrap_or_default(),
+                        },
+                    ))),
+                })
+            }
             LogicalPlan::Ddl(DdlStatement::CreateCatalogSchema(
                 CreateCatalogSchema {
                     schema_name,
