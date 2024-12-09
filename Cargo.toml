@@ -29,6 +29,7 @@ edition = { workspace = true }
 [dependencies]
 arrow = { workspace = true }
 arrow-array = { workspace = true }
+arrow-data = { workspace = true }
 arrow-schema = { workspace = true }
 chrono = { workspace = true }
 datafusion = { workspace = true }
@@ -39,12 +40,14 @@ chrono-tz = { workspace = true }
 num = { workspace = true }
 regex = { workspace = true }
 thiserror = { workspace = true }
+futures = { workspace = true }
 twox-hash = "2.0.0"
 
 [dev-dependencies]
 arrow-data = {workspace = true}
 criterion = "0.5.1"
 rand = { workspace = true}
+tokio = { version = "1", features = ["rt-multi-thread"] }
 
 
 [lib]
@@ -66,3 +69,8 @@ harness = false
 [[bench]]
 name = "decimal_div"
 harness = false
+
+[[bench]]
+name = "aggregate"
+harness = false
+

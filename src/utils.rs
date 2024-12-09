@@ -19,7 +19,7 @@ use arrow_array::{
     cast::as_primitive_array,
     types::{Int32Type, TimestampMicrosecondType},
 };
-use arrow_schema::{ArrowError, DataType};
+use arrow_schema::{ArrowError, DataType, DECIMAL128_MAX_PRECISION};
 use std::sync::Arc;
 
 use crate::timezone::Tz;
@@ -27,6 +27,7 @@ use arrow::{
     array::{as_dictionary_array, Array, ArrayRef, PrimitiveArray},
     temporal_conversions::as_datetime,
 };
+use arrow_data::decimal::{MAX_DECIMAL_FOR_EACH_PRECISION, MIN_DECIMAL_FOR_EACH_PRECISION};
 use chrono::{DateTime, Offset, TimeZone};
 
 /// Preprocesses input arrays to add timezone information from Spark to Arrow array datatype or
@@ -175,4 +176,40 @@ fn pre_timestamp_cast(array: ArrayRef, timezone: String) -> Result<ArrayRef, Arr
         }
         _ => Ok(array),
     }
+}
+
+/// Adapted from arrow-rs `validate_decimal_precision` but returns bool
+/// instead of Err to avoid the cost of formatting the error strings and is
+/// optimized to remove a memcpy that exists in the original function
+/// we can remove this code once we upgrade to a version of arrow-rs that
+/// includes https://github.com/apache/arrow-rs/pull/6419
+#[inline]
+pub fn is_valid_decimal_precision(value: i128, precision: u8) -> bool {
+    precision <= DECIMAL128_MAX_PRECISION
+        && value >= MIN_DECIMAL_FOR_EACH_PRECISION[precision as usize - 1]
+        && value <= MAX_DECIMAL_FOR_EACH_PRECISION[precision as usize - 1]
+}
+
+// These are borrowed from hashbrown crate:
+//   https://github.com/rust-lang/hashbrown/blob/master/src/raw/mod.rs
+
+// On stable we can use #[cold] to get a equivalent effect: this attributes
+// suggests that the function is unlikely to be called
+#[inline]
+#[cold]
+pub fn cold() {}
+
+#[inline]
+pub fn likely(b: bool) -> bool {
+    if !b {
+        cold();
+    }
+    b
+}
+#[inline]
+pub fn unlikely(b: bool) -> bool {
+    if b {
+        cold();
+    }
+    b
 }
