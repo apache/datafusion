@@ -75,6 +75,7 @@ unicode_expressions = [
     "datafusion-sql/unicode_expressions",
     "datafusion-functions/unicode_expressions",
 ]
+tracing = [ "dep:tracing" ]
 
 [dependencies]
 apache-avro = { version = "0.16", optional = true }
@@ -130,6 +131,7 @@ url = { workspace = true }
 uuid = { version = "1.7", features = ["v4"] }
 xz2 = { version = "0.1", optional = true, features = ["static"] }
 zstd = { version = "0.13", optional = true, default-features = false }
+tracing = { version = "0.1", optional = true }
 
 [dev-dependencies]
 arrow-buffer = { workspace = true }
