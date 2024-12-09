@@ -19,12 +19,11 @@
 
 # SQL Dialect
 
-By default, DataFusion follows the [PostgreSQL SQL dialect]. 
+By default, DataFusion follows the [PostgreSQL SQL dialect].
 For Array/List functions and semantics, it follows the [DuckDB SQL dialect].
 
-[DuckDB SQL dialect]: https://duckdb.org/docs/sql/functions/array
-[PostgreSQL SQL dialect]: https://www.postgresql.org/docs/current/sql.html
-
+[duckdb sql dialect]: https://duckdb.org/docs/sql/functions/array
+[postgresql sql dialect]: https://www.postgresql.org/docs/current/sql.html
 
 ## Rationale
 
