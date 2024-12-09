@@ -840,6 +840,12 @@ impl WindowFunction {
     }
 }
 
+/// Find DataFusion's built-in window function by name.
+#[deprecated(since = "44.0.0", note = "built-in window functions have been removed")]
+pub fn find_df_window_func(_name: &str) -> Option<WindowFunctionDefinition> {
+    None
+}
+
 /// EXISTS expression
 #[derive(Clone, PartialEq, Eq, PartialOrd, Hash, Debug)]
 pub struct Exists {
