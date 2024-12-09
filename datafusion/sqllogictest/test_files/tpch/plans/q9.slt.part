@@ -56,7 +56,7 @@ logical_plan
 02)--Projection: profit.nation, profit.o_year, sum(profit.amount) AS sum_profit
 03)----Aggregate: groupBy=[[profit.nation, profit.o_year]], aggr=[[sum(profit.amount)]]
 04)------SubqueryAlias: profit
-05)--------Projection: nation.n_name AS nation, date_part(Utf8View("YEAR"), orders.o_orderdate) AS o_year, lineitem.l_extendedprice * (Decimal128(Some(1),20,0) - lineitem.l_discount) - partsupp.ps_supplycost * lineitem.l_quantity AS amount
+05)--------Projection: nation.n_name AS nation, date_part(Utf8("YEAR"), orders.o_orderdate) AS o_year, lineitem.l_extendedprice * (Decimal128(Some(1),20,0) - lineitem.l_discount) - partsupp.ps_supplycost * lineitem.l_quantity AS amount
 06)----------Inner Join: supplier.s_nationkey = nation.n_nationkey
 07)------------Projection: lineitem.l_quantity, lineitem.l_extendedprice, lineitem.l_discount, supplier.s_nationkey, partsupp.ps_supplycost, orders.o_orderdate
 08)--------------Inner Join: lineitem.l_orderkey = orders.o_orderkey
