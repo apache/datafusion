@@ -808,8 +808,8 @@ impl RepartitionExec {
                 let size = batch.get_array_memory_size();
 
                 if is_round_robin {
-                    // try out the default (round robin) partition, then other partitions
-                    for p in std::iter::once(partition).chain(0..num_partitions) {
+                    // try out the default (round robin) partition, then all other partitions once starting with partition + 1
+                    for p in std::iter::once(partition).chain(partition+1..num_partitions).chain(0..partition) {
                         let timer = metrics.send_time[partition].timer();
 
                         if let Some((tx, reservation)) = output_channels.get_mut(&p) {
