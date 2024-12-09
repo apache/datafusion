@@ -19,7 +19,7 @@
 
 # SQL Dialect
 
-By default, DataFusion follows the [PostgreSQL SQL dialect].
+By default, Apache DataFusion follows the [PostgreSQL SQL dialect].
 For Array/List functions and semantics, it follows the [DuckDB SQL dialect].
 
 [duckdb sql dialect]: https://duckdb.org/docs/sql/functions/array
@@ -33,6 +33,6 @@ semantics exactly (need bug-for-bug compatibility), and is likely not what all
 users want. However, it avoids the (very significant) effort of defining
 semantics as well as documenting and teaching users about them.
 
-As DataFusion is highly customizable, systems built on DataFusion can and do
-update functions and SQL syntax to model other systems, such as Spark or
+As Apache DataFusion is highly customizable, systems built on DataFusion can and do
+update functions and SQL syntax to model other systems, such as Apache Spark or
 MySQL.
