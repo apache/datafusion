@@ -17,14 +17,14 @@
 
 //! Expression rewriter
 
+use crate::expr::{Alias, Sort, Unnest};
+use crate::logical_plan::Projection;
+use crate::{Expr, ExprSchemable, LogicalPlan, LogicalPlanBuilder};
+use arrow::datatypes::DataType;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::fmt::Debug;
 use std::sync::Arc;
-
-use crate::expr::{Alias, Sort, Unnest};
-use crate::logical_plan::Projection;
-use crate::{Expr, ExprSchemable, LogicalPlan, LogicalPlanBuilder};
 
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
@@ -142,6 +142,26 @@ pub fn replace_col(expr: Expr, replace_map: &HashMap<&Column, &Column>) -> Resul
                 }
             } else {
                 Transformed::no(expr)
+            }
+        })
+    })
+    .data()
+}
+
+pub fn replace_expr_with_null(
+    expr: Expr,
+    replace_columns: &HashMap<&Column, &DataType>,
+) -> Result<Expr> {
+    expr.transform(|expr| {
+        Ok({
+            match &expr {
+                Expr::Column(c) => match replace_columns.get(c) {
+                    Some(data_type) => {
+                        Transformed::yes(Expr::Literal((*data_type).try_into()?))
+                    }
+                    None => Transformed::no(expr),
+                },
+                _ => Transformed::no(expr),
             }
         })
     })
