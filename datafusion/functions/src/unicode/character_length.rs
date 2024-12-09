@@ -149,22 +149,36 @@ where
     // string is ASCII only is relatively cheap.
     // If strings are ASCII only, count bytes instead.
     let is_array_ascii_only = array.is_ascii();
-    if is_array_ascii_only {
-        for i in 0..array.len() {
-            if array.is_null(i) {
-                builder.append_null();
-            } else {
+    if array.null_count() == 0 {
+        if is_array_ascii_only {
+            for i in 0..array.len() {
                 let value = array.value(i);
                 builder.append_value(T::Native::usize_as(value.len()));
             }
-        }
-    } else {
-        for i in 0..array.len() {
-            if array.is_null(i) {
-                builder.append_null();
-            } else {
+        } else {
+            for i in 0..array.len() {
                 let value = array.value(i);
                 builder.append_value(T::Native::usize_as(value.chars().count()));
+            }
+        }
+    } else {
+        if is_array_ascii_only {
+            for i in 0..array.len() {
+                if array.is_null(i) {
+                    builder.append_null();
+                } else {
+                    let value = array.value(i);
+                    builder.append_value(T::Native::usize_as(value.len()));
+                }
+            }
+        } else {
+            for i in 0..array.len() {
+                if array.is_null(i) {
+                    builder.append_null();
+                } else {
+                    let value = array.value(i);
+                    builder.append_value(T::Native::usize_as(value.chars().count()));
+                }
             }
         }
     }
