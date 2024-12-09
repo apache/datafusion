@@ -2430,7 +2430,13 @@ mod test {
 
         match &expression.rex_type {
             Some(RexType::Selection(field_ref)) => {
-                assert_ne!(field_ref.root_type, None);
+                assert_eq!(
+                    field_ref
+                        .root_type
+                        .clone()
+                        .expect("root type should be set"),
+                    RootType::RootReference(RootReference {})
+                );
             }
 
             _ => panic!("Should not be anything other than field reference"),
