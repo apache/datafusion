@@ -19,6 +19,7 @@
 
 use std::any::Any;
 use std::collections::{BTreeMap, HashMap};
+use std::error::Error;
 use std::fmt::{self, Display};
 use std::str::FromStr;
 
@@ -978,29 +979,34 @@ impl<F: ConfigField + Default> ConfigField for Option<F> {
     }
 }
 
+fn parse<T>(input: &str) -> Result<T>
+where
+    T: FromStr,
+    T::Err: Display,
+    <T as FromStr>::Err: Sync + Send + Error + 'static,
+{
+    input.parse().map_err(|e| {
+        DataFusionError::Context(
+            format!("Error parsing '{}' as {}", input, stringify!(T),),
+            Box::new(DataFusionError::External(Box::new(e))),
+        )
+    })
+}
+
 #[macro_export]
 macro_rules! config_field {
-    ($t:ty $(, $transform:expr)?) => {
+    ($t:ty) => {
+        config_field!($t, value => parse(value)?);
+    };
+
+    ($t:ty, $arg:ident => $transform:expr) => {
         impl ConfigField for $t {
             fn visit<V: Visit>(&self, v: &mut V, key: &str, description: &'static str) {
                 v.some(key, self, description)
             }
 
-            fn set(&mut self, _: &str, value: &str) -> Result<()> {
-                $(
-                    let value = $transform(&value);
-                )?
-
-                *self = value.parse().map_err(|e| {
-                    DataFusionError::Context(
-                        format!(
-                            "Error parsing '{}' as {}",
-                            value,
-                            stringify!($t),
-                        ),
-                        Box::new(DataFusionError::External(Box::new(e))),
-                    )
-                })?;
+            fn set(&mut self, _: &str, $arg: &str) -> Result<()> {
+                *self = $transform;
                 Ok(())
             }
         }
@@ -1008,7 +1014,7 @@ macro_rules! config_field {
 }
 
 config_field!(String);
-config_field!(bool, str::to_lowercase);
+config_field!(bool, value => parse(value.to_lowercase().as_str())?);
 config_field!(usize);
 config_field!(f64);
 config_field!(u64);
