@@ -175,7 +175,7 @@ mod tests {
     fn test_functions() -> Result<()> {
         test_function!(
             RepeatFunc::new(),
-            &[
+            vec![
                 ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from("Pg")))),
                 ColumnarValue::Scalar(ScalarValue::Int64(Some(4))),
             ],
@@ -186,7 +186,7 @@ mod tests {
         );
         test_function!(
             RepeatFunc::new(),
-            &[
+            vec![
                 ColumnarValue::Scalar(ScalarValue::Utf8(None)),
                 ColumnarValue::Scalar(ScalarValue::Int64(Some(4))),
             ],
@@ -197,7 +197,7 @@ mod tests {
         );
         test_function!(
             RepeatFunc::new(),
-            &[
+            vec![
                 ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from("Pg")))),
                 ColumnarValue::Scalar(ScalarValue::Int64(None)),
             ],
@@ -209,7 +209,7 @@ mod tests {
 
         test_function!(
             RepeatFunc::new(),
-            &[
+            vec![
                 ColumnarValue::Scalar(ScalarValue::Utf8View(Some(String::from("Pg")))),
                 ColumnarValue::Scalar(ScalarValue::Int64(Some(4))),
             ],
@@ -220,7 +220,7 @@ mod tests {
         );
         test_function!(
             RepeatFunc::new(),
-            &[
+            vec![
                 ColumnarValue::Scalar(ScalarValue::Utf8View(None)),
                 ColumnarValue::Scalar(ScalarValue::Int64(Some(4))),
             ],
@@ -231,7 +231,7 @@ mod tests {
         );
         test_function!(
             RepeatFunc::new(),
-            &[
+            vec![
                 ColumnarValue::Scalar(ScalarValue::Utf8View(Some(String::from("Pg")))),
                 ColumnarValue::Scalar(ScalarValue::Int64(None)),
             ],

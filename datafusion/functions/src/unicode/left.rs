@@ -188,7 +188,7 @@ mod tests {
     fn test_functions() -> Result<()> {
         test_function!(
             LeftFunc::new(),
-            &[
+            vec![
                 ColumnarValue::Scalar(ScalarValue::from("abcde")),
                 ColumnarValue::Scalar(ScalarValue::from(2i64)),
             ],
@@ -199,7 +199,7 @@ mod tests {
         );
         test_function!(
             LeftFunc::new(),
-            &[
+            vec![
                 ColumnarValue::Scalar(ScalarValue::from("abcde")),
                 ColumnarValue::Scalar(ScalarValue::from(200i64)),
             ],
@@ -210,7 +210,7 @@ mod tests {
         );
         test_function!(
             LeftFunc::new(),
-            &[
+            vec![
                 ColumnarValue::Scalar(ScalarValue::from("abcde")),
                 ColumnarValue::Scalar(ScalarValue::from(-2i64)),
             ],
@@ -221,7 +221,7 @@ mod tests {
         );
         test_function!(
             LeftFunc::new(),
-            &[
+            vec![
                 ColumnarValue::Scalar(ScalarValue::from("abcde")),
                 ColumnarValue::Scalar(ScalarValue::from(-200i64)),
             ],
@@ -232,7 +232,7 @@ mod tests {
         );
         test_function!(
             LeftFunc::new(),
-            &[
+            vec![
                 ColumnarValue::Scalar(ScalarValue::from("abcde")),
                 ColumnarValue::Scalar(ScalarValue::from(0i64)),
             ],
@@ -243,7 +243,7 @@ mod tests {
         );
         test_function!(
             LeftFunc::new(),
-            &[
+            vec![
                 ColumnarValue::Scalar(ScalarValue::Utf8(None)),
                 ColumnarValue::Scalar(ScalarValue::from(2i64)),
             ],
@@ -254,7 +254,7 @@ mod tests {
         );
         test_function!(
             LeftFunc::new(),
-            &[
+            vec![
                 ColumnarValue::Scalar(ScalarValue::from("abcde")),
                 ColumnarValue::Scalar(ScalarValue::Int64(None)),
             ],
@@ -265,7 +265,7 @@ mod tests {
         );
         test_function!(
             LeftFunc::new(),
-            &[
+            vec![
                 ColumnarValue::Scalar(ScalarValue::from("joséésoj")),
                 ColumnarValue::Scalar(ScalarValue::from(5i64)),
             ],
@@ -276,7 +276,7 @@ mod tests {
         );
         test_function!(
             LeftFunc::new(),
-            &[
+            vec![
                 ColumnarValue::Scalar(ScalarValue::from("joséésoj")),
                 ColumnarValue::Scalar(ScalarValue::from(-3i64)),
             ],

@@ -19,12 +19,10 @@
 
 use std::any::Any;
 use std::fmt;
-use std::sync::OnceLock;
 
 use arrow::datatypes::DataType;
 use arrow::datatypes::Field;
 use datafusion_common::{not_impl_err, Result};
-use datafusion_doc::DocSection;
 use datafusion_expr::function::AccumulatorArgs;
 use datafusion_expr::function::StateFieldsArgs;
 use datafusion_expr::utils::format_state_name;

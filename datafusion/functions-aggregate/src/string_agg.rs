@@ -22,7 +22,6 @@ use arrow_schema::DataType;
 use datafusion_common::cast::as_generic_string_array;
 use datafusion_common::Result;
 use datafusion_common::{not_impl_err, ScalarValue};
-use datafusion_doc::DocSection;
 use datafusion_expr::function::AccumulatorArgs;
 use datafusion_expr::{
     Accumulator, AggregateUDFImpl, Documentation, Signature, TypeSignature, Volatility,
@@ -31,7 +30,6 @@ use datafusion_macros::user_doc;
 use datafusion_physical_expr::expressions::Literal;
 use std::any::Any;
 use std::mem::size_of_val;
-use std::sync::OnceLock;
 
 make_udaf_expr_and_func!(
     StringAgg,

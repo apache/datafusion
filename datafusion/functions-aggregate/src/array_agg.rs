@@ -25,7 +25,6 @@ use datafusion_common::cast::as_list_array;
 use datafusion_common::utils::{get_row_at_idx, SingleRowListArrayBuilder};
 use datafusion_common::{exec_err, ScalarValue};
 use datafusion_common::{internal_err, Result};
-use datafusion_doc::DocSection;
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::utils::format_state_name;
 use datafusion_expr::{Accumulator, Signature, Volatility};
@@ -36,7 +35,7 @@ use datafusion_macros::user_doc;
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
 use std::collections::{HashSet, VecDeque};
 use std::mem::{size_of, size_of_val};
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
 make_udaf_expr_and_func!(
     ArrayAgg,
