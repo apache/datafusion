@@ -190,18 +190,21 @@ async fn load_left_input(
 
     // Load all batches and count the rows
     let (batches, _metrics, reservation) = stream
-        .try_fold((Vec::new(), metrics, reservation), |mut acc, batch| async {
-            let batch_size = batch.get_array_memory_size();
-            // Reserve memory for incoming batch
-            acc.2.try_grow(batch_size)?;
-            // Update metrics
-            acc.1.build_mem_used.add(batch_size);
-            acc.1.build_input_batches.add(1);
-            acc.1.build_input_rows.add(batch.num_rows());
-            // Push batch to output
-            acc.0.push(batch);
-            Ok(acc)
-        })
+        .try_fold(
+            (Vec::new(), metrics, reservation),
+            |(mut batches, metrics, mut reservation), batch| async {
+                let batch_size = batch.get_array_memory_size();
+                // Reserve memory for incoming batch
+                reservation.try_grow(batch_size)?;
+                // Update metrics
+                metrics.build_mem_used.add(batch_size);
+                metrics.build_input_batches.add(1);
+                metrics.build_input_rows.add(batch.num_rows());
+                // Push batch to output
+                batches.push(batch);
+                Ok((batches, metrics, reservation))
+            },
+        )
         .await?;
 
     let merged_batch = concat_batches(&left_schema, &batches)?;
