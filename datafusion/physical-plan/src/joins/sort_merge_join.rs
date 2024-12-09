@@ -901,7 +901,7 @@ fn get_corrected_filter_mask(
 
             Some(corrected_mask.finish())
         }
-        JoinType::LeftAnti => {
+        JoinType::LeftAnti | JoinType::RightAnti => {
             for i in 0..row_indices_length {
                 let last_index =
                     last_index_for_row(i, row_indices, batch_ids, row_indices_length);
@@ -1013,6 +1013,7 @@ impl Stream for SortMergeJoinStream {
                                                 | JoinType::LeftMark
                                                 | JoinType::Right
                                                 | JoinType::LeftAnti
+                                                | JoinType::RightAnti
                                                 | JoinType::Full
                                         )
                                     {
@@ -1095,6 +1096,7 @@ impl Stream for SortMergeJoinStream {
                                         | JoinType::LeftSemi
                                         | JoinType::Right
                                         | JoinType::LeftAnti
+                                        | JoinType::RightAnti
                                         | JoinType::LeftMark
                                         | JoinType::Full
                                 )
@@ -1118,6 +1120,7 @@ impl Stream for SortMergeJoinStream {
                                     | JoinType::LeftSemi
                                     | JoinType::Right
                                     | JoinType::LeftAnti
+                                    | JoinType::RightAnti
                                     | JoinType::Full
                                     | JoinType::LeftMark
                             )
@@ -1468,7 +1471,9 @@ impl SortMergeJoinStream {
                     join_buffered = true;
                 };
 
-                if matches!(self.join_type, JoinType::LeftAnti) && self.filter.is_some() {
+                if matches!(self.join_type, JoinType::LeftAnti | JoinType::RightAnti)
+                    && self.filter.is_some()
+                {
                     join_streamed = !self.streamed_joined;
                     join_buffered = join_streamed;
                 }
@@ -1678,7 +1683,10 @@ impl SortMergeJoinStream {
                 if !matches!(self.join_type, JoinType::Right) {
                     if matches!(
                         self.join_type,
-                        JoinType::LeftSemi | JoinType::LeftAnti | JoinType::LeftMark
+                        JoinType::LeftSemi
+                            | JoinType::LeftAnti
+                            | JoinType::RightAnti
+                            | JoinType::LeftMark
                     ) {
                         let right_cols = fetch_right_columns_by_idxs(
                             &self.buffered_data,
@@ -1743,6 +1751,7 @@ impl SortMergeJoinStream {
                             | JoinType::LeftSemi
                             | JoinType::Right
                             | JoinType::LeftAnti
+                            | JoinType::RightAnti
                             | JoinType::LeftMark
                             | JoinType::Full
                     ) {
@@ -1826,6 +1835,7 @@ impl SortMergeJoinStream {
                     | JoinType::LeftSemi
                     | JoinType::Right
                     | JoinType::LeftAnti
+                    | JoinType::RightAnti
                     | JoinType::LeftMark
                     | JoinType::Full
             ))
@@ -1922,6 +1932,10 @@ impl SortMergeJoinStream {
             )?;
         } else if matches!(self.join_type, JoinType::LeftSemi | JoinType::LeftAnti) {
             let output_column_indices = (0..left_columns_length).collect::<Vec<_>>();
+            filtered_record_batch =
+                filtered_record_batch.project(&output_column_indices)?;
+        } else if matches!(self.join_type, JoinType::RightAnti) {
+            let output_column_indices = (0..right_columns_length).collect::<Vec<_>>();
             filtered_record_batch =
                 filtered_record_batch.project(&output_column_indices)?;
         } else if matches!(self.join_type, JoinType::Full)
@@ -2893,7 +2907,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn join_anti() -> Result<()> {
+    async fn join_left_anti() -> Result<()> {
         let left = build_table(
             ("a1", &vec![1, 2, 2, 3, 5]),
             ("b1", &vec![4, 5, 5, 7, 7]), // 7 does not exist on the right
@@ -2932,7 +2946,7 @@ mod tests {
         );
         let right =
             build_table_two_cols(("a2", &vec![10, 20, 30]), ("b1", &vec![4, 5, 6]));
-        let mut on = vec![(
+        let on = vec![(
             Arc::new(Column::new_with_schema("b1", &left.schema())?) as _,
             Arc::new(Column::new_with_schema("b1", &right.schema())?) as _,
         )];
