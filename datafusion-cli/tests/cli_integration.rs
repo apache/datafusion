@@ -17,9 +17,21 @@
 
 use std::process::Command;
 
-use assert_cmd::prelude::{CommandCargoExt, OutputAssertExt};
-use predicates::prelude::predicate;
 use rstest::rstest;
+
+use insta::{glob, Settings};
+use insta_cmd::{assert_cmd_snapshot, get_cargo_bin};
+use std::{env, fs};
+
+fn cli() -> Command {
+    Command::new(get_cargo_bin("datafusion-cli"))
+}
+
+fn make_settings() -> Settings {
+    let mut settings = Settings::clone_current();
+    settings.set_prepend_module_to_snapshot(false);
+    settings
+}
 
 #[cfg(test)]
 #[ctor::ctor]
@@ -28,31 +40,67 @@ fn init() {
     let _ = env_logger::try_init();
 }
 
-// Disabled due to https://github.com/apache/datafusion/issues/10793
-#[cfg(not(target_family = "windows"))]
 #[rstest]
-#[case::exec_from_commands(
-    ["--command", "select 1", "--format", "json", "-q"],
-    "[{\"Int64(1)\":1}]\n"
-)]
 #[case::exec_multiple_statements(
-    ["--command", "select 1; select 2;", "--format", "json", "-q"],
-    "[{\"Int64(1)\":1}]\n[{\"Int64(2)\":2}]\n"
+    "statements",
+    ["--command", "select 1; select 2;", "-q"],
 )]
 #[case::exec_from_files(
-    ["--file", "tests/data/sql.txt", "--format", "json", "-q"],
-    "[{\"Int64(1)\":1}]\n"
+    "files",
+    ["--file", "tests/sql/select.sql", "-q"],
 )]
 #[case::set_batch_size(
-    ["--command", "show datafusion.execution.batch_size", "--format", "json", "-q", "-b", "1"],
-    "[{\"name\":\"datafusion.execution.batch_size\",\"value\":\"1\"}]\n"
+    "batch_size",
+    ["--command", "show datafusion.execution.batch_size", "-q", "-b", "1"],
 )]
 #[test]
 fn cli_quick_test<'a>(
+    #[case] snapshot_name: &'a str,
     #[case] args: impl IntoIterator<Item = &'a str>,
-    #[case] expected: &str,
 ) {
-    let mut cmd = Command::cargo_bin("datafusion-cli").unwrap();
+    let mut settings = make_settings();
+    settings.set_snapshot_suffix(snapshot_name);
+    let _bound = settings.bind_to_scope();
+
+    let mut cmd = cli();
     cmd.args(args);
-    cmd.assert().stdout(predicate::eq(expected));
+
+    assert_cmd_snapshot!("cli_quick_test", cmd);
+}
+
+#[rstest]
+#[case("csv")]
+#[case("tsv")]
+#[case("table")]
+#[case("json")]
+#[case("nd-json")]
+#[case("automatic")]
+#[test]
+fn cli_format_test<'a>(#[case] format: &'a str) {
+    let mut settings = make_settings();
+    settings.set_snapshot_suffix(format);
+    let _bound = settings.bind_to_scope();
+
+    let mut cmd = cli();
+    cmd.args(["--command", "select 1", "-q", "--format", format]);
+
+    assert_cmd_snapshot!("cli_format_test", cmd);
+}
+
+#[test]
+fn test_storage_integration() {
+    if env::var("TEST_STORAGE_INTEGRATION").is_err() {
+        eprintln!("Skipping external storages integration tests");
+        return;
+    }
+
+    let mut settings = make_settings();
+    settings.add_filter(r"Elapsed .* seconds\.", "[ELAPSED]");
+    settings.add_filter(r"DataFusion CLI v.*", "[CLI_VERSION]");
+    let _bound = settings.bind_to_scope();
+
+    glob!("sql/*.sql", |path| {
+        let input = fs::read_to_string(path).unwrap();
+        assert_cmd_snapshot!("test_storage_integration", cli().pass_stdin(input))
+    });
 }
