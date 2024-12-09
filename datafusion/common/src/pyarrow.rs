@@ -17,6 +17,10 @@
 
 //! Conversions between PyArrow and DataFusion types
 
+// TODO update to pyo3 new APIs
+// See: https://pyo3.rs/v0.23.0/migration
+#![allow(deprecated)]
+
 use arrow::array::ArrayData;
 use arrow::pyarrow::{FromPyArrow, ToPyArrow};
 use arrow_array::Array;
