@@ -39,7 +39,6 @@ use crate::sorts::streaming_merge::StreamingMergeBuilder;
 use crate::stream::RecordBatchStreamAdapter;
 use crate::{DisplayFormatType, ExecutionPlan, Partitioning, PlanProperties, Statistics};
 
-use arrow::compute::kernels::zip::zip;
 use arrow::compute::take_arrays;
 use arrow::datatypes::{SchemaRef, UInt32Type};
 use arrow::record_batch::RecordBatch;
@@ -804,7 +803,7 @@ impl RepartitionExec {
                 None => break,
             };
 
-            for res in partitioner.partition_iter(batch)? {
+            'next_batch: for res in partitioner.partition_iter(batch)? {
                 let (partition, batch) = res?;
                 let size = batch.get_array_memory_size();
 
@@ -826,7 +825,7 @@ impl RepartitionExec {
                                 }
                                 Some(_) => {
                                     timer.done();
-                                    continue;
+                                    continue 'next_batch;
                                 }
                                 None => {
                                     timer.done();
