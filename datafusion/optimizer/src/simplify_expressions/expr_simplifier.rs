@@ -27,10 +27,6 @@ use arrow::{
     record_batch::RecordBatch,
 };
 
-use crate::analyzer::type_coercion::TypeCoercionRewriter;
-use crate::simplify_expressions::guarantees::GuaranteeRewriter;
-use crate::simplify_expressions::regex::simplify_regex_expr;
-use crate::simplify_expressions::SimplifyInfo;
 use datafusion_common::{
     cast::{as_large_list_array, as_list_array},
     tree_node::{Transformed, TransformedResult, TreeNode, TreeNodeRewriter},
