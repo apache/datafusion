@@ -363,7 +363,10 @@ fn get_exprs_except_skipped(
     columns_to_skip: HashSet<Column>,
 ) -> Vec<Expr> {
     if columns_to_skip.is_empty() {
-        schema.iter().map(Expr::from).collect::<Vec<Expr>>()
+        schema
+            .iter()
+            .map(|(q, f, spans)| Expr::from((q, f, spans.iter().copied())))
+            .collect::<Vec<Expr>>()
     } else {
         schema
             .columns()

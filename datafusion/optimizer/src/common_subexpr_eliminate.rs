@@ -751,7 +751,7 @@ fn build_common_expr_project_plan(
         })
         .collect::<Result<Vec<_>>>()?;
 
-    for (qualifier, field) in input.schema().iter() {
+    for (qualifier, field, _) in input.schema().iter() {
         if fields_set.insert(qualified_name(qualifier, field.name())) {
             project_exprs.push(Expr::from((qualifier, field)));
         }
@@ -769,7 +769,10 @@ fn build_recover_project_plan(
     schema: &DFSchema,
     input: LogicalPlan,
 ) -> Result<LogicalPlan> {
-    let col_exprs = schema.iter().map(Expr::from).collect();
+    let col_exprs = schema
+        .iter()
+        .map(|(q, f, spans)| Expr::from((q, f, spans.iter().copied())))
+        .collect();
     Projection::try_new(col_exprs, Arc::new(input)).map(LogicalPlan::Projection)
 }
 

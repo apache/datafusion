@@ -103,7 +103,7 @@ fn rewrite_in_terms_of_projection(
             relation: None,
             name,
             // Span is not used in PartialEq
-            span: Span::empty(),
+            spans: vec![],
         });
 
         // look for the column named the same as this expr

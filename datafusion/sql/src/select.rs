@@ -814,7 +814,11 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 Diagnostic::new([DiagnosticEntry::new(
                     "GROUP BY clause is here",
                     DiagnosticEntryKind::Note,
-                    Span::union_iter(group_by_exprs.iter().filter_map(|e| e.get_span())),
+                    Span::union_iter(
+                        group_by_exprs
+                            .iter()
+                            .flat_map(|e| e.get_spans().cloned().unwrap_or_default()),
+                    ),
                 )])
             })
         })?;

@@ -54,7 +54,7 @@ pub mod with_span;
 pub use arrow;
 pub use column::Column;
 pub use dfschema::{
-    qualified_name, DFSchema, DFSchemaRef, ExprSchema, SchemaExt, ToDFSchema,
+    qualified_name, DFSchema, DFSchemaRef, ExprSchema, SchemaExt, ToDFSchema, FieldsSpans,
 };
 pub use error::{
     field_not_found, unqualified_field_not_found, DataFusionError, Result, SchemaError,
@@ -79,7 +79,7 @@ pub use table_reference::{ResolvedTableReference, TableReference};
 pub use unnest::{RecursionUnnestOption, UnnestOptions};
 pub use utils::project_schema;
 pub use diagnostic::{Diagnostic, DiagnosticEntry, DiagnosticEntryKind};
-pub use with_span::WithSpan;
+pub use with_span::WithSpans;
 
 // These are hidden from docs purely to avoid polluting the public view of what this crate exports.
 // These are just re-exports of macros by the same name, which gets around the 'cannot refer to

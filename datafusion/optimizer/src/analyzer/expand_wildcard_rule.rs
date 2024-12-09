@@ -123,7 +123,7 @@ fn expand_exprlist(input: &LogicalPlan, expr: Vec<Expr>) -> Result<Vec<Expr>> {
             Expr::Column(Column {
                 ref relation,
                 ref name,
-                span,
+                ref spans,
             }) => {
                 if name.eq("*") {
                     let expanded_columns = if let Some(qualifier) = relation {
@@ -142,7 +142,7 @@ fn expand_exprlist(input: &LogicalPlan, expr: Vec<Expr>) -> Result<Vec<Expr>> {
 
                     projected_expr.extend(expanded_columns.into_iter().map(|mut expr| {
                         if let Expr::Column(c) = &mut expr {
-                            c.span = span;
+                            c.spans = spans.clone();
                         }
                         expr
                     }));

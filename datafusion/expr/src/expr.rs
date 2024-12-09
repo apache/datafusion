@@ -354,6 +354,16 @@ impl<'a> From<(Option<&'a TableReference>, &'a FieldRef)> for Expr {
     }
 }
 
+/// Same as [`From<(Option<&'a TableReference>, &'a FieldRef)>`] but with a span
+impl<'a, IT> From<(Option<&'a TableReference>, &'a FieldRef, IT)> for Expr
+where
+    IT: IntoIterator<Item = Span>,
+{
+    fn from(value: (Option<&'a TableReference>, &'a FieldRef, IT)) -> Self {
+        Expr::from(Column::from((value.0, value.1)).with_spans(value.2))
+    }
+}
+
 impl<'a> TreeNodeContainer<'a, Self> for Expr {
     fn apply_elements<F: FnMut(&'a Self) -> Result<TreeNodeRecursion>>(
         &'a self,
@@ -1114,7 +1124,11 @@ impl Expr {
     /// output schema. We can use this qualified name to reference the field.
     pub fn qualified_name(&self) -> (Option<TableReference>, String) {
         match self {
-            Expr::Column(Column { relation, name, span: _ }) => (relation.clone(), name.clone()),
+            Expr::Column(Column {
+                relation,
+                name,
+                spans: _,
+            }) => (relation.clone(), name.clone()),
             Expr::Alias(Alias { relation, name, .. }) => (relation.clone(), name.clone()),
             _ => (None, self.schema_name().to_string()),
         }
@@ -1667,9 +1681,10 @@ impl Expr {
         }
     }
 
-    pub fn get_span(&self) -> Option<Span> {
+    pub fn get_spans(&self) -> Option<&Vec<Span>> {
         match self {
-            Expr::Column(Column{span, ..}) => Some(*span),
+            Expr::Column(Column { spans, .. }) => Some(spans),
+            Expr::Alias(Alias { expr, .. }) => expr.get_spans(),
             _ => None,
         }
     }

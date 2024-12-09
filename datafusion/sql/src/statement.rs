@@ -1739,7 +1739,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         // Build updated values for each column, using the previous value if not modified
         let exprs = table_schema
             .iter()
-            .map(|(qualifier, field)| {
+            .map(|(qualifier, field, _)| {
                 let expr = match assign_map.remove(field.name()) {
                     Some(new_value) => {
                         let mut expr = self.sql_to_expr(

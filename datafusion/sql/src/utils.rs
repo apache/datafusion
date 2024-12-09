@@ -101,8 +101,12 @@ pub enum CheckColumnsSatisfyExprsPurpose {
 impl CheckColumnsSatisfyExprsPurpose {
     fn get_error_message(&self) -> &'static str {
         match self {
-            CheckColumnsSatisfyExprsPurpose::GroupBy => "Projection references non-aggregate values",
-            CheckColumnsSatisfyExprsPurpose::Having => "HAVING clause references non-aggregate values",
+            CheckColumnsSatisfyExprsPurpose::GroupBy => {
+                "Projection references non-aggregate values"
+            }
+            CheckColumnsSatisfyExprsPurpose::Having => {
+                "HAVING clause references non-aggregate values"
+            }
         }
     }
 }
@@ -158,19 +162,30 @@ fn check_column_satisfies_expr(
         )
         .map_err(|err| {
             let message = match call_purpose {
-                CheckColumnsSatisfyExprsPurpose::GroupBy => format!("'{}' in projection does not appear in GROUP BY clause", expr.to_string()),
-                CheckColumnsSatisfyExprsPurpose::Having => format!("'{}' in HAVING clause does not appear in GROUP BY clause", expr.to_string()),
+                CheckColumnsSatisfyExprsPurpose::GroupBy => format!(
+                    "'{}' in projection does not appear in GROUP BY clause",
+                    expr.to_string()
+                ),
+                CheckColumnsSatisfyExprsPurpose::Having => format!(
+                    "'{}' in HAVING clause does not appear in GROUP BY clause",
+                    expr.to_string()
+                ),
             };
             err.with_diagnostic(|_| {
-                Diagnostic::new([DiagnosticEntry::new(
-                    message,
-                    DiagnosticEntryKind::Error,
-                    expr.get_span().unwrap_or(Span::empty()),
-                ),DiagnosticEntry::new(
-                    format!("Add '{}' to GROUP BY clause", expr.to_string()),
-                    DiagnosticEntryKind::Help,
-                    Span::empty(),
-                )])
+                Diagnostic::new([
+                    DiagnosticEntry::new(
+                        message,
+                        DiagnosticEntryKind::Error,
+                        expr.get_spans()
+                            .and_then(|spans| spans.first().copied())
+                            .unwrap_or(Span::empty()),
+                    ),
+                    DiagnosticEntry::new(
+                        format!("Add '{}' to GROUP BY clause", expr.to_string()),
+                        DiagnosticEntryKind::Help,
+                        Span::empty(),
+                    ),
+                ])
             })
         });
     }

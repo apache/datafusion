@@ -38,6 +38,7 @@ use datafusion_common::{
 use datafusion_expr::logical_plan::{LogicalPlan, LogicalPlanBuilder};
 use datafusion_expr::utils::find_column_exprs;
 use datafusion_expr::{col, Expr};
+use sqlparser::tokenizer::Span;
 
 use crate::utils::{make_decimal_type, value_to_string};
 pub use datafusion_expr::planner::ContextProvider;
@@ -393,7 +394,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                                             col.name, r
                                         ),
                                         DiagnosticEntryKind::Error,
-                                        col.span,
+                                        col.spans.first().copied().unwrap_or(Span::empty()),
                                     )])
                                 })
                             },
@@ -414,7 +415,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                             Diagnostic::new([DiagnosticEntry::new(
                                 format!("No field named '{}'", col.name),
                                 DiagnosticEntryKind::Error,
-                                col.span,
+                                col.spans.first().copied().unwrap_or(Span::empty()),
                             )])
                         })
                 }),

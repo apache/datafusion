@@ -31,7 +31,7 @@ use arrow::datatypes::{
 use datafusion_common::types::NativeType;
 use datafusion_common::{
     exec_datafusion_err, exec_err, internal_err, plan_datafusion_err, plan_err,
-    Diagnostic, DiagnosticEntry, DiagnosticEntryKind, Result, WithSpan,
+    Diagnostic, DiagnosticEntry, DiagnosticEntryKind, Result, WithSpans,
 };
 use itertools::Itertools;
 use sqlparser::tokenizer::Span;
@@ -72,16 +72,16 @@ impl Signature {
 
 /// Returns a [`Signature`] for applying `op` to arguments of type `lhs` and `rhs`
 fn signature<'a>(
-    lhs: impl Into<WithSpan<&'a DataType>>,
-    op: impl Into<WithSpan<&'a Operator>>,
-    rhs: impl Into<WithSpan<&'a DataType>>,
+    lhs: impl Into<WithSpans<&'a DataType>>,
+    op: impl Into<WithSpans<&'a Operator>>,
+    rhs: impl Into<WithSpans<&'a DataType>>,
 ) -> Result<Signature> {
     use arrow::datatypes::DataType::*;
     use Operator::*;
 
-    let lhs: WithSpan<_> = lhs.into();
-    let op: WithSpan<_> = op.into();
-    let rhs: WithSpan<_> = rhs.into();
+    let lhs: WithSpans<_> = lhs.into();
+    let op: WithSpans<_> = op.into();
+    let rhs: WithSpans<_> = rhs.into();
 
     match *op {
         Eq |
@@ -201,28 +201,28 @@ fn signature<'a>(
                 plan_err!(
                     "Cannot coerce arithmetic expression {lhs} {op} {rhs} to valid types"
                 ).map_err(|err | {
-                    if lhs.span == Span::empty() || rhs.span == Span::empty() {
-                        err
-                    } else {
+                    if let (Some(&lhs_span), Some(&rhs_span)) = (lhs.spans.first(), rhs.spans.first()) {
                         err.with_diagnostic(|_| Diagnostic {
                             entries: vec![
                                 DiagnosticEntry {
                                     kind: DiagnosticEntryKind::Error,
                                     message: "Binary expression has invalid types".to_string(),
-                                    span: lhs.span.union(&rhs.span),
+                                    span: lhs_span.union(&rhs_span),
                                 },
                                 DiagnosticEntry {
                                     kind: DiagnosticEntryKind::Note,
                                     message: format!("Is of type {}", *lhs),
-                                    span: lhs.span,
+                                    span: lhs_span,
                                 },
                                 DiagnosticEntry {
                                     kind: DiagnosticEntryKind::Note,
                                     message: format!("Is of type {}", *rhs),
-                                    span: rhs.span,
+                                    span: rhs_span,
                                 }
                             ]
                         })
+                    } else {
+                        err
                     }
                 })
             }
@@ -232,18 +232,18 @@ fn signature<'a>(
 
 /// Returns the resulting type of a binary expression evaluating the `op` with the left and right hand types
 pub fn get_result_type<'a>(
-    lhs: impl Into<WithSpan<&'a DataType>>,
-    op: impl Into<WithSpan<&'a Operator>>,
-    rhs: impl Into<WithSpan<&'a DataType>>,
+    lhs: impl Into<WithSpans<&'a DataType>>,
+    op: impl Into<WithSpans<&'a Operator>>,
+    rhs: impl Into<WithSpans<&'a DataType>>,
 ) -> Result<DataType> {
     signature(lhs, op, rhs).map(|sig| sig.ret)
 }
 
 /// Returns the coerced input types for a binary expression evaluating the `op` with the left and right hand types
 pub fn get_input_types<'a>(
-    lhs: impl Into<WithSpan<&'a DataType>>,
-    op: impl Into<WithSpan<&'a Operator>>,
-    rhs: impl Into<WithSpan<&'a DataType>>,
+    lhs: impl Into<WithSpans<&'a DataType>>,
+    op: impl Into<WithSpans<&'a Operator>>,
+    rhs: impl Into<WithSpans<&'a DataType>>,
 ) -> Result<(DataType, DataType)> {
     signature(lhs, op, rhs).map(|sig| (sig.lhs, sig.rhs))
 }

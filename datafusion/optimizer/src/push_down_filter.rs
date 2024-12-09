@@ -238,7 +238,7 @@ impl<'a> ColumnChecker<'a> {
 fn schema_columns(schema: &DFSchema) -> HashSet<Column> {
     schema
         .iter()
-        .flat_map(|(qualifier, field)| {
+        .flat_map(|(qualifier, field, _)| {
             [
                 Column::new(qualifier.cloned(), field.name()),
                 // we need to push down filter using unqualified column as well
@@ -818,7 +818,7 @@ impl OptimizerRule for PushDownFilter {
             }
             LogicalPlan::SubqueryAlias(subquery_alias) => {
                 let mut replace_map = HashMap::new();
-                for (i, (qualifier, field)) in
+                for (i, (qualifier, field, _)) in
                     subquery_alias.input.schema().iter().enumerate()
                 {
                     let (sub_qualifier, sub_field) =
@@ -910,7 +910,7 @@ impl OptimizerRule for PushDownFilter {
                 let mut inputs = Vec::with_capacity(union.inputs.len());
                 for input in &union.inputs {
                     let mut replace_map = HashMap::new();
-                    for (i, (qualifier, field)) in input.schema().iter().enumerate() {
+                    for (i, (qualifier, field, _)) in input.schema().iter().enumerate() {
                         let (union_qualifier, union_field) =
                             union.schema.qualified_field(i);
                         replace_map.insert(
@@ -1156,7 +1156,7 @@ fn rewrite_projection(
         .schema
         .iter()
         .zip(projection.expr.iter())
-        .map(|((qualifier, field), expr)| {
+        .map(|((qualifier, field, _), expr)| {
             // strip alias, as they should not be part of filters
             let expr = expr.clone().unalias();
 

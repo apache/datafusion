@@ -63,7 +63,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 return Ok(Expr::Column(Column {
                     relation: qualifier.filter(|q| q.table() != UNNAMED_TABLE).cloned(),
                     name: normalize_ident,
-                    span: id_span,
+                    spans: vec![id_span],
                 }));
             }
 
@@ -84,7 +84,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             Ok(Expr::Column(Column {
                 relation: None,
                 name: normalize_ident,
-                span: id_span,
+                spans: vec![id_span],
             }))
         }
     }
