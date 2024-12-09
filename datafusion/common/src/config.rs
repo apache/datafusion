@@ -987,7 +987,11 @@ where
 {
     input.parse().map_err(|e| {
         DataFusionError::Context(
-            format!("Error parsing '{}' as {}", input, stringify!(T),),
+            format!(
+                "Error parsing '{}' as {}",
+                input,
+                std::any::type_name::<T>()
+            ),
             Box::new(DataFusionError::External(Box::new(e))),
         )
     })
