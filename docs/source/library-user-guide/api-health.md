@@ -28,9 +28,9 @@ APIs to give users time to adjust to the changes.
 
 ## Breaking Changes
 
-In general, a function is part of the public API if it appears on the [docs.rs page] 
+In general, a function is part of the public API if it appears on the [docs.rs page]
 
-Breaking public API changes are those that *require* users to change their code
+Breaking public API changes are those that _require_ users to change their code
 for it to compile, and are listed as "Major Changes" in the [SemVer
 Compatibility Section of the cargo book]. Common examples of breaking changes:
 
@@ -42,17 +42,17 @@ When making breaking public API changes, please add the `api-change` label to
 the PR so we can highlight the changes in the release notes.
 
 [docs.rs page]: https://docs.rs/datafusion/latest/datafusion/index.html
-[SemVer Compatibility Section of the cargo book]: https://doc.rust-lang.org/cargo/reference/semver.html#change-categories
+[semver compatibility section of the cargo book]: https://doc.rust-lang.org/cargo/reference/semver.html#change-categories
 
 ## Deprecation Policy
 
 When deprecating a method:
 
-- Mark the API as deprecated using `#[deprecated`] and specify the exact DataFusion version in which it was deprecated 
+- Mark the API as deprecated using `#[deprecated`] and specify the exact DataFusion version in which it was deprecated
 - Concisely describe the preferred API to help the user transition
 
 The deprecated version is the next version which will be released after the
-deprecation PR is merged. For example, if the next scheduled release  `41.0.0`,
+deprecation PR is merged. For example, if the next scheduled release `41.0.0`,
 and a method is deprecated in a PR, the deprecated version will be `41.0.0`.
 
 API deprecation example:
