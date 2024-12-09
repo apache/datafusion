@@ -166,12 +166,42 @@ Relative rank of the current row: (number of rows preceding or peer with current
 cume_dist()
 ```
 
+Example:
+
+```sql
+SELECT x, cume_dist() OVER(ORDER BY y) AS cume_dist FROM VALUES (1,20), (2,10), (3,30) t(x,y);
+
++---+--------------------+
+| x | cume_dist          |
++---+--------------------+
+| 2 | 0.3333333333333333 |
+| 1 | 0.6666666666666666 |
+| 3 | 1.0                |
++---+--------------------+
+```
+
 ### `dense_rank`
 
 Returns the rank of the current row without gaps. This function ranks rows in a dense manner, meaning consecutive ranks are assigned even for identical values.
 
 ```
 dense_rank()
+```
+
+Example:
+
+```sql
+SELECT x, y, dense_rank() OVER(ORDER BY y) AS dense_rank FROM VALUES (1,1), (2,1), (3,2), (4,3), (5,3) t(x,y);
+
++---+---+------------+
+| x | y | dense_rank |
++---+---+------------+
+| 1 | 1 | 1          |
+| 2 | 1 | 1          |
+| 3 | 2 | 2          |
+| 4 | 3 | 3          |
+| 5 | 3 | 3          |
++---+---+------------+
 ```
 
 ### `ntile`
@@ -184,7 +214,24 @@ ntile(expression)
 
 #### Arguments
 
-- **expression**: An integer describing the number groups the partition should be split into
+- **expression**: An integer describing the number of groups the partition should be split into
+
+Example:
+
+```sql
+SELECT x, ntile(3) OVER (ORDER BY x) AS group_num FROM VALUES (1), (2), (3), (4), (5), (6) t(x);
+
++---+-----------+
+| x | group_num |
++---+-----------+
+| 1 | 1         |
+| 2 | 1         |
+| 3 | 2         |
+| 4 | 2         |
+| 5 | 3         |
+| 6 | 3         |
++---+-----------+
+```
 
 ### `percent_rank`
 
@@ -192,6 +239,22 @@ Returns the percentage rank of the current row within its partition. The value r
 
 ```
 percent_rank()
+```
+
+Example:
+
+```sql
+SELECT x, y, percent_rank() OVER (ORDER BY y) AS percent_rank FROM VALUES (1,0), (2,75), (3,100), (4,25), (5,50) t(x,y);
+
++---+-----+--------------+
+| x | y   | percent_rank |
++---+-----+--------------+
+| 1 | 0   | 0.0          |
+| 4 | 25  | 0.25         |
+| 5 | 50  | 0.5          |
+| 2 | 75  | 0.75         |
+| 3 | 100 | 1.0          |
++---+-----+--------------+
 ```
 
 ### `rank`
@@ -202,12 +265,45 @@ Returns the rank of the current row within its partition, allowing gaps between 
 rank()
 ```
 
+Example:
+
+```sql
+SELECT x, y, rank() OVER(ORDER BY y) AS rank FROM VALUES (1,1), (2,2), (3,3), (4,1), (5,3) t(x,y);
+
++---+---+------+
+| x | y | rank |
++---+---+------+
+| 1 | 1 | 1    |
+| 4 | 1 | 1    |
+| 2 | 2 | 3    |
+| 3 | 3 | 4    |
+| 5 | 3 | 4    |
++---+---+------+
+```
+
 ### `row_number`
 
 Number of the current row within its partition, counting from 1.
 
 ```
 row_number()
+```
+
+Example:
+
+```sql
+SELECT x, y, row_number() OVER(PARTITION BY x ORDER BY y) AS row_number FROM VALUES (1,1), (1,3), (1,2), (2,4), (2,6), (2,5) t(x,y);
+
++---+---+------------+
+| x | y | row_number |
++---+---+------------+
+| 1 | 1 | 1          |
+| 1 | 2 | 2          |
+| 1 | 3 | 3          |
+| 2 | 4 | 1          |
+| 2 | 5 | 2          |
+| 2 | 6 | 3          |
++---+---+------------+
 ```
 
 ## Analytical Functions
