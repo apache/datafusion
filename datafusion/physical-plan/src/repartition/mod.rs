@@ -835,7 +835,8 @@ impl RepartitionExec {
                         }
                     }
                     // not yet succeeded to send to any partition, now send to the partition and wait for it
-                    let timer: metrics::ScopedTimerGuard<'_> = metrics.send_time[partition].timer();
+                    let timer: metrics::ScopedTimerGuard<'_> =
+                        metrics.send_time[partition].timer();
                     // if there is still a receiver, send to it
                     if let Some((tx, reservation)) = output_channels.get_mut(&partition) {
                         reservation.lock().try_grow(size)?;
@@ -847,22 +848,21 @@ impl RepartitionExec {
                         }
                     }
                     timer.done();
+                } else {
+                    let timer: metrics::ScopedTimerGuard<'_> =
+                        metrics.send_time[partition].timer();
+                    // if there is still a receiver, send to it
+                    if let Some((tx, reservation)) = output_channels.get_mut(&partition) {
+                        reservation.lock().try_grow(size)?;
 
+                        if tx.send(Some(Ok(batch))).await.is_err() {
+                            // If the other end has hung up, it was an early shutdown (e.g. LIMIT)
+                            reservation.lock().shrink(size);
+                            output_channels.remove(&partition);
+                        }
+                    }
+                    timer.done();
                 }
-                else {
-                    let timer: metrics::ScopedTimerGuard<'_> = metrics.send_time[partition].timer();
-                    // if there is still a receiver, send to it
-                    if let Some((tx, reservation)) = output_channels.get_mut(&partition) {
-                        reservation.lock().try_grow(size)?;
-
-                        if tx.send(Some(Ok(batch))).await.is_err() {
-                            // If the other end has hung up, it was an early shutdown (e.g. LIMIT)
-                            reservation.lock().shrink(size);
-                            output_channels.remove(&partition);
-                        }
-                    }
-                    timer.done();
-                }   
             }
 
             // If the input stream is endless, we may spin forever and
