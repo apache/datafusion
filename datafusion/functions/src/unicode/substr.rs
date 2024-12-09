@@ -523,7 +523,7 @@ mod tests {
     fn test_functions() -> Result<()> {
         test_function!(
             SubstrFunc::new(),
-            &[
+            vec![
                 ColumnarValue::Scalar(ScalarValue::Utf8View(None)),
                 ColumnarValue::Scalar(ScalarValue::from(1i64)),
             ],
@@ -534,7 +534,7 @@ mod tests {
         );
         test_function!(
             SubstrFunc::new(),
-            &[
+            vec![
                 ColumnarValue::Scalar(ScalarValue::Utf8View(Some(String::from(
                     "alphabet"
                 )))),
@@ -547,7 +547,7 @@ mod tests {
         );
         test_function!(
             SubstrFunc::new(),
-            &[
+            vec![
                 ColumnarValue::Scalar(ScalarValue::Utf8View(Some(String::from(
                     "this és longer than 12B"
                 )))),
@@ -561,7 +561,7 @@ mod tests {
         );
         test_function!(
             SubstrFunc::new(),
-            &[
+            vec![
                 ColumnarValue::Scalar(ScalarValue::Utf8View(Some(String::from(
                     "this is longer than 12B"
                 )))),
@@ -574,7 +574,7 @@ mod tests {
         );
         test_function!(
             SubstrFunc::new(),
-            &[
+            vec![
                 ColumnarValue::Scalar(ScalarValue::Utf8View(Some(String::from(
                     "joséésoj"
                 )))),
@@ -587,7 +587,7 @@ mod tests {
         );
         test_function!(
             SubstrFunc::new(),
-            &[
+            vec![
                 ColumnarValue::Scalar(ScalarValue::Utf8View(Some(String::from(
                     "alphabet"
                 )))),
@@ -601,7 +601,7 @@ mod tests {
         );
         test_function!(
             SubstrFunc::new(),
-            &[
+            vec![
                 ColumnarValue::Scalar(ScalarValue::Utf8View(Some(String::from(
                     "alphabet"
                 )))),
@@ -615,7 +615,7 @@ mod tests {
         );
         test_function!(
             SubstrFunc::new(),
-            &[
+            vec![
                 ColumnarValue::Scalar(ScalarValue::from("alphabet")),
                 ColumnarValue::Scalar(ScalarValue::from(0i64)),
             ],
@@ -626,7 +626,7 @@ mod tests {
         );
         test_function!(
             SubstrFunc::new(),
-            &[
+            vec![
                 ColumnarValue::Scalar(ScalarValue::from("joséésoj")),
                 ColumnarValue::Scalar(ScalarValue::from(5i64)),
             ],
@@ -637,7 +637,7 @@ mod tests {
         );
         test_function!(
             SubstrFunc::new(),
-            &[
+            vec![
                 ColumnarValue::Scalar(ScalarValue::from("joséésoj")),
                 ColumnarValue::Scalar(ScalarValue::from(-5i64)),
             ],
@@ -648,7 +648,7 @@ mod tests {
         );
         test_function!(
             SubstrFunc::new(),
-            &[
+            vec![
                 ColumnarValue::Scalar(ScalarValue::from("alphabet")),
                 ColumnarValue::Scalar(ScalarValue::from(1i64)),
             ],
@@ -659,7 +659,7 @@ mod tests {
         );
         test_function!(
             SubstrFunc::new(),
-            &[
+            vec![
                 ColumnarValue::Scalar(ScalarValue::from("alphabet")),
                 ColumnarValue::Scalar(ScalarValue::from(2i64)),
             ],
@@ -670,7 +670,7 @@ mod tests {
         );
         test_function!(
             SubstrFunc::new(),
-            &[
+            vec![
                 ColumnarValue::Scalar(ScalarValue::from("alphabet")),
                 ColumnarValue::Scalar(ScalarValue::from(3i64)),
             ],
@@ -681,7 +681,7 @@ mod tests {
         );
         test_function!(
             SubstrFunc::new(),
-            &[
+            vec![
                 ColumnarValue::Scalar(ScalarValue::from("alphabet")),
                 ColumnarValue::Scalar(ScalarValue::from(-3i64)),
             ],
@@ -692,7 +692,7 @@ mod tests {
         );
         test_function!(
             SubstrFunc::new(),
-            &[
+            vec![
                 ColumnarValue::Scalar(ScalarValue::from("alphabet")),
                 ColumnarValue::Scalar(ScalarValue::from(30i64)),
             ],
@@ -703,7 +703,7 @@ mod tests {
         );
         test_function!(
             SubstrFunc::new(),
-            &[
+            vec![
                 ColumnarValue::Scalar(ScalarValue::from("alphabet")),
                 ColumnarValue::Scalar(ScalarValue::Int64(None)),
             ],
@@ -714,7 +714,7 @@ mod tests {
         );
         test_function!(
             SubstrFunc::new(),
-            &[
+            vec![
                 ColumnarValue::Scalar(ScalarValue::from("alphabet")),
                 ColumnarValue::Scalar(ScalarValue::from(3i64)),
                 ColumnarValue::Scalar(ScalarValue::from(2i64)),
@@ -726,7 +726,7 @@ mod tests {
         );
         test_function!(
             SubstrFunc::new(),
-            &[
+            vec![
                 ColumnarValue::Scalar(ScalarValue::from("alphabet")),
                 ColumnarValue::Scalar(ScalarValue::from(3i64)),
                 ColumnarValue::Scalar(ScalarValue::from(20i64)),
@@ -738,7 +738,7 @@ mod tests {
         );
         test_function!(
             SubstrFunc::new(),
-            &[
+            vec![
                 ColumnarValue::Scalar(ScalarValue::from("alphabet")),
                 ColumnarValue::Scalar(ScalarValue::from(0i64)),
                 ColumnarValue::Scalar(ScalarValue::from(5i64)),
@@ -751,7 +751,7 @@ mod tests {
         // starting from 5 (10 + -5)
         test_function!(
             SubstrFunc::new(),
-            &[
+            vec![
                 ColumnarValue::Scalar(ScalarValue::from("alphabet")),
                 ColumnarValue::Scalar(ScalarValue::from(-5i64)),
                 ColumnarValue::Scalar(ScalarValue::from(10i64)),
@@ -764,7 +764,7 @@ mod tests {
         // starting from -1 (4 + -5)
         test_function!(
             SubstrFunc::new(),
-            &[
+            vec![
                 ColumnarValue::Scalar(ScalarValue::from("alphabet")),
                 ColumnarValue::Scalar(ScalarValue::from(-5i64)),
                 ColumnarValue::Scalar(ScalarValue::from(4i64)),
@@ -777,7 +777,7 @@ mod tests {
         // starting from 0 (5 + -5)
         test_function!(
             SubstrFunc::new(),
-            &[
+            vec![
                 ColumnarValue::Scalar(ScalarValue::from("alphabet")),
                 ColumnarValue::Scalar(ScalarValue::from(-5i64)),
                 ColumnarValue::Scalar(ScalarValue::from(5i64)),
@@ -789,7 +789,7 @@ mod tests {
         );
         test_function!(
             SubstrFunc::new(),
-            &[
+            vec![
                 ColumnarValue::Scalar(ScalarValue::from("alphabet")),
                 ColumnarValue::Scalar(ScalarValue::Int64(None)),
                 ColumnarValue::Scalar(ScalarValue::from(20i64)),
@@ -801,7 +801,7 @@ mod tests {
         );
         test_function!(
             SubstrFunc::new(),
-            &[
+            vec![
                 ColumnarValue::Scalar(ScalarValue::from("alphabet")),
                 ColumnarValue::Scalar(ScalarValue::from(3i64)),
                 ColumnarValue::Scalar(ScalarValue::Int64(None)),
@@ -813,7 +813,7 @@ mod tests {
         );
         test_function!(
             SubstrFunc::new(),
-            &[
+            vec![
                 ColumnarValue::Scalar(ScalarValue::from("alphabet")),
                 ColumnarValue::Scalar(ScalarValue::from(1i64)),
                 ColumnarValue::Scalar(ScalarValue::from(-1i64)),
@@ -825,7 +825,7 @@ mod tests {
         );
         test_function!(
             SubstrFunc::new(),
-            &[
+            vec![
                 ColumnarValue::Scalar(ScalarValue::from("joséésoj")),
                 ColumnarValue::Scalar(ScalarValue::from(5i64)),
                 ColumnarValue::Scalar(ScalarValue::from(2i64)),
@@ -851,7 +851,7 @@ mod tests {
         );
         test_function!(
             SubstrFunc::new(),
-            &[
+            vec![
                 ColumnarValue::Scalar(ScalarValue::from("abc")),
                 ColumnarValue::Scalar(ScalarValue::from(-9223372036854775808i64)),
             ],
@@ -862,7 +862,7 @@ mod tests {
         );
         test_function!(
             SubstrFunc::new(),
-            &[
+            vec![
                 ColumnarValue::Scalar(ScalarValue::from("overflow")),
                 ColumnarValue::Scalar(ScalarValue::from(-9223372036854775808i64)),
                 ColumnarValue::Scalar(ScalarValue::from(1i64)),

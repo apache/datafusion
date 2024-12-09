@@ -108,11 +108,11 @@ query error
 select avg(c1, c12) from aggregate_test_100;
 
 # AggregateFunction with wrong argument type
-statement error Coercion
+statement error DataFusion error: Error during planning: Error during planning: Failed to coerce arguments to satisfy a call to regr_slope function: coercion from
 select regr_slope(1, '2');
 
 # WindowFunction using AggregateFunction wrong signature
-statement error Coercion
+statement error DataFusion error: Error during planning: Error during planning: Failed to coerce arguments to satisfy a call to regr_slope function: coercion from
 select
 c9,
 regr_slope(c11, '2') over () as min1
@@ -120,7 +120,7 @@ from aggregate_test_100
 order by c9
 
 # WindowFunction wrong signature
-statement error DataFusion error: Error during planning: Error during planning: Coercion from \[Int32, Int64, Int64\] to the signature OneOf\(\[Any\(0\), Any\(1\), Any\(2\)\]\) failed
+statement error DataFusion error: Error during planning: Error during planning: Failed to coerce arguments to satisfy a call to nth_value function: coercion from \[Int32, Int64, Int64\] to the signature OneOf\(\[Any\(0\), Any\(1\), Any\(2\)\]\) failed
 select
 c9,
 nth_value(c5, 2, 3) over (order by c9) as nv1

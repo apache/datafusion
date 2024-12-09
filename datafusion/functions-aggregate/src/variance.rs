@@ -25,13 +25,11 @@ use arrow::{
     datatypes::{DataType, Field},
 };
 use std::mem::{size_of, size_of_val};
-use std::sync::OnceLock;
 use std::{fmt::Debug, sync::Arc};
 
 use datafusion_common::{
     downcast_value, not_impl_err, plan_err, DataFusionError, Result, ScalarValue,
 };
-use datafusion_expr::aggregate_doc_sections::DOC_SECTION_GENERAL;
 use datafusion_expr::{
     function::{AccumulatorArgs, StateFieldsArgs},
     utils::format_state_name,
@@ -41,6 +39,7 @@ use datafusion_expr::{
 use datafusion_functions_aggregate_common::{
     aggregate::groups_accumulator::accumulate::accumulate, stats::StatsType,
 };
+use datafusion_macros::user_doc;
 
 make_udaf_expr_and_func!(
     VarianceSample,
@@ -58,6 +57,12 @@ make_udaf_expr_and_func!(
     var_pop_udaf
 );
 
+#[user_doc(
+    doc_section(label = "General Functions"),
+    description = "Returns the statistical sample variance of a set of numbers.",
+    syntax_example = "var(expression)",
+    standard_argument(name = "expression", prefix = "Numeric")
+)]
 pub struct VarianceSample {
     signature: Signature,
     aliases: Vec<String>,
@@ -137,24 +142,16 @@ impl AggregateUDFImpl for VarianceSample {
     }
 
     fn documentation(&self) -> Option<&Documentation> {
-        Some(get_variance_sample_doc())
+        self.doc()
     }
 }
 
-static VARIANCE_SAMPLE_DOC: OnceLock<Documentation> = OnceLock::new();
-
-fn get_variance_sample_doc() -> &'static Documentation {
-    VARIANCE_SAMPLE_DOC.get_or_init(|| {
-        Documentation::builder(
-            DOC_SECTION_GENERAL,
-            "Returns the statistical sample variance of a set of numbers.",
-            "var(expression)",
-        )
-        .with_standard_argument("expression", Some("Numeric"))
-        .build()
-    })
-}
-
+#[user_doc(
+    doc_section(label = "General Functions"),
+    description = "Returns the statistical population variance of a set of numbers.",
+    syntax_example = "var_pop(expression)",
+    standard_argument(name = "expression", prefix = "Numeric")
+)]
 pub struct VariancePopulation {
     signature: Signature,
     aliases: Vec<String>,
@@ -241,22 +238,8 @@ impl AggregateUDFImpl for VariancePopulation {
         )))
     }
     fn documentation(&self) -> Option<&Documentation> {
-        Some(get_variance_population_doc())
+        self.doc()
     }
-}
-
-static VARIANCE_POPULATION_DOC: OnceLock<Documentation> = OnceLock::new();
-
-fn get_variance_population_doc() -> &'static Documentation {
-    VARIANCE_POPULATION_DOC.get_or_init(|| {
-        Documentation::builder(
-            DOC_SECTION_GENERAL,
-            "Returns the statistical population variance of a set of numbers.",
-            "var_pop(expression)",
-        )
-        .with_standard_argument("expression", Some("Numeric"))
-        .build()
-    })
 }
 
 /// An accumulator to compute variance

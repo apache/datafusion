@@ -20,6 +20,8 @@
 #[cfg(feature = "parquet")]
 pub mod parquet;
 
+pub mod csv;
+
 use std::any::Any;
 use std::collections::HashMap;
 use std::fs::File;

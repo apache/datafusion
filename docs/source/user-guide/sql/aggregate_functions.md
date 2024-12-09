@@ -268,10 +268,10 @@ grouping(expression)
 
 ### `last_value`
 
-Returns the first element in an aggregation group according to the requested ordering. If no ordering is given, returns an arbitrary element from the group.
+Returns the last element in an aggregation group according to the requested ordering. If no ordering is given, returns an arbitrary element from the group.
 
 ```
-first_value(expression [ORDER BY expression])
+last_value(expression [ORDER BY expression])
 ```
 
 #### Arguments
@@ -281,11 +281,11 @@ first_value(expression [ORDER BY expression])
 #### Example
 
 ```sql
-> SELECT first_value(column_name ORDER BY other_column) FROM table_name;
+> SELECT last_value(column_name ORDER BY other_column) FROM table_name;
 +-----------------------------------------------+
-| first_value(column_name ORDER BY other_column)|
+| last_value(column_name ORDER BY other_column) |
 +-----------------------------------------------+
-| first_element                                 |
+| last_element                                  |
 +-----------------------------------------------+
 ```
 
@@ -341,10 +341,10 @@ median(expression)
 
 ### `min`
 
-Returns the maximum value in the specified column.
+Returns the minimum value in the specified column.
 
 ```
-max(expression)
+min(expression)
 ```
 
 #### Arguments
@@ -354,11 +354,11 @@ max(expression)
 #### Example
 
 ```sql
-> SELECT max(column_name) FROM table_name;
+> SELECT min(column_name) FROM table_name;
 +----------------------+
-| max(column_name)      |
+| min(column_name)      |
 +----------------------+
-| 150                  |
+| 12                   |
 +----------------------+
 ```
 
@@ -730,10 +730,10 @@ stddev(expression)
 
 ### `stddev_pop`
 
-Returns the standard deviation of a set of numbers.
+Returns the population standard deviation of a set of numbers.
 
 ```
-stddev(expression)
+stddev_pop(expression)
 ```
 
 #### Arguments
@@ -743,12 +743,12 @@ stddev(expression)
 #### Example
 
 ```sql
-> SELECT stddev(column_name) FROM table_name;
-+----------------------+
-| stddev(column_name)   |
-+----------------------+
-| 12.34                |
-+----------------------+
+> SELECT stddev_pop(column_name) FROM table_name;
++--------------------------+
+| stddev_pop(column_name)   |
++--------------------------+
+| 10.56                    |
++--------------------------+
 ```
 
 ### `stddev_samp`

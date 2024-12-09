@@ -20,7 +20,7 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::sync::OnceLock;
+use std::sync::LazyLock;
 use structopt::StructOpt;
 
 use arrow::record_batch::RecordBatch;
@@ -33,7 +33,8 @@ use datafusion::datasource::{MemTable, TableProvider};
 use datafusion::error::Result;
 use datafusion::execution::memory_pool::FairSpillPool;
 use datafusion::execution::memory_pool::{human_readable_size, units};
-use datafusion::execution::runtime_env::RuntimeConfig;
+use datafusion::execution::runtime_env::RuntimeEnvBuilder;
+use datafusion::execution::SessionStateBuilder;
 use datafusion::physical_plan::display::DisplayableExecutionPlan;
 use datafusion::physical_plan::{collect, displayable};
 use datafusion::prelude::*;
@@ -90,7 +91,13 @@ struct QueryResult {
 /// Memory limits to run: 64MiB, 32MiB, 16MiB
 /// Q2 requires 250MiB for aggregation
 /// Memory limits to run: 512MiB, 256MiB, 128MiB, 64MiB, 32MiB
-static QUERY_MEMORY_LIMITS: OnceLock<HashMap<usize, Vec<u64>>> = OnceLock::new();
+static QUERY_MEMORY_LIMITS: LazyLock<HashMap<usize, Vec<u64>>> = LazyLock::new(|| {
+    use units::*;
+    let mut map = HashMap::new();
+    map.insert(1, vec![64 * MB, 32 * MB, 16 * MB]);
+    map.insert(2, vec![512 * MB, 256 * MB, 128 * MB, 64 * MB, 32 * MB]);
+    map
+});
 
 impl ExternalAggrConfig {
     const AGGR_TABLES: [&'static str; 1] = ["lineitem"];
@@ -112,16 +119,6 @@ impl ExternalAggrConfig {
         )
         "#,
     ];
-
-    fn init_query_memory_limits() -> &'static HashMap<usize, Vec<u64>> {
-        use units::*;
-        QUERY_MEMORY_LIMITS.get_or_init(|| {
-            let mut map = HashMap::new();
-            map.insert(1, vec![64 * MB, 32 * MB, 16 * MB]);
-            map.insert(2, vec![512 * MB, 256 * MB, 128 * MB, 64 * MB, 32 * MB]);
-            map
-        })
-    }
 
     /// If `--query` and `--memory-limit` is not speicified, run all queries
     /// with pre-configured memory limits
@@ -160,8 +157,7 @@ impl ExternalAggrConfig {
                     query_executions.push((query_id, limit));
                 }
                 None => {
-                    let memory_limits_table = Self::init_query_memory_limits();
-                    let memory_limits = memory_limits_table.get(&query_id).unwrap();
+                    let memory_limits = QUERY_MEMORY_LIMITS.get(&query_id).unwrap();
                     for limit in memory_limits {
                         query_executions.push((query_id, *limit));
                     }
@@ -195,10 +191,15 @@ impl ExternalAggrConfig {
         let query_name =
             format!("Q{query_id}({})", human_readable_size(mem_limit as usize));
         let config = self.common.config();
-        let runtime_config = RuntimeConfig::new()
+        let runtime_env = RuntimeEnvBuilder::new()
             .with_memory_pool(Arc::new(FairSpillPool::new(mem_limit as usize)))
             .build_arc()?;
-        let ctx = SessionContext::new_with_config_rt(config, runtime_config);
+        let state = SessionStateBuilder::new()
+            .with_config(config)
+            .with_runtime_env(runtime_env)
+            .with_default_features()
+            .build();
+        let ctx = SessionContext::from(state);
 
         // register tables
         self.register_tables(&ctx).await?;

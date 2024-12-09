@@ -29,7 +29,8 @@ use crate::datasource::provider::DefaultTableFactory;
 use crate::execution::context::SessionState;
 #[cfg(feature = "nested_expressions")]
 use crate::functions_nested;
-use crate::{functions, functions_aggregate, functions_window};
+use crate::{functions, functions_aggregate, functions_table, functions_window};
+use datafusion_catalog::TableFunction;
 use datafusion_execution::config::SessionConfig;
 use datafusion_execution::object_store::ObjectStoreUrl;
 use datafusion_execution::runtime_env::RuntimeEnv;
@@ -117,6 +118,11 @@ impl SessionStateDefaults {
     /// returns the list of default [`WindowUDF']'s
     pub fn default_window_functions() -> Vec<Arc<WindowUDF>> {
         functions_window::all_default_window_functions()
+    }
+
+    /// returns the list of default [`TableFunction`]s
+    pub fn default_table_functions() -> Vec<Arc<TableFunction>> {
+        functions_table::all_default_table_functions()
     }
 
     /// returns the list of default [`FileFormatFactory']'s

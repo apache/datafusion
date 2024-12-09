@@ -270,7 +270,7 @@ mod tests {
     fn test_functions() -> Result<()> {
         test_function!(
             SplitPartFunc::new(),
-            &[
+            vec![
                 ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from(
                     "abc~@~def~@~ghi"
                 )))),
@@ -284,7 +284,7 @@ mod tests {
         );
         test_function!(
             SplitPartFunc::new(),
-            &[
+            vec![
                 ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from(
                     "abc~@~def~@~ghi"
                 )))),
@@ -298,7 +298,7 @@ mod tests {
         );
         test_function!(
             SplitPartFunc::new(),
-            &[
+            vec![
                 ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from(
                     "abc~@~def~@~ghi"
                 )))),
@@ -312,7 +312,7 @@ mod tests {
         );
         test_function!(
             SplitPartFunc::new(),
-            &[
+            vec![
                 ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from(
                     "abc~@~def~@~ghi"
                 )))),

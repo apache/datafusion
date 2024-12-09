@@ -201,7 +201,7 @@ mod tests {
     fn test_functions() -> Result<()> {
         test_function!(
             TranslateFunc::new(),
-            &[
+            vec![
                 ColumnarValue::Scalar(ScalarValue::from("12345")),
                 ColumnarValue::Scalar(ScalarValue::from("143")),
                 ColumnarValue::Scalar(ScalarValue::from("ax"))
@@ -213,7 +213,7 @@ mod tests {
         );
         test_function!(
             TranslateFunc::new(),
-            &[
+            vec![
                 ColumnarValue::Scalar(ScalarValue::Utf8(None)),
                 ColumnarValue::Scalar(ScalarValue::from("143")),
                 ColumnarValue::Scalar(ScalarValue::from("ax"))
@@ -225,7 +225,7 @@ mod tests {
         );
         test_function!(
             TranslateFunc::new(),
-            &[
+            vec![
                 ColumnarValue::Scalar(ScalarValue::from("12345")),
                 ColumnarValue::Scalar(ScalarValue::Utf8(None)),
                 ColumnarValue::Scalar(ScalarValue::from("ax"))
@@ -237,7 +237,7 @@ mod tests {
         );
         test_function!(
             TranslateFunc::new(),
-            &[
+            vec![
                 ColumnarValue::Scalar(ScalarValue::from("12345")),
                 ColumnarValue::Scalar(ScalarValue::from("143")),
                 ColumnarValue::Scalar(ScalarValue::Utf8(None))
@@ -249,7 +249,7 @@ mod tests {
         );
         test_function!(
             TranslateFunc::new(),
-            &[
+            vec![
                 ColumnarValue::Scalar(ScalarValue::from("é2íñ5")),
                 ColumnarValue::Scalar(ScalarValue::from("éñí")),
                 ColumnarValue::Scalar(ScalarValue::from("óü")),
@@ -262,7 +262,7 @@ mod tests {
         #[cfg(not(feature = "unicode_expressions"))]
         test_function!(
             TranslateFunc::new(),
-            &[
+            vec![
                 ColumnarValue::Scalar(ScalarValue::from("12345")),
                 ColumnarValue::Scalar(ScalarValue::from("143")),
                 ColumnarValue::Scalar(ScalarValue::from("ax")),

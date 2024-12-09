@@ -414,7 +414,7 @@ fn general_replace<O: OffsetSizeTrait>(
     let data = mutable.freeze();
 
     Ok(Arc::new(GenericListArray::<O>::try_new(
-        Arc::new(Field::new("item", list_array.value_type(), true)),
+        Arc::new(Field::new_list_field(list_array.value_type(), true)),
         OffsetBuffer::<O>::new(offsets.into()),
         arrow_array::make_array(data),
         Some(NullBuffer::new(valid.finish())),

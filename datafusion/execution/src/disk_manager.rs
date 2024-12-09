@@ -15,8 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Manages files generated during query execution, files are
-//! hashed among the directories listed in RuntimeConfig::local_dirs.
+//! [`DiskManager`]: Manages files generated during query execution
 
 use datafusion_common::{resources_datafusion_err, DataFusionError, Result};
 use log::debug;

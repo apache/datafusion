@@ -319,7 +319,7 @@ mod tests {
     fn test_functions() -> Result<()> {
         test_function!(
             RPadFunc::new(),
-            &[
+            vec![
                 ColumnarValue::Scalar(ScalarValue::from("josé")),
                 ColumnarValue::Scalar(ScalarValue::from(5i64)),
             ],
@@ -330,7 +330,7 @@ mod tests {
         );
         test_function!(
             RPadFunc::new(),
-            &[
+            vec![
                 ColumnarValue::Scalar(ScalarValue::from("hi")),
                 ColumnarValue::Scalar(ScalarValue::from(5i64)),
             ],
@@ -341,7 +341,7 @@ mod tests {
         );
         test_function!(
             RPadFunc::new(),
-            &[
+            vec![
                 ColumnarValue::Scalar(ScalarValue::from("hi")),
                 ColumnarValue::Scalar(ScalarValue::from(0i64)),
             ],
@@ -352,7 +352,7 @@ mod tests {
         );
         test_function!(
             RPadFunc::new(),
-            &[
+            vec![
                 ColumnarValue::Scalar(ScalarValue::from("hi")),
                 ColumnarValue::Scalar(ScalarValue::Int64(None)),
             ],
@@ -363,7 +363,7 @@ mod tests {
         );
         test_function!(
             RPadFunc::new(),
-            &[
+            vec![
                 ColumnarValue::Scalar(ScalarValue::Utf8(None)),
                 ColumnarValue::Scalar(ScalarValue::from(5i64)),
             ],
@@ -374,7 +374,7 @@ mod tests {
         );
         test_function!(
             RPadFunc::new(),
-            &[
+            vec![
                 ColumnarValue::Scalar(ScalarValue::from("hi")),
                 ColumnarValue::Scalar(ScalarValue::from(5i64)),
                 ColumnarValue::Scalar(ScalarValue::from("xy")),
@@ -386,7 +386,7 @@ mod tests {
         );
         test_function!(
             RPadFunc::new(),
-            &[
+            vec![
                 ColumnarValue::Scalar(ScalarValue::from("hi")),
                 ColumnarValue::Scalar(ScalarValue::from(21i64)),
                 ColumnarValue::Scalar(ScalarValue::from("abcdef")),
@@ -398,7 +398,7 @@ mod tests {
         );
         test_function!(
             RPadFunc::new(),
-            &[
+            vec![
                 ColumnarValue::Scalar(ScalarValue::from("hi")),
                 ColumnarValue::Scalar(ScalarValue::from(5i64)),
                 ColumnarValue::Scalar(ScalarValue::from(" ")),
@@ -410,7 +410,7 @@ mod tests {
         );
         test_function!(
             RPadFunc::new(),
-            &[
+            vec![
                 ColumnarValue::Scalar(ScalarValue::from("hi")),
                 ColumnarValue::Scalar(ScalarValue::from(5i64)),
                 ColumnarValue::Scalar(ScalarValue::from("")),
@@ -422,7 +422,7 @@ mod tests {
         );
         test_function!(
             RPadFunc::new(),
-            &[
+            vec![
                 ColumnarValue::Scalar(ScalarValue::Utf8(None)),
                 ColumnarValue::Scalar(ScalarValue::from(5i64)),
                 ColumnarValue::Scalar(ScalarValue::from("xy")),
@@ -434,7 +434,7 @@ mod tests {
         );
         test_function!(
             RPadFunc::new(),
-            &[
+            vec![
                 ColumnarValue::Scalar(ScalarValue::from("hi")),
                 ColumnarValue::Scalar(ScalarValue::Int64(None)),
                 ColumnarValue::Scalar(ScalarValue::from("xy")),
@@ -446,7 +446,7 @@ mod tests {
         );
         test_function!(
             RPadFunc::new(),
-            &[
+            vec![
                 ColumnarValue::Scalar(ScalarValue::from("hi")),
                 ColumnarValue::Scalar(ScalarValue::from(5i64)),
                 ColumnarValue::Scalar(ScalarValue::Utf8(None)),
@@ -458,7 +458,7 @@ mod tests {
         );
         test_function!(
             RPadFunc::new(),
-            &[
+            vec![
                 ColumnarValue::Scalar(ScalarValue::from("josé")),
                 ColumnarValue::Scalar(ScalarValue::from(10i64)),
                 ColumnarValue::Scalar(ScalarValue::from("xy")),
@@ -470,7 +470,7 @@ mod tests {
         );
         test_function!(
             RPadFunc::new(),
-            &[
+            vec![
                 ColumnarValue::Scalar(ScalarValue::from("josé")),
                 ColumnarValue::Scalar(ScalarValue::from(10i64)),
                 ColumnarValue::Scalar(ScalarValue::from("éñ")),

@@ -706,9 +706,11 @@ pub fn with_new_children_if_necessary(
     }
 }
 
-/// Return a [wrapper](DisplayableExecutionPlan) around an
+/// Return a [`DisplayableExecutionPlan`] wrapper around an
 /// [`ExecutionPlan`] which can be displayed in various easier to
 /// understand ways.
+///
+/// See examples on [`DisplayableExecutionPlan`]
 pub fn displayable(plan: &dyn ExecutionPlan) -> DisplayableExecutionPlan<'_> {
     DisplayableExecutionPlan::new(plan)
 }

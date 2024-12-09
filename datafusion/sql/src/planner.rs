@@ -491,7 +491,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     || matches!(tz_info, TimezoneInfo::WithTimeZone)
                 {
                     // Timestamp With Time Zone
-                    // INPUT : [SQLDataType]   TimestampTz + [RuntimeConfig] Time Zone
+                    // INPUT : [SQLDataType]   TimestampTz + [Config] Time Zone
                     // OUTPUT: [ArrowDataType] Timestamp<TimeUnit, Some(Time Zone)>
                     self.context_provider.options().execution.time_zone.clone()
                 } else {
@@ -652,13 +652,29 @@ pub fn object_name_to_table_reference(
     idents_to_table_reference(idents, enable_normalization)
 }
 
-struct IdentTaker(Vec<Ident>);
+struct IdentTaker {
+    normalizer: IdentNormalizer,
+    idents: Vec<Ident>,
+}
+
 /// Take the next identifier from the back of idents, panic'ing if
 /// there are none left
 impl IdentTaker {
-    fn take(&mut self, enable_normalization: bool) -> String {
-        let ident = self.0.pop().expect("no more identifiers");
-        IdentNormalizer::new(enable_normalization).normalize(ident)
+    fn new(idents: Vec<Ident>, enable_normalization: bool) -> Self {
+        Self {
+            normalizer: IdentNormalizer::new(enable_normalization),
+            idents,
+        }
+    }
+
+    fn take(&mut self) -> String {
+        let ident = self.idents.pop().expect("no more identifiers");
+        self.normalizer.normalize(ident)
+    }
+
+    /// Returns the number of remaining identifiers
+    fn len(&self) -> usize {
+        self.idents.len()
     }
 }
 
@@ -666,7 +682,7 @@ impl IdentTaker {
 impl std::fmt::Display for IdentTaker {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let mut first = true;
-        for ident in self.0.iter() {
+        for ident in self.idents.iter() {
             if !first {
                 write!(f, ".")?;
             }
@@ -683,29 +699,28 @@ pub(crate) fn idents_to_table_reference(
     idents: Vec<Ident>,
     enable_normalization: bool,
 ) -> Result<TableReference> {
-    let mut taker = IdentTaker(idents);
-    let num_idents = taker.0.len();
+    let mut taker = IdentTaker::new(idents, enable_normalization);
 
-    match num_idents {
+    match taker.len() {
         1 => {
-            let table = taker.take(enable_normalization);
+            let table = taker.take();
             Ok(TableReference::bare(table))
         }
         2 => {
-            let table = taker.take(enable_normalization);
-            let schema = taker.take(enable_normalization);
+            let table = taker.take();
+            let schema = taker.take();
             Ok(TableReference::partial(schema, table))
         }
         3 => {
-            let table = taker.take(enable_normalization);
-            let schema = taker.take(enable_normalization);
-            let catalog = taker.take(enable_normalization);
+            let table = taker.take();
+            let schema = taker.take();
+            let catalog = taker.take();
             Ok(TableReference::full(catalog, schema, table))
         }
         _ => plan_err!(
             "Unsupported compound identifier '{}'. Expected 1, 2 or 3 parts, got {}",
             taker,
-            num_idents
+            taker.len()
         ),
     }
 }

@@ -62,7 +62,7 @@ pub struct GreedyMemoryPool {
 }
 
 impl GreedyMemoryPool {
-    /// Allocate up to `limit` bytes
+    /// Create a new pool that can allocate up to `pool_size` bytes
     pub fn new(pool_size: usize) -> Self {
         debug!("Created new GreedyMemoryPool(pool_size={pool_size})");
         Self {

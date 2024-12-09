@@ -991,7 +991,7 @@ mod tests {
         offsets.push(OffsetSize::from_usize(values.len()).unwrap());
         valid.append(true);
 
-        let field = Arc::new(Field::new("item", DataType::Utf8, true));
+        let field = Arc::new(Field::new_list_field(DataType::Utf8, true));
         GenericListArray::<OffsetSize>::new(
             field,
             OffsetBuffer::new(offsets.into()),
@@ -1017,7 +1017,7 @@ mod tests {
             None,
             None,
         ]));
-        let field = Arc::new(Field::new("item", DataType::Utf8, true));
+        let field = Arc::new(Field::new_list_field(DataType::Utf8, true));
         let valid = NullBuffer::from(vec![true, false, true, false, true, true]);
         FixedSizeListArray::new(field, 2, values, Some(valid))
     }
@@ -1100,7 +1100,7 @@ mod tests {
         let out_schema = Arc::new(Schema::new(vec![
             Field::new(
                 "col1_unnest_placeholder_depth_1",
-                DataType::List(Arc::new(Field::new("item", DataType::Int32, true))),
+                DataType::List(Arc::new(Field::new_list_field(DataType::Int32, true))),
                 true,
             ),
             Field::new("col1_unnest_placeholder_depth_2", DataType::Int32, true),

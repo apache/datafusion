@@ -163,7 +163,7 @@ mod tests {
     fn test_functions() -> Result<()> {
         test_function!(
             InitcapFunc::new(),
-            &[ColumnarValue::Scalar(ScalarValue::from("hi THOMAS"))],
+            vec![ColumnarValue::Scalar(ScalarValue::from("hi THOMAS"))],
             Ok(Some("Hi Thomas")),
             &str,
             Utf8,
@@ -171,7 +171,7 @@ mod tests {
         );
         test_function!(
             InitcapFunc::new(),
-            &[ColumnarValue::Scalar(ScalarValue::from(""))],
+            vec![ColumnarValue::Scalar(ScalarValue::from(""))],
             Ok(Some("")),
             &str,
             Utf8,
@@ -179,7 +179,7 @@ mod tests {
         );
         test_function!(
             InitcapFunc::new(),
-            &[ColumnarValue::Scalar(ScalarValue::from(""))],
+            vec![ColumnarValue::Scalar(ScalarValue::from(""))],
             Ok(Some("")),
             &str,
             Utf8,
@@ -187,7 +187,7 @@ mod tests {
         );
         test_function!(
             InitcapFunc::new(),
-            &[ColumnarValue::Scalar(ScalarValue::Utf8(None))],
+            vec![ColumnarValue::Scalar(ScalarValue::Utf8(None))],
             Ok(None),
             &str,
             Utf8,
@@ -195,7 +195,7 @@ mod tests {
         );
         test_function!(
             InitcapFunc::new(),
-            &[ColumnarValue::Scalar(ScalarValue::Utf8View(Some(
+            vec![ColumnarValue::Scalar(ScalarValue::Utf8View(Some(
                 "hi THOMAS".to_string()
             )))],
             Ok(Some("Hi Thomas")),
@@ -205,7 +205,7 @@ mod tests {
         );
         test_function!(
             InitcapFunc::new(),
-            &[ColumnarValue::Scalar(ScalarValue::Utf8View(Some(
+            vec![ColumnarValue::Scalar(ScalarValue::Utf8View(Some(
                 "hi THOMAS wIth M0re ThAN 12 ChaRs".to_string()
             )))],
             Ok(Some("Hi Thomas With M0re Than 12 Chars")),
@@ -215,7 +215,7 @@ mod tests {
         );
         test_function!(
             InitcapFunc::new(),
-            &[ColumnarValue::Scalar(ScalarValue::Utf8View(Some(
+            vec![ColumnarValue::Scalar(ScalarValue::Utf8View(Some(
                 "".to_string()
             )))],
             Ok(Some("")),
@@ -225,7 +225,7 @@ mod tests {
         );
         test_function!(
             InitcapFunc::new(),
-            &[ColumnarValue::Scalar(ScalarValue::Utf8View(None))],
+            vec![ColumnarValue::Scalar(ScalarValue::Utf8View(None))],
             Ok(None),
             &str,
             Utf8,

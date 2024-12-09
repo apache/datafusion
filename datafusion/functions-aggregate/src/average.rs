@@ -28,7 +28,6 @@ use arrow::datatypes::{
     Float64Type, UInt64Type,
 };
 use datafusion_common::{exec_err, not_impl_err, Result, ScalarValue};
-use datafusion_expr::aggregate_doc_sections::DOC_SECTION_GENERAL;
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::type_coercion::aggregates::{avg_return_type, coerce_avg_type};
 use datafusion_expr::utils::format_state_name;
@@ -44,11 +43,12 @@ use datafusion_functions_aggregate_common::aggregate::groups_accumulator::nulls:
 };
 
 use datafusion_functions_aggregate_common::utils::DecimalAverager;
+use datafusion_macros::user_doc;
 use log::debug;
 use std::any::Any;
 use std::fmt::Debug;
 use std::mem::{size_of, size_of_val};
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
 make_udaf_expr_and_func!(
     Avg,
@@ -58,6 +58,20 @@ make_udaf_expr_and_func!(
     avg_udaf
 );
 
+#[user_doc(
+    doc_section(label = "General Functions"),
+    description = "Returns the average of numeric values in the specified column.",
+    syntax_example = "avg(expression)",
+    sql_example = r#"```sql
+> SELECT avg(column_name) FROM table_name;
++---------------------------+
+| avg(column_name)           |
++---------------------------+
+| 42.75                      |
++---------------------------+
+```"#,
+    standard_argument(name = "expression",)
+)]
 #[derive(Debug)]
 pub struct Avg {
     signature: Signature,
@@ -240,32 +254,8 @@ impl AggregateUDFImpl for Avg {
     }
 
     fn documentation(&self) -> Option<&Documentation> {
-        Some(get_avg_doc())
+        self.doc()
     }
-}
-
-static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
-
-fn get_avg_doc() -> &'static Documentation {
-    DOCUMENTATION.get_or_init(|| {
-        Documentation::builder(
-            DOC_SECTION_GENERAL,
-            "Returns the average of numeric values in the specified column.",
-            "avg(expression)",
-        )
-        .with_sql_example(
-            r#"```sql
-> SELECT avg(column_name) FROM table_name;
-+---------------------------+
-| avg(column_name)           |
-+---------------------------+
-| 42.75                      |
-+---------------------------+
-```"#,
-        )
-        .with_standard_argument("expression", None)
-        .build()
-    })
 }
 
 /// An accumulator to compute the average

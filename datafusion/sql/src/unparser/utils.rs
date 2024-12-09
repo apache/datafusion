@@ -30,6 +30,7 @@ use datafusion_expr::{
     expr, utils::grouping_set_to_exprlist, Aggregate, Expr, LogicalPlan,
     LogicalPlanBuilder, Projection, SortExpr, Unnest, Window,
 };
+
 use indexmap::IndexSet;
 use sqlparser::ast;
 use sqlparser::tokenizer::Span;

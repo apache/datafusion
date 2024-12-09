@@ -75,7 +75,7 @@ fn criterion_benchmark(c: &mut Criterion) {
 
     c.bench_function("map_1000", |b| {
         let mut rng = rand::thread_rng();
-        let field = Arc::new(Field::new("item", DataType::Utf8, true));
+        let field = Arc::new(Field::new_list_field(DataType::Utf8, true));
         let offsets = OffsetBuffer::new(ScalarBuffer::from(vec![0, 1000]));
         let key_list = ListArray::new(
             field,
@@ -83,7 +83,7 @@ fn criterion_benchmark(c: &mut Criterion) {
             Arc::new(StringArray::from(keys(&mut rng))),
             None,
         );
-        let field = Arc::new(Field::new("item", DataType::Int32, true));
+        let field = Arc::new(Field::new_list_field(DataType::Int32, true));
         let offsets = OffsetBuffer::new(ScalarBuffer::from(vec![0, 1000]));
         let value_list = ListArray::new(
             field,

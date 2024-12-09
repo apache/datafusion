@@ -253,7 +253,7 @@ mod tests {
     fn test_functions() -> Result<()> {
         test_function!(
             SubstrIndexFunc::new(),
-            &[
+            vec![
                 ColumnarValue::Scalar(ScalarValue::from("www.apache.org")),
                 ColumnarValue::Scalar(ScalarValue::from(".")),
                 ColumnarValue::Scalar(ScalarValue::from(1i64)),
@@ -265,7 +265,7 @@ mod tests {
         );
         test_function!(
             SubstrIndexFunc::new(),
-            &[
+            vec![
                 ColumnarValue::Scalar(ScalarValue::from("www.apache.org")),
                 ColumnarValue::Scalar(ScalarValue::from(".")),
                 ColumnarValue::Scalar(ScalarValue::from(2i64)),
@@ -277,7 +277,7 @@ mod tests {
         );
         test_function!(
             SubstrIndexFunc::new(),
-            &[
+            vec![
                 ColumnarValue::Scalar(ScalarValue::from("www.apache.org")),
                 ColumnarValue::Scalar(ScalarValue::from(".")),
                 ColumnarValue::Scalar(ScalarValue::from(-2i64)),
@@ -289,7 +289,7 @@ mod tests {
         );
         test_function!(
             SubstrIndexFunc::new(),
-            &[
+            vec![
                 ColumnarValue::Scalar(ScalarValue::from("www.apache.org")),
                 ColumnarValue::Scalar(ScalarValue::from(".")),
                 ColumnarValue::Scalar(ScalarValue::from(-1i64)),
@@ -301,7 +301,7 @@ mod tests {
         );
         test_function!(
             SubstrIndexFunc::new(),
-            &[
+            vec![
                 ColumnarValue::Scalar(ScalarValue::from("www.apache.org")),
                 ColumnarValue::Scalar(ScalarValue::from(".")),
                 ColumnarValue::Scalar(ScalarValue::from(0i64)),
@@ -313,7 +313,7 @@ mod tests {
         );
         test_function!(
             SubstrIndexFunc::new(),
-            &[
+            vec![
                 ColumnarValue::Scalar(ScalarValue::from("")),
                 ColumnarValue::Scalar(ScalarValue::from(".")),
                 ColumnarValue::Scalar(ScalarValue::from(1i64)),
@@ -325,7 +325,7 @@ mod tests {
         );
         test_function!(
             SubstrIndexFunc::new(),
-            &[
+            vec![
                 ColumnarValue::Scalar(ScalarValue::from("www.apache.org")),
                 ColumnarValue::Scalar(ScalarValue::from("")),
                 ColumnarValue::Scalar(ScalarValue::from(1i64)),

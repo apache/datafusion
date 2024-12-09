@@ -63,6 +63,90 @@ impl Documentation {
     ) -> DocumentationBuilder {
         DocumentationBuilder::new(doc_section, description, syntax_example)
     }
+
+    /// Output the `Documentation` struct in form of custom Rust documentation attributes
+    /// It is useful to semi automate during tmigration of UDF documentation
+    /// generation from code based to attribute based and can be safely removed after
+    pub fn to_doc_attribute(&self) -> String {
+        let mut result = String::new();
+
+        result.push_str("#[user_doc(");
+        // Doc Section
+        result.push_str(
+            format!(
+                "\n    doc_section({}label = \"{}\"{}),",
+                if !self.doc_section.include {
+                    "include = \"false\", "
+                } else {
+                    ""
+                },
+                self.doc_section.label,
+                self.doc_section
+                    .description
+                    .map(|s| format!(", description = \"{}\"", s))
+                    .unwrap_or_default(),
+            )
+            .as_ref(),
+        );
+
+        // Description
+        result.push_str(format!("\n    description=\"{}\",", self.description).as_ref());
+        // Syntax Example
+        result.push_str(
+            format!("\n    syntax_example=\"{}\",", self.syntax_example).as_ref(),
+        );
+        // SQL Example
+        result.push_str(
+            &self
+                .sql_example
+                .clone()
+                .map(|s| format!("\n    sql_example = r#\"{}\"#,", s))
+                .unwrap_or_default(),
+        );
+
+        let st_arg_token = " expression to operate on. Can be a constant, column, or function, and any combination of operators.";
+        // Standard Arguments
+        if let Some(args) = self.arguments.clone() {
+            args.iter().for_each(|(name, value)| {
+                if value.contains(st_arg_token) {
+                    if name.starts_with("The ") {
+                        result.push_str(format!("\n    standard_argument(\n        name = \"{}\"),", name).as_ref());
+                    } else {
+                        result.push_str(format!("\n    standard_argument(\n        name = \"{}\",\n        prefix = \"{}\"\n    ),", name, value.replace(st_arg_token, "")).as_ref());
+                    }
+                }
+            });
+        }
+
+        // Arguments
+        if let Some(args) = self.arguments.clone() {
+            args.iter().for_each(|(name, value)| {
+                if !value.contains(st_arg_token) {
+                    result.push_str(format!("\n    argument(\n        name = \"{}\",\n        description = \"{}\"\n    ),", name, value).as_ref());
+                }
+            });
+        }
+
+        if let Some(alt_syntax) = self.alternative_syntax.clone() {
+            alt_syntax.iter().for_each(|syntax| {
+                result.push_str(
+                    format!("\n    alternative_syntax = \"{}\",", syntax).as_ref(),
+                );
+            });
+        }
+
+        // Related UDFs
+        if let Some(related_udf) = self.related_udfs.clone() {
+            related_udf.iter().for_each(|udf| {
+                result
+                    .push_str(format!("\n    related_udf(name = \"{}\"),", udf).as_ref());
+            });
+        }
+
+        result.push_str("\n)]");
+
+        result
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]

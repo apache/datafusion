@@ -157,7 +157,7 @@ mod tests {
     fn test_functions() -> Result<()> {
         test_function!(
             ReplaceFunc::new(),
-            &[
+            vec![
                 ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from("aabbdqcbb")))),
                 ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from("bb")))),
                 ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from("ccc")))),
@@ -170,7 +170,7 @@ mod tests {
 
         test_function!(
             ReplaceFunc::new(),
-            &[
+            vec![
                 ColumnarValue::Scalar(ScalarValue::LargeUtf8(Some(String::from(
                     "aabbb"
                 )))),
@@ -185,7 +185,7 @@ mod tests {
 
         test_function!(
             ReplaceFunc::new(),
-            &[
+            vec![
                 ColumnarValue::Scalar(ScalarValue::Utf8View(Some(String::from(
                     "aabbbcw"
                 )))),

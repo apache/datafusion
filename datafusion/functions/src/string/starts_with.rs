@@ -159,7 +159,7 @@ mod tests {
         for (args, expected) in test_cases {
             test_function!(
                 StartsWithFunc::new(),
-                &args,
+                args,
                 Ok(expected),
                 bool,
                 Boolean,

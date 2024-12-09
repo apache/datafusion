@@ -106,7 +106,7 @@ impl ScalarUDFImpl for ArrayHas {
         match &args[1] {
             ColumnarValue::Array(array_needle) => {
                 // the needle is already an array, convert the haystack to an array of the same length
-                let haystack = args[0].to_owned().into_array(array_needle.len())?;
+                let haystack = args[0].to_array(array_needle.len())?;
                 let array = array_has_inner_for_array(&haystack, array_needle)?;
                 Ok(ColumnarValue::Array(array))
             }
@@ -118,7 +118,7 @@ impl ScalarUDFImpl for ArrayHas {
                 }
 
                 // since the needle is a scalar, convert it to an array of size 1
-                let haystack = args[0].to_owned().into_array(1)?;
+                let haystack = args[0].to_array(1)?;
                 let needle = scalar_needle.to_array_of_size(1)?;
                 let needle = Scalar::new(needle);
                 let array = array_has_inner_for_scalar(&haystack, &needle)?;

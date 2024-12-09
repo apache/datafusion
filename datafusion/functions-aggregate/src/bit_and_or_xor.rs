@@ -272,7 +272,7 @@ impl AggregateUDFImpl for BitwiseOperation {
                     format!("{} distinct", self.name()).as_str(),
                 ),
                 // See COMMENTS.md to understand why nullable is set to true
-                Field::new("item", args.return_type.clone(), true),
+                Field::new_list_field(args.return_type.clone(), true),
                 false,
             )])
         } else {

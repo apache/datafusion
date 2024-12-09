@@ -617,7 +617,7 @@ pub(crate) fn reorder_join_keys_to_inputs(
                 left.equivalence_properties(),
                 right.equivalence_properties(),
             );
-            if positions.map_or(false, |idxs| !idxs.is_empty()) {
+            if positions.is_some_and(|idxs| !idxs.is_empty()) {
                 let JoinKeyPairs {
                     left_keys,
                     right_keys,

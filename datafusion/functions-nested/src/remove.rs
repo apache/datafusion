@@ -433,7 +433,7 @@ fn general_remove<OffsetSize: OffsetSizeTrait>(
     };
 
     Ok(Arc::new(GenericListArray::<OffsetSize>::try_new(
-        Arc::new(Field::new("item", data_type, true)),
+        Arc::new(Field::new_list_field(data_type, true)),
         OffsetBuffer::new(offsets.into()),
         values,
         list_array.nulls().cloned(),

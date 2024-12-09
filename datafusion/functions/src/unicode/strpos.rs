@@ -173,13 +173,13 @@ where
                 // the sub vector in the main vector. This is faster than string.find() method.
                 if ascii_only {
                     // If the substring is empty, the result is 1.
-                    if substring.as_bytes().is_empty() {
+                    if substring.is_empty() {
                         T::Native::from_usize(1)
                     } else {
                         T::Native::from_usize(
                             string
                                 .as_bytes()
-                                .windows(substring.as_bytes().len())
+                                .windows(substring.len())
                                 .position(|w| w == substring.as_bytes())
                                 .map(|x| x + 1)
                                 .unwrap_or(0),
@@ -218,7 +218,7 @@ mod tests {
         ($lhs:literal, $rhs:literal -> $result:literal; $t1:ident $t2:ident $t3:ident $t4:ident $t5:ident) => {
             test_function!(
                 StrposFunc::new(),
-                &[
+                vec![
                     ColumnarValue::Scalar(ScalarValue::$t1(Some($lhs.to_owned()))),
                     ColumnarValue::Scalar(ScalarValue::$t2(Some($rhs.to_owned()))),
                 ],

@@ -26,7 +26,7 @@ repository = { workspace = true }
 license = { workspace = true }
 authors = { workspace = true }
 # Specify MSRV here as `cargo msrv` doesn't support workspace version
-rust-version = "1.79"
+rust-version = "1.80.1"
 
 [lints]
 workspace = true
@@ -36,7 +36,7 @@ arrow-buffer = { workspace = true }
 async-recursion = "1.0"
 async-trait = { workspace = true }
 chrono = { workspace = true }
-datafusion = { workspace = true, default-features = true }
+datafusion = { workspace = true }
 itertools = { workspace = true }
 object_store = { workspace = true }
 pbjson-types = "0.7"
@@ -51,4 +51,6 @@ serde_json = "1.0"
 tokio = { workspace = true }
 
 [features]
+default = ["physical"]
+physical = ["datafusion/parquet"]
 protoc = ["substrait/protoc"]

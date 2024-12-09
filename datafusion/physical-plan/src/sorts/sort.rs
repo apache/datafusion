@@ -1344,7 +1344,7 @@ mod tests {
             Field::new("a", DataType::Int32, true),
             Field::new(
                 "b",
-                DataType::List(Arc::new(Field::new("item", DataType::Int32, true))),
+                DataType::List(Arc::new(Field::new_list_field(DataType::Int32, true))),
                 true,
             ),
         ]));
@@ -1389,7 +1389,7 @@ mod tests {
 
         assert_eq!(DataType::Int32, *sort_exec.schema().field(0).data_type());
         assert_eq!(
-            DataType::List(Arc::new(Field::new("item", DataType::Int32, true))),
+            DataType::List(Arc::new(Field::new_list_field(DataType::Int32, true))),
             *sort_exec.schema().field(1).data_type()
         );
 

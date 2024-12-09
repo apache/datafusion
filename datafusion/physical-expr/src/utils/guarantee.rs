@@ -412,7 +412,7 @@ impl<'a> ColOpLit<'a> {
 
 #[cfg(test)]
 mod test {
-    use std::sync::OnceLock;
+    use std::sync::LazyLock;
 
     use super::*;
     use crate::planner::logical2physical;
@@ -863,13 +863,12 @@ mod test {
 
     // Schema for testing
     fn schema() -> SchemaRef {
-        Arc::clone(SCHEMA.get_or_init(|| {
+        static SCHEMA: LazyLock<SchemaRef> = LazyLock::new(|| {
             Arc::new(Schema::new(vec![
                 Field::new("a", DataType::Utf8, false),
                 Field::new("b", DataType::Int32, false),
             ]))
-        }))
+        });
+        Arc::clone(&SCHEMA)
     }
-
-    static SCHEMA: OnceLock<SchemaRef> = OnceLock::new();
 }

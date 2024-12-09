@@ -73,7 +73,7 @@ impl ScalarUDFImpl for ArrayDims {
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
         Ok(match arg_types[0] {
             List(_) | LargeList(_) | FixedSizeList(_, _) => {
-                List(Arc::new(Field::new("item", UInt64, true)))
+                List(Arc::new(Field::new_list_field(UInt64, true)))
             }
             _ => {
                 return plan_err!("The array_dims function can only accept List/LargeList/FixedSizeList.");

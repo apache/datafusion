@@ -404,7 +404,7 @@ mod tests {
     fn test_functions() -> Result<()> {
         test_function!(
             ConcatWsFunc::new(),
-            &[
+            vec![
                 ColumnarValue::Scalar(ScalarValue::from("|")),
                 ColumnarValue::Scalar(ScalarValue::from("aa")),
                 ColumnarValue::Scalar(ScalarValue::from("bb")),
@@ -417,7 +417,7 @@ mod tests {
         );
         test_function!(
             ConcatWsFunc::new(),
-            &[
+            vec![
                 ColumnarValue::Scalar(ScalarValue::from("|")),
                 ColumnarValue::Scalar(ScalarValue::Utf8(None)),
             ],
@@ -428,7 +428,7 @@ mod tests {
         );
         test_function!(
             ConcatWsFunc::new(),
-            &[
+            vec![
                 ColumnarValue::Scalar(ScalarValue::Utf8(None)),
                 ColumnarValue::Scalar(ScalarValue::from("aa")),
                 ColumnarValue::Scalar(ScalarValue::from("bb")),
@@ -441,7 +441,7 @@ mod tests {
         );
         test_function!(
             ConcatWsFunc::new(),
-            &[
+            vec![
                 ColumnarValue::Scalar(ScalarValue::from("|")),
                 ColumnarValue::Scalar(ScalarValue::from("aa")),
                 ColumnarValue::Scalar(ScalarValue::Utf8(None)),

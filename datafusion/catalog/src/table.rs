@@ -25,9 +25,11 @@ use arrow_schema::SchemaRef;
 use async_trait::async_trait;
 use datafusion_common::Result;
 use datafusion_common::{not_impl_err, Constraints, Statistics};
+use datafusion_expr::Expr;
+
 use datafusion_expr::dml::InsertOp;
 use datafusion_expr::{
-    CreateExternalTable, Expr, LogicalPlan, TableProviderFilterPushDown, TableType,
+    CreateExternalTable, LogicalPlan, TableProviderFilterPushDown, TableType,
 };
 use datafusion_physical_plan::ExecutionPlan;
 
@@ -296,4 +298,41 @@ pub trait TableProviderFactory: Debug + Sync + Send {
         state: &dyn Session,
         cmd: &CreateExternalTable,
     ) -> Result<Arc<dyn TableProvider>>;
+}
+
+/// A trait for table function implementations
+pub trait TableFunctionImpl: Debug + Sync + Send {
+    /// Create a table provider
+    fn call(&self, args: &[Expr]) -> Result<Arc<dyn TableProvider>>;
+}
+
+/// A table that uses a function to generate data
+#[derive(Debug)]
+pub struct TableFunction {
+    /// Name of the table function
+    name: String,
+    /// Function implementation
+    fun: Arc<dyn TableFunctionImpl>,
+}
+
+impl TableFunction {
+    /// Create a new table function
+    pub fn new(name: String, fun: Arc<dyn TableFunctionImpl>) -> Self {
+        Self { name, fun }
+    }
+
+    /// Get the name of the table function
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    /// Get the implementation of the table function
+    pub fn function(&self) -> &Arc<dyn TableFunctionImpl> {
+        &self.fun
+    }
+
+    /// Get the function implementation and generate a table
+    pub fn create_table_provider(&self, args: &[Expr]) -> Result<Arc<dyn TableProvider>> {
+        self.fun.call(args)
+    }
 }

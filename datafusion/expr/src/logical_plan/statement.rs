@@ -18,13 +18,9 @@
 use arrow::datatypes::DataType;
 use datafusion_common::{DFSchema, DFSchemaRef};
 use std::fmt::{self, Display};
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, LazyLock};
 
 use crate::{expr_vec_fmt, Expr, LogicalPlan};
-
-/// Statements have a unchanging empty schema.
-/// TODO: Use `LazyLock` when MSRV is 1.80.0
-static STATEMENT_EMPTY_SCHEMA: OnceLock<DFSchemaRef> = OnceLock::new();
 
 /// Various types of Statements.
 ///
@@ -54,7 +50,11 @@ pub enum Statement {
 impl Statement {
     /// Get a reference to the logical plan's schema
     pub fn schema(&self) -> &DFSchemaRef {
-        STATEMENT_EMPTY_SCHEMA.get_or_init(|| Arc::new(DFSchema::empty()))
+        // Statements have an unchanging empty schema.
+        static STATEMENT_EMPTY_SCHEMA: LazyLock<DFSchemaRef> =
+            LazyLock::new(|| Arc::new(DFSchema::empty()));
+
+        &STATEMENT_EMPTY_SCHEMA
     }
 
     /// Return a descriptive string describing the type of this

@@ -105,7 +105,7 @@ where
                     Hint::AcceptsSingular => 1,
                     Hint::Pad => inferred_length,
                 };
-                arg.clone().into_array(expansion_len)
+                arg.to_array(expansion_len)
             })
             .collect::<Result<Vec<_>>>()?;
 
@@ -152,7 +152,7 @@ pub mod test {
                     let result = func.invoke_with_args(datafusion_expr::ScalarFunctionArgs{args: $ARGS, number_rows: cardinality, return_type: &return_type});
                     assert_eq!(result.is_ok(), true, "function returned an error: {}", result.unwrap_err());
 
-                    let result = result.unwrap().clone().into_array(cardinality).expect("Failed to convert to array");
+                    let result = result.unwrap().to_array(cardinality).expect("Failed to convert to array");
                     let result = result.as_any().downcast_ref::<$ARRAY_TYPE>().expect("Failed to convert to type");
 
                     // value is correct

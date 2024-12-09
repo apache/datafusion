@@ -252,7 +252,7 @@ impl ScalarUDFImpl for StringToArray {
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
         Ok(match arg_types[0] {
             Utf8 | Utf8View | LargeUtf8 => {
-                List(Arc::new(Field::new("item", arg_types[0].clone(), true)))
+                List(Arc::new(Field::new_list_field(arg_types[0].clone(), true)))
             }
             _ => {
                 return plan_err!(

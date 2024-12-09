@@ -103,7 +103,7 @@ pub fn check_finiteness_requirements(
 /// [`PhysicalExpr`]: crate::physical_plan::PhysicalExpr
 /// [`Operator`]: datafusion_expr::Operator
 fn is_prunable(join: &SymmetricHashJoinExec) -> bool {
-    join.filter().map_or(false, |filter| {
+    join.filter().is_some_and(|filter| {
         check_support(filter.expression(), &join.schema())
             && filter
                 .schema()
