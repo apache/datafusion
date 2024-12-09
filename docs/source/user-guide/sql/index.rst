@@ -21,6 +21,7 @@ SQL Reference
 .. toctree::
    :maxdepth: 2
 
+   dialect
    data_types
    select
    subqueries
