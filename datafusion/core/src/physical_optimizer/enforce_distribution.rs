@@ -836,7 +836,9 @@ fn add_roundrobin_on_top(
     n_target: usize,
 ) -> Result<DistributionContext> {
     // Adding repartition is helpful:
-    if input.plan.output_partitioning().partition_count() < n_target {
+    if input.plan.output_partitioning().partition_count() < n_target
+        || input.plan.children().is_empty()
+    {
         // When there is an existing ordering, we preserve ordering
         // during repartition. This will be un-done in the future
         // If any of the following conditions is true
