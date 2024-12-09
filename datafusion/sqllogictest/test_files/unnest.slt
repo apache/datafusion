@@ -860,12 +860,6 @@ select count(*) from (select unnest(range(0, 100000)) id) t inner join (select u
 ----
 100000
 
-# Implicit LATERAL support
-# Issue: https://github.com/apache/datafusion/issues/13659
-# TODO: https://github.com/apache/datafusion/issues/10048
-query error DataFusion error: This feature is not implemented: Physical plan does not support logical expression OuterReferenceColumn\(List\(Field \{ name: "item", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: \{\} \}\), Column \{ relation: Some\(Bare \{ table: "u" \}\), name: "column1" \}\)
-select * from unnest_table u, unnest(u.column1);
-
 
 ## Unnest in subquery
 query IIII

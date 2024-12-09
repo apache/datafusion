@@ -3230,6 +3230,21 @@ fn lateral_nested_left_join() {
 }
 
 #[test]
+fn lateral_unnest() {
+    let sql = "SELECT * from unnest_table u, unnest(u.array_col)";
+    let expected = "Projection: *\
+            \n  Cross Join: \
+            \n    SubqueryAlias: u\
+            \n      TableScan: unnest_table\
+            \n    Subquery:\
+            \n      Projection: unnest_placeholder(outer_ref(u.array_col),depth=1) AS UNNEST(outer_ref(u.array_col))\
+            \n        Unnest: lists[unnest_placeholder(outer_ref(u.array_col))|depth=1] structs[]\
+            \n          Projection: outer_ref(u.array_col) AS unnest_placeholder(outer_ref(u.array_col))\
+            \n            EmptyRelation";
+    quick_test(sql, expected);
+}
+
+#[test]
 fn hive_aggregate_with_filter() -> Result<()> {
     let dialect = &HiveDialect {};
     let sql = "SELECT sum(age) FILTER (WHERE age > 4) FROM person";
