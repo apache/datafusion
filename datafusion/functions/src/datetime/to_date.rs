@@ -27,7 +27,6 @@ use datafusion_expr::{
 };
 use datafusion_macros::user_doc;
 use std::any::Any;
-use std::sync::OnceLock;
 
 #[user_doc(
     doc_section(label = "Time and Date Functions"),

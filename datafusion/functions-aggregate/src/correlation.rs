@@ -20,7 +20,7 @@
 use std::any::Any;
 use std::fmt::Debug;
 use std::mem::size_of_val;
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
 use arrow::compute::{and, filter, is_not_null};
 use arrow::{
@@ -31,7 +31,6 @@ use arrow::{
 use crate::covariance::CovarianceAccumulator;
 use crate::stddev::StddevAccumulator;
 use datafusion_common::{plan_err, Result, ScalarValue};
-use datafusion_expr::aggregate_doc_sections::DOC_SECTION_STATISTICAL;
 use datafusion_expr::{
     function::{AccumulatorArgs, StateFieldsArgs},
     type_coercion::aggregates::NUMERICS,
@@ -39,6 +38,7 @@ use datafusion_expr::{
     Accumulator, AggregateUDFImpl, Documentation, Signature, Volatility,
 };
 use datafusion_functions_aggregate_common::stats::StatsType;
+use datafusion_macros::user_doc;
 
 make_udaf_expr_and_func!(
     Correlation,
@@ -48,6 +48,21 @@ make_udaf_expr_and_func!(
     corr_udaf
 );
 
+#[user_doc(
+    doc_section(label = "Statistical Functions"),
+    description = "Returns the coefficient of correlation between two numeric values.",
+    syntax_example = "corr(expression1, expression2)",
+    sql_example = r#"```sql
+> SELECT corr(column1, column2) FROM table_name;
++--------------------------------+
+| corr(column1, column2)         |
++--------------------------------+
+| 0.85                           |
++--------------------------------+
+```"#,
+    standard_argument(name = "expression1", prefix = "First"),
+    standard_argument(name = "expression2", prefix = "Second")
+)]
 #[derive(Debug)]
 pub struct Correlation {
     signature: Signature,
@@ -111,33 +126,8 @@ impl AggregateUDFImpl for Correlation {
     }
 
     fn documentation(&self) -> Option<&Documentation> {
-        Some(get_corr_doc())
+        self.doc()
     }
-}
-
-static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
-
-fn get_corr_doc() -> &'static Documentation {
-    DOCUMENTATION.get_or_init(|| {
-        Documentation::builder(
-            DOC_SECTION_STATISTICAL,
-            "Returns the coefficient of correlation between two numeric values.",
-            "corr(expression1, expression2)",
-        )
-        .with_sql_example(
-            r#"```sql
-> SELECT corr(column1, column2) FROM table_name;
-+--------------------------------+
-| corr(column1, column2)         |
-+--------------------------------+
-| 0.85                           |
-+--------------------------------+
-```"#,
-        )
-        .with_standard_argument("expression1", Some("First"))
-        .with_standard_argument("expression2", Some("Second"))
-        .build()
-    })
 }
 
 /// An accumulator to compute correlation

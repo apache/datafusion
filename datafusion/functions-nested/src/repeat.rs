@@ -72,8 +72,7 @@ impl ScalarUDFImpl for ArrayRepeat {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        Ok(List(Arc::new(Field::new(
-            "item",
+        Ok(List(Arc::new(Field::new_list_field(
             arg_types[0].clone(),
             true,
         ))))
@@ -204,7 +203,7 @@ fn general_repeat<O: OffsetSizeTrait>(
     let values = compute::concat(&new_values)?;
 
     Ok(Arc::new(GenericListArray::<O>::try_new(
-        Arc::new(Field::new("item", data_type.to_owned(), true)),
+        Arc::new(Field::new_list_field(data_type.to_owned(), true)),
         OffsetBuffer::from_lengths(count_vec),
         values,
         None,
@@ -255,7 +254,7 @@ fn general_list_repeat<O: OffsetSizeTrait>(
                 let repeated_array = arrow_array::make_array(data);
 
                 let list_arr = GenericListArray::<O>::try_new(
-                    Arc::new(Field::new("item", value_type.clone(), true)),
+                    Arc::new(Field::new_list_field(value_type.clone(), true)),
                     OffsetBuffer::<O>::from_lengths(vec![original_data.len(); count]),
                     repeated_array,
                     None,
@@ -272,7 +271,7 @@ fn general_list_repeat<O: OffsetSizeTrait>(
     let values = compute::concat(&new_values)?;
 
     Ok(Arc::new(ListArray::try_new(
-        Arc::new(Field::new("item", data_type.to_owned(), true)),
+        Arc::new(Field::new_list_field(data_type.to_owned(), true)),
         OffsetBuffer::<i32>::from_lengths(lengths),
         values,
         None,

@@ -25,7 +25,6 @@ pub mod default_table_source;
 pub mod dynamic_file;
 pub mod empty;
 pub mod file_format;
-pub mod function;
 pub mod listing;
 pub mod listing_table_factory;
 pub mod memory;

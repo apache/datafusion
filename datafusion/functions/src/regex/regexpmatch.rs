@@ -80,7 +80,7 @@ impl ScalarUDFImpl for RegexpMatchFunc {
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
         Ok(match &arg_types[0] {
             DataType::Null => DataType::Null,
-            other => DataType::List(Arc::new(Field::new("item", other.clone(), true))),
+            other => DataType::List(Arc::new(Field::new_list_field(other.clone(), true))),
         })
     }
     fn invoke_batch(
@@ -99,7 +99,7 @@ impl ScalarUDFImpl for RegexpMatchFunc {
         let inferred_length = len.unwrap_or(1);
         let args = args
             .iter()
-            .map(|arg| arg.clone().into_array(inferred_length))
+            .map(|arg| arg.to_array(inferred_length))
             .collect::<Result<Vec<_>>>()?;
 
         let result = regexp_match_func(&args);

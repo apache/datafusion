@@ -215,13 +215,13 @@ impl ExprSchemable for Expr {
             }) => get_result_type(&left.get_type(schema)?, op, &right.get_type(schema)?),
             Expr::Like { .. } | Expr::SimilarTo { .. } => Ok(DataType::Boolean),
             Expr::Placeholder(Placeholder { data_type, .. }) => {
-                data_type.clone().ok_or_else(|| {
-                    plan_datafusion_err!(
-                        "Placeholder type could not be resolved. Make sure that the \
-                         placeholder is bound to a concrete type, e.g. by providing \
-                         parameter values."
-                    )
-                })
+                if let Some(dtype) = data_type {
+                    Ok(dtype.clone())
+                } else {
+                    // If the placeholder's type hasn't been specified, treat it as
+                    // null (unspecified placeholders generate an error during planning)
+                    Ok(DataType::Null)
+                }
             }
             Expr::Wildcard { .. } => Ok(DataType::Null),
             Expr::GroupingSet(_) => {
