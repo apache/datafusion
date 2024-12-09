@@ -3129,9 +3129,8 @@ fn lateral_constant() {
             \n  Cross Join: \
             \n    TableScan: j1\
             \n    SubqueryAlias: j2\
-            \n      Subquery:\
-            \n        Projection: Int64(1)\
-            \n          EmptyRelation";
+            \n      Projection: Int64(1)\
+            \n        EmptyRelation";
     quick_test(sql, expected);
 }
 
