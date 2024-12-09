@@ -18,7 +18,7 @@
 use std::cmp::Ordering;
 use std::fmt::{Debug, Formatter};
 use std::mem::{size_of, size_of_val};
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
 use arrow::array::{downcast_integer, ArrowNumericType};
 use arrow::{
@@ -34,7 +34,6 @@ use arrow::array::ArrowNativeTypeOp;
 use arrow::datatypes::{ArrowNativeType, ArrowPrimitiveType};
 
 use datafusion_common::{DataFusionError, HashSet, Result, ScalarValue};
-use datafusion_doc::DocSection;
 use datafusion_expr::function::StateFieldsArgs;
 use datafusion_expr::{
     function::AccumulatorArgs, utils::format_state_name, Accumulator, AggregateUDFImpl,

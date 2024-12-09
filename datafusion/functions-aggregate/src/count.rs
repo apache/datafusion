@@ -17,7 +17,6 @@
 
 use ahash::RandomState;
 use datafusion_common::stats::Precision;
-use datafusion_doc::DocSection;
 use datafusion_functions_aggregate_common::aggregate::count_distinct::BytesViewDistinctCountAccumulator;
 use datafusion_macros::user_doc;
 use datafusion_physical_expr::expressions;
@@ -25,7 +24,7 @@ use std::collections::HashSet;
 use std::fmt::Debug;
 use std::mem::{size_of, size_of_val};
 use std::ops::BitAnd;
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
 use arrow::{
     array::{ArrayRef, AsArray},
