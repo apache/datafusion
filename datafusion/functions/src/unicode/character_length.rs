@@ -161,24 +161,22 @@ where
                 builder.append_value(T::Native::usize_as(value.chars().count()));
             }
         }
-    } else {
-        if is_array_ascii_only {
-            for i in 0..array.len() {
-                if array.is_null(i) {
-                    builder.append_null();
-                } else {
-                    let value = array.value(i);
-                    builder.append_value(T::Native::usize_as(value.len()));
-                }
+    } else if is_array_ascii_only {
+        for i in 0..array.len() {
+            if array.is_null(i) {
+                builder.append_null();
+            } else {
+                let value = array.value(i);
+                builder.append_value(T::Native::usize_as(value.len()));
             }
-        } else {
-            for i in 0..array.len() {
-                if array.is_null(i) {
-                    builder.append_null();
-                } else {
-                    let value = array.value(i);
-                    builder.append_value(T::Native::usize_as(value.chars().count()));
-                }
+        }
+    } else {
+        for i in 0..array.len() {
+            if array.is_null(i) {
+                builder.append_null();
+            } else {
+                let value = array.value(i);
+                builder.append_value(T::Native::usize_as(value.chars().count()));
             }
         }
     }
