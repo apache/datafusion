@@ -48,7 +48,7 @@ the PR so we can highlight the changes in the release notes.
 
 When deprecating a method:
 
-- Mark the API as deprecated using `#[deprecated`] and specify the exact DataFusion version in which it was deprecated
+- Mark the API as deprecated using `#[deprecated]` and specify the exact DataFusion version in which it was deprecated
 - Concisely describe the preferred API to help the user transition
 
 The deprecated version is the next version which will be released after the
