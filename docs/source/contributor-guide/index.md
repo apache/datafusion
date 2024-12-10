@@ -72,7 +72,7 @@ recently active community members in the ticket to get their attention.
 
 ### What Features are Good Fits for DataFusion?
 
-DataFusion is designed to highly extensible, and many features can be
+DataFusion is designed to be highly extensible, and many features can be
 implemented as extensions without changing the core of DataFusion. Support for
 new functions, data formats, and similar functionality can be added using those
 extension APIs, and there are already many existing community supported
@@ -92,6 +92,7 @@ to be accepted:
 4. Performance improvements to existing features (with benchmarks)
 5. "Small" functional improvements to existing features
 6. Additional APIs for extending DataFusion's capabilities
+7. CI improvements
 
 Contributions that likely require discussion prior to acceptance include:
 
