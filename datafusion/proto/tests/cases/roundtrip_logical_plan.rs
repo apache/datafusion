@@ -26,7 +26,7 @@ use arrow::datatypes::{
 use arrow::util::pretty::pretty_format_batches;
 use datafusion::datasource::file_format::json::JsonFormatFactory;
 use datafusion::optimizer::eliminate_nested_union::EliminateNestedUnion;
-use datafusion::optimizer::{Optimizer, OptimizerRule};
+use datafusion::optimizer::Optimizer;
 use datafusion_common::parsers::CompressionTypeVariant;
 use prost::Message;
 use std::any::Any;
