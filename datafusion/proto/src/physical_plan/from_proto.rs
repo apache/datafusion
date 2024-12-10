@@ -38,7 +38,7 @@ use datafusion::logical_expr::WindowFunctionDefinition;
 use datafusion::physical_expr::{LexOrdering, PhysicalSortExpr, ScalarFunctionExpr};
 use datafusion::physical_plan::expressions::{
     in_list, BinaryExpr, CaseExpr, CastExpr, Column, IsNotNullExpr, IsNullExpr, LikeExpr,
-    Literal, NegativeExpr, NotExpr, TryCastExpr, UnKnownColumn,
+    Literal, NegativeExpr, NotExpr, ScalarRegexMatchExpr, TryCastExpr, UnKnownColumn,
 };
 use datafusion::physical_plan::windows::{create_window_expr, schema_add_window_field};
 use datafusion::physical_plan::{Partitioning, PhysicalExpr, WindowExpr};
@@ -390,6 +390,26 @@ pub fn parse_physical_expr(
                 .map(|e| parse_physical_expr(e, registry, input_schema, codec))
                 .collect::<Result<_>>()?;
             (codec.try_decode_expr(extension.expr.as_slice(), &inputs)?) as _
+        }
+        ExprType::ScalarRegexMatchExpr(scalar_match_expr) => {
+            Arc::new(ScalarRegexMatchExpr::new(
+                scalar_match_expr.negated,
+                scalar_match_expr.case_insensitive,
+                parse_required_physical_expr(
+                    scalar_match_expr.expr.as_deref(),
+                    registry,
+                    "expr",
+                    input_schema,
+                    codec,
+                )?,
+                parse_required_physical_expr(
+                    scalar_match_expr.pattern.as_deref(),
+                    registry,
+                    "pattern",
+                    input_schema,
+                    codec,
+                )?,
+            ))
         }
     };
 
