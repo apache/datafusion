@@ -692,7 +692,7 @@ impl Unparser<'_> {
                 )
             }
             LogicalPlan::EmptyRelation(_) => {
-                // An EmptyRelation could be behind a UNNEST node. If the dialect supports UNNEST as a table factor,
+                // An EmptyRelation could be behind an UNNEST node. If the dialect supports UNNEST as a table factor,
                 // a TableRelationBuilder will be created for the UNNEST node first.
                 if !relation.has_relation() {
                     relation.empty();

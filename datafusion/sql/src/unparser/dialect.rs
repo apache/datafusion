@@ -161,7 +161,7 @@ pub trait Dialect: Send + Sync {
     /// Allow to unparse the unnest plan as [ast::TableFactor::UNNEST].
     ///
     /// Some dialects like BigQuery require UNNEST to be used in the FROM clause but
-    /// the LogicalPlan planner always put UNNEST in the SELECT clause. This flag allows
+    /// the LogicalPlan planner always puts UNNEST in the SELECT clause. This flag allows
     /// to unparse the UNNEST plan as [ast::TableFactor::UNNEST] instead of a subquery.
     fn unnest_as_table_factor(&self) -> bool {
         false
