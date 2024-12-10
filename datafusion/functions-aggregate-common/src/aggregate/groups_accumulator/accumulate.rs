@@ -376,6 +376,16 @@ pub fn accumulate<T, F>(
 /// This method assumes that for any input record index, if any of the value column
 /// is null, or it's filtered out by `opt_filter`, then the record would be ignored.
 /// (won't be accumulated by `value_fn`)
+///
+/// # Arguments
+///
+/// * `group_indices` - To which groups do the rows in `value_columns` belong
+/// * `value_columns` - The input arrays to accumulate
+/// * `opt_filter` - Optional filter array. If present, only rows where filter is `Some(true)` are included
+/// * `value_fn` - Callback function for each valid row, with parameters:
+///     * `group_idx`: The group index for the current row
+///     * `batch_idx`: The index of the current row in the input arrays
+///     * `columns`: Reference to all input arrays for accessing values
 pub fn accumulate_multiple<T, F>(
     group_indices: &[usize],
     value_columns: &[&PrimitiveArray<T>],
@@ -383,7 +393,7 @@ pub fn accumulate_multiple<T, F>(
     mut value_fn: F,
 ) where
     T: ArrowPrimitiveType + Send,
-    F: FnMut(usize, &[T::Native]) + Send,
+    F: FnMut(usize, usize, &[&PrimitiveArray<T>]) + Send,
 {
     // Calculate `valid_indices` to accumulate, non-valid indices are ignored.
     // `valid_indices` is a bit mask corresponding to the `group_indices`. An index
@@ -416,20 +426,14 @@ pub fn accumulate_multiple<T, F>(
 
     match valid_indices {
         None => {
-            for (idx, &group_idx) in group_indices.iter().enumerate() {
-                // Get `idx`-th row from all value(accumulate) columns
-                let row_values: Vec<_> =
-                    value_columns.iter().map(|col| col.value(idx)).collect();
-                value_fn(group_idx, &row_values);
+            for (batch_idx, &group_idx) in group_indices.iter().enumerate() {
+                value_fn(group_idx, batch_idx, value_columns);
             }
         }
         Some(valid_indices) => {
-            for (idx, &group_idx) in group_indices.iter().enumerate() {
-                if valid_indices.value(idx) {
-                    // Get `idx`-th row from all value(accumulate) columns
-                    let row_values: Vec<_> =
-                        value_columns.iter().map(|col| col.value(idx)).collect();
-                    value_fn(group_idx, &row_values);
+            for (batch_idx, &group_idx) in group_indices.iter().enumerate() {
+                if valid_indices.value(batch_idx) {
+                    value_fn(group_idx, batch_idx, value_columns);
                 }
             }
         }
@@ -1018,8 +1022,9 @@ mod test {
             &group_indices,
             &value_columns.iter().collect::<Vec<_>>(),
             None,
-            |group_idx, values| {
-                accumulated.push((group_idx, values.to_vec()));
+            |group_idx, batch_idx, columns| {
+                let values = columns.iter().map(|col| col.value(batch_idx)).collect();
+                accumulated.push((group_idx, values));
             },
         );
 
@@ -1044,8 +1049,9 @@ mod test {
             &group_indices,
             &value_columns.iter().collect::<Vec<_>>(),
             None,
-            |group_idx, values| {
-                accumulated.push((group_idx, values.to_vec()));
+            |group_idx, batch_idx, columns| {
+                let values = columns.iter().map(|col| col.value(batch_idx)).collect();
+                accumulated.push((group_idx, values));
             },
         );
 
@@ -1068,8 +1074,9 @@ mod test {
             &group_indices,
             &value_columns.iter().collect::<Vec<_>>(),
             Some(&filter),
-            |group_idx, values| {
-                accumulated.push((group_idx, values.to_vec()));
+            |group_idx, batch_idx, columns| {
+                let values = columns.iter().map(|col| col.value(batch_idx)).collect();
+                accumulated.push((group_idx, values));
             },
         );
 
@@ -1092,8 +1099,9 @@ mod test {
             &group_indices,
             &value_columns.iter().collect::<Vec<_>>(),
             Some(&filter),
-            |group_idx, values| {
-                accumulated.push((group_idx, values.to_vec()));
+            |group_idx, batch_idx, columns| {
+                let values = columns.iter().map(|col| col.value(batch_idx)).collect();
+                accumulated.push((group_idx, values));
             },
         );
 

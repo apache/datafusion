@@ -390,9 +390,9 @@ impl GroupsAccumulator for CorrelationGroupsAccumulator {
             group_indices,
             &[&array_x, &array_y],
             opt_filter,
-            |group_index, values| {
-                let x = values[0];
-                let y = values[1];
+            |group_index, batch_index, columns| {
+                let x = columns[0].value(batch_index);
+                let y = columns[1].value(batch_index);
                 self.count[group_index] += 1;
                 self.sum_x[group_index] += x;
                 self.sum_y[group_index] += y;
