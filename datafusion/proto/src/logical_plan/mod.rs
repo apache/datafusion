@@ -737,23 +737,18 @@ impl AsLogicalPlan for LogicalPlanNode {
                 builder.build()
             }
             LogicalPlanType::Union(union) => {
-                let mut input_plans: Vec<LogicalPlan> = union
-                    .inputs
-                    .iter()
-                    .map(|i| i.try_into_logical_plan(ctx, extension_codec))
-                    .collect::<Result<_>>()?;
-
-                if input_plans.len() < 2 {
+                if union.inputs.len() < 2 {
                     return  Err( DataFusionError::Internal(String::from(
                         "Protobuf deserialization error, Union was require at least two input.",
                     )));
                 }
+                let (first, rest) = union.inputs.split_first().unwrap();
+                let mut builder = LogicalPlanBuilder::from(
+                    first.try_into_logical_plan(ctx, extension_codec)?,
+                );
 
-                let first = input_plans.pop().ok_or_else(|| DataFusionError::Internal(String::from(
-                    "Protobuf deserialization error, Union was require at least two input.",
-                )))?;
-                let mut builder = LogicalPlanBuilder::from(first);
-                for plan in input_plans {
+                for i in rest {
+                    let plan = i.try_into_logical_plan(ctx, extension_codec)?;
                     builder = builder.union(plan)?;
                 }
                 builder.build()
