@@ -170,13 +170,13 @@ overflow-checks = false
 panic = 'unwind'
 rpath = false
 
-[profile.windows]
-codegen-units = 256
-debug = false
+[profile.release-windows]
+codegen-units = 1024
+debug = 'line-directives-only'
 debug-assertions = false
 incremental = true
 inherits = "release"
-lto = true
+lto = false
 opt-level = 1
 overflow-checks = false
 panic = 'unwind'
