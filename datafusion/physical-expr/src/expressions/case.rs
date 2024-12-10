@@ -16,7 +16,7 @@
 // under the License.
 
 use std::borrow::Cow;
-use std::hash::Hash;
+use std::hash::{Hash, Hasher};
 use std::{any::Any, sync::Arc};
 
 use crate::expressions::try_cast;
@@ -31,6 +31,7 @@ use datafusion_common::{exec_err, internal_err, DataFusionError, Result, ScalarV
 use datafusion_expr::ColumnarValue;
 
 use super::{Column, Literal};
+use datafusion_common::cse::HashNode;
 use datafusion_physical_expr_common::datum::compare_with_eq;
 use itertools::Itertools;
 
@@ -504,6 +505,12 @@ impl PhysicalExpr for CaseExpr {
                 else_expr.cloned(),
             )?))
         }
+    }
+}
+
+impl HashNode for CaseExpr {
+    fn hash_node<H: Hasher>(&self, state: &mut H) {
+        self.eval_method.hash(state);
     }
 }
 

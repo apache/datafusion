@@ -17,7 +17,7 @@
 
 mod kernels;
 
-use std::hash::Hash;
+use std::hash::{Hash, Hasher};
 use std::{any::Any, sync::Arc};
 
 use crate::intervals::cp_solver::{propagate_arithmetic, propagate_comparison};
@@ -32,6 +32,7 @@ use arrow::compute::{cast, ilike, like, nilike, nlike};
 use arrow::datatypes::*;
 use arrow_schema::ArrowError;
 use datafusion_common::cast::as_boolean_array;
+use datafusion_common::cse::HashNode;
 use datafusion_common::{internal_err, Result, ScalarValue};
 use datafusion_expr::interval_arithmetic::{apply_operator, Interval};
 use datafusion_expr::sort_properties::ExprProperties;
@@ -66,7 +67,7 @@ impl PartialEq for BinaryExpr {
     }
 }
 impl Hash for BinaryExpr {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+    fn hash<H: Hasher>(&self, state: &mut H) {
         self.left.hash(state);
         self.op.hash(state);
         self.right.hash(state);
@@ -675,6 +676,13 @@ impl BinaryExpr {
                 unreachable!("ArrowAt and AtArrow should be rewritten to function")
             }
         }
+    }
+}
+
+impl HashNode for BinaryExpr {
+    fn hash_node<H: Hasher>(&self, state: &mut H) {
+        self.op.hash(state);
+        self.fail_on_overflow.hash(state);
     }
 }
 

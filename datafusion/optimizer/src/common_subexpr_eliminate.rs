@@ -399,8 +399,7 @@ impl CommonSubexprEliminate {
                             // Since `group_expr` may have changed, schema may also.
                             // Use `try_new()` method.
                             Aggregate::try_new(new_input, new_group_expr, new_aggr_expr)
-                                .map(LogicalPlan::Aggregate)
-                                .map(Transformed::no)
+                                .map(|p| Transformed::no(LogicalPlan::Aggregate(p)))
                         } else {
                             Aggregate::try_new_with_schema(
                                 new_input,
@@ -408,8 +407,7 @@ impl CommonSubexprEliminate {
                                 rewritten_aggr_expr,
                                 schema,
                             )
-                            .map(LogicalPlan::Aggregate)
-                            .map(Transformed::no)
+                            .map(|p| Transformed::no(LogicalPlan::Aggregate(p)))
                         }
                     }
                 }
@@ -628,9 +626,7 @@ impl CSEController for ExprCSEController<'_> {
 
     fn conditional_children(node: &Expr) -> Option<(Vec<&Expr>, Vec<&Expr>)> {
         match node {
-            // In case of `ScalarFunction`s we don't know which children are surely
-            // executed so start visiting all children conditionally and stop the
-            // recursion with `TreeNodeRecursion::Jump`.
+            // In case of `ScalarFunction`s all children can be conditionally executed.
             Expr::ScalarFunction(ScalarFunction { func, args })
                 if func.short_circuits() =>
             {
@@ -700,7 +696,7 @@ impl CSEController for ExprCSEController<'_> {
         self.alias_generator.next(CSE_PREFIX)
     }
 
-    fn rewrite(&mut self, node: &Self::Node, alias: &str) -> Self::Node {
+    fn rewrite(&mut self, node: &Self::Node, alias: &str, _index: usize) -> Self::Node {
         // alias the expressions without an `Alias` ancestor node
         if self.alias_counter > 0 {
             col(alias)
@@ -1030,10 +1026,14 @@ mod test {
     fn subexpr_in_same_order() -> Result<()> {
         let table_scan = test_table_scan()?;
 
+        let a = col("a");
+        let lit_1 = lit(1);
+        let _1_plus_a = lit_1 + a;
+
         let plan = LogicalPlanBuilder::from(table_scan)
             .project(vec![
-                (lit(1) + col("a")).alias("first"),
-                (lit(1) + col("a")).alias("second"),
+                _1_plus_a.clone().alias("first"),
+                _1_plus_a.alias("second"),
             ])?
             .build()?;
 
@@ -1050,8 +1050,13 @@ mod test {
     fn subexpr_in_different_order() -> Result<()> {
         let table_scan = test_table_scan()?;
 
+        let a = col("a");
+        let lit_1 = lit(1);
+        let _1_plus_a = lit_1.clone() + a.clone();
+        let a_plus_1 = a + lit_1;
+
         let plan = LogicalPlanBuilder::from(table_scan)
-            .project(vec![lit(1) + col("a"), col("a") + lit(1)])?
+            .project(vec![_1_plus_a, a_plus_1])?
             .build()?;
 
         let expected = "Projection: Int32(1) + test.a, test.a + Int32(1)\
@@ -1065,6 +1070,8 @@ mod test {
     #[test]
     fn cross_plans_subexpr() -> Result<()> {
         let table_scan = test_table_scan()?;
+
+        let _1_plus_col_a = lit(1) + col("a");
 
         let plan = LogicalPlanBuilder::from(table_scan)
             .project(vec![lit(1) + col("a"), col("a")])?
@@ -1318,9 +1325,12 @@ mod test {
     fn test_volatile() -> Result<()> {
         let table_scan = test_table_scan()?;
 
-        let extracted_child = col("a") + col("b");
-        let rand = rand_func().call(vec![]);
+        let a = col("a");
+        let b = col("b");
+        let extracted_child = a + b;
+        let rand = rand_expr();
         let not_extracted_volatile = extracted_child + rand;
+
         let plan = LogicalPlanBuilder::from(table_scan)
             .project(vec![
                 not_extracted_volatile.clone().alias("c1"),
@@ -1341,13 +1351,19 @@ mod test {
     fn test_volatile_short_circuits() -> Result<()> {
         let table_scan = test_table_scan()?;
 
-        let rand = rand_func().call(vec![]);
-        let extracted_short_circuit_leg_1 = col("a").eq(lit(0));
+        let a = col("a");
+        let b = col("b");
+        let rand = rand_expr();
+        let rand_eq_0 = rand.eq(lit(0));
+
+        let extracted_short_circuit_leg_1 = a.eq(lit(0));
         let not_extracted_volatile_short_circuit_1 =
-            extracted_short_circuit_leg_1.or(rand.clone().eq(lit(0)));
-        let not_extracted_short_circuit_leg_2 = col("b").eq(lit(0));
+            extracted_short_circuit_leg_1.or(rand_eq_0.clone());
+
+        let not_extracted_short_circuit_leg_2 = b.eq(lit(0));
         let not_extracted_volatile_short_circuit_2 =
-            rand.eq(lit(0)).or(not_extracted_short_circuit_leg_2);
+            rand_eq_0.or(not_extracted_short_circuit_leg_2);
+
         let plan = LogicalPlanBuilder::from(table_scan)
             .project(vec![
                 not_extracted_volatile_short_circuit_1.clone().alias("c1"),
@@ -1370,7 +1386,10 @@ mod test {
     fn test_non_top_level_common_expression() -> Result<()> {
         let table_scan = test_table_scan()?;
 
-        let common_expr = col("a") + col("b");
+        let a = col("a");
+        let b = col("b");
+        let common_expr = a + b;
+
         let plan = LogicalPlanBuilder::from(table_scan)
             .project(vec![
                 common_expr.clone().alias("c1"),
@@ -1393,8 +1412,11 @@ mod test {
     fn test_nested_common_expression() -> Result<()> {
         let table_scan = test_table_scan()?;
 
-        let nested_common_expr = col("a") + col("b");
+        let a = col("a");
+        let b = col("b");
+        let nested_common_expr = a + b;
         let common_expr = nested_common_expr.clone() * nested_common_expr;
+
         let plan = LogicalPlanBuilder::from(table_scan)
             .project(vec![
                 common_expr.clone().alias("c1"),
@@ -1417,8 +1439,8 @@ mod test {
     ///
     /// Does not use datafusion_functions::rand to avoid introducing a
     /// dependency on that crate.
-    fn rand_func() -> ScalarUDF {
-        ScalarUDF::new_from_impl(RandomStub::new())
+    fn rand_expr() -> Expr {
+        ScalarUDF::new_from_impl(RandomStub::new()).call(vec![])
     }
 
     #[derive(Debug)]
