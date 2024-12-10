@@ -123,28 +123,40 @@ pub(crate) fn check_columns_satisfy_exprs(
         Expr::Column(_) => Ok(()),
         _ => internal_err!("Expr::Column are required"),
     })?;
+    let mut errs = vec![];
     let column_exprs = find_column_exprs(exprs);
     for e in &column_exprs {
         match e {
             Expr::GroupingSet(GroupingSet::Rollup(exprs)) => {
                 for e in exprs {
-                    check_column_satisfies_expr(columns, e, call_purpose)?;
+                    if let Err(err) = check_column_satisfies_expr(columns, e, call_purpose) {
+                        errs.push(err);
+                    }
                 }
             }
             Expr::GroupingSet(GroupingSet::Cube(exprs)) => {
                 for e in exprs {
-                    check_column_satisfies_expr(columns, e, call_purpose)?;
+                    if let Err(err) = check_column_satisfies_expr(columns, e, call_purpose) {
+                        errs.push(err);
+                    }
                 }
             }
             Expr::GroupingSet(GroupingSet::GroupingSets(lists_of_exprs)) => {
                 for exprs in lists_of_exprs {
                     for e in exprs {
-                        check_column_satisfies_expr(columns, e, call_purpose)?;
+                        if let Err(err) = check_column_satisfies_expr(columns, e, call_purpose) {
+                            errs.push(err);
+                        }
                     }
                 }
             }
-            _ => check_column_satisfies_expr(columns, e, call_purpose)?,
+            _ => if let Err(err) = check_column_satisfies_expr(columns, e, call_purpose) {
+                errs.push(err);
+            },
         }
+    }
+    if !errs.is_empty() {
+        return Err(DataFusionError::Collection(errs));
     }
     Ok(())
 }

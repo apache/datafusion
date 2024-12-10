@@ -133,6 +133,7 @@ pub enum DataFusionError {
     /// or serializing/deserializing protobytes to Substrait plans
     Substrait(String),
     Diagnostic(Diagnostic, Box<DataFusionError>),
+    Collection(Vec<DataFusionError>),
 }
 
 #[macro_export]
@@ -319,6 +320,7 @@ impl Error for DataFusionError {
             DataFusionError::Context(_, e) => Some(e.as_ref()),
             DataFusionError::Substrait(_) => None,
             DataFusionError::Diagnostic(_, e) => Some(e.as_ref()),
+            DataFusionError::Collection(_) => None,
         }
     }
 }
@@ -442,6 +444,7 @@ impl DataFusionError {
             DataFusionError::Context(_, _) => "",
             DataFusionError::Substrait(_) => "Substrait error: ",
             DataFusionError::Diagnostic(_, _) => "",
+            DataFusionError::Collection(_) => "",
         }
     }
 
@@ -483,6 +486,13 @@ impl DataFusionError {
             }
             DataFusionError::Substrait(ref desc) => Cow::Owned(desc.to_string()),
             DataFusionError::Diagnostic(_, ref err) => Cow::Owned(err.to_string()),
+            DataFusionError::Collection(ref v) => Cow::Owned(format!(
+                "[{}]",
+                v.iter()
+                    .map(|e| e.to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )),
         }
     }
 
@@ -516,6 +526,60 @@ impl DataFusionError {
         }
 
         DiagnosticsIterator { head: self }
+    }
+
+    pub fn get_individual_errors(&self) -> impl Iterator<Item = &Self> + '_ {
+        fn contains_collection(err: &DataFusionError) -> bool {
+            let mut head = err;
+            loop {
+                if let DataFusionError::Collection(_) = head {
+                    return true;
+                }
+
+                if let Some(source) = head
+                    .source()
+                    .map(|source| source.downcast_ref::<DataFusionError>())
+                    .flatten()
+                {
+                    head = source;
+                } else {
+                    return false;
+                }
+            }
+        }
+
+        struct IndividualErrorsIterator<'a> {
+            queue: Vec<&'a DataFusionError>,
+        }
+
+        impl<'a> Iterator for IndividualErrorsIterator<'a> {
+            type Item = &'a DataFusionError;
+
+            fn next(&mut self) -> Option<Self::Item> {
+                while let Some(err) = self.queue.pop() {
+                    if !contains_collection(err) {
+                        return Some(err);
+                    }
+
+                    if let DataFusionError::Collection(errs) = err {
+                        self.queue.extend(errs.iter());
+                        continue;
+                    }
+
+                    if let Some(source) = err
+                        .source()
+                        .map(|source| source.downcast_ref::<DataFusionError>())
+                        .flatten()
+                    {
+                        self.queue.push(source);
+                    }
+                }
+
+                None
+            }
+        }
+
+        IndividualErrorsIterator { queue: vec![self] }
     }
 }
 
