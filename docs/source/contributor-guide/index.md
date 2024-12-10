@@ -58,7 +58,7 @@ unable to make progress you should unassign the issue by using the `unassign me`
 link at the top of the issue page (and ask for help if are stuck) so that
 someone else can get involved in the work.
 
-### File Tickets to Discuss New Features
+### Discussing New Features
 
 If you plan to work on a new feature that doesn't have an existing ticket, it is
 a good idea to open a ticket to discuss the feature. Advanced discussion often
@@ -70,10 +70,10 @@ line PR.
 If you open a ticket and it doesn't get any response, you can try `@`-mentioning
 recently active community members in the ticket to get their attention.
 
-### What Features are Good Fits for DataFusion?
+### What Contributions are Good Fits?
 
 DataFusion is designed to be highly extensible, and many features can be
-implemented as extensions without changing the core of DataFusion. Support for
+implemented as extensions without changes or additions to the core. Support for
 new functions, data formats, and similar functionality can be added using those
 extension APIs, and there are already many existing community supported
 extensions listed in the [extensions list].
@@ -90,14 +90,15 @@ to be accepted:
 2. Test coverage for existing features
 3. Documentation improvements / examples
 4. Performance improvements to existing features (with benchmarks)
-5. "Small" functional improvements to existing features
+5. "Small" functional improvements to existing features (if they don't change existing behavior)
 6. Additional APIs for extending DataFusion's capabilities
 7. CI improvements
 
-Contributions that likely require discussion prior to acceptance include:
+Contributions that will likely involve more discussion (see Discussing New 
+Features above) prior to acceptance include:
 
-1. New functionality that is part of the "standard sql"
-2. New functions that aren't part of the "standard sql"
+1. Major new functionality (even if it is part of the "standard sql")
+2. New functions, especially if they aren't part of "standard sql"
 3. New data sources (e.g. support for Apache ORC)
 
 [extensions list]: ../library-user-guide/extensions.md
