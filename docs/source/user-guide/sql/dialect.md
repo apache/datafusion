@@ -32,15 +32,17 @@ Notable exceptions:
 - DataFusion's type system is based on the [Apache Arrow type system], and the mapping to PostgrSQL types is not always 1:1.
 - DataFusion has its own syntax (dialect) for certain operations (like [`CREATE EXTERNAL TABLE`])
 
+As Apache DataFusion is designed to be fully customizable, systems built on
+DataFusion can and do implement different SQL semantics. Using DataFusion's APs,
+you can provide alternate function definitions, type rules, and/or SQL syntax
+that matches other systems such as Apache Spark or MySQL or your own custom
+semantics.
+
 [postgresql sql dialect]: https://www.postgresql.org/docs/current/sql.html
 [sql planner]: https://docs.rs/datafusion/latest/datafusion/sql/planner/struct.SqlToRel.html
 [duckdb sql dialect]: https://duckdb.org/docs/sql/functions/array
 [apache arrow type system]: https://arrow.apache.org/docs/format/Columnar.html#data-types
 [`create external table`]: ddl.md#create-external-table
-
-As Apache DataFusion is designed to be fully customizable, systems built on
-DataFusion can and do update functions, type rules, and SQL syntax to follow
-other systems, such as Apache Spark or MySQL.
 
 ## Rationale
 
@@ -49,5 +51,3 @@ own. Using an existing dialect may not fit perfectly as it is hard to match
 semantics exactly (need bug-for-bug compatibility), and is likely not what all
 users want. However, it avoids the (very significant) effort of defining
 semantics as well as documenting and teaching users about them.
-
-
