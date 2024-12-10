@@ -18,8 +18,10 @@
 //! Signature module contains foundational types that are used to represent signatures, types,
 //! and return types of functions in DataFusion.
 
+use std::fmt::Display;
+
 use crate::type_coercion::aggregates::NUMERICS;
-use arrow::datatypes::DataType;
+use arrow::datatypes::{DataType, IntervalUnit, TimeUnit};
 use datafusion_common::types::{LogicalTypeRef, NativeType};
 use itertools::Itertools;
 
@@ -112,7 +114,7 @@ pub enum TypeSignature {
     /// For example, `Coercible(vec![logical_float64()])` accepts
     /// arguments like `vec![DataType::Int32]` or `vec![DataType::Float32]`
     /// since i32 and f32 can be casted to f64
-    Coercible(Vec<LogicalTypeRef>),
+    Coercible(Vec<TypeSignatureClass>),
     /// The arguments will be coerced to a single type based on the comparison rules.
     /// For example, i32 and i64 has coerced type Int64.
     ///
@@ -154,6 +156,25 @@ impl TypeSignature {
     }
 }
 
+#[derive(Debug, Clone, Eq, PartialEq, PartialOrd, Hash)]
+pub enum TypeSignatureClass {
+    Timestamp,
+    Date,
+    Time,
+    Interval,
+    Duration,
+    // TODO:
+    // Numeric
+    // Integer
+    Native(LogicalTypeRef),
+}
+
+impl Display for TypeSignatureClass {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "TypeSignatureClass::{self:?}")
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Hash)]
 pub enum ArrayFunctionSignature {
     /// Specialized Signature for ArrayAppend and similar functions
@@ -180,7 +201,7 @@ pub enum ArrayFunctionSignature {
     MapArray,
 }
 
-impl std::fmt::Display for ArrayFunctionSignature {
+impl Display for ArrayFunctionSignature {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             ArrayFunctionSignature::ArrayAndElement => {
@@ -255,7 +276,7 @@ impl TypeSignature {
     }
 
     /// Helper function to join types with specified delimiter.
-    pub fn join_types<T: std::fmt::Display>(types: &[T], delimiter: &str) -> String {
+    pub fn join_types<T: Display>(types: &[T], delimiter: &str) -> String {
         types
             .iter()
             .map(|t| t.to_string())
@@ -290,7 +311,24 @@ impl TypeSignature {
                 .collect(),
             TypeSignature::Coercible(types) => types
                 .iter()
-                .map(|logical_type| get_data_types(logical_type.native()))
+                .map(|logical_type| match logical_type {
+                    TypeSignatureClass::Native(l) => get_data_types(l.native()),
+                    TypeSignatureClass::Timestamp => {
+                        vec![DataType::Timestamp(TimeUnit::Nanosecond, None)]
+                    }
+                    TypeSignatureClass::Date => {
+                        vec![DataType::Date64]
+                    }
+                    TypeSignatureClass::Time => {
+                        vec![DataType::Time64(TimeUnit::Nanosecond)]
+                    }
+                    TypeSignatureClass::Interval => {
+                        vec![DataType::Interval(IntervalUnit::DayTime)]
+                    }
+                    TypeSignatureClass::Duration => {
+                        vec![DataType::Duration(TimeUnit::Nanosecond)]
+                    }
+                })
                 .multi_cartesian_product()
                 .collect(),
             TypeSignature::Variadic(types) => types
@@ -424,7 +462,10 @@ impl Signature {
         }
     }
     /// Target coerce types in order
-    pub fn coercible(target_types: Vec<LogicalTypeRef>, volatility: Volatility) -> Self {
+    pub fn coercible(
+        target_types: Vec<TypeSignatureClass>,
+        volatility: Volatility,
+    ) -> Self {
         Self {
             type_signature: TypeSignature::Coercible(target_types),
             volatility,
@@ -618,8 +659,10 @@ mod tests {
             ]
         );
 
-        let type_signature =
-            TypeSignature::Coercible(vec![logical_string(), logical_int64()]);
+        let type_signature = TypeSignature::Coercible(vec![
+            TypeSignatureClass::Native(logical_string()),
+            TypeSignatureClass::Native(logical_int64()),
+        ]);
         let possible_types = type_signature.get_possible_types();
         assert_eq!(
             possible_types,
