@@ -343,11 +343,11 @@ fn test_propagate_empty_relation_inner_join_and_unions() {
 #[test]
 fn select_wildcard_with_repeated_column() {
     let sql = "SELECT *, col_int32 FROM test";
-    let err = test_sql(sql).expect_err("query should have failed");
-    assert_eq!(
-        "Schema error: Schema contains duplicate qualified field name test.col_int32",
-        err.strip_backtrace()
-    );
+    let plan = test_sql(sql).unwrap();
+    let expected = "\
+        Projection: test.col_int32, test.col_uint32, test.col_utf8, test.col_date32, test.col_date64, test.col_ts_nano_none, test.col_ts_nano_utc, test.col_int32\
+        \n  TableScan: test projection=[col_int32, col_uint32, col_utf8, col_date32, col_date64, col_ts_nano_none, col_ts_nano_utc]";
+    assert_eq!(expected, format!("{plan}"));
 }
 
 #[test]
