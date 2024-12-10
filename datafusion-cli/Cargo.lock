@@ -1531,7 +1531,6 @@ dependencies = [
 name = "datafusion-macros"
 version = "43.0.0"
 dependencies = [
- "datafusion-doc",
  "proc-macro2",
  "quote",
  "syn",
