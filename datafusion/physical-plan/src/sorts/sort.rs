@@ -819,11 +819,13 @@ impl SortExec {
             .equivalence_properties()
             .ordering_satisfy_requirement(&requirement);
 
-        // TODO: If the input is final, should we change to incremental if sorted?
-        let emission_type = if sort_satisfied {
-            EmissionType::Incremental
-        } else {
+        // The emission type depends on whether the input is already sorted:
+        // - If not sorted, we must wait until all data is processed to emit results (Final)
+        // - If already sorted, we can emit results in the same way as the input
+        let emission_type = if !sort_satisfied {
             EmissionType::Final
+        } else {
+            input.emission_type()
         };
 
         // Calculate equivalence properties; i.e. reset the ordering equivalence

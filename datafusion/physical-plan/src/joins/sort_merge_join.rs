@@ -471,7 +471,7 @@ impl ExecutionPlan for SortMergeJoinExec {
     }
 
     fn emission_type(&self) -> EmissionType {
-        // TODO: Final if the input is sorted, Incremental otherwise
+        // TODO: If the input is sorted, we might be able to emit it incrementally
         EmissionType::Final
     }
 

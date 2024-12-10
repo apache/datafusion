@@ -33,7 +33,7 @@ use std::task::{Context, Poll};
 use std::vec;
 
 use crate::common::SharedMemoryReservation;
-use crate::execution_plan::EmissionType;
+use crate::execution_plan::{emission_type_from_children, EmissionType};
 use crate::joins::hash_join::{equal_rows_arr, update_hash};
 use crate::joins::stream_join_utils::{
     calculate_filter_expr_intervals, combine_two_batches,
@@ -275,9 +275,12 @@ impl SymmetricHashJoinExec {
         let output_partitioning =
             symmetric_join_output_partitioning(left, right, &join_type);
 
+        let emission_type =
+            emission_type_from_children(&[Arc::clone(&left), Arc::clone(&right)]);
         let has_finite_memory = left.has_finite_memory() && right.has_finite_memory();
         PlanProperties::new(eq_properties, output_partitioning)
             .with_memory_usage(has_finite_memory)
+            .with_emission_type(emission_type)
     }
 
     /// left stream
@@ -555,8 +558,7 @@ impl ExecutionPlan for SymmetricHashJoinExec {
     }
 
     fn emission_type(&self) -> EmissionType {
-        // TODO: Emit at the end if one of the input emit at the end?
-        EmissionType::Incremental
+        self.cache.emission_type.unwrap()
     }
 
     fn has_finite_memory(&self) -> bool {
