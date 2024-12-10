@@ -338,6 +338,7 @@ jobs:
       - name: Run tests (excluding doctests)
         shell: bash
         run: |
+          export RUSTFLAGS="-C link-arg=-fuse-ld=lld -C target-cpu=native"
           export PATH=$PATH:$HOME/d/protoc/bin
           cargo test --lib --tests --bins --features avro,json,backtrace
           cd datafusion-cli
