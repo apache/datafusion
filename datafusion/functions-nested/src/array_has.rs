@@ -215,7 +215,11 @@ fn array_has_dispatch_for_array<O: OffsetSizeTrait>(
         let needle_row = Scalar::new(needle.slice(i, 1));
         let eq_array = compare_with_eq(&arr, &needle_row, is_nested)?;
         let is_contained = eq_array.true_count() > 0;
-        boolean_builder.append_value(is_contained)
+        if is_contained || eq_array.null_count() == 0 {
+            boolean_builder.append_value(is_contained);
+        } else {
+            boolean_builder.append_null();
+        }
     }
 
     Ok(Arc::new(boolean_builder.finish()))
@@ -249,8 +253,9 @@ fn array_has_dispatch_for_scalar<O: OffsetSizeTrait>(
         }
         let sliced_array = eq_array.slice(start, length);
         // For nested list, check number of nulls
-        if sliced_array.null_count() != length {
-            final_contained[i] = Some(sliced_array.true_count() > 0);
+        let is_contained = sliced_array.true_count() > 0;
+        if is_contained || sliced_array.null_count() == 0 {
+            final_contained[i] = Some(is_contained);
         }
     }
 
