@@ -599,7 +599,7 @@ config_namespace! {
         ///
         /// When false, DataFusion will maximize plan parallelism using
         /// `RepartitionExec` even if this requires subsequently resorting data using a `SortExec`.
-        pub prefer_existing_sort: bool, default = false
+        pub prefer_existing_sort: bool, default = true
 
         /// When set to true, the logical plan optimizer will produce warning
         /// messages if any optimization rules produce errors and then proceed to the next

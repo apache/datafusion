@@ -2239,10 +2239,9 @@ mod tests {
             "      RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
             "        CsvExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[a@0 ASC], has_header=false"];
         let expected_optimized = ["SortPreservingMergeExec: [a@0 ASC]",
-            "  SortExec: expr=[a@0 ASC], preserve_partitioning=[true]",
-            "    RepartitionExec: partitioning=Hash([c@2], 10), input_partitions=10",
-            "      RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
-            "        CsvExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[a@0 ASC], has_header=false"];
+        "  RepartitionExec: partitioning=Hash([c@2], 10), input_partitions=10, preserve_order=true, sort_exprs=a@0 ASC",
+        "    RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
+        "      CsvExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[a@0 ASC], has_header=false",];
         assert_optimized!(expected_input, expected_optimized, physical_plan, true);
 
         Ok(())
@@ -2295,18 +2294,16 @@ mod tests {
 
         // Expected bounded results with and without flag
         let expected_optimized_bounded = vec![
-            "SortExec: expr=[a@0 ASC], preserve_partitioning=[false]",
-            "  CoalescePartitionsExec",
-            "    RepartitionExec: partitioning=Hash([c@2], 10), input_partitions=10",
-            "      RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
-            "        CsvExec: file_groups={1 group: [[file_path]]}, projection=[a, b, c, d, e], output_ordering=[a@0 ASC], has_header=true",
+            "SortPreservingMergeExec: [a@0 ASC]",
+            "  RepartitionExec: partitioning=Hash([c@2], 10), input_partitions=10, preserve_order=true, sort_exprs=a@0 ASC",
+            "    RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
+            "      CsvExec: file_groups={1 group: [[file_path]]}, projection=[a, b, c, d, e], output_ordering=[a@0 ASC], has_header=true",
         ];
         let expected_optimized_bounded_parallelize_sort = vec![
             "SortPreservingMergeExec: [a@0 ASC]",
-            "  SortExec: expr=[a@0 ASC], preserve_partitioning=[true]",
-            "    RepartitionExec: partitioning=Hash([c@2], 10), input_partitions=10",
-            "      RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
-            "        CsvExec: file_groups={1 group: [[file_path]]}, projection=[a, b, c, d, e], output_ordering=[a@0 ASC], has_header=true",
+            "  RepartitionExec: partitioning=Hash([c@2], 10), input_partitions=10, preserve_order=true, sort_exprs=a@0 ASC",
+            "    RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
+            "      CsvExec: file_groups={1 group: [[file_path]]}, projection=[a, b, c, d, e], output_ordering=[a@0 ASC], has_header=true",
         ];
         let (expected_input, expected_optimized, expected_optimized_sort_parallelize) =
             if source_unbounded {
