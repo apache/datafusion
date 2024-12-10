@@ -101,6 +101,7 @@ async fn run_tests() -> Result<()> {
         .map(|test_file| {
             SpawnedTask::spawn(async move {
                 println!("Running {:?}", test_file.relative_path);
+                let ela = std::time::Instant::now();
                 if options.complete {
                     run_complete_file(test_file).await?;
                 } else if options.postgres_runner {
@@ -108,6 +109,11 @@ async fn run_tests() -> Result<()> {
                 } else {
                     run_test_file(test_file).await?;
                 }
+                println!(
+                    "Completed {:?}. Elapsed {:.2}",
+                    test_file.relative_path,
+                    ela.elapsed()
+                );
                 Ok(()) as Result<()>
             })
             .join()
