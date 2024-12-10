@@ -37,9 +37,7 @@ use crate::spill::{
 use crate::stream::RecordBatchStreamAdapter;
 use crate::topk::TopK;
 use crate::{
-    DisplayAs, DisplayFormatType, Distribution, EmptyRecordBatchStream, ExecutionPlan,
-    ExecutionPlanProperties, Partitioning, PlanProperties, SendableRecordBatchStream,
-    Statistics,
+    DisplayAs, DisplayFormatType, Distribution, EmptyRecordBatchStream, ExecutionMode, ExecutionPlan, ExecutionPlanProperties, Partitioning, PlanProperties, SendableRecordBatchStream, Statistics
 };
 
 use arrow::compute::{concat_batches, lexsort_to_indices, take_arrays, SortColumn};
@@ -763,12 +761,12 @@ impl SortExec {
     /// can be dropped.
     pub fn with_fetch(&self, fetch: Option<usize>) -> Self {
         let mut cache = self.cache.clone();
-        if fetch.is_some() && self.cache.execution_mode.pipeline_friendly() {
-            // When a theoretically unnecessary sort becomes a top-K (which
-            // sometimes arises as an intermediate state before full removal),
-            // its execution mode should become `Bounded`.
-            cache.execution_mode = cache.execution_mode.switch_to_bounded();
-        }
+        // if fetch.is_some() && self.cache.execution_mode.pipeline_friendly() {
+        //     // When a theoretically unnecessary sort becomes a top-K (which
+        //     // sometimes arises as an intermediate state before full removal),
+        //     // its execution mode should become `Bounded`.
+        //     cache.execution_mode = cache.execution_mode.switch_to_bounded();
+        // }
         SortExec {
             input: Arc::clone(&self.input),
             expr: self.expr.clone(),
@@ -818,11 +816,7 @@ impl SortExec {
             .equivalence_properties()
             .ordering_satisfy_requirement(&requirement);
 
-        let mode = if sort_satisfied {
-            input.execution_mode().emit_incremental()
-        } else {
-            input.execution_mode().emit_at_final()
-        };
+        let mode = ExecutionMode::empty();
 
         // Calculate equivalence properties; i.e. reset the ordering equivalence
         // class with the new ordering:
@@ -1012,6 +1006,10 @@ impl ExecutionPlan for SortExec {
     }
 
     fn has_finite_memory(&self) -> bool {
+        if self.fetch.is_some() && self.emission_type() == EmissionType::Incremental {
+            return true
+        }
+
         self.input.has_finite_memory()
     }
 }

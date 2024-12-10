@@ -1161,7 +1161,7 @@ fn ensure_distribution(
     let should_use_estimates = config
         .execution
         .use_row_number_estimates_to_optimize_partitioning;
-    let is_unbounded = dist_context.plan.execution_mode().is_unbounded();
+    let is_unbounded = !dist_context.plan.has_finite_memory();
     // Use order preserving variants either of the conditions true
     // - it is desired according to config
     // - when plan is unbounded

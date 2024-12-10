@@ -336,7 +336,7 @@ impl ExecutionPlan for BoundedWindowAggExec {
     }
 
     fn has_finite_memory(&self) -> bool {
-        true
+        self.input.has_finite_memory()
     }
 }
 

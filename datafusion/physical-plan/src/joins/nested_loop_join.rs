@@ -244,15 +244,16 @@ impl NestedLoopJoinExec {
             asymmetric_join_output_partitioning(left, right, &join_type);
 
         // Determine execution mode:
-        let mode = if left.execution_mode().is_unbounded() {
-            // If build side is unbounded, the emission happens in the final stage
-            ExecutionMode::Final
-        } else {
-            // execution_mode_from_children([left, right])
+        // let mode = if left.execution_mode().is_unbounded() {
+        //     // If build side is unbounded, the emission happens in the final stage
+        //     ExecutionMode::Final
+        // } else {
+        //     // execution_mode_from_children([left, right])
 
-            // Similar to InnerJoin, matched rows could be emitted incrementally
-            ExecutionMode::Bounded | ExecutionMode::Incremental
-        };
+        //     // Similar to InnerJoin, matched rows could be emitted incrementally
+        //     ExecutionMode::Bounded | ExecutionMode::Incremental
+        // };
+        let mode = ExecutionMode::empty();
 
         PlanProperties::new(eq_properties, output_partitioning, mode)
     }

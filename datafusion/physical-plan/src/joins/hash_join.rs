@@ -525,31 +525,32 @@ impl HashJoinExec {
             }
         };
 
-        let mode = if left.execution_mode().is_unbounded() {
-            // if build side is unbounded, the emission happens in the final stage
-            ExecutionMode::Final
-        } else {
-            // If we maintain the unmatched build side rows, we need to emit them in the final stage
-            if matches!(
-                join_type,
-                JoinType::Left
-                    | JoinType::Full
-                    | JoinType::LeftAnti
-                    | JoinType::LeftMark
-                    | JoinType::Right
-                    | JoinType::RightAnti
-            ) {
-                ExecutionMode::Bounded | ExecutionMode::Incremental | ExecutionMode::Final
-            } else if matches!(
-                join_type,
-                JoinType::Inner | JoinType::LeftSemi | JoinType::RightSemi
-            ) {
-                // Since the matched rows could be emitted immediately, the join is incremental
-                ExecutionMode::Bounded | ExecutionMode::Incremental
-            } else {
-                return internal_err!("Unsupported join type: {:?}", join_type);
-            }
-        };
+        // let mode = if left.execution_mode().is_unbounded() {
+        //     // if build side is unbounded, the emission happens in the final stage
+        //     ExecutionMode::Final
+        // } else {
+        //     // If we maintain the unmatched build side rows, we need to emit them in the final stage
+        //     if matches!(
+        //         join_type,
+        //         JoinType::Left
+        //             | JoinType::Full
+        //             | JoinType::LeftAnti
+        //             | JoinType::LeftMark
+        //             | JoinType::Right
+        //             | JoinType::RightAnti
+        //     ) {
+        //         ExecutionMode::Bounded | ExecutionMode::Incremental | ExecutionMode::Final
+        //     } else if matches!(
+        //         join_type,
+        //         JoinType::Inner | JoinType::LeftSemi | JoinType::RightSemi
+        //     ) {
+        //         // Since the matched rows could be emitted immediately, the join is incremental
+        //         ExecutionMode::Bounded | ExecutionMode::Incremental
+        //     } else {
+        //         return internal_err!("Unsupported join type: {:?}", join_type);
+        //     }
+        // };
+        let mode = ExecutionMode::empty();
 
         // If contains projection, update the PlanProperties.
         if let Some(projection) = projection {

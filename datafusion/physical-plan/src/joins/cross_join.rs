@@ -161,8 +161,8 @@ impl CrossJoinExec {
             left.schema().fields.len(),
         );
 
-        let mode = if left.execution_mode().is_unbounded()
-            || right.execution_mode().is_unbounded()
+        let mode = if !left.has_finite_memory()
+            || !right.has_finite_memory()
         {
             ExecutionMode::Final
         } else {

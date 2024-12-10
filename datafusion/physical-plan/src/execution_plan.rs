@@ -427,6 +427,9 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
 
     fn emission_type(&self) -> EmissionType;
     fn has_finite_memory(&self) -> bool;
+    fn is_pipeline_breaking(&self) -> bool {
+        !self.has_finite_memory() && self.emission_type() == EmissionType::Final
+    }
 }
 
 /// Extension trait provides an easy API to fetch various properties of
@@ -545,16 +548,16 @@ impl ExecutionMode {
 
     /// Check whether the execution is pipeline friendly. If so, operator can
     /// execute safely.
-    #[inline]
-    pub fn pipeline_friendly(&self) -> bool {
-        !self.is_pipeline_breaking()
-    }
+    // #[inline]
+    // pub fn pipeline_friendly(&self) -> bool {
+    //     !self.is_pipeline_breaking()
+    // }
 
-    #[inline]
-    pub fn is_pipeline_breaking(&self) -> bool {
-        // self.contains(ExecutionMode::PipelineBreaking)
-        self.is_unbounded() && self.is_emit_at_final()
-    }
+    // #[inline]
+    // pub fn is_pipeline_breaking(&self) -> bool {
+    //     // self.contains(ExecutionMode::PipelineBreaking)
+    //     self.is_unbounded() && self.is_emit_at_final()
+    // }
 
     #[inline]
     pub fn is_emit_incremental(&self) -> bool {

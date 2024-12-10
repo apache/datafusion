@@ -85,7 +85,7 @@ pub fn check_finiteness_requirements(
                               the 'allow_symmetric_joins_without_pruning' configuration flag");
         }
     }
-    if !input.execution_mode().pipeline_friendly() {
+    if input.is_pipeline_breaking() {
         plan_err!(
             "Cannot execute pipeline breaking queries, operator: {:?}",
             input

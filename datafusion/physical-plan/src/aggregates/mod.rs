@@ -663,13 +663,15 @@ impl AggregateExec {
             input_partitioning.clone()
         };
 
-        let mode = if input.execution_mode().is_unbounded()
-            && *input_order_mode == InputOrderMode::Linear
-        {
-            ExecutionMode::Final
-        } else {
-            input.execution_mode()
-        };
+        // TODO: remove this
+        // let mode = if !input.has_finite_memory()
+        //     && *input_order_mode == InputOrderMode::Linear
+        // {
+        //     ExecutionMode::Final
+        // } else {
+        //     input.execution_mode()
+        // };
+        let mode = ExecutionMode::empty();
 
         PlanProperties::new(eq_properties, output_partitioning, mode)
     }
