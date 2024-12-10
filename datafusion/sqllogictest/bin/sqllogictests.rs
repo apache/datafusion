@@ -100,7 +100,8 @@ async fn run_tests() -> Result<()> {
     let errors: Vec<_> = futures::stream::iter(read_test_files(&options)?)
         .map(|test_file| {
             SpawnedTask::spawn(async move {
-                println!("Running {:?}", test_file.relative_path);
+                let file_path = &test_file.relative_path.clone();
+                println!("Running {:?}", file_path);
                 let ela = std::time::Instant::now();
                 if options.complete {
                     run_complete_file(test_file).await?;
@@ -109,11 +110,7 @@ async fn run_tests() -> Result<()> {
                 } else {
                     run_test_file(test_file).await?;
                 }
-                println!(
-                    "Completed {:?}. Elapsed {:?}",
-                    test_file.relative_path,
-                    ela.elapsed()
-                );
+                println!("Completed {:?}. Elapsed {:?}", file_path, ela.elapsed());
                 Ok(()) as Result<()>
             })
             .join()
