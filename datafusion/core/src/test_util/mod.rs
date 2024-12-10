@@ -261,9 +261,9 @@ impl UnboundedExec {
     ) -> PlanProperties {
         let eq_properties = EquivalenceProperties::new(schema);
         let mode = if batch_produce.is_none() {
-            ExecutionMode::Unbounded
+            ExecutionMode::Incremental
         } else {
-            ExecutionMode::Bounded
+            ExecutionMode::Bounded | ExecutionMode::Incremental
         };
         PlanProperties::new(
             eq_properties,

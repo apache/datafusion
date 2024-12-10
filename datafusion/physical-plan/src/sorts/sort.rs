@@ -37,9 +37,9 @@ use crate::spill::{
 use crate::stream::RecordBatchStreamAdapter;
 use crate::topk::TopK;
 use crate::{
-    DisplayAs, DisplayFormatType, Distribution, EmptyRecordBatchStream, ExecutionMode,
-    ExecutionPlan, ExecutionPlanProperties, Partitioning, PlanProperties,
-    SendableRecordBatchStream, Statistics,
+    DisplayAs, DisplayFormatType, Distribution, EmptyRecordBatchStream, ExecutionPlan,
+    ExecutionPlanProperties, Partitioning, PlanProperties, SendableRecordBatchStream,
+    Statistics,
 };
 
 use arrow::compute::{concat_batches, lexsort_to_indices, take_arrays, SortColumn};
@@ -763,11 +763,11 @@ impl SortExec {
     /// can be dropped.
     pub fn with_fetch(&self, fetch: Option<usize>) -> Self {
         let mut cache = self.cache.clone();
-        if fetch.is_some() && self.cache.execution_mode == ExecutionMode::Unbounded {
+        if fetch.is_some() && self.cache.execution_mode.pipeline_friendly() {
             // When a theoretically unnecessary sort becomes a top-K (which
             // sometimes arises as an intermediate state before full removal),
             // its execution mode should become `Bounded`.
-            cache.execution_mode = ExecutionMode::Bounded;
+            cache.execution_mode = cache.execution_mode.switch_to_bounded();
         }
         SortExec {
             input: Arc::clone(&self.input),
@@ -817,10 +817,11 @@ impl SortExec {
         let sort_satisfied = input
             .equivalence_properties()
             .ordering_satisfy_requirement(&requirement);
-        let mode = match input.execution_mode() {
-            ExecutionMode::Unbounded if sort_satisfied => ExecutionMode::Unbounded,
-            ExecutionMode::Bounded => ExecutionMode::Bounded,
-            _ => ExecutionMode::PipelineBreaking,
+
+        let mode = if sort_satisfied {
+            input.execution_mode().emit_incremental()
+        } else {
+            input.execution_mode().emit_at_final()
         };
 
         // Calculate equivalence properties; i.e. reset the ordering equivalence
@@ -1005,12 +1006,12 @@ mod tests {
 
     use super::*;
     use crate::coalesce_partitions::CoalescePartitionsExec;
-    use crate::collect;
     use crate::expressions::col;
     use crate::memory::MemoryExec;
     use crate::test;
     use crate::test::assert_is_pending;
     use crate::test::exec::{assert_strong_count_converges_to_zero, BlockingExec};
+    use crate::{collect, ExecutionMode};
 
     use arrow::array::*;
     use arrow::compute::SortOptions;
@@ -1049,7 +1050,7 @@ mod tests {
             eq_properties.add_new_orderings(vec![LexOrdering::new(vec![
                 PhysicalSortExpr::new_default(Arc::new(Column::new("c1", 0))),
             ])]);
-            let mode = ExecutionMode::Unbounded;
+            let mode = ExecutionMode::Final;
             PlanProperties::new(eq_properties, Partitioning::UnknownPartitioning(1), mode)
         }
     }

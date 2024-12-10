@@ -663,16 +663,15 @@ impl AggregateExec {
             input_partitioning.clone()
         };
 
-        // Determine execution mode:
-        let mut exec_mode = input.execution_mode();
-        if exec_mode == ExecutionMode::Unbounded
+        let mode = if input.execution_mode().is_unbounded()
             && *input_order_mode == InputOrderMode::Linear
         {
-            // Cannot run without breaking the pipeline
-            exec_mode = ExecutionMode::PipelineBreaking;
-        }
+            ExecutionMode::Final
+        } else {
+            input.execution_mode()
+        };
 
-        PlanProperties::new(eq_properties, output_partitioning, exec_mode)
+        PlanProperties::new(eq_properties, output_partitioning, mode)
     }
 
     pub fn input_order_mode(&self) -> &InputOrderMode {

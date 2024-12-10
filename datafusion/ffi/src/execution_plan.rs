@@ -287,7 +287,7 @@ mod tests {
                 props: PlanProperties::new(
                     datafusion::physical_expr::EquivalenceProperties::new(schema),
                     Partitioning::UnknownPartitioning(3),
-                    datafusion::physical_plan::ExecutionMode::Unbounded,
+                    datafusion::physical_plan::ExecutionMode::Incremental,
                 ),
             }
         }

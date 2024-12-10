@@ -33,7 +33,7 @@ use crate::ExecutionPlanProperties;
 use crate::{
     coalesce_partitions::CoalescePartitionsExec,
     common::can_project,
-    execution_mode_from_children, handle_state,
+    handle_state,
     hash_utils::create_hashes,
     joins::utils::{
         adjust_indices_by_join_type, apply_join_filter_to_indices,
@@ -524,24 +524,30 @@ impl HashJoinExec {
             }
         };
 
-        // Determine execution mode by checking whether this join is pipeline
-        // breaking. This happens when the left side is unbounded, or the right
-        // side is unbounded with `Left`, `Full`, `LeftAnti` or `LeftSemi` join types.
-        let pipeline_breaking = left.execution_mode().is_unbounded()
-            || (right.execution_mode().is_unbounded()
-                && matches!(
-                    join_type,
-                    JoinType::Left
-                        | JoinType::Full
-                        | JoinType::LeftAnti
-                        | JoinType::LeftSemi
-                        | JoinType::LeftMark
-                ));
-
-        let mode = if pipeline_breaking {
-            ExecutionMode::PipelineBreaking
+        let mode = if left.execution_mode().is_unbounded() {
+            // if build side is unbounded, the emission happens in the final stage
+            ExecutionMode::Final
         } else {
-            execution_mode_from_children([left, right])
+            // If we maintain the unmatched build side rows, we need to emit them in the final stage
+            if matches!(
+                join_type,
+                JoinType::Left
+                    | JoinType::Full
+                    | JoinType::LeftAnti
+                    | JoinType::LeftMark
+                    | JoinType::Right
+                    | JoinType::RightAnti
+            ) {
+                ExecutionMode::Bounded | ExecutionMode::Incremental | ExecutionMode::Final
+            } else if matches!(
+                join_type,
+                JoinType::Inner | JoinType::LeftSemi | JoinType::RightSemi
+            ) {
+                // Since the matched rows could be emitted immediately, the join is incremental
+                ExecutionMode::Bounded | ExecutionMode::Incremental
+            } else {
+                return internal_err!("Unsupported join type: {:?}", join_type);
+            }
         };
 
         // If contains projection, update the PlanProperties.

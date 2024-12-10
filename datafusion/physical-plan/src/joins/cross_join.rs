@@ -26,10 +26,9 @@ use super::utils::{
 use crate::coalesce_partitions::CoalescePartitionsExec;
 use crate::metrics::{ExecutionPlanMetricsSet, MetricsSet};
 use crate::{
-    execution_mode_from_children, handle_state, ColumnStatistics, DisplayAs,
-    DisplayFormatType, Distribution, ExecutionMode, ExecutionPlan,
-    ExecutionPlanProperties, PlanProperties, RecordBatchStream,
-    SendableRecordBatchStream, Statistics,
+    handle_state, ColumnStatistics, DisplayAs, DisplayFormatType, Distribution,
+    ExecutionMode, ExecutionPlan, ExecutionPlanProperties, PlanProperties,
+    RecordBatchStream, SendableRecordBatchStream, Statistics,
 };
 use arrow::compute::concat_batches;
 use std::{any::Any, sync::Arc, task::Poll};
@@ -161,12 +160,13 @@ impl CrossJoinExec {
             left.schema().fields.len(),
         );
 
-        // Determine the execution mode:
-        let mut mode = execution_mode_from_children([left, right]);
-        if mode.is_unbounded() {
-            // If any of the inputs is unbounded, cross join breaks the pipeline.
-            mode = ExecutionMode::PipelineBreaking;
-        }
+        let mode = if left.execution_mode().is_unbounded()
+            || right.execution_mode().is_unbounded()
+        {
+            ExecutionMode::Final
+        } else {
+            ExecutionMode::Bounded | ExecutionMode::Final
+        };
 
         PlanProperties::new(eq_properties, output_partitioning, mode)
     }

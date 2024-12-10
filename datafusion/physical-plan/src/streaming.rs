@@ -155,9 +155,9 @@ impl StreamingTableExec {
 
         // Determine execution mode:
         let mode = if is_infinite {
-            ExecutionMode::Unbounded
+            ExecutionMode::Incremental
         } else {
-            ExecutionMode::Bounded
+            ExecutionMode::Bounded | ExecutionMode::Incremental
         };
 
         PlanProperties::new(eq_properties, output_partitioning, mode)

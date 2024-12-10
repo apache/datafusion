@@ -1268,7 +1268,7 @@ mod tests {
                 .iter()
                 .map(|expr| PhysicalSortExpr::new_default(Arc::clone(expr)))
                 .collect::<LexOrdering>()]);
-            let mode = ExecutionMode::Unbounded;
+            let mode = ExecutionMode::empty();
             PlanProperties::new(eq_properties, Partitioning::Hash(columns, 3), mode)
         }
     }

@@ -289,7 +289,7 @@ impl MemoryExec {
         PlanProperties::new(
             eq_properties,                                       // Equivalence Properties
             Partitioning::UnknownPartitioning(partitions.len()), // Output Partitioning
-            ExecutionMode::Bounded,                              // Execution Mode
+            ExecutionMode::Bounded | ExecutionMode::Incremental, // Execution Mode
         )
     }
 }
@@ -393,7 +393,7 @@ impl LazyMemoryExec {
         let cache = PlanProperties::new(
             EquivalenceProperties::new(Arc::clone(&schema)),
             Partitioning::RoundRobinBatch(generators.len()),
-            ExecutionMode::Bounded,
+            ExecutionMode::Bounded | ExecutionMode::Incremental,
         );
         Ok(Self {
             schema,

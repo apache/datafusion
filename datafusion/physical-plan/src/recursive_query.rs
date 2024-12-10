@@ -122,7 +122,7 @@ impl RecursiveQueryExec {
         PlanProperties::new(
             eq_properties,
             Partitioning::UnknownPartitioning(1),
-            ExecutionMode::Bounded,
+            ExecutionMode::Bounded | ExecutionMode::Incremental,
         )
     }
 }

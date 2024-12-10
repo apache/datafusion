@@ -100,7 +100,11 @@ impl PlaceholderRowExec {
         // Get output partitioning:
         let output_partitioning = Self::output_partitioning_helper(n_partitions);
 
-        PlanProperties::new(eq_properties, output_partitioning, ExecutionMode::Bounded)
+        PlanProperties::new(
+            eq_properties,
+            output_partitioning,
+            ExecutionMode::Bounded | ExecutionMode::Incremental,
+        )
     }
 }
 

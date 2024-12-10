@@ -51,6 +51,8 @@ use crate::sorts::sort_preserving_merge::SortPreservingMergeExec;
 pub use crate::stream::EmptyRecordBatchStream;
 use crate::stream::RecordBatchStreamAdapter;
 
+use bitflags::bitflags;
+
 /// Represent nodes in the DataFusion Physical Plan.
 ///
 /// Calling [`execute`] produces an `async` [`SendableRecordBatchStream`] of
@@ -501,56 +503,82 @@ impl ExecutionPlanProperties for &dyn ExecutionPlan {
     }
 }
 
-/// Describes the execution mode of the result of calling
-/// [`ExecutionPlan::execute`] with respect to its size and behavior.
-///
-/// The mode of the execution plan is determined by the mode of its input
-/// execution plans and the details of the operator itself. For example, a
-/// `FilterExec` operator will have the same execution mode as its input, but a
-/// `SortExec` operator may have a different execution mode than its input,
-/// depending on how the input stream is sorted.
-///
-/// There are three possible execution modes: `Bounded`, `Unbounded` and
-/// `PipelineBreaking`.
-#[derive(Clone, Copy, PartialEq, Debug)]
-pub enum ExecutionMode {
-    /// The stream is bounded / finite.
+bitflags! {
+    /// Describes the execution mode of the result of calling
+    /// [`ExecutionPlan::execute`] with respect to its size and behavior.
     ///
-    /// In this case the stream will eventually return `None` to indicate that
-    /// there are no more records to process.
-    Bounded,
-    /// The stream is unbounded / infinite.
+    /// The mode of the execution plan is determined by the mode of its input
+    /// execution plans and the details of the operator itself. For example, a
+    /// `FilterExec` operator will have the same execution mode as its input, but a
+    /// `SortExec` operator may have a different execution mode than its input,
+    /// depending on how the input stream is sorted.
     ///
-    /// In this case, the stream will never be done (never return `None`),
-    /// except in case of error.
-    ///
-    /// This mode is often used in "Steaming" use cases where data is
-    /// incrementally processed as it arrives.
-    ///
-    /// Note that even though the operator generates an unbounded stream of
-    /// results, it can execute with bounded memory and incrementally produces
-    /// output.
-    Unbounded,
-    /// Some of the operator's input stream(s) are unbounded, but the operator
-    /// cannot generate streaming results from these streaming inputs.
-    ///
-    /// In this case, the execution mode will be pipeline breaking, e.g. the
-    /// operator requires unbounded memory to generate results. This
-    /// information is used by the planner when performing sanity checks
-    /// on plans processings unbounded data sources.
-    PipelineBreaking,
+    /// There are three possible execution modes: `Bounded`, `Unbounded` and
+    /// `PipelineBreaking`.
+    #[derive(Clone, Copy, PartialEq, Debug)]
+    pub struct ExecutionMode: u32 {
+        const Bounded = 0b1;
+
+        /// Emission Type
+        const Incremental = 0b1000;
+        const Final = 0b10000;
+    }
 }
 
 impl ExecutionMode {
     /// Check whether the execution mode is unbounded or not.
+    #[inline]
     pub fn is_unbounded(&self) -> bool {
-        matches!(self, ExecutionMode::Unbounded)
+        !self.contains(ExecutionMode::Bounded)
     }
 
     /// Check whether the execution is pipeline friendly. If so, operator can
     /// execute safely.
+    #[inline]
     pub fn pipeline_friendly(&self) -> bool {
-        matches!(self, ExecutionMode::Bounded | ExecutionMode::Unbounded)
+        !self.is_pipeline_breaking()
+    }
+
+    #[inline]
+    pub fn is_pipeline_breaking(&self) -> bool {
+        // self.contains(ExecutionMode::PipelineBreaking)
+        self.is_unbounded() && self.is_emit_at_final()
+    }
+
+    #[inline]
+    pub fn is_emit_incremental(&self) -> bool {
+        self.contains(ExecutionMode::Incremental)
+    }
+
+    #[inline]
+    pub fn is_emit_at_final(&self) -> bool {
+        self.contains(ExecutionMode::Final)
+    }
+
+    #[inline]
+    pub fn switch_to_bounded(mut self) -> ExecutionMode {
+        self.insert(ExecutionMode::Bounded);
+        self
+    }
+
+    #[inline]
+    pub fn switch_to_unbounded(mut self) -> ExecutionMode {
+        self.remove(ExecutionMode::Bounded);
+        self
+    }
+
+    #[inline]
+    pub fn emit_incremental(mut self) -> ExecutionMode {
+        self.insert(ExecutionMode::Incremental);
+        self.remove(ExecutionMode::Final);
+        self
+    }
+
+    #[inline]
+    pub fn emit_at_final(mut self) -> ExecutionMode {
+        self.insert(ExecutionMode::Final);
+        self.remove(ExecutionMode::Incremental);
+        self
     }
 }
 
@@ -560,20 +588,18 @@ pub(crate) fn execution_mode_from_children<'a>(
 ) -> ExecutionMode {
     let mut result = ExecutionMode::Bounded;
     for mode in children.into_iter().map(|child| child.execution_mode()) {
-        match (mode, result) {
-            (ExecutionMode::PipelineBreaking, _)
-            | (_, ExecutionMode::PipelineBreaking) => {
-                // If any of the modes is `PipelineBreaking`, so is the result:
-                return ExecutionMode::PipelineBreaking;
-            }
-            (ExecutionMode::Unbounded, _) | (_, ExecutionMode::Unbounded) => {
-                // Unbounded mode eats up bounded mode:
-                result = ExecutionMode::Unbounded;
-            }
-            (ExecutionMode::Bounded, ExecutionMode::Bounded) => {
-                // When both modes are bounded, so is the result:
-                result = ExecutionMode::Bounded;
-            }
+        if mode.is_unbounded() || result.is_unbounded() {
+            // Unbounded mode eats up bounded mode:
+            result = result.switch_to_unbounded();
+        }
+        // Otherwise, the result is still bounded
+
+        if mode.is_emit_incremental() {
+            result |= ExecutionMode::Incremental;
+        }
+
+        if mode.is_emit_at_final() {
+            result |= ExecutionMode::Final;
         }
     }
     result

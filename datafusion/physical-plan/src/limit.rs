@@ -86,7 +86,7 @@ impl GlobalLimitExec {
         PlanProperties::new(
             input.equivalence_properties().clone(), // Equivalence Properties
             Partitioning::UnknownPartitioning(1),   // Output Partitioning
-            ExecutionMode::Bounded,                 // Execution Mode
+            ExecutionMode::Bounded | ExecutionMode::Final,
         )
     }
 }
@@ -242,7 +242,7 @@ impl LocalLimitExec {
         PlanProperties::new(
             input.equivalence_properties().clone(), // Equivalence Properties
             input.output_partitioning().clone(),    // Output Partitioning
-            ExecutionMode::Bounded,                 // Execution Mode
+            ExecutionMode::Bounded | ExecutionMode::Final,
         )
     }
 }

@@ -94,6 +94,7 @@ arrow-ord = { version = "53.3.0", default-features = false }
 arrow-schema = { version = "53.3.0", default-features = false }
 async-trait = "0.1.73"
 bigdecimal = "0.4.6"
+bitflags = "2.6.0"
 bytes = "1.4"
 chrono = { version = "0.4.38", default-features = false }
 ctor = "0.2.0"
