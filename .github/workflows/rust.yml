@@ -165,20 +165,30 @@ jobs:
     name: cargo test datafusion-cli (amd64)
     needs: [ linux-build-lib ]
     runs-on: ubuntu-latest
-    container:
-      image: amd64/rust
+    env:
+      AWS_ENDPOINT: http://localhost:9000
+      AWS_ACCESS_KEY_ID: DataFusionLogin
+      AWS_SECRET_ACCESS_KEY: DataFusionPassword
     steps:
       - uses: actions/checkout@v4
         with:
           submodules: true
       - name: Setup Rust toolchain
-        uses: ./.github/actions/setup-builder
-        with:
-          rust-version: stable
-      - name: Run tests (excluding doctests)
         run: |
-          cd datafusion-cli
-          cargo test --lib --tests --bins --all-features
+          rustup toolchain install stable
+          rustup default stable
+      - name: Setup S3-compatible storage
+        working-directory: datafusion-cli
+        run: |
+          echo "MINIO_CONTAINER=$(docker run -d -p 9000:9000 -e MINIO_ROOT_USER=DataFusionLogin -e MINIO_ROOT_PASSWORD=DataFusionPassword quay.io/minio/minio server /data)" >> $GITHUB_ENV
+          aws s3 mb s3://datafusion --endpoint-url=$AWS_ENDPOINT
+          aws s3 cp ../datafusion/core/tests/data/cars.csv s3://datafusion/cars.csv --endpoint-url=$AWS_ENDPOINT
+
+      - name: Run tests (excluding doctests, but with integration tests)
+        working-directory: datafusion-cli
+        env:
+          TEST_STORAGE_INTEGRATION: 1
+        run: cargo test --lib --tests --bins --all-features
       - name: Verify Working Directory Clean
         run: git diff --exit-code
 
