@@ -94,7 +94,7 @@ to be accepted:
 6. Additional APIs for extending DataFusion's capabilities
 7. CI improvements
 
-Contributions that will likely involve more discussion (see Discussing New 
+Contributions that will likely involve more discussion (see Discussing New
 Features above) prior to acceptance include:
 
 1. Major new functionality (even if it is part of the "standard sql")
