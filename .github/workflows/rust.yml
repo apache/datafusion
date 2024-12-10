@@ -52,9 +52,8 @@ jobs:
         shell: bash
         run: |
           export PATH=$PATH:$HOME/d/protoc/bin
-          export RUSTFLAGS="-C codegen-units=256 -C link-arg=-fuse-ld=lld -C target-cpu=native -C incremental=true -C debuginfo=line-tables-only -C opt-level=3"
           echo $RUSTFLAGS
-          cargo test --lib --tests --bins --features avro,json,backtrace
+          cargo test --lib --tests --bins --features avro,json,backtrace --profile release-nonlto
           cd datafusion-cli
-          cargo test --lib --tests --bins --all-features
+          cargo test --lib --tests --bins --all-features --profile release-nonlto
 
