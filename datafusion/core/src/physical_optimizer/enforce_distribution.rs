@@ -4544,6 +4544,7 @@ pub(crate) mod tests {
             // EnforceDistribution rule satisfy this requirement also.
             "SortRequiredExec: [a@0 ASC]",
             "FilterExec: c@2 = 0",
+            "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=10",
             "ParquetExec: file_groups={10 groups: [[x:0..20], [y:0..20], [x:20..40], [y:20..40], [x:40..60], [y:40..60], [x:60..80], [y:60..80], [x:80..100], [y:80..100]]}, projection=[a, b, c, d, e], output_ordering=[a@0 ASC]",
         ];
 
