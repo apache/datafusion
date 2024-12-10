@@ -9,7 +9,7 @@ pub struct FieldsSpans(Vec<Vec<Span>>);
 
 impl FieldsSpans {
     pub fn empty(field_count: usize) -> Self {
-        Self((0..field_count).into_iter().map(|_| Vec::new()).collect())
+        Self((0..field_count).map(|_| Vec::new()).collect())
     }
 
     pub fn iter(&self) -> impl Iterator<Item = &Vec<Span>> {
@@ -20,7 +20,7 @@ impl FieldsSpans {
         &self,
         other: &FieldsSpans,
         join_type: &JoinType,
-        left_cols_len: usize,
+        _left_cols_len: usize,
     ) -> FieldsSpans {
         match join_type {
             JoinType::Inner | JoinType::Left | JoinType::Right | JoinType::Full => {

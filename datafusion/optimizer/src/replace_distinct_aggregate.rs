@@ -157,10 +157,15 @@ impl OptimizerRule for ReplaceDistinctWithAggregate {
                     .iter()
                     .skip(expr_cnt)
                     .zip(schema.iter())
-                    .map(|((new_qualifier, new_field, _), (old_qualifier, old_field, _))| {
-                        col(Column::from((new_qualifier, new_field)))
-                            .alias_qualified(old_qualifier.cloned(), old_field.name())
-                    })
+                    .map(
+                        |(
+                            (new_qualifier, new_field, _),
+                            (old_qualifier, old_field, _),
+                        )| {
+                            col(Column::from((new_qualifier, new_field)))
+                                .alias_qualified(old_qualifier.cloned(), old_field.name())
+                        },
+                    )
                     .collect::<Vec<Expr>>();
 
                 let plan = LogicalPlanBuilder::from(plan)

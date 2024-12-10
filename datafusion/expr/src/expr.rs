@@ -38,6 +38,7 @@ use datafusion_common::{
     plan_err, Column, DFSchema, HashMap, Result, ScalarValue, TableReference,
 };
 use datafusion_functions_window_common::field::WindowUDFFieldArgs;
+use derivative::Derivative;
 use sqlparser::ast::{
     display_comma_separated, ExceptSelectItem, ExcludeSelectItem, IlikeSelectItem,
     NullTreatment, RenameSelectItem, ReplaceSelectElement,
@@ -401,11 +402,19 @@ impl Unnest {
 }
 
 /// Alias expression
-#[derive(Clone, PartialEq, Eq, PartialOrd, Hash, Debug)]
+#[derive(Clone, Derivative, Debug)]
+#[derivative(PartialEq, Eq, PartialOrd, Hash)]
 pub struct Alias {
     pub expr: Box<Expr>,
     pub relation: Option<TableReference>,
     pub name: String,
+    #[derivative(
+        PartialEq = "ignore",
+        Hash = "ignore",
+        PartialOrd = "ignore",
+        Ord = "ignore"
+    )]
+    pub span: Span,
 }
 
 impl Alias {
@@ -419,7 +428,12 @@ impl Alias {
             expr: Box::new(expr),
             relation: relation.map(|r| r.into()),
             name: name.into(),
+            span: Span::empty(),
         }
+    }
+
+    pub fn with_span(self, span: Span) -> Self {
+        Self { span, ..self }
     }
 }
 
@@ -1128,6 +1142,7 @@ impl Expr {
                 relation,
                 name,
                 spans: _,
+                ..
             }) => (relation.clone(), name.clone()),
             Expr::Alias(Alias { relation, name, .. }) => (relation.clone(), name.clone()),
             _ => (None, self.schema_name().to_string()),
@@ -1681,11 +1696,22 @@ impl Expr {
         }
     }
 
-    pub fn get_spans(&self) -> Option<&Vec<Span>> {
+    pub fn get_span(&self) -> Span {
         match self {
-            Expr::Column(Column { spans, .. }) => Some(spans),
-            Expr::Alias(Alias { expr, .. }) => expr.get_spans(),
-            _ => None,
+            Expr::Column(Column { spans, .. }) => match spans.as_slice() {
+                [] => panic!("No spans for column expr"),
+                [span] => *span,
+                _ => panic!("Column expr has more than one span"),
+            },
+            Expr::Alias(Alias {
+                expr,
+                span: alias_span,
+                ..
+            }) => {
+                let span = expr.get_span();
+                span.union(alias_span)
+            }
+            _ => Span::empty(),
         }
     }
 }
@@ -1701,6 +1727,7 @@ impl HashNode for Expr {
                 expr: _expr,
                 relation,
                 name,
+                ..
             }) => {
                 relation.hash(state);
                 name.hash(state);

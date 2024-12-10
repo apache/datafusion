@@ -20,8 +20,7 @@ use sqlparser::ast::{Expr as SQLExpr, Ident};
 
 use datafusion_common::{
     internal_err, not_impl_err, plan_datafusion_err, plan_err, Column, DFSchema,
-    DataFusionError, Diagnostic, DiagnosticEntry, DiagnosticEntryKind, Result,
-    TableReference,
+    DataFusionError, Result, TableReference,
 };
 use datafusion_expr::planner::PlannerResult;
 use datafusion_expr::{Case, Expr};
@@ -114,7 +113,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 })?;
             Ok(Expr::ScalarVariable(ty, var_names))
         } else {
-            let span = ids.last().map(|id| id.span).unwrap_or(Span::empty());
+            let span = Span::union_iter(ids.iter().map(|id| id.span));
             let ids = ids
                 .into_iter()
                 .map(|id| self.ident_normalizer.normalize(id))

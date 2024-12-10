@@ -100,7 +100,14 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 table_with_joins,
                 alias,
             } => (
-                self.plan_table_with_joins(*table_with_joins, planner_context)?,
+                {
+                    let (plan, ignorable_error) =
+                        self.plan_table_with_joins(*table_with_joins, planner_context)?;
+                    if let Some(e) = ignorable_error {
+                        return Err(e);
+                    }
+                    plan
+                },
                 alias,
             ),
             TableFactor::UNNEST {

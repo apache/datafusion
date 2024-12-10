@@ -1,5 +1,4 @@
 use std::{
-    cmp::Ordering,
     fmt::{self, Debug, Display},
     ops::{Deref, DerefMut},
 };

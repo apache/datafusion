@@ -1714,7 +1714,14 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         // Build scan, join with from table if it exists.
         let mut input_tables = vec![table];
         input_tables.extend(from);
-        let scan = self.plan_from_tables(input_tables, &mut planner_context)?;
+        let scan = {
+            let (scan, ignorable_error) =
+                self.plan_from_tables(input_tables, &mut planner_context)?;
+            if let Some(ignorable_error) = ignorable_error {
+                return Err(ignorable_error);
+            }
+            scan
+        };
 
         // Filter
         let source = match predicate_expr {

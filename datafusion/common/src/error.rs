@@ -28,7 +28,7 @@ use std::sync::Arc;
 
 use crate::diagnostic::Diagnostic;
 use crate::utils::quote_identifier;
-use crate::{Column, DFSchema, DiagnosticEntry, DiagnosticEntryKind, TableReference};
+use crate::{Column, DFSchema, TableReference};
 #[cfg(feature = "avro")]
 use apache_avro::Error as AvroError;
 use arrow::error::ArrowError;
@@ -514,8 +514,7 @@ impl DataFusionError {
                     if let Some(source) = self
                         .head
                         .source()
-                        .map(|source| source.downcast_ref::<DataFusionError>())
-                        .flatten()
+                        .and_then(|source| source.downcast_ref::<DataFusionError>())
                     {
                         self.head = source;
                     } else {
@@ -528,7 +527,9 @@ impl DataFusionError {
         DiagnosticsIterator { head: self }
     }
 
-    pub fn get_individual_errors(&self) -> impl Iterator<Item = &Self> + '_ {
+    pub fn get_individual_errors(
+        &self,
+    ) -> impl Iterator<Item = (Vec<Diagnostic>, &Self)> + '_ {
         fn contains_collection(err: &DataFusionError) -> bool {
             let mut head = err;
             loop {
@@ -538,8 +539,7 @@ impl DataFusionError {
 
                 if let Some(source) = head
                     .source()
-                    .map(|source| source.downcast_ref::<DataFusionError>())
-                    .flatten()
+                    .and_then(|source| source.downcast_ref::<DataFusionError>())
                 {
                     head = source;
                 } else {
@@ -549,29 +549,34 @@ impl DataFusionError {
         }
 
         struct IndividualErrorsIterator<'a> {
-            queue: Vec<&'a DataFusionError>,
+            queue: Vec<(&'a DataFusionError, Vec<Diagnostic>)>,
         }
 
         impl<'a> Iterator for IndividualErrorsIterator<'a> {
-            type Item = &'a DataFusionError;
+            type Item = (Vec<Diagnostic>, &'a DataFusionError);
 
             fn next(&mut self) -> Option<Self::Item> {
-                while let Some(err) = self.queue.pop() {
+                while let Some((err, mut diagnostics_prefix)) = self.queue.pop() {
                     if !contains_collection(err) {
-                        return Some(err);
+                        return Some((diagnostics_prefix, err));
                     }
 
                     if let DataFusionError::Collection(errs) = err {
-                        self.queue.extend(errs.iter());
+                        self.queue.extend(
+                            errs.iter().map(|err| (err, diagnostics_prefix.clone())),
+                        );
                         continue;
+                    }
+
+                    if let DataFusionError::Diagnostic(diagnostics, _) = err {
+                        diagnostics_prefix.push(diagnostics.clone());
                     }
 
                     if let Some(source) = err
                         .source()
-                        .map(|source| source.downcast_ref::<DataFusionError>())
-                        .flatten()
+                        .and_then(|source| source.downcast_ref::<DataFusionError>())
                     {
-                        self.queue.push(source);
+                        self.queue.push((source, diagnostics_prefix));
                     }
                 }
 
@@ -579,7 +584,9 @@ impl DataFusionError {
             }
         }
 
-        IndividualErrorsIterator { queue: vec![self] }
+        IndividualErrorsIterator {
+            queue: vec![(self, vec![])],
+        }
     }
 }
 

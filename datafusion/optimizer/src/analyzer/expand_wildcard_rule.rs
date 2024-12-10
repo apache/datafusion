@@ -124,28 +124,23 @@ fn expand_exprlist(input: &LogicalPlan, expr: Vec<Expr>) -> Result<Vec<Expr>> {
                 ref relation,
                 ref name,
                 ref spans,
+                ..
             }) => {
                 if name.eq("*") {
                     let expanded_columns = if let Some(qualifier) = relation {
-                        expand_qualified_wildcard(
-                            qualifier,
-                            input.schema(),
-                            None,
-                        )?
+                        expand_qualified_wildcard(qualifier, input.schema(), None)?
                     } else {
-                        expand_wildcard(
-                            input.schema(),
-                            input,
-                            None,
-                        )?
+                        expand_wildcard(input.schema(), input, None)?
                     };
 
-                    projected_expr.extend(expanded_columns.into_iter().map(|mut expr| {
-                        if let Expr::Column(c) = &mut expr {
-                            c.spans = spans.clone();
-                        }
-                        expr
-                    }));
+                    projected_expr.extend(expanded_columns.into_iter().map(
+                        |mut expr| {
+                            if let Expr::Column(c) = &mut expr {
+                                c.spans = spans.clone();
+                            }
+                            expr
+                        },
+                    ));
                 } else {
                     projected_expr.push(e.clone());
                 }

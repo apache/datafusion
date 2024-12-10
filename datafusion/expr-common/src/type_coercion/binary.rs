@@ -34,7 +34,6 @@ use datafusion_common::{
     Diagnostic, DiagnosticEntry, DiagnosticEntryKind, Result, WithSpans,
 };
 use itertools::Itertools;
-use sqlparser::tokenizer::Span;
 
 /// The type signature of an instantiation of binary operator expression such as
 /// `lhs + rhs`

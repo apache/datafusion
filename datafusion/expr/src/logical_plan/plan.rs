@@ -2163,12 +2163,8 @@ impl Projection {
 /// produced by the projection operation. If the schema computation is successful,
 /// the `Result` will contain the schema; otherwise, it will contain an error.
 pub fn projection_schema(input: &LogicalPlan, exprs: &[Expr]) -> Result<Arc<DFSchema>> {
-
     let metadata = input.schema().metadata().clone();
-    let fields_spans = exprs
-        .iter()
-        .map(|e| e.get_spans().cloned().unwrap_or_else(|| vec![]))
-        .collect();
+    let fields_spans = exprs.iter().map(|e| vec![e.get_span()]).collect();
 
     let schema =
         DFSchema::new_with_metadata(exprlist_to_fields(exprs, input)?, metadata)?

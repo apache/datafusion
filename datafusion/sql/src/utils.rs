@@ -123,20 +123,25 @@ pub(crate) fn check_columns_satisfy_exprs(
         Expr::Column(_) => Ok(()),
         _ => internal_err!("Expr::Column are required"),
     })?;
+
     let mut errs = vec![];
     let column_exprs = find_column_exprs(exprs);
     for e in &column_exprs {
         match e {
             Expr::GroupingSet(GroupingSet::Rollup(exprs)) => {
                 for e in exprs {
-                    if let Err(err) = check_column_satisfies_expr(columns, e, call_purpose) {
+                    if let Err(err) =
+                        check_column_satisfies_expr(columns, e, call_purpose)
+                    {
                         errs.push(err);
                     }
                 }
             }
             Expr::GroupingSet(GroupingSet::Cube(exprs)) => {
                 for e in exprs {
-                    if let Err(err) = check_column_satisfies_expr(columns, e, call_purpose) {
+                    if let Err(err) =
+                        check_column_satisfies_expr(columns, e, call_purpose)
+                    {
                         errs.push(err);
                     }
                 }
@@ -144,15 +149,19 @@ pub(crate) fn check_columns_satisfy_exprs(
             Expr::GroupingSet(GroupingSet::GroupingSets(lists_of_exprs)) => {
                 for exprs in lists_of_exprs {
                     for e in exprs {
-                        if let Err(err) = check_column_satisfies_expr(columns, e, call_purpose) {
+                        if let Err(err) =
+                            check_column_satisfies_expr(columns, e, call_purpose)
+                        {
                             errs.push(err);
                         }
                     }
                 }
             }
-            _ => if let Err(err) = check_column_satisfies_expr(columns, e, call_purpose) {
-                errs.push(err);
-            },
+            _ => {
+                if let Err(err) = check_column_satisfies_expr(columns, e, call_purpose) {
+                    errs.push(err);
+                }
+            }
         }
     }
     if !errs.is_empty() {
@@ -177,11 +186,11 @@ fn check_column_satisfies_expr(
             let message = match call_purpose {
                 CheckColumnsSatisfyExprsPurpose::GroupBy => format!(
                     "'{}' in projection does not appear in GROUP BY clause",
-                    expr.to_string()
+                    expr
                 ),
                 CheckColumnsSatisfyExprsPurpose::Having => format!(
                     "'{}' in HAVING clause does not appear in GROUP BY clause",
-                    expr.to_string()
+                    expr
                 ),
             };
             err.with_diagnostic(|_| {
@@ -189,12 +198,10 @@ fn check_column_satisfies_expr(
                     DiagnosticEntry::new(
                         message,
                         DiagnosticEntryKind::Error,
-                        expr.get_spans()
-                            .and_then(|spans| spans.first().copied())
-                            .unwrap_or(Span::empty()),
+                        expr.get_span(),
                     ),
                     DiagnosticEntry::new(
-                        format!("Add '{}' to GROUP BY clause", expr.to_string()),
+                        format!("Add '{}' to GROUP BY clause", expr),
                         DiagnosticEntryKind::Help,
                         Span::empty(),
                     ),

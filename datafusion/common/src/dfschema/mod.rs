@@ -20,7 +20,6 @@
 mod fields_spans;
 pub use fields_spans::FieldsSpans;
 
-use std::backtrace::Backtrace;
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::fmt::{Display, Formatter};
 use std::hash::Hash;

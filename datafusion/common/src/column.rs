@@ -33,8 +33,8 @@ use std::fmt;
 use std::str::FromStr;
 
 /// A named reference to a qualified field in a schema.
-#[derive(Debug, Clone, Derivative)]
-#[derivative(PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Debug, Derivative)]
+#[derivative(PartialEq, Eq, Hash, PartialOrd, Ord, Clone)]
 pub struct Column {
     /// relation/table reference.
     pub relation: Option<TableReference>,
@@ -254,8 +254,7 @@ impl Column {
                         .flat_map(|s| s.columns_with_unqualified_name(&self.name))
                         .collect::<Vec<_>>();
                     for using_col in using_columns {
-                        let all_matched =
-                            columns.iter().all(|c| using_col.contains(c));
+                        let all_matched = columns.iter().all(|c| using_col.contains(c));
                         // All matched fields belong to the same using column set, in orther words
                         // the same join clause. We simply pick the qualifier from the first match.
                         if all_matched {

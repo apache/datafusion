@@ -33,6 +33,7 @@ use datafusion_common::{
 };
 use datafusion_functions_window_common::field::WindowUDFFieldArgs;
 use recursive::recursive;
+use sqlparser::tokenizer::Span;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -405,16 +406,16 @@ impl ExprSchemable for Expr {
             }) => {
                 let (left_type, left_is_nullable) =
                     left.data_type_and_nullable(schema)?;
-                let left_type = if let Some(spans) = left.get_spans() {
-                    WithSpans::new(&left_type, spans.iter().copied())
+                let left_type = if left.get_span() != Span::empty() {
+                    WithSpans::new(&left_type, [left.get_span()])
                 } else {
                     (&left_type).into()
                 };
 
                 let (right_type, right_is_nullable) =
                     right.data_type_and_nullable(schema)?;
-                let right_type = if let Some(spans) = right.get_spans() {
-                    WithSpans::new(&right_type, spans.iter().copied())
+                let right_type = if right.get_span() != Span::empty() {
+                    WithSpans::new(&right_type, [right.get_span()])
                 } else {
                     (&right_type).into()
                 };

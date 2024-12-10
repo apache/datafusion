@@ -311,6 +311,7 @@ pub(super) fn inject_column_aliases(
                 expr: Box::new(expr.clone()),
                 relation,
                 name: col_alias.value,
+                span: col_alias.span,
             })
         })
         .collect::<Vec<_>>();

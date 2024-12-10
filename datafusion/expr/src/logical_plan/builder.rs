@@ -1543,14 +1543,20 @@ pub fn union(left_plan: LogicalPlan, right_plan: LogicalPlan) -> Result<LogicalP
                         Span::empty(),
                     ),
                     DiagnosticEntry::new(
-                        format!("This side has {} columns", left_plan.schema().fields().len()),
+                        format!(
+                            "This side has {} columns",
+                            left_plan.schema().fields().len()
+                        ),
                         DiagnosticEntryKind::Note,
                         Span::union_iter(
                             left_plan.schema().fields_spans().iter().flatten().copied(),
                         ),
                     ),
                     DiagnosticEntry::new(
-                        format!("This side has {} columns", right_plan.schema().fields().len()),
+                        format!(
+                            "This side has {} columns",
+                            right_plan.schema().fields().len()
+                        ),
                         DiagnosticEntryKind::Note,
                         Span::union_iter(
                             right_plan.schema().fields_spans().iter().flatten().copied(),

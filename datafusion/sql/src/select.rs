@@ -27,7 +27,8 @@ use crate::utils::{
 
 use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
 use datafusion_common::{
-    not_impl_err, plan_err, Diagnostic, DiagnosticEntry, DiagnosticEntryKind, Result,
+    not_impl_err, plan_err, DataFusionError, Diagnostic, DiagnosticEntry,
+    DiagnosticEntryKind, Result,
 };
 use datafusion_common::{RecursionUnnestOption, UnnestOptions};
 use datafusion_expr::expr::{Alias, PlannedReplaceSelectItem, WildcardOptions};
@@ -75,8 +76,17 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             return not_impl_err!("SORT BY");
         }
 
+        let mut errs = vec![];
+
         // Process `from` clause
-        let plan = self.plan_from_tables(select.from, planner_context)?;
+        let plan = {
+            let (plan, ignorable_error) =
+                self.plan_from_tables(select.from, planner_context)?;
+            if let Some(err) = ignorable_error {
+                errs.push(err);
+            }
+            plan
+        };
         let empty_from = matches!(plan, LogicalPlan::EmptyRelation(_));
 
         // Process `where` clause
@@ -198,13 +208,21 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             .is_empty()
             || !aggr_exprs.is_empty()
         {
-            self.aggregate(
+            match self.aggregate(
                 &base_plan,
                 &select_exprs,
                 having_expr_opt.as_ref(),
                 &group_by_exprs,
                 &aggr_exprs,
-            )?
+            ) {
+                Err(err) => {
+                    errs.push(err);
+                    (base_plan.clone(), select_exprs.clone(), having_expr_opt)
+                }
+                Ok((plan, select_exprs_post_aggr, having_expr_post_aggr)) => {
+                    (plan, select_exprs_post_aggr, having_expr_post_aggr)
+                }
+            }
         } else {
             match having_expr_opt {
                 Some(having_expr) => return plan_err!("HAVING clause references: {having_expr} must appear in the GROUP BY clause or be used in an aggregate function"),
@@ -288,7 +306,13 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             plan
         };
 
-        self.order_by(plan, order_by_rex)
+        let plan = self.order_by(plan, order_by_rex)?;
+
+        if !errs.is_empty() {
+            Err(DataFusionError::Collection(errs))
+        } else {
+            Ok(plan)
+        }
     }
 
     /// Try converting Expr(Unnest(Expr)) to Projection/Unnest/Projection
@@ -537,9 +561,12 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         &self,
         mut from: Vec<TableWithJoins>,
         planner_context: &mut PlannerContext,
-    ) -> Result<LogicalPlan> {
+    ) -> Result<(LogicalPlan, Option<DataFusionError>)> {
         match from.len() {
-            0 => Ok(LogicalPlanBuilder::empty(true).build()?),
+            0 => {
+                let plan = LogicalPlanBuilder::empty(true).build()?;
+                Ok((plan, None))
+            }
             1 => {
                 let input = from.remove(0);
                 self.plan_table_with_joins(input, planner_context)
@@ -547,24 +574,49 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             _ => {
                 let mut from = from.into_iter();
 
-                let mut left = LogicalPlanBuilder::from({
-                    let input = from.next().unwrap();
-                    self.plan_table_with_joins(input, planner_context)?
-                });
+                let mut ignorable_error = None;
+                let mut add_ignorable_error = |new_ignorable_err: Option<
+                    DataFusionError,
+                >| match new_ignorable_err {
+                    None => (),
+                    Some(new_ignorable_err) => {
+                        if ignorable_error.is_none() {
+                            ignorable_error = Some(DataFusionError::Collection(vec![]));
+                        }
+                        if let Some(DataFusionError::Collection(ignorable_errors)) =
+                            &mut ignorable_error
+                        {
+                            ignorable_errors.push(new_ignorable_err);
+                        }
+                    }
+                };
+
+                let left = {
+                    let (left, ignorable_error) = self
+                        .plan_table_with_joins(from.next().unwrap(), planner_context)?;
+                    add_ignorable_error(ignorable_error);
+                    left
+                };
+                let mut left = LogicalPlanBuilder::from(left);
                 let old_outer_from_schema = {
                     let left_schema = Some(Arc::clone(left.schema()));
                     planner_context.set_outer_from_schema(left_schema)
                 };
                 for input in from {
                     // Join `input` with the current result (`left`).
-                    let right = self.plan_table_with_joins(input, planner_context)?;
+                    let right = {
+                        let (right, ignorable_error) =
+                            self.plan_table_with_joins(input, planner_context)?;
+                        add_ignorable_error(ignorable_error);
+                        right
+                    };
                     left = left.cross_join(right)?;
                     // Update the outer FROM schema.
                     let left_schema = Some(Arc::clone(left.schema()));
                     planner_context.set_outer_from_schema(left_schema);
                 }
                 planner_context.set_outer_from_schema(old_outer_from_schema);
-                left.build()
+                Ok((left.build()?, ignorable_error))
             }
         }
     }
@@ -606,6 +658,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 Ok(vec![col])
             }
             SelectItem::ExprWithAlias { expr, alias } => {
+                let alias_span = alias.span;
                 let select_expr =
                     self.sql_to_expr(expr, plan.schema(), planner_context)?;
                 let col = normalize_col_with_schemas_and_ambiguity_check(
@@ -617,7 +670,14 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 // avoiding adding an alias if the column name is the same.
                 let expr = match &col {
                     Expr::Column(column) if column.name.eq(&name) => col,
-                    _ => col.alias(name),
+                    _ => {
+                        let expr = col.alias(name);
+                        if let Expr::Alias(alias) = expr {
+                            Expr::Alias(alias.with_span(alias_span))
+                        } else {
+                            unreachable!();
+                        }
+                    }
                 };
                 Ok(vec![expr])
             }
@@ -815,11 +875,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 Diagnostic::new([DiagnosticEntry::new(
                     "GROUP BY clause is here",
                     DiagnosticEntryKind::Note,
-                    Span::union_iter(
-                        group_by_exprs
-                            .iter()
-                            .flat_map(|e| e.get_spans().cloned().unwrap_or_default()),
-                    ),
+                    Span::union_iter(group_by_exprs.iter().map(|e| e.get_span())),
                 )])
             })
         })?;

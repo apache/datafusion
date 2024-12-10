@@ -394,7 +394,10 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                                             col.name, r
                                         ),
                                         DiagnosticEntryKind::Error,
-                                        col.spans.first().copied().unwrap_or(Span::empty()),
+                                        col.spans
+                                            .first()
+                                            .copied()
+                                            .unwrap_or(Span::empty()),
                                     )])
                                 })
                             },

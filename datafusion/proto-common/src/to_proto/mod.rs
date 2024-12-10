@@ -266,7 +266,7 @@ impl TryFrom<&DFSchema> for protobuf::DfSchema {
     fn try_from(s: &DFSchema) -> Result<Self, Self::Error> {
         let columns = s
             .iter()
-            .map(|(qualifier, field)| {
+            .map(|(qualifier, field, _)| {
                 Ok(protobuf::DfField {
                     field: Some(field.as_ref().try_into()?),
                     qualifier: qualifier.map(|r| protobuf::ColumnRelation {
