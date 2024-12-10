@@ -30,10 +30,11 @@ use datafusion::error::Result;
 use datafusion::execution::context::TaskContext;
 use datafusion::logical_expr::LogicalPlanBuilder;
 use datafusion::physical_expr::EquivalenceProperties;
+use datafusion::physical_plan::execution_plan::EmissionType;
 use datafusion::physical_plan::memory::MemoryStream;
 use datafusion::physical_plan::{
-    project_schema, DisplayAs, DisplayFormatType, ExecutionMode, ExecutionPlan,
-    Partitioning, PlanProperties, SendableRecordBatchStream,
+    project_schema, DisplayAs, DisplayFormatType, ExecutionPlan, Partitioning,
+    PlanProperties, SendableRecordBatchStream,
 };
 use datafusion::prelude::*;
 
@@ -211,11 +212,7 @@ impl CustomExec {
     /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
     fn compute_properties(schema: SchemaRef) -> PlanProperties {
         let eq_properties = EquivalenceProperties::new(schema);
-        PlanProperties::new(
-            eq_properties,
-            Partitioning::UnknownPartitioning(1),
-            ExecutionMode::Bounded,
-        )
+        PlanProperties::new(eq_properties, Partitioning::UnknownPartitioning(1))
     }
 }
 
@@ -278,5 +275,13 @@ impl ExecutionPlan for CustomExec {
             self.schema(),
             None,
         )?))
+    }
+
+    fn emission_type(&self) -> EmissionType {
+        EmissionType::Incremental
+    }
+
+    fn has_finite_memory(&self) -> bool {
+        true
     }
 }

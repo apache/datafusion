@@ -1742,8 +1742,6 @@ mod tests {
                 eq_properties,
                 // Output Partitioning
                 Partitioning::UnknownPartitioning(1),
-                // Execution Mode
-                ExecutionMode::Bounded,
             )
         }
     }

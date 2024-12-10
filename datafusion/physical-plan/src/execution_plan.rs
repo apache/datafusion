@@ -51,8 +51,6 @@ use crate::sorts::sort_preserving_merge::SortPreservingMergeExec;
 pub use crate::stream::EmptyRecordBatchStream;
 use crate::stream::RecordBatchStreamAdapter;
 
-use bitflags::bitflags;
-
 /// Represent nodes in the DataFusion Physical Plan.
 ///
 /// Calling [`execute`] produces an `async` [`SendableRecordBatchStream`] of
@@ -504,85 +502,6 @@ pub enum EmissionType {
     Final,
     // Incremental and Final
     Both,
-}
-
-bitflags! {
-    /// Describes the execution mode of the result of calling
-    /// [`ExecutionPlan::execute`] with respect to its size and behavior.
-    ///
-    /// The mode of the execution plan is determined by the mode of its input
-    /// execution plans and the details of the operator itself. For example, a
-    /// `FilterExec` operator will have the same execution mode as its input, but a
-    /// `SortExec` operator may have a different execution mode than its input,
-    /// depending on how the input stream is sorted.
-    ///
-    /// There are three possible execution modes: `Bounded`, `Unbounded` and
-    /// `PipelineBreaking`.
-    #[derive(Clone, Copy, PartialEq, Debug)]
-    pub struct ExecutionMode: u32 {
-        const Bounded = 0b1;
-
-        /// Emission Type
-        const Incremental = 0b1000;
-        const Final = 0b10000;
-    }
-}
-
-impl ExecutionMode {
-    /// Check whether the execution mode is unbounded or not.
-    #[inline]
-    pub fn is_unbounded(&self) -> bool {
-        !self.contains(ExecutionMode::Bounded)
-    }
-
-    /// Check whether the execution is pipeline friendly. If so, operator can
-    /// execute safely.
-    // #[inline]
-    // pub fn pipeline_friendly(&self) -> bool {
-    //     !self.is_pipeline_breaking()
-    // }
-
-    // #[inline]
-    // pub fn is_pipeline_breaking(&self) -> bool {
-    //     // self.contains(ExecutionMode::PipelineBreaking)
-    //     self.is_unbounded() && self.is_emit_at_final()
-    // }
-
-    #[inline]
-    pub fn is_emit_incremental(&self) -> bool {
-        self.contains(ExecutionMode::Incremental)
-    }
-
-    #[inline]
-    pub fn is_emit_at_final(&self) -> bool {
-        self.contains(ExecutionMode::Final)
-    }
-
-    #[inline]
-    pub fn switch_to_bounded(mut self) -> ExecutionMode {
-        self.insert(ExecutionMode::Bounded);
-        self
-    }
-
-    #[inline]
-    pub fn switch_to_unbounded(mut self) -> ExecutionMode {
-        self.remove(ExecutionMode::Bounded);
-        self
-    }
-
-    #[inline]
-    pub fn emit_incremental(mut self) -> ExecutionMode {
-        self.insert(ExecutionMode::Incremental);
-        self.remove(ExecutionMode::Final);
-        self
-    }
-
-    #[inline]
-    pub fn emit_at_final(mut self) -> ExecutionMode {
-        self.insert(ExecutionMode::Final);
-        self.remove(ExecutionMode::Incremental);
-        self
-    }
 }
 
 pub(crate) fn emission_type_from_children(

@@ -21,12 +21,12 @@ use abi_stable::{
     std_types::{RResult, RString, RVec},
     StableAbi,
 };
-use datafusion::error::Result;
 use datafusion::{
     error::DataFusionError,
     execution::{SendableRecordBatchStream, TaskContext},
     physical_plan::{DisplayAs, ExecutionPlan, PlanProperties},
 };
+use datafusion::{error::Result, physical_plan::execution_plan::EmissionType};
 
 use crate::{
     plan_properties::FFI_PlanProperties, record_batch_stream::FFI_RecordBatchStream,
@@ -268,11 +268,22 @@ impl ExecutionPlan for ForeignExecutionPlan {
             }
         }
     }
+
+    fn emission_type(&self) -> EmissionType {
+        unimplemented!()
+    }
+
+    fn has_finite_memory(&self) -> bool {
+        true
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use datafusion::{physical_plan::Partitioning, prelude::SessionContext};
+    use datafusion::{
+        physical_plan::{execution_plan::EmissionType, Partitioning},
+        prelude::SessionContext,
+    };
 
     use super::*;
 
@@ -287,7 +298,6 @@ mod tests {
                 props: PlanProperties::new(
                     datafusion::physical_expr::EquivalenceProperties::new(schema),
                     Partitioning::UnknownPartitioning(3),
-                    datafusion::physical_plan::ExecutionMode::Incremental,
                 ),
             }
         }
@@ -337,6 +347,14 @@ mod tests {
 
         fn statistics(&self) -> Result<datafusion::common::Statistics> {
             unimplemented!()
+        }
+
+        fn emission_type(&self) -> EmissionType {
+            unimplemented!()
+        }
+
+        fn has_finite_memory(&self) -> bool {
+            true
         }
     }
 

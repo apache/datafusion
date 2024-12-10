@@ -342,7 +342,7 @@ mod tests {
     use crate::stream::RecordBatchReceiverStream;
     use crate::test::exec::{assert_strong_count_converges_to_zero, BlockingExec};
     use crate::test::{self, assert_is_pending, make_partition};
-    use crate::{collect, common, ExecutionMode};
+    use crate::{collect, common};
 
     use arrow::array::{ArrayRef, Int32Array, StringArray, TimestampNanosecondArray};
     use arrow::compute::SortOptions;
@@ -1279,8 +1279,7 @@ mod tests {
                 .iter()
                 .map(|expr| PhysicalSortExpr::new_default(Arc::clone(expr)))
                 .collect::<LexOrdering>()]);
-            let mode = ExecutionMode::empty();
-            PlanProperties::new(eq_properties, Partitioning::Hash(columns, 3), mode)
+            PlanProperties::new(eq_properties, Partitioning::Hash(columns, 3))
         }
     }
 

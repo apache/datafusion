@@ -28,7 +28,7 @@ use arrow::datatypes::SchemaRef;
 use datafusion::{
     error::{DataFusionError, Result},
     physical_expr::EquivalenceProperties,
-    physical_plan::{ExecutionMode, PlanProperties},
+    physical_plan::{execution_plan::EmissionType, PlanProperties},
     prelude::SessionContext,
 };
 use datafusion_proto::{
@@ -53,8 +53,11 @@ pub struct FFI_PlanProperties {
     pub output_partitioning:
         unsafe extern "C" fn(plan: &Self) -> RResult<RVec<u8>, RStr<'static>>,
 
-    /// Return the execution mode of the plan.
-    pub execution_mode: unsafe extern "C" fn(plan: &Self) -> FFI_ExecutionMode,
+    /// Return the emission type of the plan.
+    pub emission_type: unsafe extern "C" fn(plan: &Self) -> OptionalEmissionType,
+
+    /// Indicates whether the plan has finite memory requirements.
+    pub has_finite_memory: unsafe extern "C" fn(plan: &Self) -> bool,
 
     /// The output ordering is a [`PhysicalSortExprNodeCollection`] protobuf message
     /// serialized into bytes to pass across the FFI boundary.
@@ -98,12 +101,28 @@ unsafe extern "C" fn output_partitioning_fn_wrapper(
     ROk(output_partitioning.into())
 }
 
-unsafe extern "C" fn execution_mode_fn_wrapper(
+unsafe extern "C" fn emission_type_fn_wrapper(
     properties: &FFI_PlanProperties,
-) -> FFI_ExecutionMode {
+) -> OptionalEmissionType {
     let private_data = properties.private_data as *const PlanPropertiesPrivateData;
     let props = &(*private_data).props;
-    props.execution_mode().into()
+    if let Some(emission_type) = props.emission_type {
+        OptionalEmissionType {
+            is_some: true,
+            value: emission_type.into(),
+        }
+    } else {
+        OptionalEmissionType {
+            is_some: false,
+            value: FFI_EmissionType::Incremental, // Any value as a placeholder
+        }
+    }
+}
+
+unsafe extern "C" fn memory_usage_fn_wrapper(properties: &FFI_PlanProperties) -> bool {
+    let private_data = properties.private_data as *const PlanPropertiesPrivateData;
+    let props = &(*private_data).props;
+    props.has_finite_memory
 }
 
 unsafe extern "C" fn output_ordering_fn_wrapper(
@@ -164,7 +183,8 @@ impl From<&PlanProperties> for FFI_PlanProperties {
 
         FFI_PlanProperties {
             output_partitioning: output_partitioning_fn_wrapper,
-            execution_mode: execution_mode_fn_wrapper,
+            emission_type: emission_type_fn_wrapper,
+            has_finite_memory: memory_usage_fn_wrapper,
             output_ordering: output_ordering_fn_wrapper,
             schema: schema_fn_wrapper,
             release: release_fn_wrapper,
@@ -220,9 +240,6 @@ impl TryFrom<FFI_PlanProperties> for PlanProperties {
             RErr(e) => Err(DataFusionError::Plan(e.to_string())),
         }?;
 
-        let execution_mode: ExecutionMode =
-            unsafe { (ffi_props.execution_mode)(&ffi_props).into() };
-
         let eq_properties = match orderings {
             Some(ordering) => {
                 EquivalenceProperties::new_with_orderings(Arc::new(schema), &[ordering])
@@ -230,42 +247,46 @@ impl TryFrom<FFI_PlanProperties> for PlanProperties {
             None => EquivalenceProperties::new(Arc::new(schema)),
         };
 
-        Ok(PlanProperties::new(
-            eq_properties,
-            partitioning,
-            execution_mode,
-        ))
+        Ok(PlanProperties::new(eq_properties, partitioning))
     }
 }
 
-/// FFI safe version of [`ExecutionMode`].
+/// FFI safe version of [`EmissionType`].
 #[repr(C)]
 #[allow(non_camel_case_types)]
 #[derive(Clone, StableAbi)]
-pub enum FFI_ExecutionMode {
-    Bounded,
-    Unbounded,
-    PipelineBreaking,
+pub enum FFI_EmissionType {
+    Incremental,
+    Final,
+    Both,
 }
 
-impl From<ExecutionMode> for FFI_ExecutionMode {
-    fn from(value: ExecutionMode) -> Self {
+impl From<EmissionType> for FFI_EmissionType {
+    fn from(value: EmissionType) -> Self {
         match value {
-            ExecutionMode::Bounded => FFI_ExecutionMode::Bounded,
-            ExecutionMode::Unbounded => FFI_ExecutionMode::Unbounded,
-            ExecutionMode::PipelineBreaking => FFI_ExecutionMode::PipelineBreaking,
+            EmissionType::Incremental => FFI_EmissionType::Incremental,
+            EmissionType::Final => FFI_EmissionType::Final,
+            EmissionType::Both => FFI_EmissionType::Both,
         }
     }
 }
 
-impl From<FFI_ExecutionMode> for ExecutionMode {
-    fn from(value: FFI_ExecutionMode) -> Self {
+impl From<FFI_EmissionType> for EmissionType {
+    fn from(value: FFI_EmissionType) -> Self {
         match value {
-            FFI_ExecutionMode::Bounded => ExecutionMode::Bounded,
-            FFI_ExecutionMode::Unbounded => ExecutionMode::Unbounded,
-            FFI_ExecutionMode::PipelineBreaking => ExecutionMode::PipelineBreaking,
+            FFI_EmissionType::Incremental => EmissionType::Incremental,
+            FFI_EmissionType::Final => EmissionType::Final,
+            FFI_EmissionType::Both => EmissionType::Both,
         }
     }
+}
+
+#[repr(C)]
+#[allow(non_camel_case_types)]
+#[derive(Clone, StableAbi)]
+pub struct OptionalEmissionType {
+    pub is_some: bool,
+    pub value: FFI_EmissionType, // Valid only if `is_some` is true
 }
 
 #[cfg(test)]
@@ -283,7 +304,6 @@ mod tests {
         let original_props = PlanProperties::new(
             EquivalenceProperties::new(schema),
             Partitioning::UnknownPartitioning(3),
-            ExecutionMode::Unbounded,
         );
 
         let local_props_ptr = FFI_PlanProperties::from(&original_props);

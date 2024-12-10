@@ -36,6 +36,7 @@ use std::ops::Deref;
 use std::sync::Arc;
 
 use datafusion::common::Result;
+use datafusion::physical_plan::execution_plan::EmissionType;
 use datafusion::physical_plan::{DisplayAs, ExecutionPlan};
 use datafusion::prelude::SessionContext;
 use datafusion_common::{internal_err, DataFusionError};
@@ -127,6 +128,14 @@ impl ExecutionPlan for ParentExec {
     ) -> Result<datafusion::physical_plan::SendableRecordBatchStream> {
         unreachable!()
     }
+
+    fn emission_type(&self) -> EmissionType {
+        unimplemented!()
+    }
+
+    fn has_finite_memory(&self) -> bool {
+        true
+    }
 }
 
 /// A PhysicalExtensionCodec that can serialize and deserialize ParentExec
@@ -202,6 +211,14 @@ impl ExecutionPlan for ChildExec {
         _context: Arc<datafusion::execution::TaskContext>,
     ) -> Result<datafusion::physical_plan::SendableRecordBatchStream> {
         unreachable!()
+    }
+
+    fn emission_type(&self) -> EmissionType {
+        EmissionType::Incremental
+    }
+
+    fn has_finite_memory(&self) -> bool {
+        true
     }
 }
 

@@ -326,11 +326,7 @@ impl ExecutionPlan for UnboundedExec {
     }
 
     fn has_finite_memory(&self) -> bool {
-        if self.batch_produce.is_none() {
-            false
-        } else {
-            true
-        }
+        self.batch_produce.is_some()
     }
 }
 

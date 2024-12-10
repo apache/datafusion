@@ -1018,12 +1018,12 @@ mod tests {
 
     use super::*;
     use crate::coalesce_partitions::CoalescePartitionsExec;
+    use crate::collect;
     use crate::expressions::col;
     use crate::memory::MemoryExec;
     use crate::test;
     use crate::test::assert_is_pending;
     use crate::test::exec::{assert_strong_count_converges_to_zero, BlockingExec};
-    use crate::{collect, ExecutionMode};
 
     use arrow::array::*;
     use arrow::compute::SortOptions;
@@ -1062,8 +1062,7 @@ mod tests {
             eq_properties.add_new_orderings(vec![LexOrdering::new(vec![
                 PhysicalSortExpr::new_default(Arc::new(Column::new("c1", 0))),
             ])]);
-            let mode = ExecutionMode::Final;
-            PlanProperties::new(eq_properties, Partitioning::UnknownPartitioning(1), mode)
+            PlanProperties::new(eq_properties, Partitioning::UnknownPartitioning(1))
         }
     }
 

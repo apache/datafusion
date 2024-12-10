@@ -38,7 +38,7 @@ use datafusion::config::ConfigFileType;
 use datafusion::datasource::listing::ListingTableUrl;
 use datafusion::error::{DataFusionError, Result};
 use datafusion::logical_expr::{DdlStatement, LogicalPlan};
-use datafusion::physical_plan::{collect, execute_stream, ExecutionPlanProperties};
+use datafusion::physical_plan::{collect, execute_stream};
 use datafusion::sql::parser::{DFParser, Statement};
 use datafusion::sql::sqlparser::dialect::dialect_from_str;
 
@@ -234,7 +234,7 @@ pub(super) async fn exec_and_print(
         let df = ctx.execute_logical_plan(plan).await?;
         let physical_plan = df.create_physical_plan().await?;
 
-        if !physical_plan.has_finite_memory(){
+        if !physical_plan.has_finite_memory() {
             let stream = execute_stream(physical_plan, task_ctx.clone())?;
             print_options.print_stream(stream, now).await?;
         } else {
