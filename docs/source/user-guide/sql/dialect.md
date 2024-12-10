@@ -19,11 +19,28 @@
 
 # SQL Dialect
 
-By default, Apache DataFusion follows the [PostgreSQL SQL dialect].
-For Array/List functions and semantics, it follows the [DuckDB SQL dialect].
+The included SQL supported in Apache DataFusion mostly follows the [PostgreSQL
+SQL dialect], including:
 
-[duckdb sql dialect]: https://duckdb.org/docs/sql/functions/array
+- The sql parser and [SQL planner]
+- Type checking, analyzer, and type coercions
+- Semantics of functions bundled with DataFusion
+
+Notable exceptions:
+
+- Array/List functions and semantics follow the [DuckDB SQL dialect].
+- DataFusion's type system is based on the [Apache Arrow type system], and the mapping to PostgrSQL types is not always 1:1.
+- DataFusion has its own syntax (dialect) for certain operations (like [`CREATE EXTERNAL TABLE`])
+
 [postgresql sql dialect]: https://www.postgresql.org/docs/current/sql.html
+[sql planner]: https://docs.rs/datafusion/latest/datafusion/sql/planner/struct.SqlToRel.html
+[duckdb sql dialect]: https://duckdb.org/docs/sql/functions/array
+[apache arrow type system]: https://arrow.apache.org/docs/format/Columnar.html#data-types
+[`create external table`]: ddl.md#create-external-table
+
+As Apache DataFusion is designed to be fully customizable, systems built on
+DataFusion can and do update functions, type rules, and SQL syntax to follow
+other systems, such as Apache Spark or MySQL.
 
 ## Rationale
 
@@ -33,6 +50,4 @@ semantics exactly (need bug-for-bug compatibility), and is likely not what all
 users want. However, it avoids the (very significant) effort of defining
 semantics as well as documenting and teaching users about them.
 
-As Apache DataFusion is highly customizable, systems built on DataFusion can and do
-update functions and SQL syntax to model other systems, such as Apache Spark or
-MySQL.
+
