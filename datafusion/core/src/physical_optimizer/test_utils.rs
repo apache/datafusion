@@ -456,7 +456,7 @@ impl ExecutionPlan for RequirementsTestExec {
     }
 
     fn has_finite_memory(&self) -> bool {
-        unimplemented!()
+        true
     }
 }
 
