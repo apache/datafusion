@@ -26,7 +26,7 @@ use arrow::array::{
     downcast_array, Array, AsArray, BooleanArray, BooleanBufferBuilder, Float64Array,
     UInt64Array,
 };
-use arrow::compute::{and, filter, is_not_null, kernels::cast};
+use arrow::compute::{and, filter, is_not_null};
 use arrow::datatypes::{Float64Type, UInt64Type};
 use arrow::{
     array::ArrayRef,
@@ -341,13 +341,14 @@ fn accumulate_correlation_states(
     let sum_xx_values = sum_xx.values().as_ref();
     let sum_yy_values = sum_yy.values().as_ref();
 
-    let mut row = [0.0; 5];
     for (idx, &group_idx) in group_indices.iter().enumerate() {
-        row[0] = sum_x_values[idx];
-        row[1] = sum_y_values[idx];
-        row[2] = sum_xy_values[idx];
-        row[3] = sum_xx_values[idx];
-        row[4] = sum_yy_values[idx];
+        let row = [
+            sum_x_values[idx],
+            sum_y_values[idx],
+            sum_xy_values[idx],
+            sum_xx_values[idx],
+            sum_yy_values[idx],
+        ];
         value_fn(group_idx, counts_values[idx], &row);
     }
 }
@@ -382,10 +383,8 @@ impl GroupsAccumulator for CorrelationGroupsAccumulator {
         self.sum_xx.resize(total_num_groups, 0.0);
         self.sum_yy.resize(total_num_groups, 0.0);
 
-        let array_x = &cast(&values[0], &DataType::Float64)?;
-        let array_x = downcast_array::<Float64Array>(array_x);
-        let array_y = &cast(&values[1], &DataType::Float64)?;
-        let array_y = downcast_array::<Float64Array>(array_y);
+        let array_x = downcast_array::<Float64Array>(&values[0]);
+        let array_y = downcast_array::<Float64Array>(&values[1]);
 
         accumulate_multiple(
             group_indices,

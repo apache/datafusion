@@ -394,8 +394,10 @@ pub fn accumulate_multiple<T, F>(
     // Take AND from all null buffers of `value_columns`.
     let combined_nulls = value_columns
         .iter()
-        .map(|arr| arr.nulls())
-        .fold(None, |acc, nulls| NullBuffer::union(acc.as_ref(), nulls));
+        .map(|arr| arr.logical_nulls())
+        .fold(None, |acc, nulls| {
+            NullBuffer::union(acc.as_ref(), nulls.as_ref())
+        });
 
     // Take AND from previous combined nulls and `opt_filter`.
     let valid_indices = match (combined_nulls, opt_filter) {
@@ -409,7 +411,7 @@ pub fn accumulate_multiple<T, F>(
     };
 
     for col in value_columns.iter() {
-        assert_eq!(col.len(), group_indices.len());
+        debug_assert_eq!(col.len(), group_indices.len());
     }
 
     match valid_indices {
