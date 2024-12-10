@@ -110,7 +110,7 @@ async fn run_tests() -> Result<()> {
                     run_test_file(test_file).await?;
                 }
                 println!(
-                    "Completed {:?}. Elapsed {:.2}",
+                    "Completed {:?}. Elapsed {:?}",
                     test_file.relative_path,
                     ela.elapsed()
                 );
