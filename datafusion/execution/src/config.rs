@@ -212,6 +212,15 @@ impl SessionConfig {
         self.options.execution.target_partitions
     }
 
+    pub fn feature_flag(&self) -> bool {
+        self.options.execution.feature_flag
+    }
+
+    pub fn with_feature_flag(mut self, flag: bool) -> Self {
+        self.options.execution.feature_flag = flag;
+        self
+    }
+
     /// Is the information schema enabled?
     pub fn information_schema(&self) -> bool {
         self.options.catalog.information_schema

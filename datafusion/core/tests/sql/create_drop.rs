@@ -66,3 +66,70 @@ async fn create_external_table_with_ddl() -> Result<()> {
 
     Ok(())
 }
+
+// TODO:
+#[tokio::test]
+async fn test_table_target_partitions() -> Result<()> {
+    use arrow::util::pretty::pretty_format_batches;
+
+    let runtime_env = datafusion_execution::runtime_env::RuntimeEnvBuilder::new();
+    let runtime_env = runtime_env
+        .with_memory_pool(Arc::new(
+            datafusion_execution::memory_pool::GreedyMemoryPool::new(2 * 1024 * 1024),
+        ))
+        .build();
+    let session_config = SessionConfig::from_env()?
+        .with_information_schema(true)
+        .with_feature_flag(true);
+
+    let ctx = SessionContext::new_with_config_rt(session_config, Arc::new(runtime_env?));
+    let sql = "set datafusion.execution.target_partitions = 2;";
+    let _ = ctx.sql(sql).await?.collect().await?;
+
+    let sql = "create table t(a int, b varchar) as values 
+        (1, 'a'),
+        (1, 'a'),
+        (1, 'a'),
+        (2, 'b'),
+        (2, 'b'),
+        (2, 'b');
+        ";
+    let _ = ctx.sql(sql).await?.collect().await?;
+
+    let sql = "explain select b, sum(DISTINCT a) from T group by b;";
+    let actual = ctx.sql(sql).await?.collect().await?;
+    println!("{}", pretty_format_batches(&actual)?);
+    // ---- sql::create_drop::test_table_target_partitions stdout ----
+    // +---------------+----------------------------------------------------------------------------------------------------+
+    // | plan_type     | plan                                                                                               |
+    // +---------------+----------------------------------------------------------------------------------------------------+
+    // | logical_plan  | Projection: t.b, sum(alias1) AS sum(DISTINCT t.a)                                                  |
+    // |               |   Aggregate: groupBy=[[t.b]], aggr=[[sum(alias1)]]                                                 |
+    // |               |     Aggregate: groupBy=[[t.b, CAST(t.a AS Int64) AS alias1]], aggr=[[]]                            |
+    // |               |       TableScan: t projection=[a, b]                                                               |
+    // | physical_plan | ProjectionExec: expr=[b@0 as b, sum(alias1)@1 as sum(DISTINCT t.a)]                                |
+    // |               |   AggregateExec: mode=FinalPartitioned, gby=[b@0 as b], aggr=[sum(alias1)]                         |
+    // |               |     CoalesceBatchesExec: target_batch_size=8192                                                    |
+    // |               |       RepartitionExec: partitioning=Hash([b@0], 2), input_partitions=2                             |
+    // |               |         AggregateExec: mode=Partial, gby=[b@0 as b], aggr=[sum(alias1)]                            |
+    // |               |           AggregateExec: mode=FinalPartitioned, gby=[b@0 as b, alias1@1 as alias1], aggr=[]        |
+    // |               |             CoalesceBatchesExec: target_batch_size=8192                                            |
+    // |               |               RepartitionExec: partitioning=Hash([b@0, alias1@1], 2), input_partitions=2           |
+    // |               |                 AggregateExec: mode=Partial, gby=[b@1 as b, CAST(a@0 AS Int64) as alias1], aggr=[] |
+    // |               |                   MemoryExec: partitions=2, partition_sizes=[1, 1]                                 |
+    // |               |                                                                                                    |
+    // +---------------+----------------------------------------------------------------------------------------------------+
+
+    // let sql = "select b, sum(DISTINCT a) from T group by b;";
+    // let actual = ctx.sql(sql).await?.collect().await?;
+    // println!("{}", pretty_format_batches(&actual)?);
+
+    // let sql = "select * from T;";
+    // let actual = ctx.sql(sql).await?.collect().await?;
+    // println!("{}", pretty_format_batches(&actual)?);
+    println!(
+        "============================================================================="
+    );
+
+    Ok(())
+}

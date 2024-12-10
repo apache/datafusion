@@ -31,7 +31,9 @@ use crate::{
 
 use arrow::datatypes::{Schema, SchemaRef};
 use arrow::record_batch::{RecordBatch, RecordBatchOptions};
-use datafusion_common::{internal_err, plan_err, Result, ScalarValue};
+use arrow_array::ArrayRef;
+use datafusion_common::config::ConfigOptions;
+use datafusion_common::{plan_err, Result, ScalarValue};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::EquivalenceProperties;
 
@@ -94,7 +96,7 @@ impl ValuesExec {
             &RecordBatchOptions::new().with_row_count(Some(n_row)),
         )?;
         let data: Vec<RecordBatch> = vec![batch];
-        Self::try_new_from_batches(schema, data)
+        Self::try_new_from_batches(schema, data, 1)
     }
 
     /// Create a new plan using the provided schema and batches.
@@ -104,9 +106,14 @@ impl ValuesExec {
     pub fn try_new_from_batches(
         schema: SchemaRef,
         batches: Vec<RecordBatch>,
+        target_partitions: usize,
     ) -> Result<Self> {
         if batches.is_empty() {
             return plan_err!("Values list cannot be empty");
+        }
+
+        if batches.len() != target_partitions {
+            return plan_err!("Number of partitions is incorrect");
         }
 
         for batch in &batches {
@@ -118,7 +125,7 @@ impl ValuesExec {
             }
         }
 
-        let cache = Self::compute_properties(Arc::clone(&schema));
+        let cache = Self::compute_properties(Arc::clone(&schema), target_partitions);
         Ok(ValuesExec {
             schema,
             data: batches,
@@ -132,14 +139,15 @@ impl ValuesExec {
     }
 
     /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
-    fn compute_properties(schema: SchemaRef) -> PlanProperties {
+    fn compute_properties(schema: SchemaRef, target_partitions: usize) -> PlanProperties {
         let eq_properties = EquivalenceProperties::new(schema);
+        let partitioning = if target_partitions > 1 {
+            Partitioning::RoundRobinBatch(target_partitions)
+        } else {
+            Partitioning::UnknownPartitioning(1)
+        };
 
-        PlanProperties::new(
-            eq_properties,
-            Partitioning::UnknownPartitioning(1),
-            ExecutionMode::Bounded,
-        )
+        PlanProperties::new(eq_properties, partitioning, ExecutionMode::Bounded)
     }
 }
 
@@ -179,8 +187,64 @@ impl ExecutionPlan for ValuesExec {
         self: Arc<Self>,
         _: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        ValuesExec::try_new_from_batches(Arc::clone(&self.schema), self.data.clone())
-            .map(|e| Arc::new(e) as _)
+        ValuesExec::try_new_from_batches(
+            Arc::clone(&self.schema),
+            self.data.clone(),
+            self.cache.output_partitioning().partition_count(),
+        )
+        .map(|e| Arc::new(e) as _)
+    }
+
+    fn repartitioned(
+        &self,
+        target_partitions: usize,
+        _config: &ConfigOptions,
+    ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+        if target_partitions <= 1 {
+            return Ok(None);
+        }
+
+        let original_data = self.data();
+        let batch = &original_data[0];
+        let total_rows = batch.num_rows();
+        if total_rows <= 1 {
+            return Ok(None);
+        }
+
+        let rows_per_partition = total_rows.div_ceil(target_partitions);
+        if rows_per_partition == 0 {
+            return Ok(None);
+        }
+
+        let mut start = 0;
+        let mut new_batches = Vec::new();
+
+        while start < total_rows && new_batches.len() < target_partitions {
+            let end = (start + rows_per_partition).min(total_rows);
+
+            let columns: Vec<ArrayRef> = (0..batch.num_columns())
+                .map(|col_idx| {
+                    let array = batch.column(col_idx);
+                    array.slice(start, end - start)
+                })
+                .collect();
+
+            let new_batch = RecordBatch::try_new(batch.schema(), columns)?;
+            new_batches.push(new_batch);
+            start = end;
+        }
+
+        if new_batches.len() <= 1 {
+            return Ok(None);
+        }
+
+        let new_values_exec = ValuesExec::try_new_from_batches(
+            Arc::clone(&self.schema),
+            new_batches,
+            target_partitions,
+        )?;
+
+        Ok(Some(Arc::new(new_values_exec)))
     }
 
     fn execute(
@@ -188,20 +252,20 @@ impl ExecutionPlan for ValuesExec {
         partition: usize,
         _context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        // ValuesExec has a single output partition
-        if 0 != partition {
-            return internal_err!(
-                "ValuesExec invalid partition {partition} (expected 0)"
-            );
-        }
+        let batch = if self.cache.output_partitioning().partition_count() > 1 {
+            vec![self.data[partition].clone()]
+        } else {
+            self.data()
+        };
 
         Ok(Box::pin(MemoryStream::try_new(
-            self.data(),
+            batch,
             Arc::clone(&self.schema),
             None,
         )?))
     }
 
+    // TODO:
     fn statistics(&self) -> Result<Statistics> {
         let batch = self.data();
         Ok(common::compute_record_batch_statistics(
@@ -235,14 +299,14 @@ mod tests {
         let schema = batch.schema();
         let batches = vec![batch.clone(), batch];
 
-        let _exec = ValuesExec::try_new_from_batches(schema, batches).unwrap();
+        let _exec = ValuesExec::try_new_from_batches(schema, batches, 2).unwrap();
     }
 
     #[test]
     fn new_exec_with_batches_empty() {
         let batch = make_partition(7);
         let schema = batch.schema();
-        let _ = ValuesExec::try_new_from_batches(schema, Vec::new()).unwrap_err();
+        let _ = ValuesExec::try_new_from_batches(schema, Vec::new(), 1).unwrap_err();
     }
 
     #[test]
@@ -254,7 +318,7 @@ mod tests {
             Field::new("col0", DataType::UInt32, false),
             Field::new("col1", DataType::Utf8, false),
         ]));
-        let _ = ValuesExec::try_new_from_batches(invalid_schema, batches).unwrap_err();
+        let _ = ValuesExec::try_new_from_batches(invalid_schema, batches, 1).unwrap_err();
     }
 
     // Test issue: https://github.com/apache/datafusion/issues/8763

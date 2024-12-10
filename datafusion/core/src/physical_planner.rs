@@ -65,6 +65,7 @@ use arrow::compute::SortOptions;
 use arrow::datatypes::{Schema, SchemaRef};
 use arrow_array::builder::StringBuilder;
 use arrow_array::RecordBatch;
+use datafusion_common::config::ConfigOptions;
 use datafusion_common::display::ToStringifiedPlan;
 use datafusion_common::{
     exec_err, internal_datafusion_err, internal_err, not_impl_err, plan_err, DFSchema,
@@ -454,8 +455,10 @@ impl DefaultPhysicalPlanner {
                     .scan(session_state, projection.as_ref(), &filters, *fetch)
                     .await?
             }
+
             LogicalPlan::Values(Values { values, schema }) => {
                 let exec_schema = schema.as_ref().to_owned().into();
+
                 let exprs = values
                     .iter()
                     .map(|row| {
@@ -466,9 +469,29 @@ impl DefaultPhysicalPlanner {
                             .collect::<Result<Vec<Arc<dyn PhysicalExpr>>>>()
                     })
                     .collect::<Result<Vec<_>>>()?;
+
+                // By default get_available_parallelism()
+                let target_partitions = if session_state.config().feature_flag() {
+                    session_state.config().target_partitions()
+                } else {
+                    1
+                };
+
                 let value_exec = ValuesExec::try_new(SchemaRef::new(exec_schema), exprs)?;
-                Arc::new(value_exec)
+
+                if session_state.config().feature_flag() {
+                    if let Some(repartitioned) = value_exec
+                        .repartitioned(target_partitions, &ConfigOptions::from_env()?)?
+                    {
+                        repartitioned
+                    } else {
+                        Arc::new(value_exec)
+                    }
+                } else {
+                    Arc::new(value_exec)
+                }
             }
+
             LogicalPlan::EmptyRelation(EmptyRelation {
                 produce_one_row: false,
                 schema,
