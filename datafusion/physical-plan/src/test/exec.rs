@@ -24,10 +24,13 @@ use std::{
     task::{Context, Poll},
 };
 
-use crate::stream::{RecordBatchReceiverStream, RecordBatchStreamAdapter};
 use crate::{
     common, DisplayAs, DisplayFormatType, ExecutionMode, ExecutionPlan, Partitioning,
     PlanProperties, RecordBatchStream, SendableRecordBatchStream, Statistics,
+};
+use crate::{
+    execution_plan::EmissionType,
+    stream::{RecordBatchReceiverStream, RecordBatchStreamAdapter},
 };
 
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
@@ -265,6 +268,14 @@ impl ExecutionPlan for MockExec {
             None,
         ))
     }
+
+    fn emission_type(&self) -> EmissionType {
+        unimplemented!()
+    }
+
+    fn has_finite_memory(&self) -> bool {
+        true
+    }
 }
 
 fn clone_error(e: &DataFusionError) -> DataFusionError {
@@ -400,6 +411,14 @@ impl ExecutionPlan for BarrierExec {
             None,
         ))
     }
+
+    fn emission_type(&self) -> EmissionType {
+        unimplemented!()
+    }
+
+    fn has_finite_memory(&self) -> bool {
+        true
+    }
 }
 
 /// A mock execution plan that errors on a call to execute
@@ -482,6 +501,14 @@ impl ExecutionPlan for ErrorExec {
         _context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
         internal_err!("ErrorExec, unsurprisingly, errored in partition {partition}")
+    }
+    
+    fn emission_type(&self) -> EmissionType {
+        unimplemented!()
+    }
+
+    fn has_finite_memory(&self) -> bool {
+        true
     }
 }
 
@@ -572,6 +599,14 @@ impl ExecutionPlan for StatisticsExec {
 
     fn statistics(&self) -> Result<Statistics> {
         Ok(self.stats.clone())
+    }
+    
+    fn emission_type(&self) -> EmissionType {
+        unimplemented!()
+    }
+
+    fn has_finite_memory(&self) -> bool {
+        true
     }
 }
 
@@ -668,6 +703,14 @@ impl ExecutionPlan for BlockingExec {
             schema: Arc::clone(&self.schema),
             _refs: Arc::clone(&self.refs),
         }))
+    }
+    
+    fn emission_type(&self) -> EmissionType {
+        unimplemented!()
+    }
+
+    fn has_finite_memory(&self) -> bool {
+        true
     }
 }
 
@@ -813,6 +856,14 @@ impl ExecutionPlan for PanicExec {
             schema: Arc::clone(&self.schema),
             ready: false,
         }))
+    }
+    
+    fn emission_type(&self) -> EmissionType {
+        unimplemented!()
+    }
+
+    fn has_finite_memory(&self) -> bool {
+        true
     }
 }
 

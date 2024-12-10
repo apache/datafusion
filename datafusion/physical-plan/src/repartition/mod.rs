@@ -29,7 +29,7 @@ use super::metrics::{self, ExecutionPlanMetricsSet, MetricBuilder, MetricsSet};
 use super::{
     DisplayAs, ExecutionPlanProperties, RecordBatchStream, SendableRecordBatchStream,
 };
-use crate::execution_plan::CardinalityEffect;
+use crate::execution_plan::{CardinalityEffect, EmissionType};
 use crate::hash_utils::create_hashes;
 use crate::metrics::BaselineMetrics;
 use crate::repartition::distributor_channels::{
@@ -671,6 +671,14 @@ impl ExecutionPlan for RepartitionExec {
 
     fn cardinality_effect(&self) -> CardinalityEffect {
         CardinalityEffect::Equal
+    }
+
+    fn emission_type(&self) -> EmissionType {
+        self.input.emission_type()
+    }
+
+    fn has_finite_memory(&self) -> bool {
+        self.input.has_finite_memory()
     }
 }
 

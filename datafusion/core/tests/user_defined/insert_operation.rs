@@ -26,7 +26,7 @@ use datafusion::{
 use datafusion_catalog::{Session, TableProvider};
 use datafusion_expr::{dml::InsertOp, Expr, TableType};
 use datafusion_physical_expr::{EquivalenceProperties, Partitioning};
-use datafusion_physical_plan::{DisplayAs, ExecutionMode, ExecutionPlan, PlanProperties};
+use datafusion_physical_plan::{execution_plan::EmissionType, DisplayAs, ExecutionMode, ExecutionPlan, PlanProperties};
 
 #[tokio::test]
 async fn insert_operation_is_passed_correctly_to_table_provider() {
@@ -176,6 +176,14 @@ impl ExecutionPlan for TestInsertExec {
         _context: Arc<datafusion_execution::TaskContext>,
     ) -> Result<datafusion_execution::SendableRecordBatchStream> {
         unimplemented!("TestInsertExec is a stub for testing.")
+    }
+
+    fn emission_type(&self) -> EmissionType {
+        unimplemented!()
+    }
+
+    fn has_finite_memory(&self) -> bool {
+        true
     }
 }
 

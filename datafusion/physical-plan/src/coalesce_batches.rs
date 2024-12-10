@@ -34,7 +34,7 @@ use datafusion_common::Result;
 use datafusion_execution::TaskContext;
 
 use crate::coalesce::{BatchCoalescer, CoalescerState};
-use crate::execution_plan::CardinalityEffect;
+use crate::execution_plan::{CardinalityEffect, EmissionType};
 use futures::ready;
 use futures::stream::{Stream, StreamExt};
 
@@ -203,6 +203,14 @@ impl ExecutionPlan for CoalesceBatchesExec {
 
     fn cardinality_effect(&self) -> CardinalityEffect {
         CardinalityEffect::Equal
+    }
+
+    fn emission_type(&self) -> EmissionType {
+        self.input.emission_type()
+    }
+
+    fn has_finite_memory(&self) -> bool {
+        self.input.has_finite_memory()
     }
 }
 

@@ -38,6 +38,7 @@ use datafusion_common::config::ConfigOptions;
 use datafusion_common::Statistics;
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::{EquivalenceProperties, LexOrdering};
+use datafusion_physical_plan::execution_plan::EmissionType;
 use datafusion_physical_plan::{ExecutionMode, PlanProperties};
 
 use futures::StreamExt;
@@ -211,6 +212,14 @@ impl ExecutionPlan for ArrowExec {
             metrics: self.metrics.clone(),
             cache: self.cache.clone(),
         }))
+    }
+
+    fn emission_type(&self) -> EmissionType {
+        unimplemented!()
+    }
+
+    fn has_finite_memory(&self) -> bool {
+        true
     }
 }
 

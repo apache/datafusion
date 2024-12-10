@@ -42,6 +42,7 @@ use crate::{
 use arrow::datatypes::SchemaRef;
 use datafusion_physical_expr::{EquivalenceProperties, LexOrdering, PhysicalExpr};
 
+use datafusion_physical_plan::execution_plan::EmissionType;
 use itertools::Itertools;
 use log::debug;
 
@@ -863,6 +864,14 @@ impl ExecutionPlan for ParquetExec {
             table_parquet_options: self.table_parquet_options.clone(),
             schema_adapter_factory: self.schema_adapter_factory.clone(),
         }))
+    }
+
+    fn emission_type(&self) -> EmissionType {
+        unimplemented!()
+    }
+
+    fn has_finite_memory(&self) -> bool {
+        true
     }
 }
 

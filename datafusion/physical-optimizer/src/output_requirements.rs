@@ -25,6 +25,7 @@
 use std::sync::Arc;
 
 use datafusion_execution::TaskContext;
+use datafusion_physical_plan::execution_plan::EmissionType;
 use datafusion_physical_plan::sorts::sort::SortExec;
 use datafusion_physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, SendableRecordBatchStream,
@@ -190,6 +191,14 @@ impl ExecutionPlan for OutputRequirementExec {
 
     fn statistics(&self) -> Result<Statistics> {
         self.input.statistics()
+    }
+
+    fn emission_type(&self) -> EmissionType {
+        self.input.emission_type()
+    }
+
+    fn has_finite_memory(&self) -> bool {
+        self.input.has_finite_memory()
     }
 }
 

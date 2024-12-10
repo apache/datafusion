@@ -33,6 +33,7 @@ use std::task::{Context, Poll};
 use std::vec;
 
 use crate::common::SharedMemoryReservation;
+use crate::execution_plan::EmissionType;
 use crate::joins::hash_join::{equal_rows_arr, update_hash};
 use crate::joins::stream_join_utils::{
     calculate_filter_expr_intervals, combine_two_batches,
@@ -553,6 +554,15 @@ impl ExecutionPlan for SymmetricHashJoinExec {
                 batch_transformer: NoopBatchTransformer::new(),
             }))
         }
+    }
+
+    fn emission_type(&self) -> EmissionType {
+        // TODO: Emit at the end if one of the input emit at the end?
+        EmissionType::Incremental
+    }
+
+    fn has_finite_memory(&self) -> bool {
+        self.left.has_finite_memory() && self.right.has_finite_memory()
     }
 }
 

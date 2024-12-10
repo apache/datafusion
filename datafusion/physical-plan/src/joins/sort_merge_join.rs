@@ -55,6 +55,7 @@ use datafusion_physical_expr::PhysicalExprRef;
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, LexRequirement};
 use futures::{Stream, StreamExt};
 
+use crate::execution_plan::EmissionType;
 use crate::expressions::PhysicalSortExpr;
 use crate::joins::utils::{
     build_join_schema, check_join_is_valid, estimate_join_statistics,
@@ -467,6 +468,15 @@ impl ExecutionPlan for SortMergeJoinExec {
             &self.join_type,
             &self.schema,
         )
+    }
+
+    fn emission_type(&self) -> EmissionType {
+        // TODO: Final is the input is sorted, Incremental otherwise
+        EmissionType::Final
+    }
+
+    fn has_finite_memory(&self) -> bool {
+        self.left.has_finite_memory() && self.right.has_finite_memory()
     }
 }
 

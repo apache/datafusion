@@ -57,6 +57,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
+use crate::execution_plan::EmissionType;
 use crate::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
 use crate::sorts::sort::sort_batch;
 use crate::{
@@ -311,6 +312,14 @@ impl ExecutionPlan for PartialSortExec {
 
     fn statistics(&self) -> Result<Statistics> {
         self.input.statistics()
+    }
+
+    fn emission_type(&self) -> EmissionType {
+        self.input.emission_type()
+    }
+
+    fn has_finite_memory(&self) -> bool {
+        self.input.has_finite_memory()
     }
 }
 

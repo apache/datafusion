@@ -48,7 +48,7 @@ use datafusion_physical_expr::{
     analyze, split_conjunction, AnalysisContext, ConstExpr, ExprBoundaries, PhysicalExpr,
 };
 
-use crate::execution_plan::CardinalityEffect;
+use crate::execution_plan::{CardinalityEffect, EmissionType};
 use futures::stream::{Stream, StreamExt};
 use log::trace;
 
@@ -381,6 +381,14 @@ impl ExecutionPlan for FilterExec {
 
     fn cardinality_effect(&self) -> CardinalityEffect {
         CardinalityEffect::LowerEqual
+    }
+
+    fn emission_type(&self) -> EmissionType {
+        self.input.emission_type()
+    }
+
+    fn has_finite_memory(&self) -> bool {
+        self.input.has_finite_memory()
     }
 }
 

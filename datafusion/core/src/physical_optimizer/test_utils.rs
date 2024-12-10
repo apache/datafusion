@@ -51,6 +51,7 @@ use datafusion_expr::{WindowFrame, WindowFunctionDefinition};
 use datafusion_functions_aggregate::count::count_udaf;
 use datafusion_physical_expr::expressions::col;
 use datafusion_physical_expr::{PhysicalExpr, PhysicalSortExpr};
+use datafusion_physical_plan::execution_plan::EmissionType;
 use datafusion_physical_plan::tree_node::PlanContext;
 use datafusion_physical_plan::{
     displayable, DisplayAs, DisplayFormatType, PlanProperties,
@@ -448,6 +449,14 @@ impl ExecutionPlan for RequirementsTestExec {
         _context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
         unimplemented!("Test exec does not support execution")
+    }
+
+    fn emission_type(&self) -> EmissionType {
+        unimplemented!()
+    }
+
+    fn has_finite_memory(&self) -> bool {
+        unimplemented!()
     }
 }
 

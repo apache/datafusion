@@ -26,6 +26,7 @@ use super::{
     SendableRecordBatchStream,
 };
 use crate::display::DisplayableExecutionPlan;
+use crate::execution_plan::EmissionType;
 use crate::{DisplayFormatType, ExecutionPlan, Partitioning};
 
 use arrow::{array::StringBuilder, datatypes::SchemaRef, record_batch::RecordBatch};
@@ -203,6 +204,14 @@ impl ExecutionPlan for AnalyzeExec {
             Arc::clone(&self.schema),
             futures::stream::once(output),
         )))
+    }
+
+    fn emission_type(&self) -> EmissionType {
+        self.input.emission_type()
+    }
+
+    fn has_finite_memory(&self) -> bool {
+        self.input.has_finite_memory()
     }
 }
 

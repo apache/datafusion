@@ -21,6 +21,7 @@ use std::any::Any;
 use std::sync::Arc;
 
 use crate::common::spawn_buffered;
+use crate::execution_plan::EmissionType;
 use crate::limit::LimitStream;
 use crate::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
 use crate::sorts::streaming_merge::StreamingMergeBuilder;
@@ -309,6 +310,14 @@ impl ExecutionPlan for SortPreservingMergeExec {
 
     fn supports_limit_pushdown(&self) -> bool {
         true
+    }
+
+    fn emission_type(&self) -> EmissionType {
+        self.input.emission_type()
+    }
+
+    fn has_finite_memory(&self) -> bool {
+        self.input.has_finite_memory()
     }
 }
 
@@ -1303,6 +1312,14 @@ mod tests {
                 congestion_cleared: Arc::clone(&self.congestion_cleared),
                 partition,
             }))
+        }
+
+        fn emission_type(&self) -> EmissionType {
+            EmissionType::Incremental
+        }
+
+        fn has_finite_memory(&self) -> bool {
+            true
         }
     }
 

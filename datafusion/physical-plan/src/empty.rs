@@ -24,7 +24,10 @@ use super::{
     common, DisplayAs, ExecutionMode, PlanProperties, SendableRecordBatchStream,
     Statistics,
 };
-use crate::{memory::MemoryStream, DisplayFormatType, ExecutionPlan, Partitioning};
+use crate::{
+    execution_plan::EmissionType, memory::MemoryStream, DisplayFormatType, ExecutionPlan,
+    Partitioning,
+};
 
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
@@ -156,6 +159,14 @@ impl ExecutionPlan for EmptyExec {
             &self.schema,
             None,
         ))
+    }
+
+    fn emission_type(&self) -> EmissionType {
+        unimplemented!()
+    }
+
+    fn has_finite_memory(&self) -> bool {
+        true
     }
 }
 

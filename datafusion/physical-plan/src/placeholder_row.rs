@@ -24,6 +24,7 @@ use super::{
     common, DisplayAs, ExecutionMode, PlanProperties, SendableRecordBatchStream,
     Statistics,
 };
+use crate::execution_plan::EmissionType;
 use crate::{memory::MemoryStream, DisplayFormatType, ExecutionPlan, Partitioning};
 
 use arrow::array::{ArrayRef, NullArray};
@@ -178,6 +179,14 @@ impl ExecutionPlan for PlaceholderRowExec {
             &self.schema,
             None,
         ))
+    }
+
+    fn emission_type(&self) -> EmissionType {
+        EmissionType::Incremental
+    }
+
+    fn has_finite_memory(&self) -> bool {
+        true
     }
 }
 

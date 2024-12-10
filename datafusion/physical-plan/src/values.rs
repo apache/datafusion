@@ -24,6 +24,7 @@ use super::{
     common, DisplayAs, ExecutionMode, PlanProperties, SendableRecordBatchStream,
     Statistics,
 };
+use crate::execution_plan::EmissionType;
 use crate::{
     memory::MemoryStream, ColumnarValue, DisplayFormatType, ExecutionPlan, Partitioning,
     PhysicalExpr,
@@ -209,6 +210,14 @@ impl ExecutionPlan for ValuesExec {
             &self.schema,
             None,
         ))
+    }
+
+    fn emission_type(&self) -> EmissionType {
+        EmissionType::Incremental
+    }
+
+    fn has_finite_memory(&self) -> bool {
+        true
     }
 }
 

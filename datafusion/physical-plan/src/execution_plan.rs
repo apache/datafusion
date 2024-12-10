@@ -424,6 +424,9 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
     fn cardinality_effect(&self) -> CardinalityEffect {
         CardinalityEffect::Unknown
     }
+
+    fn emission_type(&self) -> EmissionType;
+    fn has_finite_memory(&self) -> bool;
 }
 
 /// Extension trait provides an easy API to fetch various properties of
@@ -503,6 +506,14 @@ impl ExecutionPlanProperties for &dyn ExecutionPlan {
     }
 }
 
+#[derive(PartialEq, Eq)]
+pub enum EmissionType {
+    Incremental,
+    Final,
+    // Incremental and Final
+    Both,
+}
+
 bitflags! {
     /// Describes the execution mode of the result of calling
     /// [`ExecutionPlan::execute`] with respect to its size and behavior.
@@ -579,6 +590,25 @@ impl ExecutionMode {
         self.insert(ExecutionMode::Final);
         self.remove(ExecutionMode::Incremental);
         self
+    }
+}
+
+pub(crate) fn emission_type_from_children(
+    children: &[Arc<dyn ExecutionPlan>],
+) -> EmissionType {
+    let has_incremental_children = children
+        .iter()
+        .any(|child| child.emission_type() == EmissionType::Incremental);
+    let has_final_children = children
+        .iter()
+        .any(|child| child.emission_type() == EmissionType::Final);
+
+    if has_incremental_children && has_final_children {
+        EmissionType::Both
+    } else if has_final_children {
+        EmissionType::Final
+    } else {
+        EmissionType::Incremental
     }
 }
 
@@ -1019,6 +1049,14 @@ mod tests {
         fn statistics(&self) -> Result<Statistics> {
             unimplemented!()
         }
+
+        fn emission_type(&self) -> EmissionType {
+            unimplemented!()
+        }
+
+        fn has_finite_memory(&self) -> bool {
+            unimplemented!()
+        }
     }
 
     #[derive(Debug)]
@@ -1080,6 +1118,14 @@ mod tests {
         }
 
         fn statistics(&self) -> Result<Statistics> {
+            unimplemented!()
+        }
+
+        fn emission_type(&self) -> EmissionType {
+            unimplemented!()
+        }
+
+        fn has_finite_memory(&self) -> bool {
             unimplemented!()
         }
     }

@@ -23,6 +23,7 @@ use std::sync::Arc;
 
 use super::{DisplayAs, DisplayFormatType, ExecutionMode, PlanProperties};
 use crate::display::{display_orderings, ProjectSchemaDisplay};
+use crate::execution_plan::EmissionType;
 use crate::stream::RecordBatchStreamAdapter;
 use crate::{ExecutionPlan, Partitioning, SendableRecordBatchStream};
 
@@ -282,6 +283,14 @@ impl ExecutionPlan for StreamingTableExec {
             cache: self.cache.clone(),
             metrics: self.metrics.clone(),
         }))
+    }
+
+    fn emission_type(&self) -> EmissionType {
+        EmissionType::Incremental
+    }
+
+    fn has_finite_memory(&self) -> bool {
+        !self.is_infinite()
     }
 }
 

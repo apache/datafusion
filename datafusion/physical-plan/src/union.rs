@@ -33,6 +33,7 @@ use super::{
     ExecutionPlanProperties, Partitioning, PlanProperties, RecordBatchStream,
     SendableRecordBatchStream, Statistics,
 };
+use crate::execution_plan::{emission_type_from_children, EmissionType};
 use crate::metrics::BaselineMetrics;
 use crate::stream::ObservedStream;
 
@@ -264,6 +265,14 @@ impl ExecutionPlan for UnionExec {
     fn supports_limit_pushdown(&self) -> bool {
         true
     }
+
+    fn emission_type(&self) -> EmissionType {
+        emission_type_from_children(self.inputs.as_slice())
+    }
+
+    fn has_finite_memory(&self) -> bool {
+        self.inputs.iter().all(|input| input.has_finite_memory())
+    }
 }
 
 /// Combines multiple input streams by interleaving them.
@@ -444,6 +453,14 @@ impl ExecutionPlan for InterleaveExec {
 
     fn benefits_from_input_partitioning(&self) -> Vec<bool> {
         vec![false; self.children().len()]
+    }
+
+    fn emission_type(&self) -> EmissionType {
+        emission_type_from_children(self.inputs.as_slice())
+    }
+
+    fn has_finite_memory(&self) -> bool {
+        self.inputs.iter().all(|input| input.has_finite_memory())
     }
 }
 

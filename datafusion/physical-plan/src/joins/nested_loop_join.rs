@@ -28,6 +28,7 @@ use super::utils::{
     BatchTransformer, NoopBatchTransformer, StatefulStreamResult,
 };
 use crate::coalesce_partitions::CoalescePartitionsExec;
+use crate::execution_plan::EmissionType;
 use crate::joins::utils::{
     adjust_indices_by_join_type, apply_join_filter_to_indices, build_batch_from_indices,
     build_join_schema, check_join_is_valid, estimate_join_statistics,
@@ -420,6 +421,18 @@ impl ExecutionPlan for NestedLoopJoinExec {
             &self.join_type,
             &self.schema,
         )
+    }
+
+    fn emission_type(&self) -> EmissionType {
+        if self.left.has_finite_memory() {
+            EmissionType::Incremental
+        } else {
+            EmissionType::Final
+        }
+    }
+
+    fn has_finite_memory(&self) -> bool {
+        self.left.has_finite_memory()
     }
 }
 

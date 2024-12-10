@@ -42,7 +42,7 @@ use datafusion_execution::TaskContext;
 use datafusion_physical_expr::equivalence::ProjectionMapping;
 use datafusion_physical_expr::expressions::{CastExpr, Literal};
 
-use crate::execution_plan::CardinalityEffect;
+use crate::execution_plan::{CardinalityEffect, EmissionType};
 use futures::stream::{Stream, StreamExt};
 use log::trace;
 
@@ -237,6 +237,14 @@ impl ExecutionPlan for ProjectionExec {
 
     fn cardinality_effect(&self) -> CardinalityEffect {
         CardinalityEffect::Equal
+    }
+
+    fn emission_type(&self) -> EmissionType {
+        self.input.emission_type()
+    }
+
+    fn has_finite_memory(&self) -> bool {
+        self.input.has_finite_memory()
     }
 }
 

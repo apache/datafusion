@@ -524,7 +524,7 @@ mod tests {
     use datafusion_common::{DataFusionError, Result, Statistics};
     use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 
-    use crate::{DisplayAs, ExecutionPlan, PlanProperties};
+    use crate::{execution_plan::EmissionType, DisplayAs, ExecutionPlan, PlanProperties};
 
     use super::DisplayableExecutionPlan;
 
@@ -585,6 +585,14 @@ mod tests {
                 }
                 Self::Ok => Ok(Statistics::new_unknown(self.schema().as_ref())),
             }
+        }
+
+        fn emission_type(&self) -> EmissionType {
+            unimplemented!()
+        }
+
+        fn has_finite_memory(&self) -> bool {
+            unimplemented!()
         }
     }
 

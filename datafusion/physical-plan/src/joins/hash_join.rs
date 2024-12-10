@@ -29,6 +29,7 @@ use super::{
     utils::{OnceAsync, OnceFut},
     PartitionMode,
 };
+use crate::execution_plan::EmissionType;
 use crate::ExecutionPlanProperties;
 use crate::{
     coalesce_partitions::CoalescePartitionsExec,
@@ -806,6 +807,28 @@ impl ExecutionPlan for HashJoinExec {
         )?;
         // Project statistics if there is a projection
         Ok(stats.project(self.projection.as_ref()))
+    }
+
+    fn emission_type(&self) -> EmissionType {
+        if self.left.has_finite_memory() {
+            return EmissionType::Final;
+        }
+
+        match self.join_type {
+            JoinType::Inner | JoinType::LeftSemi | JoinType::RightSemi => {
+                EmissionType::Incremental
+            }
+            JoinType::Left
+            | JoinType::LeftAnti
+            | JoinType::LeftMark
+            | JoinType::Right
+            | JoinType::RightAnti
+            | JoinType::Full => EmissionType::Both,
+        }
+    }
+
+    fn has_finite_memory(&self) -> bool {
+        self.left.has_finite_memory() && self.right.has_finite_memory()
     }
 }
 

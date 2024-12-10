@@ -55,6 +55,7 @@ use datafusion_physical_expr::{expressions, EquivalenceProperties, PhysicalExpr}
 use async_trait::async_trait;
 use datafusion_catalog::Session;
 use datafusion_physical_expr::aggregate::{AggregateExprBuilder, AggregateFunctionExpr};
+use datafusion_physical_plan::execution_plan::EmissionType;
 use futures::Stream;
 use tempfile::TempDir;
 // backwards compatibility
@@ -325,6 +326,18 @@ impl ExecutionPlan for UnboundedExec {
             count: 0,
             batch: self.batch.clone(),
         }))
+    }
+
+    fn emission_type(&self) -> EmissionType {
+        EmissionType::Incremental
+    }
+
+    fn has_finite_memory(&self) -> bool {
+        if self.batch_produce.is_none() {
+            false
+        } else {
+            true
+        }
     }
 }
 

@@ -23,6 +23,8 @@ use std::fmt;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
+use crate::execution_plan::EmissionType;
+
 use super::{
     common, DisplayAs, DisplayFormatType, ExecutionMode, ExecutionPlan, Partitioning,
     PlanProperties, RecordBatchStream, SendableRecordBatchStream, Statistics,
@@ -148,6 +150,14 @@ impl ExecutionPlan for MemoryExec {
             &self.schema,
             self.projection.clone(),
         ))
+    }
+
+    fn emission_type(&self) -> EmissionType {
+        EmissionType::Incremental
+    }
+
+    fn has_finite_memory(&self) -> bool {
+        true
     }
 }
 
@@ -484,6 +494,14 @@ impl ExecutionPlan for LazyMemoryExec {
 
     fn statistics(&self) -> Result<Statistics> {
         Ok(Statistics::new_unknown(&self.schema))
+    }
+
+    fn emission_type(&self) -> EmissionType {
+        EmissionType::Incremental
+    }
+
+    fn has_finite_memory(&self) -> bool {
+        true
     }
 }
 

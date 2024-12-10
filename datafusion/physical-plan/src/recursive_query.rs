@@ -26,6 +26,7 @@ use super::{
     work_table::{ReservedBatches, WorkTable, WorkTableExec},
     PlanProperties, RecordBatchStream, SendableRecordBatchStream, Statistics,
 };
+use crate::execution_plan::EmissionType;
 use crate::{DisplayAs, DisplayFormatType, ExecutionMode, ExecutionPlan};
 
 use arrow::datatypes::SchemaRef;
@@ -204,6 +205,14 @@ impl ExecutionPlan for RecursiveQueryExec {
 
     fn statistics(&self) -> Result<Statistics> {
         Ok(Statistics::new_unknown(&self.schema()))
+    }
+
+    fn emission_type(&self) -> EmissionType {
+        EmissionType::Incremental
+    }
+
+    fn has_finite_memory(&self) -> bool {
+        true
     }
 }
 

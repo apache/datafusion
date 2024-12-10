@@ -34,7 +34,7 @@ use arrow::record_batch::RecordBatch;
 use datafusion_common::{internal_err, Result};
 use datafusion_execution::TaskContext;
 
-use crate::execution_plan::CardinalityEffect;
+use crate::execution_plan::{CardinalityEffect, EmissionType};
 use futures::stream::{Stream, StreamExt};
 use log::trace;
 
@@ -201,6 +201,14 @@ impl ExecutionPlan for GlobalLimitExec {
     fn supports_limit_pushdown(&self) -> bool {
         true
     }
+
+    fn emission_type(&self) -> EmissionType {
+        EmissionType::Final
+    }
+
+    fn has_finite_memory(&self) -> bool {
+        true
+    }
 }
 
 /// LocalLimitExec applies a limit to a single partition
@@ -340,6 +348,14 @@ impl ExecutionPlan for LocalLimitExec {
 
     fn cardinality_effect(&self) -> CardinalityEffect {
         CardinalityEffect::LowerEqual
+    }
+
+    fn emission_type(&self) -> EmissionType {
+        EmissionType::Final
+    }
+
+    fn has_finite_memory(&self) -> bool {
+        true
     }
 }
 

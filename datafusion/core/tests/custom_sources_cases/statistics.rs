@@ -37,6 +37,7 @@ use datafusion_physical_expr::EquivalenceProperties;
 
 use async_trait::async_trait;
 use datafusion_catalog::Session;
+use datafusion_physical_plan::execution_plan::EmissionType;
 
 /// This is a testing structure for statistics
 /// It will act both as a table provider and execution plan
@@ -179,6 +180,14 @@ impl ExecutionPlan for StatisticsValidation {
 
     fn statistics(&self) -> Result<Statistics> {
         Ok(self.stats.clone())
+    }
+
+    fn emission_type(&self) -> EmissionType {
+        unimplemented!()
+    }
+
+    fn has_finite_memory(&self) -> bool {
+        true
     }
 }
 

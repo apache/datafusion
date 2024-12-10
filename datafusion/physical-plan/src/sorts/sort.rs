@@ -56,7 +56,7 @@ use datafusion_execution::TaskContext;
 use datafusion_physical_expr::LexOrdering;
 use datafusion_physical_expr_common::sort_expr::LexRequirement;
 
-use crate::execution_plan::CardinalityEffect;
+use crate::execution_plan::{CardinalityEffect, EmissionType};
 use futures::{StreamExt, TryStreamExt};
 use log::{debug, trace};
 
@@ -996,6 +996,24 @@ impl ExecutionPlan for SortExec {
             CardinalityEffect::LowerEqual
         }
     }
+
+    fn emission_type(&self) -> EmissionType {
+        let requirement = LexRequirement::from(self.expr.clone());
+        let sort_satisfied = self
+            .input
+            .equivalence_properties()
+            .ordering_satisfy_requirement(&requirement);
+
+        if sort_satisfied {
+            EmissionType::Incremental
+        } else {
+            EmissionType::Final
+        }
+    }
+
+    fn has_finite_memory(&self) -> bool {
+        self.input.has_finite_memory()
+    }
 }
 
 #[cfg(test)]
@@ -1089,6 +1107,14 @@ mod tests {
                 batch_size: self.batch_size,
                 offset: 0,
             }))
+        }
+
+        fn emission_type(&self) -> EmissionType {
+            EmissionType::Final
+        }
+
+        fn has_finite_memory(&self) -> bool {
+            false
         }
     }
 

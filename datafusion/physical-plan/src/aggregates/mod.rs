@@ -48,7 +48,7 @@ use datafusion_physical_expr::{
     PhysicalExpr, PhysicalSortRequirement,
 };
 
-use crate::execution_plan::CardinalityEffect;
+use crate::execution_plan::{CardinalityEffect, EmissionType};
 use datafusion_physical_expr::aggregate::AggregateFunctionExpr;
 use itertools::Itertools;
 
@@ -872,6 +872,20 @@ impl ExecutionPlan for AggregateExec {
 
     fn cardinality_effect(&self) -> CardinalityEffect {
         CardinalityEffect::LowerEqual
+    }
+
+    fn emission_type(&self) -> EmissionType {
+        if !self.input.has_finite_memory()
+            && self.input_order_mode == InputOrderMode::Linear
+        {
+            EmissionType::Final
+        } else {
+            self.emission_type()
+        }
+    }
+
+    fn has_finite_memory(&self) -> bool {
+        self.input.has_finite_memory()
     }
 }
 
@@ -1799,6 +1813,14 @@ mod tests {
                 &self.schema(),
                 None,
             ))
+        }
+
+        fn emission_type(&self) -> EmissionType {
+            EmissionType::Incremental
+        }
+
+        fn has_finite_memory(&self) -> bool {
+            true
         }
     }
 

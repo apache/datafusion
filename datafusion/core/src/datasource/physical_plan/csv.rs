@@ -43,6 +43,7 @@ use datafusion_common::config::ConfigOptions;
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::{EquivalenceProperties, LexOrdering};
 
+use datafusion_physical_plan::execution_plan::EmissionType;
 use futures::{StreamExt, TryStreamExt};
 use object_store::buffered::BufWriter;
 use object_store::{GetOptions, GetResultPayload, ObjectStore};
@@ -468,6 +469,14 @@ impl ExecutionPlan for CsvExec {
             file_compression_type: self.file_compression_type,
             cache: self.cache.clone(),
         }))
+    }
+
+    fn emission_type(&self) -> EmissionType {
+        unimplemented!()
+    }
+
+    fn has_finite_memory(&self) -> bool {
+        true
     }
 }
 

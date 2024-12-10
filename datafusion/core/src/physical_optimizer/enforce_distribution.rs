@@ -1430,6 +1430,7 @@ pub(crate) mod tests {
         expressions::binary, expressions::lit, LexOrdering, PhysicalSortExpr,
     };
     use datafusion_physical_expr_common::sort_expr::LexRequirement;
+    use datafusion_physical_plan::execution_plan::EmissionType;
     use datafusion_physical_plan::PlanProperties;
 
     /// Models operators like BoundedWindowExec that require an input
@@ -1526,6 +1527,14 @@ pub(crate) mod tests {
 
         fn statistics(&self) -> Result<Statistics> {
             self.input.statistics()
+        }
+
+        fn emission_type(&self) -> EmissionType {
+            self.input.emission_type()
+        }
+
+        fn has_finite_memory(&self) -> bool {
+            self.input.has_finite_memory()
         }
     }
 

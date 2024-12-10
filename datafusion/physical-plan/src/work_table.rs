@@ -24,6 +24,7 @@ use super::{
     metrics::{ExecutionPlanMetricsSet, MetricsSet},
     SendableRecordBatchStream, Statistics,
 };
+use crate::execution_plan::EmissionType;
 use crate::memory::MemoryStream;
 use crate::{DisplayAs, DisplayFormatType, ExecutionMode, ExecutionPlan, PlanProperties};
 
@@ -223,6 +224,14 @@ impl ExecutionPlan for WorkTableExec {
 
     fn statistics(&self) -> Result<Statistics> {
         Ok(Statistics::new_unknown(&self.schema()))
+    }
+
+    fn emission_type(&self) -> EmissionType {
+        EmissionType::Incremental
+    }
+
+    fn has_finite_memory(&self) -> bool {
+        true
     }
 }
 
