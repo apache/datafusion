@@ -24,6 +24,7 @@
 use core::fmt;
 
 use sqlparser::ast;
+use sqlparser::ast::helpers::attached_token::AttachedToken;
 
 #[derive(Clone)]
 pub(super) struct QueryBuilder {
@@ -268,6 +269,7 @@ impl SelectBuilder {
             connect_by: None,
             window_before_qualify: false,
             prewhere: None,
+            select_token: AttachedToken::empty(),
         })
     }
     fn create_empty() -> Self {
@@ -458,6 +460,7 @@ impl TableRelationBuilder {
             version: self.version.clone(),
             partitions: self.partitions.clone(),
             with_ordinality: false,
+            json_path: None,
         })
     }
     fn create_empty() -> Self {

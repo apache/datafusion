@@ -42,6 +42,7 @@ use sqlparser::ast::{
     display_comma_separated, ExceptSelectItem, ExcludeSelectItem, IlikeSelectItem,
     NullTreatment, RenameSelectItem, ReplaceSelectElement,
 };
+use sqlparser::tokenizer::Span;
 
 /// Represents logical expressions such as `A + 1`, or `CAST(c1 AS int)`.
 ///
@@ -222,6 +223,8 @@ use sqlparser::ast::{
 /// // to 42 = 5 AND b = 6
 /// assert_eq!(rewritten.data, lit(42).eq(lit(5)).and(col("b").eq(lit(6))));
 #[derive(Clone, PartialEq, Eq, PartialOrd, Hash, Debug)]
+// TODO make the enum smaller with more boxing (looks like Wildcard is now bigger)
+#[allow(clippy::large_enum_variant)]
 pub enum Expr {
     /// An expression with a specific name.
     Alias(Alias),
@@ -348,6 +351,16 @@ impl From<Column> for Expr {
 impl<'a> From<(Option<&'a TableReference>, &'a FieldRef)> for Expr {
     fn from(value: (Option<&'a TableReference>, &'a FieldRef)) -> Self {
         Expr::from(Column::from(value))
+    }
+}
+
+/// Same as [`From<(Option<&'a TableReference>, &'a FieldRef)>`] but with a span
+impl<'a, IT> From<(Option<&'a TableReference>, &'a FieldRef, IT)> for Expr
+where
+    IT: IntoIterator<Item = Span>,
+{
+    fn from(value: (Option<&'a TableReference>, &'a FieldRef, IT)) -> Self {
+        Expr::from(Column::from((value.0, value.1)).with_spans(value.2))
     }
 }
 
@@ -1111,7 +1124,11 @@ impl Expr {
     /// output schema. We can use this qualified name to reference the field.
     pub fn qualified_name(&self) -> (Option<TableReference>, String) {
         match self {
-            Expr::Column(Column { relation, name }) => (relation.clone(), name.clone()),
+            Expr::Column(Column {
+                relation,
+                name,
+                spans: _,
+            }) => (relation.clone(), name.clone()),
             Expr::Alias(Alias { relation, name, .. }) => (relation.clone(), name.clone()),
             _ => (None, self.schema_name().to_string()),
         }
@@ -1661,6 +1678,14 @@ impl Expr {
             | Expr::WindowFunction(..)
             | Expr::Literal(..)
             | Expr::Placeholder(..) => false,
+        }
+    }
+
+    pub fn get_spans(&self) -> Option<&Vec<Span>> {
+        match self {
+            Expr::Column(Column { spans, .. }) => Some(spans),
+            Expr::Alias(Alias { expr, .. }) => expr.get_spans(),
+            _ => None,
         }
     }
 }

@@ -17,7 +17,10 @@
 
 //! DFSchema is an extended schema struct that DataFusion uses to provide support for
 //! fields with optional relation names.
+mod fields_spans;
+pub use fields_spans::FieldsSpans;
 
+use std::backtrace::Backtrace;
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::fmt::{Display, Formatter};
 use std::hash::Hash;
@@ -28,10 +31,11 @@ use crate::{
     field_not_found, unqualified_field_not_found, Column, FunctionalDependencies,
     SchemaError, TableReference,
 };
-
 use arrow::compute::can_cast_types;
 use arrow::datatypes::{DataType, Field, FieldRef, Fields, Schema, SchemaRef};
 use arrow_schema::SchemaBuilder;
+use derivative::Derivative;
+use sqlparser::tokenizer::Span;
 
 /// A reference-counted reference to a [DFSchema].
 pub type DFSchemaRef = Arc<DFSchema>;
@@ -104,7 +108,8 @@ pub type DFSchemaRef = Arc<DFSchema>;
 /// let schema = Schema::from(df_schema);
 /// assert_eq!(schema.fields().len(), 1);
 /// ```
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Derivative)]
+#[derivative(PartialEq, Eq)]
 pub struct DFSchema {
     /// Inner Arrow schema reference.
     inner: SchemaRef,
@@ -113,6 +118,10 @@ pub struct DFSchema {
     field_qualifiers: Vec<Option<TableReference>>,
     /// Stores functional dependencies in the schema.
     functional_dependencies: FunctionalDependencies,
+    /// The location in the source code where the fields are defined (e.g. in
+    /// the body of a CTE), if any.
+    #[derivative(PartialEq = "ignore")]
+    fields_spans: FieldsSpans,
 }
 
 impl DFSchema {
@@ -122,6 +131,7 @@ impl DFSchema {
             inner: Arc::new(Schema::new([])),
             field_qualifiers: vec![],
             functional_dependencies: FunctionalDependencies::empty(),
+            fields_spans: FieldsSpans::empty(0),
         }
     }
 
@@ -147,12 +157,15 @@ impl DFSchema {
         let (qualifiers, fields): (Vec<Option<TableReference>>, Vec<Arc<Field>>) =
             qualified_fields.into_iter().unzip();
 
+        let field_count = fields.len();
+
         let schema = Arc::new(Schema::new_with_metadata(fields, metadata));
 
         let dfschema = Self {
             inner: schema,
             field_qualifiers: qualifiers,
             functional_dependencies: FunctionalDependencies::empty(),
+            fields_spans: FieldsSpans::empty(field_count),
         };
         dfschema.check_names()?;
         Ok(dfschema)
@@ -182,6 +195,7 @@ impl DFSchema {
             inner: schema,
             field_qualifiers: vec![None; field_count],
             functional_dependencies: FunctionalDependencies::empty(),
+            fields_spans: FieldsSpans::empty(field_count),
         };
         dfschema.check_names()?;
         Ok(dfschema)
@@ -200,6 +214,7 @@ impl DFSchema {
             inner: schema.clone().into(),
             field_qualifiers: vec![Some(qualifier); schema.fields.len()],
             functional_dependencies: FunctionalDependencies::empty(),
+            fields_spans: FieldsSpans::empty(schema.fields.len()),
         };
         schema.check_names()?;
         Ok(schema)
@@ -210,10 +225,12 @@ impl DFSchema {
         qualifiers: Vec<Option<TableReference>>,
         schema: &SchemaRef,
     ) -> Result<Self> {
+        let field_count = schema.fields.len();
         let dfschema = Self {
             inner: Arc::clone(schema),
             field_qualifiers: qualifiers,
             functional_dependencies: FunctionalDependencies::empty(),
+            fields_spans: FieldsSpans::empty(field_count),
         };
         dfschema.check_names()?;
         Ok(dfschema)
@@ -265,6 +282,11 @@ impl DFSchema {
         }
     }
 
+    pub fn with_fields_spans(mut self, fields_spans: FieldsSpans) -> Self {
+        self.fields_spans = fields_spans;
+        self
+    }
+
     /// Create a new schema that contains the fields from this schema followed by the fields
     /// from the supplied schema. An error will be returned if there are duplicate field names.
     pub fn join(&self, schema: &DFSchema) -> Result<Self> {
@@ -276,6 +298,7 @@ impl DFSchema {
         let mut new_metadata = self.inner.metadata.clone();
         new_metadata.extend(schema.inner.metadata.clone());
         let new_schema_with_metadata = new_schema.with_metadata(new_metadata);
+        let new_field_count = new_schema_with_metadata.fields.len();
 
         let mut new_qualifiers = self.field_qualifiers.clone();
         new_qualifiers.extend_from_slice(schema.field_qualifiers.as_slice());
@@ -284,6 +307,7 @@ impl DFSchema {
             inner: Arc::new(new_schema_with_metadata),
             field_qualifiers: new_qualifiers,
             functional_dependencies: FunctionalDependencies::empty(),
+            fields_spans: FieldsSpans::empty(new_field_count),
         };
         new_self.check_names()?;
         Ok(new_self)
@@ -296,8 +320,10 @@ impl DFSchema {
             return;
         }
 
-        let self_fields: HashSet<(Option<&TableReference>, &FieldRef)> =
-            self.iter().collect();
+        let self_fields: HashSet<(Option<&TableReference>, &FieldRef)> = self
+            .iter()
+            .map(|(qualifier, field, _)| (qualifier, field))
+            .collect();
         let self_unqualified_names: HashSet<&str> = self
             .inner
             .fields
@@ -307,7 +333,7 @@ impl DFSchema {
 
         let mut schema_builder = SchemaBuilder::from(self.inner.fields.clone());
         let mut qualifiers = Vec::new();
-        for (qualifier, field) in other_schema.iter() {
+        for (qualifier, field, _) in other_schema.iter() {
             // skip duplicate columns
             let duplicated_field = match qualifier {
                 Some(q) => self_fields.contains(&(Some(q), field)),
@@ -353,7 +379,7 @@ impl DFSchema {
         let mut matches = self
             .iter()
             .enumerate()
-            .filter(|(_, (q, f))| match (qualifier, q) {
+            .filter(|(_, (q, f, _))| match (qualifier, q) {
                 // field to lookup is qualified.
                 // current field is qualified and not shared between relations, compare both
                 // qualifier and name.
@@ -424,8 +450,8 @@ impl DFSchema {
     /// Find all fields having the given qualifier
     pub fn fields_with_qualified(&self, qualifier: &TableReference) -> Vec<&Field> {
         self.iter()
-            .filter(|(q, _)| q.map(|q| q.eq(qualifier)).unwrap_or(false))
-            .map(|(_, f)| f.as_ref())
+            .filter(|(q, _, _)| q.map(|q| q.eq(qualifier)).unwrap_or(false))
+            .map(|(_, f, _)| f.as_ref())
             .collect()
     }
 
@@ -436,7 +462,7 @@ impl DFSchema {
     ) -> Vec<usize> {
         self.iter()
             .enumerate()
-            .filter_map(|(idx, (q, _))| q.and_then(|q| q.eq(qualifier).then_some(idx)))
+            .filter_map(|(idx, (q, _, _))| q.and_then(|q| q.eq(qualifier).then_some(idx)))
             .collect()
     }
 
@@ -455,23 +481,26 @@ impl DFSchema {
         name: &str,
     ) -> Vec<(Option<&TableReference>, &Field)> {
         self.iter()
-            .filter(|(_, field)| field.name() == name)
-            .map(|(qualifier, field)| (qualifier, field.as_ref()))
+            .filter(|(_, field, _)| field.name() == name)
+            .map(|(qualifier, field, _)| (qualifier, field.as_ref()))
             .collect()
     }
 
     /// Find all fields that match the given name and convert to column
     pub fn columns_with_unqualified_name(&self, name: &str) -> Vec<Column> {
         self.iter()
-            .filter(|(_, field)| field.name() == name)
-            .map(|(qualifier, field)| Column::new(qualifier.cloned(), field.name()))
+            .filter(|(_, field, _)| field.name() == name)
+            .map(|(qualifier, field, spans)| {
+                Column::new(qualifier.cloned(), field.name())
+                    .with_spans(spans.iter().copied())
+            })
             .collect()
     }
 
     /// Return all `Column`s for the schema
     pub fn columns(&self) -> Vec<Column> {
         self.iter()
-            .map(|(qualifier, field)| {
+            .map(|(qualifier, field, _)| {
                 Column::new(qualifier.cloned(), field.name().clone())
             })
             .collect()
@@ -505,6 +534,7 @@ impl DFSchema {
                         field: Column {
                             relation: None,
                             name: name.to_string(),
+                            spans: vec![],
                         },
                     })
                 }
@@ -558,8 +588,9 @@ impl DFSchema {
         qualifier: &TableReference,
         name: &str,
     ) -> bool {
-        self.iter()
-            .any(|(q, f)| q.map(|q| q.eq(qualifier)).unwrap_or(false) && f.name() == name)
+        self.iter().any(|(q, f, _)| {
+            q.map(|q| q.eq(qualifier)).unwrap_or(false) && f.name() == name
+        })
     }
 
     /// Find if the field exists with the given qualified column
@@ -613,11 +644,13 @@ impl DFSchema {
         }
         let self_fields = self.iter();
         let other_fields = other.iter();
-        self_fields.zip(other_fields).all(|((q1, f1), (q2, f2))| {
-            q1 == q2
-                && f1.name() == f2.name()
-                && Self::datatype_is_logically_equal(f1.data_type(), f2.data_type())
-        })
+        self_fields
+            .zip(other_fields)
+            .all(|((q1, f1, _), (q2, f2, _))| {
+                q1 == q2
+                    && f1.name() == f2.name()
+                    && Self::datatype_is_logically_equal(f1.data_type(), f2.data_type())
+            })
     }
 
     /// Returns true if the two schemas have the same qualified named
@@ -635,11 +668,16 @@ impl DFSchema {
         }
         let self_fields = self.iter();
         let other_fields = other.iter();
-        self_fields.zip(other_fields).all(|((q1, f1), (q2, f2))| {
-            q1 == q2
-                && f1.name() == f2.name()
-                && Self::datatype_is_semantically_equal(f1.data_type(), f2.data_type())
-        })
+        self_fields
+            .zip(other_fields)
+            .all(|((q1, f1, _), (q2, f2, _))| {
+                q1 == q2
+                    && f1.name() == f2.name()
+                    && Self::datatype_is_semantically_equal(
+                        f1.data_type(),
+                        f2.data_type(),
+                    )
+            })
     }
 
     /// Checks if two [`DataType`]s are logically equal. This is a notably weaker constraint
@@ -779,6 +817,7 @@ impl DFSchema {
             field_qualifiers: vec![None; self.inner.fields.len()],
             inner: self.inner,
             functional_dependencies: self.functional_dependencies,
+            fields_spans: self.fields_spans,
         }
     }
 
@@ -789,13 +828,14 @@ impl DFSchema {
             field_qualifiers: vec![Some(qualifier); self.inner.fields.len()],
             inner: self.inner,
             functional_dependencies: self.functional_dependencies,
+            fields_spans: self.fields_spans,
         }
     }
 
     /// Get list of fully-qualified field names in this schema
     pub fn field_names(&self) -> Vec<String> {
         self.iter()
-            .map(|(qualifier, field)| qualified_name(qualifier, field.name()))
+            .map(|(qualifier, field, _)| qualified_name(qualifier, field.name()))
             .collect::<Vec<_>>()
     }
 
@@ -809,12 +849,20 @@ impl DFSchema {
         &self.functional_dependencies
     }
 
+    /// Get fields spans
+    pub fn fields_spans(&self) -> &FieldsSpans {
+        &self.fields_spans
+    }
+
     /// Iterate over the qualifiers and fields in the DFSchema
-    pub fn iter(&self) -> impl Iterator<Item = (Option<&TableReference>, &FieldRef)> {
+    pub fn iter(
+        &self,
+    ) -> impl Iterator<Item = (Option<&TableReference>, &FieldRef, &Vec<Span>)> {
         self.field_qualifiers
             .iter()
             .zip(self.inner.fields().iter())
-            .map(|(qualifier, field)| (qualifier.as_ref(), field))
+            .zip(self.fields_spans.iter())
+            .map(|((qualifier, field), span)| (qualifier.as_ref(), field, span))
     }
 }
 
@@ -865,6 +913,7 @@ impl TryFrom<SchemaRef> for DFSchema {
             inner: schema,
             field_qualifiers: vec![None; field_count],
             functional_dependencies: FunctionalDependencies::empty(),
+            fields_spans: FieldsSpans::empty(field_count),
         };
         Ok(dfschema)
     }
@@ -921,6 +970,7 @@ impl ToDFSchema for Vec<Field> {
             inner: schema.into(),
             field_qualifiers: vec![None; field_count],
             functional_dependencies: FunctionalDependencies::empty(),
+            fields_spans: FieldsSpans::empty(field_count),
         };
         Ok(dfschema)
     }
@@ -932,7 +982,7 @@ impl Display for DFSchema {
             f,
             "fields:[{}], metadata:{:?}",
             self.iter()
-                .map(|(q, f)| qualified_name(q, f.name()))
+                .map(|(q, f, _)| qualified_name(q, f.name()))
                 .collect::<Vec<String>>()
                 .join(", "),
             self.inner.metadata
@@ -1282,6 +1332,7 @@ mod tests {
             inner: Arc::clone(&arrow_schema_ref),
             field_qualifiers: vec![None; arrow_schema_ref.fields.len()],
             functional_dependencies: FunctionalDependencies::empty(),
+            fields_spans: FieldsSpans::empty(arrow_schema_ref.fields.len()),
         };
         let df_schema_ref = Arc::new(df_schema.clone());
 
@@ -1328,6 +1379,7 @@ mod tests {
             inner: Arc::clone(&schema),
             field_qualifiers: vec![None; schema.fields.len()],
             functional_dependencies: FunctionalDependencies::empty(),
+            fields_spans: FieldsSpans::empty(schema.fields.len()),
         };
 
         assert_eq!(df_schema.inner.metadata(), schema.metadata())

@@ -18,22 +18,38 @@
 //! Column
 
 use arrow_schema::{Field, FieldRef};
+use sqlparser::tokenizer::Span;
 
 use crate::error::_schema_err;
 use crate::utils::{parse_identifiers_normalized, quote_identifier};
-use crate::{DFSchema, Result, SchemaError, TableReference};
+use crate::{
+    DFSchema, Diagnostic, DiagnosticEntry, DiagnosticEntryKind, Result, SchemaError,
+    TableReference,
+};
+use derivative::Derivative;
 use std::collections::HashSet;
 use std::convert::Infallible;
 use std::fmt;
 use std::str::FromStr;
 
 /// A named reference to a qualified field in a schema.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Debug, Clone, Derivative)]
+#[derivative(PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct Column {
     /// relation/table reference.
     pub relation: Option<TableReference>,
     /// field/column name.
     pub name: String,
+    #[derivative(
+        PartialEq = "ignore",
+        Hash = "ignore",
+        PartialOrd = "ignore",
+        Ord = "ignore"
+    )]
+    /// The location in the source code where this column originally came from.
+    /// Does not change as the [`Column`] undergoes normalization and other
+    /// transformations.
+    pub spans: Vec<Span>,
 }
 
 impl Column {
@@ -50,6 +66,7 @@ impl Column {
         Self {
             relation: relation.map(|r| r.into()),
             name: name.into(),
+            spans: vec![],
         }
     }
 
@@ -58,6 +75,7 @@ impl Column {
         Self {
             relation: None,
             name: name.into(),
+            spans: vec![],
         }
     }
 
@@ -68,6 +86,7 @@ impl Column {
         Self {
             relation: None,
             name: name.into(),
+            spans: vec![],
         }
     }
 
@@ -99,7 +118,11 @@ impl Column {
             // identifiers will be treated as an unqualified column name
             _ => return None,
         };
-        Some(Self { relation, name })
+        Some(Self {
+            relation,
+            name,
+            spans: vec![],
+        })
     }
 
     /// Deserialize a fully qualified name string into a column
@@ -113,6 +136,7 @@ impl Column {
             Self {
                 relation: None,
                 name: flat_name,
+                spans: vec![],
             },
         )
     }
@@ -124,6 +148,7 @@ impl Column {
             Self {
                 relation: None,
                 name: flat_name,
+                spans: vec![],
             },
         )
     }
@@ -229,7 +254,8 @@ impl Column {
                         .flat_map(|s| s.columns_with_unqualified_name(&self.name))
                         .collect::<Vec<_>>();
                     for using_col in using_columns {
-                        let all_matched = columns.iter().all(|c| using_col.contains(c));
+                        let all_matched =
+                            columns.iter().all(|c| using_col.contains(c));
                         // All matched fields belong to the same using column set, in orther words
                         // the same join clause. We simply pick the qualifier from the first match.
                         if all_matched {
@@ -239,7 +265,33 @@ impl Column {
 
                     // If not due to USING columns then due to ambiguous column name
                     return _schema_err!(SchemaError::AmbiguousReference {
-                        field: Column::new_unqualified(self.name),
+                        field: Column::new_unqualified(&self.name),
+                    })
+                    .map_err(|err| {
+                        err.with_diagnostic(|_| {
+                            Diagnostic::new(
+                                [DiagnosticEntry::new(
+                                    format!("Ambiguous reference to '{}'", &self.name),
+                                    DiagnosticEntryKind::Error,
+                                    *self.spans.first().unwrap_or(&Span::empty()),
+                                )]
+                                .into_iter()
+                                .chain(
+                                    columns.iter().flat_map(|c| {
+                                        c.spans.iter().map(|span| {
+                                            DiagnosticEntry::new(
+                                                format!(
+                                                    "Possible reference to '{}' here",
+                                                    &c.name
+                                                ),
+                                                DiagnosticEntryKind::Note,
+                                                *span,
+                                            )
+                                        })
+                                    }),
+                                ),
+                            )
+                        })
                     });
                 }
             }
@@ -253,6 +305,23 @@ impl Column {
                 .flat_map(|s| s.columns())
                 .collect(),
         })
+    }
+
+    /// Attaches a [`Span`] to the [`Column`], i.e. its location in the source
+    /// SQL query.
+    pub fn with_span(mut self, span: Span) -> Self {
+        self.spans = vec![span];
+        self
+    }
+
+    /// Attaches multiple [`Span`]s to the [`Column`], i.e. its locations in the
+    /// source SQL query.
+    pub fn with_spans<IT>(mut self, spans: IT) -> Self
+    where
+        IT: IntoIterator<Item = Span>,
+    {
+        self.spans = spans.into_iter().collect();
+        self
     }
 }
 

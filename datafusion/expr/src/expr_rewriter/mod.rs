@@ -160,6 +160,7 @@ pub fn unnormalize_col(expr: Expr) -> Expr {
                 let col = Column {
                     relation: None,
                     name: c.name,
+                    spans: c.spans,
                 };
                 Transformed::yes(Expr::Column(col))
             } else {
@@ -181,10 +182,14 @@ pub fn create_col_from_scalar_expr(
             Some::<TableReference>(subqry_alias.into()),
             name,
         )),
-        Expr::Column(Column { relation: _, name }) => Ok(Column::new(
-            Some::<TableReference>(subqry_alias.into()),
+        Expr::Column(Column {
+            relation: _,
             name,
-        )),
+            spans,
+        }) => Ok(
+            Column::new(Some::<TableReference>(subqry_alias.into()), name)
+                .with_spans(spans.iter().copied()),
+        ),
         _ => {
             let scalar_column = scalar_expr.schema_name().to_string();
             Ok(Column::new(
@@ -231,7 +236,11 @@ pub fn coerce_plan_expr_for_schema(
             Ok(LogicalPlan::Projection(projection))
         }
         _ => {
-            let exprs: Vec<Expr> = plan.schema().iter().map(Expr::from).collect();
+            let exprs: Vec<Expr> = plan
+                .schema()
+                .iter()
+                .map(|(q, f, spans)| Expr::from((q, f, spans.iter().copied())))
+                .collect();
             let new_exprs = coerce_exprs_for_schema(exprs, plan.schema(), schema)?;
             let add_project = new_exprs.iter().any(|expr| expr.try_as_col().is_none());
             if add_project {

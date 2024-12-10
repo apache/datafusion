@@ -574,7 +574,7 @@ fn transform_schema_to_nonview(dfschema: &DFSchemaRef) -> Option<Result<DFSchema
     let (qualifiers, transformed_fields): (Vec<Option<TableReference>>, Vec<Arc<Field>>) =
         dfschema
             .iter()
-            .map(|(qualifier, field)| match field.data_type() {
+            .map(|(qualifier, field, _)| match field.data_type() {
                 DataType::Utf8View => {
                     transformed = true;
                     (
@@ -974,7 +974,7 @@ pub fn coerce_union_schema(inputs: &[Arc<LogicalPlan>]) -> Result<DFSchema> {
         union_nullabilities,
         union_field_meta.into_iter()
     )
-    .map(|((qualifier, field), datatype, nullable, metadata)| {
+    .map(|((qualifier, field, _), datatype, nullable, metadata)| {
         let mut field = Field::new(field.name().clone(), datatype, nullable);
         field.set_metadata(metadata);
         (qualifier.cloned(), field.into())
@@ -1000,6 +1000,7 @@ fn project_with_column_index(
             Expr::Column(Column {
                 relation: _,
                 ref name,
+                spans: _,
             }) if name != schema.field(i).name() => e.alias(schema.field(i).name()),
             Expr::Alias { .. } | Expr::Column { .. } => e,
             _ => e.alias(schema.field(i).name()),
