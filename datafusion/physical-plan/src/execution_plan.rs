@@ -502,8 +502,8 @@ pub enum EmissionType {
     Both,
 }
 
-pub(crate) fn emission_type_from_children(
-    children: &[Arc<dyn ExecutionPlan>],
+pub(crate) fn emission_type_from_children<'a>(
+    children: impl IntoIterator<Item = &'a Arc<dyn ExecutionPlan>>,
 ) -> EmissionType {
     // If any children is Final, the parent is Final as well since it is the earliest time we can emit the final result
     // The precedence is Final > Both > Incremental

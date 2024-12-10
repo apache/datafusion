@@ -275,9 +275,8 @@ impl SymmetricHashJoinExec {
         let output_partitioning =
             symmetric_join_output_partitioning(left, right, &join_type);
 
-        let emission_type =
-            emission_type_from_children(&[Arc::clone(&left), Arc::clone(&right)]);
         let has_finite_memory = left.has_finite_memory() && right.has_finite_memory();
+        let emission_type = emission_type_from_children([left, right]);
         PlanProperties::new(eq_properties, output_partitioning)
             .with_memory_usage(has_finite_memory)
             .with_emission_type(emission_type)
