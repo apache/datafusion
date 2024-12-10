@@ -26,7 +26,7 @@ use arrow::array::{
     downcast_array, Array, AsArray, BooleanArray, BooleanBufferBuilder, Float64Array,
     UInt64Array,
 };
-use arrow::compute::{and, filter, is_not_null};
+use arrow::compute::{and, filter, is_not_null, kernels::cast};
 use arrow::datatypes::{Float64Type, UInt64Type};
 use arrow::{
     array::ArrayRef,
@@ -383,8 +383,10 @@ impl GroupsAccumulator for CorrelationGroupsAccumulator {
         self.sum_xx.resize(total_num_groups, 0.0);
         self.sum_yy.resize(total_num_groups, 0.0);
 
-        let array_x = downcast_array::<Float64Array>(&values[0]);
-        let array_y = downcast_array::<Float64Array>(&values[1]);
+        let array_x = &cast(&values[0], &DataType::Float64)?;
+        let array_x = downcast_array::<Float64Array>(array_x);
+        let array_y = &cast(&values[1], &DataType::Float64)?;
+        let array_y = downcast_array::<Float64Array>(array_y);
 
         accumulate_multiple(
             group_indices,
