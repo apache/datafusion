@@ -719,7 +719,7 @@ mod tests {
             Field::new("c1", DataType::Int32, false),
             Field::new("c2", DataType::Boolean, false),
         ]));
-        let schema_descr = arrow_to_parquet_schema(&schema).unwrap();
+        let schema_descr = arrow_to_parquet_schema(&schema, false).unwrap();
         let expr = col("c1").gt(lit(15)).and(col("c2").is_null());
         let expr = logical2physical(&expr, &schema);
         let pruning_predicate = PruningPredicate::try_new(expr, schema.clone()).unwrap();
@@ -748,7 +748,7 @@ mod tests {
             Field::new("c1", DataType::Int32, false),
             Field::new("c2", DataType::Boolean, false),
         ]));
-        let schema_descr = arrow_to_parquet_schema(&schema).unwrap();
+        let schema_descr = arrow_to_parquet_schema(&schema, false).unwrap();
         let expr = col("c1")
             .gt(lit(15))
             .and(col("c2").eq(lit(ScalarValue::Boolean(None))));
