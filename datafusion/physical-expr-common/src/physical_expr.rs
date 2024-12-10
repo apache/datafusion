@@ -253,9 +253,10 @@ where
             write!(f, "[")?;
             if let Some(expr) = iter.next() {
                 write!(f, "{}", expr)?;
-            }
-            for expr in iter {
-                write!(f, ", {}", expr)?;
+
+                for expr in iter {
+                    write!(f, ", {}", expr)?;
+                }
             }
             write!(f, "]")?;
             Ok(())
