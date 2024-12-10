@@ -170,6 +170,18 @@ overflow-checks = false
 panic = 'unwind'
 rpath = false
 
+[profile.windows]
+codegen-units = 256
+debug = false
+debug-assertions = false
+incremental = true
+inherits = "release"
+lto = true
+opt-level = 1
+overflow-checks = false
+panic = 'unwind'
+rpath = false
+
 [workspace.lints.clippy]
 # Detects large stack-allocated futures that may cause stack overflow crashes (see threshold in clippy.toml)
 large_futures = "warn"
