@@ -313,6 +313,8 @@ pub(crate) fn rewrite_recursive_unnests_bottom_up(
         .collect::<Vec<_>>())
 }
 
+pub const UNNEST_PLACEHOLDER: &str = "__unnest_placeholder";
+
 /*
 This is only usedful when used with transform down up
 A full example of how the transformation works:
@@ -358,9 +360,9 @@ impl RecursiveUnnestRewriter<'_> {
         // Full context, we are trying to plan the execution as InnerProjection->Unnest->OuterProjection
         // inside unnest execution, each column inside the inner projection
         // will be transformed into new columns. Thus we need to keep track of these placeholding column names
-        let placeholder_name = format!("unnest_placeholder({})", inner_expr_name);
+        let placeholder_name = format!("{UNNEST_PLACEHOLDER}({})", inner_expr_name);
         let post_unnest_name =
-            format!("unnest_placeholder({},depth={})", inner_expr_name, level);
+            format!("{UNNEST_PLACEHOLDER}({},depth={})", inner_expr_name, level);
         // This is due to the fact that unnest transformation should keep the original
         // column name as is, to comply with group by and order by
         let placeholder_column = Column::from_name(placeholder_name.clone());
