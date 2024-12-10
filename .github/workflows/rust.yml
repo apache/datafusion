@@ -53,7 +53,7 @@ jobs:
         run: |
           export PATH=$PATH:$HOME/d/protoc/bin
           set RUSTFLAGS=-C codegen-units=16 -C link-arg=-fuse-ld=lld -C target-cpu=native -C incremental=false -C debuginfo=line-tables-only -Z threads=8
-          echo %RUSTFLAGS%
+          echo $RUSTFLAGS
           cargo test --lib --tests --bins --features avro,json,backtrace
           cd datafusion-cli
           cargo test --lib --tests --bins --all-features
