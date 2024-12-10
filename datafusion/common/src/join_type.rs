@@ -28,22 +28,28 @@ use crate::{DataFusionError, Result};
 /// Join type
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Hash)]
 pub enum JoinType {
-    /// Inner Join
+    /// Inner Join - Returns rows where there is a match in both tables.
     Inner,
-    /// Left Join
+    /// Left Join - Returns all rows from the left table and matching rows from the right table.
+    /// If no match, NULL values are returned for columns from the right table.
     Left,
-    /// Right Join
+    /// Right Join - Returns all rows from the right table and matching rows from the left table.
+    /// If no match, NULL values are returned for columns from the left table.
     Right,
-    /// Full Join
+    /// Full Join - Returns all rows when there is a match in either table.
+    /// Rows without a match in one table will have NULL values for columns from that table.
     Full,
-    /// Left Semi Join
+    /// Left Semi Join - Returns rows from the left table that have matching rows in the right table.
+    /// Only columns from the left table are returned.
     LeftSemi,
-    /// Right Semi Join
+    /// Right Semi Join - Returns rows from the right table that have matching rows in the left table.
+    /// Only columns from the right table are returned.
     RightSemi,
-    /// Left Anti Join
+    /// Left Anti Join - Returns rows from the left table that do not have a matching row in the right table.
     LeftAnti,
-    /// Right Anti Join
+    /// Right Anti Join - Returns rows from the right table that do not have a matching row in the left table.
     RightAnti,
+
     /// Left Mark join
     ///
     /// Returns one record for each record from the left input. The output contains an additional

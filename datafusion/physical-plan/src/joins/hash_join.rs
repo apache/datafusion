@@ -528,15 +528,16 @@ impl HashJoinExec {
             EmissionType::Final
         } else {
             match join_type {
-                // Right join is incremental because it can emit rows as soon as they are found
+                // If we only need to generate matched rows from the probe side, we can emit rows incrementally.
                 JoinType::Inner
                 | JoinType::LeftSemi
                 | JoinType::RightSemi
-                | JoinType::Right => EmissionType::Incremental,
+                | JoinType::Right
+                | JoinType::RightAnti => EmissionType::Incremental,
+                // If we need to generate unmatched rows from the *build side*, we need to emit them at the end.
                 JoinType::Left
                 | JoinType::LeftAnti
                 | JoinType::LeftMark
-                | JoinType::RightAnti
                 | JoinType::Full => EmissionType::Both,
             }
         };
