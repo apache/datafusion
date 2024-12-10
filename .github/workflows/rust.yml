@@ -51,7 +51,7 @@ jobs:
       - name: Run tests (excluding doctests)
         shell: bash
         run: |
-          setx RUSTFLAGS=-C codegen-units=16 -C link-arg=-fuse-ld=lld -C target-cpu=native -C incremental=yes -C debuginfo=line-tables-only -Z threads=8
+          set RUSTFLAGS=-C codegen-units=16 -C link-arg=-fuse-ld=lld -C target-cpu=native -C incremental=yes -C debuginfo=line-tables-only -Z threads=8
           export PATH=$PATH:$HOME/d/protoc/bin
           cargo test --lib --tests --bins --features avro,json,backtrace
           cd datafusion-cli
