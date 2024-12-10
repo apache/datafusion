@@ -353,6 +353,7 @@ pub(super) struct RelationBuilder {
 enum TableFactorBuilder {
     Table(TableRelationBuilder),
     Derived(DerivedRelationBuilder),
+    Unnest(UnnestRelationBuilder),
     Empty,
 }
 
@@ -369,6 +370,12 @@ impl RelationBuilder {
         self.relation = Some(TableFactorBuilder::Derived(value));
         self
     }
+
+    pub fn unnest(&mut self, value: UnnestRelationBuilder) -> &mut Self {
+        self.relation = Some(TableFactorBuilder::Unnest(value));
+        self
+    }
+
     pub fn empty(&mut self) -> &mut Self {
         self.relation = Some(TableFactorBuilder::Empty);
         self
@@ -382,6 +389,9 @@ impl RelationBuilder {
             Some(TableFactorBuilder::Derived(ref mut rel_builder)) => {
                 rel_builder.alias = value;
             }
+            Some(TableFactorBuilder::Unnest(ref mut rel_builder)) => {
+                rel_builder.alias = value;
+            }
             Some(TableFactorBuilder::Empty) => (),
             None => (),
         }
@@ -391,6 +401,7 @@ impl RelationBuilder {
         Ok(match self.relation {
             Some(TableFactorBuilder::Table(ref value)) => Some(value.build()?),
             Some(TableFactorBuilder::Derived(ref value)) => Some(value.build()?),
+            Some(TableFactorBuilder::Unnest(ref value)) => Some(value.build()?),
             Some(TableFactorBuilder::Empty) => None,
             None => return Err(Into::into(UninitializedFieldError::from("relation"))),
         })
@@ -521,6 +532,68 @@ impl DerivedRelationBuilder {
     }
 }
 impl Default for DerivedRelationBuilder {
+    fn default() -> Self {
+        Self::create_empty()
+    }
+}
+
+#[derive(Clone)]
+pub(super) struct UnnestRelationBuilder {
+    pub alias: Option<ast::TableAlias>,
+    pub array_exprs: Vec<ast::Expr>,
+    with_offset: bool,
+    with_offset_alias: Option<ast::Ident>,
+    with_ordinality: bool,
+}
+
+#[allow(dead_code)]
+impl UnnestRelationBuilder {
+    pub fn alias(&mut self, value: Option<ast::TableAlias>) -> &mut Self {
+        self.alias = value;
+        self
+    }
+    pub fn array_exprs(&mut self, value: Vec<ast::Expr>) -> &mut Self {
+        self.array_exprs = value;
+        self
+    }
+
+    pub fn with_offset(&mut self, value: bool) -> &mut Self {
+        self.with_offset = value;
+        self
+    }
+
+    pub fn with_offset_alias(&mut self, value: Option<ast::Ident>) -> &mut Self {
+        self.with_offset_alias = value;
+        self
+    }
+
+    pub fn with_ordinality(&mut self, value: bool) -> &mut Self {
+        self.with_ordinality = value;
+        self
+    }
+
+    pub fn build(&self) -> Result<ast::TableFactor, BuilderError> {
+        Ok(ast::TableFactor::UNNEST {
+            alias: self.alias.clone(),
+            array_exprs: self.array_exprs.clone(),
+            with_offset: self.with_offset,
+            with_offset_alias: self.with_offset_alias.clone(),
+            with_ordinality: self.with_ordinality,
+        })
+    }
+
+    fn create_empty() -> Self {
+        Self {
+            alias: Default::default(),
+            array_exprs: Default::default(),
+            with_offset: Default::default(),
+            with_offset_alias: Default::default(),
+            with_ordinality: Default::default(),
+        }
+    }
+}
+
+impl Default for UnnestRelationBuilder {
     fn default() -> Self {
         Self::create_empty()
     }
