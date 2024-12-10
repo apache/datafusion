@@ -426,9 +426,8 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
     fn emission_type(&self) -> EmissionType;
     fn has_finite_memory(&self) -> bool;
     fn is_pipeline_breaking(&self) -> bool {
-        !self.has_finite_memory()
-            && (self.emission_type() == EmissionType::Final
-                || self.emission_type() == EmissionType::Both)
+        !self.has_finite_memory() && self.emission_type() == EmissionType::Final
+        // || self.emission_type() == EmissionType::Both)
     }
 }
 

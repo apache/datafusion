@@ -528,13 +528,14 @@ impl HashJoinExec {
             EmissionType::Final
         } else {
             match join_type {
-                JoinType::Inner | JoinType::LeftSemi | JoinType::RightSemi => {
-                    EmissionType::Incremental
-                }
+                // Right join is incremental because it can emit rows as soon as they are found
+                JoinType::Inner
+                | JoinType::LeftSemi
+                | JoinType::RightSemi
+                | JoinType::Right => EmissionType::Incremental,
                 JoinType::Left
                 | JoinType::LeftAnti
                 | JoinType::LeftMark
-                | JoinType::Right
                 | JoinType::RightAnti
                 | JoinType::Full => EmissionType::Both,
             }

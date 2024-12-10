@@ -215,7 +215,8 @@ mod tests {
 
         let test2 = BinaryTestCase {
             source_types: (SourceType::Bounded, SourceType::Unbounded),
-            expect_fail: true,
+            // Left join for bounded build side and unbounded probe side can generate both incremental matched rows and final non-matched rows.
+            expect_fail: false,
         };
         let test3 = BinaryTestCase {
             source_types: (SourceType::Bounded, SourceType::Bounded),
@@ -225,7 +226,7 @@ mod tests {
             sql: "SELECT t2.c1 FROM left as t1 LEFT JOIN right as t2 ON t1.c1 = t2.c1"
                 .to_string(),
             cases: vec![Arc::new(test1), Arc::new(test2), Arc::new(test3)],
-            error_operator: "operator: HashJoinExec".to_string(),
+            error_operator: "".to_string(),
         };
 
         case.run().await?;
@@ -290,7 +291,8 @@ mod tests {
         };
         let test2 = BinaryTestCase {
             source_types: (SourceType::Bounded, SourceType::Unbounded),
-            expect_fail: true,
+            // Full join for bounded build side and unbounded probe side can generate both incremental matched rows and final non-matched rows.
+            expect_fail: false,
         };
         let test3 = BinaryTestCase {
             source_types: (SourceType::Bounded, SourceType::Bounded),
