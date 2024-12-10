@@ -100,7 +100,6 @@ async fn run_tests() -> Result<()> {
         .map(|test_file| {
             SpawnedTask::spawn(async move {
                 let file_path = test_file.relative_path.clone();
-                println!("Running {:?}", file_path);
                 let start = datafusion::common::instant::Instant::now();
                 if options.complete {
                     run_complete_file(test_file).await?;
@@ -109,7 +108,7 @@ async fn run_tests() -> Result<()> {
                 } else {
                     run_test_file(test_file).await?;
                 }
-                println!("Completed {:?}. Elapsed {:?}", file_path, start.elapsed());
+                println!("Executed {:?}. Took {:?}", file_path, start.elapsed());
                 Ok(()) as Result<()>
             })
             .join()
