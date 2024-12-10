@@ -180,7 +180,7 @@ impl ExecutionPlan for StatisticsValidation {
     }
 
     fn emission_type(&self) -> EmissionType {
-        unimplemented!()
+        EmissionType::Incremental
     }
 
     fn has_finite_memory(&self) -> bool {

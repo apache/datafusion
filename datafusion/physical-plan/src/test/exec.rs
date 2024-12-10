@@ -267,7 +267,7 @@ impl ExecutionPlan for MockExec {
     }
 
     fn emission_type(&self) -> EmissionType {
-        unimplemented!()
+        EmissionType::Incremental
     }
 
     fn has_finite_memory(&self) -> bool {
@@ -408,7 +408,7 @@ impl ExecutionPlan for BarrierExec {
     }
 
     fn emission_type(&self) -> EmissionType {
-        unimplemented!()
+        EmissionType::Incremental
     }
 
     fn has_finite_memory(&self) -> bool {
@@ -496,7 +496,7 @@ impl ExecutionPlan for ErrorExec {
     }
 
     fn emission_type(&self) -> EmissionType {
-        unimplemented!()
+        EmissionType::Incremental
     }
 
     fn has_finite_memory(&self) -> bool {
@@ -591,7 +591,7 @@ impl ExecutionPlan for StatisticsExec {
     }
 
     fn emission_type(&self) -> EmissionType {
-        unimplemented!()
+        EmissionType::Incremental
     }
 
     fn has_finite_memory(&self) -> bool {
@@ -692,7 +692,7 @@ impl ExecutionPlan for BlockingExec {
     }
 
     fn emission_type(&self) -> EmissionType {
-        unimplemented!()
+        EmissionType::Incremental
     }
 
     fn has_finite_memory(&self) -> bool {
@@ -842,7 +842,7 @@ impl ExecutionPlan for PanicExec {
     }
 
     fn emission_type(&self) -> EmissionType {
-        unimplemented!()
+        EmissionType::Incremental
     }
 
     fn has_finite_memory(&self) -> bool {

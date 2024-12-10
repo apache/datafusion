@@ -427,7 +427,6 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
     fn has_finite_memory(&self) -> bool;
     fn is_pipeline_breaking(&self) -> bool {
         !self.has_finite_memory() && self.emission_type() == EmissionType::Final
-        // || self.emission_type() == EmissionType::Both)
     }
 }
 
@@ -506,17 +505,20 @@ pub enum EmissionType {
 pub(crate) fn emission_type_from_children(
     children: &[Arc<dyn ExecutionPlan>],
 ) -> EmissionType {
-    let has_incremental_children = children
-        .iter()
-        .any(|child| child.emission_type() == EmissionType::Incremental);
-    let has_final_children = children
-        .iter()
-        .any(|child| child.emission_type() == EmissionType::Final);
+    // If any children is Final, the parent is Final as well since it is the earliest time we can emit the final result
+    // The precedence is Final > Both > Incremental
+    let mut has_both = false;
 
-    if has_incremental_children && has_final_children {
+    for child in children {
+        match child.emission_type() {
+            EmissionType::Final => return EmissionType::Final,
+            EmissionType::Both => has_both = true,
+            _ => {}
+        }
+    }
+
+    if has_both {
         EmissionType::Both
-    } else if has_final_children {
-        EmissionType::Final
     } else {
         EmissionType::Incremental
     }

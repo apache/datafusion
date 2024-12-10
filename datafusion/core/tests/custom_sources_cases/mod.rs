@@ -197,7 +197,7 @@ impl ExecutionPlan for CustomExecutionPlan {
     }
 
     fn emission_type(&self) -> EmissionType {
-        unimplemented!()
+        EmissionType::Incremental
     }
 
     fn has_finite_memory(&self) -> bool {
