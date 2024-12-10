@@ -122,7 +122,6 @@ impl OutputRequirementExec {
         PlanProperties::new(
             input.equivalence_properties().clone(), // Equivalence Properties
             input.output_partitioning().clone(),    // Output Partitioning
-            input.execution_mode(),                 // Execution Mode
         )
         .with_emission_type(input.emission_type())
         .with_memory_usage(input.has_finite_memory())

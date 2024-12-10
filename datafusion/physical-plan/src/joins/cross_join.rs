@@ -28,8 +28,8 @@ use crate::execution_plan::EmissionType;
 use crate::metrics::{ExecutionPlanMetricsSet, MetricsSet};
 use crate::{
     handle_state, ColumnStatistics, DisplayAs, DisplayFormatType, Distribution,
-    ExecutionMode, ExecutionPlan, ExecutionPlanProperties, PlanProperties,
-    RecordBatchStream, SendableRecordBatchStream, Statistics,
+    ExecutionPlan, ExecutionPlanProperties, PlanProperties, RecordBatchStream,
+    SendableRecordBatchStream, Statistics,
 };
 use arrow::compute::concat_batches;
 use std::{any::Any, sync::Arc, task::Poll};
@@ -162,14 +162,7 @@ impl CrossJoinExec {
         );
 
         let has_finite_memory = left.has_finite_memory() && right.has_finite_memory();
-
-        let mode = if !has_finite_memory {
-            ExecutionMode::Final
-        } else {
-            ExecutionMode::Bounded | ExecutionMode::Final
-        };
-
-        PlanProperties::new(eq_properties, output_partitioning, mode)
+        PlanProperties::new(eq_properties, output_partitioning)
             .with_memory_usage(has_finite_memory)
     }
 }

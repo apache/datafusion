@@ -20,10 +20,7 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use super::{
-    common, DisplayAs, ExecutionMode, PlanProperties, SendableRecordBatchStream,
-    Statistics,
-};
+use super::{common, DisplayAs, PlanProperties, SendableRecordBatchStream, Statistics};
 use crate::{
     execution_plan::EmissionType, memory::MemoryStream, DisplayFormatType, ExecutionPlan,
     Partitioning,
@@ -77,14 +74,9 @@ impl EmptyExec {
 
     /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
     fn compute_properties(schema: SchemaRef, n_partitions: usize) -> PlanProperties {
-        let eq_properties = EquivalenceProperties::new(schema);
-        let output_partitioning = Self::output_partitioning_helper(n_partitions);
         PlanProperties::new(
-            eq_properties,
-            // Output Partitioning
-            output_partitioning,
-            // Execution Mode
-            ExecutionMode::Bounded,
+            EquivalenceProperties::new(schema),
+            Self::output_partitioning_helper(n_partitions),
         )
     }
 }

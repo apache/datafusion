@@ -39,7 +39,7 @@ use datafusion_common::Statistics;
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::{EquivalenceProperties, LexOrdering};
 use datafusion_physical_plan::execution_plan::EmissionType;
-use datafusion_physical_plan::{ExecutionMode, PlanProperties};
+use datafusion_physical_plan::PlanProperties;
 
 use futures::StreamExt;
 use itertools::Itertools;
@@ -98,7 +98,6 @@ impl ArrowExec {
         PlanProperties::new(
             eq_properties,
             Self::output_partitioning_helper(file_scan_config), // Output Partitioning
-            ExecutionMode::Bounded,                             // Execution Mode
         )
     }
 

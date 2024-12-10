@@ -21,7 +21,7 @@ use std::any::Any;
 use std::fmt::Debug;
 use std::sync::Arc;
 
-use super::{DisplayAs, DisplayFormatType, ExecutionMode, PlanProperties};
+use super::{DisplayAs, DisplayFormatType, PlanProperties};
 use crate::display::{display_orderings, ProjectSchemaDisplay};
 use crate::execution_plan::EmissionType;
 use crate::stream::RecordBatchStreamAdapter;
@@ -99,7 +99,6 @@ impl StreamingTableExec {
             Arc::clone(&projected_schema),
             &projected_output_ordering,
             &partitions,
-            infinite,
         );
         Ok(Self {
             partitions,
@@ -146,22 +145,13 @@ impl StreamingTableExec {
         schema: SchemaRef,
         orderings: &[LexOrdering],
         partitions: &[Arc<dyn PartitionStream>],
-        is_infinite: bool,
     ) -> PlanProperties {
         // Calculate equivalence properties:
         let eq_properties = EquivalenceProperties::new_with_orderings(schema, orderings);
 
         // Get output partitioning:
         let output_partitioning = Partitioning::UnknownPartitioning(partitions.len());
-
-        // Determine execution mode:
-        let mode = if is_infinite {
-            ExecutionMode::Incremental
-        } else {
-            ExecutionMode::Bounded | ExecutionMode::Incremental
-        };
-
-        PlanProperties::new(eq_properties, output_partitioning, mode)
+        PlanProperties::new(eq_properties, output_partitioning)
     }
 }
 

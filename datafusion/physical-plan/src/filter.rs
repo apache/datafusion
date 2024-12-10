@@ -273,13 +273,9 @@ impl FilterExec {
             eq_properties = eq_properties.project(&projection_mapping, out_schema);
         }
 
-        Ok(PlanProperties::new(
-            eq_properties,
-            output_partitioning,
-            input.execution_mode(),
-        )
-        .with_emission_type(input.emission_type())
-        .with_memory_usage(input.has_finite_memory()))
+        Ok(PlanProperties::new(eq_properties, output_partitioning)
+            .with_emission_type(input.emission_type())
+            .with_memory_usage(input.has_finite_memory()))
     }
 }
 

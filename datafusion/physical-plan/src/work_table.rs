@@ -26,7 +26,7 @@ use super::{
 };
 use crate::execution_plan::EmissionType;
 use crate::memory::MemoryStream;
-use crate::{DisplayAs, DisplayFormatType, ExecutionMode, ExecutionPlan, PlanProperties};
+use crate::{DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties};
 
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
@@ -145,11 +145,7 @@ impl WorkTableExec {
     fn compute_properties(schema: SchemaRef) -> PlanProperties {
         let eq_properties = EquivalenceProperties::new(schema);
 
-        PlanProperties::new(
-            eq_properties,
-            Partitioning::UnknownPartitioning(1),
-            ExecutionMode::Bounded | ExecutionMode::Incremental,
-        )
+        PlanProperties::new(eq_properties, Partitioning::UnknownPartitioning(1))
     }
 }
 

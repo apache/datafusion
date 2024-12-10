@@ -129,13 +129,9 @@ impl ProjectionExec {
         let output_partitioning =
             input_partition.project(projection_mapping, &input_eq_properties);
 
-        Ok(PlanProperties::new(
-            eq_properties,
-            output_partitioning,
-            input.execution_mode(),
-        )
-        .with_emission_type(input.emission_type())
-        .with_memory_usage(input.has_finite_memory()))
+        Ok(PlanProperties::new(eq_properties, output_partitioning)
+            .with_emission_type(input.emission_type())
+            .with_memory_usage(input.has_finite_memory()))
     }
 }
 

@@ -48,7 +48,6 @@ use crate::joins::utils::{
     NoopBatchTransformer, StatefulStreamResult,
 };
 use crate::{
-    execution_mode_from_children,
     joins::StreamJoinPartitionMode,
     metrics::{ExecutionPlanMetricsSet, MetricsSet},
     DisplayAs, DisplayFormatType, Distribution, ExecutionPlan, ExecutionPlanProperties,
@@ -276,11 +275,8 @@ impl SymmetricHashJoinExec {
         let output_partitioning =
             symmetric_join_output_partitioning(left, right, &join_type);
 
-        // Determine execution mode:
-        let mode = execution_mode_from_children([left, right]);
         let has_finite_memory = left.has_finite_memory() && right.has_finite_memory();
-
-        PlanProperties::new(eq_properties, output_partitioning, mode)
+        PlanProperties::new(eq_properties, output_partitioning)
             .with_memory_usage(has_finite_memory)
     }
 

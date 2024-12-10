@@ -92,8 +92,7 @@ impl AnalyzeExec {
     ) -> PlanProperties {
         let eq_properties = EquivalenceProperties::new(schema);
         let output_partitioning = Partitioning::UnknownPartitioning(1);
-        let exec_mode = input.execution_mode();
-        PlanProperties::new(eq_properties, output_partitioning, exec_mode)
+        PlanProperties::new(eq_properties, output_partitioning)
             .with_emission_type(input.emission_type())
             .with_memory_usage(input.has_finite_memory())
     }

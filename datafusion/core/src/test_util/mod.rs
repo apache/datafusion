@@ -39,8 +39,8 @@ use crate::error::Result;
 use crate::execution::context::TaskContext;
 use crate::logical_expr::{LogicalPlanBuilder, UNNAMED_TABLE};
 use crate::physical_plan::{
-    DisplayAs, DisplayFormatType, ExecutionMode, ExecutionPlan, Partitioning,
-    PlanProperties, RecordBatchStream, SendableRecordBatchStream,
+    DisplayAs, DisplayFormatType, ExecutionPlan, Partitioning, PlanProperties,
+    RecordBatchStream, SendableRecordBatchStream,
 };
 use crate::prelude::{CsvReadOptions, SessionContext};
 
@@ -257,19 +257,12 @@ impl UnboundedExec {
     /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
     fn compute_properties(
         schema: SchemaRef,
-        batch_produce: Option<usize>,
+        _batch_produce: Option<usize>,
         n_partitions: usize,
     ) -> PlanProperties {
-        let eq_properties = EquivalenceProperties::new(schema);
-        let mode = if batch_produce.is_none() {
-            ExecutionMode::Incremental
-        } else {
-            ExecutionMode::Bounded | ExecutionMode::Incremental
-        };
         PlanProperties::new(
-            eq_properties,
+            EquivalenceProperties::new(schema),
             Partitioning::UnknownPartitioning(n_partitions),
-            mode,
         )
     }
 }

@@ -441,13 +441,6 @@ pub trait ExecutionPlanProperties {
     /// partitions.
     fn output_partitioning(&self) -> &Partitioning;
 
-    /// Specifies whether this plan generates an infinite stream of records.
-    /// If the plan does not support pipelining, but its input(s) are
-    /// infinite, returns [`ExecutionMode::PipelineBreaking`] to indicate this.
-    fn execution_mode(&self) -> ExecutionMode;
-
-    // fn inputs_has_finite_memory(&self) -> Vec<bool>;
-
     /// If the output of this `ExecutionPlan` within each partition is sorted,
     /// returns `Some(keys)` describing the ordering. A `None` return value
     /// indicates no assumptions should be made on the output ordering.
@@ -482,14 +475,6 @@ impl ExecutionPlanProperties for Arc<dyn ExecutionPlan> {
         self.properties().output_partitioning()
     }
 
-    fn execution_mode(&self) -> ExecutionMode {
-        self.properties().execution_mode()
-    }
-
-    // fn inputs_has_finite_memory(&self) -> Vec<bool> {
-    //     self.properties().inputs_has_finite_memory.to_vec()
-    // }
-
     fn output_ordering(&self) -> Option<&LexOrdering> {
         self.properties().output_ordering()
     }
@@ -503,14 +488,6 @@ impl ExecutionPlanProperties for &dyn ExecutionPlan {
     fn output_partitioning(&self) -> &Partitioning {
         self.properties().output_partitioning()
     }
-
-    fn execution_mode(&self) -> ExecutionMode {
-        self.properties().execution_mode()
-    }
-
-    // fn inputs_has_finite_memory(&self) -> Vec<bool> {
-    //     self.properties().inputs_has_finite_memory.to_vec()
-    // }
 
     fn output_ordering(&self) -> Option<&LexOrdering> {
         self.properties().output_ordering()
@@ -627,29 +604,6 @@ pub(crate) fn emission_type_from_children(
     }
 }
 
-/// Conservatively "combines" execution modes of a given collection of operators.
-pub(crate) fn execution_mode_from_children<'a>(
-    children: impl IntoIterator<Item = &'a Arc<dyn ExecutionPlan>>,
-) -> ExecutionMode {
-    let mut result = ExecutionMode::Bounded;
-    for mode in children.into_iter().map(|child| child.execution_mode()) {
-        if mode.is_unbounded() || result.is_unbounded() {
-            // Unbounded mode eats up bounded mode:
-            result = result.switch_to_unbounded();
-        }
-        // Otherwise, the result is still bounded
-
-        if mode.is_emit_incremental() {
-            result |= ExecutionMode::Incremental;
-        }
-
-        if mode.is_emit_at_final() {
-            result |= ExecutionMode::Final;
-        }
-    }
-    result
-}
-
 /// Stores certain, often expensive to compute, plan properties used in query
 /// optimization.
 ///
@@ -662,8 +616,6 @@ pub struct PlanProperties {
     pub eq_properties: EquivalenceProperties,
     /// See [ExecutionPlanProperties::output_partitioning]
     pub partitioning: Partitioning,
-    /// See [ExecutionPlanProperties::execution_mode]
-    pub execution_mode: ExecutionMode,
     // Store input's emission type and memory usage to avoid stackoverflow
     pub emission_type: Option<EmissionType>,
     pub has_finite_memory: bool,
@@ -673,17 +625,12 @@ pub struct PlanProperties {
 
 impl PlanProperties {
     /// Construct a new `PlanPropertiesCache` from the
-    pub fn new(
-        eq_properties: EquivalenceProperties,
-        partitioning: Partitioning,
-        execution_mode: ExecutionMode,
-    ) -> Self {
+    pub fn new(eq_properties: EquivalenceProperties, partitioning: Partitioning) -> Self {
         // Output ordering can be derived from `eq_properties`.
         let output_ordering = eq_properties.output_ordering();
         Self {
             eq_properties,
             partitioning,
-            execution_mode,
             emission_type: None,
             has_finite_memory: true,
             output_ordering,
@@ -693,12 +640,6 @@ impl PlanProperties {
     /// Overwrite output partitioning with its new value.
     pub fn with_partitioning(mut self, partitioning: Partitioning) -> Self {
         self.partitioning = partitioning;
-        self
-    }
-
-    /// Overwrite the execution Mode with its new value.
-    pub fn with_execution_mode(mut self, execution_mode: ExecutionMode) -> Self {
-        self.execution_mode = execution_mode;
         self
     }
 
@@ -732,19 +673,6 @@ impl PlanProperties {
     pub fn output_ordering(&self) -> Option<&LexOrdering> {
         self.output_ordering.as_ref()
     }
-
-    pub fn execution_mode(&self) -> ExecutionMode {
-        self.execution_mode
-    }
-
-    // pub fn input_emission_type(&self) -> EmissionType {
-    //     self.input_emission_type
-
-    // }
-
-    // pub fn input_has_finite_memory(&self) -> bool {
-    //     self.input_has_finite_memory
-    // }
 
     /// Get schema of the node.
     fn schema(&self) -> &SchemaRef {

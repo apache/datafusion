@@ -47,9 +47,7 @@ use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_physical_expr::{EquivalenceProperties, Partitioning, PhysicalSortExpr};
 use datafusion_physical_plan::execution_plan::EmissionType;
 use datafusion_physical_plan::streaming::{PartitionStream, StreamingTableExec};
-use datafusion_physical_plan::{
-    DisplayAs, DisplayFormatType, ExecutionMode, PlanProperties,
-};
+use datafusion_physical_plan::{DisplayAs, DisplayFormatType, PlanProperties};
 
 #[cfg(feature = "compression")]
 use bzip2::write::BzEncoder;
@@ -387,13 +385,9 @@ impl StatisticsExec {
 
     /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
     fn compute_properties(schema: SchemaRef) -> PlanProperties {
-        let eq_properties = EquivalenceProperties::new(schema);
         PlanProperties::new(
-            eq_properties,
-            // Output Partitioning
+            EquivalenceProperties::new(schema),
             Partitioning::UnknownPartitioning(2),
-            // Execution Mode
-            ExecutionMode::Bounded,
         )
     }
 }

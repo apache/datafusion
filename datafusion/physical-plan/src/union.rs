@@ -27,7 +27,6 @@ use std::task::{Context, Poll};
 use std::{any::Any, sync::Arc};
 
 use super::{
-    execution_mode_from_children,
     metrics::{ExecutionPlanMetricsSet, MetricsSet},
     ColumnStatistics, DisplayAs, DisplayFormatType, ExecutionPlan,
     ExecutionPlanProperties, Partitioning, PlanProperties, RecordBatchStream,
@@ -139,13 +138,9 @@ impl UnionExec {
 
         let emission_type = emission_type_from_children(inputs);
         let has_finite_memory = inputs.iter().all(|input| input.has_finite_memory());
-        let mode = execution_mode_from_children(inputs.iter());
-
-        Ok(
-            PlanProperties::new(eq_properties, output_partitioning, mode)
-                .with_emission_type(emission_type)
-                .with_memory_usage(has_finite_memory),
-        )
+        Ok(PlanProperties::new(eq_properties, output_partitioning)
+            .with_emission_type(emission_type)
+            .with_memory_usage(has_finite_memory))
     }
 }
 
@@ -345,10 +340,7 @@ impl InterleaveExec {
         let eq_properties = EquivalenceProperties::new(schema);
         // Get output partitioning:
         let output_partitioning = inputs[0].output_partitioning().clone();
-        // Determine execution mode:
-        let mode = execution_mode_from_children(inputs.iter());
-
-        PlanProperties::new(eq_properties, output_partitioning, mode)
+        PlanProperties::new(eq_properties, output_partitioning)
     }
 }
 

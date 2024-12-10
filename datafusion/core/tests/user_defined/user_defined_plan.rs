@@ -88,9 +88,8 @@ use datafusion::{
     optimizer::{OptimizerConfig, OptimizerRule},
     physical_expr::EquivalenceProperties,
     physical_plan::{
-        DisplayAs, DisplayFormatType, Distribution, ExecutionMode, ExecutionPlan,
-        Partitioning, PlanProperties, RecordBatchStream, SendableRecordBatchStream,
-        Statistics,
+        DisplayAs, DisplayFormatType, Distribution, ExecutionPlan, Partitioning,
+        PlanProperties, RecordBatchStream, SendableRecordBatchStream, Statistics,
     },
     physical_planner::{DefaultPhysicalPlanner, ExtensionPlanner, PhysicalPlanner},
     prelude::{SessionConfig, SessionContext},
@@ -498,11 +497,7 @@ impl TopKExec {
     fn compute_properties(schema: SchemaRef) -> PlanProperties {
         let eq_properties = EquivalenceProperties::new(schema);
 
-        PlanProperties::new(
-            eq_properties,
-            Partitioning::UnknownPartitioning(1),
-            ExecutionMode::Bounded,
-        )
+        PlanProperties::new(eq_properties, Partitioning::UnknownPartitioning(1))
     }
 }
 

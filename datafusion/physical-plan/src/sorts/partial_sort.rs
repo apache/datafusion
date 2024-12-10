@@ -202,10 +202,7 @@ impl PartialSortExec {
         let output_partitioning =
             Self::output_partitioning_helper(input, preserve_partitioning);
 
-        // Determine execution mode:
-        let mode = input.execution_mode();
-
-        PlanProperties::new(eq_properties, output_partitioning, mode)
+        PlanProperties::new(eq_properties, output_partitioning)
             .with_emission_type(input.emission_type())
             .with_memory_usage(input.has_finite_memory())
     }

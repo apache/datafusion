@@ -155,12 +155,9 @@ impl MockExec {
 
     /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
     fn compute_properties(schema: SchemaRef) -> PlanProperties {
-        let eq_properties = EquivalenceProperties::new(schema);
-
         PlanProperties::new(
-            eq_properties,
+            EquivalenceProperties::new(schema),
             Partitioning::UnknownPartitioning(1),
-            ExecutionMode::Bounded,
         )
     }
 }
@@ -326,11 +323,9 @@ impl BarrierExec {
         schema: SchemaRef,
         data: &[Vec<RecordBatch>],
     ) -> PlanProperties {
-        let eq_properties = EquivalenceProperties::new(schema);
         PlanProperties::new(
-            eq_properties,
+            EquivalenceProperties::new(schema),
             Partitioning::UnknownPartitioning(data.len()),
-            ExecutionMode::Bounded,
         )
     }
 }
@@ -446,12 +441,9 @@ impl ErrorExec {
 
     /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
     fn compute_properties(schema: SchemaRef) -> PlanProperties {
-        let eq_properties = EquivalenceProperties::new(schema);
-
         PlanProperties::new(
-            eq_properties,
+            EquivalenceProperties::new(schema),
             Partitioning::UnknownPartitioning(1),
-            ExecutionMode::Bounded,
         )
     }
 }
@@ -536,12 +528,9 @@ impl StatisticsExec {
 
     /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
     fn compute_properties(schema: SchemaRef) -> PlanProperties {
-        let eq_properties = EquivalenceProperties::new(schema);
-
         PlanProperties::new(
-            eq_properties,
+            EquivalenceProperties::new(schema),
             Partitioning::UnknownPartitioning(2),
-            ExecutionMode::Bounded,
         )
     }
 }
@@ -645,12 +634,9 @@ impl BlockingExec {
 
     /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
     fn compute_properties(schema: SchemaRef, n_partitions: usize) -> PlanProperties {
-        let eq_properties = EquivalenceProperties::new(schema);
-
         PlanProperties::new(
-            eq_properties,
+            EquivalenceProperties::new(schema),
             Partitioning::UnknownPartitioning(n_partitions),
-            ExecutionMode::Bounded,
         )
     }
 }
@@ -795,13 +781,10 @@ impl PanicExec {
         schema: SchemaRef,
         batches_until_panics: &[usize],
     ) -> PlanProperties {
-        let eq_properties = EquivalenceProperties::new(schema);
         let num_partitions = batches_until_panics.len();
-
         PlanProperties::new(
-            eq_properties,
+            EquivalenceProperties::new(schema),
             Partitioning::UnknownPartitioning(num_partitions),
-            ExecutionMode::Bounded,
         )
     }
 }

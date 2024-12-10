@@ -738,9 +738,8 @@ impl RepartitionExec {
         let eq_properties = Self::eq_properties_helper(input, preserve_order);
 
         PlanProperties::new(
-            eq_properties,          // Equivalence Properties
-            partitioning,           // Output Partitioning
-            input.execution_mode(), // Execution Mode
+            eq_properties, // Equivalence Properties
+            partitioning,  // Output Partitioning
         )
         .with_emission_type(input.emission_type())
         .with_memory_usage(input.has_finite_memory())

@@ -41,7 +41,7 @@ use datafusion_common::stats::Precision;
 use datafusion_physical_expr::EquivalenceProperties;
 use datafusion_physical_plan::execution_plan::EmissionType;
 use datafusion_physical_plan::placeholder_row::PlaceholderRowExec;
-use datafusion_physical_plan::{ExecutionMode, PlanProperties};
+use datafusion_physical_plan::PlanProperties;
 
 use async_trait::async_trait;
 use datafusion_catalog::Session;
@@ -92,12 +92,9 @@ impl CustomExecutionPlan {
 
     /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
     fn compute_properties(schema: SchemaRef) -> PlanProperties {
-        let eq_properties = EquivalenceProperties::new(schema);
         PlanProperties::new(
-            eq_properties,
-            // Output Partitioning
+            EquivalenceProperties::new(schema),
             Partitioning::UnknownPartitioning(1),
-            ExecutionMode::Bounded,
         )
     }
 }

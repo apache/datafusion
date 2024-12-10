@@ -35,7 +35,6 @@ pub use datafusion_physical_expr::{
 };
 
 pub use crate::display::{DefaultDisplay, DisplayAs, DisplayFormatType, VerboseDisplay};
-pub(crate) use crate::execution_plan::execution_mode_from_children;
 pub use crate::execution_plan::{
     collect, collect_partitioned, displayable, execute_input_stream, execute_stream,
     execute_stream_partitioned, get_plan_string, with_new_children_if_necessary,

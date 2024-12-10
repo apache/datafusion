@@ -26,8 +26,8 @@ use datafusion::{
     error::Result,
     logical_expr::Expr,
     physical_plan::{
-        ColumnStatistics, DisplayAs, DisplayFormatType, ExecutionMode, ExecutionPlan,
-        Partitioning, PlanProperties, SendableRecordBatchStream, Statistics,
+        ColumnStatistics, DisplayAs, DisplayFormatType, ExecutionPlan, Partitioning,
+        PlanProperties, SendableRecordBatchStream, Statistics,
     },
     prelude::SessionContext,
     scalar::ScalarValue,
@@ -65,12 +65,9 @@ impl StatisticsValidation {
 
     /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
     fn compute_properties(schema: SchemaRef) -> PlanProperties {
-        let eq_properties = EquivalenceProperties::new(schema);
-
         PlanProperties::new(
-            eq_properties,
+            EquivalenceProperties::new(schema),
             Partitioning::UnknownPartitioning(2),
-            ExecutionMode::Bounded,
         )
     }
 }

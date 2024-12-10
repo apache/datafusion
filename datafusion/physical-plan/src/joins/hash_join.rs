@@ -45,9 +45,8 @@ use crate::{
         JoinHashMapType, JoinOn, JoinOnRef, StatefulStreamResult,
     },
     metrics::{ExecutionPlanMetricsSet, MetricsSet},
-    DisplayAs, DisplayFormatType, Distribution, ExecutionMode, ExecutionPlan,
-    Partitioning, PlanProperties, RecordBatchStream, SendableRecordBatchStream,
-    Statistics,
+    DisplayAs, DisplayFormatType, Distribution, ExecutionPlan, Partitioning,
+    PlanProperties, RecordBatchStream, SendableRecordBatchStream, Statistics,
 };
 
 use arrow::array::{
@@ -541,32 +540,6 @@ impl HashJoinExec {
             }
         };
 
-        let mode = if left.execution_mode().is_unbounded() {
-            // if build side is unbounded, the emission happens in the final stage
-            ExecutionMode::Final
-        } else {
-            // If we maintain the unmatched build side rows, we need to emit them in the final stage
-            if matches!(
-                join_type,
-                JoinType::Left
-                    | JoinType::Full
-                    | JoinType::LeftAnti
-                    | JoinType::LeftMark
-                    | JoinType::Right
-                    | JoinType::RightAnti
-            ) {
-                ExecutionMode::Bounded | ExecutionMode::Incremental | ExecutionMode::Final
-            } else if matches!(
-                join_type,
-                JoinType::Inner | JoinType::LeftSemi | JoinType::RightSemi
-            ) {
-                // Since the matched rows could be emitted immediately, the join is incremental
-                ExecutionMode::Bounded | ExecutionMode::Incremental
-            } else {
-                return internal_err!("Unsupported join type: {:?}", join_type);
-            }
-        };
-
         let has_finite_memory = left.has_finite_memory() && right.has_finite_memory();
 
         // If contains projection, update the PlanProperties.
@@ -579,11 +552,9 @@ impl HashJoinExec {
                 output_partitioning.project(&projection_mapping, &eq_properties);
             eq_properties = eq_properties.project(&projection_mapping, out_schema);
         }
-        Ok(
-            PlanProperties::new(eq_properties, output_partitioning, mode)
-                .with_memory_usage(has_finite_memory)
-                .with_emission_type(emission_type),
-        )
+        Ok(PlanProperties::new(eq_properties, output_partitioning)
+            .with_memory_usage(has_finite_memory)
+            .with_emission_type(emission_type))
     }
 }
 

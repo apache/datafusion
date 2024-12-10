@@ -64,9 +64,9 @@ use crate::joins::utils::{
 use crate::metrics::{Count, ExecutionPlanMetricsSet, MetricBuilder, MetricsSet};
 use crate::spill::spill_record_batches;
 use crate::{
-    execution_mode_from_children, metrics, DisplayAs, DisplayFormatType, Distribution,
-    ExecutionPlan, ExecutionPlanProperties, PhysicalExpr, PlanProperties,
-    RecordBatchStream, SendableRecordBatchStream, Statistics,
+    metrics, DisplayAs, DisplayFormatType, Distribution, ExecutionPlan,
+    ExecutionPlanProperties, PhysicalExpr, PlanProperties, RecordBatchStream,
+    SendableRecordBatchStream, Statistics,
 };
 
 /// Join execution plan that executes equi-join predicates on multiple partitions using Sort-Merge
@@ -304,10 +304,8 @@ impl SortMergeJoinExec {
             symmetric_join_output_partitioning(left, right, &join_type);
 
         // Determine execution mode:
-        let mode = execution_mode_from_children([left, right]);
         let has_finite_memory = left.has_finite_memory() && right.has_finite_memory();
-
-        PlanProperties::new(eq_properties, output_partitioning, mode)
+        PlanProperties::new(eq_properties, output_partitioning)
             .with_memory_usage(has_finite_memory)
     }
 }

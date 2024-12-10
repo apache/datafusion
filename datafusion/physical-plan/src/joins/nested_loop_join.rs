@@ -37,8 +37,8 @@ use crate::joins::utils::{
 };
 use crate::metrics::{ExecutionPlanMetricsSet, MetricsSet};
 use crate::{
-    handle_state, DisplayAs, DisplayFormatType, Distribution, ExecutionMode,
-    ExecutionPlan, ExecutionPlanProperties, PlanProperties, RecordBatchStream,
+    handle_state, DisplayAs, DisplayFormatType, Distribution, ExecutionPlan,
+    ExecutionPlanProperties, PlanProperties, RecordBatchStream,
     SendableRecordBatchStream,
 };
 
@@ -243,18 +243,7 @@ impl NestedLoopJoinExec {
         let output_partitioning =
             asymmetric_join_output_partitioning(left, right, &join_type);
 
-        // Determine execution mode:
-        let mode = if left.execution_mode().is_unbounded() {
-            // If build side is unbounded, the emission happens in the final stage
-            ExecutionMode::Final
-        } else {
-            // execution_mode_from_children([left, right])
-
-            // Similar to InnerJoin, matched rows could be emitted incrementally
-            ExecutionMode::Bounded | ExecutionMode::Incremental
-        };
-
-        PlanProperties::new(eq_properties, output_partitioning, mode)
+        PlanProperties::new(eq_properties, output_partitioning)
             .with_memory_usage(left.has_finite_memory())
     }
 

@@ -20,10 +20,7 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use super::{
-    common, DisplayAs, ExecutionMode, PlanProperties, SendableRecordBatchStream,
-    Statistics,
-};
+use super::{common, DisplayAs, PlanProperties, SendableRecordBatchStream, Statistics};
 use crate::execution_plan::EmissionType;
 use crate::{
     memory::MemoryStream, ColumnarValue, DisplayFormatType, ExecutionPlan, Partitioning,
@@ -136,11 +133,7 @@ impl ValuesExec {
     fn compute_properties(schema: SchemaRef) -> PlanProperties {
         let eq_properties = EquivalenceProperties::new(schema);
 
-        PlanProperties::new(
-            eq_properties,
-            Partitioning::UnknownPartitioning(1),
-            ExecutionMode::Bounded | ExecutionMode::Incremental,
-        )
+        PlanProperties::new(eq_properties, Partitioning::UnknownPartitioning(1))
     }
 }
 

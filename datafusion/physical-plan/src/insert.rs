@@ -23,8 +23,8 @@ use std::fmt::Debug;
 use std::sync::Arc;
 
 use super::{
-    execute_input_stream, DisplayAs, DisplayFormatType, ExecutionPlan,
-    ExecutionPlanProperties, Partitioning, PlanProperties, SendableRecordBatchStream,
+    execute_input_stream, DisplayAs, DisplayFormatType, ExecutionPlan, Partitioning,
+    PlanProperties, SendableRecordBatchStream,
 };
 use crate::stream::RecordBatchStreamAdapter;
 use crate::{execution_plan::EmissionType, metrics::MetricsSet};
@@ -137,13 +137,9 @@ impl DataSinkExec {
         schema: SchemaRef,
     ) -> PlanProperties {
         let eq_properties = EquivalenceProperties::new(schema);
-        PlanProperties::new(
-            eq_properties,
-            Partitioning::UnknownPartitioning(1),
-            input.execution_mode(),
-        )
-        .with_emission_type(input.emission_type())
-        .with_memory_usage(input.has_finite_memory())
+        PlanProperties::new(eq_properties, Partitioning::UnknownPartitioning(1))
+            .with_emission_type(input.emission_type())
+            .with_memory_usage(input.has_finite_memory())
     }
 }
 

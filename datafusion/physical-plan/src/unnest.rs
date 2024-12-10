@@ -102,13 +102,9 @@ impl UnnestExec {
     ) -> PlanProperties {
         let eq_properties = EquivalenceProperties::new(schema);
 
-        PlanProperties::new(
-            eq_properties,
-            input.output_partitioning().clone(),
-            input.execution_mode(),
-        )
-        .with_emission_type(input.emission_type())
-        .with_memory_usage(input.has_finite_memory())
+        PlanProperties::new(eq_properties, input.output_partitioning().clone())
+            .with_emission_type(input.emission_type())
+            .with_memory_usage(input.has_finite_memory())
     }
 
     /// Input execution plan

@@ -24,8 +24,8 @@ use super::FileScanConfig;
 use crate::error::Result;
 use crate::physical_plan::metrics::{ExecutionPlanMetricsSet, MetricsSet};
 use crate::physical_plan::{
-    DisplayAs, DisplayFormatType, ExecutionMode, ExecutionPlan, Partitioning,
-    PlanProperties, SendableRecordBatchStream, Statistics,
+    DisplayAs, DisplayFormatType, ExecutionPlan, Partitioning, PlanProperties,
+    SendableRecordBatchStream, Statistics,
 };
 
 use arrow::datatypes::SchemaRef;
@@ -82,7 +82,6 @@ impl AvroExec {
         PlanProperties::new(
             eq_properties,
             Partitioning::UnknownPartitioning(n_partitions), // Output Partitioning
-            ExecutionMode::Bounded,                          // Execution Mode
         )
     }
 }

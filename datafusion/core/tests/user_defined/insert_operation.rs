@@ -27,7 +27,7 @@ use datafusion_catalog::{Session, TableProvider};
 use datafusion_expr::{dml::InsertOp, Expr, TableType};
 use datafusion_physical_expr::{EquivalenceProperties, Partitioning};
 use datafusion_physical_plan::{
-    execution_plan::EmissionType, DisplayAs, ExecutionMode, ExecutionPlan, PlanProperties,
+    execution_plan::EmissionType, DisplayAs, ExecutionPlan, PlanProperties,
 };
 
 #[tokio::test]
@@ -125,11 +125,8 @@ struct TestInsertExec {
 impl TestInsertExec {
     fn new(op: InsertOp) -> Self {
         let eq_properties = EquivalenceProperties::new(make_count_schema());
-        let plan_properties = PlanProperties::new(
-            eq_properties,
-            Partitioning::UnknownPartitioning(1),
-            ExecutionMode::Bounded,
-        );
+        let plan_properties =
+            PlanProperties::new(eq_properties, Partitioning::UnknownPartitioning(1));
         Self {
             op,
             plan_properties,

@@ -30,9 +30,9 @@ use crate::windows::{
     window_equivalence_properties,
 };
 use crate::{
-    ColumnStatistics, DisplayAs, DisplayFormatType, Distribution, ExecutionMode,
-    ExecutionPlan, ExecutionPlanProperties, PhysicalExpr, PlanProperties,
-    RecordBatchStream, SendableRecordBatchStream, Statistics, WindowExpr,
+    ColumnStatistics, DisplayAs, DisplayFormatType, Distribution, ExecutionPlan,
+    ExecutionPlanProperties, PhysicalExpr, PlanProperties, RecordBatchStream,
+    SendableRecordBatchStream, Statistics, WindowExpr,
 };
 use arrow::array::ArrayRef;
 use arrow::compute::{concat, concat_batches};
@@ -128,12 +128,8 @@ impl WindowAggExec {
         // would be either 1 or more than 1 depending on the presence of repartitioning.
         let output_partitioning = input.output_partitioning().clone();
 
-        // TODO: emission mode should be based on the aggregation function
-        // let mode = input.execution_mode().emit_incremental();
-        let mode = ExecutionMode::empty();
-
         // Construct properties cache:
-        PlanProperties::new(eq_properties, output_partitioning, mode)
+        PlanProperties::new(eq_properties, output_partitioning)
             .with_memory_usage(input.has_finite_memory())
     }
 }

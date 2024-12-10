@@ -27,7 +27,7 @@ use super::{
     PlanProperties, RecordBatchStream, SendableRecordBatchStream, Statistics,
 };
 use crate::execution_plan::EmissionType;
-use crate::{DisplayAs, DisplayFormatType, ExecutionMode, ExecutionPlan};
+use crate::{DisplayAs, DisplayFormatType, ExecutionPlan};
 
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
@@ -120,11 +120,7 @@ impl RecursiveQueryExec {
     fn compute_properties(schema: SchemaRef) -> PlanProperties {
         let eq_properties = EquivalenceProperties::new(schema);
 
-        PlanProperties::new(
-            eq_properties,
-            Partitioning::UnknownPartitioning(1),
-            ExecutionMode::Bounded | ExecutionMode::Incremental,
-        )
+        PlanProperties::new(eq_properties, Partitioning::UnknownPartitioning(1))
     }
 }
 

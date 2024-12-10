@@ -24,7 +24,7 @@ use std::task::{Context, Poll};
 
 use super::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
 use super::{
-    DisplayAs, ExecutionMode, ExecutionPlanProperties, PlanProperties, RecordBatchStream,
+    DisplayAs, ExecutionPlanProperties, PlanProperties, RecordBatchStream,
     SendableRecordBatchStream, Statistics,
 };
 use crate::{DisplayFormatType, Distribution, ExecutionPlan, Partitioning};
@@ -86,7 +86,6 @@ impl GlobalLimitExec {
         PlanProperties::new(
             input.equivalence_properties().clone(), // Equivalence Properties
             Partitioning::UnknownPartitioning(1),   // Output Partitioning
-            ExecutionMode::Bounded | ExecutionMode::Final,
         )
     }
 }
@@ -250,7 +249,6 @@ impl LocalLimitExec {
         PlanProperties::new(
             input.equivalence_properties().clone(), // Equivalence Properties
             input.output_partitioning().clone(),    // Output Partitioning
-            ExecutionMode::Bounded | ExecutionMode::Final,
         )
     }
 }

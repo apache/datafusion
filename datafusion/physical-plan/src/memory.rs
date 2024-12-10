@@ -26,8 +26,8 @@ use std::task::{Context, Poll};
 use crate::execution_plan::EmissionType;
 
 use super::{
-    common, DisplayAs, DisplayFormatType, ExecutionMode, ExecutionPlan, Partitioning,
-    PlanProperties, RecordBatchStream, SendableRecordBatchStream, Statistics,
+    common, DisplayAs, DisplayFormatType, ExecutionPlan, Partitioning, PlanProperties,
+    RecordBatchStream, SendableRecordBatchStream, Statistics,
 };
 
 use arrow::datatypes::SchemaRef;
@@ -295,11 +295,9 @@ impl MemoryExec {
         orderings: &[LexOrdering],
         partitions: &[Vec<RecordBatch>],
     ) -> PlanProperties {
-        let eq_properties = EquivalenceProperties::new_with_orderings(schema, orderings);
         PlanProperties::new(
-            eq_properties,                                       // Equivalence Properties
+            EquivalenceProperties::new_with_orderings(schema, orderings),
             Partitioning::UnknownPartitioning(partitions.len()), // Output Partitioning
-            ExecutionMode::Bounded | ExecutionMode::Incremental, // Execution Mode
         )
     }
 }
@@ -403,7 +401,6 @@ impl LazyMemoryExec {
         let cache = PlanProperties::new(
             EquivalenceProperties::new(Arc::clone(&schema)),
             Partitioning::RoundRobinBatch(generators.len()),
-            ExecutionMode::Bounded | ExecutionMode::Incremental,
         );
         Ok(Self {
             schema,

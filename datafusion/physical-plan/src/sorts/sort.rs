@@ -37,9 +37,9 @@ use crate::spill::{
 use crate::stream::RecordBatchStreamAdapter;
 use crate::topk::TopK;
 use crate::{
-    DisplayAs, DisplayFormatType, Distribution, EmptyRecordBatchStream, ExecutionMode,
-    ExecutionPlan, ExecutionPlanProperties, Partitioning, PlanProperties,
-    SendableRecordBatchStream, Statistics,
+    DisplayAs, DisplayFormatType, Distribution, EmptyRecordBatchStream, ExecutionPlan,
+    ExecutionPlanProperties, Partitioning, PlanProperties, SendableRecordBatchStream,
+    Statistics,
 };
 
 use arrow::compute::{concat_batches, lexsort_to_indices, take_arrays, SortColumn};
@@ -819,13 +819,12 @@ impl SortExec {
             .equivalence_properties()
             .ordering_satisfy_requirement(&requirement);
 
+        // TODO: If the input is final, should we change to incremental if sorted?
         let emission_type = if sort_satisfied {
             EmissionType::Incremental
         } else {
             EmissionType::Final
         };
-
-        let mode = ExecutionMode::empty();
 
         // Calculate equivalence properties; i.e. reset the ordering equivalence
         // class with the new ordering:
@@ -839,7 +838,7 @@ impl SortExec {
         let output_partitioning =
             Self::output_partitioning_helper(input, preserve_partitioning);
 
-        PlanProperties::new(eq_properties, output_partitioning, mode)
+        PlanProperties::new(eq_properties, output_partitioning)
             .with_memory_usage(input.has_finite_memory())
             .with_emission_type(emission_type)
     }

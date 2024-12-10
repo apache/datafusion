@@ -20,7 +20,7 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use super::{DisplayAs, ExecutionMode, ExecutionPlanProperties, PlanProperties};
+use super::{DisplayAs, ExecutionPlanProperties, PlanProperties};
 use crate::aggregates::{
     no_grouping::AggregateStream, row_hash::GroupedHashAggregateStream,
     topk_stream::GroupedTopKAggregateStream,
@@ -669,8 +669,7 @@ impl AggregateExec {
             input.emission_type()
         };
 
-        let mode = ExecutionMode::empty();
-        PlanProperties::new(eq_properties, output_partitioning, mode)
+        PlanProperties::new(eq_properties, output_partitioning)
             .with_emission_type(emission_type)
             .with_memory_usage(input.has_finite_memory())
     }

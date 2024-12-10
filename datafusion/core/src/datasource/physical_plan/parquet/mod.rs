@@ -34,7 +34,7 @@ use crate::{
     physical_optimizer::pruning::PruningPredicate,
     physical_plan::{
         metrics::{ExecutionPlanMetricsSet, MetricBuilder, MetricsSet},
-        DisplayFormatType, ExecutionMode, ExecutionPlan, Partitioning, PlanProperties,
+        DisplayFormatType, ExecutionPlan, Partitioning, PlanProperties,
         SendableRecordBatchStream, Statistics,
     },
 };
@@ -661,7 +661,6 @@ impl ParquetExec {
         PlanProperties::new(
             eq_properties,
             Self::output_partitioning_helper(file_config), // Output Partitioning
-            ExecutionMode::Bounded,                        // Execution Mode
         )
     }
 

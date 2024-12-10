@@ -33,8 +33,8 @@ use crate::datasource::physical_plan::FileMeta;
 use crate::error::{DataFusionError, Result};
 use crate::physical_plan::metrics::{ExecutionPlanMetricsSet, MetricsSet};
 use crate::physical_plan::{
-    DisplayAs, DisplayFormatType, ExecutionMode, ExecutionPlan, ExecutionPlanProperties,
-    Partitioning, PlanProperties, SendableRecordBatchStream, Statistics,
+    DisplayAs, DisplayFormatType, ExecutionPlan, ExecutionPlanProperties, Partitioning,
+    PlanProperties, SendableRecordBatchStream, Statistics,
 };
 
 use arrow::csv;
@@ -328,7 +328,6 @@ impl CsvExec {
         PlanProperties::new(
             eq_properties,
             Self::output_partitioning_helper(file_scan_config), // Output Partitioning
-            ExecutionMode::Bounded,                             // Execution Mode
         )
     }
 

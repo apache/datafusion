@@ -2017,7 +2017,7 @@ mod tests {
     use crate::datasource::file_format::options::CsvReadOptions;
     use crate::datasource::MemTable;
     use crate::physical_plan::{
-        expressions, DisplayAs, DisplayFormatType, ExecutionMode, PlanProperties,
+        expressions, DisplayAs, DisplayFormatType, PlanProperties,
         SendableRecordBatchStream,
     };
     use crate::prelude::{SessionConfig, SessionContext};
@@ -2620,13 +2620,9 @@ mod tests {
 
         /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
         fn compute_properties(schema: SchemaRef) -> PlanProperties {
-            let eq_properties = EquivalenceProperties::new(schema);
             PlanProperties::new(
-                eq_properties,
-                // Output Partitioning
+                EquivalenceProperties::new(schema),
                 Partitioning::UnknownPartitioning(1),
-                // Execution Mode
-                ExecutionMode::Bounded,
             )
         }
     }
