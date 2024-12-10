@@ -161,15 +161,16 @@ impl CrossJoinExec {
             left.schema().fields.len(),
         );
 
-        let mode = if !left.has_finite_memory()
-            || !right.has_finite_memory()
-        {
+        let has_finite_memory = left.has_finite_memory() && right.has_finite_memory();
+
+        let mode = if !has_finite_memory {
             ExecutionMode::Final
         } else {
             ExecutionMode::Bounded | ExecutionMode::Final
         };
 
         PlanProperties::new(eq_properties, output_partitioning, mode)
+            .with_memory_usage(has_finite_memory)
     }
 }
 
@@ -328,7 +329,7 @@ impl ExecutionPlan for CrossJoinExec {
     }
 
     fn has_finite_memory(&self) -> bool {
-        self.left.has_finite_memory() && self.right.has_finite_memory()
+        self.cache.has_finite_memory
     }
 }
 

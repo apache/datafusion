@@ -272,11 +272,14 @@ impl FilterExec {
                 output_partitioning.project(&projection_mapping, &eq_properties);
             eq_properties = eq_properties.project(&projection_mapping, out_schema);
         }
+
         Ok(PlanProperties::new(
             eq_properties,
             output_partitioning,
             input.execution_mode(),
-        ))
+        )
+        .with_emission_type(input.emission_type())
+        .with_memory_usage(input.has_finite_memory()))
     }
 }
 
@@ -384,11 +387,12 @@ impl ExecutionPlan for FilterExec {
     }
 
     fn emission_type(&self) -> EmissionType {
-        self.input.emission_type()
+        // Safe to unwrap because the emission type is set in the constructor
+        self.cache.emission_type.unwrap()
     }
 
     fn has_finite_memory(&self) -> bool {
-        self.input.has_finite_memory()
+        self.cache.has_finite_memory
     }
 }
 

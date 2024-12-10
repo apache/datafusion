@@ -244,18 +244,18 @@ impl NestedLoopJoinExec {
             asymmetric_join_output_partitioning(left, right, &join_type);
 
         // Determine execution mode:
-        // let mode = if left.execution_mode().is_unbounded() {
-        //     // If build side is unbounded, the emission happens in the final stage
-        //     ExecutionMode::Final
-        // } else {
-        //     // execution_mode_from_children([left, right])
+        let mode = if left.execution_mode().is_unbounded() {
+            // If build side is unbounded, the emission happens in the final stage
+            ExecutionMode::Final
+        } else {
+            // execution_mode_from_children([left, right])
 
-        //     // Similar to InnerJoin, matched rows could be emitted incrementally
-        //     ExecutionMode::Bounded | ExecutionMode::Incremental
-        // };
-        let mode = ExecutionMode::empty();
+            // Similar to InnerJoin, matched rows could be emitted incrementally
+            ExecutionMode::Bounded | ExecutionMode::Incremental
+        };
 
         PlanProperties::new(eq_properties, output_partitioning, mode)
+            .with_memory_usage(left.has_finite_memory())
     }
 
     /// Returns a vector indicating whether the left and right inputs maintain their order.
@@ -425,7 +425,7 @@ impl ExecutionPlan for NestedLoopJoinExec {
     }
 
     fn emission_type(&self) -> EmissionType {
-        if self.left.has_finite_memory() {
+        if self.has_finite_memory() {
             EmissionType::Incremental
         } else {
             EmissionType::Final
@@ -433,7 +433,7 @@ impl ExecutionPlan for NestedLoopJoinExec {
     }
 
     fn has_finite_memory(&self) -> bool {
-        self.left.has_finite_memory()
+        self.cache.has_finite_memory
     }
 }
 

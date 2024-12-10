@@ -525,32 +525,49 @@ impl HashJoinExec {
             }
         };
 
-        // let mode = if left.execution_mode().is_unbounded() {
-        //     // if build side is unbounded, the emission happens in the final stage
-        //     ExecutionMode::Final
-        // } else {
-        //     // If we maintain the unmatched build side rows, we need to emit them in the final stage
-        //     if matches!(
-        //         join_type,
-        //         JoinType::Left
-        //             | JoinType::Full
-        //             | JoinType::LeftAnti
-        //             | JoinType::LeftMark
-        //             | JoinType::Right
-        //             | JoinType::RightAnti
-        //     ) {
-        //         ExecutionMode::Bounded | ExecutionMode::Incremental | ExecutionMode::Final
-        //     } else if matches!(
-        //         join_type,
-        //         JoinType::Inner | JoinType::LeftSemi | JoinType::RightSemi
-        //     ) {
-        //         // Since the matched rows could be emitted immediately, the join is incremental
-        //         ExecutionMode::Bounded | ExecutionMode::Incremental
-        //     } else {
-        //         return internal_err!("Unsupported join type: {:?}", join_type);
-        //     }
-        // };
-        let mode = ExecutionMode::empty();
+        let emission_type = if !left.has_finite_memory() {
+            EmissionType::Final
+        } else {
+            match join_type {
+                JoinType::Inner | JoinType::LeftSemi | JoinType::RightSemi => {
+                    EmissionType::Incremental
+                }
+                JoinType::Left
+                | JoinType::LeftAnti
+                | JoinType::LeftMark
+                | JoinType::Right
+                | JoinType::RightAnti
+                | JoinType::Full => EmissionType::Both,
+            }
+        };
+
+        let mode = if left.execution_mode().is_unbounded() {
+            // if build side is unbounded, the emission happens in the final stage
+            ExecutionMode::Final
+        } else {
+            // If we maintain the unmatched build side rows, we need to emit them in the final stage
+            if matches!(
+                join_type,
+                JoinType::Left
+                    | JoinType::Full
+                    | JoinType::LeftAnti
+                    | JoinType::LeftMark
+                    | JoinType::Right
+                    | JoinType::RightAnti
+            ) {
+                ExecutionMode::Bounded | ExecutionMode::Incremental | ExecutionMode::Final
+            } else if matches!(
+                join_type,
+                JoinType::Inner | JoinType::LeftSemi | JoinType::RightSemi
+            ) {
+                // Since the matched rows could be emitted immediately, the join is incremental
+                ExecutionMode::Bounded | ExecutionMode::Incremental
+            } else {
+                return internal_err!("Unsupported join type: {:?}", join_type);
+            }
+        };
+
+        let has_finite_memory = left.has_finite_memory() && right.has_finite_memory();
 
         // If contains projection, update the PlanProperties.
         if let Some(projection) = projection {
@@ -562,11 +579,11 @@ impl HashJoinExec {
                 output_partitioning.project(&projection_mapping, &eq_properties);
             eq_properties = eq_properties.project(&projection_mapping, out_schema);
         }
-        Ok(PlanProperties::new(
-            eq_properties,
-            output_partitioning,
-            mode,
-        ))
+        Ok(
+            PlanProperties::new(eq_properties, output_partitioning, mode)
+                .with_memory_usage(has_finite_memory)
+                .with_emission_type(emission_type),
+        )
     }
 }
 
@@ -811,25 +828,12 @@ impl ExecutionPlan for HashJoinExec {
     }
 
     fn emission_type(&self) -> EmissionType {
-        if self.left.has_finite_memory() {
-            return EmissionType::Final;
-        }
-
-        match self.join_type {
-            JoinType::Inner | JoinType::LeftSemi | JoinType::RightSemi => {
-                EmissionType::Incremental
-            }
-            JoinType::Left
-            | JoinType::LeftAnti
-            | JoinType::LeftMark
-            | JoinType::Right
-            | JoinType::RightAnti
-            | JoinType::Full => EmissionType::Both,
-        }
+        // Safe to unwrap because it is set in `compute_properties`
+        self.cache.emission_type.unwrap()
     }
 
     fn has_finite_memory(&self) -> bool {
-        self.left.has_finite_memory() && self.right.has_finite_memory()
+        self.cache.has_finite_memory
     }
 }
 

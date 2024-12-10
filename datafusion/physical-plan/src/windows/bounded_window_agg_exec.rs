@@ -207,6 +207,8 @@ impl BoundedWindowAggExec {
             output_partitioning,    // Output Partitioning
             input.execution_mode(), // Execution Mode
         )
+        .with_emission_type(input.emission_type())
+        .with_memory_usage(input.has_finite_memory())
     }
 }
 
@@ -332,11 +334,11 @@ impl ExecutionPlan for BoundedWindowAggExec {
     }
 
     fn emission_type(&self) -> EmissionType {
-        self.input.emission_type()
+        self.cache.emission_type.unwrap()
     }
 
     fn has_finite_memory(&self) -> bool {
-        self.input.has_finite_memory()
+        self.cache.has_finite_memory
     }
 }
 

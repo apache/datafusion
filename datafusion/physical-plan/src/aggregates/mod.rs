@@ -663,17 +663,16 @@ impl AggregateExec {
             input_partitioning.clone()
         };
 
-        // TODO: remove this
-        // let mode = if !input.has_finite_memory()
-        //     && *input_order_mode == InputOrderMode::Linear
-        // {
-        //     ExecutionMode::Final
-        // } else {
-        //     input.execution_mode()
-        // };
-        let mode = ExecutionMode::empty();
+        let emission_type = if *input_order_mode == InputOrderMode::Linear {
+            EmissionType::Final
+        } else {
+            input.emission_type()
+        };
 
+        let mode = ExecutionMode::empty();
         PlanProperties::new(eq_properties, output_partitioning, mode)
+            .with_emission_type(emission_type)
+            .with_memory_usage(input.has_finite_memory())
     }
 
     pub fn input_order_mode(&self) -> &InputOrderMode {
@@ -877,17 +876,11 @@ impl ExecutionPlan for AggregateExec {
     }
 
     fn emission_type(&self) -> EmissionType {
-        if !self.input.has_finite_memory()
-            && self.input_order_mode == InputOrderMode::Linear
-        {
-            EmissionType::Final
-        } else {
-            self.emission_type()
-        }
+        self.cache.emission_type.unwrap()
     }
 
     fn has_finite_memory(&self) -> bool {
-        self.input.has_finite_memory()
+        self.cache.has_finite_memory
     }
 }
 

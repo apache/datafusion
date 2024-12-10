@@ -37,7 +37,9 @@ use crate::spill::{
 use crate::stream::RecordBatchStreamAdapter;
 use crate::topk::TopK;
 use crate::{
-    DisplayAs, DisplayFormatType, Distribution, EmptyRecordBatchStream, ExecutionMode, ExecutionPlan, ExecutionPlanProperties, Partitioning, PlanProperties, SendableRecordBatchStream, Statistics
+    DisplayAs, DisplayFormatType, Distribution, EmptyRecordBatchStream, ExecutionMode,
+    ExecutionPlan, ExecutionPlanProperties, Partitioning, PlanProperties,
+    SendableRecordBatchStream, Statistics,
 };
 
 use arrow::compute::{concat_batches, lexsort_to_indices, take_arrays, SortColumn};
@@ -761,12 +763,13 @@ impl SortExec {
     /// can be dropped.
     pub fn with_fetch(&self, fetch: Option<usize>) -> Self {
         let mut cache = self.cache.clone();
-        // if fetch.is_some() && self.cache.execution_mode.pipeline_friendly() {
-        //     // When a theoretically unnecessary sort becomes a top-K (which
-        //     // sometimes arises as an intermediate state before full removal),
-        //     // its execution mode should become `Bounded`.
-        //     cache.execution_mode = cache.execution_mode.switch_to_bounded();
-        // }
+        // If execution mode is pipeline breaking, keep it as it is.
+        if fetch.is_some() && !self.is_pipeline_breaking() {
+            // When a theoretically unnecessary sort becomes a top-K (which
+            // sometimes arises as an intermediate state before full removal),
+            // its execution mode should become `Bounded`.
+            cache = cache.with_memory_usage(true);
+        }
         SortExec {
             input: Arc::clone(&self.input),
             expr: self.expr.clone(),
@@ -816,6 +819,12 @@ impl SortExec {
             .equivalence_properties()
             .ordering_satisfy_requirement(&requirement);
 
+        let emission_type = if sort_satisfied {
+            EmissionType::Incremental
+        } else {
+            EmissionType::Final
+        };
+
         let mode = ExecutionMode::empty();
 
         // Calculate equivalence properties; i.e. reset the ordering equivalence
@@ -831,6 +840,8 @@ impl SortExec {
             Self::output_partitioning_helper(input, preserve_partitioning);
 
         PlanProperties::new(eq_properties, output_partitioning, mode)
+            .with_memory_usage(input.has_finite_memory())
+            .with_emission_type(emission_type)
     }
 }
 
@@ -992,25 +1003,11 @@ impl ExecutionPlan for SortExec {
     }
 
     fn emission_type(&self) -> EmissionType {
-        let requirement = LexRequirement::from(self.expr.clone());
-        let sort_satisfied = self
-            .input
-            .equivalence_properties()
-            .ordering_satisfy_requirement(&requirement);
-
-        if sort_satisfied {
-            EmissionType::Incremental
-        } else {
-            EmissionType::Final
-        }
+        self.cache.emission_type.unwrap()
     }
 
     fn has_finite_memory(&self) -> bool {
-        if self.fetch.is_some() && self.emission_type() == EmissionType::Incremental {
-            return true
-        }
-
-        self.input.has_finite_memory()
+        self.cache.has_finite_memory
     }
 }
 

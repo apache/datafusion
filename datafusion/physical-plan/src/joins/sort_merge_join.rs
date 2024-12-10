@@ -305,8 +305,10 @@ impl SortMergeJoinExec {
 
         // Determine execution mode:
         let mode = execution_mode_from_children([left, right]);
+        let has_finite_memory = left.has_finite_memory() && right.has_finite_memory();
 
         PlanProperties::new(eq_properties, output_partitioning, mode)
+            .with_memory_usage(has_finite_memory)
     }
 }
 
@@ -471,12 +473,12 @@ impl ExecutionPlan for SortMergeJoinExec {
     }
 
     fn emission_type(&self) -> EmissionType {
-        // TODO: Final is the input is sorted, Incremental otherwise
+        // TODO: Final if the input is sorted, Incremental otherwise
         EmissionType::Final
     }
 
     fn has_finite_memory(&self) -> bool {
-        self.left.has_finite_memory() && self.right.has_finite_memory()
+        self.cache.has_finite_memory
     }
 }
 

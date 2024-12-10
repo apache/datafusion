@@ -137,14 +137,15 @@ impl UnionExec {
             .sum();
         let output_partitioning = Partitioning::UnknownPartitioning(num_partitions);
 
-        // Determine execution mode:
+        let emission_type = emission_type_from_children(inputs);
+        let has_finite_memory = inputs.iter().all(|input| input.has_finite_memory());
         let mode = execution_mode_from_children(inputs.iter());
 
-        Ok(PlanProperties::new(
-            eq_properties,
-            output_partitioning,
-            mode,
-        ))
+        Ok(
+            PlanProperties::new(eq_properties, output_partitioning, mode)
+                .with_emission_type(emission_type)
+                .with_memory_usage(has_finite_memory),
+        )
     }
 }
 
@@ -267,11 +268,11 @@ impl ExecutionPlan for UnionExec {
     }
 
     fn emission_type(&self) -> EmissionType {
-        emission_type_from_children(self.inputs.as_slice())
+        self.cache.emission_type.unwrap()
     }
 
     fn has_finite_memory(&self) -> bool {
-        self.inputs.iter().all(|input| input.has_finite_memory())
+        self.cache.has_finite_memory
     }
 }
 

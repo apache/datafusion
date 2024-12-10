@@ -30,7 +30,9 @@ use crate::windows::{
     window_equivalence_properties,
 };
 use crate::{
-    ColumnStatistics, DisplayAs, DisplayFormatType, Distribution, ExecutionMode, ExecutionPlan, ExecutionPlanProperties, PhysicalExpr, PlanProperties, RecordBatchStream, SendableRecordBatchStream, Statistics, WindowExpr
+    ColumnStatistics, DisplayAs, DisplayFormatType, Distribution, ExecutionMode,
+    ExecutionPlan, ExecutionPlanProperties, PhysicalExpr, PlanProperties,
+    RecordBatchStream, SendableRecordBatchStream, Statistics, WindowExpr,
 };
 use arrow::array::ArrayRef;
 use arrow::compute::{concat, concat_batches};
@@ -132,6 +134,7 @@ impl WindowAggExec {
 
         // Construct properties cache:
         PlanProperties::new(eq_properties, output_partitioning, mode)
+            .with_memory_usage(input.has_finite_memory())
     }
 }
 
@@ -263,7 +266,7 @@ impl ExecutionPlan for WindowAggExec {
     }
 
     fn has_finite_memory(&self) -> bool {
-        self.input.has_finite_memory()
+        self.cache.has_finite_memory
     }
 }
 

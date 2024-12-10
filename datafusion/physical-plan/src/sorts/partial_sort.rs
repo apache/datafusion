@@ -206,6 +206,8 @@ impl PartialSortExec {
         let mode = input.execution_mode();
 
         PlanProperties::new(eq_properties, output_partitioning, mode)
+            .with_emission_type(input.emission_type())
+            .with_memory_usage(input.has_finite_memory())
     }
 }
 
@@ -315,11 +317,12 @@ impl ExecutionPlan for PartialSortExec {
     }
 
     fn emission_type(&self) -> EmissionType {
-        self.input.emission_type()
+        // Safe to unwrap because we set it in the `compute_properties`
+        self.cache.emission_type.unwrap()
     }
 
     fn has_finite_memory(&self) -> bool {
-        self.input.has_finite_memory()
+        self.cache.has_finite_memory
     }
 }
 

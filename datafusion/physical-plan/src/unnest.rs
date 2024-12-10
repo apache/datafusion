@@ -107,6 +107,8 @@ impl UnnestExec {
             input.output_partitioning().clone(),
             input.execution_mode(),
         )
+        .with_emission_type(input.emission_type())
+        .with_memory_usage(input.has_finite_memory())
     }
 
     /// Input execution plan
@@ -200,11 +202,11 @@ impl ExecutionPlan for UnnestExec {
     }
 
     fn emission_type(&self) -> EmissionType {
-        self.input.emission_type()
+        self.cache.emission_type.unwrap()
     }
 
     fn has_finite_memory(&self) -> bool {
-        self.input.has_finite_memory()
+        self.cache.has_finite_memory
     }
 }
 

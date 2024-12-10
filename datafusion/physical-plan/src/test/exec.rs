@@ -502,7 +502,7 @@ impl ExecutionPlan for ErrorExec {
     ) -> Result<SendableRecordBatchStream> {
         internal_err!("ErrorExec, unsurprisingly, errored in partition {partition}")
     }
-    
+
     fn emission_type(&self) -> EmissionType {
         unimplemented!()
     }
@@ -600,7 +600,7 @@ impl ExecutionPlan for StatisticsExec {
     fn statistics(&self) -> Result<Statistics> {
         Ok(self.stats.clone())
     }
-    
+
     fn emission_type(&self) -> EmissionType {
         unimplemented!()
     }
@@ -704,7 +704,7 @@ impl ExecutionPlan for BlockingExec {
             _refs: Arc::clone(&self.refs),
         }))
     }
-    
+
     fn emission_type(&self) -> EmissionType {
         unimplemented!()
     }
@@ -857,7 +857,7 @@ impl ExecutionPlan for PanicExec {
             ready: false,
         }))
     }
-    
+
     fn emission_type(&self) -> EmissionType {
         unimplemented!()
     }
