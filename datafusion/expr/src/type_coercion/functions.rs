@@ -599,7 +599,9 @@ fn get_valid_types(
                         )
                     }
                     // Not consistent with Postgres and DuckDB but to avoid regression we implicit cast string to timestamp
-                    TypeSignatureClass::Timestamp if logical_type == NativeType::String => {
+                    TypeSignatureClass::Timestamp
+                        if logical_type == NativeType::String =>
+                    {
                         Ok(DataType::Timestamp(TimeUnit::Nanosecond, None))
                     }
                     TypeSignatureClass::Timestamp if logical_type.is_timestamp() => {

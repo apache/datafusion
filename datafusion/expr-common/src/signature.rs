@@ -156,6 +156,14 @@ impl TypeSignature {
     }
 }
 
+/// Represents the class of types that can be used in a function signature.
+///
+/// This is used to specify what types are valid for function arguments in a more flexible way than
+/// just listing specific DataTypes. For example, TypeSignatureClass::Timestamp matches any timestamp
+/// type regardless of timezone or precision.
+///
+/// Used primarily with TypeSignature::Coercible to define function signatures that can accept
+/// arguments that can be coerced to a particular class of types.
 #[derive(Debug, Clone, Eq, PartialEq, PartialOrd, Hash)]
 pub enum TypeSignatureClass {
     Timestamp,
@@ -163,10 +171,10 @@ pub enum TypeSignatureClass {
     Time,
     Interval,
     Duration,
+    Native(LogicalTypeRef),
     // TODO:
     // Numeric
     // Integer
-    Native(LogicalTypeRef),
 }
 
 impl Display for TypeSignatureClass {
