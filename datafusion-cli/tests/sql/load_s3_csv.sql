@@ -1,5 +1,5 @@
 CREATE EXTERNAL TABLE CARS
 STORED AS CSV
-LOCATION 's3://datafusion/cars.csv';
+LOCATION 's3://datafusion/test_cli/cars.csv';
 
 SELECT * FROM CARS limit 1;

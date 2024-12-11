@@ -34,6 +34,8 @@ fn cli() -> Command {
 fn make_settings() -> Settings {
     let mut settings = Settings::clone_current();
     settings.set_prepend_module_to_snapshot(false);
+    settings.add_filter(r"Elapsed .* seconds\.", "[ELAPSED]");
+    settings.add_filter(r"DataFusion CLI v.*", "[CLI_VERSION]");
     settings
 }
 
@@ -97,12 +99,12 @@ async fn setup_s3_storage() -> aws_sdk_s3::Client {
     let secret_access_key =
         env::var("AWS_SECRET_ACCESS_KEY").expect("AWS_SECRET_ACCESS_KEY is not set");
 
+    let endpoint_url = env::var("AWS_ENDPOINT").expect("AWS_ENDPOINT is not set");
     let region = Region::new(env::var("AWS_REGION").unwrap_or("df-test".to_string()));
 
     let allow_non_test_credentials = env::var("ALLOW_NON_TEST_CREDENTIALS")
         .map(|v| v == "1")
         .unwrap_or(false);
-    let endpoint_url = env::var("AWS_ENDPOINT").expect("AWS_ENDPOINT is not set");
 
     if allow_non_test_credentials
         || !access_key_id.starts_with("TEST-")
@@ -122,16 +124,7 @@ async fn setup_s3_storage() -> aws_sdk_s3::Client {
     aws_sdk_s3::Client::from_conf(config)
 }
 
-#[tokio::test]
-async fn test_cli() {
-    if env::var("TEST_STORAGE_INTEGRATION").is_err() {
-        eprintln!("Skipping external storages integration tests");
-        return;
-    }
-
-    let aws_client = setup_s3_storage().await;
-    let bucket_name = "datafusion";
-
+async fn create_bucket(bucket_name: &str, aws_client: &aws_sdk_s3::Client) {
     match aws_client.head_bucket().bucket(bucket_name).send().await {
         Ok(_) => {}
         Err(SdkError::ServiceError(err))
@@ -149,29 +142,98 @@ async fn test_cli() {
         }
         Err(e) => panic!("Failed to head bucket: {:?}", e),
     }
+}
 
-    let file_name = "../datafusion/core/tests/data/cars.csv";
+async fn move_file_to_bucket(
+    from_path: &str,
+    to_path: &str,
+    bucket_name: &str,
+    aws_client: &aws_sdk_s3::Client,
+) {
     let body =
-        aws_sdk_s3::primitives::ByteStream::from_path(std::path::Path::new(file_name))
+        aws_sdk_s3::primitives::ByteStream::from_path(std::path::Path::new(from_path))
             .await
             .expect("Failed to read file");
 
     aws_client
         .put_object()
-        .bucket("datafusion")
-        .key("cars.csv")
+        .bucket(bucket_name)
+        .key(to_path)
         .body(body)
         .send()
         .await
         .expect("Failed to put object");
+}
 
-    let mut settings = make_settings();
-    settings.add_filter(r"Elapsed .* seconds\.", "[ELAPSED]");
-    settings.add_filter(r"DataFusion CLI v.*", "[CLI_VERSION]");
+#[tokio::test]
+async fn test_cli() {
+    if env::var("TEST_STORAGE_INTEGRATION").is_err() {
+        eprintln!("Skipping external storages integration tests");
+        return;
+    }
+
+    let aws_client = setup_s3_storage().await;
+    create_bucket("datafusion", &aws_client).await;
+    move_file_to_bucket(
+        "../datafusion/core/tests/data/cars.csv",
+        "test_cli/cars.csv",
+        "datafusion",
+        &aws_client,
+    )
+    .await;
+
+    let settings = make_settings();
     let _bound = settings.bind_to_scope();
 
     glob!("sql/*.sql", |path| {
         let input = fs::read_to_string(path).unwrap();
         assert_cmd_snapshot!("cli", cli().pass_stdin(input))
     });
+}
+
+#[tokio::test]
+async fn test_aws_options() {
+    // Separate test is needed to pass aws as options in sql and not via env
+
+    if env::var("TEST_STORAGE_INTEGRATION").is_err() {
+        eprintln!("Skipping external storages integration tests");
+        return;
+    }
+
+    let aws_client = setup_s3_storage().await;
+    create_bucket("datafusion", &aws_client).await;
+    move_file_to_bucket(
+        "../datafusion/core/tests/data/cars.csv",
+        "test_aws_options/cars.csv",
+        "datafusion",
+        &aws_client,
+    )
+    .await;
+
+    let settings = make_settings();
+    let _bound = settings.bind_to_scope();
+
+    let access_key_id =
+        env::var("AWS_ACCESS_KEY_ID").expect("AWS_ACCESS_KEY_ID is not set");
+    let secret_access_key =
+        env::var("AWS_SECRET_ACCESS_KEY").expect("AWS_SECRET_ACCESS_KEY is not set");
+    let endpoint_url = env::var("AWS_ENDPOINT").expect("AWS_ENDPOINT is not set");
+
+    let input = format!(
+        r#"CREATE EXTERNAL TABLE CARS
+STORED AS CSV
+LOCATION 's3://datafusion/test_aws_options/cars.csv'
+OPTIONS(
+    'aws.access_key_id' '{}',
+    'aws.secret_access_key' '{}',
+    'aws.endpoint' '{}',
+    'aws.allow_http' 'true'
+);
+
+SELECT * FROM CARS limit 1;
+"#,
+        access_key_id, secret_access_key, endpoint_url
+    );
+
+    assert_cmd_snapshot!("aws_options", cli().env_clear().pass_stdin(input));
 }
