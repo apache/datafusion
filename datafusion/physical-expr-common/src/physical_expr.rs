@@ -26,7 +26,7 @@ use arrow::array::BooleanArray;
 use arrow::compute::filter_record_batch;
 use arrow::datatypes::{DataType, Schema};
 use arrow::record_batch::RecordBatch;
-use datafusion_common::{internal_err, not_impl_err, Result};
+use datafusion_common::{internal_err, not_impl_err, ColumnStatistics, Result, Statistics};
 use datafusion_expr_common::columnar_value::ColumnarValue;
 use datafusion_expr_common::interval_arithmetic::Interval;
 use datafusion_expr_common::sort_properties::ExprProperties;
@@ -148,6 +148,11 @@ pub trait PhysicalExpr: Send + Sync + Display + Debug + DynEq + DynHash {
     /// be specified externally, as the function defaults to unknown properties.
     fn get_properties(&self, _children: &[ExprProperties]) -> Result<ExprProperties> {
         Ok(ExprProperties::new_unknown())
+    }
+
+    /// Return the column statistics of this expression given the statistics of the input
+    fn column_statistics(&self, _statistics: &Statistics) -> Result<ColumnStatistics> {
+        Ok(ColumnStatistics::new_unknown())
     }
 }
 

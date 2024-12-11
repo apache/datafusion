@@ -27,7 +27,8 @@ use arrow::{
     datatypes::{DataType, Schema},
     record_batch::RecordBatch,
 };
-use datafusion_common::{Result, ScalarValue};
+use datafusion_common::{ColumnStatistics, Result, ScalarValue, Statistics};
+use datafusion_common::stats::Precision;
 use datafusion_expr::Expr;
 use datafusion_expr_common::columnar_value::ColumnarValue;
 use datafusion_expr_common::interval_arithmetic::Interval;
@@ -90,6 +91,22 @@ impl PhysicalExpr for Literal {
         Ok(ExprProperties {
             sort_properties: SortProperties::Singleton,
             range: Interval::try_new(self.value().clone(), self.value().clone())?,
+        })
+    }
+
+    fn column_statistics(&self, statistics: &Statistics) -> Result<ColumnStatistics> {
+        Ok(ColumnStatistics {
+            null_count: Precision::Exact(if self.value.is_null() { 1 } else { 0 }),
+            max_value: Precision::Exact(self.value.clone()),
+            min_value: Precision::Exact(self.value.clone()),
+            sum_value: if self.value.data_type().is_numeric() {
+                Precision::<ScalarValue>::from(statistics.num_rows).cast_to(&self.value.data_type())
+                    .map(|num_rows| Precision::Exact(self.value.clone()).multiply(&num_rows))
+                    .unwrap_or(Precision::Absent)
+            } else {
+                Precision::Absent
+            },
+            distinct_count: Precision::Exact(1),
         })
     }
 }

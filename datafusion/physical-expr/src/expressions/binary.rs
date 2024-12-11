@@ -32,7 +32,7 @@ use arrow::compute::{cast, ilike, like, nilike, nlike};
 use arrow::datatypes::*;
 use arrow_schema::ArrowError;
 use datafusion_common::cast::as_boolean_array;
-use datafusion_common::{internal_err, Result, ScalarValue};
+use datafusion_common::{internal_err, ColumnStatistics, Result, ScalarValue, Statistics};
 use datafusion_expr::interval_arithmetic::{apply_operator, Interval};
 use datafusion_expr::sort_properties::ExprProperties;
 use datafusion_expr::type_coercion::binary::get_result_type;
@@ -534,6 +534,23 @@ impl PhysicalExpr for BinaryExpr {
             }),
             _ => Ok(ExprProperties::new_unknown()),
         }
+    }
+
+    fn column_statistics(&self, statistics: &Statistics) -> Result<ColumnStatistics> {
+        let mut col_stats = ColumnStatistics::new_unknown();
+
+        // Propagate the sum statistic for numeric operators
+        if matches!(self.op, Operator::Plus | Operator::Minus) {
+            let left = self.left.column_statistics(statistics)?;
+            let right = self.right.column_statistics(statistics)?;
+            match self.op {
+                Operator::Plus => col_stats.sum_value = left.sum_value.add(&right.sum_value),
+                Operator::Minus => col_stats.sum_value = left.sum_value.sub(&right.sum_value),
+                _ => {}
+            }
+        }
+
+        Ok(col_stats)
     }
 }
 

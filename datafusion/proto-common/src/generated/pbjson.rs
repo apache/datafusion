@@ -985,6 +985,9 @@ impl serde::Serialize for ColumnStats {
         if self.max_value.is_some() {
             len += 1;
         }
+        if self.sum_value.is_some() {
+            len += 1;
+        }
         if self.null_count.is_some() {
             len += 1;
         }
@@ -997,6 +1000,9 @@ impl serde::Serialize for ColumnStats {
         }
         if let Some(v) = self.max_value.as_ref() {
             struct_ser.serialize_field("maxValue", v)?;
+        }
+        if let Some(v) = self.sum_value.as_ref() {
+            struct_ser.serialize_field("sumValue", v)?;
         }
         if let Some(v) = self.null_count.as_ref() {
             struct_ser.serialize_field("nullCount", v)?;
@@ -1018,6 +1024,8 @@ impl<'de> serde::Deserialize<'de> for ColumnStats {
             "minValue",
             "max_value",
             "maxValue",
+            "sum_value",
+            "sumValue",
             "null_count",
             "nullCount",
             "distinct_count",
@@ -1028,6 +1036,7 @@ impl<'de> serde::Deserialize<'de> for ColumnStats {
         enum GeneratedField {
             MinValue,
             MaxValue,
+            SumValue,
             NullCount,
             DistinctCount,
         }
@@ -1053,6 +1062,7 @@ impl<'de> serde::Deserialize<'de> for ColumnStats {
                         match value {
                             "minValue" | "min_value" => Ok(GeneratedField::MinValue),
                             "maxValue" | "max_value" => Ok(GeneratedField::MaxValue),
+                            "sumValue" | "sum_value" => Ok(GeneratedField::SumValue),
                             "nullCount" | "null_count" => Ok(GeneratedField::NullCount),
                             "distinctCount" | "distinct_count" => Ok(GeneratedField::DistinctCount),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
@@ -1076,6 +1086,7 @@ impl<'de> serde::Deserialize<'de> for ColumnStats {
             {
                 let mut min_value__ = None;
                 let mut max_value__ = None;
+                let mut sum_value__ = None;
                 let mut null_count__ = None;
                 let mut distinct_count__ = None;
                 while let Some(k) = map_.next_key()? {
@@ -1091,6 +1102,12 @@ impl<'de> serde::Deserialize<'de> for ColumnStats {
                                 return Err(serde::de::Error::duplicate_field("maxValue"));
                             }
                             max_value__ = map_.next_value()?;
+                        }
+                        GeneratedField::SumValue => {
+                            if sum_value__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("sumValue"));
+                            }
+                            sum_value__ = map_.next_value()?;
                         }
                         GeneratedField::NullCount => {
                             if null_count__.is_some() {
@@ -1109,6 +1126,7 @@ impl<'de> serde::Deserialize<'de> for ColumnStats {
                 Ok(ColumnStats {
                     min_value: min_value__,
                     max_value: max_value__,
+                    sum_value: sum_value__,
                     null_count: null_count__,
                     distinct_count: distinct_count__,
                 })

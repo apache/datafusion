@@ -34,13 +34,11 @@ use arrow::datatypes::{
 };
 use arrow::{array::ArrayRef, datatypes::Field};
 use datafusion_common::{exec_err, not_impl_err, Result, ScalarValue};
+use datafusion_common::stats::Precision;
 use datafusion_expr::function::AccumulatorArgs;
 use datafusion_expr::function::StateFieldsArgs;
 use datafusion_expr::utils::format_state_name;
-use datafusion_expr::{
-    Accumulator, AggregateUDFImpl, Documentation, GroupsAccumulator, ReversedUDAF,
-    Signature, Volatility,
-};
+use datafusion_expr::{Accumulator, AggregateUDFImpl, Documentation, GroupsAccumulator, ReversedUDAF, Signature, StatisticsArgs, Volatility};
 use datafusion_functions_aggregate_common::aggregate::groups_accumulator::prim_op::PrimitiveGroupsAccumulator;
 use datafusion_functions_aggregate_common::utils::Hashable;
 use datafusion_macros::user_doc;
@@ -253,6 +251,31 @@ impl AggregateUDFImpl for Sum {
 
     fn documentation(&self) -> Option<&Documentation> {
         self.doc()
+    }
+
+    fn value_from_stats(&self, statistics_args: &StatisticsArgs) -> Option<ScalarValue> {
+        log::warn!("SUM STATS: {:#?}", statistics_args);
+        if let Precision::Exact(num_rows) = &statistics_args.statistics.num_rows {
+            match *num_rows {
+                0 => return ScalarValue::new_zero(statistics_args.return_type).ok(),
+                _ => {
+                    if statistics_args.exprs.len() == 1 {
+                        let sum_value = if let Precision::Exact(sum) = statistics_args.exprs[0]
+                            .column_statistics(&statistics_args.statistics)
+                            .ok()
+                            ?.sum_value {
+
+                            sum.cast_to(statistics_args.return_type).ok()
+                        } else {
+                            None
+                        };
+                        log::warn!("SUM STATS VALUE: {:?}", sum_value);
+                        return sum_value;
+                    }
+                }
+            }
+        }
+        None
     }
 }
 
