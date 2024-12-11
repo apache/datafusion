@@ -214,6 +214,21 @@ pub fn with_new_children_if_necessary(
     }
 }
 
+#[deprecated(since = "44.0.0")]
+pub fn down_cast_any_ref(any: &dyn Any) -> &dyn Any {
+    if any.is::<Arc<dyn PhysicalExpr>>() {
+        any.downcast_ref::<Arc<dyn PhysicalExpr>>()
+            .unwrap()
+            .as_any()
+    } else if any.is::<Box<dyn PhysicalExpr>>() {
+        any.downcast_ref::<Box<dyn PhysicalExpr>>()
+            .unwrap()
+            .as_any()
+    } else {
+        any
+    }
+}
+
 /// Returns [`Display`] able a list of [`PhysicalExpr`]
 ///
 /// Example output: `[a + 1, b]`

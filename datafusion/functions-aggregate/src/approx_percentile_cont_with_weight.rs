@@ -18,7 +18,7 @@
 use std::any::Any;
 use std::fmt::{Debug, Formatter};
 use std::mem::size_of_val;
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
 use arrow::{
     array::ArrayRef,
@@ -27,7 +27,6 @@ use arrow::{
 
 use datafusion_common::ScalarValue;
 use datafusion_common::{not_impl_err, plan_err, Result};
-use datafusion_doc::DocSection;
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::type_coercion::aggregates::NUMERICS;
 use datafusion_expr::Volatility::Immutable;
