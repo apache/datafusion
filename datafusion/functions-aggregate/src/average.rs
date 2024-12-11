@@ -34,7 +34,7 @@ use datafusion_expr::utils::format_state_name;
 use datafusion_expr::Volatility::Immutable;
 use datafusion_expr::{
     Accumulator, AggregateUDFImpl, Documentation, EmitTo, GroupsAccumulator,
-    ReversedUDAF, Signature,
+    ReversedUDAF, Signature, StatisticsArgs,
 };
 
 use datafusion_functions_aggregate_common::aggregate::groups_accumulator::accumulate::NullState;
@@ -42,6 +42,8 @@ use datafusion_functions_aggregate_common::aggregate::groups_accumulator::nulls:
     filtered_null_mask, set_nulls,
 };
 
+use crate::sum::Sum;
+use datafusion_common::stats::Precision;
 use datafusion_functions_aggregate_common::utils::DecimalAverager;
 use datafusion_macros::user_doc;
 use log::debug;
@@ -251,6 +253,35 @@ impl AggregateUDFImpl for Avg {
             return exec_err!("{} expects exactly one argument.", self.name());
         }
         coerce_avg_type(self.name(), arg_types)
+    }
+
+    fn value_from_stats(&self, statistics_args: &StatisticsArgs) -> Option<ScalarValue> {
+        if statistics_args.is_distinct {
+            return None;
+        }
+
+        if let Precision::Exact(num_rows) = &statistics_args.statistics.num_rows {
+            match *num_rows {
+                0 => return ScalarValue::new_zero(statistics_args.return_type).ok(),
+                _ => {
+                    if statistics_args.exprs.len() == 1 {
+                        if let Precision::Exact(sum) = statistics_args.exprs[0]
+                            .column_statistics(&statistics_args.statistics)
+                            .ok()?
+                            .sum_value
+                        {
+                            let sum = sum.cast_to(statistics_args.return_type).ok()?;
+                            let num_rows =
+                                ScalarValue::from(statistics_args.statistics.num_rows)
+                                    .cast_to(statistics_args.return_type)
+                                    .ok()?;
+                            return sum.div(&num_rows).ok();
+                        }
+                    }
+                }
+            }
+        }
+        None
     }
 
     fn documentation(&self) -> Option<&Documentation> {
@@ -604,5 +635,45 @@ where
 
     fn size(&self) -> usize {
         self.counts.capacity() * size_of::<u64>() + self.sums.capacity() * size_of::<T>()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use datafusion_common::{ColumnStatistics, Statistics};
+    use datafusion_physical_expr::expressions::Column;
+    use std::sync::Arc;
+
+    #[test]
+    fn sum() {
+        let agg = Box::new(Avg::new());
+        let statistics = Statistics {
+            num_rows: Precision::Exact(5),
+            total_byte_size: Precision::Absent,
+            column_statistics: vec![ColumnStatistics {
+                null_count: Precision::Absent,
+                max_value: Precision::Absent,
+                min_value: Precision::Absent,
+                sum_value: Precision::Exact(ScalarValue::Int8(Some(10))),
+                distinct_count: Default::default(),
+            }],
+        };
+        let mut statistics_args = StatisticsArgs {
+            statistics: &statistics,
+            return_type: &DataType::Float64,
+            is_distinct: false,
+            exprs: &[Arc::new(Column::new("a", 0))],
+        };
+
+        // Ensure that the sum statistic is used and cast to the return type.
+        assert_eq!(
+            agg.value_from_stats(&statistics_args),
+            Some(ScalarValue::Float64(Some(2.0)))
+        );
+
+        // With a distinct aggregate, the sum statistic isn't helpful
+        statistics_args.is_distinct = true;
+        assert_eq!(agg.value_from_stats(&statistics_args), None);
     }
 }
