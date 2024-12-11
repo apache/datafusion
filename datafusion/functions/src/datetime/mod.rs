@@ -37,43 +37,23 @@ pub mod to_timestamp;
 pub mod to_unixtime;
 
 // create UDFs
-make_udf_function!(current_date::CurrentDateFunc, CURRENT_DATE, current_date);
-make_udf_function!(current_time::CurrentTimeFunc, CURRENT_TIME, current_time);
-make_udf_function!(date_bin::DateBinFunc, DATE_BIN, date_bin);
-make_udf_function!(date_part::DatePartFunc, DATE_PART, date_part);
-make_udf_function!(date_trunc::DateTruncFunc, DATE_TRUNC, date_trunc);
-make_udf_function!(make_date::MakeDateFunc, MAKE_DATE, make_date);
-make_udf_function!(
-    from_unixtime::FromUnixtimeFunc,
-    FROM_UNIXTIME,
-    from_unixtime
-);
-make_udf_function!(now::NowFunc, NOW, now);
-make_udf_function!(to_char::ToCharFunc, TO_CHAR, to_char);
-make_udf_function!(to_date::ToDateFunc, TO_DATE, to_date);
-make_udf_function!(to_local_time::ToLocalTimeFunc, TO_LOCAL_TIME, to_local_time);
-make_udf_function!(to_unixtime::ToUnixtimeFunc, TO_UNIXTIME, to_unixtime);
-make_udf_function!(to_timestamp::ToTimestampFunc, TO_TIMESTAMP, to_timestamp);
-make_udf_function!(
-    to_timestamp::ToTimestampSecondsFunc,
-    TO_TIMESTAMP_SECONDS,
-    to_timestamp_seconds
-);
-make_udf_function!(
-    to_timestamp::ToTimestampMillisFunc,
-    TO_TIMESTAMP_MILLIS,
-    to_timestamp_millis
-);
-make_udf_function!(
-    to_timestamp::ToTimestampMicrosFunc,
-    TO_TIMESTAMP_MICROS,
-    to_timestamp_micros
-);
-make_udf_function!(
-    to_timestamp::ToTimestampNanosFunc,
-    TO_TIMESTAMP_NANOS,
-    to_timestamp_nanos
-);
+make_udf_function!(current_date::CurrentDateFunc, current_date);
+make_udf_function!(current_time::CurrentTimeFunc, current_time);
+make_udf_function!(date_bin::DateBinFunc, date_bin);
+make_udf_function!(date_part::DatePartFunc, date_part);
+make_udf_function!(date_trunc::DateTruncFunc, date_trunc);
+make_udf_function!(make_date::MakeDateFunc, make_date);
+make_udf_function!(from_unixtime::FromUnixtimeFunc, from_unixtime);
+make_udf_function!(now::NowFunc, now);
+make_udf_function!(to_char::ToCharFunc, to_char);
+make_udf_function!(to_date::ToDateFunc, to_date);
+make_udf_function!(to_local_time::ToLocalTimeFunc, to_local_time);
+make_udf_function!(to_unixtime::ToUnixtimeFunc, to_unixtime);
+make_udf_function!(to_timestamp::ToTimestampFunc, to_timestamp);
+make_udf_function!(to_timestamp::ToTimestampSecondsFunc, to_timestamp_seconds);
+make_udf_function!(to_timestamp::ToTimestampMillisFunc, to_timestamp_millis);
+make_udf_function!(to_timestamp::ToTimestampMicrosFunc, to_timestamp_micros);
+make_udf_function!(to_timestamp::ToTimestampNanosFunc, to_timestamp_nanos);
 
 // we cannot currently use the export_functions macro since it doesn't handle
 // functions with varargs currently
