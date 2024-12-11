@@ -5127,4 +5127,3 @@ order by id;
 
 statement ok
 drop table t1;
-
