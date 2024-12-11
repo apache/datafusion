@@ -169,6 +169,8 @@ jobs:
       AWS_ENDPOINT: http://localhost:9000
       AWS_ACCESS_KEY_ID: TEST-DataFusionLogin
       AWS_SECRET_ACCESS_KEY: TEST-DataFusionPassword
+      TEST_STORAGE_INTEGRATION: 1
+      AWS_ALLOW_HTTP: true
 
     steps:
       - uses: actions/checkout@v4
@@ -184,8 +186,6 @@ jobs:
           echo "MINIO_CONTAINER=$(docker run -d -p 9000:9000 -e MINIO_ROOT_USER=TEST-DataFusionLogin -e MINIO_ROOT_PASSWORD=TEST-DataFusionPassword quay.io/minio/minio server /data)" >> $GITHUB_ENV
       - name: Run tests (excluding doctests, but with integration tests)
         working-directory: datafusion-cli
-        env:
-          TEST_STORAGE_INTEGRATION: 1
         run: cargo test --lib --tests --bins --all-features
       - name: Verify Working Directory Clean
         run: git diff --exit-code
