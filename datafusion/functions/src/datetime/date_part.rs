@@ -35,7 +35,9 @@ use datafusion_common::cast::{
     as_timestamp_microsecond_array, as_timestamp_millisecond_array,
     as_timestamp_nanosecond_array, as_timestamp_second_array,
 };
-use datafusion_common::{exec_err, internal_err, not_impl_err, ExprSchema, Result, ScalarValue};
+use datafusion_common::{
+    exec_err, internal_err, not_impl_err, ExprSchema, Result, ScalarValue,
+};
 use datafusion_expr::scalar_doc_sections::DOC_SECTION_DATETIME;
 use datafusion_expr::TypeSignature::Exact;
 use datafusion_expr::{
