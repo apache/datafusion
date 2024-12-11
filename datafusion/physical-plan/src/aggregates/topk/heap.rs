@@ -367,7 +367,7 @@ impl<VAL: ValueType> TopKHeap<VAL> {
 impl<VAL: ValueType> Display for TopKHeap<VAL> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         let mut output = String::new();
-        if self.heap.first().is_some() {
+        if !self.heap.is_empty() {
             self._tree_print(0, String::new(), true, &mut output);
         }
         write!(f, "{}", output)

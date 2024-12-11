@@ -23,7 +23,7 @@ use substrait::proto::expression_reference::ExprType;
 
 use datafusion::arrow::datatypes::{Field, IntervalUnit};
 use datafusion::logical_expr::{
-    Distinct, FetchType, Like, Partitioning, SkipType, WindowFrameUnits,
+    Distinct, FetchType, Like, Partitioning, SkipType, TryCast, WindowFrameUnits,
 };
 use datafusion::{
     arrow::datatypes::{DataType, TimeUnit},
@@ -55,6 +55,7 @@ use datafusion::logical_expr::{expr, Between, JoinConstraint, LogicalPlan, Opera
 use datafusion::prelude::Expr;
 use pbjson_types::Any as ProtoAny;
 use substrait::proto::exchange_rel::{ExchangeKind, RoundRobin, ScatterFields};
+use substrait::proto::expression::cast::FailureBehavior;
 use substrait::proto::expression::literal::interval_day_to_second::PrecisionMode;
 use substrait::proto::expression::literal::map::KeyValue;
 use substrait::proto::expression::literal::{
@@ -1182,23 +1183,36 @@ pub fn to_substrait_rex(
                 rex_type: Some(RexType::IfThen(Box::new(IfThen { ifs, r#else }))),
             })
         }
-        Expr::Cast(Cast { expr, data_type }) => {
-            Ok(Expression {
-                rex_type: Some(RexType::Cast(Box::new(
-                    substrait::proto::expression::Cast {
-                        r#type: Some(to_substrait_type(data_type, true)?),
-                        input: Some(Box::new(to_substrait_rex(
-                            state,
-                            expr,
-                            schema,
-                            col_ref_offset,
-                            extensions,
-                        )?)),
-                        failure_behavior: 0, // FAILURE_BEHAVIOR_UNSPECIFIED
-                    },
-                ))),
-            })
-        }
+        Expr::Cast(Cast { expr, data_type }) => Ok(Expression {
+            rex_type: Some(RexType::Cast(Box::new(
+                substrait::proto::expression::Cast {
+                    r#type: Some(to_substrait_type(data_type, true)?),
+                    input: Some(Box::new(to_substrait_rex(
+                        state,
+                        expr,
+                        schema,
+                        col_ref_offset,
+                        extensions,
+                    )?)),
+                    failure_behavior: FailureBehavior::ThrowException.into(),
+                },
+            ))),
+        }),
+        Expr::TryCast(TryCast { expr, data_type }) => Ok(Expression {
+            rex_type: Some(RexType::Cast(Box::new(
+                substrait::proto::expression::Cast {
+                    r#type: Some(to_substrait_type(data_type, true)?),
+                    input: Some(Box::new(to_substrait_rex(
+                        state,
+                        expr,
+                        schema,
+                        col_ref_offset,
+                        extensions,
+                    )?)),
+                    failure_behavior: FailureBehavior::ReturnNull.into(),
+                },
+            ))),
+        }),
         Expr::Literal(value) => to_substrait_literal_expr(value, extensions),
         Expr::Alias(Alias { expr, .. }) => {
             to_substrait_rex(state, expr, schema, col_ref_offset, extensions)
@@ -2416,7 +2430,7 @@ mod test {
                 "struct",
                 DataType::Struct(Fields::from(vec![Field::new(
                     "inner",
-                    DataType::List(Arc::new(Field::new("item", DataType::Utf8, true))),
+                    DataType::List(Arc::new(Field::new_list_field(DataType::Utf8, true))),
                     true,
                 )])),
                 true,

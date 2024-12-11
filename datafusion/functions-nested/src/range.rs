@@ -109,8 +109,7 @@ impl ScalarUDFImpl for Range {
         if arg_types.iter().any(|t| t.is_null()) {
             Ok(Null)
         } else {
-            Ok(List(Arc::new(Field::new(
-                "item",
+            Ok(List(Arc::new(Field::new_list_field(
                 arg_types[0].clone(),
                 true,
             ))))
@@ -249,8 +248,7 @@ impl ScalarUDFImpl for GenSeries {
         if arg_types.iter().any(|t| t.is_null()) {
             Ok(Null)
         } else {
-            Ok(List(Arc::new(Field::new(
-                "item",
+            Ok(List(Arc::new(Field::new_list_field(
                 arg_types[0].clone(),
                 true,
             ))))
@@ -393,7 +391,7 @@ pub(super) fn gen_range_inner(
         };
     }
     let arr = Arc::new(ListArray::try_new(
-        Arc::new(Field::new("item", Int64, true)),
+        Arc::new(Field::new_list_field(Int64, true)),
         OffsetBuffer::new(offsets.into()),
         Arc::new(Int64Array::from(values)),
         Some(NullBuffer::new(valid.finish())),

@@ -412,6 +412,16 @@ async fn implicit_cast() -> Result<()> {
 }
 
 #[tokio::test]
+async fn try_cast_decimal_to_int() -> Result<()> {
+    roundtrip("SELECT * FROM data WHERE a = TRY_CAST(b AS int)").await
+}
+
+#[tokio::test]
+async fn try_cast_decimal_to_string() -> Result<()> {
+    roundtrip("SELECT * FROM data WHERE a = TRY_CAST(b AS string)").await
+}
+
+#[tokio::test]
 async fn aggregate_case() -> Result<()> {
     assert_expected_plan(
         "SELECT sum(CASE WHEN a > 0 THEN 1 ELSE NULL END) FROM data",
@@ -1443,10 +1453,14 @@ async fn create_all_type_context() -> Result<SessionContext> {
         Field::new("utf8_col", DataType::Utf8, true),
         Field::new("large_utf8_col", DataType::LargeUtf8, true),
         Field::new("view_utf8_col", DataType::Utf8View, true),
-        Field::new_list("list_col", Field::new("item", DataType::Int64, true), true),
+        Field::new_list(
+            "list_col",
+            Field::new_list_field(DataType::Int64, true),
+            true,
+        ),
         Field::new_list(
             "large_list_col",
-            Field::new("item", DataType::Int64, true),
+            Field::new_list_field(DataType::Int64, true),
             true,
         ),
         Field::new("decimal_128_col", DataType::Decimal128(10, 2), true),

@@ -15,19 +15,19 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::fmt::Display;
-use std::sync::Arc;
-
 use super::{add_offset_to_expr, collapse_lex_req, ProjectionMapping};
 use crate::{
-    expressions::Column, physical_expr::deduplicate_physical_exprs,
-    physical_exprs_bag_equal, physical_exprs_contains, LexOrdering, LexRequirement,
-    PhysicalExpr, PhysicalExprRef, PhysicalSortExpr, PhysicalSortRequirement,
+    expressions::Column, LexOrdering, LexRequirement, PhysicalExpr, PhysicalExprRef,
+    PhysicalSortExpr, PhysicalSortRequirement,
 };
+use std::fmt::Display;
+use std::sync::Arc;
 
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::JoinType;
 use datafusion_physical_expr_common::physical_expr::format_physical_expr_list;
+
+use indexmap::{IndexMap, IndexSet};
 
 /// A structure representing a expression known to be constant in a physical execution plan.
 ///
@@ -125,7 +125,7 @@ impl ConstExpr {
     /// Returns a [`Display`]able list of `ConstExpr`.
     pub fn format_list(input: &[ConstExpr]) -> impl Display + '_ {
         struct DisplayableList<'a>(&'a [ConstExpr]);
-        impl<'a> Display for DisplayableList<'a> {
+        impl Display for DisplayableList<'_> {
             fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
                 let mut first = true;
                 for const_expr in self.0 {
@@ -190,47 +190,47 @@ pub struct EquivalenceClass {
     /// The expressions in this equivalence class. The order doesn't
     /// matter for equivalence purposes
     ///
-    /// TODO: use a HashSet for this instead of a Vec
-    exprs: Vec<Arc<dyn PhysicalExpr>>,
+    exprs: IndexSet<Arc<dyn PhysicalExpr>>,
 }
 
 impl PartialEq for EquivalenceClass {
     /// Returns true if other is equal in the sense
     /// of bags (multi-sets), disregarding their orderings.
     fn eq(&self, other: &Self) -> bool {
-        physical_exprs_bag_equal(&self.exprs, &other.exprs)
+        self.exprs.eq(&other.exprs)
     }
 }
 
 impl EquivalenceClass {
     /// Create a new empty equivalence class
     pub fn new_empty() -> Self {
-        Self { exprs: vec![] }
+        Self {
+            exprs: IndexSet::new(),
+        }
     }
 
     // Create a new equivalence class from a pre-existing `Vec`
-    pub fn new(mut exprs: Vec<Arc<dyn PhysicalExpr>>) -> Self {
-        deduplicate_physical_exprs(&mut exprs);
-        Self { exprs }
+    pub fn new(exprs: Vec<Arc<dyn PhysicalExpr>>) -> Self {
+        Self {
+            exprs: exprs.into_iter().collect(),
+        }
     }
 
     /// Return the inner vector of expressions
     pub fn into_vec(self) -> Vec<Arc<dyn PhysicalExpr>> {
-        self.exprs
+        self.exprs.into_iter().collect()
     }
 
     /// Return the "canonical" expression for this class (the first element)
     /// if any
     fn canonical_expr(&self) -> Option<Arc<dyn PhysicalExpr>> {
-        self.exprs.first().cloned()
+        self.exprs.iter().next().cloned()
     }
 
     /// Insert the expression into this class, meaning it is known to be equal to
     /// all other expressions in this class
     pub fn push(&mut self, expr: Arc<dyn PhysicalExpr>) {
-        if !self.contains(&expr) {
-            self.exprs.push(expr);
-        }
+        self.exprs.insert(expr);
     }
 
     /// Inserts all the expressions from other into this class
@@ -243,7 +243,7 @@ impl EquivalenceClass {
 
     /// Returns true if this equivalence class contains t expression
     pub fn contains(&self, expr: &Arc<dyn PhysicalExpr>) -> bool {
-        physical_exprs_contains(&self.exprs, expr)
+        self.exprs.contains(expr)
     }
 
     /// Returns true if this equivalence class has any entries in common with `other`
@@ -518,7 +518,7 @@ impl EquivalenceGroup {
                 // and the equivalence class `(a, b)`, expression `b` projects to `a1`.
                 if self
                     .get_equivalence_class(source)
-                    .map_or(false, |group| group.contains(expr))
+                    .is_some_and(|group| group.contains(expr))
                 {
                     return Some(Arc::clone(target));
                 }
@@ -546,28 +546,20 @@ impl EquivalenceGroup {
                 .collect::<Vec<_>>();
             (new_class.len() > 1).then_some(EquivalenceClass::new(new_class))
         });
-        // TODO: Convert the algorithm below to a version that uses `HashMap`.
-        //       once `Arc<dyn PhysicalExpr>` can be stored in `HashMap`.
-        // See issue: https://github.com/apache/datafusion/issues/8027
-        let mut new_classes = vec![];
-        for (source, target) in mapping.iter() {
-            if new_classes.is_empty() {
-                new_classes.push((source, vec![Arc::clone(target)]));
-            }
-            if let Some((_, values)) =
-                new_classes.iter_mut().find(|(key, _)| *key == source)
-            {
-                if !physical_exprs_contains(values, target) {
-                    values.push(Arc::clone(target));
-                }
-            }
-        }
+        // the key is the source expression and the value is the EquivalenceClass that contains the target expression of the source expression.
+        let mut new_classes: IndexMap<Arc<dyn PhysicalExpr>, EquivalenceClass> =
+            IndexMap::new();
+        mapping.iter().for_each(|(source, target)| {
+            new_classes
+                .entry(Arc::clone(source))
+                .or_insert_with(EquivalenceClass::new_empty)
+                .push(Arc::clone(target));
+        });
         // Only add equivalence classes with at least two members as singleton
         // equivalence classes are meaningless.
         let new_classes = new_classes
             .into_iter()
-            .filter_map(|(_, values)| (values.len() > 1).then_some(values))
-            .map(EquivalenceClass::new);
+            .filter_map(|(_, cls)| (cls.len() > 1).then_some(cls));
 
         let classes = projected_classes.chain(new_classes).collect();
         Self::new(classes)

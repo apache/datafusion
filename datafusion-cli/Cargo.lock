@@ -1243,6 +1243,7 @@ dependencies = [
  "datafusion-functions",
  "datafusion-functions-aggregate",
  "datafusion-functions-nested",
+ "datafusion-functions-table",
  "datafusion-functions-window",
  "datafusion-optimizer",
  "datafusion-physical-expr",
@@ -1256,7 +1257,6 @@ dependencies = [
  "itertools",
  "log",
  "num-traits",
- "num_cpus",
  "object_store",
  "parking_lot",
  "parquet",
@@ -1300,6 +1300,7 @@ dependencies = [
  "clap",
  "ctor",
  "datafusion",
+ "datafusion-catalog",
  "dirs",
  "env_logger",
  "futures",
@@ -1330,7 +1331,6 @@ dependencies = [
  "hashbrown 0.14.5",
  "indexmap",
  "libc",
- "num_cpus",
  "object_store",
  "parquet",
  "paste",
@@ -1439,9 +1439,11 @@ dependencies = [
  "arrow",
  "arrow-schema",
  "datafusion-common",
+ "datafusion-doc",
  "datafusion-execution",
  "datafusion-expr",
  "datafusion-functions-aggregate-common",
+ "datafusion-macros",
  "datafusion-physical-expr",
  "datafusion-physical-expr-common",
  "half",
@@ -1483,6 +1485,29 @@ dependencies = [
 ]
 
 [[package]]
+name = "datafusion-functions-table"
+version = "43.0.0"
+dependencies = [
+ "ahash",
+ "arrow",
+ "arrow-schema",
+ "async-trait",
+ "datafusion-catalog",
+ "datafusion-common",
+ "datafusion-execution",
+ "datafusion-expr",
+ "datafusion-functions-aggregate-common",
+ "datafusion-physical-expr",
+ "datafusion-physical-expr-common",
+ "datafusion-physical-plan",
+ "half",
+ "indexmap",
+ "log",
+ "parking_lot",
+ "paste",
+]
+
+[[package]]
 name = "datafusion-functions-window"
 version = "43.0.0"
 dependencies = [
@@ -1507,7 +1532,6 @@ dependencies = [
 name = "datafusion-macros"
 version = "43.0.0"
 dependencies = [
- "datafusion-doc",
  "proc-macro2",
  "quote",
  "syn",
@@ -2017,12 +2041,6 @@ name = "heck"
 version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2304e00983f87ffb38b55b444b5e3b60a884b5d30c0fca7d82fe33449bbe55ea"
-
-[[package]]
-name = "hermit-abi"
-version = "0.3.9"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d231dfb89cfffdbc30e7fc41579ed6066ad03abda9e567ccafae602b97ec5024"
 
 [[package]]
 name = "hex"
@@ -2774,16 +2792,6 @@ checksum = "071dfc062690e90b734c0b2273ce72ad0ffa95f0c74596bc250dcfd960262841"
 dependencies = [
  "autocfg",
  "libm",
-]
-
-[[package]]
-name = "num_cpus"
-version = "1.16.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4161fcb6d602d4d2081af7c3a45852d875a03dd337a6bfdd6e06407b61342a43"
-dependencies = [
- "hermit-abi",
- "libc",
 ]
 
 [[package]]

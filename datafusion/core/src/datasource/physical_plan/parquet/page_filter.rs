@@ -449,7 +449,7 @@ impl<'a> PagesPruningStatistics<'a> {
         Some(vec)
     }
 }
-impl<'a> PruningStatistics for PagesPruningStatistics<'a> {
+impl PruningStatistics for PagesPruningStatistics<'_> {
     fn min_values(&self, _column: &datafusion_common::Column) -> Option<ArrayRef> {
         match self.converter.data_page_mins(
             self.column_index,

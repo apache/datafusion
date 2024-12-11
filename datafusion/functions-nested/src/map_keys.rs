@@ -72,8 +72,7 @@ impl ScalarUDFImpl for MapKeysFunc {
         }
         let map_type = &arg_types[0];
         let map_fields = get_map_entry_field(map_type)?;
-        Ok(DataType::List(Arc::new(Field::new(
-            "item",
+        Ok(DataType::List(Arc::new(Field::new_list_field(
             map_fields.first().unwrap().data_type().clone(),
             false,
         ))))
@@ -130,7 +129,7 @@ fn map_keys_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
     };
 
     Ok(Arc::new(ListArray::new(
-        Arc::new(Field::new("item", map_array.key_type().clone(), false)),
+        Arc::new(Field::new_list_field(map_array.key_type().clone(), false)),
         map_array.offsets().clone(),
         Arc::clone(map_array.keys()),
         None,

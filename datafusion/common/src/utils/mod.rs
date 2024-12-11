@@ -39,8 +39,10 @@ use sqlparser::parser::Parser;
 use std::borrow::{Borrow, Cow};
 use std::cmp::{min, Ordering};
 use std::collections::HashSet;
+use std::num::NonZero;
 use std::ops::Range;
 use std::sync::Arc;
+use std::thread::available_parallelism;
 
 /// Applies an optional projection to a [`SchemaRef`], returning the
 /// projected schema
@@ -319,93 +321,201 @@ pub fn longest_consecutive_prefix<T: Borrow<usize>>(
     count
 }
 
-/// Array Utils
+/// Creates single element [`ListArray`], [`LargeListArray`] and
+/// [`FixedSizeListArray`] from other arrays
+///
+/// For example this builder can convert `[1, 2, 3]` into `[[1, 2, 3]]`
+///
+/// # Example
+/// ```
+/// # use std::sync::Arc;
+/// # use arrow_array::{Array, ListArray};
+/// # use arrow_array::types::Int64Type;
+/// # use datafusion_common::utils::SingleRowListArrayBuilder;
+/// // Array is [1, 2, 3]
+/// let arr = ListArray::from_iter_primitive::<Int64Type, _, _>(vec![
+///       Some(vec![Some(1), Some(2), Some(3)]),
+/// ]);
+/// // Wrap as a list array: [[1, 2, 3]]
+/// let list_arr = SingleRowListArrayBuilder::new(Arc::new(arr)).build_list_array();
+/// assert_eq!(list_arr.len(), 1);
+/// ```
+#[derive(Debug, Clone)]
+pub struct SingleRowListArrayBuilder {
+    /// array to be wrapped
+    arr: ArrayRef,
+    /// Should the resulting array be nullable? Defaults to `true`.
+    nullable: bool,
+    /// Specify the field name for the resulting array. Defaults to value used in
+    /// [`Field::new_list_field`]
+    field_name: Option<String>,
+}
+
+impl SingleRowListArrayBuilder {
+    /// Create a new instance of [`SingleRowListArrayBuilder`]
+    pub fn new(arr: ArrayRef) -> Self {
+        Self {
+            arr,
+            nullable: true,
+            field_name: None,
+        }
+    }
+
+    /// Set the nullable flag
+    pub fn with_nullable(mut self, nullable: bool) -> Self {
+        self.nullable = nullable;
+        self
+    }
+
+    /// sets the field name for the resulting array
+    pub fn with_field_name(mut self, field_name: Option<String>) -> Self {
+        self.field_name = field_name;
+        self
+    }
+
+    /// Copies field name and nullable from the specified field
+    pub fn with_field(self, field: &Field) -> Self {
+        self.with_field_name(Some(field.name().to_owned()))
+            .with_nullable(field.is_nullable())
+    }
+
+    /// Build a single element [`ListArray`]
+    pub fn build_list_array(self) -> ListArray {
+        let (field, arr) = self.into_field_and_arr();
+        let offsets = OffsetBuffer::from_lengths([arr.len()]);
+        ListArray::new(field, offsets, arr, None)
+    }
+
+    /// Build a single element [`ListArray`] and wrap as [`ScalarValue::List`]
+    pub fn build_list_scalar(self) -> ScalarValue {
+        ScalarValue::List(Arc::new(self.build_list_array()))
+    }
+
+    /// Build a single element [`LargeListArray`]
+    pub fn build_large_list_array(self) -> LargeListArray {
+        let (field, arr) = self.into_field_and_arr();
+        let offsets = OffsetBuffer::from_lengths([arr.len()]);
+        LargeListArray::new(field, offsets, arr, None)
+    }
+
+    /// Build a single element [`LargeListArray`] and wrap as [`ScalarValue::LargeList`]
+    pub fn build_large_list_scalar(self) -> ScalarValue {
+        ScalarValue::LargeList(Arc::new(self.build_large_list_array()))
+    }
+
+    /// Build a single element [`FixedSizeListArray`]
+    pub fn build_fixed_size_list_array(self, list_size: usize) -> FixedSizeListArray {
+        let (field, arr) = self.into_field_and_arr();
+        FixedSizeListArray::new(field, list_size as i32, arr, None)
+    }
+
+    /// Build a single element [`FixedSizeListArray`] and wrap as [`ScalarValue::FixedSizeList`]
+    pub fn build_fixed_size_list_scalar(self, list_size: usize) -> ScalarValue {
+        ScalarValue::FixedSizeList(Arc::new(self.build_fixed_size_list_array(list_size)))
+    }
+
+    /// Helper function: convert this builder into a tuple of field and array
+    fn into_field_and_arr(self) -> (Arc<Field>, ArrayRef) {
+        let Self {
+            arr,
+            nullable,
+            field_name,
+        } = self;
+        let data_type = arr.data_type().to_owned();
+        let field = match field_name {
+            Some(name) => Field::new(name, data_type, nullable),
+            None => Field::new_list_field(data_type, nullable),
+        };
+        (Arc::new(field), arr)
+    }
+}
 
 /// Wrap an array into a single element `ListArray`.
 /// For example `[1, 2, 3]` would be converted into `[[1, 2, 3]]`
 /// The field in the list array is nullable.
+#[deprecated(
+    since = "44.0.0",
+    note = "please use `SingleRowListArrayBuilder` instead"
+)]
 pub fn array_into_list_array_nullable(arr: ArrayRef) -> ListArray {
-    array_into_list_array(arr, true)
+    SingleRowListArrayBuilder::new(arr)
+        .with_nullable(true)
+        .build_list_array()
 }
-
-/// Array Utils
 
 /// Wrap an array into a single element `ListArray`.
 /// For example `[1, 2, 3]` would be converted into `[[1, 2, 3]]`
+#[deprecated(
+    since = "44.0.0",
+    note = "please use `SingleRowListArrayBuilder` instead"
+)]
 pub fn array_into_list_array(arr: ArrayRef, nullable: bool) -> ListArray {
-    let offsets = OffsetBuffer::from_lengths([arr.len()]);
-    ListArray::new(
-        Arc::new(Field::new_list_field(arr.data_type().to_owned(), nullable)),
-        offsets,
-        arr,
-        None,
-    )
+    SingleRowListArrayBuilder::new(arr)
+        .with_nullable(nullable)
+        .build_list_array()
 }
 
+#[deprecated(
+    since = "44.0.0",
+    note = "please use `SingleRowListArrayBuilder` instead"
+)]
 pub fn array_into_list_array_with_field_name(
     arr: ArrayRef,
     nullable: bool,
     field_name: &str,
 ) -> ListArray {
-    let offsets = OffsetBuffer::from_lengths([arr.len()]);
-    ListArray::new(
-        Arc::new(Field::new(field_name, arr.data_type().to_owned(), nullable)),
-        offsets,
-        arr,
-        None,
-    )
+    SingleRowListArrayBuilder::new(arr)
+        .with_nullable(nullable)
+        .with_field_name(Some(field_name.to_string()))
+        .build_list_array()
 }
 
 /// Wrap an array into a single element `LargeListArray`.
 /// For example `[1, 2, 3]` would be converted into `[[1, 2, 3]]`
+#[deprecated(
+    since = "44.0.0",
+    note = "please use `SingleRowListArrayBuilder` instead"
+)]
 pub fn array_into_large_list_array(arr: ArrayRef) -> LargeListArray {
-    let offsets = OffsetBuffer::from_lengths([arr.len()]);
-    LargeListArray::new(
-        Arc::new(Field::new_list_field(arr.data_type().to_owned(), true)),
-        offsets,
-        arr,
-        None,
-    )
+    SingleRowListArrayBuilder::new(arr).build_large_list_array()
 }
 
+#[deprecated(
+    since = "44.0.0",
+    note = "please use `SingleRowListArrayBuilder` instead"
+)]
 pub fn array_into_large_list_array_with_field_name(
     arr: ArrayRef,
     field_name: &str,
 ) -> LargeListArray {
-    let offsets = OffsetBuffer::from_lengths([arr.len()]);
-    LargeListArray::new(
-        Arc::new(Field::new(field_name, arr.data_type().to_owned(), true)),
-        offsets,
-        arr,
-        None,
-    )
+    SingleRowListArrayBuilder::new(arr)
+        .with_field_name(Some(field_name.to_string()))
+        .build_large_list_array()
 }
 
+#[deprecated(
+    since = "44.0.0",
+    note = "please use `SingleRowListArrayBuilder` instead"
+)]
 pub fn array_into_fixed_size_list_array(
     arr: ArrayRef,
     list_size: usize,
 ) -> FixedSizeListArray {
-    let list_size = list_size as i32;
-    FixedSizeListArray::new(
-        Arc::new(Field::new_list_field(arr.data_type().to_owned(), true)),
-        list_size,
-        arr,
-        None,
-    )
+    SingleRowListArrayBuilder::new(arr).build_fixed_size_list_array(list_size)
 }
 
+#[deprecated(
+    since = "44.0.0",
+    note = "please use `SingleRowListArrayBuilder` instead"
+)]
 pub fn array_into_fixed_size_list_array_with_field_name(
     arr: ArrayRef,
     list_size: usize,
     field_name: &str,
 ) -> FixedSizeListArray {
-    let list_size = list_size as i32;
-    FixedSizeListArray::new(
-        Arc::new(Field::new(field_name, arr.data_type().to_owned(), true)),
-        list_size,
-        arr,
-        None,
-    )
+    SingleRowListArrayBuilder::new(arr)
+        .with_field_name(Some(field_name.to_string()))
+        .build_fixed_size_list_array(list_size)
 }
 
 /// Wrap arrays into a single element `ListArray`.
@@ -569,7 +679,7 @@ pub mod datafusion_strsim {
 
     struct StringWrapper<'a>(&'a str);
 
-    impl<'a, 'b> IntoIterator for &'a StringWrapper<'b> {
+    impl<'b> IntoIterator for &StringWrapper<'b> {
         type Item = char;
         type IntoIter = Chars<'b>;
 
@@ -763,6 +873,16 @@ pub fn combine_limit(
     };
 
     (combined_skip, combined_fetch)
+}
+
+/// Returns the estimated number of threads available for parallel execution.
+///
+/// This is a wrapper around `std::thread::available_parallelism`, providing a default value
+/// of `1` if the system's parallelism cannot be determined.
+pub fn get_available_parallelism() -> usize {
+    available_parallelism()
+        .unwrap_or(NonZero::new(1).expect("literal value `1` shouldn't be zero"))
+        .get()
 }
 
 #[cfg(test)]

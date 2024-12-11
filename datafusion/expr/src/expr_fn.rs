@@ -434,10 +434,24 @@ impl SimpleScalarUDF {
         volatility: Volatility,
         fun: ScalarFunctionImplementation,
     ) -> Self {
-        let name = name.into();
-        let signature = Signature::exact(input_types, volatility);
-        Self {
+        Self::new_with_signature(
             name,
+            Signature::exact(input_types, volatility),
+            return_type,
+            fun,
+        )
+    }
+
+    /// Create a new `SimpleScalarUDF` from a name, signature, return type and
+    /// implementation. Implementing [`ScalarUDFImpl`] allows more flexibility
+    pub fn new_with_signature(
+        name: impl Into<String>,
+        signature: Signature,
+        return_type: DataType,
+        fun: ScalarFunctionImplementation,
+    ) -> Self {
+        Self {
+            name: name.into(),
             signature,
             return_type,
             fun,
@@ -519,7 +533,7 @@ impl Debug for SimpleAggregateUDF {
 }
 
 impl SimpleAggregateUDF {
-    /// Create a new `AggregateUDFImpl` from a name, input types, return type, state type and
+    /// Create a new `SimpleAggregateUDF` from a name, input types, return type, state type and
     /// implementation. Implementing [`AggregateUDFImpl`] allows more flexibility
     pub fn new(
         name: impl Into<String>,
@@ -540,6 +554,8 @@ impl SimpleAggregateUDF {
         }
     }
 
+    /// Create a new `SimpleAggregateUDF` from a name, signature, return type, state type and
+    /// implementation. Implementing [`AggregateUDFImpl`] allows more flexibility
     pub fn new_with_signature(
         name: impl Into<String>,
         signature: Signature,
