@@ -1,0 +1,17 @@
+Apache DataFusion
+Copyright 2019-2024 The Apache Software Foundation
+
+This product includes software developed at
+The Apache Software Foundation (http://www.apache.org/).
+
+---
+
+All slt files in test_files/sqlite were sourced from sqlite.org
+which has the following license.md:
+
+The author disclaims copyright to this source code.  In place of
+a legal notice, here is a blessing:
+
+  *   May you do good and not evil.
+  *   May you find forgiveness for yourself and forgive others.
+  *   May you share freely, never taking more than you give.

@@ -15,19 +15,40 @@
 // specific language governing permissions and limitations
 // under the License.
 
+#[cfg(feature = "postgres")]
+use std::env::set_var;
+use std::ffi::OsStr;
+use std::fs;
+#[cfg(feature = "postgres")]
+use std::future::Future;
+use std::path::{Path, PathBuf};
+#[cfg(feature = "postgres")]
+use std::{env, thread};
+
 use clap::Parser;
 use datafusion_common::utils::get_available_parallelism;
+use datafusion_common::{exec_datafusion_err, exec_err, DataFusionError, Result};
+use datafusion_common_runtime::SpawnedTask;
+#[cfg(feature = "postgres")]
+use datafusion_sqllogictest::Postgres;
 use datafusion_sqllogictest::{DataFusion, TestContext};
 use futures::stream::StreamExt;
 use itertools::Itertools;
-use log::info;
-use sqllogictest::strict_column_validator;
-use std::ffi::OsStr;
-use std::fs;
-use std::path::{Path, PathBuf};
-
-use datafusion_common::{exec_datafusion_err, exec_err, DataFusionError, Result};
-use datafusion_common_runtime::SpawnedTask;
+use log::Level::{Info, Warn};
+use log::{info, log_enabled, warn};
+#[cfg(feature = "postgres")]
+use once_cell::sync::Lazy;
+use sqllogictest::{strict_column_validator, Normalizer, Validator};
+#[cfg(feature = "postgres")]
+use testcontainers::core::IntoContainerPort;
+#[cfg(feature = "postgres")]
+use testcontainers::runners::AsyncRunner;
+#[cfg(feature = "postgres")]
+use testcontainers::ImageExt;
+#[cfg(feature = "postgres")]
+use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
+#[cfg(feature = "postgres")]
+use tokio::sync::{mpsc, Mutex};
 
 const TEST_DIRECTORY: &str = "test_files/";
 const PG_COMPAT_FILE_PREFIX: &str = "pg_compat_";
@@ -35,32 +56,81 @@ const PG_COMPAT_FILE_PREFIX: &str = "pg_compat_";
 pub fn main() -> Result<()> {
     tokio::runtime::Builder::new_multi_thread()
         .enable_all()
-        .build()
-        .unwrap()
+        .build()?
         .block_on(run_tests())
 }
 
-fn value_validator(actual: &[Vec<String>], expected: &[String]) -> bool {
-    let expected = expected
+// Trailing whitespace from lines in SLT will typically be removed, but do not fail if it is not
+// If particular test wants to cover trailing whitespace on a value,
+// it should project additional non-whitespace column on the right.
+#[allow(clippy::ptr_arg)]
+fn value_normalizer(s: &String) -> String {
+    s.trim_end().to_string()
+}
+
+fn sqlite_value_validator(
+    normalizer: Normalizer,
+    actual: &[Vec<String>],
+    expected: &[String],
+) -> bool {
+    let normalized_expected = expected.iter().map(normalizer).collect::<Vec<_>>();
+    let normalized_actual = actual
         .iter()
-        // Trailing whitespace from lines in SLT will typically be removed, but do not fail if it is not
-        // If particular test wants to cover trailing whitespace on a value,
-        // it should project additional non-whitespace column on the right.
-        .map(|s| s.trim_end().to_owned())
-        .collect::<Vec<_>>();
-    let actual = actual
+        .map(|strs| strs.iter().map(normalizer).join(" "))
+        .collect_vec();
+
+    if log_enabled!(Info) && normalized_actual != normalized_expected {
+        info!("sqlite validation failed. actual vs expected:");
+        for i in 0..normalized_actual.len() {
+            info!("[{i}] {}<eol>", normalized_actual[i]);
+            info!(
+                "[{i}] {}<eol>",
+                if normalized_expected.len() >= i {
+                    &normalized_expected[i]
+                } else {
+                    "No more results"
+                }
+            );
+        }
+    }
+
+    normalized_actual == normalized_expected
+}
+
+fn df_value_validator(
+    normalizer: Normalizer,
+    actual: &[Vec<String>],
+    expected: &[String],
+) -> bool {
+    let normalized_expected = expected.iter().map(normalizer).collect::<Vec<_>>();
+    let normalized_actual = actual
         .iter()
         .map(|strs| strs.iter().join(" "))
-        // Editors do not preserve trailing whitespace, so expected may or may not lack it included
-        .map(|s| s.trim_end().to_owned())
-        .collect::<Vec<_>>();
-    actual == expected
+        .map(|str| str.trim_end().to_string())
+        .collect_vec();
+
+    if log_enabled!(Warn) && normalized_actual != normalized_expected {
+        warn!("df validation failed. actual vs expected:");
+        for i in 0..normalized_actual.len() {
+            warn!("[{i}] {}<eol>", normalized_actual[i]);
+            warn!(
+                "[{i}] {}<eol>",
+                if normalized_expected.len() >= i {
+                    &normalized_expected[i]
+                } else {
+                    "No more results"
+                }
+            );
+        }
+    }
+
+    normalized_actual == normalized_expected
 }
 
 /// Sets up an empty directory at test_files/scratch/<name>
 /// creating it if needed and clearing any file contents if it exists
 /// This allows tests for inserting to external tables or copy to
-/// to persist data to disk and have consistent state when running
+/// persist data to disk and have consistent state when running
 /// a new test
 fn setup_scratch_dir(name: &Path) -> Result<()> {
     // go from copy.slt --> copy
@@ -91,6 +161,31 @@ async fn run_tests() -> Result<()> {
     }
     options.warn_on_ignored();
 
+    #[cfg(feature = "postgres")]
+    if options.postgres_runner && !is_pg_uri_set() {
+        info!("Starting postgres db ...");
+
+        thread::spawn(|| {
+            execute_blocking(start_postgres(
+                &POSTGRES_IN,
+                &POSTGRES_HOST,
+                &POSTGRES_PORT,
+                &POSTGRES_STOPPED,
+            ))
+        });
+
+        POSTGRES_IN.tx.send(ContainerCommands::FetchHost).unwrap();
+        let db_host = POSTGRES_HOST.rx.lock().await.recv().await.unwrap();
+
+        POSTGRES_IN.tx.send(ContainerCommands::FetchPort).unwrap();
+        let db_port = POSTGRES_PORT.rx.lock().await.recv().await.unwrap();
+
+        let pg_uri = format!("postgresql://postgres:postgres@{db_host}:{db_port}/test");
+        info!("Postgres uri is {pg_uri}");
+
+        set_var("PG_URI", pg_uri);
+    }
+
     // Run all tests in parallel, reporting failures at the end
     //
     // Doing so is safe because each slt file runs with its own
@@ -98,15 +193,21 @@ async fn run_tests() -> Result<()> {
     // modifying shared state like `/tmp/`)
     let errors: Vec<_> = futures::stream::iter(read_test_files(&options)?)
         .map(|test_file| {
+            let validator = if !test_file.check_sqlite(&options) {
+                sqlite_value_validator
+            } else {
+                df_value_validator
+            };
+
             SpawnedTask::spawn(async move {
                 let file_path = test_file.relative_path.clone();
                 let start = datafusion::common::instant::Instant::now();
                 if options.complete {
-                    run_complete_file(test_file).await?;
+                    run_complete_file(test_file, validator).await?;
                 } else if options.postgres_runner {
-                    run_test_file_with_postgres(test_file).await?;
+                    run_test_file_with_postgres(test_file, validator).await?;
                 } else {
-                    run_test_file(test_file).await?;
+                    run_test_file(test_file, validator).await?;
                 }
                 println!("Executed {:?}. Took {:?}", file_path, start.elapsed());
                 Ok(()) as Result<()>
@@ -131,6 +232,12 @@ async fn run_tests() -> Result<()> {
         .collect()
         .await;
 
+    #[cfg(feature = "postgres")]
+    if options.postgres_runner {
+        POSTGRES_IN.tx.send(ContainerCommands::Stop).unwrap_or(());
+        POSTGRES_STOPPED.rx.lock().await.recv().await;
+    }
+
     // report on any errors
     if !errors.is_empty() {
         for e in &errors {
@@ -142,12 +249,20 @@ async fn run_tests() -> Result<()> {
     }
 }
 
-async fn run_test_file(test_file: TestFile) -> Result<()> {
+#[cfg(feature = "postgres")]
+fn is_pg_uri_set() -> bool {
+    match env::var("PG_URI") {
+        Ok(_) => true,
+        Err(_) => false,
+    }
+}
+
+async fn run_test_file(test_file: TestFile, validator: Validator) -> Result<()> {
     let TestFile {
         path,
         relative_path,
     } = test_file;
-    info!("Running with DataFusion runner: {}", path.display());
+    println!("Running with DataFusion runner: {}", path.display());
     let Some(test_ctx) = TestContext::try_new_for_test_file(&relative_path).await else {
         info!("Skipping: {}", path.display());
         return Ok(());
@@ -159,8 +274,10 @@ async fn run_test_file(test_file: TestFile) -> Result<()> {
             relative_path.clone(),
         ))
     });
+    runner.add_label("Datafusion");
     runner.with_column_validator(strict_column_validator);
-    runner.with_validator(value_validator);
+    runner.with_normalizer(value_normalizer);
+    runner.with_validator(validator);
     runner
         .run_file_async(path)
         .await
@@ -168,7 +285,10 @@ async fn run_test_file(test_file: TestFile) -> Result<()> {
 }
 
 #[cfg(feature = "postgres")]
-async fn run_test_file_with_postgres(test_file: TestFile) -> Result<()> {
+async fn run_test_file_with_postgres(
+    test_file: TestFile,
+    validator: Validator,
+) -> Result<()> {
     use datafusion_sqllogictest::Postgres;
     let TestFile {
         path,
@@ -179,7 +299,8 @@ async fn run_test_file_with_postgres(test_file: TestFile) -> Result<()> {
     let mut runner =
         sqllogictest::Runner::new(|| Postgres::connect(relative_path.clone()));
     runner.with_column_validator(strict_column_validator);
-    runner.with_validator(value_validator);
+    runner.with_normalizer(value_normalizer);
+    runner.with_validator(validator);
     runner
         .run_file_async(path)
         .await
@@ -188,12 +309,15 @@ async fn run_test_file_with_postgres(test_file: TestFile) -> Result<()> {
 }
 
 #[cfg(not(feature = "postgres"))]
-async fn run_test_file_with_postgres(_test_file: TestFile) -> Result<()> {
+async fn run_test_file_with_postgres(
+    _test_file: TestFile,
+    _validator: Validator,
+) -> Result<()> {
     use datafusion_common::plan_err;
     plan_err!("Can not run with postgres as postgres feature is not enabled")
 }
 
-async fn run_complete_file(test_file: TestFile) -> Result<()> {
+async fn run_complete_file(test_file: TestFile, validator: Validator) -> Result<()> {
     let TestFile {
         path,
         relative_path,
@@ -212,12 +336,14 @@ async fn run_complete_file(test_file: TestFile) -> Result<()> {
             relative_path.clone(),
         ))
     });
+
     let col_separator = " ";
     runner
         .update_test_file(
             path,
             col_separator,
-            value_validator,
+            validator,
+            value_normalizer,
             strict_column_validator,
         )
         .await
@@ -254,6 +380,14 @@ impl TestFile {
         self.path.extension() == Some(OsStr::new("slt"))
     }
 
+    fn check_sqlite(&self, options: &Options) -> bool {
+        if !self.relative_path.starts_with("sqlite") {
+            return true;
+        }
+
+        options.include_sqlite
+    }
+
     fn check_tpch(&self, options: &Options) -> bool {
         if !self.relative_path.starts_with("tpch") {
             return true;
@@ -273,6 +407,7 @@ fn read_test_files<'a>(
             .filter(|f| options.check_test_file(&f.relative_path))
             .filter(|f| f.is_slt_file())
             .filter(|f| f.check_tpch(options))
+            .filter(|f| f.check_sqlite(options))
             .filter(|f| options.check_pg_compat_file(f.path.as_path())),
     ))
 }
@@ -306,7 +441,7 @@ fn read_dir_recursive_impl(dst: &mut Vec<PathBuf>, path: &Path) -> Result<()> {
 
 /// Parsed command line options
 ///
-/// This structure attempts to mimic the command line options of the built in rust test runner
+/// This structure attempts to mimic the command line options of the built-in rust test runner
 /// accepted by IDEs such as CLion that pass arguments
 ///
 /// See <https://github.com/apache/datafusion/issues/8287> for more details
@@ -322,6 +457,9 @@ struct Options {
         help = "Run Postgres compatibility tests with Postgres runner"
     )]
     postgres_runner: bool,
+
+    #[clap(long, env = "INCLUDE_SQLITE", help = "Include sqlite files")]
+    include_sqlite: bool,
 
     #[clap(long, env = "INCLUDE_TPCH", help = "Include tpch files")]
     include_tpch: bool,
@@ -408,3 +546,88 @@ impl Options {
         }
     }
 }
+
+#[cfg(feature = "postgres")]
+pub async fn start_postgres(
+    in_channel: &Channel<ContainerCommands>,
+    host_channel: &Channel<String>,
+    port_channel: &Channel<u16>,
+    stopped_channel: &Channel<()>,
+) {
+    info!("Starting postgres test container with user postgres/postgres and db test");
+
+    let container = testcontainers_modules::postgres::Postgres::default()
+        .with_user("postgres")
+        .with_password("postgres")
+        .with_db_name("test")
+        .with_mapped_port(16432, 5432.tcp())
+        .start()
+        .await
+        .unwrap();
+    // if you are running inside a docker container uncomment this
+    // let host = "host.docker.internal";
+    let host = container.get_host().await.unwrap();
+    let port = container.get_host_port_ipv4(5432).await.unwrap();
+
+    let mut rx = in_channel.rx.lock().await;
+    while let Some(command) = rx.recv().await {
+        match command {
+            ContainerCommands::FetchHost => {
+                host_channel.tx.send(host.to_string()).unwrap()
+            }
+            ContainerCommands::FetchPort => port_channel.tx.send(port).unwrap(),
+            ContainerCommands::Stop => {
+                container.stop().await.unwrap();
+                stopped_channel.tx.send(()).unwrap();
+                rx.close();
+            }
+        }
+    }
+}
+
+#[cfg(feature = "postgres")]
+#[derive(Debug)]
+pub enum ContainerCommands {
+    FetchHost,
+    FetchPort,
+    Stop,
+}
+
+#[cfg(feature = "postgres")]
+pub struct Channel<T> {
+    pub tx: UnboundedSender<T>,
+    pub rx: Mutex<UnboundedReceiver<T>>,
+}
+
+#[cfg(feature = "postgres")]
+pub fn channel<T>() -> Channel<T> {
+    let (tx, rx) = mpsc::unbounded_channel();
+    Channel {
+        tx,
+        rx: Mutex::new(rx),
+    }
+}
+
+#[cfg(feature = "postgres")]
+pub fn execute_blocking<F: Future>(f: F) {
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap()
+        .block_on(f);
+}
+
+#[cfg(feature = "postgres")]
+pub struct HostPort {
+    pub host: String,
+    pub port: u16,
+}
+
+#[cfg(feature = "postgres")]
+static POSTGRES_IN: Lazy<Channel<ContainerCommands>> = Lazy::new(channel);
+#[cfg(feature = "postgres")]
+static POSTGRES_HOST: Lazy<Channel<String>> = Lazy::new(channel);
+#[cfg(feature = "postgres")]
+static POSTGRES_PORT: Lazy<Channel<u16>> = Lazy::new(channel);
+#[cfg(feature = "postgres")]
+static POSTGRES_STOPPED: Lazy<Channel<()>> = Lazy::new(channel);

@@ -1,0 +1,3164 @@
+hash-threshold 8
+control resultmode valuewise
+
+statement ok
+CREATE TABLE tab0(pk INTEGER PRIMARY KEY, col0 INTEGER, col1 FLOAT, col2 TEXT, col3 INTEGER, col4 FLOAT, col5 TEXT)
+
+statement ok
+INSERT INTO tab0 VALUES(0,6862,2428.5,'fgalw',1540,8996.62,'srnag')
+
+statement ok
+INSERT INTO tab0 VALUES(1,5814,4924.57,'roeet',4635,3524.44,'uvipr')
+
+statement ok
+INSERT INTO tab0 VALUES(2,4456,9855.40,'nczyo',4830,5921.65,'xnvxa')
+
+statement ok
+INSERT INTO tab0 VALUES(3,6262,7117.49,'goqgm',4316,9922.3,'bckff')
+
+statement ok
+INSERT INTO tab0 VALUES(4,9957,846.49,'divso',6164,6624.16,'tcaxa')
+
+statement ok
+INSERT INTO tab0 VALUES(5,772,5664.94,'xhcyp',5577,738.54,'uganm')
+
+statement ok
+INSERT INTO tab0 VALUES(6,1689,2932.33,'jipyl',1132,6838.71,'xroyu')
+
+statement ok
+INSERT INTO tab0 VALUES(7,4696,7001.25,'ycsby',6038,5612.35,'ezint')
+
+statement ok
+INSERT INTO tab0 VALUES(8,2035,1457.54,'mkpbi',9383,111.46,'aldcl')
+
+statement ok
+INSERT INTO tab0 VALUES(9,7451,5379.38,'rgwnx',7382,1998.44,'lyqhx')
+
+statement ok
+INSERT INTO tab0 VALUES(10,7444,9579.44,'wwipt',4631,7802.26,'wkvnq')
+
+statement ok
+INSERT INTO tab0 VALUES(11,2517,2861.97,'myimi',5354,5163.51,'trrei')
+
+statement ok
+INSERT INTO tab0 VALUES(12,8427,8266.98,'vtrgy',4653,9084.61,'eqwqn')
+
+statement ok
+INSERT INTO tab0 VALUES(13,7434,9324.31,'sgbfr',9760,8184.87,'loina')
+
+statement ok
+INSERT INTO tab0 VALUES(14,9555,6301.79,'wduwp',1286,942.67,'tzwwt')
+
+statement ok
+INSERT INTO tab0 VALUES(15,3807,2454.34,'uejdw',4470,1954.51,'uzvaj')
+
+statement ok
+INSERT INTO tab0 VALUES(16,9465,277.12,'izblx',431,8174.24,'jgrzq')
+
+statement ok
+INSERT INTO tab0 VALUES(17,7303,7752.65,'fptwk',7416,5175.7,'dfrkj')
+
+statement ok
+INSERT INTO tab0 VALUES(18,853,4601.92,'tdfeq',2052,3389.79,'ydltw')
+
+statement ok
+INSERT INTO tab0 VALUES(19,7650,8532.51,'libch',593,4363.84,'vjqnp')
+
+statement ok
+INSERT INTO tab0 VALUES(20,481,1493.76,'pjejb',174,7009.45,'ihpfu')
+
+statement ok
+INSERT INTO tab0 VALUES(21,8639,5919.83,'ycluc',57,3848.77,'hnvnb')
+
+statement ok
+INSERT INTO tab0 VALUES(22,9171,984.88,'jhgnz',2886,7269.99,'kdule')
+
+statement ok
+INSERT INTO tab0 VALUES(23,8126,8850.18,'ingzx',5930,5771.47,'xqnok')
+
+statement ok
+INSERT INTO tab0 VALUES(24,1808,918.19,'rmyft',2339,217.86,'decvj')
+
+statement ok
+INSERT INTO tab0 VALUES(25,8025,4077.77,'dcfwi',2392,85.21,'eqjar')
+
+statement ok
+INSERT INTO tab0 VALUES(26,7340,6953.23,'bmchg',4747,9713.13,'nsrsi')
+
+statement ok
+INSERT INTO tab0 VALUES(27,4317,6162.50,'zhhvm',7689,4555.90,'pfhmo')
+
+statement ok
+INSERT INTO tab0 VALUES(28,8777,2557.22,'fqusx',384,7429.57,'nadvk')
+
+statement ok
+INSERT INTO tab0 VALUES(29,7043,7480.89,'mkrja',4127,4762.12,'qdlog')
+
+statement ok
+INSERT INTO tab0 VALUES(30,3193,9012.1,'sflnp',3590,2849.57,'fdivo')
+
+statement ok
+INSERT INTO tab0 VALUES(31,307,8220.15,'jrxff',8076,4096.11,'xziel')
+
+statement ok
+INSERT INTO tab0 VALUES(32,1721,5412.14,'hlraw',2765,3272.20,'qfhth')
+
+statement ok
+INSERT INTO tab0 VALUES(33,2275,6383.13,'ghuet',9968,3760.75,'yfrij')
+
+statement ok
+INSERT INTO tab0 VALUES(34,9561,8665.77,'qklpr',373,3806.18,'xeloo')
+
+statement ok
+INSERT INTO tab0 VALUES(35,5176,7781.32,'yhlfx',4298,2770.59,'khncv')
+
+statement ok
+INSERT INTO tab0 VALUES(36,5972,3489.75,'ndzwp',2939,7375.87,'cwmpy')
+
+statement ok
+INSERT INTO tab0 VALUES(37,5302,6039.89,'dqeom',9623,7956.82,'xmewc')
+
+statement ok
+INSERT INTO tab0 VALUES(38,4277,2416.56,'rmunq',1053,4714.30,'mbjen')
+
+statement ok
+INSERT INTO tab0 VALUES(39,3007,2596.66,'rfrlv',8562,3959.32,'cagcb')
+
+statement ok
+INSERT INTO tab0 VALUES(40,1861,5791.35,'zjrmk',9364,4368.17,'ekgww')
+
+statement ok
+INSERT INTO tab0 VALUES(41,2708,6702.11,'jsxkt',7799,3231.58,'tapkb')
+
+statement ok
+INSERT INTO tab0 VALUES(42,172,1769.92,'gkrtb',6587,2700.81,'kntke')
+
+statement ok
+INSERT INTO tab0 VALUES(43,2882,5420.36,'cxzzs',8077,6040.79,'onipz')
+
+statement ok
+INSERT INTO tab0 VALUES(44,4720,6321.73,'iidof',5496,3880.22,'kwpqa')
+
+statement ok
+INSERT INTO tab0 VALUES(45,6072,3626.21,'sjlap',4203,462.76,'imzog')
+
+statement ok
+INSERT INTO tab0 VALUES(46,5079,3228.91,'dptfc',2932,9894.6,'ovwpq')
+
+statement ok
+INSERT INTO tab0 VALUES(47,8883,4008.9,'eockv',5047,2391.98,'vsflw')
+
+statement ok
+INSERT INTO tab0 VALUES(48,4883,4084.21,'qskgk',9793,538.64,'bszku')
+
+statement ok
+INSERT INTO tab0 VALUES(49,1979,7065.11,'jwzfl',3542,5530.59,'xaamh')
+
+statement ok
+INSERT INTO tab0 VALUES(50,1829,8296.7,'tagjk',1044,3424.93,'jtmls')
+
+statement ok
+INSERT INTO tab0 VALUES(51,91,1112.2,'iqjty',6681,1394.39,'lzrbo')
+
+statement ok
+INSERT INTO tab0 VALUES(52,7680,3084.58,'ntujv',5711,3973.54,'uzkee')
+
+statement ok
+INSERT INTO tab0 VALUES(53,2010,2273.24,'bbyjj',5523,9312.82,'hfttg')
+
+statement ok
+INSERT INTO tab0 VALUES(54,8255,3479.46,'xcvec',6882,5421.76,'tnvfn')
+
+statement ok
+INSERT INTO tab0 VALUES(55,590,4487.83,'pgpqi',5186,6425.0,'kedik')
+
+statement ok
+INSERT INTO tab0 VALUES(56,3443,2324.13,'bciay',1708,8813.52,'reilp')
+
+statement ok
+INSERT INTO tab0 VALUES(57,2747,9504.51,'bgmgw',4852,7687.68,'tgxpr')
+
+statement ok
+INSERT INTO tab0 VALUES(58,7189,278.62,'ztqcu',1402,3012.41,'cwrsu')
+
+statement ok
+INSERT INTO tab0 VALUES(59,9461,6887.68,'lzbds',7767,5864.29,'hrmqe')
+
+statement ok
+INSERT INTO tab0 VALUES(60,7505,5809.66,'wxjyo',1240,4687.70,'mivgz')
+
+statement ok
+INSERT INTO tab0 VALUES(61,5772,4012.37,'agcgy',1238,1535.91,'crnqq')
+
+statement ok
+INSERT INTO tab0 VALUES(62,6463,5199.61,'vlkcr',561,8326.26,'jcefr')
+
+statement ok
+INSERT INTO tab0 VALUES(63,785,6065.27,'wvpvi',6634,3091.26,'ejaxg')
+
+statement ok
+INSERT INTO tab0 VALUES(64,198,2542.48,'byxic',2766,6224.68,'ivicv')
+
+statement ok
+INSERT INTO tab0 VALUES(65,7667,6050.72,'fkwed',9387,6735.74,'psgzt')
+
+statement ok
+INSERT INTO tab0 VALUES(66,8908,9746.96,'tchpi',5315,8493.17,'zyemy')
+
+statement ok
+INSERT INTO tab0 VALUES(67,3646,4777.75,'hlnua',8992,6483.38,'nprml')
+
+statement ok
+INSERT INTO tab0 VALUES(68,6854,6528.38,'fjiyl',9739,3053.59,'xuwbb')
+
+statement ok
+INSERT INTO tab0 VALUES(69,14,872.0,'jljij',9006,4164.90,'bxehb')
+
+statement ok
+INSERT INTO tab0 VALUES(70,2358,421.73,'rezoy',1623,5641.48,'vrwtt')
+
+statement ok
+INSERT INTO tab0 VALUES(71,2124,774.80,'tvppa',7049,9420.65,'lhuia')
+
+statement ok
+INSERT INTO tab0 VALUES(72,7805,6770.66,'mvoxy',620,9803.3,'jrxoc')
+
+statement ok
+INSERT INTO tab0 VALUES(73,9395,8733.12,'suqog',4802,9703.64,'ulysd')
+
+statement ok
+INSERT INTO tab0 VALUES(74,9643,8730.47,'ypqmc',442,6899.7,'hzauu')
+
+statement ok
+INSERT INTO tab0 VALUES(75,5303,6812.60,'roeja',8011,281.55,'kvgtw')
+
+statement ok
+INSERT INTO tab0 VALUES(76,8382,7271.12,'kobzo',8865,6102.11,'jnmsy')
+
+statement ok
+INSERT INTO tab0 VALUES(77,7391,4886.51,'zffgt',6483,4230.70,'oxsxb')
+
+statement ok
+INSERT INTO tab0 VALUES(78,8596,1175.22,'ivzgz',7727,4396.30,'iewxh')
+
+statement ok
+INSERT INTO tab0 VALUES(79,7264,644.81,'csaqj',4086,2444.7,'nalsg')
+
+statement ok
+INSERT INTO tab0 VALUES(80,8919,7037.6,'dgujp',2930,6579.45,'btazz')
+
+statement ok
+INSERT INTO tab0 VALUES(81,587,9586.10,'kzedj',8754,3624.30,'rkazk')
+
+statement ok
+INSERT INTO tab0 VALUES(82,2049,9262.55,'hteke',4436,5262.2,'jydvx')
+
+statement ok
+INSERT INTO tab0 VALUES(83,7089,5025.62,'lvmmu',2481,4288.68,'iheob')
+
+statement ok
+INSERT INTO tab0 VALUES(84,4746,71.27,'hbdsz',6273,865.15,'ekpjf')
+
+statement ok
+INSERT INTO tab0 VALUES(85,562,8085.30,'rzbpd',1324,8764.18,'xqapf')
+
+statement ok
+INSERT INTO tab0 VALUES(86,7833,9494.48,'qwxvv',6527,1624.60,'iqcvv')
+
+statement ok
+INSERT INTO tab0 VALUES(87,8860,7707.70,'sainn',5403,9193.39,'umwfo')
+
+statement ok
+INSERT INTO tab0 VALUES(88,6196,5376.7,'xsaic',7351,3586.82,'uaqlc')
+
+statement ok
+INSERT INTO tab0 VALUES(89,3900,639.5,'bmzmo',8899,5529.59,'nsjwc')
+
+statement ok
+INSERT INTO tab0 VALUES(90,8782,3374.58,'scizp',4956,612.90,'oxmsv')
+
+statement ok
+INSERT INTO tab0 VALUES(91,1659,1445.22,'kuxuj',58,5538.68,'obkbo')
+
+statement ok
+INSERT INTO tab0 VALUES(92,8601,6957.24,'qkxvu',9620,4373.59,'qoeem')
+
+statement ok
+INSERT INTO tab0 VALUES(93,2181,2501.76,'hikbp',1187,4797.25,'jfdmd')
+
+statement ok
+INSERT INTO tab0 VALUES(94,2727,7407.89,'jwdwq',5681,4355.29,'bcnsa')
+
+statement ok
+INSERT INTO tab0 VALUES(95,9569,3994.85,'lhzyn',8654,6700.53,'ouczm')
+
+statement ok
+INSERT INTO tab0 VALUES(96,2294,3818.8,'otsln',1539,7854.6,'wnrdy')
+
+statement ok
+INSERT INTO tab0 VALUES(97,1989,3924.36,'oulfw',2893,2449.40,'shzov')
+
+statement ok
+INSERT INTO tab0 VALUES(98,2500,3096.97,'ydnxn',9657,9981.62,'fwzpe')
+
+statement ok
+INSERT INTO tab0 VALUES(99,1671,8106.78,'jzxyv',8399,1060.42,'lcvka')
+
+statement ok
+INSERT INTO tab0 VALUES(100,2605,9962.39,'hawwc',6563,3658.33,'dyehi')
+
+statement ok
+INSERT INTO tab0 VALUES(101,4906,163.27,'qtrhg',3727,9361.79,'iozti')
+
+statement ok
+INSERT INTO tab0 VALUES(102,5932,6947.85,'jiebk',2843,9620.25,'xocql')
+
+statement ok
+INSERT INTO tab0 VALUES(103,2047,1535.66,'dzlmm',1497,1995.35,'dxzep')
+
+statement ok
+INSERT INTO tab0 VALUES(104,9867,4394.48,'ywhiz',3150,6414.3,'qhced')
+
+statement ok
+INSERT INTO tab0 VALUES(105,7512,1472.42,'slcbj',8393,1415.63,'oftfe')
+
+statement ok
+INSERT INTO tab0 VALUES(106,5857,461.9,'xkhuy',6196,400.4,'ovqpn')
+
+statement ok
+INSERT INTO tab0 VALUES(107,9780,7038.68,'fvxph',5158,7886.80,'hnlrz')
+
+statement ok
+INSERT INTO tab0 VALUES(108,9412,1117.13,'cnloz',4757,5751.27,'zpnuh')
+
+statement ok
+INSERT INTO tab0 VALUES(109,1391,3105.23,'ntiwe',6600,9487.69,'dumol')
+
+statement ok
+INSERT INTO tab0 VALUES(110,106,144.73,'mtmag',5672,4451.36,'davup')
+
+statement ok
+INSERT INTO tab0 VALUES(111,8951,2364.51,'pqdvl',1588,2110.76,'xvown')
+
+statement ok
+INSERT INTO tab0 VALUES(112,1573,9135.66,'xpgsm',9841,6297.64,'jjwsg')
+
+statement ok
+INSERT INTO tab0 VALUES(113,3125,5315.63,'iyjpe',3054,9458.18,'jlsxs')
+
+statement ok
+INSERT INTO tab0 VALUES(114,1511,7498.34,'jjzgz',2228,8901.7,'avjxk')
+
+statement ok
+INSERT INTO tab0 VALUES(115,8642,270.33,'tyjiu',7994,3047.72,'mgfca')
+
+statement ok
+INSERT INTO tab0 VALUES(116,1681,2453.85,'xidml',1859,7683.28,'mnfxy')
+
+statement ok
+INSERT INTO tab0 VALUES(117,4294,3356.3,'vwunj',7463,2206.84,'cvpya')
+
+statement ok
+INSERT INTO tab0 VALUES(118,7904,9029.95,'nrmkg',1822,5879.53,'dnohd')
+
+statement ok
+INSERT INTO tab0 VALUES(119,2936,8510.80,'qvnqn',6582,4076.65,'cptgv')
+
+statement ok
+INSERT INTO tab0 VALUES(120,68,73.1,'gladf',9268,4536.78,'mryww')
+
+statement ok
+INSERT INTO tab0 VALUES(121,1483,7482.37,'gvrmi',4533,3610.92,'natvz')
+
+statement ok
+INSERT INTO tab0 VALUES(122,2118,6240.11,'fpdys',5411,2514.61,'xvdqm')
+
+statement ok
+INSERT INTO tab0 VALUES(123,914,9837.11,'uuuvl',4561,3575.5,'hibts')
+
+statement ok
+INSERT INTO tab0 VALUES(124,2066,6000.94,'nbjiq',5525,6485.26,'zterx')
+
+statement ok
+INSERT INTO tab0 VALUES(125,6271,2948.6,'ipoua',3972,4549.14,'msier')
+
+statement ok
+INSERT INTO tab0 VALUES(126,1983,5635.88,'hoqwm',8950,935.65,'gbigp')
+
+statement ok
+INSERT INTO tab0 VALUES(127,6659,2005.92,'dzbnu',4137,4924.91,'dgnlb')
+
+statement ok
+INSERT INTO tab0 VALUES(128,8007,9239.93,'uwchd',9087,8160.33,'fhhvo')
+
+statement ok
+INSERT INTO tab0 VALUES(129,5242,7.3,'ioniy',487,902.75,'hzwcq')
+
+statement ok
+INSERT INTO tab0 VALUES(130,333,8718.79,'eoeoe',3399,8271.52,'nyxxg')
+
+statement ok
+INSERT INTO tab0 VALUES(131,9252,7768.41,'dxoth',2517,6501.70,'cuzuq')
+
+statement ok
+INSERT INTO tab0 VALUES(132,3223,3792.79,'sdpsq',3411,9189.10,'vhiht')
+
+statement ok
+INSERT INTO tab0 VALUES(133,9978,3913.71,'xmckd',3784,3548.47,'smohy')
+
+statement ok
+INSERT INTO tab0 VALUES(134,5000,1992.91,'szkzz',4713,6651.59,'srbwp')
+
+statement ok
+INSERT INTO tab0 VALUES(135,2776,4880.25,'wqecg',1907,1685.42,'huuqv')
+
+statement ok
+INSERT INTO tab0 VALUES(136,8048,8663.80,'kmwul',6955,4202.19,'ygvrx')
+
+statement ok
+INSERT INTO tab0 VALUES(137,7061,4920.1,'isivb',8570,8365.55,'aiawe')
+
+statement ok
+INSERT INTO tab0 VALUES(138,8815,6962.77,'evnrn',3850,3203.72,'fcpxi')
+
+statement ok
+INSERT INTO tab0 VALUES(139,6312,6095.62,'suerl',9517,8855.55,'fqwjj')
+
+statement ok
+INSERT INTO tab0 VALUES(140,7811,7858.78,'kdhgm',3174,2826.70,'hesya')
+
+statement ok
+INSERT INTO tab0 VALUES(141,8071,8281.36,'iauyu',4554,6233.73,'bdimk')
+
+statement ok
+INSERT INTO tab0 VALUES(142,9609,132.44,'nlgmx',6766,57.27,'yjsgr')
+
+statement ok
+INSERT INTO tab0 VALUES(143,3943,9166.19,'rjkbc',7551,1391.8,'xeoxr')
+
+statement ok
+INSERT INTO tab0 VALUES(144,2845,379.2,'wtvic',527,9692.24,'znnpn')
+
+statement ok
+INSERT INTO tab0 VALUES(145,9593,4251.69,'dtopv',6441,3031.23,'bbchf')
+
+statement ok
+INSERT INTO tab0 VALUES(146,217,3005.45,'awsyu',4419,4342.9,'hifsh')
+
+statement ok
+INSERT INTO tab0 VALUES(147,4751,6849.13,'gychz',3218,7670.49,'xwspn')
+
+statement ok
+INSERT INTO tab0 VALUES(148,8483,230.32,'knwqg',2470,4428.93,'tjfri')
+
+statement ok
+INSERT INTO tab0 VALUES(149,3207,8084.42,'msdcd',3939,9637.80,'wsmxr')
+
+statement ok
+INSERT INTO tab0 VALUES(150,8468,2085.86,'olpyh',2767,8185.55,'fegok')
+
+statement ok
+INSERT INTO tab0 VALUES(151,2817,6896.13,'kqczi',8723,1072.78,'hntkf')
+
+statement ok
+INSERT INTO tab0 VALUES(152,5057,6416.97,'bekmh',7460,1662.38,'sdisy')
+
+statement ok
+INSERT INTO tab0 VALUES(153,5496,34.47,'ofqgf',1754,1930.68,'sfcmi')
+
+statement ok
+INSERT INTO tab0 VALUES(154,7197,8877.21,'meczb',2764,8717.51,'drqns')
+
+statement ok
+INSERT INTO tab0 VALUES(155,7224,2061.34,'pysfy',1275,9977.42,'pnmrp')
+
+statement ok
+INSERT INTO tab0 VALUES(156,7898,2939.78,'mwumb',8954,1024.70,'nxurg')
+
+statement ok
+INSERT INTO tab0 VALUES(157,8042,5354.27,'dcpld',9595,790.58,'lebqh')
+
+statement ok
+INSERT INTO tab0 VALUES(158,4234,9884.55,'rnxaf',369,8067.34,'xbqxk')
+
+statement ok
+INSERT INTO tab0 VALUES(159,2054,99.45,'wyupb',3081,7762.40,'vtiha')
+
+statement ok
+INSERT INTO tab0 VALUES(160,7338,8805.4,'thbxz',5410,7143.50,'jdeds')
+
+statement ok
+INSERT INTO tab0 VALUES(161,7426,4298.74,'lqbmk',2167,2095.77,'iuzoc')
+
+statement ok
+INSERT INTO tab0 VALUES(162,2411,6610.44,'mjfnk',6540,3363.89,'zcxme')
+
+statement ok
+INSERT INTO tab0 VALUES(163,6388,3763.64,'qgodl',1347,2806.22,'opcrg')
+
+statement ok
+INSERT INTO tab0 VALUES(164,8710,8017.56,'nroly',284,9648.89,'xvlci')
+
+statement ok
+INSERT INTO tab0 VALUES(165,5231,2120.30,'erprz',9178,6723.96,'epzxv')
+
+statement ok
+INSERT INTO tab0 VALUES(166,9560,5559.91,'seqkt',7232,6733.53,'hctmg')
+
+statement ok
+INSERT INTO tab0 VALUES(167,4310,807.56,'xwwlj',8280,8489.85,'vyfsr')
+
+statement ok
+INSERT INTO tab0 VALUES(168,2346,9580.64,'vqggj',2033,3167.49,'inbcn')
+
+statement ok
+INSERT INTO tab0 VALUES(169,8040,9075.88,'pngxk',5335,555.40,'fustc')
+
+statement ok
+INSERT INTO tab0 VALUES(170,8515,8234.53,'twlcx',3403,5308.11,'gsxrg')
+
+statement ok
+INSERT INTO tab0 VALUES(171,4900,3986.40,'djaqo',1087,3189.79,'ddoua')
+
+statement ok
+INSERT INTO tab0 VALUES(172,3577,7495.6,'ikodb',4115,7329.40,'hdbce')
+
+statement ok
+INSERT INTO tab0 VALUES(173,7432,415.91,'kzplr',345,4469.83,'izftx')
+
+statement ok
+INSERT INTO tab0 VALUES(174,7106,1141.34,'lxgqz',1010,1215.0,'tgqil')
+
+statement ok
+INSERT INTO tab0 VALUES(175,2241,1052.84,'iwvgh',1976,286.1,'oclus')
+
+statement ok
+INSERT INTO tab0 VALUES(176,2736,768.13,'cslel',4987,6763.23,'yhyqv')
+
+statement ok
+INSERT INTO tab0 VALUES(177,9992,6396.30,'vjsdi',8914,4343.47,'shecx')
+
+statement ok
+INSERT INTO tab0 VALUES(178,8165,5782.88,'efhlq',1011,1584.6,'flqgn')
+
+statement ok
+INSERT INTO tab0 VALUES(179,5415,4760.4,'ywpji',8153,8158.1,'qetdn')
+
+statement ok
+INSERT INTO tab0 VALUES(180,5155,3403.66,'srhej',8105,1099.11,'ywqtj')
+
+statement ok
+INSERT INTO tab0 VALUES(181,7301,2271.48,'qncii',751,1057.7,'giskc')
+
+statement ok
+INSERT INTO tab0 VALUES(182,9526,8662.21,'tgflz',9360,8544.65,'ooesr')
+
+statement ok
+INSERT INTO tab0 VALUES(183,8504,2864.68,'zmcpy',1827,184.77,'kfwrt')
+
+statement ok
+INSERT INTO tab0 VALUES(184,1165,4403.93,'jzbih',1926,4965.63,'mlsyh')
+
+statement ok
+INSERT INTO tab0 VALUES(185,5941,8293.37,'asvvg',562,490.86,'dfkuc')
+
+statement ok
+INSERT INTO tab0 VALUES(186,4019,1284.87,'pxfdr',7017,9223.63,'fjako')
+
+statement ok
+INSERT INTO tab0 VALUES(187,591,8118.93,'wfszw',202,4743.78,'kqrvg')
+
+statement ok
+INSERT INTO tab0 VALUES(188,6098,7774.75,'oxehb',9908,7990.91,'facfm')
+
+statement ok
+INSERT INTO tab0 VALUES(189,7493,9717.40,'svmaa',8054,3520.58,'gqjyy')
+
+statement ok
+INSERT INTO tab0 VALUES(190,9476,153.92,'msykw',9938,5752.37,'bbjrl')
+
+statement ok
+INSERT INTO tab0 VALUES(191,5755,8276.47,'rfedk',5487,5214.2,'sinmj')
+
+statement ok
+INSERT INTO tab0 VALUES(192,288,2517.41,'mbpha',507,4803.57,'ibjdl')
+
+statement ok
+INSERT INTO tab0 VALUES(193,8541,6796.49,'yccrf',7934,6027.47,'vrhzg')
+
+statement ok
+INSERT INTO tab0 VALUES(194,8731,6772.90,'unpud',9080,5256.72,'olzgz')
+
+statement ok
+INSERT INTO tab0 VALUES(195,3081,6091.47,'uzvdg',4889,9975.98,'upgbw')
+
+statement ok
+INSERT INTO tab0 VALUES(196,9066,2638.72,'rqsbd',7182,5032.70,'lplrc')
+
+statement ok
+INSERT INTO tab0 VALUES(197,665,4786.6,'mjfdv',9909,8888.26,'syfob')
+
+statement ok
+INSERT INTO tab0 VALUES(198,9614,7645.86,'juxfq',400,9867.5,'qtdkj')
+
+statement ok
+INSERT INTO tab0 VALUES(199,6650,9318.60,'gplnt',614,2407.65,'tkhkd')
+
+statement ok
+INSERT INTO tab0 VALUES(200,2763,7140.97,'gjmtt',8387,3308.93,'tcwkw')
+
+statement ok
+INSERT INTO tab0 VALUES(201,449,3938.5,'myygj',8686,7984.18,'dqvuy')
+
+statement ok
+INSERT INTO tab0 VALUES(202,4959,4277.36,'pnzda',4855,6714.21,'qsoxh')
+
+statement ok
+INSERT INTO tab0 VALUES(203,5544,710.4,'nqklo',9870,887.51,'ccmyy')
+
+statement ok
+INSERT INTO tab0 VALUES(204,6712,27.97,'vkhcs',7581,9258.37,'ypogt')
+
+statement ok
+INSERT INTO tab0 VALUES(205,9474,9508.86,'sruiv',3973,4194.98,'xheia')
+
+statement ok
+INSERT INTO tab0 VALUES(206,2596,3171.43,'ibonl',8403,7925.57,'nqmaz')
+
+statement ok
+INSERT INTO tab0 VALUES(207,3845,8021.46,'odlka',4863,8795.56,'woeoq')
+
+statement ok
+INSERT INTO tab0 VALUES(208,1245,303.1,'nldil',3221,7512.62,'epdve')
+
+statement ok
+INSERT INTO tab0 VALUES(209,4322,1749.44,'kwwfs',475,3395.89,'icyju')
+
+statement ok
+INSERT INTO tab0 VALUES(210,5357,5830.63,'xkutm',2000,628.99,'sfqnc')
+
+statement ok
+INSERT INTO tab0 VALUES(211,635,4005.4,'vrwnw',2802,4509.26,'qcgqa')
+
+statement ok
+INSERT INTO tab0 VALUES(212,1694,1972.88,'ysldw',8764,7698.80,'bcmcb')
+
+statement ok
+INSERT INTO tab0 VALUES(213,6575,5915.19,'hhqgb',7901,6467.64,'frflj')
+
+statement ok
+INSERT INTO tab0 VALUES(214,1076,8759.0,'dajwi',1603,6954.84,'dshrx')
+
+statement ok
+INSERT INTO tab0 VALUES(215,9997,6417.45,'jiokj',5892,1409.62,'lscbk')
+
+statement ok
+INSERT INTO tab0 VALUES(216,8390,4037.90,'dwcrh',2667,4445.53,'vodox')
+
+statement ok
+INSERT INTO tab0 VALUES(217,2816,2260.5,'pigfj',957,9289.48,'ucpvh')
+
+statement ok
+INSERT INTO tab0 VALUES(218,2584,3462.11,'mtlip',8169,4030.96,'dyfga')
+
+statement ok
+INSERT INTO tab0 VALUES(219,1011,8009.86,'prscg',1340,7873.12,'trpgr')
+
+statement ok
+INSERT INTO tab0 VALUES(220,6667,504.85,'tcnsq',8386,7383.90,'cbchq')
+
+statement ok
+INSERT INTO tab0 VALUES(221,4625,6038.44,'bsfnq',9350,2739.14,'xbgbr')
+
+statement ok
+INSERT INTO tab0 VALUES(222,7713,6443.98,'rdtaj',7656,3987.73,'sbpnr')
+
+statement ok
+INSERT INTO tab0 VALUES(223,7761,6536.95,'otgeu',1355,7280.75,'sxbcc')
+
+statement ok
+INSERT INTO tab0 VALUES(224,6856,375.4,'xcslh',4379,1139.53,'cavur')
+
+statement ok
+INSERT INTO tab0 VALUES(225,8586,7503.27,'wwpxk',7788,2698.85,'vrtic')
+
+statement ok
+INSERT INTO tab0 VALUES(226,9295,9205.18,'dbklj',1019,3951.1,'gxefp')
+
+statement ok
+INSERT INTO tab0 VALUES(227,9328,4752.90,'rckst',3143,8009.98,'uukyn')
+
+statement ok
+INSERT INTO tab0 VALUES(228,4289,7654.26,'eabod',4103,5344.54,'knjbz')
+
+statement ok
+INSERT INTO tab0 VALUES(229,6280,1909.99,'tmztr',5977,43.35,'ioggp')
+
+statement ok
+INSERT INTO tab0 VALUES(230,5162,8253.76,'syenr',4218,6054.15,'rrgry')
+
+statement ok
+INSERT INTO tab0 VALUES(231,9795,411.36,'yvzik',8910,3439.81,'ceztf')
+
+statement ok
+INSERT INTO tab0 VALUES(232,9298,1346.82,'qqngo',6015,4626.53,'gaepa')
+
+statement ok
+INSERT INTO tab0 VALUES(233,4290,9509.50,'ayjxx',8624,653.88,'tujat')
+
+statement ok
+INSERT INTO tab0 VALUES(234,8145,5090.25,'tuety',8208,7422.2,'kdopk')
+
+statement ok
+INSERT INTO tab0 VALUES(235,8243,6266.53,'vnicn',5864,1950.73,'cmqwc')
+
+statement ok
+INSERT INTO tab0 VALUES(236,7215,5454.51,'ybmgl',3572,8614.62,'imgms')
+
+statement ok
+INSERT INTO tab0 VALUES(237,4197,5558.23,'hcjre',5437,5408.18,'vcffq')
+
+statement ok
+INSERT INTO tab0 VALUES(238,6078,6221.71,'dzcbh',8946,186.98,'inhhf')
+
+statement ok
+INSERT INTO tab0 VALUES(239,8754,72.6,'iefoi',6212,6918.72,'vnufk')
+
+statement ok
+INSERT INTO tab0 VALUES(240,8372,8983.63,'fayte',5230,1936.41,'smceo')
+
+statement ok
+INSERT INTO tab0 VALUES(241,2583,310.12,'xezwy',1122,187.48,'xnkaw')
+
+statement ok
+INSERT INTO tab0 VALUES(242,1792,3148.70,'dnexj',7389,1474.89,'wpgma')
+
+statement ok
+INSERT INTO tab0 VALUES(243,411,4583.15,'ykzvp',7161,6725.26,'xthda')
+
+statement ok
+INSERT INTO tab0 VALUES(244,8101,5935.99,'zsglq',4448,4223.2,'dzssl')
+
+statement ok
+INSERT INTO tab0 VALUES(245,1030,9017.57,'mbvvg',5387,5866.51,'tsacl')
+
+statement ok
+INSERT INTO tab0 VALUES(246,3120,2377.24,'suahi',9495,3416.11,'yrrmc')
+
+statement ok
+INSERT INTO tab0 VALUES(247,7295,7551.45,'pgklo',918,4748.35,'izmpf')
+
+statement ok
+INSERT INTO tab0 VALUES(248,6734,5316.87,'kukof',9682,102.7,'snppv')
+
+statement ok
+INSERT INTO tab0 VALUES(249,6121,1935.52,'izxkp',2938,8327.52,'qvtny')
+
+statement ok
+INSERT INTO tab0 VALUES(250,2893,5411.91,'dsvpt',6221,3139.50,'zkgbb')
+
+statement ok
+INSERT INTO tab0 VALUES(251,8489,1732.15,'uguoa',4691,9367.46,'qpgxv')
+
+statement ok
+INSERT INTO tab0 VALUES(252,9604,1129.8,'bmvuu',4388,9202.65,'ebsxr')
+
+statement ok
+INSERT INTO tab0 VALUES(253,9438,4317.39,'dwvxa',3483,8448.24,'jmrzn')
+
+statement ok
+INSERT INTO tab0 VALUES(254,8942,8753.74,'huhuv',3523,2774.43,'xcgle')
+
+statement ok
+INSERT INTO tab0 VALUES(255,8074,4879.92,'nozrg',685,3961.59,'xnzaf')
+
+statement ok
+INSERT INTO tab0 VALUES(256,7042,2378.92,'blkjt',7025,6153.39,'rcocl')
+
+statement ok
+INSERT INTO tab0 VALUES(257,7562,6418.10,'dypfy',1728,2108.90,'gulpq')
+
+statement ok
+INSERT INTO tab0 VALUES(258,4101,3908.29,'oyqjd',2359,9448.75,'cmmlb')
+
+statement ok
+INSERT INTO tab0 VALUES(259,5132,9747.93,'gqgyy',6108,6907.22,'pcoid')
+
+statement ok
+INSERT INTO tab0 VALUES(260,4380,3066.18,'awqyz',1049,583.39,'vqeeb')
+
+statement ok
+INSERT INTO tab0 VALUES(261,2076,3490.7,'ccvom',7381,188.25,'bjdbl')
+
+statement ok
+INSERT INTO tab0 VALUES(262,6202,7381.59,'tpmgw',8685,5291.84,'mvchz')
+
+statement ok
+INSERT INTO tab0 VALUES(263,3746,4087.85,'yqlwk',3168,1586.34,'vfhsy')
+
+statement ok
+INSERT INTO tab0 VALUES(264,1951,2198.17,'alktw',4917,7121.27,'vfasz')
+
+statement ok
+INSERT INTO tab0 VALUES(265,9562,5788.24,'eonwc',5149,8561.52,'cijln')
+
+statement ok
+INSERT INTO tab0 VALUES(266,8075,674.21,'frayq',3459,7432.54,'nxxtq')
+
+statement ok
+INSERT INTO tab0 VALUES(267,2998,656.86,'cbupk',9070,6376.44,'cgbnm')
+
+statement ok
+INSERT INTO tab0 VALUES(268,5086,3777.68,'rkdnh',2086,5397.13,'jvbsd')
+
+statement ok
+INSERT INTO tab0 VALUES(269,1600,8566.2,'dfgkt',4739,8111.44,'djhlw')
+
+statement ok
+INSERT INTO tab0 VALUES(270,7554,291.19,'vryio',2637,7999.22,'cxcde')
+
+statement ok
+INSERT INTO tab0 VALUES(271,6969,7207.64,'szere',6023,4656.49,'mbhsb')
+
+statement ok
+INSERT INTO tab0 VALUES(272,4117,6809.2,'ckukq',1014,38.59,'oywrz')
+
+statement ok
+INSERT INTO tab0 VALUES(273,4774,2078.33,'gicbb',856,4716.25,'lonec')
+
+statement ok
+INSERT INTO tab0 VALUES(274,7471,7737.8,'ymlxh',7178,4122.74,'pqmeh')
+
+statement ok
+INSERT INTO tab0 VALUES(275,4742,6493.35,'fawfm',1233,4805.0,'mauqn')
+
+statement ok
+INSERT INTO tab0 VALUES(276,4377,5295.97,'xqudu',5156,675.77,'dpjpm')
+
+statement ok
+INSERT INTO tab0 VALUES(277,666,1578.61,'etpcy',3210,9254.69,'xnegi')
+
+statement ok
+INSERT INTO tab0 VALUES(278,5657,9515.93,'loeqy',3037,7930.46,'zifdg')
+
+statement ok
+INSERT INTO tab0 VALUES(279,399,6269.68,'qdrto',6907,202.93,'dbzfd')
+
+statement ok
+INSERT INTO tab0 VALUES(280,6197,8241.85,'ducyd',2971,1935.26,'ehbbb')
+
+statement ok
+INSERT INTO tab0 VALUES(281,5858,7319.78,'etujy',6507,7604.99,'slwxb')
+
+statement ok
+INSERT INTO tab0 VALUES(282,4944,7129.28,'pvjye',1172,6550.25,'rtdvs')
+
+statement ok
+INSERT INTO tab0 VALUES(283,3021,9288.79,'kayjg',253,9226.79,'bmrvt')
+
+statement ok
+INSERT INTO tab0 VALUES(284,4909,9650.44,'labno',7915,3448.18,'lzzar')
+
+statement ok
+INSERT INTO tab0 VALUES(285,1931,4555.25,'zfhgc',453,646.90,'swrsj')
+
+statement ok
+INSERT INTO tab0 VALUES(286,3165,7084.19,'isqud',7539,2113.46,'odlmw')
+
+statement ok
+INSERT INTO tab0 VALUES(287,6691,3305.36,'oqkrs',3477,5257.55,'ffhjr')
+
+statement ok
+INSERT INTO tab0 VALUES(288,846,8526.5,'ycsal',8446,9843.15,'bfpbt')
+
+statement ok
+INSERT INTO tab0 VALUES(289,5469,3540.96,'vkcnw',9756,4258.64,'ezhvw')
+
+statement ok
+INSERT INTO tab0 VALUES(290,3151,883.21,'zffqk',3097,1747.96,'afwvk')
+
+statement ok
+INSERT INTO tab0 VALUES(291,491,1073.56,'npltu',3786,6669.71,'eprft')
+
+statement ok
+INSERT INTO tab0 VALUES(292,9340,8873.48,'fdkfr',8020,748.27,'rzxch')
+
+statement ok
+INSERT INTO tab0 VALUES(293,8052,9530.32,'kdunh',4123,9319.95,'wkuwq')
+
+statement ok
+INSERT INTO tab0 VALUES(294,2735,5029.37,'kttme',3801,7581.11,'bhqfn')
+
+statement ok
+INSERT INTO tab0 VALUES(295,8503,347.6,'hyues',3388,6847.24,'yofhi')
+
+statement ok
+INSERT INTO tab0 VALUES(296,722,9695.3,'jwchq',5094,793.16,'lujtr')
+
+statement ok
+INSERT INTO tab0 VALUES(297,6263,2776.26,'ztkcw',8261,1708.8,'dgvbf')
+
+statement ok
+INSERT INTO tab0 VALUES(298,4748,1028.24,'yfmsb',610,6744.76,'abpjy')
+
+statement ok
+INSERT INTO tab0 VALUES(299,9808,3879.5,'igvzf',9489,4167.64,'dltye')
+
+statement ok
+INSERT INTO tab0 VALUES(300,325,4996.49,'algxf',3125,9606.92,'cqbzx')
+
+statement ok
+INSERT INTO tab0 VALUES(301,1683,8533.21,'ganop',1877,2304.75,'tdlyq')
+
+statement ok
+INSERT INTO tab0 VALUES(302,7023,5382.87,'mcahe',9479,1365.29,'wvwov')
+
+statement ok
+INSERT INTO tab0 VALUES(303,8490,9425.19,'rphuo',4296,2008.89,'tdrcq')
+
+statement ok
+INSERT INTO tab0 VALUES(304,8480,3780.16,'gptiu',571,1817.18,'szkil')
+
+statement ok
+INSERT INTO tab0 VALUES(305,896,7055.9,'mifta',9678,6985.20,'zejso')
+
+statement ok
+INSERT INTO tab0 VALUES(306,2392,9596.79,'hhpsf',1366,8572.55,'zigoy')
+
+statement ok
+INSERT INTO tab0 VALUES(307,3629,9737.66,'snosn',5017,8750.48,'hzven')
+
+statement ok
+INSERT INTO tab0 VALUES(308,520,50.84,'qmbgg',889,7053.3,'bxkud')
+
+statement ok
+INSERT INTO tab0 VALUES(309,5482,3596.32,'kkzad',1370,6631.17,'qbqaa')
+
+statement ok
+INSERT INTO tab0 VALUES(310,8687,173.6,'ihwxf',2229,495.90,'huaqk')
+
+statement ok
+INSERT INTO tab0 VALUES(311,9309,2570.13,'ncjgk',3858,7770.39,'wxpze')
+
+statement ok
+INSERT INTO tab0 VALUES(312,6777,2811.83,'jvcwz',2535,9945.9,'fwpxn')
+
+statement ok
+INSERT INTO tab0 VALUES(313,2025,8410.82,'eqydl',1662,7122.89,'zwwzp')
+
+statement ok
+INSERT INTO tab0 VALUES(314,8739,8619.22,'waajx',3022,4263.20,'gzwoy')
+
+statement ok
+INSERT INTO tab0 VALUES(315,4610,678.77,'nxcow',8027,7449.11,'zgwzk')
+
+statement ok
+INSERT INTO tab0 VALUES(316,2582,6066.94,'zuhww',8966,121.48,'xwxsn')
+
+statement ok
+INSERT INTO tab0 VALUES(317,2105,6750.3,'pupny',260,9333.11,'wgggi')
+
+statement ok
+INSERT INTO tab0 VALUES(318,381,1435.34,'vwtzj',9706,2004.83,'sebpt')
+
+statement ok
+INSERT INTO tab0 VALUES(319,3615,1814.27,'rzmeh',9731,1165.63,'rxzbo')
+
+statement ok
+INSERT INTO tab0 VALUES(320,8269,8820.45,'pbomh',8641,2210.80,'gkxqp')
+
+statement ok
+INSERT INTO tab0 VALUES(321,2306,8871.85,'webxd',1871,9147.5,'nhizv')
+
+statement ok
+INSERT INTO tab0 VALUES(322,6444,127.95,'mwfgf',3235,848.63,'ccimo')
+
+statement ok
+INSERT INTO tab0 VALUES(323,5406,8734.79,'myxei',6176,7296.43,'nhvpk')
+
+statement ok
+INSERT INTO tab0 VALUES(324,9168,5076.17,'uvjje',5014,5840.17,'ynnvr')
+
+statement ok
+INSERT INTO tab0 VALUES(325,4208,28.73,'trvrc',6202,7441.46,'urhud')
+
+statement ok
+INSERT INTO tab0 VALUES(326,4761,1198.10,'tjccr',9567,2922.96,'jzynn')
+
+statement ok
+INSERT INTO tab0 VALUES(327,4065,9189.0,'yuceh',9569,9222.50,'nfumh')
+
+statement ok
+INSERT INTO tab0 VALUES(328,5611,3838.39,'suqvv',6545,5642.19,'drhrf')
+
+statement ok
+INSERT INTO tab0 VALUES(329,4395,471.58,'knaqg',7960,94.57,'xmrvv')
+
+statement ok
+INSERT INTO tab0 VALUES(330,8166,6152.35,'zipah',9660,5357.70,'xqpmj')
+
+statement ok
+INSERT INTO tab0 VALUES(331,8675,5936.9,'ncjfy',7119,5322.33,'fbrcc')
+
+statement ok
+INSERT INTO tab0 VALUES(332,2932,9110.92,'ydume',6689,1242.98,'mwehd')
+
+statement ok
+INSERT INTO tab0 VALUES(333,4447,5457.82,'qoder',6852,7985.11,'sjrta')
+
+statement ok
+INSERT INTO tab0 VALUES(334,4486,1494.73,'agjzg',9470,282.20,'qgppg')
+
+statement ok
+INSERT INTO tab0 VALUES(335,3316,6725.72,'eypxn',1031,8974.90,'rtxjb')
+
+statement ok
+INSERT INTO tab0 VALUES(336,1462,9896.5,'pptnq',3904,7272.15,'fpsdx')
+
+statement ok
+INSERT INTO tab0 VALUES(337,948,5240.38,'qdhbw',7586,6994.33,'llwsf')
+
+statement ok
+INSERT INTO tab0 VALUES(338,6557,8726.81,'eaqjd',9954,4823.32,'zqrsx')
+
+statement ok
+INSERT INTO tab0 VALUES(339,7072,4313.6,'lybiu',8512,8558.69,'kpira')
+
+statement ok
+INSERT INTO tab0 VALUES(340,6532,201.59,'hhzta',1646,3359.81,'xxwgm')
+
+statement ok
+INSERT INTO tab0 VALUES(341,5479,5072.68,'cazqu',9868,7998.95,'yikio')
+
+statement ok
+INSERT INTO tab0 VALUES(342,2210,4353.63,'jbbed',7069,1112.42,'wzazn')
+
+statement ok
+INSERT INTO tab0 VALUES(343,4024,6454.81,'fbnaa',1771,7453.71,'mojwj')
+
+statement ok
+INSERT INTO tab0 VALUES(344,8475,9027.83,'bxkhu',8373,4132.58,'uhdei')
+
+statement ok
+INSERT INTO tab0 VALUES(345,4622,5209.65,'iohsa',8405,6877.22,'mewto')
+
+statement ok
+INSERT INTO tab0 VALUES(346,4278,9879.73,'yivww',1772,6277.37,'rclgu')
+
+statement ok
+INSERT INTO tab0 VALUES(347,3254,5900.11,'ayicy',8013,4036.42,'lyukv')
+
+statement ok
+INSERT INTO tab0 VALUES(348,2624,378.56,'pslwu',7542,9220.55,'nsmwi')
+
+statement ok
+INSERT INTO tab0 VALUES(349,9960,904.72,'zourn',2904,4510.87,'wpjpi')
+
+statement ok
+INSERT INTO tab0 VALUES(350,589,1807.18,'rhpjm',21,2447.53,'ifdux')
+
+statement ok
+INSERT INTO tab0 VALUES(351,8844,407.66,'wqgdw',9446,1688.82,'irbdu')
+
+statement ok
+INSERT INTO tab0 VALUES(352,9310,3259.10,'yizrk',7610,3253.35,'grmxz')
+
+statement ok
+INSERT INTO tab0 VALUES(353,8076,2410.79,'iiniu',8072,6775.14,'jsobl')
+
+statement ok
+INSERT INTO tab0 VALUES(354,3980,1642.51,'awoeo',2772,6750.75,'hcxio')
+
+statement ok
+INSERT INTO tab0 VALUES(355,9877,2727.62,'erqfn',3277,8787.39,'qczmb')
+
+statement ok
+INSERT INTO tab0 VALUES(356,3863,1674.23,'syolm',2034,5859.9,'qgbhf')
+
+statement ok
+INSERT INTO tab0 VALUES(357,545,4982.30,'cqazw',3617,4552.77,'uepty')
+
+statement ok
+INSERT INTO tab0 VALUES(358,2281,5888.77,'umlfh',5983,1315.40,'kyxez')
+
+statement ok
+INSERT INTO tab0 VALUES(359,433,614.67,'ydhxe',1713,8712.13,'ldyiy')
+
+statement ok
+INSERT INTO tab0 VALUES(360,6619,4626.26,'ahajm',9270,1667.37,'wwsnm')
+
+statement ok
+INSERT INTO tab0 VALUES(361,3958,8874.18,'nxjmh',4246,3720.98,'jcavk')
+
+statement ok
+INSERT INTO tab0 VALUES(362,8324,6047.51,'iciyh',611,3273.35,'eozbw')
+
+statement ok
+INSERT INTO tab0 VALUES(363,9597,6824.97,'qpmip',1961,9841.51,'icwag')
+
+statement ok
+INSERT INTO tab0 VALUES(364,2908,6120.99,'moudg',2777,305.32,'pomqt')
+
+statement ok
+INSERT INTO tab0 VALUES(365,9892,9340.84,'hvdea',9665,5156.53,'zbyxx')
+
+statement ok
+INSERT INTO tab0 VALUES(366,9941,8626.79,'mdair',2610,4750.94,'kehgj')
+
+statement ok
+INSERT INTO tab0 VALUES(367,1448,9109.22,'hcbzz',6227,5555.52,'gxanj')
+
+statement ok
+INSERT INTO tab0 VALUES(368,3061,5159.71,'fjwzf',1012,6404.53,'zuvcl')
+
+statement ok
+INSERT INTO tab0 VALUES(369,4931,6632.21,'qvjwo',4581,4741.63,'xhbdb')
+
+statement ok
+INSERT INTO tab0 VALUES(370,9965,5126.15,'qopvc',2941,2877.5,'qoqnf')
+
+statement ok
+INSERT INTO tab0 VALUES(371,5070,223.57,'igiae',1720,4231.65,'uxjeb')
+
+statement ok
+INSERT INTO tab0 VALUES(372,2412,5747.22,'tzqqe',7427,9591.12,'sqsam')
+
+statement ok
+INSERT INTO tab0 VALUES(373,657,6007.71,'iqpxy',8702,3354.4,'wimex')
+
+statement ok
+INSERT INTO tab0 VALUES(374,6226,2052.64,'puujs',7559,9781.3,'rygep')
+
+statement ok
+INSERT INTO tab0 VALUES(375,4545,7921.71,'tbbzk',646,9249.89,'aafxr')
+
+statement ok
+INSERT INTO tab0 VALUES(376,1292,6888.82,'gbbfo',486,4496.71,'ynsvj')
+
+statement ok
+INSERT INTO tab0 VALUES(377,3651,7716.27,'ppxcs',6734,6872.98,'fitez')
+
+statement ok
+INSERT INTO tab0 VALUES(378,1558,909.81,'uuuld',7422,2593.75,'zcwyf')
+
+statement ok
+INSERT INTO tab0 VALUES(379,8954,4956.80,'adozl',211,8988.72,'lomba')
+
+statement ok
+INSERT INTO tab0 VALUES(380,5033,2586.32,'hunmh',3642,747.40,'imtpa')
+
+statement ok
+INSERT INTO tab0 VALUES(381,5495,7015.32,'dovtv',8385,6175.19,'sxbtk')
+
+statement ok
+INSERT INTO tab0 VALUES(382,3792,8199.71,'zyfzm',8486,3441.56,'mhscg')
+
+statement ok
+INSERT INTO tab0 VALUES(383,2379,9082.52,'cnrpn',2624,6826.13,'cmmpk')
+
+statement ok
+INSERT INTO tab0 VALUES(384,3968,1844.0,'axaqr',5355,2973.80,'baivx')
+
+statement ok
+INSERT INTO tab0 VALUES(385,2772,4157.76,'euluu',8361,7142.91,'rgzct')
+
+statement ok
+INSERT INTO tab0 VALUES(386,5760,5428.88,'pgilk',1709,9454.33,'pfokl')
+
+statement ok
+INSERT INTO tab0 VALUES(387,3903,3053.5,'nuswk',5090,1142.60,'ncdwr')
+
+statement ok
+INSERT INTO tab0 VALUES(388,3428,8668.68,'znxkr',9077,805.3,'temoy')
+
+statement ok
+INSERT INTO tab0 VALUES(389,7063,4396.4,'lcilq',6370,654.88,'wxrtb')
+
+statement ok
+INSERT INTO tab0 VALUES(390,5294,9097.38,'mcutb',3048,2760.43,'feqdy')
+
+statement ok
+INSERT INTO tab0 VALUES(391,7607,4623.5,'galkj',9819,5315.12,'uiute')
+
+statement ok
+INSERT INTO tab0 VALUES(392,3745,2060.64,'ijeyq',3270,8869.70,'qjsgp')
+
+statement ok
+INSERT INTO tab0 VALUES(393,4951,7985.7,'fvmqx',7120,2584.33,'patzx')
+
+statement ok
+INSERT INTO tab0 VALUES(394,5227,713.75,'ymtla',3460,489.70,'uxscm')
+
+statement ok
+INSERT INTO tab0 VALUES(395,2574,6546.71,'stege',4015,7725.18,'lnhrr')
+
+statement ok
+INSERT INTO tab0 VALUES(396,251,6025.68,'qqgzl',1389,6795.92,'jryzu')
+
+statement ok
+INSERT INTO tab0 VALUES(397,8018,180.27,'eumpo',314,3817.0,'qghik')
+
+statement ok
+INSERT INTO tab0 VALUES(398,3390,6778.5,'wuxkm',8900,4770.52,'eqzmf')
+
+statement ok
+INSERT INTO tab0 VALUES(399,2886,6575.69,'yasbb',9886,1750.76,'mpano')
+
+statement ok
+INSERT INTO tab0 VALUES(400,3279,9566.12,'azbsm',1891,9212.30,'bosfz')
+
+statement ok
+INSERT INTO tab0 VALUES(401,2846,1233.58,'oikfd',663,228.12,'hszac')
+
+statement ok
+INSERT INTO tab0 VALUES(402,2615,8797.82,'palcc',327,2731.74,'wdfcw')
+
+statement ok
+INSERT INTO tab0 VALUES(403,7624,7466.18,'kmkvu',4639,5769.35,'mwxro')
+
+statement ok
+INSERT INTO tab0 VALUES(404,8160,6688.73,'cqzwq',8233,5750.95,'lazae')
+
+statement ok
+INSERT INTO tab0 VALUES(405,1015,6399.41,'cevvp',7872,2699.43,'jawpb')
+
+statement ok
+INSERT INTO tab0 VALUES(406,736,3273.10,'zoanx',3699,6502.72,'srsfr')
+
+statement ok
+INSERT INTO tab0 VALUES(407,871,6971.83,'ccafq',482,3160.94,'lgfac')
+
+statement ok
+INSERT INTO tab0 VALUES(408,5228,6394.83,'xharh',8873,1036.48,'qoixs')
+
+statement ok
+INSERT INTO tab0 VALUES(409,9110,5932.68,'assgn',6650,7106.16,'dipiv')
+
+statement ok
+INSERT INTO tab0 VALUES(410,582,1710.46,'kiwcq',9971,3211.33,'eadpg')
+
+statement ok
+INSERT INTO tab0 VALUES(411,1709,7844.84,'lmxgj',4621,2305.1,'ycxzy')
+
+statement ok
+INSERT INTO tab0 VALUES(412,9811,2688.21,'dcptj',7267,4700.1,'ifqwq')
+
+statement ok
+INSERT INTO tab0 VALUES(413,8711,5084.83,'attuw',6702,4330.6,'kfito')
+
+statement ok
+INSERT INTO tab0 VALUES(414,9987,612.94,'svqtj',5101,4987.93,'djtmw')
+
+statement ok
+INSERT INTO tab0 VALUES(415,4219,7840.86,'lsunf',9263,6578.55,'aihkk')
+
+statement ok
+INSERT INTO tab0 VALUES(416,2245,4575.17,'vupje',1872,1371.15,'rlmkj')
+
+statement ok
+INSERT INTO tab0 VALUES(417,6401,4112.77,'kowhe',2736,249.36,'lwpat')
+
+statement ok
+INSERT INTO tab0 VALUES(418,1782,1484.8,'fzmat',45,8959.38,'amhse')
+
+statement ok
+INSERT INTO tab0 VALUES(419,7485,9712.8,'pibcy',1616,4361.4,'fhhti')
+
+statement ok
+INSERT INTO tab0 VALUES(420,7860,6057.51,'qnnfr',6145,677.0,'ihvpu')
+
+statement ok
+INSERT INTO tab0 VALUES(421,3762,8267.94,'vasck',4459,5742.80,'awpwm')
+
+statement ok
+INSERT INTO tab0 VALUES(422,3800,828.94,'vfdty',762,7257.4,'uqbmj')
+
+statement ok
+INSERT INTO tab0 VALUES(423,5587,1214.17,'wlmpw',3886,9033.48,'ovfvb')
+
+statement ok
+INSERT INTO tab0 VALUES(424,6989,6140.52,'qzfnf',8544,7247.18,'nffxl')
+
+statement ok
+INSERT INTO tab0 VALUES(425,7376,7805.24,'ojhbd',6578,6688.60,'miyij')
+
+statement ok
+INSERT INTO tab0 VALUES(426,8873,149.6,'wmuno',8207,7008.77,'uptpe')
+
+statement ok
+INSERT INTO tab0 VALUES(427,7608,5101.30,'tnjbr',3280,8973.34,'pkzcj')
+
+statement ok
+INSERT INTO tab0 VALUES(428,4963,8826.1,'kjeyr',2526,711.80,'vgnjf')
+
+statement ok
+INSERT INTO tab0 VALUES(429,8824,7978.12,'imflj',8800,3966.52,'pyscl')
+
+statement ok
+INSERT INTO tab0 VALUES(430,4832,5951.50,'efbes',8338,342.93,'ypqhu')
+
+statement ok
+INSERT INTO tab0 VALUES(431,7630,9125.15,'fsncq',2006,7559.62,'jvxkp')
+
+statement ok
+INSERT INTO tab0 VALUES(432,2115,3120.28,'ckisl',6546,5698.47,'mwjnp')
+
+statement ok
+INSERT INTO tab0 VALUES(433,4690,9042.48,'irldo',5832,3455.78,'ruohi')
+
+statement ok
+INSERT INTO tab0 VALUES(434,4510,9738.80,'didfc',2113,4388.39,'sjkjx')
+
+statement ok
+INSERT INTO tab0 VALUES(435,4734,6042.88,'sphuo',7271,3170.80,'kmxep')
+
+statement ok
+INSERT INTO tab0 VALUES(436,3776,3025.12,'gfbok',4064,1835.30,'ccrim')
+
+statement ok
+INSERT INTO tab0 VALUES(437,6554,6250.76,'isqlt',7380,6033.12,'mmopa')
+
+statement ok
+INSERT INTO tab0 VALUES(438,5738,8013.1,'ohuqu',5488,1275.50,'aejbs')
+
+statement ok
+INSERT INTO tab0 VALUES(439,3004,3604.18,'gdkrr',1280,9185.86,'ugjhr')
+
+statement ok
+INSERT INTO tab0 VALUES(440,280,7546.84,'boiqz',3534,3753.91,'xlyjj')
+
+statement ok
+INSERT INTO tab0 VALUES(441,999,9856.88,'oyuel',8154,7580.78,'hekdd')
+
+statement ok
+INSERT INTO tab0 VALUES(442,1349,2281.68,'wacvk',9419,8131.13,'fufew')
+
+statement ok
+INSERT INTO tab0 VALUES(443,1520,4566.22,'izgws',1243,3984.29,'zocdq')
+
+statement ok
+INSERT INTO tab0 VALUES(444,6957,687.23,'bopra',8416,1080.40,'nxfqe')
+
+statement ok
+INSERT INTO tab0 VALUES(445,9608,5112.26,'semsq',7857,8975.49,'xndnt')
+
+statement ok
+INSERT INTO tab0 VALUES(446,9175,9046.86,'wzute',9864,7085.64,'hlgzr')
+
+statement ok
+INSERT INTO tab0 VALUES(447,4366,6681.67,'weoyz',9365,944.9,'cfmqu')
+
+statement ok
+INSERT INTO tab0 VALUES(448,4140,1451.59,'kzuwx',7165,8444.39,'cyyqi')
+
+statement ok
+INSERT INTO tab0 VALUES(449,8961,2274.82,'asuwx',1199,6095.49,'rpkyl')
+
+statement ok
+INSERT INTO tab0 VALUES(450,2048,9810.9,'xcaxr',7781,5267.88,'pxefs')
+
+statement ok
+INSERT INTO tab0 VALUES(451,622,2704.71,'jhszf',2853,8445.73,'rpldz')
+
+statement ok
+INSERT INTO tab0 VALUES(452,7160,3842.71,'qyhyn',3238,5476.99,'jpckv')
+
+statement ok
+INSERT INTO tab0 VALUES(453,641,6596.0,'fjfye',7886,9821.52,'hbjzg')
+
+statement ok
+INSERT INTO tab0 VALUES(454,7799,1079.44,'wvnfa',9125,4806.23,'bkfdg')
+
+statement ok
+INSERT INTO tab0 VALUES(455,4372,389.1,'vjloq',3916,9866.20,'sqhno')
+
+statement ok
+INSERT INTO tab0 VALUES(456,6351,6864.91,'wdbcg',5093,6803.80,'kkflc')
+
+statement ok
+INSERT INTO tab0 VALUES(457,1231,8332.71,'onwuz',2625,6032.81,'daowu')
+
+statement ok
+INSERT INTO tab0 VALUES(458,9262,4356.44,'bcldw',4856,2829.54,'dreoz')
+
+statement ok
+INSERT INTO tab0 VALUES(459,4697,2489.74,'tzdtc',9758,3585.99,'urxgh')
+
+statement ok
+INSERT INTO tab0 VALUES(460,7044,4522.97,'tvnbz',6187,2055.95,'zhhuc')
+
+statement ok
+INSERT INTO tab0 VALUES(461,2311,2735.38,'txgsj',5123,5605.10,'yceec')
+
+statement ok
+INSERT INTO tab0 VALUES(462,4267,6145.14,'kimqi',927,1466.18,'sbgsc')
+
+statement ok
+INSERT INTO tab0 VALUES(463,5679,6758.57,'afndu',2589,2982.9,'xpreo')
+
+statement ok
+INSERT INTO tab0 VALUES(464,9570,5819.20,'jpqzd',4976,5860.3,'euvyf')
+
+statement ok
+INSERT INTO tab0 VALUES(465,465,59.92,'avmpv',87,4420.62,'alvbt')
+
+statement ok
+INSERT INTO tab0 VALUES(466,5647,7950.10,'emuec',8298,7846.99,'ffejg')
+
+statement ok
+INSERT INTO tab0 VALUES(467,6399,5950.69,'fpyvn',9614,6436.98,'qtlrd')
+
+statement ok
+INSERT INTO tab0 VALUES(468,9261,4758.40,'itvpo',4919,7848.18,'sxtxm')
+
+statement ok
+INSERT INTO tab0 VALUES(469,7274,5560.78,'cebsj',7225,3357.11,'drpdv')
+
+statement ok
+INSERT INTO tab0 VALUES(470,1234,6275.35,'habrh',2926,4099.36,'okgus')
+
+statement ok
+INSERT INTO tab0 VALUES(471,942,7820.76,'gfgjm',3041,7325.64,'acprj')
+
+statement ok
+INSERT INTO tab0 VALUES(472,6451,344.86,'rwzcq',4471,2647.98,'seqgh')
+
+statement ok
+INSERT INTO tab0 VALUES(473,9320,9486.86,'gfcym',1244,8293.82,'qxcqx')
+
+statement ok
+INSERT INTO tab0 VALUES(474,3860,2623.46,'cvmqm',5766,7352.13,'dletc')
+
+statement ok
+INSERT INTO tab0 VALUES(475,8387,5120.96,'qqqvm',76,4028.57,'oxaob')
+
+statement ok
+INSERT INTO tab0 VALUES(476,6471,6581.38,'cfpfg',7089,9886.56,'wnlyp')
+
+statement ok
+INSERT INTO tab0 VALUES(477,8185,7097.60,'dudoe',1848,108.47,'hunda')
+
+statement ok
+INSERT INTO tab0 VALUES(478,1357,3499.47,'kjszw',2778,9735.67,'xnfor')
+
+statement ok
+INSERT INTO tab0 VALUES(479,2818,5605.96,'jxavt',2928,9924.74,'jdbeo')
+
+statement ok
+INSERT INTO tab0 VALUES(480,9653,2472.26,'rlndu',1231,4195.53,'inqnw')
+
+statement ok
+INSERT INTO tab0 VALUES(481,451,8645.91,'aeelz',3748,4680.29,'jlktv')
+
+statement ok
+INSERT INTO tab0 VALUES(482,6558,408.93,'ppzdb',4916,8376.85,'glcyd')
+
+statement ok
+INSERT INTO tab0 VALUES(483,3317,2030.94,'wqrlc',8802,3392.66,'xcozq')
+
+statement ok
+INSERT INTO tab0 VALUES(484,1329,2023.30,'zuhoe',355,5202.0,'udgaa')
+
+statement ok
+INSERT INTO tab0 VALUES(485,7701,9384.22,'qfvxx',6649,2890.4,'qlxfi')
+
+statement ok
+INSERT INTO tab0 VALUES(486,7292,9850.88,'nyydf',8138,5405.1,'ckcdq')
+
+statement ok
+INSERT INTO tab0 VALUES(487,3963,2146.57,'dvjft',9907,7812.29,'gsyws')
+
+statement ok
+INSERT INTO tab0 VALUES(488,1831,4235.81,'dwtst',2916,7535.57,'kwuxo')
+
+statement ok
+INSERT INTO tab0 VALUES(489,6517,9567.46,'efeum',5258,614.94,'maqod')
+
+statement ok
+INSERT INTO tab0 VALUES(490,6394,3333.88,'oitjy',3402,7951.3,'wexzx')
+
+statement ok
+INSERT INTO tab0 VALUES(491,3841,8710.2,'rclgl',3448,1561.14,'zjbem')
+
+statement ok
+INSERT INTO tab0 VALUES(492,6491,3114.57,'syjhk',2373,825.37,'utfgj')
+
+statement ok
+INSERT INTO tab0 VALUES(493,8479,4449.5,'lzrkq',9283,8733.72,'pssng')
+
+statement ok
+INSERT INTO tab0 VALUES(494,1695,7359.98,'nfdvj',6665,8142.26,'mavsc')
+
+statement ok
+INSERT INTO tab0 VALUES(495,7033,9474.97,'llrdm',1633,8020.18,'cxhuj')
+
+statement ok
+INSERT INTO tab0 VALUES(496,5641,7663.88,'xqbmn',7181,9699.0,'fgbnx')
+
+statement ok
+INSERT INTO tab0 VALUES(497,171,4284.90,'pwmpz',3430,3125.64,'isufi')
+
+statement ok
+INSERT INTO tab0 VALUES(498,6027,3432.71,'uohyd',8883,3107.56,'irobz')
+
+statement ok
+INSERT INTO tab0 VALUES(499,2620,7192.59,'xnlyq',1669,5566.90,'dslee')
+
+statement ok
+INSERT INTO tab0 VALUES(500,4614,1886.55,'fehaa',798,3787.57,'gkgud')
+
+statement ok
+INSERT INTO tab0 VALUES(501,3174,4324.46,'kqdrm',7407,4670.41,'loxgk')
+
+statement ok
+INSERT INTO tab0 VALUES(502,7223,8056.14,'ftvrk',6013,4975.30,'iljir')
+
+statement ok
+INSERT INTO tab0 VALUES(503,4685,9619.56,'cimgc',5763,7578.29,'drzee')
+
+statement ok
+INSERT INTO tab0 VALUES(504,3740,4787.88,'ugycf',1681,7718.70,'crinm')
+
+statement ok
+INSERT INTO tab0 VALUES(505,4071,4825.63,'bpqmq',5920,9245.29,'fmtvc')
+
+statement ok
+INSERT INTO tab0 VALUES(506,8114,2736.82,'ctznv',9013,875.35,'yzziy')
+
+statement ok
+INSERT INTO tab0 VALUES(507,2309,9510.5,'klcer',1123,2436.83,'resfg')
+
+statement ok
+INSERT INTO tab0 VALUES(508,8353,370.66,'gbnkb',3287,1120.49,'kchuy')
+
+statement ok
+INSERT INTO tab0 VALUES(509,4443,1041.85,'iqpil',8677,7731.0,'malnj')
+
+statement ok
+INSERT INTO tab0 VALUES(510,6531,3973.78,'jakjl',3840,2937.5,'bqrfy')
+
+statement ok
+INSERT INTO tab0 VALUES(511,9575,4613.73,'xydfq',9953,3519.52,'tczdr')
+
+statement ok
+INSERT INTO tab0 VALUES(512,8784,7639.19,'rgwey',4073,8622.57,'kdqby')
+
+statement ok
+INSERT INTO tab0 VALUES(513,873,3224.3,'kzbcl',385,6005.78,'njonx')
+
+statement ok
+INSERT INTO tab0 VALUES(514,5309,3275.58,'jlhsz',1450,8287.27,'bcdwk')
+
+statement ok
+INSERT INTO tab0 VALUES(515,5564,7688.77,'ajxnr',9464,9205.83,'xtsji')
+
+statement ok
+INSERT INTO tab0 VALUES(516,365,598.28,'rbmbr',7496,9854.3,'rwijj')
+
+statement ok
+INSERT INTO tab0 VALUES(517,4942,6629.61,'anocq',749,4947.36,'ccgms')
+
+statement ok
+INSERT INTO tab0 VALUES(518,2277,7142.27,'xnjmo',7801,9057.37,'xrrmm')
+
+statement ok
+INSERT INTO tab0 VALUES(519,4359,6487.86,'tveqd',1860,2873.75,'fchul')
+
+statement ok
+INSERT INTO tab0 VALUES(520,3429,8251.21,'iegis',2014,9444.49,'krxgt')
+
+statement ok
+INSERT INTO tab0 VALUES(521,3233,1510.50,'lneco',4479,436.0,'nkdmk')
+
+statement ok
+INSERT INTO tab0 VALUES(522,269,7080.39,'jeset',3849,2375.22,'zazwx')
+
+statement ok
+INSERT INTO tab0 VALUES(523,5042,3764.16,'ovhqt',4349,2902.77,'fmnvy')
+
+statement ok
+INSERT INTO tab0 VALUES(524,3307,4602.79,'htqrx',1082,7022.6,'irhsa')
+
+statement ok
+INSERT INTO tab0 VALUES(525,7327,3121.13,'jvmne',1281,3350.41,'pvifa')
+
+statement ok
+INSERT INTO tab0 VALUES(526,7116,9593.1,'pwcsu',5552,369.17,'fnjhv')
+
+statement ok
+INSERT INTO tab0 VALUES(527,1696,7272.35,'kmadt',9139,2672.88,'yuuic')
+
+statement ok
+INSERT INTO tab0 VALUES(528,332,8652.32,'qmohq',3159,7215.36,'nibgp')
+
+statement ok
+INSERT INTO tab0 VALUES(529,3808,1716.42,'bsmda',5860,9569.83,'pokvd')
+
+statement ok
+INSERT INTO tab0 VALUES(530,5651,6185.65,'ylrof',3867,169.9,'bunma')
+
+statement ok
+INSERT INTO tab0 VALUES(531,3397,9767.60,'uisfy',3436,560.56,'xjzrs')
+
+statement ok
+INSERT INTO tab0 VALUES(532,9834,4410.59,'zolvu',1701,9653.49,'spdyl')
+
+statement ok
+INSERT INTO tab0 VALUES(533,4255,2549.80,'eauhb',7925,9972.2,'hfoyw')
+
+statement ok
+INSERT INTO tab0 VALUES(534,3705,3358.38,'gldqf',4750,3903.33,'jfrtq')
+
+statement ok
+INSERT INTO tab0 VALUES(535,4235,9001.59,'sldkn',9447,9946.80,'ecmvd')
+
+statement ok
+INSERT INTO tab0 VALUES(536,2148,876.91,'ksgpu',5166,8965.6,'aabfz')
+
+statement ok
+INSERT INTO tab0 VALUES(537,5252,5873.19,'ackvw',2184,437.19,'axjss')
+
+statement ok
+INSERT INTO tab0 VALUES(538,4111,2618.74,'yuqmk',9160,8700.77,'plpvj')
+
+statement ok
+INSERT INTO tab0 VALUES(539,3287,7728.48,'qkpvh',4380,9209.9,'hjdcf')
+
+statement ok
+INSERT INTO tab0 VALUES(540,2603,2055.7,'ncjfm',7009,4780.20,'dqvef')
+
+statement ok
+INSERT INTO tab0 VALUES(541,8381,6942.1,'grybl',8342,1842.8,'ngytu')
+
+statement ok
+INSERT INTO tab0 VALUES(542,4700,469.78,'uwwzy',3052,6690.75,'rtozl')
+
+statement ok
+INSERT INTO tab0 VALUES(543,4638,3703.97,'ofycn',440,1728.40,'hchlf')
+
+statement ok
+INSERT INTO tab0 VALUES(544,1534,6952.38,'kjuyg',5689,1726.50,'gwxgn')
+
+statement ok
+INSERT INTO tab0 VALUES(545,224,6011.19,'edkuh',1107,68.94,'dkygr')
+
+statement ok
+INSERT INTO tab0 VALUES(546,8304,8413.5,'drapl',7384,5000.15,'zxham')
+
+statement ok
+INSERT INTO tab0 VALUES(547,7369,9679.20,'xnley',4837,5881.23,'spwgz')
+
+statement ok
+INSERT INTO tab0 VALUES(548,4270,9570.63,'suwma',4662,9433.8,'ztiox')
+
+statement ok
+INSERT INTO tab0 VALUES(549,2363,8333.16,'lhkkj',186,5994.49,'qzlul')
+
+statement ok
+INSERT INTO tab0 VALUES(550,2756,2955.60,'yquha',8113,5761.32,'lezeu')
+
+statement ok
+INSERT INTO tab0 VALUES(551,5561,3410.87,'riytv',9775,5048.57,'pufjw')
+
+statement ok
+INSERT INTO tab0 VALUES(552,1146,8912.12,'oapzc',2386,2530.55,'nvnnu')
+
+statement ok
+INSERT INTO tab0 VALUES(553,1380,4162.83,'jkysg',286,5497.98,'hcboq')
+
+statement ok
+INSERT INTO tab0 VALUES(554,888,5599.98,'lrioj',6195,6101.12,'lhlgz')
+
+statement ok
+INSERT INTO tab0 VALUES(555,8298,7651.15,'jgrxy',2463,7607.90,'maefq')
+
+statement ok
+INSERT INTO tab0 VALUES(556,7492,8984.64,'mfjfl',2317,645.3,'nbnfc')
+
+statement ok
+INSERT INTO tab0 VALUES(557,8856,8752.62,'pjqbx',1113,9457.14,'ykzfi')
+
+statement ok
+INSERT INTO tab0 VALUES(558,531,2849.23,'ofiho',7589,8148.92,'zmwmi')
+
+statement ok
+INSERT INTO tab0 VALUES(559,9660,154.70,'yhndo',5107,6938.20,'leerr')
+
+statement ok
+INSERT INTO tab0 VALUES(560,3640,8788.51,'qcdil',2912,8407.11,'eyvei')
+
+statement ok
+INSERT INTO tab0 VALUES(561,1374,2357.48,'kkmfw',7376,3754.21,'vatwd')
+
+statement ok
+INSERT INTO tab0 VALUES(562,4518,6208.91,'qgzzh',3251,9032.58,'kobql')
+
+statement ok
+INSERT INTO tab0 VALUES(563,8730,3674.71,'xbtok',4915,1418.97,'yqaet')
+
+statement ok
+INSERT INTO tab0 VALUES(564,4924,2329.51,'pwibx',7629,5446.93,'cmljk')
+
+statement ok
+INSERT INTO tab0 VALUES(565,516,231.80,'mkbpe',8781,9263.92,'tonec')
+
+statement ok
+INSERT INTO tab0 VALUES(566,680,2181.6,'neyoq',9137,882.45,'rsfzo')
+
+statement ok
+INSERT INTO tab0 VALUES(567,9589,5966.84,'fpfut',4093,4429.18,'chcof')
+
+statement ok
+INSERT INTO tab0 VALUES(568,1673,8610.95,'lfwph',4925,6389.8,'nfvht')
+
+statement ok
+INSERT INTO tab0 VALUES(569,2865,2628.53,'cqkyg',35,1867.51,'aexgu')
+
+statement ok
+INSERT INTO tab0 VALUES(570,1850,2272.23,'nylnh',6206,827.40,'dtchk')
+
+statement ok
+INSERT INTO tab0 VALUES(571,1321,9782.27,'imdxj',9849,4346.33,'lmhgx')
+
+statement ok
+INSERT INTO tab0 VALUES(572,9222,1636.62,'whfsm',8256,867.67,'bcabj')
+
+statement ok
+INSERT INTO tab0 VALUES(573,1,4801.9,'zydre',844,2445.72,'klauh')
+
+statement ok
+INSERT INTO tab0 VALUES(574,5860,2984.48,'pzcui',413,995.80,'uwywd')
+
+statement ok
+INSERT INTO tab0 VALUES(575,8008,2876.68,'guklm',4389,4551.40,'zdzdc')
+
+statement ok
+INSERT INTO tab0 VALUES(576,7901,410.82,'xugnu',6079,3507.33,'xqmcq')
+
+statement ok
+INSERT INTO tab0 VALUES(577,8507,7006.39,'iqgnl',5917,6871.78,'gomwd')
+
+statement ok
+INSERT INTO tab0 VALUES(578,5542,5821.34,'zhduk',2717,8515.49,'awmkl')
+
+statement ok
+INSERT INTO tab0 VALUES(579,8729,8003.23,'lbhmx',4921,3422.88,'hpapr')
+
+statement ok
+INSERT INTO tab0 VALUES(580,3043,8937.36,'dylte',1852,3940.16,'swfmo')
+
+statement ok
+INSERT INTO tab0 VALUES(581,9966,4494.87,'xnjxb',4960,6030.42,'gckel')
+
+statement ok
+INSERT INTO tab0 VALUES(582,8728,7288.88,'qfgor',9074,5516.85,'syafp')
+
+statement ok
+INSERT INTO tab0 VALUES(583,7569,2917.61,'yjpqv',3652,4337.76,'jtuow')
+
+statement ok
+INSERT INTO tab0 VALUES(584,4981,6219.53,'tktqz',4032,6793.76,'rhrro')
+
+statement ok
+INSERT INTO tab0 VALUES(585,957,7521.44,'xxlqo',2680,5797.90,'uelwu')
+
+statement ok
+INSERT INTO tab0 VALUES(586,8249,8887.63,'vtomt',441,9128.73,'iyfcf')
+
+statement ok
+INSERT INTO tab0 VALUES(587,3609,371.98,'dhqzc',7789,5676.51,'uycjp')
+
+statement ok
+INSERT INTO tab0 VALUES(588,9044,6262.13,'gkowc',6076,1695.26,'kwytp')
+
+statement ok
+INSERT INTO tab0 VALUES(589,3066,1340.53,'bpdzx',8784,7054.93,'pmsnf')
+
+statement ok
+INSERT INTO tab0 VALUES(590,1938,7124.65,'livou',2775,1479.50,'sajgm')
+
+statement ok
+INSERT INTO tab0 VALUES(591,931,8119.3,'bwfcx',9537,818.14,'pckyd')
+
+statement ok
+INSERT INTO tab0 VALUES(592,5567,8069.46,'vouqy',6440,3276.27,'cdkfc')
+
+statement ok
+INSERT INTO tab0 VALUES(593,2872,6206.7,'qylwq',7980,5675.76,'actji')
+
+statement ok
+INSERT INTO tab0 VALUES(594,2628,3502.48,'wxdfk',7033,9698.2,'jyfme')
+
+statement ok
+INSERT INTO tab0 VALUES(595,8618,8915.91,'frqbb',6106,8141.11,'hpnrh')
+
+statement ok
+INSERT INTO tab0 VALUES(596,9880,5643.31,'bdxrj',8582,1166.89,'lbeba')
+
+statement ok
+INSERT INTO tab0 VALUES(597,1959,7372.47,'htyot',9973,2544.13,'uruzd')
+
+statement ok
+INSERT INTO tab0 VALUES(598,8149,4524.18,'xwhks',9173,5914.65,'eazbm')
+
+statement ok
+INSERT INTO tab0 VALUES(599,750,513.32,'muskt',9701,1025.43,'yhwll')
+
+statement ok
+INSERT INTO tab0 VALUES(600,2317,7990.99,'atvdu',958,9990.74,'ofquv')
+
+statement ok
+INSERT INTO tab0 VALUES(601,6908,5091.67,'ihrwt',9472,3537.27,'ghjnh')
+
+statement ok
+INSERT INTO tab0 VALUES(602,1334,1696.29,'yfjqk',151,7255.24,'oylta')
+
+statement ok
+INSERT INTO tab0 VALUES(603,6411,5668.41,'ltthv',7531,7847.57,'dngrj')
+
+statement ok
+INSERT INTO tab0 VALUES(604,8209,9112.30,'irzua',7026,9381.92,'enwml')
+
+statement ok
+INSERT INTO tab0 VALUES(605,9301,4619.8,'llfer',6183,9534.91,'dqqpv')
+
+statement ok
+INSERT INTO tab0 VALUES(606,15,1520.87,'vjcup',5924,5851.17,'kauub')
+
+statement ok
+INSERT INTO tab0 VALUES(607,9682,2132.87,'aqogm',1801,1988.52,'vfbfj')
+
+statement ok
+INSERT INTO tab0 VALUES(608,7887,8014.53,'cnivn',5244,3965.6,'jnipi')
+
+statement ok
+INSERT INTO tab0 VALUES(609,5720,6209.63,'wmpia',4814,6415.29,'uuflh')
+
+statement ok
+INSERT INTO tab0 VALUES(610,7024,5500.45,'wgqix',7449,8831.29,'eyvzg')
+
+statement ok
+INSERT INTO tab0 VALUES(611,9645,2660.87,'taljn',9718,1827.77,'qtemi')
+
+statement ok
+INSERT INTO tab0 VALUES(612,6685,8699.48,'xngxe',9067,3372.25,'xezfk')
+
+statement ok
+INSERT INTO tab0 VALUES(613,7748,5114.74,'ifkpu',5071,5055.16,'zkfqu')
+
+statement ok
+INSERT INTO tab0 VALUES(614,193,141.10,'zhshl',684,8323.97,'tatpv')
+
+statement ok
+INSERT INTO tab0 VALUES(615,382,5006.8,'nyegd',3491,740.31,'nzzjn')
+
+statement ok
+INSERT INTO tab0 VALUES(616,4933,172.45,'xjthi',6953,2232.12,'wbjte')
+
+statement ok
+INSERT INTO tab0 VALUES(617,1966,1589.34,'bzrvm',1661,1337.74,'zqhix')
+
+statement ok
+INSERT INTO tab0 VALUES(618,2354,6948.35,'nmlax',6586,1457.6,'nyikm')
+
+statement ok
+INSERT INTO tab0 VALUES(619,976,1924.67,'wzdye',326,7109.62,'cihgu')
+
+statement ok
+INSERT INTO tab0 VALUES(620,7965,6436.25,'rgerw',2360,172.77,'zdmin')
+
+statement ok
+INSERT INTO tab0 VALUES(621,9956,887.85,'uozjd',4292,6138.77,'qamdr')
+
+statement ok
+INSERT INTO tab0 VALUES(622,1339,2420.26,'hfooj',1110,361.92,'mavqk')
+
+statement ok
+INSERT INTO tab0 VALUES(623,5509,1166.33,'tfbav',2429,4313.69,'jpobm')
+
+statement ok
+INSERT INTO tab0 VALUES(624,6112,6495.16,'hvnfe',3742,1823.82,'jxukx')
+
+statement ok
+INSERT INTO tab0 VALUES(625,8301,3263.20,'tijbg',7670,5337.49,'eumhs')
+
+statement ok
+INSERT INTO tab0 VALUES(626,9981,8066.38,'qlfhn',5216,2165.43,'zzybh')
+
+statement ok
+INSERT INTO tab0 VALUES(627,3062,5489.22,'rfhqw',7010,728.0,'xfoej')
+
+statement ok
+INSERT INTO tab0 VALUES(628,4706,4354.99,'jheqe',4559,6811.37,'sjhai')
+
+statement ok
+INSERT INTO tab0 VALUES(629,8582,3970.80,'qbkeu',1502,9814.64,'lmjia')
+
+statement ok
+INSERT INTO tab0 VALUES(630,6110,388.75,'mpdgl',4858,8997.93,'zbzzi')
+
+statement ok
+INSERT INTO tab0 VALUES(631,7716,2644.2,'qzqgp',6271,9736.54,'sbtlu')
+
+statement ok
+INSERT INTO tab0 VALUES(632,4079,9015.4,'bjcff',3266,9768.4,'eamse')
+
+statement ok
+INSERT INTO tab0 VALUES(633,7381,3264.59,'sbdpj',497,5447.45,'rhulg')
+
+statement ok
+INSERT INTO tab0 VALUES(634,2560,890.92,'dqlvv',996,7986.30,'vapdg')
+
+statement ok
+INSERT INTO tab0 VALUES(635,8556,5387.90,'adkbs',7424,9714.79,'imxio')
+
+statement ok
+INSERT INTO tab0 VALUES(636,9563,4483.10,'xfsoe',3322,321.94,'lwjll')
+
+statement ok
+INSERT INTO tab0 VALUES(637,6281,6395.98,'sddqx',4360,3114.65,'suvgl')
+
+statement ok
+INSERT INTO tab0 VALUES(638,7162,6076.95,'lzwzt',9584,1260.88,'ndcvf')
+
+statement ok
+INSERT INTO tab0 VALUES(639,9662,1471.53,'xtjoo',2673,4040.75,'vjmqa')
+
+statement ok
+INSERT INTO tab0 VALUES(640,1491,9763.48,'aozxm',3183,3099.68,'rlltn')
+
+statement ok
+INSERT INTO tab0 VALUES(641,1864,3619.90,'vqkdx',7798,8695.49,'vddyd')
+
+statement ok
+INSERT INTO tab0 VALUES(642,2749,7450.38,'upnfx',1582,5949.55,'legux')
+
+statement ok
+INSERT INTO tab0 VALUES(643,116,3651.10,'sjwxu',9227,1096.90,'tciwa')
+
+statement ok
+INSERT INTO tab0 VALUES(644,5194,8857.97,'bohzz',6306,7732.37,'nsrsk')
+
+statement ok
+INSERT INTO tab0 VALUES(645,5711,191.78,'ujoll',519,3070.70,'uzvdl')
+
+statement ok
+INSERT INTO tab0 VALUES(646,7151,1515.26,'awelj',2944,4183.67,'nifio')
+
+statement ok
+INSERT INTO tab0 VALUES(647,4002,9680.27,'laspt',9292,4259.23,'couvv')
+
+statement ok
+INSERT INTO tab0 VALUES(648,1004,769.88,'bxozc',1148,8848.63,'deptn')
+
+statement ok
+INSERT INTO tab0 VALUES(649,4405,6364.53,'xqria',7229,2116.51,'xknzy')
+
+statement ok
+INSERT INTO tab0 VALUES(650,3202,9776.14,'muzdv',4630,3088.9,'djvex')
+
+statement ok
+INSERT INTO tab0 VALUES(651,400,2310.21,'oiete',75,1907.22,'lcsxg')
+
+statement ok
+INSERT INTO tab0 VALUES(652,4254,9505.99,'rtgpr',1166,6076.55,'fveyv')
+
+statement ok
+INSERT INTO tab0 VALUES(653,9527,7391.59,'ugfep',7636,6712.67,'zbics')
+
+statement ok
+INSERT INTO tab0 VALUES(654,8733,8737.6,'aupfj',2595,4796.18,'fogpb')
+
+statement ok
+INSERT INTO tab0 VALUES(655,3392,9297.61,'bjczh',3783,7421.85,'vqobs')
+
+statement ok
+INSERT INTO tab0 VALUES(656,5275,4067.62,'ywibc',4818,4045.77,'ygxut')
+
+statement ok
+INSERT INTO tab0 VALUES(657,7660,3528.87,'toits',6447,2738.40,'ibwqg')
+
+statement ok
+INSERT INTO tab0 VALUES(658,6577,9901.59,'zvefr',7797,6434.79,'fqhjt')
+
+statement ok
+INSERT INTO tab0 VALUES(659,2061,3395.63,'kqthw',7623,9179.62,'uncrx')
+
+statement ok
+INSERT INTO tab0 VALUES(660,9399,8459.55,'okeah',5559,2384.38,'xiuhh')
+
+statement ok
+INSERT INTO tab0 VALUES(661,386,29.80,'minmj',3369,1073.46,'raggs')
+
+statement ok
+INSERT INTO tab0 VALUES(662,4565,9772.76,'fhmav',6193,131.30,'zwete')
+
+statement ok
+INSERT INTO tab0 VALUES(663,488,2359.94,'ofzif',3803,561.51,'jptog')
+
+statement ok
+INSERT INTO tab0 VALUES(664,6959,1686.9,'obstp',1849,5722.0,'jqiav')
+
+statement ok
+INSERT INTO tab0 VALUES(665,4286,7143.30,'fwwdb',3108,7595.6,'iddbq')
+
+statement ok
+INSERT INTO tab0 VALUES(666,5530,9857.12,'ddrcm',8739,3017.56,'zaqnb')
+
+statement ok
+INSERT INTO tab0 VALUES(667,7757,8940.74,'bsceb',9529,9943.1,'bijfn')
+
+statement ok
+INSERT INTO tab0 VALUES(668,3288,7750.4,'ozkyy',7142,3688.73,'xenyi')
+
+statement ok
+INSERT INTO tab0 VALUES(669,943,128.80,'sbxaw',5372,3183.95,'cypsc')
+
+statement ok
+INSERT INTO tab0 VALUES(670,7304,6653.73,'nvjkv',1394,7220.93,'dixzo')
+
+statement ok
+INSERT INTO tab0 VALUES(671,7948,894.67,'vdwjq',7008,706.10,'znilb')
+
+statement ok
+INSERT INTO tab0 VALUES(672,8713,5657.70,'rxftq',9896,910.20,'tlvpg')
+
+statement ok
+INSERT INTO tab0 VALUES(673,6938,9238.21,'ddsaf',4869,3716.36,'hpgkr')
+
+statement ok
+INSERT INTO tab0 VALUES(674,2716,1670.13,'uhvkk',5113,9869.27,'wntvk')
+
+statement ok
+INSERT INTO tab0 VALUES(675,144,974.93,'jcpzt',3449,1229.28,'qpmss')
+
+statement ok
+INSERT INTO tab0 VALUES(676,8572,9410.85,'nzmyr',3569,7018.51,'okhzo')
+
+statement ok
+INSERT INTO tab0 VALUES(677,3855,9726.98,'hzwld',1303,73.4,'rugsl')
+
+statement ok
+INSERT INTO tab0 VALUES(678,9602,1410.37,'syrbl',5854,3093.95,'awkku')
+
+statement ok
+INSERT INTO tab0 VALUES(679,8426,6934.18,'rrdrq',1055,4890.51,'cjfws')
+
+statement ok
+INSERT INTO tab0 VALUES(680,3194,8015.81,'eyfri',6618,6641.28,'mpjqr')
+
+statement ok
+INSERT INTO tab0 VALUES(681,8274,1847.1,'iwjde',9384,8134.21,'oofvy')
+
+statement ok
+INSERT INTO tab0 VALUES(682,793,7377.0,'ttdum',4574,4021.83,'cdqkj')
+
+statement ok
+INSERT INTO tab0 VALUES(683,1878,1528.60,'ejtlb',7036,69.30,'vhkiz')
+
+statement ok
+INSERT INTO tab0 VALUES(684,7911,5469.37,'gzuro',2499,9407.61,'eaaoo')
+
+statement ok
+INSERT INTO tab0 VALUES(685,1779,854.73,'bqujh',8818,8776.62,'sogih')
+
+statement ok
+INSERT INTO tab0 VALUES(686,4120,6074.6,'rewpt',7230,4782.26,'yoqdk')
+
+statement ok
+INSERT INTO tab0 VALUES(687,4580,2511.86,'xghwh',3599,144.63,'yekyu')
+
+statement ok
+INSERT INTO tab0 VALUES(688,3056,784.84,'wtfdt',9669,9947.11,'udvhq')
+
+statement ok
+INSERT INTO tab0 VALUES(689,950,7002.7,'qpgbb',4311,7879.49,'kyyka')
+
+statement ok
+INSERT INTO tab0 VALUES(690,2416,9006.12,'vcbyv',4779,2505.12,'ayfjo')
+
+statement ok
+INSERT INTO tab0 VALUES(691,5616,2635.13,'hyacb',7950,3495.99,'ylcdz')
+
+statement ok
+INSERT INTO tab0 VALUES(692,3961,7960.0,'plwut',1585,7884.90,'batvx')
+
+statement ok
+INSERT INTO tab0 VALUES(693,7370,5541.45,'vnflk',5572,6321.57,'mimsf')
+
+statement ok
+INSERT INTO tab0 VALUES(694,3513,2677.21,'dzjsv',3177,9318.75,'glpja')
+
+statement ok
+INSERT INTO tab0 VALUES(695,9067,9656.10,'imtrq',2297,3499.36,'xzwvw')
+
+statement ok
+INSERT INTO tab0 VALUES(696,958,6002.16,'otrvy',6705,7855.60,'ccgst')
+
+statement ok
+INSERT INTO tab0 VALUES(697,7621,6729.79,'wuulx',7307,9982.10,'fvkjm')
+
+statement ok
+INSERT INTO tab0 VALUES(698,242,8591.89,'xuall',3383,2351.3,'awmwm')
+
+statement ok
+INSERT INTO tab0 VALUES(699,4013,6325.92,'nkvqv',3846,8537.22,'icnjg')
+
+statement ok
+INSERT INTO tab0 VALUES(700,9378,8913.11,'jxbyg',8487,9482.30,'oliyd')
+
+statement ok
+INSERT INTO tab0 VALUES(701,3285,5820.52,'leoio',9222,9741.80,'jbxaw')
+
+statement ok
+INSERT INTO tab0 VALUES(702,436,3250.20,'ayrau',1353,3732.31,'gmdfe')
+
+statement ok
+INSERT INTO tab0 VALUES(703,4539,399.29,'vvaqv',4805,1986.57,'htnqm')
+
+statement ok
+INSERT INTO tab0 VALUES(704,9554,5697.17,'cozja',5384,7398.62,'rnnbn')
+
+statement ok
+INSERT INTO tab0 VALUES(705,944,3065.56,'wznyv',6026,1476.92,'geoux')
+
+statement ok
+INSERT INTO tab0 VALUES(706,6927,8160.69,'ujmxm',8044,591.45,'jzjct')
+
+statement ok
+INSERT INTO tab0 VALUES(707,9726,4630.36,'tgqsk',2380,2227.89,'igqck')
+
+statement ok
+INSERT INTO tab0 VALUES(708,6817,359.11,'jwxte',857,1231.68,'ahuaw')
+
+statement ok
+INSERT INTO tab0 VALUES(709,2180,3720.34,'tbgqu',7425,6066.18,'runjs')
+
+statement ok
+INSERT INTO tab0 VALUES(710,7547,9825.42,'cnfdq',9413,5056.82,'hsium')
+
+statement ok
+INSERT INTO tab0 VALUES(711,3657,6773.82,'fummw',8779,2637.16,'lnhoh')
+
+statement ok
+INSERT INTO tab0 VALUES(712,1501,1902.25,'hprjb',3362,5610.8,'wiqkq')
+
+statement ok
+INSERT INTO tab0 VALUES(713,3575,8038.77,'lsufy',8126,9391.84,'xajvw')
+
+statement ok
+INSERT INTO tab0 VALUES(714,5127,9748.92,'hiyby',6417,4256.28,'liucz')
+
+statement ok
+INSERT INTO tab0 VALUES(715,5412,9581.84,'taxyx',1209,1595.88,'gxily')
+
+statement ok
+INSERT INTO tab0 VALUES(716,8936,4330.39,'mwuxo',6355,164.93,'uqbfs')
+
+statement ok
+INSERT INTO tab0 VALUES(717,6711,1274.29,'ottag',7836,2329.62,'tofwl')
+
+statement ok
+INSERT INTO tab0 VALUES(718,7501,4432.26,'fgksn',5015,320.18,'rdahm')
+
+statement ok
+INSERT INTO tab0 VALUES(719,9075,808.8,'hyquw',1878,2482.3,'sheru')
+
+statement ok
+INSERT INTO tab0 VALUES(720,9456,6647.81,'zkenc',8294,9521.85,'zqnzo')
+
+statement ok
+INSERT INTO tab0 VALUES(721,8170,3681.82,'kmdwg',1263,758.76,'mlsqz')
+
+statement ok
+INSERT INTO tab0 VALUES(722,7499,5383.97,'gfumz',6159,377.40,'mwtcr')
+
+statement ok
+INSERT INTO tab0 VALUES(723,3726,3208.74,'jebzk',7989,3674.10,'kcqqo')
+
+statement ok
+INSERT INTO tab0 VALUES(724,8391,2857.32,'mkgyn',2635,3311.95,'dkbre')
+
+statement ok
+INSERT INTO tab0 VALUES(725,9535,514.77,'ssncy',8112,5559.99,'xizto')
+
+statement ok
+INSERT INTO tab0 VALUES(726,2954,9102.11,'frtkm',5811,6556.29,'ttfvu')
+
+statement ok
+INSERT INTO tab0 VALUES(727,3449,4536.47,'ytyfw',1752,8553.6,'jddfp')
+
+statement ok
+INSERT INTO tab0 VALUES(728,6074,1963.22,'aoxkg',7837,6162.84,'jkevy')
+
+statement ok
+INSERT INTO tab0 VALUES(729,7386,2025.8,'quzow',3092,2609.56,'hjqjt')
+
+statement ok
+INSERT INTO tab0 VALUES(730,6698,7096.22,'monwr',4926,5986.71,'xqeem')
+
+statement ok
+INSERT INTO tab0 VALUES(731,7325,7544.46,'lgpmz',375,5495.42,'dumts')
+
+statement ok
+INSERT INTO tab0 VALUES(732,7837,7971.31,'garpd',7355,7703.63,'kqvmw')
+
+statement ok
+INSERT INTO tab0 VALUES(733,3308,3469.16,'znboz',5909,2789.20,'lducr')
+
+statement ok
+INSERT INTO tab0 VALUES(734,6563,5868.36,'xhsvq',9461,796.2,'wqwnz')
+
+statement ok
+INSERT INTO tab0 VALUES(735,9436,9987.38,'xtvka',6064,7881.15,'tzbfh')
+
+statement ok
+INSERT INTO tab0 VALUES(736,4012,9883.89,'fmjtp',9647,2563.93,'jqmei')
+
+statement ok
+INSERT INTO tab0 VALUES(737,3880,5100.95,'yeuxw',1271,1975.15,'rvbcv')
+
+statement ok
+INSERT INTO tab0 VALUES(738,5381,6921.8,'vuota',374,8114.9,'aqboy')
+
+statement ok
+INSERT INTO tab0 VALUES(739,8865,4620.39,'vvybs',6025,4089.74,'ucuyc')
+
+statement ok
+INSERT INTO tab0 VALUES(740,9931,1703.75,'oenmm',8170,372.86,'ykfwj')
+
+statement ok
+INSERT INTO tab0 VALUES(741,685,2171.86,'gqtzl',8884,1049.13,'taobi')
+
+statement ok
+INSERT INTO tab0 VALUES(742,985,6760.41,'dosqa',3621,70.28,'huynq')
+
+statement ok
+INSERT INTO tab0 VALUES(743,9693,9194.18,'cmtaj',2466,7497.18,'gyzwl')
+
+statement ok
+INSERT INTO tab0 VALUES(744,5926,2436.20,'juzcf',1380,5757.2,'hklci')
+
+statement ok
+INSERT INTO tab0 VALUES(745,306,4938.83,'ddzph',3455,5888.40,'zxxbt')
+
+statement ok
+INSERT INTO tab0 VALUES(746,6205,6889.92,'dnjxe',160,3792.44,'dwhhr')
+
+statement ok
+INSERT INTO tab0 VALUES(747,1002,6466.92,'hioir',2594,6486.95,'rynje')
+
+statement ok
+INSERT INTO tab0 VALUES(748,7330,6086.3,'hlggq',2737,8348.53,'crfxg')
+
+statement ok
+INSERT INTO tab0 VALUES(749,4324,8653.26,'jobbk',4692,7371.67,'dagte')
+
+statement ok
+INSERT INTO tab0 VALUES(750,8874,3810.64,'scfms',5947,1410.94,'kejah')
+
+statement ok
+INSERT INTO tab0 VALUES(751,6875,4187.29,'hkeqz',8616,4433.4,'cyuiq')
+
+statement ok
+INSERT INTO tab0 VALUES(752,4473,1655.54,'jxfdd',693,2775.99,'mraun')
+
+statement ok
+INSERT INTO tab0 VALUES(753,9321,3570.10,'cfafh',7301,1377.20,'mnehc')
+
+statement ok
+INSERT INTO tab0 VALUES(754,1825,9028.14,'fflwf',1939,51.64,'pkwoe')
+
+statement ok
+INSERT INTO tab0 VALUES(755,6393,5115.45,'rhxay',7739,9718.94,'djrdq')
+
+statement ok
+INSERT INTO tab0 VALUES(756,2689,3149.53,'fiinq',8710,8664.52,'dmvtc')
+
+statement ok
+INSERT INTO tab0 VALUES(757,6880,4944.75,'bwmkz',989,8786.72,'wbvjs')
+
+statement ok
+INSERT INTO tab0 VALUES(758,2888,9048.45,'mjrau',4094,1846.91,'nwcco')
+
+statement ok
+INSERT INTO tab0 VALUES(759,3638,6998.8,'jbozx',2170,5720.64,'sbmrl')
+
+statement ok
+INSERT INTO tab0 VALUES(760,2308,9571.30,'zknnn',5242,647.74,'fndjl')
+
+statement ok
+INSERT INTO tab0 VALUES(761,3583,3028.15,'oxklx',464,5477.46,'ptuam')
+
+statement ok
+INSERT INTO tab0 VALUES(762,4897,5373.13,'wkeid',3368,3923.60,'rgtmc')
+
+statement ok
+INSERT INTO tab0 VALUES(763,7693,2595.35,'vhlrp',9116,819.61,'lkdky')
+
+statement ok
+INSERT INTO tab0 VALUES(764,8664,4925.65,'fifxq',3749,8350.74,'lvyom')
+
+statement ok
+INSERT INTO tab0 VALUES(765,1012,3076.72,'hbkre',5433,2325.16,'jfgzo')
+
+statement ok
+INSERT INTO tab0 VALUES(766,5683,4507.22,'gwovj',5719,8411.7,'zvbya')
+
+statement ok
+INSERT INTO tab0 VALUES(767,2639,9659.94,'bziqh',784,8389.84,'jhadl')
+
+statement ok
+INSERT INTO tab0 VALUES(768,2089,8214.87,'btiwj',2684,6405.15,'xwtyr')
+
+statement ok
+INSERT INTO tab0 VALUES(769,5746,5343.38,'lsnxf',602,5215.5,'optjl')
+
+statement ok
+INSERT INTO tab0 VALUES(770,8079,7953.28,'yqayd',2104,2439.19,'ujvfa')
+
+statement ok
+INSERT INTO tab0 VALUES(771,7559,942.2,'ptpzs',4381,6815.83,'abyhu')
+
+statement ok
+INSERT INTO tab0 VALUES(772,7913,3443.78,'cyicq',5506,4438.7,'hsnmz')
+
+statement ok
+INSERT INTO tab0 VALUES(773,9371,5081.55,'uqinc',5679,5020.88,'xnlug')
+
+statement ok
+INSERT INTO tab0 VALUES(774,9915,2216.35,'vdhpn',8479,8136.31,'bdhqg')
+
+statement ok
+INSERT INTO tab0 VALUES(775,6535,4199.27,'hrzhe',2115,9472.56,'lqhug')
+
+statement ok
+INSERT INTO tab0 VALUES(776,6470,9616.65,'lndvv',673,7080.11,'uuvsw')
+
+statement ok
+INSERT INTO tab0 VALUES(777,8467,2545.17,'nexgh',5370,7623.88,'tcylo')
+
+statement ok
+INSERT INTO tab0 VALUES(778,4025,8800.98,'himie',5802,2630.31,'fvdxl')
+
+statement ok
+INSERT INTO tab0 VALUES(779,8648,2184.86,'thupj',1191,4742.51,'djzzr')
+
+statement ok
+INSERT INTO tab0 VALUES(780,3091,737.30,'ssdtu',1641,3960.40,'beoqf')
+
+statement ok
+INSERT INTO tab0 VALUES(781,4617,2989.65,'kcsnv',9385,3902.78,'vyjyl')
+
+statement ok
+INSERT INTO tab0 VALUES(782,8241,4208.22,'drhzh',29,8051.53,'dtrjv')
+
+statement ok
+INSERT INTO tab0 VALUES(783,7980,2650.46,'wqxnq',3818,5999.67,'ediuj')
+
+statement ok
+INSERT INTO tab0 VALUES(784,8109,5810.2,'yfibx',6867,9704.53,'gihtm')
+
+statement ok
+INSERT INTO tab0 VALUES(785,4403,6667.91,'quxdf',2425,9737.83,'mfikl')
+
+statement ok
+INSERT INTO tab0 VALUES(786,5393,9945.63,'scyck',2118,1528.85,'hqpsa')
+
+statement ok
+INSERT INTO tab0 VALUES(787,3616,8352.25,'eiodr',7201,1627.53,'difpf')
+
+statement ok
+INSERT INTO tab0 VALUES(788,6855,8836.62,'vedlc',9809,3944.62,'bgzdr')
+
+statement ok
+INSERT INTO tab0 VALUES(789,9407,8833.39,'zzzkm',4204,6002.75,'mnznr')
+
+statement ok
+INSERT INTO tab0 VALUES(790,3318,2514.24,'xacpt',8026,5188.61,'nsegh')
+
+statement ok
+INSERT INTO tab0 VALUES(791,9633,7044.90,'pkpzt',3550,5002.8,'zuail')
+
+statement ok
+INSERT INTO tab0 VALUES(792,9661,8823.38,'khldt',8922,1308.28,'qldhf')
+
+statement ok
+INSERT INTO tab0 VALUES(793,6210,9739.1,'qbbdc',9423,8581.78,'caxkq')
+
+statement ok
+INSERT INTO tab0 VALUES(794,4839,3420.60,'akyxx',8711,6163.70,'itdsi')
+
+statement ok
+INSERT INTO tab0 VALUES(795,5116,1480.59,'qlifq',69,4505.79,'iyphy')
+
+statement ok
+INSERT INTO tab0 VALUES(796,1860,9773.11,'iusws',7665,1424.62,'qxsea')
+
+statement ok
+INSERT INTO tab0 VALUES(797,6395,4642.18,'ivqtb',7793,8351.67,'dhgrm')
+
+statement ok
+INSERT INTO tab0 VALUES(798,7796,9165.78,'zrdba',126,6580.45,'oatlh')
+
+statement ok
+INSERT INTO tab0 VALUES(799,4148,9413.98,'imnjp',8967,3512.66,'dqila')
+
+statement ok
+INSERT INTO tab0 VALUES(800,3784,690.11,'riwuj',4495,8923.26,'fehjo')
+
+statement ok
+INSERT INTO tab0 VALUES(801,6543,3793.84,'houzy',4020,1192.64,'xmpot')
+
+statement ok
+INSERT INTO tab0 VALUES(802,5019,1255.30,'cuwls',3233,3566.75,'rhscx')
+
+statement ok
+INSERT INTO tab0 VALUES(803,5809,3597.26,'bcnnk',7450,405.17,'agcem')
+
+statement ok
+INSERT INTO tab0 VALUES(804,763,5579.18,'acjqq',2867,3432.30,'bftwu')
+
+statement ok
+INSERT INTO tab0 VALUES(805,8237,2449.40,'hcbfs',7811,7981.44,'efcpn')
+
+statement ok
+INSERT INTO tab0 VALUES(806,4339,6193.23,'fevae',3986,9255.94,'osibi')
+
+statement ok
+INSERT INTO tab0 VALUES(807,4182,1786.9,'vkchh',7725,8562.31,'aqgjr')
+
+statement ok
+INSERT INTO tab0 VALUES(808,3132,3442.61,'nvcpx',1241,9580.35,'jnrfd')
+
+statement ok
+INSERT INTO tab0 VALUES(809,8059,860.79,'ntngx',3873,4598.29,'gqjai')
+
+statement ok
+INSERT INTO tab0 VALUES(810,8589,5482.12,'sufhy',3343,770.89,'reiai')
+
+statement ok
+INSERT INTO tab0 VALUES(811,8349,6734.65,'ewpsa',7000,6360.56,'qgqkk')
+
+statement ok
+INSERT INTO tab0 VALUES(812,6221,8283.21,'sqnja',3071,6997.54,'tdbjo')
+
+statement ok
+INSERT INTO tab0 VALUES(813,7592,4285.44,'sitlm',1913,1923.94,'xjnkh')
+
+statement ok
+INSERT INTO tab0 VALUES(814,5600,5628.0,'lareg',7261,244.96,'wvyhb')
+
+statement ok
+INSERT INTO tab0 VALUES(815,2393,6196.62,'aqujv',7481,7179.92,'xwrez')
+
+statement ok
+INSERT INTO tab0 VALUES(816,363,9108.27,'uhofj',6816,310.46,'jnixn')
+
+statement ok
+INSERT INTO tab0 VALUES(817,3416,2972.27,'betpa',6637,5833.63,'lneyz')
+
+statement ok
+INSERT INTO tab0 VALUES(818,8206,8132.43,'tvjdr',6697,4807.1,'plxpf')
+
+statement ok
+INSERT INTO tab0 VALUES(819,5392,2924.16,'wgajo',6376,9399.86,'kyfch')
+
+statement ok
+INSERT INTO tab0 VALUES(820,889,9920.59,'hyqtw',5932,9151.23,'ysnuy')
+
+statement ok
+INSERT INTO tab0 VALUES(821,7113,2179.70,'jbdbm',7754,7207.8,'qslfl')
+
+statement ok
+INSERT INTO tab0 VALUES(822,4236,9501.47,'msbcj',7608,6582.41,'uilfa')
+
+statement ok
+INSERT INTO tab0 VALUES(823,1433,4674.96,'rtbgj',5891,6398.38,'diqbo')
+
+statement ok
+INSERT INTO tab0 VALUES(824,8132,9721.47,'igshx',8877,8146.47,'pedph')
+
+statement ok
+INSERT INTO tab0 VALUES(825,5267,2159.65,'viyqj',9969,1926.53,'vdylg')
+
+statement ok
+INSERT INTO tab0 VALUES(826,6525,1237.65,'znwoy',951,2703.0,'vejyd')
+
+statement ok
+INSERT INTO tab0 VALUES(827,9595,4197.18,'ytgdc',3234,6557.96,'rjulr')
+
+statement ok
+INSERT INTO tab0 VALUES(828,7424,2518.71,'nleli',9107,6925.27,'azeim')
+
+statement ok
+INSERT INTO tab0 VALUES(829,9459,8165.56,'dusss',2991,868.73,'tivfn')
+
+statement ok
+INSERT INTO tab0 VALUES(830,2903,9845.2,'dtmmo',2683,5298.17,'rgwau')
+
+statement ok
+INSERT INTO tab0 VALUES(831,3962,9250.50,'qgjpz',612,3250.58,'baady')
+
+statement ok
+INSERT INTO tab0 VALUES(832,9096,7312.61,'zfzlo',5080,118.26,'jncmz')
+
+statement ok
+INSERT INTO tab0 VALUES(833,6272,452.34,'otncb',1526,9909.91,'slqrt')
+
+statement ok
+INSERT INTO tab0 VALUES(834,6203,6828.14,'hjcgw',3761,1495.76,'rhsfq')
+
+statement ok
+INSERT INTO tab0 VALUES(835,3617,2585.9,'fwsrt',5231,4860.74,'vogne')
+
+statement ok
+INSERT INTO tab0 VALUES(836,8482,8110.96,'hspal',254,7351.55,'hxxbt')
+
+statement ok
+INSERT INTO tab0 VALUES(837,7285,4274.41,'vaxbi',5281,9931.79,'nepmb')
+
+statement ok
+INSERT INTO tab0 VALUES(838,4256,8690.6,'gskxy',143,3423.14,'vpdvx')
+
+statement ok
+INSERT INTO tab0 VALUES(839,2635,1957.63,'sqdar',9297,4765.42,'ayunt')
+
+statement ok
+INSERT INTO tab0 VALUES(840,5912,3914.8,'orwjk',3082,3256.74,'zocpf')
+
+statement ok
+INSERT INTO tab0 VALUES(841,9082,9885.71,'dyxnd',8963,6813.63,'logua')
+
+statement ok
+INSERT INTO tab0 VALUES(842,9896,6935.32,'lvowm',2784,8211.18,'mwwpi')
+
+statement ok
+INSERT INTO tab0 VALUES(843,107,119.29,'odxro',22,1343.10,'dnpnk')
+
+statement ok
+INSERT INTO tab0 VALUES(844,6719,8727.74,'jhidi',7027,7461.95,'cnsdj')
+
+statement ok
+INSERT INTO tab0 VALUES(845,3247,2536.65,'ghdtk',2279,1433.16,'hgtfs')
+
+statement ok
+INSERT INTO tab0 VALUES(846,953,8067.97,'rcgbp',7643,7989.22,'pkeua')
+
+statement ok
+INSERT INTO tab0 VALUES(847,109,4826.74,'tlwep',9606,7974.78,'hdykm')
+
+statement ok
+INSERT INTO tab0 VALUES(848,1235,1553.26,'wfvqo',538,4594.79,'uheep')
+
+statement ok
+INSERT INTO tab0 VALUES(849,6359,2485.16,'kkppr',9936,9670.61,'jkrxs')
+
+statement ok
+INSERT INTO tab0 VALUES(850,261,3591.56,'ilrzy',5675,9885.13,'oyuet')
+
+statement ok
+INSERT INTO tab0 VALUES(851,1726,8829.17,'tcgrp',5262,3036.93,'ygtpw')
+
+statement ok
+INSERT INTO tab0 VALUES(852,4792,6398.44,'pqvmz',7080,4284.37,'twmtw')
+
+statement ok
+INSERT INTO tab0 VALUES(853,2,4983.67,'hcxjz',1642,2402.71,'kqfna')
+
+statement ok
+INSERT INTO tab0 VALUES(854,5650,8.14,'fjnpp',2839,6028.28,'hrzas')
+
+statement ok
+INSERT INTO tab0 VALUES(855,9039,9886.23,'odysv',9194,9910.55,'fqkxv')
+
+statement ok
+INSERT INTO tab0 VALUES(856,7721,2265.56,'tghyb',5106,1161.30,'dtfiq')
+
+statement ok
+INSERT INTO tab0 VALUES(857,755,286.9,'dsbyu',2102,5510.71,'tcxeh')
+
+statement ok
+INSERT INTO tab0 VALUES(858,9953,8825.26,'ttyhg',92,3545.52,'flldn')
+
+statement ok
+INSERT INTO tab0 VALUES(859,1130,748.11,'qffkz',8610,6971.12,'ptsve')
+
+statement ok
+INSERT INTO tab0 VALUES(860,5356,3158.44,'vhpqo',8074,4853.70,'pzgzv')
+
+statement ok
+INSERT INTO tab0 VALUES(861,204,3647.85,'szqpd',1026,9871.35,'fiynp')
+
+statement ok
+INSERT INTO tab0 VALUES(862,1003,6545.96,'scpcz',3389,4568.22,'glmsm')
+
+statement ok
+INSERT INTO tab0 VALUES(863,2082,9170.49,'zhwhk',5717,7601.63,'dlceg')
+
+statement ok
+INSERT INTO tab0 VALUES(864,8028,8080.36,'akrwz',4440,9989.16,'izefy')
+
+statement ok
+INSERT INTO tab0 VALUES(865,4929,5319.87,'fhsfn',3118,1366.85,'znxtl')
+
+statement ok
+INSERT INTO tab0 VALUES(866,1630,4671.80,'nhtkm',3689,6225.24,'vluof')
+
+statement ok
+INSERT INTO tab0 VALUES(867,977,7906.52,'caglt',7722,179.56,'kbkkx')
+
+statement ok
+INSERT INTO tab0 VALUES(868,1069,1036.13,'xtahd',7663,6199.82,'yuyaw')
+
+statement ok
+INSERT INTO tab0 VALUES(869,6513,557.59,'jlvcy',8087,870.96,'zixly')
+
+statement ok
+INSERT INTO tab0 VALUES(870,9667,9707.83,'ztagx',6949,644.94,'vsqyz')
+
+statement ok
+INSERT INTO tab0 VALUES(871,1894,4710.89,'wkcmk',6832,8082.90,'knaik')
+
+statement ok
+INSERT INTO tab0 VALUES(872,4810,1029.5,'ocndk',6198,8110.27,'rybxc')
+
+statement ok
+INSERT INTO tab0 VALUES(873,1536,9615.91,'lsaby',639,4266.90,'jvotr')
+
+statement ok
+INSERT INTO tab0 VALUES(874,7946,3159.59,'mmpau',4124,4955.17,'rztqk')
+
+statement ok
+INSERT INTO tab0 VALUES(875,3919,2336.78,'wbuma',255,9690.14,'rfukq')
+
+statement ok
+INSERT INTO tab0 VALUES(876,4585,2064.91,'pppbs',3503,5352.63,'djmyo')
+
+statement ok
+INSERT INTO tab0 VALUES(877,1582,7747.27,'czwmn',483,2432.43,'bqais')
+
+statement ok
+INSERT INTO tab0 VALUES(878,4300,1529.13,'wxdrj',1174,1286.31,'inkxs')
+
+statement ok
+INSERT INTO tab0 VALUES(879,1131,8536.85,'azczy',194,8382.26,'hzbnw')
+
+statement ok
+INSERT INTO tab0 VALUES(880,725,3143.2,'dxeil',8036,2554.52,'nquqr')
+
+statement ok
+INSERT INTO tab0 VALUES(881,3234,5206.59,'qnlde',2322,1246.76,'gyxip')
+
+statement ok
+INSERT INTO tab0 VALUES(882,1559,6319.0,'lyxrf',9053,6766.21,'dahmq')
+
+statement ok
+INSERT INTO tab0 VALUES(883,2616,6067.27,'vuhdv',3860,2537.74,'ueuby')
+
+statement ok
+INSERT INTO tab0 VALUES(884,8562,8273.17,'ugtpl',3252,9344.3,'mtwzl')
+
+statement ok
+INSERT INTO tab0 VALUES(885,8069,7246.30,'sdgjy',5866,1587.65,'uhhjl')
+
+statement ok
+INSERT INTO tab0 VALUES(886,7557,4036.26,'damam',3720,3525.24,'bvssj')
+
+statement ok
+INSERT INTO tab0 VALUES(887,2450,2680.74,'hoglb',3461,5534.59,'etgxe')
+
+statement ok
+INSERT INTO tab0 VALUES(888,8428,6455.66,'qiecd',7609,353.78,'fehmg')
+
+statement ok
+INSERT INTO tab0 VALUES(889,2674,4122.31,'pdkah',5822,9334.32,'yxvpu')
+
+statement ok
+INSERT INTO tab0 VALUES(890,5125,6184.44,'hddcu',6132,8690.25,'mqjho')
+
+statement ok
+INSERT INTO tab0 VALUES(891,9721,1131.40,'vvgah',6199,5753.27,'aaklk')
+
+statement ok
+INSERT INTO tab0 VALUES(892,5656,1694.29,'ghynk',4564,5207.89,'jxaec')
+
+statement ok
+INSERT INTO tab0 VALUES(893,8630,1086.5,'bkllg',1897,5365.52,'miqrs')
+
+statement ok
+INSERT INTO tab0 VALUES(894,2095,9265.60,'srnxi',2245,4391.61,'jromk')
+
+statement ok
+INSERT INTO tab0 VALUES(895,8508,9174.95,'lqblw',4285,6567.79,'jxnpy')
+
+statement ok
+INSERT INTO tab0 VALUES(896,577,2993.37,'vwybp',2575,8538.96,'bmopl')
+
+statement ok
+INSERT INTO tab0 VALUES(897,2518,8394.45,'gekki',8797,5561.47,'tsitv')
+
+statement ok
+INSERT INTO tab0 VALUES(898,1300,4784.28,'uotxr',3017,7757.18,'ctycr')
+
+statement ok
+INSERT INTO tab0 VALUES(899,7893,9561.55,'qobvm',4927,6362.61,'tsotq')
+
+statement ok
+INSERT INTO tab0 VALUES(900,8523,4358.68,'wgqmp',5097,9973.12,'awxte')
+
+statement ok
+INSERT INTO tab0 VALUES(901,5921,1299.93,'yhwho',6230,799.92,'msald')
+
+statement ok
+INSERT INTO tab0 VALUES(902,570,9245.54,'jhqaz',4404,917.31,'ocvkm')
+
+statement ok
+INSERT INTO tab0 VALUES(903,1958,47.88,'kszrk',328,8514.74,'ekvtt')
+
+statement ok
+INSERT INTO tab0 VALUES(904,9826,4791.53,'obyxw',588,4140.95,'kpndt')
+
+statement ok
+INSERT INTO tab0 VALUES(905,5420,55.40,'icwyk',8902,6959.10,'aliwg')
+
+statement ok
+INSERT INTO tab0 VALUES(906,2739,4152.93,'uugsw',7364,1000.88,'gmzdp')
+
+statement ok
+INSERT INTO tab0 VALUES(907,9787,3386.12,'dpfdl',7698,1402.66,'gifbd')
+
+statement ok
+INSERT INTO tab0 VALUES(908,9819,8297.71,'lohdf',2506,670.59,'wrlud')
+
+statement ok
+INSERT INTO tab0 VALUES(909,2598,9915.31,'ejzqx',6521,4920.75,'dmktg')
+
+statement ok
+INSERT INTO tab0 VALUES(910,5639,6008.49,'ymhzn',7854,134.24,'acopd')
+
+statement ok
+INSERT INTO tab0 VALUES(911,5460,7331.92,'ximuu',9243,8405.35,'zicnd')
+
+statement ok
+INSERT INTO tab0 VALUES(912,8833,3880.53,'rlqga',9307,4190.64,'ooegv')
+
+statement ok
+INSERT INTO tab0 VALUES(913,4037,1134.56,'skgfo',3794,562.10,'cbuds')
+
+statement ok
+INSERT INTO tab0 VALUES(914,2101,6318.77,'dhzfn',6830,5449.25,'iujnw')
+
+statement ok
+INSERT INTO tab0 VALUES(915,8060,4638.48,'dldrg',2171,7902.30,'xvioo')
+
+statement ok
+INSERT INTO tab0 VALUES(916,2201,5542.78,'uvjcf',4449,4331.21,'eiqmr')
+
+statement ok
+INSERT INTO tab0 VALUES(917,1318,8966.59,'qcgak',428,4759.89,'trstr')
+
+statement ok
+INSERT INTO tab0 VALUES(918,9958,1585.82,'grzka',250,9073.28,'asrfz')
+
+statement ok
+INSERT INTO tab0 VALUES(919,1668,3059.46,'vzzjc',8687,3274.49,'bqhas')
+
+statement ok
+INSERT INTO tab0 VALUES(920,254,2289.77,'zllte',6387,5721.91,'wkkae')
+
+statement ok
+INSERT INTO tab0 VALUES(921,1024,3665.32,'fraxx',1129,3396.36,'horss')
+
+statement ok
+INSERT INTO tab0 VALUES(922,2040,3313.19,'qpmzq',9071,8135.19,'prdkd')
+
+statement ok
+INSERT INTO tab0 VALUES(923,5367,5348.4,'lohab',6000,2894.42,'zfvik')
+
+statement ok
+INSERT INTO tab0 VALUES(924,8325,8125.28,'ungau',8580,7991.86,'hulxh')
+
+statement ok
+INSERT INTO tab0 VALUES(925,4737,484.17,'daced',5605,7348.24,'qhxqy')
+
+statement ok
+INSERT INTO tab0 VALUES(926,6181,8006.92,'dmeyo',9250,4766.33,'yxcjo')
+
+statement ok
+INSERT INTO tab0 VALUES(927,3238,9260.89,'zfycj',6316,147.6,'tkjka')
+
+statement ok
+INSERT INTO tab0 VALUES(928,6744,2053.63,'irvak',9483,5763.66,'qbfql')
+
+statement ok
+INSERT INTO tab0 VALUES(929,9038,9677.6,'rjprn',8563,2496.77,'yayrx')
+
+statement ok
+INSERT INTO tab0 VALUES(930,5213,7168.58,'cfesj',1744,6091.57,'lffwy')
+
+statement ok
+INSERT INTO tab0 VALUES(931,4365,7548.19,'xneuv',6842,3409.91,'wospi')
+
+statement ok
+INSERT INTO tab0 VALUES(932,847,8075.61,'fdmny',2556,8673.43,'oetgp')
+
+statement ok
+INSERT INTO tab0 VALUES(933,5510,6499.43,'nqard',9710,9717.69,'ciymr')
+
+statement ok
+INSERT INTO tab0 VALUES(934,6967,7304.20,'kiggf',2509,4242.27,'btufm')
+
+statement ok
+INSERT INTO tab0 VALUES(935,2828,7966.60,'fnvqs',9786,6060.95,'kpgvr')
+
+statement ok
+INSERT INTO tab0 VALUES(936,961,5200.51,'npgst',6253,1347.78,'fqoge')
+
+statement ok
+INSERT INTO tab0 VALUES(937,735,1202.18,'xblcm',3753,4891.23,'kknfu')
+
+statement ok
+INSERT INTO tab0 VALUES(938,4276,9916.34,'ksnas',2503,6347.30,'ejndw')
+
+statement ok
+INSERT INTO tab0 VALUES(939,7711,3269.30,'jvert',2354,6478.67,'wvxlx')
+
+statement ok
+INSERT INTO tab0 VALUES(940,2422,7426.14,'xgmit',4034,3414.82,'gkore')
+
+statement ok
+INSERT INTO tab0 VALUES(941,6295,9043.76,'ollfn',398,8898.12,'ovumk')
+
+statement ok
+INSERT INTO tab0 VALUES(942,4971,1509.4,'yuszb',7684,4534.0,'tfsxh')
+
+statement ok
+INSERT INTO tab0 VALUES(943,3094,1209.98,'ilbof',6754,8042.6,'hfzjg')
+
+statement ok
+INSERT INTO tab0 VALUES(944,5560,3761.80,'ktdmi',4353,9504.16,'xbizz')
+
+statement ok
+INSERT INTO tab0 VALUES(945,8772,271.7,'sebwv',4354,7615.61,'xtkla')
+
+statement ok
+INSERT INTO tab0 VALUES(946,1885,3587.85,'inzov',9007,5934.25,'ddbhm')
+
+statement ok
+INSERT INTO tab0 VALUES(947,8061,4541.79,'qzuiw',192,9132.59,'hcjaq')
+
+statement ok
+INSERT INTO tab0 VALUES(948,5708,8207.28,'rirzi',669,9246.91,'uovgo')
+
+statement ok
+INSERT INTO tab0 VALUES(949,9748,145.55,'cavjj',5326,1922.43,'hukss')
+
+statement ok
+INSERT INTO tab0 VALUES(950,2850,2653.82,'mizse',2430,2674.41,'hjvop')
+
+statement ok
+INSERT INTO tab0 VALUES(951,6690,1020.42,'eldoy',4876,3126.26,'vikgi')
+
+statement ok
+INSERT INTO tab0 VALUES(952,3198,9769.88,'vqzye',1439,7266.69,'blozk')
+
+statement ok
+INSERT INTO tab0 VALUES(953,5805,8916.12,'yhvpr',8023,7697.82,'xcmmc')
+
+statement ok
+INSERT INTO tab0 VALUES(954,698,212.50,'tfzyt',8911,1883.33,'pqtmj')
+
+statement ok
+INSERT INTO tab0 VALUES(955,8068,3398.3,'nmlif',8012,8403.55,'miame')
+
+statement ok
+INSERT INTO tab0 VALUES(956,3361,2451.41,'kxodt',119,3197.60,'kqmek')
+
+statement ok
+INSERT INTO tab0 VALUES(957,8524,1839.20,'avqvt',2150,5820.52,'pgskf')
+
+statement ok
+INSERT INTO tab0 VALUES(958,3260,2767.95,'ynoer',4405,5691.39,'aeciy')
+
+statement ok
+INSERT INTO tab0 VALUES(959,6275,9429.31,'pcmgy',1808,8341.45,'hyopm')
+
+statement ok
+INSERT INTO tab0 VALUES(960,6530,5256.15,'ougtl',5167,1665.26,'asdja')
+
+statement ok
+INSERT INTO tab0 VALUES(961,4489,9168.71,'mygyb',2416,2170.75,'qktor')
+
+statement ok
+INSERT INTO tab0 VALUES(962,3369,1823.70,'mgzvo',9869,1227.43,'ytowc')
+
+statement ok
+INSERT INTO tab0 VALUES(963,393,1868.42,'wwpjx',3470,1321.45,'towyb')
+
+statement ok
+INSERT INTO tab0 VALUES(964,8037,2188.92,'xmnmc',39,2300.77,'mqnof')
+
+statement ok
+INSERT INTO tab0 VALUES(965,5280,6156.9,'ckhfs',8527,7624.26,'vespm')
+
+statement ok
+INSERT INTO tab0 VALUES(966,8857,3883.80,'dwxyo',1264,618.82,'hrljy')
+
+statement ok
+INSERT INTO tab0 VALUES(967,4504,8469.4,'jxohi',5206,720.53,'zbimg')
+
+statement ok
+INSERT INTO tab0 VALUES(968,8214,2252.0,'mriod',3193,9730.76,'bychk')
+
+statement ok
+INSERT INTO tab0 VALUES(969,7481,3057.25,'bpuod',5190,8063.28,'ltesg')
+
+statement ok
+INSERT INTO tab0 VALUES(970,2555,451.81,'hflxi',9542,996.42,'mplog')
+
+statement ok
+INSERT INTO tab0 VALUES(971,7690,1985.34,'orrca',4223,4918.18,'muvox')
+
+statement ok
+INSERT INTO tab0 VALUES(972,2394,9450.20,'ypcqk',8085,3587.32,'jpvop')
+
+statement ok
+INSERT INTO tab0 VALUES(973,2673,5127.61,'ehhfj',2112,4365.55,'iqhnc')
+
+statement ok
+INSERT INTO tab0 VALUES(974,2297,8031.78,'vvkrz',662,4486.60,'lwvue')
+
+statement ok
+INSERT INTO tab0 VALUES(975,4033,170.0,'jiuie',2727,7294.38,'hrsdh')
+
+statement ok
+INSERT INTO tab0 VALUES(976,905,2788.82,'kwtzi',3175,8495.8,'odhxe')
+
+statement ok
+INSERT INTO tab0 VALUES(977,7438,2616.11,'puvay',4000,2409.30,'scrdm')
+
+statement ok
+INSERT INTO tab0 VALUES(978,913,8127.25,'cpwse',5582,8220.21,'oejtk')
+
+statement ok
+INSERT INTO tab0 VALUES(979,2617,5778.20,'ikfcq',7926,6226.62,'ybwng')
+
+statement ok
+INSERT INTO tab0 VALUES(980,9083,6268.65,'ltrgu',1915,4086.14,'inlid')
+
+statement ok
+INSERT INTO tab0 VALUES(981,3358,781.17,'bxaju',563,3074.28,'kqlgp')
+
+statement ok
+INSERT INTO tab0 VALUES(982,6237,7243.27,'yznaa',259,4326.62,'tufte')
+
+statement ok
+INSERT INTO tab0 VALUES(983,7519,6564.59,'jyszo',2027,5093.89,'nvrqc')
+
+statement ok
+INSERT INTO tab0 VALUES(984,7259,8895.0,'dwxqe',2768,4989.11,'vhtiw')
+
+statement ok
+INSERT INTO tab0 VALUES(985,7015,9876.70,'vaxbn',6503,2238.72,'smfzx')
+
+statement ok
+INSERT INTO tab0 VALUES(986,1099,6882.39,'rxpzd',5648,9933.69,'mlfnd')
+
+statement ok
+INSERT INTO tab0 VALUES(987,7826,5280.37,'bopau',2236,2275.68,'mjywr')
+
+statement ok
+INSERT INTO tab0 VALUES(988,765,4673.66,'dmtxi',9183,831.11,'slfyk')
+
+statement ok
+INSERT INTO tab0 VALUES(989,9993,5153.14,'qwakc',1532,782.35,'keczo')
+
+statement ok
+INSERT INTO tab0 VALUES(990,3332,3550.66,'fvtpr',7708,7169.78,'plojo')
+
+statement ok
+INSERT INTO tab0 VALUES(991,7618,9682.20,'hgrwo',763,1150.96,'ynddh')
+
+statement ok
+INSERT INTO tab0 VALUES(992,9934,2606.93,'oeggr',9624,6243.75,'eljsc')
+
+statement ok
+INSERT INTO tab0 VALUES(993,8870,6867.40,'rvkgz',356,4583.40,'uxtjd')
+
+statement ok
+INSERT INTO tab0 VALUES(994,5769,8748.63,'wrehh',7395,3164.74,'omabb')
+
+statement ok
+INSERT INTO tab0 VALUES(995,5977,2522.25,'oqhoq',4810,97.23,'lsauu')
+
+statement ok
+INSERT INTO tab0 VALUES(996,96,6697.61,'yguib',7546,854.13,'wieqz')
+
+statement ok
+INSERT INTO tab0 VALUES(997,5232,272.91,'rrryh',2681,4520.63,'qhguq')
+
+statement ok
+INSERT INTO tab0 VALUES(998,6240,8985.35,'nwobc',667,47.95,'hvvvw')
+
+statement ok
+INSERT INTO tab0 VALUES(999,6986,1554.20,'wtfsg',6588,2495.47,'zuaum')
+
+statement ok
+CREATE TABLE tab1(pk INTEGER PRIMARY KEY, col0 INTEGER, col1 FLOAT, col2 TEXT, col3 INTEGER, col4 FLOAT, col5 TEXT)
+
+# Datafusion - DataFusion error: This feature is not implemented: Unsupported logical plan: CreateIndex
+skipif Datafusion
+statement ok
+CREATE INDEX idx_tab1_0 on tab1 (col0)
+
+# Datafusion - DataFusion error: This feature is not implemented: Unsupported logical plan: CreateIndex
+skipif Datafusion
+statement ok
+CREATE INDEX idx_tab1_1 on tab1 (col1)
+
+# Datafusion - DataFusion error: This feature is not implemented: Unsupported logical plan: CreateIndex
+skipif Datafusion
+statement ok
+CREATE INDEX idx_tab1_3 on tab1 (col3)
+
+# Datafusion - DataFusion error: This feature is not implemented: Unsupported logical plan: CreateIndex
+skipif Datafusion
+statement ok
+CREATE INDEX idx_tab1_4 on tab1 (col4)
+
+statement ok
+INSERT INTO tab1 SELECT * FROM tab0
+
+statement ok
+CREATE TABLE tab2(pk INTEGER PRIMARY KEY, col0 INTEGER, col1 FLOAT, col2 TEXT, col3 INTEGER, col4 FLOAT, col5 TEXT)
+
+# Datafusion - DataFusion error: This feature is not implemented: Unsupported logical plan: CreateIndex
+skipif Datafusion
+statement ok
+CREATE INDEX idx_tab2_0 ON tab2 (col3)
+
+# Datafusion - DataFusion error: This feature is not implemented: Unsupported logical plan: CreateIndex
+skipif Datafusion
+statement ok
+CREATE INDEX idx_tab2_1 ON tab2 (col0 DESC)
+
+# Datafusion - DataFusion error: This feature is not implemented: Unsupported logical plan: CreateIndex
+skipif Datafusion
+statement ok
+CREATE UNIQUE INDEX idx_tab2_3 ON tab2 (col1 DESC)
+
+statement ok
+INSERT INTO tab2 SELECT * FROM tab0
+
+statement ok
+CREATE TABLE tab3(pk INTEGER PRIMARY KEY, col0 INTEGER, col1 FLOAT, col2 TEXT, col3 INTEGER, col4 FLOAT, col5 TEXT)
+
+# Datafusion - DataFusion error: This feature is not implemented: Unsupported logical plan: CreateIndex
+skipif Datafusion
+statement ok
+CREATE UNIQUE INDEX idx_tab3_0 ON tab3 (col1 DESC)
+
+# Datafusion - DataFusion error: This feature is not implemented: Unsupported logical plan: CreateIndex
+skipif Datafusion
+statement ok
+CREATE UNIQUE INDEX idx_tab3_2 ON tab3 (col0)
+
+# Datafusion - DataFusion error: This feature is not implemented: Unsupported logical plan: CreateIndex
+skipif Datafusion
+statement ok
+CREATE INDEX idx_tab3_3 ON tab3 (col3)
+
+statement ok
+INSERT INTO tab3 SELECT * FROM tab0
+
+statement ok
+CREATE TABLE tab4(pk INTEGER PRIMARY KEY, col0 INTEGER, col1 FLOAT, col2 TEXT, col3 INTEGER, col4 FLOAT, col5 TEXT)
+
+# Datafusion - DataFusion error: This feature is not implemented: Unsupported logical plan: CreateIndex
+skipif Datafusion
+statement ok
+CREATE UNIQUE INDEX idx_tab4_1 ON tab4 (col0,col4 DESC)
+
+# Datafusion - DataFusion error: This feature is not implemented: Unsupported logical plan: CreateIndex
+skipif Datafusion
+statement ok
+CREATE UNIQUE INDEX idx_tab4_2 ON tab4 (col4 DESC,col1)
+
+# Datafusion - DataFusion error: This feature is not implemented: Unsupported logical plan: CreateIndex
+skipif Datafusion
+statement ok
+CREATE UNIQUE INDEX idx_tab4_5 ON tab4 (col0 DESC,col3)
+
+statement ok
+INSERT INTO tab4 SELECT * FROM tab0
+
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] III[I][I][I][I]
+# Datafusion - [Actual  ] II[R][T]I[R][T]
+query IIRTIRT rowsort label-0
+SELECT * FROM tab0 AS cor0 WHERE NOT NULL <> NULL
+----
+
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] III[I][I][I][I]
+# Datafusion - [Actual  ] II[R][T]I[R][T]
+query IIRTIRT rowsort label-0
+SELECT * FROM tab1 AS cor0 WHERE NOT NULL <> NULL
+----
+
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] III[I][I][I][I]
+# Datafusion - [Actual  ] II[R][T]I[R][T]
+query IIRTIRT rowsort label-0
+SELECT * FROM tab2 AS cor0 WHERE NOT NULL <> NULL
+----
+
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] III[I][I][I][I]
+# Datafusion - [Actual  ] II[R][T]I[R][T]
+query IIRTIRT rowsort label-0
+SELECT * FROM tab3 AS cor0 WHERE NOT NULL <> NULL
+----
+
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] III[I][I][I][I]
+# Datafusion - [Actual  ] II[R][T]I[R][T]
+query IIRTIRT rowsort label-0
+SELECT * FROM tab4 AS cor0 WHERE NOT NULL <> NULL
+----
+
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] III[I][I][I][I]
+# Datafusion - [Actual  ] II[R][T]I[R][T]
+query IIRTIRT rowsort label-5
+SELECT * FROM tab0 cor0 WHERE NOT ( NOT ( - CAST ( NULL AS REAL ) + + col0 NOT IN ( - - col0 * - col3 ) ) )
+----
+
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] III[I][I][I][I]
+# Datafusion - [Actual  ] II[R][T]I[R][T]
+query IIRTIRT rowsort label-5
+SELECT * FROM tab1 cor0 WHERE NOT ( NOT ( - CAST ( NULL AS REAL ) + + col0 NOT IN ( - - col0 * - col3 ) ) )
+----
+
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] III[I][I][I][I]
+# Datafusion - [Actual  ] II[R][T]I[R][T]
+query IIRTIRT rowsort label-5
+SELECT * FROM tab2 cor0 WHERE NOT ( NOT ( - CAST ( NULL AS REAL ) + + col0 NOT IN ( - - col0 * - col3 ) ) )
+----
+
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] III[I][I][I][I]
+# Datafusion - [Actual  ] II[R][T]I[R][T]
+query IIRTIRT rowsort label-5
+SELECT * FROM tab3 cor0 WHERE NOT ( NOT ( - CAST ( NULL AS REAL ) + + col0 NOT IN ( - - col0 * - col3 ) ) )
+----
+
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] III[I][I][I][I]
+# Datafusion - [Actual  ] II[R][T]I[R][T]
+query IIRTIRT rowsort label-5
+SELECT * FROM tab4 cor0 WHERE NOT ( NOT ( - CAST ( NULL AS REAL ) + + col0 NOT IN ( - - col0 * - col3 ) ) )
+----

@@ -22,7 +22,7 @@ use std::str::FromStr;
 use async_trait::async_trait;
 use bytes::Bytes;
 use futures::{SinkExt, StreamExt};
-use log::debug;
+use log::{debug, info};
 use sqllogictest::DBOutput;
 use tokio::task::JoinHandle;
 
@@ -75,14 +75,14 @@ impl Postgres {
         let uri =
             std::env::var("PG_URI").map_or(PG_URI.to_string(), std::convert::identity);
 
-        debug!("Using posgres connection string: {uri}");
+        info!("Using postgres connection string: {uri}");
 
         let config = tokio_postgres::Config::from_str(&uri)?;
 
         // hint to user what the connection string was
         let res = config.connect(tokio_postgres::NoTls).await;
         if res.is_err() {
-            eprintln!("Error connecting to posgres using PG_URI={uri}");
+            eprintln!("Error connecting to postgres using PG_URI={uri}");
         };
 
         let (client, connection) = res?;
@@ -194,16 +194,13 @@ fn no_quotes(t: &str) -> &str {
 /// return a schema name
 fn schema_name(relative_path: &Path) -> String {
     relative_path
-        .file_name()
-        .map(|name| {
-            name.to_string_lossy()
-                .chars()
-                .filter(|ch| ch.is_ascii_alphabetic())
-                .collect::<String>()
-                .trim_start_matches("pg_")
-                .to_string()
-        })
-        .unwrap_or_else(|| "default_schema".to_string())
+        .to_string_lossy()
+        .to_string()
+        .chars()
+        .filter(|ch| ch.is_ascii_alphanumeric())
+        .collect::<String>()
+        .trim_start_matches("pg_")
+        .to_string()
 }
 
 impl Drop for Postgres {
@@ -221,7 +218,7 @@ impl sqllogictest::AsyncDB for Postgres {
         &mut self,
         sql: &str,
     ) -> Result<DBOutput<Self::ColumnType>, Self::Error> {
-        println!(
+        debug!(
             "[{}] Running query: \"{}\"",
             self.relative_path.display(),
             sql

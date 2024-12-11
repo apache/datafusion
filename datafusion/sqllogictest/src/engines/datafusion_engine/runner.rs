@@ -18,15 +18,16 @@
 use std::sync::Arc;
 use std::{path::PathBuf, time::Duration};
 
+use super::{error::Result, normalize, DFSqlLogicTestError};
 use arrow::record_batch::RecordBatch;
 use async_trait::async_trait;
 use datafusion::physical_plan::common::collect;
 use datafusion::physical_plan::execute_stream;
 use datafusion::prelude::SessionContext;
-use log::info;
+use log::Level::{Debug, Info};
+use log::{debug, log_enabled, warn};
 use sqllogictest::DBOutput;
-
-use super::{error::Result, normalize, DFSqlLogicTestError};
+use tokio::time::Instant;
 
 use crate::engines::output::{DFColumnType, DFOutput};
 
@@ -47,12 +48,26 @@ impl sqllogictest::AsyncDB for DataFusion {
     type ColumnType = DFColumnType;
 
     async fn run(&mut self, sql: &str) -> Result<DFOutput> {
-        info!(
-            "[{}] Running query: \"{}\"",
-            self.relative_path.display(),
-            sql
-        );
-        run_query(&self.ctx, sql).await
+        if log_enabled!(Debug) {
+            debug!(
+                "[{}] Running query: \"{}\"",
+                self.relative_path.display(),
+                sql
+            );
+        }
+
+        let start = Instant::now();
+        let result = run_query(&self.ctx, sql).await;
+        let duration = start.elapsed();
+
+        if log_enabled!(Info) && duration.gt(&Duration::from_secs(2)) {
+            warn!(
+                "[{}] Running query took more than 2 sec ({duration:?}): \"{sql}\"",
+                self.relative_path.display()
+            );
+        }
+
+        result
     }
 
     /// Engine name of current database.

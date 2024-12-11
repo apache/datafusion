@@ -48,12 +48,15 @@ half = { workspace = true, default-features = true }
 itertools = { workspace = true }
 log = { workspace = true }
 object_store = { workspace = true }
+once_cell = { version = "1.20", optional = true }
 postgres-protocol = { version = "0.6.4", optional = true }
 postgres-types = { version = "0.2.4", optional = true }
 rust_decimal = { version = "1.27.0" }
-sqllogictest = "0.23.0"
+sqllogictest = { git = "https://github.com/Omega359/sqllogictest-rs.git", branch = "main" }
 sqlparser = { workspace = true }
 tempfile = { workspace = true }
+testcontainers = { version = "0.23", features = ["default"], optional = true }
+testcontainers-modules = { version = "0.11", features = ["postgres"], optional = true }
 thiserror = "2.0.0"
 tokio = { workspace = true }
 tokio-postgres = { version = "0.7.7", optional = true }
@@ -63,9 +66,12 @@ avro = ["datafusion/avro"]
 postgres = [
     "bytes",
     "chrono",
-    "tokio-postgres",
+    "once_cell",
     "postgres-types",
     "postgres-protocol",
+    "testcontainers",
+    "testcontainers-modules",
+    "tokio-postgres",
 ]
 
 [dev-dependencies]
