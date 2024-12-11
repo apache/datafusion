@@ -273,11 +273,11 @@ impl<'a, 'b> ExecutionPlanVisitor for IndentVisitor<'a, 'b> {
     fn pre_visit(&mut self, plan: &dyn ExecutionPlan) -> Result<bool, Self::Error> {
         write!(self.f, "{:indent$}", "", indent = self.indent * 2)?;
         plan.fmt_as(self.t, self.f)?;
-        let node_id = plan
-            .properties()
-            .node_id()
-            .map_or("None".to_string(), |id| format!(", node_id={}", id));
-        write!(self.f, "{node_id}")?;
+
+        if let Some(node_id) = plan.properties().node_id() {
+            write!(self.f, ", node_id={}", node_id)?;
+        }
+
         match self.show_metrics {
             ShowMetrics::None => {}
             ShowMetrics::Aggregated => {
