@@ -223,8 +223,8 @@ config_namespace! {
 
         /// Configure the SQL dialect used by DataFusion's parser; supported values include: Generic,
         /// MySQL, PostgreSQL, Hive, SQLite, Snowflake, Redshift, MsSQL, ClickHouse, BigQuery, and Ansi.
-        pub dialect: String, default = "generic".to_string() // no need to lowercase because
-        // [`sqlparser::dialect_from_str`] is case-insensitive
+        pub dialect: String, default = "generic".to_string()
+        // no need to lowercase because `sqlparser::dialect_from_str`] is case-insensitive
 
         /// If true, permit lengths for `VARCHAR` such as `VARCHAR(20)`, but
         /// ignore the length. If false, error if a `VARCHAR` with a length is
