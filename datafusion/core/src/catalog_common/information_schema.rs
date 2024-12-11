@@ -406,6 +406,7 @@ fn get_udf_args_and_return_types(
             .into_iter()
             .map(|arg_types| {
                 // only handle the function which implemented [`ScalarUDFImpl::return_type`] method
+                #[allow(deprecated)]
                 let return_type = udf.return_type(&arg_types).ok().map(|t| t.to_string());
                 let arg_types = arg_types
                     .into_iter()
