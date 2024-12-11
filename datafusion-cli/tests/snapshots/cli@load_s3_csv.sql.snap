@@ -3,7 +3,7 @@ source: tests/cli_integration.rs
 info:
   program: datafusion-cli
   args: []
-  stdin: "CREATE EXTERNAL TABLE CARS\nSTORED AS CSV\nOPTIONS(\n    'aws.access_key_id' 'DataFusionLogin',\n    'aws.secret_access_key' 'DataFusionPassword',\n    'aws.endpoint' 'http://localhost:9000',\n    'aws.allow_http' 'true'\n)\nLOCATION 's3://datafusion/cars.csv';\n\nSELECT * FROM CARS limit 1;"
+  stdin: "CREATE EXTERNAL TABLE CARS\nSTORED AS CSV\nLOCATION 's3://datafusion/cars.csv';\n\nSELECT * FROM CARS limit 1;"
 input_file: tests/sql/load_s3_csv.sql
 ---
 success: true

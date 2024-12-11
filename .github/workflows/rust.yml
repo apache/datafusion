@@ -167,8 +167,9 @@ jobs:
     runs-on: ubuntu-latest
     env:
       AWS_ENDPOINT: http://localhost:9000
-      AWS_ACCESS_KEY_ID: DataFusionLogin
-      AWS_SECRET_ACCESS_KEY: DataFusionPassword
+      AWS_ACCESS_KEY_ID: TEST-DataFusionLogin
+      AWS_SECRET_ACCESS_KEY: TEST-DataFusionPassword
+
     steps:
       - uses: actions/checkout@v4
         with:
@@ -179,11 +180,8 @@ jobs:
           rustup default stable
       - name: Setup Minio - S3-compatible storage
         working-directory: datafusion-cli
-        run: |
-          echo "MINIO_CONTAINER=$(docker run -d -p 9000:9000 -e MINIO_ROOT_USER=DataFusionLogin -e MINIO_ROOT_PASSWORD=DataFusionPassword quay.io/minio/minio server /data)" >> $GITHUB_ENV
-          aws s3 mb s3://datafusion --endpoint-url=$AWS_ENDPOINT
-          aws s3 cp ../datafusion/core/tests/data/cars.csv s3://datafusion/cars.csv --endpoint-url=$AWS_ENDPOINT
-
+        run:
+          echo "MINIO_CONTAINER=$(docker run -d -p 9000:9000 -e MINIO_ROOT_USER=TEST-DataFusionLogin -e MINIO_ROOT_PASSWORD=TEST-DataFusionPassword quay.io/minio/minio server /data)" >> $GITHUB_ENV
       - name: Run tests (excluding doctests, but with integration tests)
         working-directory: datafusion-cli
         env:

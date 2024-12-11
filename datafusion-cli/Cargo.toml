@@ -69,3 +69,4 @@ insta = { version = "1.41.1", features = ["glob", "filters"] }
 insta-cmd = "0.6.0"
 predicates = "3.0"
 rstest = "0.22"
+aws-sdk-s3 = { version = "1.65.0" }
