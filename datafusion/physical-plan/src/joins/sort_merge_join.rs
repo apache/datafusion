@@ -1683,10 +1683,7 @@ impl SortMergeJoinStream {
                 if !matches!(self.join_type, JoinType::Right) {
                     if matches!(
                         self.join_type,
-                        JoinType::LeftSemi
-                            | JoinType::LeftAnti
-                            | JoinType::RightAnti
-                            | JoinType::LeftMark
+                        JoinType::LeftSemi | JoinType::LeftAnti | JoinType::LeftMark
                     ) {
                         let right_cols = fetch_right_columns_by_idxs(
                             &self.buffered_data,
@@ -1695,6 +1692,14 @@ impl SortMergeJoinStream {
                         )?;
 
                         get_filter_column(&self.filter, &left_columns, &right_cols)
+                    } else if matches!(self.join_type, JoinType::RightAnti) {
+                        let right_cols = fetch_right_columns_by_idxs(
+                            &self.buffered_data,
+                            chunk.buffered_batch_idx.unwrap(),
+                            &right_indices,
+                        )?;
+
+                        get_filter_column(&self.filter, &right_cols, &left_columns)
                     } else {
                         get_filter_column(&self.filter, &left_columns, &right_columns)
                     }
@@ -4186,174 +4191,176 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_left_anti_join_filtered_mask() -> Result<()> {
-        let mut joined_batches = build_joined_record_batches()?;
-        let schema = joined_batches.batches.first().unwrap().schema();
+    async fn test_anti_join_filtered_mask() -> Result<()> {
+        for join_type in [LeftAnti, RightAnti] {
+            let mut joined_batches = build_joined_record_batches()?;
+            let schema = joined_batches.batches.first().unwrap().schema();
 
-        let output = concat_batches(&schema, &joined_batches.batches)?;
-        let out_mask = joined_batches.filter_mask.finish();
-        let out_indices = joined_batches.row_indices.finish();
+            let output = concat_batches(&schema, &joined_batches.batches)?;
+            let out_mask = joined_batches.filter_mask.finish();
+            let out_indices = joined_batches.row_indices.finish();
 
-        assert_eq!(
-            get_corrected_filter_mask(
-                LeftAnti,
-                &UInt64Array::from(vec![0]),
-                &[0usize],
-                &BooleanArray::from(vec![true]),
-                1
+            assert_eq!(
+                get_corrected_filter_mask(
+                    join_type,
+                    &UInt64Array::from(vec![0]),
+                    &[0usize],
+                    &BooleanArray::from(vec![true]),
+                    1
+                )
+                .unwrap(),
+                BooleanArray::from(vec![None])
+            );
+
+            assert_eq!(
+                get_corrected_filter_mask(
+                    join_type,
+                    &UInt64Array::from(vec![0]),
+                    &[0usize],
+                    &BooleanArray::from(vec![false]),
+                    1
+                )
+                .unwrap(),
+                BooleanArray::from(vec![Some(true)])
+            );
+
+            assert_eq!(
+                get_corrected_filter_mask(
+                    join_type,
+                    &UInt64Array::from(vec![0, 0]),
+                    &[0usize; 2],
+                    &BooleanArray::from(vec![true, true]),
+                    2
+                )
+                .unwrap(),
+                BooleanArray::from(vec![None, None])
+            );
+
+            assert_eq!(
+                get_corrected_filter_mask(
+                    join_type,
+                    &UInt64Array::from(vec![0, 0, 0]),
+                    &[0usize; 3],
+                    &BooleanArray::from(vec![true, true, true]),
+                    3
+                )
+                .unwrap(),
+                BooleanArray::from(vec![None, None, None])
+            );
+
+            assert_eq!(
+                get_corrected_filter_mask(
+                    join_type,
+                    &UInt64Array::from(vec![0, 0, 0]),
+                    &[0usize; 3],
+                    &BooleanArray::from(vec![true, false, true]),
+                    3
+                )
+                .unwrap(),
+                BooleanArray::from(vec![None, None, None])
+            );
+
+            assert_eq!(
+                get_corrected_filter_mask(
+                    join_type,
+                    &UInt64Array::from(vec![0, 0, 0]),
+                    &[0usize; 3],
+                    &BooleanArray::from(vec![false, false, true]),
+                    3
+                )
+                .unwrap(),
+                BooleanArray::from(vec![None, None, None])
+            );
+
+            assert_eq!(
+                get_corrected_filter_mask(
+                    join_type,
+                    &UInt64Array::from(vec![0, 0, 0]),
+                    &[0usize; 3],
+                    &BooleanArray::from(vec![false, true, true]),
+                    3
+                )
+                .unwrap(),
+                BooleanArray::from(vec![None, None, None])
+            );
+
+            assert_eq!(
+                get_corrected_filter_mask(
+                    join_type,
+                    &UInt64Array::from(vec![0, 0, 0]),
+                    &[0usize; 3],
+                    &BooleanArray::from(vec![false, false, false]),
+                    3
+                )
+                .unwrap(),
+                BooleanArray::from(vec![None, None, Some(true)])
+            );
+
+            let corrected_mask = get_corrected_filter_mask(
+                join_type,
+                &out_indices,
+                &joined_batches.batch_ids,
+                &out_mask,
+                output.num_rows(),
             )
-            .unwrap(),
-            BooleanArray::from(vec![None])
-        );
+            .unwrap();
 
-        assert_eq!(
-            get_corrected_filter_mask(
-                LeftAnti,
-                &UInt64Array::from(vec![0]),
-                &[0usize],
-                &BooleanArray::from(vec![false]),
-                1
-            )
-            .unwrap(),
-            BooleanArray::from(vec![Some(true)])
-        );
+            assert_eq!(
+                corrected_mask,
+                BooleanArray::from(vec![
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    Some(true),
+                    None,
+                    Some(true)
+                ])
+            );
 
-        assert_eq!(
-            get_corrected_filter_mask(
-                LeftAnti,
-                &UInt64Array::from(vec![0, 0]),
-                &[0usize; 2],
-                &BooleanArray::from(vec![true, true]),
-                2
-            )
-            .unwrap(),
-            BooleanArray::from(vec![None, None])
-        );
+            let filtered_rb = filter_record_batch(&output, &corrected_mask)?;
 
-        assert_eq!(
-            get_corrected_filter_mask(
-                LeftAnti,
-                &UInt64Array::from(vec![0, 0, 0]),
-                &[0usize; 3],
-                &BooleanArray::from(vec![true, true, true]),
-                3
-            )
-            .unwrap(),
-            BooleanArray::from(vec![None, None, None])
-        );
+            assert_batches_eq!(
+                &[
+                    "+---+----+---+----+",
+                    "| a | b  | x | y  |",
+                    "+---+----+---+----+",
+                    "| 1 | 13 | 1 | 12 |",
+                    "| 1 | 14 | 1 | 11 |",
+                    "+---+----+---+----+",
+                ],
+                &[filtered_rb]
+            );
 
-        assert_eq!(
-            get_corrected_filter_mask(
-                LeftAnti,
-                &UInt64Array::from(vec![0, 0, 0]),
-                &[0usize; 3],
-                &BooleanArray::from(vec![true, false, true]),
-                3
-            )
-            .unwrap(),
-            BooleanArray::from(vec![None, None, None])
-        );
+            // output null rows
+            let null_mask = arrow::compute::not(&corrected_mask)?;
+            assert_eq!(
+                null_mask,
+                BooleanArray::from(vec![
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    Some(false),
+                    None,
+                    Some(false),
+                ])
+            );
 
-        assert_eq!(
-            get_corrected_filter_mask(
-                LeftAnti,
-                &UInt64Array::from(vec![0, 0, 0]),
-                &[0usize; 3],
-                &BooleanArray::from(vec![false, false, true]),
-                3
-            )
-            .unwrap(),
-            BooleanArray::from(vec![None, None, None])
-        );
+            let null_joined_batch = filter_record_batch(&output, &null_mask)?;
 
-        assert_eq!(
-            get_corrected_filter_mask(
-                LeftAnti,
-                &UInt64Array::from(vec![0, 0, 0]),
-                &[0usize; 3],
-                &BooleanArray::from(vec![false, true, true]),
-                3
-            )
-            .unwrap(),
-            BooleanArray::from(vec![None, None, None])
-        );
-
-        assert_eq!(
-            get_corrected_filter_mask(
-                LeftAnti,
-                &UInt64Array::from(vec![0, 0, 0]),
-                &[0usize; 3],
-                &BooleanArray::from(vec![false, false, false]),
-                3
-            )
-            .unwrap(),
-            BooleanArray::from(vec![None, None, Some(true)])
-        );
-
-        let corrected_mask = get_corrected_filter_mask(
-            LeftAnti,
-            &out_indices,
-            &joined_batches.batch_ids,
-            &out_mask,
-            output.num_rows(),
-        )
-        .unwrap();
-
-        assert_eq!(
-            corrected_mask,
-            BooleanArray::from(vec![
-                None,
-                None,
-                None,
-                None,
-                None,
-                Some(true),
-                None,
-                Some(true)
-            ])
-        );
-
-        let filtered_rb = filter_record_batch(&output, &corrected_mask)?;
-
-        assert_batches_eq!(
-            &[
-                "+---+----+---+----+",
-                "| a | b  | x | y  |",
-                "+---+----+---+----+",
-                "| 1 | 13 | 1 | 12 |",
-                "| 1 | 14 | 1 | 11 |",
-                "+---+----+---+----+",
-            ],
-            &[filtered_rb]
-        );
-
-        // output null rows
-        let null_mask = arrow::compute::not(&corrected_mask)?;
-        assert_eq!(
-            null_mask,
-            BooleanArray::from(vec![
-                None,
-                None,
-                None,
-                None,
-                None,
-                Some(false),
-                None,
-                Some(false),
-            ])
-        );
-
-        let null_joined_batch = filter_record_batch(&output, &null_mask)?;
-
-        assert_batches_eq!(
-            &[
-                "+---+---+---+---+",
-                "| a | b | x | y |",
-                "+---+---+---+---+",
-                "+---+---+---+---+",
-            ],
-            &[null_joined_batch]
-        );
+            assert_batches_eq!(
+                &[
+                    "+---+---+---+---+",
+                    "| a | b | x | y |",
+                    "+---+---+---+---+",
+                    "+---+---+---+---+",
+                ],
+                &[null_joined_batch]
+            );
+        }
         Ok(())
     }
 
