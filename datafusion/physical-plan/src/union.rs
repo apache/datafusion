@@ -572,10 +572,7 @@ impl Stream for CombinedRecordBatchStream {
     }
 }
 
-fn col_stats_union(
-    left: ColumnStatistics,
-    right: ColumnStatistics,
-) -> ColumnStatistics {
+fn col_stats_union(left: ColumnStatistics, right: ColumnStatistics) -> ColumnStatistics {
     ColumnStatistics {
         null_count: left.null_count.add(&right.null_count),
         max_value: left.max_value.max(&right.max_value),
@@ -729,7 +726,7 @@ mod tests {
                     distinct_count: Precision::Absent,
                     max_value: Precision::Exact(ScalarValue::Int64(Some(34))),
                     min_value: Precision::Exact(ScalarValue::Int64(Some(-4))),
-                    sum_value: Precision::Exact(ScalarValue::Int64(Some(42))),
+                    sum_value: Precision::Exact(ScalarValue::Int64(Some(84))),
                     null_count: Precision::Exact(1),
                 },
                 ColumnStatistics {

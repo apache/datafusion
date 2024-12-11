@@ -353,7 +353,7 @@ mod tests {
     use crate::test;
 
     use arrow_schema::DataType;
-    use datafusion_common::{ScalarValue, ColumnStatistics};
+    use datafusion_common::{ColumnStatistics, ScalarValue};
 
     #[tokio::test]
     async fn project_no_column() -> Result<()> {
@@ -418,7 +418,8 @@ mod tests {
             Arc::new(Column::new("col0", 0)),
         ];
 
-        let result = stats_projection(source, exprs.into_iter(), Arc::new(schema)).unwrap();
+        let result =
+            stats_projection(source, exprs.into_iter(), Arc::new(schema)).unwrap();
 
         let expected = Statistics {
             num_rows: Precision::Exact(5),
@@ -454,7 +455,8 @@ mod tests {
             Arc::new(Column::new("col0", 0)),
         ];
 
-        let result = stats_projection(source, exprs.into_iter(), Arc::new(schema)).unwrap();
+        let result =
+            stats_projection(source, exprs.into_iter(), Arc::new(schema)).unwrap();
 
         let expected = Statistics {
             num_rows: Precision::Exact(5),

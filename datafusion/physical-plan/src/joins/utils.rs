@@ -1989,8 +1989,6 @@ mod tests {
     fn create_column_stats(
         min: Precision<i64>,
         max: Precision<i64>,
-        // FIXME(ngates): add these to test cases
-        // sum: Precision<i64>,
         distinct_count: Precision<usize>,
         null_count: Precision<usize>,
     ) -> ColumnStatistics {
@@ -1998,7 +1996,6 @@ mod tests {
             distinct_count,
             min_value: min.map(ScalarValue::from),
             max_value: max.map(ScalarValue::from),
-            // sum_value: sum.map(ScalarValue::from),
             sum_value: Absent,
             null_count,
         }

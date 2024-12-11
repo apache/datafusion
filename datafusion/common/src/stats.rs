@@ -174,9 +174,10 @@ impl Precision<ScalarValue> {
             }
             (Precision::Inexact(a), Precision::Exact(b))
             | (Precision::Exact(a), Precision::Inexact(b))
-            | (Precision::Inexact(a), Precision::Inexact(b)) => {
-                a.add(b).map(Precision::Inexact).unwrap_or(Precision::Absent)
-            }
+            | (Precision::Inexact(a), Precision::Inexact(b)) => a
+                .add(b)
+                .map(Precision::Inexact)
+                .unwrap_or(Precision::Absent),
             (_, _) => Precision::Absent,
         }
     }
@@ -191,9 +192,10 @@ impl Precision<ScalarValue> {
             }
             (Precision::Inexact(a), Precision::Exact(b))
             | (Precision::Exact(a), Precision::Inexact(b))
-            | (Precision::Inexact(a), Precision::Inexact(b)) => {
-                a.add(b).map(Precision::Inexact).unwrap_or(Precision::Absent)
-            }
+            | (Precision::Inexact(a), Precision::Inexact(b)) => a
+                .add(b)
+                .map(Precision::Inexact)
+                .unwrap_or(Precision::Absent),
             (_, _) => Precision::Absent,
         }
     }
@@ -203,12 +205,16 @@ impl Precision<ScalarValue> {
     /// values is [`Precision::Absent`], the result is `Absent` too.
     pub fn multiply(&self, other: &Precision<ScalarValue>) -> Precision<ScalarValue> {
         match (self, other) {
-            (Precision::Exact(a), Precision::Exact(b)) => a.mul_checked(b)
+            (Precision::Exact(a), Precision::Exact(b)) => a
+                .mul_checked(b)
                 .map(Precision::Exact)
                 .unwrap_or(Precision::Absent),
             (Precision::Inexact(a), Precision::Exact(b))
             | (Precision::Exact(a), Precision::Inexact(b))
-            | (Precision::Inexact(a), Precision::Inexact(b)) => a.mul_checked(b).map(Precision::Inexact).unwrap_or(Precision::Absent),
+            | (Precision::Inexact(a), Precision::Inexact(b)) => a
+                .mul_checked(b)
+                .map(Precision::Inexact)
+                .unwrap_or(Precision::Absent),
             (_, _) => Precision::Absent,
         }
     }
@@ -247,7 +253,9 @@ impl From<Precision<usize>> for Precision<ScalarValue> {
     fn from(value: Precision<usize>) -> Self {
         match value {
             Precision::Exact(v) => Precision::Exact(ScalarValue::UInt64(Some(v as u64))),
-            Precision::Inexact(v) => Precision::Inexact(ScalarValue::UInt64(Some(v as u64))),
+            Precision::Inexact(v) => {
+                Precision::Inexact(ScalarValue::UInt64(Some(v as u64)))
+            }
             Precision::Absent => Precision::Absent,
         }
     }
