@@ -148,9 +148,7 @@ impl ScalarUDFImpl for DatePartFunc {
     }
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        // return type could be Float32 or Int32 depending on the input arguments
-        // return_type_from_exprs should be called instead
-        Ok(DataType::Float64)
+        internal_err!("return_type_from_exprs shoud be called instead")
     }
 
     fn return_type_from_exprs(
