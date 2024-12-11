@@ -322,7 +322,13 @@ impl TypeSignature {
                 .map(|logical_type| match logical_type {
                     TypeSignatureClass::Native(l) => get_data_types(l.native()),
                     TypeSignatureClass::Timestamp => {
-                        vec![DataType::Timestamp(TimeUnit::Nanosecond, None)]
+                        vec![
+                            DataType::Timestamp(TimeUnit::Nanosecond, None),
+                            DataType::Timestamp(
+                                TimeUnit::Nanosecond,
+                                Some(TIMEZONE_WILDCARD.into()),
+                            ),
+                        ]
                     }
                     TypeSignatureClass::Date => {
                         vec![DataType::Date64]
