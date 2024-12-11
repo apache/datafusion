@@ -180,4 +180,4 @@ unused_qualifications = "deny"
 
 ## Temp patch for sqlparser
 [patch.crates-io]
-sqlparser = { git = "https://github.com/apache/datafusion-sqlparser-rs.git", rev = "d0fcc06652ba9880622d0ef8b426c809cee752fe" }
+sqlparser = { git = "https://github.com/apache/datafusion-sqlparser-rs.git", rev = "d6743e924c99cebaa1f065eb721ae085f9f0116f" }
