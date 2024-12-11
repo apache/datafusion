@@ -29,7 +29,7 @@ SQL dialect], including:
 Notable exceptions:
 
 - Array/List functions and semantics follow the [DuckDB SQL dialect].
-- DataFusion's type system is based on the [Apache Arrow type system], and the mapping to PostgrSQL types is not always 1:1.
+- DataFusion's type system is based on the [Apache Arrow type system], and the mapping to PostgreSQL types is not always 1:1.
 - DataFusion has its own syntax (dialect) for certain operations (like [`CREATE EXTERNAL TABLE`])
 
 As Apache DataFusion is designed to be fully customizable, systems built on
