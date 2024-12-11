@@ -2570,12 +2570,6 @@ async fn roundtrip_union_query() -> Result<()> {
         .await?;
     let dataframe = ctx.sql(query).await?;
     let plan = dataframe.into_optimized_plan()?;
-    // plan.display_indent_schema()
-    // Aggregate: groupBy=[[t1.a]], aggr=[[]] [a:Int64;N]
-    //   Union [a:Int64;N]
-    //     TableScan: t1 projection=[a] [a:Int64;N]
-    //     TableScan: t1 projection=[a] [a:Int64;N]
-    //     TableScan: t2 projection=[a] [a:Int64;N]
 
     let bytes = logical_plan_to_bytes(&plan)?;
 
@@ -2586,13 +2580,7 @@ async fn roundtrip_union_query() -> Result<()> {
         .await?;
     let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx)?;
     // proto deserialisation only supports 2-way union, hence this plan has nested unions
-    // logical_round_trip.display_indent_schema()
-    // Aggregate: groupBy=[[t1.a]], aggr=[[]] [a:Int64;N]
-    //   Union [a:Int64;N]
-    //     Union [a:Int64;N]
-    //       TableScan: t1 projection=[a] [a:Int64;N]
-    //       TableScan: t1 projection=[a] [a:Int64;N]
-    //     TableScan: t2 projection=[a] [a:Int64;N]
+    // apply the flatten unions optimizer rule to be able to compare
     let optimizer = Optimizer::with_rules(vec![Arc::new(EliminateNestedUnion::new())]);
     let unnested = optimizer.optimize(logical_round_trip, &(ctx.state()), |_x, _y| {})?;
     assert_eq!(
