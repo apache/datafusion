@@ -17,8 +17,8 @@
 
 use super::{add_offset_to_expr, collapse_lex_req, ProjectionMapping};
 use crate::{
-    expressions::Column, physical_exprs_contains, LexOrdering, LexRequirement,
-    PhysicalExpr, PhysicalExprRef, PhysicalSortExpr, PhysicalSortRequirement,
+    expressions::Column, LexOrdering, LexRequirement, PhysicalExpr, PhysicalExprRef,
+    PhysicalSortExpr, PhysicalSortRequirement,
 };
 use std::fmt::Display;
 use std::sync::Arc;
@@ -27,7 +27,7 @@ use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::JoinType;
 use datafusion_physical_expr_common::physical_expr::format_physical_expr_list;
 
-use indexmap::IndexSet;
+use indexmap::{IndexMap, IndexSet};
 
 /// A structure representing a expression known to be constant in a physical execution plan.
 ///
@@ -546,28 +546,20 @@ impl EquivalenceGroup {
                 .collect::<Vec<_>>();
             (new_class.len() > 1).then_some(EquivalenceClass::new(new_class))
         });
-        // TODO: Convert the algorithm below to a version that uses `HashMap`.
-        //       once `Arc<dyn PhysicalExpr>` can be stored in `HashMap`.
-        // See issue: https://github.com/apache/datafusion/issues/8027
-        let mut new_classes = vec![];
-        for (source, target) in mapping.iter() {
-            if new_classes.is_empty() {
-                new_classes.push((source, vec![Arc::clone(target)]));
-            }
-            if let Some((_, values)) =
-                new_classes.iter_mut().find(|(key, _)| *key == source)
-            {
-                if !physical_exprs_contains(values, target) {
-                    values.push(Arc::clone(target));
-                }
-            }
-        }
+        // the key is the source expression and the value is the EquivalenceClass that contains the target expression of the source expression.
+        let mut new_classes: IndexMap<Arc<dyn PhysicalExpr>, EquivalenceClass> =
+            IndexMap::new();
+        mapping.iter().for_each(|(source, target)| {
+            new_classes
+                .entry(Arc::clone(source))
+                .or_insert_with(EquivalenceClass::new_empty)
+                .push(Arc::clone(target));
+        });
         // Only add equivalence classes with at least two members as singleton
         // equivalence classes are meaningless.
         let new_classes = new_classes
             .into_iter()
-            .filter_map(|(_, values)| (values.len() > 1).then_some(values))
-            .map(EquivalenceClass::new);
+            .filter_map(|(_, cls)| (cls.len() > 1).then_some(cls));
 
         let classes = projected_classes.chain(new_classes).collect();
         Self::new(classes)
