@@ -150,14 +150,16 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         match expr {
             Expr::Column(col) => match &col.relation {
                 Some(q) => {
-                    match schema.iter().find(|(qualifier, field)| match qualifier {
+                    match schema.iter().find(|(qualifier, field, _)| match qualifier {
                         Some(field_q) => {
                             field.name() == &col.name
                                 && field_q.to_string().ends_with(&format!(".{q}"))
                         }
                         _ => false,
                     }) {
-                        Some((qualifier, df_field)) => Expr::from((qualifier, df_field)),
+                        Some((qualifier, df_field, _)) => {
+                            Expr::from((qualifier, df_field))
+                        }
                         None => Expr::Column(col),
                     }
                 }
@@ -565,11 +567,11 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 }
                 not_impl_err!("AnyOp not supported by ExprPlanner: {binary_expr:?}")
             }
-            SQLExpr::Wildcard => Ok(Expr::Wildcard {
+            SQLExpr::Wildcard(_token) => Ok(Expr::Wildcard {
                 qualifier: None,
                 options: WildcardOptions::default(),
             }),
-            SQLExpr::QualifiedWildcard(object_name) => Ok(Expr::Wildcard {
+            SQLExpr::QualifiedWildcard(object_name, _token) => Ok(Expr::Wildcard {
                 qualifier: Some(self.object_name_to_table_reference(object_name)?),
                 options: WildcardOptions::default(),
             }),

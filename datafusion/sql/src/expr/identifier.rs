@@ -24,6 +24,7 @@ use datafusion_common::{
 };
 use datafusion_expr::planner::PlannerResult;
 use datafusion_expr::{Case, Expr};
+use sqlparser::tokenizer::Span;
 
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 use datafusion_expr::UNNAMED_TABLE;
@@ -46,6 +47,8 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 })?;
             Ok(Expr::ScalarVariable(ty, var_names))
         } else {
+            let id_span = id.span;
+
             // Don't use `col()` here because it will try to
             // interpret names with '.' as if they were
             // compound identifiers, but this is not a compound
@@ -59,6 +62,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 return Ok(Expr::Column(Column {
                     relation: qualifier.filter(|q| q.table() != UNNAMED_TABLE).cloned(),
                     name: normalize_ident,
+                    spans: vec![id_span],
                 }));
             }
 
@@ -79,6 +83,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             Ok(Expr::Column(Column {
                 relation: None,
                 name: normalize_ident,
+                spans: vec![id_span],
             }))
         }
     }
@@ -108,6 +113,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 })?;
             Ok(Expr::ScalarVariable(ty, var_names))
         } else {
+            let span = Span::union_iter(ids.iter().map(|id| id.span));
             let ids = ids
                 .into_iter()
                 .map(|id| self.ident_normalizer.normalize(id))
@@ -135,9 +141,9 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     plan_err!("could not parse compound identifier from {ids:?}")
                 }
                 // Found matching field with no spare identifier(s)
-                Some((field, qualifier, _nested_names)) => {
-                    Ok(Expr::Column(Column::from((qualifier, field))))
-                }
+                Some((field, qualifier, _nested_names)) => Ok(Expr::Column(
+                    Column::from((qualifier, field)).with_span(span),
+                )),
                 None => {
                     // Return default where use all identifiers to not have a nested field
                     // this len check is because at 5 identifiers will have to have a nested field
@@ -172,14 +178,19 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                                     // safe unwrap as s can never be empty or exceed the bounds
                                     let (relation, column_name) =
                                         form_identifier(s).unwrap();
-                                    Ok(Expr::Column(Column::new(relation, column_name)))
+                                    Ok(Expr::Column(
+                                        Column::new(relation, column_name)
+                                            .with_span(span),
+                                    ))
                                 }
                             }
                         } else {
                             let s = &ids[0..ids.len()];
                             // Safe unwrap as s can never be empty or exceed the bounds
                             let (relation, column_name) = form_identifier(s).unwrap();
-                            Ok(Expr::Column(Column::new(relation, column_name)))
+                            Ok(Expr::Column(
+                                Column::new(relation, column_name).with_span(span),
+                            ))
                         }
                     }
                 }

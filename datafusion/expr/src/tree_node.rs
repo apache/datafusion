@@ -127,7 +127,16 @@ impl TreeNode for Expr {
                 expr,
                 relation,
                 name,
-            }) => f(*expr)?.update_data(|e| e.alias_qualified(relation, name)),
+                span,
+                ..
+            }) => f(*expr)?.update_data(|e| {
+                let e = e.alias_qualified(relation, name);
+                if let Expr::Alias(alias) = e {
+                    Expr::Alias(alias.with_span(span))
+                } else {
+                    unreachable!();
+                }
+            }),
             Expr::InSubquery(InSubquery {
                 expr,
                 subquery,

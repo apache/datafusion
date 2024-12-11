@@ -363,7 +363,10 @@ fn get_exprs_except_skipped(
     columns_to_skip: HashSet<Column>,
 ) -> Vec<Expr> {
     if columns_to_skip.is_empty() {
-        schema.iter().map(Expr::from).collect::<Vec<Expr>>()
+        schema
+            .iter()
+            .map(|(q, f, spans)| Expr::from((q, f, spans.iter().copied())))
+            .collect::<Vec<Expr>>()
     } else {
         schema
             .columns()
@@ -700,7 +703,7 @@ pub fn exprlist_to_fields<'a>(
     // Look for exact match in plan's output schema
     let wildcard_schema = find_base_plan(plan).schema();
     let input_schema = plan.schema();
-    let result = exprs
+    let (fields, errs) = exprs
         .into_iter()
         .map(|e| match e {
             Expr::Wildcard { qualifier, options } => match qualifier {
@@ -756,11 +759,19 @@ pub fn exprlist_to_fields<'a>(
             },
             _ => Ok(vec![e.to_field(input_schema)?]),
         })
-        .collect::<Result<Vec<_>>>()?
-        .into_iter()
-        .flatten()
-        .collect();
-    Ok(result)
+        .fold((vec![], vec![]), |(mut fields, mut errs), result| {
+            match result {
+                Ok(this_fields) => fields.extend(this_fields),
+                Err(err) => errs.push(err),
+            }
+            (fields, errs)
+        });
+
+    if !errs.is_empty() {
+        Err(DataFusionError::Collection(errs))
+    } else {
+        Ok(fields)
+    }
 }
 
 /// Find the suitable base plan to expand the wildcard expression recursively.

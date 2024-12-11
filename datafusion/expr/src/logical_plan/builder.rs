@@ -54,12 +54,14 @@ use datafusion_common::file_options::file_type::FileType;
 use datafusion_common::{
     exec_err, get_target_functional_dependencies, internal_err, not_impl_err,
     plan_datafusion_err, plan_err, Column, DFSchema, DFSchemaRef, DataFusionError,
+    Diagnostic, DiagnosticEntry, DiagnosticEntryKind, FieldsSpans,
     FunctionalDependencies, Result, ScalarValue, TableReference, ToDFSchema,
     UnnestOptions,
 };
 use datafusion_expr_common::type_coercion::binary::type_union_resolution;
 
 use indexmap::IndexSet;
+use sqlparser::tokenizer::Span;
 
 /// Default table name for unnamed table
 pub const UNNAMED_TABLE: &str = "?table?";
@@ -1341,7 +1343,7 @@ pub fn change_redundant_column(fields: &Fields) -> Vec<Field> {
 fn mark_field(schema: &DFSchema) -> (Option<TableReference>, Arc<Field>) {
     let mut table_references = schema
         .iter()
-        .filter_map(|(qualifier, _)| qualifier)
+        .filter_map(|(qualifier, _, _)| qualifier)
         .collect::<Vec<_>>();
     table_references.dedup();
     let table_reference = if table_references.len() == 1 {
@@ -1375,8 +1377,8 @@ pub fn build_join_schema(
             .collect()
     }
 
-    let right_fields = right.iter();
-    let left_fields = left.iter();
+    let right_fields = right.iter().map(|(q, f, _)| (q, f));
+    let left_fields = left.iter().map(|(q, f, _)| (q, f));
 
     let qualified_fields: Vec<(Option<TableReference>, Arc<Field>)> = match join_type {
         JoinType::Inner => {
@@ -1438,6 +1440,12 @@ pub fn build_join_schema(
         join_type,
         left.fields().len(),
     );
+    let left_fields_spans: FieldsSpans =
+        left.iter().map(|(_, _, spans)| spans).cloned().collect();
+    let right_fields_spans: FieldsSpans =
+        right.iter().map(|(_, _, spans)| spans).cloned().collect();
+    let fields_spans =
+        left_fields_spans.join(&right_fields_spans, join_type, left.fields().len());
     let metadata = left
         .metadata()
         .clone()
@@ -1445,7 +1453,8 @@ pub fn build_join_schema(
         .chain(right.metadata().clone())
         .collect();
     let dfschema = DFSchema::new_with_metadata(qualified_fields, metadata)?;
-    dfschema.with_functional_dependencies(func_dependencies)
+    let dfschema = dfschema.with_functional_dependencies(func_dependencies)?;
+    Ok(dfschema.with_fields_spans(fields_spans))
 }
 
 /// Add additional "synthetic" group by expressions based on functional
@@ -1524,7 +1533,38 @@ pub fn union(left_plan: LogicalPlan, right_plan: LogicalPlan) -> Result<LogicalP
             left has {} columns whereas right has {} columns",
             left_plan.schema().fields().len(),
             right_plan.schema().fields().len()
-        );
+        )
+        .map_err(|err| {
+            err.with_diagnostic(|_| {
+                Diagnostic::new([
+                    DiagnosticEntry::new(
+                        "UNION queries have different number of columns",
+                        DiagnosticEntryKind::Error,
+                        Span::empty(),
+                    ),
+                    DiagnosticEntry::new(
+                        format!(
+                            "This side has {} columns",
+                            left_plan.schema().fields().len()
+                        ),
+                        DiagnosticEntryKind::Note,
+                        Span::union_iter(
+                            left_plan.schema().fields_spans().iter().flatten().copied(),
+                        ),
+                    ),
+                    DiagnosticEntry::new(
+                        format!(
+                            "This side has {} columns",
+                            right_plan.schema().fields().len()
+                        ),
+                        DiagnosticEntryKind::Note,
+                        Span::union_iter(
+                            right_plan.schema().fields_spans().iter().flatten().copied(),
+                        ),
+                    ),
+                ])
+            })
+        });
     }
 
     // Temporarily use the schema from the left input and later rely on the analyzer to
@@ -1864,7 +1904,7 @@ pub fn unnest_with_options(
     let fields = input_schema
         .iter()
         .enumerate()
-        .map(|(index, (original_qualifier, original_field))| {
+        .map(|(index, (original_qualifier, original_field, _))| {
             match indices_to_unnest.get(&index) {
                 Some(column_to_unnest) => {
                     let recursions_on_column = options
@@ -1968,6 +2008,7 @@ mod tests {
     use crate::{col, expr, expr_fn::exists, in_subquery, lit, scalar_subquery};
 
     use datafusion_common::{RecursionUnnestOption, SchemaError};
+    use sqlparser::tokenizer::Span;
 
     #[test]
     fn plan_builder_simple() -> Result<()> {
@@ -2212,6 +2253,7 @@ mod tests {
                         Column {
                             relation: Some(TableReference::Bare { table }),
                             name,
+                            spans: _,
                         },
                 },
                 _,

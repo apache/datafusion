@@ -38,10 +38,12 @@ use datafusion_common::{
     plan_err, Column, DFSchema, HashMap, Result, ScalarValue, TableReference,
 };
 use datafusion_functions_window_common::field::WindowUDFFieldArgs;
+use derivative::Derivative;
 use sqlparser::ast::{
     display_comma_separated, ExceptSelectItem, ExcludeSelectItem, IlikeSelectItem,
     NullTreatment, RenameSelectItem, ReplaceSelectElement,
 };
+use sqlparser::tokenizer::Span;
 
 /// Represents logical expressions such as `A + 1`, or `CAST(c1 AS int)`.
 ///
@@ -222,6 +224,8 @@ use sqlparser::ast::{
 /// // to 42 = 5 AND b = 6
 /// assert_eq!(rewritten.data, lit(42).eq(lit(5)).and(col("b").eq(lit(6))));
 #[derive(Clone, PartialEq, Eq, PartialOrd, Hash, Debug)]
+// TODO make the enum smaller with more boxing (looks like Wildcard is now bigger)
+#[allow(clippy::large_enum_variant)]
 pub enum Expr {
     /// An expression with a specific name.
     Alias(Alias),
@@ -351,6 +355,16 @@ impl<'a> From<(Option<&'a TableReference>, &'a FieldRef)> for Expr {
     }
 }
 
+/// Same as [`From<(Option<&'a TableReference>, &'a FieldRef)>`] but with a span
+impl<'a, IT> From<(Option<&'a TableReference>, &'a FieldRef, IT)> for Expr
+where
+    IT: IntoIterator<Item = Span>,
+{
+    fn from(value: (Option<&'a TableReference>, &'a FieldRef, IT)) -> Self {
+        Expr::from(Column::from((value.0, value.1)).with_spans(value.2))
+    }
+}
+
 impl<'a> TreeNodeContainer<'a, Self> for Expr {
     fn apply_elements<F: FnMut(&'a Self) -> Result<TreeNodeRecursion>>(
         &'a self,
@@ -388,11 +402,19 @@ impl Unnest {
 }
 
 /// Alias expression
-#[derive(Clone, PartialEq, Eq, PartialOrd, Hash, Debug)]
+#[derive(Clone, Derivative, Debug)]
+#[derivative(PartialEq, Eq, PartialOrd, Hash)]
 pub struct Alias {
     pub expr: Box<Expr>,
     pub relation: Option<TableReference>,
     pub name: String,
+    #[derivative(
+        PartialEq = "ignore",
+        Hash = "ignore",
+        PartialOrd = "ignore",
+        Ord = "ignore"
+    )]
+    pub span: Span,
 }
 
 impl Alias {
@@ -406,7 +428,12 @@ impl Alias {
             expr: Box::new(expr),
             relation: relation.map(|r| r.into()),
             name: name.into(),
+            span: Span::empty(),
         }
+    }
+
+    pub fn with_span(self, span: Span) -> Self {
+        Self { span, ..self }
     }
 }
 
@@ -1111,7 +1138,12 @@ impl Expr {
     /// output schema. We can use this qualified name to reference the field.
     pub fn qualified_name(&self) -> (Option<TableReference>, String) {
         match self {
-            Expr::Column(Column { relation, name }) => (relation.clone(), name.clone()),
+            Expr::Column(Column {
+                relation,
+                name,
+                spans: _,
+                ..
+            }) => (relation.clone(), name.clone()),
             Expr::Alias(Alias { relation, name, .. }) => (relation.clone(), name.clone()),
             _ => (None, self.schema_name().to_string()),
         }
@@ -1663,6 +1695,25 @@ impl Expr {
             | Expr::Placeholder(..) => false,
         }
     }
+
+    pub fn get_span(&self) -> Span {
+        match self {
+            Expr::Column(Column { spans, .. }) => match spans.as_slice() {
+                [] => panic!("No spans for column expr"),
+                [span] => *span,
+                _ => panic!("Column expr has more than one span"),
+            },
+            Expr::Alias(Alias {
+                expr,
+                span: alias_span,
+                ..
+            }) => {
+                let span = expr.get_span();
+                span.union(alias_span)
+            }
+            _ => Span::empty(),
+        }
+    }
 }
 
 impl HashNode for Expr {
@@ -1676,6 +1727,7 @@ impl HashNode for Expr {
                 expr: _expr,
                 relation,
                 name,
+                ..
             }) => {
                 relation.hash(state);
                 name.hash(state);

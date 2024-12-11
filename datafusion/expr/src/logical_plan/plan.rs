@@ -2164,12 +2164,14 @@ impl Projection {
 /// the `Result` will contain the schema; otherwise, it will contain an error.
 pub fn projection_schema(input: &LogicalPlan, exprs: &[Expr]) -> Result<Arc<DFSchema>> {
     let metadata = input.schema().metadata().clone();
+    let fields_spans = exprs.iter().map(|e| vec![e.get_span()]).collect();
 
     let schema =
         DFSchema::new_with_metadata(exprlist_to_fields(exprs, input)?, metadata)?
             .with_functional_dependencies(calc_func_dependencies_for_project(
                 exprs, input,
-            )?)?;
+            )?)?
+            .with_fields_spans(fields_spans);
 
     Ok(Arc::new(schema))
 }
@@ -2200,9 +2202,11 @@ impl SubqueryAlias {
         // Since schema is the same, other than qualifier, we can use existing
         // functional dependencies:
         let func_dependencies = plan.schema().functional_dependencies().clone();
+        let fields_spans = plan.schema().fields_spans().clone();
         let schema = DFSchemaRef::new(
             DFSchema::try_from_qualified_schema(alias.clone(), &schema)?
-                .with_functional_dependencies(func_dependencies)?,
+                .with_functional_dependencies(func_dependencies)?
+                .with_fields_spans(fields_spans),
         );
         Ok(SubqueryAlias {
             input: plan,
@@ -2379,7 +2383,7 @@ impl Window {
         let fields: Vec<(Option<TableReference>, Arc<Field>)> = input
             .schema()
             .iter()
-            .map(|(q, f)| (q.cloned(), Arc::clone(f)))
+            .map(|(q, f, _)| (q.cloned(), Arc::clone(f)))
             .collect();
         let input_len = fields.len();
         let mut window_fields = fields;

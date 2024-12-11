@@ -1686,7 +1686,7 @@ impl DataFrame {
         let mut fields: Vec<Expr> = plan
             .schema()
             .iter()
-            .filter_map(|(qualifier, field)| {
+            .filter_map(|(qualifier, field, _)| {
                 if field.name() == name {
                     col_exists = true;
                     Some(new_column.clone())
@@ -1764,7 +1764,7 @@ impl DataFrame {
             .plan
             .schema()
             .iter()
-            .map(|(qualifier, field)| {
+            .map(|(qualifier, field, _)| {
                 if qualifier.eq(&qualifier_rename) && field.as_ref() == field_rename {
                     col(Column::from((qualifier, field))).alias(new_name)
                 } else {

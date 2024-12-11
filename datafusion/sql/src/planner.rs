@@ -22,7 +22,8 @@ use std::vec;
 
 use arrow_schema::*;
 use datafusion_common::{
-    field_not_found, internal_err, plan_datafusion_err, DFSchemaRef, SchemaError,
+    field_not_found, internal_err, plan_datafusion_err, DFSchemaRef, Diagnostic,
+    DiagnosticEntry, DiagnosticEntryKind, SchemaError,
 };
 use sqlparser::ast::{ArrayElemTypeDef, ExactNumberInfo};
 use sqlparser::ast::{ColumnDef as SQLColumnDef, ColumnOption};
@@ -37,6 +38,7 @@ use datafusion_common::{
 use datafusion_expr::logical_plan::{LogicalPlan, LogicalPlanBuilder};
 use datafusion_expr::utils::find_column_exprs;
 use datafusion_expr::{col, Expr};
+use sqlparser::tokenizer::Span;
 
 use crate::utils::{make_decimal_type, value_to_string};
 pub use datafusion_expr::planner::ContextProvider;
@@ -339,7 +341,8 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         plan: LogicalPlan,
         alias: TableAlias,
     ) -> Result<LogicalPlan> {
-        let plan = self.apply_expr_alias(plan, alias.columns)?;
+        let idents = alias.columns.into_iter().map(|c| c.name).collect();
+        let plan = self.apply_expr_alias(plan, idents)?;
 
         LogicalPlanBuilder::from(plan)
             .alias(TableReference::bare(
@@ -382,7 +385,23 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             .try_for_each(|col| match col {
                 Expr::Column(col) => match &col.relation {
                     Some(r) => {
-                        schema.field_with_qualified_name(r, &col.name)?;
+                        schema.field_with_qualified_name(r, &col.name).map_err(
+                            |err| {
+                                err.with_diagnostic(|_| {
+                                    Diagnostic::new([DiagnosticEntry::new(
+                                        format!(
+                                            "No field named '{}' in relation '{}'",
+                                            col.name, r
+                                        ),
+                                        DiagnosticEntryKind::Error,
+                                        col.spans
+                                            .first()
+                                            .copied()
+                                            .unwrap_or(Span::empty()),
+                                    )])
+                                })
+                            },
+                        )?;
                         Ok(())
                     }
                     None => {
@@ -395,6 +414,13 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 }
                 .map_err(|_: DataFusionError| {
                     field_not_found(col.relation.clone(), col.name.as_str(), schema)
+                        .with_diagnostic(|_| {
+                            Diagnostic::new([DiagnosticEntry::new(
+                                format!("No field named '{}'", col.name),
+                                DiagnosticEntryKind::Error,
+                                col.spans.first().copied().unwrap_or(Span::empty()),
+                            )])
+                        })
                 }),
                 _ => internal_err!("Not a column"),
             })
@@ -586,6 +612,13 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             | SQLDataType::Nullable(_)
             | SQLDataType::LowCardinality(_)
             | SQLDataType::Trigger
+            // MySQL datatypes
+            | SQLDataType::TinyBlob
+            | SQLDataType::MediumBlob
+            | SQLDataType::LongBlob
+            | SQLDataType::TinyText
+            | SQLDataType::MediumText
+            | SQLDataType::LongText
             => not_impl_err!(
                 "Unsupported SQL type {sql_type:?}"
             ),

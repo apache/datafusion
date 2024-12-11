@@ -18,14 +18,14 @@
 use std::sync::Arc;
 
 use arrow_schema::TimeUnit;
+use datafusion_common::Result;
 use datafusion_expr::Expr;
 use regex::Regex;
+use sqlparser::tokenizer::Span;
 use sqlparser::{
     ast::{self, BinaryOperator, Function, Ident, ObjectName, TimezoneInfo},
     keywords::ALL_KEYWORDS,
 };
-
-use datafusion_common::Result;
 
 use super::{utils::character_length_to_sql, utils::date_part_to_sql, Unparser};
 
@@ -279,6 +279,7 @@ impl PostgreSqlDialect {
             name: ObjectName(vec![Ident {
                 value: func_name.to_string(),
                 quote_style: None,
+                span: Span::empty(),
             }]),
             args: ast::FunctionArguments::List(ast::FunctionArgumentList {
                 duplicate_treatment: None,

@@ -101,6 +101,8 @@ fn rewrite_in_terms_of_projection(
         let search_col = Expr::Column(Column {
             relation: None,
             name,
+            // Span is not used in PartialEq
+            spans: vec![],
         });
 
         // look for the column named the same as this expr

@@ -16,8 +16,8 @@
 // under the License.
 
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
-use datafusion_common::{not_impl_err, Column, Result};
-use datafusion_expr::{JoinType, LogicalPlan, LogicalPlanBuilder};
+use datafusion_common::{not_impl_err, Column, DataFusionError, Result, ScalarValue};
+use datafusion_expr::{Expr, JoinType, LogicalPlan, LogicalPlanBuilder};
 use sqlparser::ast::{Join, JoinConstraint, JoinOperator, TableFactor, TableWithJoins};
 use std::collections::HashSet;
 
@@ -26,19 +26,21 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         &self,
         t: TableWithJoins,
         planner_context: &mut PlannerContext,
-    ) -> Result<LogicalPlan> {
+    ) -> Result<(LogicalPlan, Option<DataFusionError>)> {
         let mut left = if is_lateral(&t.relation) {
             self.create_relation_subquery(t.relation, planner_context)?
         } else {
             self.create_relation(t.relation, planner_context)?
         };
+        let mut ignorable_error = None;
         let old_outer_from_schema = planner_context.outer_from_schema();
         for join in t.joins {
             planner_context.extend_outer_from_schema(left.schema())?;
-            left = self.parse_relation_join(left, join, planner_context)?;
+            (left, ignorable_error) =
+                self.parse_relation_join(left, join, planner_context)?;
         }
         planner_context.set_outer_from_schema(old_outer_from_schema);
-        Ok(left)
+        Ok((left, ignorable_error))
     }
 
     fn parse_relation_join(
@@ -46,7 +48,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         left: LogicalPlan,
         join: Join,
         planner_context: &mut PlannerContext,
-    ) -> Result<LogicalPlan> {
+    ) -> Result<(LogicalPlan, Option<DataFusionError>)> {
         let right = if is_lateral_join(&join)? {
             self.create_relation_subquery(join.relation, planner_context)?
         } else {
@@ -93,7 +95,10 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             JoinOperator::FullOuter(constraint) => {
                 self.parse_join(left, right, constraint, JoinType::Full, planner_context)
             }
-            JoinOperator::CrossJoin => self.parse_cross_join(left, right),
+            JoinOperator::CrossJoin => {
+                let plan = self.parse_cross_join(left, right)?;
+                Ok((plan, None))
+            }
             other => not_impl_err!("Unsupported JOIN operator {other:?}"),
         }
     }
@@ -113,24 +118,32 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         constraint: JoinConstraint,
         join_type: JoinType,
         planner_context: &mut PlannerContext,
-    ) -> Result<LogicalPlan> {
+    ) -> Result<(LogicalPlan, Option<DataFusionError>)> {
         match constraint {
             JoinConstraint::On(sql_expr) => {
                 let join_schema = left.schema().join(right.schema())?;
                 // parse ON expression
-                let expr = self.sql_to_expr(sql_expr, &join_schema, planner_context)?;
-                LogicalPlanBuilder::from(left)
+                let (expr, ignorable_error) =
+                    match self.sql_to_expr(sql_expr, &join_schema, planner_context) {
+                        Ok(expr) => (expr, None),
+                        Err(e) => {
+                            (Expr::Literal(ScalarValue::Boolean(Some(false))), Some(e))
+                        }
+                    };
+                let plan = LogicalPlanBuilder::from(left)
                     .join_on(right, join_type, Some(expr))?
-                    .build()
+                    .build()?;
+                Ok((plan, ignorable_error))
             }
             JoinConstraint::Using(idents) => {
                 let keys: Vec<Column> = idents
                     .into_iter()
                     .map(|x| Column::from_name(self.ident_normalizer.normalize(x)))
                     .collect();
-                LogicalPlanBuilder::from(left)
+                let plan = LogicalPlanBuilder::from(left)
                     .join_using(right, join_type, keys)?
-                    .build()
+                    .build()?;
+                Ok((plan, None))
             }
             JoinConstraint::Natural => {
                 let left_cols: HashSet<&String> =
@@ -143,17 +156,21 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     .filter(|f| left_cols.contains(f))
                     .map(Column::from_name)
                     .collect();
-                if keys.is_empty() {
-                    self.parse_cross_join(left, right)
+                let plan = if keys.is_empty() {
+                    self.parse_cross_join(left, right)?
                 } else {
                     LogicalPlanBuilder::from(left)
                         .join_using(right, join_type, keys)?
-                        .build()
-                }
+                        .build()?
+                };
+                Ok((plan, None))
             }
-            JoinConstraint::None => LogicalPlanBuilder::from(left)
-                .join_on(right, join_type, [])?
-                .build(),
+            JoinConstraint::None => {
+                let plan = LogicalPlanBuilder::from(left)
+                    .join_on(right, join_type, [])?
+                    .build()?;
+                Ok((plan, None))
+            }
         }
     }
 }
