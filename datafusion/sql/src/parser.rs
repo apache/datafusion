@@ -20,8 +20,8 @@
 use std::collections::VecDeque;
 use std::fmt;
 
-use sqlparser::tokenizer::TokenWithSpan;
 use sqlparser::ast::ExprWithAlias;
+use sqlparser::tokenizer::TokenWithSpan;
 use sqlparser::{
     ast::{
         ColumnDef, ColumnOptionDef, ObjectName, OrderByExpr, Query,
