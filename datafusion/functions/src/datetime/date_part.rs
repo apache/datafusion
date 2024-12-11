@@ -35,7 +35,7 @@ use datafusion_common::cast::{
     as_timestamp_microsecond_array, as_timestamp_millisecond_array,
     as_timestamp_nanosecond_array, as_timestamp_second_array,
 };
-use datafusion_common::{exec_err, internal_err, ExprSchema, Result, ScalarValue};
+use datafusion_common::{exec_err, internal_err, not_impl_err, ExprSchema, Result, ScalarValue};
 use datafusion_expr::scalar_doc_sections::DOC_SECTION_DATETIME;
 use datafusion_expr::TypeSignature::Exact;
 use datafusion_expr::{
@@ -292,7 +292,7 @@ fn get_date_part_doc() -> &'static Documentation {
 fn seconds_as_i32(array: &dyn Array, unit: TimeUnit) -> Result<ArrayRef> {
     // Nanosecond is neither supported in Postgres nor DuckDB, to avoid to deal with overflow and precision issue we don't support nanosecond
     if unit == Nanosecond {
-        return internal_err!("unit {unit:?} not supported");
+        return not_impl_err!("unit {unit:?} not supported");
     }
 
     let conversion_factor = match unit {

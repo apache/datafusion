@@ -225,7 +225,7 @@ SELECT EXTRACT(microsecond FROM timestamp '2020-09-08T12:00:12.12345678+00:00')
 ----
 12123456
 
-query error DataFusion error: Internal error: unit Nanosecond not supported
+query error DataFusion error: This feature is not implemented: unit Nanosecond not supported
 SELECT EXTRACT(nanosecond FROM timestamp '2020-09-08T12:00:12.12345678+00:00')
 
 query I
@@ -243,7 +243,7 @@ SELECT EXTRACT("microsecond" FROM timestamp '2020-09-08T12:00:12.12345678+00:00'
 ----
 12123456
 
-query error DataFusion error: Internal error: unit Nanosecond not supported
+query error DataFusion error: This feature is not implemented: unit Nanosecond not supported
 SELECT EXTRACT("nanosecond" FROM timestamp '2020-09-08T12:00:12.12345678+00:00')
 
 query I
@@ -261,7 +261,7 @@ SELECT EXTRACT('microsecond' FROM timestamp '2020-09-08T12:00:12.12345678+00:00'
 ----
 12123456
 
-query error DataFusion error: Internal error: unit Nanosecond not supported
+query error DataFusion error: This feature is not implemented: unit Nanosecond not supported
 SELECT EXTRACT('nanosecond' FROM timestamp '2020-09-08T12:00:12.12345678+00:00')
 
 
@@ -281,7 +281,7 @@ SELECT date_part('microsecond', timestamp '2020-09-08T12:00:12.12345678+00:00')
 ----
 12123456
 
-query error DataFusion error: Internal error: unit Nanosecond not supported
+query error DataFusion error: This feature is not implemented: unit Nanosecond not supported
 SELECT date_part('nanosecond', timestamp '2020-09-08T12:00:12.12345678+00:00')
 
 
@@ -300,7 +300,7 @@ SELECT date_part('microsecond', '2020-09-08T12:00:12.12345678+00:00')
 ----
 12123456
 
-query error DataFusion error: Internal error: unit Nanosecond not supported
+query error DataFusion error: This feature is not implemented: unit Nanosecond not supported
 SELECT date_part('nanosecond', '2020-09-08T12:00:12.12345678+00:00')
 
 # test_date_part_time
@@ -356,7 +356,7 @@ SELECT extract(microsecond from arrow_cast('23:32:50'::time, 'Time32(Second)'))
 ----
 50000000
 
-query error DataFusion error: Internal error: unit Nanosecond not supported
+query error DataFusion error: This feature is not implemented: unit Nanosecond not supported
 SELECT extract(nanosecond from arrow_cast('23:32:50'::time, 'Time32(Second)'))
 
 query R
@@ -420,7 +420,7 @@ SELECT extract(microsecond from arrow_cast('23:32:50.123'::time, 'Time32(Millise
 ----
 50123000
 
-query error DataFusion error: Internal error: unit Nanosecond not supported
+query error DataFusion error: This feature is not implemented: unit Nanosecond not supported
 SELECT extract(nanosecond from arrow_cast('23:32:50.123'::time, 'Time32(Millisecond)'))
 
 query R
@@ -484,7 +484,7 @@ SELECT extract(microsecond from arrow_cast('23:32:50.123456'::time, 'Time64(Micr
 ----
 50123456
 
-query error DataFusion error: Internal error: unit Nanosecond not supported
+query error DataFusion error: This feature is not implemented: unit Nanosecond not supported
 SELECT extract(nanosecond from arrow_cast('23:32:50.123456'::time, 'Time64(Microsecond)'))
 
 query R
@@ -564,7 +564,7 @@ SELECT extract(us from arrow_cast('23:32:50.123456789'::time, 'Time64(Nanosecond
 ----
 50123456
 
-query error DataFusion error: Internal error: unit Nanosecond not supported
+query error DataFusion error: This feature is not implemented: unit Nanosecond not supported
 SELECT date_part('nanosecond', arrow_cast('23:32:50.123456789'::time, 'Time64(Nanosecond)'))
 
 query R
@@ -874,5 +874,5 @@ SELECT (date_part('microsecond', now()) = EXTRACT(microsecond FROM now()))
 ----
 true
 
-query error DataFusion error: Internal error: unit Nanosecond not supported
+query error DataFusion error: This feature is not implemented: unit Nanosecond not supported
 SELECT (date_part('nanosecond', now()) = EXTRACT(nanosecond FROM now()))
