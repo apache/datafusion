@@ -351,7 +351,7 @@ pin_project! {
 impl<S> RecordBatchStreamAdapter<S> {
     /// Creates a new [`RecordBatchStreamAdapter`] from the provided schema and stream.
     ///
-    /// Note to create a [`SendableRecordBatchStream`] you pun the result
+    /// Note to create a [`SendableRecordBatchStream`] you pin the result
     ///
     /// # Example
     /// ```
