@@ -22,7 +22,7 @@
 The included SQL supported in Apache DataFusion mostly follows the [PostgreSQL
 SQL dialect], including:
 
-- The sql parser and [SQL planner]
+- The SQL parser and [SQL planner]
 - Type checking, analyzer, and type coercions
 - Semantics of functions bundled with DataFusion
 
@@ -33,7 +33,7 @@ Notable exceptions:
 - DataFusion has its own syntax (dialect) for certain operations (like [`CREATE EXTERNAL TABLE`])
 
 As Apache DataFusion is designed to be fully customizable, systems built on
-DataFusion can and do implement different SQL semantics. Using DataFusion's APs,
+DataFusion can and do implement different SQL semantics. Using DataFusion's APIs,
 you can provide alternate function definitions, type rules, and/or SQL syntax
 that matches other systems such as Apache Spark or MySQL or your own custom
 semantics.
