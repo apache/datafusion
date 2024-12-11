@@ -18,8 +18,8 @@
 use datafusion_expr::expr::Unnest;
 use sqlparser::ast::Value::SingleQuotedString;
 use sqlparser::ast::{
-    self, Array, BinaryOperator, Expr as AstExpr, Function, Ident, Interval, ObjectName,
-    Subscript, TimezoneInfo, UnaryOperator,
+    self, AccessExpr, Array, BinaryOperator, Expr as AstExpr, Function, Ident, Interval,
+    ObjectName, Subscript, TimezoneInfo, UnaryOperator,
 };
 use std::sync::Arc;
 use std::vec;
@@ -520,9 +520,9 @@ impl Unparser<'_> {
         }
         let array = self.expr_to_sql(&args[0])?;
         let index = self.expr_to_sql(&args[1])?;
-        Ok(ast::Expr::Subscript {
-            expr: Box::new(array),
-            subscript: Box::new(Subscript::Index { index }),
+        Ok(ast::Expr::CompoundFieldAccess {
+            root: Box::new(array),
+            access_chain: vec![AccessExpr::Subscript(Subscript::Index { index })],
         })
     }
 
