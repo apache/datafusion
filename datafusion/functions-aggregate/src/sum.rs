@@ -483,3 +483,43 @@ impl<T: ArrowPrimitiveType> Accumulator for DistinctSumAccumulator<T> {
         size_of_val(self) + self.values.capacity() * size_of::<T::Native>()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use datafusion_common::{ColumnStatistics, Statistics};
+    use datafusion_physical_expr::expressions::Column;
+    use std::sync::Arc;
+
+    #[test]
+    fn sum() {
+        let agg = Box::new(Sum::new());
+        let statistics = Statistics {
+            num_rows: Precision::Exact(5),
+            total_byte_size: Precision::Absent,
+            column_statistics: vec![ColumnStatistics {
+                null_count: Precision::Absent,
+                max_value: Precision::Absent,
+                min_value: Precision::Absent,
+                sum_value: Precision::Exact(ScalarValue::Int8(Some(10))),
+                distinct_count: Default::default(),
+            }],
+        };
+        let mut statistics_args = StatisticsArgs {
+            statistics: &statistics,
+            return_type: &DataType::Int64,
+            is_distinct: false,
+            exprs: &[Arc::new(Column::new("a", 0))],
+        };
+
+        // Ensure that the sum statistic is used and cast to the return type.
+        assert_eq!(
+            agg.value_from_stats(&statistics_args),
+            Some(ScalarValue::Int64(Some(10)))
+        );
+
+        // With a distinct aggregate, the sum statistic isn't helpful
+        statistics_args.is_distinct = true;
+        assert_eq!(agg.value_from_stats(&statistics_args), None);
+    }
+}
