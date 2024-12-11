@@ -23,7 +23,7 @@ fn from_env() {
     // Note: these must be a single test to avoid interference from concurrent execution
     let env_key = "DATAFUSION_OPTIMIZER_FILTER_NULL_JOIN_KEYS";
     // valid testing in different cases
-    for bool_option in ["true", "TRUE", "True"] {
+    for bool_option in ["true", "TRUE", "True", "tRUe"] {
         env::set_var(env_key, bool_option);
         let config = ConfigOptions::from_env().unwrap();
         env::remove_var(env_key);

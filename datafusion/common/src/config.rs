@@ -1532,7 +1532,7 @@ macro_rules! config_namespace_with_hashmap {
      $vis:vis struct $struct_name:ident {
         $(
         $(#[doc = $d:tt])*
-        $field_vis:vis $field_name:ident : $field_type:ty, default = $default:expr
+        $field_vis:vis $field_name:ident : $field_type:ty, $(transform = $transform:expr,)? default = $default:expr
         )*$(,)*
     }
     ) => {
@@ -1551,7 +1551,10 @@ macro_rules! config_namespace_with_hashmap {
                 let (key, rem) = key.split_once('.').unwrap_or((key, ""));
                 match key {
                     $(
-                       stringify!($field_name) => self.$field_name.set(rem, value),
+                       stringify!($field_name) => {
+                           $(let value = $transform(value);)?
+                           self.$field_name.set(rem, value.as_ref())
+                       },
                     )*
                     _ => _config_err!(
                         "Config value \"{}\" not found on {}", key, stringify!($struct_name)
@@ -1630,7 +1633,7 @@ config_namespace_with_hashmap! {
         /// lzo, brotli(level), lz4, zstd(level), and lz4_raw.
         /// These values are not case-sensitive. If NULL, uses
         /// default parquet options
-        pub compression: Option<String>, default = None
+        pub compression: Option<String>, transform = str::to_lowercase, default = None
 
         /// Sets if statistics are enabled for the column
         /// Valid values are: "none", "chunk", and "page"
