@@ -979,10 +979,9 @@ impl<F: ConfigField + Default> ConfigField for Option<F> {
     }
 }
 
-fn parse<T>(input: &str) -> Result<T>
+fn default_transform<T>(input: &str) -> Result<T>
 where
     T: FromStr,
-    T::Err: Display,
     <T as FromStr>::Err: Sync + Send + Error + 'static,
 {
     input.parse().map_err(|e| {
@@ -1000,7 +999,7 @@ where
 #[macro_export]
 macro_rules! config_field {
     ($t:ty) => {
-        config_field!($t, value => parse(value)?);
+        config_field!($t, value => default_transform(value)?);
     };
 
     ($t:ty, $arg:ident => $transform:expr) => {
@@ -1018,7 +1017,7 @@ macro_rules! config_field {
 }
 
 config_field!(String);
-config_field!(bool, value => parse(value.to_lowercase().as_str())?);
+config_field!(bool, value => default_transform(value.to_lowercase().as_str())?);
 config_field!(usize);
 config_field!(f64);
 config_field!(u64);
