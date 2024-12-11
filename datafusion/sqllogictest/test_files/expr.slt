@@ -1100,7 +1100,7 @@ SELECT date_part('microsecond', timestamp '2020-09-08T12:00:12.12345678+00:00')
 query error DataFusion error: Internal error: unit Nanosecond not supported
 SELECT date_part('nanosecond', timestamp '2020-09-08T12:00:12.12345678+00:00')
 
-query error
+query I
 SELECT date_part('second', '2020-09-08T12:00:12.12345678+00:00')
 ----
 12
@@ -1338,7 +1338,7 @@ SELECT date_part('second', arrow_cast('23:32:50.123456789'::time, 'Time64(Nanose
 ----
 50
 
-query error
+query I
 select extract(second from '2024-08-09T12:13:14');
 ----
 14
