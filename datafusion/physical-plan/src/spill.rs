@@ -357,12 +357,12 @@ mod tests {
         let schema = Arc::new(Schema::new(vec![
             Field::new(
                 "nested_int",
-                DataType::List(Arc::new(Field::new("item", DataType::Int32, true))),
+                DataType::List(Arc::new(Field::new_list_field(DataType::Int32, true))),
                 false,
             ),
             Field::new(
                 "nested_int2",
-                DataType::List(Arc::new(Field::new("item", DataType::Int32, true))),
+                DataType::List(Arc::new(Field::new_list_field(DataType::Int32, true))),
                 false,
             ),
         ]));

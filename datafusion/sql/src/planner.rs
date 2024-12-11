@@ -468,7 +468,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     || matches!(tz_info, TimezoneInfo::WithTimeZone)
                 {
                     // Timestamp With Time Zone
-                    // INPUT : [SQLDataType]   TimestampTz + [RuntimeConfig] Time Zone
+                    // INPUT : [SQLDataType]   TimestampTz + [Config] Time Zone
                     // OUTPUT: [ArrowDataType] Timestamp<TimeUnit, Some(Time Zone)>
                     self.context_provider.options().execution.time_zone.clone()
                 } else {

@@ -138,7 +138,7 @@ mod tests {
     fn test_functions() -> Result<()> {
         test_function!(
             EndsWithFunc::new(),
-            &[
+            vec![
                 ColumnarValue::Scalar(ScalarValue::from("alphabet")),
                 ColumnarValue::Scalar(ScalarValue::from("alph")),
             ],
@@ -149,7 +149,7 @@ mod tests {
         );
         test_function!(
             EndsWithFunc::new(),
-            &[
+            vec![
                 ColumnarValue::Scalar(ScalarValue::from("alphabet")),
                 ColumnarValue::Scalar(ScalarValue::from("bet")),
             ],
@@ -160,7 +160,7 @@ mod tests {
         );
         test_function!(
             EndsWithFunc::new(),
-            &[
+            vec![
                 ColumnarValue::Scalar(ScalarValue::Utf8(None)),
                 ColumnarValue::Scalar(ScalarValue::from("alph")),
             ],
@@ -171,7 +171,7 @@ mod tests {
         );
         test_function!(
             EndsWithFunc::new(),
-            &[
+            vec![
                 ColumnarValue::Scalar(ScalarValue::from("alphabet")),
                 ColumnarValue::Scalar(ScalarValue::Utf8(None)),
             ],

@@ -134,20 +134,20 @@ impl PhysicalExpr for ScalarFunctionExpr {
     }
 
     fn evaluate(&self, batch: &RecordBatch) -> Result<ColumnarValue> {
-        let inputs = self
+        let args = self
             .args
             .iter()
             .map(|e| e.evaluate(batch))
             .collect::<Result<Vec<_>>>()?;
 
-        let input_empty = inputs.is_empty();
-        let input_all_scalar = inputs
+        let input_empty = args.is_empty();
+        let input_all_scalar = args
             .iter()
             .all(|arg| matches!(arg, ColumnarValue::Scalar(_)));
 
         // evaluate the function
         let output = self.fun.invoke_with_args(ScalarFunctionArgs {
-            args: inputs.as_slice(),
+            args,
             number_rows: batch.num_rows(),
             return_type: &self.return_type,
         })?;
@@ -161,8 +161,8 @@ impl PhysicalExpr for ScalarFunctionExpr {
                 return if preserve_scalar {
                     ScalarValue::try_from_array(array, 0).map(ColumnarValue::Scalar)
                 } else {
-                    internal_err!("UDF returned a different number of rows than expected. Expected: {}, Got: {}",
-                            batch.num_rows(), array.len())
+                    internal_err!("UDF {} returned a different number of rows than expected. Expected: {}, Got: {}",
+                            self.name, batch.num_rows(), array.len())
                 };
             }
         }
