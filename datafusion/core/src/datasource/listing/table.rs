@@ -470,6 +470,8 @@ impl ListingOptions {
         let files: Vec<_> = table_path
             .list_all_files(state, store.as_ref(), &self.file_extension)
             .await?
+            // Empty files cannot affect schema but may throw when trying to read for it
+            .try_filter(|object_meta| future::ready(object_meta.size > 0))
             .try_collect()
             .await?;
 
