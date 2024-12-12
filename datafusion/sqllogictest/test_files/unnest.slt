@@ -533,8 +533,16 @@ select unnest(column1) from (select * from (values([1,2,3]), ([4,5,6])) limit 1 
 5
 6
 
-query error DataFusion error: Error during planning: Projections require unique expression names but the expression "UNNEST\(unnest_table.column1\)" at position 0 and "UNNEST\(unnest_table.column1\)" at position 1 have the same name. Consider aliasing \("AS"\) one of them.
+query II
 select unnest(column1), unnest(column1) from unnest_table;
+----
+1 1
+2 2
+3 3
+4 4
+5 5
+6 6
+12 12
 
 query II
 select unnest(column1), unnest(column1) u1 from unnest_table;

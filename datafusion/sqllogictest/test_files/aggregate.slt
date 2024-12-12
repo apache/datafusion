@@ -72,7 +72,7 @@ CREATE TABLE test (c1 BIGINT,c2 BIGINT) as values
 #######
 
 # https://github.com/apache/datafusion/issues/3353
-statement error DataFusion error: Schema error: Schema contains duplicate unqualified field name "approx_distinct\(aggregate_test_100\.c9\)"
+statement error DataFusion error: Schema error: Ambiguous reference to unqualified field "approx_distinct\(aggregate_test_100\.c9\)"
 SELECT approx_distinct(c9) count_c9, approx_distinct(cast(c9 as varchar)) count_c9_str FROM aggregate_test_100
 
 # csv_query_approx_percentile_cont_with_weight
@@ -5943,9 +5943,10 @@ logical_plan
 02)--Aggregate: groupBy=[[employee_csv.state]], aggr=[[sum(employee_csv.salary)]]
 03)----TableScan: employee_csv projection=[state, salary]
 
-# fail if there is duplicate name
-query error DataFusion error: Schema error: Schema contains qualified field name employee_csv\.state and unqualified field name state which would be ambiguous
+query TI
 select state, sum(salary) as state from employee_csv group by state;
+----
+unemployed 10
 
 statement ok
 set datafusion.explain.logical_plan_only = false;
