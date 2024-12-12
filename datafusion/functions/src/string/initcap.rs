@@ -132,21 +132,22 @@ fn initcap_utf8view(args: &[ArrayRef]) -> Result<ArrayRef> {
     Ok(Arc::new(result) as ArrayRef)
 }
 
-fn initcap_string(string: Option<&str>) -> Option<String> {
-    let mut char_vector = Vec::<char>::new();
-    string.map(|string: &str| {
-        char_vector.clear();
-        let mut previous_character_letter_or_number = false;
-        for c in string.chars() {
-            if previous_character_letter_or_number {
-                char_vector.push(c.to_ascii_lowercase());
+fn initcap_string(input: Option<&str>) -> Option<String> {
+    input.map(|s| {
+        let mut result = String::with_capacity(s.len());
+        let mut prev_is_alphanumeric = false;
+
+        for c in s.chars() {
+            let transformed = if prev_is_alphanumeric {
+                c.to_ascii_lowercase()
             } else {
-                char_vector.push(c.to_ascii_uppercase());
-            }
-            previous_character_letter_or_number =
-                c.is_ascii_uppercase() || c.is_ascii_lowercase() || c.is_ascii_digit();
+                c.to_ascii_uppercase()
+            };
+            result.push(transformed);
+            prev_is_alphanumeric = c.is_ascii_alphanumeric();
         }
-        char_vector.iter().collect::<String>()
+
+        result
     })
 }
 
