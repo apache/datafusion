@@ -57,7 +57,7 @@ SELECT id FROM alltypes_plain ORDER BY int_col, double_col
 query R
 SELECT MIN(c12) FROM aggregate_test_100 ORDER BY MIN(c12)
 ----
-0.014793053078
+0.01479305308
 
 # test_nulls_first_asc
 

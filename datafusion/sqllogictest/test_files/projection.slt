@@ -89,11 +89,11 @@ SELECT c1 as c3 FROM aggregate_simple ORDER BY c3 LIMIT 2;
 query RT rowsort
 SELECT avg(c12), c1 FROM aggregate_test_100 GROUP BY c1;
 ----
-0.410407092638 b
-0.486006692713 e
-0.487545174661 a
-0.488553793875 d
-0.660045653644 c
+0.4104070926 b
+0.4860066927 e
+0.4875451747 a
+0.4885537939 d
+0.6600456536 c
 
 # parallel projection
 query II

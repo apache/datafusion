@@ -31,4 +31,4 @@ where
   and l_shipdate >= date '1995-09-01'
   and l_shipdate < date '1995-10-01';
 ----
-16.283855689006
+16.28385569

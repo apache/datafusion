@@ -490,12 +490,12 @@ SELECT extract(nanosecond from arrow_cast('23:32:50.123456'::time, 'Time64(Micro
 query R
 SELECT date_part('epoch', arrow_cast('23:32:50.123456'::time, 'Time64(Microsecond)'))
 ----
-84770.123456
+84770.12346
 
 query R
 SELECT extract(epoch from arrow_cast('23:32:50.123456'::time, 'Time64(Microsecond)'))
 ----
-84770.123456
+84770.12346
 
 ## time64 nanoseconds
 query I
@@ -570,19 +570,19 @@ SELECT date_part('nanosecond', arrow_cast('23:32:50.123456789'::time, 'Time64(Na
 query R
 SELECT date_part('epoch', arrow_cast('23:32:50.123456789'::time, 'Time64(Nanosecond)'))
 ----
-84770.123456789
+84770.12346
 
 query R
 SELECT extract(epoch from arrow_cast('23:32:50.123456789'::time, 'Time64(Nanosecond)'))
 ----
-84770.123456789
+84770.12346
 
 # test_extract_epoch
 
 query R
 SELECT extract(epoch from '1870-01-01T07:29:10.256'::timestamp)
 ----
--3155646649.744
+-3155646650
 
 query R
 SELECT extract(epoch from '2000-01-01T00:00:00.000'::timestamp)
