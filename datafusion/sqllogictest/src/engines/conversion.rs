@@ -106,30 +106,7 @@ pub(crate) fn big_decimal_to_str(value: BigDecimal) -> String {
     // Round the value to limit the number of decimal places
     let value = value.round(12).normalized();
     // Format the value to a string
-    format_big_decimal(value)
-}
-
-fn format_big_decimal(value: BigDecimal) -> String {
-    let (integer, scale) = value.into_bigint_and_exponent();
-    let mut str = integer.to_str_radix(10);
-    if scale <= 0 {
-        // Append zeros to the right of the integer part
-        str.extend(std::iter::repeat('0').take(scale.unsigned_abs() as usize));
-        str
-    } else {
-        let (sign, unsigned_len, unsigned_str) = if integer.is_negative() {
-            ("-", str.len() - 1, &str[1..])
-        } else {
-            ("", str.len(), &str[..])
-        };
-        let scale = scale as usize;
-        if unsigned_len <= scale {
-            format!("{}0.{:0>scale$}", sign, unsigned_str)
-        } else {
-            str.insert(str.len() - scale, '.');
-            str
-        }
-    }
+    value.to_plain_string()
 }
 
 #[cfg(test)]
@@ -158,6 +135,8 @@ mod tests {
         assert_decimal_str_eq!(11, 0, "11");
         assert_decimal_str_eq!(11, -1, "110");
         assert_decimal_str_eq!(0, 0, "0");
+        assert_decimal_str_eq!(12345678901234567890123456789012345678_i128, 0, "12345678901234567890123456789012345678");
+        assert_decimal_str_eq!(12345678901234567890123456789012345678_i128, 38, "0.123456789012");
 
         // Negative cases
         assert_decimal_str_eq!(-110, 3, "-0.11");
@@ -166,6 +145,8 @@ mod tests {
         assert_decimal_str_eq!(-11, 1, "-1.1");
         assert_decimal_str_eq!(-11, 0, "-11");
         assert_decimal_str_eq!(-11, -1, "-110");
+        assert_decimal_str_eq!(-12345678901234567890123456789012345678_i128, 0, "-12345678901234567890123456789012345678");
+        assert_decimal_str_eq!(-12345678901234567890123456789012345678_i128, 38, "-0.123456789012");
 
         // Round to 12 decimal places
         // 1.0000000000011 -> 1.000000000001
