@@ -41,14 +41,10 @@ json = ["serde", "serde_json", "pbjson"]
 
 [dependencies]
 arrow = { workspace = true }
-chrono = { workspace = true }
 datafusion-common = { workspace = true }
-object_store = { workspace = true }
 pbjson = { workspace = true, optional = true }
 prost = { workspace = true }
 serde = { version = "1.0", optional = true }
 serde_json = { workspace = true, optional = true }
 
 [dev-dependencies]
-doc-comment = { workspace = true }
-tokio = { workspace = true }
