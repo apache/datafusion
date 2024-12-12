@@ -149,6 +149,7 @@ mod tests {
 
     #[test]
     fn test_big_decimal_to_str() {
+        assert_decimal_str_eq!(110, 3, "0.11");
         assert_decimal_str_eq!(11, 3, "0.011");
         assert_decimal_str_eq!(11, 2, "0.11");
         assert_decimal_str_eq!(11, 1, "1.1");
@@ -157,6 +158,7 @@ mod tests {
         assert_decimal_str_eq!(0, 0, "0");
 
         // Negative cases
+        assert_decimal_str_eq!(-110, 3, "-0.11");
         assert_decimal_str_eq!(-11, 3, "-0.011");
         assert_decimal_str_eq!(-11, 2, "-0.11");
         assert_decimal_str_eq!(-11, 1, "-1.1");
