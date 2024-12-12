@@ -21,18 +21,18 @@ use datafusion_common::arrow::array::{ArrayRef, Float64Array};
 use datafusion_common::arrow::datatypes::DataType;
 use datafusion_common::arrow::datatypes::Field;
 use datafusion_common::Result;
-use datafusion_expr::window_doc_sections::DOC_SECTION_RANKING;
 use datafusion_expr::{
     Documentation, PartitionEvaluator, Signature, Volatility, WindowUDFImpl,
 };
 use datafusion_functions_window_common::field;
 use datafusion_functions_window_common::partition::PartitionEvaluatorArgs;
+use datafusion_macros::user_doc;
 use field::WindowUDFFieldArgs;
 use std::any::Any;
 use std::fmt::Debug;
 use std::iter;
 use std::ops::Range;
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
 define_udwf_and_expr!(
     CumeDist,
@@ -41,6 +41,11 @@ define_udwf_and_expr!(
 );
 
 /// CumeDist calculates the cume_dist in the window function with order by
+#[user_doc(
+    doc_section(label = "Ranking Functions"),
+    description = "Relative rank of the current row: (number of rows preceding or peer with current row) / (total rows).",
+    syntax_example = "cume_dist()"
+)]
 #[derive(Debug)]
 pub struct CumeDist {
     signature: Signature,
@@ -86,17 +91,8 @@ impl WindowUDFImpl for CumeDist {
     }
 
     fn documentation(&self) -> Option<&Documentation> {
-        Some(get_cume_dist_doc())
+        self.doc()
     }
-}
-
-static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
-
-fn get_cume_dist_doc() -> &'static Documentation {
-    DOCUMENTATION.get_or_init(|| {
-        Documentation::builder(DOC_SECTION_RANKING, "Relative rank of the current row: (number of rows preceding or peer with current row) / (total rows).", "cume_dist()")
-            .build()
-    })
 }
 
 #[derive(Debug, Default)]
