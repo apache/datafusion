@@ -176,10 +176,10 @@ mod tests {
         datasource::file_format::csv::CsvFormat, execution::context::SessionContext,
     };
 
-    use datafusion_common::{Constraints, DFSchema, TableReference};
+    use datafusion_common::{DFSchema, TableReference};
 
     #[tokio::test]
-    async fn test_create_using_non_std_file_ext() {
+    async fn test_create_using_non_std_file_ext() -> Result<()> {
         let csv_file = tempfile::Builder::new()
             .prefix("foo")
             .suffix(".tbl")
@@ -190,21 +190,13 @@ mod tests {
         let context = SessionContext::new();
         let state = context.state();
         let name = TableReference::bare("foo");
-        let cmd = CreateExternalTable {
-            name,
-            location: csv_file.path().to_str().unwrap().to_string(),
-            file_type: "csv".to_string(),
-            schema: Arc::new(DFSchema::empty()),
-            table_partition_cols: vec![],
-            if_not_exists: false,
-            temporary: false,
-            definition: None,
-            order_exprs: vec![],
-            unbounded: false,
-            options: HashMap::from([("format.has_header".into(), "true".into())]),
-            constraints: Constraints::empty(),
-            column_defaults: HashMap::new(),
-        };
+        let cmd = CreateExternalTable::builder()
+            .name(name)
+            .location(csv_file.path().to_str().unwrap().to_string())
+            .file_type("csv".to_string())
+            .schema(Arc::new(DFSchema::empty()))
+            .options(HashMap::from([("format.has_header".into(), "true".into())]))
+            .build()?;
         let table_provider = factory.create(&state, &cmd).await.unwrap();
         let listing_table = table_provider
             .as_any()
@@ -212,10 +204,11 @@ mod tests {
             .unwrap();
         let listing_options = listing_table.options();
         assert_eq!(".tbl", listing_options.file_extension);
+        Ok(())
     }
 
     #[tokio::test]
-    async fn test_create_using_non_std_file_ext_csv_options() {
+    async fn test_create_using_non_std_file_ext_csv_options() -> Result<()> {
         let csv_file = tempfile::Builder::new()
             .prefix("foo")
             .suffix(".tbl")
@@ -230,21 +223,13 @@ mod tests {
         let mut options = HashMap::new();
         options.insert("format.schema_infer_max_rec".to_owned(), "1000".to_owned());
         options.insert("format.has_header".into(), "true".into());
-        let cmd = CreateExternalTable {
-            name,
-            location: csv_file.path().to_str().unwrap().to_string(),
-            file_type: "csv".to_string(),
-            schema: Arc::new(DFSchema::empty()),
-            table_partition_cols: vec![],
-            if_not_exists: false,
-            temporary: false,
-            definition: None,
-            order_exprs: vec![],
-            unbounded: false,
-            options,
-            constraints: Constraints::empty(),
-            column_defaults: HashMap::new(),
-        };
+        let cmd = CreateExternalTable::builder()
+            .name(name)
+            .location(csv_file.path().to_str().unwrap().to_string())
+            .file_type("csv".to_string())
+            .schema(Arc::new(DFSchema::empty()))
+            .options(options)
+            .build()?;
         let table_provider = factory.create(&state, &cmd).await.unwrap();
         let listing_table = table_provider
             .as_any()
@@ -257,5 +242,6 @@ mod tests {
         assert_eq!(csv_options.schema_infer_max_rec, Some(1000));
         let listing_options = listing_table.options();
         assert_eq!(".tbl", listing_options.file_extension);
+        Ok(())
     }
 }
