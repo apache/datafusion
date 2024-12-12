@@ -748,6 +748,7 @@ impl From<&ColumnStatistics> for protobuf::ColumnStats {
         protobuf::ColumnStats {
             min_value: Some(protobuf::Precision::from(&s.min_value)),
             max_value: Some(protobuf::Precision::from(&s.max_value)),
+            sum_value: Some(protobuf::Precision::from(&s.sum_value)),
             null_count: Some(protobuf::Precision::from(&s.null_count)),
             distinct_count: Some(protobuf::Precision::from(&s.distinct_count)),
         }

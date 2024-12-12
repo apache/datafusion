@@ -414,6 +414,7 @@ fn collect_new_statistics(
                     null_count: input_column_stats[idx].null_count.to_inexact(),
                     max_value,
                     min_value,
+                    sum_value: Precision::Absent,
                     distinct_count: distinct_count.to_inexact(),
                 }
             },
@@ -1132,6 +1133,7 @@ mod tests {
                 null_count: Precision::Absent,
                 min_value: Precision::Inexact(ScalarValue::Int32(Some(5))),
                 max_value: Precision::Inexact(ScalarValue::Int32(Some(10))),
+                sum_value: Precision::Absent,
                 distinct_count: Precision::Absent,
             }],
         };
