@@ -215,7 +215,7 @@ mod tests {
 
         let test2 = BinaryTestCase {
             source_types: (SourceType::Bounded, SourceType::Unbounded),
-            expect_fail: true,
+            expect_fail: false,
         };
         let test3 = BinaryTestCase {
             source_types: (SourceType::Bounded, SourceType::Bounded),
@@ -290,7 +290,7 @@ mod tests {
         };
         let test2 = BinaryTestCase {
             source_types: (SourceType::Bounded, SourceType::Unbounded),
-            expect_fail: true,
+            expect_fail: false,
         };
         let test3 = BinaryTestCase {
             source_types: (SourceType::Bounded, SourceType::Bounded),
