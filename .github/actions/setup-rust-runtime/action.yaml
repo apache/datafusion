@@ -34,5 +34,5 @@ runs:
         echo "RUSTC_WRAPPER=sccache" >> $GITHUB_ENV  
         echo "SCCACHE_GHA_ENABLED=true" >> $GITHUB_ENV 
         echo "RUST_BACKTRACE=1" >> $GITHUB_ENV
-        echo "RUSTFLAGS=-C debuginfo=line-tables-only -C incremental=false -Wunused-crate-dependencies" >> $GITHUB_ENV
+        echo "RUSTFLAGS=-C debuginfo=line-tables-only -C incremental=false" >> $GITHUB_ENV
      

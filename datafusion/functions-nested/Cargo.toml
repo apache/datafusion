@@ -54,10 +54,10 @@ datafusion-physical-expr-common = { workspace = true }
 itertools = { workspace = true, features = ["use_std"] }
 log = { workspace = true }
 paste = "1.0.14"
-rand = "0.8.5"
 
 [dev-dependencies]
 criterion = { version = "0.5", features = ["async_tokio"] }
+rand = "0.8.5"
 
 [[bench]]
 harness = false
