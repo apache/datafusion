@@ -1070,5 +1070,3 @@ true
 
 query error DataFusion error: This feature is not implemented: Date part Nanosecond not supported
 SELECT (date_part('nanosecond', now()) = EXTRACT(nanosecond FROM now()))
-
-
