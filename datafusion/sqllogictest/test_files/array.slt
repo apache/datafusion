@@ -4967,26 +4967,26 @@ select list_distance([1, 2, 3], [1, 2, 3]) AS distance;
 query RRR
 select array_distance(column1, column2), array_distance(column1, column3), array_distance(column1, column4) from arrays_distance_table;
 ----
-0 0.374165738677 NULL
-5.196152422707 6.063827174318 NULL
-10.392304845413 11.778794505381 NULL
-15.58845726812 15.935494971917 NULL
+0 0.3741657387 NULL
+5.196152423 6.063827174 NULL
+10.39230485 11.77879451 NULL
+15.58845727 15.93549497 NULL
 
 query RRR
 select array_distance(column1, column2), array_distance(column1, column3), array_distance(column1, column4) from large_arrays_distance_table;
 ----
-0 0.374165738677 NULL
-5.196152422707 6.063827174318 NULL
-10.392304845413 11.778794505381 NULL
-15.58845726812 15.935494971917 NULL
+0 0.3741657387 NULL
+5.196152423 6.063827174 NULL
+10.39230485 11.77879451 NULL
+15.58845727 15.93549497 NULL
 
 query RRR
 select array_distance(column1, column2), array_distance(column1, column3), array_distance(column1, column4) from fixed_size_arrays_distance_table;
 ----
-0 0.374165738677 NULL
-5.196152422707 6.063827174318 NULL
-10.392304845413 11.778794505381 NULL
-15.58845726812 15.935494971917 NULL
+0 0.3741657387 NULL
+5.196152423 6.063827174 NULL
+10.39230485 11.77879451 NULL
+15.58845727 15.93549497 NULL
 
 
 ## array_dims (aliases: `list_dims`)

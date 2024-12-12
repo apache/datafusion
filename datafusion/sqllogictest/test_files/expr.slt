@@ -1742,25 +1742,25 @@ CREATE TABLE doubles (
 query RRR rowsort
 select f64, round(1.0 / f64) as i64_1, acos(round(1.0 / f64)) from doubles;
 ----
-10.1 0 1.570796326795
+10.1 0 1.570796327
 
 # common subexpr with coalesce (short-circuited)
 query RRR
 select f64, coalesce(1.0 / f64, 0.0), acos(coalesce(1.0 / f64, 0.0)) from doubles;
 ----
-10.1 0.09900990099 1.471623942989
+10.1 0.09900990099 1.471623943
 
 # common subexpr with coalesce (short-circuited) and alias
 query RRR
 select f64, coalesce(1.0 / f64, 0.0) as f64_1, acos(coalesce(1.0 / f64, 0.0)) from doubles;
 ----
-10.1 0.09900990099 1.471623942989
+10.1 0.09900990099 1.471623943
 
 # common subexpr with case (short-circuited)
 query RRR rowsort
 select f64, case when f64 > 0 then 1.0 / f64 else null end, acos(case when f64 > 0 then 1.0 / f64 else null end) from doubles;
 ----
-10.1 0.09900990099 1.471623942989
+10.1 0.09900990099 1.471623943
 
 
 statement ok
