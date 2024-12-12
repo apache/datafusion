@@ -65,24 +65,23 @@ macro_rules! export_functions {
     };
 }
 
-/// Creates a singleton `ScalarUDF` of the `$UDF` function named `$GNAME` and a
-/// function named `$NAME` which returns that singleton.
+/// Creates a singleton `ScalarUDF` of the `$UDF` function and a function
+/// named `$NAME` which returns that singleton.
 ///
 /// This is used to ensure creating the list of `ScalarUDF` only happens once.
 macro_rules! make_udf_function {
-    ($UDF:ty, $GNAME:ident, $NAME:ident) => {
-        #[doc = "Return a [`ScalarUDF`](datafusion_expr::ScalarUDF) implementation "]
-        #[doc = stringify!($UDF)]
+    ($UDF:ty, $NAME:ident) => {
+        #[doc = concat!("Return a [`ScalarUDF`](datafusion_expr::ScalarUDF) implementation of ", stringify!($NAME))]
         pub fn $NAME() -> std::sync::Arc<datafusion_expr::ScalarUDF> {
             // Singleton instance of the function
-            static $GNAME: std::sync::LazyLock<
+            static INSTANCE: std::sync::LazyLock<
                 std::sync::Arc<datafusion_expr::ScalarUDF>,
             > = std::sync::LazyLock::new(|| {
                 std::sync::Arc::new(datafusion_expr::ScalarUDF::new_from_impl(
                     <$UDF>::new(),
                 ))
             });
-            std::sync::Arc::clone(&$GNAME)
+            std::sync::Arc::clone(&INSTANCE)
         }
     };
 }
@@ -134,13 +133,13 @@ macro_rules! downcast_arg {
 /// applies a unary floating function to the argument, and returns a value of the same type.
 ///
 /// $UDF: the name of the UDF struct that implements `ScalarUDFImpl`
-/// $GNAME: a singleton instance of the UDF
 /// $NAME: the name of the function
 /// $UNARY_FUNC: the unary function to apply to the argument
 /// $OUTPUT_ORDERING: the output ordering calculation method of the function
+/// $GET_DOC: the function to get the documentation of the UDF
 macro_rules! make_math_unary_udf {
-    ($UDF:ident, $GNAME:ident, $NAME:ident, $UNARY_FUNC:ident, $OUTPUT_ORDERING:expr, $EVALUATE_BOUNDS:expr, $GET_DOC:expr) => {
-        make_udf_function!($NAME::$UDF, $GNAME, $NAME);
+    ($UDF:ident, $NAME:ident, $UNARY_FUNC:ident, $OUTPUT_ORDERING:expr, $EVALUATE_BOUNDS:expr, $GET_DOC:expr) => {
+        make_udf_function!($NAME::$UDF, $NAME);
 
         mod $NAME {
             use std::any::Any;
@@ -248,13 +247,13 @@ macro_rules! make_math_unary_udf {
 /// applies a binary floating function to the argument, and returns a value of the same type.
 ///
 /// $UDF: the name of the UDF struct that implements `ScalarUDFImpl`
-/// $GNAME: a singleton instance of the UDF
 /// $NAME: the name of the function
 /// $BINARY_FUNC: the binary function to apply to the argument
 /// $OUTPUT_ORDERING: the output ordering calculation method of the function
+/// $GET_DOC: the function to get the documentation of the UDF
 macro_rules! make_math_binary_udf {
-    ($UDF:ident, $GNAME:ident, $NAME:ident, $BINARY_FUNC:ident, $OUTPUT_ORDERING:expr, $GET_DOC:expr) => {
-        make_udf_function!($NAME::$UDF, $GNAME, $NAME);
+    ($UDF:ident, $NAME:ident, $BINARY_FUNC:ident, $OUTPUT_ORDERING:expr, $GET_DOC:expr) => {
+        make_udf_function!($NAME::$UDF, $NAME);
 
         mod $NAME {
             use std::any::Any;

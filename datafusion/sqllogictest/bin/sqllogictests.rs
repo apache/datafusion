@@ -15,10 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::ffi::OsStr;
-use std::fs;
-use std::path::{Path, PathBuf};
-
 use clap::Parser;
 use datafusion_common::utils::get_available_parallelism;
 use datafusion_sqllogictest::{DataFusion, TestContext};
@@ -26,6 +22,9 @@ use futures::stream::StreamExt;
 use itertools::Itertools;
 use log::info;
 use sqllogictest::strict_column_validator;
+use std::ffi::OsStr;
+use std::fs;
+use std::path::{Path, PathBuf};
 
 use datafusion_common::{exec_datafusion_err, exec_err, DataFusionError, Result};
 use datafusion_common_runtime::SpawnedTask;
@@ -100,7 +99,8 @@ async fn run_tests() -> Result<()> {
     let errors: Vec<_> = futures::stream::iter(read_test_files(&options)?)
         .map(|test_file| {
             SpawnedTask::spawn(async move {
-                println!("Running {:?}", test_file.relative_path);
+                let file_path = test_file.relative_path.clone();
+                let start = datafusion::common::instant::Instant::now();
                 if options.complete {
                     run_complete_file(test_file).await?;
                 } else if options.postgres_runner {
@@ -108,6 +108,7 @@ async fn run_tests() -> Result<()> {
                 } else {
                     run_test_file(test_file).await?;
                 }
+                println!("Executed {:?}. Took {:?}", file_path, start.elapsed());
                 Ok(()) as Result<()>
             })
             .join()
