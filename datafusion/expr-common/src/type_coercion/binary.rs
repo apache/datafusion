@@ -186,6 +186,12 @@ fn signature(lhs: &DataType, op: &Operator, rhs: &DataType) -> Result<Signature>
             } else if let Some(numeric) = mathematics_numerical_coercion(lhs, rhs) {
                 // Numeric arithmetic, e.g. Int32 + Int32
                 Ok(Signature::uniform(numeric))
+            } else if let Some((new_lhs, new_rhs, ret)) = resolve_ints_to_intervals(lhs, rhs) {
+                Ok(Signature {
+                    lhs: new_lhs,
+                    rhs: new_rhs,
+                    ret,
+                })
             } else {
                 plan_err!(
                     "Cannot coerce arithmetic expression {lhs} {op} {rhs} to valid types"
@@ -1449,6 +1455,22 @@ fn null_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
     }
 }
 
+/// Resolves integer types to interval types for temporal arithmetic
+fn resolve_ints_to_intervals(
+    lhs: &DataType,
+    rhs: &DataType,
+) -> Option<(DataType, DataType, DataType)> {
+    use arrow::datatypes::DataType::*;
+    use arrow::datatypes::IntervalUnit::*;
+
+    match (lhs, rhs) {
+        // Handle integer + interval cases
+        (Int32 | Int64, _) => Some((Interval(DayTime), rhs.clone(), rhs.clone())),
+        (_, Int32 | Int64) => Some((lhs.clone(), Interval(DayTime), lhs.clone())),
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1604,6 +1626,18 @@ mod tests {
             let (lhs, rhs) = get_input_types(&$LHS_TYPE, &$OP, &$RHS_TYPE)?;
             assert_eq!(lhs, $RESULT_TYPE);
             assert_eq!(rhs, $RESULT_TYPE);
+        }};
+    }
+
+    /// Test coercion rules for assymetric binary operators
+    ///
+    /// Applies coercion rules for `$LHS_TYPE $OP $RHS_TYPE` and asserts that the
+    /// the result types are `$RESULT_TYPE1` and `$RESULT_TYPE2` respectively
+    macro_rules! test_coercion_assymetric_binary_rule {
+        ($LHS_TYPE:expr, $RHS_TYPE:expr, $OP:expr, $RESULT_TYPE1:expr, $RESULT_TYPE2:expr) => {{
+            let (lhs, rhs) = get_input_types(&$LHS_TYPE, &$OP, &$RHS_TYPE)?;
+            assert_eq!(lhs, $RESULT_TYPE1);
+            assert_eq!(rhs, $RESULT_TYPE2);
         }};
     }
 
@@ -1837,6 +1871,8 @@ mod tests {
 
     #[test]
     fn test_type_coercion_arithmetic() -> Result<()> {
+        use arrow::datatypes::IntervalUnit;
+
         // integer
         test_coercion_binary_rule!(
             DataType::Int32,
@@ -1869,6 +1905,51 @@ mod tests {
             Operator::Multiply,
             DataType::Float64
         );
+
+        // Test integer to interval coercion for temporal arithmetic
+        test_coercion_assymetric_binary_rule!(
+            DataType::Int32,
+            DataType::Timestamp(TimeUnit::Nanosecond, None),
+            Operator::Plus,
+            DataType::Interval(IntervalUnit::DayTime),
+            DataType::Timestamp(TimeUnit::Nanosecond, None)
+        );
+        test_coercion_assymetric_binary_rule!(
+            DataType::Timestamp(TimeUnit::Nanosecond, None),
+            DataType::Int64,
+            Operator::Plus,
+            DataType::Timestamp(TimeUnit::Nanosecond, None),
+            DataType::Interval(IntervalUnit::DayTime)
+        );
+        test_coercion_assymetric_binary_rule!(
+            DataType::Int32,
+            DataType::Date32,
+            Operator::Plus,
+            DataType::Interval(IntervalUnit::DayTime),
+            DataType::Date32
+        );
+        test_coercion_assymetric_binary_rule!(
+            DataType::Date32,
+            DataType::Int64,
+            Operator::Plus,
+            DataType::Date32,
+            DataType::Interval(IntervalUnit::DayTime)
+        );
+        test_coercion_assymetric_binary_rule!(
+            DataType::Int32,
+            DataType::Date64,
+            Operator::Plus,
+            DataType::Interval(IntervalUnit::DayTime),
+            DataType::Date64
+        );
+        test_coercion_assymetric_binary_rule!(
+            DataType::Date64,
+            DataType::Int64,
+            Operator::Plus,
+            DataType::Date64,
+            DataType::Interval(IntervalUnit::DayTime)
+        );
+
         // TODO add other data type
         Ok(())
     }

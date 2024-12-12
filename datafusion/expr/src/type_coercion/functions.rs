@@ -880,6 +880,9 @@ fn coerced_from<'a>(
         (Timestamp(_, Some(_)), Null | Timestamp(_, _) | Date32 | Utf8 | LargeUtf8) => {
             Some(type_into.clone())
         }
+        // Support Date?? + Int??
+        (Date32, Int32 | Int64) | (Int32 | Int64, Date32) => Some(Date32),
+        (Date64, Int32 | Int64) | (Int32 | Int64, Date64) => Some(Date64),
         _ => None,
     }
 }
@@ -1071,5 +1074,34 @@ mod tests {
             coerced_from(&type_into, &type_from),
             Some(type_into.clone())
         );
+    }
+
+    #[test]
+    fn test_date_coercion_return_values() {
+        let test_cases = vec![
+            // Date32 cases - should return Date32 when coercion is possible
+            (DataType::Date32, DataType::Int32, Some(DataType::Date32)),
+            (DataType::Date32, DataType::Int64, Some(DataType::Date32)),
+            (DataType::Int32, DataType::Date32, Some(DataType::Date32)),
+            (DataType::Int64, DataType::Date32, Some(DataType::Date32)),
+            // Date64 cases - should return Date64 when coercion is possible
+            (DataType::Date64, DataType::Int32, Some(DataType::Date64)),
+            (DataType::Date64, DataType::Int64, Some(DataType::Date64)),
+            (DataType::Int32, DataType::Date64, Some(DataType::Date64)),
+            (DataType::Int64, DataType::Date64, Some(DataType::Date64)),
+            // Negative cases - should return None when coercion is not possible
+            (DataType::Date32, DataType::Int16, None),
+            (DataType::Date64, DataType::Int16, None),
+            (DataType::Int16, DataType::Date32, None),
+            (DataType::Int16, DataType::Date64, None),
+        ];
+
+        for (type_into, type_from, expected) in test_cases {
+            assert_eq!(
+                coerced_from(&type_into, &type_from),
+                expected,
+                "Coercion from {type_from:?} to {type_into:?} should return {expected:?}"
+            );
+        }
     }
 }
