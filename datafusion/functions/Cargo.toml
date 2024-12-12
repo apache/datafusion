@@ -75,6 +75,7 @@ datafusion-common = { workspace = true }
 datafusion-doc = { workspace = true }
 datafusion-execution = { workspace = true }
 datafusion-expr = { workspace = true }
+datafusion-expr-common = { workspace = true }
 datafusion-macros = { workspace = true }
 hashbrown = { workspace = true, optional = true }
 hex = { version = "0.4", optional = true }

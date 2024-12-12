@@ -22,14 +22,18 @@ use arrow::{
     datatypes::{DataType, TimeUnit},
 };
 use datafusion_common::{
-    exec_err, internal_datafusion_err, internal_err, plan_err,
+    exec_err, internal_datafusion_err, internal_err, not_impl_err, plan_err,
     types::{LogicalType, NativeType},
     utils::{coerced_fixed_size_list_to_list, list_ndims},
     Result,
 };
 use datafusion_expr_common::{
-    signature::{ArrayFunctionSignature, FIXED_SIZE_LIST_WILDCARD, TIMEZONE_WILDCARD},
-    type_coercion::binary::{comparison_coercion_numeric, string_coercion},
+    signature::{
+        ArrayFunctionSignature, TypeSignatureClass, FIXED_SIZE_LIST_WILDCARD,
+        TIMEZONE_WILDCARD,
+    },
+    type_coercion::binary::comparison_coercion_numeric,
+    type_coercion::binary::string_coercion,
 };
 use std::sync::Arc;
 
@@ -568,35 +572,65 @@ fn get_valid_types(
             // Make sure the corresponding test is covered
             // If this function becomes COMPLEX, create another new signature!
             fn can_coerce_to(
-                logical_type: &NativeType,
-                target_type: &NativeType,
-            ) -> bool {
-                if logical_type == target_type {
-                    return true;
-                }
+                current_type: &DataType,
+                target_type_class: &TypeSignatureClass,
+            ) -> Result<DataType> {
+                let logical_type: NativeType = current_type.into();
 
-                if logical_type == &NativeType::Null {
-                    return true;
-                }
+                match target_type_class {
+                    TypeSignatureClass::Native(native_type) => {
+                        let target_type = native_type.native();
+                        if &logical_type == target_type {
+                            return target_type.default_cast_for(current_type);
+                        }
 
-                if target_type.is_integer() && logical_type.is_integer() {
-                    return true;
-                }
+                        if logical_type == NativeType::Null {
+                            return target_type.default_cast_for(current_type);
+                        }
 
-                false
+                        if target_type.is_integer() && logical_type.is_integer() {
+                            return target_type.default_cast_for(current_type);
+                        }
+
+                        internal_err!(
+                            "Expect {} but received {}",
+                            target_type_class,
+                            current_type
+                        )
+                    }
+                    // Not consistent with Postgres and DuckDB but to avoid regression we implicit cast string to timestamp
+                    TypeSignatureClass::Timestamp
+                        if logical_type == NativeType::String =>
+                    {
+                        Ok(DataType::Timestamp(TimeUnit::Nanosecond, None))
+                    }
+                    TypeSignatureClass::Timestamp if logical_type.is_timestamp() => {
+                        Ok(current_type.to_owned())
+                    }
+                    TypeSignatureClass::Date if logical_type.is_date() => {
+                        Ok(current_type.to_owned())
+                    }
+                    TypeSignatureClass::Time if logical_type.is_time() => {
+                        Ok(current_type.to_owned())
+                    }
+                    TypeSignatureClass::Interval if logical_type.is_interval() => {
+                        Ok(current_type.to_owned())
+                    }
+                    TypeSignatureClass::Duration if logical_type.is_duration() => {
+                        Ok(current_type.to_owned())
+                    }
+                    _ => {
+                        not_impl_err!("Got logical_type: {logical_type} with target_type_class: {target_type_class}")
+                    }
+                }
             }
 
             let mut new_types = Vec::with_capacity(current_types.len());
-            for (current_type, target_type) in
+            for (current_type, target_type_class) in
                 current_types.iter().zip(target_types.iter())
             {
-                let logical_type: NativeType = current_type.into();
-                let target_logical_type = target_type.native();
-                if can_coerce_to(&logical_type, target_logical_type) {
-                    let target_type =
-                        target_logical_type.default_cast_for(current_type)?;
-                    new_types.push(target_type);
-                }
+                let target_type = can_coerce_to(current_type, target_type_class)?;
+                new_types.push(target_type);
             }
 
             vec![new_types]

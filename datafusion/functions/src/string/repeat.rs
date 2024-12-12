@@ -32,6 +32,7 @@ use datafusion_common::{exec_err, Result};
 use datafusion_expr::scalar_doc_sections::DOC_SECTION_STRING;
 use datafusion_expr::{ColumnarValue, Documentation, Volatility};
 use datafusion_expr::{ScalarUDFImpl, Signature};
+use datafusion_expr_common::signature::TypeSignatureClass;
 
 #[derive(Debug)]
 pub struct RepeatFunc {
@@ -48,7 +49,10 @@ impl RepeatFunc {
     pub fn new() -> Self {
         Self {
             signature: Signature::coercible(
-                vec![logical_string(), logical_int64()],
+                vec![
+                    TypeSignatureClass::Native(logical_string()),
+                    TypeSignatureClass::Native(logical_int64()),
+                ],
                 Volatility::Immutable,
             ),
         }
