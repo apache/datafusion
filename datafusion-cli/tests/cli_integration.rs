@@ -93,7 +93,7 @@ fn test_cli_format<'a>(#[case] format: &'a str) {
     assert_cmd_snapshot!("cli_format", cmd);
 }
 
-async fn setup_s3_storage() -> aws_sdk_s3::Client {
+async fn s3_client() -> aws_sdk_s3::Client {
     let access_key_id =
         env::var("AWS_ACCESS_KEY_ID").expect("AWS_ACCESS_KEY_ID is not set");
     let secret_access_key =
@@ -124,8 +124,8 @@ async fn setup_s3_storage() -> aws_sdk_s3::Client {
     aws_sdk_s3::Client::from_conf(config)
 }
 
-async fn create_bucket(bucket_name: &str, aws_client: &aws_sdk_s3::Client) {
-    match aws_client.head_bucket().bucket(bucket_name).send().await {
+async fn create_bucket(bucket_name: &str, client: &aws_sdk_s3::Client) {
+    match client.head_bucket().bucket(bucket_name).send().await {
         Ok(_) => {}
         Err(SdkError::ServiceError(err))
             if matches!(
@@ -133,9 +133,9 @@ async fn create_bucket(bucket_name: &str, aws_client: &aws_sdk_s3::Client) {
                 aws_sdk_s3::operation::head_bucket::HeadBucketError::NotFound(_)
             ) =>
         {
-            aws_client
+            client
                 .create_bucket()
-                .bucket("datafusion")
+                .bucket(bucket_name)
                 .send()
                 .await
                 .expect("Failed to create bucket");
@@ -148,14 +148,14 @@ async fn move_file_to_bucket(
     from_path: &str,
     to_path: &str,
     bucket_name: &str,
-    aws_client: &aws_sdk_s3::Client,
+    client: &aws_sdk_s3::Client,
 ) {
     let body =
         aws_sdk_s3::primitives::ByteStream::from_path(std::path::Path::new(from_path))
             .await
             .expect("Failed to read file");
 
-    aws_client
+    client
         .put_object()
         .bucket(bucket_name)
         .key(to_path)
@@ -172,13 +172,13 @@ async fn test_cli() {
         return;
     }
 
-    let aws_client = setup_s3_storage().await;
-    create_bucket("datafusion", &aws_client).await;
+    let client = s3_client().await;
+    create_bucket("cli", &client).await;
     move_file_to_bucket(
         "../datafusion/core/tests/data/cars.csv",
-        "test_cli/cars.csv",
-        "datafusion",
-        &aws_client,
+        "cars.csv",
+        "cli",
+        &client,
     )
     .await;
 
@@ -200,13 +200,13 @@ async fn test_aws_options() {
         return;
     }
 
-    let aws_client = setup_s3_storage().await;
-    create_bucket("datafusion", &aws_client).await;
+    let client = s3_client().await;
+    create_bucket("options", &client).await;
     move_file_to_bucket(
         "../datafusion/core/tests/data/cars.csv",
-        "test_aws_options/cars.csv",
-        "datafusion",
-        &aws_client,
+        "cars.csv",
+        "options",
+        &client,
     )
     .await;
 
@@ -222,7 +222,7 @@ async fn test_aws_options() {
     let input = format!(
         r#"CREATE EXTERNAL TABLE CARS
 STORED AS CSV
-LOCATION 's3://datafusion/test_aws_options/cars.csv'
+LOCATION 's3://options/cars.csv'
 OPTIONS(
     'aws.access_key_id' '{}',
     'aws.secret_access_key' '{}',
