@@ -33,6 +33,8 @@ mod correlation;
 pub use correlation::Correlation;
 mod covariance;
 pub use covariance::Covariance;
+mod strings;
+pub use strings::{Contains, EndsWith, Like, StartsWith, StringSpaceExpr, SubstringExpr};
 mod kernels;
 mod list;
 mod regexp;
