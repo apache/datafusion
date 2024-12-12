@@ -887,10 +887,10 @@ pub fn get_available_parallelism() -> usize {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
     use crate::ScalarValue::Null;
     use arrow::array::Float64Array;
-
-    use super::*;
+    use sqlparser::tokenizer::Span;
 
     #[test]
     fn test_bisect_linear_left_and_right() -> Result<()> {
@@ -1118,6 +1118,7 @@ mod tests {
             let expected_parsed = vec![Ident {
                 value: identifier.to_string(),
                 quote_style,
+                span: Span::empty(),
             }];
 
             assert_eq!(
