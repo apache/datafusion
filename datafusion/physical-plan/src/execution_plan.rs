@@ -47,6 +47,7 @@ pub use crate::metrics::Metric;
 use crate::metrics::MetricsSet;
 pub use crate::ordering::InputOrderMode;
 use crate::repartition::RepartitionExec;
+use crate::sorts::sort::SortExec;
 use crate::sorts::sort_preserving_merge::SortPreservingMergeExec;
 pub use crate::stream::EmptyRecordBatchStream;
 use crate::stream::RecordBatchStreamAdapter;
@@ -446,6 +447,10 @@ pub trait ExecutionPlanProperties {
     /// output if its input is sorted as it does not reorder the input rows.
     fn output_ordering(&self) -> Option<&LexOrdering>;
 
+    fn boundedness(&self) -> Boundedness;
+
+    fn pipeline_behavior(&self) -> EmissionType;
+
     /// Get the [`EquivalenceProperties`] within the plan.
     ///
     /// Equivalence properties tell DataFusion what columns are known to be
@@ -475,6 +480,22 @@ impl ExecutionPlanProperties for Arc<dyn ExecutionPlan> {
         self.properties().output_ordering()
     }
 
+    fn boundedness(&self) -> Boundedness {
+        // The properties is computed once and cache with `compute_properties`, usually take input's properties, else has own additional logic,
+        // hardcoded for source
+        if self.properties().has_finite_memory {
+            Boundedness::Bounded
+        } else {
+            Boundedness::Unbounded
+        }
+    }
+
+    fn pipeline_behavior(&self) -> EmissionType {
+        // The properties is computed once and cache with `compute_properties`, usually take input's properties, else has own additional logic,
+        // hardcoded for source
+        self.properties().emission_type.unwrap()
+    }
+
     fn equivalence_properties(&self) -> &EquivalenceProperties {
         self.properties().equivalence_properties()
     }
@@ -489,9 +510,27 @@ impl ExecutionPlanProperties for &dyn ExecutionPlan {
         self.properties().output_ordering()
     }
 
+    fn boundedness(&self) -> Boundedness {
+        if self.has_finite_memory() {
+            Boundedness::Bounded
+        } else {
+            Boundedness::Unbounded
+        }
+    }
+
+    fn pipeline_behavior(&self) -> EmissionType {
+        self.emission_type()
+    }
+
     fn equivalence_properties(&self) -> &EquivalenceProperties {
         self.properties().equivalence_properties()
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Boundedness {
+    Bounded,
+    Unbounded,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -329,6 +329,8 @@ impl CsvExec {
             eq_properties,
             Self::output_partitioning_helper(file_scan_config), // Output Partitioning
         )
+        .with_emission_type(EmissionType::Incremental)
+        .with_memory_usage(true)
     }
 
     fn with_file_groups(mut self, file_groups: Vec<Vec<PartitionedFile>>) -> Self {
@@ -470,10 +472,12 @@ impl ExecutionPlan for CsvExec {
         }))
     }
 
+    // Not helpful at all
     fn emission_type(&self) -> EmissionType {
         EmissionType::Incremental
     }
 
+    // Not helpful at all
     fn has_finite_memory(&self) -> bool {
         true
     }

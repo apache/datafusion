@@ -54,6 +54,7 @@ use datafusion_physical_expr::{
 };
 use datafusion_physical_optimizer::output_requirements::OutputRequirementExec;
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
+use datafusion_physical_plan::execution_plan::Boundedness;
 use datafusion_physical_plan::windows::{get_best_fitting_window, BoundedWindowAggExec};
 use datafusion_physical_plan::ExecutionPlanProperties;
 
@@ -1161,7 +1162,8 @@ fn ensure_distribution(
     let should_use_estimates = config
         .execution
         .use_row_number_estimates_to_optimize_partitioning;
-    let is_unbounded = !dist_context.plan.has_finite_memory();
+    // let is_unbounded = !dist_context.plan.has_finite_memory();
+    let is_unbounded = dist_context.plan.boundedness() == Boundedness::Unbounded;
     // Use order preserving variants either of the conditions true
     // - it is desired according to config
     // - when plan is unbounded

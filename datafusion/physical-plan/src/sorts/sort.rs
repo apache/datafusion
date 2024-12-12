@@ -1003,14 +1003,25 @@ impl ExecutionPlan for SortExec {
         }
     }
 
+    // Not helpful at all
     fn emission_type(&self) -> EmissionType {
         self.cache.emission_type.unwrap()
     }
-
+    // Not helpful at all
     fn has_finite_memory(&self) -> bool {
         self.cache.has_finite_memory
     }
 }
+
+// 1.
+// fn has_finite_memory(&self) -> bool {
+//     self.cache.has_finite_memory
+// }
+
+// fn has_finite_memory(&self) -> bool {
+//     // Hardcode case
+//     true
+// }
 
 #[cfg(test)]
 mod tests {
