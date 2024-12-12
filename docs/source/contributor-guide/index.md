@@ -97,8 +97,8 @@ to be accepted:
 Contributions that will likely involve more discussion (see Discussing New
 Features above) prior to acceptance include:
 
-1. Major new functionality (even if it is part of the "standard sql")
-2. New functions, especially if they aren't part of "standard sql"
+1. Major new functionality (even if it is part of the "standard SQL")
+2. New functions, especially if they aren't part of "standard SQL"
 3. New data sources (e.g. support for Apache ORC)
 
 [extensions list]: ../library-user-guide/extensions.md
