@@ -268,7 +268,7 @@ impl AggregateUDFImpl for Sum {
                 _ => {
                     if statistics_args.exprs.len() == 1 {
                         if let Precision::Exact(sum) = statistics_args.exprs[0]
-                            .column_statistics(&statistics_args.statistics)
+                            .column_statistics(statistics_args.statistics)
                             .ok()?
                             .sum_value
                         {
