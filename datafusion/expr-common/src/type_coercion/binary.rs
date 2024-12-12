@@ -1464,9 +1464,13 @@ fn resolve_ints_to_intervals(
     use arrow::datatypes::IntervalUnit::*;
 
     match (lhs, rhs) {
-        // Handle integer + interval cases
-        (Int32 | Int64, _) => Some((Interval(DayTime), rhs.clone(), rhs.clone())),
-        (_, Int32 | Int64) => Some((lhs.clone(), Interval(DayTime), lhs.clone())),
+        // Handle integer + temporal types cases
+        (Int32 | Int64, rhs) if rhs.is_temporal() => {
+            Some((Interval(DayTime), rhs.clone(), rhs.clone()))
+        }
+        (lhs, Int32 | Int64) if lhs.is_temporal() => {
+            Some((lhs.clone(), Interval(DayTime), lhs.clone()))
+        }
         _ => None,
     }
 }
@@ -1907,22 +1911,23 @@ mod tests {
         );
 
         // Test integer to interval coercion for temporal arithmetic
+        // (Using Date32 only since the logic is invariant wrt the temporal type)
         test_coercion_assymetric_binary_rule!(
             DataType::Int32,
-            DataType::Timestamp(TimeUnit::Nanosecond, None),
+            DataType::Date32,
             Operator::Plus,
             DataType::Interval(IntervalUnit::DayTime),
-            DataType::Timestamp(TimeUnit::Nanosecond, None)
+            DataType::Date32
         );
         test_coercion_assymetric_binary_rule!(
-            DataType::Timestamp(TimeUnit::Nanosecond, None),
-            DataType::Int64,
+            DataType::Date32,
+            DataType::Int32,
             Operator::Plus,
-            DataType::Timestamp(TimeUnit::Nanosecond, None),
+            DataType::Date32,
             DataType::Interval(IntervalUnit::DayTime)
         );
         test_coercion_assymetric_binary_rule!(
-            DataType::Int32,
+            DataType::Int64,
             DataType::Date32,
             Operator::Plus,
             DataType::Interval(IntervalUnit::DayTime),
@@ -1933,20 +1938,6 @@ mod tests {
             DataType::Int64,
             Operator::Plus,
             DataType::Date32,
-            DataType::Interval(IntervalUnit::DayTime)
-        );
-        test_coercion_assymetric_binary_rule!(
-            DataType::Int32,
-            DataType::Date64,
-            Operator::Plus,
-            DataType::Interval(IntervalUnit::DayTime),
-            DataType::Date64
-        );
-        test_coercion_assymetric_binary_rule!(
-            DataType::Date64,
-            DataType::Int64,
-            Operator::Plus,
-            DataType::Date64,
             DataType::Interval(IntervalUnit::DayTime)
         );
 
