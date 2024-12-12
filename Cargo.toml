@@ -29,6 +29,7 @@ edition = { workspace = true }
 [dependencies]
 arrow = { workspace = true }
 arrow-array = { workspace = true }
+arrow-buffer = { workspace = true }
 arrow-data = { workspace = true }
 arrow-schema = { workspace = true }
 chrono = { workspace = true }
