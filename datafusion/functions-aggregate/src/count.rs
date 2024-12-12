@@ -336,8 +336,7 @@ impl AggregateUDFImpl for Count {
                 let col_stats = statistics_args.exprs[0]
                     .column_statistics(&statistics_args.statistics)
                     .ok()?;
-                let current_val = col_stats.null_count;
-                if let &Precision::Exact(val) = current_val {
+                if let Precision::Exact(val) = col_stats.null_count {
                     return Some(ScalarValue::Int64(Some((num_rows - val) as i64)));
                 }
             }

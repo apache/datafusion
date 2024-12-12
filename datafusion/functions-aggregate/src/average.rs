@@ -42,7 +42,6 @@ use datafusion_functions_aggregate_common::aggregate::groups_accumulator::nulls:
     filtered_null_mask, set_nulls,
 };
 
-use crate::sum::Sum;
 use datafusion_common::stats::Precision;
 use datafusion_functions_aggregate_common::utils::DecimalAverager;
 use datafusion_macros::user_doc;
@@ -263,7 +262,7 @@ impl AggregateUDFImpl for Avg {
         if let Precision::Exact(num_rows) = &statistics_args.statistics.num_rows {
             match *num_rows {
                 0 => return ScalarValue::new_zero(statistics_args.return_type).ok(),
-                _ => {
+                num_rows => {
                     if statistics_args.exprs.len() == 1 {
                         if let Precision::Exact(sum) = statistics_args.exprs[0]
                             .column_statistics(&statistics_args.statistics)
@@ -272,7 +271,7 @@ impl AggregateUDFImpl for Avg {
                         {
                             let sum = sum.cast_to(statistics_args.return_type).ok()?;
                             let num_rows =
-                                ScalarValue::from(statistics_args.statistics.num_rows)
+                                ScalarValue::from(num_rows as u64)
                                     .cast_to(statistics_args.return_type)
                                     .ok()?;
                             return sum.div(&num_rows).ok();
