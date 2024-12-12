@@ -18,6 +18,190 @@
 # Tests for `date_part` and `EXTRACT` (which is a different syntax
 # for the same function).
 
+
+## Begin tests fo rdate_part with columns and timestamp's with timezones
+
+# Source data table has
+# timestamps with millisecond (very common timestamp precision) and nanosecond (maximum precision) timestamps
+statement count 0
+CREATE TABLE source_ts AS
+with t as (values
+  ('2020-01-01T00:00:00+00:00'),
+  ('2021-01-01T00:00:00+00:00'),           -- year
+  ('2020-09-01T00:00:00+00:00'),           -- month
+  ('2020-01-25T00:00:00+00:00'),           -- day
+  ('2020-01-24T00:00:00+00:00'),           -- day
+  ('2020-01-01T12:00:00+00:00'),           -- hour
+  ('2020-01-01T00:30:00+00:00'),           -- minute
+  ('2020-01-01T00:00:30+00:00'),           -- second
+  ('2020-01-01T00:00:00.123+00:00'),       -- ms
+  ('2020-01-01T00:00:00.123456+00:00'),    -- us
+  ('2020-01-01T00:00:00.123456789+00:00')  -- ns
+)
+SELECT
+  -- nanoseconds, with no, utc, and local timezone
+  arrow_cast(column1, 'Timestamp(Nanosecond, None)') as ts_nano_no_tz,
+  arrow_cast(column1, 'Timestamp(Nanosecond, Some("UTC"))') as ts_nano_utc,
+  arrow_cast(column1, 'Timestamp(Nanosecond, Some("America/New_York"))') as ts_nano_eastern,
+  -- milliseconds, with no, utc, and local timezone
+  arrow_cast(column1, 'Timestamp(Millisecond, None)') as ts_milli_no_tz,
+  arrow_cast(column1, 'Timestamp(Millisecond, Some("UTC"))') as ts_milli_utc,
+  arrow_cast(column1, 'Timestamp(Millisecond, Some("America/New_York"))') as ts_milli_eastern
+FROM t;
+
+
+query PPPPPP
+SELECT * FROM source_ts;
+----
+2020-01-01T00:00:00 2020-01-01T00:00:00Z 2019-12-31T19:00:00-05:00 2020-01-01T00:00:00 2020-01-01T00:00:00Z 2019-12-31T19:00:00-05:00
+2021-01-01T00:00:00 2021-01-01T00:00:00Z 2020-12-31T19:00:00-05:00 2021-01-01T00:00:00 2021-01-01T00:00:00Z 2020-12-31T19:00:00-05:00
+2020-09-01T00:00:00 2020-09-01T00:00:00Z 2020-08-31T20:00:00-04:00 2020-09-01T00:00:00 2020-09-01T00:00:00Z 2020-08-31T20:00:00-04:00
+2020-01-25T00:00:00 2020-01-25T00:00:00Z 2020-01-24T19:00:00-05:00 2020-01-25T00:00:00 2020-01-25T00:00:00Z 2020-01-24T19:00:00-05:00
+2020-01-24T00:00:00 2020-01-24T00:00:00Z 2020-01-23T19:00:00-05:00 2020-01-24T00:00:00 2020-01-24T00:00:00Z 2020-01-23T19:00:00-05:00
+2020-01-01T12:00:00 2020-01-01T12:00:00Z 2020-01-01T07:00:00-05:00 2020-01-01T12:00:00 2020-01-01T12:00:00Z 2020-01-01T07:00:00-05:00
+2020-01-01T00:30:00 2020-01-01T00:30:00Z 2019-12-31T19:30:00-05:00 2020-01-01T00:30:00 2020-01-01T00:30:00Z 2019-12-31T19:30:00-05:00
+2020-01-01T00:00:30 2020-01-01T00:00:30Z 2019-12-31T19:00:30-05:00 2020-01-01T00:00:30 2020-01-01T00:00:30Z 2019-12-31T19:00:30-05:00
+2020-01-01T00:00:00.123 2020-01-01T00:00:00.123Z 2019-12-31T19:00:00.123-05:00 2020-01-01T00:00:00.123 2020-01-01T00:00:00.123Z 2019-12-31T19:00:00.123-05:00
+2020-01-01T00:00:00.123456 2020-01-01T00:00:00.123456Z 2019-12-31T19:00:00.123456-05:00 2020-01-01T00:00:00.123 2020-01-01T00:00:00.123Z 2019-12-31T19:00:00.123-05:00
+2020-01-01T00:00:00.123456789 2020-01-01T00:00:00.123456789Z 2019-12-31T19:00:00.123456789-05:00 2020-01-01T00:00:00.123 2020-01-01T00:00:00.123Z 2019-12-31T19:00:00.123-05:00
+
+# date_part (year) with columns and explicit timestamp
+query IIIIII
+SELECT date_part('year', ts_nano_no_tz), date_part('year', ts_nano_utc), date_part('year', ts_nano_eastern), date_part('year', ts_milli_no_tz), date_part('year', ts_milli_utc), date_part('year', ts_milli_eastern)  FROM source_ts;
+----
+2020 2020 2019 2020 2020 2019
+2021 2021 2020 2021 2021 2020
+2020 2020 2020 2020 2020 2020
+2020 2020 2020 2020 2020 2020
+2020 2020 2020 2020 2020 2020
+2020 2020 2020 2020 2020 2020
+2020 2020 2019 2020 2020 2019
+2020 2020 2019 2020 2020 2019
+2020 2020 2019 2020 2020 2019
+2020 2020 2019 2020 2020 2019
+2020 2020 2019 2020 2020 2019
+
+# date_part (month)
+query IIIIII
+SELECT date_part('month', ts_nano_no_tz), date_part('month', ts_nano_utc), date_part('month', ts_nano_eastern), date_part('month', ts_milli_no_tz), date_part('month', ts_milli_utc), date_part('month', ts_milli_eastern)  FROM source_ts;
+----
+1 1 12 1 1 12
+1 1 12 1 1 12
+9 9 8 9 9 8
+1 1 1 1 1 1
+1 1 1 1 1 1
+1 1 1 1 1 1
+1 1 12 1 1 12
+1 1 12 1 1 12
+1 1 12 1 1 12
+1 1 12 1 1 12
+1 1 12 1 1 12
+
+# date_part (day)
+query IIIIII
+SELECT date_part('day', ts_nano_no_tz), date_part('day', ts_nano_utc), date_part('day', ts_nano_eastern), date_part('day', ts_milli_no_tz), date_part('day', ts_milli_utc), date_part('day', ts_milli_eastern)  FROM source_ts;
+----
+1 1 31 1 1 31
+1 1 31 1 1 31
+1 1 31 1 1 31
+25 25 24 25 25 24
+24 24 23 24 24 23
+1 1 1 1 1 1
+1 1 31 1 1 31
+1 1 31 1 1 31
+1 1 31 1 1 31
+1 1 31 1 1 31
+1 1 31 1 1 31
+
+# date_part (hour)
+query IIIIII
+SELECT date_part('hour', ts_nano_no_tz), date_part('hour', ts_nano_utc), date_part('hour', ts_nano_eastern), date_part('hour', ts_milli_no_tz), date_part('hour', ts_milli_utc), date_part('hour', ts_milli_eastern)  FROM source_ts;
+----
+0 0 19 0 0 19
+0 0 19 0 0 19
+0 0 20 0 0 20
+0 0 19 0 0 19
+0 0 19 0 0 19
+12 12 7 12 12 7
+0 0 19 0 0 19
+0 0 19 0 0 19
+0 0 19 0 0 19
+0 0 19 0 0 19
+0 0 19 0 0 19
+
+# date_part (minute)
+query IIIIII
+SELECT date_part('minute', ts_nano_no_tz), date_part('minute', ts_nano_utc), date_part('minute', ts_nano_eastern), date_part('minute', ts_milli_no_tz), date_part('minute', ts_milli_utc), date_part('minute', ts_milli_eastern)  FROM source_ts;
+----
+0 0 0 0 0 0
+0 0 0 0 0 0
+0 0 0 0 0 0
+0 0 0 0 0 0
+0 0 0 0 0 0
+0 0 0 0 0 0
+30 30 30 30 30 30
+0 0 0 0 0 0
+0 0 0 0 0 0
+0 0 0 0 0 0
+0 0 0 0 0 0
+
+# date_part (second)
+query IIIIII
+SELECT date_part('second', ts_nano_no_tz), date_part('second', ts_nano_utc), date_part('second', ts_nano_eastern), date_part('second', ts_milli_no_tz), date_part('second', ts_milli_utc), date_part('second', ts_milli_eastern)  FROM source_ts;
+----
+0 0 0 0 0 0
+0 0 0 0 0 0
+0 0 0 0 0 0
+0 0 0 0 0 0
+0 0 0 0 0 0
+0 0 0 0 0 0
+0 0 0 0 0 0
+30 30 30 30 30 30
+0 0 0 0 0 0
+0 0 0 0 0 0
+0 0 0 0 0 0
+
+# date_part (millisecond)
+query IIIIII
+SELECT date_part('millisecond', ts_nano_no_tz), date_part('millisecond', ts_nano_utc), date_part('millisecond', ts_nano_eastern), date_part('millisecond', ts_milli_no_tz), date_part('millisecond', ts_milli_utc), date_part('millisecond', ts_milli_eastern)  FROM source_ts;
+----
+0 0 0 0 0 0
+0 0 0 0 0 0
+0 0 0 0 0 0
+0 0 0 0 0 0
+0 0 0 0 0 0
+0 0 0 0 0 0
+0 0 0 0 0 0
+30000 30000 30000 30000 30000 30000
+123 123 123 123 123 123
+123 123 123 123 123 123
+123 123 123 123 123 123
+
+# date_part (microsecond)
+query IIIIII
+SELECT date_part('microsecond', ts_nano_no_tz), date_part('microsecond', ts_nano_utc), date_part('microsecond', ts_nano_eastern), date_part('microsecond', ts_milli_no_tz), date_part('microsecond', ts_milli_utc), date_part('microsecond', ts_milli_eastern)  FROM source_ts;
+----
+0 0 0 0 0 0
+0 0 0 0 0 0
+0 0 0 0 0 0
+0 0 0 0 0 0
+0 0 0 0 0 0
+0 0 0 0 0 0
+0 0 0 0 0 0
+30000000 30000000 30000000 30000000 30000000 30000000
+123000 123000 123000 123000 123000 123000
+123456 123456 123456 123000 123000 123000
+123456 123456 123456 123000 123000 123000
+
+### Cleanup
+statement ok
+drop table source_ts;
+
+
+
+## "Unit style" tests for types and units on scalar values
+
+
 query error
 SELECT EXTRACT("'''year'''" FROM  timestamp '2020-09-08T12:00:00+00:00')
 
@@ -225,7 +409,7 @@ SELECT EXTRACT(microsecond FROM timestamp '2020-09-08T12:00:12.12345678+00:00')
 ----
 12123456
 
-query error DataFusion error: Internal error: unit Nanosecond not supported
+query error DataFusion error: This feature is not implemented: Date part Nanosecond not supported
 SELECT EXTRACT(nanosecond FROM timestamp '2020-09-08T12:00:12.12345678+00:00')
 
 query I
@@ -243,7 +427,7 @@ SELECT EXTRACT("microsecond" FROM timestamp '2020-09-08T12:00:12.12345678+00:00'
 ----
 12123456
 
-query error DataFusion error: Internal error: unit Nanosecond not supported
+query error DataFusion error: This feature is not implemented: Date part Nanosecond not supported
 SELECT EXTRACT("nanosecond" FROM timestamp '2020-09-08T12:00:12.12345678+00:00')
 
 query I
@@ -261,7 +445,7 @@ SELECT EXTRACT('microsecond' FROM timestamp '2020-09-08T12:00:12.12345678+00:00'
 ----
 12123456
 
-query error DataFusion error: Internal error: unit Nanosecond not supported
+query error DataFusion error: This feature is not implemented: Date part Nanosecond not supported
 SELECT EXTRACT('nanosecond' FROM timestamp '2020-09-08T12:00:12.12345678+00:00')
 
 
@@ -281,7 +465,7 @@ SELECT date_part('microsecond', timestamp '2020-09-08T12:00:12.12345678+00:00')
 ----
 12123456
 
-query error DataFusion error: Internal error: unit Nanosecond not supported
+query error DataFusion error: This feature is not implemented: Date part Nanosecond not supported
 SELECT date_part('nanosecond', timestamp '2020-09-08T12:00:12.12345678+00:00')
 
 
@@ -300,7 +484,7 @@ SELECT date_part('microsecond', '2020-09-08T12:00:12.12345678+00:00')
 ----
 12123456
 
-query error DataFusion error: Internal error: unit Nanosecond not supported
+query error DataFusion error: This feature is not implemented: Date part Nanosecond not supported
 SELECT date_part('nanosecond', '2020-09-08T12:00:12.12345678+00:00')
 
 # test_date_part_time
@@ -356,7 +540,7 @@ SELECT extract(microsecond from arrow_cast('23:32:50'::time, 'Time32(Second)'))
 ----
 50000000
 
-query error DataFusion error: Internal error: unit Nanosecond not supported
+query error DataFusion error: This feature is not implemented: Date part Nanosecond not supported
 SELECT extract(nanosecond from arrow_cast('23:32:50'::time, 'Time32(Second)'))
 
 query R
@@ -420,7 +604,7 @@ SELECT extract(microsecond from arrow_cast('23:32:50.123'::time, 'Time32(Millise
 ----
 50123000
 
-query error DataFusion error: Internal error: unit Nanosecond not supported
+query error DataFusion error: This feature is not implemented: Date part Nanosecond not supported
 SELECT extract(nanosecond from arrow_cast('23:32:50.123'::time, 'Time32(Millisecond)'))
 
 query R
@@ -484,7 +668,7 @@ SELECT extract(microsecond from arrow_cast('23:32:50.123456'::time, 'Time64(Micr
 ----
 50123456
 
-query error DataFusion error: Internal error: unit Nanosecond not supported
+query error DataFusion error: This feature is not implemented: Date part Nanosecond not supported
 SELECT extract(nanosecond from arrow_cast('23:32:50.123456'::time, 'Time64(Microsecond)'))
 
 query R
@@ -529,7 +713,17 @@ select extract(second from '2024-08-09T12:13:14')
 14
 
 query I
+select extract(second from timestamp '2024-08-09T12:13:14')
+----
+14
+
+query I
 select extract(seconds from '2024-08-09T12:13:14')
+----
+14
+
+query I
+select extract(seconds from timestamp '2024-08-09T12:13:14')
 ----
 14
 
@@ -564,7 +758,7 @@ SELECT extract(us from arrow_cast('23:32:50.123456789'::time, 'Time64(Nanosecond
 ----
 50123456
 
-query error DataFusion error: Internal error: unit Nanosecond not supported
+query error DataFusion error: This feature is not implemented: Date part Nanosecond not supported
 SELECT date_part('nanosecond', arrow_cast('23:32:50.123456789'::time, 'Time64(Nanosecond)'))
 
 query R
@@ -874,5 +1068,5 @@ SELECT (date_part('microsecond', now()) = EXTRACT(microsecond FROM now()))
 ----
 true
 
-query error DataFusion error: Internal error: unit Nanosecond not supported
+query error DataFusion error: This feature is not implemented: Date part Nanosecond not supported
 SELECT (date_part('nanosecond', now()) = EXTRACT(nanosecond FROM now()))
