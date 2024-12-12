@@ -26,6 +26,7 @@ use arrow::compute::{can_cast_types, CastOptions};
 use arrow::datatypes::{DataType, DataType::*, Schema};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::format::DEFAULT_FORMAT_OPTIONS;
+use datafusion_common::stats::Precision;
 use datafusion_common::{not_impl_err, ColumnStatistics, Result, Statistics};
 use datafusion_expr_common::columnar_value::ColumnarValue;
 use datafusion_expr_common::interval_arithmetic::Interval;
@@ -199,8 +200,14 @@ impl PhysicalExpr for CastExpr {
         let child_stats = self.expr.column_statistics(statistics)?;
         Ok(ColumnStatistics {
             null_count: child_stats.null_count,
-            max_value: child_stats.max_value.cast_to(&self.cast_type)?,
-            min_value: child_stats.min_value.cast_to(&self.cast_type)?,
+            max_value: child_stats
+                .max_value
+                .cast_to(&self.cast_type)
+                .unwrap_or(Precision::Absent),
+            min_value: child_stats
+                .min_value
+                .cast_to(&self.cast_type)
+                .unwrap_or(Precision::Absent),
             // The sum value may be a wider numeric type than the data value, it's not safe to cast.
             sum_value: child_stats.sum_value,
             distinct_count: Default::default(),

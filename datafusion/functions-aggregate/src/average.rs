@@ -270,10 +270,9 @@ impl AggregateUDFImpl for Avg {
                             .sum_value
                         {
                             let sum = sum.cast_to(statistics_args.return_type).ok()?;
-                            let num_rows =
-                                ScalarValue::from(num_rows as u64)
-                                    .cast_to(statistics_args.return_type)
-                                    .ok()?;
+                            let num_rows = ScalarValue::from(num_rows as u64)
+                                .cast_to(statistics_args.return_type)
+                                .ok()?;
                             return sum.div(&num_rows).ok();
                         }
                     }
