@@ -22,12 +22,13 @@ use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
 use datafusion_expr::registry::FunctionRegistry;
+use datafusion_expr::Union;
 use log::{debug, warn};
 
 use datafusion_common::alias::AliasGenerator;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::instant::Instant;
-use datafusion_common::tree_node::{Transformed, TreeNodeRewriter};
+use datafusion_common::tree_node::{Transformed, TreeNodeRecursion, TreeNodeRewriter};
 use datafusion_common::{internal_err, DFSchema, DataFusionError, HashSet, Result};
 use datafusion_expr::logical_plan::LogicalPlan;
 
@@ -355,6 +356,16 @@ impl Optimizer {
     where
         F: FnMut(&LogicalPlan, &dyn OptimizerRule),
     {
+        // verify at the start, before the first LP optimizer pass.
+        check_plan("before_optimizers", &plan, Arc::clone(plan.schema())).map_err(
+            |e| {
+                DataFusionError::Context(
+                    "check_plan_before_optimizers".to_string(),
+                    Box::new(e),
+                )
+            },
+        )?;
+
         let start_time = Instant::now();
         let options = config.options();
         let mut new_plan = plan;
@@ -384,9 +395,15 @@ impl Optimizer {
                     // rule handles recursion itself
                     None => optimize_plan_node(new_plan, rule.as_ref(), config),
                 }
-                // verify the rule didn't change the schema
                 .and_then(|tnr| {
-                    assert_schema_is_the_same(rule.name(), &starting_schema, &tnr.data)?;
+                    // verify after each optimizer pass.
+                    check_plan(rule.name(), &tnr.data, starting_schema).map_err(|e| {
+                        DataFusionError::Context(
+                            "check_optimized_plan".to_string(),
+                            Box::new(e),
+                        )
+                    })?;
+
                     Ok(tnr)
                 });
 
@@ -451,6 +468,33 @@ impl Optimizer {
     }
 }
 
+/// These are invariants to hold true for each logical plan.
+/// Do necessary check and fail the invalid plan.
+///
+/// Checks for elements which are immutable across optimizer passes.
+fn check_plan(
+    check_name: &str,
+    plan: &LogicalPlan,
+    prev_schema: Arc<DFSchema>,
+) -> Result<()> {
+    // verify invariant: optimizer rule didn't change the schema
+    assert_schema_is_the_same(check_name, &prev_schema, plan)?;
+
+    // verify invariant: fields must have unique names
+    assert_unique_field_names(plan)?;
+
+    /* This current fails for:
+       - execution::context::tests::cross_catalog_access
+       - at test_files/string/string.slt:46
+               External error: query failed: DataFusion error: Optimizer rule 'eliminate_nested_union' failed
+    */
+    // verify invariant: equivalent schema across union inputs
+    // assert_unions_are_valid(check_name, plan)?;
+
+    // TODO: trait API and provide extension on the Optimizer to define own validations?
+    Ok(())
+}
+
 /// Returns an error if `new_plan`'s schema is different than `prev_schema`
 ///
 /// It ignores metadata and nullability.
@@ -474,6 +518,38 @@ pub(crate) fn assert_schema_is_the_same(
     } else {
         Ok(())
     }
+}
+
+/// Returns an error if plan, and subplans, do not have unique fields.
+///
+/// This invariant is subject to change.
+/// refer: <https://github.com/apache/datafusion/issues/13525#issuecomment-2494046463>
+fn assert_unique_field_names(plan: &LogicalPlan) -> Result<()> {
+    plan.schema().check_names()?;
+
+    plan.apply_with_subqueries(|plan: &LogicalPlan| {
+        plan.schema().check_names()?;
+        Ok(TreeNodeRecursion::Continue)
+    })
+    .map(|_| ())
+}
+
+/// Returns an error if any union nodes are invalid.
+#[allow(dead_code)]
+fn assert_unions_are_valid(rule_name: &str, plan: &LogicalPlan) -> Result<()> {
+    plan.apply_with_subqueries(|plan: &LogicalPlan| {
+        if let LogicalPlan::Union(Union { schema, inputs }) = plan {
+            inputs.iter().try_for_each(|subplan| {
+                assert_schema_is_the_same(
+                    format!("{rule_name}:union_check").as_str(),
+                    schema,
+                    subplan,
+                )
+            })?;
+        }
+        Ok(TreeNodeRecursion::Continue)
+    })
+    .map(|_| ())
 }
 
 #[cfg(test)]
