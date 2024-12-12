@@ -866,9 +866,9 @@ dependencies = [
 
 [[package]]
 name = "bstr"
-version = "1.11.0"
+version = "1.11.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1a68f1f47cdf0ec8ee4b941b2eee2a80cb796db73118c0dd09ac63fbe405be22"
+checksum = "786a307d683a5bf92e6fd5fd69a7eb613751668d1d8d67d802846dfe367c62c8"
 dependencies = [
  "memchr",
  "regex-automata",
@@ -3754,7 +3754,7 @@ checksum = "6980e8d7511241f8acf4aebddbb1ff938df5eebe98691418c4468d0b72a96a67"
 [[package]]
 name = "sqlparser"
 version = "0.52.0"
-source = "git+https://github.com/apache/datafusion-sqlparser-rs.git?rev=d0fcc06652ba9880622d0ef8b426c809cee752fe#d0fcc06652ba9880622d0ef8b426c809cee752fe"
+source = "git+https://github.com/apache/datafusion-sqlparser-rs.git?rev=d6743e924c99cebaa1f065eb721ae085f9f0116f#d6743e924c99cebaa1f065eb721ae085f9f0116f"
 dependencies = [
  "log",
  "sqlparser_derive",
@@ -3763,7 +3763,7 @@ dependencies = [
 [[package]]
 name = "sqlparser_derive"
 version = "0.3.0"
-source = "git+https://github.com/apache/datafusion-sqlparser-rs.git?rev=d0fcc06652ba9880622d0ef8b426c809cee752fe#d0fcc06652ba9880622d0ef8b426c809cee752fe"
+source = "git+https://github.com/apache/datafusion-sqlparser-rs.git?rev=d6743e924c99cebaa1f065eb721ae085f9f0116f#d6743e924c99cebaa1f065eb721ae085f9f0116f"
 dependencies = [
  "proc-macro2",
  "quote",
