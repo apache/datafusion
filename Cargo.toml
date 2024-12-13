@@ -175,9 +175,7 @@ debug = 'line-directives-only'
 inherits = "release"
 lto = 'fat'
 opt-level = 0
-overflow-checks = false
 panic = 'abort'
-rpath = false
 
 [workspace.lints.clippy]
 # Detects large stack-allocated futures that may cause stack overflow crashes (see threshold in clippy.toml)
