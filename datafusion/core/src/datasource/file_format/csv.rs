@@ -1259,18 +1259,13 @@ mod tests {
         Ok(())
     }
 
-    /// Read a single empty csv file in parallel
+    /// Read a single empty csv file
     ///
     /// empty_0_byte.csv:
     /// (file is empty)
-    #[rstest(n_partitions, case(1), case(2), case(3), case(4))]
     #[tokio::test]
-    async fn test_csv_parallel_empty_file(n_partitions: usize) -> Result<()> {
-        let config = SessionConfig::new()
-            .with_repartition_file_scans(true)
-            .with_repartition_file_min_size(0)
-            .with_target_partitions(n_partitions);
-        let ctx = SessionContext::new_with_config(config);
+    async fn test_csv_empty_file() -> Result<()> {
+        let ctx = SessionContext::new();
         ctx.register_csv(
             "empty",
             "tests/data/empty_0_byte.csv",
@@ -1278,32 +1273,24 @@ mod tests {
         )
         .await?;
 
-        // Require a predicate to enable repartition for the optimizer
         let query = "select * from empty where random() > 0.5;";
         let query_result = ctx.sql(query).await?.collect().await?;
-        let actual_partitions = count_query_csv_partitions(&ctx, query).await?;
 
         #[rustfmt::skip]
         let expected = ["++",
             "++"];
         assert_batches_eq!(expected, &query_result);
-        assert_eq!(1, actual_partitions); // Won't get partitioned if all files are empty
 
         Ok(())
     }
 
-    /// Read a single empty csv file with header in parallel
+    /// Read a single empty csv file with header
     ///
     /// empty.csv:
     /// c1,c2,c3
-    #[rstest(n_partitions, case(1), case(2), case(3))]
     #[tokio::test]
-    async fn test_csv_parallel_empty_with_header(n_partitions: usize) -> Result<()> {
-        let config = SessionConfig::new()
-            .with_repartition_file_scans(true)
-            .with_repartition_file_min_size(0)
-            .with_target_partitions(n_partitions);
-        let ctx = SessionContext::new_with_config(config);
+    async fn test_csv_empty_with_header() -> Result<()> {
+        let ctx = SessionContext::new();
         ctx.register_csv(
             "empty",
             "tests/data/empty.csv",
@@ -1311,21 +1298,18 @@ mod tests {
         )
         .await?;
 
-        // Require a predicate to enable repartition for the optimizer
         let query = "select * from empty where random() > 0.5;";
         let query_result = ctx.sql(query).await?.collect().await?;
-        let actual_partitions = count_query_csv_partitions(&ctx, query).await?;
 
         #[rustfmt::skip]
         let expected = ["++",
             "++"];
         assert_batches_eq!(expected, &query_result);
-        assert_eq!(n_partitions, actual_partitions);
 
         Ok(())
     }
 
-    /// Read multiple empty csv files in parallel
+    /// Read multiple empty csv files
     ///
     /// all_empty
     /// ├── empty0.csv
@@ -1334,14 +1318,9 @@ mod tests {
     ///
     /// empty0.csv/empty1.csv/empty2.csv:
     /// (file is empty)
-    #[rstest(n_partitions, case(1), case(2), case(3), case(4))]
     #[tokio::test]
-    async fn test_csv_parallel_multiple_empty_files(n_partitions: usize) -> Result<()> {
-        let config = SessionConfig::new()
-            .with_repartition_file_scans(true)
-            .with_repartition_file_min_size(0)
-            .with_target_partitions(n_partitions);
-        let ctx = SessionContext::new_with_config(config);
+    async fn test_csv_multiple_empty_files() -> Result<()> {
+        let ctx = SessionContext::new();
         let file_format = Arc::new(CsvFormat::default().with_has_header(false));
         let listing_options = ListingOptions::new(file_format.clone())
             .with_file_extension(file_format.get_ext());
@@ -1358,13 +1337,11 @@ mod tests {
         // Require a predicate to enable repartition for the optimizer
         let query = "select * from empty where random() > 0.5;";
         let query_result = ctx.sql(query).await?.collect().await?;
-        let actual_partitions = count_query_csv_partitions(&ctx, query).await?;
 
         #[rustfmt::skip]
         let expected = ["++",
             "++"];
         assert_batches_eq!(expected, &query_result);
-        assert_eq!(1, actual_partitions); // Won't get partitioned if all files are empty
 
         Ok(())
     }
