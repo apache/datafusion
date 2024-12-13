@@ -30,7 +30,7 @@ use datafusion::logical_expr::expr::{Exists, InSubquery, Sort};
 
 use datafusion::logical_expr::{
     Aggregate, BinaryExpr, Case, Cast, EmptyRelation, Expr, ExprSchemable, Extension,
-    LogicalPlan, Operator, Projection, SortExpr, Subquery, TryCast, Values,
+    LogicalPlan, Operator, Projection, SortExpr, Subquery, TableScan, TryCast, Values,
 };
 use substrait::proto::aggregate_rel::Grouping;
 use substrait::proto::expression as substrait_expression;
@@ -86,6 +86,7 @@ use substrait::proto::expression::{
     SingularOrList, SwitchExpression, WindowFunction,
 };
 use substrait::proto::read_rel::local_files::file_or_files::PathType::UriFile;
+use substrait::proto::read_rel::ExtensionTable;
 use substrait::proto::rel_common::{Emit, EmitKind};
 use substrait::proto::set_rel::SetOp;
 use substrait::proto::{
@@ -457,6 +458,22 @@ pub trait SubstraitConsumer: Send + Sync + Sized {
             user_defined_literal.type_reference
         )
     }
+
+    fn consume_extension_table(
+        &self,
+        extension_table: &ExtensionTable,
+        _schema: &DFSchema,
+        _projection: &Option<MaskExpression>,
+    ) -> Result<LogicalPlan> {
+        if let Some(ext_detail) = extension_table.detail.as_ref() {
+            substrait_err!(
+                "Missing handler for extension table: {}",
+                &ext_detail.type_url
+            )
+        } else {
+            substrait_err!("Unexpected empty detail in ExtensionTable")
+        }
+    }
 }
 
 /// Convert Substrait Rel to DataFusion DataFrame
@@ -577,6 +594,32 @@ impl SubstraitConsumer for DefaultSubstraitConsumer<'_> {
         }
         let plan = plan.with_exprs_and_inputs(plan.expressions(), inputs)?;
         Ok(LogicalPlan::Extension(Extension { node: plan }))
+    }
+
+    fn consume_extension_table(
+        &self,
+        extension_table: &ExtensionTable,
+        schema: &DFSchema,
+        projection: &Option<MaskExpression>,
+    ) -> Result<LogicalPlan> {
+        if let Some(ext_detail) = &extension_table.detail {
+            let source = self
+                .state
+                .serializer_registry()
+                .deserialize_custom_table(&ext_detail.type_url, &ext_detail.value)?;
+            let table_name = ext_detail
+                .type_url
+                .rsplit_once('/')
+                .map(|(_, name)| name)
+                .unwrap_or(&ext_detail.type_url);
+            let table_scan = TableScan::try_new(table_name, source, None, vec![], None)?;
+            let plan = LogicalPlan::TableScan(table_scan);
+            ensure_schema_compatibility(plan.schema(), schema.clone())?;
+            let schema = apply_masking(schema.clone(), projection)?;
+            apply_projection(plan, schema)
+        } else {
+            substrait_err!("Unexpected empty detail in ExtensionTable")
+        }
     }
 }
 
@@ -1467,8 +1510,11 @@ pub async fn from_read_rel(
             )
             .await
         }
-        _ => {
-            not_impl_err!("Unsupported ReadType: {:?}", read.read_type)
+        Some(ReadType::ExtensionTable(ext)) => {
+            consumer.consume_extension_table(ext, &substrait_schema, &read.projection)
+        }
+        None => {
+            substrait_err!("Unexpected empty read_type")
         }
     }
 }

@@ -19,7 +19,7 @@
 
 use crate::expr_rewriter::FunctionRewrite;
 use crate::planner::ExprPlanner;
-use crate::{AggregateUDF, ScalarUDF, UserDefinedLogicalNode, WindowUDF};
+use crate::{AggregateUDF, ScalarUDF, TableSource, UserDefinedLogicalNode, WindowUDF};
 use datafusion_common::{not_impl_err, plan_datafusion_err, HashMap, Result};
 use std::collections::HashSet;
 use std::fmt::Debug;
@@ -123,22 +123,52 @@ pub trait FunctionRegistry {
     }
 }
 
-/// Serializer and deserializer registry for extensions like [UserDefinedLogicalNode].
+/// Serializer and deserializer registry for extensions like [UserDefinedLogicalNode]
+/// and custom table providers for which the name alone is meaningless in the target
+/// execution context, e.g. UDTFs, manually registered tables etc.
 pub trait SerializerRegistry: Debug + Send + Sync {
     /// Serialize this node to a byte array. This serialization should not include
     /// input plans.
     fn serialize_logical_plan(
         &self,
         node: &dyn UserDefinedLogicalNode,
-    ) -> Result<Vec<u8>>;
+    ) -> Result<Vec<u8>> {
+        not_impl_err!(
+            "Serializing user defined logical plan node `{}` is not supported",
+            node.name()
+        )
+    }
 
     /// Deserialize user defined logical plan node ([UserDefinedLogicalNode]) from
     /// bytes.
     fn deserialize_logical_plan(
         &self,
         name: &str,
-        bytes: &[u8],
-    ) -> Result<Arc<dyn UserDefinedLogicalNode>>;
+        _bytes: &[u8],
+    ) -> Result<Arc<dyn UserDefinedLogicalNode>> {
+        not_impl_err!(
+            "Deserializing user defined logical plan node `{name}` is not supported"
+        )
+    }
+
+    /// Serialized table definition for UDTFs or manually registered table providers that can't be
+    /// marshaled by reference. Should return some benign error for regular tables that can be
+    /// found/restored by name in the destination execution context.
+    fn serialize_custom_table(&self, _table: &dyn TableSource) -> Result<Vec<u8>> {
+        not_impl_err!("No custom table support")
+    }
+
+    /// Deserialize the custom table with the given name.
+    /// Note: more often than not, the name can't be used as a discriminator if multiple different
+    /// `TableSource` and/or `TableProvider` implementations are expected (this is particularly true
+    /// for UDTFs in DataFusion, which are always registered under the same name: `tmp_table`).
+    fn deserialize_custom_table(
+        &self,
+        name: &str,
+        _bytes: &[u8],
+    ) -> Result<Arc<dyn TableSource>> {
+        not_impl_err!("Deserializing custom table `{name}` is not supported")
+    }
 }
 
 /// A  [`FunctionRegistry`] that uses in memory [`HashMap`]s
