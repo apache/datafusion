@@ -497,9 +497,24 @@
               
               <div class="toc-item">
                 
+<div class="tocsection onthispage pt-5 pb-3">
+    <i class="fas fa-list"></i> On this page
+</div>
 
 <nav id="bd-toc-nav">
-    
+    <ul class="visible nav section-nav flex-column">
+ <li class="toc-h2 nav-item toc-entry">
+  <a class="reference internal nav-link" href="#breaking-changes">
+   Breaking Changes
+  </a>
+ </li>
+ <li class="toc-h2 nav-item toc-entry">
+  <a class="reference internal nav-link" href="#deprecation-guidelines">
+   Deprecation Guidelines
+  </a>
+ </li>
+</ul>
+
 </nav>
               </div>
               
@@ -546,19 +561,47 @@
 -->
 <section id="api-health-policy">
 <h1>API health policy<a class="headerlink" href="#api-health-policy" title="Link to this heading">¶</a></h1>
-<p>To maintain API health, developers must track and properly deprecate outdated methods.
-When deprecating a method:</p>
+<p>DataFusion is used extensively as a library and has a large public API, thus it
+is important that the API is well maintained. In general, we try to minimize
+breaking API changes, but they are sometimes necessary.</p>
+<p>When possible, rather than making breaking API changes, we prefer to deprecate
+APIs to give users time to adjust to the changes.</p>
+<section id="breaking-changes">
+<h2>Breaking Changes<a class="headerlink" href="#breaking-changes" title="Link to this heading">¶</a></h2>
+<p>In general, a function is part of the public API if it appears on the <a class="reference external" href="https://docs.rs/datafusion/latest/datafusion/index.html">docs.rs page</a></p>
+<p>Breaking public API changes are those that <em>require</em> users to change their code
+for it to compile, and are listed as “Major Changes” in the <a class="reference external" href="https://doc.rust-lang.org/cargo/reference/semver.html#change-categories">SemVer
+Compatibility Section of the cargo book</a>. Common examples of breaking changes:</p>
 <ul class="simple">
-<li><p>clearly mark the API as deprecated and specify the exact DataFusion version in which it was deprecated.</p></li>
-<li><p>concisely describe the preferred API, if relevant</p></li>
+<li><p>Adding new required parameters to a function (<code class="docutils literal notranslate"><span class="pre">foo(a:</span> <span class="pre">i32,</span> <span class="pre">b:</span> <span class="pre">i32)</span></code> -&gt; <code class="docutils literal notranslate"><span class="pre">foo(a:</span> <span class="pre">i32,</span> <span class="pre">b:</span> <span class="pre">i32,</span> <span class="pre">c:</span> <span class="pre">i32)</span></code>)</p></li>
+<li><p>Removing a <code class="docutils literal notranslate"><span class="pre">pub</span></code> function</p></li>
+<li><p>Changing the return type of a function</p></li>
 </ul>
-<p>API deprecation example:</p>
+<p>When making breaking public API changes, please add the <code class="docutils literal notranslate"><span class="pre">api-change</span></code> label to
+the PR so we can highlight the changes in the release notes.</p>
+</section>
+<section id="deprecation-guidelines">
+<h2>Deprecation Guidelines<a class="headerlink" href="#deprecation-guidelines" title="Link to this heading">¶</a></h2>
+<p>When deprecating a method:</p>
+<ul class="simple">
+<li><p>Mark the API as deprecated using <code class="docutils literal notranslate"><span class="pre">#[deprecated]</span></code> and specify the exact DataFusion version in which it was deprecated</p></li>
+<li><p>Concisely describe the preferred API to help the user transition</p></li>
+</ul>
+<p>The deprecated version is the next version which contains the deprecation. For
+example, if the current version listed in <a class="reference external" href="https://github.com/apache/datafusion/blob/main/Cargo.toml"><code class="docutils literal notranslate"><span class="pre">Cargo.toml</span></code></a> is <code class="docutils literal notranslate"><span class="pre">43.0.0</span></code> then the next
+version will be <code class="docutils literal notranslate"><span class="pre">44.0.0</span></code>.</p>
+<p>To mark the API as deprecated, use the <code class="docutils literal notranslate"><span class="pre">#[deprecated]</span></code> attribute like this:</p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="w">    </span><span class="cp">#[deprecated(since = </span><span class="s">&quot;...&quot;</span><span class="cp">, note = </span><span class="s">&quot;...&quot;</span><span class="cp">)]</span>
+</pre></div>
+</div>
+<p>For example:</p>
 <div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="w">    </span><span class="cp">#[deprecated(since = </span><span class="s">&quot;41.0.0&quot;</span><span class="cp">, note = </span><span class="s">&quot;Use SessionStateBuilder&quot;</span><span class="cp">)]</span>
 <span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="k">fn</span><span class="w"> </span><span class="nf">new_with_config_rt</span><span class="p">(</span><span class="n">config</span><span class="p">:</span><span class="w"> </span><span class="nc">SessionConfig</span><span class="p">,</span><span class="w"> </span><span class="n">runtime</span><span class="p">:</span><span class="w"> </span><span class="nc">Arc</span><span class="o">&lt;</span><span class="n">RuntimeEnv</span><span class="o">&gt;</span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nc">Self</span>
 </pre></div>
 </div>
 <p>Deprecated methods will remain in the codebase for a period of 6 major versions or 6 months, whichever is longer, to provide users ample time to transition away from them.</p>
 <p>Please refer to <a class="reference external" href="https://crates.io/crates/datafusion/versions">DataFusion releases</a> to plan ahead API migration</p>
+</section>
 </section>
 
 
