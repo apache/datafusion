@@ -322,14 +322,6 @@ impl From<FFI_EmissionType> for EmissionType {
     }
 }
 
-#[repr(C)]
-#[allow(non_camel_case_types)]
-#[derive(Clone, StableAbi)]
-pub struct OptionalEmissionType {
-    pub is_some: bool,
-    pub value: FFI_EmissionType, // Valid only if `is_some` is true
-}
-
 #[cfg(test)]
 mod tests {
     use datafusion::physical_plan::Partitioning;

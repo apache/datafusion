@@ -34,7 +34,7 @@ use arrow::record_batch::RecordBatch;
 use datafusion_common::{internal_err, Result};
 use datafusion_execution::TaskContext;
 
-use crate::execution_plan::{Boundedness, CardinalityEffect, EmissionType};
+use crate::execution_plan::{CardinalityEffect, EmissionType};
 use futures::stream::{Stream, StreamExt};
 use log::trace;
 
@@ -87,7 +87,7 @@ impl GlobalLimitExec {
             input.equivalence_properties().clone(), // Equivalence Properties
             Partitioning::UnknownPartitioning(1),   // Output Partitioning
             EmissionType::Final,
-            input.boundedness()
+            input.boundedness(),
         )
     }
 }

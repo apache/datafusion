@@ -436,7 +436,8 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
 /// - Aggregations that need to group all input rows
 /// - Window functions that need the complete partition to compute
 pub fn is_pipeline_breaking(plan: &dyn ExecutionPlan) -> bool {
-    !plan.boundedness().requires_finite_memory() && plan.pipeline_behavior() == EmissionType::Final
+    !plan.boundedness().requires_finite_memory()
+        && plan.pipeline_behavior() == EmissionType::Final
 }
 
 /// Extension trait provides an easy API to fetch various properties of
