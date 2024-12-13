@@ -398,7 +398,7 @@ impl EquivalenceProperties {
             sort_exprs
                 .into_iter()
                 .filter(|expr| !self.is_expr_constant(&expr.expr))
-                .collect()
+                .collect(),
         );
 
         if filtered_exprs.is_empty() {
@@ -430,8 +430,8 @@ impl EquivalenceProperties {
 
         // Check if new order matches existing prefix (considering equivalences)
         new_order.iter().zip(existing).all(|(new, existing)| {
-            self.eq_group.exprs_equal(&new.expr, &existing.expr) &&
-            new.options == existing.options
+            self.eq_group.exprs_equal(&new.expr, &existing.expr)
+                && new.options == existing.options
         })
     }
 

@@ -636,8 +636,15 @@ impl EquivalenceGroup {
     }
 
     /// Checks if two expressions are equal either directly or through equivalence classes.
-    pub fn exprs_equal(&self, left: &Arc<dyn PhysicalExpr>, right: &Arc<dyn PhysicalExpr>) -> bool {
-        left.eq(right) || self.iter().any(|cls| cls.contains(left) && cls.contains(right))
+    pub fn exprs_equal(
+        &self,
+        left: &Arc<dyn PhysicalExpr>,
+        right: &Arc<dyn PhysicalExpr>,
+    ) -> bool {
+        left.eq(right)
+            || self
+                .iter()
+                .any(|cls| cls.contains(left) && cls.contains(right))
     }
 }
 
