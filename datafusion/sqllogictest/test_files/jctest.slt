@@ -1,0 +1,49 @@
+# --------------------------------------
+# String_view specific tests
+# --------------------------------------
+statement ok
+create table test_source as values
+  ('Andrew', 'X', 'datafusion📊🔥', '🔥'),
+  ('Xiangpeng', 'Xiangpeng', 'datafusion数据融合', 'datafusion数据融合'),
+  ('Raphael', 'R', 'datafusionДатаФусион', 'аФус'),
+  ('under_score', 'un_____core', 'un iść core', 'chrząszcz na łące w 東京都'),
+  ('percent', 'p%t', 'pan Tadeusz ma iść w kąt', 'Pan Tadeusz ma frunąć stąd w kąt'),
+  ('', '%', '', ''),
+  ('%', '\%', '', ''),
+  ('_', '\_', '', ''),
+  (NULL, '%', NULL, NULL),
+  (NULL, 'R', NULL, '🔥');
+
+# --------------------------------------
+# Setup test tables with different physical string types
+# and repeat tests in `string_query.slt.part`
+# --------------------------------------
+statement ok
+create table test_basic_operator as
+select
+    arrow_cast(column1, 'Utf8') as ascii_1,
+    arrow_cast(column2, 'Utf8') as ascii_2,
+    arrow_cast(column3, 'Utf8') as unicode_1,
+    arrow_cast(column4, 'Utf8') as unicode_2
+from test_source;
+
+query TTTTTT
+SELECT
+  RIGHT(ascii_1, 3),
+  RIGHT(ascii_1, 0),
+  RIGHT(ascii_1, -3),
+  RIGHT(unicode_1, 3),
+  RIGHT(unicode_1, 0),
+  RIGHT(unicode_1, -3)
+FROM test_basic_operator;
+----
+rew (empty) rew n📊🔥 (empty) afusion📊🔥
+eng (empty) ngpeng 据融合 (empty) afusion数据融合
+ael (empty) hael ион (empty) afusionДатаФусион
+ore (empty) er_score ore (empty) iść core
+ent (empty) cent kąt (empty)  Tadeusz ma iść w kąt
+(empty) (empty) (empty) (empty) (empty) (empty)
+% (empty) (empty) (empty) (empty) (empty)
+_ (empty) (empty) (empty) (empty) (empty)
+NULL NULL NULL NULL NULL NULL
+NULL NULL NULL NULL NULL NULL
