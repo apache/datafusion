@@ -669,8 +669,8 @@ fn hash_join_swap_subrule(
     _config_options: &ConfigOptions,
 ) -> Result<Arc<dyn ExecutionPlan>> {
     if let Some(hash_join) = input.as_any().downcast_ref::<HashJoinExec>() {
-        if !hash_join.left.boundedness().requires_finite_memory()
-            && hash_join.right.boundedness().requires_finite_memory()
+        if hash_join.left.boundedness().is_unbounded()
+            && !hash_join.right.boundedness().is_unbounded()
             && matches!(
                 *hash_join.join_type(),
                 JoinType::Inner
@@ -2025,12 +2025,12 @@ mod hash_join_tests {
             assert_eq!(
                 (
                     t.case.as_str(),
-                    if !left.boundedness().requires_finite_memory() {
+                    if left.boundedness().is_unbounded() {
                         SourceType::Unbounded
                     } else {
                         SourceType::Bounded
                     },
-                    if !right.boundedness().requires_finite_memory() {
+                    if right.boundedness().is_unbounded() {
                         SourceType::Unbounded
                     } else {
                         SourceType::Bounded

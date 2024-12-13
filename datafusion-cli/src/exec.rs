@@ -235,7 +235,7 @@ pub(super) async fn exec_and_print(
         let df = ctx.execute_logical_plan(plan).await?;
         let physical_plan = df.create_physical_plan().await?;
 
-        if !physical_plan.boundedness().requires_finite_memory() {
+        if physical_plan.boundedness().is_unbounded() {
             let stream = execute_stream(physical_plan, task_ctx.clone())?;
             print_options.print_stream(stream, now).await?;
         } else {

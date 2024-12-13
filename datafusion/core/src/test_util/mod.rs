@@ -260,11 +260,12 @@ impl UnboundedExec {
         batch_produce: Option<usize>,
         n_partitions: usize,
     ) -> PlanProperties {
-        let boundedness = if batch_produce.is_some() {
+        let boundedness = if batch_produce.is_none() {
             Boundedness::Unbounded {
-                requires_finite_memory: false,
+                requires_finite_memory: true,
             }
         } else {
+            // TODO: Switch to Unbounded with finite memory
             Boundedness::Bounded
         };
         PlanProperties::new(
