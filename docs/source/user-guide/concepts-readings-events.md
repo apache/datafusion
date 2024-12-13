@@ -47,7 +47,7 @@ This is a list of DataFusion related blog posts, articles, and other resources. 
 
 - **2024-11-18** [Blog: Apache DataFusion is now the fastest single node engine for querying Apache Parquet files](https://datafusion.apache.org/blog/2024/11/18/datafusion-fastest-single-node-parquet-clickbench/)
 
-- **2024-11-18** [Building Databases over a Weekend ](https://www.denormalized.io/blog/building-databases)
+- **2024-11-18** [Building Databases over a Weekend](https://www.denormalized.io/blog/building-databases)
 
 - **2024-10-27** [Caching in DataFusion: Don't read twice](https://blog.haoxp.xyz/posts/caching-datafusion)
 
