@@ -27,7 +27,8 @@ use datafusion_catalog::{Session, TableProvider};
 use datafusion_expr::{dml::InsertOp, Expr, TableType};
 use datafusion_physical_expr::{EquivalenceProperties, Partitioning};
 use datafusion_physical_plan::{
-    execution_plan::EmissionType, DisplayAs, ExecutionPlan, PlanProperties,
+    execution_plan::{Boundedness, EmissionType},
+    DisplayAs, ExecutionPlan, PlanProperties,
 };
 
 #[tokio::test]
@@ -124,12 +125,14 @@ struct TestInsertExec {
 
 impl TestInsertExec {
     fn new(op: InsertOp) -> Self {
-        let eq_properties = EquivalenceProperties::new(make_count_schema());
-        let plan_properties =
-            PlanProperties::new(eq_properties, Partitioning::UnknownPartitioning(1));
         Self {
             op,
-            plan_properties,
+            plan_properties: PlanProperties::new(
+                EquivalenceProperties::new(make_count_schema()),
+                Partitioning::UnknownPartitioning(1),
+                EmissionType::Incremental,
+                Boundedness::Bounded,
+            ),
         }
     }
 }
@@ -175,14 +178,6 @@ impl ExecutionPlan for TestInsertExec {
         _context: Arc<datafusion_execution::TaskContext>,
     ) -> Result<datafusion_execution::SendableRecordBatchStream> {
         unimplemented!("TestInsertExec is a stub for testing.")
-    }
-
-    fn emission_type(&self) -> EmissionType {
-        EmissionType::Incremental
-    }
-
-    fn has_finite_memory(&self) -> bool {
-        true
     }
 }
 

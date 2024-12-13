@@ -47,7 +47,6 @@ pub use crate::metrics::Metric;
 use crate::metrics::MetricsSet;
 pub use crate::ordering::InputOrderMode;
 use crate::repartition::RepartitionExec;
-use crate::sorts::sort::SortExec;
 use crate::sorts::sort_preserving_merge::SortPreservingMergeExec;
 pub use crate::stream::EmptyRecordBatchStream;
 use crate::stream::RecordBatchStreamAdapter;
@@ -423,12 +422,21 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
     fn cardinality_effect(&self) -> CardinalityEffect {
         CardinalityEffect::Unknown
     }
+}
 
-    fn emission_type(&self) -> EmissionType;
-    fn has_finite_memory(&self) -> bool;
-    fn is_pipeline_breaking(&self) -> bool {
-        !self.has_finite_memory() && self.emission_type() == EmissionType::Final
-    }
+/// Returns true if this execution plan node is pipeline breaking, meaning it needs to
+/// consume all input before producing output and has unbounded memory usage.
+///
+/// A node is pipeline breaking if it:
+/// 1. Has unbounded memory usage (boundedness is unbounded)
+/// 2. Only emits output after consuming all input (emission type is Final)
+///
+/// Examples of pipeline breaking nodes include:
+/// - Sort operations that need to buffer all input before sorting
+/// - Aggregations that need to group all input rows
+/// - Window functions that need the complete partition to compute
+pub fn is_pipeline_breaking(plan: &dyn ExecutionPlan) -> bool {
+    plan.boundedness().is_unbounded() && plan.pipeline_behavior() == EmissionType::Final
 }
 
 /// Extension trait provides an easy API to fetch various properties of
@@ -481,19 +489,11 @@ impl ExecutionPlanProperties for Arc<dyn ExecutionPlan> {
     }
 
     fn boundedness(&self) -> Boundedness {
-        // The properties is computed once and cache with `compute_properties`, usually take input's properties, else has own additional logic,
-        // hardcoded for source
-        if self.properties().has_finite_memory {
-            Boundedness::Bounded
-        } else {
-            Boundedness::Unbounded
-        }
+        self.properties().boundedness
     }
 
     fn pipeline_behavior(&self) -> EmissionType {
-        // The properties is computed once and cache with `compute_properties`, usually take input's properties, else has own additional logic,
-        // hardcoded for source
-        self.properties().emission_type.unwrap()
+        self.properties().emission_type
     }
 
     fn equivalence_properties(&self) -> &EquivalenceProperties {
@@ -511,15 +511,11 @@ impl ExecutionPlanProperties for &dyn ExecutionPlan {
     }
 
     fn boundedness(&self) -> Boundedness {
-        if self.has_finite_memory() {
-            Boundedness::Bounded
-        } else {
-            Boundedness::Unbounded
-        }
+        self.properties().boundedness
     }
 
     fn pipeline_behavior(&self) -> EmissionType {
-        self.emission_type()
+        self.properties().emission_type
     }
 
     fn equivalence_properties(&self) -> &EquivalenceProperties {
@@ -530,7 +526,23 @@ impl ExecutionPlanProperties for &dyn ExecutionPlan {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Boundedness {
     Bounded,
-    Unbounded,
+    Unbounded { requires_finite_memory: bool },
+}
+
+impl Boundedness {
+    pub fn is_unbounded(&self) -> bool {
+        matches!(self, Boundedness::Unbounded { .. })
+    }
+
+    pub fn requires_finite_memory(&self) -> bool {
+        matches!(
+            self,
+            Boundedness::Bounded
+                | Boundedness::Unbounded {
+                    requires_finite_memory: true
+                }
+        )
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -541,6 +553,36 @@ pub enum EmissionType {
     Both,
 }
 
+pub(crate) fn boundedness_from_children<'a>(
+    children: impl IntoIterator<Item = &'a Arc<dyn ExecutionPlan>>,
+) -> Boundedness {
+    let mut is_unbounded_with_finite_memory = false;
+
+    for child in children {
+        match child.boundedness() {
+            Boundedness::Unbounded {
+                requires_finite_memory: false,
+            } => {
+                return Boundedness::Unbounded {
+                    requires_finite_memory: false,
+                }
+            }
+            Boundedness::Unbounded {
+                requires_finite_memory: true,
+            } => is_unbounded_with_finite_memory = true,
+            _ => {}
+        }
+    }
+
+    if is_unbounded_with_finite_memory {
+        Boundedness::Unbounded {
+            requires_finite_memory: true,
+        }
+    } else {
+        Boundedness::Bounded
+    }
+}
+
 pub(crate) fn emission_type_from_children<'a>(
     children: impl IntoIterator<Item = &'a Arc<dyn ExecutionPlan>>,
 ) -> EmissionType {
@@ -549,7 +591,7 @@ pub(crate) fn emission_type_from_children<'a>(
     let mut has_both = false;
 
     for child in children {
-        match child.emission_type() {
+        match child.pipeline_behavior() {
             EmissionType::Final => return EmissionType::Final,
             EmissionType::Both => has_both = true,
             _ => {}
@@ -576,22 +618,27 @@ pub struct PlanProperties {
     /// See [ExecutionPlanProperties::output_partitioning]
     pub partitioning: Partitioning,
     // Store input's emission type and memory usage to avoid stackoverflow
-    pub emission_type: Option<EmissionType>,
-    pub has_finite_memory: bool,
+    pub emission_type: EmissionType,
+    pub boundedness: Boundedness,
     /// See [ExecutionPlanProperties::output_ordering]
     output_ordering: Option<LexOrdering>,
 }
 
 impl PlanProperties {
     /// Construct a new `PlanPropertiesCache` from the
-    pub fn new(eq_properties: EquivalenceProperties, partitioning: Partitioning) -> Self {
+    pub fn new(
+        eq_properties: EquivalenceProperties,
+        partitioning: Partitioning,
+        emission_type: EmissionType,
+        boundedness: Boundedness,
+    ) -> Self {
         // Output ordering can be derived from `eq_properties`.
         let output_ordering = eq_properties.output_ordering();
         Self {
             eq_properties,
             partitioning,
-            emission_type: None,
-            has_finite_memory: true,
+            emission_type,
+            boundedness,
             output_ordering,
         }
     }
@@ -602,22 +649,18 @@ impl PlanProperties {
         self
     }
 
-    pub fn with_emission_type(mut self, emission_type: EmissionType) -> Self {
-        self.emission_type = Some(emission_type);
-        self
-    }
-
-    pub fn with_memory_usage(mut self, has_finite_memory: bool) -> Self {
-        self.has_finite_memory = has_finite_memory;
-        self
-    }
-
     /// Overwrite equivalence properties with its new value.
     pub fn with_eq_properties(mut self, eq_properties: EquivalenceProperties) -> Self {
         // Changing equivalence properties also changes output ordering, so
         // make sure to overwrite it:
         self.output_ordering = eq_properties.output_ordering();
         self.eq_properties = eq_properties;
+        self
+    }
+
+    /// Overwrite boundedness with its new value.
+    pub fn with_boundedness(mut self, boundedness: Boundedness) -> Self {
+        self.boundedness = boundedness;
         self
     }
 
@@ -975,14 +1018,6 @@ mod tests {
         fn statistics(&self) -> Result<Statistics> {
             unimplemented!()
         }
-
-        fn emission_type(&self) -> EmissionType {
-            unimplemented!()
-        }
-
-        fn has_finite_memory(&self) -> bool {
-            unimplemented!()
-        }
     }
 
     #[derive(Debug)]
@@ -1044,14 +1079,6 @@ mod tests {
         }
 
         fn statistics(&self) -> Result<Statistics> {
-            unimplemented!()
-        }
-
-        fn emission_type(&self) -> EmissionType {
-            unimplemented!()
-        }
-
-        fn has_finite_memory(&self) -> bool {
             unimplemented!()
         }
     }

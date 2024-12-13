@@ -21,7 +21,6 @@ use std::any::Any;
 use std::sync::Arc;
 
 use crate::common::spawn_buffered;
-use crate::execution_plan::EmissionType;
 use crate::limit::LimitStream;
 use crate::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
 use crate::sorts::streaming_merge::StreamingMergeBuilder;
@@ -140,9 +139,9 @@ impl SortPreservingMergeExec {
         PlanProperties::new(
             eq_properties,                        // Equivalence Properties
             Partitioning::UnknownPartitioning(1), // Output Partitioning
+            input.pipeline_behavior(),
+            input.boundedness(),
         )
-        .with_emission_type(input.emission_type())
-        .with_memory_usage(input.has_finite_memory())
     }
 }
 
@@ -312,15 +311,6 @@ impl ExecutionPlan for SortPreservingMergeExec {
     fn supports_limit_pushdown(&self) -> bool {
         true
     }
-
-    fn emission_type(&self) -> EmissionType {
-        // Safe to unwrap because it is set in `compute_properties`
-        self.cache.emission_type.unwrap()
-    }
-
-    fn has_finite_memory(&self) -> bool {
-        self.cache.has_finite_memory
-    }
 }
 
 #[cfg(test)]
@@ -334,6 +324,7 @@ mod tests {
     use super::*;
     use crate::coalesce_batches::CoalesceBatchesExec;
     use crate::coalesce_partitions::CoalescePartitionsExec;
+    use crate::execution_plan::{Boundedness, EmissionType};
     use crate::expressions::col;
     use crate::memory::MemoryExec;
     use crate::metrics::{MetricValue, Timestamp};
@@ -1279,7 +1270,12 @@ mod tests {
                 .iter()
                 .map(|expr| PhysicalSortExpr::new_default(Arc::clone(expr)))
                 .collect::<LexOrdering>()]);
-            PlanProperties::new(eq_properties, Partitioning::Hash(columns, 3))
+            PlanProperties::new(
+                eq_properties,
+                Partitioning::Hash(columns, 3),
+                EmissionType::Incremental,
+                Boundedness::Bounded,
+            )
         }
     }
 
@@ -1313,14 +1309,6 @@ mod tests {
                 congestion_cleared: Arc::clone(&self.congestion_cleared),
                 partition,
             }))
-        }
-
-        fn emission_type(&self) -> EmissionType {
-            EmissionType::Incremental
-        }
-
-        fn has_finite_memory(&self) -> bool {
-            true
         }
     }
 

@@ -55,7 +55,7 @@ use datafusion_physical_expr::PhysicalExprRef;
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, LexRequirement};
 use futures::{Stream, StreamExt};
 
-use crate::execution_plan::EmissionType;
+use crate::execution_plan::{boundedness_from_children, EmissionType};
 use crate::expressions::PhysicalSortExpr;
 use crate::joins::utils::{
     build_join_schema, check_join_is_valid, estimate_join_statistics,
@@ -303,10 +303,13 @@ impl SortMergeJoinExec {
         let output_partitioning =
             symmetric_join_output_partitioning(left, right, &join_type);
 
-        // Determine execution mode:
-        let has_finite_memory = left.has_finite_memory() && right.has_finite_memory();
-        PlanProperties::new(eq_properties, output_partitioning)
-            .with_memory_usage(has_finite_memory)
+        // TODO: Emission type may be incremental if the input is sorted
+        PlanProperties::new(
+            eq_properties,
+            output_partitioning,
+            EmissionType::Final,
+            boundedness_from_children([left, right]),
+        )
     }
 }
 
@@ -468,15 +471,6 @@ impl ExecutionPlan for SortMergeJoinExec {
             &self.join_type,
             &self.schema,
         )
-    }
-
-    fn emission_type(&self) -> EmissionType {
-        // TODO: If the input is sorted, we might be able to emit it incrementally
-        EmissionType::Final
-    }
-
-    fn has_finite_memory(&self) -> bool {
-        self.cache.has_finite_memory
     }
 }
 

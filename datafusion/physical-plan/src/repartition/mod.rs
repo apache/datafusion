@@ -29,7 +29,7 @@ use super::metrics::{self, ExecutionPlanMetricsSet, MetricBuilder, MetricsSet};
 use super::{
     DisplayAs, ExecutionPlanProperties, RecordBatchStream, SendableRecordBatchStream,
 };
-use crate::execution_plan::{CardinalityEffect, EmissionType};
+use crate::execution_plan::CardinalityEffect;
 use crate::hash_utils::create_hashes;
 use crate::metrics::BaselineMetrics;
 use crate::repartition::distributor_channels::{
@@ -672,14 +672,6 @@ impl ExecutionPlan for RepartitionExec {
     fn cardinality_effect(&self) -> CardinalityEffect {
         CardinalityEffect::Equal
     }
-
-    fn emission_type(&self) -> EmissionType {
-        self.cache.emission_type.unwrap()
-    }
-
-    fn has_finite_memory(&self) -> bool {
-        self.cache.has_finite_memory
-    }
 }
 
 impl RepartitionExec {
@@ -734,15 +726,12 @@ impl RepartitionExec {
         partitioning: Partitioning,
         preserve_order: bool,
     ) -> PlanProperties {
-        // Equivalence Properties
-        let eq_properties = Self::eq_properties_helper(input, preserve_order);
-
         PlanProperties::new(
-            eq_properties, // Equivalence Properties
-            partitioning,  // Output Partitioning
+            Self::eq_properties_helper(input, preserve_order),
+            partitioning, // Output Partitioning
+            input.pipeline_behavior(),
+            input.boundedness(),
         )
-        .with_emission_type(input.emission_type())
-        .with_memory_usage(input.has_finite_memory())
     }
 
     /// Specify if this reparititoning operation should preserve the order of

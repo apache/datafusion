@@ -45,7 +45,7 @@ use arrow::record_batch::RecordBatch;
 use datafusion_common::{DataFusionError, Statistics};
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_physical_expr::{EquivalenceProperties, Partitioning, PhysicalSortExpr};
-use datafusion_physical_plan::execution_plan::EmissionType;
+use datafusion_physical_plan::execution_plan::{Boundedness, EmissionType};
 use datafusion_physical_plan::streaming::{PartitionStream, StreamingTableExec};
 use datafusion_physical_plan::{DisplayAs, DisplayFormatType, PlanProperties};
 
@@ -388,6 +388,8 @@ impl StatisticsExec {
         PlanProperties::new(
             EquivalenceProperties::new(schema),
             Partitioning::UnknownPartitioning(2),
+            EmissionType::Incremental,
+            Boundedness::Bounded,
         )
     }
 }
@@ -445,14 +447,6 @@ impl ExecutionPlan for StatisticsExec {
 
     fn statistics(&self) -> Result<Statistics> {
         Ok(self.stats.clone())
-    }
-
-    fn emission_type(&self) -> EmissionType {
-        unimplemented!()
-    }
-
-    fn has_finite_memory(&self) -> bool {
-        true
     }
 }
 

@@ -69,7 +69,7 @@ use arrow::{
     util::pretty::pretty_format_batches,
 };
 use async_trait::async_trait;
-use datafusion_physical_plan::execution_plan::EmissionType;
+use datafusion_physical_plan::execution_plan::{Boundedness, EmissionType};
 use futures::{Stream, StreamExt};
 
 use datafusion::execution::session_state::SessionStateBuilder;
@@ -495,9 +495,12 @@ impl TopKExec {
 
     /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
     fn compute_properties(schema: SchemaRef) -> PlanProperties {
-        let eq_properties = EquivalenceProperties::new(schema);
-
-        PlanProperties::new(eq_properties, Partitioning::UnknownPartitioning(1))
+        PlanProperties::new(
+            EquivalenceProperties::new(schema),
+            Partitioning::UnknownPartitioning(1),
+            EmissionType::Incremental,
+            Boundedness::Bounded,
+        )
     }
 }
 
@@ -569,14 +572,6 @@ impl ExecutionPlan for TopKExec {
         // to improve the optimizability of this plan
         // better statistics inference could be provided
         Ok(Statistics::new_unknown(&self.schema()))
-    }
-
-    fn emission_type(&self) -> EmissionType {
-        EmissionType::Incremental
-    }
-
-    fn has_finite_memory(&self) -> bool {
-        true
     }
 }
 

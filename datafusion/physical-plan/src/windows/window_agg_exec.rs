@@ -129,8 +129,13 @@ impl WindowAggExec {
         let output_partitioning = input.output_partitioning().clone();
 
         // Construct properties cache:
-        PlanProperties::new(eq_properties, output_partitioning)
-            .with_memory_usage(input.has_finite_memory())
+        // TODO: Adjust emission type based on the aggregation function?
+        PlanProperties::new(
+            eq_properties,
+            output_partitioning,
+            EmissionType::Incremental,
+            input.boundedness(),
+        )
     }
 }
 
@@ -254,15 +259,6 @@ impl ExecutionPlan for WindowAggExec {
             column_statistics,
             total_byte_size: Precision::Absent,
         })
-    }
-
-    fn emission_type(&self) -> EmissionType {
-        // TODO: Adjust it based on the aggregation function
-        EmissionType::Incremental
-    }
-
-    fn has_finite_memory(&self) -> bool {
-        self.cache.has_finite_memory
     }
 }
 

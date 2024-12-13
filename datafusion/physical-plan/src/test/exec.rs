@@ -25,8 +25,9 @@ use std::{
 };
 
 use crate::{
-    common, DisplayAs, DisplayFormatType, ExecutionPlan, Partitioning, PlanProperties,
-    RecordBatchStream, SendableRecordBatchStream, Statistics,
+    common, execution_plan::Boundedness, DisplayAs, DisplayFormatType, ExecutionPlan,
+    Partitioning, PlanProperties, RecordBatchStream, SendableRecordBatchStream,
+    Statistics,
 };
 use crate::{
     execution_plan::EmissionType,
@@ -158,6 +159,8 @@ impl MockExec {
         PlanProperties::new(
             EquivalenceProperties::new(schema),
             Partitioning::UnknownPartitioning(1),
+            EmissionType::Incremental,
+            Boundedness::Bounded,
         )
     }
 }
@@ -265,14 +268,6 @@ impl ExecutionPlan for MockExec {
             None,
         ))
     }
-
-    fn emission_type(&self) -> EmissionType {
-        EmissionType::Incremental
-    }
-
-    fn has_finite_memory(&self) -> bool {
-        true
-    }
 }
 
 fn clone_error(e: &DataFusionError) -> DataFusionError {
@@ -326,6 +321,8 @@ impl BarrierExec {
         PlanProperties::new(
             EquivalenceProperties::new(schema),
             Partitioning::UnknownPartitioning(data.len()),
+            EmissionType::Incremental,
+            Boundedness::Bounded,
         )
     }
 }
@@ -406,14 +403,6 @@ impl ExecutionPlan for BarrierExec {
             None,
         ))
     }
-
-    fn emission_type(&self) -> EmissionType {
-        EmissionType::Incremental
-    }
-
-    fn has_finite_memory(&self) -> bool {
-        true
-    }
 }
 
 /// A mock execution plan that errors on a call to execute
@@ -444,6 +433,8 @@ impl ErrorExec {
         PlanProperties::new(
             EquivalenceProperties::new(schema),
             Partitioning::UnknownPartitioning(1),
+            EmissionType::Incremental,
+            Boundedness::Bounded,
         )
     }
 }
@@ -494,14 +485,6 @@ impl ExecutionPlan for ErrorExec {
     ) -> Result<SendableRecordBatchStream> {
         internal_err!("ErrorExec, unsurprisingly, errored in partition {partition}")
     }
-
-    fn emission_type(&self) -> EmissionType {
-        EmissionType::Incremental
-    }
-
-    fn has_finite_memory(&self) -> bool {
-        true
-    }
 }
 
 /// A mock execution plan that simply returns the provided statistics
@@ -531,6 +514,8 @@ impl StatisticsExec {
         PlanProperties::new(
             EquivalenceProperties::new(schema),
             Partitioning::UnknownPartitioning(2),
+            EmissionType::Incremental,
+            Boundedness::Bounded,
         )
     }
 }
@@ -589,14 +574,6 @@ impl ExecutionPlan for StatisticsExec {
     fn statistics(&self) -> Result<Statistics> {
         Ok(self.stats.clone())
     }
-
-    fn emission_type(&self) -> EmissionType {
-        EmissionType::Incremental
-    }
-
-    fn has_finite_memory(&self) -> bool {
-        true
-    }
 }
 
 /// Execution plan that emits streams that block forever.
@@ -637,6 +614,8 @@ impl BlockingExec {
         PlanProperties::new(
             EquivalenceProperties::new(schema),
             Partitioning::UnknownPartitioning(n_partitions),
+            EmissionType::Incremental,
+            Boundedness::Bounded,
         )
     }
 }
@@ -689,14 +668,6 @@ impl ExecutionPlan for BlockingExec {
             schema: Arc::clone(&self.schema),
             _refs: Arc::clone(&self.refs),
         }))
-    }
-
-    fn emission_type(&self) -> EmissionType {
-        EmissionType::Incremental
-    }
-
-    fn has_finite_memory(&self) -> bool {
-        true
     }
 }
 
@@ -785,6 +756,8 @@ impl PanicExec {
         PlanProperties::new(
             EquivalenceProperties::new(schema),
             Partitioning::UnknownPartitioning(num_partitions),
+            EmissionType::Incremental,
+            Boundedness::Bounded,
         )
     }
 }
@@ -839,14 +812,6 @@ impl ExecutionPlan for PanicExec {
             schema: Arc::clone(&self.schema),
             ready: false,
         }))
-    }
-
-    fn emission_type(&self) -> EmissionType {
-        EmissionType::Incremental
-    }
-
-    fn has_finite_memory(&self) -> bool {
-        true
     }
 }
 

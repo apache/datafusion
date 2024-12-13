@@ -24,7 +24,7 @@ use super::utils::{
     StatefulStreamResult,
 };
 use crate::coalesce_partitions::CoalescePartitionsExec;
-use crate::execution_plan::EmissionType;
+use crate::execution_plan::{boundedness_from_children, EmissionType};
 use crate::metrics::{ExecutionPlanMetricsSet, MetricsSet};
 use crate::{
     handle_state, ColumnStatistics, DisplayAs, DisplayFormatType, Distribution,
@@ -161,9 +161,12 @@ impl CrossJoinExec {
             left.schema().fields.len(),
         );
 
-        let has_finite_memory = left.has_finite_memory() && right.has_finite_memory();
-        PlanProperties::new(eq_properties, output_partitioning)
-            .with_memory_usage(has_finite_memory)
+        PlanProperties::new(
+            eq_properties,
+            output_partitioning,
+            EmissionType::Final,
+            boundedness_from_children([left, right]),
+        )
     }
 }
 
@@ -315,14 +318,6 @@ impl ExecutionPlan for CrossJoinExec {
             self.left.statistics()?,
             self.right.statistics()?,
         ))
-    }
-
-    fn emission_type(&self) -> EmissionType {
-        EmissionType::Final
-    }
-
-    fn has_finite_memory(&self) -> bool {
-        self.cache.has_finite_memory
     }
 }
 

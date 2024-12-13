@@ -26,7 +26,6 @@ use super::{
     SendableRecordBatchStream,
 };
 use crate::display::DisplayableExecutionPlan;
-use crate::execution_plan::EmissionType;
 use crate::{DisplayFormatType, ExecutionPlan, Partitioning};
 
 use arrow::{array::StringBuilder, datatypes::SchemaRef, record_batch::RecordBatch};
@@ -90,11 +89,12 @@ impl AnalyzeExec {
         input: &Arc<dyn ExecutionPlan>,
         schema: SchemaRef,
     ) -> PlanProperties {
-        let eq_properties = EquivalenceProperties::new(schema);
-        let output_partitioning = Partitioning::UnknownPartitioning(1);
-        PlanProperties::new(eq_properties, output_partitioning)
-            .with_emission_type(input.emission_type())
-            .with_memory_usage(input.has_finite_memory())
+        PlanProperties::new(
+            EquivalenceProperties::new(schema),
+            Partitioning::UnknownPartitioning(1),
+            input.pipeline_behavior(),
+            input.boundedness(),
+        )
     }
 }
 
@@ -205,14 +205,6 @@ impl ExecutionPlan for AnalyzeExec {
             Arc::clone(&self.schema),
             futures::stream::once(output),
         )))
-    }
-
-    fn emission_type(&self) -> EmissionType {
-        self.cache.emission_type.unwrap()
-    }
-
-    fn has_finite_memory(&self) -> bool {
-        self.cache.has_finite_memory
     }
 }
 

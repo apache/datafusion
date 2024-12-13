@@ -33,7 +33,7 @@ use std::task::{Context, Poll};
 use std::vec;
 
 use crate::common::SharedMemoryReservation;
-use crate::execution_plan::{emission_type_from_children, EmissionType};
+use crate::execution_plan::{boundedness_from_children, emission_type_from_children};
 use crate::joins::hash_join::{equal_rows_arr, update_hash};
 use crate::joins::stream_join_utils::{
     calculate_filter_expr_intervals, combine_two_batches,
@@ -275,11 +275,12 @@ impl SymmetricHashJoinExec {
         let output_partitioning =
             symmetric_join_output_partitioning(left, right, &join_type);
 
-        let has_finite_memory = left.has_finite_memory() && right.has_finite_memory();
-        let emission_type = emission_type_from_children([left, right]);
-        PlanProperties::new(eq_properties, output_partitioning)
-            .with_memory_usage(has_finite_memory)
-            .with_emission_type(emission_type)
+        PlanProperties::new(
+            eq_properties,
+            output_partitioning,
+            emission_type_from_children([left, right]),
+            boundedness_from_children([left, right]),
+        )
     }
 
     /// left stream
@@ -554,14 +555,6 @@ impl ExecutionPlan for SymmetricHashJoinExec {
                 batch_transformer: NoopBatchTransformer::new(),
             }))
         }
-    }
-
-    fn emission_type(&self) -> EmissionType {
-        self.cache.emission_type.unwrap()
-    }
-
-    fn has_finite_memory(&self) -> bool {
-        self.cache.has_finite_memory
     }
 }
 

@@ -24,7 +24,7 @@ use super::{
     metrics::{ExecutionPlanMetricsSet, MetricsSet},
     SendableRecordBatchStream, Statistics,
 };
-use crate::execution_plan::EmissionType;
+use crate::execution_plan::{Boundedness, EmissionType};
 use crate::memory::MemoryStream;
 use crate::{DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties};
 
@@ -143,9 +143,12 @@ impl WorkTableExec {
 
     /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
     fn compute_properties(schema: SchemaRef) -> PlanProperties {
-        let eq_properties = EquivalenceProperties::new(schema);
-
-        PlanProperties::new(eq_properties, Partitioning::UnknownPartitioning(1))
+        PlanProperties::new(
+            EquivalenceProperties::new(schema),
+            Partitioning::UnknownPartitioning(1),
+            EmissionType::Incremental,
+            Boundedness::Bounded,
+        )
     }
 }
 
@@ -220,14 +223,6 @@ impl ExecutionPlan for WorkTableExec {
 
     fn statistics(&self) -> Result<Statistics> {
         Ok(Statistics::new_unknown(&self.schema()))
-    }
-
-    fn emission_type(&self) -> EmissionType {
-        EmissionType::Incremental
-    }
-
-    fn has_finite_memory(&self) -> bool {
-        true
     }
 }
 

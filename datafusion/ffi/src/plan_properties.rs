@@ -28,7 +28,10 @@ use arrow::datatypes::SchemaRef;
 use datafusion::{
     error::{DataFusionError, Result},
     physical_expr::EquivalenceProperties,
-    physical_plan::{execution_plan::EmissionType, PlanProperties},
+    physical_plan::{
+        execution_plan::{Boundedness, EmissionType},
+        PlanProperties,
+    },
     prelude::SessionContext,
 };
 use datafusion_proto::{
@@ -54,10 +57,10 @@ pub struct FFI_PlanProperties {
         unsafe extern "C" fn(plan: &Self) -> RResult<RVec<u8>, RStr<'static>>,
 
     /// Return the emission type of the plan.
-    pub emission_type: unsafe extern "C" fn(plan: &Self) -> OptionalEmissionType,
+    pub emission_type: unsafe extern "C" fn(plan: &Self) -> FFI_EmissionType,
 
     /// Indicates whether the plan has finite memory requirements.
-    pub has_finite_memory: unsafe extern "C" fn(plan: &Self) -> bool,
+    pub boundedness: unsafe extern "C" fn(plan: &Self) -> FFI_Boundedness,
 
     /// The output ordering is a [`PhysicalSortExprNodeCollection`] protobuf message
     /// serialized into bytes to pass across the FFI boundary.
@@ -103,26 +106,18 @@ unsafe extern "C" fn output_partitioning_fn_wrapper(
 
 unsafe extern "C" fn emission_type_fn_wrapper(
     properties: &FFI_PlanProperties,
-) -> OptionalEmissionType {
+) -> FFI_EmissionType {
     let private_data = properties.private_data as *const PlanPropertiesPrivateData;
     let props = &(*private_data).props;
-    if let Some(emission_type) = props.emission_type {
-        OptionalEmissionType {
-            is_some: true,
-            value: emission_type.into(),
-        }
-    } else {
-        OptionalEmissionType {
-            is_some: false,
-            value: FFI_EmissionType::Incremental, // Any value as a placeholder
-        }
-    }
+    props.emission_type.into()
 }
 
-unsafe extern "C" fn memory_usage_fn_wrapper(properties: &FFI_PlanProperties) -> bool {
+unsafe extern "C" fn boundedness_fn_wrapper(
+    properties: &FFI_PlanProperties,
+) -> FFI_Boundedness {
     let private_data = properties.private_data as *const PlanPropertiesPrivateData;
     let props = &(*private_data).props;
-    props.has_finite_memory
+    props.boundedness.into()
 }
 
 unsafe extern "C" fn output_ordering_fn_wrapper(
@@ -184,7 +179,7 @@ impl From<&PlanProperties> for FFI_PlanProperties {
         FFI_PlanProperties {
             output_partitioning: output_partitioning_fn_wrapper,
             emission_type: emission_type_fn_wrapper,
-            has_finite_memory: memory_usage_fn_wrapper,
+            boundedness: boundedness_fn_wrapper,
             output_ordering: output_ordering_fn_wrapper,
             schema: schema_fn_wrapper,
             release: release_fn_wrapper,
@@ -247,7 +242,53 @@ impl TryFrom<FFI_PlanProperties> for PlanProperties {
             None => EquivalenceProperties::new(Arc::new(schema)),
         };
 
-        Ok(PlanProperties::new(eq_properties, partitioning))
+        let emission_type: EmissionType =
+            unsafe { (ffi_props.emission_type)(&ffi_props).into() };
+
+        let boundedness: Boundedness =
+            unsafe { (ffi_props.boundedness)(&ffi_props).into() };
+
+        Ok(PlanProperties::new(
+            eq_properties,
+            partitioning,
+            emission_type,
+            boundedness,
+        ))
+    }
+}
+
+/// FFI safe version of [`Boundedness`].
+#[repr(C)]
+#[allow(non_camel_case_types)]
+#[derive(Clone, StableAbi)]
+pub enum FFI_Boundedness {
+    Bounded,
+    Unbounded { requires_finite_memory: bool },
+}
+
+impl From<Boundedness> for FFI_Boundedness {
+    fn from(value: Boundedness) -> Self {
+        match value {
+            Boundedness::Bounded => FFI_Boundedness::Bounded,
+            Boundedness::Unbounded {
+                requires_finite_memory,
+            } => FFI_Boundedness::Unbounded {
+                requires_finite_memory,
+            },
+        }
+    }
+}
+
+impl From<FFI_Boundedness> for Boundedness {
+    fn from(value: FFI_Boundedness) -> Self {
+        match value {
+            FFI_Boundedness::Bounded => Boundedness::Bounded,
+            FFI_Boundedness::Unbounded {
+                requires_finite_memory,
+            } => Boundedness::Unbounded {
+                requires_finite_memory,
+            },
+        }
     }
 }
 
@@ -304,6 +345,8 @@ mod tests {
         let original_props = PlanProperties::new(
             EquivalenceProperties::new(schema),
             Partitioning::UnknownPartitioning(3),
+            EmissionType::Incremental,
+            Boundedness::Bounded,
         );
 
         let local_props_ptr = FFI_PlanProperties::from(&original_props);

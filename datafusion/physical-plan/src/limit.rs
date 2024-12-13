@@ -34,7 +34,7 @@ use arrow::record_batch::RecordBatch;
 use datafusion_common::{internal_err, Result};
 use datafusion_execution::TaskContext;
 
-use crate::execution_plan::{CardinalityEffect, EmissionType};
+use crate::execution_plan::{Boundedness, CardinalityEffect, EmissionType};
 use futures::stream::{Stream, StreamExt};
 use log::trace;
 
@@ -83,9 +83,19 @@ impl GlobalLimitExec {
 
     /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
     fn compute_properties(input: &Arc<dyn ExecutionPlan>) -> PlanProperties {
+        let boundedness = if input.boundedness().is_unbounded() {
+            Boundedness::Unbounded {
+                requires_finite_memory: true,
+            }
+        } else {
+            Boundedness::Bounded
+        };
+
         PlanProperties::new(
             input.equivalence_properties().clone(), // Equivalence Properties
             Partitioning::UnknownPartitioning(1),   // Output Partitioning
+            EmissionType::Final,
+            boundedness,
         )
     }
 }
@@ -200,14 +210,6 @@ impl ExecutionPlan for GlobalLimitExec {
     fn supports_limit_pushdown(&self) -> bool {
         true
     }
-
-    fn emission_type(&self) -> EmissionType {
-        EmissionType::Final
-    }
-
-    fn has_finite_memory(&self) -> bool {
-        true
-    }
 }
 
 /// LocalLimitExec applies a limit to a single partition
@@ -246,9 +248,18 @@ impl LocalLimitExec {
 
     /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
     fn compute_properties(input: &Arc<dyn ExecutionPlan>) -> PlanProperties {
+        let boundedness = if input.boundedness().is_unbounded() {
+            Boundedness::Unbounded {
+                requires_finite_memory: true,
+            }
+        } else {
+            Boundedness::Bounded
+        };
         PlanProperties::new(
             input.equivalence_properties().clone(), // Equivalence Properties
             input.output_partitioning().clone(),    // Output Partitioning
+            EmissionType::Final,
+            boundedness,
         )
     }
 }
@@ -346,14 +357,6 @@ impl ExecutionPlan for LocalLimitExec {
 
     fn cardinality_effect(&self) -> CardinalityEffect {
         CardinalityEffect::LowerEqual
-    }
-
-    fn emission_type(&self) -> EmissionType {
-        EmissionType::Final
-    }
-
-    fn has_finite_memory(&self) -> bool {
-        true
     }
 }
 

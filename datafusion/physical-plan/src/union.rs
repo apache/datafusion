@@ -32,7 +32,7 @@ use super::{
     ExecutionPlanProperties, Partitioning, PlanProperties, RecordBatchStream,
     SendableRecordBatchStream, Statistics,
 };
-use crate::execution_plan::{emission_type_from_children, EmissionType};
+use crate::execution_plan::{boundedness_from_children, emission_type_from_children};
 use crate::metrics::BaselineMetrics;
 use crate::stream::ObservedStream;
 
@@ -135,12 +135,12 @@ impl UnionExec {
             .map(|plan| plan.output_partitioning().partition_count())
             .sum();
         let output_partitioning = Partitioning::UnknownPartitioning(num_partitions);
-
-        let emission_type = emission_type_from_children(inputs);
-        let has_finite_memory = inputs.iter().all(|input| input.has_finite_memory());
-        Ok(PlanProperties::new(eq_properties, output_partitioning)
-            .with_emission_type(emission_type)
-            .with_memory_usage(has_finite_memory))
+        Ok(PlanProperties::new(
+            eq_properties,
+            output_partitioning,
+            emission_type_from_children(inputs),
+            boundedness_from_children(inputs),
+        ))
     }
 }
 
@@ -261,14 +261,6 @@ impl ExecutionPlan for UnionExec {
     fn supports_limit_pushdown(&self) -> bool {
         true
     }
-
-    fn emission_type(&self) -> EmissionType {
-        self.cache.emission_type.unwrap()
-    }
-
-    fn has_finite_memory(&self) -> bool {
-        self.cache.has_finite_memory
-    }
 }
 
 /// Combines multiple input streams by interleaving them.
@@ -340,7 +332,12 @@ impl InterleaveExec {
         let eq_properties = EquivalenceProperties::new(schema);
         // Get output partitioning:
         let output_partitioning = inputs[0].output_partitioning().clone();
-        PlanProperties::new(eq_properties, output_partitioning)
+        PlanProperties::new(
+            eq_properties,
+            output_partitioning,
+            emission_type_from_children(inputs),
+            boundedness_from_children(inputs),
+        )
     }
 }
 
@@ -446,14 +443,6 @@ impl ExecutionPlan for InterleaveExec {
 
     fn benefits_from_input_partitioning(&self) -> Vec<bool> {
         vec![false; self.children().len()]
-    }
-
-    fn emission_type(&self) -> EmissionType {
-        emission_type_from_children(self.inputs.as_slice())
-    }
-
-    fn has_finite_memory(&self) -> bool {
-        self.inputs.iter().all(|input| input.has_finite_memory())
     }
 }
 

@@ -56,7 +56,9 @@ use datafusion_execution::TaskContext;
 use datafusion_physical_expr::LexOrdering;
 use datafusion_physical_expr_common::sort_expr::LexRequirement;
 
-use crate::execution_plan::{CardinalityEffect, EmissionType};
+use crate::execution_plan::{
+    is_pipeline_breaking, Boundedness, CardinalityEffect, EmissionType,
+};
 use futures::{StreamExt, TryStreamExt};
 use log::{debug, trace};
 
@@ -764,11 +766,12 @@ impl SortExec {
     pub fn with_fetch(&self, fetch: Option<usize>) -> Self {
         let mut cache = self.cache.clone();
         // If execution mode is pipeline breaking, keep it as it is.
-        if fetch.is_some() && !self.is_pipeline_breaking() {
+        let is_pipeline_breaking = is_pipeline_breaking(self);
+        if fetch.is_some() && !is_pipeline_breaking {
             // When a theoretically unnecessary sort becomes a top-K (which
             // sometimes arises as an intermediate state before full removal),
             // its execution mode should become `Bounded`.
-            cache = cache.with_memory_usage(true);
+            cache = cache.with_boundedness(Boundedness::Bounded);
         }
         SortExec {
             input: Arc::clone(&self.input),
@@ -825,7 +828,7 @@ impl SortExec {
         let emission_type = if !sort_satisfied {
             EmissionType::Final
         } else {
-            input.emission_type()
+            input.pipeline_behavior()
         };
 
         // Calculate equivalence properties; i.e. reset the ordering equivalence
@@ -840,9 +843,12 @@ impl SortExec {
         let output_partitioning =
             Self::output_partitioning_helper(input, preserve_partitioning);
 
-        PlanProperties::new(eq_properties, output_partitioning)
-            .with_memory_usage(input.has_finite_memory())
-            .with_emission_type(emission_type)
+        PlanProperties::new(
+            eq_properties,
+            output_partitioning,
+            emission_type,
+            input.boundedness(),
+        )
     }
 }
 
@@ -1002,26 +1008,7 @@ impl ExecutionPlan for SortExec {
             CardinalityEffect::LowerEqual
         }
     }
-
-    // Not helpful at all
-    fn emission_type(&self) -> EmissionType {
-        self.cache.emission_type.unwrap()
-    }
-    // Not helpful at all
-    fn has_finite_memory(&self) -> bool {
-        self.cache.has_finite_memory
-    }
 }
-
-// 1.
-// fn has_finite_memory(&self) -> bool {
-//     self.cache.has_finite_memory
-// }
-
-// fn has_finite_memory(&self) -> bool {
-//     // Hardcode case
-//     true
-// }
 
 #[cfg(test)]
 mod tests {
@@ -1032,6 +1019,7 @@ mod tests {
     use super::*;
     use crate::coalesce_partitions::CoalescePartitionsExec;
     use crate::collect;
+    use crate::execution_plan::Boundedness;
     use crate::expressions::col;
     use crate::memory::MemoryExec;
     use crate::test;
@@ -1075,7 +1063,14 @@ mod tests {
             eq_properties.add_new_orderings(vec![LexOrdering::new(vec![
                 PhysicalSortExpr::new_default(Arc::new(Column::new("c1", 0))),
             ])]);
-            PlanProperties::new(eq_properties, Partitioning::UnknownPartitioning(1))
+            PlanProperties::new(
+                eq_properties,
+                Partitioning::UnknownPartitioning(1),
+                EmissionType::Final,
+                Boundedness::Unbounded {
+                    requires_finite_memory: false,
+                },
+            )
         }
     }
 
@@ -1113,14 +1108,6 @@ mod tests {
                 batch_size: self.batch_size,
                 offset: 0,
             }))
-        }
-
-        fn emission_type(&self) -> EmissionType {
-            EmissionType::Final
-        }
-
-        fn has_finite_memory(&self) -> bool {
-            false
         }
     }
 

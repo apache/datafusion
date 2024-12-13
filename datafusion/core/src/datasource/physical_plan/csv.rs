@@ -43,7 +43,7 @@ use datafusion_common::config::ConfigOptions;
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::{EquivalenceProperties, LexOrdering};
 
-use datafusion_physical_plan::execution_plan::EmissionType;
+use datafusion_physical_plan::execution_plan::{Boundedness, EmissionType};
 use futures::{StreamExt, TryStreamExt};
 use object_store::buffered::BufWriter;
 use object_store::{GetOptions, GetResultPayload, ObjectStore};
@@ -328,9 +328,9 @@ impl CsvExec {
         PlanProperties::new(
             eq_properties,
             Self::output_partitioning_helper(file_scan_config), // Output Partitioning
+            EmissionType::Incremental,
+            Boundedness::Bounded,
         )
-        .with_emission_type(EmissionType::Incremental)
-        .with_memory_usage(true)
     }
 
     fn with_file_groups(mut self, file_groups: Vec<Vec<PartitionedFile>>) -> Self {
@@ -470,16 +470,6 @@ impl ExecutionPlan for CsvExec {
             file_compression_type: self.file_compression_type,
             cache: self.cache.clone(),
         }))
-    }
-
-    // Not helpful at all
-    fn emission_type(&self) -> EmissionType {
-        EmissionType::Incremental
-    }
-
-    // Not helpful at all
-    fn has_finite_memory(&self) -> bool {
-        true
     }
 }
 

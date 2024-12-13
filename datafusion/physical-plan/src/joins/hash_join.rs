@@ -29,7 +29,7 @@ use super::{
     utils::{OnceAsync, OnceFut},
     PartitionMode,
 };
-use crate::execution_plan::EmissionType;
+use crate::execution_plan::{boundedness_from_children, EmissionType};
 use crate::ExecutionPlanProperties;
 use crate::{
     coalesce_partitions::CoalescePartitionsExec,
@@ -524,9 +524,10 @@ impl HashJoinExec {
             }
         };
 
-        let emission_type = if !left.has_finite_memory() {
+        let emission_type = if !left.boundedness().requires_finite_memory() {
             EmissionType::Final
         } else {
+            // TOOD: Adjusted based on children's pipeline behavior?
             match join_type {
                 // If we only need to generate matched rows from the probe side, we can emit rows incrementally.
                 JoinType::Inner
@@ -542,8 +543,6 @@ impl HashJoinExec {
             }
         };
 
-        let has_finite_memory = left.has_finite_memory() && right.has_finite_memory();
-
         // If contains projection, update the PlanProperties.
         if let Some(projection) = projection {
             // construct a map from the input expressions to the output expression of the Projection
@@ -554,9 +553,12 @@ impl HashJoinExec {
                 output_partitioning.project(&projection_mapping, &eq_properties);
             eq_properties = eq_properties.project(&projection_mapping, out_schema);
         }
-        Ok(PlanProperties::new(eq_properties, output_partitioning)
-            .with_memory_usage(has_finite_memory)
-            .with_emission_type(emission_type))
+        Ok(PlanProperties::new(
+            eq_properties,
+            output_partitioning,
+            emission_type,
+            boundedness_from_children([left, right]),
+        ))
     }
 }
 
@@ -798,15 +800,6 @@ impl ExecutionPlan for HashJoinExec {
         )?;
         // Project statistics if there is a projection
         Ok(stats.project(self.projection.as_ref()))
-    }
-
-    fn emission_type(&self) -> EmissionType {
-        // Safe to unwrap because it is set in `compute_properties`
-        self.cache.emission_type.unwrap()
-    }
-
-    fn has_finite_memory(&self) -> bool {
-        self.cache.has_finite_memory
     }
 }
 

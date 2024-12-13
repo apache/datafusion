@@ -30,6 +30,7 @@ use datafusion_common::config::{ConfigOptions, OptimizerOptions};
 use datafusion_common::plan_err;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_physical_expr::intervals::utils::{check_support, is_datatype_supported};
+use datafusion_physical_plan::execution_plan::is_pipeline_breaking;
 use datafusion_physical_plan::joins::SymmetricHashJoinExec;
 use datafusion_physical_plan::{get_plan_string, ExecutionPlanProperties};
 
@@ -85,7 +86,8 @@ pub fn check_finiteness_requirements(
                               the 'allow_symmetric_joins_without_pruning' configuration flag");
         }
     }
-    if input.is_pipeline_breaking() {
+
+    if is_pipeline_breaking(input.as_ref()) {
         plan_err!(
             "Cannot execute pipeline breaking queries, operator: {:?}",
             input

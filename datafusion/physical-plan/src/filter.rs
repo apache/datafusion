@@ -48,7 +48,7 @@ use datafusion_physical_expr::{
     analyze, split_conjunction, AnalysisContext, ConstExpr, ExprBoundaries, PhysicalExpr,
 };
 
-use crate::execution_plan::{CardinalityEffect, EmissionType};
+use crate::execution_plan::CardinalityEffect;
 use futures::stream::{Stream, StreamExt};
 use log::trace;
 
@@ -273,9 +273,12 @@ impl FilterExec {
             eq_properties = eq_properties.project(&projection_mapping, out_schema);
         }
 
-        Ok(PlanProperties::new(eq_properties, output_partitioning)
-            .with_emission_type(input.emission_type())
-            .with_memory_usage(input.has_finite_memory()))
+        Ok(PlanProperties::new(
+            eq_properties,
+            output_partitioning,
+            input.pipeline_behavior(),
+            input.boundedness(),
+        ))
     }
 }
 
@@ -380,15 +383,6 @@ impl ExecutionPlan for FilterExec {
 
     fn cardinality_effect(&self) -> CardinalityEffect {
         CardinalityEffect::LowerEqual
-    }
-
-    fn emission_type(&self) -> EmissionType {
-        // Safe to unwrap because the emission type is set in the constructor
-        self.cache.emission_type.unwrap()
-    }
-
-    fn has_finite_memory(&self) -> bool {
-        self.cache.has_finite_memory
     }
 }
 

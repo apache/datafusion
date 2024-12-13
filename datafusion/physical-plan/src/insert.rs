@@ -26,8 +26,9 @@ use super::{
     execute_input_stream, DisplayAs, DisplayFormatType, ExecutionPlan, Partitioning,
     PlanProperties, SendableRecordBatchStream,
 };
+use crate::metrics::MetricsSet;
 use crate::stream::RecordBatchStreamAdapter;
-use crate::{execution_plan::EmissionType, metrics::MetricsSet};
+use crate::ExecutionPlanProperties;
 
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
@@ -137,9 +138,12 @@ impl DataSinkExec {
         schema: SchemaRef,
     ) -> PlanProperties {
         let eq_properties = EquivalenceProperties::new(schema);
-        PlanProperties::new(eq_properties, Partitioning::UnknownPartitioning(1))
-            .with_emission_type(input.emission_type())
-            .with_memory_usage(input.has_finite_memory())
+        PlanProperties::new(
+            eq_properties,
+            Partitioning::UnknownPartitioning(1),
+            input.pipeline_behavior(),
+            input.boundedness(),
+        )
     }
 }
 
@@ -244,14 +248,6 @@ impl ExecutionPlan for DataSinkExec {
     /// Returns the metrics of the underlying [DataSink]
     fn metrics(&self) -> Option<MetricsSet> {
         self.sink.metrics()
-    }
-
-    fn emission_type(&self) -> EmissionType {
-        self.cache.emission_type.unwrap()
-    }
-
-    fn has_finite_memory(&self) -> bool {
-        self.cache.has_finite_memory
     }
 }
 

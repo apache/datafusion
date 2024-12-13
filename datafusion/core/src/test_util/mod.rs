@@ -55,7 +55,7 @@ use datafusion_physical_expr::{expressions, EquivalenceProperties, PhysicalExpr}
 use async_trait::async_trait;
 use datafusion_catalog::Session;
 use datafusion_physical_expr::aggregate::{AggregateExprBuilder, AggregateFunctionExpr};
-use datafusion_physical_plan::execution_plan::EmissionType;
+use datafusion_physical_plan::execution_plan::{Boundedness, EmissionType};
 use futures::Stream;
 use tempfile::TempDir;
 // backwards compatibility
@@ -257,12 +257,21 @@ impl UnboundedExec {
     /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
     fn compute_properties(
         schema: SchemaRef,
-        _batch_produce: Option<usize>,
+        batch_produce: Option<usize>,
         n_partitions: usize,
     ) -> PlanProperties {
+        let boundedness = if batch_produce.is_some() {
+            Boundedness::Unbounded {
+                requires_finite_memory: false,
+            }
+        } else {
+            Boundedness::Bounded
+        };
         PlanProperties::new(
             EquivalenceProperties::new(schema),
             Partitioning::UnknownPartitioning(n_partitions),
+            EmissionType::Incremental,
+            boundedness,
         )
     }
 }
@@ -319,14 +328,6 @@ impl ExecutionPlan for UnboundedExec {
             count: 0,
             batch: self.batch.clone(),
         }))
-    }
-
-    fn emission_type(&self) -> EmissionType {
-        EmissionType::Incremental
-    }
-
-    fn has_finite_memory(&self) -> bool {
-        self.batch_produce.is_some()
     }
 }
 

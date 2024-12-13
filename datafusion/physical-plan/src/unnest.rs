@@ -22,7 +22,6 @@ use std::{any::Any, sync::Arc};
 
 use super::metrics::{self, ExecutionPlanMetricsSet, MetricBuilder, MetricsSet};
 use super::{DisplayAs, ExecutionPlanProperties, PlanProperties};
-use crate::execution_plan::EmissionType;
 use crate::{
     DisplayFormatType, Distribution, ExecutionPlan, RecordBatchStream,
     SendableRecordBatchStream,
@@ -100,11 +99,12 @@ impl UnnestExec {
         input: &Arc<dyn ExecutionPlan>,
         schema: SchemaRef,
     ) -> PlanProperties {
-        let eq_properties = EquivalenceProperties::new(schema);
-
-        PlanProperties::new(eq_properties, input.output_partitioning().clone())
-            .with_emission_type(input.emission_type())
-            .with_memory_usage(input.has_finite_memory())
+        PlanProperties::new(
+            EquivalenceProperties::new(schema),
+            input.output_partitioning().to_owned(),
+            input.pipeline_behavior(),
+            input.boundedness(),
+        )
     }
 
     /// Input execution plan
@@ -195,14 +195,6 @@ impl ExecutionPlan for UnnestExec {
 
     fn metrics(&self) -> Option<MetricsSet> {
         Some(self.metrics.clone_inner())
-    }
-
-    fn emission_type(&self) -> EmissionType {
-        self.cache.emission_type.unwrap()
-    }
-
-    fn has_finite_memory(&self) -> bool {
-        self.cache.has_finite_memory
     }
 }
 

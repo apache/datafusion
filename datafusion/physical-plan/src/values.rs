@@ -21,7 +21,7 @@ use std::any::Any;
 use std::sync::Arc;
 
 use super::{common, DisplayAs, PlanProperties, SendableRecordBatchStream, Statistics};
-use crate::execution_plan::EmissionType;
+use crate::execution_plan::{Boundedness, EmissionType};
 use crate::{
     memory::MemoryStream, ColumnarValue, DisplayFormatType, ExecutionPlan, Partitioning,
     PhysicalExpr,
@@ -131,9 +131,12 @@ impl ValuesExec {
 
     /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
     fn compute_properties(schema: SchemaRef) -> PlanProperties {
-        let eq_properties = EquivalenceProperties::new(schema);
-
-        PlanProperties::new(eq_properties, Partitioning::UnknownPartitioning(1))
+        PlanProperties::new(
+            EquivalenceProperties::new(schema),
+            Partitioning::UnknownPartitioning(1),
+            EmissionType::Incremental,
+            Boundedness::Bounded,
+        )
     }
 }
 
@@ -203,14 +206,6 @@ impl ExecutionPlan for ValuesExec {
             &self.schema,
             None,
         ))
-    }
-
-    fn emission_type(&self) -> EmissionType {
-        EmissionType::Incremental
-    }
-
-    fn has_finite_memory(&self) -> bool {
-        true
     }
 }
 

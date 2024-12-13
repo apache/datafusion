@@ -666,12 +666,15 @@ impl AggregateExec {
         let emission_type = if *input_order_mode == InputOrderMode::Linear {
             EmissionType::Final
         } else {
-            input.emission_type()
+            input.pipeline_behavior()
         };
 
-        PlanProperties::new(eq_properties, output_partitioning)
-            .with_emission_type(emission_type)
-            .with_memory_usage(input.has_finite_memory())
+        PlanProperties::new(
+            eq_properties,
+            output_partitioning,
+            emission_type,
+            input.boundedness(),
+        )
     }
 
     pub fn input_order_mode(&self) -> &InputOrderMode {
@@ -872,14 +875,6 @@ impl ExecutionPlan for AggregateExec {
 
     fn cardinality_effect(&self) -> CardinalityEffect {
         CardinalityEffect::LowerEqual
-    }
-
-    fn emission_type(&self) -> EmissionType {
-        self.cache.emission_type.unwrap()
-    }
-
-    fn has_finite_memory(&self) -> bool {
-        self.cache.has_finite_memory
     }
 }
 
@@ -1305,6 +1300,7 @@ mod tests {
     use crate::coalesce_batches::CoalesceBatchesExec;
     use crate::coalesce_partitions::CoalescePartitionsExec;
     use crate::common;
+    use crate::execution_plan::Boundedness;
     use crate::expressions::col;
     use crate::memory::MemoryExec;
     use crate::test::assert_is_pending;
@@ -1737,11 +1733,11 @@ mod tests {
 
         /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
         fn compute_properties(schema: SchemaRef) -> PlanProperties {
-            let eq_properties = EquivalenceProperties::new(schema);
             PlanProperties::new(
-                eq_properties,
-                // Output Partitioning
+                EquivalenceProperties::new(schema),
                 Partitioning::UnknownPartitioning(1),
+                EmissionType::Incremental,
+                Boundedness::Bounded,
             )
         }
     }
@@ -1805,14 +1801,6 @@ mod tests {
                 &self.schema(),
                 None,
             ))
-        }
-
-        fn emission_type(&self) -> EmissionType {
-            EmissionType::Incremental
-        }
-
-        fn has_finite_memory(&self) -> bool {
-            true
         }
     }
 

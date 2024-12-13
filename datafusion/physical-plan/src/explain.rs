@@ -21,7 +21,7 @@ use std::any::Any;
 use std::sync::Arc;
 
 use super::{DisplayAs, PlanProperties, SendableRecordBatchStream};
-use crate::execution_plan::EmissionType;
+use crate::execution_plan::{Boundedness, EmissionType};
 use crate::stream::RecordBatchStreamAdapter;
 use crate::{DisplayFormatType, ExecutionPlan, Partitioning};
 
@@ -78,6 +78,8 @@ impl ExplainExec {
         PlanProperties::new(
             EquivalenceProperties::new(schema),
             Partitioning::UnknownPartitioning(1),
+            EmissionType::Final,
+            Boundedness::Bounded,
         )
     }
 }
@@ -172,14 +174,6 @@ impl ExecutionPlan for ExplainExec {
             Arc::clone(&self.schema),
             futures::stream::iter(vec![Ok(record_batch)]),
         )))
-    }
-
-    fn emission_type(&self) -> EmissionType {
-        EmissionType::Final
-    }
-
-    fn has_finite_memory(&self) -> bool {
-        true
     }
 }
 

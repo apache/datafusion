@@ -2032,7 +2032,7 @@ mod tests {
     use datafusion_expr::{col, lit, LogicalPlanBuilder, UserDefinedLogicalNodeCore};
     use datafusion_functions_aggregate::expr_fn::sum;
     use datafusion_physical_expr::EquivalenceProperties;
-    use datafusion_physical_plan::execution_plan::EmissionType;
+    use datafusion_physical_plan::execution_plan::{Boundedness, EmissionType};
 
     fn make_session_state() -> SessionState {
         let runtime = Arc::new(RuntimeEnv::default());
@@ -2623,6 +2623,8 @@ mod tests {
             PlanProperties::new(
                 EquivalenceProperties::new(schema),
                 Partitioning::UnknownPartitioning(1),
+                EmissionType::Incremental,
+                Boundedness::Bounded,
             )
         }
     }
@@ -2668,14 +2670,6 @@ mod tests {
             _context: Arc<TaskContext>,
         ) -> Result<SendableRecordBatchStream> {
             unimplemented!("NoOpExecutionPlan::execute");
-        }
-
-        fn emission_type(&self) -> EmissionType {
-            unimplemented!()
-        }
-
-        fn has_finite_memory(&self) -> bool {
-            true
         }
     }
 

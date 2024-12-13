@@ -54,7 +54,6 @@ use datafusion_physical_expr::{
 };
 use datafusion_physical_optimizer::output_requirements::OutputRequirementExec;
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
-use datafusion_physical_plan::execution_plan::Boundedness;
 use datafusion_physical_plan::windows::{get_best_fitting_window, BoundedWindowAggExec};
 use datafusion_physical_plan::ExecutionPlanProperties;
 
@@ -1163,7 +1162,7 @@ fn ensure_distribution(
         .execution
         .use_row_number_estimates_to_optimize_partitioning;
     // let is_unbounded = !dist_context.plan.has_finite_memory();
-    let is_unbounded = dist_context.plan.boundedness() == Boundedness::Unbounded;
+    let is_unbounded = dist_context.plan.boundedness().is_unbounded();
     // Use order preserving variants either of the conditions true
     // - it is desired according to config
     // - when plan is unbounded
@@ -1432,7 +1431,6 @@ pub(crate) mod tests {
         expressions::binary, expressions::lit, LexOrdering, PhysicalSortExpr,
     };
     use datafusion_physical_expr_common::sort_expr::LexRequirement;
-    use datafusion_physical_plan::execution_plan::EmissionType;
     use datafusion_physical_plan::PlanProperties;
 
     /// Models operators like BoundedWindowExec that require an input
@@ -1462,9 +1460,9 @@ pub(crate) mod tests {
             PlanProperties::new(
                 input.equivalence_properties().clone(), // Equivalence Properties
                 input.output_partitioning().clone(),    // Output Partitioning
+                input.pipeline_behavior(),
+                input.boundedness(),
             )
-            .with_emission_type(input.emission_type())
-            .with_memory_usage(input.has_finite_memory())
         }
     }
 
@@ -1530,14 +1528,6 @@ pub(crate) mod tests {
 
         fn statistics(&self) -> Result<Statistics> {
             self.input.statistics()
-        }
-
-        fn emission_type(&self) -> EmissionType {
-            self.cache.emission_type.unwrap()
-        }
-
-        fn has_finite_memory(&self) -> bool {
-            self.cache.has_finite_memory
         }
     }
 

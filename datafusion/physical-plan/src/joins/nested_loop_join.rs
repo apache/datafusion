@@ -243,8 +243,18 @@ impl NestedLoopJoinExec {
         let output_partitioning =
             asymmetric_join_output_partitioning(left, right, &join_type);
 
-        PlanProperties::new(eq_properties, output_partitioning)
-            .with_memory_usage(left.has_finite_memory())
+        let emission_type = if left.boundedness().requires_finite_memory() {
+            left.pipeline_behavior()
+        } else {
+            EmissionType::Final
+        };
+
+        PlanProperties::new(
+            eq_properties,
+            output_partitioning,
+            emission_type,
+            left.boundedness(),
+        )
     }
 
     /// Returns a vector indicating whether the left and right inputs maintain their order.
@@ -411,18 +421,6 @@ impl ExecutionPlan for NestedLoopJoinExec {
             &self.join_type,
             &self.schema,
         )
-    }
-
-    fn emission_type(&self) -> EmissionType {
-        if self.has_finite_memory() {
-            EmissionType::Incremental
-        } else {
-            EmissionType::Final
-        }
-    }
-
-    fn has_finite_memory(&self) -> bool {
-        self.cache.has_finite_memory
     }
 }
 

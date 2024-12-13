@@ -31,7 +31,7 @@ use crate::physical_plan::{
 use arrow::datatypes::SchemaRef;
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::{EquivalenceProperties, LexOrdering};
-use datafusion_physical_plan::execution_plan::EmissionType;
+use datafusion_physical_plan::execution_plan::{Boundedness, EmissionType};
 
 /// Execution plan for scanning Avro data source
 #[derive(Debug, Clone)]
@@ -82,6 +82,8 @@ impl AvroExec {
         PlanProperties::new(
             eq_properties,
             Partitioning::UnknownPartitioning(n_partitions), // Output Partitioning
+            EmissionType::Incremental,
+            Boundedness::Bounded,
         )
     }
 }
@@ -179,14 +181,6 @@ impl ExecutionPlan for AvroExec {
             metrics: self.metrics.clone(),
             cache: self.cache.clone(),
         }))
-    }
-
-    fn emission_type(&self) -> EmissionType {
-        EmissionType::Incremental
-    }
-
-    fn has_finite_memory(&self) -> bool {
-        true
     }
 }
 

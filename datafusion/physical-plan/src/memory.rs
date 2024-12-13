@@ -23,7 +23,7 @@ use std::fmt;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
-use crate::execution_plan::EmissionType;
+use crate::execution_plan::{Boundedness, EmissionType};
 
 use super::{
     common, DisplayAs, DisplayFormatType, ExecutionPlan, Partitioning, PlanProperties,
@@ -150,14 +150,6 @@ impl ExecutionPlan for MemoryExec {
             &self.schema,
             self.projection.clone(),
         ))
-    }
-
-    fn emission_type(&self) -> EmissionType {
-        EmissionType::Incremental
-    }
-
-    fn has_finite_memory(&self) -> bool {
-        true
     }
 }
 
@@ -298,6 +290,8 @@ impl MemoryExec {
         PlanProperties::new(
             EquivalenceProperties::new_with_orderings(schema, orderings),
             Partitioning::UnknownPartitioning(partitions.len()), // Output Partitioning
+            EmissionType::Incremental,
+            Boundedness::Bounded,
         )
     }
 }
@@ -401,6 +395,8 @@ impl LazyMemoryExec {
         let cache = PlanProperties::new(
             EquivalenceProperties::new(Arc::clone(&schema)),
             Partitioning::RoundRobinBatch(generators.len()),
+            EmissionType::Incremental,
+            Boundedness::Bounded,
         );
         Ok(Self {
             schema,
@@ -491,14 +487,6 @@ impl ExecutionPlan for LazyMemoryExec {
 
     fn statistics(&self) -> Result<Statistics> {
         Ok(Statistics::new_unknown(&self.schema))
-    }
-
-    fn emission_type(&self) -> EmissionType {
-        EmissionType::Incremental
-    }
-
-    fn has_finite_memory(&self) -> bool {
-        true
     }
 }
 

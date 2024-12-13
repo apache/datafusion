@@ -22,8 +22,9 @@ use std::sync::Arc;
 
 use super::{common, DisplayAs, PlanProperties, SendableRecordBatchStream, Statistics};
 use crate::{
-    execution_plan::EmissionType, memory::MemoryStream, DisplayFormatType, ExecutionPlan,
-    Partitioning,
+    execution_plan::{Boundedness, EmissionType},
+    memory::MemoryStream,
+    DisplayFormatType, ExecutionPlan, Partitioning,
 };
 
 use arrow::datatypes::SchemaRef;
@@ -77,6 +78,8 @@ impl EmptyExec {
         PlanProperties::new(
             EquivalenceProperties::new(schema),
             Self::output_partitioning_helper(n_partitions),
+            EmissionType::Incremental,
+            Boundedness::Bounded,
         )
     }
 }
@@ -151,14 +154,6 @@ impl ExecutionPlan for EmptyExec {
             &self.schema,
             None,
         ))
-    }
-
-    fn emission_type(&self) -> EmissionType {
-        EmissionType::Incremental
-    }
-
-    fn has_finite_memory(&self) -> bool {
-        true
     }
 }
 

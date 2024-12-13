@@ -28,7 +28,6 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 
 use super::utils::create_schema;
-use crate::execution_plan::EmissionType;
 use crate::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
 use crate::windows::{
     calc_requirements, get_ordered_partition_by_indices, get_partition_by_sort_exprs,
@@ -205,9 +204,9 @@ impl BoundedWindowAggExec {
         PlanProperties::new(
             eq_properties,       // Equivalence Properties
             output_partitioning, // Output Partitioning
+            input.pipeline_behavior(),
+            input.boundedness(),
         )
-        .with_emission_type(input.emission_type())
-        .with_memory_usage(input.has_finite_memory())
     }
 }
 
@@ -330,14 +329,6 @@ impl ExecutionPlan for BoundedWindowAggExec {
             column_statistics,
             total_byte_size: Precision::Absent,
         })
-    }
-
-    fn emission_type(&self) -> EmissionType {
-        self.cache.emission_type.unwrap()
-    }
-
-    fn has_finite_memory(&self) -> bool {
-        self.cache.has_finite_memory
     }
 }
 

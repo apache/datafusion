@@ -537,8 +537,8 @@ fn hash_join_convert_symmetric_subrule(
 ) -> Result<Arc<dyn ExecutionPlan>> {
     // Check if the current plan node is a HashJoinExec.
     if let Some(hash_join) = input.as_any().downcast_ref::<HashJoinExec>() {
-        let left_unbounded = !hash_join.left.has_finite_memory();
-        let right_unbounded = !hash_join.right.has_finite_memory();
+        let left_unbounded = hash_join.left.boundedness().is_unbounded();
+        let right_unbounded = hash_join.right.boundedness().is_unbounded();
         // Process only if both left and right sides are unbounded.
         if left_unbounded && right_unbounded {
             // Determine the partition mode based on configuration.
@@ -669,8 +669,8 @@ fn hash_join_swap_subrule(
     _config_options: &ConfigOptions,
 ) -> Result<Arc<dyn ExecutionPlan>> {
     if let Some(hash_join) = input.as_any().downcast_ref::<HashJoinExec>() {
-        if !hash_join.left.has_finite_memory()
-            && hash_join.right.has_finite_memory()
+        if !hash_join.left.boundedness().requires_finite_memory()
+            && hash_join.right.boundedness().requires_finite_memory()
             && matches!(
                 *hash_join.join_type(),
                 JoinType::Inner
@@ -2025,12 +2025,12 @@ mod hash_join_tests {
             assert_eq!(
                 (
                     t.case.as_str(),
-                    if !left.has_finite_memory() {
+                    if !left.boundedness().requires_finite_memory() {
                         SourceType::Unbounded
                     } else {
                         SourceType::Bounded
                     },
-                    if !right.has_finite_memory() {
+                    if !right.boundedness().requires_finite_memory() {
                         SourceType::Unbounded
                     } else {
                         SourceType::Bounded

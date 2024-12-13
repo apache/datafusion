@@ -30,7 +30,7 @@ use super::{
 
 use crate::{DisplayFormatType, ExecutionPlan, Partitioning};
 
-use crate::execution_plan::{CardinalityEffect, EmissionType};
+use crate::execution_plan::CardinalityEffect;
 use datafusion_common::{internal_err, Result};
 use datafusion_execution::TaskContext;
 
@@ -70,9 +70,9 @@ impl CoalescePartitionsExec {
         PlanProperties::new(
             eq_properties,                        // Equivalence Properties
             Partitioning::UnknownPartitioning(1), // Output Partitioning
+            input.pipeline_behavior(),
+            input.boundedness(),
         )
-        .with_emission_type(input.emission_type())
-        .with_memory_usage(input.has_finite_memory())
     }
 }
 
@@ -183,14 +183,6 @@ impl ExecutionPlan for CoalescePartitionsExec {
 
     fn cardinality_effect(&self) -> CardinalityEffect {
         CardinalityEffect::Equal
-    }
-
-    fn emission_type(&self) -> EmissionType {
-        self.cache.emission_type.unwrap()
-    }
-
-    fn has_finite_memory(&self) -> bool {
-        self.cache.has_finite_memory
     }
 }
 

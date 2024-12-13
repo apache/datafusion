@@ -41,7 +41,7 @@ use datafusion_physical_expr::EquivalenceProperties;
 
 use async_trait::async_trait;
 use datafusion_catalog::Session;
-use datafusion_physical_plan::execution_plan::EmissionType;
+use datafusion_physical_plan::execution_plan::{Boundedness, EmissionType};
 
 fn create_batch(value: i32, num_rows: usize) -> Result<RecordBatch> {
     let mut builder = Int32Builder::with_capacity(num_rows);
@@ -76,6 +76,8 @@ impl CustomPlan {
         PlanProperties::new(
             EquivalenceProperties::new(schema),
             Partitioning::UnknownPartitioning(1),
+            EmissionType::Incremental,
+            Boundedness::Bounded,
         )
     }
 }
@@ -138,14 +140,6 @@ impl ExecutionPlan for CustomPlan {
         // here we could provide more accurate statistics
         // but we want to test the filter pushdown not the CBOs
         Ok(Statistics::new_unknown(&self.schema()))
-    }
-
-    fn emission_type(&self) -> EmissionType {
-        EmissionType::Incremental
-    }
-
-    fn has_finite_memory(&self) -> bool {
-        true
     }
 }
 

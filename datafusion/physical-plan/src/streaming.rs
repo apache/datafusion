@@ -23,7 +23,7 @@ use std::sync::Arc;
 
 use super::{DisplayAs, DisplayFormatType, PlanProperties};
 use crate::display::{display_orderings, ProjectSchemaDisplay};
-use crate::execution_plan::EmissionType;
+use crate::execution_plan::{Boundedness, EmissionType};
 use crate::stream::RecordBatchStreamAdapter;
 use crate::{ExecutionPlan, Partitioning, SendableRecordBatchStream};
 
@@ -99,6 +99,7 @@ impl StreamingTableExec {
             Arc::clone(&projected_schema),
             &projected_output_ordering,
             &partitions,
+            infinite,
         );
         Ok(Self {
             partitions,
@@ -145,13 +146,26 @@ impl StreamingTableExec {
         schema: SchemaRef,
         orderings: &[LexOrdering],
         partitions: &[Arc<dyn PartitionStream>],
+        infinte: bool,
     ) -> PlanProperties {
         // Calculate equivalence properties:
         let eq_properties = EquivalenceProperties::new_with_orderings(schema, orderings);
 
         // Get output partitioning:
         let output_partitioning = Partitioning::UnknownPartitioning(partitions.len());
-        PlanProperties::new(eq_properties, output_partitioning)
+        let boundedness = if infinte {
+            Boundedness::Unbounded {
+                requires_finite_memory: false,
+            }
+        } else {
+            Boundedness::Bounded
+        };
+        PlanProperties::new(
+            eq_properties,
+            output_partitioning,
+            EmissionType::Incremental,
+            boundedness,
+        )
     }
 }
 
@@ -273,14 +287,6 @@ impl ExecutionPlan for StreamingTableExec {
             cache: self.cache.clone(),
             metrics: self.metrics.clone(),
         }))
-    }
-
-    fn emission_type(&self) -> EmissionType {
-        EmissionType::Incremental
-    }
-
-    fn has_finite_memory(&self) -> bool {
-        !self.is_infinite()
     }
 }
 

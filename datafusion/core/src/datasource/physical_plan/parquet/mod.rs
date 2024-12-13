@@ -42,7 +42,7 @@ use crate::{
 use arrow::datatypes::SchemaRef;
 use datafusion_physical_expr::{EquivalenceProperties, LexOrdering, PhysicalExpr};
 
-use datafusion_physical_plan::execution_plan::EmissionType;
+use datafusion_physical_plan::execution_plan::{Boundedness, EmissionType};
 use itertools::Itertools;
 use log::debug;
 
@@ -655,12 +655,11 @@ impl ParquetExec {
         orderings: &[LexOrdering],
         file_config: &FileScanConfig,
     ) -> PlanProperties {
-        // Equivalence Properties
-        let eq_properties = EquivalenceProperties::new_with_orderings(schema, orderings);
-
         PlanProperties::new(
-            eq_properties,
+            EquivalenceProperties::new_with_orderings(schema, orderings),
             Self::output_partitioning_helper(file_config), // Output Partitioning
+            EmissionType::Incremental,
+            Boundedness::Bounded,
         )
     }
 
@@ -863,14 +862,6 @@ impl ExecutionPlan for ParquetExec {
             table_parquet_options: self.table_parquet_options.clone(),
             schema_adapter_factory: self.schema_adapter_factory.clone(),
         }))
-    }
-
-    fn emission_type(&self) -> EmissionType {
-        EmissionType::Incremental
-    }
-
-    fn has_finite_memory(&self) -> bool {
-        true
     }
 }
 
