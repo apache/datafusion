@@ -28,6 +28,7 @@ use arrow::datatypes::DataType::{
 use arrow::datatypes::TimeUnit::{Microsecond, Millisecond, Nanosecond, Second};
 use arrow::datatypes::{DataType, TimeUnit};
 
+use datafusion_common::not_impl_err;
 use datafusion_common::{
     cast::{
         as_date32_array, as_date64_array, as_int32_array, as_time32_millisecond_array,
@@ -39,11 +40,6 @@ use datafusion_common::{
     types::logical_string,
     ExprSchema, Result, ScalarValue,
 };
-use datafusion_common::{
-    exec_err, internal_err, not_impl_err, ExprSchema, Result, ScalarValue,
-};
-use datafusion_expr::scalar_doc_sections::DOC_SECTION_DATETIME;
-use datafusion_expr::TypeSignature::Exact;
 use datafusion_expr::{
     scalar_doc_sections::DOC_SECTION_DATETIME, ColumnarValue, Documentation, Expr,
     ScalarUDFImpl, Signature, TypeSignature, Volatility,
