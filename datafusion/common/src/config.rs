@@ -30,7 +30,9 @@ use crate::{DataFusionError, Result};
 
 /// A macro that wraps a configuration struct and automatically derives
 /// [`Default`] and [`ConfigField`] for it, allowing it to be used
-/// in the [`ConfigOptions`] configuration tree
+/// in the [`ConfigOptions`] configuration tree.
+///
+/// transform is be used to normalize the value before parsing.
 ///
 /// For example,
 ///
@@ -113,7 +115,7 @@ macro_rules! config_namespace {
      $vis:vis struct $struct_name:ident {
         $(
         $(#[doc = $d:tt])*
-        $field_vis:vis $field_name:ident : $field_type:ty, $(transform = $transform:expr,)? default = $default:expr
+        $field_vis:vis $field_name:ident : $field_type:ty, $(warn = $warn: expr,)? $(transform = $transform:expr,)? default = $default:expr
         )*$(,)*
     }
     ) => {
@@ -135,6 +137,7 @@ macro_rules! config_namespace {
                     $(
                        stringify!($field_name) => {
                            $(let value = $transform(value);)?
+                           $(log::warn!($warn);)?
                            self.$field_name.set(rem, value.as_ref())
                        },
                     )*
@@ -218,8 +221,10 @@ config_namespace! {
         /// When set to true, SQL parser will normalize ident (convert ident to lowercase when not quoted)
         pub enable_ident_normalization: bool, default = true
 
-        /// When set to true, SQL parser will normalize options value (convert value to lowercase)
-        pub enable_options_value_normalization: bool, default = false
+        /// When set to true, SQL parser will normalize options value (convert value to lowercase).
+        /// Note that this option is ignored and will be removed in the future. All case-insensitive values
+        /// are normalized automatically.
+        pub enable_options_value_normalization: bool, warn = "`enable_options_value_normalization` is deprecated and ignored", default = false
 
         /// Configure the SQL dialect used by DataFusion's parser; supported values include: Generic,
         /// MySQL, PostgreSQL, Hive, SQLite, Snowflake, Redshift, MsSQL, ClickHouse, BigQuery, and Ansi.

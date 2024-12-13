@@ -1329,6 +1329,7 @@ dependencies = [
  "hashbrown 0.14.5",
  "indexmap",
  "libc",
+ "log",
  "object_store",
  "parquet",
  "paste",
