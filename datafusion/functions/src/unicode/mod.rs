@@ -99,7 +99,7 @@ pub mod expr_fn {
     ),(
         initcap,
         "converts the first letter of each word in `string` in uppercase and the remaining characters in lowercase",
-        string n
+        string
     ),(
         find_in_set,
         "Returns a value in the range of 1 to N if the string str is in the string list strlist consisting of N substrings",

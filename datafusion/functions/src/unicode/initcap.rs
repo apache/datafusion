@@ -200,7 +200,7 @@ mod tests {
         test_function!(
             InitcapFunc::new(),
             vec![ColumnarValue::Scalar(ScalarValue::Utf8(Some(
-                "êm ả ñandú árbol олег иванович íslensku þjóðarinnar ελληνική"
+                "êM ả ñAnDÚ ÁrBOL ОлЕГ ИвАНОВИч ÍslENsku ÞjóðaRiNNaR εΛλΗΝΙκΉ"
                     .to_string()
             )))],
             Ok(Some(
@@ -258,7 +258,7 @@ mod tests {
         test_function!(
             InitcapFunc::new(),
             vec![ColumnarValue::Scalar(ScalarValue::Utf8View(Some(
-                "êm ả ñandú árbol олег иванович íslensku þjóðarinnar ελληνική"
+                "êM ả ñAnDÚ ÁrBOL ОлЕГ ИвАНОВИч ÍslENsku ÞjóðaRiNNaR εΛλΗΝΙκΉ"
                     .to_string()
             )))],
             Ok(Some(
