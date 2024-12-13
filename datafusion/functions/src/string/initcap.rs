@@ -90,25 +90,36 @@ fn get_initcap_doc() -> &'static Documentation {
     DOCUMENTATION.get_or_init(|| {
         Documentation::builder(
             DOC_SECTION_STRING,
-            "Capitalizes the first character in each word in the input string. Words are delimited by non-alphanumeric characters.",
-            "initcap(str)")
-            .with_sql_example(r#"```sql
+            "Capitalizes the first character in each word in the ASCII input string. \
+            Words are delimited by non-alphanumeric characters.\n\n\
+            Note this function does not support UTF-8 characters.",
+            "initcap(str)",
+        )
+        .with_sql_example(
+            r#"```sql
 > select initcap('apache datafusion');
 +------------------------------------+
 | initcap(Utf8("apache datafusion")) |
 +------------------------------------+
 | Apache Datafusion                  |
 +------------------------------------+
-```"#)
-            .with_standard_argument("str", Some("String"))
-            .with_related_udf("lower")
-            .with_related_udf("upper")
-            .build()
+```"#,
+        )
+        .with_standard_argument("str", Some("String"))
+        .with_related_udf("lower")
+        .with_related_udf("upper")
+        .build()
     })
 }
 
-/// Converts the first letter of each word to upper case and the rest to lower case. Words are sequences of alphanumeric characters separated by non-alphanumeric characters.
+/// Converts the first letter of each word to upper case and the rest to lower
+/// case. Words are sequences of alphanumeric characters separated by
+/// non-alphanumeric characters.
+///
+/// Example:
+/// ```sql
 /// initcap('hi THOMAS') = 'Hi Thomas'
+/// ```
 fn initcap<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
     let string_array = as_generic_string_array::<T>(&args[0])?;
 
