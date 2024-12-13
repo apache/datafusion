@@ -3237,9 +3237,9 @@ fn lateral_unnest() {
             \n    SubqueryAlias: u\
             \n      TableScan: unnest_table\
             \n    Subquery:\
-            \n      Projection: unnest_placeholder(outer_ref(u.array_col),depth=1) AS UNNEST(outer_ref(u.array_col))\
-            \n        Unnest: lists[unnest_placeholder(outer_ref(u.array_col))|depth=1] structs[]\
-            \n          Projection: outer_ref(u.array_col) AS unnest_placeholder(outer_ref(u.array_col))\
+            \n      Projection: __unnest_placeholder(outer_ref(u.array_col),depth=1) AS UNNEST(outer_ref(u.array_col))\
+            \n        Unnest: lists[__unnest_placeholder(outer_ref(u.array_col))|depth=1] structs[]\
+            \n          Projection: outer_ref(u.array_col) AS __unnest_placeholder(outer_ref(u.array_col))\
             \n            EmptyRelation";
     quick_test(sql, expected);
 }
