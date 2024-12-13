@@ -53,6 +53,7 @@ jobs:
         run: |
           export PATH=$PATH:$HOME/d/protoc/bin
           unset RUSTFLAGS
+          RUSTFLAGS=-Clink-arg=-fuse-ld
           echo $RUSTFLAGS
           rustup show
           cargo test --lib --tests --bins --features avro,json,backtrace --profile=release-windows --target x86_64-pc-windows-msvc
