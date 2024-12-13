@@ -2251,10 +2251,12 @@ mod tests {
         scan_format(state, &*format, &testdata, file_name, projection, limit).await
     }
 
+    /// Test that 0-byte files don't break while reading
     #[tokio::test]
     async fn test_read_empty_parquet() -> Result<()> {
-        let testdata = crate::test_util::parquet_test_data();
-        let path = format!("{testdata}/empty.parquet");
+        let tmp_dir = tempfile::TempDir::new().unwrap();
+        let path = format!("{}/empty.parquet", tmp_dir.path().to_string_lossy());
+        File::create(&path).await?;
 
         let ctx = SessionContext::new();
 
@@ -2272,16 +2274,21 @@ mod tests {
         Ok(())
     }
 
+    /// Test that 0-byte files don't break while reading
     #[tokio::test]
     async fn test_read_partitioned_empty_parquet() -> Result<()> {
-        let testdata = crate::test_util::parquet_test_data();
-        let path = format!("{testdata}/partitioned/");
+        let tmp_dir = tempfile::TempDir::new().unwrap();
+        let partition_dir = tmp_dir.path().join("col1=a");
+        std::fs::create_dir(&partition_dir).unwrap();
+        File::create(partition_dir.join("empty.parquet"))
+            .await
+            .unwrap();
 
         let ctx = SessionContext::new();
 
         let df = ctx
             .read_parquet(
-                &path,
+                tmp_dir.path().to_str().unwrap(),
                 ParquetReadOptions::new()
                     .table_partition_cols(vec![("col1".to_string(), DataType::Utf8)]),
             )
