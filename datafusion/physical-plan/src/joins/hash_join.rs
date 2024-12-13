@@ -1013,6 +1013,7 @@ impl BuildSide {
 ///  └─ ProcessProbeBatch
 ///
 /// ```
+#[derive(Debug, Clone)]
 enum HashJoinStreamState {
     /// Initial state for HashJoinStream indicating that build-side data not collected yet
     WaitBuildSide,
@@ -1038,6 +1039,7 @@ impl HashJoinStreamState {
 }
 
 /// Container for HashJoinStreamState::ProcessProbeBatch related data
+#[derive(Debug, Clone)]
 struct ProcessProbeBatchState {
     /// Current probe-side batch
     batch: RecordBatch,
