@@ -71,7 +71,7 @@ fn cli_quick_test<'a>(
     let mut cmd = cli();
     cmd.args(args);
 
-    assert_cmd_snapshot!("cli_quick_test", cmd);
+    assert_cmd_snapshot!(cmd);
 }
 
 #[rstest]
@@ -90,7 +90,7 @@ fn test_cli_format<'a>(#[case] format: &'a str) {
     let mut cmd = cli();
     cmd.args(["--command", "select 1", "-q", "--format", format]);
 
-    assert_cmd_snapshot!("cli_format", cmd);
+    assert_cmd_snapshot!(cmd);
 }
 
 async fn s3_client() -> aws_sdk_s3::Client {
@@ -187,7 +187,7 @@ async fn test_cli() {
 
     glob!("sql/*.sql", |path| {
         let input = fs::read_to_string(path).unwrap();
-        assert_cmd_snapshot!("cli", cli().pass_stdin(input))
+        assert_cmd_snapshot!(cli().pass_stdin(input))
     });
 }
 
@@ -235,5 +235,5 @@ SELECT * FROM CARS limit 1;
         access_key_id, secret_access_key, endpoint_url
     );
 
-    assert_cmd_snapshot!("aws_options", cli().env_clear().pass_stdin(input));
+    assert_cmd_snapshot!(cli().env_clear().pass_stdin(input));
 }
