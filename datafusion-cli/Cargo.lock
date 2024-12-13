@@ -881,9 +881,9 @@ dependencies = [
 
 [[package]]
 name = "bstr"
-version = "1.11.0"
+version = "1.11.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1a68f1f47cdf0ec8ee4b941b2eee2a80cb796db73118c0dd09ac63fbe405be22"
+checksum = "786a307d683a5bf92e6fd5fd69a7eb613751668d1d8d67d802846dfe367c62c8"
 dependencies = [
  "memchr",
  "regex-automata",
@@ -1512,8 +1512,10 @@ name = "datafusion-functions-window"
 version = "43.0.0"
 dependencies = [
  "datafusion-common",
+ "datafusion-doc",
  "datafusion-expr",
  "datafusion-functions-window-common",
+ "datafusion-macros",
  "datafusion-physical-expr",
  "datafusion-physical-expr-common",
  "log",
@@ -2210,7 +2212,7 @@ dependencies = [
  "http 1.2.0",
  "hyper 1.5.1",
  "hyper-util",
- "rustls 0.23.19",
+ "rustls 0.23.20",
  "rustls-native-certs 0.8.1",
  "rustls-pki-types",
  "tokio",
@@ -3112,7 +3114,7 @@ dependencies = [
  "quinn-proto",
  "quinn-udp",
  "rustc-hash",
- "rustls 0.23.19",
+ "rustls 0.23.20",
  "socket2",
  "thiserror 2.0.6",
  "tokio",
@@ -3130,7 +3132,7 @@ dependencies = [
  "rand",
  "ring",
  "rustc-hash",
- "rustls 0.23.19",
+ "rustls 0.23.20",
  "rustls-pki-types",
  "slab",
  "thiserror 2.0.6",
@@ -3224,9 +3226,9 @@ dependencies = [
 
 [[package]]
 name = "redox_syscall"
-version = "0.5.7"
+version = "0.5.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9b6dfecf2c74bce2466cabf93f6664d6998a69eb21e39f4207930065b27b771f"
+checksum = "03a862b389f93e68874fbf580b9de08dd02facb9a788ebadaf4a3fd33cf58834"
 dependencies = [
  "bitflags 2.6.0",
 ]
@@ -3308,7 +3310,7 @@ dependencies = [
  "percent-encoding",
  "pin-project-lite",
  "quinn",
- "rustls 0.23.19",
+ "rustls 0.23.20",
  "rustls-native-certs 0.8.1",
  "rustls-pemfile 2.2.0",
  "rustls-pki-types",
@@ -3427,9 +3429,9 @@ dependencies = [
 
 [[package]]
 name = "rustls"
-version = "0.23.19"
+version = "0.23.20"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "934b404430bb06b3fae2cba809eb45a1ab1aecd64491213d7c3301b88393f8d1"
+checksum = "5065c3f250cbd332cd894be57c40fa52387247659b14a2d6041d121547903b1b"
 dependencies = [
  "once_cell",
  "ring",
@@ -3617,9 +3619,9 @@ dependencies = [
 
 [[package]]
 name = "semver"
-version = "1.0.23"
+version = "1.0.24"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "61697e0a1c7e512e84a621326239844a24d8207b4669b41bc18b32ea5cbf988b"
+checksum = "3cb6eb87a131f756572d7fb904f6e7b68633f09cca868c5df1c4b8d1a694bbba"
 
 [[package]]
 name = "seq-macro"
@@ -4060,7 +4062,7 @@ version = "0.26.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5f6d0975eaace0cf0fcadee4e4aaa5da15b5c079146f2cffb67c113be122bf37"
 dependencies = [
- "rustls 0.23.19",
+ "rustls 0.23.20",
  "tokio",
 ]
 
