@@ -57,7 +57,7 @@ jobs:
           lld-link --version
           echo $RUSTFLAGS
           rustup show
-          cargo test --lib --tests --bins --features avro,json,backtrace --profile=release-windows --target x86_64-pc-windows-msvc
+          cargo test --lib --tests --bins --features avro,json,backtrace --profile=release-windows
           cd datafusion-cli
-          cargo test --lib --tests --bins --all-features --profile=release-windows --target x86_64-pc-windows-msvc
+          cargo test --lib --tests --bins --all-features --profile=release-windows
 
