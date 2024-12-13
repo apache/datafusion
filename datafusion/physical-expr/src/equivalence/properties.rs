@@ -1875,14 +1875,14 @@ fn calculate_union_binary(
                 .iter()
                 .find(|rhs_const| rhs_const.expr().eq(lhs_const.expr()))
                 .map(|rhs_const| {
-                    // Create new constant with across_partitions=false since we're in a union
-                    let mut const_expr = ConstExpr::new(Arc::clone(lhs_const.expr()))
-                        .with_across_partitions(false);
+                    let mut const_expr = ConstExpr::new(Arc::clone(lhs_const.expr()));
 
-                    // If both sides have matching constant values, preserve the value
+                    // If both sides have matching constant values, preserve the value and set across_partitions=true
                     if let (Some(lhs_val), Some(rhs_val)) = (lhs_const.value(), rhs_const.value()) {
                         if lhs_val == rhs_val {
-                            const_expr = const_expr.with_value(lhs_val.clone());
+                            const_expr = const_expr
+                                .with_across_partitions(true)
+                                .with_value(lhs_val.clone());
                         }
                     }
                     const_expr
