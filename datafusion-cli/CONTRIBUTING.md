@@ -27,9 +27,20 @@ Tests can be run using `cargo`
 cargo test
 ```
 
+## Snapshot testing
+
+To test CLI output, [Insta](https://github.com/mitsuhiko/insta) is used for snapshot testing. Snapshots are generated
+and compared on each test run. If the output changes, tests will fail.
+To review the changes, you can use Insta CLI:
+
+```shell
+cargo install cargo-insta
+cargo insta review
+```
+
 ## Running Storage Integration Tests
 
-By default, storage integration tests are not run. To run them you will need to set `TEST_STORAGE_INTEGRATION=1` and 
+By default, storage integration tests are not run. To run them you will need to set `TEST_STORAGE_INTEGRATION=1` and
 then provide the necessary configuration for that object store.
 
 ### AWS
@@ -39,32 +50,23 @@ To test the S3 integration against [Minio](https://github.com/minio/minio)
 First start up a container with Minio
 
 ```
-$ LOCALSTACK_VERSION=sha256:a0b79cb2430f1818de2c66ce89d41bba40f5a1823410f5a7eaf3494b692eed97
-$ podman run -d -p 4566:4566 localstack/localstack@$LOCALSTACK_VERSION
-$ podman run -d -p 1338:1338 amazon/amazon-ec2-metadata-mock:v1.9.2 --imdsv2
+$ docker run -d -p 9000:9000 -e MINIO_ROOT_USER=TEST-DataFusionLogin -e MINIO_ROOT_PASSWORD=TEST-DataFusionPassword quay.io/minio/minio server /data
 ```
 
 Setup environment
 
 ```
-export TEST_INTEGRATION=1
-export AWS_DEFAULT_REGION=us-east-1
-export AWS_ACCESS_KEY_ID=test
-export AWS_SECRET_ACCESS_KEY=test
-export AWS_ENDPOINT=http://localhost:4566
+export TEST_STORAGE_INTEGRATION=1
+export AWS_ACCESS_KEY_ID=TEST-DataFusionLogin
+export AWS_SECRET_ACCESS_KEY=TEST-DataFusionPassword
+export AWS_ENDPOINT=http://127.0.0.1:9000
 export AWS_ALLOW_HTTP=true
-export AWS_BUCKET_NAME=test-bucket
 ```
 
-Create a bucket using the AWS CLI
-
-```
-podman run --net=host --env-host amazon/aws-cli --endpoint-url=http://localhost:4566 s3 mb s3://test-bucket
-```
+Note that `AWS_ENDPOINT` is set without slash at the end.
 
 Run tests
 
 ```
-$ cargo test --features aws
+$ cargo test
 ```
-
