@@ -172,19 +172,12 @@ rpath = false
 [profile.release-windows]
 codegen-units = 1
 debug = 'line-directives-only'
-debug-assertions = false
-incremental = false
 inherits = "release"
 lto = 'fat'
 opt-level = 0
 overflow-checks = false
 panic = 'abort'
 rpath = false
-
-[profile.release-windows.build-override]
-opt-level = 0
-codegen-units = 256
-debug = false
 
 [workspace.lints.clippy]
 # Detects large stack-allocated futures that may cause stack overflow crashes (see threshold in clippy.toml)
@@ -193,6 +186,3 @@ large_futures = "warn"
 [workspace.lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ["cfg(tarpaulin)"] }
 unused_qualifications = "deny"
-
-[target.x86_64-pc-windows-msvc]
-linker = "lld-link.exe"
