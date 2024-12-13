@@ -29,8 +29,6 @@ use clap::Parser;
 use datafusion_common::utils::get_available_parallelism;
 use datafusion_common::{exec_datafusion_err, exec_err, DataFusionError, Result};
 use datafusion_common_runtime::SpawnedTask;
-#[cfg(feature = "postgres")]
-use datafusion_sqllogictest::Postgres;
 use datafusion_sqllogictest::{DataFusion, TestContext};
 use futures::stream::StreamExt;
 use itertools::Itertools;
@@ -193,7 +191,9 @@ async fn run_tests() -> Result<()> {
     // modifying shared state like `/tmp/`)
     let errors: Vec<_> = futures::stream::iter(read_test_files(&options)?)
         .map(|test_file| {
-            let validator = if !test_file.check_sqlite(&options) {
+            let validator = if options.include_sqlite
+                && test_file.relative_path.starts_with("sqlite")
+            {
                 sqlite_value_validator
             } else {
                 df_value_validator
@@ -203,10 +203,14 @@ async fn run_tests() -> Result<()> {
                 let file_path = test_file.relative_path.clone();
                 let start = datafusion::common::instant::Instant::now();
                 match (options.postgres_runner, options.complete) {
-                    (false, false) => run_test_file(test_file).await?,
-                    (false, true) => run_complete_file(test_file).await?,
-                    (true, false) => run_test_file_with_postgres(test_file).await?,
-                    (true, true) => run_complete_file_with_postgres(test_file).await?,
+                    (false, false) => run_test_file(test_file, validator).await?,
+                    (false, true) => run_complete_file(test_file, validator).await?,
+                    (true, false) => {
+                        run_test_file_with_postgres(test_file, validator).await?
+                    }
+                    (true, true) => {
+                        run_complete_file_with_postgres(test_file, validator).await?
+                    }
                 }
                 println!("Executed {:?}. Took {:?}", file_path, start.elapsed());
                 Ok(()) as Result<()>
@@ -353,7 +357,10 @@ async fn run_complete_file(test_file: TestFile, validator: Validator) -> Result<
 }
 
 #[cfg(feature = "postgres")]
-async fn run_complete_file_with_postgres(test_file: TestFile) -> Result<()> {
+async fn run_complete_file_with_postgres(
+    test_file: TestFile,
+    validator: Validator,
+) -> Result<()> {
     use datafusion_sqllogictest::Postgres;
     let TestFile {
         path,
@@ -371,7 +378,8 @@ async fn run_complete_file_with_postgres(test_file: TestFile) -> Result<()> {
         .update_test_file(
             path,
             col_separator,
-            value_validator,
+            validator,
+            value_normalizer,
             strict_column_validator,
         )
         .await
@@ -382,7 +390,10 @@ async fn run_complete_file_with_postgres(test_file: TestFile) -> Result<()> {
 }
 
 #[cfg(not(feature = "postgres"))]
-async fn run_complete_file_with_postgres(_test_file: TestFile) -> Result<()> {
+async fn run_complete_file_with_postgres(
+    _test_file: TestFile,
+    _validator: Validator,
+) -> Result<()> {
     use datafusion_common::plan_err;
     plan_err!("Can not run with postgres as postgres feature is not enabled")
 }
@@ -595,6 +606,7 @@ pub async fn start_postgres(
         .with_password("postgres")
         .with_db_name("test")
         .with_mapped_port(16432, 5432.tcp())
+        .with_tag("17-alpine")
         .start()
         .await
         .unwrap();
