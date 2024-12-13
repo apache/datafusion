@@ -53,9 +53,5 @@ serde_json = { workspace = true }
 sqlparser = { workspace = true }
 
 [dev-dependencies]
-#arrow-array = { workspace = true }
-#arrow-buffer = { workspace = true }
 ctor = { workspace = true }
 env_logger = { workspace = true }
-#strum = { version = "0.26.1", features = ["derive"] }
-#strum_macros = "0.26.0"
