@@ -55,7 +55,7 @@ The deprecated version is the next version which contains the deprecation. For
 example, if the current version listed in [`Cargo.toml`] is `43.0.0` then the next
 version will be `44.0.0`.
 
-[`Cargo.toml`]: https://github.com/apache/datafusion/blob/main/Cargo.toml
+[`cargo.toml`]: https://github.com/apache/datafusion/blob/main/Cargo.toml
 
 To mark the API as deprecated, use the `#[deprecated]` attribute like this:
 
