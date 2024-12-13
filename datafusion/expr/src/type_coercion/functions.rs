@@ -21,6 +21,7 @@ use arrow::{
     compute::can_cast_types,
     datatypes::{DataType, TimeUnit},
 };
+use datafusion_common::utils::coerced_fixed_size_list_to_list;
 use datafusion_common::{
     exec_err, internal_datafusion_err, internal_err, plan_err,
     types::{LogicalType, NativeType},
@@ -414,11 +415,24 @@ fn get_valid_types(
             _ => Ok(vec![vec![]]),
         }
     }
+
     fn array(array_type: &DataType) -> Option<DataType> {
         match array_type {
             DataType::List(_) => Some(array_type.clone()),
             DataType::LargeList(field) | DataType::FixedSizeList(field, _) => {
                 Some(DataType::List(Arc::clone(field)))
+            }
+            _ => None,
+        }
+    }
+
+    fn recursive_array(array_type: &DataType) -> Option<DataType> {
+        match array_type {
+            DataType::List(_)
+            | DataType::LargeList(_)
+            | DataType::FixedSizeList(_, _) => {
+                let array_type = coerced_fixed_size_list_to_list(array_type);
+                Some(array_type)
             }
             _ => None,
         }
@@ -649,6 +663,13 @@ fn get_valid_types(
                 }
 
                 array(&current_types[0])
+                    .map_or_else(|| vec![vec![]], |array_type| vec![vec![array_type]])
+            }
+            ArrayFunctionSignature::RecursiveArray => {
+                if current_types.len() != 1 {
+                    return Ok(vec![vec![]]);
+                }
+                recursive_array(&current_types[0])
                     .map_or_else(|| vec![vec![]], |array_type| vec![vec![array_type]])
             }
             ArrayFunctionSignature::MapArray => {
