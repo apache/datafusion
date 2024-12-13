@@ -18,7 +18,9 @@
 use std::any::Any;
 use std::sync::{Arc, OnceLock};
 
-use arrow::array::{ArrayRef, GenericStringArray, OffsetSizeTrait, StringArray};
+use arrow::array::{
+    Array, ArrayRef, GenericStringBuilder, OffsetSizeTrait, StringViewBuilder,
+};
 use arrow::datatypes::DataType;
 
 use crate::utils::{make_scalar_function, utf8_to_str_type};
@@ -74,7 +76,7 @@ impl ScalarUDFImpl for InitcapFunc {
             DataType::LargeUtf8 => make_scalar_function(initcap::<i64>, vec![])(args),
             DataType::Utf8View => make_scalar_function(initcap_utf8view, vec![])(args),
             other => {
-                exec_err!("Unsupported data type {other:?} for function initcap")
+                exec_err!("Unsupported data type {other:?} for function `initcap`")
             }
         }
     }
@@ -90,9 +92,8 @@ fn get_initcap_doc() -> &'static Documentation {
     DOCUMENTATION.get_or_init(|| {
         Documentation::builder(
             DOC_SECTION_STRING,
-            "Capitalizes the first character in each word in the ASCII input string. \
-            Words are delimited by non-alphanumeric characters.\n\n\
-            Note this function does not support UTF-8 characters.",
+            "Capitalizes the first character in each word in the input string. \
+            Words are delimited by non-alphanumeric characters.",
             "initcap(str)",
         )
         .with_sql_example(
@@ -123,24 +124,36 @@ fn get_initcap_doc() -> &'static Documentation {
 fn initcap<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
     let string_array = as_generic_string_array::<T>(&args[0])?;
 
-    // first map is the iterator, second is for the `Option<_>`
-    let result = string_array
-        .iter()
-        .map(initcap_string)
-        .collect::<GenericStringArray<T>>();
+    let mut builder = GenericStringBuilder::<T>::with_capacity(
+        string_array.len(),
+        string_array.value_data().len(),
+    );
 
-    Ok(Arc::new(result) as ArrayRef)
+    string_array.iter().for_each(|str| match str {
+        Some(s) => {
+            let initcap_str = initcap_string(Some(s)).unwrap();
+            builder.append_value(initcap_str);
+        }
+        None => builder.append_null(),
+    });
+
+    Ok(Arc::new(builder.finish()) as ArrayRef)
 }
 
 fn initcap_utf8view(args: &[ArrayRef]) -> Result<ArrayRef> {
     let string_view_array = as_string_view_array(&args[0])?;
 
-    let result = string_view_array
-        .iter()
-        .map(initcap_string)
-        .collect::<StringArray>();
+    let mut builder = StringViewBuilder::with_capacity(string_view_array.len());
 
-    Ok(Arc::new(result) as ArrayRef)
+    string_view_array.iter().for_each(|str| match str {
+        Some(s) => {
+            let initcap_str = initcap_string(Some(s)).unwrap();
+            builder.append_value(initcap_str);
+        }
+        None => builder.append_null(),
+    });
+
+    Ok(Arc::new(builder.finish()) as ArrayRef)
 }
 
 fn initcap_string(input: Option<&str>) -> Option<String> {
@@ -149,13 +162,16 @@ fn initcap_string(input: Option<&str>) -> Option<String> {
         let mut prev_is_alphanumeric = false;
 
         for c in s.chars() {
-            let transformed = if prev_is_alphanumeric {
-                c.to_ascii_lowercase()
+            if prev_is_alphanumeric {
+                for lc in c.to_lowercase() {
+                    result.push(lc);
+                }
             } else {
-                c.to_ascii_uppercase()
-            };
-            result.push(transformed);
-            prev_is_alphanumeric = c.is_ascii_alphanumeric();
+                for uc in c.to_uppercase() {
+                    result.push(uc);
+                }
+            }
+            prev_is_alphanumeric = c.is_alphanumeric();
         }
 
         result
@@ -164,9 +180,9 @@ fn initcap_string(input: Option<&str>) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use crate::string::initcap::InitcapFunc;
+    use crate::unicode::initcap::InitcapFunc;
     use crate::utils::test::test_function;
-    use arrow::array::{Array, StringArray};
+    use arrow::array::{Array, StringArray, StringViewArray};
     use arrow::datatypes::DataType::Utf8;
     use datafusion_common::{Result, ScalarValue};
     use datafusion_expr::{ColumnarValue, ScalarUDFImpl};
@@ -177,6 +193,19 @@ mod tests {
             InitcapFunc::new(),
             vec![ColumnarValue::Scalar(ScalarValue::from("hi THOMAS"))],
             Ok(Some("Hi Thomas")),
+            &str,
+            Utf8,
+            StringArray
+        );
+        test_function!(
+            InitcapFunc::new(),
+            vec![ColumnarValue::Scalar(ScalarValue::Utf8(Some(
+                "êm ả ñandú árbol олег иванович íslensku þjóðarinnar ελληνική"
+                    .to_string()
+            )))],
+            Ok(Some(
+                "Êm Ả Ñandú Árbol Олег Иванович Íslensku Þjóðarinnar Ελληνική"
+            )),
             &str,
             Utf8,
             StringArray
@@ -205,6 +234,7 @@ mod tests {
             Utf8,
             StringArray
         );
+
         test_function!(
             InitcapFunc::new(),
             vec![ColumnarValue::Scalar(ScalarValue::Utf8View(Some(
@@ -213,7 +243,7 @@ mod tests {
             Ok(Some("Hi Thomas")),
             &str,
             Utf8,
-            StringArray
+            StringViewArray
         );
         test_function!(
             InitcapFunc::new(),
@@ -223,7 +253,20 @@ mod tests {
             Ok(Some("Hi Thomas With M0re Than 12 Chars")),
             &str,
             Utf8,
-            StringArray
+            StringViewArray
+        );
+        test_function!(
+            InitcapFunc::new(),
+            vec![ColumnarValue::Scalar(ScalarValue::Utf8View(Some(
+                "êm ả ñandú árbol олег иванович íslensku þjóðarinnar ελληνική"
+                    .to_string()
+            )))],
+            Ok(Some(
+                "Êm Ả Ñandú Árbol Олег Иванович Íslensku Þjóðarinnar Ελληνική"
+            )),
+            &str,
+            Utf8,
+            StringViewArray
         );
         test_function!(
             InitcapFunc::new(),
@@ -233,7 +276,7 @@ mod tests {
             Ok(Some("")),
             &str,
             Utf8,
-            StringArray
+            StringViewArray
         );
         test_function!(
             InitcapFunc::new(),
@@ -241,7 +284,7 @@ mod tests {
             Ok(None),
             &str,
             Utf8,
-            StringArray
+            StringViewArray
         );
 
         Ok(())
