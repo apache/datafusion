@@ -688,7 +688,7 @@ mod tests {
                 .files
                 .as_ref()
                 .map(|f| f.iter().map(|f| f.location.filename().unwrap()).collect())
-                .unwrap_or(Vec::new()),
+                .unwrap_or_default(),
         )
     }
 
