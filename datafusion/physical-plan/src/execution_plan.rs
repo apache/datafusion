@@ -436,7 +436,7 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
 /// - Aggregations that need to group all input rows
 /// - Window functions that need the complete partition to compute
 pub fn is_pipeline_breaking(plan: &dyn ExecutionPlan) -> bool {
-    plan.boundedness().is_unbounded() && plan.pipeline_behavior() == EmissionType::Final
+    !plan.boundedness().requires_finite_memory() && plan.pipeline_behavior() == EmissionType::Final
 }
 
 /// Extension trait provides an easy API to fetch various properties of
@@ -523,10 +523,24 @@ impl ExecutionPlanProperties for &dyn ExecutionPlan {
     }
 }
 
+/// Represents whether a stream of data is bounded (finite) or unbounded (infinite).
+///
+/// This is used to determine whether an execution plan will eventually complete
+/// processing all its data (bounded) or could potentially run forever (unbounded).
+///
+/// For unbounded streams, it also tracks whether the operator requires finite memory
+/// to process the stream or if memory usage could grow unbounded.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Boundedness {
+    /// The data stream is bounded (finite) and will eventually complete
     Bounded,
-    Unbounded { requires_finite_memory: bool },
+    /// The data stream is unbounded (infinite) and could run forever
+    Unbounded {
+        /// Whether this operator requires finite memory to process the unbounded stream.
+        /// If true, the operator can process an infinite stream with bounded memory.
+        /// If false, memory usage may grow unbounded while processing the stream.
+        requires_finite_memory: bool,
+    },
 }
 
 impl Boundedness {
@@ -545,11 +559,35 @@ impl Boundedness {
     }
 }
 
+/// Represents how an operator emits its output records.
+///
+/// This is used to determine whether an operator emits records incrementally as they arrive,
+/// only emits a final result at the end, or can do both.
+///
+/// For example, in the following plan:
+/// ```text
+///   SortExec [EmissionType::Final]
+///     |_ on: [col1 ASC]
+///     FilterExec [EmissionType::Incremental]
+///       |_ pred: col2 > 100
+///       CsvExec [EmissionType::Incremental]
+///         |_ file: "data.csv"
+/// ```
+/// - CsvExec emits records incrementally as it reads from the file
+/// - FilterExec processes and emits filtered records incrementally as they arrive
+/// - SortExec must wait for all input records before it can emit the sorted result,
+///   since it needs to see all values to determine their final order
+///
+/// Left joins can emit both incrementally and finally:
+/// - Incrementally emit matches as they are found
+/// - Finally emit non-matches after all input is processed
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EmissionType {
+    /// Records are emitted incrementally as they arrive and are processed
     Incremental,
+    /// Records are only emitted once all input has been processed
     Final,
-    // Incremental and Final
+    /// Records can be emitted both incrementally and as a final result
     Both,
 }
 

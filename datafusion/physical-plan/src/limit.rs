@@ -83,19 +83,11 @@ impl GlobalLimitExec {
 
     /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
     fn compute_properties(input: &Arc<dyn ExecutionPlan>) -> PlanProperties {
-        let boundedness = if input.boundedness().is_unbounded() {
-            Boundedness::Unbounded {
-                requires_finite_memory: true,
-            }
-        } else {
-            Boundedness::Bounded
-        };
-
         PlanProperties::new(
             input.equivalence_properties().clone(), // Equivalence Properties
             Partitioning::UnknownPartitioning(1),   // Output Partitioning
             EmissionType::Final,
-            boundedness,
+            input.boundedness()
         )
     }
 }
@@ -248,18 +240,11 @@ impl LocalLimitExec {
 
     /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
     fn compute_properties(input: &Arc<dyn ExecutionPlan>) -> PlanProperties {
-        let boundedness = if input.boundedness().is_unbounded() {
-            Boundedness::Unbounded {
-                requires_finite_memory: true,
-            }
-        } else {
-            Boundedness::Bounded
-        };
         PlanProperties::new(
             input.equivalence_properties().clone(), // Equivalence Properties
             input.output_partitioning().clone(),    // Output Partitioning
             EmissionType::Final,
-            boundedness,
+            input.boundedness(),
         )
     }
 }

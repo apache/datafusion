@@ -28,7 +28,7 @@ use super::utils::{
     BatchTransformer, NoopBatchTransformer, StatefulStreamResult,
 };
 use crate::coalesce_partitions::CoalescePartitionsExec;
-use crate::execution_plan::EmissionType;
+use crate::execution_plan::{emission_type_from_children, EmissionType};
 use crate::joins::utils::{
     adjust_indices_by_join_type, apply_join_filter_to_indices, build_batch_from_indices,
     build_join_schema, check_join_is_valid, estimate_join_statistics,
@@ -244,7 +244,7 @@ impl NestedLoopJoinExec {
             asymmetric_join_output_partitioning(left, right, &join_type);
 
         let emission_type = if left.boundedness().requires_finite_memory() {
-            left.pipeline_behavior()
+            emission_type_from_children([left, right])
         } else {
             EmissionType::Final
         };
