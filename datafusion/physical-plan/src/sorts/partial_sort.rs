@@ -363,31 +363,31 @@ impl PartialSortStream {
         if self.is_closed {
             return Poll::Ready(None);
         }
-        let result = match ready!(self.input.poll_next_unpin(cx)) {
-            Some(Ok(batch)) => {
-                if let Some(slice_point) =
-                    self.get_slice_point(self.common_prefix_length, &batch)?
-                {
-                    self.in_mem_batches.push(batch.slice(0, slice_point));
-                    let remaining_batch =
-                        batch.slice(slice_point, batch.num_rows() - slice_point);
-                    let sorted_batch = self.sort_in_mem_batches();
-                    self.in_mem_batches.push(remaining_batch);
-                    sorted_batch
-                } else {
-                    self.in_mem_batches.push(batch);
-                    Ok(RecordBatch::new_empty(self.schema()))
+        loop {
+            return Poll::Ready(Some(match ready!(self.input.poll_next_unpin(cx)) {
+                Some(Ok(batch)) => {
+                    if let Some(slice_point) =
+                        self.get_slice_point(self.common_prefix_length, &batch)?
+                    {
+                        self.in_mem_batches.push(batch.slice(0, slice_point));
+                        let remaining_batch =
+                            batch.slice(slice_point, batch.num_rows() - slice_point);
+                        let sorted_batch = self.sort_in_mem_batches();
+                        self.in_mem_batches.push(remaining_batch);
+                        sorted_batch
+                    } else {
+                        self.in_mem_batches.push(batch);
+                        continue;
+                    }
                 }
-            }
-            Some(Err(e)) => Err(e),
-            None => {
-                self.is_closed = true;
-                // once input is consumed, sort the rest of the inserted batches
-                self.sort_in_mem_batches()
-            }
-        };
-
-        Poll::Ready(Some(result))
+                Some(Err(e)) => Err(e),
+                None => {
+                    self.is_closed = true;
+                    // once input is consumed, sort the rest of the inserted batches
+                    self.sort_in_mem_batches()
+                }
+            }));
+        }
     }
 
     /// Returns a sorted RecordBatch from in_mem_batches and clears in_mem_batches
@@ -731,7 +731,7 @@ mod tests {
         let result = collect(partial_sort_exec, Arc::clone(&task_ctx)).await?;
         assert_eq!(
             result.iter().map(|r| r.num_rows()).collect_vec(),
-            [0, 125, 125, 0, 150]
+            [125, 125, 150]
         );
 
         assert_eq!(
@@ -760,10 +760,10 @@ mod tests {
             nulls_first: false,
         };
         for (fetch_size, expected_batch_num_rows) in [
-            (Some(50), vec![0, 50]),
-            (Some(120), vec![0, 120]),
-            (Some(150), vec![0, 125, 25]),
-            (Some(250), vec![0, 125, 125]),
+            (Some(50), vec![50]),
+            (Some(120), vec![120]),
+            (Some(150), vec![125, 25]),
+            (Some(250), vec![125, 125]),
         ] {
             let partial_sort_executor = PartialSortExec::new(
                 LexOrdering::new(vec![

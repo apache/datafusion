@@ -312,13 +312,9 @@ impl WindowAggStream {
         })
     }
 
-    fn compute_aggregates(&self) -> Result<RecordBatch> {
+    fn compute_aggregates(&self, batch: RecordBatch) -> Result<RecordBatch> {
         // record compute time on drop
         let _timer = self.baseline_metrics.elapsed_compute().timer();
-        let batch = concat_batches(&self.input.schema(), &self.batches)?;
-        if batch.num_rows() == 0 {
-            return Ok(RecordBatch::new_empty(Arc::clone(&self.schema)));
-        }
 
         let partition_by_sort_keys = self
             .ordered_partition_by_indices
@@ -386,7 +382,13 @@ impl WindowAggStream {
                     continue;
                 }
                 Some(Err(e)) => Err(e),
-                None => self.compute_aggregates(),
+                None => {
+                    let batch = concat_batches(&self.input.schema(), &self.batches)?;
+                    if batch.num_rows() == 0 {
+                        return Poll::Ready(None);
+                    }
+                    self.compute_aggregates(batch)
+                }
             };
 
             self.finished = true;

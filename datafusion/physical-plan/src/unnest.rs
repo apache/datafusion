@@ -18,6 +18,7 @@
 //! Define a plan for unnesting values in columns that contain a list type.
 
 use std::cmp::{self, Ordering};
+use std::task::{ready, Poll};
 use std::{any::Any, sync::Arc};
 
 use super::metrics::{self, ExecutionPlanMetricsSet, MetricBuilder, MetricsSet};
@@ -267,7 +268,7 @@ impl Stream for UnnestStream {
     fn poll_next(
         mut self: std::pin::Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<Option<Self::Item>> {
+    ) -> Poll<Option<Self::Item>> {
         self.poll_next_impl(cx)
     }
 }
@@ -278,10 +279,9 @@ impl UnnestStream {
     fn poll_next_impl(
         &mut self,
         cx: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<Option<Result<RecordBatch>>> {
-        self.input
-            .poll_next_unpin(cx)
-            .map(|maybe_batch| match maybe_batch {
+    ) -> Poll<Option<Result<RecordBatch>>> {
+        loop {
+            return Poll::Ready(match ready!(self.input.poll_next_unpin(cx)) {
                 Some(Ok(batch)) => {
                     let timer = self.metrics.elapsed_compute.timer();
                     let result = build_batch(
@@ -294,6 +294,9 @@ impl UnnestStream {
                     self.metrics.input_batches.add(1);
                     self.metrics.input_rows.add(batch.num_rows());
                     if let Ok(ref batch) = result {
+                        if batch.num_rows() == 0 {
+                            continue;
+                        }
                         timer.done();
                         self.metrics.output_batches.add(1);
                         self.metrics.output_rows.add(batch.num_rows());
@@ -313,7 +316,8 @@ impl UnnestStream {
                     );
                     other
                 }
-            })
+            });
+        }
     }
 }
 

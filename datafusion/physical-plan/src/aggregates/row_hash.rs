@@ -768,9 +768,12 @@ impl Stream for GroupedHashAggregateStream {
                         let output = batch.slice(0, size);
                         (ExecutionState::ProducingOutput(remaining), output)
                     };
-                    return Poll::Ready(Some(Ok(
-                        output_batch.record_output(&self.baseline_metrics)
-                    )));
+                    if output_batch.num_rows() > 0 {
+                        return Poll::Ready(Some(Ok(
+                            output_batch.record_output(&self.baseline_metrics)
+                        )));
+                    }
+                    continue;
                 }
 
                 ExecutionState::Done => {
