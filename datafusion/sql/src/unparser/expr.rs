@@ -247,6 +247,7 @@ impl Unparser<'_> {
                     over,
                     within_group: vec![],
                     parameters: ast::FunctionArguments::None,
+                    uses_odbc_syntax: false,
                 }))
             }
             Expr::SimilarTo(Like {
@@ -295,6 +296,7 @@ impl Unparser<'_> {
                     over: None,
                     within_group: vec![],
                     parameters: ast::FunctionArguments::None,
+                    uses_odbc_syntax: false,
                 }))
             }
             Expr::ScalarSubquery(subq) => {
@@ -500,6 +502,7 @@ impl Unparser<'_> {
             over: None,
             within_group: vec![],
             parameters: ast::FunctionArguments::None,
+            uses_odbc_syntax: false,
         }))
     }
 
@@ -1504,6 +1507,7 @@ impl Unparser<'_> {
             over: None,
             within_group: vec![],
             parameters: ast::FunctionArguments::None,
+            uses_odbc_syntax: false,
         }))
     }
 

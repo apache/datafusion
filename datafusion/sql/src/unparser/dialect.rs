@@ -300,6 +300,7 @@ impl PostgreSqlDialect {
             over: None,
             within_group: vec![],
             parameters: ast::FunctionArguments::None,
+            uses_odbc_syntax: false,
         }))
     }
 }
