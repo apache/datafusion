@@ -24,7 +24,7 @@ use arrow::{
 use datafusion_common::{
     exec_err, internal_datafusion_err, internal_err, plan_err,
     types::{LogicalType, NativeType},
-    utils::{coerced_fixed_size_list_to_list, list_ndims},
+    utils::list_ndims,
     Result,
 };
 use datafusion_expr_common::{
@@ -416,11 +416,9 @@ fn get_valid_types(
     }
     fn array(array_type: &DataType) -> Option<DataType> {
         match array_type {
-            DataType::List(_)
-            | DataType::LargeList(_)
-            | DataType::FixedSizeList(_, _) => {
-                let array_type = coerced_fixed_size_list_to_list(array_type);
-                Some(array_type)
+            DataType::List(_) => Some(array_type.clone()),
+            DataType::LargeList(field) | DataType::FixedSizeList(field, _) => {
+                Some(DataType::List(Arc::clone(field)))
             }
             _ => None,
         }
