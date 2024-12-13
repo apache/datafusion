@@ -193,15 +193,16 @@ impl StringArrayBuilder {
     ///
     /// - the provided `null_buffer` is not the same length as the `offsets_buffer`.
     pub fn finish(self, null_buffer: Option<NullBuffer>) -> StringArray {
+        let row_count = self.offsets_buffer.len() / size_of::<i32>() - 1;
         if let Some(ref null_buffer) = null_buffer {
             assert_eq!(
                 null_buffer.len(),
-                self.offsets_buffer.len() / size_of::<i32>() - 1,
+                row_count,
                 "Null buffer and offsets buffer must be the same length"
             );
         }
         let array_builder = ArrayDataBuilder::new(DataType::Utf8)
-            .len(self.offsets_buffer.len() / size_of::<i32>() - 1)
+            .len(row_count)
             .add_buffer(self.offsets_buffer.into())
             .add_buffer(self.value_buffer.into())
             .nulls(null_buffer);
@@ -357,15 +358,16 @@ impl LargeStringArrayBuilder {
     ///
     /// - the provided `null_buffer` is not the same length as the `offsets_buffer`.
     pub fn finish(self, null_buffer: Option<NullBuffer>) -> LargeStringArray {
+        let row_count = self.offsets_buffer.len() / size_of::<i64>() - 1;
         if let Some(ref null_buffer) = null_buffer {
             assert_eq!(
                 null_buffer.len(),
-                self.offsets_buffer.len() / size_of::<i64>() - 1,
+                row_count,
                 "Null buffer and offsets buffer must be the same length"
             );
         }
         let array_builder = ArrayDataBuilder::new(DataType::LargeUtf8)
-            .len(self.offsets_buffer.len() / size_of::<i64>() - 1)
+            .len(row_count)
             .add_buffer(self.offsets_buffer.into())
             .add_buffer(self.value_buffer.into())
             .nulls(null_buffer);
