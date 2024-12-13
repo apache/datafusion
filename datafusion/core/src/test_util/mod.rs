@@ -265,7 +265,6 @@ impl UnboundedExec {
                 requires_finite_memory: true,
             }
         } else {
-            // TODO: Switch to Unbounded with finite memory
             Boundedness::Bounded
         };
         PlanProperties::new(
