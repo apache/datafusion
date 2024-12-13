@@ -51,11 +51,19 @@ When deprecating a method:
 - Mark the API as deprecated using `#[deprecated]` and specify the exact DataFusion version in which it was deprecated
 - Concisely describe the preferred API to help the user transition
 
-The deprecated version is the next version which will be released after the
-deprecation PR is merged. For example, if the next scheduled release `41.0.0`,
-and a method is deprecated in a PR, the deprecated version will be `41.0.0`.
+The deprecated version is the next version which contains the deprecation. For
+example, if the current version listed in [`Cargo.toml`] is `43.0.0` then the next
+version will be `44.0.0`.
 
-API deprecation example:
+[`Cargo.toml`]: https://github.com/apache/datafusion/blob/main/Cargo.toml
+
+To mark the API as deprecated, use the `#[deprecated]` attribute like this:
+
+```rust
+    #[deprecated(since = "XXX", note = "What new API the user should use?")]
+```
+
+For example:
 
 ```rust
     #[deprecated(since = "41.0.0", note = "Use SessionStateBuilder")]
