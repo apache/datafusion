@@ -1260,7 +1260,6 @@ dependencies = [
  "object_store",
  "parking_lot",
  "parquet",
- "paste",
  "rand",
  "sqlparser",
  "tempfile",
@@ -1326,7 +1325,6 @@ dependencies = [
  "arrow-array",
  "arrow-buffer",
  "arrow-schema",
- "chrono",
  "half",
  "hashbrown 0.14.5",
  "indexmap",
@@ -1357,7 +1355,6 @@ name = "datafusion-execution"
 version = "43.0.0"
 dependencies = [
  "arrow",
- "chrono",
  "dashmap",
  "datafusion-common",
  "datafusion-expr",
@@ -1374,10 +1371,7 @@ dependencies = [
 name = "datafusion-expr"
 version = "43.0.0"
 dependencies = [
- "ahash",
  "arrow",
- "arrow-array",
- "arrow-buffer",
  "chrono",
  "datafusion-common",
  "datafusion-doc",
@@ -1390,8 +1384,6 @@ dependencies = [
  "recursive",
  "serde_json",
  "sqlparser",
- "strum",
- "strum_macros",
 ]
 
 [[package]]
@@ -1401,7 +1393,6 @@ dependencies = [
  "arrow",
  "datafusion-common",
  "itertools",
- "paste",
 ]
 
 [[package]]
@@ -1460,7 +1451,6 @@ dependencies = [
  "datafusion-common",
  "datafusion-expr-common",
  "datafusion-physical-expr-common",
- "rand",
 ]
 
 [[package]]
@@ -1481,28 +1471,18 @@ dependencies = [
  "itertools",
  "log",
  "paste",
- "rand",
 ]
 
 [[package]]
 name = "datafusion-functions-table"
 version = "43.0.0"
 dependencies = [
- "ahash",
  "arrow",
- "arrow-schema",
  "async-trait",
  "datafusion-catalog",
  "datafusion-common",
- "datafusion-execution",
  "datafusion-expr",
- "datafusion-functions-aggregate-common",
- "datafusion-physical-expr",
- "datafusion-physical-expr-common",
  "datafusion-physical-plan",
- "half",
- "indexmap",
- "log",
  "parking_lot",
  "paste",
 ]
@@ -1534,7 +1514,6 @@ dependencies = [
 name = "datafusion-macros"
 version = "43.0.0"
 dependencies = [
- "proc-macro2",
  "quote",
  "syn",
 ]
@@ -1544,7 +1523,6 @@ name = "datafusion-optimizer"
 version = "43.0.0"
 dependencies = [
  "arrow",
- "async-trait",
  "chrono",
  "datafusion-common",
  "datafusion-expr",
@@ -1632,10 +1610,8 @@ dependencies = [
  "indexmap",
  "itertools",
  "log",
- "once_cell",
  "parking_lot",
  "pin-project-lite",
- "rand",
  "tokio",
 ]
 
@@ -3829,9 +3805,6 @@ name = "strum"
 version = "0.26.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8fec0f0aef304996cf250b31b5a10dee7980c85da9d759361292b8bca5a18f06"
-dependencies = [
- "strum_macros",
-]
 
 [[package]]
 name = "strum_macros"
