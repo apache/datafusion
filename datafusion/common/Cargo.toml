@@ -43,7 +43,7 @@ force_hash_collisions = []
 
 [dependencies]
 ahash = { workspace = true }
-apache-avro = { version = "0.16", default-features = false, features = [
+apache-avro = { version = "0.17", default-features = false, features = [
     "bzip",
     "snappy",
     "xz",
@@ -53,7 +53,6 @@ arrow = { workspace = true }
 arrow-array = { workspace = true }
 arrow-buffer = { workspace = true }
 arrow-schema = { workspace = true }
-chrono = { workspace = true }
 half = { workspace = true }
 hashbrown = { workspace = true }
 indexmap = { workspace = true }
@@ -70,4 +69,5 @@ tokio = { workspace = true }
 web-time = "1.1.0"
 
 [dev-dependencies]
+chrono = { workspace = true }
 rand = { workspace = true }

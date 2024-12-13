@@ -48,15 +48,15 @@ half = { workspace = true, default-features = true }
 itertools = { workspace = true }
 log = { workspace = true }
 object_store = { workspace = true }
-postgres-protocol = { version = "0.6.4", optional = true }
-postgres-types = { version = "0.2.4", optional = true }
-rust_decimal = { version = "1.27.0" }
+postgres-protocol = { version = "0.6.7", optional = true }
+postgres-types = { version = "0.2.8", features = ["derive", "with-chrono-0_4"], optional = true }
+rust_decimal = { version = "1.36.0", features = ["tokio-pg"] }
 sqllogictest = "0.23.0"
 sqlparser = { workspace = true }
 tempfile = { workspace = true }
 thiserror = "2.0.0"
 tokio = { workspace = true }
-tokio-postgres = { version = "0.7.7", optional = true }
+tokio-postgres = { version = "0.7.12", optional = true }
 
 [features]
 avro = ["datafusion/avro"]
