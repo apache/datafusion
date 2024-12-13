@@ -166,7 +166,7 @@ jobs:
     needs: [ linux-build-lib ]
     runs-on: ubuntu-latest
     env:
-      AWS_ENDPOINT: http://localhost:9000
+      AWS_ENDPOINT: http://127.0.0.1:9000/
       AWS_ACCESS_KEY_ID: TEST-DataFusionLogin
       AWS_SECRET_ACCESS_KEY: TEST-DataFusionPassword
       TEST_STORAGE_INTEGRATION: 1
