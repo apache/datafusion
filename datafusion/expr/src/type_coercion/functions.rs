@@ -418,10 +418,8 @@ fn get_valid_types(
 
     fn array(array_type: &DataType) -> Option<DataType> {
         match array_type {
-            DataType::List(_) => Some(array_type.clone()),
-            DataType::LargeList(field) | DataType::FixedSizeList(field, _) => {
-                Some(DataType::List(Arc::clone(field)))
-            }
+            DataType::List(_) | DataType::LargeList(_) => Some(array_type.clone()),
+            DataType::FixedSizeList(field, _) => Some(DataType::List(Arc::clone(field))),
             _ => None,
         }
     }
