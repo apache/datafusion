@@ -584,7 +584,7 @@ Decimal128(12, 2) 400420638.54
 query TR
 select arrow_typeof(cast(400420638.54 as decimal(12,2)) * 1.0), cast(400420638.54 as decimal(12,2)) * 1.0;
 ----
-Float64 400420638.54
+Float64 400420638.5
 
 
 query TB

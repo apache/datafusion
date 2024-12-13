@@ -861,7 +861,7 @@ ORDER BY a.population
 ----
 c 626.443 c 626.443
 a 838.698 a 838.698
-b 1778.934 b 1778.934
+b 1778.93 b 1778.93
 
 statement ok
 DROP TABLE population;

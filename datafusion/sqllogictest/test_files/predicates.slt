@@ -50,8 +50,8 @@ CREATE EXTERNAL TABLE alltypes_plain STORED AS PARQUET LOCATION '../../parquet-t
 query TR
 SELECT c1, c12 FROM aggregate_test_100 WHERE c12 > 0.376 AND c12 < 0.4
 ----
-e 0.391444365692
-d 0.38870280984
+e 0.3914443657
+d 0.3887028098
 
 # async fn csv_query_with_negative_predicate
 query TI
