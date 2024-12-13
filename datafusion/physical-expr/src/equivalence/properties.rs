@@ -3726,6 +3726,7 @@ mod tests {
         // Verify column 'a' remains constant with value 10
         let const_a = &union_props.constants()[0];
         assert!(const_a.expr().eq(&col_a));
+        assert_eq!(const_a.across_partitions(), true);
         assert_eq!(const_a.value(), Some(&literal_10));
 
         Ok(())
