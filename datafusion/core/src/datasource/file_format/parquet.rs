@@ -1312,7 +1312,7 @@ mod tests {
 
     use crate::datasource::file_format::parquet::test_util::store_parquet;
     use crate::physical_plan::metrics::MetricValue;
-    use crate::prelude::{SessionConfig, SessionContext};
+    use crate::prelude::{ParquetReadOptions, SessionConfig, SessionContext};
     use arrow::array::{Array, ArrayRef, StringArray};
     use arrow_array::types::Int32Type;
     use arrow_array::{DictionaryArray, Int32Array, Int64Array};
@@ -1323,8 +1323,8 @@ mod tests {
         as_float64_array, as_int32_array, as_timestamp_nanosecond_array,
     };
     use datafusion_common::config::ParquetOptions;
-    use datafusion_common::ScalarValue;
     use datafusion_common::ScalarValue::Utf8;
+    use datafusion_common::{assert_batches_eq, ScalarValue};
     use datafusion_execution::object_store::ObjectStoreUrl;
     use datafusion_execution::runtime_env::RuntimeEnv;
     use datafusion_physical_plan::stream::RecordBatchStreamAdapter;
@@ -2249,6 +2249,79 @@ mod tests {
             .unwrap_or(Arc::new(ParquetFormat::new()));
 
         scan_format(state, &*format, &testdata, file_name, projection, limit).await
+    }
+
+    #[tokio::test]
+    async fn test_read_parquet() -> Result<()> {
+        let testdata = crate::test_util::parquet_test_data();
+        let path = format!("{testdata}/alltypes_tiny_pages.parquet");
+        let file = File::open(path).await.unwrap();
+        let options = ArrowReaderOptions::new().with_page_index(true);
+        let builder =
+            ParquetRecordBatchStreamBuilder::new_with_options(file, options.clone())
+                .await
+                .unwrap()
+                .metadata()
+                .clone();
+        check_page_index_validation(builder.column_index(), builder.offset_index());
+
+        let path = format!("{testdata}/alltypes_tiny_pages_plain.parquet");
+        let file = File::open(path).await.unwrap();
+
+        let builder = ParquetRecordBatchStreamBuilder::new_with_options(file, options)
+            .await
+            .unwrap()
+            .metadata()
+            .clone();
+        check_page_index_validation(builder.column_index(), builder.offset_index());
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_read_empty_parquet() -> Result<()> {
+        let testdata = crate::test_util::parquet_test_data();
+        let path = format!("{testdata}/empty.parquet");
+
+        let ctx = SessionContext::new();
+
+        let df = ctx
+            .read_parquet(&path, ParquetReadOptions::default())
+            .await
+            .expect("read_parquet should succeed");
+
+        let result = df.collect().await?;
+        #[rustfmt::skip]
+        let expected = ["++",
+            "++"];
+        assert_batches_eq!(expected, &result);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_read_partitioned_empty_parquet() -> Result<()> {
+        let testdata = crate::test_util::parquet_test_data();
+        let path = format!("{testdata}/partitioned/");
+
+        let ctx = SessionContext::new();
+
+        let df = ctx
+            .read_parquet(
+                &path,
+                ParquetReadOptions::new()
+                    .table_partition_cols(vec![("col1".to_string(), DataType::Utf8)]),
+            )
+            .await
+            .expect("read_parquet should succeed");
+
+        let result = df.collect().await?;
+        #[rustfmt::skip]
+        let expected = ["++",
+            "++"];
+        assert_batches_eq!(expected, &result);
+
+        Ok(())
     }
 
     fn build_ctx(store_url: &url::Url) -> Arc<TaskContext> {
