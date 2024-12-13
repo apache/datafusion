@@ -173,7 +173,7 @@ rpath = false
 codegen-units = 16
 debug = 'line-directives-only'
 inherits = "release"
-lto = 'fat'
+lto = true
 opt-level = 0
 panic = 'abort'
 
