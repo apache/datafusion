@@ -62,6 +62,7 @@ pub struct ConstExpr {
     /// Does the constant have the same value across all partitions? See
     /// struct docs for more details
     across_partitions: bool,
+    /// The value of the constant expression
     value: Option<ScalarValue>
 }
 
