@@ -44,7 +44,7 @@ the PR so we can highlight the changes in the release notes.
 [docs.rs page]: https://docs.rs/datafusion/latest/datafusion/index.html
 [semver compatibility section of the cargo book]: https://doc.rust-lang.org/cargo/reference/semver.html#change-categories
 
-## Deprecation Policy
+## Deprecation Guidelines
 
 When deprecating a method:
 
