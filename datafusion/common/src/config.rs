@@ -32,7 +32,7 @@ use crate::{DataFusionError, Result};
 /// [`Default`] and [`ConfigField`] for it, allowing it to be used
 /// in the [`ConfigOptions`] configuration tree.
 ///
-/// `transform` is be used to normalize the value before parsing.
+/// `transform` is used to normalize values before parsing.
 ///
 /// For example,
 ///
