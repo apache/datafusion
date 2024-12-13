@@ -60,7 +60,7 @@ version will be `44.0.0`.
 To mark the API as deprecated, use the `#[deprecated]` attribute like this:
 
 ```rust
-    #[deprecated(since = "XXX", note = "What new API the user should use?")]
+    #[deprecated(since = "...", note = "...")]
 ```
 
 For example:
