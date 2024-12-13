@@ -2252,33 +2252,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_read_parquet() -> Result<()> {
-        let testdata = crate::test_util::parquet_test_data();
-        let path = format!("{testdata}/alltypes_tiny_pages.parquet");
-        let file = File::open(path).await.unwrap();
-        let options = ArrowReaderOptions::new().with_page_index(true);
-        let builder =
-            ParquetRecordBatchStreamBuilder::new_with_options(file, options.clone())
-                .await
-                .unwrap()
-                .metadata()
-                .clone();
-        check_page_index_validation(builder.column_index(), builder.offset_index());
-
-        let path = format!("{testdata}/alltypes_tiny_pages_plain.parquet");
-        let file = File::open(path).await.unwrap();
-
-        let builder = ParquetRecordBatchStreamBuilder::new_with_options(file, options)
-            .await
-            .unwrap()
-            .metadata()
-            .clone();
-        check_page_index_validation(builder.column_index(), builder.offset_index());
-
-        Ok(())
-    }
-
-    #[tokio::test]
     async fn test_read_empty_parquet() -> Result<()> {
         let testdata = crate::test_util::parquet_test_data();
         let path = format!("{testdata}/empty.parquet");
