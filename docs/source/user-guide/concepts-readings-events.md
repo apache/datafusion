@@ -28,6 +28,7 @@
 - **2023-04-05**: [Video: DataFusion Architecture Part 3: Physical Plan and Execution](https://youtu.be/2jkWU3_w6z0) [Slides](https://docs.google.com/presentation/d/1cA2WQJ2qg6tx6y4Wf8FH2WVSm9JQ5UgmBWATHdik0hg)
 
 - **2023-04-04**: [Video: DataFusion Architecture Part 2: Logical Plans and Expressions](https://youtu.be/EzZTLiSJnhY) [Slides](https://docs.google.com/presentation/d/1ypylM3-w60kVDW7Q6S99AHzvlBgciTdjsAfqNP85K30)
+
 - **2023-03-31**: [Video: DataFusion Architecture Part 1: Query Engines](https://youtu.be/NVKujPxwSBA) [Slides](https://docs.google.com/presentation/d/1D3GDVas-8y0sA4c8EOgdCvEjVND4s2E7I6zfs67Y4j8)
 
 - **2020-02-27**: [Online Book: How Query Engines Work](https://andygrove.io/2020/02/how-query-engines-work/)
@@ -49,6 +50,7 @@ This is a list of DataFusion related blog posts, articles, and other resources. 
 - **2024-11-18** [Building Databases over a Weekend ](https://www.denormalized.io/blog/building-databases)
 
 - **2024-10-27** [Caching in DataFusion: Don't read twice](https://blog.haoxp.xyz/posts/caching-datafusion)
+
 - **2024-10-24** [Parquet pruning in DataFusion: Read no more than you need](https://blog.haoxp.xyz/posts/parquet-to-arrow/)
 
 - **2024-09-13** [Blog: Using StringView / German Style Strings to make Queries Faster: Part 2 - String Operations](https://www.influxdata.com/blog/faster-queries-with-stringview-part-two-influxdb/) [Reposted on DataFusion Blog](https://datafusion.apache.org/blog/2024/09/13/string-view-german-style-strings-part-2/)
