@@ -48,8 +48,7 @@ This is a list of DataFusion related blog posts, articles, and other resources. 
 
 - **2024-11-18** [Building Databases over a Weekend ](https://www.denormalized.io/blog/building-databases)
 
-- **2024-10-27** [Caching in DataFusion: Don't read twice](https://blog.haoxp.xyz/posts/caching-datafusion) 
-  
+- **2024-10-27** [Caching in DataFusion: Don't read twice](https://blog.haoxp.xyz/posts/caching-datafusion)
 - **2024-10-24** [Parquet pruning in DataFusion: Read no more than you need](https://blog.haoxp.xyz/posts/parquet-to-arrow/)
 
 - **2024-09-13** [Blog: Using StringView / German Style Strings to make Queries Faster: Part 2 - String Operations](https://www.influxdata.com/blog/faster-queries-with-stringview-part-two-influxdb/) [Reposted on DataFusion Blog](https://datafusion.apache.org/blog/2024/09/13/string-view-german-style-strings-part-2/)
