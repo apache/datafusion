@@ -185,7 +185,21 @@ impl StringArrayBuilder {
         unsafe { self.offsets_buffer.push_unchecked(next_offset) };
     }
 
+    /// Finalise the builder into a concrete [`StringArray`].
+    ///
+    /// # Panics
+    ///
+    /// This method can panic when:
+    ///
+    /// - the provided `null_buffer` is not the same length as the `offsets_buffer`.
     pub fn finish(self, null_buffer: Option<NullBuffer>) -> StringArray {
+        if let Some(ref null_buffer) = null_buffer {
+            assert_eq!(
+                null_buffer.len(),
+                self.offsets_buffer.len() / size_of::<i32>() - 1,
+                "Null buffer and offsets buffer must be the same length"
+            );
+        }
         let array_builder = ArrayDataBuilder::new(DataType::Utf8)
             .len(self.offsets_buffer.len() / size_of::<i32>() - 1)
             .add_buffer(self.offsets_buffer.into())
