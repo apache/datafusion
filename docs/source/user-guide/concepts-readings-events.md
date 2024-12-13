@@ -36,6 +36,22 @@
 
 This is a list of DataFusion related blog posts, articles, and other resources. Please open a PR to add any new resources you create or find
 
+- **2024-11-22** [Blog: Apache Datafusion Comet and the story of my first contribution to it](https://semyonsinchenko.github.io/ssinchenko/post/comet-first-contribution/)
+
+- **2024-11-21** [Blog: DataFusion is featured as one of the coolest 10 open source software tools by CRN](https://www.crn.com/news/software/2024/the-10-coolest-open-source-software-tools-of-2024?page=3)
+
+- **2024-11-20** [Apache DataFusion Comet 0.4.0 Release](https://datafusion.apache.org/blog/2024/11/20/datafusion-comet-0.4.0/)
+
+- **2024-11-19** [Blog: Comparing approaches to User Defined Functions in Apache DataFusion using Python](https://datafusion.apache.org/blog/2024/11/19/datafusion-python-udf-comparisons/)
+
+- **2024-11-18** [Blog: Apache DataFusion is now the fastest single node engine for querying Apache Parquet files](https://datafusion.apache.org/blog/2024/11/18/datafusion-fastest-single-node-parquet-clickbench/)
+
+- **2024-11-18** [Building Databases over a Weekend ](https://www.denormalized.io/blog/building-databases)
+
+- **2024-10-27** [Caching in DataFusion: Don't read twice](https://blog.haoxp.xyz/posts/caching-datafusion) 
+  
+- **2024-10-24** [Parquet pruning in DataFusion: Read no more than you need](https://blog.haoxp.xyz/posts/parquet-to-arrow/)
+
 - **2024-09-13** [Blog: Using StringView / German Style Strings to make Queries Faster: Part 2 - String Operations](https://www.influxdata.com/blog/faster-queries-with-stringview-part-two-influxdb/) [Reposted on DataFusion Blog](https://datafusion.apache.org/blog/2024/09/13/string-view-german-style-strings-part-2/)
 
 - **2024-09-13** [Blog: Using StringView / German Style Strings to Make Queries Faster: Part 1- Reading Parquet](https://www.influxdata.com/blog/faster-queries-with-stringview-part-one-influxdb/) [Reposted on Datafusion Blog](https://datafusion.apache.org/blog/2024/09/13/string-view-german-style-strings-part-1/)
