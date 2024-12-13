@@ -34,7 +34,7 @@ use arrow::record_batch::RecordBatch;
 use datafusion_common::{internal_err, Result};
 use datafusion_execution::TaskContext;
 
-use crate::execution_plan::{CardinalityEffect, EmissionType};
+use crate::execution_plan::{Boundedness, CardinalityEffect};
 use futures::stream::{Stream, StreamExt};
 use log::trace;
 
@@ -86,8 +86,9 @@ impl GlobalLimitExec {
         PlanProperties::new(
             input.equivalence_properties().clone(), // Equivalence Properties
             Partitioning::UnknownPartitioning(1),   // Output Partitioning
-            EmissionType::Final,
-            input.boundedness(),
+            input.pipeline_behavior(),
+            // Limit operations are always bounded since they output a finite number of rows
+            Boundedness::Bounded,
         )
     }
 }
@@ -243,8 +244,9 @@ impl LocalLimitExec {
         PlanProperties::new(
             input.equivalence_properties().clone(), // Equivalence Properties
             input.output_partitioning().clone(),    // Output Partitioning
-            EmissionType::Final,
-            input.boundedness(),
+            input.pipeline_behavior(),
+            // Limit operations are always bounded since they output a finite number of rows
+            Boundedness::Bounded,
         )
     }
 }
