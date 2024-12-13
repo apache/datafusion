@@ -193,3 +193,6 @@ large_futures = "warn"
 [workspace.lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ["cfg(tarpaulin)"] }
 unused_qualifications = "deny"
+
+[target.x86_64-pc-windows-msvc]
+linker = "lld-link.exe"
