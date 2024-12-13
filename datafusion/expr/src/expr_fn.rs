@@ -416,9 +416,10 @@ pub struct SimpleScalarUDF {
 
 impl Debug for SimpleScalarUDF {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        f.debug_struct("ScalarUDF")
+        f.debug_struct("SimpleScalarUDF")
             .field("name", &self.name)
             .field("signature", &self.signature)
+            .field("return_type", &self.return_type)
             .field("fun", &"<FUNC>")
             .finish()
     }
@@ -524,9 +525,10 @@ pub struct SimpleAggregateUDF {
 
 impl Debug for SimpleAggregateUDF {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        f.debug_struct("AggregateUDF")
+        f.debug_struct("SimpleAggregateUDF")
             .field("name", &self.name)
             .field("signature", &self.signature)
+            .field("return_type", &self.return_type)
             .field("fun", &"<FUNC>")
             .finish()
     }
