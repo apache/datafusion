@@ -141,7 +141,6 @@ parquet = { version = "53.3.0", default-features = false, features = [
 pbjson = { version = "0.7.0" }
 # Should match arrow-flight's version of prost.
 prost = "0.13.1"
-prost-derive = "0.13.1"
 rand = "0.8"
 recursive = "0.1.1"
 regex = "1.8"
@@ -171,15 +170,15 @@ panic = 'unwind'
 rpath = false
 
 [profile.release-windows]
-codegen-units = 16
+codegen-units = 1
 debug = 'line-directives-only'
 debug-assertions = false
 incremental = false
 inherits = "release"
-lto = false
-opt-level = 3
+lto = 'fat'
+opt-level = 0
 overflow-checks = false
-panic = 'unwind'
+panic = 'abort'
 rpath = false
 
 [profile.release-windows.build-override]
