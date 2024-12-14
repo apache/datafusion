@@ -32,7 +32,7 @@ use std::sync::{Arc, OnceLock};
 
 const SORT_OPTIONS: SortOptions = SortOptions {
     // We want least first
-    descending: true,
+    descending: false,
 
     // NULL will be greater than any other value
     nulls_first: false,
@@ -105,9 +105,22 @@ fn keep_smaller_scalar<'a>(
     lhs: &'a ScalarValue,
     rhs: &'a ScalarValue,
 ) -> Result<&'a ScalarValue> {
+    // Manual checking for nulls as:
+    // 1. If we're going to use <=, in Rust None is smaller than Some(T), which we don't want
+    // 2. And we can't use make_comparator as it has no natural order (Arrow error)
+    if lhs.is_null() {
+        return Ok(rhs);
+    }
+
+    if rhs.is_null() {
+        return Ok(lhs);
+    }
+
     if !lhs.data_type().is_nested() {
         return if lhs <= rhs { Ok(lhs) } else { Ok(rhs) };
     }
+
+    // Not using <= as in Rust None is smaller than Some(T)
 
     // If complex type we can't compare directly as we want null values to be larger
     let cmp = make_comparator(
@@ -162,7 +175,7 @@ impl ScalarUDFImpl for LeastFunc {
             return Ok(args[0].clone());
         }
 
-        // Split to scalars and arrays for later optimization
+        // Split to scalars and arrays for later optimization (constant folding)
         let (scalars, arrays): (Vec<_>, Vec<_>) = args.iter().partition(|x| match x {
             ColumnarValue::Scalar(_) => true,
             ColumnarValue::Array(_) => false,
