@@ -36,6 +36,7 @@ name = "datafusion_common"
 path = "src/lib.rs"
 
 [features]
+default = ["recursive-protection"]
 avro = ["apache-avro"]
 backtrace = []
 pyarrow = ["pyo3", "arrow/pyarrow", "parquet"]
