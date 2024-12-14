@@ -175,6 +175,8 @@ debug = 'line-directives-only'
 inherits = "release"
 lto = true
 opt-level = 1
+rustflags = ["-C", "link-arg=-fuse-ld=lld"]
+incremental = false
 
 [workspace.lints.clippy]
 # Detects large stack-allocated futures that may cause stack overflow crashes (see threshold in clippy.toml)
