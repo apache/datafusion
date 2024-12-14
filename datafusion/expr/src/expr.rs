@@ -1843,11 +1843,12 @@ fn rewrite_placeholder(expr: &mut Expr, other: &Expr, schema: &DFSchema) -> Resu
 #[macro_export]
 macro_rules! expr_vec_fmt {
     ( $ARRAY:expr ) => {{
-        $ARRAY
+        let mut expr_str = $ARRAY
             .iter()
             .map(|e| format!("{e}"))
-            .collect::<Vec<String>>()
-            .join(", ")
+            .collect::<Vec<String>>();
+        expr_str.sort();
+        expr_str.join(", ")
     }};
 }
 
