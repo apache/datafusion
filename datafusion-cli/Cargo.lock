@@ -1409,6 +1409,7 @@ dependencies = [
  "datafusion-doc",
  "datafusion-execution",
  "datafusion-expr",
+ "datafusion-expr-common",
  "datafusion-macros",
  "hashbrown 0.14.5",
  "hex",
