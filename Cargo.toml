@@ -170,7 +170,7 @@ panic = 'unwind'
 rpath = false
 
 [profile.release-windows]
-codegen-units = 16
+codegen-units = 32
 debug = 'line-directives-only'
 inherits = "release"
 lto = true
