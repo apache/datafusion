@@ -37,7 +37,6 @@ use datafusion_physical_expr::PhysicalSortExpr;
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, LexRequirement};
 
 use log::{debug, trace};
-use tokio::stream;
 
 /// Sort preserving merge execution plan
 ///
@@ -336,7 +335,6 @@ impl ExecutionPlan for SortPreservingMergeExec {
                     .with_fetch(self.fetch)
                     .with_reservation(reservation)
                     .with_round_robin_tie_breaker(self.enable_round_robin_repartition)
-                    .with_pull_based_execution(self.enable_pull_based_execution)
                     .build()?;
 
                 debug!("Got stream result from SortPreservingMergeStream::new_from_receivers");
