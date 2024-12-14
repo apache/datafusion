@@ -3693,7 +3693,7 @@ mod tests {
     #[test]
     fn test_with_reorder_constant_filtering() -> Result<()> {
         let schema = create_test_schema()?;
-        let mut eq_properties = EquivalenceProperties::new(schema.clone());
+        let mut eq_properties = EquivalenceProperties::new(Arc::clone(&schema));
 
         // Setup constant columns
         let col_a = col("a", &schema)?;
@@ -3724,7 +3724,7 @@ mod tests {
     #[test]
     fn test_with_reorder_preserve_suffix() -> Result<()> {
         let schema = create_test_schema()?;
-        let mut eq_properties = EquivalenceProperties::new(schema.clone());
+        let mut eq_properties = EquivalenceProperties::new(Arc::clone(&schema));
 
         let col_a = col("a", &schema)?;
         let col_b = col("b", &schema)?;
@@ -3776,7 +3776,7 @@ mod tests {
     #[test]
     fn test_with_reorder_equivalent_expressions() -> Result<()> {
         let schema = create_test_schema()?;
-        let mut eq_properties = EquivalenceProperties::new(schema.clone());
+        let mut eq_properties = EquivalenceProperties::new(Arc::clone(&schema));
 
         let col_a = col("a", &schema)?;
         let col_b = col("b", &schema)?;
@@ -3823,7 +3823,7 @@ mod tests {
     #[test]
     fn test_with_reorder_incompatible_prefix() -> Result<()> {
         let schema = create_test_schema()?;
-        let mut eq_properties = EquivalenceProperties::new(schema.clone());
+        let mut eq_properties = EquivalenceProperties::new(Arc::clone(&schema));
 
         let col_a = col("a", &schema)?;
         let col_b = col("b", &schema)?;
@@ -3864,7 +3864,7 @@ mod tests {
     #[test]
     fn test_with_reorder_comprehensive() -> Result<()> {
         let schema = create_test_schema()?;
-        let mut eq_properties = EquivalenceProperties::new(schema.clone());
+        let mut eq_properties = EquivalenceProperties::new(Arc::clone(&schema));
 
         let col_a = col("a", &schema)?;
         let col_b = col("b", &schema)?;
