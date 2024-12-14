@@ -173,8 +173,8 @@ rpath = false
 codegen-units = 16
 debug = 'line-directives-only'
 inherits = "release"
-lto = true
-opt-level = 0
+lto = false
+opt-level = 1
 panic = 'abort'
 
 [workspace.lints.clippy]
