@@ -7,11 +7,17 @@ The Apache Software Foundation (http://www.apache.org/).
 ---
 
 All slt files in test_files/sqlite were sourced from sqlite.org
-which has the following license.md:
+where the copyright allows the use to select the license.
+DataFusion selects the MIT license for these files based on
+this COPYRIGHT.md file:
 
-The author disclaims copyright to this source code.  In place of
-a legal notice, here is a blessing:
+Copyright © 2008 D. Richard Hipp
 
-  *   May you do good and not evil.
-  *   May you find forgiveness for yourself and forgive others.
-  *   May you share freely, never taking more than you give.
+This program is free software. As far as the author is concerned, you can redistribute it and/or modify the code as you see fit. No attribution is required. Use whichever of the following license terms best applies to your situation.
+
+    GNU General Public License
+    BSD License
+    MIT License
+    CC0 License
+
+This program is distributed in the hope that it will be useful, but without any warranty; without even the implied warranty of merchantability or fitness for a particular purpose.

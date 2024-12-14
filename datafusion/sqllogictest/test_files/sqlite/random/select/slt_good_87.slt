@@ -29612,6 +29612,10 @@ SELECT ALL col1 + cor0.col0 * - col0 AS col2 FROM tab2 AS cor0
 -6025
 -6224
 
+query III rowsort label-4391
+SELECT * FROM tab1 AS cor0 WHERE col0 + col1 / - col2 NOT BETWEEN + col0 AND NULL
+----
+
 query III rowsort
 SELECT ALL * FROM tab2 AS cor0 WHERE col0 + + col0 / + col0 > NULL
 ----

@@ -3956,7 +3956,7 @@ SELECT DISTINCT + - col0 * col0 + ( + col1 ) AS col0 FROM tab2 AS cor0
 -6025
 -6224
 
-# Datafusion - Data was automatically updated based on compare with postgres results
+# Datafusion - Data was automatically updated based on comparison db results
 # Datafusion - Previous results:
 # Datafusion - 27
 # Datafusion - 28

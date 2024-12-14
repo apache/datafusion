@@ -79,6 +79,9 @@ SELECT - col1 + + + 92 * + 77 FROM tab1
 7070
 7079
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]I
+# Datafusion - [Actual  ] [R]I
 query RI rowsort label-7
 SELECT DISTINCT + 36 - + col1 + - CAST ( NULL AS REAL ) AS col0, col2 * - ( + 63 ) AS col1 FROM tab2
 ----
@@ -593,6 +596,9 @@ SELECT + - col2 + + - col0 + + col1 * - col0 * - - col0 FROM tab1 AS cor0
 -36561
 -389366
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-90
 SELECT ALL CAST ( NULL AS REAL ) * - col1 + + col0 AS col2 FROM tab1 AS cor0
 ----
@@ -882,6 +888,9 @@ SELECT ALL + - col1 + - col2 * + col0 * + 80 col2 FROM tab2 cor0
 -348067
 -84691
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-133
 SELECT DISTINCT - col2 + + CAST ( NULL AS REAL ) * + - col2 FROM tab1 AS cor0
 ----
@@ -1395,6 +1404,9 @@ SELECT col1, 35 AS col2 FROM tab1
 5
 35
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-211
 SELECT ALL - CAST ( NULL AS REAL ) * col2 AS col2 FROM tab2
 ----
@@ -1544,6 +1556,9 @@ SELECT DISTINCT ( + + col2 ) / - col1 + col0 + - col2 - ( + 26 ) AS col1 FROM ta
 -4
 -77
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-236
 SELECT ALL - CAST ( NULL AS REAL ) + col2 * + col2 * + col1 col1 FROM tab1
 ----
@@ -1859,6 +1874,9 @@ SELECT DISTINCT MAX ( ALL + col1 ) AS col1 FROM tab1
 ----
 47
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-290
 SELECT SUM ( - col2 ) / AVG ( ALL + col2 ) FROM tab1 WHERE NOT NULL IS NULL
 ----
@@ -2659,6 +2677,9 @@ SELECT DISTINCT + ( + 46 ) FROM tab0 AS cor0
 ----
 46
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort
 SELECT ALL ( + AVG ( + col1 ) ) FROM tab1 AS cor0 WHERE - col1 <> ( NULL )
 ----
@@ -2879,6 +2900,9 @@ SELECT + 39 * COUNT ( * ) FROM tab0 AS cor0
 ----
 117
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-460
 SELECT - - 48 + AVG ( CAST ( NULL AS INTEGER ) ) * 93 FROM tab2 AS cor0 CROSS JOIN tab2 AS cor1
 ----
@@ -3370,6 +3394,9 @@ SELECT DISTINCT - - COUNT ( * ) * - - COUNT ( * ) AS col0 FROM tab1 AS cor0
 ----
 9
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-541
 SELECT ALL - - col0 / ( + ( CAST ( NULL AS REAL ) ) ) * col2 FROM tab0 AS cor0
 ----
@@ -4111,6 +4138,9 @@ SELECT DISTINCT col0 AS col1, col2 * - col1 * + col2 AS col2 FROM tab1
 91
 -217328
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-664
 SELECT ALL + CAST ( NULL AS REAL ) AS col1 FROM tab1
 ----
@@ -4143,6 +4173,9 @@ SELECT MIN ( + 62 ) FROM tab2 cor0
 ----
 62
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] I[I]
+# Datafusion - [Actual  ] I[R]
 query IR rowsort label-670
 SELECT DISTINCT col0 AS col2, + col2 + + CAST ( NULL AS REAL ) FROM tab1 AS cor0
 ----
@@ -4277,6 +4310,9 @@ query III rowsort
 SELECT * FROM tab1 AS cor0 WHERE + col0 * - - 67 IS NULL
 ----
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-691
 SELECT DISTINCT 56 * CAST ( NULL AS INTEGER ) * + - 21 + AVG ( col2 ) AS col2 FROM tab0 AS cor0
 ----
@@ -5259,6 +5295,9 @@ SELECT DISTINCT - ( - + 86 ) FROM tab2 AS cor0 CROSS JOIN tab2 AS cor1
 ----
 86
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]I
+# Datafusion - [Actual  ] [R]I
 query RI rowsort label-856
 SELECT DISTINCT col1 * + + CAST ( NULL AS REAL ), - col2 AS col2 FROM tab0
 ----
@@ -6110,6 +6149,9 @@ SELECT ALL - - 70 * - 38 + + SUM ( + ( - 50 ) ) AS col0 FROM tab2 AS cor0
 ----
 -2810
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-999
 SELECT - 71 + - CAST ( NULL AS REAL ) + col0 * - - 35 AS col1 FROM tab0 AS cor0
 ----
@@ -6299,6 +6341,9 @@ SELECT DISTINCT + 38, 44 * + SUM ( ALL + - 13 ) + MAX ( - + 72 ) AS col1 FROM ta
 38
 -1788
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-1029
 SELECT CAST ( NULL AS REAL ) * + col1 * + col1 FROM tab0
 ----
@@ -6499,6 +6544,9 @@ query III rowsort
 SELECT * FROM tab0 WHERE NULL <= 64
 ----
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-1062
 SELECT ALL AVG ( ALL - + 67 ) - + + CAST ( NULL AS INTEGER ) AS col1 FROM tab0
 ----
@@ -7040,6 +7088,9 @@ SELECT ALL + col0, + col0 * - + 97 FROM tab0
 97
 -9409
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort
 SELECT ( + AVG ( ALL - + ( - 78 ) ) ) AS col2 FROM tab1 AS cor0 WHERE NULL NOT BETWEEN col0 AND + - col0
 ----
@@ -7591,6 +7642,9 @@ query I rowsort
 SELECT ALL col0 AS col1 FROM tab2 WHERE NOT + col1 <= NULL
 ----
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-1239
 SELECT + COUNT ( * ) + AVG ( + 93 + - CAST ( NULL AS INTEGER ) ) AS col0 FROM tab2
 ----
@@ -7720,6 +7774,9 @@ query III rowsort
 SELECT DISTINCT * FROM tab2 cor0 WHERE ( - 96 ) >= NULL
 ----
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-1263
 SELECT + CAST ( NULL AS REAL ) * - 81 AS col2 FROM tab2 AS cor0
 ----
@@ -7829,6 +7886,9 @@ SELECT - 48 + + col0 / - col1 AS col1 FROM tab0
 -48
 -52
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort
 SELECT AVG ( col0 ) FROM tab2 AS cor0 WHERE NULL <> col1 + - 22
 ----
@@ -8767,6 +8827,9 @@ SELECT + SUM ( DISTINCT - + 15 ) FROM tab1 cor0
 ----
 -15
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-1434
 SELECT ALL ( - - CAST ( NULL AS REAL ) ) FROM tab0 cor0
 ----
@@ -9473,6 +9536,9 @@ SELECT + col2 + 46 AS col2 FROM tab2
 69
 86
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] I[I]
+# Datafusion - [Actual  ] I[R]
 query IR rowsort label-1545
 SELECT DISTINCT + ( - 77 ), - AVG ( DISTINCT col0 ) * - + CAST ( NULL AS INTEGER ) + - COUNT ( * ) col2 FROM tab2
 ----
@@ -9516,6 +9582,9 @@ SELECT + col1 * - + col2 AS col2 FROM tab0 AS cor0
 -3807
 -99
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-1552
 SELECT DISTINCT - - col2 + - CAST ( NULL AS REAL ) FROM tab0 AS cor0
 ----
@@ -9926,6 +9995,9 @@ SELECT - - 13 AS col1 FROM tab1 AS cor0 CROSS JOIN tab0 AS cor1
 ----
 9 values hashing to 184e52d7aa5aa66591291e39c67a3dfb
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-1613
 SELECT CAST ( NULL AS REAL ) / - 20 * - col1 AS col2 FROM tab2
 ----
@@ -10937,6 +11009,9 @@ SELECT ALL - CAST ( - COUNT ( * ) AS INTEGER ) AS col2 FROM tab0 AS cor0 CROSS J
 ----
 9
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]I
+# Datafusion - [Actual  ] [R]I
 query RI rowsort label-1786
 SELECT ALL CAST ( NULL AS REAL ) AS col1, 47 FROM tab0 AS cor0
 ----
@@ -11316,6 +11391,9 @@ SELECT DISTINCT + 98 AS col2 FROM tab2 WHERE - + ( CAST ( NULL AS REAL ) ) * col
 ----
 98
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-1847
 SELECT + MAX ( DISTINCT CAST ( NULL AS REAL ) ) FROM tab0
 ----
@@ -11882,6 +11960,9 @@ SELECT - col0 + - 77 * col0 AS col1 FROM tab2 AS cor0
 -4992
 -5850
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-1938
 SELECT + CAST ( NULL AS REAL ) + - + col0 + + col2 FROM tab2 AS cor0
 ----
@@ -12624,6 +12705,9 @@ query I rowsort
 SELECT - 80 FROM tab2 WHERE NOT NULL < - col0 / - col0
 ----
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-2063
 SELECT + col1 + - col0 * col0 / col0 + + col1 + + col0 + - CAST ( - 13 AS REAL ) AS col1 FROM tab0 WHERE NOT + - 9 * col1 - + col2 <= NULL
 ----
@@ -13568,6 +13652,9 @@ SELECT ALL * FROM tab0 WHERE col2 + + col2 IS NOT NULL
 ----
 9 values hashing to c4b42765dff94eaaa46040e537fb43b7
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-2219
 SELECT DISTINCT + CAST ( NULL AS INTEGER ) - - AVG ( DISTINCT - 45 + col0 ) AS col0 FROM tab0
 ----
@@ -13704,6 +13791,9 @@ query I rowsort
 SELECT DISTINCT 74 AS col2 FROM tab2 AS cor0 WHERE NOT 86 IS NOT NULL
 ----
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort
 SELECT + AVG ( col2 ) AS col2 FROM tab1 AS cor0 WHERE NOT 97 IS NOT NULL
 ----
@@ -15465,6 +15555,9 @@ SELECT * FROM tab2 AS cor0 WHERE - 62 + + 69 IS NOT NULL
 ----
 9 values hashing to 75c998aa53ac83218cbf2feb962d0a49
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-2537
 SELECT ALL CAST ( NULL AS REAL ) + - 35 FROM tab2 AS cor0
 ----
@@ -15924,6 +16017,9 @@ SELECT + - 30 / + - COUNT ( * ) FROM tab1 AS cor0
 ----
 10
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-2613
 SELECT - + CAST ( NULL AS REAL ) / - + col0 + col2 AS col1 FROM tab2 AS cor0
 ----
@@ -16054,6 +16150,9 @@ SELECT DISTINCT * FROM tab0 WHERE NOT + 59 * - ( - col0 ) IS NULL
 ----
 9 values hashing to c4b42765dff94eaaa46040e537fb43b7
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-2634
 SELECT DISTINCT 92 * - AVG ( ALL + col1 ) - CAST ( NULL AS INTEGER ) * - COUNT ( * ) + 54 FROM tab0
 ----
@@ -16155,6 +16254,9 @@ SELECT DISTINCT + 65 * - COUNT ( ALL - + col0 ) FROM tab2
 ----
 -195
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort
 SELECT ALL - AVG ( ALL + col1 ) AS col2 FROM tab1 WHERE NOT - col2 - + + col1 <= NULL
 ----
@@ -18218,6 +18320,9 @@ query I rowsort
 SELECT ALL + - col2 / 30 + - 87 FROM tab2 WHERE + - col1 IS NULL
 ----
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-3001
 SELECT + MAX ( ALL - CAST ( NULL AS REAL ) ) FROM tab0
 ----
@@ -18688,6 +18793,9 @@ SELECT ALL COUNT ( * ) * + 29 AS col0 FROM tab2 AS cor0 WHERE NOT ( col2 * - + c
 ----
 87
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-3072
 SELECT DISTINCT + CAST ( NULL AS INTEGER ) + + + AVG ( - 61 ) FROM tab0
 ----
@@ -18783,6 +18891,9 @@ SELECT + + COUNT ( * ) FROM tab1 AS cor0 WHERE NOT - col0 IS NOT NULL
 ----
 0
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] I[I]
+# Datafusion - [Actual  ] I[R]
 query IR rowsort label-3088
 SELECT CAST ( NULL AS INTEGER ), CAST ( NULL AS REAL ) + - COUNT ( ( + col1 ) ) * + MIN ( ALL col1 ) AS col2 FROM tab2
 ----
@@ -20732,6 +20843,9 @@ SELECT + 22 - + col2 FROM tab2 AS cor0
 -18
 -36
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-3411
 SELECT CAST ( NULL AS REAL ) - - COUNT ( * ) FROM tab0 AS cor0
 ----
@@ -21303,6 +21417,9 @@ query III rowsort
 SELECT ALL * FROM tab2 WHERE NULL NOT BETWEEN NULL AND - - ( + col0 )
 ----
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-3505
 SELECT - col2 * - CAST ( NULL AS REAL ) * col2 AS col2 FROM tab2 AS cor0
 ----
@@ -21346,6 +21463,9 @@ SELECT + + SUM ( + + col0 ) AS col0 FROM tab1 AS cor0
 ----
 227
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] I[I]
+# Datafusion - [Actual  ] I[R]
 query IR rowsort label-3511
 SELECT + + COUNT ( * ) AS col1, CAST ( NULL AS REAL ) * CAST ( NULL AS INTEGER ) FROM tab2 AS cor0
 ----
@@ -21828,6 +21948,9 @@ query III rowsort
 SELECT ALL * FROM tab2 AS cor0 WHERE NOT - col1 / - 73 * + ( - col0 ) * - 31 IS NOT NULL
 ----
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-3587
 SELECT DISTINCT + CAST ( NULL AS REAL ) AS col1 FROM tab1 AS cor0 WHERE + 74 IS NOT NULL
 ----
@@ -22081,6 +22204,9 @@ SELECT DISTINCT + col1 + + col0 * - col2 + + - col2 * - col2 AS col1 FROM tab0
 1585
 199
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] I[I]
+# Datafusion - [Actual  ] I[R]
 query IR rowsort label-3630
 SELECT CAST ( NULL AS INTEGER ) + - col0 + - col1 - 12 - + - col1, CAST ( NULL AS REAL ) AS col1 FROM tab2
 ----
@@ -22112,6 +22238,9 @@ SELECT col1 + + + col2 + + 16 FROM tab2
 141
 90
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-3634
 SELECT DISTINCT - col0 * + + CAST ( NULL AS REAL ) FROM tab0
 ----
@@ -22146,6 +22275,9 @@ SELECT + 29 + + 50 AS col1 FROM tab0
 79
 79
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-3639
 SELECT DISTINCT + + CAST ( NULL AS REAL ) + + + col0 FROM tab0 AS cor0
 ----
@@ -22931,6 +23063,9 @@ SELECT DISTINCT COUNT ( * ) * + - ( + + 53 ) AS col0 FROM tab1
 ----
 -159
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-3769
 SELECT - col0 * - CAST ( NULL AS REAL ) + + col1 FROM tab0
 ----
@@ -23854,6 +23989,9 @@ SELECT + col1 - + 44 FROM tab1 AS cor0
 -39
 3
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-3924
 SELECT - - CAST ( NULL AS INTEGER ) - + CAST ( COUNT ( * ) AS REAL ) + + COUNT ( * ) AS col1 FROM tab2 cor0
 ----
@@ -24035,6 +24173,9 @@ SELECT DISTINCT + 66 + + + col1 col2 FROM tab2 AS cor0
 133
 143
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort
 SELECT - AVG ( DISTINCT + col0 ) FROM tab0 AS cor0 WHERE + col0 IS NULL
 ----
@@ -24283,6 +24424,9 @@ SELECT + - COUNT ( + col1 ) AS col1 FROM tab1 AS cor0
 ----
 -3
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-3995
 SELECT DISTINCT + ( + + AVG ( ALL CAST ( NULL AS REAL ) ) ) AS col2 FROM tab1 AS cor0
 ----
@@ -25359,6 +25503,9 @@ SELECT - 38 FROM tab1 WHERE - 89 * - col1 >= 19
 -38
 -38
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-4175
 SELECT CAST ( NULL AS REAL ) - col2 AS col0 FROM tab0
 ----
@@ -25889,6 +26036,9 @@ query III rowsort
 SELECT DISTINCT * FROM tab0 AS cor0 WHERE - ( 12 ) * col1 IN ( 59 * + 41 + - col2 - + 96 )
 ----
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-4268
 SELECT ALL CAST ( NULL AS INTEGER ) * - COUNT ( DISTINCT col2 ) - - AVG ( DISTINCT col2 ) AS col1 FROM tab0 AS cor0
 ----
@@ -27376,6 +27526,9 @@ SELECT 20 / MIN ( - col0 ) + COUNT ( ALL + col2 ) * + + 82 AS col1 FROM tab0 AS 
 ----
 246
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-4510
 SELECT ALL - - CAST ( NULL AS REAL ) + col2 FROM tab2 AS cor0
 ----
@@ -27556,6 +27709,9 @@ query IIIIII rowsort
 SELECT ALL * FROM tab1 AS cor0 CROSS JOIN tab1 AS cor1 WHERE NOT ( NULL ) IS NULL
 ----
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort
 SELECT AVG ( + col1 ) AS col1 FROM tab2 WHERE NOT NULL IS NULL
 ----
@@ -28568,6 +28724,9 @@ query I rowsort
 SELECT 66 * col1 + ( col2 + 71 * + col0 ) AS col0 FROM tab2 WHERE - col2 IS NULL
 ----
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-4714
 SELECT - ( + + COUNT ( * ) ) * COUNT ( * ) - CAST ( NULL AS REAL ) FROM tab2
 ----
@@ -28881,6 +29040,9 @@ SELECT ALL 17 FROM tab0 AS cor0 WHERE - ( + col0 ) * + ( - col2 ) + + col1 NOT I
 17
 17
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-4770
 SELECT DISTINCT CAST ( NULL AS REAL ) + + col2 + col2 * 70 * 81 AS col1 FROM tab2 AS cor0 WHERE ( NOT NULL NOT BETWEEN ( col2 ) AND NULL )
 ----
@@ -29396,6 +29558,9 @@ SELECT ALL + - 75 * col2 AS col1 FROM tab2 AS cor0
 -3000
 -4350
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-4856
 SELECT CAST ( NULL AS REAL ) col0 FROM tab0 WHERE NULL = col0
 ----
@@ -29863,6 +30028,9 @@ query I rowsort
 SELECT - 90 FROM tab0 AS cor0 WHERE - 36 <> NULL
 ----
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-4930
 SELECT AVG ( ALL - + CAST ( NULL AS INTEGER ) ) col1 FROM tab0 AS cor0
 ----
@@ -29993,6 +30161,9 @@ query I rowsort label-4952
 SELECT - 92 + - 27 / - col0 FROM tab0 AS cor0 WHERE NOT ( NULL ) BETWEEN + CAST ( + + col2 AS INTEGER ) / + col1 AND col1
 ----
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]I
+# Datafusion - [Actual  ] [R]I
 query RI rowsort label-4953
 SELECT ALL - CAST ( NULL AS REAL ), col2 col0 FROM tab2
 ----
@@ -30003,6 +30174,9 @@ NULL
 NULL
 58
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-4954
 SELECT - CAST ( NULL AS REAL ) * col0 FROM tab0
 ----
@@ -30452,6 +30626,9 @@ query IIIIII rowsort
 SELECT DISTINCT * FROM tab2 AS cor0 CROSS JOIN tab1 cor1 WHERE ( NULL ) IS NOT NULL
 ----
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-5028
 SELECT + CAST ( NULL AS REAL ) FROM tab2 AS cor0 CROSS JOIN tab1 AS cor1
 ----
@@ -32764,6 +32941,9 @@ query I rowsort label-5407
 SELECT DISTINCT + 25 FROM tab1 WHERE + CAST ( NULL AS INTEGER ) > + col0
 ----
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort
 SELECT ALL AVG ( DISTINCT + + col0 ) FROM tab2 WHERE - 66 >= + + col2
 ----
@@ -33046,6 +33226,9 @@ query III rowsort
 SELECT * FROM tab1 AS cor0 WHERE ( - col0 / - 21 + + col0 + col2 + - col0 ) = - col2
 ----
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] I[I]
+# Datafusion - [Actual  ] I[R]
 query IR rowsort label-5451
 SELECT ALL + + 40 - - col1 + col0, - CAST ( NULL AS REAL ) AS col0 FROM tab1 AS cor0
 ----
@@ -33128,6 +33311,9 @@ SELECT ALL col1, + 50 FROM tab2 AS cor0
 77
 50
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-5463
 SELECT - CAST ( NULL AS REAL ) * + 0 FROM tab1 AS cor0 WHERE NOT + col2 * col1 < ( - + col0 )
 ----
@@ -33153,6 +33339,9 @@ SELECT DISTINCT - ( + ( + COUNT ( * ) ) ) AS col2 FROM tab1
 ----
 -3
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort
 SELECT ALL - ( - + AVG ( DISTINCT + col1 ) ) FROM tab0 WHERE NULL IS NOT NULL
 ----
@@ -33202,6 +33391,9 @@ SELECT + 66 * - 99 * + - 5 + + 90 * + COUNT ( * ) FROM tab2
 ----
 32940
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort
 SELECT ALL AVG ( ALL col0 ) AS col1 FROM tab2 WHERE NULL IS NOT NULL
 ----
@@ -33447,6 +33639,9 @@ SELECT * FROM tab0 WHERE + + 2 <> - 53
 ----
 9 values hashing to c4b42765dff94eaaa46040e537fb43b7
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-5516
 SELECT ALL COUNT ( * ) * + - CAST ( NULL AS INTEGER ) + AVG ( - 79 ) FROM tab0
 ----
@@ -34068,6 +34263,9 @@ query I rowsort label-5614
 SELECT ALL + col1 + - 81 * + + col0 + + col1 + - ( - - 18 ) + CAST ( NULL AS INTEGER ) FROM tab0 AS cor0 WHERE NOT NULL IS NULL
 ----
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-5615
 SELECT + ( 12 ) * CAST ( NULL AS REAL ) AS col2 FROM tab2 AS cor0
 ----
@@ -34216,6 +34414,9 @@ SELECT DISTINCT - 65 FROM tab1 AS cor0 CROSS JOIN tab0 AS cor1
 ----
 -65
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-5639
 SELECT + + CAST ( NULL AS REAL ) + COUNT ( * ) + - 73 + + CAST ( NULL AS INTEGER ) FROM tab2 AS cor0 WHERE NOT col1 < 92
 ----
@@ -34404,6 +34605,9 @@ SELECT + - col1 * - col1 + + + 91 / - 15 FROM tab2 AS cor0
 4483
 5923
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] I[I]
+# Datafusion - [Actual  ] I[R]
 query IR rowsort label-5669
 SELECT DISTINCT + - CAST ( NULL AS INTEGER ), - 66 + + ( + 7 ) + - COUNT ( + - col1 ) * - AVG ( + CAST ( NULL AS INTEGER ) ) FROM tab0 AS cor0
 ----
@@ -34528,6 +34732,9 @@ SELECT ALL col1 + + 36 / 42 FROM tab2
 67
 77
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort
 SELECT ALL AVG ( - 5 ) FROM tab0 WHERE NOT + 37 IS NOT NULL
 ----
@@ -34751,6 +34958,9 @@ NULL
 NULL
 NULL
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-5729
 SELECT + CAST ( NULL AS REAL ) AS col0 FROM tab1 WHERE NOT ( NULL ) <> NULL
 ----
@@ -34797,6 +35007,9 @@ SELECT SUM ( - - ( - 89 ) ) FROM tab2
 ----
 -267
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort
 SELECT ALL + 14 * - ( + AVG ( - col0 ) ) AS col0 FROM tab1 WHERE NOT - col2 + + 80 * col2 IS NOT NULL
 ----
@@ -34890,6 +35103,9 @@ query I rowsort
 SELECT ALL col2 AS col2 FROM tab1 cor0 WHERE NOT - ( + 74 ) * - + col0 + col0 >= ( + 73 )
 ----
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-5755
 SELECT CAST ( NULL AS REAL ) * - - col1 - + col2 / - col2 + - + col1 FROM tab1 AS cor0
 ----
@@ -35303,6 +35519,9 @@ SELECT - col0 * + - col1 * - 54 FROM tab2 cor0
 -266112
 -271350
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-5826
 SELECT DISTINCT - + col1 + + + ( - CAST ( NULL AS REAL ) ) FROM tab1 cor0
 ----
@@ -35406,6 +35625,9 @@ query I rowsort
 SELECT DISTINCT - col1 + - col2 AS col0 FROM tab2 AS cor0 WHERE NULL IS NOT NULL
 ----
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-5844
 SELECT DISTINCT - 48 + CAST ( NULL AS INTEGER ) + + CAST ( NULL AS REAL ) + 8 + - col1 * col2 - col0 AS col0 FROM tab1 AS cor0
 ----
@@ -35460,6 +35682,9 @@ SELECT + + col1 * + col0 - + 10 FROM tab2 AS cor0
 4918
 5015
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-5851
 SELECT + + 58 - CAST ( NULL AS REAL ) FROM tab1 AS cor0
 ----
@@ -36406,6 +36631,9 @@ SELECT - 36 + + COUNT ( + + 83 ) FROM tab0
 ----
 -33
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort
 SELECT ALL + AVG ( ALL - - col2 ) col0 FROM tab0 WHERE NULL NOT IN ( col2, - col0 + - col0, col2 )
 ----
@@ -37000,6 +37228,9 @@ SELECT DISTINCT + 90 * COUNT ( * ) AS col1 FROM tab1
 ----
 270
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-6101
 SELECT ALL - CAST ( NULL AS REAL ) col0 FROM tab2
 ----
@@ -37292,6 +37523,9 @@ query III rowsort label-6150
 SELECT * FROM tab2 AS cor0 WHERE 58 * - CAST ( NULL AS INTEGER ) * + col2 < NULL
 ----
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-6151
 SELECT DISTINCT + CAST ( NULL AS REAL ) - + + col0 col1 FROM tab1 AS cor0
 ----
@@ -39238,6 +39472,9 @@ SELECT DISTINCT - 88 + - COUNT ( * ) / + COUNT ( * ) FROM tab0
 ----
 -89
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-6484
 SELECT - CAST ( - + col0 AS INTEGER ) * col1 * CAST ( NULL AS REAL ) FROM tab0
 ----
@@ -39300,6 +39537,9 @@ SELECT DISTINCT 57 * - + 43 * COUNT ( * ) AS col2, 32 * 37 * MAX ( + 3 ) AS col0
 -7353
 3552
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-6496
 SELECT 54 / - CAST ( NULL AS REAL ) FROM tab0
 ----
@@ -40266,6 +40506,9 @@ SELECT col0 * col1 * + 95 + + ( 65 ) / - + col0 AS col1 FROM tab1 AS cor0
 406315
 67829
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-6648
 SELECT col0 * + - CAST ( NULL AS REAL ) / + col0 FROM tab1
 ----
@@ -41036,6 +41279,9 @@ SELECT ALL + col2 AS col2, + 17 * - 11 + - + col1 AS col0 FROM tab1
 96
 -201
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-6780
 SELECT + CAST ( NULL AS REAL ) FROM tab1 AS cor0 CROSS JOIN tab2 cor1
 ----
@@ -41055,6 +41301,9 @@ SELECT ALL + col2 * - 50 * + col1 * - - 96 col1 FROM tab0 AS cor0
 -18273600
 -475200
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-6783
 SELECT - col1 + - CAST ( NULL AS REAL ) FROM tab2 AS cor0
 ----
@@ -41191,6 +41440,9 @@ SELECT DISTINCT * FROM tab0 WHERE + + ( - - col0 ) - col0 IS NOT NULL
 ----
 9 values hashing to c4b42765dff94eaaa46040e537fb43b7
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]I
+# Datafusion - [Actual  ] [R]I
 query RI rowsort label-6806
 SELECT CAST ( NULL AS REAL ) * + - col0, + col1 FROM tab2
 ----
@@ -43602,6 +43854,9 @@ query III rowsort
 SELECT * FROM tab0 WHERE NOT + 56 - + col1 NOT IN ( col1 * col0 )
 ----
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort
 SELECT AVG ( ALL + 20 ) AS col0 FROM tab1 WHERE NOT 14 NOT BETWEEN + col2 AND col0
 ----
@@ -43611,6 +43866,9 @@ query III rowsort
 SELECT DISTINCT * FROM tab2 WHERE NOT ( NULL ) NOT IN ( - col2 )
 ----
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-7203
 SELECT ALL MAX ( 47 ) + CAST ( ( - 83 ) AS INTEGER ) * - AVG ( DISTINCT col0 ) FROM tab1 WHERE NOT NULL NOT IN ( + 6 )
 ----
@@ -43992,6 +44250,9 @@ SELECT col2 * 35 + col1 AS col2 FROM tab0 AS cor0 WHERE NOT col2 < CAST ( - col1
 3466
 371
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort
 SELECT - AVG ( + - 27 ) FROM tab0 AS cor0 WHERE NOT col1 IS NOT NULL
 ----
@@ -44170,6 +44431,9 @@ SELECT DISTINCT + + 47 AS col2 FROM tab0 AS cor0 WHERE col0 IS NOT NULL
 ----
 47
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-7295
 SELECT DISTINCT + AVG ( DISTINCT col2 ) - - CAST ( NULL AS INTEGER ) AS col2 FROM tab1 AS cor0
 ----
@@ -44565,6 +44829,9 @@ SELECT DISTINCT col2 * + 10 AS col0 FROM tab0
 470
 990
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-7358
 SELECT col1 / CAST ( NULL AS REAL ) AS col2 FROM tab0 AS cor0
 ----
@@ -44885,6 +45152,9 @@ query I rowsort
 SELECT ALL - col1 AS col2 FROM tab1 WHERE NOT - 25 IS NOT NULL
 ----
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-7406
 SELECT CAST ( NULL AS REAL ) FROM tab1 AS cor0 WHERE NOT + col1 NOT BETWEEN NULL AND - col2 * 67 * + col0
 ----
@@ -45237,6 +45507,9 @@ SELECT DISTINCT - - COUNT ( * ) FROM tab1 AS cor0 WHERE col0 + col0 IS NOT NULL
 ----
 3
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-7469
 SELECT DISTINCT + - CAST ( NULL AS REAL ) - + + 84 FROM tab0 AS cor0 CROSS JOIN tab0 AS cor1
 ----
@@ -45465,6 +45738,9 @@ query III rowsort label-7505
 SELECT ALL * FROM tab1 AS cor0 WHERE ( NOT 83 NOT IN ( + ( + - 77 ), + col2 / + col2 * ( CAST ( + 49 AS REAL ) ) + ( 28 ), - col2 ) )
 ----
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-7506
 SELECT - CAST ( NULL AS REAL ) * + 96 * - COUNT ( * ) FROM tab0 AS cor0 WHERE NOT NULL IS NOT NULL
 ----
@@ -46792,6 +47068,9 @@ SELECT MIN ( col1 ) FROM tab1 AS cor0 WHERE NOT - col0 < col1
 ----
 NULL
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] I[I]
+# Datafusion - [Actual  ] I[R]
 query IR rowsort label-7718
 SELECT + col1, CAST ( NULL AS REAL ) - + CAST ( NULL AS INTEGER ) AS col0 FROM tab1
 ----
@@ -47395,6 +47674,9 @@ query III rowsort
 SELECT ALL * FROM tab2 WHERE - col0 - + 93 * - 87 - - - col1 <= 65 * + 94
 ----
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-7818
 SELECT DISTINCT CAST ( NULL AS REAL ) AS col0 FROM tab2 WHERE ( NULL ) IS NULL
 ----
@@ -49307,6 +49589,9 @@ SELECT DISTINCT - col0 - - + col1 AS col2 FROM tab2
 13
 5
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-8126
 SELECT DISTINCT + CAST ( NULL AS REAL ) + + - CAST ( NULL AS INTEGER ) * - - CAST ( - col1 AS REAL ) + - col2 AS col1 FROM tab2 WHERE NOT 89 IS NOT NULL
 ----
@@ -49378,6 +49663,9 @@ SELECT ALL + 0 - col0 AS col0, + ( + 71 ) AS col1 FROM tab1
 -91
 71
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-8137
 SELECT ALL - + MIN ( DISTINCT CAST ( NULL AS REAL ) ) AS col2 FROM tab0 WHERE - col0 IS NULL
 ----
@@ -49986,6 +50274,9 @@ SELECT - - col2 * + col1 * col1 * - 18 + - col0 * - 7 AS col2 FROM tab2 AS cor0
 -4268432
 -4685991
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-8244
 SELECT DISTINCT - + col0 * col0 * col0 * - + col1 / - CAST ( NULL AS REAL ) + col0 AS col0 FROM tab0 AS cor0
 ----
@@ -50332,6 +50623,9 @@ SELECT + col2 + - col2 * - 0 col1 FROM tab1
 68
 96
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-8302
 SELECT col2 * - + 50 + + ( + - CAST ( NULL AS REAL ) ) + + col2 AS col1 FROM tab1
 ----
@@ -50684,6 +50978,9 @@ SELECT DISTINCT 0 AS col2 FROM tab0 WHERE NOT NULL IS NOT NULL
 ----
 0
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] I[I]
+# Datafusion - [Actual  ] I[R]
 query IR rowsort label-8360
 SELECT DISTINCT + col1 AS col2, - ( CAST ( NULL AS REAL ) ) + - col1 FROM tab1
 ----
@@ -50825,6 +51122,9 @@ SELECT col0 AS col0, col1 AS col1 FROM tab2
 75
 67
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-8382
 SELECT + 79 * - + 99 * CAST ( NULL AS REAL ) / + - 67 FROM tab0
 ----
@@ -50848,6 +51148,9 @@ SELECT 45 AS col2, col2 FROM tab0
 45
 99
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]I
+# Datafusion - [Actual  ] [R]I
 query RI rowsort label-8385
 SELECT + col0 * + ( - CAST ( NULL AS REAL ) ) col0, - col0 FROM tab1
 ----
@@ -51273,6 +51576,9 @@ SELECT SUM ( - + 13 ) FROM tab2 AS cor0
 ----
 -39
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-8456
 SELECT DISTINCT CAST ( NULL AS REAL ) / - - col2 AS col1 FROM tab2 AS cor0
 ----
@@ -51342,6 +51648,9 @@ SELECT - col2 + - + col2 AS col2 FROM tab0 AS cor0
 -20
 -94
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-8467
 SELECT + CAST ( NULL AS REAL ) + - col2 + ( 35 ) FROM tab1
 ----
@@ -52772,6 +53081,9 @@ SELECT 62 / + col2 col0 FROM tab1
 0
 1
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort
 SELECT DISTINCT + AVG ( ALL + - col0 ) AS col0 FROM tab1 WHERE NULL IS NOT NULL
 ----
@@ -54067,6 +54379,9 @@ SELECT ( - ( + 25 ) ) FROM tab0
 -25
 -25
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-8920
 SELECT DISTINCT - + 56 / + SUM ( DISTINCT CAST ( col1 AS INTEGER ) ) * + AVG ( + ( + col2 ) ) FROM tab2 WHERE - col1 * + 29 IS NULL
 ----
@@ -54917,6 +55232,9 @@ SELECT - ( 44 ) * - - col2 + - 18 * - - col0 FROM tab2 AS cor0
 -2912
 -3902
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-9055
 SELECT CAST ( NULL AS REAL ) FROM tab1 cor0
 ----
@@ -55387,6 +55705,9 @@ SELECT DISTINCT MAX ( ALL - col0 ) - COUNT ( * ) AS col1 FROM tab0 AS cor0
 ----
 -18
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-9133
 SELECT ALL + CAST ( NULL AS INTEGER ) - - AVG ( - col2 ) + + COUNT ( * ) AS col2 FROM tab2 AS cor0
 ----
@@ -55797,6 +56118,9 @@ SELECT - SUM ( DISTINCT 70 ) AS col2 FROM tab1 AS cor0 WHERE 58 IS NOT NULL
 ----
 -70
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-9207
 SELECT - CAST ( NULL AS REAL ) * + col2 AS col2 FROM tab0 WHERE NULL NOT BETWEEN - - 43 * - 49 AND ( - 68 )
 ----
@@ -56986,6 +57310,9 @@ SELECT + col2 * col1 * - col1 + 92 FROM tab0 AS cor0
 -4318
 -7
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-9406
 SELECT DISTINCT SUM ( DISTINCT + CAST ( NULL AS REAL ) ) AS col0 FROM tab1 AS cor0
 ----
@@ -57420,6 +57747,9 @@ SELECT col0 * col0 * - - col0 FROM tab1
 614125
 753571
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-9476
 SELECT ALL CAST ( NULL AS REAL ) + - - COUNT ( * ) AS col0 FROM tab2
 ----
@@ -58319,6 +58649,9 @@ query III rowsort
 SELECT * FROM tab0 WHERE NOT - col0 BETWEEN NULL AND ( NULL )
 ----
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-9617
 SELECT 82 * CAST ( NULL AS REAL ) col0 FROM tab0 WHERE ( NULL ) NOT IN ( col1 + + col2 )
 ----
@@ -59062,6 +59395,9 @@ SELECT DISTINCT * FROM tab2 WHERE CAST ( NULL AS INTEGER ) IS NULL AND col0 NOT 
 ----
 9 values hashing to 75c998aa53ac83218cbf2feb962d0a49
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I][I]
+# Datafusion - [Actual  ] [R][R]
 query RR rowsort label-9743
 SELECT ALL + AVG ( + col2 ) - + CAST ( NULL AS INTEGER ), 22 + CAST ( NULL AS REAL ) col1 FROM tab2
 ----
@@ -59350,6 +59686,9 @@ SELECT ALL + col2 * + - col0 FROM tab0 AS cor0
 -870
 -9603
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-9793
 SELECT CAST ( NULL AS REAL ) / + COUNT ( * ) FROM tab1 AS cor0
 ----
@@ -59581,6 +59920,9 @@ query III rowsort
 SELECT ALL * FROM tab1 AS cor0 WHERE + col0 NOT BETWEEN NULL AND NULL
 ----
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]I
+# Datafusion - [Actual  ] [R]I
 query RI rowsort label-9830
 SELECT CAST ( NULL AS REAL ), + col2 col2 FROM tab2 AS cor0
 ----
@@ -59708,6 +60050,9 @@ SELECT * FROM tab2 AS cor0 WHERE - 61 IS NOT NULL
 ----
 9 values hashing to 75c998aa53ac83218cbf2feb962d0a49
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-9853
 SELECT DISTINCT + col2 + + + col2 - + ( + + CAST ( NULL AS REAL ) ) FROM tab2 AS cor0
 ----
@@ -59722,6 +60067,9 @@ query III rowsort label-9855
 SELECT * FROM tab1 cor0 WHERE + CAST ( NULL AS INTEGER ) IS NOT NULL
 ----
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-9856
 SELECT 26 / + AVG ( ALL - col1 ) * - - SUM ( + + col2 ) + + 37 FROM tab0 cor0 WHERE ( col1 ) IS NULL
 ----
@@ -59797,9 +60145,11 @@ SELECT ALL ( + + 51 ) FROM tab1 AS cor0
 51
 51
 
-# PostgreSQL handles NULL in DIV/0 by differently
+#  PostgreSQL handles NULL in DIV/0 by differently
 skipif postgresql
 # Datafusion - DataFusion error: Arrow error: Divide by zero error
+# Postgresql - Postgres error: db error: ERROR: division by zero
+skipif postgres
 skipif Datafusion
 query I rowsort label-9867
 SELECT ALL COUNT ( - col2 ) * + 10 / - + COUNT ( * ) * + + SUM ( + - col2 ) AS col2 FROM tab2 AS cor0 WHERE NULL IS NOT NULL
@@ -60105,6 +60455,9 @@ SELECT CAST ( + SUM ( DISTINCT - 8 ) AS INTEGER ) FROM tab0
 ----
 -8
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-9919
 SELECT + CAST ( NULL AS REAL ) col1 FROM tab2 WHERE NOT ( NOT col1 IS NULL )
 ----
@@ -60542,11 +60895,17 @@ SELECT ALL + 70, col1 FROM tab2
 70
 77
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-9987
 SELECT DISTINCT + AVG ( - + CAST ( NULL AS REAL ) ) AS col2 FROM tab1
 ----
 NULL
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-9988
 SELECT DISTINCT + col0 * + CAST ( NULL AS REAL ) * - col0 FROM tab0
 ----

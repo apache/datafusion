@@ -154,7 +154,7 @@ SELECT a+b*2+c*3+d*4,
 ----
 24 values hashing to 425542fc8d1ec04f89534ae98d59a74d
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query IIII nosort
 SELECT a+b*2+c*3+d*4,
@@ -176,7 +176,7 @@ SELECT CASE a+1 WHEN b THEN 111 WHEN c THEN 222
 ----
 30 values hashing to f2bf77f8cfb62666ab72c866ed4d4f1a
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query I nosort
 SELECT (SELECT count(*) FROM t1 AS x WHERE x.b<t1.b)
@@ -187,7 +187,7 @@ SELECT (SELECT count(*) FROM t1 AS x WHERE x.b<t1.b)
 ----
 20 values hashing to 1d6b8ed1db696a5f1c8d126facddd077
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query IIIII nosort
 SELECT a,
@@ -204,8 +204,6 @@ SELECT a,
 ----
 145 values hashing to 65042db64d506f67a37c85f825cdd11f
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
-skipif Datafusion
 query IIIIIII nosort
 SELECT CASE a+1 WHEN b THEN 111 WHEN c THEN 222
         WHEN d THEN 333  WHEN e THEN 444 ELSE 555 END,
@@ -224,7 +222,7 @@ SELECT CASE a+1 WHEN b THEN 111 WHEN c THEN 222
 ----
 210 values hashing to a259991ed1248a55a07838ce36a7c257
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query IIIIII nosort
 SELECT CASE WHEN c>(SELECT avg(c) FROM t1) THEN a*2 ELSE b*10 END,
@@ -242,7 +240,7 @@ SELECT CASE WHEN c>(SELECT avg(c) FROM t1) THEN a*2 ELSE b*10 END,
 ----
 180 values hashing to 631b9506abcdd5dcea64c7ed2a3799ed
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - Error during planning: Projections require unique expression names
 skipif Datafusion
 query IIIII nosort
 SELECT (SELECT count(*) FROM t1 AS x WHERE x.c>t1.c AND x.d<t1.d),
@@ -257,8 +255,6 @@ SELECT (SELECT count(*) FROM t1 AS x WHERE x.c>t1.c AND x.d<t1.d),
 ----
 125 values hashing to 58b4ab36ed442f3837188b38cd02486a
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
-skipif Datafusion
 query IIIIII nosort
 SELECT CASE WHEN c>(SELECT avg(c) FROM t1) THEN a*2 ELSE b*10 END,
        a-b,
@@ -295,7 +291,7 @@ SELECT a,
 ----
 60 values hashing to f88a6f6656b30fc5b3c4ede940008ff2
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query III nosort
 SELECT c,
@@ -307,8 +303,6 @@ SELECT c,
 ----
 66 values hashing to 49b01d3ad62fdaa733104a9c70dfb87c
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
-skipif Datafusion
 query IIIIII nosort
 SELECT CASE WHEN c>(SELECT avg(c) FROM t1) THEN a*2 ELSE b*10 END,
        a+b*2+c*3+d*4+e*5,
@@ -340,7 +334,7 @@ SELECT a+b*2+c*3+d*4+e*5,
 ----
 144 values hashing to 1d2ad7123e951f275353001a6879b3c8
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query IIIIIII nosort
 SELECT CASE WHEN a<b-3 THEN 111 WHEN a<=b THEN 222
@@ -357,8 +351,6 @@ SELECT CASE WHEN a<b-3 THEN 111 WHEN a<=b THEN 222
 ----
 210 values hashing to b046dd2378da12da24149ec8171de183
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
-skipif Datafusion
 query IIIIII nosort
 SELECT a,
        a+b*2+c*3+d*4+e*5,
@@ -403,7 +395,7 @@ SELECT CASE WHEN a<b-3 THEN 111 WHEN a<=b THEN 222
 ----
 154 values hashing to 437f5acfb0bed27efe918cd27dc829cd
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query IIIIII nosort
 SELECT e,
@@ -419,8 +411,6 @@ SELECT e,
 ----
 132 values hashing to b1b55f05abc1bf86626a186d4b60ea65
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
-skipif Datafusion
 query I nosort
 SELECT CASE WHEN c>(SELECT avg(c) FROM t1) THEN a*2 ELSE b*10 END
   FROM t1
@@ -432,7 +422,7 @@ SELECT CASE WHEN c>(SELECT avg(c) FROM t1) THEN a*2 ELSE b*10 END
 1180
 1240
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query IIIIIII nosort
 SELECT a+b*2+c*3,
@@ -450,8 +440,6 @@ SELECT a+b*2+c*3,
 ----
 56 values hashing to 41c19a8a94cbb13f6a1672a654f9ef40
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
-skipif Datafusion
 query IIIII nosort
 SELECT a+b*2,
        a+b*2+c*3,
@@ -467,8 +455,6 @@ SELECT a+b*2,
 ----
 25 values hashing to d26c6a15ff9231615a949e9c2412fc2b
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
-skipif Datafusion
 query IIIIIII nosort
 SELECT a+b*2+c*3+d*4+e*5,
        CASE WHEN a<b-3 THEN 111 WHEN a<=b THEN 222
@@ -485,7 +471,7 @@ SELECT a+b*2+c*3+d*4+e*5,
 ----
 196 values hashing to 601e621103e91110c69c4545c08a48c1
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - Error during planning: Projections require unique expression names
 skipif Datafusion
 query IIIII nosort
 SELECT (SELECT count(*) FROM t1 AS x WHERE x.b<t1.b),
@@ -500,7 +486,7 @@ SELECT (SELECT count(*) FROM t1 AS x WHERE x.b<t1.b),
 ----
 135 values hashing to 635b37bb69d24a1353243f6975112cea
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query I nosort
 SELECT (SELECT count(*) FROM t1 AS x WHERE x.b<t1.b)
@@ -511,7 +497,7 @@ SELECT (SELECT count(*) FROM t1 AS x WHERE x.b<t1.b)
  ORDER BY 1
 ----
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query IIIII nosort
 SELECT CASE a+1 WHEN b THEN 111 WHEN c THEN 222
@@ -541,7 +527,7 @@ SELECT d,
 ----
 180 values hashing to 4cf6744bf5d3826cd98ad853eeb5beba
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query IIIIIII nosort
 SELECT CASE a+1 WHEN b THEN 111 WHEN c THEN 222
@@ -558,8 +544,6 @@ SELECT CASE a+1 WHEN b THEN 111 WHEN c THEN 222
 ----
 154 values hashing to b82f838cd6b2f0034ba34f8069a36b09
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
-skipif Datafusion
 query IIIII nosort
 SELECT d,
        CASE WHEN c>(SELECT avg(c) FROM t1) THEN a*2 ELSE b*10 END,
@@ -585,7 +569,7 @@ SELECT a-b,
 ----
 24 values hashing to afd55bf27f337fa6f2554d2ae3726e96
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query IIIIII nosort
 SELECT (a+b+c+d+e)/5,
@@ -636,8 +620,6 @@ SELECT CASE WHEN a<b-3 THEN 111 WHEN a<=b THEN 222
 ----
 15 values hashing to 08fa8e3fd6a4743609ebd0354e659bba
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
-skipif Datafusion
 query IIII nosort
 SELECT a,
        e,
@@ -648,7 +630,7 @@ SELECT a,
 ----
 120 values hashing to c328c1a96813bf1072935593f41667ab
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query III nosort
 SELECT (a+b+c+d+e)/5,
@@ -661,7 +643,7 @@ SELECT (a+b+c+d+e)/5,
 ----
 90 values hashing to 66be8c935b54646fa54e09d50724c3fc
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query IIII nosort
 SELECT a-b,
@@ -684,7 +666,7 @@ SELECT a+b*2
 ----
 23 values hashing to 58bbff23f68fc8cebb2a4c6436d0b04a
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - Error during planning: Projections require unique expression names
 skipif Datafusion
 query IIIIII nosort
 SELECT CASE a+1 WHEN b THEN 111 WHEN c THEN 222
@@ -729,7 +711,7 @@ SELECT a+b*2+c*3,
 ----
 150 values hashing to b5d3c38c9410c06baec2ae85a2834ffd
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query IIIII nosort
 SELECT CASE WHEN a<b-3 THEN 111 WHEN a<=b THEN 222
@@ -760,8 +742,6 @@ SELECT c,
 ----
 24 values hashing to 141c5a5c81089f8c2a8422883e66bae6
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
-skipif Datafusion
 query IIII nosort
 SELECT CASE a+1 WHEN b THEN 111 WHEN c THEN 222
         WHEN d THEN 333  WHEN e THEN 444 ELSE 555 END,
@@ -775,7 +755,7 @@ SELECT CASE a+1 WHEN b THEN 111 WHEN c THEN 222
 ----
 88 values hashing to d5ef959057259760f6e4ff24af1eb5c9
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query IIII nosort
 SELECT d-e,
@@ -796,7 +776,7 @@ SELECT a+b*2+c*3
 ----
 30 values hashing to 20bb63abd067ae8ef5a05f08be3b6762
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query IIIII nosort
 SELECT CASE WHEN a<b-3 THEN 111 WHEN a<=b THEN 222
@@ -811,7 +791,7 @@ SELECT CASE WHEN a<b-3 THEN 111 WHEN a<=b THEN 222
 ----
 80 values hashing to dda48f2f14d6eef074c866167931274f
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query II nosort
 SELECT (SELECT count(*) FROM t1 AS x WHERE x.c>t1.c AND x.d<t1.d),
@@ -835,7 +815,7 @@ SELECT a+b*2+c*3+d*4+e*5,
 ----
 80 values hashing to 36b0bd3c4a5efd58912d89eec64b42fe
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query III nosort
 SELECT a-b,
@@ -908,7 +888,7 @@ SELECT abs(b-c),
 ----
 56 values hashing to 6d15efe8755229aeadcfc31141690e0c
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query IIII nosort
 SELECT e,
@@ -945,7 +925,7 @@ SELECT abs(a),
 ----
 50 values hashing to 0d42d0a09548edf4a343fe9e95c98b2c
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query IIIIII nosort
 SELECT (a+b+c+d+e)/5,
@@ -961,7 +941,7 @@ SELECT (a+b+c+d+e)/5,
 ----
 18 values hashing to 51c5d8e007a143cf3bf858945f677039
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query IIIIIII nosort
 SELECT (SELECT count(*) FROM t1 AS x WHERE x.c>t1.c AND x.d<t1.d),
@@ -1000,7 +980,7 @@ SELECT a+b*2,
 -1
 333
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query IIII nosort
 SELECT c-d,
@@ -1022,7 +1002,7 @@ SELECT e
 ----
 165
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query IIIII nosort
 SELECT abs(b-c),
@@ -1055,7 +1035,7 @@ SELECT b-c
 ----
 30 values hashing to 970be304ddec1d2bede8d8e2f14368c6
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query IIIIII nosort
 SELECT (SELECT count(*) FROM t1 AS x WHERE x.c>t1.c AND x.d<t1.d),
@@ -1155,7 +1135,7 @@ SELECT b,
 ----
 112 values hashing to 5ae5415105496a1711310d3c42176846
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query IIII nosort
 SELECT a+b*2+c*3+d*4,
@@ -1180,7 +1160,7 @@ SELECT b,
 ----
 12 values hashing to d33f553dec1000186e0827b36e03a5a0
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query IIIIIII nosort
 SELECT CASE WHEN a<b-3 THEN 111 WHEN a<=b THEN 222
@@ -1209,7 +1189,7 @@ SELECT d,
 ----
 180 values hashing to 51a0a8497754b6679d3130c947c96360
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query III nosort
 SELECT CASE WHEN a<b-3 THEN 111 WHEN a<=b THEN 222
@@ -1244,7 +1224,7 @@ SELECT a-b,
 ----
 90 values hashing to 27ca10878c9391decf14b1da14b81a1a
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query II nosort
 SELECT (SELECT count(*) FROM t1 AS x WHERE x.c>t1.c AND x.d<t1.d),
@@ -1283,7 +1263,7 @@ SELECT a+b*2,
 ----
 112 values hashing to 056a2f68932723bbdeb9dc7c26e21ff8
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query IIIII nosort
 SELECT a,
@@ -1299,7 +1279,7 @@ SELECT a,
 ----
 140 values hashing to 3dfb60ce29bfaa3deb2c90771787ae28
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query IIIIIII nosort
 SELECT (SELECT count(*) FROM t1 AS x WHERE x.c>t1.c AND x.d<t1.d),
@@ -1317,7 +1297,7 @@ SELECT (SELECT count(*) FROM t1 AS x WHERE x.c>t1.c AND x.d<t1.d),
 ----
 154 values hashing to 7be42f68cbfeb20d2a574569eabc62b8
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query IIIII nosort
 SELECT b-c,
@@ -1333,7 +1313,7 @@ SELECT b-c,
 ----
 130 values hashing to 3872625fdb5d1bd8d2d87c61b2c5d2b9
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query IIIIIII nosort
 SELECT b-c,
@@ -1352,7 +1332,7 @@ SELECT b-c,
 ----
 203 values hashing to 449a18d19874d7ee976c4c9fc953e3f4
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query III nosort
 SELECT (SELECT count(*) FROM t1 AS x WHERE x.c>t1.c AND x.d<t1.d),
@@ -1376,7 +1356,7 @@ SELECT CASE a+1 WHEN b THEN 111 WHEN c THEN 222
 ----
 60 values hashing to 1692ce3bd9941e0f21090da530fd3ed8
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query IIIIIII nosort
 SELECT a+b*2+c*3+d*4,
@@ -1393,7 +1373,7 @@ SELECT a+b*2+c*3+d*4,
 ----
 203 values hashing to 9cc51c802e6d11db1eb947a0431c0898
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query IIIIIII nosort
 SELECT abs(a),
@@ -1509,7 +1489,7 @@ SELECT CASE a+1 WHEN b THEN 111 WHEN c THEN 222
 -3
 1000
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query IIIII nosort
 SELECT a+b*2,
@@ -1531,7 +1511,7 @@ SELECT e
 ----
 30 values hashing to 41762f74ba25ab0f9b0448f319f2f292
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query IIIIII nosort
 SELECT c-d,
@@ -1560,7 +1540,7 @@ SELECT abs(b-c),
 ----
 145 values hashing to d7e8eaed9394e826f4fdcccf068acdec
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query IIII nosort
 SELECT (SELECT count(*) FROM t1 AS x WHERE x.b<t1.b),
@@ -1585,7 +1565,7 @@ SELECT (a+b+c+d+e)/5
 ----
 30 values hashing to 8d2279ba80763220505cecac39786e90
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - Error during planning: Projections require unique expression names
 skipif Datafusion
 query IIIIII nosort
 SELECT a+b*2,
@@ -1626,7 +1606,7 @@ SELECT a+b*2+c*3,
 ----
 120 values hashing to 227ac1db8da88813615a7e008801fba7
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query III nosort
 SELECT (a+b+c+d+e)/5,
@@ -1666,7 +1646,7 @@ SELECT c,
 ----
 150 values hashing to 2064f4d12bd17daef2792157a3fa01ac
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query IIIIIII nosort
 SELECT c-d,
@@ -1706,7 +1686,7 @@ SELECT (a+b+c+d+e)/5,
 ----
 20 values hashing to d6130a18387e9029c427520c8fdd0b08
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query IIIIIII nosort
 SELECT c-d,
@@ -1724,7 +1704,7 @@ SELECT c-d,
 ----
 196 values hashing to ce60e2883fe7a0c41c29c17e9b62bf51
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query IIIIII nosort
 SELECT (SELECT count(*) FROM t1 AS x WHERE x.c>t1.c AND x.d<t1.d),
@@ -1742,7 +1722,7 @@ SELECT (SELECT count(*) FROM t1 AS x WHERE x.c>t1.c AND x.d<t1.d),
 ----
 150 values hashing to c31247552305ea7108b6c15517e4e50e
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query IIIIII nosort
 SELECT b-c,
@@ -1781,7 +1761,7 @@ SELECT b,
 ----
 60 values hashing to 909ebdb8fc6864d4dffee74235090ed7
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query IIIIIII nosort
 SELECT a+b*2,
@@ -1841,7 +1821,7 @@ SELECT e,
 ----
 104 values hashing to 57317371c67d5ca0360d9860ff06b5f6
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query IIIII nosort
 SELECT (SELECT count(*) FROM t1 AS x WHERE x.b<t1.b),
@@ -1855,7 +1835,7 @@ SELECT (SELECT count(*) FROM t1 AS x WHERE x.b<t1.b),
 ----
 150 values hashing to b77fe449c8203b5d18b816d00d4a9229
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query IIIII nosort
 SELECT b-c,
@@ -1893,7 +1873,7 @@ SELECT a+b*2,
 ----
 21 values hashing to 47e5ff2f412981bf5017a3fcd7dcbfce
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query IIIII nosort
 SELECT a+b*2+c*3,
@@ -1953,7 +1933,7 @@ SELECT a-b,
 ----
 14 values hashing to d2bcb971c3fe19befbef456f67ecb854
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query III nosort
 SELECT b,
@@ -2034,7 +2014,7 @@ SELECT abs(a),
 ----
 150 values hashing to 34ca74f90850eff35ac3a230238544be
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query IIIII nosort
 SELECT (SELECT count(*) FROM t1 AS x WHERE x.c>t1.c AND x.d<t1.d),
@@ -2060,7 +2040,7 @@ SELECT c,
 ----
 57 values hashing to 25d96795a29f85eafc1253b3af853f3d
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - Error during planning: Projections require unique expression names
 skipif Datafusion
 query IIIIIII nosort
 SELECT (SELECT count(*) FROM t1 AS x WHERE x.c>t1.c AND x.d<t1.d),
@@ -2140,7 +2120,7 @@ SELECT a+b*2+c*3+d*4,
 ----
 180 values hashing to 5e503b736a28f01aee385b8265f1f970
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query II nosort
 SELECT d-e,
@@ -2181,7 +2161,7 @@ SELECT abs(b-c),
 ----
 28 values hashing to 574174bf2275d3475e01cc0a0bf79a10
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query II nosort
 SELECT (SELECT count(*) FROM t1 AS x WHERE x.c>t1.c AND x.d<t1.d),
@@ -2191,7 +2171,7 @@ SELECT (SELECT count(*) FROM t1 AS x WHERE x.c>t1.c AND x.d<t1.d),
 ----
 60 values hashing to aae77ef6a7bbfce44e353697e1736636
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query IIIIIII nosort
 SELECT CASE WHEN a<b-3 THEN 111 WHEN a<=b THEN 222
@@ -2270,7 +2250,7 @@ SELECT a+b*2+c*3+d*4,
 ----
 112 values hashing to ac8288fa97219e018be4a8600f11d525
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query IIIIII nosort
 SELECT a,
@@ -2298,7 +2278,7 @@ SELECT c,
 ----
 90 values hashing to 068283feddad9ffb2ebce753740a6ff6
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query IIII nosort
 SELECT (SELECT count(*) FROM t1 AS x WHERE x.c>t1.c AND x.d<t1.d),
@@ -2421,7 +2401,7 @@ SELECT (a+b+c+d+e)/5,
 ----
 58 values hashing to 689847f49b3867b87e7c46dfeb0da7c1
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query IIII nosort
 SELECT a+b*2+c*3,
@@ -2436,7 +2416,7 @@ SELECT a+b*2+c*3,
 ----
 108 values hashing to 709932df0abe61ded2f95a3b2b8e9c34
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query IIIIIII nosort
 SELECT (a+b+c+d+e)/5,
@@ -2478,7 +2458,7 @@ SELECT a+b*2+c*3,
 ----
 75 values hashing to 1cdfc134eae0ccc6b2fdb86041b2f365
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query IIIIIII nosort
 SELECT c,
@@ -2498,7 +2478,7 @@ SELECT c,
 ----
 14 values hashing to d8e81dbe9389b8a7fb955726d1018688
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - Error during planning: Projections require unique expression names
 skipif Datafusion
 query IIIIIII nosort
 SELECT (SELECT count(*) FROM t1 AS x WHERE x.c>t1.c AND x.d<t1.d),
@@ -2515,7 +2495,7 @@ SELECT (SELECT count(*) FROM t1 AS x WHERE x.c>t1.c AND x.d<t1.d),
 ----
 133 values hashing to e0e2d07862532072e37e60225da99516
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - Error during planning: Projections require unique expression names
 skipif Datafusion
 query IIIIII nosort
 SELECT e,
@@ -2570,7 +2550,7 @@ SELECT CASE WHEN c>(SELECT avg(c) FROM t1) THEN a*2 ELSE b*10 END,
 ----
 54 values hashing to cbda5acbecfd69e4351d6c31044f2a08
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query III nosort
 SELECT (SELECT count(*) FROM t1 AS x WHERE x.b<t1.b),
@@ -2679,7 +2659,7 @@ SELECT a+b*2,
 ----
 133 values hashing to ec7e7648bfc1da6386905d63a1ef52a3
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query IIIIIII nosort
 SELECT (SELECT count(*) FROM t1 AS x WHERE x.c>t1.c AND x.d<t1.d),
@@ -2732,7 +2712,7 @@ SELECT a+b*2,
 ----
 88 values hashing to fcc8243428e8bf0faa312279fec704a0
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query IIIII nosort
 SELECT a+b*2,
@@ -2758,7 +2738,7 @@ SELECT CASE WHEN c>(SELECT avg(c) FROM t1) THEN a*2 ELSE b*10 END,
 ----
 150 values hashing to 00fcc8fc925a74eb4ec0f853929e555f
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query IIIII nosort
 SELECT CASE a+1 WHEN b THEN 111 WHEN c THEN 222
@@ -2795,7 +2775,7 @@ SELECT a+b*2+c*3+d*4,
 ----
 132 values hashing to d551d268f45008968f8d65e271eab053
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query IIIIIII nosort
 SELECT (SELECT count(*) FROM t1 AS x WHERE x.c>t1.c AND x.d<t1.d),
@@ -2827,7 +2807,7 @@ SELECT a+b*2+c*3+d*4+e*5,
  ORDER BY 2,4,6,5,1,3
 ----
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query IIII nosort
 SELECT a+b*2+c*3+d*4,
@@ -2850,7 +2830,7 @@ SELECT CASE WHEN a<b-3 THEN 111 WHEN a<=b THEN 222
 ----
 22 values hashing to 4c13d7a8f6f0787460deb4f3b6773d2e
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query IIIIIII nosort
 SELECT b,
@@ -2933,7 +2913,7 @@ SELECT c-d,
 ----
 210 values hashing to 3aeee1754c550f295bd6081aa0496d47
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query IIIIIII nosort
 SELECT c,
@@ -2973,7 +2953,7 @@ SELECT d
 ----
 29 values hashing to dd2f68e88e982f64348a02e0ea88e9e6
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - Error during planning: Projections require unique expression names
 skipif Datafusion
 query IIIIIII nosort
 SELECT (SELECT count(*) FROM t1 AS x WHERE x.c>t1.c AND x.d<t1.d),
@@ -3003,7 +2983,7 @@ SELECT CASE WHEN a<b-3 THEN 111 WHEN a<=b THEN 222
 ----
 10 values hashing to e43fc83490b72542af8316746a9d8313
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query IIII nosort
 SELECT abs(a),
@@ -3054,7 +3034,7 @@ SELECT CASE a+1 WHEN b THEN 111 WHEN c THEN 222
 ----
 90 values hashing to b07b2168ff53b46689e49c06ab4331fc
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query IIIIIII nosort
 SELECT c-d,
@@ -3081,7 +3061,7 @@ SELECT abs(b-c),
 ----
 120 values hashing to 2aa5f26c8186061ab63b692ca759a624
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query IIIIII nosort
 SELECT (SELECT count(*) FROM t1 AS x WHERE x.b<t1.b),
@@ -3121,7 +3101,7 @@ SELECT abs(b-c)
 1
 2
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query IIIIIII nosort
 SELECT c,
@@ -3150,7 +3130,7 @@ SELECT a-b,
 ----
 58 values hashing to fca9ff5897fd8bf220dfd03ebf9bf41d
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query IIIII nosort
 SELECT CASE a+1 WHEN b THEN 111 WHEN c THEN 222
@@ -3195,7 +3175,7 @@ SELECT CASE a+1 WHEN b THEN 111 WHEN c THEN 222
 ----
 29 values hashing to 60438bc97433575b27692732a1fc3a1a
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query II nosort
 SELECT (SELECT count(*) FROM t1 AS x WHERE x.b<t1.b),
@@ -3208,7 +3188,7 @@ SELECT (SELECT count(*) FROM t1 AS x WHERE x.b<t1.b),
 ----
 56 values hashing to 693fcab084970cc9c34f84cb13c7533e
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query IIIII nosort
 SELECT CASE a+1 WHEN b THEN 111 WHEN c THEN 222
@@ -3224,7 +3204,7 @@ SELECT CASE a+1 WHEN b THEN 111 WHEN c THEN 222
 ----
 30 values hashing to 7f66566999f88b34321d64aafb17b34d
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query IIII nosort
 SELECT a,
@@ -3236,7 +3216,7 @@ SELECT a,
 ----
 120 values hashing to 322fbb90672f08ec55b91dd2b85b8bc5
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query IIIIIII nosort
 SELECT b-c,
@@ -3287,7 +3267,7 @@ SELECT (a+b+c+d+e)/5,
 ----
 66 values hashing to 6ceda7f4ed630291e9090bc96e62be7c
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query IIIII nosort
 SELECT CASE a+1 WHEN b THEN 111 WHEN c THEN 222
@@ -3315,7 +3295,7 @@ SELECT c,
 ----
 140 values hashing to fc266d3bd870c2607aaf5ba9f695a329
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query IIIIII nosort
 SELECT (a+b+c+d+e)/5,
@@ -3354,7 +3334,7 @@ SELECT abs(b-c)
 ----
 30 values hashing to ebf2696a89b67ae7c2bb5d796d902b72
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query IIIIIII nosort
 SELECT a+b*2+c*3+d*4+e*5,
@@ -3372,7 +3352,7 @@ SELECT a+b*2+c*3+d*4+e*5,
 ----
 14 values hashing to 89b8c971ba8b5b3394998a86198c12f6
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query IIIIII nosort
 SELECT a,
@@ -3544,7 +3524,7 @@ SELECT b,
 ----
 88 values hashing to 2820aafd42976a6213cb2b0499401103
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query IIIIIII nosort
 SELECT a+b*2+c*3,
@@ -3571,7 +3551,7 @@ SELECT a+b*2+c*3+d*4+e*5,
 ----
 90 values hashing to 577bb9d41043fa7499fca863c9201ba8
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query III nosort
 SELECT a+b*2+c*3,
@@ -3584,7 +3564,7 @@ SELECT a+b*2+c*3,
  ORDER BY 1,2,3
 ----
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query IIIIIII nosort
 SELECT (SELECT count(*) FROM t1 AS x WHERE x.c>t1.c AND x.d<t1.d),
@@ -3615,7 +3595,7 @@ SELECT (a+b+c+d+e)/5,
 ----
 125 values hashing to 71783a534966e0cd68c32a87f62c08ec
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query IIII nosort
 SELECT b-c,
@@ -3646,7 +3626,7 @@ SELECT (a+b+c+d+e)/5,
 ----
 30 values hashing to 0f5786c35d6a3334fe23ccebd6d6b4f8
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query IIIIII nosort
 SELECT a+b*2+c*3,
@@ -3662,7 +3642,7 @@ SELECT a+b*2+c*3,
 ----
 174 values hashing to a414c5a3ec57033e4ca2e3c9988f6f81
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query IIIII nosort
 SELECT CASE WHEN c>(SELECT avg(c) FROM t1) THEN a*2 ELSE b*10 END,
@@ -3709,7 +3689,7 @@ SELECT CASE WHEN a<b-3 THEN 111 WHEN a<=b THEN 222
 ----
 75 values hashing to 893e24339a4507d442b4fa21e8520989
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query IIIIII nosort
 SELECT abs(a),
@@ -3754,7 +3734,7 @@ SELECT CASE WHEN a<b-3 THEN 111 WHEN a<=b THEN 222
 ----
 9 values hashing to f43d74c9e89e35866c98a91869e403da
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query IIIII nosort
 SELECT c-d,
@@ -3770,7 +3750,7 @@ SELECT c-d,
 ----
 30 values hashing to 70df2aeb36f371ec975106f8a74d10ee
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - Error during planning: Projections require unique expression names
 skipif Datafusion
 query IIIIII nosort
 SELECT a+b*2+c*3+d*4,
@@ -3804,7 +3784,7 @@ SELECT CASE a+1 WHEN b THEN 111 WHEN c THEN 222
 ----
 60 values hashing to 32eaa03d1690e6a79bee8609c596e8e4
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query IIIIIII nosort
 SELECT (SELECT count(*) FROM t1 AS x WHERE x.c>t1.c AND x.d<t1.d),
@@ -3863,7 +3843,7 @@ SELECT b,
 ----
 14 values hashing to 94dc1eae57798c8862e7d5b4cfd12cff
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query II nosort
 SELECT a,
@@ -3881,7 +3861,7 @@ SELECT a,
 245
 29
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - Error during planning: Projections require unique expression names
 skipif Datafusion
 query IIIII nosort
 SELECT a+b*2+c*3+d*4,
@@ -3924,7 +3904,7 @@ SELECT a+b*2+c*3+d*4+e*5,
 ----
 22 values hashing to 5df231969b8d5bdc0ea1ed90ff3b23d2
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query IIIIII nosort
 SELECT a-b,
@@ -4094,7 +4074,7 @@ SELECT a,
 ----
 120 values hashing to e70daaeccb2899ae3ab5a338ca45c0fa
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query II nosort
 SELECT b,
@@ -4124,7 +4104,7 @@ SELECT a+b*2+c*3+d*4+e*5,
 ----
 58 values hashing to 91d6869d5b9abdb04ae95cba62e03774
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query III nosort
 SELECT (SELECT count(*) FROM t1 AS x WHERE x.c>t1.c AND x.d<t1.d),
@@ -4146,7 +4126,7 @@ SELECT c-d
 ----
 28 values hashing to ae8b5e96b30d88fb1ab70fe4095e3a96
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query IIIIIII nosort
 SELECT a-b,
@@ -4175,7 +4155,7 @@ SELECT a+b*2+c*3+d*4,
 ----
 180 values hashing to 7e45631d2b6d6694abd0f917d9c07c4a
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query IIIIII nosort
 SELECT abs(b-c),
@@ -4217,7 +4197,7 @@ SELECT a+b*2+c*3+d*4+e*5
 ----
 15 values hashing to 21fef18aeb42508fd385db124bd2a8cc
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query IIIIIII nosort
 SELECT e,
@@ -4236,7 +4216,7 @@ SELECT e,
 ----
 210 values hashing to 166de7592ef32109aae1d9670d3e23bf
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query IIIII nosort
 SELECT (a+b+c+d+e)/5,
@@ -4259,7 +4239,7 @@ SELECT a+b*2+c*3+d*4+e*5
 ----
 29 values hashing to 52abcdd72ea8512b37c16f4859ec7416
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query IIIIII nosort
 SELECT a,
@@ -4273,7 +4253,7 @@ SELECT a,
 ----
 180 values hashing to 864ee28e245ce38778cd4be32d567b92
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query IIII nosort
 SELECT (SELECT count(*) FROM t1 AS x WHERE x.c>t1.c AND x.d<t1.d),
@@ -4309,7 +4289,7 @@ SELECT CASE WHEN a<b-3 THEN 111 WHEN a<=b THEN 222
 ----
 150 values hashing to d2ce913033e84a4c69b91191db3b8a07
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query IIII nosort
 SELECT CASE a+1 WHEN b THEN 111 WHEN c THEN 222
@@ -4350,7 +4330,7 @@ SELECT b,
 ----
 150 values hashing to 6c74a3313ad194acb0f970e759de70e8
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query IIII nosort
 SELECT (SELECT count(*) FROM t1 AS x WHERE x.c>t1.c AND x.d<t1.d),
@@ -4365,7 +4345,7 @@ SELECT (SELECT count(*) FROM t1 AS x WHERE x.c>t1.c AND x.d<t1.d),
 ----
 12 values hashing to fae09a9a32247b430470a8b81fbc6cc9
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - Error during planning: Projections require unique expression names
 skipif Datafusion
 query IIIIII nosort
 SELECT (SELECT count(*) FROM t1 AS x WHERE x.c>t1.c AND x.d<t1.d),
@@ -4402,7 +4382,7 @@ SELECT b,
 ----
 90 values hashing to 600c8683d405cc652ef67b480900c83f
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query IIIIIII nosort
 SELECT a+b*2+c*3,
@@ -4420,7 +4400,7 @@ SELECT a+b*2+c*3,
 ----
 21 values hashing to d87da634fb840b1c06fbe4a9044e809d
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query II nosort
 SELECT b-c,
@@ -4452,7 +4432,7 @@ SELECT abs(b-c),
 ----
 30 values hashing to d39306fef5d6bbbd904608305c01b290
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query II nosort
 SELECT (SELECT count(*) FROM t1 AS x WHERE x.c>t1.c AND x.d<t1.d),
@@ -4462,7 +4442,7 @@ SELECT (SELECT count(*) FROM t1 AS x WHERE x.c>t1.c AND x.d<t1.d),
 ----
 60 values hashing to 15596791cdb51704f8ab6f597e39790d
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query III nosort
 SELECT d-e,
@@ -4554,7 +4534,7 @@ SELECT c-d,
 ----
 90 values hashing to d4c08d26fb7262abff3283495e53ef07
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query IIIII nosort
 SELECT a+b*2+c*3+d*4,
@@ -4593,7 +4573,7 @@ SELECT a+b*2,
  ORDER BY 3,2,5,4,1
 ----
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query IIIIII nosort
 SELECT e,
@@ -4609,7 +4589,7 @@ SELECT e,
 ----
 168 values hashing to 14f600ab97eac8730eb4e16e5d99c249
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query IIIII nosort
 SELECT (a+b+c+d+e)/5,
@@ -4648,7 +4628,7 @@ SELECT a,
 3331
 2
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query I nosort
 SELECT (SELECT count(*) FROM t1 AS x WHERE x.c>t1.c AND x.d<t1.d)
@@ -4694,7 +4674,7 @@ SELECT abs(a),
 ----
 60 values hashing to 537018406f031d7e81f5a1a9ee9d4b64
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query IIIII nosort
 SELECT a-b,
@@ -4707,7 +4687,7 @@ SELECT a-b,
 ----
 150 values hashing to 034d9cdf4634c24ca574f76ba23ed550
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query IIIIII nosort
 SELECT b-c,
@@ -4724,7 +4704,7 @@ SELECT b-c,
 ----
 114 values hashing to d289034237130317cf469cf3bc27c879
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query IIIII nosort
 SELECT a,
@@ -4755,7 +4735,7 @@ SELECT a+b*2,
 ----
 144 values hashing to 9266b31632a5347c36e4390e5c199fb9
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query IIIIIII nosort
 SELECT d,
@@ -4771,7 +4751,7 @@ SELECT d,
 ----
 210 values hashing to 0b9d7c7d7a7c7cc0a5d90f1990a043e9
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query IIII nosort
 SELECT c,
@@ -4812,7 +4792,7 @@ SELECT a-b
 ----
 14 values hashing to 28d7a52ffd1e2866a0fa7582a43ec38e
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query IIIIIII nosort
 SELECT a+b*2+c*3,
@@ -4841,7 +4821,7 @@ SELECT CASE a+1 WHEN b THEN 111 WHEN c THEN 222
 ----
 150 values hashing to 33c133cd531a8c83b0e12c1bf2816a47
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query IIIIIII nosort
 SELECT a+b*2+c*3+d*4,
@@ -4882,7 +4862,7 @@ SELECT d-e
 ----
 18 values hashing to a5e48a0153bf4c438302b48fadaaa38e
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query IIIIIII nosort
 SELECT CASE a+1 WHEN b THEN 111 WHEN c THEN 222
@@ -4910,7 +4890,7 @@ SELECT d-e,
 ----
 150 values hashing to 7b23e04dc880c8d57e7ebf2ce767fde5
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query III nosort
 SELECT d-e,
@@ -4922,7 +4902,7 @@ SELECT d-e,
 ----
 33 values hashing to 83af9d93602ea54fa991d265574a4c3a
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - Error during planning: Projections require unique expression names
 skipif Datafusion
 query IIIIIII nosort
 SELECT d,
@@ -4949,7 +4929,7 @@ SELECT b-c,
 ----
 120 values hashing to 7c9d31e357ba5e9ca4d8d2ef8f56117a
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query IIII nosort
 SELECT CASE WHEN a<b-3 THEN 111 WHEN a<=b THEN 222
@@ -4964,7 +4944,7 @@ SELECT CASE WHEN a<b-3 THEN 111 WHEN a<=b THEN 222
 ----
 108 values hashing to 4213133a1f82afa8019caa346d9e5849
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query II nosort
 SELECT (a+b+c+d+e)/5,
@@ -4991,7 +4971,7 @@ SELECT b,
 ----
 98 values hashing to 8420ffda963b1647bef090ee5739449a
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query I nosort
 SELECT (SELECT count(*) FROM t1 AS x WHERE x.c>t1.c AND x.d<t1.d)
@@ -5009,7 +4989,7 @@ SELECT c
 ----
 30 values hashing to 70364ca416eb4255377b03cd243b032a
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query IIII nosort
 SELECT a+b*2,
@@ -5021,7 +5001,7 @@ SELECT a+b*2,
 ----
 120 values hashing to a6627a0078cbf942e660977a942b5987
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - Error during planning: Projections require unique expression names
 skipif Datafusion
 query IIIIII nosort
 SELECT (a+b+c+d+e)/5,
@@ -5036,7 +5016,7 @@ SELECT (a+b+c+d+e)/5,
 ----
 66 values hashing to 80d5784436f12d6111be1755171b13d4
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query IIII nosort
 SELECT (SELECT count(*) FROM t1 AS x WHERE x.b<t1.b),
@@ -5048,7 +5028,7 @@ SELECT (SELECT count(*) FROM t1 AS x WHERE x.b<t1.b),
 ----
 120 values hashing to 9fdbbe77da4a2d6902d4d55104121739
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query III nosort
 SELECT a-b,
@@ -5059,7 +5039,7 @@ SELECT a-b,
 ----
 90 values hashing to fb63c0da23b6869a02b06048ea39681c
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query I nosort
 SELECT (SELECT count(*) FROM t1 AS x WHERE x.b<t1.b)
@@ -5084,7 +5064,7 @@ SELECT a+b*2+c*3,
 ----
 180 values hashing to 8308675248fdb458de9cb714090daf99
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query II nosort
 SELECT a+b*2+c*3+d*4+e*5,
@@ -5095,7 +5075,7 @@ SELECT a+b*2+c*3+d*4+e*5,
 ----
 58 values hashing to 9646b8b8b446280ab97d4f5e30a51bae
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - Error during planning: Projections require unique expression names
 skipif Datafusion
 query IIIIII nosort
 SELECT (SELECT count(*) FROM t1 AS x WHERE x.b<t1.b),
@@ -5162,7 +5142,7 @@ SELECT a+b*2+c*3,
 ----
 78 values hashing to 68b9d7afd5c62e5c4bb2c20478a07a61
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query III nosort
 SELECT a,
@@ -5173,7 +5153,7 @@ SELECT a,
 ----
 90 values hashing to ea5d42bf4b76916f27ca2207d5f3a1cb
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query III nosort
 SELECT (SELECT count(*) FROM t1 AS x WHERE x.c>t1.c AND x.d<t1.d),
@@ -5194,7 +5174,7 @@ SELECT b
 ----
 11 values hashing to c11ff9c2a7e1278b7c296c552128c88a
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - Error during planning: Projections require unique expression names
 skipif Datafusion
 query IIIII nosort
 SELECT (SELECT count(*) FROM t1 AS x WHERE x.b<t1.b),
@@ -5232,7 +5212,7 @@ SELECT a+b*2+c*3+d*4+e*5,
 ----
 90 values hashing to eb08dc2a0f14d493bfe5f8cf91fb03ba
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query III nosort
 SELECT CASE a+1 WHEN b THEN 111 WHEN c THEN 222
@@ -5266,7 +5246,7 @@ SELECT c-d,
 ----
 100 values hashing to 028c01fd1a3fde99ed6dcf60c1113942
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query IIIIII nosort
 SELECT abs(b-c),
@@ -5303,7 +5283,7 @@ SELECT CASE WHEN c>(SELECT avg(c) FROM t1) THEN a*2 ELSE b*10 END,
 ----
 210 values hashing to 83f9eb2c991235ceaf943aab7abde5f6
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query III nosort
 SELECT a,
@@ -5315,7 +5295,7 @@ SELECT a,
 ----
 81 values hashing to 93d7b3b407d166dc7e232faf70b8c121
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query IIIIIII nosort
 SELECT (SELECT count(*) FROM t1 AS x WHERE x.c>t1.c AND x.d<t1.d),
@@ -5357,7 +5337,7 @@ SELECT a+b*2+c*3+d*4+e*5,
 1529
 555
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - Error during planning: Projections require unique expression names
 skipif Datafusion
 query IIIIIII nosort
 SELECT (SELECT count(*) FROM t1 AS x WHERE x.c>t1.c AND x.d<t1.d),
@@ -5373,7 +5353,7 @@ SELECT (SELECT count(*) FROM t1 AS x WHERE x.c>t1.c AND x.d<t1.d),
 ----
 98 values hashing to 9672e04e6af85e083efc6d3a01ad003c
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query IIII nosort
 SELECT a+b*2,
@@ -5399,7 +5379,7 @@ SELECT e,
 ----
 150 values hashing to 13d3c2f83fa3cf186cf6ebda9e14254f
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query IIIII nosort
 SELECT a+b*2+c*3+d*4+e*5,
@@ -5487,7 +5467,7 @@ SELECT (a+b+c+d+e)/5,
 111
 -1
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - Error during planning: Projections require unique expression names
 skipif Datafusion
 query IIIIII nosort
 SELECT c,
@@ -5521,7 +5501,7 @@ SELECT abs(b-c)
 ----
 10 values hashing to 957f34bd4f6530b19d41aade9e48d932
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - Error during planning: Projections require unique expression names
 skipif Datafusion
 query IIIII nosort
 SELECT (SELECT count(*) FROM t1 AS x WHERE x.c>t1.c AND x.d<t1.d),
@@ -5665,7 +5645,7 @@ SELECT c
 ----
 27 values hashing to f46e34330cef7bee4b17e127fcb2433f
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query IIII nosort
 SELECT a+b*2+c*3+d*4,
@@ -5687,7 +5667,7 @@ SELECT abs(a)
 ----
 30 values hashing to d1361dd52a9236110ba64b28a64f850d
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query IIII nosort
 SELECT (SELECT count(*) FROM t1 AS x WHERE x.c>t1.c AND x.d<t1.d),
@@ -5700,7 +5680,7 @@ SELECT (SELECT count(*) FROM t1 AS x WHERE x.c>t1.c AND x.d<t1.d),
 ----
 120 values hashing to 9d8ae71d1d4851666a75fec8bc675773
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query IIIIII nosort
 SELECT c-d,
@@ -5715,7 +5695,7 @@ SELECT c-d,
 ----
 96 values hashing to a762a09cf2fc3bb7b96a1bacd3516820
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query IIIII nosort
 SELECT a+b*2+c*3+d*4+e*5,
@@ -5728,8 +5708,6 @@ SELECT a+b*2+c*3+d*4+e*5,
 ----
 150 values hashing to 9fa5902ee5ef32c5318e0331bdd35651
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
-skipif Datafusion
 query IIIIIII nosort
 SELECT CASE WHEN a<b-3 THEN 111 WHEN a<=b THEN 222
         WHEN a<b+3 THEN 333 ELSE 444 END,
@@ -5767,7 +5745,7 @@ SELECT c-d,
 ----
 150 values hashing to 02281452fc49042060157771c16a930d
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query III nosort
 SELECT CASE WHEN a<b-3 THEN 111 WHEN a<=b THEN 222
@@ -5782,7 +5760,7 @@ SELECT CASE WHEN a<b-3 THEN 111 WHEN a<=b THEN 222
 ----
 90 values hashing to b5050d48797882b2954b2bb7278991db
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query III nosort
 SELECT a+b*2+c*3+d*4+e*5,
@@ -5828,7 +5806,7 @@ SELECT abs(b-c)
 ----
 30 values hashing to ebf2696a89b67ae7c2bb5d796d902b72
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query IIIIII nosort
 SELECT b,
@@ -5842,7 +5820,7 @@ SELECT b,
 ----
 180 values hashing to 8c1ed130d0125560ee81e819bc8451af
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query IIIII nosort
 SELECT c,
@@ -5867,7 +5845,7 @@ SELECT a,
 ----
 50 values hashing to 522548ede2edcdbad05472fed877bcf0
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query IIIIIII nosort
 SELECT a+b*2+c*3+d*4,
@@ -5931,7 +5909,7 @@ SELECT d-e,
 3
 191
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - Error during planning: Projections require unique expression names
 skipif Datafusion
 query IIIIIII nosort
 SELECT (SELECT count(*) FROM t1 AS x WHERE x.c>t1.c AND x.d<t1.d),
@@ -5980,7 +5958,7 @@ SELECT b,
 ----
 21 values hashing to 677c2b291c4593e92612ecd64d0703bc
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query IIIIII nosort
 SELECT (a+b+c+d+e)/5,
@@ -6170,7 +6148,7 @@ SELECT abs(b-c)
 3
 4
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query IIII nosort
 SELECT CASE WHEN c>(SELECT avg(c) FROM t1) THEN a*2 ELSE b*10 END,
@@ -6285,7 +6263,7 @@ SELECT a+b*2+c*3+d*4+e*5,
 ----
 88 values hashing to 8a7565aef4b4ff5dc5b2669162892999
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - Error during planning: Projections require unique expression names
 skipif Datafusion
 query IIIIII nosort
 SELECT (SELECT count(*) FROM t1 AS x WHERE x.b<t1.b),
@@ -6301,7 +6279,7 @@ SELECT (SELECT count(*) FROM t1 AS x WHERE x.b<t1.b),
 ----
 24 values hashing to 9e80b3c7e910457fc023a082297c66a6
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query I nosort
 SELECT (SELECT count(*) FROM t1 AS x WHERE x.b<t1.b)
@@ -6310,7 +6288,7 @@ SELECT (SELECT count(*) FROM t1 AS x WHERE x.b<t1.b)
 ----
 30 values hashing to 0267d5a030ef7be744b11e28265acf35
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query IIIIIII nosort
 SELECT (SELECT count(*) FROM t1 AS x WHERE x.b<t1.b),
@@ -6356,7 +6334,7 @@ SELECT a+b*2+c*3+d*4+e*5,
 ----
 80 values hashing to 90c813844bf5d6adeffa4f21f6ca28f2
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query IIIIII nosort
 SELECT e,
@@ -6436,7 +6414,7 @@ SELECT c-d,
 ----
 145 values hashing to 2c21a6af40d74c2a9f8da0749a4b959d
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query IIIIIII nosort
 SELECT e,
@@ -6472,7 +6450,7 @@ SELECT e,
 ----
 120 values hashing to 66537dce5d5a5988d8089fe9e8d59800
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query IIIIII nosort
 SELECT a+b*2,
@@ -6506,7 +6484,7 @@ SELECT a+b*2+c*3+d*4+e*5,
 ----
 42 values hashing to bb2e37cf59a5b762b43ef4271a54e000
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query IIIIII nosort
 SELECT CASE a+1 WHEN b THEN 111 WHEN c THEN 222
@@ -6522,7 +6500,7 @@ SELECT CASE a+1 WHEN b THEN 111 WHEN c THEN 222
 ----
 180 values hashing to 9167d3aa65f67301e2a34753a02afd02
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query IIII nosort
 SELECT abs(b-c),
@@ -6556,7 +6534,7 @@ SELECT CASE WHEN c>(SELECT avg(c) FROM t1) THEN a*2 ELSE b*10 END,
 ----
 24 values hashing to d649f2039986a74e6ec3591a11b8ed4b
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query III nosort
 SELECT abs(a),
@@ -6580,7 +6558,7 @@ SELECT a-b,
 ----
 150 values hashing to 85a750970f2a3cfd014b8df3cb52a6f6
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query III nosort
 SELECT CASE WHEN a<b-3 THEN 111 WHEN a<=b THEN 222
@@ -6595,7 +6573,7 @@ SELECT CASE WHEN a<b-3 THEN 111 WHEN a<=b THEN 222
 ----
 78 values hashing to bbceeaaca7afd780d5aa5173c0f3df16
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query IIII nosort
 SELECT (SELECT count(*) FROM t1 AS x WHERE x.c>t1.c AND x.d<t1.d),
@@ -6619,7 +6597,7 @@ SELECT (a+b+c+d+e)/5,
 ----
 54 values hashing to 851593a9a226d556e165b5765819e242
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query IIIII nosort
 SELECT CASE WHEN c>(SELECT avg(c) FROM t1) THEN a*2 ELSE b*10 END,
@@ -6655,7 +6633,7 @@ SELECT b-c,
 ----
 81 values hashing to b9b1ef0a70997d40f2cb0c0b5b6ea761
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query IIIIII nosort
 SELECT a+b*2+c*3+d*4+e*5,
@@ -6678,7 +6656,7 @@ SELECT d
 ----
 30 values hashing to 0c542471646c50440dc6eda5bb1b61a8
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query III nosort
 SELECT CASE WHEN a<b-3 THEN 111 WHEN a<=b THEN 222
@@ -6707,7 +6685,7 @@ SELECT abs(a),
 ----
 48 values hashing to 04bb6be1da657237947cd4ab3392c384
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query IIIIII nosort
 SELECT a+b*2+c*3+d*4+e*5,
@@ -6743,7 +6721,7 @@ SELECT a-b,
 ----
 22 values hashing to afe0aa8cffc769721328534eeed4055a
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query IIIII nosort
 SELECT a+b*2+c*3+d*4+e*5,
@@ -6760,7 +6738,7 @@ SELECT a+b*2+c*3+d*4+e*5,
 ----
 140 values hashing to 0147eff9aa1fd447ee41ccda073598b9
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query IIII nosort
 SELECT a+b*2+c*3,
@@ -6773,7 +6751,7 @@ SELECT a+b*2+c*3,
 ----
 88 values hashing to db4da1f3c45a5823d3ebc705f0762179
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query II nosort
 SELECT (SELECT count(*) FROM t1 AS x WHERE x.c>t1.c AND x.d<t1.d),
@@ -6796,7 +6774,7 @@ SELECT a+b*2+c*3+d*4
 2125
 2226
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query IIIIII nosort
 SELECT (SELECT count(*) FROM t1 AS x WHERE x.c>t1.c AND x.d<t1.d),
@@ -6810,7 +6788,7 @@ SELECT (SELECT count(*) FROM t1 AS x WHERE x.c>t1.c AND x.d<t1.d),
 ----
 180 values hashing to e80b8346172b01fad12a7248e5bbc7a4
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query IIIIII nosort
 SELECT (SELECT count(*) FROM t1 AS x WHERE x.b<t1.b),
@@ -6897,7 +6875,7 @@ SELECT CASE a+1 WHEN b THEN 111 WHEN c THEN 222
 ----
 66 values hashing to cd02907c94bef262defa2744db1d76fe
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query IIII nosort
 SELECT a,
@@ -6930,7 +6908,7 @@ SELECT a+b*2+c*3+d*4
 ----
 22 values hashing to 986d884c71dc223ac25f3dd12e7d7540
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query IIIII nosort
 SELECT c-d,
@@ -6945,7 +6923,7 @@ SELECT c-d,
 ----
 55 values hashing to 50319241cf069b222e20cb31cfb4f023
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query IIIII nosort
 SELECT c-d,
@@ -6972,7 +6950,7 @@ SELECT c,
 ----
 150 values hashing to 3565717d74e8461a76a1e7e96613a5ee
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - Error during planning: Projections require unique expression names
 skipif Datafusion
 query III nosort
 SELECT (a+b+c+d+e)/5,
@@ -7007,7 +6985,7 @@ SELECT c,
 ----
 180 values hashing to 083d6dcd4c56b50a9ad85c893885dd3a
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query III nosort
 SELECT (SELECT count(*) FROM t1 AS x WHERE x.b<t1.b),
@@ -7083,7 +7061,7 @@ SELECT a+b*2+c*3+d*4,
 ----
 12 values hashing to ab6ddb0019d35b32de0f257c78d20c9b
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query IIIII nosort
 SELECT (SELECT count(*) FROM t1 AS x WHERE x.c>t1.c AND x.d<t1.d),
@@ -7221,7 +7199,7 @@ SELECT d,
 ----
 180 values hashing to 4d08f00ee53c5830f926a4a0dcee2b20
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query IIIIII nosort
 SELECT CASE WHEN a<b-3 THEN 111 WHEN a<=b THEN 222
@@ -7356,7 +7334,7 @@ SELECT c,
 ----
 115 values hashing to 4f24f48edeed6bafc24320280f45feca
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query IIIII nosort
 SELECT abs(b-c),
@@ -7372,7 +7350,7 @@ SELECT abs(b-c),
 ----
 10 values hashing to d1f0237fc8125db019f7ae5fc6432c34
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query III nosort
 SELECT b,
@@ -7412,7 +7390,7 @@ SELECT a+b*2,
 ----
 180 values hashing to 48d8489ba2d0cd0db78ff89d7c25090e
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query IIIIIII nosort
 SELECT e,
@@ -7430,7 +7408,7 @@ SELECT e,
 ----
 168 values hashing to d460bea3b5d3f177ff5befb82bf9b9c1
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query IIIIII nosort
 SELECT a+b*2+c*3+d*4,
@@ -7463,7 +7441,7 @@ SELECT a+b*2+c*3,
 ----
 168 values hashing to 23425d8f076e222594024d8bf9b642ec
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query IIIII nosort
 SELECT a+b*2,
@@ -7477,7 +7455,7 @@ SELECT a+b*2,
 ----
 70 values hashing to 5b3117153cd6e1dc100280e8fa82eb28
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - Error during planning: Projections require unique expression names
 skipif Datafusion
 query IIIIII nosort
 SELECT (SELECT count(*) FROM t1 AS x WHERE x.b<t1.b),
@@ -7503,7 +7481,7 @@ SELECT b-c,
 ----
 90 values hashing to 1b9686dadfd2cec59f0bce345217b20d
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query II nosort
 SELECT (SELECT count(*) FROM t1 AS x WHERE x.b<t1.b),
@@ -7535,7 +7513,7 @@ SELECT abs(b-c),
 ----
 120 values hashing to 6e197d6c621de72f9288f1e3f27b08a8
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query III nosort
 SELECT (SELECT count(*) FROM t1 AS x WHERE x.b<t1.b),
@@ -7547,7 +7525,7 @@ SELECT (SELECT count(*) FROM t1 AS x WHERE x.b<t1.b),
 ----
 90 values hashing to a6b4585e286a4224213e0d992c98fd0d
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query III nosort
 SELECT (SELECT count(*) FROM t1 AS x WHERE x.c>t1.c AND x.d<t1.d),
@@ -7569,7 +7547,7 @@ SELECT d,
 ----
 90 values hashing to 57c895300deda1eb561d3d1a25b41458
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query III nosort
 SELECT e,
@@ -7654,7 +7632,7 @@ SELECT a+b*2+c*3+d*4
 ----
 14 values hashing to 840c9b8b71971d5911654f07be8e4708
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query IIIII nosort
 SELECT d-e,
@@ -7687,7 +7665,7 @@ SELECT b-c
 ----
 30 values hashing to 970be304ddec1d2bede8d8e2f14368c6
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query IIIIII nosort
 SELECT abs(b-c),
@@ -7743,7 +7721,7 @@ SELECT c
 ----
 14 values hashing to 18666cb3224ae801a1972a186fe5843f
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query IIIIIII nosort
 SELECT CASE a+1 WHEN b THEN 111 WHEN c THEN 222
@@ -7762,7 +7740,7 @@ SELECT CASE a+1 WHEN b THEN 111 WHEN c THEN 222
 ----
 98 values hashing to 73fcbe214cbf5ab7cc9bcf09d8b85acf
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - Error during planning: Projections require unique expression names
 skipif Datafusion
 query IIIIIII nosort
 SELECT (SELECT count(*) FROM t1 AS x WHERE x.b<t1.b),
@@ -7778,7 +7756,7 @@ SELECT (SELECT count(*) FROM t1 AS x WHERE x.b<t1.b),
 ----
 210 values hashing to 278b40264305ba138427722b9dcc7b78
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query IIIIII nosort
 SELECT (SELECT count(*) FROM t1 AS x WHERE x.c>t1.c AND x.d<t1.d),
@@ -7845,7 +7823,7 @@ SELECT a-b,
 ----
 210 values hashing to 48556c805f6f4da3a00f4e3b981ae954
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query IIIIII nosort
 SELECT (SELECT count(*) FROM t1 AS x WHERE x.c>t1.c AND x.d<t1.d),
@@ -7911,7 +7889,7 @@ SELECT abs(a),
 ----
 58 values hashing to 29d7f19c885dc86951cfbe1cd84d3d72
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query IIII nosort
 SELECT d-e,
@@ -7937,7 +7915,7 @@ SELECT CASE WHEN a<b-3 THEN 111 WHEN a<=b THEN 222
 ----
 29 values hashing to f81c86b5ccfceb91643fed162f9e5413
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query IIIII nosort
 SELECT (SELECT count(*) FROM t1 AS x WHERE x.c>t1.c AND x.d<t1.d),
@@ -7959,7 +7937,7 @@ SELECT CASE a+1 WHEN b THEN 111 WHEN c THEN 222
 ----
 30 values hashing to f2bf77f8cfb62666ab72c866ed4d4f1a
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query II nosort
 SELECT c-d,
@@ -7982,7 +7960,7 @@ SELECT abs(a),
 ----
 24 values hashing to 00467ddc8858d6cf90c3f1b9b193edbc
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query IIIIII nosort
 SELECT abs(a),
@@ -8040,7 +8018,7 @@ SELECT a+b*2+c*3+d*4
 ----
 30 values hashing to a97f06c7abca35ed0602e7a54b6ca0ac
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query IIII nosort
 SELECT (SELECT count(*) FROM t1 AS x WHERE x.b<t1.b),
@@ -8053,7 +8031,7 @@ SELECT (SELECT count(*) FROM t1 AS x WHERE x.b<t1.b),
 ----
 60 values hashing to e3257bfeb0e05898a093d9dd74a5c6f2
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query IIIIIII nosort
 SELECT (SELECT count(*) FROM t1 AS x WHERE x.c>t1.c AND x.d<t1.d),
@@ -8103,7 +8081,7 @@ SELECT (a+b+c+d+e)/5
 ----
 10 values hashing to aa2c9e190b3da5017e764235b4370941
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query IIIII nosort
 SELECT c,
@@ -8181,7 +8159,7 @@ SELECT b-c,
 ----
 21 values hashing to a9adff4c78600e1bb516fe971d672dee
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query IIIIIII nosort
 SELECT (SELECT count(*) FROM t1 AS x WHERE x.c>t1.c AND x.d<t1.d),
@@ -8200,7 +8178,7 @@ SELECT (SELECT count(*) FROM t1 AS x WHERE x.c>t1.c AND x.d<t1.d),
 ----
 154 values hashing to b9a9dc5ffa8928273db7bcd669c53cd7
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - Error during planning: Projections require unique expression names
 skipif Datafusion
 query IIIII nosort
 SELECT abs(a),
@@ -8249,7 +8227,7 @@ SELECT c,
 1757
 115
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query IIII nosort
 SELECT (SELECT count(*) FROM t1 AS x WHERE x.c>t1.c AND x.d<t1.d),
@@ -8261,7 +8239,7 @@ SELECT (SELECT count(*) FROM t1 AS x WHERE x.c>t1.c AND x.d<t1.d),
 ----
 120 values hashing to 238444a65f715eb041390b17898802ba
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - Error during planning: Projections require unique expression names
 skipif Datafusion
 query III nosort
 SELECT CASE a+1 WHEN b THEN 111 WHEN c THEN 222
@@ -8311,7 +8289,7 @@ SELECT CASE a+1 WHEN b THEN 111 WHEN c THEN 222
 ----
 20 values hashing to c7b97476a8b2de6d251ac49288730b61
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query III nosort
 SELECT (a+b+c+d+e)/5,
@@ -8335,7 +8313,7 @@ SELECT a+b*2,
 ----
 58 values hashing to 1ced196f5801ed37a6183f2f20dff45c
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query IIIII nosort
 SELECT a+b*2+c*3+d*4+e*5,
@@ -8435,7 +8413,7 @@ SELECT CASE WHEN c>(SELECT avg(c) FROM t1) THEN a*2 ELSE b*10 END,
 ----
 42 values hashing to ba254e8d09c76b7cbc07d9d591025883
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query IIIII nosort
 SELECT a+b*2+c*3,
@@ -8449,7 +8427,7 @@ SELECT a+b*2+c*3,
 ----
 30 values hashing to a33bb527d06a2910c9a6c62eca6505b7
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query IIII nosort
 SELECT c-d,
@@ -8485,7 +8463,7 @@ SELECT CASE a+1 WHEN b THEN 111 WHEN c THEN 222
 ----
 27 values hashing to 56366183f13626643e62133d31b97fab
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query IIIII nosort
 SELECT b,
@@ -8513,7 +8491,7 @@ SELECT d-e,
 ----
 75 values hashing to 91e95036e8737e2902f3561cf2148b7c
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - Error during planning: Projections require unique expression names
 skipif Datafusion
 query IIIIIII nosort
 SELECT abs(b-c),
@@ -8529,7 +8507,7 @@ SELECT abs(b-c),
 ----
 210 values hashing to 2086c3df1975d9993bfa394053028c8f
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - Error during planning: Projections require unique expression names
 skipif Datafusion
 query IIIIIII nosort
 SELECT (a+b+c+d+e)/5,
@@ -8565,7 +8543,7 @@ SELECT e
 ----
 27 values hashing to d8936a5a1a3837cd7f42c18b75761e64
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query IIIIIII nosort
 SELECT a+b*2+c*3,
@@ -8611,7 +8589,7 @@ SELECT a+b*2+c*3+d*4+e*5,
 ----
 14 values hashing to 21927ded75a33b0171059772011e3c39
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query IIIIIII nosort
 SELECT e,
@@ -8629,7 +8607,7 @@ SELECT e,
 ----
 56 values hashing to 8f75e59b84b486d20c41620c1756b110
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query IIIII nosort
 SELECT b-c,
@@ -8700,7 +8678,7 @@ SELECT b-c
 ----
 16 values hashing to c5cb15074dbce6c2853b664f05e5a06a
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query II nosort
 SELECT (SELECT count(*) FROM t1 AS x WHERE x.b<t1.b),
@@ -8761,7 +8739,7 @@ SELECT a+b*2+c*3,
 ----
 150 values hashing to 1ed27c9e9967fcf30b0548861bbd897d
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query III nosort
 SELECT a,
@@ -8772,7 +8750,7 @@ SELECT a,
 ----
 90 values hashing to 23fade28502d6270c32ef8abb80c2587
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query IIII nosort
 SELECT a+b*2+c*3+d*4,
@@ -8787,7 +8765,7 @@ SELECT a+b*2+c*3+d*4,
 ----
 116 values hashing to 4aba029d043e5101b15151e670342702
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query IIII nosort
 SELECT abs(a),
@@ -8799,7 +8777,7 @@ SELECT abs(a),
 ----
 120 values hashing to c0fb0d9f06fa5550406b035929522753
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query IIII nosort
 SELECT c-d,
@@ -8832,7 +8810,7 @@ SELECT CASE WHEN c>(SELECT avg(c) FROM t1) THEN a*2 ELSE b*10 END
 ----
 14 values hashing to af1d86a32171d08bae1f8f3033e8a3dc
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query IIII nosort
 SELECT c-d,
@@ -8859,7 +8837,7 @@ SELECT a+b*2,
 ----
 16 values hashing to 59f365656ebcdfed6ff46a2d5c6d6341
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - Error during planning: Projections require unique expression names
 skipif Datafusion
 query IIIIII nosort
 SELECT (SELECT count(*) FROM t1 AS x WHERE x.b<t1.b),
@@ -8883,7 +8861,7 @@ SELECT a-b
 ----
 27 values hashing to e7100a9a9684fb20d83162187da839e4
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - Error during planning: Projections require unique expression names
 skipif Datafusion
 query III nosort
 SELECT CASE a+1 WHEN b THEN 111 WHEN c THEN 222
@@ -8898,7 +8876,7 @@ SELECT CASE a+1 WHEN b THEN 111 WHEN c THEN 222
 ----
 90 values hashing to 622e9a88d60bdd5066c19a3843a170f7
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query IIIIII nosort
 SELECT d,
@@ -8924,7 +8902,7 @@ SELECT abs(a),
 ----
 36 values hashing to 05293d133ca2cac2f19e4e30db84dfda
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query I nosort
 SELECT (SELECT count(*) FROM t1 AS x WHERE x.c>t1.c AND x.d<t1.d)
@@ -8938,7 +8916,7 @@ SELECT (SELECT count(*) FROM t1 AS x WHERE x.c>t1.c AND x.d<t1.d)
 0
 0
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query IIII nosort
 SELECT a+b*2+c*3+d*4+e*5,
@@ -8966,7 +8944,7 @@ SELECT CASE a+1 WHEN b THEN 111 WHEN c THEN 222
 ----
 180 values hashing to d24051044659497869bcab93873c4188
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query IIIIII nosort
 SELECT (SELECT count(*) FROM t1 AS x WHERE x.b<t1.b),
@@ -8981,7 +8959,7 @@ SELECT (SELECT count(*) FROM t1 AS x WHERE x.b<t1.b),
 ----
 132 values hashing to 5847451a2d973ff076a6917a24df31ce
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query I nosort
 SELECT (SELECT count(*) FROM t1 AS x WHERE x.b<t1.b)
@@ -9008,7 +8986,7 @@ SELECT d,
 ----
 180 values hashing to 25be50217edd1dde9c08a20bbaa92559
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query IIIIII nosort
 SELECT (SELECT count(*) FROM t1 AS x WHERE x.c>t1.c AND x.d<t1.d),
@@ -9022,7 +9000,7 @@ SELECT (SELECT count(*) FROM t1 AS x WHERE x.c>t1.c AND x.d<t1.d),
 ----
 180 values hashing to 76cb0f185711243083f4b8769f948815
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query IIIII nosort
 SELECT CASE a+1 WHEN b THEN 111 WHEN c THEN 222
@@ -9064,7 +9042,7 @@ SELECT b,
 ----
 20 values hashing to bc0a728a029d400d4c19f501f51eb828
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query IIIIII nosort
 SELECT (SELECT count(*) FROM t1 AS x WHERE x.b<t1.b),
@@ -9079,7 +9057,7 @@ SELECT (SELECT count(*) FROM t1 AS x WHERE x.b<t1.b),
 ----
 174 values hashing to bd1cf8c2ce872c289ac27e250ab8c77e
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query IIIIII nosort
 SELECT a+b*2+c*3+d*4+e*5,
@@ -9103,7 +9081,7 @@ SELECT a+b*2+c*3
 ----
 24 values hashing to 27eeb568907f3b4f8a48a13652124dd5
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query IIIII nosort
 SELECT b-c,
@@ -9154,7 +9132,7 @@ SELECT a,
 ----
 60 values hashing to 46131633c62f2d9e6f547c327a590045
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query IIIII nosort
 SELECT CASE WHEN c>(SELECT avg(c) FROM t1) THEN a*2 ELSE b*10 END,
@@ -9219,7 +9197,7 @@ SELECT CASE WHEN a<b-3 THEN 111 WHEN a<=b THEN 222
 ----
 48 values hashing to d0ea668a25e020372a556318afe192ab
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query IIIII nosort
 SELECT (SELECT count(*) FROM t1 AS x WHERE x.b<t1.b),
@@ -9233,7 +9211,7 @@ SELECT (SELECT count(*) FROM t1 AS x WHERE x.b<t1.b),
 ----
 135 values hashing to 0a7ff196c476089cbcb92e49c1c62442
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query II nosort
 SELECT (SELECT count(*) FROM t1 AS x WHERE x.b<t1.b),
@@ -9251,7 +9229,7 @@ SELECT (SELECT count(*) FROM t1 AS x WHERE x.b<t1.b),
 29
 245
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query IIII nosort
 SELECT a+b*2,
@@ -9306,7 +9284,7 @@ SELECT a+b*2+c*3,
 ----
 14 values hashing to 09449abc628f43f2b2cfd09cb028fcbd
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query IIIIII nosort
 SELECT CASE a+1 WHEN b THEN 111 WHEN c THEN 222
@@ -9358,7 +9336,7 @@ SELECT a+b*2+c*3,
 ----
 180 values hashing to eba90a7042d20ae635380f2920638d69
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query IIIIII nosort
 SELECT a-b,
@@ -9374,7 +9352,7 @@ SELECT a-b,
 ----
 174 values hashing to 742703bb047dc6b6254470d20be52ae0
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query IIIII nosort
 SELECT CASE WHEN a<b-3 THEN 111 WHEN a<=b THEN 222
@@ -9395,7 +9373,7 @@ SELECT CASE WHEN a<b-3 THEN 111 WHEN a<=b THEN 222
 110
 2
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query IIIIIII nosort
 SELECT c,
@@ -9411,7 +9389,7 @@ SELECT c,
 ----
 210 values hashing to c101599893954e2d252da01e33c73937
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query IIIIII nosort
 SELECT d,
@@ -9482,7 +9460,7 @@ SELECT abs(a),
 ----
 58 values hashing to 51eb92d661a225afae03f1e126f36433
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - Error during planning: Projections require unique expression names
 skipif Datafusion
 query IIIIII nosort
 SELECT (SELECT count(*) FROM t1 AS x WHERE x.b<t1.b),
@@ -9540,7 +9518,7 @@ SELECT c-d
 ----
 11 values hashing to 03dc6d78aaa470425875f87a9c9eeab5
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query IIIII nosort
 SELECT a+b*2+c*3+d*4+e*5,
@@ -9616,7 +9594,7 @@ SELECT c-d,
 ----
 120 values hashing to 179b1a322c10a0b9d1ec5b326ea081e1
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query III nosort
 SELECT a+b*2+c*3+d*4,
@@ -9627,7 +9605,7 @@ SELECT a+b*2+c*3+d*4,
 ----
 90 values hashing to d8520212db20c57541d0c28d4fddae94
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query IIIIIII nosort
 SELECT e,
@@ -9701,7 +9679,7 @@ SELECT a+b*2+c*3+d*4+e*5,
 ----
 120 values hashing to f614d7af58f04a09e4b5dda636fb7790
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - Error during planning: Projections require unique expression names
 skipif Datafusion
 query IIIIII nosort
 SELECT abs(a),
@@ -9777,7 +9755,7 @@ SELECT d,
 ----
 56 values hashing to 8e9a734c55398ee1e2d087d50531c3db
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query II nosort
 SELECT (SELECT count(*) FROM t1 AS x WHERE x.b<t1.b),
@@ -9810,7 +9788,7 @@ SELECT (a+b+c+d+e)/5,
 ----
 90 values hashing to 7ead3c920199ae810a2ae8119e9797cd
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query II nosort
 SELECT (SELECT count(*) FROM t1 AS x WHERE x.c>t1.c AND x.d<t1.d),
@@ -9856,7 +9834,7 @@ SELECT c-d,
 ----
 48 values hashing to 40e60735f1fdf2e1d665a6c00b9bd1d3
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query IIIII nosort
 SELECT (SELECT count(*) FROM t1 AS x WHERE x.b<t1.b),
@@ -9872,7 +9850,7 @@ SELECT (SELECT count(*) FROM t1 AS x WHERE x.b<t1.b),
 ----
 115 values hashing to 87b7852145d2cd4b4aef60d7fde294ca
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - Error during planning: Projections require unique expression names
 skipif Datafusion
 query IIIIII nosort
 SELECT b-c,
@@ -9886,7 +9864,7 @@ SELECT b-c,
 ----
 180 values hashing to 0237184a8878edf72b431a6c9bcfcbf2
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query III nosort
 SELECT e,
@@ -9974,7 +9952,7 @@ SELECT d-e,
 ----
 9 values hashing to 722881c1ff15283d5c95a5ef39fccb6d
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query IIII nosort
 SELECT b-c,
@@ -9988,7 +9966,7 @@ SELECT b-c,
 ----
 44 values hashing to 4ee79810a1704816bba77ef7c8033bfb
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query IIIIII nosort
 SELECT abs(a),
@@ -10029,7 +10007,7 @@ SELECT a,
 ----
 140 values hashing to 9644b07604668d80e82ada3908306f8b
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query IIIIIII nosort
 SELECT CASE a+1 WHEN b THEN 111 WHEN c THEN 222
@@ -10047,7 +10025,7 @@ SELECT CASE a+1 WHEN b THEN 111 WHEN c THEN 222
 ----
 14 values hashing to b3cdf8a3a0bfb3e38e63a70a6887354d
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query IIIII nosort
 SELECT CASE WHEN a<b-3 THEN 111 WHEN a<=b THEN 222
@@ -10061,7 +10039,7 @@ SELECT CASE WHEN a<b-3 THEN 111 WHEN a<=b THEN 222
 ----
 150 values hashing to 1db48656258028dd2a0274c1f20a4e6c
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - Error during planning: Projections require unique expression names
 skipif Datafusion
 query IIIIII nosort
 SELECT (SELECT count(*) FROM t1 AS x WHERE x.c>t1.c AND x.d<t1.d),
@@ -10077,7 +10055,7 @@ SELECT (SELECT count(*) FROM t1 AS x WHERE x.c>t1.c AND x.d<t1.d),
 ----
 162 values hashing to ec8ccfd9d87f0f620283a1dae7d24434
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query IIIIIII nosort
 SELECT CASE a+1 WHEN b THEN 111 WHEN c THEN 222
@@ -10120,7 +10098,7 @@ SELECT a-b,
 ----
 180 values hashing to 8290882412be354b12366d09fa630d1e
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query IIII nosort
 SELECT abs(b-c),
@@ -10142,7 +10120,7 @@ SELECT abs(b-c),
 2
 2476
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - Error during planning: Projections require unique expression names
 skipif Datafusion
 query IIIIIII nosort
 SELECT (SELECT count(*) FROM t1 AS x WHERE x.c>t1.c AND x.d<t1.d),
@@ -10172,7 +10150,7 @@ SELECT d,
  ORDER BY 5,2,1,4,3
 ----
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query IIII nosort
 SELECT (SELECT count(*) FROM t1 AS x WHERE x.b<t1.b),
@@ -10188,7 +10166,7 @@ SELECT (SELECT count(*) FROM t1 AS x WHERE x.b<t1.b),
 ----
 40 values hashing to ce114edef775ad5ff5fdc63fd86c4a61
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query III nosort
 SELECT (SELECT count(*) FROM t1 AS x WHERE x.b<t1.b),
@@ -10207,7 +10185,7 @@ SELECT a
 ----
 16 values hashing to 952e6c754c450612dd99b9d315977052
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query I nosort
 SELECT (SELECT count(*) FROM t1 AS x WHERE x.c>t1.c AND x.d<t1.d)
@@ -10216,7 +10194,7 @@ SELECT (SELECT count(*) FROM t1 AS x WHERE x.c>t1.c AND x.d<t1.d)
 ----
 30 values hashing to ec9f02c46c399db521c47dd9cb6a40dd
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - Error during planning: Projections require unique expression names
 skipif Datafusion
 query III nosort
 SELECT (SELECT count(*) FROM t1 AS x WHERE x.c>t1.c AND x.d<t1.d),
@@ -10227,7 +10205,7 @@ SELECT (SELECT count(*) FROM t1 AS x WHERE x.c>t1.c AND x.d<t1.d),
 ----
 90 values hashing to 87301227ae0731f419456d467d0e095f
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query III nosort
 SELECT (SELECT count(*) FROM t1 AS x WHERE x.b<t1.b),
@@ -10248,7 +10226,7 @@ SELECT a+b*2,
 ----
 81 values hashing to 87ef93a2fb3074f84f96ba99640b4492
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query IIIIIII nosort
 SELECT c,
@@ -10292,7 +10270,7 @@ SELECT a+b*2
 ----
 29 values hashing to 4f865c5fb99fc326faf2828fc7d2509e
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query IIII nosort
 SELECT (a+b+c+d+e)/5,
@@ -10326,7 +10304,7 @@ SELECT b,
 107
 -1
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query IIII nosort
 SELECT (SELECT count(*) FROM t1 AS x WHERE x.c>t1.c AND x.d<t1.d),
@@ -10340,7 +10318,7 @@ SELECT (SELECT count(*) FROM t1 AS x WHERE x.c>t1.c AND x.d<t1.d),
 ----
 24 values hashing to 746dff67b6166bb25993d89eaa93e7a3
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query II nosort
 SELECT a+b*2+c*3+d*4,
@@ -10356,7 +10334,7 @@ SELECT a+b*2+c*3+d*4,
 1272
 5
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query IIIIIII nosort
 SELECT (SELECT count(*) FROM t1 AS x WHERE x.c>t1.c AND x.d<t1.d),
@@ -10436,7 +10414,7 @@ SELECT d,
 168
 4
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query IIIIIII nosort
 SELECT b,
@@ -10463,7 +10441,7 @@ SELECT CASE WHEN a<b-3 THEN 111 WHEN a<=b THEN 222
 ----
 14 values hashing to b4343c8fa35241f0314e777c2fdc9fa9
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query IIII nosort
 SELECT CASE a+1 WHEN b THEN 111 WHEN c THEN 222
@@ -10476,7 +10454,7 @@ SELECT CASE a+1 WHEN b THEN 111 WHEN c THEN 222
 ----
 120 values hashing to d9c1f2d45e8e78ed66f251b5f29547da
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query III nosort
 SELECT CASE a+1 WHEN b THEN 111 WHEN c THEN 222
@@ -10488,7 +10466,7 @@ SELECT CASE a+1 WHEN b THEN 111 WHEN c THEN 222
 ----
 90 values hashing to 28225a47a6332aa64342b0faecc4ffde
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query IIII nosort
 SELECT a+b*2+c*3+d*4+e*5,
@@ -10632,7 +10610,7 @@ SELECT c
 166
 184
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query III nosort
 SELECT (SELECT count(*) FROM t1 AS x WHERE x.c>t1.c AND x.d<t1.d),
@@ -10645,7 +10623,7 @@ SELECT (SELECT count(*) FROM t1 AS x WHERE x.c>t1.c AND x.d<t1.d),
 ----
 63 values hashing to 77cf402238c411fd045a6a991c7dec12
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query I nosort
 SELECT (SELECT count(*) FROM t1 AS x WHERE x.b<t1.b)
@@ -10680,7 +10658,7 @@ SELECT CASE WHEN a<b-3 THEN 111 WHEN a<=b THEN 222
 ----
 24 values hashing to 5321af8590c0715986885546b3b2f12e
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query IIIII nosort
 SELECT CASE a+1 WHEN b THEN 111 WHEN c THEN 222
@@ -10708,7 +10686,7 @@ SELECT e,
 ----
 60 values hashing to 467e5d25c71478e4f23e2aadc3c9a524
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query IIIIII nosort
 SELECT abs(b-c),
@@ -10756,7 +10734,7 @@ SELECT CASE WHEN a<b-3 THEN 111 WHEN a<=b THEN 222
 ----
 90 values hashing to 08eac84b9bd0c5c4ddaab249f3aa5246
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query I nosort
 SELECT (SELECT count(*) FROM t1 AS x WHERE x.c>t1.c AND x.d<t1.d)
@@ -10768,7 +10746,7 @@ SELECT (SELECT count(*) FROM t1 AS x WHERE x.c>t1.c AND x.d<t1.d)
 ----
 28 values hashing to a76dc8384405fa57100e5dffbbd99b99
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query IIIII nosort
 SELECT c-d,
@@ -10795,7 +10773,7 @@ SELECT CASE WHEN a<b-3 THEN 111 WHEN a<=b THEN 222
 ----
 88 values hashing to 6d6ee761ad491517a71dab0f2bf6175e
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query IIIIIII nosort
 SELECT d-e,
@@ -10832,7 +10810,7 @@ SELECT b-c,
 ----
 12 values hashing to 8ffc4e78f33b8122501c601b2692870a
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query IIIIIII nosort
 SELECT (SELECT count(*) FROM t1 AS x WHERE x.c>t1.c AND x.d<t1.d),
@@ -10848,7 +10826,7 @@ SELECT (SELECT count(*) FROM t1 AS x WHERE x.c>t1.c AND x.d<t1.d),
 ----
 112 values hashing to 3a34b6923ab936224547f54261b88bd9
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query IIIIII nosort
 SELECT a,
@@ -10888,7 +10866,7 @@ SELECT c-d,
 ----
 63 values hashing to a5dc7cb38ce2fbae14e0a18eb8623b58
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query IIIII nosort
 SELECT (SELECT count(*) FROM t1 AS x WHERE x.c>t1.c AND x.d<t1.d),
@@ -10917,7 +10895,7 @@ SELECT b-c,
 ----
 55 values hashing to 057345435f09100b127853a55a907dd8
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query IIII nosort
 SELECT a,
@@ -10929,7 +10907,7 @@ SELECT a,
 ----
 120 values hashing to 343df600fb44be4495c01502f42dbc1c
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query IIIIIII nosort
 SELECT d,
@@ -10945,7 +10923,7 @@ SELECT d,
 ----
 210 values hashing to ef988543f649244c2dc67ed8612cff61
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - Error during planning: Projections require unique expression names
 skipif Datafusion
 query IIII nosort
 SELECT b,
@@ -10968,7 +10946,7 @@ SELECT a+b*2+c*3+d*4+e*5,
 ----
 90 values hashing to 4f5f0d9293917c38b9f4b02cd5186710
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query IIII nosort
 SELECT a+b*2,
@@ -10982,7 +10960,7 @@ SELECT a+b*2,
 ----
 76 values hashing to ea6edb85e6478b917bdf5a7a0901f86b
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query IIII nosort
 SELECT (SELECT count(*) FROM t1 AS x WHERE x.c>t1.c AND x.d<t1.d),
@@ -11032,7 +11010,7 @@ SELECT a+b*2+c*3,
 ----
 48 values hashing to 07d61cbdc1b1a770028513bc1000183b
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query IIIIIII nosort
 SELECT (a+b+c+d+e)/5,
@@ -11048,7 +11026,7 @@ SELECT (a+b+c+d+e)/5,
 ----
 154 values hashing to f4bd4639e1c015beb228d4ba3986b11a
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - Error during planning: Projections require unique expression names
 skipif Datafusion
 query IIII nosort
 SELECT a+b*2+c*3,
@@ -11061,7 +11039,7 @@ SELECT a+b*2+c*3,
 ----
 60 values hashing to d5adb2536f4ed1202bbffe836134c8b8
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query I nosort
 SELECT (SELECT count(*) FROM t1 AS x WHERE x.b<t1.b)
@@ -11096,7 +11074,7 @@ SELECT (a+b+c+d+e)/5
 ----
 26 values hashing to 94e65afbe9fac7f180c1e29f697217ae
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query IIIII nosort
 SELECT abs(b-c),
@@ -11110,7 +11088,7 @@ SELECT abs(b-c),
 ----
 150 values hashing to 260624a74ca814f56655f5c39009bc4b
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query IIII nosort
 SELECT (SELECT count(*) FROM t1 AS x WHERE x.c>t1.c AND x.d<t1.d),
@@ -11124,7 +11102,7 @@ SELECT (SELECT count(*) FROM t1 AS x WHERE x.c>t1.c AND x.d<t1.d),
 ----
 76 values hashing to c842520d07c8a4805c0e9c46781e4e44
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query IIIII nosort
 SELECT CASE WHEN a<b-3 THEN 111 WHEN a<=b THEN 222
@@ -11183,7 +11161,7 @@ SELECT d-e,
 ----
 84 values hashing to 01735d043bb36ecd392f6788eca95cf8
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - Error during planning: Projections require unique expression names
 skipif Datafusion
 query IIIIII nosort
 SELECT (a+b+c+d+e)/5,
@@ -11199,7 +11177,7 @@ SELECT (a+b+c+d+e)/5,
 ----
 96 values hashing to 521dca6d96de8a96e1ee4b3bfd22ca84
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query I nosort
 SELECT (SELECT count(*) FROM t1 AS x WHERE x.b<t1.b)
@@ -11212,7 +11190,7 @@ SELECT (SELECT count(*) FROM t1 AS x WHERE x.b<t1.b)
 24
 29
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - Error during planning: Projections require unique expression names
 skipif Datafusion
 query IIII nosort
 SELECT CASE WHEN c>(SELECT avg(c) FROM t1) THEN a*2 ELSE b*10 END,
@@ -11226,7 +11204,7 @@ SELECT CASE WHEN c>(SELECT avg(c) FROM t1) THEN a*2 ELSE b*10 END,
 ----
 116 values hashing to 7475b1713d2bb04b2f15460ec5487648
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query II nosort
 SELECT CASE WHEN c>(SELECT avg(c) FROM t1) THEN a*2 ELSE b*10 END,
@@ -11291,7 +11269,7 @@ SELECT a-b,
 ----
 12 values hashing to b1152eb06806863ed3686d7bf4c6c661
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - Error during planning: Projections require unique expression names
 skipif Datafusion
 query IIIIIII nosort
 SELECT CASE WHEN c>(SELECT avg(c) FROM t1) THEN a*2 ELSE b*10 END,
@@ -11364,7 +11342,7 @@ SELECT d-e
 ----
 30 values hashing to 4693bcd1d8668b362b0c8373297c511b
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query I nosort
 SELECT (SELECT count(*) FROM t1 AS x WHERE x.b<t1.b)
@@ -11383,7 +11361,7 @@ SELECT a+b*2,
 ----
 60 values hashing to 38d959c66fd021952542450eb9e1d47c
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query IIIII nosort
 SELECT (a+b+c+d+e)/5,
@@ -11473,7 +11451,7 @@ SELECT abs(b-c),
 ----
 81 values hashing to e402ef9e6993672296cd0149b030ea63
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query IIIIII nosort
 SELECT a+b*2+c*3+d*4+e*5,
@@ -11489,7 +11467,7 @@ SELECT a+b*2+c*3+d*4+e*5,
 ----
 180 values hashing to fda423ac986fe8647b30d631dafb83fa
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query II nosort
 SELECT (SELECT count(*) FROM t1 AS x WHERE x.b<t1.b),
@@ -11499,7 +11477,7 @@ SELECT (SELECT count(*) FROM t1 AS x WHERE x.b<t1.b),
 ----
 60 values hashing to 95d01ba1e4d6c81aed6a9218884a3a6a
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query IIIII nosort
 SELECT c,
@@ -11526,7 +11504,7 @@ SELECT a-b,
  ORDER BY 1,2,3
 ----
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query IIIIIII nosort
 SELECT e,
@@ -11618,7 +11596,7 @@ SELECT a,
 ----
 28 values hashing to 0b0814cb234a17e666c66c7674f50432
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - Error during planning: Projections require unique expression names
 skipif Datafusion
 query IIIIIII nosort
 SELECT b,
@@ -11645,7 +11623,7 @@ SELECT CASE a+1 WHEN b THEN 111 WHEN c THEN 222
 ----
 30 values hashing to 8d21e20a71a7efb567bf98815988b2ca
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query IIIIIII nosort
 SELECT abs(b-c),
@@ -11678,7 +11656,7 @@ SELECT c-d,
 ----
 20 values hashing to cfb7c2f188b2c59ec68ec61e00d4ec65
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query IIIII nosort
 SELECT b,
@@ -11693,7 +11671,7 @@ SELECT b,
 ----
 45 values hashing to 170723580d1cb9c1114c2269200ebca6
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - Error during planning: Projections require unique expression names
 skipif Datafusion
 query IIIIIII nosort
 SELECT CASE WHEN c>(SELECT avg(c) FROM t1) THEN a*2 ELSE b*10 END,
@@ -11775,7 +11753,7 @@ SELECT b-c,
 ----
 16 values hashing to 8c43f9413cb17457b4374d71b31ea8d3
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query III nosort
 SELECT (SELECT count(*) FROM t1 AS x WHERE x.b<t1.b),
@@ -11788,7 +11766,7 @@ SELECT (SELECT count(*) FROM t1 AS x WHERE x.b<t1.b),
 ----
 45 values hashing to f0eaad06d4e85740bf5623d60f120f17
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query II nosort
 SELECT (SELECT count(*) FROM t1 AS x WHERE x.b<t1.b),
@@ -11798,7 +11776,7 @@ SELECT (SELECT count(*) FROM t1 AS x WHERE x.b<t1.b),
 ----
 60 values hashing to ffc02cccce8d6bfd112727aa04ef7943
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query IIIIII nosort
 SELECT a+b*2+c*3,
@@ -11857,7 +11835,7 @@ SELECT a+b*2+c*3,
 ----
 38 values hashing to 6ea9d603b4c575b610fd90c9144e7536
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query IIIIII nosort
 SELECT a,
@@ -11901,7 +11879,7 @@ SELECT a+b*2,
 ----
 120 values hashing to 09e9f16109a33c112566d23c35fe3d34
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query IIII nosort
 SELECT (SELECT count(*) FROM t1 AS x WHERE x.b<t1.b),
@@ -12080,7 +12058,7 @@ SELECT b,
 ----
 60 values hashing to 2276c23f13eb557d0c37f88904c8e9c6
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query IIIII nosort
 SELECT (SELECT count(*) FROM t1 AS x WHERE x.c>t1.c AND x.d<t1.d),
@@ -12208,7 +12186,7 @@ SELECT CASE a+1 WHEN b THEN 111 WHEN c THEN 222
 ----
 16 values hashing to 812c454e8d6a9bac1766cce23665de1c
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - Error during planning: Projections require unique expression names
 skipif Datafusion
 query IIII nosort
 SELECT CASE a+1 WHEN b THEN 111 WHEN c THEN 222
@@ -12250,7 +12228,7 @@ SELECT e
 ----
 30 values hashing to 41762f74ba25ab0f9b0448f319f2f292
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query I nosort
 SELECT (SELECT count(*) FROM t1 AS x WHERE x.b<t1.b)
@@ -12293,7 +12271,7 @@ SELECT a+b*2+c*3+d*4
 ----
 24 values hashing to 72a0bad4364ab5cec9197874c8214b90
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query IIIIIII nosort
 SELECT (a+b+c+d+e)/5,
@@ -12348,7 +12326,7 @@ SELECT abs(a),
 ----
 168 values hashing to 1293b2b1eae0693b834b1a25534ecbf6
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query IIIIII nosort
 SELECT e,
@@ -12400,7 +12378,7 @@ SELECT a+b*2+c*3+d*4+e*5,
 ----
 90 values hashing to 99b07f07bebaeafdec57423602e76a03
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - Error during planning: Projections require unique expression names
 skipif Datafusion
 query IIIIII nosort
 SELECT (a+b+c+d+e)/5,
@@ -12530,7 +12508,7 @@ SELECT d-e,
 ----
 96 values hashing to 3633ea792216aff36f581f5be1c322ba
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query IIIIIII nosort
 SELECT a+b*2+c*3+d*4,
@@ -12574,7 +12552,7 @@ SELECT b-c,
 ----
 42 values hashing to ab72cc439cc82497430fcb1fbd96b135
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query IIII nosort
 SELECT e,
@@ -12620,7 +12598,7 @@ SELECT c,
 ----
 115 values hashing to 5d36f45159c9d74c2031ff38615d53af
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query IIIIIII nosort
 SELECT d-e,
@@ -12684,7 +12662,7 @@ SELECT d-e,
 2
 247
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query IIIII nosort
 SELECT (SELECT count(*) FROM t1 AS x WHERE x.b<t1.b),
@@ -12748,7 +12726,7 @@ SELECT a+b*2
 ----
 24 values hashing to 853518e87c34debe4bc0fa37ef0bfc3e
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query II nosort
 SELECT c,
@@ -12777,7 +12755,7 @@ SELECT a-b,
 ----
 114 values hashing to a182ab374cf9de5884edf48ee0c3c177
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query IIII nosort
 SELECT a+b*2+c*3+d*4+e*5,
@@ -12859,7 +12837,7 @@ SELECT c-d,
 ----
 168 values hashing to 3cff8fa2e319bf668edb7b07c5437a21
 
-# Datafusion - This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
+# Datafusion - DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
 skipif Datafusion
 query IIIIII nosort
 SELECT b,
@@ -12890,4 +12868,3 @@ SELECT c
  ORDER BY 1
 ----
 29 values hashing to 20a327dd7dddd406aa915b0ee3795434
-

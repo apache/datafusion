@@ -114,9 +114,11 @@ SELECT DISTINCT col0 AS col1 FROM tab1 GROUP BY col0, col1
 28
 82
 
-# PostgreSQL has strict column usage for GROUP BY clauses
+#  PostgreSQL has strict column usage for GROUP BY clauses
 skipif postgresql
 # Datafusion - Error during planning: HAVING clause references non-aggregate values: Expression tab2.col2 could not be resolved from available co
+# Postgresql - Postgres error: db error: ERROR: column "tab2.col2" must appear in the GROUP BY clause or be used in an aggregate function
+skipif postgres
 skipif Datafusion
 query I rowsort
 SELECT + col0 AS col2 FROM tab2 GROUP BY col0 HAVING NULL > ( col2 )
@@ -178,9 +180,11 @@ SELECT DISTINCT - col2 col0 FROM tab1 GROUP BY col2
 -71
 -8
 
-# PostgreSQL has strict column usage for GROUP BY clauses
+#  PostgreSQL has strict column usage for GROUP BY clauses
 skipif postgresql
 # Datafusion - Error during planning: HAVING clause references non-aggregate values: Expression cor0.col1 could not be resolved from available co
+# Postgresql - Postgres error: db error: ERROR: column "cor0.col1" must appear in the GROUP BY clause or be used in an aggregate function
+skipif postgres
 skipif Datafusion
 query I rowsort
 SELECT - AVG ( + + col0 ) AS col1 FROM tab2 AS cor0 GROUP BY col0 HAVING NOT col1 IS NULL AND NOT NULL IS NULL
@@ -225,9 +229,11 @@ SELECT ALL - + col1 FROM tab1 AS cor0 GROUP BY col1, col2
 -57
 -6
 
-# PostgreSQL has strict column usage for GROUP BY clauses
+#  PostgreSQL has strict column usage for GROUP BY clauses
 skipif postgresql
 # Datafusion - Error during planning: HAVING clause references non-aggregate values: Expression cor0.col0 could not be resolved from available co
+# Postgresql - Postgres error: db error: ERROR: column "cor0.col0" must appear in the GROUP BY clause or be used in an aggregate function
+skipif postgres
 skipif Datafusion
 query I rowsort
 SELECT ALL + col1 AS col0 FROM tab1 AS cor0 GROUP BY col1 HAVING NULL = col0 / col0
@@ -627,6 +633,11 @@ SELECT ALL col2 FROM tab0 GROUP BY col2, col1, col1 HAVING + col2 IS NOT NULL
 24
 38
 79
+
+query I rowsort label-87
+SELECT DISTINCT - col0 / - col0 AS col1 FROM tab2 cor0 GROUP BY col0, col0
+----
+1
 
 query I rowsort
 SELECT ALL - col1 * + col1 + col1 * + col1 AS col2 FROM tab1 AS cor0 GROUP BY col1
@@ -1496,6 +1507,11 @@ SELECT ALL + - col1 FROM tab0 AS cor0 GROUP BY col1
 -81
 0
 
+query I rowsort label-223
+SELECT DISTINCT + col0 / - - col0 FROM tab2 GROUP BY col0
+----
+1
+
 query I rowsort label-224
 SELECT col1 + col1 / - - col1 AS col0 FROM tab1 AS cor0 GROUP BY col1
 ----
@@ -1671,6 +1687,11 @@ SELECT col1 AS col1 FROM tab1 AS cor0 GROUP BY col1, col1, col1
 query I rowsort
 SELECT col0 FROM tab0 GROUP BY col0 HAVING NULL >= NULL
 ----
+
+query I rowsort label-251
+SELECT DISTINCT col2 / col2 FROM tab1 GROUP BY col2
+----
+1
 
 query I rowsort
 SELECT col1 AS col0 FROM tab0 cor0 GROUP BY col1, col1
@@ -1946,6 +1967,11 @@ query I rowsort
 SELECT DISTINCT - col2 + col2 col0 FROM tab1 AS cor0 GROUP BY col2, col2
 ----
 0
+
+query I rowsort label-296
+SELECT DISTINCT col0 / col0 AS col2 FROM tab1 GROUP BY col0, col0, col1
+----
+1
 
 query I rowsort
 SELECT col1 col1 FROM tab0 GROUP BY col1
@@ -2477,6 +2503,11 @@ SELECT + - col0 AS col0 FROM tab2 AS cor0 GROUP BY col0
 -91
 -92
 
+query I rowsort label-376
+SELECT DISTINCT col0 / + col0 FROM tab0 AS cor0 GROUP BY col0 HAVING NOT NULL IS NOT NULL
+----
+1
+
 query I rowsort
 SELECT + col1 AS col2 FROM tab1 AS cor0 GROUP BY col1, col2
 ----
@@ -2678,9 +2709,11 @@ SELECT - + col1 + - col1 AS col0 FROM tab2 AS cor0 GROUP BY col1, col2
 -122
 -82
 
-# PostgreSQL has strict column usage for GROUP BY clauses
+#  PostgreSQL has strict column usage for GROUP BY clauses
 skipif postgresql
 # Datafusion - Error during planning: HAVING clause references non-aggregate values: Expression cor0.col2 could not be resolved from available co
+# Postgresql - Postgres error: db error: ERROR: column "cor0.col2" must appear in the GROUP BY clause or be used in an aggregate function
+skipif postgres
 skipif Datafusion
 query I rowsort
 SELECT + col1 AS col2 FROM tab2 AS cor0 WHERE NULL IS NULL GROUP BY col1 HAVING NOT NULL >= + - col2
@@ -3825,9 +3858,11 @@ SELECT ALL - col2 AS col1 FROM tab1 AS cor0 GROUP BY col2
 -71
 -8
 
-# PostgreSQL has strict column usage for GROUP BY clauses
+#  PostgreSQL has strict column usage for GROUP BY clauses
 skipif postgresql
 # Datafusion - Error during planning: HAVING clause references non-aggregate values: Expression cor0.col0 could not be resolved from available co
+# Postgresql - Postgres error: db error: ERROR: column "cor0.col0" must appear in the GROUP BY clause or be used in an aggregate function
+skipif postgres
 skipif Datafusion
 query I rowsort
 SELECT - + col1 AS col0 FROM tab1 AS cor0 GROUP BY col1 HAVING NOT + col0 IS NULL AND NULL IS NOT NULL
@@ -5782,6 +5817,11 @@ SELECT col0 FROM tab0 AS cor0 GROUP BY col0, col2
 43
 83
 
+query I rowsort label-871
+SELECT DISTINCT - col0 / - col0 FROM tab1 GROUP BY col0
+----
+1
+
 query I rowsort
 SELECT ALL + col1 * col1 col0 FROM tab1 AS cor0 GROUP BY col0, col1
 ----
@@ -6942,6 +6982,11 @@ SELECT + col2 FROM tab2 WHERE NOT NULL IS NOT NULL GROUP BY col2
 79
 87
 
+query I rowsort label-1042
+SELECT DISTINCT + col2 / - col2 FROM tab1 AS cor0 GROUP BY col2
+----
+-1
+
 query I rowsort
 SELECT DISTINCT col2 AS col0 FROM tab2 GROUP BY col2, col2
 ----
@@ -7086,9 +7131,11 @@ SELECT DISTINCT - + col0 + + - col0 AS col0 FROM tab0 AS cor0 GROUP BY col0
 -52
 -86
 
-# PostgreSQL has strict column usage for GROUP BY clauses
+#  PostgreSQL has strict column usage for GROUP BY clauses
 skipif postgresql
 # Datafusion - Error during planning: HAVING clause references non-aggregate values: Expression cor0.col2 could not be resolved from available co
+# Postgresql - Postgres error: db error: ERROR: column "cor0.col2" must appear in the GROUP BY clause or be used in an aggregate function
+skipif postgres
 skipif Datafusion
 query I rowsort
 SELECT + - col1 AS col2 FROM tab1 AS cor0 GROUP BY col1, col1 HAVING NOT ( NULL ) < - col1 + - col2
@@ -7482,9 +7529,11 @@ SELECT - col0 + + col0 FROM tab0 GROUP BY col0
 0
 0
 
-# PostgreSQL has strict column usage for GROUP BY clauses
+#  PostgreSQL has strict column usage for GROUP BY clauses
 skipif postgresql
 # Datafusion - Error during planning: HAVING clause references non-aggregate values: Expression tab1.col0 could not be resolved from available co
+# Postgresql - Postgres error: db error: ERROR: column "tab1.col0" must appear in the GROUP BY clause or be used in an aggregate function
+skipif postgres
 skipif Datafusion
 query I rowsort
 SELECT + col1 AS col0 FROM tab1 GROUP BY col1 HAVING NULL IN ( - col1 * + col0 )
@@ -10855,6 +10904,8 @@ SELECT DISTINCT - col2 FROM tab1 AS cor0 GROUP BY col2 HAVING NOT NULL <= NULL
 ----
 
 # Datafusion - Error during planning: HAVING clause references non-aggregate values: Expression cor0.col0 could not be resolved from available co
+# Postgresql - Postgres error: db error: ERROR: column "cor0.col0" must appear in the GROUP BY clause or be used in an aggregate function
+skipif postgres
 skipif Datafusion
 query I rowsort
 SELECT - col1 col0 FROM tab2 AS cor0 GROUP BY col1 HAVING NULL > col0
@@ -11091,6 +11142,11 @@ SELECT col2 AS col1 FROM tab1 AS cor0 GROUP BY col2 HAVING NOT - AVG ( ALL - col
 query I rowsort
 SELECT - col0 AS col2 FROM tab0 AS cor0 WHERE NULL = NULL GROUP BY col0
 ----
+
+query I rowsort label-1665
+SELECT DISTINCT col2 / + col2 AS col2 FROM tab1 AS cor0 GROUP BY col2, col2
+----
+1
 
 query I rowsort label-1666
 SELECT + col2 / + col2 col1 FROM tab2 GROUP BY col2 HAVING NOT NULL IS NOT NULL
@@ -11511,9 +11567,11 @@ query I rowsort
 SELECT ALL - col0 FROM tab2 AS cor0 GROUP BY col0 HAVING NOT NULL IS NULL
 ----
 
-# PostgreSQL has strict column usage for GROUP BY clauses
+#  PostgreSQL has strict column usage for GROUP BY clauses
 skipif postgresql
 # Datafusion - Error during planning: HAVING clause references non-aggregate values: Expression cor0.col0 could not be resolved from available co
+# Postgresql - Postgres error: db error: ERROR: column "cor0.col0" must appear in the GROUP BY clause or be used in an aggregate function
+skipif postgres
 skipif Datafusion
 query I rowsort
 SELECT DISTINCT col1 AS col0 FROM tab1 AS cor0 GROUP BY col1 HAVING NULL >= + - col0
@@ -11884,9 +11942,11 @@ query R rowsort
 SELECT + AVG ( - col2 ) FROM tab2 WHERE NOT NULL >= col1 GROUP BY col2
 ----
 
-# PostgreSQL has strict column usage for GROUP BY clauses
+#  PostgreSQL has strict column usage for GROUP BY clauses
 skipif postgresql
 # Datafusion - Error during planning: HAVING clause references non-aggregate values: Expression tab2.col0 could not be resolved from available co
+# Postgresql - Postgres error: db error: ERROR: column "tab2.col0" must appear in the GROUP BY clause or be used in an aggregate function
+skipif postgres
 skipif Datafusion
 query I rowsort
 SELECT DISTINCT col2 AS col0 FROM tab2 GROUP BY col2, col1, col1 HAVING NULL BETWEEN - col0 AND NULL
@@ -12201,9 +12261,11 @@ SELECT DISTINCT col1 AS col2 FROM tab2 AS cor0 GROUP BY col0, col1
 59
 61
 
-# PostgreSQL has strict column usage for GROUP BY clauses
+#  PostgreSQL has strict column usage for GROUP BY clauses
 skipif postgresql
 # Datafusion - Error during planning: HAVING clause references non-aggregate values: Expression tab0.col0 could not be resolved from available co
+# Postgresql - Postgres error: db error: ERROR: column "tab0.col0" must appear in the GROUP BY clause or be used in an aggregate function
+skipif postgres
 skipif Datafusion
 query I rowsort
 SELECT DISTINCT col1 * + + AVG ( DISTINCT - col2 ) AS col0 FROM tab0 GROUP BY col2, col1 HAVING NOT NULL < + col0 + - col1
@@ -12454,6 +12516,11 @@ SELECT col1 FROM tab1 GROUP BY col1, col0 HAVING + + col1 IS NOT NULL
 57
 6
 
+query I rowsort label-1905
+SELECT DISTINCT - + col1 / - col1 FROM tab2 AS cor0 GROUP BY col1, col1
+----
+1
+
 # Datafusion - Types were automatically converted from:
 # Datafusion - [Expected] [I]
 # Datafusion - [Actual  ] [R]
@@ -12666,9 +12733,11 @@ SELECT - col1 AS col1 FROM tab0 AS cor0 GROUP BY col1, col1 HAVING NULL IS NULL
 -81
 0
 
-# PostgreSQL has strict column usage for GROUP BY clauses
+#  PostgreSQL has strict column usage for GROUP BY clauses
 skipif postgresql
 # Datafusion - Error during planning: HAVING clause references non-aggregate values: Expression tab2.col1 could not be resolved from available co
+# Postgresql - Postgres error: db error: ERROR: column "tab2.col1" must appear in the GROUP BY clause or be used in an aggregate function
+skipif postgres
 skipif Datafusion
 query I rowsort
 SELECT + col0 AS col1 FROM tab2 GROUP BY col0 HAVING NOT + col1 < NULL
@@ -13839,6 +13908,11 @@ SELECT DISTINCT - 1 AS col2 FROM tab0 AS cor0 CROSS JOIN tab2 AS cor1 GROUP BY c
 ----
 -1
 
+query I rowsort label-2124
+SELECT DISTINCT + 55 + - 39 / + cor0.col1 AS col1 FROM tab2, tab2 AS cor0 GROUP BY cor0.col1
+----
+55
+
 query III rowsort
 SELECT * FROM tab1 cor0 GROUP BY cor0.col0, cor0.col2, cor0.col1
 ----
@@ -14603,6 +14677,11 @@ SELECT - col1 col1 FROM tab1 GROUP BY tab1.col1
 -57
 -6
 
+query I rowsort label-2239
+SELECT DISTINCT col2 / + tab0.col2 FROM tab0 GROUP BY tab0.col2
+----
+1
+
 query I rowsort
 SELECT DISTINCT - 16 AS col1 FROM tab2 AS cor0 GROUP BY cor0.col0
 ----
@@ -14633,6 +14712,11 @@ SELECT + 32 AS col1 FROM tab1 AS cor0 GROUP BY cor0.col2
 32
 32
 32
+
+query I rowsort label-2245
+SELECT DISTINCT + cor0.col2 / - cor0.col2 FROM tab2 AS cor0 GROUP BY col2
+----
+-1
 
 query I rowsort
 SELECT DISTINCT + 49 AS col2 FROM tab0 AS cor0 GROUP BY cor0.col0
@@ -14692,6 +14776,11 @@ SELECT - 13 FROM tab2 AS cor0 GROUP BY col0
 -13
 -13
 -13
+
+query I rowsort label-2255
+SELECT DISTINCT CAST ( NULL AS INTEGER ) * 93 FROM tab1 AS cor0 GROUP BY cor0.col1
+----
+NULL
 
 query I rowsort
 SELECT 27 FROM tab1 AS cor0 GROUP BY cor0.col1
@@ -15395,6 +15484,11 @@ SELECT 95 AS col2 FROM tab1 AS cor0 GROUP BY cor0.col0
 95
 95
 95
+
+query I rowsort label-2360
+SELECT DISTINCT + CAST ( NULL AS INTEGER ) * - cor0.col0 col1 FROM tab0 AS cor0 GROUP BY cor0.col0
+----
+NULL
 
 query I rowsort
 SELECT ALL 29 + - cor0.col1 AS col0 FROM tab2 AS cor0 GROUP BY cor0.col1
@@ -16193,6 +16287,11 @@ SELECT 42 col1 FROM tab0 AS cor0 GROUP BY cor0.col0
 42
 42
 
+query I rowsort label-2477
+SELECT DISTINCT - CAST ( NULL AS INTEGER ) FROM tab0 AS cor0 GROUP BY cor0.col0
+----
+NULL
+
 query I rowsort
 SELECT 13 AS col0 FROM tab0 GROUP BY col2
 ----
@@ -16367,6 +16466,11 @@ SELECT ALL + cor0.col2 AS col1 FROM tab1 AS cor0 GROUP BY cor0.col1, cor0.col2
 45
 71
 8
+
+query I rowsort label-2504
+SELECT DISTINCT + CAST ( 88 AS INTEGER ) FROM tab2 AS cor0 GROUP BY col2
+----
+88
 
 query I rowsort
 SELECT + col2 * col1 FROM tab0 AS cor0 GROUP BY cor0.col2, cor0.col1
@@ -16838,9 +16942,11 @@ SELECT - + col1 AS col0 FROM tab0 cor0 GROUP BY col2, col1
 0
 0
 
-# PostgreSQL has strict column usage for GROUP BY clauses
+#  PostgreSQL has strict column usage for GROUP BY clauses
 skipif postgresql
 # Datafusion - Error during planning: HAVING clause references non-aggregate values: Expression tab1.col2 could not be resolved from available co
+# Postgresql - Postgres error: db error: ERROR: column "tab1.col2" must appear in the GROUP BY clause or be used in an aggregate function
+skipif postgres
 skipif Datafusion
 query I rowsort
 SELECT col1 AS col2 FROM tab1 GROUP BY col1, col0 HAVING NULL NOT BETWEEN NULL AND - col2
@@ -18572,17 +18678,21 @@ SELECT DISTINCT col0, col0 FROM tab1 GROUP BY col0
 82
 82
 
-# PostgreSQL has strict column usage for GROUP BY clauses
+#  PostgreSQL has strict column usage for GROUP BY clauses
 skipif postgresql
 # Datafusion - Error during planning: HAVING clause references non-aggregate values: Expression cor0.col0 could not be resolved from available co
+# Postgresql - Postgres error: db error: ERROR: column "cor0.col0" must appear in the GROUP BY clause or be used in an aggregate function
+skipif postgres
 skipif Datafusion
 query I rowsort
 SELECT + - col2 AS col0 FROM tab0 AS cor0 GROUP BY col2, col2 HAVING NOT - col0 BETWEEN NULL AND ( NULL )
 ----
 
-# PostgreSQL has strict column usage for GROUP BY clauses
+#  PostgreSQL has strict column usage for GROUP BY clauses
 skipif postgresql
 # Datafusion - Error during planning: HAVING clause references non-aggregate values: Expression cor0.col1 could not be resolved from available co
+# Postgresql - Postgres error: db error: ERROR: column "cor0.col1" must appear in the GROUP BY clause or be used in an aggregate function
+skipif postgres
 skipif Datafusion
 query I rowsort
 SELECT ALL - + AVG ( DISTINCT col0 ) AS col1 FROM tab0 AS cor0 GROUP BY col0 HAVING NOT - col1 <= ( NULL )
@@ -18640,6 +18750,11 @@ SELECT col1 FROM tab0 AS cor0 GROUP BY col1 HAVING NOT ( NULL ) IS NOT NULL
 ----
 0
 81
+
+query I rowsort label-2886
+SELECT DISTINCT - col1 / - col1 FROM tab1 AS cor0 GROUP BY col1
+----
+1
 
 query I rowsort
 SELECT + col0 FROM tab1 AS cor0 GROUP BY col0 HAVING ( NOT NULL IS NULL )
@@ -19686,9 +19801,11 @@ query I rowsort
 SELECT ALL + + col0 * col0 AS col1 FROM tab0 WHERE NOT col0 IS NOT NULL GROUP BY col0
 ----
 
-# PostgreSQL has strict column usage for GROUP BY clauses
+#  PostgreSQL has strict column usage for GROUP BY clauses
 skipif postgresql
 # Datafusion - Error during planning: HAVING clause references non-aggregate values: Expression cor0.col2 could not be resolved from available co
+# Postgresql - Postgres error: db error: ERROR: column "cor0.col2" must appear in the GROUP BY clause or be used in an aggregate function
+skipif postgres
 skipif Datafusion
 query I rowsort
 SELECT - - col1 AS col2 FROM tab2 AS cor0 GROUP BY col1 HAVING col2 > NULL
@@ -19719,6 +19836,11 @@ SELECT DISTINCT + col2 AS col1 FROM tab1 AS cor0 GROUP BY col0, col2 HAVING NOT 
 query I rowsort
 SELECT ALL + + col0 FROM tab1 cor0 GROUP BY col0, col1, col0 HAVING NOT + col1 IS NOT NULL
 ----
+
+query I rowsort label-3071
+SELECT DISTINCT + col0 / + col0 AS col0 FROM tab0 GROUP BY col0, col2
+----
+1
 
 query I rowsort
 SELECT ALL + col2 col2 FROM tab0 GROUP BY col0, col1, col2 HAVING ( NULL ) IS NULL
@@ -20140,9 +20262,11 @@ SELECT - col2 - col0 * col2 FROM tab0 AS cor0 WHERE + col2 IS NOT NULL GROUP BY 
 -2133
 -3192
 
-# PostgreSQL has strict column usage for GROUP BY clauses
+#  PostgreSQL has strict column usage for GROUP BY clauses
 skipif postgresql
 # Datafusion - Error during planning: HAVING clause references non-aggregate values: Expression cor0.col1 could not be resolved from available co
+# Postgresql - Postgres error: db error: ERROR: column "cor0.col1" must appear in the GROUP BY clause or be used in an aggregate function
+skipif postgres
 skipif Datafusion
 query I rowsort
 SELECT - col2 AS col1 FROM tab0 AS cor0 WHERE NOT ( NOT ( ( NULL ) >= NULL ) ) GROUP BY col2 HAVING NOT ( col1 ) NOT BETWEEN NULL AND NULL
@@ -21604,6 +21728,8 @@ SELECT DISTINCT + col0 AS col0 FROM tab1 AS cor0 WHERE NOT ( NULL ) <= NULL GROU
 ----
 
 # Datafusion - Error during planning: HAVING clause references non-aggregate values: Expression tab0.col2 could not be resolved from available co
+# Postgresql - Postgres error: db error: ERROR: column "tab0.col2" must appear in the GROUP BY clause or be used in an aggregate function
+skipif postgres
 skipif Datafusion
 query I rowsort
 SELECT col1 col2 FROM tab0 GROUP BY col1, col1 HAVING NOT col2 NOT BETWEEN NULL AND NULL
@@ -21748,6 +21874,8 @@ SELECT DISTINCT + + col1 FROM tab1 AS cor0 GROUP BY col0, col2, col1
 6
 
 # Datafusion - Error during planning: HAVING clause references non-aggregate values: Expression cor0.col0 could not be resolved from available co
+# Postgresql - Postgres error: db error: ERROR: column "cor0.col0" must appear in the GROUP BY clause or be used in an aggregate function
+skipif postgres
 skipif Datafusion
 query I rowsort
 SELECT DISTINCT - + col2 col0 FROM tab0 AS cor0 GROUP BY col2 HAVING NULL NOT IN ( col0 )
@@ -21761,9 +21889,11 @@ query I rowsort
 SELECT ALL - - col1 FROM tab0 cor0 GROUP BY col1 HAVING NOT - col1 IS NOT NULL OR NOT ( NULL ) IS NULL
 ----
 
-# PostgreSQL has strict column usage for GROUP BY clauses
+#  PostgreSQL has strict column usage for GROUP BY clauses
 skipif postgresql
 # Datafusion - Error during planning: HAVING clause references non-aggregate values: Expression cor0.col2 could not be resolved from available co
+# Postgresql - Postgres error: db error: ERROR: column "cor0.col2" must appear in the GROUP BY clause or be used in an aggregate function
+skipif postgres
 skipif Datafusion
 query I rowsort
 SELECT DISTINCT + col0 AS col2 FROM tab1 AS cor0 GROUP BY col0 HAVING NOT + - col2 = NULL
@@ -21864,9 +21994,11 @@ query I rowsort
 SELECT ALL - col1 FROM tab0 GROUP BY col1 HAVING NOT NULL IS NULL
 ----
 
-# PostgreSQL has strict column usage for GROUP BY clauses
+#  PostgreSQL has strict column usage for GROUP BY clauses
 skipif postgresql
 # Datafusion - Error during planning: HAVING clause references non-aggregate values: Expression tab1.col2 could not be resolved from available co
+# Postgresql - Postgres error: db error: ERROR: column "tab1.col2" must appear in the GROUP BY clause or be used in an aggregate function
+skipif postgres
 skipif Datafusion
 query I rowsort
 SELECT col0 AS col2 FROM tab1 GROUP BY col0, col0 HAVING NOT + + col2 < NULL
@@ -22155,6 +22287,11 @@ query I rowsort
 SELECT col1 + col1 AS col2 FROM tab1 WHERE NOT + col1 IS NOT NULL GROUP BY col1, col2
 ----
 
+query I rowsort label-3489
+SELECT DISTINCT + col1 / - col1 FROM tab1 GROUP BY col1
+----
+-1
+
 query I rowsort
 SELECT DISTINCT col2 FROM tab0 GROUP BY col2 HAVING NOT NULL < NULL
 ----
@@ -22236,9 +22373,11 @@ query I rowsort
 SELECT + col1 col2 FROM tab0 WHERE - col1 IS NULL GROUP BY col1, col2 HAVING NULL <> ( NULL )
 ----
 
-# PostgreSQL has strict column usage for GROUP BY clauses
+#  PostgreSQL has strict column usage for GROUP BY clauses
 skipif postgresql
 # Datafusion - Error during planning: HAVING clause references non-aggregate values: Expression tab2.col1 could not be resolved from available co
+# Postgresql - Postgres error: db error: ERROR: column "tab2.col1" must appear in the GROUP BY clause or be used in an aggregate function
+skipif postgres
 skipif Datafusion
 query I rowsort
 SELECT - col0 AS col1 FROM tab2 GROUP BY col2, col2, col0 HAVING NOT NULL > col1
@@ -22377,6 +22516,8 @@ SELECT ALL - col1 FROM tab1 GROUP BY col1 HAVING NOT NULL IS NOT NULL
 -6
 
 # Datafusion - Error during planning: HAVING clause references non-aggregate values: Expression cor0.col2 could not be resolved from available co
+# Postgresql - Postgres error: db error: ERROR: column "cor0.col2" must appear in the GROUP BY clause or be used in an aggregate function
+skipif postgres
 skipif Datafusion
 query I rowsort
 SELECT ALL col1 col2 FROM tab2 AS cor0 WHERE NOT NULL IS NULL GROUP BY col1, col1 HAVING + col2 >= ( NULL )
@@ -23116,9 +23257,11 @@ query I rowsort
 SELECT - col0 col1 FROM tab1 AS cor0 WHERE NOT NULL IS NULL GROUP BY col0, col2 HAVING - col2 >= NULL
 ----
 
-# PostgreSQL has strict column usage for GROUP BY clauses
+#  PostgreSQL has strict column usage for GROUP BY clauses
 skipif postgresql
 # Datafusion - Error during planning: HAVING clause references non-aggregate values: Expression tab0.col0 could not be resolved from available co
+# Postgresql - Postgres error: db error: ERROR: column "tab0.col0" must appear in the GROUP BY clause or be used in an aggregate function
+skipif postgres
 skipif Datafusion
 query I rowsort
 SELECT DISTINCT + col1 AS col0 FROM tab0 GROUP BY col1 HAVING NOT NULL >= - + col0
@@ -23206,9 +23349,11 @@ SELECT DISTINCT - col1 AS col1 FROM tab2 AS cor0 GROUP BY col1, col1
 -59
 -61
 
-# PostgreSQL has strict column usage for GROUP BY clauses
+#  PostgreSQL has strict column usage for GROUP BY clauses
 skipif postgresql
 # Datafusion - Error during planning: HAVING clause references non-aggregate values: Expression cor0.col1 could not be resolved from available co
+# Postgresql - Postgres error: db error: ERROR: column "cor0.col1" must appear in the GROUP BY clause or be used in an aggregate function
+skipif postgres
 skipif Datafusion
 query I rowsort
 SELECT + + col2 AS col1 FROM tab0 AS cor0 GROUP BY col2, col2 HAVING NOT ( - col1 <= NULL )
@@ -23894,6 +24039,11 @@ query I rowsort
 SELECT DISTINCT + col2 AS col1 FROM tab1 AS cor0 GROUP BY col2, col2 HAVING NULL IS NOT NULL
 ----
 
+query I rowsort label-3780
+SELECT DISTINCT + col0 / - - col0 FROM tab0 GROUP BY col0
+----
+1
+
 query I rowsort
 SELECT ALL col0 col1 FROM tab1 GROUP BY col0, col0, col0
 ----
@@ -23907,6 +24057,11 @@ SELECT col2 * col2 AS col2 FROM tab1 AS cor0 GROUP BY col1, col2
 2025
 5041
 64
+
+query I rowsort label-3783
+SELECT DISTINCT col0 / - col0 AS col0 FROM tab0 GROUP BY col0 HAVING NULL IS NULL
+----
+-1
 
 query I rowsort
 SELECT + - col2 AS col2 FROM tab1 AS cor0 GROUP BY col2 HAVING NOT ( NULL ) IS NOT NULL
@@ -25169,6 +25324,8 @@ SELECT + + col2 FROM tab2 cor0 GROUP BY col2 HAVING NULL IS NOT NULL
 ----
 
 # Datafusion - Error during planning: HAVING clause references non-aggregate values: Expression tab0.col2 could not be resolved from available co
+# Postgresql - Postgres error: db error: ERROR: column "tab0.col2" must appear in the GROUP BY clause or be used in an aggregate function
+skipif postgres
 skipif Datafusion
 query I rowsort
 SELECT col1 col2 FROM tab0 GROUP BY col1, col1 HAVING ( NULL > col2 )
@@ -25771,9 +25928,11 @@ query I rowsort
 SELECT col1 * + + col1 FROM tab0 GROUP BY col1, col1 HAVING ( NULL ) <= NULL
 ----
 
-# PostgreSQL has strict column usage for GROUP BY clauses
+#  PostgreSQL has strict column usage for GROUP BY clauses
 skipif postgresql
 # Datafusion - Error during planning: HAVING clause references non-aggregate values: Expression cor0.col2 could not be resolved from available co
+# Postgresql - Postgres error: db error: ERROR: column "cor0.col2" must appear in the GROUP BY clause or be used in an aggregate function
+skipif postgres
 skipif Datafusion
 query I rowsort
 SELECT + col0 + - col0 AS col2 FROM tab1 AS cor0 GROUP BY col0 HAVING NOT NULL <= ( - col2 + col0 )
@@ -26365,9 +26524,11 @@ SELECT DISTINCT + col1 * col1 FROM tab2 GROUP BY col1, col1
 3481
 3721
 
-# PostgreSQL has strict column usage for GROUP BY clauses
+#  PostgreSQL has strict column usage for GROUP BY clauses
 skipif postgresql
 # Datafusion - Error during planning: HAVING clause references non-aggregate values: Expression cor0.col0 could not be resolved from available co
+# Postgresql - Postgres error: db error: ERROR: column "cor0.col0" must appear in the GROUP BY clause or be used in an aggregate function
+skipif postgres
 skipif Datafusion
 query I rowsort
 SELECT ALL col1 AS col0 FROM tab0 cor0 WHERE NULL IS NOT NULL GROUP BY col1 HAVING NOT NULL > col0
@@ -27520,9 +27681,11 @@ SELECT ALL - col2 * + + col2 FROM tab0 GROUP BY col2, col2
 -576
 -6241
 
-# PostgreSQL has strict column usage for GROUP BY clauses
+#  PostgreSQL has strict column usage for GROUP BY clauses
 skipif postgresql
 # Datafusion - Error during planning: HAVING clause references non-aggregate values: Expression cor0.col1 could not be resolved from available co
+# Postgresql - Postgres error: db error: ERROR: column "cor0.col1" must appear in the GROUP BY clause or be used in an aggregate function
+skipif postgres
 skipif Datafusion
 query I rowsort
 SELECT DISTINCT col0 + + - col0 AS col1 FROM tab2 AS cor0 GROUP BY col0 HAVING col1 > NULL
@@ -27793,6 +27956,11 @@ SELECT + + col1 + + col1 FROM tab2 AS cor0 GROUP BY col1
 118
 122
 82
+
+query I rowsort label-4392
+SELECT DISTINCT col1 / - col1 FROM tab2 GROUP BY col1
+----
+-1
 
 query I rowsort
 SELECT + col2 FROM tab2 GROUP BY col0, col2, col0
@@ -28469,6 +28637,11 @@ query I rowsort
 SELECT col0 AS col1 FROM tab0 GROUP BY col0, col2 HAVING NULL IS NOT NULL
 ----
 
+query I rowsort label-4500
+SELECT DISTINCT - - col1 / col1 FROM tab1 AS cor0 GROUP BY col1 HAVING NOT NULL IS NOT NULL
+----
+1
+
 query I rowsort
 SELECT ALL col1 FROM tab0 GROUP BY col1, col1, col0
 ----
@@ -28498,9 +28671,11 @@ query II rowsort
 SELECT - col2, col2 AS col2 FROM tab0 cor0 WHERE col0 IS NULL GROUP BY col2
 ----
 
-# PostgreSQL has strict column usage for GROUP BY clauses
+#  PostgreSQL has strict column usage for GROUP BY clauses
 skipif postgresql
 # Datafusion - Error during planning: HAVING clause references non-aggregate values: Expression tab2.col0 could not be resolved from available co
+# Postgresql - Postgres error: db error: ERROR: column "tab2.col0" must appear in the GROUP BY clause or be used in an aggregate function
+skipif postgres
 skipif Datafusion
 query I rowsort
 SELECT DISTINCT col2 * + col2 AS col0 FROM tab2 GROUP BY col2 HAVING + col0 >= ( NULL )
@@ -28850,9 +29025,11 @@ SELECT - col2 AS col2 FROM tab2 GROUP BY col2, col2
 -79
 -87
 
-# PostgreSQL has strict column usage for GROUP BY clauses
+#  PostgreSQL has strict column usage for GROUP BY clauses
 skipif postgresql
 # Datafusion - Error during planning: HAVING clause references non-aggregate values: Expression cor0.col0 could not be resolved from available co
+# Postgresql - Postgres error: db error: ERROR: column "cor0.col0" must appear in the GROUP BY clause or be used in an aggregate function
+skipif postgres
 skipif Datafusion
 query I rowsort
 SELECT ALL + col2 AS col0 FROM tab2 AS cor0 GROUP BY col2 HAVING NOT ( col0 ) = NULL
@@ -28927,6 +29104,11 @@ SELECT DISTINCT col1 FROM tab0 cor0 GROUP BY col1, col2
 ----
 0
 81
+
+query I rowsort label-4576
+SELECT DISTINCT - col2 / - - col2 AS col2 FROM tab2 GROUP BY col2
+----
+-1
 
 query I rowsort
 SELECT - col2 col0 FROM tab1 AS cor0 GROUP BY col2
@@ -29151,9 +29333,11 @@ SELECT + col1 * - + col1 AS col0 FROM tab1 GROUP BY col1 HAVING NULL IS NULL
 -3249
 -36
 
-# PostgreSQL has strict column usage for GROUP BY clauses
+#  PostgreSQL has strict column usage for GROUP BY clauses
 skipif postgresql
 # Datafusion - Error during planning: HAVING clause references non-aggregate values: Expression cor0.col2 could not be resolved from available co
+# Postgresql - Postgres error: db error: ERROR: column "cor0.col2" must appear in the GROUP BY clause or be used in an aggregate function
+skipif postgres
 skipif Datafusion
 query I rowsort
 SELECT AVG ( ALL - col0 ) AS col2 FROM tab1 AS cor0 GROUP BY col0 HAVING + - col2 <= NULL
@@ -29621,6 +29805,11 @@ SELECT DISTINCT + col2 FROM tab0 GROUP BY col2, col1
 query I rowsort
 SELECT col1 * + - col1 * - + col2 col2 FROM tab1 GROUP BY col2, col1 HAVING NOT NULL IS NULL
 ----
+
+query I rowsort label-4682
+SELECT DISTINCT col0 / + col0 AS col0 FROM tab0 GROUP BY col0
+----
+1
 
 query I rowsort
 SELECT DISTINCT + col0 * col0 FROM tab2 AS cor0 GROUP BY col1, col0, col0 HAVING NULL IN ( - col1 + col0 )
@@ -31136,9 +31325,11 @@ SELECT ALL - col0 col1, col0 AS col1 FROM tab1 cor0 GROUP BY col1, col0
 -82
 82
 
-# PostgreSQL has strict column usage for GROUP BY clauses
+#  PostgreSQL has strict column usage for GROUP BY clauses
 skipif postgresql
 # Datafusion - Error during planning: HAVING clause references non-aggregate values: Expression tab2.col0 could not be resolved from available co
+# Postgresql - Postgres error: db error: ERROR: column "tab2.col0" must appear in the GROUP BY clause or be used in an aggregate function
+skipif postgres
 skipif Datafusion
 query I rowsort
 SELECT ALL - col2 AS col0 FROM tab2 GROUP BY col2, col1 HAVING NOT ( - col0 ) > ( NULL )
@@ -31370,9 +31561,11 @@ SELECT DISTINCT col0 FROM tab0 GROUP BY col0, col2 HAVING NOT NULL IS NOT NULL
 43
 83
 
-# PostgreSQL has strict column usage for GROUP BY clauses
+#  PostgreSQL has strict column usage for GROUP BY clauses
 skipif postgresql
 # Datafusion - Error during planning: HAVING clause references non-aggregate values: Expression tab1.col2 could not be resolved from available co
+# Postgresql - Postgres error: db error: ERROR: column "tab1.col2" must appear in the GROUP BY clause or be used in an aggregate function
+skipif postgres
 skipif Datafusion
 query I rowsort
 SELECT DISTINCT col1 AS col2 FROM tab1 GROUP BY col0, col1 HAVING NOT NULL <= - col2
@@ -31951,6 +32144,8 @@ SELECT - col0 FROM tab2 AS cor0 WHERE NULL IS NOT NULL GROUP BY col0, col1 HAVIN
 ----
 
 # Datafusion - Error during planning: HAVING clause references non-aggregate values: Expression cor0.col0 could not be resolved from available co
+# Postgresql - Postgres error: db error: ERROR: column "cor0.col0" must appear in the GROUP BY clause or be used in an aggregate function
+skipif postgres
 skipif Datafusion
 query I rowsort
 SELECT col1 col0 FROM tab0 AS cor0 GROUP BY col1 HAVING NOT + col0 = NULL
@@ -32077,9 +32272,11 @@ query I rowsort
 SELECT - col0 FROM tab1 GROUP BY col0 HAVING ( NULL ) IS NOT NULL
 ----
 
-# PostgreSQL has strict column usage for GROUP BY clauses
+#  PostgreSQL has strict column usage for GROUP BY clauses
 skipif postgresql
 # Datafusion - Error during planning: HAVING clause references non-aggregate values: Expression cor0.col1 could not be resolved from available co
+# Postgresql - Postgres error: db error: ERROR: column "cor0.col1" must appear in the GROUP BY clause or be used in an aggregate function
+skipif postgres
 skipif Datafusion
 query I rowsort
 SELECT col2 AS col1 FROM tab1 AS cor0 GROUP BY col2 HAVING NOT + - col1 >= NULL
@@ -32847,9 +33044,11 @@ SELECT DISTINCT - col2 AS col1 FROM tab2 GROUP BY col2, col2
 -79
 -87
 
-# PostgreSQL has strict column usage for GROUP BY clauses
+#  PostgreSQL has strict column usage for GROUP BY clauses
 skipif postgresql
 # Datafusion - Error during planning: HAVING clause references non-aggregate values: Expression tab0.col2 could not be resolved from available co
+# Postgresql - Postgres error: db error: ERROR: column "tab0.col2" must appear in the GROUP BY clause or be used in an aggregate function
+skipif postgres
 skipif Datafusion
 query I rowsort
 SELECT col0 AS col2 FROM tab0 GROUP BY col0, col0 HAVING NOT NULL >= + - col2 * + col0
@@ -33055,9 +33254,11 @@ query I rowsort
 SELECT DISTINCT + col0 FROM tab0 GROUP BY col0 HAVING ( NULL ) IS NOT NULL
 ----
 
-# PostgreSQL has strict column usage for GROUP BY clauses
+#  PostgreSQL has strict column usage for GROUP BY clauses
 skipif postgresql
 # Datafusion - Error during planning: HAVING clause references non-aggregate values: Expression tab1.col0 could not be resolved from available co
+# Postgresql - Postgres error: db error: ERROR: column "tab1.col0" must appear in the GROUP BY clause or be used in an aggregate function
+skipif postgres
 skipif Datafusion
 query I rowsort
 SELECT ALL col1 AS col0 FROM tab1 GROUP BY col1 HAVING NULL <> col0
@@ -33279,6 +33480,11 @@ SELECT DISTINCT - col2 AS col1, - col0 AS col1 FROM tab2 AS cor0 GROUP BY col0, 
 -91
 -87
 -15
+
+query I rowsort label-5260
+SELECT DISTINCT - col1 / + + col1 FROM tab1 AS cor0 GROUP BY col1
+----
+-1
 
 query I rowsort
 SELECT ALL col1 * col1 AS col1 FROM tab2 GROUP BY col0, col1, col1
@@ -33567,9 +33773,11 @@ query I rowsort
 SELECT + col2 AS col1 FROM tab2 AS cor0 WHERE NOT ( NULL ) BETWEEN NULL AND col2 GROUP BY col2, col0 HAVING NOT ( NOT - col2 IS NOT NULL )
 ----
 
-# PostgreSQL has strict column usage for GROUP BY clauses
+#  PostgreSQL has strict column usage for GROUP BY clauses
 skipif postgresql
 # Datafusion - Error during planning: HAVING clause references non-aggregate values: Expression cor0.col0 could not be resolved from available co
+# Postgresql - Postgres error: db error: ERROR: column "cor0.col0" must appear in the GROUP BY clause or be used in an aggregate function
+skipif postgres
 skipif Datafusion
 query I rowsort
 SELECT + col2 AS col0 FROM tab2 AS cor0 GROUP BY col2 HAVING NOT NULL BETWEEN NULL AND - col2 * col0
@@ -33687,9 +33895,11 @@ query R rowsort
 SELECT AVG ( + - col1 ) FROM tab0 GROUP BY col0, col1 HAVING NOT col0 IS NOT NULL
 ----
 
-# PostgreSQL has strict column usage for GROUP BY clauses
+#  PostgreSQL has strict column usage for GROUP BY clauses
 skipif postgresql
 # Datafusion - Error during planning: HAVING clause references non-aggregate values: Expression tab2.col0 could not be resolved from available co
+# Postgresql - Postgres error: db error: ERROR: column "tab2.col0" must appear in the GROUP BY clause or be used in an aggregate function
+skipif postgres
 skipif Datafusion
 query I rowsort
 SELECT - col1 - col1 AS col0 FROM tab2 GROUP BY col1 HAVING NOT ( NULL ) NOT BETWEEN NULL AND + col1 * - col0
@@ -34767,9 +34977,11 @@ SELECT - col1 AS col2 FROM tab0 AS cor0 GROUP BY col1, col1 HAVING NOT NULL IS N
 -81
 0
 
-# PostgreSQL has strict column usage for GROUP BY clauses
+#  PostgreSQL has strict column usage for GROUP BY clauses
 skipif postgresql
 # Datafusion - Error during planning: HAVING clause references non-aggregate values: Expression tab2.col1 could not be resolved from available co
+# Postgresql - Postgres error: db error: ERROR: column "tab2.col1" must appear in the GROUP BY clause or be used in an aggregate function
+skipif postgres
 skipif Datafusion
 query I rowsort
 SELECT ALL - col2 AS col1 FROM tab2 GROUP BY col2 HAVING NOT NULL BETWEEN - col1 AND NULL
@@ -35057,6 +35269,11 @@ SELECT col0 * col0 AS col0 FROM tab2 cor0 GROUP BY col0
 225
 8281
 8464
+
+query I rowsort label-5535
+SELECT DISTINCT - col2 / + col2 AS col2 FROM tab2 GROUP BY col2
+----
+-1
 
 query I rowsort
 SELECT ALL - col2 AS col2 FROM tab1 GROUP BY col0, col2
@@ -35879,6 +36096,8 @@ SELECT DISTINCT - col1 AS col2 FROM tab1 GROUP BY col1, col1 HAVING NOT ( - col1
 -6
 
 # Datafusion - Error during planning: HAVING clause references non-aggregate values: Expression tab1.col1 could not be resolved from available co
+# Postgresql - Postgres error: db error: ERROR: column "tab1.col1" must appear in the GROUP BY clause or be used in an aggregate function
+skipif postgres
 skipif Datafusion
 query I rowsort
 SELECT ALL - col0 col1 FROM tab1 GROUP BY col0 HAVING NOT col1 >= NULL
@@ -36048,6 +36267,8 @@ SELECT col0 FROM tab0 GROUP BY col0 HAVING NOT NULL IS NULL
 ----
 
 # Datafusion - Error during planning: HAVING clause references non-aggregate values: Expression cor0.col2 could not be resolved from available co
+# Postgresql - Postgres error: db error: ERROR: column "cor0.col2" must appear in the GROUP BY clause or be used in an aggregate function
+skipif postgres
 skipif Datafusion
 query I rowsort
 SELECT DISTINCT - col0 / - col1 + - col1 col2 FROM tab2 AS cor0 GROUP BY col0, col1 HAVING NOT NULL NOT BETWEEN + col2 AND NULL
@@ -36666,9 +36887,11 @@ query I rowsort
 SELECT col0 AS col1 FROM tab1 GROUP BY col0, col1 HAVING NULL >= NULL
 ----
 
-# PostgreSQL has strict column usage for GROUP BY clauses
+#  PostgreSQL has strict column usage for GROUP BY clauses
 skipif postgresql
 # Datafusion - Error during planning: HAVING clause references non-aggregate values: Expression cor0.col2 could not be resolved from available co
+# Postgresql - Postgres error: db error: ERROR: column "cor0.col2" must appear in the GROUP BY clause or be used in an aggregate function
+skipif postgres
 skipif Datafusion
 query I rowsort
 SELECT DISTINCT + col0 AS col2 FROM tab1 AS cor0 GROUP BY col0 HAVING NULL <= ( + col2 )
@@ -37274,6 +37497,8 @@ SELECT col1 * - - col1 * + - AVG ( + col1 ) FROM tab0 GROUP BY col1, col1 HAVING
 ----
 
 # Datafusion - Error during planning: HAVING clause references non-aggregate values: Expression tab0.col1 could not be resolved from available co
+# Postgresql - Postgres error: db error: ERROR: column "tab0.col1" must appear in the GROUP BY clause or be used in an aggregate function
+skipif postgres
 skipif Datafusion
 query I rowsort
 SELECT col2 col1 FROM tab0 GROUP BY col2 HAVING NOT - + col1 <> NULL
@@ -38321,9 +38546,11 @@ query I rowsort
 SELECT ALL + col0 AS col1 FROM tab1 WHERE NULL <> - col2 * - col0 GROUP BY col0
 ----
 
-# PostgreSQL has strict column usage for GROUP BY clauses
+#  PostgreSQL has strict column usage for GROUP BY clauses
 skipif postgresql
 # Datafusion - Error during planning: HAVING clause references non-aggregate values: Expression tab2.col2 could not be resolved from available co
+# Postgresql - Postgres error: db error: ERROR: column "tab2.col2" must appear in the GROUP BY clause or be used in an aggregate function
+skipif postgres
 skipif Datafusion
 query I rowsort
 SELECT + col1 AS col2 FROM tab2 GROUP BY col1 HAVING NULL < col2
@@ -38723,6 +38950,11 @@ SELECT - col0 AS col2 FROM tab0 GROUP BY col0, col1
 -43
 -83
 
+query I rowsort label-6112
+SELECT DISTINCT + + col2 / col2 FROM tab0 AS cor0 GROUP BY col2, col0
+----
+1
+
 query I rowsort
 SELECT col0 AS col0 FROM tab2 GROUP BY col0, col1
 ----
@@ -38846,9 +39078,11 @@ query I rowsort
 SELECT ALL col1 AS col0 FROM tab1 GROUP BY col1 HAVING NULL < NULL
 ----
 
-# PostgreSQL has strict column usage for GROUP BY clauses
+#  PostgreSQL has strict column usage for GROUP BY clauses
 skipif postgresql
 # Datafusion - Error during planning: HAVING clause references non-aggregate values: Expression cor0.col0 could not be resolved from available co
+# Postgresql - Postgres error: db error: ERROR: column "cor0.col0" must appear in the GROUP BY clause or be used in an aggregate function
+skipif postgres
 skipif Datafusion
 query I rowsort
 SELECT - col2 AS col0 FROM tab0 AS cor0 GROUP BY col2 HAVING NOT - col0 >= NULL
@@ -38956,6 +39190,11 @@ SELECT ALL - col0 FROM tab1 cor0 GROUP BY col2, col0
 -22
 -28
 -82
+
+query I rowsort label-6151
+SELECT DISTINCT col0 / + + col0 AS col1 FROM tab1 GROUP BY col0
+----
+1
 
 query I rowsort
 SELECT ALL + col2 AS col2 FROM tab2 AS cor0 GROUP BY col2 HAVING ( NULL ) IS NOT NULL
@@ -39096,9 +39335,11 @@ SELECT col2 FROM tab0 AS cor0 WHERE + col0 IS NOT NULL GROUP BY col2
 38
 79
 
-# PostgreSQL has strict column usage for GROUP BY clauses
+#  PostgreSQL has strict column usage for GROUP BY clauses
 skipif postgresql
 # Datafusion - Error during planning: HAVING clause references non-aggregate values: Expression cor0.col0 could not be resolved from available co
+# Postgresql - Postgres error: db error: ERROR: column "cor0.col0" must appear in the GROUP BY clause or be used in an aggregate function
+skipif postgres
 skipif Datafusion
 query I rowsort
 SELECT + col1 AS col0 FROM tab2 AS cor0 GROUP BY col1 HAVING NOT ( NOT ( NULL ) <> col0 )
@@ -39328,6 +39569,11 @@ SELECT ALL col1 AS col0 FROM tab2 GROUP BY col2, col1, col0
 query I rowsort
 SELECT DISTINCT col1 FROM tab2 AS cor0 GROUP BY col1 HAVING AVG ( - + col0 ) < NULL
 ----
+
+query I rowsort label-6208
+SELECT DISTINCT col0 / col0 AS col0 FROM tab0 GROUP BY col0
+----
+1
 
 query I rowsort
 SELECT DISTINCT col2 AS col2 FROM tab1 GROUP BY col2, col1, col2, col2
@@ -40203,6 +40449,11 @@ SELECT ALL col2 FROM tab0 GROUP BY col2, col1 HAVING NOT NULL IS NOT NULL
 38
 79
 
+query I rowsort label-6344
+SELECT DISTINCT - col1 / - col1 AS col2 FROM tab1 GROUP BY col1, col1
+----
+1
+
 query I rowsort
 SELECT DISTINCT col1 AS col1 FROM tab2 GROUP BY col2, col1
 ----
@@ -40540,6 +40791,8 @@ SELECT - + col2 AS col1 FROM tab2 AS cor0 GROUP BY col2
 -87
 
 # Datafusion - Error during planning: HAVING clause references non-aggregate values: Expression tab1.col1 could not be resolved from available co
+# Postgresql - Postgres error: db error: ERROR: column "tab1.col1" must appear in the GROUP BY clause or be used in an aggregate function
+skipif postgres
 skipif Datafusion
 query I rowsort
 SELECT ALL col0 * col0 col1 FROM tab1 GROUP BY col0 HAVING NOT NULL NOT IN ( - col1 )
@@ -41118,6 +41371,8 @@ SELECT + col0 + col0 AS col2 FROM tab2 GROUP BY col0, col0
 30
 
 # Datafusion - Error during planning: HAVING clause references non-aggregate values: Expression tab2.col1 could not be resolved from available co
+# Postgresql - Postgres error: db error: ERROR: column "tab2.col1" must appear in the GROUP BY clause or be used in an aggregate function
+skipif postgres
 skipif Datafusion
 query I rowsort
 SELECT DISTINCT - col2 col1 FROM tab2 GROUP BY col2 HAVING ( NULL ) NOT IN ( col1 )
@@ -41318,9 +41573,11 @@ query I rowsort
 SELECT DISTINCT col0 col2 FROM tab2 WHERE NULL IS NOT NULL GROUP BY col0
 ----
 
-# PostgreSQL has strict column usage for GROUP BY clauses
+#  PostgreSQL has strict column usage for GROUP BY clauses
 skipif postgresql
 # Datafusion - Error during planning: HAVING clause references non-aggregate values: Expression cor0.col1 could not be resolved from available co
+# Postgresql - Postgres error: db error: ERROR: column "cor0.col1" must appear in the GROUP BY clause or be used in an aggregate function
+skipif postgres
 skipif Datafusion
 query I rowsort
 SELECT col0 + + col0 AS col1 FROM tab2 AS cor0 GROUP BY col0 HAVING - + col1 * + col0 + col0 > NULL
@@ -41520,9 +41777,11 @@ SELECT ALL + col2 AS col2 FROM tab2 GROUP BY col2, col1 HAVING NULL IS NULL
 79
 87
 
-# PostgreSQL has strict column usage for GROUP BY clauses
+#  PostgreSQL has strict column usage for GROUP BY clauses
 skipif postgresql
 # Datafusion - Error during planning: HAVING clause references non-aggregate values: Expression tab2.col0 could not be resolved from available co
+# Postgresql - Postgres error: db error: ERROR: column "tab2.col0" must appear in the GROUP BY clause or be used in an aggregate function
+skipif postgres
 skipif Datafusion
 query I rowsort
 SELECT col2 AS col0 FROM tab2 GROUP BY col2 HAVING NOT + + col0 < ( NULL )
@@ -41696,9 +41955,11 @@ query I rowsort
 SELECT ALL - col2 FROM tab2 AS cor0 WHERE + col2 IS NULL GROUP BY col2
 ----
 
-# PostgreSQL has strict column usage for GROUP BY clauses
+#  PostgreSQL has strict column usage for GROUP BY clauses
 skipif postgresql
 # Datafusion - Error during planning: HAVING clause references non-aggregate values: Expression cor0.col0 could not be resolved from available co
+# Postgresql - Postgres error: db error: ERROR: column "cor0.col0" must appear in the GROUP BY clause or be used in an aggregate function
+skipif postgres
 skipif Datafusion
 query I rowsort
 SELECT col1 AS col0 FROM tab0 AS cor0 GROUP BY col1 HAVING NOT NULL IS NULL OR ( col0 ) NOT BETWEEN NULL AND NULL
@@ -43044,6 +43305,8 @@ SELECT + + col1 + col1 col2 FROM tab0 cor0 GROUP BY col1
 162
 
 # Datafusion - Error during planning: HAVING clause references non-aggregate values: Expression tab1.col2 could not be resolved from available co
+# Postgresql - Postgres error: db error: ERROR: column "tab1.col2" must appear in the GROUP BY clause or be used in an aggregate function
+skipif postgres
 skipif Datafusion
 query I rowsort
 SELECT ALL - col1 col2 FROM tab1 GROUP BY col1 HAVING NOT NULL < + + col2
@@ -43340,9 +43603,11 @@ SELECT - col2 AS col2 FROM tab1 WHERE NULL IS NULL GROUP BY col2
 -71
 -8
 
-# PostgreSQL has strict column usage for GROUP BY clauses
+#  PostgreSQL has strict column usage for GROUP BY clauses
 skipif postgresql
 # Datafusion - Error during planning: HAVING clause references non-aggregate values: Expression tab2.col0 could not be resolved from available co
+# Postgresql - Postgres error: db error: ERROR: column "tab2.col0" must appear in the GROUP BY clause or be used in an aggregate function
+skipif postgres
 skipif Datafusion
 query I rowsort
 SELECT ALL + AVG ( + col1 ) AS col0 FROM tab2 GROUP BY col1 HAVING NOT NULL <> col0
@@ -43579,9 +43844,11 @@ SELECT ALL - col0 AS col2 FROM tab2 AS cor0 GROUP BY col0
 -91
 -92
 
-# PostgreSQL has strict column usage for GROUP BY clauses
+#  PostgreSQL has strict column usage for GROUP BY clauses
 skipif postgresql
 # Datafusion - Error during planning: HAVING clause references non-aggregate values: Expression cor0.col2 could not be resolved from available co
+# Postgresql - Postgres error: db error: ERROR: column "cor0.col2" must appear in the GROUP BY clause or be used in an aggregate function
+skipif postgres
 skipif Datafusion
 query I rowsort
 SELECT DISTINCT + col0 AS col2 FROM tab1 cor0 GROUP BY col0 HAVING NOT col2 NOT BETWEEN NULL AND NULL
@@ -44366,6 +44633,8 @@ SELECT col2 * - col2 FROM tab0 AS cor0 WHERE NULL IS NOT NULL GROUP BY col2
 ----
 
 # Datafusion - Error during planning: HAVING clause references non-aggregate values: Expression cor0.col1 could not be resolved from available co
+# Postgresql - Postgres error: db error: ERROR: column "cor0.col1" must appear in the GROUP BY clause or be used in an aggregate function
+skipif postgres
 skipif Datafusion
 query I rowsort
 SELECT + col2 col1 FROM tab0 AS cor0 GROUP BY col2 HAVING NULL NOT IN ( col1 )
@@ -44532,9 +44801,11 @@ SELECT col2 * + col2 col1 FROM tab0 GROUP BY col2
 576
 6241
 
-# PostgreSQL has strict column usage for GROUP BY clauses
+#  PostgreSQL has strict column usage for GROUP BY clauses
 skipif postgresql
 # Datafusion - Error during planning: HAVING clause references non-aggregate values: Expression cor0.col2 could not be resolved from available co
+# Postgresql - Postgres error: db error: ERROR: column "cor0.col2" must appear in the GROUP BY clause or be used in an aggregate function
+skipif postgres
 skipif Datafusion
 query I rowsort
 SELECT + + col1 AS col2 FROM tab0 AS cor0 GROUP BY col1 HAVING ( NULL ) NOT BETWEEN NULL AND ( col2 )
@@ -44554,9 +44825,11 @@ SELECT + col0 AS col0 FROM tab1 cor0 GROUP BY col0, col0
 28
 82
 
-# PostgreSQL has strict column usage for GROUP BY clauses
+#  PostgreSQL has strict column usage for GROUP BY clauses
 skipif postgresql
 # Datafusion - Error during planning: HAVING clause references non-aggregate values: Expression tab1.col1 could not be resolved from available co
+# Postgresql - Postgres error: db error: ERROR: column "tab1.col1" must appear in the GROUP BY clause or be used in an aggregate function
+skipif postgres
 skipif Datafusion
 query I rowsort
 SELECT DISTINCT col0 AS col1 FROM tab1 GROUP BY col2, col0 HAVING - col1 NOT BETWEEN ( NULL ) AND ( NULL )
@@ -46304,6 +46577,11 @@ SELECT + col2 AS col0 FROM tab1 GROUP BY col1, col2
 45
 71
 8
+
+query I rowsort label-7310
+SELECT DISTINCT + col2 / - col2 FROM tab0 AS cor0 GROUP BY col2, col2
+----
+-1
 
 query I rowsort
 SELECT ALL - col2 + col0 AS col1 FROM tab0 AS cor0 WHERE NOT NULL IS NOT NULL GROUP BY col0, col2 HAVING NOT NULL IS NULL
@@ -48618,9 +48896,11 @@ SELECT DISTINCT col2 AS col2 FROM tab1 AS cor0 GROUP BY col0, col0, col2
 71
 8
 
-# PostgreSQL has strict column usage for GROUP BY clauses
+#  PostgreSQL has strict column usage for GROUP BY clauses
 skipif postgresql
 # Datafusion - Error during planning: HAVING clause references non-aggregate values: Expression tab1.col2 could not be resolved from available co
+# Postgresql - Postgres error: db error: ERROR: column "tab1.col2" must appear in the GROUP BY clause or be used in an aggregate function
+skipif postgres
 skipif Datafusion
 query I rowsort
 SELECT col0 AS col2 FROM tab1 GROUP BY col0, col1 HAVING + + col1 * col2 + + + col2 * + - col2 > NULL
@@ -50920,6 +51200,8 @@ SELECT - col1 - col1 FROM tab2 AS cor0 GROUP BY col1
 -82
 
 # Datafusion - Error during planning: HAVING clause references non-aggregate values: Expression cor0.col2 could not be resolved from available co
+# Postgresql - Postgres error: db error: ERROR: column "cor0.col2" must appear in the GROUP BY clause or be used in an aggregate function
+skipif postgres
 skipif Datafusion
 query I rowsort
 SELECT + + col0 col2 FROM tab0 cor0 GROUP BY col0 HAVING NOT NULL BETWEEN col2 AND + col0
@@ -51752,6 +52034,11 @@ SELECT DISTINCT + col1 col0 FROM tab1 AS cor0 GROUP BY col1, col1
 57
 6
 
+query I rowsort label-8173
+SELECT DISTINCT col2 / col2 AS col2 FROM tab2 GROUP BY col2
+----
+1
+
 query I rowsort
 SELECT col2 AS col1 FROM tab1 GROUP BY col0, col2, col2
 ----
@@ -52261,6 +52548,11 @@ query I rowsort
 SELECT + col2 FROM tab2 GROUP BY col2 HAVING NULL IS NOT NULL
 ----
 
+query I rowsort label-8252
+SELECT DISTINCT - + col1 / - col1 FROM tab2 cor0 GROUP BY col1
+----
+1
+
 query I rowsort
 SELECT - - col2 + - col2 FROM tab0 AS cor0 GROUP BY col2
 ----
@@ -52573,9 +52865,11 @@ SELECT ALL - col1 FROM tab0 GROUP BY col2, col1
 0
 0
 
-# PostgreSQL has strict column usage for GROUP BY clauses
+#  PostgreSQL has strict column usage for GROUP BY clauses
 skipif postgresql
 # Datafusion - Error during planning: HAVING clause references non-aggregate values: Expression tab2.col0 could not be resolved from available co
+# Postgresql - Postgres error: db error: ERROR: column "tab2.col0" must appear in the GROUP BY clause or be used in an aggregate function
+skipif postgres
 skipif Datafusion
 query I rowsort
 SELECT ALL + col1 AS col0 FROM tab2 GROUP BY col1 HAVING NULL >= ( - col0 )
@@ -53054,9 +53348,11 @@ SELECT DISTINCT - col1 + + col1 FROM tab0 GROUP BY col1
 ----
 0
 
-# PostgreSQL has strict column usage for GROUP BY clauses
+#  PostgreSQL has strict column usage for GROUP BY clauses
 skipif postgresql
 # Datafusion - Error during planning: HAVING clause references non-aggregate values: Expression tab1.col0 could not be resolved from available co
+# Postgresql - Postgres error: db error: ERROR: column "tab1.col0" must appear in the GROUP BY clause or be used in an aggregate function
+skipif postgres
 skipif Datafusion
 query I rowsort
 SELECT col1 AS col0 FROM tab1 GROUP BY col1 HAVING NULL < + col0
@@ -53121,9 +53417,11 @@ SELECT + col0 + + col0 AS col1 FROM tab0 AS cor0 GROUP BY col0
 52
 86
 
-# PostgreSQL has strict column usage for GROUP BY clauses
+#  PostgreSQL has strict column usage for GROUP BY clauses
 skipif postgresql
 # Datafusion - Error during planning: HAVING clause references non-aggregate values: Expression cor0.col0 could not be resolved from available co
+# Postgresql - Postgres error: db error: ERROR: column "cor0.col0" must appear in the GROUP BY clause or be used in an aggregate function
+skipif postgres
 skipif Datafusion
 query I rowsort
 SELECT DISTINCT + col1 AS col0 FROM tab0 AS cor0 GROUP BY col1 HAVING + col0 >= NULL
@@ -53598,6 +53896,11 @@ SELECT + + col0 AS col2 FROM tab0 AS cor0 GROUP BY col2, col0
 43
 83
 
+query I rowsort label-8464
+SELECT DISTINCT col2 / - col2 AS col2 FROM tab0 GROUP BY col2
+----
+-1
+
 # Datafusion - Types were automatically converted from:
 # Datafusion - [Expected] [I]
 # Datafusion - [Actual  ] [R]
@@ -54006,9 +54309,11 @@ SELECT ALL + col1 FROM tab0 AS cor0 GROUP BY col1 HAVING NOT NULL IS NOT NULL
 0
 81
 
-# PostgreSQL has strict column usage for GROUP BY clauses
+#  PostgreSQL has strict column usage for GROUP BY clauses
 skipif postgresql
 # Datafusion - Error during planning: HAVING clause references non-aggregate values: Expression tab1.col1 could not be resolved from available co
+# Postgresql - Postgres error: db error: ERROR: column "tab1.col1" must appear in the GROUP BY clause or be used in an aggregate function
+skipif postgres
 skipif Datafusion
 query I rowsort
 SELECT - col0 AS col1 FROM tab1 GROUP BY col0 HAVING NULL NOT BETWEEN ( NULL ) AND col1
@@ -54376,6 +54681,8 @@ SELECT ALL col1 FROM tab1 GROUP BY col0, col2, col1
 6
 
 # Datafusion - Error during planning: HAVING clause references non-aggregate values: Expression tab2.col1 could not be resolved from available co
+# Postgresql - Postgres error: db error: ERROR: column "tab2.col1" must appear in the GROUP BY clause or be used in an aggregate function
+skipif postgres
 skipif Datafusion
 query I rowsort
 SELECT col2 col1 FROM tab2 GROUP BY col2 HAVING NOT NULL = col1
@@ -54828,6 +55135,11 @@ SELECT + col2 + - col2 FROM tab1 GROUP BY col2, col1 HAVING NOT NULL IS NULL
 query R rowsort
 SELECT col0 + AVG ( DISTINCT - col0 ) FROM tab0 GROUP BY col0, col1 HAVING NULL < NULL
 ----
+
+query I rowsort label-8658
+SELECT DISTINCT col2 / col2 FROM tab2 GROUP BY col2
+----
+1
 
 query I rowsort
 SELECT DISTINCT col1 + col1 FROM tab1 WHERE NOT NULL IS NOT NULL GROUP BY col1, col0 HAVING NULL > NULL
@@ -55323,9 +55635,11 @@ SELECT - col2 AS col1 FROM tab0 GROUP BY col0, col2
 -38
 -79
 
-# PostgreSQL has strict column usage for GROUP BY clauses
+#  PostgreSQL has strict column usage for GROUP BY clauses
 skipif postgresql
 # Datafusion - Error during planning: HAVING clause references non-aggregate values: Expression cor0.col0 could not be resolved from available co
+# Postgresql - Postgres error: db error: ERROR: column "cor0.col0" must appear in the GROUP BY clause or be used in an aggregate function
+skipif postgres
 skipif Datafusion
 query I rowsort
 SELECT - col1 AS col0 FROM tab1 AS cor0 GROUP BY col1 HAVING NOT col0 < NULL
@@ -56436,9 +56750,11 @@ SELECT DISTINCT col0 - col0 AS col2 FROM tab0 GROUP BY col0
 ----
 0
 
-# PostgreSQL has strict column usage for GROUP BY clauses
+#  PostgreSQL has strict column usage for GROUP BY clauses
 skipif postgresql
 # Datafusion - Error during planning: HAVING clause references non-aggregate values: Expression tab0.col2 could not be resolved from available co
+# Postgresql - Postgres error: db error: ERROR: column "tab0.col2" must appear in the GROUP BY clause or be used in an aggregate function
+skipif postgres
 skipif Datafusion
 query I rowsort
 SELECT + col0 AS col2 FROM tab0 GROUP BY col0, col0 HAVING NOT ( + - col2 ) <= ( NULL )
@@ -57173,9 +57489,11 @@ query I rowsort
 SELECT ALL - col0 col2 FROM tab0 GROUP BY col0 HAVING NOT NULL IS NULL
 ----
 
-# PostgreSQL has strict column usage for GROUP BY clauses
+#  PostgreSQL has strict column usage for GROUP BY clauses
 skipif postgresql
 # Datafusion - Error during planning: HAVING clause references non-aggregate values: Expression tab1.col2 could not be resolved from available co
+# Postgresql - Postgres error: db error: ERROR: column "tab1.col2" must appear in the GROUP BY clause or be used in an aggregate function
+skipif postgres
 skipif Datafusion
 query I rowsort
 SELECT ALL - col1 AS col2 FROM tab1 GROUP BY col1 HAVING NULL <> - col2
@@ -57667,6 +57985,11 @@ SELECT DISTINCT col0 * + col0 AS col2 FROM tab0 GROUP BY col0
 676
 6889
 
+query I rowsort label-9104
+SELECT DISTINCT - col1 / col1 FROM tab2 AS cor0 WHERE NOT + col2 IS NULL GROUP BY col1
+----
+-1
+
 query I rowsort
 SELECT col0 AS col1 FROM tab0 GROUP BY col0 HAVING NULL IS NULL
 ----
@@ -57992,9 +58315,11 @@ SELECT ALL col0 FROM tab1 AS cor0 GROUP BY col2, col0
 28
 82
 
-# PostgreSQL has strict column usage for GROUP BY clauses
+#  PostgreSQL has strict column usage for GROUP BY clauses
 skipif postgresql
 # Datafusion - Error during planning: HAVING clause references non-aggregate values: Expression tab1.col0 could not be resolved from available co
+# Postgresql - Postgres error: db error: ERROR: column "tab1.col0" must appear in the GROUP BY clause or be used in an aggregate function
+skipif postgres
 skipif Datafusion
 query I rowsort
 SELECT col1 AS col0 FROM tab1 WHERE NOT NULL <= ( - + col0 ) GROUP BY col1 HAVING NULL > ( col1 * + col0 )
@@ -59272,6 +59597,11 @@ SELECT + + col2 AS col2 FROM tab0 cor0 GROUP BY col2, col1, col1
 24
 38
 79
+
+query I rowsort label-9361
+SELECT DISTINCT col0 / + col0 AS col0 FROM tab0 GROUP BY col1, col0
+----
+1
 
 query I rowsort
 SELECT + col2 * col0 AS col2 FROM tab0 GROUP BY col2, col0
@@ -61244,9 +61574,11 @@ SELECT col1 FROM tab0 GROUP BY col1, col0 HAVING NULL IS NULL
 0
 81
 
-# PostgreSQL has strict column usage for GROUP BY clauses
+#  PostgreSQL has strict column usage for GROUP BY clauses
 skipif postgresql
 # Datafusion - Error during planning: HAVING clause references non-aggregate values: Expression cor0.col1 could not be resolved from available co
+# Postgresql - Postgres error: db error: ERROR: column "cor0.col1" must appear in the GROUP BY clause or be used in an aggregate function
+skipif postgres
 skipif Datafusion
 query I rowsort
 SELECT - + col2 / + col2 AS col1 FROM tab1 AS cor0 GROUP BY col2 HAVING ( + col1 ) = ( NULL )
@@ -61356,6 +61688,11 @@ SELECT DISTINCT col2 + - col0 FROM tab0 GROUP BY col0, col0, col2
 query I rowsort
 SELECT DISTINCT - + col0 FROM tab1 AS cor0 GROUP BY col0 HAVING NOT NULL IS NULL
 ----
+
+query I rowsort label-9688
+SELECT DISTINCT + col0 / - col0 AS col1 FROM tab0 GROUP BY col0
+----
+-1
 
 query I rowsort
 SELECT DISTINCT + col1 FROM tab2 GROUP BY col1, col1 HAVING NULL <= NULL
@@ -61810,9 +62147,11 @@ SELECT - - col2 col1, col1 FROM tab2 AS cor0 GROUP BY col1, col2, col1
 87
 61
 
-# PostgreSQL has strict column usage for GROUP BY clauses
+#  PostgreSQL has strict column usage for GROUP BY clauses
 skipif postgresql
 # Datafusion - Error during planning: HAVING clause references non-aggregate values: Expression tab1.col1 could not be resolved from available co
+# Postgresql - Postgres error: db error: ERROR: column "tab1.col1" must appear in the GROUP BY clause or be used in an aggregate function
+skipif postgres
 skipif Datafusion
 query I rowsort
 SELECT ALL col2 AS col1 FROM tab1 GROUP BY col2 HAVING + col1 + - col2 BETWEEN NULL AND NULL
@@ -62250,6 +62589,11 @@ query I rowsort
 SELECT ALL - col2 FROM tab0 AS cor0 GROUP BY col2 HAVING ( NULL ) IS NOT NULL
 ----
 
+query I rowsort label-9826
+SELECT DISTINCT - + col0 / + col0 AS col1 FROM tab1 WHERE NOT NULL IS NOT NULL GROUP BY col0
+----
+-1
+
 query I rowsort
 SELECT ALL + col0 AS col1 FROM tab2 WHERE NOT NULL IS NOT NULL GROUP BY col0
 ----
@@ -62619,6 +62963,11 @@ SELECT DISTINCT col2 FROM tab0 GROUP BY col2 HAVING NOT - AVG ( DISTINCT - col2 
 24
 38
 79
+
+query I rowsort label-9884
+SELECT DISTINCT col1 / + + col1 AS col0 FROM tab1 GROUP BY col1
+----
+1
 
 query I rowsort
 SELECT ALL col0 AS col1 FROM tab1 cor0 GROUP BY col2, col0
@@ -63308,6 +63657,11 @@ SELECT DISTINCT - col1 AS col0 FROM tab1 AS cor0 GROUP BY col1, col2
 -44
 -57
 -6
+
+query I rowsort label-9995
+SELECT DISTINCT col2 / col2 col1 FROM tab2 GROUP BY col2
+----
+1
 
 query I rowsort
 SELECT ALL + - col0 FROM tab1 AS cor0 GROUP BY col0 HAVING NOT NULL IS NOT NULL

@@ -6787,7 +6787,7 @@ SELECT + 69 * - col0 FROM tab0 AS cor0
 -2415
 -6141
 
-# Datafusion - Data was automatically updated based on compare with postgres results
+# Datafusion - Data was automatically updated based on comparison db results
 # Datafusion - Previous results:
 # Datafusion - 165
 # Datafusion - 35

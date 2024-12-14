@@ -13612,7 +13612,7 @@ SELECT + - col0 * - ( - col1 ) + - col1 AS col0 FROM tab0 AS cor0
 -3492
 -8190
 
-# Datafusion - Data was automatically updated based on compare with postgres results
+# Datafusion - Data was automatically updated based on comparison db results
 # Datafusion - Previous results:
 # Datafusion - 0
 # Datafusion - 0

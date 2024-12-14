@@ -503,7 +503,7 @@ query I rowsort
 SELECT - - col2 * - + col1 + col1 * - col1 FROM tab2 WHERE NULL <> NULL
 ----
 
-# Datafusion - Error during planning: Projections require unique expression names
+# Datafusion - DataFusion error: Schema error: Schema contains qualified field name tab1.col2 and unqualified field name col2 which would be ambiguous
 skipif Datafusion
 query II rowsort label-72
 SELECT DISTINCT - col1 AS col2, col2 AS col2 FROM tab1 WHERE - - CAST ( + - col1 AS REAL ) NOT BETWEEN - col0 AND NULL
@@ -706,6 +706,9 @@ NULL
 97
 NULL
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-104
 SELECT ALL + CAST ( NULL AS REAL ) / - 26 + + col0 FROM tab2 AS cor0 WHERE - col1 = - col0 * 11 + - col1 * + ( CAST ( NULL AS INTEGER ) )
 ----
@@ -897,6 +900,9 @@ SELECT ALL - 56 * + + col0 + - col1 - col1 FROM tab1 cor0 WHERE - col0 IS NOT NU
 -4770
 -5190
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-136
 SELECT ALL + 85 + + CAST ( + + ( - CAST ( NULL AS INTEGER ) ) AS REAL ) FROM tab1 AS cor0 WHERE NOT ( - + 8 ) IS NOT NULL
 ----
@@ -1069,6 +1075,8 @@ SELECT + ( col1 ) * + col2 + - col0 FROM tab1 AS cor0
 210
 3105
 
+# Datafusion - DataFusion error: type_coercion
+# Datafusion - caused by
 # Datafusion - Error during planning: Cannot automatically convert Float32 to Null
 skipif Datafusion
 query III rowsort label-165
@@ -1266,6 +1274,8 @@ SELECT ALL - ( 62 ) FROM tab0
 -62
 -62
 
+# Datafusion - DataFusion error: type_coercion
+# Datafusion - caused by
 # Datafusion - Error during planning: Cannot automatically convert Int64 to Null
 skipif Datafusion
 query I rowsort
@@ -1575,6 +1585,9 @@ query I rowsort
 SELECT ALL - col0 AS col0 FROM tab1 AS cor0 WHERE NOT ( + ( - col0 ) ) IS NOT NULL
 ----
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-255
 SELECT DISTINCT + COUNT ( * ) + AVG ( col0 ) AS col1 FROM tab2 AS cor0 WHERE + ( col0 ) = + col0 * - 68
 ----
@@ -1776,6 +1789,9 @@ SELECT ALL - - col1 AS col1 FROM tab1 AS cor0 WHERE ( col2 ) NOT IN ( + 90, + 68
 14
 5
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]I
+# Datafusion - [Actual  ] [R]I
 query RI rowsort label-291
 SELECT - 50 * - CAST ( NULL AS REAL ) + - COUNT ( * ) AS col0, 68 + - 4 FROM tab2 AS cor0
 ----
@@ -1793,12 +1809,17 @@ query II rowsort
 SELECT DISTINCT + col1, col2 AS col0 FROM tab0 AS cor0 WHERE NOT 51 IS NOT NULL
 ----
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-294
 SELECT DISTINCT + CAST ( NULL AS REAL ) * + + 22 AS col2 FROM tab2 AS cor0 CROSS JOIN tab1 AS cor1
 ----
 NULL
 
-# Datafusion - Cannot automatically convert Int64 to Null
+# Datafusion - DataFusion error: type_coercion
+# Datafusion - caused by
+# Datafusion - Error during planning: Cannot automatically convert Int32 to Null
 skipif Datafusion
 query I rowsort
 SELECT col1 FROM tab2 WHERE ( ( NOT ( NULL BETWEEN NULL AND ( - col2 ) ) ) )
@@ -1914,6 +1935,9 @@ SELECT DISTINCT col0 - + col1 col1 FROM tab2
 -5
 8
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-314
 SELECT ALL 79 * 85 - - CAST ( NULL AS REAL ) AS col2 FROM tab1
 ----
@@ -3054,6 +3078,9 @@ query I rowsort
 SELECT DISTINCT col2 FROM tab1 cor0 WHERE - col1 IS NULL
 ----
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-501
 SELECT ALL + 69 - + COUNT ( * ) + + CAST ( + 87 AS REAL ) - + CAST ( - CAST ( NULL AS INTEGER ) AS INTEGER ) FROM tab0 AS cor0
 ----
@@ -3188,7 +3215,7 @@ SELECT DISTINCT - - col0 * - 27 FROM tab0 AS cor0
 -2619
 -405
 
-# Datafusion - Schema error: Schema contains qualified field name tab0.col2 and unqualified field name col2 which would be ambiguous
+# Datafusion - DataFusion error: Schema error: Schema contains qualified field name tab0.col2 and unqualified field name col2 which would be ambiguous
 skipif Datafusion
 query II rowsort
 SELECT col2, - col2 col2 FROM tab0 WHERE NOT 43 IS NULL
@@ -3458,7 +3485,7 @@ SELECT ALL col0 * + + 22 AS col0 FROM tab2
 1408
 1650
 
-# Datafusion - Execution error: avg(DISTINCT) aggregations are not available
+# Datafusion - DataFusion error: Execution error: avg(DISTINCT) aggregations are not available
 skipif Datafusion
 query I rowsort label-563
 SELECT AVG ( DISTINCT + CAST ( NULL AS INTEGER ) ) / CAST ( - + 77 AS INTEGER ) + - 47 AS col1 FROM tab1
@@ -3736,7 +3763,7 @@ SELECT ALL ( - 90 ) FROM tab0 AS cor0
 -90
 -90
 
-# Datafusion - Schema error: Schema contains qualified field name tab1.col0 and unqualified field name col0 which would be ambiguous
+# Datafusion - DataFusion error: Schema error: Schema contains qualified field name tab1.col0 and unqualified field name col0 which would be ambiguous
 skipif Datafusion
 query II rowsort
 SELECT ( + - col0 ) AS col0, col0 AS col0 FROM tab1
@@ -3793,7 +3820,7 @@ SELECT - COUNT ( * ) + + 39 col1 FROM tab1 AS cor0 CROSS JOIN tab1 AS cor1
 ----
 30
 
-# Datafusion - Schema error: Schema contains qualified field name cor0.col2 and unqualified field name col2 which would be ambiguous
+# Datafusion - DataFusion error: Schema error: Schema contains qualified field name cor0.col2 and unqualified field name col2 which would be ambiguous
 skipif Datafusion
 query II rowsort
 SELECT DISTINCT col1 col2, col2 FROM tab1 AS cor0
@@ -3945,6 +3972,8 @@ SELECT DISTINCT col0 col1, ( - col1 ) AS col2 FROM tab2
 75
 -67
 
+# Datafusion - DataFusion error: type_coercion
+# Datafusion - caused by
 # Datafusion - Error during planning: Cannot automatically convert Int64 to Null
 skipif Datafusion
 query III rowsort label-639
@@ -4335,6 +4364,8 @@ SELECT DISTINCT + COUNT ( * ) AS col1 FROM tab0 WHERE 30 + + col1 = NULL
 ----
 0
 
+# Datafusion - DataFusion error: type_coercion
+# Datafusion - caused by
 # Datafusion - Error during planning: Cannot automatically convert Int32 to Null
 skipif Datafusion
 query III rowsort
@@ -4832,6 +4863,9 @@ query III rowsort
 SELECT * FROM tab1 WHERE ( NULL ) >= + 37
 ----
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-796
 SELECT ALL CAST ( NULL AS REAL ) * + + COUNT ( * ) + - 6 FROM tab0
 ----
@@ -4910,6 +4944,9 @@ SELECT col2 * + col2 * - col1 AS col1 FROM tab0
 -2100
 -9801
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-810
 SELECT + AVG ( ALL col0 ) + COUNT ( * ) AS col2 FROM tab1 WHERE NOT ( NULL ) IS NULL
 ----
@@ -5044,11 +5081,16 @@ SELECT MAX ( DISTINCT - col0 ) FROM tab0 AS cor0
 ----
 -15
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort
 SELECT AVG ( + col1 ) FROM tab2 AS cor0 WHERE NULL > NULL
 ----
 NULL
 
+# Datafusion - DataFusion error: type_coercion
+# Datafusion - caused by
 # Datafusion - Error during planning: Cannot automatically convert Int32 to Null
 skipif Datafusion
 query I rowsort
@@ -5115,6 +5157,9 @@ SELECT DISTINCT + col1 AS col0, 82 FROM tab0 AS cor0
 81
 82
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort
 SELECT DISTINCT + + AVG ( ALL + col2 ) FROM tab1 AS cor0 WHERE + col2 IS NULL
 ----
@@ -5262,6 +5307,9 @@ SELECT * FROM tab0 AS cor0 WHERE NOT ( col1 ) IS NULL
 ----
 9 values hashing to c4b42765dff94eaaa46040e537fb43b7
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]I
+# Datafusion - [Actual  ] [R]I
 query RI rowsort label-866
 SELECT DISTINCT - CAST ( NULL AS REAL ) AS col1, col2 AS col2 FROM tab1 cor0
 ----
@@ -5359,7 +5407,7 @@ query III rowsort
 SELECT * FROM tab0 cor0 WHERE NOT - 73 * + col2 IS NOT NULL
 ----
 
-# Datafusion - Schema error: Schema contains qualified field name cor0.col1 and unqualified field name col1 which would be ambiguous
+# Datafusion - DataFusion error: Schema error: Schema contains qualified field name cor0.col1 and unqualified field name col1 which would be ambiguous
 skipif Datafusion
 query II rowsort
 SELECT DISTINCT - - 58 col1, col1 AS col1 FROM tab0 AS cor0
@@ -5476,6 +5524,8 @@ query I rowsort
 SELECT - col0 FROM tab2 cor0 WHERE + 53 * - - col2 * - ( + col0 ) IN ( - 51 )
 ----
 
+# Datafusion - DataFusion error: type_coercion
+# Datafusion - caused by
 # Datafusion - Error during planning: Cannot automatically convert Int32 to Null
 skipif Datafusion
 query II rowsort
@@ -5582,6 +5632,9 @@ SELECT + ( - 89 ) col2 FROM tab0 cor0
 -89
 -89
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-919
 SELECT ( col1 ) * + col2 + CAST ( NULL AS REAL ) + 95 * + + 65 AS col1 FROM tab0 AS cor0
 ----
@@ -5843,6 +5896,8 @@ query I rowsort
 SELECT ALL 50 * col1 AS col1 FROM tab1 WHERE NOT ( NOT - col2 IS NULL )
 ----
 
+# Datafusion - DataFusion error: type_coercion
+# Datafusion - caused by
 # Datafusion - Error during planning: Cannot automatically convert Int64 to Null
 skipif Datafusion
 query III rowsort
@@ -5983,6 +6038,8 @@ SELECT DISTINCT + 65 + + 76 FROM tab2 AS cor0
 ----
 141
 
+# Datafusion - DataFusion error: type_coercion
+# Datafusion - caused by
 # Datafusion - Error during planning: Cannot automatically convert Int64 to Null
 skipif Datafusion
 query III rowsort
@@ -6025,9 +6082,9 @@ SELECT DISTINCT + col1 + col0 * + + col0 FROM tab0 cor0
 7590
 9410
 
-# Datafusion - Execution error: avg(DISTINCT) aggregations are not available
+# Datafusion - DataFusion error: Execution error: avg(DISTINCT) aggregations are not available
 skipif Datafusion
-query R rowsort
+query I rowsort
 SELECT DISTINCT ( - AVG ( DISTINCT + 59 ) ) AS col0 FROM tab0 AS cor0 WHERE 56 BETWEEN + - col1 * col2 * col1 + - col0 + - col1 * - - 13 + - col2 + - col1 + + 97 AND NULL
 ----
 NULL
@@ -7282,6 +7339,8 @@ SELECT DISTINCT + col2 * - - ( - ( col0 ) ) FROM tab0 cor0
 -870
 -9603
 
+# Datafusion - DataFusion error: type_coercion
+# Datafusion - caused by
 # Datafusion - Error during planning: Cannot automatically convert Int64 to Null
 skipif Datafusion
 query I rowsort label-1202
@@ -7454,6 +7513,9 @@ SELECT + MIN ( - 82 ) AS col0 FROM tab2 WHERE - + 5 * + col1 / - CAST ( NULL AS 
 ----
 -82
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-1232
 SELECT ( - 65 ) / CAST ( NULL AS REAL ) + 42 col0 FROM tab1 WHERE ( NOT col0 + + 29 >= - 27 * col0 )
 ----
@@ -8119,6 +8181,9 @@ query III rowsort
 SELECT * FROM tab2 AS cor0 WHERE 62 IS NULL
 ----
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-1338
 SELECT DISTINCT - CAST ( NULL AS REAL ) + + + col0 * + 2 FROM tab1 cor0
 ----
@@ -8223,6 +8288,9 @@ SELECT ALL + col0 FROM tab0 AS cor0 WHERE NOT ( - - col2 ) >= + col0
 ----
 87
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-1355
 SELECT ALL CAST ( NULL AS REAL ) * + - col2 FROM tab2
 ----
@@ -8303,6 +8371,8 @@ SELECT col0 + + - col0 + + col2 FROM tab0 WHERE NULL IS NULL
 47
 99
 
+# Datafusion - DataFusion error: type_coercion
+# Datafusion - caused by
 # Datafusion - Error during planning: Cannot automatically convert Int32 to Null
 skipif Datafusion
 query I rowsort
@@ -8469,6 +8539,9 @@ query III rowsort
 SELECT ALL * FROM tab1 AS cor0 WHERE NULL < col1 * + + col2 * + - col1
 ----
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort
 SELECT 1 - AVG ( ALL - col2 ) FROM tab2 AS cor0 WHERE NULL IS NOT NULL
 ----
@@ -8718,6 +8791,9 @@ query III rowsort
 SELECT * FROM tab1 WHERE 93 = 34
 ----
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-1436
 SELECT ALL col0 * + col1 * + col1 - - CAST ( NULL AS REAL ) * + + col2 * col2 FROM tab1
 ----
@@ -9043,6 +9119,9 @@ SELECT - - 40 AS col1 FROM tab2 AS cor0 WHERE NOT ( NULL ) IS NOT NULL
 40
 40
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-1488
 SELECT + - ( + - CAST ( NULL AS INTEGER ) ) * AVG ( + - col0 ) AS col0 FROM tab1 AS cor0
 ----
@@ -9340,6 +9419,8 @@ SELECT col2 * - 65 FROM tab2
 -2600
 -3770
 
+# Datafusion - DataFusion error: type_coercion
+# Datafusion - caused by
 # Datafusion - Error during planning: Cannot automatically convert Int32 to Null
 skipif Datafusion
 query III rowsort
@@ -9464,6 +9545,8 @@ query III rowsort
 SELECT ALL * FROM tab0 AS cor0 WHERE col1 > ( - - 91 )
 ----
 
+# Datafusion - DataFusion error: type_coercion
+# Datafusion - caused by
 # Datafusion - Error during planning: Cannot automatically convert Int32 to Null
 skipif Datafusion
 query I rowsort
@@ -9655,7 +9738,7 @@ SELECT col2, + col1 FROM tab2
 58
 67
 
-# Datafusion - Schema error: Schema contains qualified field name tab0.col2 and unqualified field name col2 which would be ambiguous
+# Datafusion - DataFusion error: Schema error: Schema contains qualified field name tab0.col2 and unqualified field name col2 which would be ambiguous
 skipif Datafusion
 query II rowsort
 SELECT ALL + col0 - + col2 AS col2, col2 AS col2 FROM tab0
@@ -10256,6 +10339,8 @@ SELECT DISTINCT col1 AS col2, - col0 FROM tab1
 5
 -85
 
+# Datafusion - DataFusion error: type_coercion
+# Datafusion - caused by
 # Datafusion - Error during planning: Cannot automatically convert Int32 to Null
 skipif Datafusion
 query III rowsort
@@ -10286,9 +10371,9 @@ query III rowsort
 SELECT * FROM tab0 AS cor0 WHERE ( NULL ) BETWEEN col0 AND ( NULL )
 ----
 
-# Datafusion - Execution error: avg(DISTINCT) aggregations are not available
+# Datafusion - DataFusion error: Execution error: avg(DISTINCT) aggregations are not available
 skipif Datafusion
-query R rowsort label-1698
+query I rowsort label-1698
 SELECT ALL + + CAST ( NULL AS REAL ) + COUNT ( * ) * - + 78 * AVG ( DISTINCT + 97 ) AS col0 FROM tab0 AS cor0
 ----
 NULL
@@ -10522,6 +10607,9 @@ SELECT + CAST ( + ( + COUNT ( * ) ) AS INTEGER ) + - MIN ( ALL + 52 ) FROM tab0 
 ----
 NULL
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-1736
 SELECT DISTINCT + + MAX ( DISTINCT - - col2 ) - + - CAST ( - COUNT ( * ) AS INTEGER ) * + CAST ( NULL AS REAL ) FROM tab2 AS cor0
 ----
@@ -10821,6 +10909,9 @@ SELECT + 68 * - 66 * - - col2 AS col0 FROM tab0
 -444312
 -44880
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-1787
 SELECT - CAST ( NULL AS REAL ) * 83 AS col2 FROM tab1
 ----
@@ -10945,6 +11036,9 @@ query III rowsort label-1806
 SELECT * FROM tab2 AS cor0 WHERE NOT + CAST ( - col0 AS INTEGER ) = NULL
 ----
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-1807
 SELECT CAST ( NULL AS REAL ) * - - col2 FROM tab2
 ----
@@ -11060,6 +11154,9 @@ SELECT col1 AS col2 FROM tab1 WHERE NOT NULL IS NOT NULL
 47
 5
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-1824
 SELECT ALL + CAST ( NULL AS INTEGER ) * + AVG ( - - 33 ) FROM tab0
 ----
@@ -11554,6 +11651,9 @@ SELECT - col0 * + - col1 FROM tab1 cor0
 4277
 714
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort
 SELECT ALL - AVG ( + 7 ) AS col0 FROM tab1 AS cor0 WHERE NOT - col1 IS NOT NULL
 ----
@@ -12295,7 +12395,7 @@ SELECT - col0 * + col1 / - col1 AS col2 FROM tab2 AS cor0
 64
 75
 
-# Datafusion - Schema error: Schema contains qualified field name cor0.col0 and unqualified field name col0 which would be ambiguous
+# Datafusion - DataFusion error: Schema error: Schema contains qualified field name cor0.col0 and unqualified field name col0 which would be ambiguous
 skipif Datafusion
 query II rowsort label-2029
 SELECT + col2 / + + col1 AS col0, + col0 AS col0 FROM tab0 cor0
@@ -12551,6 +12651,9 @@ SELECT ALL + + 12 * - - 4 * + - CAST ( - - col1 AS INTEGER ) FROM tab2 WHERE NOT
 -3216
 -3696
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-2071
 SELECT col0 + CAST ( NULL AS REAL ) AS col1 FROM tab1
 ----
@@ -12656,7 +12759,7 @@ SELECT - 10 * COUNT ( * ) FROM tab0
 ----
 -30
 
-# Datafusion - Schema error: Schema contains qualified field name tab2.col1 and unqualified field name col1 which would be ambiguous
+# Datafusion - DataFusion error: Schema error: Schema contains qualified field name tab2.col1 and unqualified field name col1 which would be ambiguous
 skipif Datafusion
 query II rowsort
 SELECT 28 AS col1, col1 AS col1 FROM tab2
@@ -12879,6 +12982,9 @@ SELECT ALL 8 / - col1 AS col0 FROM tab0
 0
 0
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-2125
 SELECT CAST ( NULL AS REAL ) * - col2 + 78 AS col0 FROM tab0
 ----
@@ -13250,6 +13356,8 @@ query I rowsort
 SELECT DISTINCT + - col0 FROM tab0 AS cor0 WHERE - col1 * col2 IS NULL
 ----
 
+# Datafusion - DataFusion error: type_coercion
+# Datafusion - caused by
 # Datafusion - Error during planning: Cannot automatically convert Int32 to Null
 skipif Datafusion
 query III rowsort
@@ -13307,6 +13415,8 @@ SELECT + col1 AS col0, - col1 + col2 AS col2 FROM tab2 AS cor0
 77
 -37
 
+# Datafusion - DataFusion error: type_coercion
+# Datafusion - caused by
 # Datafusion - Error during planning: Cannot automatically convert Int32 to Null
 skipif Datafusion
 query I rowsort
@@ -13455,6 +13565,9 @@ NULL
 3886
 NULL
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-2224
 SELECT ALL CAST ( NULL AS REAL ) / + col1 FROM tab0 AS cor0
 ----
@@ -13755,7 +13868,7 @@ query III rowsort
 SELECT * FROM tab2 WHERE NOT + col2 = NULL
 ----
 
-# Datafusion - Schema error: Schema contains qualified field name tab0.col2 and unqualified field name col2 which would be ambiguous
+# Datafusion - DataFusion error: Schema error: Schema contains qualified field name tab0.col2 and unqualified field name col2 which would be ambiguous
 skipif Datafusion
 query II rowsort
 SELECT + ( - - col1 ) col2, + col2 AS col2 FROM tab0
@@ -14395,7 +14508,7 @@ NULL
 NULL
 -77
 
-# Datafusion - Execution error: avg(DISTINCT) aggregations are not available
+# Datafusion - DataFusion error: Execution error: avg(DISTINCT) aggregations are not available
 skipif Datafusion
 query I rowsort label-2377
 SELECT DISTINCT + + 8 * COUNT ( col2 ) * - CAST ( + - AVG ( DISTINCT + 87 ) AS INTEGER ) * - + COUNT ( * ) FROM tab1 WHERE NOT - - 0 * + - 16 < col0
@@ -14479,7 +14592,7 @@ SELECT - col1 / - - col2 AS col0 FROM tab1 AS cor0
 0
 0
 
-# Datafusion - Schema error: Schema contains qualified field name tab0.col1 and unqualified field name col1 which would be ambiguous
+# Datafusion - DataFusion error: Schema error: Schema contains qualified field name tab0.col1 and unqualified field name col1 which would be ambiguous
 skipif Datafusion
 query II rowsort
 SELECT ALL col0 AS col1, + col1 AS col1 FROM tab0
@@ -14884,6 +14997,9 @@ SELECT * FROM tab2 AS cor0 WHERE NOT - col0 * col0 + col2 * col1 IS NULL
 ----
 9 values hashing to 75c998aa53ac83218cbf2feb962d0a49
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-2457
 SELECT DISTINCT + - 36 * + CAST ( NULL AS INTEGER ) * + + AVG ( + col0 ) FROM tab0 AS cor0
 ----
@@ -15109,6 +15225,8 @@ SELECT CAST ( - + 96 AS INTEGER ) AS col0 FROM tab1
 -96
 -96
 
+# Datafusion - DataFusion error: type_coercion
+# Datafusion - caused by
 # Datafusion - Error during planning: Cannot automatically convert Int64 to Null
 skipif Datafusion
 query I rowsort
@@ -15193,6 +15311,9 @@ SELECT - 29 * - col0 * + - col1 + - + col0 FROM tab2 AS cor0
 -145800
 -68080
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-2511
 SELECT + 5 + + - col1 + + CAST ( NULL AS REAL ) * + 3 FROM tab0 AS cor0
 ----
@@ -15250,6 +15371,8 @@ SELECT COUNT ( ALL - col1 ) AS col2 FROM tab2 cor0
 ----
 3
 
+# Datafusion - DataFusion error: type_coercion
+# Datafusion - caused by
 # Datafusion - Error during planning: Cannot automatically convert Int32 to Null
 skipif Datafusion
 query I rowsort
@@ -15560,9 +15683,11 @@ query III rowsort label-2572
 SELECT DISTINCT * FROM tab0 WHERE NULL > + col0 * + CAST ( NULL AS INTEGER )
 ----
 
-# PostgreSQL handles NULL in DIV/0 by differently
+#  PostgreSQL handles NULL in DIV/0 by differently
 skipif postgresql
 # Datafusion - DataFusion error: Arrow error: Divide by zero error
+# Postgresql - Postgres error: db error: ERROR: division by zero
+skipif postgres
 skipif Datafusion
 query I rowsort label-2573
 SELECT - + 52 / - COUNT ( * ) * - - ( + SUM ( ALL - + col0 ) ) AS col2 FROM tab0 WHERE NULL <> - 41
@@ -15744,6 +15869,9 @@ NULL
 NULL
 NULL
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-2602
 SELECT CAST ( NULL AS REAL ) * - col1 AS col0 FROM tab0
 ----
@@ -15780,6 +15908,9 @@ SELECT + col1 + 40 AS col1 FROM tab2 WHERE ( - col1 ) IS NOT NULL
 117
 91
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-2608
 SELECT 25 + + CAST ( NULL AS REAL ) AS col1 FROM tab0 WHERE NOT NULL IS NOT NULL
 ----
@@ -16020,6 +16151,9 @@ SELECT DISTINCT + + 33 AS col1 FROM ( tab1 AS cor0 CROSS JOIN tab2 AS cor1 )
 ----
 33
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort
 SELECT DISTINCT - ( AVG ( 68 ) ) FROM tab1 WHERE ( + 98 + + col0 ) IS NULL
 ----
@@ -16993,7 +17127,7 @@ NULL
 NULL
 NULL
 
-# Datafusion - Schema error: Schema contains qualified field name cor0.col2 and unqualified field name col2 which would be ambiguous
+# Datafusion - DataFusion error: Schema error: Schema contains qualified field name cor0.col2 and unqualified field name col2 which would be ambiguous
 skipif Datafusion
 query II rowsort
 SELECT + col2 * 90 AS col2, col2 AS col2 FROM tab1 AS cor0
@@ -17232,7 +17366,7 @@ SELECT DISTINCT 47 + COUNT ( * ) + + + COUNT ( * ) FROM tab0 AS cor0
 ----
 53
 
-# Datafusion - Schema contains qualified field name cor0.col0 and unqualified field name col0 which would be ambiguous
+# Datafusion - DataFusion error: Schema error: Schema contains qualified field name cor0.col0 and unqualified field name col0 which would be ambiguous
 skipif Datafusion
 query II rowsort
 SELECT ALL - 62 AS col0, + col0 AS col0 FROM tab0 AS cor0
@@ -17287,6 +17421,9 @@ SELECT DISTINCT + 42 * - col1 AS col2, col1 FROM tab0
 -882
 21
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-2856
 SELECT ALL - CAST ( NULL AS REAL ) * + + col1 * + - col2 AS col2 FROM tab2
 ----
@@ -17466,7 +17603,7 @@ SELECT DISTINCT col1 * 28 * 94 + + col1 + col2 FROM tab2 cor0
 176469
 202781
 
-# Datafusion - Schema contains qualified field name cor0.col0 and unqualified field name col0 which would be ambiguous
+# Datafusion - DataFusion error: Schema error: Schema contains qualified field name cor0.col0 and unqualified field name col0 which would be ambiguous
 skipif Datafusion
 query III rowsort label-2883
 SELECT + + col0 AS col0, + col0 / - col1, + 1 * + - col0 * + + col1 AS col0 FROM tab0 AS cor0
@@ -17722,6 +17859,9 @@ SELECT ALL ( - 63 ) + - col0 + - - col2 AS col0 FROM tab2 AS cor0
 -86
 -87
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-2924
 SELECT ALL - CAST ( NULL AS INTEGER ) + + CAST ( NULL AS REAL ) / + col1 FROM tab1 AS cor0
 ----
@@ -17794,6 +17934,9 @@ SELECT DISTINCT + - col2 + + col1 AS col2 FROM tab0 AS cor0
 11
 34
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-2936
 SELECT ALL + + 90 + - + CAST ( NULL AS REAL ) + - col2 - + - 12 FROM tab2 AS cor0
 ----
@@ -17836,7 +17979,7 @@ SELECT ALL + - COUNT ( * ) FROM tab1 WHERE NOT NULL IS NULL
 ----
 0
 
-# Datafusion - Schema error: Schema contains qualified field name tab1.col0 and unqualified field name col0 which would be ambiguous
+# Datafusion - DataFusion error: Schema error: Schema contains qualified field name tab1.col0 and unqualified field name col0 which would be ambiguous
 skipif Datafusion
 query II rowsort label-2943
 SELECT DISTINCT + CAST ( NULL AS INTEGER ) AS col0, col0 FROM tab1
@@ -17875,6 +18018,9 @@ query III rowsort
 SELECT ALL * FROM tab0 AS cor0 WHERE NOT col0 + - - col2 * - col1 IS NOT NULL
 ----
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-2949
 SELECT - 75 / + col2 * - + CAST ( NULL AS REAL ) * + col2 FROM tab0 AS cor0
 ----
@@ -18405,6 +18551,8 @@ SELECT DISTINCT - col0 * - + 75 FROM tab0
 6525
 7275
 
+# Datafusion - DataFusion error: type_coercion
+# Datafusion - caused by
 # Datafusion - Error during planning: Cannot automatically convert Int32 to Null
 skipif Datafusion
 query III rowsort
@@ -18502,6 +18650,9 @@ SELECT ALL + COUNT ( DISTINCT - - 73 ) * ( - COUNT ( * ) ) FROM tab0
 ----
 -3
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-3052
 SELECT DISTINCT + 32 / CAST ( NULL AS REAL ) / 71 AS col0 FROM tab2
 ----
@@ -19169,6 +19320,9 @@ SELECT DISTINCT + ( - - col2 ) + - col0 * - 77 FROM tab2
 4968
 5833
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-3173
 SELECT 23 + - - col0 - - CAST ( NULL AS REAL ) * col0 / + 81 FROM tab1
 ----
@@ -19316,6 +19470,9 @@ SELECT ALL col1 * + 20 * + - 68 FROM tab1
 -63920
 -6800
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort
 SELECT ALL AVG ( col0 ) col2 FROM tab0 WHERE NOT NULL > + - col2 + - 18
 ----
@@ -19493,6 +19650,8 @@ SELECT - col1 * + - col0 - + col1 AS col0 FROM tab0 AS cor0
 1806
 96
 
+# Datafusion - DataFusion error: type_coercion
+# Datafusion - caused by
 # Datafusion - Error during planning: Cannot automatically convert Int32 to Null
 skipif Datafusion
 query I rowsort label-3228
@@ -19749,7 +19908,7 @@ SELECT - 50 + - COUNT ( * ) * + + CAST ( - COUNT ( * ) AS INTEGER ) AS col1 FROM
 ----
 -41
 
-# Datafusion - Schema error: Schema contains qualified field name tab0.col0 and unqualified field name col0 which would be ambiguous
+# Datafusion - DataFusion error: Schema error: Schema contains qualified field name tab0.col0 and unqualified field name col0 which would be ambiguous
 skipif Datafusion
 query II rowsort
 SELECT ALL - ( - 19 ) + + + 96 AS col0, col0 FROM tab0
@@ -19783,6 +19942,8 @@ query III rowsort
 SELECT DISTINCT * FROM tab0 AS cor0 WHERE ( NULL ) IN ( - - 58 - + col0 * + 40 + - + 16 )
 ----
 
+# Datafusion - DataFusion error: type_coercion
+# Datafusion - caused by
 # Datafusion - Error during planning: Cannot automatically convert Int32 to Null
 skipif Datafusion
 query I rowsort label-3271
@@ -19805,6 +19966,9 @@ SELECT ALL col1 / - ( col0 ) AS col0 FROM tab1
 0
 0
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-3275
 SELECT DISTINCT CAST ( NULL AS REAL ) / - col1 * - - col1 AS col0 FROM tab0
 ----
@@ -20148,6 +20312,9 @@ SELECT ALL SUM ( col2 ) / + COUNT ( * ) + + COUNT ( * ) FROM tab0 AS cor0
 ----
 55
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-3333
 SELECT DISTINCT - AVG ( - CAST ( NULL AS INTEGER ) ) FROM tab1 cor0
 ----
@@ -20540,7 +20707,7 @@ SELECT - CAST ( + 47 AS INTEGER ) + + + COUNT ( col0 ) AS col1 FROM tab1
 ----
 -44
 
-# Datafusion - Schema error: Schema contains qualified field name tab2.col0 and unqualified field name col0 which would be ambiguous
+# Datafusion - DataFusion error: Schema error: Schema contains qualified field name tab2.col0 and unqualified field name col0 which would be ambiguous
 skipif Datafusion
 query II rowsort label-3396
 SELECT + col2 + + CAST ( NULL AS INTEGER ) + + ( ( - col0 ) ) col0, col0 FROM tab2
@@ -20662,6 +20829,8 @@ SELECT 12 col0 FROM tab1 WHERE NOT NULL IS NOT NULL
 12
 12
 
+# Datafusion - DataFusion error: type_coercion
+# Datafusion - caused by
 # Datafusion - Error during planning: Cannot automatically convert Int64 to Null
 skipif Datafusion
 query III rowsort
@@ -20821,6 +20990,9 @@ SELECT ALL 7 AS col0, 65 * col0 FROM tab1
 7
 5915
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-3439
 SELECT DISTINCT CAST ( NULL AS REAL ) * col2 + - col1 AS col2 FROM tab1
 ----
@@ -20888,6 +21060,8 @@ SELECT col0 * + 35 FROM tab1 AS cor0
 2975
 3185
 
+# Datafusion - DataFusion error: type_coercion
+# Datafusion - caused by
 # Datafusion - Error during planning: Cannot automatically convert Int64 to Null
 skipif Datafusion
 query III rowsort
@@ -21105,6 +21279,9 @@ SELECT ALL 11 / + col0 * col2 AS col1 FROM tab1
 0
 0
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-3486
 SELECT DISTINCT - CAST ( NULL AS REAL ) AS col0 FROM tab0
 ----
@@ -21389,6 +21566,9 @@ query III rowsort
 SELECT ALL * FROM tab2 cor0 WHERE NULL >= 85
 ----
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-3532
 SELECT + - SUM ( DISTINCT + - 59 ) * + CAST ( NULL AS REAL ) FROM tab0 cor0
 ----
@@ -21736,6 +21916,9 @@ SELECT DISTINCT * FROM tab0 WHERE NOT + col1 = - 13
 ----
 9 values hashing to c4b42765dff94eaaa46040e537fb43b7
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]I
+# Datafusion - [Actual  ] [R]I
 query RI rowsort label-3586
 SELECT + ( + CAST ( NULL AS REAL ) ), col0 col2 FROM tab2
 ----
@@ -21786,9 +21969,11 @@ SELECT - MAX ( DISTINCT col2 ) FROM tab2 AS cor0
 ----
 -58
 
-# PostgreSQL handles NULL in DIV/0 by differently
+#  PostgreSQL handles NULL in DIV/0 by differently
 skipif postgresql
 # Datafusion - Error during planning: Projections require unique expression names
+# Postgresql - Postgres error: db error: ERROR: division by zero
+skipif postgres
 skipif Datafusion
 query II rowsort label-3594
 SELECT col0 / col1 AS col2, + 78 * 68 / - 0 AS col2 FROM tab1 AS cor0 WHERE NOT NULL > + col2 + CAST ( NULL AS INTEGER )
@@ -21832,14 +22017,17 @@ query I rowsort
 SELECT - - 8 AS col2 FROM tab0 WHERE NULL IS NOT NULL
 ----
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-3602
 SELECT DISTINCT col0 * + + 50 * + + CAST ( NULL AS REAL ) AS col1 FROM tab2
 ----
 NULL
 
-# Datafusion - Execution error: avg(DISTINCT) aggregations are not available
+# Datafusion - DataFusion error: Execution error: avg(DISTINCT) aggregations are not available
 skipif Datafusion
-query R rowsort label-3603
+query I rowsort label-3603
 SELECT - AVG ( DISTINCT - 60 ) + CAST ( NULL AS INTEGER ) FROM tab0
 ----
 NULL
@@ -21874,12 +22062,18 @@ SELECT - col0 + - col0 * - + col2 AS col1 FROM tab1 cor0
 4930
 6097
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]I
+# Datafusion - [Actual  ] [R]I
 query RI rowsort label-3609
 SELECT DISTINCT - COUNT ( * ) * - CAST ( NULL AS REAL ), COUNT ( * ) col1 FROM tab2
 ----
 NULL
 3
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-3610
 SELECT DISTINCT - CAST ( NULL AS REAL ) FROM tab1 AS cor0 CROSS JOIN tab2 AS cor1
 ----
@@ -21930,6 +22124,8 @@ SELECT 98 AS col1, COUNT ( * ) + - COUNT ( * ) FROM tab1
 98
 0
 
+# Datafusion - DataFusion error: type_coercion
+# Datafusion - caused by
 # Datafusion - Error during planning: Cannot automatically convert Int32 to Null
 skipif Datafusion
 query I rowsort label-3618
@@ -22023,6 +22219,9 @@ SELECT DISTINCT * FROM tab1 WHERE - col2 * col1 < col2 * + col2 + col2
 ----
 9 values hashing to c6c0a4111b36d04dbc811a11e4d54cad
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort
 SELECT DISTINCT - AVG ( + 75 ) FROM tab2 WHERE NOT NULL NOT IN ( col0 )
 ----
@@ -22290,6 +22489,8 @@ SELECT - ( ( + 11 ) ) FROM tab2
 -11
 -11
 
+# Datafusion - DataFusion error: type_coercion
+# Datafusion - caused by
 # Datafusion - Error during planning: Cannot automatically convert Int32 to Null
 skipif Datafusion
 query III rowsort
@@ -22609,7 +22810,7 @@ SELECT + SUM ( ALL + - 8 ) + - 52 + + COUNT ( * ) FROM tab0 WHERE NOT NULL >= NU
 ----
 NULL
 
-# Datafusion - Schema error: Schema contains qualified field name tab0.col1 and unqualified field name col1 which would be ambiguous
+# Datafusion - DataFusion error: Schema error: Schema contains qualified field name tab0.col1 and unqualified field name col1 which would be ambiguous
 skipif Datafusion
 query II rowsort
 SELECT col1, 97 AS col1 FROM tab0
@@ -22621,6 +22822,8 @@ SELECT col1, 97 AS col1 FROM tab0
 81
 97
 
+# Datafusion - DataFusion error: type_coercion
+# Datafusion - caused by
 # Datafusion - Error during planning: Cannot automatically convert Int64 to Null
 skipif Datafusion
 query III rowsort
@@ -22906,7 +23109,7 @@ SELECT DISTINCT - SUM ( ALL col1 ) col0 FROM tab2
 ----
 -195
 
-# Datafusion - Error during planning: Projections require unique expression names
+# Datafusion - DataFusion error: Schema error: Schema contains qualified field name tab1.col1 and unqualified field name col1 which would be ambiguous
 skipif Datafusion
 query II rowsort
 SELECT ALL col1, col2 col1 FROM tab1
@@ -23272,7 +23475,7 @@ SELECT + + CAST ( + - SUM ( ALL + - col0 ) AS INTEGER ) AS col1 FROM tab1 AS cor
 ----
 227
 
-# Datafusion - Schema error: Schema contains qualified field name cor0.col2 and unqualified field name col2 which would be ambiguous
+# Datafusion - DataFusion error: Schema error: Schema contains qualified field name cor0.col2 and unqualified field name col2 which would be ambiguous
 skipif Datafusion
 query II rowsort
 SELECT ALL + 16 + - + 91 * col0 AS col2, col2 FROM tab0 AS cor0
@@ -23693,7 +23896,7 @@ SELECT - - COUNT ( * ) AS col2 FROM tab0 cor0
 ----
 3
 
-# Datafusion - Schema error: Schema contains qualified field name cor0.col1 and unqualified field name col1 which would be ambiguous
+# Datafusion - DataFusion error: Schema error: Schema contains qualified field name cor0.col1 and unqualified field name col1 which would be ambiguous
 skipif Datafusion
 query II rowsort
 SELECT + col0 AS col1, col1 FROM tab1 AS cor0 WHERE ( + col2 ) IS NULL
@@ -23711,6 +23914,9 @@ SELECT DISTINCT - + MIN ( + col0 ) AS col1 FROM tab1 AS cor0
 ----
 -51
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-3913
 SELECT ALL MAX ( DISTINCT col1 ) + + CAST ( NULL AS REAL ) AS col0 FROM tab0 AS cor0
 ----
@@ -23805,6 +24011,9 @@ SELECT ALL + - col0 AS col0, col2 AS col0 FROM tab2 AS cor0
 -75
 58
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort
 SELECT AVG ( DISTINCT + col0 ) FROM tab2 AS cor0 WHERE - 12 * - col2 IS NULL
 ----
@@ -24165,6 +24374,9 @@ SELECT 32 + - ( - ( 42 ) ) AS col0 FROM tab2 AS cor0
 74
 74
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-3982
 SELECT + CAST ( NULL AS REAL ) + col2 AS col2 FROM tab2
 ----
@@ -24438,6 +24650,9 @@ SELECT * FROM tab1 AS cor0 WHERE ( col0 ) NOT BETWEEN col0 * - col1 AND + 99 + -
 47
 68
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-4024
 SELECT DISTINCT + - CAST ( NULL AS REAL ) - - col0 AS col1 FROM tab0 AS cor0
 ----
@@ -24799,6 +25014,9 @@ SELECT - 52 * col2 col1, 97 FROM tab0 AS cor0
 -520
 97
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-4086
 SELECT col1 * - CAST ( NULL AS REAL ) - 84 FROM tab1 AS cor0
 ----
@@ -25436,6 +25654,8 @@ query III rowsort
 SELECT DISTINCT * FROM tab1 AS cor0 WHERE NOT + col2 < NULL
 ----
 
+# Datafusion - DataFusion error: type_coercion
+# Datafusion - caused by
 # Datafusion - Error during planning: Cannot automatically convert Int32 to Null
 skipif Datafusion
 query III rowsort
@@ -25732,7 +25952,7 @@ SELECT COUNT ( + col0 ) FROM tab1
 ----
 3
 
-# Datafusion - Schema error: Schema contains qualified field name tab0.col0 and unqualified field name col0 which would be ambiguous
+# Datafusion - DataFusion error: Schema error: Schema contains qualified field name tab0.col0 and unqualified field name col0 which would be ambiguous
 skipif Datafusion
 query II rowsort
 SELECT ALL - col2 col0, col0 FROM tab0
@@ -25767,6 +25987,9 @@ SELECT ALL COUNT ( * ) AS col1 FROM tab1 AS cor0 WHERE NOT NULL IS NULL
 ----
 0
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-4250
 SELECT + AVG ( CAST ( NULL AS INTEGER ) ) AS col0 FROM tab0 AS cor0 CROSS JOIN tab0 AS cor1
 ----
@@ -26247,6 +26470,9 @@ SELECT MAX ( DISTINCT - col1 ) AS col2 FROM tab2 AS cor0
 ----
 -51
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-4326
 SELECT 75 * - AVG ( col1 ) / - SUM ( col1 ) FROM tab0 AS cor0 WHERE - col1 = + col2 + - col0
 ----
@@ -26413,6 +26639,9 @@ SELECT 76 * col0 + col1 * + col2 AS col1 FROM tab1
 5220
 6755
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-4355
 SELECT - + MAX ( ALL CAST ( NULL AS REAL ) ) + 55 FROM tab0 AS cor0
 ----
@@ -26865,6 +27094,8 @@ SELECT ALL + COUNT ( * ) AS col0, 21 + + - CAST ( ( - MAX ( - - 76 ) ) AS INTEGE
 3
 97
 
+# Datafusion - DataFusion error: type_coercion
+# Datafusion - caused by
 # Datafusion - Error during planning: Cannot automatically convert Int32 to Null
 skipif Datafusion
 query III rowsort
@@ -27078,9 +27309,10 @@ SELECT DISTINCT COUNT ( * ) * - COUNT ( * ) * - + 92 FROM tab0
 ----
 828
 
-# Datafusion - Execution error: avg(DISTINCT) aggregations are not available
-skipif Datafusion
-query I rowsort label-4468
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
+query R rowsort label-4468
 SELECT - CAST ( NULL AS INTEGER ) * AVG ( DISTINCT col1 ) * + + 51 AS col1 FROM tab0
 ----
 NULL
@@ -27796,6 +28028,9 @@ SELECT + ( + SUM ( DISTINCT - - col0 ) ) FROM tab2 AS cor0
 ----
 185
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-4587
 SELECT ALL - - ( - ( + AVG ( ALL + col2 ) ) ) * - - 59 * + CAST ( + + 15 AS INTEGER ) * COUNT ( * ) col1 FROM tab0 AS cor0 WHERE - col2 + + col2 > NULL
 ----
@@ -28883,6 +29118,8 @@ SELECT ALL + 28 AS col1 FROM tab1 cor0
 28
 28
 
+# Datafusion - DataFusion error: type_coercion
+# Datafusion - caused by
 # Datafusion - Error during planning: Cannot automatically convert Int64 to Null
 skipif Datafusion
 query III rowsort
@@ -29467,6 +29704,9 @@ SELECT DISTINCT - col2 + + - col0 col2 FROM tab2 AS cor0
 -133
 -69
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-4864
 SELECT + col0 + + col1 - CAST ( NULL AS REAL ) + + - 23 - - col0 col2 FROM tab0 AS cor0
 ----
@@ -29511,6 +29751,9 @@ SELECT DISTINCT * FROM tab1 WHERE + col2 + - - ( - col2 ) + 95 NOT BETWEEN col1 
 ----
 9 values hashing to c6c0a4111b36d04dbc811a11e4d54cad
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]I
+# Datafusion - [Actual  ] [R]I
 query RI rowsort label-4871
 SELECT DISTINCT - CAST ( NULL AS REAL ) * col1, 80 AS col2 FROM tab1
 ----
@@ -29679,7 +29922,7 @@ SELECT DISTINCT 54 + + - col1 FROM tab0
 33
 53
 
-# Datafusion - Schema error: Schema contains qualified field name tab0.col0 and unqualified field name col0 which would be ambiguous
+# Datafusion - DataFusion error: Schema error: Schema contains qualified field name tab0.col0 and unqualified field name col0 which would be ambiguous
 skipif Datafusion
 query II rowsort
 SELECT ALL col0, - 71 AS col0 FROM tab0
@@ -30002,6 +30245,9 @@ query I rowsort
 SELECT DISTINCT + - col2 * col1 * + col2 FROM tab1 WHERE NOT NULL IS NULL
 ----
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-4953
 SELECT + col2 / + - col2 * - 79 * + + col1 / + + col1 - CAST ( - + col0 AS REAL ) col0 FROM tab0 WHERE NOT NULL <> + 30
 ----
@@ -30241,6 +30487,9 @@ query I rowsort
 SELECT ALL + - col1 + + - col1 + ( 41 ) FROM tab1 AS cor0 WHERE NULL BETWEEN NULL AND ( NULL )
 ----
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-4991
 SELECT DISTINCT - 72 * CAST ( NULL AS REAL ) * + col0 + col0 - col0 AS col1 FROM tab0 AS cor0
 ----
@@ -30321,7 +30570,7 @@ SELECT 29 * - - col2 AS col2 FROM tab0
 2871
 290
 
-# Datafusion - Schema error: Schema contains qualified field name tab1.col0 and unqualified field name col0 which would be ambiguous
+# Datafusion - DataFusion error: Schema error: Schema contains qualified field name tab1.col0 and unqualified field name col0 which would be ambiguous
 skipif Datafusion
 query II rowsort
 SELECT DISTINCT + col0 AS col0, col1 + - col0 - 87 AS col0 FROM tab1
@@ -30850,6 +31099,9 @@ SELECT ALL - col2, col1 FROM tab1
 -96
 14
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-5091
 SELECT DISTINCT - CAST ( NULL AS REAL ) AS col2 FROM tab2 WHERE - col2 IS NOT NULL
 ----
@@ -31287,6 +31539,8 @@ SELECT MIN ( - - col1 ) AS col2 FROM tab1 AS cor0
 ----
 5
 
+# Datafusion - DataFusion error: type_coercion
+# Datafusion - caused by
 # Datafusion - Error during planning: Cannot automatically convert Int32 to Null
 skipif Datafusion
 query III rowsort
@@ -31691,6 +31945,8 @@ query III rowsort
 SELECT * FROM tab0 AS cor0 WHERE + ( col1 ) IS NULL
 ----
 
+# Datafusion - DataFusion error: type_coercion
+# Datafusion - caused by
 # Datafusion - Error during planning: Cannot automatically convert Int32 to Null
 skipif Datafusion
 query III rowsort
@@ -32000,13 +32256,15 @@ SELECT CAST ( + COUNT ( * ) AS INTEGER ), - ( - SUM ( 65 ) ) AS col0 FROM tab1
 3
 195
 
+# Datafusion - DataFusion error: type_coercion
+# Datafusion - caused by
 # Datafusion - Error during planning: Cannot automatically convert Int64 to Null
 skipif Datafusion
 query I rowsort
 SELECT ALL col1 FROM tab0 WHERE NULL NOT BETWEEN NULL AND ( + 82 )
 ----
 
-# Datafusion - Schema error: Schema contains qualified field name tab2.col1 and unqualified field name col1 which would be ambiguous
+# Datafusion - DataFusion error: Schema error: Schema contains qualified field name tab2.col1 and unqualified field name col1 which would be ambiguous
 skipif Datafusion
 query II rowsort
 SELECT col1, - col0 - - col2 AS col1 FROM tab2
@@ -32383,7 +32641,7 @@ SELECT ALL + col0 AS col0, + 32 AS col2 FROM tab1 AS cor0
 91
 32
 
-# Datafusion - Schema error: Schema contains qualified field name cor0.col1 and unqualified field name col1 which would be ambiguou
+# Datafusion - DataFusion error: Schema error: Schema contains qualified field name cor0.col1 and unqualified field name col1 which would be ambiguous
 skipif Datafusion
 query II rowsort
 SELECT - + 19 col1, col1 FROM tab0 cor0
@@ -32839,7 +33097,7 @@ SELECT ALL - - col0 * + col1 * + ( CAST ( - 11 AS INTEGER ) ) * - col0 AS col2 F
 1748439
 200475
 
-# Datafusion - Schema error: Schema contains qualified field name cor0.col1 and unqualified field name col1 which would be ambiguous
+# Datafusion - DataFusion error: Schema error: Schema contains qualified field name cor0.col1 and unqualified field name col1 which would be ambiguous
 skipif Datafusion
 query II rowsort
 SELECT col1, + 11 - - - col0 col1 FROM tab0 AS cor0
@@ -33007,6 +33265,9 @@ SELECT COUNT ( + col2 ) AS col1 FROM tab1
 ----
 3
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] I[I]
+# Datafusion - [Actual  ] I[R]
 query IR rowsort label-5440
 SELECT ALL - col2 + + + CAST ( NULL AS INTEGER ) AS col0, CAST ( - col0 AS REAL ) * - CAST ( NULL AS INTEGER ) + - col1 FROM tab2 AS cor0
 ----
@@ -33113,6 +33374,8 @@ query I rowsort
 SELECT DISTINCT col0 FROM tab1 WHERE NULL IS NOT NULL
 ----
 
+# Datafusion - DataFusion error: type_coercion
+# Datafusion - caused by
 # Datafusion - Error during planning: Cannot automatically convert Int32 to Null
 skipif Datafusion
 query I rowsort
@@ -33324,6 +33587,9 @@ SELECT ALL 30 * + col0 col2 FROM tab2
 1920
 2250
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-5494
 SELECT DISTINCT CAST ( - ( - CAST ( NULL AS INTEGER ) ) AS REAL ) AS col0 FROM tab0
 ----
@@ -33935,7 +34201,7 @@ query III rowsort
 SELECT ALL * FROM tab2 WHERE NOT NULL >= ( 41 )
 ----
 
-# Datafusion - Execution error: avg(DISTINCT) aggregations are not available
+# Datafusion - DataFusion error: Execution error: avg(DISTINCT) aggregations are not available
 skipif Datafusion
 query I rowsort label-5591
 SELECT ALL - AVG ( DISTINCT 26 ) FROM tab1 WHERE NOT col1 > ( CAST ( NULL AS INTEGER ) )
@@ -34029,6 +34295,8 @@ SELECT col1 + + 89 AS col1 FROM tab0
 170
 90
 
+# Datafusion - DataFusion error: type_coercion
+# Datafusion - caused by
 # Datafusion - Error during planning: Cannot automatically convert Int32 to Null
 skipif Datafusion
 query III rowsort
@@ -34884,6 +35152,9 @@ SELECT ALL + ( - + 26 ) + - col1 * 50 FROM tab2 AS cor0
 -3376
 -3876
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort
 SELECT + AVG ( - 52 ) FROM tab0 AS cor0 WHERE - 56 IS NULL
 ----
@@ -35123,6 +35394,9 @@ SELECT + 9 + - COUNT ( * ) AS col1 FROM tab2 AS cor0
 ----
 6
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-5795
 SELECT ALL - - CAST ( NULL AS INTEGER ) + + col2 * - - CAST ( NULL AS REAL ) AS col0 FROM tab2 cor0
 ----
@@ -35175,6 +35449,9 @@ SELECT ALL MAX ( ALL + col0 ) AS col0 FROM tab1
 ----
 91
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]I
+# Datafusion - [Actual  ] [R]I
 query RI rowsort label-5804
 SELECT - CAST ( NULL AS REAL ) * CAST ( - + col1 AS INTEGER ) AS col0, - col0 AS col2 FROM tab1
 ----
@@ -35436,7 +35713,7 @@ SELECT ALL - COUNT ( * ) + - 24 AS col2 FROM tab2 AS cor0
 ----
 -27
 
-# Datafusion - Schema error: Schema contains qualified field name cor0.col1 and unqualified field name col1 which would be ambiguous
+# Datafusion - DataFusion error: Schema error: Schema contains qualified field name cor0.col1 and unqualified field name col1 which would be ambiguous
 skipif Datafusion
 query II rowsort
 SELECT col1, col2 * - col1 + + col1 AS col1 FROM tab1 AS cor0
@@ -35460,7 +35737,7 @@ SELECT * FROM tab2 WHERE - 64 - - + col0 IS NOT NULL
 ----
 9 values hashing to 75c998aa53ac83218cbf2feb962d0a49
 
-# Datafusion - Schema error: Schema contains qualified field name tab1.col1 and unqualified field name col1 which would be ambiguous
+# Datafusion - DataFusion error: Schema error: Schema contains qualified field name tab1.col1 and unqualified field name col1 which would be ambiguous
 skipif Datafusion
 query II rowsort
 SELECT DISTINCT col1, + col0 col1 FROM tab1
@@ -35553,6 +35830,8 @@ SELECT + 61 + - MAX ( DISTINCT - + 89 ) FROM tab0 AS cor0
 ----
 150
 
+# Datafusion - DataFusion error: type_coercion
+# Datafusion - caused by
 # Datafusion - Error during planning: Cannot automatically convert Int32 to Null
 skipif Datafusion
 query III rowsort
@@ -36038,7 +36317,7 @@ SELECT + 5 * - - MAX ( - 66 ) AS col2 FROM tab1
 ----
 -330
 
-# Datafusion - Schema error: Schema contains qualified field name tab2.col0 and unqualified field name col0 which would be ambiguous
+# Datafusion - DataFusion error: Schema error: Schema contains qualified field name tab2.col0 and unqualified field name col0 which would be ambiguous
 skipif Datafusion
 query II rowsort
 SELECT col0, + 17 * - col2 AS col0 FROM tab2
@@ -36050,6 +36329,9 @@ SELECT col0, + 17 * - col2 AS col0 FROM tab2
 75
 -986
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]I
+# Datafusion - [Actual  ] [R]I
 query RI rowsort label-5942
 SELECT ALL 23 * CAST ( NULL AS REAL ), - SUM ( ALL col1 ) col2 FROM tab0
 ----
@@ -36212,6 +36494,9 @@ query III rowsort
 SELECT ALL * FROM tab1 AS cor0 WHERE NOT + col0 BETWEEN ( 95 ) * - 25 AND - 49 * - col1 * + col0
 ----
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-5968
 SELECT ALL - col2 * - - CAST ( NULL AS REAL ) FROM tab2 AS cor0
 ----
@@ -36226,7 +36511,7 @@ NULL
 NULL
 NULL
 
-# Datafusion - Schema error: Schema contains qualified field name cor0.col1 and unqualified field name col1 which would be ambiguous
+# Datafusion - DataFusion error: Schema error: Schema contains qualified field name cor0.col1 and unqualified field name col1 which would be ambiguous
 skipif Datafusion
 query II rowsort label-5970
 SELECT DISTINCT col1 AS col1, CAST ( NULL AS INTEGER ) AS col1 FROM tab2 AS cor0 WHERE NOT NULL IS NULL
@@ -36318,6 +36603,9 @@ SELECT + COUNT ( * ) + + 15 FROM tab1 AS cor0
 ----
 18
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-5986
 SELECT CAST ( CAST ( NULL AS INTEGER ) AS INTEGER ) + + CAST ( 72 AS REAL ) + - + 89 col1 FROM tab2 AS cor0
 ----
@@ -36398,7 +36686,7 @@ query I rowsort
 SELECT ALL - 15 * + + ( col1 ) FROM tab0 AS cor0 WHERE NOT ( NULL ) IS NULL
 ----
 
-# Datafusion - Schema error: Schema contains qualified field name cor0.col1 and unqualified field name col1 which would be ambiguous
+# Datafusion - DataFusion error: Schema error: Schema contains qualified field name cor0.col1 and unqualified field name col1 which would be ambiguous
 skipif Datafusion
 query II rowsort
 SELECT col1, + 45 AS col1 FROM tab0 AS cor0
@@ -36551,6 +36839,9 @@ SELECT - COUNT ( * ) + - 86 AS col2 FROM tab0
 ----
 -89
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-6026
 SELECT DISTINCT + col0 - + col2 + 86 + - col0 + + col1 * - col2 * + - CAST ( NULL AS REAL ) / 94 * + 55 AS col0 FROM tab2
 ----
@@ -36588,6 +36879,9 @@ SELECT 85 / + + ( - col2 ) AS col2 FROM tab1 AS cor0
 -1
 0
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] I[I]
+# Datafusion - [Actual  ] I[R]
 query IR rowsort label-6032
 SELECT - 33 AS col0, - 15 + - MAX ( CAST ( col1 AS REAL ) ) + - CAST ( NULL AS INTEGER ) FROM tab0 AS cor0
 ----
@@ -36774,6 +37068,9 @@ SELECT ALL + col2 * 21 FROM tab0
 210
 987
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-6062
 SELECT CAST ( NULL AS INTEGER ) * + AVG ( - 15 ) FROM tab2
 ----
@@ -37116,6 +37413,8 @@ SELECT + MAX ( DISTINCT - 28 ) AS col2 FROM tab0 AS cor0
 ----
 -28
 
+# Datafusion - DataFusion error: type_coercion
+# Datafusion - caused by
 # Datafusion - Error during planning: Cannot automatically convert Int32 to Null
 skipif Datafusion
 query III rowsort
@@ -37222,6 +37521,9 @@ query I rowsort
 SELECT + 38 * + 15 FROM tab2 WHERE NULL < ( ( - + col0 ) * + + 20 )
 ----
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-6142
 SELECT ALL - AVG ( - - CAST ( NULL AS INTEGER ) ) + - - 25 AS col2 FROM tab2, tab2 AS cor0
 ----
@@ -37656,6 +37958,9 @@ SELECT ALL col1 FROM tab2 cor0 WHERE col1 > ( + col2 )
 67
 77
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-6214
 SELECT + + col2 + - - CAST ( NULL AS REAL ) AS col1 FROM tab1 AS cor0
 ----
@@ -38602,6 +38907,9 @@ SELECT + 74, + col1 FROM tab1
 74
 5
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort
 SELECT - AVG ( - + col0 ) + - 95 col1 FROM tab2 AS cor0 WHERE ( NULL ) IS NOT NULL
 ----
@@ -38880,6 +39188,9 @@ SELECT + col1 * - col1 - + + col1 FROM tab1
 -2256
 -30
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-6407
 SELECT DISTINCT + CAST ( NULL AS REAL ) * + col1 + 27 + - col2 FROM tab1 AS cor0
 ----
@@ -39216,6 +39527,9 @@ SELECT ALL + - COUNT ( ALL col1 ) + ( + 38 ) AS col1 FROM tab0 AS cor0
 ----
 35
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-6462
 SELECT ALL + CAST ( NULL AS REAL ) + + MIN ( ALL - 54 ) FROM tab0 AS cor0
 ----
@@ -39577,6 +39891,8 @@ SELECT + 49 * ( - COUNT ( * ) ) AS col2 FROM tab2 AS cor0
 ----
 -147
 
+# Datafusion - DataFusion error: type_coercion
+# Datafusion - caused by
 # Datafusion - Error during planning: Cannot automatically convert Int32 to Null
 skipif Datafusion
 query III rowsort
@@ -39704,6 +40020,9 @@ SELECT 37 * + 25 * + MAX ( ALL + col1 ) / + MAX ( col1 ) FROM tab1
 ----
 925
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-6542
 SELECT ALL + CAST ( NULL AS INTEGER ) * - AVG ( + CAST ( NULL AS INTEGER ) ) FROM tab1
 ----
@@ -39788,6 +40107,9 @@ SELECT 12 col1 FROM tab0
 12
 12
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-6558
 SELECT DISTINCT col2 + + col1 * CAST ( NULL AS REAL ) FROM tab1
 ----
@@ -40064,6 +40386,8 @@ SELECT DISTINCT - col2 * col1 AS col1 FROM tab1 WHERE + col0 IS NOT NULL
 -295
 -3196
 
+# Datafusion - DataFusion error: type_coercion
+# Datafusion - caused by
 # Datafusion - Error during planning: Cannot automatically convert Int32 to Null
 skipif Datafusion
 query I rowsort
@@ -40192,6 +40516,9 @@ SELECT ALL COUNT ( - - col2 ) / CAST ( - 35 AS INTEGER ) * 37 + + MAX ( col2 ) *
 ----
 5544
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort
 SELECT ALL + AVG ( + col2 ) FROM tab2 AS cor0 WHERE NOT ( NULL ) IN ( - + col1 )
 ----
@@ -40412,6 +40739,8 @@ SELECT DISTINCT * FROM tab2 WHERE NOT + - col2 IS NULL
 ----
 9 values hashing to 75c998aa53ac83218cbf2feb962d0a49
 
+# Datafusion - DataFusion error: type_coercion
+# Datafusion - caused by
 # Datafusion - Error during planning: Cannot automatically convert Int32 to Null
 skipif Datafusion
 query III rowsort
@@ -40738,7 +41067,7 @@ SELECT ALL + 74 + + COUNT ( * ) AS col1 FROM tab0 AS cor0
 ----
 77
 
-# Datafusion - Schema error: Schema contains qualified field name cor0.col1 and unqualified field name col1 which would be ambiguous
+# Datafusion - DataFusion error: Schema error: Schema contains qualified field name cor0.col1 and unqualified field name col1 which would be ambiguous
 skipif Datafusion
 query II rowsort
 SELECT ALL col1, - col1 col1 FROM tab2 AS cor0 WHERE NULL IS NULL
@@ -40798,6 +41127,9 @@ SELECT 25 * 53 FROM tab0
 1325
 1325
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-6725
 SELECT ALL - 12 / 83 - + - CAST ( NULL AS REAL ) FROM tab0
 ----
@@ -40934,6 +41266,8 @@ SELECT * FROM tab2 WHERE NOT + + 12 = col1
 ----
 9 values hashing to 75c998aa53ac83218cbf2feb962d0a49
 
+# Datafusion - DataFusion error: type_coercion
+# Datafusion - caused by
 # Datafusion - Error during planning: Cannot automatically convert Int64 to Null
 skipif Datafusion
 query I rowsort
@@ -41156,7 +41490,7 @@ SELECT * FROM tab1 WHERE NOT ( NOT 35 + + 74 NOT IN ( - + 64, + col0 * + 89 + + 
 ----
 9 values hashing to c6c0a4111b36d04dbc811a11e4d54cad
 
-# Datafusion - Schema error: Schema contains qualified field name tab0.col0 and unqualified field name col0 which would be ambiguous
+# Datafusion - DataFusion error: Schema error: Schema contains qualified field name tab0.col0 and unqualified field name col0 which would be ambiguous
 skipif Datafusion
 query III rowsort
 SELECT 85 AS col2, col0, col2 AS col0 FROM tab0 WHERE NOT ( NULL ) IS NULL
@@ -42006,6 +42340,9 @@ SELECT + 84 - + + COUNT ( * ) FROM tab0
 ----
 81
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-6922
 SELECT AVG ( + + CAST ( NULL AS INTEGER ) ) - + 33 FROM tab2
 ----
@@ -42369,7 +42706,7 @@ query I rowsort
 SELECT ALL - 36 AS col2 FROM tab0 cor0 WHERE NOT NULL >= NULL
 ----
 
-# Datafusion - Schema error: Schema contains qualified field name cor0.col1 and unqualified field name col1 which would be ambiguous
+# Datafusion - DataFusion error: Schema error: Schema contains qualified field name cor0.col1 and unqualified field name col1 which would be ambiguous
 skipif Datafusion
 query II rowsort
 SELECT col1 AS col1, - col0 AS col1 FROM tab2 AS cor0
@@ -42398,7 +42735,7 @@ SELECT DISTINCT + SUM ( + + col1 ) FROM tab2
 ----
 195
 
-# Datafusion - Schema error: Schema contains qualified field name tab2.col2 and unqualified field name col2 which would be ambiguous
+# Datafusion - DataFusion error: Schema error: Schema contains qualified field name tab2.col2 and unqualified field name col2 which would be ambiguous
 skipif Datafusion
 query II rowsort
 SELECT col2, 27 AS col2 FROM tab2
@@ -42725,6 +43062,8 @@ query I rowsort
 SELECT DISTINCT + + col0 / - 16 / col1 AS col0 FROM tab2 AS cor0 WHERE col2 IS NULL
 ----
 
+# Datafusion - DataFusion error: type_coercion
+# Datafusion - caused by
 # Datafusion - Error during planning: Cannot automatically convert Int32 to Null
 skipif Datafusion
 query III rowsort
@@ -42918,6 +43257,9 @@ query III rowsort
 SELECT * FROM tab1 WHERE 13 - col2 BETWEEN NULL AND + 60
 ----
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-7073
 SELECT DISTINCT CAST ( NULL AS REAL ) / - col2 FROM tab1
 ----
@@ -43290,6 +43632,9 @@ SELECT + ( - COUNT ( * ) ) FROM tab2 AS cor0 WHERE NOT - col0 * + - 4 IS NULL
 ----
 -3
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-7141
 SELECT - AVG ( col1 ) * CAST ( NULL AS INTEGER ) AS col2 FROM tab1 WHERE NOT col0 NOT IN ( - col2 )
 ----
@@ -43329,6 +43674,9 @@ query III rowsort
 SELECT * FROM tab1 cor0 WHERE ( + col2 ) IN ( + col2 + - col1 )
 ----
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-7148
 SELECT DISTINCT - + 36 + + + CAST ( NULL AS REAL ) + col0 + ( 32 ) AS col0 FROM tab0 AS cor0
 ----
@@ -43346,6 +43694,8 @@ SELECT 91 + 10 FROM tab2
 101
 101
 
+# Datafusion - DataFusion error: type_coercion
+# Datafusion - caused by
 # Datafusion - Error during planning: Cannot automatically convert Int64 to Null
 skipif Datafusion
 query III rowsort
@@ -43873,7 +44223,7 @@ SELECT - 37 * - CAST ( - 11 AS INTEGER ) AS col1 FROM tab2 cor0
 -407
 -407
 
-# Datafusion - Schema error: Schema contains qualified field name cor0.col1 and unqualified field name col1 which would be ambiguous
+# Datafusion - DataFusion error: Schema error: Schema contains qualified field name cor0.col1 and unqualified field name col1 which would be ambiguous
 skipif Datafusion
 query II rowsort
 SELECT col1, 90 AS col1 FROM tab0 AS cor0 WHERE NOT NULL >= ( col2 )
@@ -44317,6 +44667,9 @@ SELECT - col1 + 36 AS col1, - col2 / CAST ( - - 33 AS INTEGER ) AS col1 FROM tab
 -41
 -1
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-7310
 SELECT + col2 + - - CAST ( NULL AS REAL ) AS col0 FROM tab0
 ----
@@ -44391,6 +44744,8 @@ SELECT DISTINCT + col0 * - 95 FROM tab2
 -6080
 -7125
 
+# Datafusion - DataFusion error: type_coercion
+# Datafusion - caused by
 # Datafusion - Error during planning: Cannot automatically convert Int32 to Null
 skipif Datafusion
 query III rowsort
@@ -44584,6 +44939,9 @@ SELECT 34 / + 21 FROM tab2
 1
 1
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-7356
 SELECT CAST ( NULL AS REAL ) * - col0 AS col2 FROM tab1 AS cor0
 ----
@@ -44675,7 +45033,7 @@ query I rowsort
 SELECT - col2 / + + col1 * - col1 / ( col2 ) AS col1 FROM tab0 WHERE NULL <> - col1
 ----
 
-# Datafusion - Error during planning: Projections require unique expression names
+# Datafusion - DataFusion error: Schema error: Schema contains qualified field name tab2.col1 and unqualified field name col1 which would be ambiguous
 skipif Datafusion
 query II rowsort
 SELECT col1, col0 AS col1 FROM tab2
@@ -44991,6 +45349,9 @@ SELECT ALL - 24 / col2 AS col2 FROM tab2 AS cor0
 0
 0
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-7427
 SELECT ALL col2 * + CAST ( NULL AS REAL ) * - col2 FROM tab2
 ----
@@ -45371,6 +45732,9 @@ SELECT + COUNT ( * ) / - 80 AS col2 FROM tab2 AS cor0
 ----
 0
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-7490
 SELECT ALL 55 * AVG ( 24 ) + - COUNT ( * ) * - COUNT ( * ) AS col1 FROM tab0 AS cor0 WHERE NOT NULL = NULL
 ----
@@ -45773,7 +46137,7 @@ NULL
 NULL
 96
 
-# Datafusion - Schema error: Schema contains qualified field name tab1.col2 and unqualified field name col2 which would be ambiguous
+# Datafusion - DataFusion error: Schema error: Schema contains qualified field name tab1.col2 and unqualified field name col2 which would be ambiguous
 skipif Datafusion
 query II rowsort
 SELECT col2 AS col2, col1 AS col2 FROM tab1
@@ -45896,6 +46260,8 @@ query I rowsort
 SELECT + col2 * + 37 FROM tab1 WHERE NOT ( NULL ) NOT BETWEEN ( NULL ) AND NULL
 ----
 
+# Datafusion - DataFusion error: type_coercion
+# Datafusion - caused by
 # Datafusion - Error during planning: Cannot automatically convert Int64 to Null
 skipif Datafusion
 query III rowsort
@@ -46237,6 +46603,9 @@ SELECT - SUM ( - - col0 ) FROM tab2 AS cor0
 ----
 -185
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-7643
 SELECT ALL - - col2 * CAST ( NULL AS REAL ) AS col2 FROM tab2 WHERE NOT + CAST ( NULL AS REAL ) IN ( col2, - 81 )
 ----
@@ -46335,6 +46704,9 @@ SELECT ALL + col0 * - ( + col0 ) AS col1 FROM tab0 AS cor0
 -7569
 -9409
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-7660
 SELECT DISTINCT - ( + ( - - CAST ( NULL AS INTEGER ) ) ) + + COUNT ( * ) * + + AVG ( - col1 ) FROM tab0 AS cor0
 ----
@@ -46350,6 +46722,8 @@ SELECT * FROM tab0 AS cor0 WHERE + col0 * col0 * + col2 IS NOT NULL
 ----
 9 values hashing to c4b42765dff94eaaa46040e537fb43b7
 
+# Datafusion - DataFusion error: type_coercion
+# Datafusion - caused by
 # Datafusion - Error during planning: Cannot automatically convert Int32 to Null
 skipif Datafusion
 query III rowsort label-7663
@@ -46917,6 +47291,9 @@ query III rowsort
 SELECT DISTINCT * FROM tab1 AS cor0 WHERE NOT 1 <= col1
 ----
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort
 SELECT ALL - - AVG ( ALL - col0 ) AS col2 FROM tab0 AS cor0 WHERE NULL NOT BETWEEN col1 AND - 76 + + col0 * - col2 + - col1
 ----
@@ -46961,6 +47338,8 @@ query I rowsort label-7762
 SELECT ALL - CAST ( NULL AS INTEGER ) / - col2 FROM tab0 WHERE col2 IS NULL
 ----
 
+# Datafusion - DataFusion error: type_coercion
+# Datafusion - caused by
 # Datafusion - Error during planning: Cannot automatically convert Int32 to Null
 skipif Datafusion
 query III rowsort
@@ -47080,6 +47459,9 @@ SELECT ( - 57 ) AS col2 FROM tab1 AS cor0
 -57
 -57
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]I
+# Datafusion - [Actual  ] [R]I
 query RI rowsort label-7780
 SELECT DISTINCT - - col2 * CAST ( NULL AS REAL ) - + 86 + + 52 AS col1, 15 + + col0 AS col0 FROM tab2 AS cor0
 ----
@@ -47404,7 +47786,7 @@ SELECT - col1 + col1 - col0 * col2 AS col0 FROM tab1
 -5015
 -6188
 
-# Datafusion - Schema error: Schema contains qualified field name tab2.col1 and unqualified field name col1 which would be ambiguous
+# Datafusion - DataFusion error: Schema error: Schema contains qualified field name tab2.col1 and unqualified field name col1 which would be ambiguous
 skipif Datafusion
 query II rowsort
 SELECT ALL 26 AS col1, col1 FROM tab2
@@ -47425,7 +47807,7 @@ query III rowsort
 SELECT ALL * FROM tab1 WHERE + + col1 IS NULL
 ----
 
-# Datafusion - Schema error: Schema contains qualified field name tab0.col0 and unqualified field name col0 which would be ambiguous
+# Datafusion - DataFusion error: Schema error: Schema contains qualified field name tab0.col0 and unqualified field name col0 which would be ambiguous
 skipif Datafusion
 query II rowsort
 SELECT ALL ( + col0 ) * col2 * - col1 AS col0, col0 AS col0 FROM tab0
@@ -47940,6 +48322,9 @@ SELECT DISTINCT + - col1 / + col0 AS col2 FROM tab1 AS cor0
 ----
 0
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-7914
 SELECT ALL ( + 85 ) * - - COUNT ( * ) * + + CAST ( NULL AS REAL ) AS col2 FROM tab2
 ----
@@ -48565,6 +48950,9 @@ SELECT - - col2 AS col1 FROM tab0 cor0 WHERE + 5 IS NOT NULL
 47
 99
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-8019
 SELECT - CAST ( NULL AS INTEGER ) + + CAST ( NULL AS REAL ) + + - ( - col2 ) FROM tab1
 ----
@@ -48577,6 +48965,9 @@ SELECT ALL - COUNT ( + - 2 ) FROM tab0
 ----
 -3
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-8021
 SELECT + 25 / + col2 * + CAST ( NULL AS REAL ) AS col0 FROM tab2
 ----
@@ -48864,6 +49255,9 @@ SELECT col2 + 47 FROM tab1
 115
 143
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-8070
 SELECT ( + CAST ( NULL AS REAL ) ) col0 FROM tab1
 ----
@@ -49032,6 +49426,9 @@ SELECT - - col0 / - 13 FROM tab0 cor0
 -6
 -7
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-8101
 SELECT ALL CAST ( NULL AS REAL ) * - - col1 FROM tab0
 ----
@@ -49103,6 +49500,8 @@ SELECT DISTINCT + - col0 + - 65 + + col1 * ( - col2 ) * + col0 AS col1 FROM tab1
 -290992
 -68660
 
+# Datafusion - DataFusion error: type_coercion
+# Datafusion - caused by
 # Datafusion - Error during planning: Cannot automatically convert Int64 to Null
 skipif Datafusion
 query I rowsort
@@ -49236,6 +49635,9 @@ SELECT DISTINCT - 55 AS col2 FROM tab0
 ----
 -55
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-8137
 SELECT ALL - CAST ( NULL AS REAL ) / - col2 FROM tab0
 ----
@@ -49398,7 +49800,7 @@ SELECT DISTINCT col1 - + col0 AS col1 FROM tab0 AS cor0
 -96
 66
 
-# Datafusion - Schema error: Schema contains qualified field name tab2.col0 and unqualified field name col0 which would be ambiguous
+# Datafusion - DataFusion error: Schema error: Schema contains qualified field name tab2.col0 and unqualified field name col0 which would be ambiguous
 skipif Datafusion
 query II rowsort
 SELECT DISTINCT + col0, 94 AS col0 FROM tab2 WHERE NOT + + col1 > - col2
@@ -49559,6 +49961,8 @@ query III rowsort
 SELECT * FROM tab2 AS cor0 WHERE - col1 + col0 = NULL
 ----
 
+# Datafusion - DataFusion error: type_coercion
+# Datafusion - caused by
 # Datafusion - Error during planning: Cannot automatically convert Int32 to Null
 skipif Datafusion
 query III rowsort
@@ -49578,6 +49982,8 @@ query III rowsort label-8195
 SELECT ALL * FROM tab0 AS cor0 WHERE NOT - col1 < + col2 - + - col2 + + CAST ( NULL AS INTEGER ) + - col0
 ----
 
+# Datafusion - DataFusion error: type_coercion
+# Datafusion - caused by
 # Datafusion - Error during planning: Cannot automatically convert Int32 to Null
 skipif Datafusion
 query III rowsort
@@ -49728,7 +50134,7 @@ SELECT + - COUNT ( col1 ) * COUNT ( DISTINCT - col2 ) AS col1 FROM tab0 AS cor0
 ----
 -9
 
-# Datafusion - Schema error: Schema contains qualified field name cor0.col2 and unqualified field name col2 which would be ambiguous
+# Datafusion - DataFusion error: Schema error: Schema contains qualified field name cor0.col2 and unqualified field name col2 which would be ambiguous
 skipif Datafusion
 query II rowsort
 SELECT - + ( + col1 ) * + 75 * - col2 * - 63 * - col2 + - col1 AS col2, col2 FROM tab0 AS cor0
@@ -50032,6 +50438,9 @@ SELECT - col0 + - 17 * - - 91 FROM tab1
 -1632
 -1638
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-8273
 SELECT - CAST ( NULL AS REAL ) + col1 FROM tab2
 ----
@@ -50284,6 +50693,9 @@ query III rowsort label-8314
 SELECT ALL * FROM tab0 WHERE NOT + col0 * + col2 - CAST ( NULL AS INTEGER ) > + col0
 ----
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-8315
 SELECT DISTINCT + + CAST ( NULL AS REAL ) / col2 FROM tab2 AS cor0
 ----
@@ -50320,6 +50732,9 @@ query III rowsort
 SELECT DISTINCT * FROM tab1 cor0 WHERE NOT 33 IS NOT NULL
 ----
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-8322
 SELECT ALL ( - - CAST ( NULL AS REAL ) ) * COUNT ( * ) FROM tab1 AS cor0
 ----
@@ -50861,6 +51276,9 @@ query I rowsort
 SELECT DISTINCT - col2 FROM tab2 AS cor0 WHERE NULL <> col0 * - 16
 ----
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] I[I]
+# Datafusion - [Actual  ] I[R]
 query IR rowsort label-8407
 SELECT - 21 AS col2, CAST ( NULL AS REAL ) / - col2 AS col0 FROM tab2 AS cor0
 ----
@@ -50917,6 +51335,9 @@ SELECT + 76 * - + col1 * - + col1 AS col2 FROM tab1
 167884
 1900
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-8415
 SELECT ALL AVG ( CAST ( NULL AS INTEGER ) ) AS col1 FROM tab2
 ----
@@ -51099,6 +51520,9 @@ SELECT - + COUNT ( * ) * + COUNT ( * ) FROM tab0 cor0 CROSS JOIN tab1 AS cor1
 ----
 -81
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-8446
 SELECT DISTINCT CAST ( NULL AS REAL ) / 73 * + - col0 AS col0 FROM tab2
 ----
@@ -51342,6 +51766,9 @@ SELECT DISTINCT + COUNT ( + + col2 ) FROM tab0
 ----
 3
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-8487
 SELECT DISTINCT + CAST ( NULL AS REAL ) FROM tab2 WHERE NULL IS NULL
 ----
@@ -51412,6 +51839,9 @@ SELECT ALL - + COUNT ( * ) * - COUNT ( * ) AS col1 FROM tab0 AS cor0
 ----
 9
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-8500
 SELECT DISTINCT ( CAST ( NULL AS REAL ) ) * - col2 FROM tab2
 ----
@@ -51488,6 +51918,9 @@ SELECT + col0 + + - col2 AS col0 FROM tab0 AS cor0
 -32
 77
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort
 SELECT ALL + AVG ( + col1 ) * - - 30 / + 18 AS col1 FROM tab1 AS cor0 WHERE NULL = col1
 ----
@@ -51611,6 +52044,9 @@ SELECT ( - col2 ) * - col1 * - + col1 - + col2, col0 FROM tab0 AS cor0
 -4420
 87
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-8533
 SELECT DISTINCT col1 * - - col0 * + - CAST ( NULL AS REAL ) / + col1 FROM tab1
 ----
@@ -51869,6 +52305,9 @@ NULL
 NULL
 NULL
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-8575
 SELECT ALL CAST ( NULL AS REAL ) + 84 FROM tab1 WHERE ( 34 ) NOT IN ( ( col1 ) )
 ----
@@ -52161,6 +52600,8 @@ query III rowsort
 SELECT * FROM tab0 WHERE col0 < NULL
 ----
 
+# Datafusion - DataFusion error: type_coercion
+# Datafusion - caused by
 # Datafusion - Error during planning: Cannot automatically convert Int32 to Null
 skipif Datafusion
 query III rowsort
@@ -52307,6 +52748,9 @@ SELECT - col0 * col1 + + col1 + - + 1 FROM tab0
 -1807
 -97
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-8653
 SELECT CAST ( NULL AS INTEGER ) + + - 62 * + MIN ( col1 ) + COUNT ( * ) * + CAST ( NULL AS REAL ) FROM tab0
 ----
@@ -52413,7 +52857,7 @@ SELECT CAST ( NULL AS REAL ) AS col2, col0 * + - 49 AS col2 FROM tab0
 NULL
 -4263
 NULL
--4753c
+-4753
 NULL
 -735
 
@@ -52626,6 +53070,9 @@ SELECT DISTINCT 21 * - + COUNT ( * ) FROM tab2
 ----
 -63
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-8707
 SELECT DISTINCT - CAST ( - + CAST ( NULL AS REAL ) AS REAL ) col0 FROM tab1
 ----
@@ -53618,6 +54065,9 @@ SELECT ALL - 89 + col1 FROM tab2 cor0
 -22
 -38
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-8868
 SELECT - 21 + + - CAST ( NULL AS REAL ) AS col0 FROM tab1 AS cor0
 ----
@@ -53843,6 +54293,9 @@ SELECT + 79 * 89 * col2 AS col2 FROM tab0 AS cor0
 696069
 70310
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-8905
 SELECT DISTINCT 39 * - col2 + - - 94 * + CAST ( NULL AS REAL ) col0 FROM tab0 AS cor0
 ----
@@ -53935,6 +54388,9 @@ SELECT 73 - - + col2 - - CAST ( - col0 AS INTEGER ) FROM tab2
 50
 56
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] I[I]
+# Datafusion - [Actual  ] I[R]
 query IR rowsort label-8920
 SELECT DISTINCT - MAX ( DISTINCT + - col2 ) - - ( + - COUNT ( ALL + col1 ) ), COUNT ( * ) * + - COUNT ( * ) * AVG ( - col1 ) FROM tab1 WHERE NOT - 90 NOT BETWEEN NULL AND NULL
 ----
@@ -54436,6 +54892,9 @@ SELECT 11, + col0 AS col2 FROM tab2
 11
 75
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-9000
 SELECT ALL + + CAST ( NULL AS REAL ) * + col0 FROM tab2 AS cor0
 ----
@@ -54570,7 +55029,7 @@ SELECT DISTINCT SUM ( + 7 ) FROM tab2
 ----
 21
 
-# Datafusion - Schema error: Schema contains qualified field name tab0.col0 and unqualified field name col0 which would be ambiguous
+# Datafusion - DataFusion error: Schema error: Schema contains qualified field name tab0.col0 and unqualified field name col0 which would be ambiguous
 skipif Datafusion
 query II rowsort label-9023
 SELECT DISTINCT + ( CAST ( NULL AS INTEGER ) ) AS col0, col0 FROM tab0
@@ -54694,6 +55153,9 @@ query III rowsort
 SELECT ALL * FROM tab1 WHERE - col2 / - col1 IS NULL
 ----
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-9042
 SELECT + col1 + CAST ( NULL AS REAL ) AS col2 FROM tab2
 ----
@@ -55063,6 +55525,9 @@ SELECT ALL col0 * - - col0 FROM tab2
 4096
 5625
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort
 SELECT - 69 * AVG ( 74 * col0 ) FROM tab1 WHERE NOT ( 60 + + col0 ) BETWEEN + 52 - - col0 AND ( NULL )
 ----
@@ -55219,6 +55684,8 @@ SELECT col2 + col0 AS col0, + col0 col2 FROM tab1
 159
 91
 
+# Datafusion - DataFusion error: type_coercion
+# Datafusion - caused by
 # Datafusion - Error during planning: Cannot automatically convert Int64 to Null
 skipif Datafusion
 query I rowsort label-9133
@@ -55251,7 +55718,7 @@ query III rowsort
 SELECT * FROM tab1 WHERE + 10 + + 40 IS NULL
 ----
 
-# Datafusion - Schema error: Schema contains qualified field name cor0.col0 and unqualified field name col0 which would be ambiguous
+# Datafusion - DataFusion error: Schema error: Schema contains qualified field name cor0.col0 and unqualified field name col0 which would be ambiguous
 skipif Datafusion
 query II rowsort
 SELECT - - col2 + - 40 + + col2 * - col1 col0, col0 FROM tab2 AS cor0
@@ -55372,6 +55839,9 @@ SELECT - col0 * 73 * + + col1 AS col1 FROM tab1
 -312221
 -52122
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-9158
 SELECT ALL - - CAST ( NULL AS REAL ) AS col2 FROM tab1 WHERE NULL IS NULL
 ----
@@ -55736,6 +56206,9 @@ query III rowsort
 SELECT DISTINCT * FROM tab1 AS cor0 WHERE NULL >= 52 * - + col2
 ----
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-9216
 SELECT CAST ( NULL AS REAL ) col0 FROM tab2 cor0
 ----
@@ -56206,6 +56679,9 @@ query III rowsort
 SELECT * FROM tab1 WHERE NULL > 64 - + col0
 ----
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-9289
 SELECT CAST ( NULL AS REAL ) + col0 + col2 * - + 57 FROM tab2
 ----
@@ -56343,7 +56819,7 @@ SELECT DISTINCT * FROM tab0, tab1 AS cor0 WHERE NOT - 8 IS NULL
 ----
 54 values hashing to 9cf5329ae50920f4c6e297c9f5b652fd
 
-# Datafusion - Schema error: Schema contains qualified field name tab1.col0 and unqualified field name col0 which would be ambiguous
+# Datafusion - DataFusion error: Schema error: Schema contains qualified field name tab1.col0 and unqualified field name col0 which would be ambiguous
 skipif Datafusion
 query II rowsort
 SELECT col0, col2 AS col0 FROM tab1 WHERE - + col2 IS NOT NULL
@@ -56899,7 +57375,7 @@ SELECT - - MIN ( ALL + 25 ) AS col1 FROM tab1 AS cor0
 ----
 25
 
-# Datafusion - Schema error: Schema contains qualified field name cor0.col1 and unqualified field name col1 which would be ambiguous
+# Datafusion - DataFusion error: Schema error: Schema contains qualified field name cor0.col1 and unqualified field name col1 which would be ambiguous
 skipif Datafusion
 query II rowsort
 SELECT DISTINCT - - col1 AS col1, + col1 FROM tab0 AS cor0
@@ -57144,6 +57620,8 @@ query IIIIII rowsort
 SELECT * FROM tab2 AS cor0 CROSS JOIN tab2 AS cor1 WHERE NOT ( NOT NULL IS NOT NULL )
 ----
 
+# Datafusion - DataFusion error: type_coercion
+# Datafusion - caused by
 # Datafusion - Error during planning: Cannot automatically convert Int32 to Null
 skipif Datafusion
 query I rowsort label-9439
@@ -57691,6 +58169,8 @@ query III rowsort
 SELECT * FROM tab1 WHERE col1 - 36 IS NULL
 ----
 
+# Datafusion - DataFusion error: type_coercion
+# Datafusion - caused by
 # Datafusion - Error during planning: Cannot automatically convert Int32 to Null
 skipif Datafusion
 query III rowsort
@@ -57970,7 +58450,7 @@ SELECT + - COUNT ( DISTINCT + 70 ) FROM tab2 AS cor0
 ----
 -1
 
-# Datafusion - Schema error: Schema contains qualified field name cor0.col1 and unqualified field name col1 which would be ambiguous
+# Datafusion - DataFusion error: Schema error: Schema contains qualified field name cor0.col1 and unqualified field name col1 which would be ambiguous
 skipif Datafusion
 query II rowsort
 SELECT DISTINCT - col2 col1, col1 FROM tab1 AS cor0
@@ -58320,6 +58800,9 @@ SELECT DISTINCT - col0 - - - 26 FROM tab0 AS cor0
 -123
 -41
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-9635
 SELECT ALL + CAST ( NULL AS REAL ) * - col2 - + + col2 + col0 FROM tab2
 ----
@@ -58397,7 +58880,7 @@ SELECT col1 AS col0, - col2 FROM tab1
 5
 -59
 
-# Datafusion - Schema error: Schema contains qualified field name tab0.col0 and unqualified field name col0 which would be ambiguous
+# Datafusion - DataFusion error: Schema error: Schema contains qualified field name tab0.col0 and unqualified field name col0 which would be ambiguous
 skipif Datafusion
 query II rowsort
 SELECT col0, col0 - col1 + col1 AS col0 FROM tab0
@@ -58757,6 +59240,9 @@ SELECT DISTINCT + - 64 col0 FROM tab1 AS cor0
 ----
 -64
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-9704
 SELECT DISTINCT - + 94 * + CAST ( NULL AS REAL ) AS col1 FROM tab0 AS cor0
 ----
@@ -59116,6 +59602,9 @@ SELECT - 33 AS col1 FROM tab1 AS cor0 WHERE NULL IS NULL
 -33
 -33
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-9760
 SELECT ALL CAST ( NULL AS REAL ) AS col2 FROM tab1 AS cor0 CROSS JOIN tab2 AS cor1 WHERE NULL IS NOT NULL
 ----
@@ -59357,6 +59846,8 @@ query III rowsort
 SELECT ALL * FROM tab1 WHERE NOT NULL BETWEEN - col2 AND + col2
 ----
 
+# Datafusion - DataFusion error: type_coercion
+# Datafusion - caused by
 # Datafusion - Error during planning: Cannot automatically convert Int32 to Null
 skipif Datafusion
 query III rowsort
@@ -59417,6 +59908,9 @@ SELECT - COUNT ( ALL - col0 ) * - COUNT ( * ) AS col0 FROM tab0 AS cor0
 ----
 9
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-9812
 SELECT + CAST ( NULL AS REAL ) FROM tab1 AS cor0 WHERE NOT NULL <= - col0 * - ( + 49 )
 ----
@@ -60359,6 +60853,9 @@ SELECT DISTINCT col1 - + CAST ( NULL AS INTEGER ) + - 29 AS col1 FROM tab2
 ----
 NULL
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-9965
 SELECT - 37 + - ( - - CAST ( NULL AS REAL ) ) + COUNT ( * ) AS col2 FROM tab1
 ----
@@ -60445,7 +60942,7 @@ SELECT * FROM tab1 AS cor0 WHERE NOT + col0 - + col1 > + 41
 
 # Datafusion - Error during planning: Projections require unique expression names
 skipif Datafusion
-query RI rowsort label-9980
+query II rowsort label-9980
 SELECT - CAST ( NULL AS REAL ) AS col0, COUNT ( ALL + 24 ) + - COUNT ( * ) - - COUNT ( * ) AS col0 FROM tab0
 ----
 NULL

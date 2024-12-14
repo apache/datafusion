@@ -1259,30 +1259,45 @@ SELECT 46 + - 25 AS col5 FROM tab4 AS cor0 WHERE NOT NULL NOT BETWEEN ( NULL ) A
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query IIIIIII rowsort label-190
 SELECT * FROM tab0 WHERE + + col2 IS NULL
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query IIIIIII rowsort label-190
 SELECT * FROM tab1 WHERE + + col2 IS NULL
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query IIIIIII rowsort label-190
 SELECT * FROM tab2 WHERE + + col2 IS NULL
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query IIIIIII rowsort label-190
 SELECT * FROM tab3 WHERE + + col2 IS NULL
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query IIIIIII rowsort label-190
 SELECT * FROM tab4 WHERE + + col2 IS NULL
@@ -1449,30 +1464,45 @@ SELECT + col3 FROM tab4 AS cor0 WHERE NULL <> NULL
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-225
 SELECT ALL + col5 AS col2 FROM tab0 AS cor0 WHERE NOT NULL IS NULL
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-225
 SELECT ALL + col5 AS col2 FROM tab1 AS cor0 WHERE NOT NULL IS NULL
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-225
 SELECT ALL + col5 AS col2 FROM tab2 AS cor0 WHERE NOT NULL IS NULL
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-225
 SELECT ALL + col5 AS col2 FROM tab3 AS cor0 WHERE NOT NULL IS NULL
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-225
 SELECT ALL + col5 AS col2 FROM tab4 AS cor0 WHERE NOT NULL IS NULL
@@ -2009,30 +2039,45 @@ SELECT - CAST ( - + 41 AS REAL ) + + 57 FROM tab4 WHERE NOT + col4 IS NOT NULL
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query II rowsort label-310
 SELECT + + col5, + col4 FROM tab0 cor0 WHERE NOT - 97 NOT IN ( + 23 + + col4, col0 + + - 17 )
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query II rowsort label-310
 SELECT + + col5, + col4 FROM tab1 cor0 WHERE NOT - 97 NOT IN ( + 23 + + col4, col0 + + - 17 )
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query II rowsort label-310
 SELECT + + col5, + col4 FROM tab2 cor0 WHERE NOT - 97 NOT IN ( + 23 + + col4, col0 + + - 17 )
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query II rowsort label-310
 SELECT + + col5, + col4 FROM tab3 cor0 WHERE NOT - 97 NOT IN ( + 23 + + col4, col0 + + - 17 )
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query II rowsort label-310
 SELECT + + col5, + col4 FROM tab4 cor0 WHERE NOT - 97 NOT IN ( + 23 + + col4, col0 + + - 17 )
@@ -3059,30 +3104,45 @@ SELECT DISTINCT + CAST ( NULL AS INTEGER ) AS col0 FROM tab4 AS cor0 WHERE NOT (
 NULL
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query II rowsort label-475
 SELECT ALL + col2 AS col2, + 84 * + col4 FROM tab0 AS cor0 WHERE NOT NULL IS NULL
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query II rowsort label-475
 SELECT ALL + col2 AS col2, + 84 * + col4 FROM tab1 AS cor0 WHERE NOT NULL IS NULL
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query II rowsort label-475
 SELECT ALL + col2 AS col2, + 84 * + col4 FROM tab2 AS cor0 WHERE NOT NULL IS NULL
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query II rowsort label-475
 SELECT ALL + col2 AS col2, + 84 * + col4 FROM tab3 AS cor0 WHERE NOT NULL IS NULL
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query II rowsort label-475
 SELECT ALL + col2 AS col2, + 84 * + col4 FROM tab4 AS cor0 WHERE NOT NULL IS NULL
@@ -3254,30 +3314,45 @@ SELECT ALL * FROM tab4 WHERE NULL = - + 23 + - - 19
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-505
 SELECT + col2 FROM tab0 WHERE + - ( + - col3 ) IS NULL
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-505
 SELECT + col2 FROM tab1 WHERE + - ( + - col3 ) IS NULL
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-505
 SELECT + col2 FROM tab2 WHERE + - ( + - col3 ) IS NULL
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-505
 SELECT + col2 FROM tab3 WHERE + - ( + - col3 ) IS NULL
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-505
 SELECT + col2 FROM tab4 WHERE + - ( + - col3 ) IS NULL
@@ -3629,30 +3704,45 @@ SELECT * FROM tab4 WHERE - - 92 * + + col3 = + ( 0 )
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-560
 SELECT ALL col4 AS col5 FROM tab0 AS cor0 WHERE NOT + col5 IS NOT NULL
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-560
 SELECT ALL col4 AS col5 FROM tab1 AS cor0 WHERE NOT + col5 IS NOT NULL
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-560
 SELECT ALL col4 AS col5 FROM tab2 AS cor0 WHERE NOT + col5 IS NOT NULL
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-560
 SELECT ALL col4 AS col5 FROM tab3 AS cor0 WHERE NOT + col5 IS NOT NULL
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-560
 SELECT ALL col4 AS col5 FROM tab4 AS cor0 WHERE NOT + col5 IS NOT NULL
@@ -5069,30 +5159,45 @@ SELECT * FROM tab4 WHERE NOT 48 + - col4 BETWEEN NULL AND NULL
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-785
 SELECT ALL + col2 AS col3 FROM tab0 WHERE NULL < NULL
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-785
 SELECT ALL + col2 AS col3 FROM tab1 WHERE NULL < NULL
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-785
 SELECT ALL + col2 AS col3 FROM tab2 WHERE NULL < NULL
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-785
 SELECT ALL + col2 AS col3 FROM tab3 WHERE NULL < NULL
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-785
 SELECT ALL + col2 AS col3 FROM tab4 WHERE NULL < NULL
@@ -5434,6 +5539,9 @@ SELECT ALL * FROM tab4 WHERE ( NULL ) NOT BETWEEN + 87 + 75 AND ( + col1 / + col
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-845
 SELECT + col5 AS col5 FROM tab0 WHERE NOT ( + 69 ) < - col1
@@ -5441,6 +5549,9 @@ SELECT + col5 AS col5 FROM tab0 WHERE NOT ( + 69 ) < - col1
 10 values hashing to b833e3a3ba082b2c0028b4cd08f0834d
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-845
 SELECT + col5 AS col5 FROM tab1 WHERE NOT ( + 69 ) < - col1
@@ -5448,6 +5559,9 @@ SELECT + col5 AS col5 FROM tab1 WHERE NOT ( + 69 ) < - col1
 10 values hashing to b833e3a3ba082b2c0028b4cd08f0834d
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-845
 SELECT + col5 AS col5 FROM tab2 WHERE NOT ( + 69 ) < - col1
@@ -5455,6 +5569,9 @@ SELECT + col5 AS col5 FROM tab2 WHERE NOT ( + 69 ) < - col1
 10 values hashing to b833e3a3ba082b2c0028b4cd08f0834d
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-845
 SELECT + col5 AS col5 FROM tab3 WHERE NOT ( + 69 ) < - col1
@@ -5462,6 +5579,9 @@ SELECT + col5 AS col5 FROM tab3 WHERE NOT ( + 69 ) < - col1
 10 values hashing to b833e3a3ba082b2c0028b4cd08f0834d
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-845
 SELECT + col5 AS col5 FROM tab4 WHERE NOT ( + 69 ) < - col1
@@ -7184,30 +7304,45 @@ SELECT - col3 * + col0 AS col0 FROM tab4 AS cor0 WHERE NOT NULL <= NULL
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-1130
 SELECT DISTINCT + 45 + + 96 + - col1 FROM tab0 AS cor0 WHERE + col2 IS NULL
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-1130
 SELECT DISTINCT + 45 + + 96 + - col1 FROM tab1 AS cor0 WHERE + col2 IS NULL
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-1130
 SELECT DISTINCT + 45 + + 96 + - col1 FROM tab2 AS cor0 WHERE + col2 IS NULL
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-1130
 SELECT DISTINCT + 45 + + 96 + - col1 FROM tab3 AS cor0 WHERE + col2 IS NULL
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-1130
 SELECT DISTINCT + 45 + + 96 + - col1 FROM tab4 AS cor0 WHERE + col2 IS NULL
@@ -7394,6 +7529,9 @@ SELECT ALL 90 + - col0 FROM tab4 AS cor0 WHERE ( 42 + 17 + - - 35 + 72 ) IS NULL
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-1165
 SELECT + col5 AS col5 FROM tab0 cor0 WHERE + 90 * col4 IS NOT NULL
@@ -7401,6 +7539,9 @@ SELECT + col5 AS col5 FROM tab0 cor0 WHERE + 90 * col4 IS NOT NULL
 10 values hashing to b833e3a3ba082b2c0028b4cd08f0834d
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-1165
 SELECT + col5 AS col5 FROM tab1 cor0 WHERE + 90 * col4 IS NOT NULL
@@ -7408,6 +7549,9 @@ SELECT + col5 AS col5 FROM tab1 cor0 WHERE + 90 * col4 IS NOT NULL
 10 values hashing to b833e3a3ba082b2c0028b4cd08f0834d
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-1165
 SELECT + col5 AS col5 FROM tab2 cor0 WHERE + 90 * col4 IS NOT NULL
@@ -7415,6 +7559,9 @@ SELECT + col5 AS col5 FROM tab2 cor0 WHERE + 90 * col4 IS NOT NULL
 10 values hashing to b833e3a3ba082b2c0028b4cd08f0834d
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-1165
 SELECT + col5 AS col5 FROM tab3 cor0 WHERE + 90 * col4 IS NOT NULL
@@ -7422,6 +7569,9 @@ SELECT + col5 AS col5 FROM tab3 cor0 WHERE + 90 * col4 IS NOT NULL
 10 values hashing to b833e3a3ba082b2c0028b4cd08f0834d
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-1165
 SELECT + col5 AS col5 FROM tab4 cor0 WHERE + 90 * col4 IS NOT NULL
@@ -8429,30 +8579,45 @@ SELECT * FROM tab4 AS cor0 WHERE NOT NULL = 79
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-1320
 SELECT + + col5 FROM tab0 AS cor0 WHERE NOT - CAST ( NULL AS REAL ) < NULL
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-1320
 SELECT + + col5 FROM tab1 AS cor0 WHERE NOT - CAST ( NULL AS REAL ) < NULL
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-1320
 SELECT + + col5 FROM tab2 AS cor0 WHERE NOT - CAST ( NULL AS REAL ) < NULL
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-1320
 SELECT + + col5 FROM tab3 AS cor0 WHERE NOT - CAST ( NULL AS REAL ) < NULL
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-1320
 SELECT + + col5 FROM tab4 AS cor0 WHERE NOT - CAST ( NULL AS REAL ) < NULL
@@ -8619,30 +8784,45 @@ SELECT * FROM tab4 WHERE + col1 BETWEEN - col0 + CAST ( NULL AS INTEGER ) AND NU
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-1350
 SELECT ALL + col5 AS col5 FROM tab0 AS cor0 WHERE NOT 77 * + col0 <> col1
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-1350
 SELECT ALL + col5 AS col5 FROM tab1 AS cor0 WHERE NOT 77 * + col0 <> col1
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-1350
 SELECT ALL + col5 AS col5 FROM tab2 AS cor0 WHERE NOT 77 * + col0 <> col1
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-1350
 SELECT ALL + col5 AS col5 FROM tab3 AS cor0 WHERE NOT 77 * + col0 <> col1
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-1350
 SELECT ALL + col5 AS col5 FROM tab4 AS cor0 WHERE NOT 77 * + col0 <> col1
@@ -9159,30 +9339,45 @@ SELECT + - col0 FROM tab4 AS cor0 WHERE NOT ( NOT - 18 IS NULL )
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-1450
 SELECT + col2 AS col1 FROM tab0 AS cor0 WHERE NOT col4 IS NOT NULL
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-1450
 SELECT + col2 AS col1 FROM tab1 AS cor0 WHERE NOT col4 IS NOT NULL
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-1450
 SELECT + col2 AS col1 FROM tab2 AS cor0 WHERE NOT col4 IS NOT NULL
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-1450
 SELECT + col2 AS col1 FROM tab3 AS cor0 WHERE NOT col4 IS NOT NULL
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-1450
 SELECT + col2 AS col1 FROM tab4 AS cor0 WHERE NOT col4 IS NOT NULL
@@ -9984,6 +10179,9 @@ SELECT * FROM tab4 WHERE NOT NULL >= - 33
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-1600
 SELECT ALL + col2 FROM tab0 WHERE NULL IS NULL
@@ -9991,6 +10189,9 @@ SELECT ALL + col2 FROM tab0 WHERE NULL IS NULL
 10 values hashing to b833e3a3ba082b2c0028b4cd08f0834d
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-1600
 SELECT ALL + col2 FROM tab1 WHERE NULL IS NULL
@@ -9998,6 +10199,9 @@ SELECT ALL + col2 FROM tab1 WHERE NULL IS NULL
 10 values hashing to b833e3a3ba082b2c0028b4cd08f0834d
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-1600
 SELECT ALL + col2 FROM tab2 WHERE NULL IS NULL
@@ -10005,6 +10209,9 @@ SELECT ALL + col2 FROM tab2 WHERE NULL IS NULL
 10 values hashing to b833e3a3ba082b2c0028b4cd08f0834d
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-1600
 SELECT ALL + col2 FROM tab3 WHERE NULL IS NULL
@@ -10012,6 +10219,9 @@ SELECT ALL + col2 FROM tab3 WHERE NULL IS NULL
 10 values hashing to b833e3a3ba082b2c0028b4cd08f0834d
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-1600
 SELECT ALL + col2 FROM tab4 WHERE NULL IS NULL
@@ -11724,6 +11934,9 @@ SELECT * FROM tab4 AS cor0 WHERE col0 + + col0 * col4 IS NULL
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-1895
 SELECT ALL + col5 AS col3 FROM tab0 AS cor0 WHERE ( - col4 + + + col4 ) NOT IN ( - col1 + - col0 )
@@ -11731,6 +11944,9 @@ SELECT ALL + col5 AS col3 FROM tab0 AS cor0 WHERE ( - col4 + + + col4 ) NOT IN (
 10 values hashing to b833e3a3ba082b2c0028b4cd08f0834d
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-1895
 SELECT ALL + col5 AS col3 FROM tab1 AS cor0 WHERE ( - col4 + + + col4 ) NOT IN ( - col1 + - col0 )
@@ -11738,6 +11954,9 @@ SELECT ALL + col5 AS col3 FROM tab1 AS cor0 WHERE ( - col4 + + + col4 ) NOT IN (
 10 values hashing to b833e3a3ba082b2c0028b4cd08f0834d
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-1895
 SELECT ALL + col5 AS col3 FROM tab2 AS cor0 WHERE ( - col4 + + + col4 ) NOT IN ( - col1 + - col0 )
@@ -11745,6 +11964,9 @@ SELECT ALL + col5 AS col3 FROM tab2 AS cor0 WHERE ( - col4 + + + col4 ) NOT IN (
 10 values hashing to b833e3a3ba082b2c0028b4cd08f0834d
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-1895
 SELECT ALL + col5 AS col3 FROM tab3 AS cor0 WHERE ( - col4 + + + col4 ) NOT IN ( - col1 + - col0 )
@@ -11752,6 +11974,9 @@ SELECT ALL + col5 AS col3 FROM tab3 AS cor0 WHERE ( - col4 + + + col4 ) NOT IN (
 10 values hashing to b833e3a3ba082b2c0028b4cd08f0834d
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-1895
 SELECT ALL + col5 AS col3 FROM tab4 AS cor0 WHERE ( - col4 + + + col4 ) NOT IN ( - col1 + - col0 )
@@ -14984,30 +15209,45 @@ SELECT ALL - col3 AS col2 FROM tab4 WHERE NOT NULL <> - col1
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-2430
 SELECT + col5 FROM tab0 WHERE NOT - + col3 IS NOT NULL
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-2430
 SELECT + col5 FROM tab1 WHERE NOT - + col3 IS NOT NULL
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-2430
 SELECT + col5 FROM tab2 WHERE NOT - + col3 IS NOT NULL
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-2430
 SELECT + col5 FROM tab3 WHERE NOT - + col3 IS NOT NULL
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-2430
 SELECT + col5 FROM tab4 WHERE NOT - + col3 IS NOT NULL
@@ -15204,30 +15444,45 @@ SELECT DISTINCT - 73 AS col0 FROM tab4 WHERE + + col1 + 35 IS NOT NULL
 -73
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-2470
 SELECT ALL + col2 FROM tab0 WHERE ( NULL IS NOT NULL )
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-2470
 SELECT ALL + col2 FROM tab1 WHERE ( NULL IS NOT NULL )
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-2470
 SELECT ALL + col2 FROM tab2 WHERE ( NULL IS NOT NULL )
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-2470
 SELECT ALL + col2 FROM tab3 WHERE ( NULL IS NOT NULL )
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-2470
 SELECT ALL + col2 FROM tab4 WHERE ( NULL IS NOT NULL )
@@ -15339,30 +15594,45 @@ SELECT col4 - col4 + + 36 FROM tab4 WHERE + col1 * + col4 * CAST ( NULL AS INTEG
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-2490
 SELECT ALL + col2 FROM tab0 AS cor0 WHERE 72 * + col1 <= NULL
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-2490
 SELECT ALL + col2 FROM tab1 AS cor0 WHERE 72 * + col1 <= NULL
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-2490
 SELECT ALL + col2 FROM tab2 AS cor0 WHERE 72 * + col1 <= NULL
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-2490
 SELECT ALL + col2 FROM tab3 AS cor0 WHERE 72 * + col1 <= NULL
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-2490
 SELECT ALL + col2 FROM tab4 AS cor0 WHERE 72 * + col1 <= NULL
@@ -15474,30 +15744,45 @@ SELECT ALL col2 FROM tab4 cor0 WHERE - col0 <> ( NULL )
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query IIIIIII rowsort label-2510
 SELECT * FROM tab0 AS cor0 WHERE NOT ( + col5 IS NOT NULL )
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query IIIIIII rowsort label-2510
 SELECT * FROM tab1 AS cor0 WHERE NOT ( + col5 IS NOT NULL )
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query IIIIIII rowsort label-2510
 SELECT * FROM tab2 AS cor0 WHERE NOT ( + col5 IS NOT NULL )
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query IIIIIII rowsort label-2510
 SELECT * FROM tab3 AS cor0 WHERE NOT ( + col5 IS NOT NULL )
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query IIIIIII rowsort label-2510
 SELECT * FROM tab4 AS cor0 WHERE NOT ( + col5 IS NOT NULL )
@@ -16434,30 +16719,45 @@ SELECT ALL * FROM tab4 WHERE col1 + + + 62 IS NULL
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-2665
 SELECT ALL + col5 AS col0 FROM tab0 AS cor0 WHERE NOT col2 IS NOT NULL
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-2665
 SELECT ALL + col5 AS col0 FROM tab1 AS cor0 WHERE NOT col2 IS NOT NULL
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-2665
 SELECT ALL + col5 AS col0 FROM tab2 AS cor0 WHERE NOT col2 IS NOT NULL
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-2665
 SELECT ALL + col5 AS col0 FROM tab3 AS cor0 WHERE NOT col2 IS NOT NULL
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-2665
 SELECT ALL + col5 AS col0 FROM tab4 AS cor0 WHERE NOT col2 IS NOT NULL
@@ -17229,6 +17529,9 @@ SELECT - 44 FROM tab4 WHERE NOT NULL IS NULL OR NOT col3 NOT BETWEEN ( NULL ) AN
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-2795
 SELECT ALL + col5 AS col2 FROM tab0 WHERE NULL IS NULL
@@ -17236,6 +17539,9 @@ SELECT ALL + col5 AS col2 FROM tab0 WHERE NULL IS NULL
 10 values hashing to b833e3a3ba082b2c0028b4cd08f0834d
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-2795
 SELECT ALL + col5 AS col2 FROM tab1 WHERE NULL IS NULL
@@ -17243,6 +17549,9 @@ SELECT ALL + col5 AS col2 FROM tab1 WHERE NULL IS NULL
 10 values hashing to b833e3a3ba082b2c0028b4cd08f0834d
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-2795
 SELECT ALL + col5 AS col2 FROM tab2 WHERE NULL IS NULL
@@ -17250,6 +17559,9 @@ SELECT ALL + col5 AS col2 FROM tab2 WHERE NULL IS NULL
 10 values hashing to b833e3a3ba082b2c0028b4cd08f0834d
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-2795
 SELECT ALL + col5 AS col2 FROM tab3 WHERE NULL IS NULL
@@ -17257,6 +17569,9 @@ SELECT ALL + col5 AS col2 FROM tab3 WHERE NULL IS NULL
 10 values hashing to b833e3a3ba082b2c0028b4cd08f0834d
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-2795
 SELECT ALL + col5 AS col2 FROM tab4 WHERE NULL IS NULL
@@ -17819,6 +18134,9 @@ SELECT DISTINCT + - MAX ( ALL - 11 ) FROM tab4 AS cor0 WHERE ( NULL ) IS NULL
 11
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query II rowsort label-2895
 SELECT 27, + col2 AS col4 FROM tab0 WHERE NOT NULL IS NOT NULL
@@ -17826,6 +18144,9 @@ SELECT 27, + col2 AS col4 FROM tab0 WHERE NOT NULL IS NOT NULL
 20 values hashing to aa5391c3f60beae92bf1b22e5fdff80f
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query II rowsort label-2895
 SELECT 27, + col2 AS col4 FROM tab1 WHERE NOT NULL IS NOT NULL
@@ -17833,6 +18154,9 @@ SELECT 27, + col2 AS col4 FROM tab1 WHERE NOT NULL IS NOT NULL
 20 values hashing to aa5391c3f60beae92bf1b22e5fdff80f
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query II rowsort label-2895
 SELECT 27, + col2 AS col4 FROM tab2 WHERE NOT NULL IS NOT NULL
@@ -17840,6 +18164,9 @@ SELECT 27, + col2 AS col4 FROM tab2 WHERE NOT NULL IS NOT NULL
 20 values hashing to aa5391c3f60beae92bf1b22e5fdff80f
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query II rowsort label-2895
 SELECT 27, + col2 AS col4 FROM tab3 WHERE NOT NULL IS NOT NULL
@@ -17847,6 +18174,9 @@ SELECT 27, + col2 AS col4 FROM tab3 WHERE NOT NULL IS NOT NULL
 20 values hashing to aa5391c3f60beae92bf1b22e5fdff80f
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query II rowsort label-2895
 SELECT 27, + col2 AS col4 FROM tab4 WHERE NOT NULL IS NOT NULL
@@ -19434,6 +19764,9 @@ SELECT ALL - - col3 AS col5 FROM tab4 WHERE NOT col4 / + 32 + + - 28 IS NOT NULL
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-3165
 SELECT + col2 col2 FROM tab0 WHERE + + col3 + - col0 IS NOT NULL
@@ -19441,6 +19774,9 @@ SELECT + col2 col2 FROM tab0 WHERE + + col3 + - col0 IS NOT NULL
 10 values hashing to b833e3a3ba082b2c0028b4cd08f0834d
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-3165
 SELECT + col2 col2 FROM tab1 WHERE + + col3 + - col0 IS NOT NULL
@@ -19448,6 +19784,9 @@ SELECT + col2 col2 FROM tab1 WHERE + + col3 + - col0 IS NOT NULL
 10 values hashing to b833e3a3ba082b2c0028b4cd08f0834d
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-3165
 SELECT + col2 col2 FROM tab2 WHERE + + col3 + - col0 IS NOT NULL
@@ -19455,6 +19794,9 @@ SELECT + col2 col2 FROM tab2 WHERE + + col3 + - col0 IS NOT NULL
 10 values hashing to b833e3a3ba082b2c0028b4cd08f0834d
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-3165
 SELECT + col2 col2 FROM tab3 WHERE + + col3 + - col0 IS NOT NULL
@@ -19462,6 +19804,9 @@ SELECT + col2 col2 FROM tab3 WHERE + + col3 + - col0 IS NOT NULL
 10 values hashing to b833e3a3ba082b2c0028b4cd08f0834d
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-3165
 SELECT + col2 col2 FROM tab4 WHERE + + col3 + - col0 IS NOT NULL
@@ -19594,30 +19939,45 @@ SELECT ( + col4 ) + - - 99 AS col3 FROM tab4 AS cor0 WHERE NOT ( NULL ) IS NULL
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-3190
 SELECT ALL + col2 AS col5 FROM tab0 AS cor0 WHERE col0 IS NULL
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-3190
 SELECT ALL + col2 AS col5 FROM tab1 AS cor0 WHERE col0 IS NULL
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-3190
 SELECT ALL + col2 AS col5 FROM tab2 AS cor0 WHERE col0 IS NULL
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-3190
 SELECT ALL + col2 AS col5 FROM tab3 AS cor0 WHERE col0 IS NULL
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-3190
 SELECT ALL + col2 AS col5 FROM tab4 AS cor0 WHERE col0 IS NULL
@@ -20604,30 +20964,45 @@ SELECT DISTINCT - col3 + col0 + col1 FROM tab4 AS cor0 WHERE ( ( - col0 ) * - ( 
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-3365
 SELECT ALL + col5 FROM tab0 cor0 WHERE ( NULL ) IS NOT NULL
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-3365
 SELECT ALL + col5 FROM tab1 cor0 WHERE ( NULL ) IS NOT NULL
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-3365
 SELECT ALL + col5 FROM tab2 cor0 WHERE ( NULL ) IS NOT NULL
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-3365
 SELECT ALL + col5 FROM tab3 cor0 WHERE ( NULL ) IS NOT NULL
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-3365
 SELECT ALL + col5 FROM tab4 cor0 WHERE ( NULL ) IS NOT NULL
@@ -20669,6 +21044,9 @@ SELECT ALL * FROM tab4 cor0 WHERE - 69 >= - col4 + 32 * col3
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-3375
 SELECT + col5 FROM tab0 AS cor0 WHERE NOT + col4 * - 97 = ( - - col3 ) / - 49 + col1
@@ -20676,6 +21054,9 @@ SELECT + col5 FROM tab0 AS cor0 WHERE NOT + col4 * - 97 = ( - - col3 ) / - 49 + 
 10 values hashing to b833e3a3ba082b2c0028b4cd08f0834d
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-3375
 SELECT + col5 FROM tab1 AS cor0 WHERE NOT + col4 * - 97 = ( - - col3 ) / - 49 + col1
@@ -20683,6 +21064,9 @@ SELECT + col5 FROM tab1 AS cor0 WHERE NOT + col4 * - 97 = ( - - col3 ) / - 49 + 
 10 values hashing to b833e3a3ba082b2c0028b4cd08f0834d
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-3375
 SELECT + col5 FROM tab2 AS cor0 WHERE NOT + col4 * - 97 = ( - - col3 ) / - 49 + col1
@@ -20690,6 +21074,9 @@ SELECT + col5 FROM tab2 AS cor0 WHERE NOT + col4 * - 97 = ( - - col3 ) / - 49 + 
 10 values hashing to b833e3a3ba082b2c0028b4cd08f0834d
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-3375
 SELECT + col5 FROM tab3 AS cor0 WHERE NOT + col4 * - 97 = ( - - col3 ) / - 49 + col1
@@ -20697,6 +21084,9 @@ SELECT + col5 FROM tab3 AS cor0 WHERE NOT + col4 * - 97 = ( - - col3 ) / - 49 + 
 10 values hashing to b833e3a3ba082b2c0028b4cd08f0834d
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-3375
 SELECT + col5 FROM tab4 AS cor0 WHERE NOT + col4 * - 97 = ( - - col3 ) / - 49 + col1
@@ -20894,30 +21284,45 @@ SELECT * FROM tab4 WHERE + - col1 / + col3 + - + col1 <> 47 + CAST ( NULL AS REA
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-3410
 SELECT + 71 AS col3 FROM tab0 WHERE + + col5 IS NULL
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-3410
 SELECT + 71 AS col3 FROM tab1 WHERE + + col5 IS NULL
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-3410
 SELECT + 71 AS col3 FROM tab2 WHERE + + col5 IS NULL
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-3410
 SELECT + 71 AS col3 FROM tab3 WHERE + + col5 IS NULL
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-3410
 SELECT + 71 AS col3 FROM tab4 WHERE + + col5 IS NULL
@@ -21769,30 +22174,45 @@ SELECT col0 col2 FROM tab4 AS cor0 WHERE col5 IS NOT NULL
 10 values hashing to b205cfd47bf72e1ebec7d5c99f76d787
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-3550
 SELECT + col2 FROM tab0 WHERE NULL NOT BETWEEN NULL AND - + col0
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-3550
 SELECT + col2 FROM tab1 WHERE NULL NOT BETWEEN NULL AND - + col0
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-3550
 SELECT + col2 FROM tab2 WHERE NULL NOT BETWEEN NULL AND - + col0
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-3550
 SELECT + col2 FROM tab3 WHERE NULL NOT BETWEEN NULL AND - + col0
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-3550
 SELECT + col2 FROM tab4 WHERE NULL NOT BETWEEN NULL AND - + col0
@@ -22354,30 +22774,45 @@ SELECT * FROM tab4 AS cor0 WHERE + col1 NOT IN ( - 82, - col1, 96, col1, CAST ( 
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-3650
 SELECT + + col2 FROM tab0 WHERE NOT + 62 + - col3 IS NOT NULL
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-3650
 SELECT + + col2 FROM tab1 WHERE NOT + 62 + - col3 IS NOT NULL
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-3650
 SELECT + + col2 FROM tab2 WHERE NOT + 62 + - col3 IS NOT NULL
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-3650
 SELECT + + col2 FROM tab3 WHERE NOT + 62 + - col3 IS NOT NULL
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-3650
 SELECT + + col2 FROM tab4 WHERE NOT + 62 + - col3 IS NOT NULL
@@ -23234,6 +23669,9 @@ SELECT + col0 AS col0 FROM tab4 AS cor0 WHERE NOT ( NULL ) BETWEEN - 58 + 20 AND
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-3800
 SELECT DISTINCT 56 FROM tab0 AS cor0 WHERE NOT ( + col2 ) IS NULL
@@ -23241,6 +23679,9 @@ SELECT DISTINCT 56 FROM tab0 AS cor0 WHERE NOT ( + col2 ) IS NULL
 56
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-3800
 SELECT DISTINCT 56 FROM tab1 AS cor0 WHERE NOT ( + col2 ) IS NULL
@@ -23248,6 +23689,9 @@ SELECT DISTINCT 56 FROM tab1 AS cor0 WHERE NOT ( + col2 ) IS NULL
 56
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-3800
 SELECT DISTINCT 56 FROM tab2 AS cor0 WHERE NOT ( + col2 ) IS NULL
@@ -23255,6 +23699,9 @@ SELECT DISTINCT 56 FROM tab2 AS cor0 WHERE NOT ( + col2 ) IS NULL
 56
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-3800
 SELECT DISTINCT 56 FROM tab3 AS cor0 WHERE NOT ( + col2 ) IS NULL
@@ -23262,6 +23709,9 @@ SELECT DISTINCT 56 FROM tab3 AS cor0 WHERE NOT ( + col2 ) IS NULL
 56
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-3800
 SELECT DISTINCT 56 FROM tab4 AS cor0 WHERE NOT ( + col2 ) IS NULL
@@ -24994,6 +25444,9 @@ SELECT ALL + - 46 * + col0, CAST ( NULL AS INTEGER ) * + + col3 * + col0 FROM ta
 20 values hashing to a4f869801bb1b8ec0e0f0e79ef251e85
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-4085
 SELECT DISTINCT - AVG ( 66 ) AS col2 FROM tab0 AS cor0 WHERE NOT + col5 IS NOT NULL
@@ -25001,6 +25454,9 @@ SELECT DISTINCT - AVG ( 66 ) AS col2 FROM tab0 AS cor0 WHERE NOT + col5 IS NOT N
 NULL
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-4085
 SELECT DISTINCT - AVG ( 66 ) AS col2 FROM tab1 AS cor0 WHERE NOT + col5 IS NOT NULL
@@ -25008,6 +25464,9 @@ SELECT DISTINCT - AVG ( 66 ) AS col2 FROM tab1 AS cor0 WHERE NOT + col5 IS NOT N
 NULL
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-4085
 SELECT DISTINCT - AVG ( 66 ) AS col2 FROM tab2 AS cor0 WHERE NOT + col5 IS NOT NULL
@@ -25015,6 +25474,9 @@ SELECT DISTINCT - AVG ( 66 ) AS col2 FROM tab2 AS cor0 WHERE NOT + col5 IS NOT N
 NULL
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-4085
 SELECT DISTINCT - AVG ( 66 ) AS col2 FROM tab3 AS cor0 WHERE NOT + col5 IS NOT NULL
@@ -25022,6 +25484,9 @@ SELECT DISTINCT - AVG ( 66 ) AS col2 FROM tab3 AS cor0 WHERE NOT + col5 IS NOT N
 NULL
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-4085
 SELECT DISTINCT - AVG ( 66 ) AS col2 FROM tab4 AS cor0 WHERE NOT + col5 IS NOT NULL
@@ -25429,6 +25894,9 @@ SELECT * FROM tab4 AS cor0 WHERE NOT - 27 * CAST ( NULL AS INTEGER ) + + - 44 <=
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-4160
 SELECT + col2 AS col2 FROM tab0 AS cor0 WHERE NOT + col1 IS NULL
@@ -25436,6 +25904,9 @@ SELECT + col2 AS col2 FROM tab0 AS cor0 WHERE NOT + col1 IS NULL
 10 values hashing to b833e3a3ba082b2c0028b4cd08f0834d
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-4160
 SELECT + col2 AS col2 FROM tab1 AS cor0 WHERE NOT + col1 IS NULL
@@ -25443,6 +25914,9 @@ SELECT + col2 AS col2 FROM tab1 AS cor0 WHERE NOT + col1 IS NULL
 10 values hashing to b833e3a3ba082b2c0028b4cd08f0834d
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-4160
 SELECT + col2 AS col2 FROM tab2 AS cor0 WHERE NOT + col1 IS NULL
@@ -25450,6 +25924,9 @@ SELECT + col2 AS col2 FROM tab2 AS cor0 WHERE NOT + col1 IS NULL
 10 values hashing to b833e3a3ba082b2c0028b4cd08f0834d
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-4160
 SELECT + col2 AS col2 FROM tab3 AS cor0 WHERE NOT + col1 IS NULL
@@ -25457,6 +25934,9 @@ SELECT + col2 AS col2 FROM tab3 AS cor0 WHERE NOT + col1 IS NULL
 10 values hashing to b833e3a3ba082b2c0028b4cd08f0834d
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-4160
 SELECT + col2 AS col2 FROM tab4 AS cor0 WHERE NOT + col1 IS NULL
@@ -26194,30 +26674,45 @@ SELECT 97 AS col4 FROM tab4 AS cor0 WHERE ( NULL ) > col0
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-4290
 SELECT ALL - + 98 AS col1 FROM tab0 WHERE + + ( col2 ) IS NULL
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-4290
 SELECT ALL - + 98 AS col1 FROM tab1 WHERE + + ( col2 ) IS NULL
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-4290
 SELECT ALL - + 98 AS col1 FROM tab2 WHERE + + ( col2 ) IS NULL
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-4290
 SELECT ALL - + 98 AS col1 FROM tab3 WHERE + + ( col2 ) IS NULL
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-4290
 SELECT ALL - + 98 AS col1 FROM tab4 WHERE + + ( col2 ) IS NULL
@@ -26489,30 +26984,45 @@ SELECT DISTINCT + 67 + + col3 FROM tab4 WHERE - col4 >= NULL
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-4345
 SELECT + col5 AS col1 FROM tab0 WHERE NOT - col1 < 32
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-4345
 SELECT + col5 AS col1 FROM tab1 WHERE NOT - col1 < 32
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-4345
 SELECT + col5 AS col1 FROM tab2 WHERE NOT - col1 < 32
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-4345
 SELECT + col5 AS col1 FROM tab3 WHERE NOT - col1 < 32
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-4345
 SELECT + col5 AS col1 FROM tab4 WHERE NOT - col1 < 32
@@ -27039,30 +27549,45 @@ SELECT * FROM tab4 WHERE col1 + - 12 + + + CAST ( + + 65 AS INTEGER ) + - col3 *
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-4440
 SELECT ALL col2 AS col4 FROM tab0 WHERE + + col5 IS NULL
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-4440
 SELECT ALL col2 AS col4 FROM tab1 WHERE + + col5 IS NULL
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-4440
 SELECT ALL col2 AS col4 FROM tab2 WHERE + + col5 IS NULL
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-4440
 SELECT ALL col2 AS col4 FROM tab3 WHERE + + col5 IS NULL
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-4440
 SELECT ALL col2 AS col4 FROM tab4 WHERE + + col5 IS NULL
@@ -27124,6 +27649,9 @@ SELECT ALL * FROM tab4 AS cor0 WHERE ( NULL ) > - col3
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-4455
 SELECT + + col2 FROM tab0 WHERE NOT NULL IS NOT NULL
@@ -27131,6 +27659,9 @@ SELECT + + col2 FROM tab0 WHERE NOT NULL IS NOT NULL
 10 values hashing to b833e3a3ba082b2c0028b4cd08f0834d
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-4455
 SELECT + + col2 FROM tab1 WHERE NOT NULL IS NOT NULL
@@ -27138,6 +27669,9 @@ SELECT + + col2 FROM tab1 WHERE NOT NULL IS NOT NULL
 10 values hashing to b833e3a3ba082b2c0028b4cd08f0834d
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-4455
 SELECT + + col2 FROM tab2 WHERE NOT NULL IS NOT NULL
@@ -27145,6 +27679,9 @@ SELECT + + col2 FROM tab2 WHERE NOT NULL IS NOT NULL
 10 values hashing to b833e3a3ba082b2c0028b4cd08f0834d
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-4455
 SELECT + + col2 FROM tab3 WHERE NOT NULL IS NOT NULL
@@ -27152,6 +27689,9 @@ SELECT + + col2 FROM tab3 WHERE NOT NULL IS NOT NULL
 10 values hashing to b833e3a3ba082b2c0028b4cd08f0834d
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-4455
 SELECT + + col2 FROM tab4 WHERE NOT NULL IS NOT NULL
@@ -27664,30 +28204,45 @@ SELECT col3 col5, + col3 + - - 8 AS col2 FROM tab4 AS cor0 WHERE NOT NULL IS NOT
 20 values hashing to 448548f238cb7a0ea55cb503407cb69d
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-4540
 SELECT ALL + col2 FROM tab0 WHERE NOT NULL IS NULL
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-4540
 SELECT ALL + col2 FROM tab1 WHERE NOT NULL IS NULL
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-4540
 SELECT ALL + col2 FROM tab2 WHERE NOT NULL IS NULL
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-4540
 SELECT ALL + col2 FROM tab3 WHERE NOT NULL IS NULL
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-4540
 SELECT ALL + col2 FROM tab4 WHERE NOT NULL IS NULL
@@ -30644,30 +31199,45 @@ SELECT * FROM tab4 AS cor0 WHERE NULL < + 99
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-5025
 SELECT + col2 AS col2 FROM tab0 WHERE NOT 78 * col0 NOT BETWEEN - 29 AND - 61
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-5025
 SELECT + col2 AS col2 FROM tab1 WHERE NOT 78 * col0 NOT BETWEEN - 29 AND - 61
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-5025
 SELECT + col2 AS col2 FROM tab2 WHERE NOT 78 * col0 NOT BETWEEN - 29 AND - 61
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-5025
 SELECT + col2 AS col2 FROM tab3 WHERE NOT 78 * col0 NOT BETWEEN - 29 AND - 61
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-5025
 SELECT + col2 AS col2 FROM tab4 WHERE NOT 78 * col0 NOT BETWEEN - 29 AND - 61
@@ -31154,6 +31724,9 @@ SELECT DISTINCT + col0 FROM tab4 WHERE + col0 IS NOT NULL
 10 values hashing to b205cfd47bf72e1ebec7d5c99f76d787
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-5105
 SELECT ALL + col2 AS col2 FROM tab0 AS cor0 WHERE NOT col0 IS NULL
@@ -31161,6 +31734,9 @@ SELECT ALL + col2 AS col2 FROM tab0 AS cor0 WHERE NOT col0 IS NULL
 10 values hashing to b833e3a3ba082b2c0028b4cd08f0834d
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-5105
 SELECT ALL + col2 AS col2 FROM tab1 AS cor0 WHERE NOT col0 IS NULL
@@ -31168,6 +31744,9 @@ SELECT ALL + col2 AS col2 FROM tab1 AS cor0 WHERE NOT col0 IS NULL
 10 values hashing to b833e3a3ba082b2c0028b4cd08f0834d
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-5105
 SELECT ALL + col2 AS col2 FROM tab2 AS cor0 WHERE NOT col0 IS NULL
@@ -31175,6 +31754,9 @@ SELECT ALL + col2 AS col2 FROM tab2 AS cor0 WHERE NOT col0 IS NULL
 10 values hashing to b833e3a3ba082b2c0028b4cd08f0834d
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-5105
 SELECT ALL + col2 AS col2 FROM tab3 AS cor0 WHERE NOT col0 IS NULL
@@ -31182,6 +31764,9 @@ SELECT ALL + col2 AS col2 FROM tab3 AS cor0 WHERE NOT col0 IS NULL
 10 values hashing to b833e3a3ba082b2c0028b4cd08f0834d
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-5105
 SELECT ALL + col2 AS col2 FROM tab4 AS cor0 WHERE NOT col0 IS NULL
@@ -31649,6 +32234,9 @@ SELECT - col3 * - - 40 + col0 AS col1 FROM tab4 AS cor0 WHERE ( NULL ) IS NULL
 10 values hashing to 75a3d5e8801db795cb517b0549d4b81e
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query II rowsort label-5180
 SELECT DISTINCT + - ( 16 ) AS col5, + col3 * + 73 FROM tab0 AS cor0 WHERE NOT + col2 IS NULL
@@ -31656,6 +32244,9 @@ SELECT DISTINCT + - ( 16 ) AS col5, + col3 * + 73 FROM tab0 AS cor0 WHERE NOT + 
 20 values hashing to 028a2c62086966c46351d3bc2eb905ae
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query II rowsort label-5180
 SELECT DISTINCT + - ( 16 ) AS col5, + col3 * + 73 FROM tab1 AS cor0 WHERE NOT + col2 IS NULL
@@ -31663,6 +32254,9 @@ SELECT DISTINCT + - ( 16 ) AS col5, + col3 * + 73 FROM tab1 AS cor0 WHERE NOT + 
 20 values hashing to 028a2c62086966c46351d3bc2eb905ae
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query II rowsort label-5180
 SELECT DISTINCT + - ( 16 ) AS col5, + col3 * + 73 FROM tab2 AS cor0 WHERE NOT + col2 IS NULL
@@ -31670,6 +32264,9 @@ SELECT DISTINCT + - ( 16 ) AS col5, + col3 * + 73 FROM tab2 AS cor0 WHERE NOT + 
 20 values hashing to 028a2c62086966c46351d3bc2eb905ae
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query II rowsort label-5180
 SELECT DISTINCT + - ( 16 ) AS col5, + col3 * + 73 FROM tab3 AS cor0 WHERE NOT + col2 IS NULL
@@ -31677,6 +32274,9 @@ SELECT DISTINCT + - ( 16 ) AS col5, + col3 * + 73 FROM tab3 AS cor0 WHERE NOT + 
 20 values hashing to 028a2c62086966c46351d3bc2eb905ae
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query II rowsort label-5180
 SELECT DISTINCT + - ( 16 ) AS col5, + col3 * + 73 FROM tab4 AS cor0 WHERE NOT + col2 IS NULL
@@ -31789,60 +32389,90 @@ SELECT ALL - col4 FROM tab4 WHERE NOT + CAST ( NULL AS INTEGER ) IS NULL
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query IIIIIII rowsort label-5200
 SELECT * FROM tab0 cor0 WHERE + col2 IS NULL
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query IIIIIII rowsort label-5200
 SELECT * FROM tab1 cor0 WHERE + col2 IS NULL
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query IIIIIII rowsort label-5200
 SELECT * FROM tab2 cor0 WHERE + col2 IS NULL
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query IIIIIII rowsort label-5200
 SELECT * FROM tab3 cor0 WHERE + col2 IS NULL
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query IIIIIII rowsort label-5200
 SELECT * FROM tab4 cor0 WHERE + col2 IS NULL
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-5205
 SELECT ALL + + col5 AS col4 FROM tab0 AS cor0 WHERE NOT + 98 <= col4 * 31 + + ( + + col1 )
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-5205
 SELECT ALL + + col5 AS col4 FROM tab1 AS cor0 WHERE NOT + 98 <= col4 * 31 + + ( + + col1 )
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-5205
 SELECT ALL + + col5 AS col4 FROM tab2 AS cor0 WHERE NOT + 98 <= col4 * 31 + + ( + + col1 )
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-5205
 SELECT ALL + + col5 AS col4 FROM tab3 AS cor0 WHERE NOT + 98 <= col4 * 31 + + ( + + col1 )
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-5205
 SELECT ALL + + col5 AS col4 FROM tab4 AS cor0 WHERE NOT + 98 <= col4 * 31 + + ( + + col1 )
@@ -32094,6 +32724,9 @@ SELECT DISTINCT - ( COUNT ( * ) ) * - COUNT ( * ) FROM tab4 cor0 WHERE NOT + col
 0
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-5250
 SELECT ALL 60 + COUNT ( * ) AS col0 FROM tab0 AS cor0 WHERE NOT ( + col5 ) IS NULL
@@ -32101,6 +32734,9 @@ SELECT ALL 60 + COUNT ( * ) AS col0 FROM tab0 AS cor0 WHERE NOT ( + col5 ) IS NU
 70
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-5250
 SELECT ALL 60 + COUNT ( * ) AS col0 FROM tab1 AS cor0 WHERE NOT ( + col5 ) IS NULL
@@ -32108,6 +32744,9 @@ SELECT ALL 60 + COUNT ( * ) AS col0 FROM tab1 AS cor0 WHERE NOT ( + col5 ) IS NU
 70
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-5250
 SELECT ALL 60 + COUNT ( * ) AS col0 FROM tab2 AS cor0 WHERE NOT ( + col5 ) IS NULL
@@ -32115,6 +32754,9 @@ SELECT ALL 60 + COUNT ( * ) AS col0 FROM tab2 AS cor0 WHERE NOT ( + col5 ) IS NU
 70
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-5250
 SELECT ALL 60 + COUNT ( * ) AS col0 FROM tab3 AS cor0 WHERE NOT ( + col5 ) IS NULL
@@ -32122,6 +32764,9 @@ SELECT ALL 60 + COUNT ( * ) AS col0 FROM tab3 AS cor0 WHERE NOT ( + col5 ) IS NU
 70
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-5250
 SELECT ALL 60 + COUNT ( * ) AS col0 FROM tab4 AS cor0 WHERE NOT ( + col5 ) IS NULL
@@ -32349,30 +32994,45 @@ SELECT * FROM tab4 WHERE ( - col3 + col0 - + 4 ) IS NULL
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-5290
 SELECT + col5 AS col5 FROM tab0 WHERE - col1 IS NULL
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-5290
 SELECT + col5 AS col5 FROM tab1 WHERE - col1 IS NULL
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-5290
 SELECT + col5 AS col5 FROM tab2 WHERE - col1 IS NULL
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-5290
 SELECT + col5 AS col5 FROM tab3 WHERE - col1 IS NULL
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-5290
 SELECT + col5 AS col5 FROM tab4 WHERE - col1 IS NULL
@@ -33289,30 +33949,45 @@ SELECT ALL + ( - col1 ) AS col2 FROM tab4 WHERE NULL IN ( 80 )
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-5435
 SELECT + + col5 FROM tab0 AS cor0 WHERE NOT ( NULL ) NOT BETWEEN - + 36 AND NULL
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-5435
 SELECT + + col5 FROM tab1 AS cor0 WHERE NOT ( NULL ) NOT BETWEEN - + 36 AND NULL
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-5435
 SELECT + + col5 FROM tab2 AS cor0 WHERE NOT ( NULL ) NOT BETWEEN - + 36 AND NULL
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-5435
 SELECT + + col5 FROM tab3 AS cor0 WHERE NOT ( NULL ) NOT BETWEEN - + 36 AND NULL
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-5435
 SELECT + + col5 FROM tab4 AS cor0 WHERE NOT ( NULL ) NOT BETWEEN - + 36 AND NULL
@@ -33824,30 +34499,45 @@ SELECT + ( col4 ), + 28 * col1 FROM tab4 AS cor0 WHERE NOT NULL > NULL
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-5520
 SELECT + col2 FROM tab0 WHERE NULL IS NOT NULL
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-5520
 SELECT + col2 FROM tab1 WHERE NULL IS NOT NULL
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-5520
 SELECT + col2 FROM tab2 WHERE NULL IS NOT NULL
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-5520
 SELECT + col2 FROM tab3 WHERE NULL IS NOT NULL
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-5520
 SELECT + col2 FROM tab4 WHERE NULL IS NOT NULL
@@ -34724,6 +35414,9 @@ SELECT * FROM tab4 WHERE 2 * + 64 IS NULL
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-5660
 SELECT ALL + + col5 AS col0 FROM tab0 AS cor0 WHERE NOT - 21 / + col3 IS NULL
@@ -34731,6 +35424,9 @@ SELECT ALL + + col5 AS col0 FROM tab0 AS cor0 WHERE NOT - 21 / + col3 IS NULL
 10 values hashing to b833e3a3ba082b2c0028b4cd08f0834d
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-5660
 SELECT ALL + + col5 AS col0 FROM tab1 AS cor0 WHERE NOT - 21 / + col3 IS NULL
@@ -34738,6 +35434,9 @@ SELECT ALL + + col5 AS col0 FROM tab1 AS cor0 WHERE NOT - 21 / + col3 IS NULL
 10 values hashing to b833e3a3ba082b2c0028b4cd08f0834d
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-5660
 SELECT ALL + + col5 AS col0 FROM tab2 AS cor0 WHERE NOT - 21 / + col3 IS NULL
@@ -34745,6 +35444,9 @@ SELECT ALL + + col5 AS col0 FROM tab2 AS cor0 WHERE NOT - 21 / + col3 IS NULL
 10 values hashing to b833e3a3ba082b2c0028b4cd08f0834d
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-5660
 SELECT ALL + + col5 AS col0 FROM tab3 AS cor0 WHERE NOT - 21 / + col3 IS NULL
@@ -34752,6 +35454,9 @@ SELECT ALL + + col5 AS col0 FROM tab3 AS cor0 WHERE NOT - 21 / + col3 IS NULL
 10 values hashing to b833e3a3ba082b2c0028b4cd08f0834d
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-5660
 SELECT ALL + + col5 AS col0 FROM tab4 AS cor0 WHERE NOT - 21 / + col3 IS NULL
@@ -35824,30 +36529,45 @@ SELECT * FROM tab4 AS cor0 WHERE ( NULL ) > col0
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-5850
 SELECT - + 66 FROM tab0 cor0 WHERE + col5 IS NULL
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-5850
 SELECT - + 66 FROM tab1 cor0 WHERE + col5 IS NULL
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-5850
 SELECT - + 66 FROM tab2 cor0 WHERE + col5 IS NULL
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-5850
 SELECT - + 66 FROM tab3 cor0 WHERE + col5 IS NULL
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-5850
 SELECT - + 66 FROM tab4 cor0 WHERE + col5 IS NULL
@@ -36179,30 +36899,45 @@ SELECT ALL * FROM tab4 AS cor0 WHERE NOT ( - col1 + - col4 + - + 7 * CAST ( col1
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-5910
 SELECT ALL - - 61 AS col2 FROM tab0 WHERE NOT + ( col5 ) IS NOT NULL
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-5910
 SELECT ALL - - 61 AS col2 FROM tab1 WHERE NOT + ( col5 ) IS NOT NULL
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-5910
 SELECT ALL - - 61 AS col2 FROM tab2 WHERE NOT + ( col5 ) IS NOT NULL
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-5910
 SELECT ALL - - 61 AS col2 FROM tab3 WHERE NOT + ( col5 ) IS NOT NULL
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-5910
 SELECT ALL - - 61 AS col2 FROM tab4 WHERE NOT + ( col5 ) IS NOT NULL
@@ -38224,30 +38959,45 @@ SELECT ALL * FROM tab4 AS cor0 WHERE NOT + col1 * col0 > + - 10 + ( col1 )
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-6250
 SELECT + col2 AS col3 FROM tab0 AS cor0 WHERE ( NULL ) IS NOT NULL
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-6250
 SELECT + col2 AS col3 FROM tab1 AS cor0 WHERE ( NULL ) IS NOT NULL
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-6250
 SELECT + col2 AS col3 FROM tab2 AS cor0 WHERE ( NULL ) IS NOT NULL
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-6250
 SELECT + col2 AS col3 FROM tab3 AS cor0 WHERE ( NULL ) IS NOT NULL
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-6250
 SELECT + col2 AS col3 FROM tab4 AS cor0 WHERE ( NULL ) IS NOT NULL
@@ -38704,30 +39454,45 @@ SELECT ALL + + col4 FROM tab4 WHERE NOT - + 35 * col1 IS NOT NULL
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-6335
 SELECT DISTINCT + + col1 + - col4 FROM tab0 WHERE NOT + + col5 IS NOT NULL
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-6335
 SELECT DISTINCT + + col1 + - col4 FROM tab1 WHERE NOT + + col5 IS NOT NULL
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-6335
 SELECT DISTINCT + + col1 + - col4 FROM tab2 WHERE NOT + + col5 IS NOT NULL
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-6335
 SELECT DISTINCT + + col1 + - col4 FROM tab3 WHERE NOT + + col5 IS NOT NULL
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-6335
 SELECT DISTINCT + + col1 + - col4 FROM tab4 WHERE NOT + + col5 IS NOT NULL
@@ -40849,30 +41614,45 @@ SELECT + + 99, ( - col1 ) FROM tab4 WHERE NOT - CAST ( - + col0 AS INTEGER ) - -
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-6680
 SELECT + col5 FROM tab0 AS cor0 WHERE NULL = 18
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-6680
 SELECT + col5 FROM tab1 AS cor0 WHERE NULL = 18
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-6680
 SELECT + col5 FROM tab2 AS cor0 WHERE NULL = 18
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-6680
 SELECT + col5 FROM tab3 AS cor0 WHERE NULL = 18
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-6680
 SELECT + col5 FROM tab4 AS cor0 WHERE NULL = 18
@@ -41779,30 +42559,45 @@ SELECT + col1 FROM tab4 AS cor0 WHERE NOT + col3 + 77 IS NOT NULL
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-6830
 SELECT ALL + ( col5 ) AS col4 FROM tab0 AS cor0 WHERE NOT - col3 IS NOT NULL
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-6830
 SELECT ALL + ( col5 ) AS col4 FROM tab1 AS cor0 WHERE NOT - col3 IS NOT NULL
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-6830
 SELECT ALL + ( col5 ) AS col4 FROM tab2 AS cor0 WHERE NOT - col3 IS NOT NULL
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-6830
 SELECT ALL + ( col5 ) AS col4 FROM tab3 AS cor0 WHERE NOT - col3 IS NOT NULL
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-6830
 SELECT ALL + ( col5 ) AS col4 FROM tab4 AS cor0 WHERE NOT - col3 IS NOT NULL
@@ -42479,6 +43274,9 @@ SELECT + col0 * + col0 FROM tab4 cor0 WHERE NOT NULL IS NOT NULL
 10 values hashing to 40fe556545665f260b52676c5300957c
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-6940
 SELECT ALL + ( + col2 ) FROM tab0 AS cor0 WHERE NOT col1 * col0 + ( + col0 ) <= 23 + col1 * - CAST ( CAST ( 2 AS INTEGER ) AS INTEGER )
@@ -42486,6 +43284,9 @@ SELECT ALL + ( + col2 ) FROM tab0 AS cor0 WHERE NOT col1 * col0 + ( + col0 ) <= 
 10 values hashing to b833e3a3ba082b2c0028b4cd08f0834d
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-6940
 SELECT ALL + ( + col2 ) FROM tab1 AS cor0 WHERE NOT col1 * col0 + ( + col0 ) <= 23 + col1 * - CAST ( CAST ( 2 AS INTEGER ) AS INTEGER )
@@ -42493,6 +43294,9 @@ SELECT ALL + ( + col2 ) FROM tab1 AS cor0 WHERE NOT col1 * col0 + ( + col0 ) <= 
 10 values hashing to b833e3a3ba082b2c0028b4cd08f0834d
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-6940
 SELECT ALL + ( + col2 ) FROM tab2 AS cor0 WHERE NOT col1 * col0 + ( + col0 ) <= 23 + col1 * - CAST ( CAST ( 2 AS INTEGER ) AS INTEGER )
@@ -42500,6 +43304,9 @@ SELECT ALL + ( + col2 ) FROM tab2 AS cor0 WHERE NOT col1 * col0 + ( + col0 ) <= 
 10 values hashing to b833e3a3ba082b2c0028b4cd08f0834d
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-6940
 SELECT ALL + ( + col2 ) FROM tab3 AS cor0 WHERE NOT col1 * col0 + ( + col0 ) <= 23 + col1 * - CAST ( CAST ( 2 AS INTEGER ) AS INTEGER )
@@ -42507,6 +43314,9 @@ SELECT ALL + ( + col2 ) FROM tab3 AS cor0 WHERE NOT col1 * col0 + ( + col0 ) <= 
 10 values hashing to b833e3a3ba082b2c0028b4cd08f0834d
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-6940
 SELECT ALL + ( + col2 ) FROM tab4 AS cor0 WHERE NOT col1 * col0 + ( + col0 ) <= 23 + col1 * - CAST ( CAST ( 2 AS INTEGER ) AS INTEGER )
@@ -43014,30 +43824,45 @@ SELECT ALL 79 FROM tab4 WHERE NOT + col0 IS NULL
 10 values hashing to a4327188292349b9117c1d7c675d787b
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-7030
 SELECT ALL + col2 AS col0 FROM tab0 WHERE NULL IS NOT NULL
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-7030
 SELECT ALL + col2 AS col0 FROM tab1 WHERE NULL IS NOT NULL
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-7030
 SELECT ALL + col2 AS col0 FROM tab2 WHERE NULL IS NOT NULL
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-7030
 SELECT ALL + col2 AS col0 FROM tab3 WHERE NULL IS NOT NULL
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-7030
 SELECT ALL + col2 AS col0 FROM tab4 WHERE NULL IS NOT NULL
@@ -43319,30 +44144,45 @@ SELECT col4 * - col4 FROM tab4 AS cor0 WHERE col4 IS NULL
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query IIIIIII rowsort label-7080
 SELECT * FROM tab0 WHERE ( + ( + col5 ) ) IS NULL
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query IIIIIII rowsort label-7080
 SELECT * FROM tab1 WHERE ( + ( + col5 ) ) IS NULL
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query IIIIIII rowsort label-7080
 SELECT * FROM tab2 WHERE ( + ( + col5 ) ) IS NULL
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query IIIIIII rowsort label-7080
 SELECT * FROM tab3 WHERE ( + ( + col5 ) ) IS NULL
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query IIIIIII rowsort label-7080
 SELECT * FROM tab4 WHERE ( + ( + col5 ) ) IS NULL
@@ -43999,6 +44839,9 @@ SELECT - - 9 FROM tab4 WHERE NOT ( CAST ( NULL AS INTEGER ) ) NOT IN ( - col0, +
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-7195
 SELECT ALL + + col2 AS col1 FROM tab0 WHERE NOT ( - 16 / - col0 IS NULL )
@@ -44006,6 +44849,9 @@ SELECT ALL + + col2 AS col1 FROM tab0 WHERE NOT ( - 16 / - col0 IS NULL )
 10 values hashing to b833e3a3ba082b2c0028b4cd08f0834d
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-7195
 SELECT ALL + + col2 AS col1 FROM tab1 WHERE NOT ( - 16 / - col0 IS NULL )
@@ -44013,6 +44859,9 @@ SELECT ALL + + col2 AS col1 FROM tab1 WHERE NOT ( - 16 / - col0 IS NULL )
 10 values hashing to b833e3a3ba082b2c0028b4cd08f0834d
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-7195
 SELECT ALL + + col2 AS col1 FROM tab2 WHERE NOT ( - 16 / - col0 IS NULL )
@@ -44020,6 +44869,9 @@ SELECT ALL + + col2 AS col1 FROM tab2 WHERE NOT ( - 16 / - col0 IS NULL )
 10 values hashing to b833e3a3ba082b2c0028b4cd08f0834d
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-7195
 SELECT ALL + + col2 AS col1 FROM tab3 WHERE NOT ( - 16 / - col0 IS NULL )
@@ -44027,6 +44879,9 @@ SELECT ALL + + col2 AS col1 FROM tab3 WHERE NOT ( - 16 / - col0 IS NULL )
 10 values hashing to b833e3a3ba082b2c0028b4cd08f0834d
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-7195
 SELECT ALL + + col2 AS col1 FROM tab4 WHERE NOT ( - 16 / - col0 IS NULL )
@@ -44554,6 +45409,9 @@ SELECT DISTINCT - 38 AS col4 FROM tab4 WHERE NOT NULL IS NOT NULL
 -38
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-7290
 SELECT ALL + col5 FROM tab0 AS cor0 WHERE NOT - col1 IS NULL
@@ -44561,6 +45419,9 @@ SELECT ALL + col5 FROM tab0 AS cor0 WHERE NOT - col1 IS NULL
 10 values hashing to b833e3a3ba082b2c0028b4cd08f0834d
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-7290
 SELECT ALL + col5 FROM tab1 AS cor0 WHERE NOT - col1 IS NULL
@@ -44568,6 +45429,9 @@ SELECT ALL + col5 FROM tab1 AS cor0 WHERE NOT - col1 IS NULL
 10 values hashing to b833e3a3ba082b2c0028b4cd08f0834d
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-7290
 SELECT ALL + col5 FROM tab2 AS cor0 WHERE NOT - col1 IS NULL
@@ -44575,6 +45439,9 @@ SELECT ALL + col5 FROM tab2 AS cor0 WHERE NOT - col1 IS NULL
 10 values hashing to b833e3a3ba082b2c0028b4cd08f0834d
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-7290
 SELECT ALL + col5 FROM tab3 AS cor0 WHERE NOT - col1 IS NULL
@@ -44582,6 +45449,9 @@ SELECT ALL + col5 FROM tab3 AS cor0 WHERE NOT - col1 IS NULL
 10 values hashing to b833e3a3ba082b2c0028b4cd08f0834d
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-7290
 SELECT ALL + col5 FROM tab4 AS cor0 WHERE NOT - col1 IS NULL
@@ -47609,6 +48479,9 @@ SELECT + col3 FROM tab4 WHERE NOT ( NULL ) IS NULL
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query III rowsort label-7790
 SELECT ALL - 35 / 86 col3, + ( + col5 ) AS col4, + col3 FROM tab0 WHERE NOT ( ( NOT ( col3 ) IS NOT NULL ) )
@@ -47616,6 +48489,9 @@ SELECT ALL - 35 / 86 col3, + ( + col5 ) AS col4, + col3 FROM tab0 WHERE NOT ( ( 
 30 values hashing to 4e1d47b31c893b17b6a3847044895a47
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query III rowsort label-7790
 SELECT ALL - 35 / 86 col3, + ( + col5 ) AS col4, + col3 FROM tab1 WHERE NOT ( ( NOT ( col3 ) IS NOT NULL ) )
@@ -47623,6 +48499,9 @@ SELECT ALL - 35 / 86 col3, + ( + col5 ) AS col4, + col3 FROM tab1 WHERE NOT ( ( 
 30 values hashing to 4e1d47b31c893b17b6a3847044895a47
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query III rowsort label-7790
 SELECT ALL - 35 / 86 col3, + ( + col5 ) AS col4, + col3 FROM tab2 WHERE NOT ( ( NOT ( col3 ) IS NOT NULL ) )
@@ -47630,6 +48509,9 @@ SELECT ALL - 35 / 86 col3, + ( + col5 ) AS col4, + col3 FROM tab2 WHERE NOT ( ( 
 30 values hashing to 4e1d47b31c893b17b6a3847044895a47
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query III rowsort label-7790
 SELECT ALL - 35 / 86 col3, + ( + col5 ) AS col4, + col3 FROM tab3 WHERE NOT ( ( NOT ( col3 ) IS NOT NULL ) )
@@ -47637,6 +48519,9 @@ SELECT ALL - 35 / 86 col3, + ( + col5 ) AS col4, + col3 FROM tab3 WHERE NOT ( ( 
 30 values hashing to 4e1d47b31c893b17b6a3847044895a47
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query III rowsort label-7790
 SELECT ALL - 35 / 86 col3, + ( + col5 ) AS col4, + col3 FROM tab4 WHERE NOT ( ( NOT ( col3 ) IS NOT NULL ) )
@@ -48109,6 +48994,9 @@ SELECT + 8 AS col1 FROM tab4 WHERE NOT + 13 * - col1 IS NOT NULL
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-7865
 SELECT + col2 FROM tab0 WHERE ( NULL ) IS NULL
@@ -48116,6 +49004,9 @@ SELECT + col2 FROM tab0 WHERE ( NULL ) IS NULL
 10 values hashing to b833e3a3ba082b2c0028b4cd08f0834d
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-7865
 SELECT + col2 FROM tab1 WHERE ( NULL ) IS NULL
@@ -48123,6 +49014,9 @@ SELECT + col2 FROM tab1 WHERE ( NULL ) IS NULL
 10 values hashing to b833e3a3ba082b2c0028b4cd08f0834d
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-7865
 SELECT + col2 FROM tab2 WHERE ( NULL ) IS NULL
@@ -48130,6 +49024,9 @@ SELECT + col2 FROM tab2 WHERE ( NULL ) IS NULL
 10 values hashing to b833e3a3ba082b2c0028b4cd08f0834d
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-7865
 SELECT + col2 FROM tab3 WHERE ( NULL ) IS NULL
@@ -48137,6 +49034,9 @@ SELECT + col2 FROM tab3 WHERE ( NULL ) IS NULL
 10 values hashing to b833e3a3ba082b2c0028b4cd08f0834d
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-7865
 SELECT + col2 FROM tab4 WHERE ( NULL ) IS NULL
@@ -50884,30 +51784,45 @@ SELECT ALL * FROM tab4 WHERE NOT - col3 <= ( + col3 )
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-8315
 SELECT + col5 FROM tab0 WHERE NULL NOT BETWEEN col1 AND NULL
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-8315
 SELECT + col5 FROM tab1 WHERE NULL NOT BETWEEN col1 AND NULL
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-8315
 SELECT + col5 FROM tab2 WHERE NULL NOT BETWEEN col1 AND NULL
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-8315
 SELECT + col5 FROM tab3 WHERE NULL NOT BETWEEN col1 AND NULL
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-8315
 SELECT + col5 FROM tab4 WHERE NULL NOT BETWEEN col1 AND NULL
@@ -50949,30 +51864,45 @@ SELECT * FROM tab4 WHERE + + 35 + - col3 NOT BETWEEN NULL AND NULL
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-8325
 SELECT ALL ( + + col5 ) AS col5 FROM tab0 AS cor0 WHERE NOT + 80 IS NOT NULL
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-8325
 SELECT ALL ( + + col5 ) AS col5 FROM tab1 AS cor0 WHERE NOT + 80 IS NOT NULL
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-8325
 SELECT ALL ( + + col5 ) AS col5 FROM tab2 AS cor0 WHERE NOT + 80 IS NOT NULL
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-8325
 SELECT ALL ( + + col5 ) AS col5 FROM tab3 AS cor0 WHERE NOT + 80 IS NOT NULL
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-8325
 SELECT ALL ( + + col5 ) AS col5 FROM tab4 AS cor0 WHERE NOT + 80 IS NOT NULL
@@ -51524,6 +52454,9 @@ SELECT + - 92 FROM tab4 WHERE NOT NULL IS NULL
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-8425
 SELECT ALL + 95 + 98 col4 FROM tab0 AS cor0 WHERE + col2 IS NOT NULL
@@ -51531,6 +52464,9 @@ SELECT ALL + 95 + 98 col4 FROM tab0 AS cor0 WHERE + col2 IS NOT NULL
 10 values hashing to c0f1775d5a81c9b36eba08200ca67e52
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-8425
 SELECT ALL + 95 + 98 col4 FROM tab1 AS cor0 WHERE + col2 IS NOT NULL
@@ -51538,6 +52474,9 @@ SELECT ALL + 95 + 98 col4 FROM tab1 AS cor0 WHERE + col2 IS NOT NULL
 10 values hashing to c0f1775d5a81c9b36eba08200ca67e52
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-8425
 SELECT ALL + 95 + 98 col4 FROM tab2 AS cor0 WHERE + col2 IS NOT NULL
@@ -51545,6 +52484,9 @@ SELECT ALL + 95 + 98 col4 FROM tab2 AS cor0 WHERE + col2 IS NOT NULL
 10 values hashing to c0f1775d5a81c9b36eba08200ca67e52
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-8425
 SELECT ALL + 95 + 98 col4 FROM tab3 AS cor0 WHERE + col2 IS NOT NULL
@@ -51552,6 +52494,9 @@ SELECT ALL + 95 + 98 col4 FROM tab3 AS cor0 WHERE + col2 IS NOT NULL
 10 values hashing to c0f1775d5a81c9b36eba08200ca67e52
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-8425
 SELECT ALL + 95 + 98 col4 FROM tab4 AS cor0 WHERE + col2 IS NOT NULL
@@ -53099,6 +54044,9 @@ SELECT DISTINCT + 65 AS col3 FROM tab4 AS cor0 WHERE NOT ( NULL ) IS NULL
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-8690
 SELECT + col2 FROM tab0 cor0 WHERE NULL IS NULL
@@ -53106,6 +54054,9 @@ SELECT + col2 FROM tab0 cor0 WHERE NULL IS NULL
 10 values hashing to b833e3a3ba082b2c0028b4cd08f0834d
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-8690
 SELECT + col2 FROM tab1 cor0 WHERE NULL IS NULL
@@ -53113,6 +54064,9 @@ SELECT + col2 FROM tab1 cor0 WHERE NULL IS NULL
 10 values hashing to b833e3a3ba082b2c0028b4cd08f0834d
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-8690
 SELECT + col2 FROM tab2 cor0 WHERE NULL IS NULL
@@ -53120,6 +54074,9 @@ SELECT + col2 FROM tab2 cor0 WHERE NULL IS NULL
 10 values hashing to b833e3a3ba082b2c0028b4cd08f0834d
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-8690
 SELECT + col2 FROM tab3 cor0 WHERE NULL IS NULL
@@ -53127,6 +54084,9 @@ SELECT + col2 FROM tab3 cor0 WHERE NULL IS NULL
 10 values hashing to b833e3a3ba082b2c0028b4cd08f0834d
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-8690
 SELECT + col2 FROM tab4 cor0 WHERE NULL IS NULL
@@ -53594,30 +54554,45 @@ SELECT * FROM tab4 WHERE ( col1 IS NULL )
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query II rowsort label-8770
 SELECT ALL 37 / + col4 * + col0, + col5 FROM tab0 WHERE ( - 58 ) IS NULL
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query II rowsort label-8770
 SELECT ALL 37 / + col4 * + col0, + col5 FROM tab1 WHERE ( - 58 ) IS NULL
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query II rowsort label-8770
 SELECT ALL 37 / + col4 * + col0, + col5 FROM tab2 WHERE ( - 58 ) IS NULL
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query II rowsort label-8770
 SELECT ALL 37 / + col4 * + col0, + col5 FROM tab3 WHERE ( - 58 ) IS NULL
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query II rowsort label-8770
 SELECT ALL 37 / + col4 * + col0, + col5 FROM tab4 WHERE ( - 58 ) IS NULL
@@ -53729,6 +54704,9 @@ SELECT * FROM tab4 WHERE NULL IS NOT NULL AND + col1 > NULL
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query II rowsort label-8795
 SELECT ALL + - 54 AS col2, col2 AS col3 FROM tab0 WHERE NOT + col5 IS NULL
@@ -53736,6 +54714,9 @@ SELECT ALL + - 54 AS col2, col2 AS col3 FROM tab0 WHERE NOT + col5 IS NULL
 20 values hashing to 295fa07e2ad1ec10777f7611fdbeb184
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query II rowsort label-8795
 SELECT ALL + - 54 AS col2, col2 AS col3 FROM tab1 WHERE NOT + col5 IS NULL
@@ -53743,6 +54724,9 @@ SELECT ALL + - 54 AS col2, col2 AS col3 FROM tab1 WHERE NOT + col5 IS NULL
 20 values hashing to 295fa07e2ad1ec10777f7611fdbeb184
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query II rowsort label-8795
 SELECT ALL + - 54 AS col2, col2 AS col3 FROM tab2 WHERE NOT + col5 IS NULL
@@ -53750,6 +54734,9 @@ SELECT ALL + - 54 AS col2, col2 AS col3 FROM tab2 WHERE NOT + col5 IS NULL
 20 values hashing to 295fa07e2ad1ec10777f7611fdbeb184
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query II rowsort label-8795
 SELECT ALL + - 54 AS col2, col2 AS col3 FROM tab3 WHERE NOT + col5 IS NULL
@@ -53757,6 +54744,9 @@ SELECT ALL + - 54 AS col2, col2 AS col3 FROM tab3 WHERE NOT + col5 IS NULL
 20 values hashing to 295fa07e2ad1ec10777f7611fdbeb184
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query II rowsort label-8795
 SELECT ALL + - 54 AS col2, col2 AS col3 FROM tab4 WHERE NOT + col5 IS NULL
@@ -55114,6 +56104,9 @@ SELECT * FROM tab4 WHERE NOT ( - - col3 * + 79 ) IS NOT NULL
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-9025
 SELECT ALL + ( col5 ) FROM tab0 AS cor0 WHERE NOT - col0 BETWEEN ( + 65 ) AND NULL
@@ -55121,6 +56114,9 @@ SELECT ALL + ( col5 ) FROM tab0 AS cor0 WHERE NOT - col0 BETWEEN ( + 65 ) AND NU
 10 values hashing to b833e3a3ba082b2c0028b4cd08f0834d
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-9025
 SELECT ALL + ( col5 ) FROM tab1 AS cor0 WHERE NOT - col0 BETWEEN ( + 65 ) AND NULL
@@ -55128,6 +56124,9 @@ SELECT ALL + ( col5 ) FROM tab1 AS cor0 WHERE NOT - col0 BETWEEN ( + 65 ) AND NU
 10 values hashing to b833e3a3ba082b2c0028b4cd08f0834d
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-9025
 SELECT ALL + ( col5 ) FROM tab2 AS cor0 WHERE NOT - col0 BETWEEN ( + 65 ) AND NULL
@@ -55135,6 +56134,9 @@ SELECT ALL + ( col5 ) FROM tab2 AS cor0 WHERE NOT - col0 BETWEEN ( + 65 ) AND NU
 10 values hashing to b833e3a3ba082b2c0028b4cd08f0834d
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-9025
 SELECT ALL + ( col5 ) FROM tab3 AS cor0 WHERE NOT - col0 BETWEEN ( + 65 ) AND NULL
@@ -55142,6 +56144,9 @@ SELECT ALL + ( col5 ) FROM tab3 AS cor0 WHERE NOT - col0 BETWEEN ( + 65 ) AND NU
 10 values hashing to b833e3a3ba082b2c0028b4cd08f0834d
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-9025
 SELECT ALL + ( col5 ) FROM tab4 AS cor0 WHERE NOT - col0 BETWEEN ( + 65 ) AND NULL
@@ -55494,6 +56499,9 @@ SELECT ALL MAX ( - 3 ) + - AVG ( + + col3 ) FROM tab4 AS cor0 WHERE NULL IS NOT 
 NULL
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-9090
 SELECT + col5 AS col5 FROM tab0 AS cor0 WHERE ( NULL ) IS NULL
@@ -55501,6 +56509,9 @@ SELECT + col5 AS col5 FROM tab0 AS cor0 WHERE ( NULL ) IS NULL
 10 values hashing to b833e3a3ba082b2c0028b4cd08f0834d
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-9090
 SELECT + col5 AS col5 FROM tab1 AS cor0 WHERE ( NULL ) IS NULL
@@ -55508,6 +56519,9 @@ SELECT + col5 AS col5 FROM tab1 AS cor0 WHERE ( NULL ) IS NULL
 10 values hashing to b833e3a3ba082b2c0028b4cd08f0834d
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-9090
 SELECT + col5 AS col5 FROM tab2 AS cor0 WHERE ( NULL ) IS NULL
@@ -55515,6 +56529,9 @@ SELECT + col5 AS col5 FROM tab2 AS cor0 WHERE ( NULL ) IS NULL
 10 values hashing to b833e3a3ba082b2c0028b4cd08f0834d
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-9090
 SELECT + col5 AS col5 FROM tab3 AS cor0 WHERE ( NULL ) IS NULL
@@ -55522,6 +56539,9 @@ SELECT + col5 AS col5 FROM tab3 AS cor0 WHERE ( NULL ) IS NULL
 10 values hashing to b833e3a3ba082b2c0028b4cd08f0834d
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-9090
 SELECT + col5 AS col5 FROM tab4 AS cor0 WHERE ( NULL ) IS NULL
@@ -56519,30 +57539,45 @@ SELECT * FROM tab4 AS cor0 WHERE NOT + col0 > NULL
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-9260
 SELECT + col2 AS col1 FROM tab0 AS cor0 WHERE ( NULL ) IS NOT NULL
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-9260
 SELECT + col2 AS col1 FROM tab1 AS cor0 WHERE ( NULL ) IS NOT NULL
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-9260
 SELECT + col2 AS col1 FROM tab2 AS cor0 WHERE ( NULL ) IS NOT NULL
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-9260
 SELECT + col2 AS col1 FROM tab3 AS cor0 WHERE ( NULL ) IS NOT NULL
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-9260
 SELECT + col2 AS col1 FROM tab4 AS cor0 WHERE ( NULL ) IS NOT NULL
@@ -56984,30 +58019,45 @@ SELECT * FROM tab4 AS cor0 WHERE NOT NULL > col4 / - col0 + + col1
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-9335
 SELECT + + col5 col4 FROM tab0 WHERE col4 IS NULL
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-9335
 SELECT + + col5 col4 FROM tab1 WHERE col4 IS NULL
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-9335
 SELECT + + col5 col4 FROM tab2 WHERE col4 IS NULL
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-9335
 SELECT + + col5 col4 FROM tab3 WHERE col4 IS NULL
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-9335
 SELECT + + col5 col4 FROM tab4 WHERE col4 IS NULL
@@ -57104,6 +58154,9 @@ SELECT + ( 70 ) - - col4 / col0, ( - + col0 ) FROM tab4 WHERE ( + CAST ( NULL AS
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-9350
 SELECT ALL - SUM ( DISTINCT col0 ) - - COUNT ( ALL + col1 ) FROM tab0 WHERE + col5 IS NOT NULL
@@ -57111,6 +58164,9 @@ SELECT ALL - SUM ( DISTINCT col0 ) - - COUNT ( ALL + col1 ) FROM tab0 WHERE + co
 -4774
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-9350
 SELECT ALL - SUM ( DISTINCT col0 ) - - COUNT ( ALL + col1 ) FROM tab1 WHERE + col5 IS NOT NULL
@@ -57118,6 +58174,9 @@ SELECT ALL - SUM ( DISTINCT col0 ) - - COUNT ( ALL + col1 ) FROM tab1 WHERE + co
 -4774
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-9350
 SELECT ALL - SUM ( DISTINCT col0 ) - - COUNT ( ALL + col1 ) FROM tab2 WHERE + col5 IS NOT NULL
@@ -57125,6 +58184,9 @@ SELECT ALL - SUM ( DISTINCT col0 ) - - COUNT ( ALL + col1 ) FROM tab2 WHERE + co
 -4774
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-9350
 SELECT ALL - SUM ( DISTINCT col0 ) - - COUNT ( ALL + col1 ) FROM tab3 WHERE + col5 IS NOT NULL
@@ -57132,6 +58194,9 @@ SELECT ALL - SUM ( DISTINCT col0 ) - - COUNT ( ALL + col1 ) FROM tab3 WHERE + co
 -4774
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-9350
 SELECT ALL - SUM ( DISTINCT col0 ) - - COUNT ( ALL + col1 ) FROM tab4 WHERE + col5 IS NOT NULL
@@ -57549,6 +58614,9 @@ SELECT ALL * FROM tab4 WHERE NOT 0 IS NOT NULL OR NOT + + col3 IS NOT NULL
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-9420
 SELECT ALL 66 AS col3 FROM tab0 AS cor0 WHERE + col5 IS NOT NULL
@@ -57556,6 +58624,9 @@ SELECT ALL 66 AS col3 FROM tab0 AS cor0 WHERE + col5 IS NOT NULL
 10 values hashing to 61959d3c4c8bda3266d41deab7e74502
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-9420
 SELECT ALL 66 AS col3 FROM tab1 AS cor0 WHERE + col5 IS NOT NULL
@@ -57563,6 +58634,9 @@ SELECT ALL 66 AS col3 FROM tab1 AS cor0 WHERE + col5 IS NOT NULL
 10 values hashing to 61959d3c4c8bda3266d41deab7e74502
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-9420
 SELECT ALL 66 AS col3 FROM tab2 AS cor0 WHERE + col5 IS NOT NULL
@@ -57570,6 +58644,9 @@ SELECT ALL 66 AS col3 FROM tab2 AS cor0 WHERE + col5 IS NOT NULL
 10 values hashing to 61959d3c4c8bda3266d41deab7e74502
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-9420
 SELECT ALL 66 AS col3 FROM tab3 AS cor0 WHERE + col5 IS NOT NULL
@@ -57577,6 +58654,9 @@ SELECT ALL 66 AS col3 FROM tab3 AS cor0 WHERE + col5 IS NOT NULL
 10 values hashing to 61959d3c4c8bda3266d41deab7e74502
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-9420
 SELECT ALL 66 AS col3 FROM tab4 AS cor0 WHERE + col5 IS NOT NULL
@@ -58999,30 +60079,45 @@ SELECT * FROM tab4 WHERE NULL BETWEEN NULL AND + - col4 + + - col4 * - 67
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-9665
 SELECT + col5 FROM tab0 WHERE NOT NULL <= - 15
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-9665
 SELECT + col5 FROM tab1 WHERE NOT NULL <= - 15
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-9665
 SELECT + col5 FROM tab2 WHERE NOT NULL <= - 15
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-9665
 SELECT + col5 FROM tab3 WHERE NOT NULL <= - 15
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-9665
 SELECT + col5 FROM tab4 WHERE NOT NULL <= - 15
@@ -59309,30 +60404,45 @@ SELECT * FROM tab4 WHERE NULL BETWEEN + col0 AND NULL
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-9715
 SELECT ALL + col5 col4 FROM tab0 WHERE NOT NULL BETWEEN NULL AND NULL
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-9715
 SELECT ALL + col5 col4 FROM tab1 WHERE NOT NULL BETWEEN NULL AND NULL
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-9715
 SELECT ALL + col5 col4 FROM tab2 WHERE NOT NULL BETWEEN NULL AND NULL
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-9715
 SELECT ALL + col5 col4 FROM tab3 WHERE NOT NULL BETWEEN NULL AND NULL
 ----
 
 # Datafusion - DataFusion error: Error during planning: Unary operator '+' only supports numeric, interval and timestamp types
+# Postgresql - Postgres error: db error: ERROR: operator does not exist: + text
+# Postgresql - HINT: No operator matches the given name and argument type. You might need to add an explicit type cast.
+skipif postgres
 skipif Datafusion
 query I rowsort label-9715
 SELECT ALL + col5 col4 FROM tab4 WHERE NOT NULL BETWEEN NULL AND NULL

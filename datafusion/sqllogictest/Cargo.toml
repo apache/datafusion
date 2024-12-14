@@ -77,6 +77,7 @@ postgres = [
 [dev-dependencies]
 env_logger = { workspace = true }
 tokio = { workspace = true, features = ["rt-multi-thread"] }
+in-container = "^1"
 
 [[test]]
 harness = false

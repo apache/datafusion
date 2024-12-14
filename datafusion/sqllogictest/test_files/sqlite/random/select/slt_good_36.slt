@@ -64619,6 +64619,10 @@ query III rowsort
 SELECT ALL * FROM tab2 WHERE NOT col0 > - col0 * col1 + - col1 / + col1
 ----
 
+query III rowsort label-9607
+SELECT * FROM tab1 WHERE - col1 + col1 NOT IN ( + col1 / + col2 )
+----
+
 query I rowsort label-9608
 SELECT ALL + col0 / + tab0.col1 col1 FROM tab0
 ----

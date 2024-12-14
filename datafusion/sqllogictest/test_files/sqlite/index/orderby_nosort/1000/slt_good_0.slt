@@ -33398,46 +33398,26 @@ SELECT pk, col0 FROM tab4 WHERE col0 IN (SELECT col3 FROM tab4 WHERE col1 = 4064
 ----
 176 values hashing to c3e59865547888324363dd90a1a11b98
 
-# Datafusion - DataFusion error: SanityCheckPlan
-# Datafusion - caused by
-# Datafusion - Error during planning: Plan: ["SortPreservingMergeExec: [col0@1 DESC]", "  CoalesceBatchesExec: target_batch_size=8192", "    HashJoinExec: mode=Partitioned, join_type=RightSemi, on=[(col3@0, col0@1)]", "      CoalesceBatchesExec: target_batch_size=8192", "        RepartitionExec: partitioning=Hash([col3@0], 4), input_partitions=4", "          RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1", "            CoalesceBatchesExec: target_batch_size=8192", "              FilterExec: CAST(col1@0 AS Float64) = 4064.87 AND CAST(col4@2 AS Float64) < 1128.4 AND CAST(col4@2 AS Float64) = 3899.98 OR CAST(col4@2 AS Float64) > 2973.9, projection=[col3@1]", "                MemoryExec: partitions=1, partition_sizes=[1000]", "      SortExec: expr=[pk@0 DESC], preserve_partitioning=[true]", "        CoalesceBatchesExec: target_batch_size=8192", "          RepartitionExec: partitioning=Hash([col0@1], 4), input_partitions=1", "            MemoryExec: partitions=1, partition_sizes=[1000]"] does not satisfy order requirements: [col0@1 DESC]. Child-0 order: [[pk@0 DESC]]
-skipif Datafusion
 query II nosort label-6250-2-desc
 SELECT pk, col0 FROM tab0 WHERE col0 IN (SELECT col3 FROM tab0 WHERE col1 = 4064.87 AND col4 < 1128.40 AND col4 = 3899.98 OR col4 > 2973.9) ORDER BY 2 DESC
 ----
 176 values hashing to 7f504802aa2e71115c6610c8186bf3ca
 
-# Datafusion - DataFusion error: SanityCheckPlan
-# Datafusion - caused by
-# Datafusion - Error during planning: Plan: ["SortPreservingMergeExec: [col0@1 DESC]", "  CoalesceBatchesExec: target_batch_size=8192", "    HashJoinExec: mode=Partitioned, join_type=RightSemi, on=[(col3@0, col0@1)]", "      CoalesceBatchesExec: target_batch_size=8192", "        RepartitionExec: partitioning=Hash([col3@0], 4), input_partitions=4", "          RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1", "            CoalesceBatchesExec: target_batch_size=8192", "              FilterExec: CAST(col1@0 AS Float64) = 4064.87 AND CAST(col4@2 AS Float64) < 1128.4 AND CAST(col4@2 AS Float64) = 3899.98 OR CAST(col4@2 AS Float64) > 2973.9, projection=[col3@1]", "                MemoryExec: partitions=1, partition_sizes=[1000]", "      SortExec: expr=[pk@0 DESC], preserve_partitioning=[true]", "        CoalesceBatchesExec: target_batch_size=8192", "          RepartitionExec: partitioning=Hash([col0@1], 4), input_partitions=1", "            MemoryExec: partitions=1, partition_sizes=[1000]"] does not satisfy order requirements: [col0@1 DESC]. Child-0 order: [[pk@0 DESC]]
-skipif Datafusion
 query II nosort label-6250-2-desc
 SELECT pk, col0 FROM tab1 WHERE col0 IN (SELECT col3 FROM tab1 WHERE col1 = 4064.87 AND col4 < 1128.40 AND col4 = 3899.98 OR col4 > 2973.9) ORDER BY 2 DESC
 ----
 176 values hashing to 7f504802aa2e71115c6610c8186bf3ca
 
-# Datafusion - DataFusion error: SanityCheckPlan
-# Datafusion - caused by
-# Datafusion - Error during planning: Plan: ["SortPreservingMergeExec: [col0@1 DESC]", "  CoalesceBatchesExec: target_batch_size=8192", "    HashJoinExec: mode=Partitioned, join_type=RightSemi, on=[(col3@0, col0@1)]", "      CoalesceBatchesExec: target_batch_size=8192", "        RepartitionExec: partitioning=Hash([col3@0], 4), input_partitions=4", "          RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1", "            CoalesceBatchesExec: target_batch_size=8192", "              FilterExec: CAST(col1@0 AS Float64) = 4064.87 AND CAST(col4@2 AS Float64) < 1128.4 AND CAST(col4@2 AS Float64) = 3899.98 OR CAST(col4@2 AS Float64) > 2973.9, projection=[col3@1]", "                MemoryExec: partitions=1, partition_sizes=[1000]", "      SortExec: expr=[pk@0 DESC], preserve_partitioning=[true]", "        CoalesceBatchesExec: target_batch_size=8192", "          RepartitionExec: partitioning=Hash([col0@1], 4), input_partitions=1", "            MemoryExec: partitions=1, partition_sizes=[1000]"] does not satisfy order requirements: [col0@1 DESC]. Child-0 order: [[pk@0 DESC]]
-skipif Datafusion
 query II nosort label-6250-2-desc
 SELECT pk, col0 FROM tab2 WHERE col0 IN (SELECT col3 FROM tab2 WHERE col1 = 4064.87 AND col4 < 1128.40 AND col4 = 3899.98 OR col4 > 2973.9) ORDER BY 2 DESC
 ----
 176 values hashing to 7f504802aa2e71115c6610c8186bf3ca
 
-# Datafusion - DataFusion error: SanityCheckPlan
-# Datafusion - caused by
-# Datafusion - Error during planning: Plan: ["SortPreservingMergeExec: [col0@1 DESC]", "  CoalesceBatchesExec: target_batch_size=8192", "    HashJoinExec: mode=Partitioned, join_type=RightSemi, on=[(col3@0, col0@1)]", "      CoalesceBatchesExec: target_batch_size=8192", "        RepartitionExec: partitioning=Hash([col3@0], 4), input_partitions=4", "          RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1", "            CoalesceBatchesExec: target_batch_size=8192", "              FilterExec: CAST(col1@0 AS Float64) = 4064.87 AND CAST(col4@2 AS Float64) < 1128.4 AND CAST(col4@2 AS Float64) = 3899.98 OR CAST(col4@2 AS Float64) > 2973.9, projection=[col3@1]", "                MemoryExec: partitions=1, partition_sizes=[1000]", "      SortExec: expr=[pk@0 DESC], preserve_partitioning=[true]", "        CoalesceBatchesExec: target_batch_size=8192", "          RepartitionExec: partitioning=Hash([col0@1], 4), input_partitions=1", "            MemoryExec: partitions=1, partition_sizes=[1000]"] does not satisfy order requirements: [col0@1 DESC]. Child-0 order: [[pk@0 DESC]]
-skipif Datafusion
 query II nosort label-6250-2-desc
 SELECT pk, col0 FROM tab3 WHERE col0 IN (SELECT col3 FROM tab3 WHERE col1 = 4064.87 AND col4 < 1128.40 AND col4 = 3899.98 OR col4 > 2973.9) ORDER BY 2 DESC
 ----
 176 values hashing to 7f504802aa2e71115c6610c8186bf3ca
 
-# Datafusion - DataFusion error: SanityCheckPlan
-# Datafusion - caused by
-# Datafusion - Error during planning: Plan: ["SortPreservingMergeExec: [col0@1 DESC]", "  CoalesceBatchesExec: target_batch_size=8192", "    HashJoinExec: mode=Partitioned, join_type=RightSemi, on=[(col3@0, col0@1)]", "      CoalesceBatchesExec: target_batch_size=8192", "        RepartitionExec: partitioning=Hash([col3@0], 4), input_partitions=4", "          RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1", "            CoalesceBatchesExec: target_batch_size=8192", "              FilterExec: CAST(col1@0 AS Float64) = 4064.87 AND CAST(col4@2 AS Float64) < 1128.4 AND CAST(col4@2 AS Float64) = 3899.98 OR CAST(col4@2 AS Float64) > 2973.9, projection=[col3@1]", "                MemoryExec: partitions=1, partition_sizes=[1000]", "      SortExec: expr=[pk@0 DESC], preserve_partitioning=[true]", "        CoalesceBatchesExec: target_batch_size=8192", "          RepartitionExec: partitioning=Hash([col0@1], 4), input_partitions=1", "            MemoryExec: partitions=1, partition_sizes=[1000]"] does not satisfy order requirements: [col0@1 DESC]. Child-0 order: [[pk@0 DESC]]
-skipif Datafusion
 query II nosort label-6250-2-desc
 SELECT pk, col0 FROM tab4 WHERE col0 IN (SELECT col3 FROM tab4 WHERE col1 = 4064.87 AND col4 < 1128.40 AND col4 = 3899.98 OR col4 > 2973.9) ORDER BY 2 DESC
 ----
@@ -33468,46 +33448,26 @@ SELECT pk, col0 FROM tab4 WHERE col0 IN (SELECT col3 FROM tab4 WHERE col1 = 4064
 ----
 176 values hashing to ee6f9a53e77fefe4a387aae42ccadd1e
 
-# Datafusion - DataFusion error: SanityCheckPlan
-# Datafusion - caused by
-# Datafusion - Error during planning: Plan: ["SortPreservingMergeExec: [col0@1 ASC NULLS LAST]", "  CoalesceBatchesExec: target_batch_size=8192", "    HashJoinExec: mode=Partitioned, join_type=RightSemi, on=[(col3@0, col0@1)]", "      CoalesceBatchesExec: target_batch_size=8192", "        RepartitionExec: partitioning=Hash([col3@0], 4), input_partitions=4", "          RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1", "            CoalesceBatchesExec: target_batch_size=8192", "              FilterExec: CAST(col1@0 AS Float64) = 4064.87 AND CAST(col4@2 AS Float64) < 1128.4 AND CAST(col4@2 AS Float64) = 3899.98 OR CAST(col4@2 AS Float64) > 2973.9, projection=[col3@1]", "                MemoryExec: partitions=1, partition_sizes=[1000]", "      SortExec: expr=[pk@0 ASC NULLS LAST], preserve_partitioning=[true]", "        CoalesceBatchesExec: target_batch_size=8192", "          RepartitionExec: partitioning=Hash([col0@1], 4), input_partitions=1", "            MemoryExec: partitions=1, partition_sizes=[1000]"] does not satisfy order requirements: [col0@1 ASC NULLS LAST]. Child-0 order: [[pk@0 ASC NULLS LAST]]
-skipif Datafusion
 query II nosort label-6250-2
 SELECT pk, col0 FROM tab0 WHERE col0 IN (SELECT col3 FROM tab0 WHERE col1 = 4064.87 AND col4 < 1128.40 AND col4 = 3899.98 OR col4 > 2973.9) ORDER BY 2
 ----
 176 values hashing to ab262b514f2b353703dd56095e0655d2
 
-# Datafusion - DataFusion error: SanityCheckPlan
-# Datafusion - caused by
-# Datafusion - Error during planning: Plan: ["SortPreservingMergeExec: [col0@1 ASC NULLS LAST]", "  CoalesceBatchesExec: target_batch_size=8192", "    HashJoinExec: mode=Partitioned, join_type=RightSemi, on=[(col3@0, col0@1)]", "      CoalesceBatchesExec: target_batch_size=8192", "        RepartitionExec: partitioning=Hash([col3@0], 4), input_partitions=4", "          RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1", "            CoalesceBatchesExec: target_batch_size=8192", "              FilterExec: CAST(col1@0 AS Float64) = 4064.87 AND CAST(col4@2 AS Float64) < 1128.4 AND CAST(col4@2 AS Float64) = 3899.98 OR CAST(col4@2 AS Float64) > 2973.9, projection=[col3@1]", "                MemoryExec: partitions=1, partition_sizes=[1000]", "      SortExec: expr=[pk@0 ASC NULLS LAST], preserve_partitioning=[true]", "        CoalesceBatchesExec: target_batch_size=8192", "          RepartitionExec: partitioning=Hash([col0@1], 4), input_partitions=1", "            MemoryExec: partitions=1, partition_sizes=[1000]"] does not satisfy order requirements: [col0@1 ASC NULLS LAST]. Child-0 order: [[pk@0 ASC NULLS LAST]]
-skipif Datafusion
 query II nosort label-6250-2
 SELECT pk, col0 FROM tab1 WHERE col0 IN (SELECT col3 FROM tab1 WHERE col1 = 4064.87 AND col4 < 1128.40 AND col4 = 3899.98 OR col4 > 2973.9) ORDER BY 2
 ----
 176 values hashing to ab262b514f2b353703dd56095e0655d2
 
-# Datafusion - DataFusion error: SanityCheckPlan
-# Datafusion - caused by
-# Datafusion - Error during planning: Plan: ["SortPreservingMergeExec: [col0@1 ASC NULLS LAST]", "  CoalesceBatchesExec: target_batch_size=8192", "    HashJoinExec: mode=Partitioned, join_type=RightSemi, on=[(col3@0, col0@1)]", "      CoalesceBatchesExec: target_batch_size=8192", "        RepartitionExec: partitioning=Hash([col3@0], 4), input_partitions=4", "          RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1", "            CoalesceBatchesExec: target_batch_size=8192", "              FilterExec: CAST(col1@0 AS Float64) = 4064.87 AND CAST(col4@2 AS Float64) < 1128.4 AND CAST(col4@2 AS Float64) = 3899.98 OR CAST(col4@2 AS Float64) > 2973.9, projection=[col3@1]", "                MemoryExec: partitions=1, partition_sizes=[1000]", "      SortExec: expr=[pk@0 ASC NULLS LAST], preserve_partitioning=[true]", "        CoalesceBatchesExec: target_batch_size=8192", "          RepartitionExec: partitioning=Hash([col0@1], 4), input_partitions=1", "            MemoryExec: partitions=1, partition_sizes=[1000]"] does not satisfy order requirements: [col0@1 ASC NULLS LAST]. Child-0 order: [[pk@0 ASC NULLS LAST]]
-skipif Datafusion
 query II nosort label-6250-2
 SELECT pk, col0 FROM tab2 WHERE col0 IN (SELECT col3 FROM tab2 WHERE col1 = 4064.87 AND col4 < 1128.40 AND col4 = 3899.98 OR col4 > 2973.9) ORDER BY 2
 ----
 176 values hashing to ab262b514f2b353703dd56095e0655d2
 
-# Datafusion - DataFusion error: SanityCheckPlan
-# Datafusion - caused by
-# Datafusion - Error during planning: Plan: ["SortPreservingMergeExec: [col0@1 ASC NULLS LAST]", "  CoalesceBatchesExec: target_batch_size=8192", "    HashJoinExec: mode=Partitioned, join_type=RightSemi, on=[(col3@0, col0@1)]", "      CoalesceBatchesExec: target_batch_size=8192", "        RepartitionExec: partitioning=Hash([col3@0], 4), input_partitions=4", "          RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1", "            CoalesceBatchesExec: target_batch_size=8192", "              FilterExec: CAST(col1@0 AS Float64) = 4064.87 AND CAST(col4@2 AS Float64) < 1128.4 AND CAST(col4@2 AS Float64) = 3899.98 OR CAST(col4@2 AS Float64) > 2973.9, projection=[col3@1]", "                MemoryExec: partitions=1, partition_sizes=[1000]", "      SortExec: expr=[pk@0 ASC NULLS LAST], preserve_partitioning=[true]", "        CoalesceBatchesExec: target_batch_size=8192", "          RepartitionExec: partitioning=Hash([col0@1], 4), input_partitions=1", "            MemoryExec: partitions=1, partition_sizes=[1000]"] does not satisfy order requirements: [col0@1 ASC NULLS LAST]. Child-0 order: [[pk@0 ASC NULLS LAST]]
-skipif Datafusion
 query II nosort label-6250-2
 SELECT pk, col0 FROM tab3 WHERE col0 IN (SELECT col3 FROM tab3 WHERE col1 = 4064.87 AND col4 < 1128.40 AND col4 = 3899.98 OR col4 > 2973.9) ORDER BY 2
 ----
 176 values hashing to ab262b514f2b353703dd56095e0655d2
 
-# Datafusion - DataFusion error: SanityCheckPlan
-# Datafusion - caused by
-# Datafusion - Error during planning: Plan: ["SortPreservingMergeExec: [col0@1 ASC NULLS LAST]", "  CoalesceBatchesExec: target_batch_size=8192", "    HashJoinExec: mode=Partitioned, join_type=RightSemi, on=[(col3@0, col0@1)]", "      CoalesceBatchesExec: target_batch_size=8192", "        RepartitionExec: partitioning=Hash([col3@0], 4), input_partitions=4", "          RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1", "            CoalesceBatchesExec: target_batch_size=8192", "              FilterExec: CAST(col1@0 AS Float64) = 4064.87 AND CAST(col4@2 AS Float64) < 1128.4 AND CAST(col4@2 AS Float64) = 3899.98 OR CAST(col4@2 AS Float64) > 2973.9, projection=[col3@1]", "                MemoryExec: partitions=1, partition_sizes=[1000]", "      SortExec: expr=[pk@0 ASC NULLS LAST], preserve_partitioning=[true]", "        CoalesceBatchesExec: target_batch_size=8192", "          RepartitionExec: partitioning=Hash([col0@1], 4), input_partitions=1", "            MemoryExec: partitions=1, partition_sizes=[1000]"] does not satisfy order requirements: [col0@1 ASC NULLS LAST]. Child-0 order: [[pk@0 ASC NULLS LAST]]
-skipif Datafusion
 query II nosort label-6250-2
 SELECT pk, col0 FROM tab4 WHERE col0 IN (SELECT col3 FROM tab4 WHERE col1 = 4064.87 AND col4 < 1128.40 AND col4 = 3899.98 OR col4 > 2973.9) ORDER BY 2
 ----
@@ -46073,42 +46033,22 @@ query II nosort label-8890-1-desc
 SELECT pk, col0 FROM tab4 WHERE col0 IN (SELECT col3 FROM tab4 WHERE (col3 IS NULL)) ORDER BY 1 DESC
 ----
 
-# Datafusion - DataFusion error: SanityCheckPlan
-# Datafusion - caused by
-# Datafusion - Error during planning: Plan: ["SortPreservingMergeExec: [col0@1 DESC]", "  CoalesceBatchesExec: target_batch_size=8192", "    HashJoinExec: mode=Partitioned, join_type=RightSemi, on=[(col3@0, col0@1)]", "      CoalesceBatchesExec: target_batch_size=8192", "        RepartitionExec: partitioning=Hash([col3@0], 4), input_partitions=4", "          RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1", "            CoalesceBatchesExec: target_batch_size=8192", "              FilterExec: col3@0 IS NULL", "                MemoryExec: partitions=1, partition_sizes=[1000]", "      SortExec: expr=[pk@0 DESC], preserve_partitioning=[true]", "        CoalesceBatchesExec: target_batch_size=8192", "          RepartitionExec: partitioning=Hash([col0@1], 4), input_partitions=1", "            MemoryExec: partitions=1, partition_sizes=[1000]"] does not satisfy order requirements: [col0@1 DESC]. Child-0 order: [[pk@0 DESC]]
-skipif Datafusion
 query II nosort label-8890-2-desc
 SELECT pk, col0 FROM tab0 WHERE col0 IN (SELECT col3 FROM tab0 WHERE (col3 IS NULL)) ORDER BY 2 DESC
 ----
 
-# Datafusion - DataFusion error: SanityCheckPlan
-# Datafusion - caused by
-# Datafusion - Error during planning: Plan: ["SortPreservingMergeExec: [col0@1 DESC]", "  CoalesceBatchesExec: target_batch_size=8192", "    HashJoinExec: mode=Partitioned, join_type=RightSemi, on=[(col3@0, col0@1)]", "      CoalesceBatchesExec: target_batch_size=8192", "        RepartitionExec: partitioning=Hash([col3@0], 4), input_partitions=4", "          RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1", "            CoalesceBatchesExec: target_batch_size=8192", "              FilterExec: col3@0 IS NULL", "                MemoryExec: partitions=1, partition_sizes=[1000]", "      SortExec: expr=[pk@0 DESC], preserve_partitioning=[true]", "        CoalesceBatchesExec: target_batch_size=8192", "          RepartitionExec: partitioning=Hash([col0@1], 4), input_partitions=1", "            MemoryExec: partitions=1, partition_sizes=[1000]"] does not satisfy order requirements: [col0@1 DESC]. Child-0 order: [[pk@0 DESC]]
-skipif Datafusion
 query II nosort label-8890-2-desc
 SELECT pk, col0 FROM tab1 WHERE col0 IN (SELECT col3 FROM tab1 WHERE (col3 IS NULL)) ORDER BY 2 DESC
 ----
 
-# Datafusion - DataFusion error: SanityCheckPlan
-# Datafusion - caused by
-# Datafusion - Error during planning: Plan: ["SortPreservingMergeExec: [col0@1 DESC]", "  CoalesceBatchesExec: target_batch_size=8192", "    HashJoinExec: mode=Partitioned, join_type=RightSemi, on=[(col3@0, col0@1)]", "      CoalesceBatchesExec: target_batch_size=8192", "        RepartitionExec: partitioning=Hash([col3@0], 4), input_partitions=4", "          RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1", "            CoalesceBatchesExec: target_batch_size=8192", "              FilterExec: col3@0 IS NULL", "                MemoryExec: partitions=1, partition_sizes=[1000]", "      SortExec: expr=[pk@0 DESC], preserve_partitioning=[true]", "        CoalesceBatchesExec: target_batch_size=8192", "          RepartitionExec: partitioning=Hash([col0@1], 4), input_partitions=1", "            MemoryExec: partitions=1, partition_sizes=[1000]"] does not satisfy order requirements: [col0@1 DESC]. Child-0 order: [[pk@0 DESC]]
-skipif Datafusion
 query II nosort label-8890-2-desc
 SELECT pk, col0 FROM tab2 WHERE col0 IN (SELECT col3 FROM tab2 WHERE (col3 IS NULL)) ORDER BY 2 DESC
 ----
 
-# Datafusion - DataFusion error: SanityCheckPlan
-# Datafusion - caused by
-# Datafusion - Error during planning: Plan: ["SortPreservingMergeExec: [col0@1 DESC]", "  CoalesceBatchesExec: target_batch_size=8192", "    HashJoinExec: mode=Partitioned, join_type=RightSemi, on=[(col3@0, col0@1)]", "      CoalesceBatchesExec: target_batch_size=8192", "        RepartitionExec: partitioning=Hash([col3@0], 4), input_partitions=4", "          RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1", "            CoalesceBatchesExec: target_batch_size=8192", "              FilterExec: col3@0 IS NULL", "                MemoryExec: partitions=1, partition_sizes=[1000]", "      SortExec: expr=[pk@0 DESC], preserve_partitioning=[true]", "        CoalesceBatchesExec: target_batch_size=8192", "          RepartitionExec: partitioning=Hash([col0@1], 4), input_partitions=1", "            MemoryExec: partitions=1, partition_sizes=[1000]"] does not satisfy order requirements: [col0@1 DESC]. Child-0 order: [[pk@0 DESC]]
-skipif Datafusion
 query II nosort label-8890-2-desc
 SELECT pk, col0 FROM tab3 WHERE col0 IN (SELECT col3 FROM tab3 WHERE (col3 IS NULL)) ORDER BY 2 DESC
 ----
 
-# Datafusion - DataFusion error: SanityCheckPlan
-# Datafusion - caused by
-# Datafusion - Error during planning: Plan: ["SortPreservingMergeExec: [col0@1 DESC]", "  CoalesceBatchesExec: target_batch_size=8192", "    HashJoinExec: mode=Partitioned, join_type=RightSemi, on=[(col3@0, col0@1)]", "      CoalesceBatchesExec: target_batch_size=8192", "        RepartitionExec: partitioning=Hash([col3@0], 4), input_partitions=4", "          RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1", "            CoalesceBatchesExec: target_batch_size=8192", "              FilterExec: col3@0 IS NULL", "                MemoryExec: partitions=1, partition_sizes=[1000]", "      SortExec: expr=[pk@0 DESC], preserve_partitioning=[true]", "        CoalesceBatchesExec: target_batch_size=8192", "          RepartitionExec: partitioning=Hash([col0@1], 4), input_partitions=1", "            MemoryExec: partitions=1, partition_sizes=[1000]"] does not satisfy order requirements: [col0@1 DESC]. Child-0 order: [[pk@0 DESC]]
-skipif Datafusion
 query II nosort label-8890-2-desc
 SELECT pk, col0 FROM tab4 WHERE col0 IN (SELECT col3 FROM tab4 WHERE (col3 IS NULL)) ORDER BY 2 DESC
 ----
@@ -46133,42 +46073,22 @@ query II nosort label-8890-1
 SELECT pk, col0 FROM tab4 WHERE col0 IN (SELECT col3 FROM tab4 WHERE (col3 IS NULL)) ORDER BY 1
 ----
 
-# Datafusion - DataFusion error: SanityCheckPlan
-# Datafusion - caused by
-# Datafusion - Error during planning: Plan: ["SortPreservingMergeExec: [col0@1 ASC NULLS LAST]", "  CoalesceBatchesExec: target_batch_size=8192", "    HashJoinExec: mode=Partitioned, join_type=RightSemi, on=[(col3@0, col0@1)]", "      CoalesceBatchesExec: target_batch_size=8192", "        RepartitionExec: partitioning=Hash([col3@0], 4), input_partitions=4", "          RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1", "            CoalesceBatchesExec: target_batch_size=8192", "              FilterExec: col3@0 IS NULL", "                MemoryExec: partitions=1, partition_sizes=[1000]", "      SortExec: expr=[pk@0 ASC NULLS LAST], preserve_partitioning=[true]", "        CoalesceBatchesExec: target_batch_size=8192", "          RepartitionExec: partitioning=Hash([col0@1], 4), input_partitions=1", "            MemoryExec: partitions=1, partition_sizes=[1000]"] does not satisfy order requirements: [col0@1 ASC NULLS LAST]. Child-0 order: [[pk@0 ASC NULLS LAST]]
-skipif Datafusion
 query II nosort label-8890-2
 SELECT pk, col0 FROM tab0 WHERE col0 IN (SELECT col3 FROM tab0 WHERE (col3 IS NULL)) ORDER BY 2
 ----
 
-# Datafusion - DataFusion error: SanityCheckPlan
-# Datafusion - caused by
-# Datafusion - Error during planning: Plan: ["SortPreservingMergeExec: [col0@1 ASC NULLS LAST]", "  CoalesceBatchesExec: target_batch_size=8192", "    HashJoinExec: mode=Partitioned, join_type=RightSemi, on=[(col3@0, col0@1)]", "      CoalesceBatchesExec: target_batch_size=8192", "        RepartitionExec: partitioning=Hash([col3@0], 4), input_partitions=4", "          RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1", "            CoalesceBatchesExec: target_batch_size=8192", "              FilterExec: col3@0 IS NULL", "                MemoryExec: partitions=1, partition_sizes=[1000]", "      SortExec: expr=[pk@0 ASC NULLS LAST], preserve_partitioning=[true]", "        CoalesceBatchesExec: target_batch_size=8192", "          RepartitionExec: partitioning=Hash([col0@1], 4), input_partitions=1", "            MemoryExec: partitions=1, partition_sizes=[1000]"] does not satisfy order requirements: [col0@1 ASC NULLS LAST]. Child-0 order: [[pk@0 ASC NULLS LAST]]
-skipif Datafusion
 query II nosort label-8890-2
 SELECT pk, col0 FROM tab1 WHERE col0 IN (SELECT col3 FROM tab1 WHERE (col3 IS NULL)) ORDER BY 2
 ----
 
-# Datafusion - DataFusion error: SanityCheckPlan
-# Datafusion - caused by
-# Datafusion - Error during planning: Plan: ["SortPreservingMergeExec: [col0@1 ASC NULLS LAST]", "  CoalesceBatchesExec: target_batch_size=8192", "    HashJoinExec: mode=Partitioned, join_type=RightSemi, on=[(col3@0, col0@1)]", "      CoalesceBatchesExec: target_batch_size=8192", "        RepartitionExec: partitioning=Hash([col3@0], 4), input_partitions=4", "          RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1", "            CoalesceBatchesExec: target_batch_size=8192", "              FilterExec: col3@0 IS NULL", "                MemoryExec: partitions=1, partition_sizes=[1000]", "      SortExec: expr=[pk@0 ASC NULLS LAST], preserve_partitioning=[true]", "        CoalesceBatchesExec: target_batch_size=8192", "          RepartitionExec: partitioning=Hash([col0@1], 4), input_partitions=1", "            MemoryExec: partitions=1, partition_sizes=[1000]"] does not satisfy order requirements: [col0@1 ASC NULLS LAST]. Child-0 order: [[pk@0 ASC NULLS LAST]]
-skipif Datafusion
 query II nosort label-8890-2
 SELECT pk, col0 FROM tab2 WHERE col0 IN (SELECT col3 FROM tab2 WHERE (col3 IS NULL)) ORDER BY 2
 ----
 
-# Datafusion - DataFusion error: SanityCheckPlan
-# Datafusion - caused by
-# Datafusion - Error during planning: Plan: ["SortPreservingMergeExec: [col0@1 ASC NULLS LAST]", "  CoalesceBatchesExec: target_batch_size=8192", "    HashJoinExec: mode=Partitioned, join_type=RightSemi, on=[(col3@0, col0@1)]", "      CoalesceBatchesExec: target_batch_size=8192", "        RepartitionExec: partitioning=Hash([col3@0], 4), input_partitions=4", "          RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1", "            CoalesceBatchesExec: target_batch_size=8192", "              FilterExec: col3@0 IS NULL", "                MemoryExec: partitions=1, partition_sizes=[1000]", "      SortExec: expr=[pk@0 ASC NULLS LAST], preserve_partitioning=[true]", "        CoalesceBatchesExec: target_batch_size=8192", "          RepartitionExec: partitioning=Hash([col0@1], 4), input_partitions=1", "            MemoryExec: partitions=1, partition_sizes=[1000]"] does not satisfy order requirements: [col0@1 ASC NULLS LAST]. Child-0 order: [[pk@0 ASC NULLS LAST]]
-skipif Datafusion
 query II nosort label-8890-2
 SELECT pk, col0 FROM tab3 WHERE col0 IN (SELECT col3 FROM tab3 WHERE (col3 IS NULL)) ORDER BY 2
 ----
 
-# Datafusion - DataFusion error: SanityCheckPlan
-# Datafusion - caused by
-# Datafusion - Error during planning: Plan: ["SortPreservingMergeExec: [col0@1 ASC NULLS LAST]", "  CoalesceBatchesExec: target_batch_size=8192", "    HashJoinExec: mode=Partitioned, join_type=RightSemi, on=[(col3@0, col0@1)]", "      CoalesceBatchesExec: target_batch_size=8192", "        RepartitionExec: partitioning=Hash([col3@0], 4), input_partitions=4", "          RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1", "            CoalesceBatchesExec: target_batch_size=8192", "              FilterExec: col3@0 IS NULL", "                MemoryExec: partitions=1, partition_sizes=[1000]", "      SortExec: expr=[pk@0 ASC NULLS LAST], preserve_partitioning=[true]", "        CoalesceBatchesExec: target_batch_size=8192", "          RepartitionExec: partitioning=Hash([col0@1], 4), input_partitions=1", "            MemoryExec: partitions=1, partition_sizes=[1000]"] does not satisfy order requirements: [col0@1 ASC NULLS LAST]. Child-0 order: [[pk@0 ASC NULLS LAST]]
-skipif Datafusion
 query II nosort label-8890-2
 SELECT pk, col0 FROM tab4 WHERE col0 IN (SELECT col3 FROM tab4 WHERE (col3 IS NULL)) ORDER BY 2
 ----

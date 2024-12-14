@@ -109,9 +109,11 @@ SELECT tab2.col2 * - tab2.col2 FROM tab2 GROUP BY col2
 -6241
 -7569
 
-# PostgreSQL has strict column usage for GROUP BY clauses
+#  PostgreSQL has strict column usage for GROUP BY clauses
 skipif postgresql
 # Datafusion - Error during planning: Projection references non-aggregate values: Expression tab1.col2 could not be resolved from available colum
+# Postgresql - Postgres error: db error: ERROR: column "tab1.col2" must appear in the GROUP BY clause or be used in an aggregate function
+skipif postgres
 skipif Datafusion
 query I rowsort label-11
 SELECT + ( COALESCE ( + 29, + tab1.col2 ) ) / - tab1.col1 AS col0 FROM tab1 GROUP BY col1
@@ -504,6 +506,11 @@ SELECT ALL + - col0 * tab1.col0 FROM tab1 GROUP BY tab1.col0
 -484
 -6724
 -784
+
+query I rowsort label-70
+SELECT DISTINCT + CAST ( NULL AS INTEGER ) + 92 AS col2 FROM tab1 AS cor0 GROUP BY cor0.col0, cor0.col0
+----
+NULL
 
 query I rowsort
 SELECT 44 + - col1 FROM tab0 AS cor0 GROUP BY col1
@@ -1473,9 +1480,11 @@ SELECT - 89 FROM tab0 GROUP BY tab0.col0
 -89
 -89
 
-# PostgreSQL has strict column usage for GROUP BY clauses
+#  PostgreSQL has strict column usage for GROUP BY clauses
 skipif postgresql
 # Datafusion - Error during planning: Projection references non-aggregate values: Expression cor0.col2 could not be resolved from available colum
+# Postgresql - Postgres error: db error: ERROR: column "cor0.col2" must appear in the GROUP BY clause or be used in an aggregate function
+skipif postgres
 skipif Datafusion
 query I rowsort
 SELECT - COALESCE ( - 4, cor0.col0 * col0, ( - cor0.col2 ) ) * cor0.col0 AS col1 FROM tab0 AS cor0 GROUP BY col0
@@ -2230,6 +2239,11 @@ SELECT - ( tab2.col2 ) - + col2 FROM tab2 GROUP BY col2
 -158
 -174
 
+query I rowsort label-332
+SELECT DISTINCT - 93 - cor0.col2 / - 74 FROM tab1 cor0 GROUP BY cor0.col2, cor0.col1, cor0.col2
+----
+-93
+
 query I rowsort
 SELECT - cor0.col1 FROM tab1 AS cor0 GROUP BY col1, cor0.col0
 ----
@@ -2903,9 +2917,11 @@ SELECT ALL - + ( 46 ) AS col0 FROM tab0 GROUP BY tab0.col1
 -46
 -46
 
-# PostgreSQL has strict column usage for GROUP BY clauses
+#  PostgreSQL has strict column usage for GROUP BY clauses
 skipif postgresql
 # Datafusion - Error during planning: Projection references non-aggregate values: Expression tab0.col1 could not be resolved from available colum
+# Postgresql - Postgres error: db error: ERROR: column "tab0.col1" must appear in the GROUP BY clause or be used in an aggregate function
+skipif postgres
 skipif Datafusion
 query I rowsort
 SELECT NULLIF ( - col2, tab0.col2 * - COALESCE ( + 59, col1, col2 ) ) + COALESCE ( 83, tab0.col2 + - ( tab0.col2 ) * + tab0.col2 ) AS col1 FROM tab0 GROUP BY tab0.col2
@@ -3590,9 +3606,11 @@ SELECT ALL + 75 AS col1 FROM tab0 GROUP BY tab0.col0
 75
 75
 
-# PostgreSQL has strict column usage for GROUP BY clauses
+#  PostgreSQL has strict column usage for GROUP BY clauses
 skipif postgresql
 # Datafusion - Error during planning: Projection references non-aggregate values: Expression tab1.col2 could not be resolved from available colum
+# Postgresql - Postgres error: db error: ERROR: column "tab1.col2" must appear in the GROUP BY clause or be used in an aggregate function
+skipif postgres
 skipif Datafusion
 query I rowsort
 SELECT + 20 * COALESCE ( 95, - tab1.col2, - tab1.col1 ) FROM tab1 GROUP BY tab1.col0
@@ -3722,9 +3740,11 @@ SELECT DISTINCT ( cor0.col0 ) AS col2 FROM tab1 AS cor0 GROUP BY cor0.col0
 28
 82
 
-# PostgreSQL has strict column usage for GROUP BY clauses
+#  PostgreSQL has strict column usage for GROUP BY clauses
 skipif postgresql
 # Datafusion - Error during planning: Projection references non-aggregate values: Expression cor0.col1 could not be resolved from available colum
+# Postgresql - Postgres error: db error: ERROR: column "cor0.col1" must appear in the GROUP BY clause or be used in an aggregate function
+skipif postgres
 skipif Datafusion
 query I rowsort
 SELECT ALL COALESCE ( 10, cor0.col1, - cor0.col2 + + 31 ) * 25 + cor0.col2 * + ( 75 ) AS col2 FROM tab1 AS cor0 GROUP BY cor0.col0, cor0.col2
@@ -4103,6 +4123,11 @@ SELECT ALL + - 7 + tab0.col0 FROM tab0 GROUP BY tab0.col0
 36
 76
 
+query I rowsort label-616
+SELECT DISTINCT - + tab0.col0 / tab0.col0 AS col2 FROM tab0 GROUP BY tab0.col0
+----
+-1
+
 query I rowsort
 SELECT DISTINCT - + col2 AS col0 FROM tab2 GROUP BY tab2.col2
 ----
@@ -4110,9 +4135,11 @@ SELECT DISTINCT - + col2 AS col0 FROM tab2 GROUP BY tab2.col2
 -79
 -87
 
-# PostgreSQL has strict column usage for GROUP BY clauses
+#  PostgreSQL has strict column usage for GROUP BY clauses
 skipif postgresql
 # Datafusion - Error during planning: Projection references non-aggregate values: Expression tab0.col2 could not be resolved from available colum
+# Postgresql - Postgres error: db error: ERROR: column "tab0.col2" must appear in the GROUP BY clause or be used in an aggregate function
+skipif postgres
 skipif Datafusion
 query I rowsort
 SELECT col1 * COALESCE ( 32, - col2 ) AS col2 FROM tab0 GROUP BY col1
@@ -4642,6 +4669,11 @@ SELECT ALL + 76 * - tab1.col2 FROM tab1 GROUP BY tab1.col2
 -5396
 -608
 
+query I rowsort label-696
+SELECT DISTINCT 87 + tab0.col0 / - col0 FROM tab0 GROUP BY col0
+----
+86
+
 query I rowsort
 SELECT DISTINCT tab2.col0 + tab2.col0 FROM tab2 GROUP BY tab2.col0
 ----
@@ -4737,6 +4769,8 @@ SELECT DISTINCT + 36 / - NULLIF ( cor0.col0, + col0 * 36 + - 75 ) FROM tab0 AS c
 0
 
 # Datafusion - Error during planning: Projection references non-aggregate values: Expression cor0.col2 could not be resolved from available colum
+# Postgresql - Postgres error: db error: ERROR: column "cor0.col2" must appear in the GROUP BY clause or be used in an aggregate function
+skipif postgres
 skipif Datafusion
 query I rowsort
 SELECT DISTINCT + COALESCE ( 98, + col2, 62 + cor0.col2 ) col1 FROM tab2 AS cor0 GROUP BY cor0.col1
@@ -4759,6 +4793,11 @@ SELECT ALL - ( + 54 ) col1 FROM tab1 GROUP BY tab1.col2
 -54
 -54
 -54
+
+query I rowsort label-715
+SELECT DISTINCT + + tab2.col2 / tab2.col2 AS col1 FROM tab2 GROUP BY tab2.col2
+----
+1
 
 query I rowsort
 SELECT DISTINCT - 84 - tab1.col1 FROM tab1 GROUP BY tab1.col1
@@ -4851,9 +4890,11 @@ SELECT DISTINCT + cor0.col1 AS col1 FROM tab2 cor0 GROUP BY cor0.col1
 59
 61
 
-# PostgreSQL has strict column usage for GROUP BY clauses
+#  PostgreSQL has strict column usage for GROUP BY clauses
 skipif postgresql
 # Datafusion - Error during planning: Projection references non-aggregate values: Expression cor0.col0 could not be resolved from available colum
+# Postgresql - Postgres error: db error: ERROR: column "cor0.col0" must appear in the GROUP BY clause or be used in an aggregate function
+skipif postgres
 skipif Datafusion
 query I rowsort
 SELECT DISTINCT 73 * COALESCE ( 82, cor0.col0 - - CASE cor0.col1 WHEN - col2 / + CASE cor0.col2 WHEN + 66 * - cor0.col2 THEN NULL WHEN COALESCE ( + cor0.col1, + cor0.col1 + cor0.col1 * - cor0.col0, - cor0.col2 * col2 ) THEN cor0.col1 END THEN - cor0.col0 + + cor0.col1 ELSE + cor0.col0 END * - cor0.col0 ) FROM tab0 AS cor0 GROUP BY cor0.col2
@@ -4906,9 +4947,11 @@ SELECT DISTINCT 19 AS col0 FROM tab1 GROUP BY tab1.col2
 ----
 19
 
-# PostgreSQL has strict column usage for GROUP BY clauses
+#  PostgreSQL has strict column usage for GROUP BY clauses
 skipif postgresql
 # Datafusion - Error during planning: Projection references non-aggregate values: Expression cor0.col0 could not be resolved from available colum
+# Postgresql - Postgres error: db error: ERROR: column "cor0.col0" must appear in the GROUP BY clause or be used in an aggregate function
+skipif postgres
 skipif Datafusion
 query I rowsort label-738
 SELECT ALL COALESCE ( 98, - col0 + - cor0.col2 / + cor0.col1 ) FROM tab2 AS cor0 GROUP BY cor0.col1, cor0.col1
@@ -4998,6 +5041,11 @@ SELECT 87 AS col2 FROM tab1 AS cor0 GROUP BY col1
 87
 87
 
+query I rowsort label-751
+SELECT DISTINCT - tab1.col1 / tab1.col1 AS col2 FROM tab1 GROUP BY tab1.col1
+----
+-1
+
 query I rowsort
 SELECT 39 FROM tab1 AS cor0 GROUP BY cor0.col1
 ----
@@ -5031,9 +5079,11 @@ SELECT + 61 AS col2 FROM tab0 AS cor0 GROUP BY cor0.col0, cor0.col0
 61
 61
 
-# PostgreSQL has strict column usage for GROUP BY clauses
+#  PostgreSQL has strict column usage for GROUP BY clauses
 skipif postgresql
 # Datafusion - Error during planning: Projection references non-aggregate values: Expression cor0.col2 could not be resolved from available colum
+# Postgresql - Postgres error: db error: ERROR: column "cor0.col2" must appear in the GROUP BY clause or be used in an aggregate function
+skipif postgres
 skipif Datafusion
 query I rowsort
 SELECT - COALESCE ( - 31, cor0.col2, ( 36 ), cor0.col1 ) FROM tab0 cor0 GROUP BY cor0.col0, cor0.col1
@@ -5356,6 +5406,11 @@ SELECT DISTINCT + 49 * + tab1.col0 AS col0 FROM tab1 GROUP BY tab1.col0
 1078
 1372
 4018
+
+query I rowsort label-804
+SELECT DISTINCT - tab1.col0 / - tab1.col0 FROM tab1 GROUP BY tab1.col0
+----
+1
 
 query I rowsort
 SELECT ALL + COALESCE ( 87, cor0.col2 ) AS col2 FROM tab1 AS cor0 GROUP BY cor0.col2
@@ -5784,9 +5839,11 @@ SELECT ALL - cor0.col0 AS col2 FROM tab1 AS cor0 GROUP BY cor0.col2, cor0.col0
 -28
 -82
 
-# PostgreSQL has strict column usage for GROUP BY clauses
+#  PostgreSQL has strict column usage for GROUP BY clauses
 skipif postgresql
 # Datafusion - Error during planning: Projection references non-aggregate values: Expression tab0.col1 could not be resolved from available colum
+# Postgresql - Postgres error: db error: ERROR: column "tab0.col1" must appear in the GROUP BY clause or be used in an aggregate function
+skipif postgres
 skipif Datafusion
 query I rowsort label-869
 SELECT ALL - COALESCE ( 90, + tab0.col1 * 71 + + tab0.col1 / tab0.col0, - tab0.col0 * + tab0.col2 ) * 3 AS col0 FROM tab0 GROUP BY col2
@@ -5873,6 +5930,11 @@ SELECT ALL - col2 * 67 FROM tab1 GROUP BY tab1.col2
 -3015
 -4757
 -536
+
+query I rowsort label-882
+SELECT DISTINCT tab1.col2 / + tab1.col2 AS col1 FROM tab1 GROUP BY tab1.col2
+----
+1
 
 query I rowsort
 SELECT cor0.col1 AS col0 FROM tab0 AS cor0 GROUP BY cor0.col0, cor0.col1, cor0.col2
@@ -6212,9 +6274,11 @@ SELECT ALL 78 + - 74 AS col2 FROM tab2 GROUP BY tab2.col2
 4
 4
 
-# PostgreSQL has strict column usage for GROUP BY clauses
+#  PostgreSQL has strict column usage for GROUP BY clauses
 skipif postgresql
 # Datafusion - Error during planning: Projection references non-aggregate values: Expression tab2.col0 could not be resolved from available colum
+# Postgresql - Postgres error: db error: ERROR: column "tab2.col0" must appear in the GROUP BY clause or be used in an aggregate function
+skipif postgres
 skipif Datafusion
 query I rowsort
 SELECT DISTINCT - COALESCE ( 59, tab2.col0 ) AS col1 FROM tab2 GROUP BY tab2.col2
@@ -6599,6 +6663,8 @@ SELECT 59 AS col0 FROM tab1 GROUP BY tab1.col0
 59
 
 # Datafusion - Error during planning: Projection references non-aggregate values: Expression tab0.col2 could not be resolved from available colum
+# Postgresql - Postgres error: db error: ERROR: column "tab0.col2" must appear in the GROUP BY clause or be used in an aggregate function
+skipif postgres
 skipif Datafusion
 query I rowsort label-992
 SELECT ALL + + COALESCE ( + 71, - tab0.col2 - CAST ( NULL AS INTEGER ) / col2, tab0.col0 ) + + tab0.col0 col0 FROM tab0 GROUP BY tab0.col0
@@ -6641,6 +6707,11 @@ SELECT + - 70 AS col1 FROM tab0 GROUP BY tab0.col2
 -70
 -70
 -70
+
+query I rowsort label-998
+SELECT DISTINCT - 45 + tab0.col2 / + tab0.col2 AS col2 FROM tab0 GROUP BY tab0.col2
+----
+-44
 
 query I rowsort
 SELECT 87 FROM tab2 cor0 GROUP BY col0, cor0.col0
@@ -6701,9 +6772,11 @@ SELECT ALL + - 7 FROM tab2 GROUP BY tab2.col0
 -7
 -7
 
-# PostgreSQL has strict column usage for GROUP BY clauses
+#  PostgreSQL has strict column usage for GROUP BY clauses
 skipif postgresql
 # Datafusion - Error during planning: Projection references non-aggregate values: Expression tab1.col0 could not be resolved from available colum
+# Postgresql - Postgres error: db error: ERROR: column "tab1.col0" must appear in the GROUP BY clause or be used in an aggregate function
+skipif postgres
 skipif Datafusion
 query I rowsort
 SELECT ALL - + COALESCE ( + 73, tab1.col0 ) AS col0 FROM tab1 GROUP BY tab1.col2
@@ -6857,6 +6930,11 @@ SELECT 9 * cor0.col1 FROM tab2 AS cor0 GROUP BY cor0.col1
 369
 531
 549
+
+query I rowsort label-1031
+SELECT DISTINCT CAST ( NULL AS INTEGER ) / - cor0.col1 FROM tab1 AS cor0 GROUP BY col1
+----
+NULL
 
 query I rowsort
 SELECT + + tab0.col1 col2 FROM tab0 GROUP BY tab0.col1
@@ -7028,6 +7106,11 @@ SELECT + cor0.col1 col2 FROM tab1 AS cor0 GROUP BY cor0.col2, col1
 57
 6
 
+query I rowsort label-1058
+SELECT DISTINCT cor0.col2 / cor0.col2 AS col1 FROM tab0 AS cor0 GROUP BY cor0.col2
+----
+1
+
 query I rowsort
 SELECT cor1.col2 FROM tab0 AS cor0 CROSS JOIN tab1 cor1 GROUP BY cor1.col2
 ----
@@ -7197,9 +7280,11 @@ SELECT ALL + 17 - - tab2.col2 FROM tab2 GROUP BY col2
 75
 96
 
-# PostgreSQL has strict column usage for GROUP BY clauses
+#  PostgreSQL has strict column usage for GROUP BY clauses
 skipif postgresql
 # Datafusion - Error during planning: Projection references non-aggregate values: Expression tab1.col1 could not be resolved from available colum
+# Postgresql - Postgres error: db error: ERROR: column "tab1.col1" must appear in the GROUP BY clause or be used in an aggregate function
+skipif postgres
 skipif Datafusion
 query I rowsort
 SELECT DISTINCT COALESCE ( + 49, col1, tab1.col0 + tab1.col1 ) FROM tab1 GROUP BY col2
@@ -7300,9 +7385,11 @@ SELECT + 5 FROM tab0 cor0 GROUP BY cor0.col2
 5
 5
 
-# PostgreSQL has strict column usage for GROUP BY clauses
+#  PostgreSQL has strict column usage for GROUP BY clauses
 skipif postgresql
 # Datafusion - Error during planning: Projection references non-aggregate values: Expression tab1.col1 could not be resolved from available colum
+# Postgresql - Postgres error: db error: ERROR: column "tab1.col1" must appear in the GROUP BY clause or be used in an aggregate function
+skipif postgres
 skipif Datafusion
 query I rowsort
 SELECT COALESCE ( + 78, + tab1.col2 + - tab1.col1 ) AS col1 FROM tab1 GROUP BY tab1.col2
@@ -8164,6 +8251,11 @@ SELECT + col1 * + 22 - - 31 * 23 AS col0 FROM tab2 cor0 GROUP BY cor0.col1, col0
 2011
 2055
 
+query I rowsort label-1228
+SELECT DISTINCT + cor0.col1 / 62 FROM tab2 AS cor0 GROUP BY cor0.col1
+----
+0
+
 query I rowsort
 SELECT ALL + 90 AS col1 FROM tab0 GROUP BY tab0.col1
 ----
@@ -8301,6 +8393,11 @@ SELECT ALL - ( - ( - cor0.col1 ) ) AS col1 FROM tab1 AS cor0 GROUP BY cor0.col1
 -44
 -57
 -6
+
+query I rowsort label-1250
+SELECT DISTINCT + CAST ( NULL AS INTEGER ) AS col2 FROM tab0 GROUP BY tab0.col1
+----
+NULL
 
 query I rowsort
 SELECT DISTINCT + tab1.col2 - - 3 AS col1 FROM tab1 GROUP BY tab1.col2
@@ -8446,6 +8543,11 @@ SELECT + 83 * 74 AS col2 FROM tab1 GROUP BY tab1.col0
 6142
 6142
 
+query I rowsort label-1272
+SELECT DISTINCT 70 / + 16 AS col1 FROM tab2 GROUP BY tab2.col0
+----
+4
+
 query I rowsort
 SELECT - tab1.col2 * + tab1.col2 AS col1 FROM tab1 GROUP BY tab1.col2
 ----
@@ -8477,6 +8579,16 @@ SELECT ALL col0 * - cor0.col1 FROM tab2 AS cor0 GROUP BY cor0.col1, cor0.col0
 -3772
 -5369
 -915
+
+query I rowsort label-1278
+SELECT DISTINCT + col0 / col0 AS col2 FROM tab2 GROUP BY tab2.col0
+----
+1
+
+query I rowsort label-1279
+SELECT DISTINCT + CAST ( - 3 AS INTEGER ) AS col0 FROM tab0 GROUP BY tab0.col0
+----
+-3
 
 query I rowsort
 SELECT 97 AS col1 FROM tab2 AS cor0 GROUP BY cor0.col1
@@ -8998,6 +9110,11 @@ SELECT 45 AS col1 FROM tab1 GROUP BY tab1.col2
 45
 45
 
+query I rowsort label-1359
+SELECT DISTINCT + + CAST ( NULL AS INTEGER ) AS col2 FROM tab0 GROUP BY col2
+----
+NULL
+
 query I rowsort
 SELECT ALL + tab2.col1 * + tab2.col1 AS col0 FROM tab2 GROUP BY tab2.col1
 ----
@@ -9165,6 +9282,11 @@ SELECT tab2.col1 AS col2 FROM tab2 GROUP BY col1
 41
 59
 61
+
+query I rowsort label-1385
+SELECT DISTINCT 57 / 78 AS col2 FROM tab2 cor0 GROUP BY cor0.col0, cor0.col2
+----
+0
 
 query I rowsort
 SELECT ALL cor0.col2 FROM tab1 cor0 GROUP BY cor0.col2, cor0.col1
@@ -9442,6 +9564,11 @@ SELECT ALL cor1.col1 AS col2 FROM tab2 cor0 CROSS JOIN tab0 AS cor1 GROUP BY cor
 0
 81
 
+query I rowsort label-1429
+SELECT DISTINCT - tab0.col0 / - tab0.col0 col0 FROM tab0 GROUP BY tab0.col0
+----
+1
+
 query I rowsort label-1430
 SELECT - cor0.col0 / ( - 54 ) col1 FROM tab0 cor0 GROUP BY cor0.col0
 ----
@@ -9549,6 +9676,11 @@ SELECT ALL - tab2.col0 + tab2.col0 AS col1 FROM tab2 GROUP BY col0 HAVING NOT NU
 0
 0
 
+query I rowsort label-1446
+SELECT DISTINCT - CAST ( NULL AS INTEGER ) FROM tab0 GROUP BY tab0.col2
+----
+NULL
+
 query I rowsort
 SELECT col0 + - tab0.col0 FROM tab0 GROUP BY tab0.col0
 ----
@@ -9622,9 +9754,11 @@ SELECT col0 * + cor0.col1 FROM tab0 AS cor0 GROUP BY cor0.col1, cor0.col0
 0
 3483
 
-# PostgreSQL has strict column usage for GROUP BY clauses
+#  PostgreSQL has strict column usage for GROUP BY clauses
 skipif postgresql
 # Datafusion - Error during planning: Projection references non-aggregate values: Expression cor0.col0 could not be resolved from available colum
+# Postgresql - Postgres error: db error: ERROR: column "cor0.col0" must appear in the GROUP BY clause or be used in an aggregate function
+skipif postgres
 skipif Datafusion
 query I rowsort
 SELECT cor0.col1 + COALESCE ( 35, cor0.col0 - cor0.col2, + cor0.col0 - - CASE cor0.col0 + + cor0.col1 / cor0.col1 WHEN + cor0.col2 * cor0.col2 THEN + cor0.col0 + cor0.col2 WHEN cor0.col2 THEN NULL END, cor0.col2 * cor0.col2 ) AS col1 FROM tab1 AS cor0 GROUP BY cor0.col1
@@ -10343,6 +10477,11 @@ SELECT - 14 - tab1.col0 FROM tab1 GROUP BY tab1.col0
 -42
 -96
 
+query I rowsort label-1567
+SELECT DISTINCT - tab0.col0 / - 99 AS col0 FROM tab0 GROUP BY tab0.col0
+----
+0
+
 query I rowsort
 SELECT - tab1.col2 col2 FROM tab1 GROUP BY tab1.col2
 ----
@@ -10419,9 +10558,11 @@ SELECT 14 + 18 FROM tab0 GROUP BY tab0.col0
 32
 32
 
-# PostgreSQL has strict column usage for GROUP BY clauses
+#  PostgreSQL has strict column usage for GROUP BY clauses
 skipif postgresql
 # Datafusion - Error during planning: Projection references non-aggregate values: Expression tab0.col2 could not be resolved from available colum
+# Postgresql - Postgres error: db error: ERROR: column "tab0.col2" must appear in the GROUP BY clause or be used in an aggregate function
+skipif postgres
 skipif Datafusion
 query I rowsort
 SELECT COALESCE ( 27, tab0.col2 ) * tab0.col0 FROM tab0 GROUP BY tab0.col0
@@ -11108,6 +11249,11 @@ SELECT DISTINCT + col1 col2 FROM tab2 AS cor0 GROUP BY cor0.col1
 59
 61
 
+query I rowsort label-1684
+SELECT DISTINCT 18 / 21 AS col0 FROM tab2 cor0 GROUP BY col2
+----
+0
+
 query I rowsort
 SELECT + - 51 col2 FROM tab2 GROUP BY tab2.col0
 ----
@@ -11628,9 +11774,11 @@ SELECT DISTINCT 91 FROM tab0 AS cor0 GROUP BY cor0.col0
 ----
 91
 
-# PostgreSQL has strict column usage for GROUP BY clauses
+#  PostgreSQL has strict column usage for GROUP BY clauses
 skipif postgresql
 # Datafusion - Error during planning: Projection references non-aggregate values: Expression cor0.col1 could not be resolved from available colum
+# Postgresql - Postgres error: db error: ERROR: column "cor0.col1" must appear in the GROUP BY clause or be used in an aggregate function
+skipif postgres
 skipif Datafusion
 query I rowsort
 SELECT DISTINCT - COALESCE ( - 70, cor0.col1 ) AS col0 FROM tab1 AS cor0 GROUP BY cor0.col0
@@ -11643,6 +11791,11 @@ SELECT ALL + 43 * col2 FROM tab2 AS cor0 GROUP BY cor0.col2
 2494
 3397
 3741
+
+query I rowsort label-1766
+SELECT DISTINCT + tab1.col0 / tab1.col0 FROM tab1 GROUP BY tab1.col0
+----
+1
 
 query I rowsort
 SELECT - cor0.col0 AS col0 FROM tab0 AS cor0 GROUP BY cor0.col1, col0
@@ -11685,6 +11838,11 @@ SELECT - ( + col1 ) AS col0 FROM tab1 GROUP BY tab1.col1
 -44
 -57
 -6
+
+query I rowsort label-1773
+SELECT DISTINCT - cor0.col1 / - 84 col2 FROM tab1 AS cor0 GROUP BY col1
+----
+0
 
 query I rowsort
 SELECT ALL + - 12 AS col0 FROM tab2 GROUP BY tab2.col2
@@ -11900,6 +12058,11 @@ SELECT DISTINCT 92 AS col0 FROM tab0 AS cor0 GROUP BY cor0.col2
 ----
 92
 
+query I rowsort label-1806
+SELECT DISTINCT + 82 / 92 FROM tab2 AS cor0 GROUP BY col0
+----
+0
+
 query I rowsort
 SELECT 96 FROM tab0 GROUP BY tab0.col2
 ----
@@ -11996,6 +12159,11 @@ SELECT + - 59 col0 FROM tab2 GROUP BY col1
 -59
 -59
 -59
+
+query I rowsort label-1821
+SELECT DISTINCT CAST ( NULL AS INTEGER ) + col0 / - 12 FROM tab1 AS cor0 GROUP BY col0
+----
+NULL
 
 query I rowsort
 SELECT - + ( - cor0.col0 ) FROM tab0, tab1 AS cor0 GROUP BY cor0.col0
@@ -12189,6 +12357,11 @@ SELECT DISTINCT + col1 AS col0 FROM tab1 cor0 GROUP BY col1
 57
 6
 
+query I rowsort label-1851
+SELECT DISTINCT COALESCE ( - 7, cor0.col2 ) + - 41 * + NULLIF ( + cor0.col0 / cor0.col0, - 9 ) FROM tab0 cor0 GROUP BY cor0.col0, cor0.col1, cor0.col2
+----
+-48
+
 query I rowsort
 SELECT ALL - col0 AS col0 FROM tab1 AS cor0 GROUP BY cor0.col0, cor0.col0
 ----
@@ -12209,6 +12382,11 @@ SELECT ALL tab1.col0 col1 FROM tab1 GROUP BY tab1.col0
 22
 28
 82
+
+query I rowsort label-1855
+SELECT DISTINCT - + CAST ( NULL AS INTEGER ) AS col2 FROM tab0 GROUP BY col1
+----
+NULL
 
 query I rowsort
 SELECT + - 14 col2 FROM tab1 GROUP BY tab1.col2
@@ -13106,9 +13284,11 @@ SELECT + tab0.col1 * 52 FROM tab0 GROUP BY tab0.col1
 0
 4212
 
-# PostgreSQL has strict column usage for GROUP BY clauses
+#  PostgreSQL has strict column usage for GROUP BY clauses
 skipif postgresql
 # Datafusion - Error during planning: Projection references non-aggregate values: Expression tab2.col0 could not be resolved from available colum
+# Postgresql - Postgres error: db error: ERROR: column "tab2.col0" must appear in the GROUP BY clause or be used in an aggregate function
+skipif postgres
 skipif Datafusion
 query I rowsort
 SELECT + + COALESCE ( 38, - tab2.col0 + - tab2.col2 ) * tab2.col1 AS col1 FROM tab2 GROUP BY tab2.col1
@@ -13197,9 +13377,11 @@ SELECT + 79 FROM tab1 cor0 GROUP BY cor0.col1
 79
 79
 
-# PostgreSQL has strict column usage for GROUP BY clauses
+#  PostgreSQL has strict column usage for GROUP BY clauses
 skipif postgresql
 # Datafusion - Error during planning: Projection references non-aggregate values: Expression cor0.col2 could not be resolved from available colum
+# Postgresql - Postgres error: db error: ERROR: column "cor0.col2" must appear in the GROUP BY clause or be used in an aggregate function
+skipif postgres
 skipif Datafusion
 query I rowsort label-2004
 SELECT DISTINCT cor0.col1 * COALESCE ( + 14, cor0.col2 / + cor0.col0 + cor0.col2, - cor0.col1 ) AS col0 FROM tab2 AS cor0 GROUP BY cor0.col0, cor0.col1
@@ -13335,9 +13517,11 @@ SELECT + tab0.col0 * col0 FROM tab0 GROUP BY col0
 676
 6889
 
-# PostgreSQL has strict column usage for GROUP BY clauses
+#  PostgreSQL has strict column usage for GROUP BY clauses
 skipif postgresql
 # Datafusion - Error during planning: Projection references non-aggregate values: Expression tab0.col0 could not be resolved from available colum
+# Postgresql - Postgres error: db error: ERROR: column "tab0.col0" must appear in the GROUP BY clause or be used in an aggregate function
+skipif postgres
 skipif Datafusion
 query I rowsort
 SELECT ALL - - tab0.col2 * COALESCE ( - 18, + tab0.col0 * CASE 98 WHEN - tab0.col0 THEN NULL WHEN - tab0.col2 - tab0.col2 * tab0.col2 THEN NULL WHEN + tab0.col2 THEN tab0.col1 * tab0.col0 ELSE NULL END, tab0.col1 ) FROM tab0 GROUP BY col2
@@ -13602,6 +13786,11 @@ SELECT - 62 AS col1 FROM tab0 GROUP BY tab0.col2
 -62
 -62
 -62
+
+query I rowsort label-2064
+SELECT DISTINCT + - tab1.col2 / - col2 + col2 / 84 FROM tab1 GROUP BY col2
+----
+1
 
 query I rowsort
 SELECT DISTINCT - + 46 AS col1 FROM tab0 GROUP BY tab0.col2
@@ -14276,9 +14465,11 @@ SELECT 14 FROM tab0 AS cor0 CROSS JOIN tab0 AS cor1 GROUP BY cor0.col0
 14
 14
 
-# PostgreSQL has strict column usage for GROUP BY clauses
+#  PostgreSQL has strict column usage for GROUP BY clauses
 skipif postgresql
 # Datafusion - Error during planning: Projection references non-aggregate values: Expression cor0.col1 could not be resolved from available colum
+# Postgresql - Postgres error: db error: ERROR: column "cor0.col1" must appear in the GROUP BY clause or be used in an aggregate function
+skipif postgres
 skipif Datafusion
 query I rowsort
 SELECT ALL COALESCE ( - 97, + cor0.col1 + NULLIF ( + cor0.col0 + - cor0.col0, cor0.col0 ) ) FROM tab0 AS cor0 GROUP BY cor0.col2
@@ -14324,6 +14515,11 @@ SELECT - 24 FROM tab0 GROUP BY tab0.col2
 -24
 -24
 -24
+
+query I rowsort label-2175
+SELECT DISTINCT cor0.col0 / - cor0.col0 AS col2 FROM tab0 cor0 GROUP BY cor0.col0
+----
+-1
 
 query I rowsort
 SELECT 81 AS col2 FROM tab2 GROUP BY tab2.col1
@@ -14378,9 +14574,19 @@ SELECT DISTINCT col0 + + tab0.col0 col1 FROM tab0 GROUP BY tab0.col0
 52
 86
 
-# PostgreSQL has strict column usage for GROUP BY clauses
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
+query R rowsort label-2184
+SELECT DISTINCT - CAST ( NULL AS REAL ) + NULLIF ( 48, tab0.col1 ) AS col2 FROM tab0 GROUP BY tab0.col1
+----
+NULL
+
+#  PostgreSQL has strict column usage for GROUP BY clauses
 skipif postgresql
 # Datafusion - Error during planning: Projection references non-aggregate values: Expression tab1.col0 could not be resolved from available colum
+# Postgresql - Postgres error: db error: ERROR: column "tab1.col0" must appear in the GROUP BY clause or be used in an aggregate function
+skipif postgres
 skipif Datafusion
 query I rowsort
 SELECT ALL + + tab1.col1 * COALESCE ( 23, tab1.col0 * 50 ) FROM tab1 GROUP BY tab1.col1
@@ -14414,6 +14620,11 @@ SELECT tab0.col2 + - tab0.col2 / - col2 FROM tab0 GROUP BY tab0.col2
 25
 39
 80
+
+query I rowsort label-2190
+SELECT DISTINCT tab2.col0 / - tab2.col0 AS col1 FROM tab2 GROUP BY tab2.col0
+----
+-1
 
 query I rowsort
 SELECT ALL + + col0 AS col1 FROM tab1 GROUP BY tab1.col0
@@ -14684,6 +14895,11 @@ SELECT ALL - 76 AS col1 FROM tab0 GROUP BY col2
 -76
 -76
 -76
+
+query I rowsort label-2232
+SELECT DISTINCT + - tab1.col2 / - tab1.col2 FROM tab1 GROUP BY col2
+----
+1
 
 query I rowsort
 SELECT 51 FROM tab1 GROUP BY tab1.col2
@@ -15075,9 +15291,11 @@ SELECT - + 51 + 87 FROM tab0 GROUP BY tab0.col1
 36
 36
 
-# PostgreSQL has strict column usage for GROUP BY clauses
+#  PostgreSQL has strict column usage for GROUP BY clauses
 skipif postgresql
 # Datafusion - Error during planning: Projection references non-aggregate values: Expression cor0.col1 could not be resolved from available colum
+# Postgresql - Postgres error: db error: ERROR: column "cor0.col1" must appear in the GROUP BY clause or be used in an aggregate function
+skipif postgres
 skipif Datafusion
 query I rowsort
 SELECT DISTINCT COALESCE ( - ( 23 ), + cor0.col1 * 73, + cor0.col2 ) * + cor0.col2 AS col0 FROM tab1 AS cor0 GROUP BY cor0.col2
@@ -15105,9 +15323,11 @@ SELECT ALL + 30 AS col1 FROM tab0 AS cor0 GROUP BY cor0.col0, cor0.col1
 30
 30
 
-# PostgreSQL has strict column usage for GROUP BY clauses
+#  PostgreSQL has strict column usage for GROUP BY clauses
 skipif postgresql
 # Datafusion - Error during planning: Projection references non-aggregate values: Expression cor0.col1 could not be resolved from available colum
+# Postgresql - Postgres error: db error: ERROR: column "cor0.col1" must appear in the GROUP BY clause or be used in an aggregate function
+skipif postgres
 skipif Datafusion
 query I rowsort
 SELECT + COALESCE ( + 53, + cor0.col1, col1, 72 ) * cor0.col0 AS col0 FROM tab1 AS cor0 GROUP BY cor0.col0
@@ -15122,9 +15342,11 @@ SELECT ALL - + 17 AS col1 FROM tab0 GROUP BY tab0.col1
 -17
 -17
 
-# PostgreSQL has strict column usage for GROUP BY clauses
+#  PostgreSQL has strict column usage for GROUP BY clauses
 skipif postgresql
 # Datafusion - Error during planning: Projection references non-aggregate values: Expression cor0.col1 could not be resolved from available colum
+# Postgresql - Postgres error: db error: ERROR: column "cor0.col1" must appear in the GROUP BY clause or be used in an aggregate function
+skipif postgres
 skipif Datafusion
 query I rowsort
 SELECT DISTINCT + COALESCE ( - 72, cor0.col1, - cor0.col1 + cor0.col2 * cor0.col2 ) FROM tab0 cor0 GROUP BY cor0.col0
@@ -15145,9 +15367,11 @@ SELECT + tab0.col2 * 52 AS col2 FROM tab0 GROUP BY tab0.col2
 1976
 4108
 
-# PostgreSQL has strict column usage for GROUP BY clauses
+#  PostgreSQL has strict column usage for GROUP BY clauses
 skipif postgresql
 # Datafusion - Error during planning: Projection references non-aggregate values: Expression cor0.col2 could not be resolved from available colum
+# Postgresql - Postgres error: db error: ERROR: column "cor0.col2" must appear in the GROUP BY clause or be used in an aggregate function
+skipif postgres
 skipif Datafusion
 query I rowsort label-2303
 SELECT COALESCE ( - 79, - cor0.col2 / col0, NULLIF ( col2, cor0.col2 ) ) / 92 FROM tab2 AS cor0 GROUP BY cor0.col1
@@ -15162,6 +15386,11 @@ SELECT DISTINCT + - tab2.col2 AS col2 FROM tab2 GROUP BY tab2.col2
 -58
 -79
 -87
+
+query I rowsort label-2305
+SELECT DISTINCT - - 1 / + tab1.col2 AS col0 FROM tab1 GROUP BY tab1.col2
+----
+0
 
 query I rowsort
 SELECT ALL 84 AS col1 FROM tab0 GROUP BY tab0.col2
@@ -15415,9 +15644,11 @@ SELECT - + ( + col2 ) AS col0 FROM tab1 GROUP BY tab1.col2
 -71
 -8
 
-# PostgreSQL has strict column usage for GROUP BY clauses
+#  PostgreSQL has strict column usage for GROUP BY clauses
 skipif postgresql
 # Datafusion - Error during planning: Projection references non-aggregate values: Expression tab2.col1 could not be resolved from available colum
+# Postgresql - Postgres error: db error: ERROR: column "tab2.col1" must appear in the GROUP BY clause or be used in an aggregate function
+skipif postgres
 skipif Datafusion
 query I rowsort label-2345
 SELECT + tab2.col2 * COALESCE ( 15, tab2.col2 + + ( tab2.col1 ) / + tab2.col0 ) FROM tab2 GROUP BY tab2.col2
@@ -16143,6 +16374,11 @@ SELECT cor0.col1 * - cor0.col1 + 42 FROM tab2 AS cor0 GROUP BY cor0.col1
 -3439
 -3679
 
+query I rowsort label-2455
+SELECT DISTINCT - cor0.col1 / - col1 AS col1 FROM tab2 AS cor0 GROUP BY col1
+----
+1
+
 query I rowsort label-2456
 SELECT ALL + cor0.col2 / + cor0.col2 FROM tab2 AS cor0 GROUP BY cor0.col2
 ----
@@ -16281,9 +16517,11 @@ SELECT 21 * + 64 AS col1 FROM tab2 AS cor0 GROUP BY cor0.col2
 1344
 1344
 
-# PostgreSQL has strict column usage for GROUP BY clauses
+#  PostgreSQL has strict column usage for GROUP BY clauses
 skipif postgresql
 # Datafusion - Error during planning: Projection references non-aggregate values: Expression cor0.col2 could not be resolved from available colum
+# Postgresql - Postgres error: db error: ERROR: column "cor0.col2" must appear in the GROUP BY clause or be used in an aggregate function
+skipif postgres
 skipif Datafusion
 query I rowsort
 SELECT DISTINCT COALESCE ( 95, - cor0.col2 * 84, - 58 * col0 ) AS col1 FROM tab1 AS cor0 GROUP BY cor0.col0
@@ -16360,9 +16598,11 @@ SELECT ALL + cor0.col1 * + cor0.col2 AS col1 FROM tab0 AS cor0 GROUP BY col2, co
 0
 1944
 
-# PostgreSQL has strict column usage for GROUP BY clauses
+#  PostgreSQL has strict column usage for GROUP BY clauses
 skipif postgresql
 # Datafusion - Error during planning: Projection references non-aggregate values: Expression cor0.col2 could not be resolved from available colum
+# Postgresql - Postgres error: db error: ERROR: column "cor0.col2" must appear in the GROUP BY clause or be used in an aggregate function
+skipif postgres
 skipif Datafusion
 query I rowsort label-2487
 SELECT cor0.col1 * - COALESCE ( - 54, - cor0.col0, cor0.col0 / CASE cor0.col2 WHEN - cor0.col2 THEN 60 * - cor0.col0 ELSE NULL END ) AS col1 FROM tab2 AS cor0 GROUP BY cor0.col0, cor0.col1
@@ -16502,9 +16742,11 @@ SELECT 96 * - tab2.col0 AS col0 FROM tab2 GROUP BY tab2.col0
 -8736
 -8832
 
-# PostgreSQL has strict column usage for GROUP BY clauses
+#  PostgreSQL has strict column usage for GROUP BY clauses
 skipif postgresql
 # Datafusion - Error during planning: Projection references non-aggregate values: Expression tab0.col2 could not be resolved from available colum
+# Postgresql - Postgres error: db error: ERROR: column "tab0.col2" must appear in the GROUP BY clause or be used in an aggregate function
+skipif postgres
 skipif Datafusion
 query I rowsort
 SELECT 16 - + tab0.col0 * COALESCE ( + 35, tab0.col2 * + col2 ) FROM tab0 GROUP BY tab0.col0
@@ -16687,9 +16929,11 @@ SELECT DISTINCT cor0.col1 AS col0 FROM tab2 cor0 GROUP BY cor0.col1
 59
 61
 
-# PostgreSQL has strict column usage for GROUP BY clauses
+#  PostgreSQL has strict column usage for GROUP BY clauses
 skipif postgresql
 # Datafusion - Error during planning: Projection references non-aggregate values: Expression tab2.col1 could not be resolved from available colum
+# Postgresql - Postgres error: db error: ERROR: column "tab2.col1" must appear in the GROUP BY clause or be used in an aggregate function
+skipif postgres
 skipif Datafusion
 query I rowsort
 SELECT ALL - - COALESCE ( 14, + tab2.col1 ) FROM tab2 GROUP BY tab2.col0
@@ -16830,9 +17074,11 @@ SELECT 10 FROM tab0 AS cor0 CROSS JOIN tab2 AS cor1 GROUP BY cor1.col0
 10
 10
 
-# PostgreSQL has strict column usage for GROUP BY clauses
+#  PostgreSQL has strict column usage for GROUP BY clauses
 skipif postgresql
 # Datafusion - Error during planning: Projection references non-aggregate values: Expression tab1.col0 could not be resolved from available colum
+# Postgresql - Postgres error: db error: ERROR: column "tab1.col0" must appear in the GROUP BY clause or be used in an aggregate function
+skipif postgres
 skipif Datafusion
 query I rowsort
 SELECT + COALESCE ( - 67, + tab1.col1, + tab1.col0, tab1.col0 ) FROM tab1 GROUP BY tab1.col1
@@ -17108,6 +17354,11 @@ SELECT 44 - - 79 FROM tab0 AS cor0 GROUP BY cor0.col2
 123
 123
 
+query I rowsort label-2594
+SELECT DISTINCT - 77 + tab1.col1 * + CAST ( NULL AS INTEGER ) FROM tab1 GROUP BY tab1.col1
+----
+NULL
+
 query I rowsort
 SELECT 92 col2 FROM tab2 AS cor0 GROUP BY cor0.col2, cor0.col1
 ----
@@ -17195,9 +17446,11 @@ SELECT 43 AS col1 FROM tab0 GROUP BY tab0.col2
 43
 43
 
-# PostgreSQL has strict column usage for GROUP BY clauses
+#  PostgreSQL has strict column usage for GROUP BY clauses
 skipif postgresql
 # Datafusion - Error during planning: Projection references non-aggregate values: Expression cor0.col0 could not be resolved from available colum
+# Postgresql - Postgres error: db error: ERROR: column "cor0.col0" must appear in the GROUP BY clause or be used in an aggregate function
+skipif postgres
 skipif Datafusion
 query I rowsort
 SELECT COALESCE ( 29, + cor0.col0 + 3 ) FROM tab2 AS cor0 GROUP BY cor0.col1
@@ -17247,6 +17500,11 @@ SELECT ALL 73 col0 FROM tab1 cor0 GROUP BY cor0.col0
 73
 73
 73
+
+query I rowsort label-2615
+SELECT DISTINCT - cor0.col1 / cor0.col2 FROM tab2 AS cor0 GROUP BY cor0.col2, cor0.col1, cor0.col2
+----
+0
 
 query I rowsort
 SELECT DISTINCT - - 88 AS col1 FROM tab0 GROUP BY tab0.col2
@@ -17535,6 +17793,14 @@ query I rowsort
 SELECT DISTINCT 28 AS col0 FROM tab1 AS cor0 GROUP BY cor0.col2
 ----
 28
+
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
+query R rowsort label-2659
+SELECT DISTINCT + CAST ( NULL AS REAL ) FROM tab0 GROUP BY tab0.col2
+----
+NULL
 
 query I rowsort label-2660
 SELECT ALL - 96 / 76 AS col2 FROM tab2 GROUP BY tab2.col1
@@ -18268,6 +18534,11 @@ SELECT ALL + - tab1.col2 AS col2 FROM tab1 GROUP BY tab1.col2
 -71
 -8
 
+query I rowsort label-2769
+SELECT DISTINCT + cor0.col2 / col2 FROM tab2 AS cor0 GROUP BY cor0.col2
+----
+1
+
 query I rowsort
 SELECT + col2 col0 FROM tab0 AS cor0 GROUP BY cor0.col2
 ----
@@ -18343,6 +18614,11 @@ SELECT - 2 * tab1.col1 FROM tab1 GROUP BY col1
 -114
 -12
 -88
+
+query I rowsort label-2781
+SELECT DISTINCT + 98 / + 92 FROM tab0 AS cor0 GROUP BY cor0.col2
+----
+1
 
 query I rowsort
 SELECT - 63 AS col1 FROM tab1 AS cor0 GROUP BY cor0.col1, cor0.col1
@@ -18462,6 +18738,11 @@ SELECT DISTINCT - 64 col0 FROM tab1 cor0 GROUP BY col2
 ----
 -64
 
+query I rowsort label-2800
+SELECT DISTINCT - tab2.col2 / tab2.col2 AS col1 FROM tab2 GROUP BY tab2.col2
+----
+-1
+
 query I rowsort
 SELECT col1 AS col2 FROM tab1 AS cor0 GROUP BY cor0.col1, cor0.col0
 ----
@@ -18527,6 +18808,11 @@ SELECT + 74 AS col1 FROM tab1 GROUP BY tab1.col1
 74
 74
 74
+
+query I rowsort label-2811
+SELECT DISTINCT CAST ( NULL AS INTEGER ) AS col2 FROM tab1 AS cor0 GROUP BY cor0.col0, cor0.col2
+----
+NULL
 
 query I rowsort
 SELECT - cor0.col2 * - cor0.col2 AS col0 FROM tab2 AS cor0 CROSS JOIN tab0 AS cor1 GROUP BY cor0.col2
@@ -18643,6 +18929,11 @@ SELECT ALL 96 col1 FROM tab2 AS cor0 GROUP BY col2
 96
 96
 96
+
+query I rowsort label-2830
+SELECT DISTINCT - col2 / - cor0.col2 AS col1 FROM tab0 cor0 GROUP BY col2
+----
+1
 
 query I rowsort
 SELECT DISTINCT 55 AS col0 FROM tab2 AS cor0 GROUP BY cor0.col1
@@ -19307,9 +19598,11 @@ SELECT DISTINCT + col2 + 14 * tab2.col2 AS col0 FROM tab2 GROUP BY col2
 1305
 870
 
-# PostgreSQL has strict column usage for GROUP BY clauses
+#  PostgreSQL has strict column usage for GROUP BY clauses
 skipif postgresql
 # Datafusion - Error during planning: Projection references non-aggregate values: Expression tab1.col2 could not be resolved from available colum
+# Postgresql - Postgres error: db error: ERROR: column "tab1.col2" must appear in the GROUP BY clause or be used in an aggregate function
+skipif postgres
 skipif Datafusion
 query I rowsort
 SELECT DISTINCT - - COALESCE ( - 55, + tab1.col2 ) FROM tab1 GROUP BY tab1.col1
@@ -19497,6 +19790,11 @@ SELECT + 79 + - 57 FROM tab1 GROUP BY tab1.col0
 22
 22
 
+query I rowsort label-2959
+SELECT DISTINCT + tab0.col0 / - 93 FROM tab0 GROUP BY tab0.col0
+----
+0
+
 query I rowsort
 SELECT ALL + + col0 AS col0 FROM tab0 GROUP BY tab0.col0
 ----
@@ -19584,9 +19882,11 @@ SELECT - tab2.col2 * + 76 + + tab2.col2 FROM tab2 GROUP BY tab2.col2
 -5925
 -6525
 
-# PostgreSQL has strict column usage for GROUP BY clauses
+#  PostgreSQL has strict column usage for GROUP BY clauses
 skipif postgresql
 # Datafusion - Error during planning: Projection references non-aggregate values: Expression cor0.col2 could not be resolved from available colum
+# Postgresql - Postgres error: db error: ERROR: column "cor0.col2" must appear in the GROUP BY clause or be used in an aggregate function
+skipif postgres
 skipif Datafusion
 query I rowsort label-2973
 SELECT - COALESCE ( 91, - cor0.col2 + cor0.col1 / + cor0.col0, cor0.col2 * cor0.col0 ) * - 27 FROM tab1 AS cor0 GROUP BY cor0.col1
@@ -19716,6 +20016,11 @@ SELECT DISTINCT tab0.col0 + + tab0.col0 * + col0 AS col1 FROM tab0 GROUP BY tab0
 1892
 6972
 702
+
+query I rowsort label-2992
+SELECT DISTINCT + tab0.col0 / - tab0.col0 FROM tab0 GROUP BY tab0.col0
+----
+-1
 
 query I rowsort
 SELECT ALL - 95 AS col2 FROM tab0 AS cor0 GROUP BY cor0.col2
@@ -19868,6 +20173,14 @@ query I rowsort
 SELECT DISTINCT + - 32 FROM tab0 GROUP BY tab0.col1
 ----
 -32
+
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
+query R rowsort label-3016
+SELECT DISTINCT + CAST ( NULL AS REAL ) - + col2 AS col1 FROM tab2 GROUP BY tab2.col2
+----
+NULL
 
 query I rowsort
 SELECT ALL + 55 AS col1 FROM tab1 AS cor0 GROUP BY cor0.col0
@@ -20116,9 +20429,11 @@ SELECT 89 AS col0 FROM tab2 AS cor0 GROUP BY cor0.col1
 89
 89
 
-# PostgreSQL has strict column usage for GROUP BY clauses
+#  PostgreSQL has strict column usage for GROUP BY clauses
 skipif postgresql
 # Datafusion - Error during planning: Projection references non-aggregate values: Expression tab0.col2 could not be resolved from available colum
+# Postgresql - Postgres error: db error: ERROR: column "tab0.col2" must appear in the GROUP BY clause or be used in an aggregate function
+skipif postgres
 skipif Datafusion
 query I rowsort
 SELECT + + COALESCE ( + 5, tab0.col2 ) FROM tab0 GROUP BY col0
@@ -20334,6 +20649,14 @@ SELECT DISTINCT cor0.col2 * 10 AS col1 FROM tab0 cor0 CROSS JOIN tab2 AS cor1 GR
 380
 790
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
+query R rowsort label-3088
+SELECT DISTINCT CAST ( NULL AS REAL ) col2 FROM tab1 cor0 GROUP BY col2
+----
+NULL
+
 query I rowsort
 SELECT DISTINCT ( 92 ) FROM tab1 AS cor0 GROUP BY cor0.col1
 ----
@@ -20444,9 +20767,11 @@ SELECT DISTINCT + + 40 AS col1 FROM tab2 GROUP BY tab2.col0
 ----
 40
 
-# PostgreSQL has strict column usage for GROUP BY clauses
+#  PostgreSQL has strict column usage for GROUP BY clauses
 skipif postgresql
 # Datafusion - Error during planning: Projection references non-aggregate values: Expression cor0.col2 could not be resolved from available colum
+# Postgresql - Postgres error: db error: ERROR: column "cor0.col2" must appear in the GROUP BY clause or be used in an aggregate function
+skipif postgres
 skipif Datafusion
 query I rowsort
 SELECT ALL - COALESCE ( + 2, cor0.col2, cor0.col2 * cor0.col2 ) FROM tab1 cor0 GROUP BY cor0.col1
@@ -20912,9 +21237,11 @@ SELECT DISTINCT - 64 + 40 AS col1 FROM tab1 GROUP BY tab1.col1
 ----
 -24
 
-# PostgreSQL has strict column usage for GROUP BY clauses
+#  PostgreSQL has strict column usage for GROUP BY clauses
 skipif postgresql
 # Datafusion - Error during planning: Projection references non-aggregate values: Expression tab0.col2 could not be resolved from available colum
+# Postgresql - Postgres error: db error: ERROR: column "tab0.col2" must appear in the GROUP BY clause or be used in an aggregate function
+skipif postgres
 skipif Datafusion
 query I rowsort
 SELECT - COALESCE ( 72, col2 + 98 ) AS col1 FROM tab0 GROUP BY tab0.col1
@@ -20994,6 +21321,11 @@ SELECT + tab1.col0 - col0 AS col0 FROM tab1 GROUP BY tab1.col0
 0
 0
 
+query I rowsort label-3187
+SELECT DISTINCT cor0.col2 / cor0.col2 AS col1 FROM tab2 AS cor0 GROUP BY cor0.col2, cor0.col1
+----
+1
+
 query I rowsort
 SELECT ALL col0 FROM tab1 AS cor0 GROUP BY cor0.col1, cor0.col0, cor0.col2, cor0.col0
 ----
@@ -21032,6 +21364,11 @@ SELECT 56 AS col0 FROM tab0 GROUP BY tab0.col1
 ----
 56
 56
+
+query I rowsort label-3194
+SELECT DISTINCT - 18 / cor0.col1 FROM tab2 AS cor0 GROUP BY cor0.col2, cor0.col1
+----
+0
 
 query I rowsort
 SELECT + - 97 FROM tab2 GROUP BY col2
@@ -21902,6 +22239,11 @@ SELECT 91 FROM tab0 AS cor0 CROSS JOIN tab1 AS cor1 GROUP BY cor0.col1, cor0.col
 91
 91
 
+query I rowsort label-3327
+SELECT DISTINCT CAST ( NULL AS INTEGER ) AS col0 FROM tab0 GROUP BY tab0.col2
+----
+NULL
+
 query I rowsort
 SELECT 13 FROM tab0 cor0 GROUP BY cor0.col0
 ----
@@ -22654,6 +22996,11 @@ SELECT + + 23 AS col0 FROM tab1 GROUP BY tab1.col1
 23
 23
 23
+
+query I rowsort label-3442
+SELECT DISTINCT - CAST ( NULL AS INTEGER ) FROM tab0 AS cor0 CROSS JOIN tab2 AS cor1 GROUP BY cor1.col2
+----
+NULL
 
 query I rowsort
 SELECT ALL - 14 FROM tab1 AS cor0 GROUP BY cor0.col1
@@ -23876,6 +24223,11 @@ SELECT ALL col1 / 49 AS col0 FROM tab1 AS cor0 GROUP BY col1
 0
 1
 
+query I rowsort label-3626
+SELECT DISTINCT cor0.col1 / 32 AS col0 FROM tab2 AS cor0 GROUP BY col1, cor0.col1
+----
+1
+
 query I rowsort
 SELECT ALL + cor0.col1 col1 FROM tab0 cor0 GROUP BY col1
 ----
@@ -24099,9 +24451,11 @@ SELECT DISTINCT - + 66 AS col0 FROM tab1 GROUP BY tab1.col2
 ----
 -66
 
-# PostgreSQL has strict column usage for GROUP BY clauses
+#  PostgreSQL has strict column usage for GROUP BY clauses
 skipif postgresql
 # Datafusion - Error during planning: Projection references non-aggregate values: Expression tab0.col0 could not be resolved from available colum
+# Postgresql - Postgres error: db error: ERROR: column "tab0.col0" must appear in the GROUP BY clause or be used in an aggregate function
+skipif postgres
 skipif Datafusion
 query I rowsort
 SELECT DISTINCT + COALESCE ( + 64, tab0.col0 * + tab0.col0 - NULLIF ( tab0.col1 + tab0.col1 * tab0.col0, tab0.col1 + + col1 * tab0.col2 ) ) FROM tab0 GROUP BY tab0.col2
@@ -24254,6 +24608,11 @@ SELECT - 16 + + 73 FROM tab2 AS cor0 GROUP BY cor0.col2, cor0.col0
 57
 57
 57
+
+query I rowsort label-3684
+SELECT DISTINCT 51 / cor0.col2 FROM tab2 AS cor0 GROUP BY cor0.col2, cor0.col2
+----
+0
 
 query I rowsort
 SELECT DISTINCT + cor0.col1 * 56 FROM tab0 AS cor0 GROUP BY cor0.col2, cor0.col1
@@ -24480,6 +24839,8 @@ SELECT ALL - cor0.col0 / cor0.col0 FROM tab2 AS cor0 GROUP BY cor0.col0, cor0.co
 -1
 
 # Datafusion - Error during planning: Projection references non-aggregate values: Expression cor0.col1 could not be resolved from available colum
+# Postgresql - Postgres error: db error: ERROR: column "cor0.col1" must appear in the GROUP BY clause or be used in an aggregate function
+skipif postgres
 skipif Datafusion
 query I rowsort
 SELECT + COALESCE ( 83, - cor0.col0 - cor0.col1 ) + - cor0.col0 * - 98 col2 FROM tab2 cor0 GROUP BY cor0.col0
@@ -24615,6 +24976,11 @@ SELECT ALL - tab2.col1 * 95 FROM tab2 GROUP BY tab2.col1
 -3895
 -5605
 -5795
+
+query I rowsort label-3738
+SELECT DISTINCT + + CAST ( NULL AS INTEGER ) * 26 AS col2 FROM tab1 GROUP BY col1
+----
+NULL
 
 query I rowsort
 SELECT DISTINCT ( - 79 ) AS col1 FROM tab0 GROUP BY tab0.col2
@@ -25505,9 +25871,11 @@ SELECT + 81 * cor0.col2 FROM tab0 AS cor0 GROUP BY cor0.col2
 3078
 6399
 
-# PostgreSQL has strict column usage for GROUP BY clauses
+#  PostgreSQL has strict column usage for GROUP BY clauses
 skipif postgresql
 # Datafusion - Error during planning: Projection references non-aggregate values: Expression cor0.col0 could not be resolved from available colum
+# Postgresql - Postgres error: db error: ERROR: column "cor0.col0" must appear in the GROUP BY clause or be used in an aggregate function
+skipif postgres
 skipif Datafusion
 query I rowsort
 SELECT ALL COALESCE ( 92, cor0.col0, + NULLIF ( + 30, 58 + + cor0.col0 ) * 77 ) FROM tab2 AS cor0 GROUP BY cor0.col2
@@ -25569,6 +25937,11 @@ SELECT ALL + 86 * - cor0.col1 AS col1 FROM tab1 AS cor0 GROUP BY cor0.col1
 -3784
 -4902
 -516
+
+query I rowsort label-3882
+SELECT DISTINCT tab1.col1 / - tab1.col1 FROM tab1 GROUP BY tab1.col1
+----
+-1
 
 query I rowsort
 SELECT DISTINCT col2 * + col2 FROM tab1 GROUP BY tab1.col2
@@ -25787,9 +26160,11 @@ SELECT - cor0.col2 * + 30 FROM tab0 cor0 GROUP BY cor0.col2, cor0.col1
 -2370
 -720
 
-# PostgreSQL has strict column usage for GROUP BY clauses
+#  PostgreSQL has strict column usage for GROUP BY clauses
 skipif postgresql
 # Datafusion - Error during planning: Projection references non-aggregate values: Expression cor0.col0 could not be resolved from available colum
+# Postgresql - Postgres error: db error: ERROR: column "cor0.col0" must appear in the GROUP BY clause or be used in an aggregate function
+skipif postgres
 skipif Datafusion
 query I rowsort label-3916
 SELECT - COALESCE ( 27, col1 * 71, cor0.col0 / cor0.col1 ) AS col0 FROM tab1 AS cor0 GROUP BY cor0.col1
@@ -25859,9 +26234,11 @@ SELECT ALL + cor0.col2 + 34 FROM tab2 AS cor0 GROUP BY cor0.col2, cor0.col0, cor
 121
 92
 
-# PostgreSQL has strict column usage for GROUP BY clauses
+#  PostgreSQL has strict column usage for GROUP BY clauses
 skipif postgresql
 # Datafusion - Error during planning: Projection references non-aggregate values: Expression tab1.col2 could not be resolved from available colum
+# Postgresql - Postgres error: db error: ERROR: column "tab1.col2" must appear in the GROUP BY clause or be used in an aggregate function
+skipif postgres
 skipif Datafusion
 query I rowsort
 SELECT DISTINCT tab1.col1 * COALESCE ( 99, + tab1.col2 * tab1.col1 ) FROM tab1 GROUP BY tab1.col1
@@ -26080,6 +26457,11 @@ SELECT ALL - 28 AS col1 FROM tab2 AS cor0 GROUP BY cor0.col0
 -28
 -28
 
+query I rowsort label-3958
+SELECT DISTINCT tab2.col2 / tab2.col2 FROM tab2 GROUP BY tab2.col2
+----
+1
+
 query I rowsort
 SELECT DISTINCT - 56 AS col0 FROM tab1 GROUP BY tab1.col0
 ----
@@ -26273,9 +26655,11 @@ SELECT cor0.col0 * cor0.col1 AS col1 FROM tab1 AS cor0 GROUP BY cor0.col1, cor0.
 1596
 3608
 
-# PostgreSQL has strict column usage for GROUP BY clauses
+#  PostgreSQL has strict column usage for GROUP BY clauses
 skipif postgresql
 # Datafusion - Error during planning: Projection references non-aggregate values: Expression cor0.col2 could not be resolved from available colum
+# Postgresql - Postgres error: db error: ERROR: column "cor0.col2" must appear in the GROUP BY clause or be used in an aggregate function
+skipif postgres
 skipif Datafusion
 query I rowsort
 SELECT - COALESCE ( 47, - cor0.col1, ( cor0.col2 ) ) FROM tab2 AS cor0 GROUP BY cor0.col1
@@ -26928,9 +27312,11 @@ SELECT ALL cor0.col1 * 63 FROM tab2 cor0 GROUP BY cor0.col1, cor0.col0
 3717
 3843
 
-# PostgreSQL has strict column usage for GROUP BY clauses
+#  PostgreSQL has strict column usage for GROUP BY clauses
 skipif postgresql
 # Datafusion - Error during planning: Projection references non-aggregate values: Expression tab0.col0 could not be resolved from available colum
+# Postgresql - Postgres error: db error: ERROR: column "tab0.col0" must appear in the GROUP BY clause or be used in an aggregate function
+skipif postgres
 skipif Datafusion
 query I rowsort label-4085
 SELECT - COALESCE ( + 99, tab0.col1 + tab0.col0 ) / CAST ( NULL AS INTEGER ) AS col1 FROM tab0 GROUP BY tab0.col1
@@ -27008,6 +27394,17 @@ SELECT cor0.col2 - cor0.col2 AS col1 FROM tab1 cor0 GROUP BY cor0.col2
 0
 0
 0
+
+#  PostgreSQL has strict column usage for GROUP BY clauses
+skipif postgresql
+# Datafusion - Error during planning: Projection references non-aggregate values: Expression tab0.col1 could not be resolved from available colum
+# Postgresql - Postgres error: db error: ERROR: column "tab0.col1" must appear in the GROUP BY clause or be used in an aggregate function
+skipif postgres
+skipif Datafusion
+query I rowsort label-4097
+SELECT DISTINCT COALESCE ( 65, + tab0.col1, + col2 / - 35 ) FROM tab0 GROUP BY col2
+----
+65
 
 query I rowsort
 SELECT DISTINCT - + tab0.col0 * NULLIF ( + tab0.col0, - tab0.col0 ) FROM tab0 GROUP BY col0
@@ -27140,6 +27537,11 @@ SELECT ALL + cor0.col0 + - cor0.col0 * - cor0.col0 AS col2 FROM tab0 AS cor0 GRO
 1892
 6972
 702
+
+query I rowsort label-4118
+SELECT DISTINCT cor0.col0 / - cor0.col0 AS col0 FROM tab0 AS cor0 GROUP BY col0
+----
+-1
 
 query I rowsort
 SELECT DISTINCT - col0 col1 FROM tab1 AS cor0 GROUP BY col0
@@ -27479,6 +27881,8 @@ SELECT ALL - - 39 AS col1 FROM tab0 GROUP BY tab0.col1
 39
 
 # Datafusion - Error during planning: Projection references non-aggregate values: Expression tab0.col1 could not be resolved from available colum
+# Postgresql - Postgres error: db error: ERROR: column "tab0.col1" must appear in the GROUP BY clause or be used in an aggregate function
+skipif postgres
 skipif Datafusion
 query I rowsort
 SELECT COALESCE ( + 64, col1 ) + - tab0.col0 col1 FROM tab0 GROUP BY tab0.col0
@@ -27668,6 +28072,11 @@ SELECT DISTINCT - 99 * - cor0.col1 AS col1 FROM tab2 AS cor0 GROUP BY cor0.col1
 5841
 6039
 
+query I rowsort label-4198
+SELECT DISTINCT - tab0.col2 / tab0.col2 AS col2 FROM tab0 GROUP BY tab0.col2
+----
+-1
+
 query I rowsort
 SELECT DISTINCT - 0 FROM tab2 GROUP BY col0
 ----
@@ -27829,6 +28238,11 @@ SELECT cor0.col2 * 37 - 26 FROM tab1 AS cor0 GROUP BY col2
 2601
 270
 
+query I rowsort label-4225
+SELECT DISTINCT - tab0.col0 / col0 - 24 FROM tab0 GROUP BY tab0.col0
+----
+-25
+
 query I rowsort
 SELECT ( - 22 ) * cor0.col0 AS col2 FROM tab0 AS cor0 GROUP BY cor0.col0
 ----
@@ -27948,6 +28362,17 @@ SELECT ALL 95 + - tab2.col0 FROM tab2 GROUP BY tab2.col0
 3
 4
 80
+
+#  PostgreSQL has strict column usage for GROUP BY clauses
+skipif postgresql
+# Datafusion - Error during planning: Projection references non-aggregate values: Expression cor0.col0 could not be resolved from available colum
+# Postgresql - Postgres error: db error: ERROR: column "cor0.col0" must appear in the GROUP BY clause or be used in an aggregate function
+skipif postgres
+skipif Datafusion
+query I rowsort label-4244
+SELECT DISTINCT COALESCE ( 24, cor0.col0 + + cor0.col0 / + cor0.col0 ) AS col2 FROM tab0 AS cor0 GROUP BY cor0.col2, col2
+----
+24
 
 query I rowsort
 SELECT DISTINCT + 34 + 20 FROM tab0 AS cor0 GROUP BY cor0.col0, cor0.col1
@@ -28456,9 +28881,11 @@ SELECT ALL 19 + + cor0.col2 AS col2 FROM tab2 AS cor0 GROUP BY col2
 77
 98
 
-# PostgreSQL has strict column usage for GROUP BY clauses
+#  PostgreSQL has strict column usage for GROUP BY clauses
 skipif postgresql
 # Datafusion - Error during planning: Projection references non-aggregate values: Expression cor0.col0 could not be resolved from available colum
+# Postgresql - Postgres error: db error: ERROR: column "cor0.col0" must appear in the GROUP BY clause or be used in an aggregate function
+skipif postgres
 skipif Datafusion
 query I rowsort label-4323
 SELECT + COALESCE ( - 49, cor0.col0 + - CAST ( NULL AS INTEGER ) / cor0.col2, cor0.col2 ) FROM tab1 AS cor0 GROUP BY cor0.col1
@@ -28467,9 +28894,11 @@ SELECT + COALESCE ( - 49, cor0.col0 + - CAST ( NULL AS INTEGER ) / cor0.col2, co
 -49
 -49
 
-# PostgreSQL has strict column usage for GROUP BY clauses
+#  PostgreSQL has strict column usage for GROUP BY clauses
 skipif postgresql
 # Datafusion - Error during planning: Projection references non-aggregate values: Expression cor0.col2 could not be resolved from available colum
+# Postgresql - Postgres error: db error: ERROR: column "cor0.col2" must appear in the GROUP BY clause or be used in an aggregate function
+skipif postgres
 skipif Datafusion
 query I rowsort label-4324
 SELECT DISTINCT - ( col1 ) + + cor0.col1 * COALESCE ( 29, cor0.col1 / cor0.col1, CASE + col2 WHEN + cor0.col1 + + col0 THEN - cor0.col0 + - cor0.col1 WHEN cor0.col0 - - cor0.col2 THEN + cor0.col0 / cor0.col1 + - cor0.col0 ELSE - cor0.col2 END * cor0.col2 ) FROM tab2 AS cor0 GROUP BY col1
@@ -28738,6 +29167,11 @@ SELECT cor0.col0 col1 FROM tab0 AS cor0 GROUP BY col0
 26
 43
 83
+
+query I rowsort label-4366
+SELECT DISTINCT CAST ( - 38 AS INTEGER ) FROM tab2 AS cor0 GROUP BY cor0.col0
+----
+-38
 
 query I rowsort
 SELECT 57 col0 FROM tab2 AS cor0 GROUP BY cor0.col2, col1
@@ -29223,9 +29657,11 @@ query I rowsort
 SELECT + tab1.col2 col1 FROM tab1 GROUP BY tab1.col2 HAVING NULL IS NOT NULL OR NOT NULL < ( NULL )
 ----
 
-# PostgreSQL has strict column usage for GROUP BY clauses
+#  PostgreSQL has strict column usage for GROUP BY clauses
 skipif postgresql
 # Datafusion - Error during planning: Projection references non-aggregate values: Expression cor0.col0 could not be resolved from available colum
+# Postgresql - Postgres error: db error: ERROR: column "cor0.col0" must appear in the GROUP BY clause or be used in an aggregate function
+skipif postgres
 skipif Datafusion
 query I rowsort
 SELECT COALESCE ( 35, - cor0.col0 - + cor0.col0 * cor0.col0, + cor0.col1 + cor0.col0 * - cor0.col0 ) AS col0 FROM tab0 AS cor0 GROUP BY cor0.col1
@@ -29260,9 +29696,11 @@ SELECT ALL + cor0.col1 * 64 FROM tab0 AS cor0 GROUP BY cor0.col1, cor0.col1
 0
 5184
 
-# PostgreSQL has strict column usage for GROUP BY clauses
+#  PostgreSQL has strict column usage for GROUP BY clauses
 skipif postgresql
 # Datafusion - Error during planning: Projection references non-aggregate values: Expression tab2.col2 could not be resolved from available colum
+# Postgresql - Postgres error: db error: ERROR: column "tab2.col2" must appear in the GROUP BY clause or be used in an aggregate function
+skipif postgres
 skipif Datafusion
 query I rowsort
 SELECT + COALESCE ( 36, tab2.col2 ) + - ( tab2.col0 ) AS col0 FROM tab2 GROUP BY tab2.col0
@@ -29579,6 +30017,11 @@ SELECT + 10 col0 FROM tab1 GROUP BY tab1.col0
 10
 10
 
+query I rowsort label-4494
+SELECT DISTINCT + - CAST ( 14 AS INTEGER ) FROM tab0 GROUP BY tab0.col2
+----
+-14
+
 query I rowsort
 SELECT + 29 + 61 FROM tab1 GROUP BY tab1.col1
 ----
@@ -29600,9 +30043,11 @@ SELECT + - 41 FROM tab0 GROUP BY col0
 -41
 -41
 
-# PostgreSQL has strict column usage for GROUP BY clauses
+#  PostgreSQL has strict column usage for GROUP BY clauses
 skipif postgresql
 # Datafusion - Error during planning: Projection references non-aggregate values: Expression tab1.col1 could not be resolved from available colum
+# Postgresql - Postgres error: db error: ERROR: column "tab1.col1" must appear in the GROUP BY clause or be used in an aggregate function
+skipif postgres
 skipif Datafusion
 query I rowsort
 SELECT COALESCE ( 65, + tab1.col1 ) FROM tab1 GROUP BY col0
@@ -29611,9 +30056,11 @@ SELECT COALESCE ( 65, + tab1.col1 ) FROM tab1 GROUP BY col0
 65
 65
 
-# PostgreSQL has strict column usage for GROUP BY clauses
+#  PostgreSQL has strict column usage for GROUP BY clauses
 skipif postgresql
 # Datafusion - Error during planning: Projection references non-aggregate values: Expression cor0.col2 could not be resolved from available colum
+# Postgresql - Postgres error: db error: ERROR: column "cor0.col2" must appear in the GROUP BY clause or be used in an aggregate function
+skipif postgres
 skipif Datafusion
 query I rowsort
 SELECT DISTINCT + COALESCE ( 4, cor0.col2, cor0.col1 ) AS col2 FROM tab1 cor0 GROUP BY cor0.col1
@@ -29797,6 +30244,11 @@ SELECT ALL + tab1.col2 + 32 FROM tab1 GROUP BY tab1.col2
 40
 77
 
+query I rowsort label-4526
+SELECT DISTINCT cor0.col2 / + col1 FROM tab2 AS cor0 GROUP BY cor0.col2, cor0.col1
+----
+1
+
 query I rowsort label-4527
 SELECT - col2 - CAST ( NULL AS INTEGER ) AS col0 FROM tab2 GROUP BY tab2.col2
 ----
@@ -29804,9 +30256,11 @@ NULL
 NULL
 NULL
 
-# PostgreSQL has strict column usage for GROUP BY clauses
+#  PostgreSQL has strict column usage for GROUP BY clauses
 skipif postgresql
 # Datafusion - Error during planning: Projection references non-aggregate values: Expression cor0.col1 could not be resolved from available colum
+# Postgresql - Postgres error: db error: ERROR: column "cor0.col1" must appear in the GROUP BY clause or be used in an aggregate function
+skipif postgres
 skipif Datafusion
 query I rowsort
 SELECT ALL + cor0.col0 + - COALESCE ( 62, col1 * - cor0.col0, + cor0.col1 * + cor0.col0 ) FROM tab1 AS cor0 GROUP BY cor0.col0, col2
@@ -29911,9 +30365,11 @@ SELECT ALL - - 99 AS col1 FROM tab1 GROUP BY tab1.col2
 99
 99
 
-# PostgreSQL has strict column usage for GROUP BY clauses
+#  PostgreSQL has strict column usage for GROUP BY clauses
 skipif postgresql
 # Datafusion - Error during planning: Projection references non-aggregate values: Expression tab0.col2 could not be resolved from available colum
+# Postgresql - Postgres error: db error: ERROR: column "tab0.col2" must appear in the GROUP BY clause or be used in an aggregate function
+skipif postgres
 skipif Datafusion
 query I rowsort
 SELECT ALL tab0.col1 + COALESCE ( 83, col1, tab0.col1 * + tab0.col2 ) FROM tab0 GROUP BY tab0.col1
@@ -30120,6 +30576,11 @@ SELECT + NULLIF ( 80, cor0.col1 ) * 27 AS col1 FROM tab1 AS cor0 GROUP BY cor0.c
 2160
 2160
 
+query I rowsort label-4575
+SELECT DISTINCT - - CAST ( 56 AS INTEGER ) FROM tab0 GROUP BY tab0.col1
+----
+56
+
 query I rowsort
 SELECT - col1 AS col0 FROM tab2 AS cor0 GROUP BY cor0.col2, cor0.col1
 ----
@@ -30233,14 +30694,21 @@ SELECT - 32 FROM tab0 AS cor0 GROUP BY cor0.col1, cor0.col0
 -32
 -32
 
-# PostgreSQL has strict column usage for GROUP BY clauses
+#  PostgreSQL has strict column usage for GROUP BY clauses
 skipif postgresql
 # Datafusion - Error during planning: Projection references non-aggregate values: Expression tab0.col1 could not be resolved from available colum
+# Postgresql - Postgres error: db error: ERROR: column "tab0.col1" must appear in the GROUP BY clause or be used in an aggregate function
+skipif postgres
 skipif Datafusion
 query I rowsort
 SELECT DISTINCT + COALESCE ( + 63, - tab0.col2 - tab0.col1 ) AS col2 FROM tab0 GROUP BY tab0.col2
 ----
 63
+
+query I rowsort label-4594
+SELECT DISTINCT - 60 / - 14 AS col2 FROM tab1 AS cor0 CROSS JOIN tab0 cor1 GROUP BY cor0.col2
+----
+4
 
 query I rowsort
 SELECT cor0.col1 FROM tab0 cor0 GROUP BY cor0.col1, cor0.col1
@@ -30571,9 +31039,11 @@ SELECT DISTINCT 46 FROM tab1 GROUP BY col0
 ----
 46
 
-# PostgreSQL has strict column usage for GROUP BY clauses
+#  PostgreSQL has strict column usage for GROUP BY clauses
 skipif postgresql
 # Datafusion - Error during planning: Projection references non-aggregate values: Expression cor0.col2 could not be resolved from available colum
+# Postgresql - Postgres error: db error: ERROR: column "cor0.col2" must appear in the GROUP BY clause or be used in an aggregate function
+skipif postgres
 skipif Datafusion
 query I rowsort
 SELECT DISTINCT - COALESCE ( + 43, col2 * + 58, + 29 * - cor0.col2 ) FROM tab2 AS cor0 GROUP BY col0
@@ -30641,9 +31111,11 @@ SELECT 80 FROM tab0 AS cor0 GROUP BY col0
 80
 80
 
-# PostgreSQL has strict column usage for GROUP BY clauses
+#  PostgreSQL has strict column usage for GROUP BY clauses
 skipif postgresql
 # Datafusion - Error during planning: Projection references non-aggregate values: Expression cor0.col1 could not be resolved from available colum
+# Postgresql - Postgres error: db error: ERROR: column "cor0.col1" must appear in the GROUP BY clause or be used in an aggregate function
+skipif postgres
 skipif Datafusion
 query I rowsort
 SELECT COALESCE ( + 89, cor0.col2, - cor0.col1 * + cor0.col2 + - cor0.col2 * - col2 ) AS col0 FROM tab2 AS cor0 GROUP BY cor0.col2, cor0.col0
@@ -30652,9 +31124,11 @@ SELECT COALESCE ( + 89, cor0.col2, - cor0.col1 * + cor0.col2 + - cor0.col2 * - c
 89
 89
 
-# PostgreSQL has strict column usage for GROUP BY clauses
+#  PostgreSQL has strict column usage for GROUP BY clauses
 skipif postgresql
 # Datafusion - Error during planning: Projection references non-aggregate values: Expression cor0.col0 could not be resolved from available colum
+# Postgresql - Postgres error: db error: ERROR: column "cor0.col0" must appear in the GROUP BY clause or be used in an aggregate function
+skipif postgres
 skipif Datafusion
 query I rowsort
 SELECT - COALESCE ( - 44, cor0.col0 + - cor0.col0 * cor0.col0, cor0.col0 * cor0.col1 + cor0.col0, cor0.col1 ) FROM tab2 AS cor0 GROUP BY cor0.col2
@@ -30819,9 +31293,11 @@ SELECT - tab2.col0 * tab2.col0 AS col2 FROM tab2 GROUP BY tab2.col0
 -8281
 -8464
 
-# PostgreSQL has strict column usage for GROUP BY clauses
+#  PostgreSQL has strict column usage for GROUP BY clauses
 skipif postgresql
 # Datafusion - Error during planning: Projection references non-aggregate values: Expression cor0.col1 could not be resolved from available colum
+# Postgresql - Postgres error: db error: ERROR: column "cor0.col1" must appear in the GROUP BY clause or be used in an aggregate function
+skipif postgres
 skipif Datafusion
 query I rowsort
 SELECT DISTINCT + COALESCE ( 6, cor0.col1 ) + 89 FROM tab1 AS cor0 GROUP BY cor0.col0, cor0.col0
@@ -30975,9 +31451,11 @@ SELECT + cor0.col2 * cor0.col1 AS col1 FROM tab0 AS cor0 GROUP BY col1, cor0.col
 0
 1944
 
-# PostgreSQL has strict column usage for GROUP BY clauses
+#  PostgreSQL has strict column usage for GROUP BY clauses
 skipif postgresql
 # Datafusion - Error during planning: Projection references non-aggregate values: Expression tab2.col0 could not be resolved from available colum
+# Postgresql - Postgres error: db error: ERROR: column "tab2.col0" must appear in the GROUP BY clause or be used in an aggregate function
+skipif postgres
 skipif Datafusion
 query I rowsort label-4703
 SELECT + COALESCE ( - 50, tab2.col2 + tab2.col2 / + tab2.col0 ) * - tab2.col2 FROM tab2 GROUP BY tab2.col2
@@ -31160,6 +31638,11 @@ SELECT DISTINCT - - col1 * tab2.col1 AS col1 FROM tab2 GROUP BY tab2.col1
 1681
 3481
 3721
+
+query I rowsort label-4730
+SELECT DISTINCT tab2.col1 / - tab2.col1 + CAST ( NULL AS INTEGER ) FROM tab2 GROUP BY tab2.col1
+----
+NULL
 
 query I rowsort
 SELECT DISTINCT - - 80 FROM tab2 GROUP BY tab2.col1
@@ -31679,6 +32162,11 @@ SELECT 16 * tab0.col1 AS col2 FROM tab0 GROUP BY tab0.col1
 0
 1296
 
+query I rowsort label-4808
+SELECT DISTINCT cor0.col1 / cor0.col1 + + 73 AS col2 FROM tab2 AS cor0 GROUP BY cor0.col1
+----
+74
+
 query I rowsort
 SELECT DISTINCT + 69 FROM tab0 GROUP BY tab0.col0
 ----
@@ -31998,9 +32486,11 @@ SELECT 78 FROM tab2 GROUP BY tab2.col2
 78
 78
 
-# PostgreSQL has strict column usage for GROUP BY clauses
+#  PostgreSQL has strict column usage for GROUP BY clauses
 skipif postgresql
 # Datafusion - Error during planning: Projection references non-aggregate values: Expression cor1.col2 could not be resolved from available colum
+# Postgresql - Postgres error: db error: ERROR: column "cor1.col2" must appear in the GROUP BY clause or be used in an aggregate function
+skipif postgres
 skipif Datafusion
 query I rowsort
 SELECT DISTINCT + COALESCE ( + 95, - cor1.col2, 35 ) FROM tab2 AS cor0 CROSS JOIN tab1 AS cor1 GROUP BY cor1.col1
@@ -32175,6 +32665,11 @@ SELECT DISTINCT - cor0.col0 + 30 * - cor0.col0 col2 FROM tab2 AS cor0 GROUP BY c
 -2852
 -465
 
+query I rowsort label-4885
+SELECT DISTINCT + 35 / 84 FROM tab2 AS cor0 GROUP BY col1
+----
+0
+
 query I rowsort
 SELECT DISTINCT + tab2.col0 col1 FROM tab2 GROUP BY tab2.col0
 ----
@@ -32325,6 +32820,11 @@ SELECT DISTINCT - - tab0.col0 FROM tab0 GROUP BY tab0.col0
 43
 83
 
+query I rowsort label-4908
+SELECT DISTINCT 37 / + 88 AS col1 FROM tab2 GROUP BY tab2.col2
+----
+0
+
 query I rowsort
 SELECT DISTINCT cor0.col2 + cor0.col1 * cor0.col1 FROM tab2 cor0 GROUP BY cor0.col1, cor0.col2
 ----
@@ -32339,9 +32839,11 @@ SELECT + 31 * + tab1.col0 AS col2 FROM tab1 GROUP BY tab1.col0
 682
 868
 
-# PostgreSQL has strict column usage for GROUP BY clauses
+#  PostgreSQL has strict column usage for GROUP BY clauses
 skipif postgresql
 # Datafusion - Error during planning: Projection references non-aggregate values: Expression tab0.col2 could not be resolved from available colum
+# Postgresql - Postgres error: db error: ERROR: column "tab0.col2" must appear in the GROUP BY clause or be used in an aggregate function
+skipif postgres
 skipif Datafusion
 query I rowsort
 SELECT COALESCE ( - 99, tab0.col2 * tab0.col2, - tab0.col2 * col0 ) * tab0.col0 AS col2 FROM tab0 GROUP BY tab0.col0
@@ -32889,9 +33391,11 @@ NULL
 NULL
 NULL
 
-# PostgreSQL has strict column usage for GROUP BY clauses
+#  PostgreSQL has strict column usage for GROUP BY clauses
 skipif postgresql
 # Datafusion - Error during planning: Projection references non-aggregate values: Expression tab1.col1 could not be resolved from available colum
+# Postgresql - Postgres error: db error: ERROR: column "tab1.col1" must appear in the GROUP BY clause or be used in an aggregate function
+skipif postgres
 skipif Datafusion
 query I rowsort label-4993
 SELECT DISTINCT - + COALESCE ( 30, tab1.col1, + tab1.col0 * COALESCE ( tab1.col0, ( + tab1.col1 ) + - tab1.col0 ) ) / tab1.col0 + + 56 FROM tab1 GROUP BY tab1.col0
@@ -33630,9 +34134,11 @@ SELECT ALL 96 col0 FROM tab2 GROUP BY tab2.col0
 96
 96
 
-# PostgreSQL has strict column usage for GROUP BY clauses
+#  PostgreSQL has strict column usage for GROUP BY clauses
 skipif postgresql
 # Datafusion - Error during planning: Projection references non-aggregate values: Expression tab1.col2 could not be resolved from available colum
+# Postgresql - Postgres error: db error: ERROR: column "tab1.col2" must appear in the GROUP BY clause or be used in an aggregate function
+skipif postgres
 skipif Datafusion
 query I rowsort
 SELECT DISTINCT COALESCE ( 52, + tab1.col2 ) FROM tab1 GROUP BY tab1.col0
@@ -33755,6 +34261,8 @@ SELECT DISTINCT + 18 * + col1 FROM tab2 GROUP BY tab2.col1
 738
 
 # Datafusion - Error during planning: Projection references non-aggregate values: Expression cor1.col1 could not be resolved from available colum
+# Postgresql - Postgres error: db error: ERROR: column "cor1.col1" must appear in the GROUP BY clause or be used in an aggregate function
+skipif postgres
 skipif Datafusion
 query I rowsort
 SELECT COALESCE ( 77, cor1.col1 * 6 ) col0 FROM tab0 AS cor0 CROSS JOIN tab2 AS cor1 GROUP BY cor0.col0, cor0.col1
@@ -33841,6 +34349,11 @@ SELECT 27 AS col2 FROM tab2 cor0 GROUP BY cor0.col0
 27
 27
 27
+
+query I rowsort label-5138
+SELECT DISTINCT + tab0.col2 / tab0.col2 FROM tab0 GROUP BY tab0.col2
+----
+1
 
 query I rowsort
 SELECT ALL 45 + 41 AS col1 FROM tab1 GROUP BY tab1.col2
@@ -34254,6 +34767,11 @@ SELECT - 28 AS col1 FROM tab0 GROUP BY tab0.col0
 -28
 -28
 -28
+
+query I rowsort label-5201
+SELECT DISTINCT - 87 / + cor0.col2 AS col1 FROM tab2 AS cor0 GROUP BY cor0.col2
+----
+-1
 
 query I rowsort
 SELECT col1 * - tab1.col1 FROM tab1 GROUP BY tab1.col1
@@ -35039,9 +35557,11 @@ SELECT DISTINCT + 13 AS col0 FROM tab1 GROUP BY tab1.col0
 ----
 13
 
-# PostgreSQL has strict column usage for GROUP BY clauses
+#  PostgreSQL has strict column usage for GROUP BY clauses
 skipif postgresql
 # Datafusion - Error during planning: Projection references non-aggregate values: Expression cor0.col1 could not be resolved from available colum
+# Postgresql - Postgres error: db error: ERROR: column "cor0.col1" must appear in the GROUP BY clause or be used in an aggregate function
+skipif postgres
 skipif Datafusion
 query I rowsort label-5321
 SELECT - cor0.col0 / COALESCE ( 42, cor0.col1 + cor0.col2, CASE 55 WHEN cor0.col1 * col2 THEN NULL WHEN cor0.col2 * cor0.col0 + cor0.col1 * cor0.col1 THEN + col0 ELSE NULL END * - cor0.col1, cor0.col2 ) FROM tab0 AS cor0 GROUP BY cor0.col0
@@ -35049,6 +35569,11 @@ SELECT - cor0.col0 / COALESCE ( 42, cor0.col1 + cor0.col2, CASE 55 WHEN cor0.col
 -1
 -1
 0
+
+query I rowsort label-5322
+SELECT DISTINCT col0 / tab1.col0 FROM tab1 GROUP BY tab1.col0
+----
+1
 
 query I rowsort
 SELECT ALL - COALESCE ( cor0.col1, cor0.col1 ) FROM tab1 AS cor0 GROUP BY cor0.col1
@@ -35723,6 +36248,11 @@ SELECT - ( - 30 ) AS col0 FROM tab2 AS cor0 GROUP BY cor0.col0, cor0.col1
 30
 30
 
+query I rowsort label-5425
+SELECT DISTINCT cor0.col2 / cor0.col2 AS col1 FROM tab2 AS cor0 GROUP BY cor0.col2
+----
+1
+
 query I rowsort
 SELECT ALL - 56 FROM tab0 cor0 CROSS JOIN tab2 AS cor1 GROUP BY cor0.col1, cor1.col2
 ----
@@ -35931,9 +36461,11 @@ SELECT ALL - 4 AS col1 FROM tab1 GROUP BY tab1.col1
 -4
 -4
 
-# PostgreSQL has strict column usage for GROUP BY clauses
+#  PostgreSQL has strict column usage for GROUP BY clauses
 skipif postgresql
 # Datafusion - Error during planning: Projection references non-aggregate values: Expression tab2.col0 could not be resolved from available colum
+# Postgresql - Postgres error: db error: ERROR: column "tab2.col0" must appear in the GROUP BY clause or be used in an aggregate function
+skipif postgres
 skipif Datafusion
 query I rowsort
 SELECT ALL tab2.col1 + COALESCE ( - 68, col0 * ( 43 * + tab2.col2 ) ) AS col0 FROM tab2 GROUP BY tab2.col1
@@ -36218,6 +36750,11 @@ SELECT DISTINCT cor0.col2 + - cor0.col0 AS col1 FROM tab2 AS cor0 GROUP BY cor0.
 -34
 72
 
+query I rowsort label-5499
+SELECT DISTINCT + - 64 / 17 AS col2 FROM tab1 GROUP BY tab1.col0
+----
+-3
+
 query I rowsort
 SELECT DISTINCT 69 + - col1 FROM tab2 GROUP BY tab2.col1
 ----
@@ -36377,6 +36914,11 @@ SELECT DISTINCT cor0.col1 + - cor0.col1 * + cor0.col1 FROM tab1 AS cor0 GROUP BY
 -30
 -3192
 
+query I rowsort label-5523
+SELECT DISTINCT - CAST ( NULL AS INTEGER ) AS col1 FROM tab2 GROUP BY tab2.col0
+----
+NULL
+
 query I rowsort
 SELECT DISTINCT - 24 + - col0 * tab0.col0 AS col1 FROM tab0 GROUP BY tab0.col0
 ----
@@ -36409,6 +36951,11 @@ SELECT tab1.col0 AS col0 FROM tab1 GROUP BY col0
 22
 28
 82
+
+query I rowsort label-5529
+SELECT DISTINCT + cor0.col0 / + cor0.col0 FROM tab1 AS cor0 GROUP BY cor0.col0
+----
+1
 
 query I rowsort
 SELECT 87 * cor0.col1 + - 93 AS col1 FROM tab1 AS cor0 GROUP BY cor0.col1
@@ -36608,6 +37155,11 @@ query I rowsort
 SELECT DISTINCT + 34 FROM tab2 AS cor0 GROUP BY cor0.col0
 ----
 34
+
+query I rowsort label-5560
+SELECT DISTINCT + 88 / - 49 FROM tab2 AS cor0 GROUP BY cor0.col0
+----
+-1
 
 query I rowsort
 SELECT ALL + 18 + - cor0.col1 col1 FROM tab0 AS cor0 GROUP BY cor0.col1
@@ -37187,6 +37739,11 @@ SELECT ALL - 74 * - col2 + - tab2.col2 AS col2 FROM tab2 GROUP BY tab2.col2
 5767
 6351
 
+query I rowsort label-5648
+SELECT DISTINCT cor0.col1 / - cor0.col1 AS col0 FROM tab2 AS cor0 GROUP BY cor0.col1
+----
+-1
+
 query I rowsort
 SELECT cor0.col2 + + cor0.col2 col0 FROM tab2 AS cor0 GROUP BY col2
 ----
@@ -37312,6 +37869,11 @@ SELECT DISTINCT - - tab1.col0 + 61 FROM tab1 GROUP BY col0
 143
 83
 89
+
+query I rowsort label-5667
+SELECT DISTINCT col1 / ( + 62 ) AS col1 FROM tab2 AS cor0 GROUP BY cor0.col1, cor0.col2
+----
+0
 
 query I rowsort
 SELECT DISTINCT cor0.col0 - - 58 AS col2 FROM tab2 cor0 GROUP BY cor0.col0
@@ -37441,9 +38003,11 @@ SELECT ALL + cor0.col0 FROM tab0 AS cor0 GROUP BY col0, cor0.col1
 43
 83
 
-# PostgreSQL has strict column usage for GROUP BY clauses
+#  PostgreSQL has strict column usage for GROUP BY clauses
 skipif postgresql
 # Datafusion - Error during planning: Projection references non-aggregate values: Expression cor0.col0 could not be resolved from available colum
+# Postgresql - Postgres error: db error: ERROR: column "cor0.col0" must appear in the GROUP BY clause or be used in an aggregate function
+skipif postgres
 skipif Datafusion
 query I rowsort
 SELECT DISTINCT + COALESCE ( 84, + cor0.col0 * - cor0.col2 + 62 ) FROM tab0 AS cor0 GROUP BY cor0.col1
@@ -37525,6 +38089,11 @@ SELECT DISTINCT + 75 * + tab0.col1 FROM tab0 GROUP BY tab0.col1
 ----
 0
 6075
+
+query I rowsort label-5699
+SELECT DISTINCT 14 / - col2 FROM tab2 AS cor0 GROUP BY col2
+----
+0
 
 query I rowsort
 SELECT DISTINCT cor0.col0 + 38 col2 FROM tab1 AS cor0 GROUP BY cor0.col0
@@ -37850,9 +38419,11 @@ SELECT ALL + tab2.col2 * - 65 FROM tab2 GROUP BY tab2.col2
 -5135
 -5655
 
-# PostgreSQL has strict column usage for GROUP BY clauses
+#  PostgreSQL has strict column usage for GROUP BY clauses
 skipif postgresql
 # Datafusion - Error during planning: Projection references non-aggregate values: Expression tab1.col0 could not be resolved from available colum
+# Postgresql - Postgres error: db error: ERROR: column "tab1.col0" must appear in the GROUP BY clause or be used in an aggregate function
+skipif postgres
 skipif Datafusion
 query I rowsort
 SELECT + COALESCE ( 34, 75 * - col0 ) AS col0 FROM tab1 GROUP BY tab1.col2
@@ -38376,6 +38947,17 @@ SELECT 25 FROM tab1 AS cor0 GROUP BY cor0.col0
 25
 25
 
+#  PostgreSQL has strict column usage for GROUP BY clauses
+skipif postgresql
+# Datafusion - Error during planning: Projection references non-aggregate values: Expression cor0.col1 could not be resolved from available colum
+# Postgresql - Postgres error: db error: ERROR: column "cor0.col1" must appear in the GROUP BY clause or be used in an aggregate function
+skipif postgres
+skipif Datafusion
+query I rowsort label-5827
+SELECT DISTINCT + COALESCE ( 28, col1, cor0.col2 / + cor0.col0, cor0.col0 + + col1 * cor0.col1 ) / 17 FROM tab2 AS cor0 GROUP BY cor0.col0
+----
+1
+
 query I rowsort
 SELECT - - tab0.col2 + - 32 FROM tab0 GROUP BY tab0.col2
 ----
@@ -38693,6 +39275,11 @@ SELECT ALL + + 46 AS col0 FROM tab2 GROUP BY tab2.col0
 46
 46
 46
+
+query I rowsort label-5878
+SELECT DISTINCT + cor0.col1 / - 67 AS col0 FROM tab2 AS cor0 GROUP BY col0, cor0.col1
+----
+0
 
 query I rowsort
 SELECT ALL + 47 AS col0 FROM tab1 AS cor0 GROUP BY cor0.col1
@@ -39442,6 +40029,11 @@ SELECT ALL + 64 FROM tab2 GROUP BY tab2.col1
 64
 64
 
+query I rowsort label-5992
+SELECT DISTINCT + CAST ( NULL AS INTEGER ) FROM tab0 GROUP BY tab0.col1
+----
+NULL
+
 query I rowsort
 SELECT ALL 92 AS col0 FROM tab2 GROUP BY tab2.col1
 ----
@@ -39534,6 +40126,11 @@ SELECT ALL cor0.col2 AS col1 FROM tab2 AS cor0 GROUP BY cor0.col0, cor0.col2
 79
 87
 
+query I rowsort label-6007
+SELECT DISTINCT + + tab1.col2 + - CAST ( tab1.col2 AS INTEGER ) FROM tab1 GROUP BY tab1.col2
+----
+0
+
 query I rowsort
 SELECT DISTINCT - tab2.col1 * 48 col1 FROM tab2 GROUP BY tab2.col1
 ----
@@ -39591,9 +40188,11 @@ SELECT ALL + - 30 FROM tab0 GROUP BY tab0.col2
 -30
 -30
 
-# PostgreSQL has strict column usage for GROUP BY clauses
+#  PostgreSQL has strict column usage for GROUP BY clauses
 skipif postgresql
 # Datafusion - Error during planning: Projection references non-aggregate values: Expression tab2.col0 could not be resolved from available colum
+# Postgresql - Postgres error: db error: ERROR: column "tab2.col0" must appear in the GROUP BY clause or be used in an aggregate function
+skipif postgres
 skipif Datafusion
 query I rowsort
 SELECT ALL COALESCE ( 84, - tab2.col0 ) AS col1 FROM tab2 GROUP BY tab2.col2
@@ -40227,6 +40826,11 @@ NULL
 NULL
 NULL
 
+query I rowsort label-6110
+SELECT DISTINCT cor0.col1 / - cor0.col1 AS col0 FROM tab2 cor0 GROUP BY cor0.col0, cor0.col1
+----
+-1
+
 query I rowsort
 SELECT col0 col2 FROM tab0 GROUP BY tab0.col0
 ----
@@ -40672,14 +41276,21 @@ SELECT DISTINCT - col1 AS col0 FROM tab2 GROUP BY tab2.col1
 -59
 -61
 
+query I rowsort label-6177
+SELECT DISTINCT + CAST ( NULL AS INTEGER ) AS col0 FROM tab2 GROUP BY tab2.col1
+----
+NULL
+
 query I rowsort
 SELECT DISTINCT - + 17 FROM tab0 GROUP BY tab0.col0
 ----
 -17
 
-# PostgreSQL has strict column usage for GROUP BY clauses
+#  PostgreSQL has strict column usage for GROUP BY clauses
 skipif postgresql
 # Datafusion - Error during planning: Projection references non-aggregate values: Expression tab1.col2 could not be resolved from available colum
+# Postgresql - Postgres error: db error: ERROR: column "tab1.col2" must appear in the GROUP BY clause or be used in an aggregate function
+skipif postgres
 skipif Datafusion
 query I rowsort
 SELECT DISTINCT - - COALESCE ( + 38, - tab1.col2 ) FROM tab1 GROUP BY tab1.col0
@@ -41454,6 +42065,11 @@ SELECT + cor0.col0 * 60 FROM tab0 AS cor0 GROUP BY cor0.col0
 2580
 4980
 
+query I rowsort label-6297
+SELECT DISTINCT + tab1.col0 / 90 AS col0 FROM tab1 GROUP BY tab1.col0
+----
+0
+
 query I rowsort
 SELECT tab0.col0 + - tab0.col0 FROM tab0 GROUP BY tab0.col0
 ----
@@ -41615,6 +42231,11 @@ SELECT - ( 79 ) FROM tab2 GROUP BY tab2.col2
 -79
 -79
 -79
+
+query I rowsort label-6322
+SELECT DISTINCT tab0.col0 / tab0.col0 col2 FROM tab0 GROUP BY tab0.col0
+----
+1
 
 query I rowsort
 SELECT tab2.col2 FROM tab2 WHERE - tab2.col1 IS NOT NULL GROUP BY tab2.col2 HAVING NOT NULL NOT IN ( + col2 * tab2.col2 )
@@ -42182,9 +42803,11 @@ SELECT ALL - + 41 FROM tab1 GROUP BY tab1.col0
 -41
 -41
 
-# PostgreSQL has strict column usage for GROUP BY clauses
+#  PostgreSQL has strict column usage for GROUP BY clauses
 skipif postgresql
 # Datafusion - Error during planning: Projection references non-aggregate values: Expression tab1.col2 could not be resolved from available colum
+# Postgresql - Postgres error: db error: ERROR: column "tab1.col2" must appear in the GROUP BY clause or be used in an aggregate function
+skipif postgres
 skipif Datafusion
 query I rowsort
 SELECT ALL COALESCE ( 78, tab1.col2 ) FROM tab1 GROUP BY tab1.col0
@@ -42226,9 +42849,11 @@ SELECT + + 53 FROM tab0 GROUP BY tab0.col0
 53
 53
 
-# PostgreSQL has strict column usage for GROUP BY clauses
+#  PostgreSQL has strict column usage for GROUP BY clauses
 skipif postgresql
 # Datafusion - Error during planning: Projection references non-aggregate values: Expression cor0.col1 could not be resolved from available colum
+# Postgresql - Postgres error: db error: ERROR: column "cor0.col1" must appear in the GROUP BY clause or be used in an aggregate function
+skipif postgres
 skipif Datafusion
 query I rowsort label-6413
 SELECT COALESCE ( + 76, + cor0.col0 / + cor0.col1 ) FROM tab1 cor0 GROUP BY cor0.col2, col0
@@ -42265,6 +42890,11 @@ SELECT + cor0.col0 + cor0.col0 FROM tab1 AS cor0 GROUP BY cor0.col1, cor0.col0
 44
 56
 
+query I rowsort label-6418
+SELECT DISTINCT + + 38 + - tab1.col0 / - tab1.col0 AS col1 FROM tab1 GROUP BY tab1.col0
+----
+39
+
 query I rowsort
 SELECT - 57 + + 5 FROM tab1 AS cor0 GROUP BY col0
 ----
@@ -42278,6 +42908,11 @@ SELECT ALL + 59 * tab0.col0 AS col2 FROM tab0 GROUP BY tab0.col0
 1534
 2537
 4897
+
+query I rowsort label-6421
+SELECT DISTINCT - cor0.col1 / - 94 FROM tab0 AS cor0 GROUP BY cor0.col1
+----
+0
 
 query I rowsort
 SELECT DISTINCT cor0.col2 * + 68 AS col2 FROM tab1 AS cor0 GROUP BY cor0.col2
@@ -42596,9 +43231,11 @@ SELECT ALL - 82 * col1 AS col1 FROM tab1 GROUP BY col1
 -4674
 -492
 
-# PostgreSQL has strict column usage for GROUP BY clauses
+#  PostgreSQL has strict column usage for GROUP BY clauses
 skipif postgresql
 # Datafusion - Error during planning: Projection references non-aggregate values: Expression cor0.col2 could not be resolved from available colum
+# Postgresql - Postgres error: db error: ERROR: column "cor0.col2" must appear in the GROUP BY clause or be used in an aggregate function
+skipif postgres
 skipif Datafusion
 query I rowsort
 SELECT + COALESCE ( cor0.col1, - 88, + cor0.col1, cor0.col2 ) FROM tab1 AS cor0 GROUP BY cor0.col1
@@ -42634,9 +43271,11 @@ SELECT - 20 FROM tab0 GROUP BY tab0.col1
 -20
 -20
 
-# PostgreSQL has strict column usage for GROUP BY clauses
+#  PostgreSQL has strict column usage for GROUP BY clauses
 skipif postgresql
 # Datafusion - Error during planning: Projection references non-aggregate values: Expression tab2.col1 could not be resolved from available colum
+# Postgresql - Postgres error: db error: ERROR: column "tab2.col1" must appear in the GROUP BY clause or be used in an aggregate function
+skipif postgres
 skipif Datafusion
 query I rowsort
 SELECT + COALESCE ( + 50, tab2.col1 * tab2.col0 - - tab2.col1 ) + 62 AS col0 FROM tab2 GROUP BY tab2.col0
@@ -43601,9 +44240,11 @@ SELECT - - col2 * tab1.col2 FROM tab1 GROUP BY col2
 5041
 64
 
-# PostgreSQL has strict column usage for GROUP BY clauses
+#  PostgreSQL has strict column usage for GROUP BY clauses
 skipif postgresql
 # Datafusion - Error during planning: Projection references non-aggregate values: Expression tab2.col2 could not be resolved from available colum
+# Postgresql - Postgres error: db error: ERROR: column "tab2.col2" must appear in the GROUP BY clause or be used in an aggregate function
+skipif postgres
 skipif Datafusion
 query I rowsort
 SELECT - COALESCE ( 95, + col0 + + tab2.col2 * col2, + tab2.col1 + + tab2.col0 ) * - tab2.col0 FROM tab2 GROUP BY col0
@@ -43664,6 +44305,11 @@ SELECT + - 31 AS col0 FROM tab0 GROUP BY col1
 -31
 -31
 
+query I rowsort label-6628
+SELECT DISTINCT CAST ( 35 AS INTEGER ) AS col2 FROM tab0 AS cor0 GROUP BY cor0.col0
+----
+35
+
 query I rowsort
 SELECT + 62 col1 FROM tab0 GROUP BY col2
 ----
@@ -43687,9 +44333,11 @@ SELECT DISTINCT + 63 AS col1 FROM tab2 AS cor0 GROUP BY cor0.col0
 ----
 63
 
-# PostgreSQL has strict column usage for GROUP BY clauses
+#  PostgreSQL has strict column usage for GROUP BY clauses
 skipif postgresql
 # Datafusion - Error during planning: Projection references non-aggregate values: Expression tab2.col1 could not be resolved from available colum
+# Postgresql - Postgres error: db error: ERROR: column "tab2.col1" must appear in the GROUP BY clause or be used in an aggregate function
+skipif postgres
 skipif Datafusion
 query I rowsort
 SELECT - + COALESCE ( 63, tab2.col1 ) FROM tab2 GROUP BY tab2.col2
@@ -44019,9 +44667,11 @@ SELECT + 38 - tab0.col1 AS col0 FROM tab0 GROUP BY tab0.col1
 -43
 38
 
-# PostgreSQL has strict column usage for GROUP BY clauses
+#  PostgreSQL has strict column usage for GROUP BY clauses
 skipif postgresql
 # Datafusion - Error during planning: Projection references non-aggregate values: Expression cor0.col2 could not be resolved from available colum
+# Postgresql - Postgres error: db error: ERROR: column "cor0.col2" must appear in the GROUP BY clause or be used in an aggregate function
+skipif postgres
 skipif Datafusion
 query I rowsort label-6683
 SELECT - COALESCE ( - 89, + cor0.col2 - + cor0.col0 ) / 25 AS col2 FROM tab2 AS cor0 GROUP BY cor0.col0, cor0.col0
@@ -44036,6 +44686,11 @@ SELECT ALL - + 25 AS col0 FROM tab0, tab0 AS cor0 GROUP BY cor0.col0
 -25
 -25
 -25
+
+query I rowsort label-6685
+SELECT DISTINCT 33 / + 2 AS col0 FROM tab1 GROUP BY tab1.col2
+----
+16
 
 query I rowsort
 SELECT DISTINCT + - 39 * + 78 FROM tab1 GROUP BY col1
@@ -44591,6 +45246,11 @@ SELECT - + 31 * + tab2.col0 FROM tab2 GROUP BY tab2.col0
 -2852
 -465
 
+query I rowsort label-6771
+SELECT DISTINCT CAST ( NULL AS INTEGER ) col2 FROM tab1 cor0 GROUP BY cor0.col2, cor0.col0
+----
+NULL
+
 query I rowsort
 SELECT cor0.col1 + 95 AS col2 FROM tab2 cor0 GROUP BY cor0.col0, cor0.col1
 ----
@@ -44936,6 +45596,11 @@ SELECT ALL + 61 FROM tab1 AS cor0 GROUP BY col2
 61
 61
 61
+
+query I rowsort label-6824
+SELECT DISTINCT tab2.col1 / tab2.col1 FROM tab2 GROUP BY tab2.col1
+----
+1
 
 query I rowsort
 SELECT + 24 AS col1 FROM tab0 GROUP BY tab0.col2
@@ -45292,6 +45957,11 @@ SELECT cor0.col0 / cor0.col0 AS col0 FROM tab1 AS cor0 GROUP BY cor0.col0, cor0.
 1
 1
 
+query I rowsort label-6878
+SELECT DISTINCT cor0.col0 / cor0.col0 AS col2 FROM tab0 AS cor0 GROUP BY cor0.col0, col2
+----
+1
+
 query I rowsort
 SELECT ALL 19 AS col0 FROM tab2 AS cor0 GROUP BY cor0.col0
 ----
@@ -45415,6 +46085,11 @@ SELECT DISTINCT + col2 * - tab2.col2 FROM tab2 GROUP BY tab2.col2
 -3364
 -6241
 -7569
+
+query I rowsort label-6898
+SELECT DISTINCT tab2.col2 / + tab2.col2 + - 60 AS col1 FROM tab2 GROUP BY tab2.col2
+----
+-59
 
 query I rowsort
 SELECT ALL - cor0.col1 * 55 FROM tab1 AS cor0 GROUP BY cor0.col1, col0
@@ -45663,6 +46338,11 @@ query I rowsort
 SELECT DISTINCT 59 AS col1 FROM tab0 cor0 GROUP BY cor0.col2
 ----
 59
+
+query I rowsort label-6937
+SELECT DISTINCT - cor0.col1 / cor0.col1 AS col2 FROM tab2 AS cor0 GROUP BY col1
+----
+-1
 
 query I rowsort
 SELECT DISTINCT - 90 AS col2 FROM tab0 AS cor0 GROUP BY cor0.col0
@@ -45973,6 +46653,11 @@ query I rowsort
 SELECT DISTINCT 50 AS col2 FROM tab2 GROUP BY col1
 ----
 50
+
+query I rowsort label-6985
+SELECT DISTINCT - tab0.col0 * CAST ( NULL AS INTEGER ) col1 FROM tab0 GROUP BY tab0.col0
+----
+NULL
 
 query I rowsort
 SELECT + 27 FROM tab0 GROUP BY col1
@@ -46489,6 +47174,11 @@ SELECT cor0.col1 + + cor0.col1 col1 FROM tab0 cor0 GROUP BY cor0.col1
 0
 162
 
+query I rowsort label-7066
+SELECT DISTINCT cor0.col0 / CAST ( NULL AS INTEGER ) col0 FROM tab1 cor0 CROSS JOIN tab2 AS cor1 GROUP BY cor0.col0, cor1.col0
+----
+NULL
+
 query I rowsort
 SELECT + cor0.col1 FROM tab1 AS cor0 GROUP BY cor0.col2, cor0.col1, cor0.col1
 ----
@@ -46698,6 +47388,14 @@ SELECT - 80 AS col2 FROM tab1 AS cor0 CROSS JOIN tab1 AS cor1 GROUP BY cor1.col0
 -80
 -80
 -80
+
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
+query R rowsort label-7099
+SELECT DISTINCT + CAST ( NULL AS REAL ) AS col2 FROM tab1 AS cor0 GROUP BY cor0.col1, cor0.col0
+----
+NULL
 
 query I rowsort
 SELECT ALL cor0.col2 * - 21 AS col1 FROM tab1 AS cor0 GROUP BY cor0.col2
@@ -47146,6 +47844,11 @@ SELECT + 25 AS col1 FROM tab0 GROUP BY tab0.col0
 25
 25
 
+query I rowsort label-7168
+SELECT DISTINCT - tab1.col1 / tab1.col1 FROM tab1 GROUP BY tab1.col1
+----
+-1
+
 query I rowsort
 SELECT 66 AS col1 FROM tab0 AS cor0 GROUP BY cor0.col0
 ----
@@ -47439,6 +48142,11 @@ query I rowsort
 SELECT DISTINCT 20 FROM tab0 cor0 GROUP BY cor0.col0
 ----
 20
+
+query I rowsort label-7214
+SELECT DISTINCT + CAST ( NULL AS INTEGER ) FROM tab2, tab2 cor0 GROUP BY cor0.col1
+----
+NULL
 
 query I rowsort
 SELECT 6 - - cor0.col0 * - cor0.col0 AS col0 FROM tab2 cor0 GROUP BY cor0.col0
@@ -47951,6 +48659,11 @@ SELECT - cor0.col1 * - cor0.col1 + - cor0.col1 AS col2 FROM tab2 cor0 GROUP BY c
 3422
 3660
 
+query I rowsort label-7293
+SELECT DISTINCT 45 / 92 FROM tab1 AS cor0 GROUP BY cor0.col0
+----
+0
+
 query I rowsort
 SELECT + 62 - - 34 FROM tab0 AS cor0 GROUP BY cor0.col0
 ----
@@ -48386,6 +49099,11 @@ SELECT ALL + cor0.col0 * + 2 AS col2 FROM tab0 AS cor0 GROUP BY cor0.col0
 52
 86
 
+query I rowsort label-7360
+SELECT DISTINCT - 66 / cor0.col1 AS col0 FROM tab2 cor0 GROUP BY cor0.col1
+----
+-1
+
 query I rowsort
 SELECT - - tab1.col1 + 52 * - col1 AS col2 FROM tab1 GROUP BY col1
 ----
@@ -48406,9 +49124,11 @@ SELECT cor0.col0 AS col2 FROM tab2 AS cor0 GROUP BY cor0.col1, col0, cor0.col0
 91
 92
 
-# PostgreSQL has strict column usage for GROUP BY clauses
+#  PostgreSQL has strict column usage for GROUP BY clauses
 skipif postgresql
 # Datafusion - Error during planning: Projection references non-aggregate values: Expression tab2.col1 could not be resolved from available colum
+# Postgresql - Postgres error: db error: ERROR: column "tab2.col1" must appear in the GROUP BY clause or be used in an aggregate function
+skipif postgres
 skipif Datafusion
 query I rowsort label-7364
 SELECT COALESCE ( 82, tab2.col1 + - NULLIF ( - tab2.col0, tab2.col2 ) / tab2.col2, tab2.col2 + + 98 ) AS col1 FROM tab2 GROUP BY tab2.col2
@@ -48461,9 +49181,11 @@ SELECT ALL 70 + + 6 * cor0.col2 FROM tab2 AS cor0 GROUP BY cor0.col2
 544
 592
 
-# PostgreSQL has strict column usage for GROUP BY clauses
+#  PostgreSQL has strict column usage for GROUP BY clauses
 skipif postgresql
 # Datafusion - Error during planning: Projection references non-aggregate values: Expression tab2.col0 could not be resolved from available colum
+# Postgresql - Postgres error: db error: ERROR: column "tab2.col0" must appear in the GROUP BY clause or be used in an aggregate function
+skipif postgres
 skipif Datafusion
 query I rowsort label-7372
 SELECT ALL - col1 * + COALESCE ( 14, - col0 / tab2.col2 ) FROM tab2 GROUP BY tab2.col1
@@ -48652,6 +49374,11 @@ SELECT + cor0.col1 FROM tab2 AS cor0 GROUP BY cor0.col1, col0
 41
 59
 61
+
+query I rowsort label-7400
+SELECT DISTINCT col2 / tab1.col2 AS col2 FROM tab1 GROUP BY tab1.col2
+----
+1
 
 query I rowsort
 SELECT + - tab1.col1 * - tab1.col1 FROM tab1 GROUP BY tab1.col1
@@ -48979,9 +49706,11 @@ SELECT + tab1.col2 + - col2 FROM tab1 GROUP BY tab1.col2
 0
 0
 
-# PostgreSQL has strict column usage for GROUP BY clauses
+#  PostgreSQL has strict column usage for GROUP BY clauses
 skipif postgresql
 # Datafusion - Error during planning: Projection references non-aggregate values: Expression cor0.col0 could not be resolved from available colum
+# Postgresql - Postgres error: db error: ERROR: column "cor0.col0" must appear in the GROUP BY clause or be used in an aggregate function
+skipif postgres
 skipif Datafusion
 query I rowsort
 SELECT ALL + COALESCE ( + 64, col0 ) AS col2 FROM tab2 AS cor0 GROUP BY col1
@@ -50039,9 +50768,11 @@ SELECT DISTINCT 91 * + cor0.col2 FROM tab2 AS cor0 GROUP BY cor0.col2
 7189
 7917
 
-# PostgreSQL has strict column usage for GROUP BY clauses
+#  PostgreSQL has strict column usage for GROUP BY clauses
 skipif postgresql
 # Datafusion - Error during planning: Projection references non-aggregate values: Expression tab2.col0 could not be resolved from available colum
+# Postgresql - Postgres error: db error: ERROR: column "tab2.col0" must appear in the GROUP BY clause or be used in an aggregate function
+skipif postgres
 skipif Datafusion
 query I rowsort
 SELECT ALL tab2.col1 - COALESCE ( 60, + tab2.col0, CASE + 87 WHEN tab2.col2 THEN - col2 END * - 64, + tab2.col1 ) AS col0 FROM tab2 GROUP BY tab2.col1
@@ -50057,6 +50788,11 @@ SELECT ALL 13 + + cor0.col0 AS col1 FROM tab0 AS cor0 GROUP BY cor0.col0
 56
 96
 
+query I rowsort label-7609
+SELECT DISTINCT - CAST ( + 52 AS INTEGER ) FROM tab2 AS cor0 GROUP BY col1
+----
+-52
+
 query I rowsort
 SELECT + 85 * + col0 FROM tab2 GROUP BY tab2.col0
 ----
@@ -50070,6 +50806,11 @@ SELECT 20 + tab1.col0 FROM tab1 GROUP BY tab1.col0
 102
 42
 48
+
+query I rowsort label-7612
+SELECT DISTINCT tab2.col1 / - tab2.col1 AS col2 FROM tab2 GROUP BY tab2.col1
+----
+-1
 
 query I rowsort
 SELECT DISTINCT col2 col1 FROM tab1 WHERE NOT ( NULL ) IS NULL GROUP BY tab1.col2
@@ -50484,9 +51225,11 @@ SELECT DISTINCT - 77 AS col2 FROM tab1 AS cor0 GROUP BY col2
 ----
 -77
 
-# PostgreSQL has strict column usage for GROUP BY clauses
+#  PostgreSQL has strict column usage for GROUP BY clauses
 skipif postgresql
 # Datafusion - Error during planning: Projection references non-aggregate values: Expression cor0.col2 could not be resolved from available colum
+# Postgresql - Postgres error: db error: ERROR: column "cor0.col2" must appear in the GROUP BY clause or be used in an aggregate function
+skipif postgres
 skipif Datafusion
 query I rowsort
 SELECT ALL 3 * - COALESCE ( + 92, + cor0.col2 - + ( + col1 + - cor0.col1 ) * 58 ) AS col0 FROM tab1 AS cor0 GROUP BY cor0.col1
@@ -50722,6 +51465,11 @@ SELECT DISTINCT 19 * + col1 AS col0 FROM tab2 AS cor0 GROUP BY cor0.col1
 1159
 779
 
+query I rowsort label-7711
+SELECT DISTINCT CAST ( NULL AS INTEGER ) AS col2 FROM tab2 cor0 GROUP BY cor0.col0
+----
+NULL
+
 query I rowsort
 SELECT - 84 FROM tab2 AS cor0 CROSS JOIN tab2 AS cor1 GROUP BY cor0.col2
 ----
@@ -50937,9 +51685,11 @@ SELECT + col0 * COALESCE ( - cor0.col1 * + col0, cor0.col1 ) FROM tab0 AS cor0 G
 0
 0
 
-# PostgreSQL has strict column usage for GROUP BY clauses
+#  PostgreSQL has strict column usage for GROUP BY clauses
 skipif postgresql
 # Datafusion - Error during planning: Projection references non-aggregate values: Expression tab2.col0 could not be resolved from available colum
+# Postgresql - Postgres error: db error: ERROR: column "tab2.col0" must appear in the GROUP BY clause or be used in an aggregate function
+skipif postgres
 skipif Datafusion
 query I rowsort
 SELECT ( + COALESCE ( - 26, tab2.col0 - ( 73 ) ) ) AS col1 FROM tab2 GROUP BY tab2.col2
@@ -51052,14 +51802,21 @@ SELECT - 37 AS col0 FROM tab2 cor0 GROUP BY cor0.col1
 -37
 -37
 
-# PostgreSQL has strict column usage for GROUP BY clauses
+#  PostgreSQL has strict column usage for GROUP BY clauses
 skipif postgresql
 # Datafusion - Error during planning: Projection references non-aggregate values: Expression cor0.col1 could not be resolved from available colum
+# Postgresql - Postgres error: db error: ERROR: column "cor0.col1" must appear in the GROUP BY clause or be used in an aggregate function
+skipif postgres
 skipif Datafusion
 query I rowsort
 SELECT DISTINCT COALESCE ( + 55, col1, cor0.col1 + cor0.col2 * cor0.col2 ) FROM tab1 AS cor0 GROUP BY cor0.col0
 ----
 55
+
+query I rowsort label-7762
+SELECT DISTINCT CAST ( NULL AS INTEGER ) * 80 - tab1.col2 * - tab1.col2 FROM tab1 GROUP BY tab1.col2
+----
+NULL
 
 query I rowsort
 SELECT - 87 FROM tab2 AS cor0 GROUP BY cor0.col0, col1
@@ -51086,6 +51843,14 @@ SELECT ALL tab2.col1 * 35 AS col2 FROM tab2 GROUP BY tab2.col1
 1435
 2065
 2135
+
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
+query R rowsort label-7767
+SELECT DISTINCT - tab1.col2 * CAST ( NULL AS REAL ) AS col1 FROM tab1 GROUP BY col2
+----
+NULL
 
 query I rowsort
 SELECT 76 col2 FROM tab2 GROUP BY tab2.col2
@@ -51311,9 +52076,11 @@ SELECT + cor0.col2 + cor0.col2 AS col2 FROM tab2 AS cor0 GROUP BY cor0.col2
 158
 174
 
-# PostgreSQL has strict column usage for GROUP BY clauses
+#  PostgreSQL has strict column usage for GROUP BY clauses
 skipif postgresql
 # Datafusion - Error during planning: Projection references non-aggregate values: Expression tab2.col1 could not be resolved from available colum
+# Postgresql - Postgres error: db error: ERROR: column "tab2.col1" must appear in the GROUP BY clause or be used in an aggregate function
+skipif postgres
 skipif Datafusion
 query I rowsort label-7802
 SELECT ALL - + tab2.col2 * - COALESCE ( - 53, tab2.col1 / - tab2.col1 + - tab2.col0 / tab2.col1, - tab2.col0 ) FROM tab2 GROUP BY tab2.col2
@@ -51488,9 +52255,11 @@ SELECT + tab2.col2 * 57 FROM tab2 GROUP BY tab2.col2
 4503
 4959
 
-# PostgreSQL has strict column usage for GROUP BY clauses
+#  PostgreSQL has strict column usage for GROUP BY clauses
 skipif postgresql
 # Datafusion - Error during planning: Projection references non-aggregate values: Expression cor0.col2 could not be resolved from available colum
+# Postgresql - Postgres error: db error: ERROR: column "cor0.col2" must appear in the GROUP BY clause or be used in an aggregate function
+skipif postgres
 skipif Datafusion
 query I rowsort
 SELECT DISTINCT COALESCE ( - 87, cor0.col0 * + COALESCE ( cor0.col0 * cor0.col2, col1 * - cor0.col2, 91 * - cor0.col1 ), cor0.col1 * cor0.col2 ) FROM tab2 AS cor0 GROUP BY cor0.col0, cor0.col1
@@ -51757,6 +52526,11 @@ SELECT col2 * - cor0.col2 + - cor0.col0 AS col1 FROM tab2 AS cor0 GROUP BY col2,
 -6332
 -7584
 
+query I rowsort label-7868
+SELECT DISTINCT + 6 / + tab0.col0 FROM tab0 GROUP BY tab0.col0
+----
+0
+
 query I rowsort
 SELECT DISTINCT 38 FROM tab2 GROUP BY tab2.col0
 ----
@@ -51823,9 +52597,11 @@ SELECT DISTINCT - 77 FROM tab1 AS cor0 GROUP BY col1
 ----
 -77
 
-# PostgreSQL has strict column usage for GROUP BY clauses
+#  PostgreSQL has strict column usage for GROUP BY clauses
 skipif postgresql
 # Datafusion - Error during planning: Projection references non-aggregate values: Expression cor0.col0 could not be resolved from available colum
+# Postgresql - Postgres error: db error: ERROR: column "cor0.col0" must appear in the GROUP BY clause or be used in an aggregate function
+skipif postgres
 skipif Datafusion
 query I rowsort
 SELECT DISTINCT - COALESCE ( 30, + cor0.col2 * - CASE - cor0.col0 WHEN cor0.col0 THEN + cor0.col0 END, + ( + cor0.col1 ) * - cor0.col1 - col0 ) + + 99 * cor0.col2 FROM tab1 AS cor0 GROUP BY col2
@@ -52033,9 +52809,11 @@ NULL
 NULL
 NULL
 
-# PostgreSQL has strict column usage for GROUP BY clauses
+#  PostgreSQL has strict column usage for GROUP BY clauses
 skipif postgresql
 # Datafusion - Error during planning: Projection references non-aggregate values: Expression tab2.col0 could not be resolved from available colum
+# Postgresql - Postgres error: db error: ERROR: column "tab2.col0" must appear in the GROUP BY clause or be used in an aggregate function
+skipif postgres
 skipif Datafusion
 query I rowsort
 SELECT ALL CASE + 19 WHEN 5 THEN - tab2.col0 * - tab2.col2 ELSE NULL END AS col0 FROM tab2 GROUP BY tab2.col2
@@ -52406,9 +53184,19 @@ SELECT ALL + col1 col1 FROM tab1 GROUP BY tab1.col1
 57
 6
 
+query I rowsort label-7967
+SELECT DISTINCT tab2.col1 / + tab2.col1 FROM tab2 GROUP BY tab2.col1
+----
+1
+
 query I rowsort
 SELECT DISTINCT tab1.col0 FROM tab1 WHERE NOT NULL = ( tab1.col2 / - col2 ) GROUP BY tab1.col0
 ----
+
+query I rowsort label-7969
+SELECT DISTINCT tab0.col2 / tab0.col2 AS col2 FROM tab0 GROUP BY tab0.col2
+----
+1
 
 query I rowsort
 SELECT 19 AS col1 FROM tab1 cor0 GROUP BY cor0.col0
@@ -52684,6 +53472,11 @@ SELECT ALL + tab1.col2 * + tab1.col2 FROM tab1 GROUP BY tab1.col2
 5041
 64
 
+query I rowsort label-8011
+SELECT DISTINCT 79 / - cor0.col1 FROM tab2 AS cor0 GROUP BY cor0.col1
+----
+-1
+
 query I rowsort
 SELECT DISTINCT 60 FROM tab1 GROUP BY tab1.col0
 ----
@@ -52927,12 +53720,22 @@ SELECT + 68 + col1 AS col1 FROM tab2 AS cor0 GROUP BY cor0.col1
 127
 129
 
+query I rowsort label-8049
+SELECT DISTINCT + tab2.col1 / - 34 FROM tab2 GROUP BY col1
+----
+-1
+
 query I rowsort
 SELECT + 43 * + tab2.col2 AS col2 FROM tab2 GROUP BY tab2.col2
 ----
 2494
 3397
 3741
+
+query I rowsort label-8051
+SELECT DISTINCT cor0.col2 / cor0.col2 AS col1 FROM tab1 AS cor0 GROUP BY cor0.col2, cor0.col1
+----
+1
 
 query I rowsort
 SELECT ALL - cor0.col1 * - cor0.col1 FROM tab0 AS cor0 GROUP BY cor0.col1, cor0.col1
@@ -52966,6 +53769,11 @@ SELECT ALL tab1.col2 * 43 AS col0 FROM tab1 GROUP BY tab1.col2
 1935
 3053
 344
+
+query I rowsort label-8057
+SELECT DISTINCT cor0.col1 / - cor0.col1 AS col1 FROM tab2 AS cor0 GROUP BY cor0.col1
+----
+-1
 
 query I rowsort
 SELECT DISTINCT 9 AS col2 FROM tab1 AS cor0 GROUP BY cor0.col0
@@ -54782,6 +55590,11 @@ SELECT ALL - + 52 FROM tab1 GROUP BY tab1.col2
 -52
 -52
 
+query I rowsort label-8330
+SELECT DISTINCT + + tab1.col2 / tab1.col2 FROM tab1 GROUP BY tab1.col2
+----
+1
+
 query I rowsort
 SELECT 20 FROM tab2 AS cor0 CROSS JOIN tab1 AS cor1 GROUP BY cor0.col0
 ----
@@ -55420,9 +56233,11 @@ SELECT ALL 35 * + tab0.col1 AS col0 FROM tab0 GROUP BY tab0.col1
 0
 2835
 
-# PostgreSQL has strict column usage for GROUP BY clauses
+#  PostgreSQL has strict column usage for GROUP BY clauses
 skipif postgresql
 # Datafusion - Error during planning: Projection references non-aggregate values: Expression cor0.col2 could not be resolved from available colum
+# Postgresql - Postgres error: db error: ERROR: column "cor0.col2" must appear in the GROUP BY clause or be used in an aggregate function
+skipif postgres
 skipif Datafusion
 query I rowsort
 SELECT DISTINCT COALESCE ( 51, + cor0.col2 ) * 28 FROM tab1 AS cor0 GROUP BY cor0.col0
@@ -55658,6 +56473,11 @@ SELECT 82 FROM tab1 AS cor0 GROUP BY col0
 82
 82
 
+query I rowsort label-8463
+SELECT DISTINCT - 49 - cor0.col0 / cor0.col0 AS col2 FROM tab2 cor0 GROUP BY cor0.col1, cor0.col0
+----
+-50
+
 query I rowsort
 SELECT DISTINCT - - tab2.col2 col0 FROM tab2 GROUP BY tab2.col2
 ----
@@ -55700,9 +56520,11 @@ SELECT - 21 FROM tab0 GROUP BY tab0.col0
 -21
 -21
 
-# PostgreSQL has strict column usage for GROUP BY clauses
+#  PostgreSQL has strict column usage for GROUP BY clauses
 skipif postgresql
 # Datafusion - Error during planning: Projection references non-aggregate values: Expression tab2.col0 could not be resolved from available colum
+# Postgresql - Postgres error: db error: ERROR: column "tab2.col0" must appear in the GROUP BY clause or be used in an aggregate function
+skipif postgres
 skipif Datafusion
 query I rowsort
 SELECT - - COALESCE ( + 94, tab2.col0, - col2 ) * tab2.col2 AS col0 FROM tab2 GROUP BY tab2.col2
@@ -55731,6 +56553,11 @@ SELECT + 19 FROM tab1 GROUP BY col0
 19
 19
 
+query I rowsort label-8474
+SELECT DISTINCT CAST ( NULL AS INTEGER ) * - CASE + 67 WHEN + col2 THEN 84 END col2 FROM tab0 GROUP BY tab0.col2
+----
+NULL
+
 query I rowsort
 SELECT DISTINCT 71 AS col0 FROM tab2 AS cor0 GROUP BY cor0.col0
 ----
@@ -55756,6 +56583,11 @@ SELECT + + tab0.col0 AS col2 FROM tab0 GROUP BY col0
 26
 43
 83
+
+query I rowsort label-8479
+SELECT DISTINCT 68 / - 7 FROM tab0 AS cor0 GROUP BY cor0.col1
+----
+-9
 
 query I rowsort
 SELECT 27 col0 FROM tab2 AS cor0 GROUP BY cor0.col1
@@ -55821,6 +56653,11 @@ SELECT cor0.col0 col0 FROM tab2 cor0 GROUP BY cor0.col0, cor0.col1
 15
 91
 92
+
+query I rowsort label-8490
+SELECT DISTINCT - 96 / 87 FROM tab2 GROUP BY tab2.col0
+----
+-1
 
 query I rowsort
 SELECT DISTINCT + - 43 FROM tab0 GROUP BY tab0.col0
@@ -55945,6 +56782,11 @@ SELECT ALL - tab1.col2 * - 35 FROM tab1 GROUP BY tab1.col2
 1575
 2485
 280
+
+query I rowsort label-8511
+SELECT DISTINCT cor0.col1 + CAST ( NULL AS INTEGER ) AS col1 FROM tab2 AS cor0 GROUP BY cor0.col0, cor0.col1
+----
+NULL
 
 query I rowsort
 SELECT DISTINCT 76 + 31 AS col2 FROM tab1 GROUP BY tab1.col2
@@ -56620,6 +57462,11 @@ SELECT 10 / cor0.col2 FROM tab1 AS cor0 GROUP BY cor0.col2
 0
 1
 
+query I rowsort label-8614
+SELECT DISTINCT - - 88 / - 13 FROM tab2 GROUP BY col0
+----
+-6
+
 query I rowsort
 SELECT - 91 + col2 col2 FROM tab1 GROUP BY tab1.col2
 ----
@@ -56753,6 +57600,8 @@ SELECT ALL + 11 FROM tab2 GROUP BY tab2.col0
 11
 
 # Datafusion - Error during planning: Projection references non-aggregate values: Expression tab2.col2 could not be resolved from available colum
+# Postgresql - Postgres error: db error: ERROR: column "tab2.col2" must appear in the GROUP BY clause or be used in an aggregate function
+skipif postgres
 skipif Datafusion
 query I rowsort
 SELECT DISTINCT COALESCE ( 67, tab2.col2 - + tab2.col2 ) * tab2.col0 col1 FROM tab2 GROUP BY tab2.col0
@@ -57018,9 +57867,11 @@ SELECT ALL + tab0.col1 * 16 + + 32 AS col2 FROM tab0 GROUP BY tab0.col1
 1328
 32
 
-# PostgreSQL has strict column usage for GROUP BY clauses
+#  PostgreSQL has strict column usage for GROUP BY clauses
 skipif postgresql
 # Datafusion - Error during planning: Projection references non-aggregate values: Expression tab1.col2 could not be resolved from available colum
+# Postgresql - Postgres error: db error: ERROR: column "tab1.col2" must appear in the GROUP BY clause or be used in an aggregate function
+skipif postgres
 skipif Datafusion
 query I rowsort
 SELECT COALESCE ( 71, - col2 ) FROM tab1 GROUP BY tab1.col0
@@ -57033,6 +57884,11 @@ query I rowsort
 SELECT DISTINCT 40 FROM tab2 AS cor0 GROUP BY cor0.col0, cor0.col1
 ----
 40
+
+query I rowsort label-8676
+SELECT DISTINCT + CAST ( NULL AS INTEGER ) FROM tab1 GROUP BY tab1.col2
+----
+NULL
 
 query I rowsort
 SELECT + 2 AS col0 FROM tab2 GROUP BY tab2.col1
@@ -58242,6 +59098,11 @@ SELECT ALL 50 FROM tab1 AS cor0 GROUP BY cor0.col2
 50
 50
 
+query I rowsort label-8861
+SELECT DISTINCT cor0.col2 / col2 AS col2 FROM tab0 AS cor0 GROUP BY cor0.col2
+----
+1
+
 query I rowsort
 SELECT COALESCE ( 12, - cor0.col2 ) AS col1 FROM tab1 AS cor0 GROUP BY cor0.col2
 ----
@@ -58610,6 +59471,11 @@ SELECT ALL 18 FROM tab1 GROUP BY tab1.col2
 18
 18
 
+query I rowsort label-8919
+SELECT DISTINCT + tab1.col1 / tab1.col1 AS col0 FROM tab1 GROUP BY tab1.col1
+----
+1
+
 query I rowsort
 SELECT - ( cor0.col1 ) AS col0 FROM tab2 AS cor0 GROUP BY cor0.col1
 ----
@@ -58855,9 +59721,11 @@ SELECT DISTINCT - COALESCE ( 87, + 84 + - tab2.col2 ) FROM tab2 GROUP BY tab2.co
 ----
 -87
 
-# PostgreSQL has strict column usage for GROUP BY clauses
+#  PostgreSQL has strict column usage for GROUP BY clauses
 skipif postgresql
 # Datafusion - Error during planning: Projection references non-aggregate values: Expression tab1.col0 could not be resolved from available colum
+# Postgresql - Postgres error: db error: ERROR: column "tab1.col0" must appear in the GROUP BY clause or be used in an aggregate function
+skipif postgres
 skipif Datafusion
 query I rowsort label-8957
 SELECT + COALESCE ( + 84, + tab1.col0 * - tab1.col0 - tab1.col1 * tab1.col1 ) / - col2 AS col0 FROM tab1 GROUP BY tab1.col2
@@ -59056,6 +59924,11 @@ SELECT ALL + cor0.col0 col1 FROM tab2 AS cor0 CROSS JOIN tab1 AS cor1 GROUP BY c
 91
 92
 
+query I rowsort label-8986
+SELECT DISTINCT tab1.col0 / tab1.col0 AS col0 FROM tab1 GROUP BY tab1.col0
+----
+1
+
 query I rowsort
 SELECT + tab0.col0 * - tab0.col0 AS col1 FROM tab0 GROUP BY tab0.col0
 ----
@@ -59177,6 +60050,11 @@ SELECT - 18 * - cor0.col2 AS col0 FROM tab2 AS cor0 GROUP BY col2, cor0.col2
 1044
 1422
 1566
+
+query I rowsort label-9005
+SELECT DISTINCT + cor0.col2 / cor0.col2 AS col0 FROM tab2 cor0 GROUP BY cor0.col2, cor0.col1
+----
+1
 
 query I rowsort label-9006
 SELECT ALL + col1 / - tab2.col1 AS col0 FROM tab2 GROUP BY tab2.col1
@@ -59314,9 +60192,11 @@ SELECT DISTINCT + col2 FROM tab1 GROUP BY col2
 71
 8
 
-# PostgreSQL has strict column usage for GROUP BY clauses
+#  PostgreSQL has strict column usage for GROUP BY clauses
 skipif postgresql
 # Datafusion - Error during planning: Projection references non-aggregate values: Expression cor0.col2 could not be resolved from available colum
+# Postgresql - Postgres error: db error: ERROR: column "cor0.col2" must appear in the GROUP BY clause or be used in an aggregate function
+skipif postgres
 skipif Datafusion
 query I rowsort
 SELECT ALL - COALESCE ( 69, cor0.col2, cor0.col0, + cor0.col1 ) + 94 FROM tab2 AS cor0 GROUP BY cor0.col0, cor0.col0
@@ -59338,6 +60218,19 @@ SELECT DISTINCT + 70 * - 59 + - tab0.col2 FROM tab0 GROUP BY tab0.col2
 -4154
 -4168
 -4209
+
+query I rowsort label-9029
+SELECT DISTINCT + CAST ( NULL AS INTEGER ) FROM tab2 GROUP BY col2
+----
+NULL
+
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
+query R rowsort label-9030
+SELECT DISTINCT - + CAST ( NULL AS REAL ) FROM tab2 GROUP BY tab2.col2
+----
+NULL
 
 query I rowsort
 SELECT DISTINCT + 38 FROM tab1 GROUP BY col1
@@ -59932,6 +60825,11 @@ NULL
 NULL
 NULL
 
+query I rowsort label-9119
+SELECT DISTINCT + cor0.col2 / 86 FROM tab0 AS cor0 GROUP BY cor0.col2
+----
+0
+
 query I rowsort
 SELECT ALL cor0.col0 AS col1 FROM tab0 cor0 GROUP BY cor0.col2, cor0.col0
 ----
@@ -60006,6 +60904,11 @@ SELECT + tab0.col0 * 46 AS col0 FROM tab0 GROUP BY tab0.col0
 1978
 3818
 
+query I rowsort label-9132
+SELECT DISTINCT - cor0.col2 / - cor0.col2 AS col2 FROM tab1 AS cor0 GROUP BY cor0.col2
+----
+1
+
 query I rowsort label-9133
 SELECT ALL cor0.col0 / cor0.col0 FROM tab1 AS cor0 GROUP BY cor0.col0
 ----
@@ -60018,6 +60921,11 @@ SELECT - - 42 + tab0.col1 FROM tab0 GROUP BY tab0.col1
 ----
 123
 42
+
+query I rowsort label-9135
+SELECT DISTINCT + + CAST ( NULL AS INTEGER ) FROM tab0 GROUP BY tab0.col2
+----
+NULL
 
 query I rowsort
 SELECT ALL - 11 FROM tab2 GROUP BY col0
@@ -60260,9 +61168,11 @@ SELECT ALL 56 FROM tab0, tab0 AS cor0 GROUP BY tab0.col0
 56
 56
 
-# PostgreSQL has strict column usage for GROUP BY clauses
+#  PostgreSQL has strict column usage for GROUP BY clauses
 skipif postgresql
 # Datafusion - Error during planning: Projection references non-aggregate values: Expression tab1.col0 could not be resolved from available colum
+# Postgresql - Postgres error: db error: ERROR: column "tab1.col0" must appear in the GROUP BY clause or be used in an aggregate function
+skipif postgres
 skipif Datafusion
 query I rowsort label-9173
 SELECT + COALESCE ( - 9, - tab1.col0 / + tab1.col0 ) FROM tab1 GROUP BY col2
@@ -60657,6 +61567,11 @@ SELECT 12 FROM tab0 AS cor0 GROUP BY col2, cor0.col0
 12
 12
 
+query I rowsort label-9233
+SELECT DISTINCT - cor0.col1 / 65 AS col2 FROM tab2 AS cor0 GROUP BY cor0.col1, cor0.col0
+----
+0
+
 query I rowsort
 SELECT ALL - col0 col0 FROM tab1 AS cor0 GROUP BY cor0.col0
 ----
@@ -60956,6 +61871,11 @@ SELECT + + 63 AS col2 FROM tab2 GROUP BY tab2.col0
 63
 63
 
+query I rowsort label-9280
+SELECT DISTINCT + - 83 + - tab2.col1 / tab2.col1 FROM tab2 GROUP BY tab2.col1
+----
+-84
+
 query I rowsort
 SELECT - + tab1.col1 - 82 AS col1 FROM tab1 GROUP BY tab1.col1
 ----
@@ -60988,6 +61908,19 @@ SELECT DISTINCT - 72 * cor0.col2 col0 FROM tab2 AS cor0 GROUP BY col2
 -4176
 -5688
 -6264
+
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
+query R rowsort label-9286
+SELECT DISTINCT CAST ( NULL AS REAL ) * 11 FROM tab1 cor0 CROSS JOIN tab1 AS cor1 GROUP BY cor0.col2
+----
+NULL
+
+query I rowsort label-9287
+SELECT DISTINCT cor0.col2 / - CAST ( NULL AS INTEGER ) + + col2 AS col0 FROM tab0 AS cor0 GROUP BY cor0.col2
+----
+NULL
 
 query I rowsort
 SELECT - cor0.col2 FROM tab0 cor0 GROUP BY cor0.col2, cor0.col2
@@ -61043,9 +61976,11 @@ SELECT DISTINCT COALESCE ( 13, col2 ) FROM tab1 AS cor0 GROUP BY cor0.col2, cor0
 ----
 13
 
-# PostgreSQL has strict column usage for GROUP BY clauses
+#  PostgreSQL has strict column usage for GROUP BY clauses
 skipif postgresql
 # Datafusion - Error during planning: Projection references non-aggregate values: Expression tab2.col0 could not be resolved from available colum
+# Postgresql - Postgres error: db error: ERROR: column "tab2.col0" must appear in the GROUP BY clause or be used in an aggregate function
+skipif postgres
 skipif Datafusion
 query I rowsort
 SELECT DISTINCT + COALESCE ( + 51, col0 - col1 ) AS col2 FROM tab2 GROUP BY col1
@@ -61226,9 +62161,11 @@ SELECT ALL + + 39 AS col1 FROM tab2 GROUP BY tab2.col1
 39
 39
 
-# PostgreSQL has strict column usage for GROUP BY clauses
+#  PostgreSQL has strict column usage for GROUP BY clauses
 skipif postgresql
 # Datafusion - Error during planning: Projection references non-aggregate values: Expression tab1.col2 could not be resolved from available colum
+# Postgresql - Postgres error: db error: ERROR: column "tab1.col2" must appear in the GROUP BY clause or be used in an aggregate function
+skipif postgres
 skipif Datafusion
 query I rowsort
 SELECT DISTINCT COALESCE ( + 47, - tab1.col1 * tab1.col2 + tab1.col2 ) FROM tab1 GROUP BY tab1.col1
@@ -61841,6 +62778,11 @@ SELECT ALL - 76 FROM tab2 GROUP BY tab2.col2
 -76
 -76
 -76
+
+query I rowsort label-9414
+SELECT DISTINCT + CAST ( 18 AS INTEGER ) AS col0 FROM tab2 AS cor0 GROUP BY cor0.col0
+----
+18
 
 query I rowsort
 SELECT ALL + 91 FROM tab2 cor0 GROUP BY cor0.col2
@@ -62831,9 +63773,11 @@ SELECT DISTINCT - cor0.col1 col1 FROM tab1 AS cor0 GROUP BY col1
 -57
 -6
 
-# PostgreSQL has strict column usage for GROUP BY clauses
+#  PostgreSQL has strict column usage for GROUP BY clauses
 skipif postgresql
 # Datafusion - Error during planning: Projection references non-aggregate values: Expression cor0.col0 could not be resolved from available colum
+# Postgresql - Postgres error: db error: ERROR: column "cor0.col0" must appear in the GROUP BY clause or be used in an aggregate function
+skipif postgres
 skipif Datafusion
 query I rowsort
 SELECT + COALESCE ( 15, - cor0.col2 + + cor0.col0 * cor0.col1 ) FROM tab2 AS cor0 GROUP BY cor0.col2
@@ -62848,6 +63792,11 @@ SELECT - NULLIF ( col2, - cor0.col2 * + cor0.col2 ) AS col0 FROM tab2 AS cor0 GR
 -58
 -79
 -87
+
+query I rowsort label-9564
+SELECT DISTINCT + 39 / + 14 FROM tab0 GROUP BY tab0.col1
+----
+2
 
 query I rowsort
 SELECT DISTINCT + 60 AS col0 FROM tab2 GROUP BY tab2.col2
@@ -63298,9 +64247,11 @@ SELECT - tab2.col2 * - col2 FROM tab2 GROUP BY tab2.col2
 6241
 7569
 
-# PostgreSQL has strict column usage for GROUP BY clauses
+#  PostgreSQL has strict column usage for GROUP BY clauses
 skipif postgresql
 # Datafusion - Error during planning: Projection references non-aggregate values: Expression tab2.col2 could not be resolved from available colum
+# Postgresql - Postgres error: db error: ERROR: column "tab2.col2" must appear in the GROUP BY clause or be used in an aggregate function
+skipif postgres
 skipif Datafusion
 query I rowsort label-9632
 SELECT - COALESCE ( + 81, - tab2.col1 * + tab2.col2, - col0 / tab2.col2 ) FROM tab2 GROUP BY tab2.col1
@@ -64052,6 +65003,11 @@ SELECT DISTINCT + cor0.col1 AS col0 FROM tab0 AS cor0 GROUP BY cor0.col1, cor0.c
 0
 81
 
+query I rowsort label-9744
+SELECT DISTINCT + CAST ( NULL AS INTEGER ) FROM tab1 GROUP BY tab1.col1
+----
+NULL
+
 query I rowsort
 SELECT ALL + + ( - tab0.col1 ) AS col0 FROM tab0 GROUP BY tab0.col1
 ----
@@ -64374,9 +65330,16 @@ SELECT ( 85 ) FROM tab0 cor0 GROUP BY col0
 85
 85
 
-# PostgreSQL has strict column usage for GROUP BY clauses
+query I rowsort label-9793
+SELECT DISTINCT - + tab0.col2 / 80 AS col1 FROM tab0 GROUP BY tab0.col2
+----
+0
+
+#  PostgreSQL has strict column usage for GROUP BY clauses
 skipif postgresql
 # Datafusion - Error during planning: Projection references non-aggregate values: Expression cor0.col1 could not be resolved from available colum
+# Postgresql - Postgres error: db error: ERROR: column "cor0.col1" must appear in the GROUP BY clause or be used in an aggregate function
+skipif postgres
 skipif Datafusion
 query I rowsort
 SELECT ALL + COALESCE ( - 25, + cor0.col1 ) AS col2 FROM tab0 AS cor0 GROUP BY cor0.col0
@@ -64498,6 +65461,11 @@ SELECT + COALESCE ( cor0.col2, + cor0.col2 ) AS col1 FROM tab1 cor0 GROUP BY cor
 45
 71
 8
+
+query I rowsort label-9813
+SELECT DISTINCT + 9 / + 43 FROM tab2 AS cor0 GROUP BY cor0.col0
+----
+0
 
 query I rowsort
 SELECT cor0.col0 - + 69 FROM tab0 AS cor0 GROUP BY cor0.col0
@@ -64628,9 +65596,11 @@ SELECT ALL - + 66 FROM tab2 GROUP BY col1
 -66
 -66
 
-# PostgreSQL has strict column usage for GROUP BY clauses
+#  PostgreSQL has strict column usage for GROUP BY clauses
 skipif postgresql
 # Datafusion - Error during planning: Projection references non-aggregate values: Expression tab2.col1 could not be resolved from available colum
+# Postgresql - Postgres error: db error: ERROR: column "tab2.col1" must appear in the GROUP BY clause or be used in an aggregate function
+skipif postgres
 skipif Datafusion
 query I rowsort label-9833
 SELECT ALL - + COALESCE ( 28, 90 + tab2.col1 / tab2.col1 ) / tab2.col2 AS col0 FROM tab2 GROUP BY tab2.col2
@@ -64660,12 +65630,22 @@ SELECT + tab0.col0 / + tab0.col0 FROM tab0 GROUP BY tab0.col0
 1
 1
 
+query I rowsort label-9837
+SELECT DISTINCT + + tab2.col0 / tab2.col0 FROM tab2 GROUP BY tab2.col0
+----
+1
+
 query I rowsort
 SELECT DISTINCT 79 * col2 AS col0 FROM tab1 cor0 GROUP BY cor0.col2
 ----
 3555
 5609
 632
+
+query I rowsort label-9839
+SELECT DISTINCT CAST ( 66 AS INTEGER ) * 78 AS col2 FROM tab1 AS cor0 GROUP BY cor0.col0
+----
+5148
 
 query I rowsort
 SELECT 9 FROM tab1 AS cor0 GROUP BY cor0.col2
@@ -65063,6 +66043,11 @@ SELECT 47 FROM tab1 AS cor0 GROUP BY cor0.col1, cor0.col0
 47
 47
 47
+
+query I rowsort label-9900
+SELECT DISTINCT + cor0.col2 / cor0.col2 FROM tab2 AS cor0 GROUP BY cor0.col2
+----
+1
 
 query I rowsort
 SELECT ALL cor0.col2 AS col2 FROM tab2 AS cor0 GROUP BY cor0.col2, cor0.col0
@@ -65529,6 +66514,8 @@ SELECT 84 * - cor0.col1 col0 FROM tab1 AS cor0 GROUP BY cor0.col1
 -504
 
 # Datafusion - Error during planning: Projection references non-aggregate values: Expression tab0.col1 could not be resolved from available colum
+# Postgresql - Postgres error: db error: ERROR: column "tab0.col1" must appear in the GROUP BY clause or be used in an aggregate function
+skipif postgres
 skipif Datafusion
 query I rowsort label-9972
 SELECT + 99 * + NULLIF ( tab0.col2 + CAST ( NULL AS INTEGER ), - COALESCE ( + 57, tab0.col1 + 50, 15 - tab0.col0 ) ) col2 FROM tab0 GROUP BY tab0.col2

@@ -330,6 +330,11 @@ SELECT ALL - + tab1.col1 * tab1.col1 AS col2 FROM tab1 GROUP BY tab1.col1
 -3249
 -36
 
+query I rowsort label-44
+SELECT DISTINCT cor0.col2 / - cor0.col2 AS col1 FROM tab1 AS cor0 GROUP BY cor0.col2, cor0.col1
+----
+-1
+
 query I rowsort
 SELECT ALL tab1.col0 + 75 * 59 AS col1 FROM tab1 GROUP BY tab1.col0
 ----
@@ -476,9 +481,11 @@ SELECT ALL - 85 FROM tab2, tab2 AS cor0 GROUP BY tab2.col0
 -85
 -85
 
-# PostgreSQL has strict column usage for GROUP BY clauses
+#  PostgreSQL has strict column usage for GROUP BY clauses
 skipif postgresql
 # Datafusion - Error during planning: Projection references non-aggregate values: Expression tab2.col1 could not be resolved from available colum
+# Postgresql - Postgres error: db error: ERROR: column "tab2.col1" must appear in the GROUP BY clause or be used in an aggregate function
+skipif postgres
 skipif Datafusion
 query I rowsort label-66
 SELECT - + COALESCE ( 37, + tab2.col1, - 38 * - tab2.col2 + - 41 * tab2.col0 ) / 45 FROM tab2 GROUP BY col0
@@ -933,6 +940,11 @@ SELECT DISTINCT - 2 + cor0.col1 AS col2 FROM tab0 AS cor0 GROUP BY cor0.col1
 ----
 -2
 79
+
+query I rowsort label-134
+SELECT DISTINCT - CAST ( + 21 AS INTEGER ) FROM tab1 GROUP BY tab1.col2
+----
+-21
 
 query I rowsort
 SELECT DISTINCT + - 72 + tab1.col2 FROM tab1 GROUP BY tab1.col2
@@ -1416,9 +1428,11 @@ SELECT + 33 FROM tab0 AS cor0 GROUP BY col1
 33
 33
 
-# PostgreSQL has strict column usage for GROUP BY clauses
+#  PostgreSQL has strict column usage for GROUP BY clauses
 skipif postgresql
 # Datafusion - Error during planning: Projection references non-aggregate values: Expression cor0.col1 could not be resolved from available colum
+# Postgresql - Postgres error: db error: ERROR: column "cor0.col1" must appear in the GROUP BY clause or be used in an aggregate function
+skipif postgres
 skipif Datafusion
 query I rowsort
 SELECT DISTINCT COALESCE ( - 30, - col1 * cor0.col2 + - 56 ) AS col1 FROM tab0 AS cor0 GROUP BY cor0.col0, cor0.col0
@@ -1450,6 +1464,11 @@ query I rowsort
 SELECT DISTINCT - 27 FROM tab0 GROUP BY tab0.col2
 ----
 -27
+
+query I rowsort label-212
+SELECT DISTINCT + CAST ( NULL AS INTEGER ) * - tab1.col2 FROM tab1 GROUP BY tab1.col2
+----
+NULL
 
 query I rowsort
 SELECT DISTINCT + cor0.col0 AS col2 FROM tab2 cor0 GROUP BY cor0.col0, col2
@@ -3926,9 +3945,11 @@ SELECT + cor0.col1 / + cor0.col1 AS col2 FROM tab1 AS cor0 GROUP BY cor0.col1
 1
 1
 
-# PostgreSQL has strict column usage for GROUP BY clauses
+#  PostgreSQL has strict column usage for GROUP BY clauses
 skipif postgresql
 # Datafusion - Error during planning: Projection references non-aggregate values: Expression cor0.col0 could not be resolved from available colum
+# Postgresql - Postgres error: db error: ERROR: column "cor0.col0" must appear in the GROUP BY clause or be used in an aggregate function
+skipif postgres
 skipif Datafusion
 query I rowsort
 SELECT + COALESCE ( + 82, - cor0.col0 * col1 ) AS col0 FROM tab2 AS cor0 GROUP BY cor0.col1
@@ -4450,6 +4471,11 @@ SELECT 93 AS col0 FROM tab1 GROUP BY tab1.col2
 93
 93
 
+query I rowsort label-665
+SELECT DISTINCT CAST ( - 85 AS INTEGER ) FROM tab1 AS cor0 GROUP BY cor0.col0
+----
+-85
+
 query I rowsort
 SELECT ALL cor0.col2 * + cor0.col1 FROM tab2 AS cor0 GROUP BY cor0.col2, cor0.col1
 ----
@@ -4541,6 +4567,11 @@ SELECT tab0.col0 * - 35 AS col2 FROM tab0 GROUP BY col0
 -1505
 -2905
 -910
+
+query I rowsort label-680
+SELECT DISTINCT + col1 / tab2.col1 col1 FROM tab2 GROUP BY tab2.col1
+----
+1
 
 query I rowsort
 SELECT + 80 * tab2.col1 col0 FROM tab2 GROUP BY tab2.col1
@@ -4868,6 +4899,11 @@ SELECT DISTINCT - tab0.col0 * - tab0.col0 + + tab0.col0 AS col2 FROM tab0 GROUP 
 1892
 6972
 702
+
+query I rowsort label-730
+SELECT DISTINCT CAST ( NULL AS INTEGER ) AS col1 FROM tab2 AS cor0 GROUP BY cor0.col1, cor0.col2
+----
+NULL
 
 query I rowsort
 SELECT ALL + - 60 col0 FROM tab0 GROUP BY tab0.col2
@@ -5644,6 +5680,11 @@ SELECT + cor1.col0 FROM tab1 AS cor0 CROSS JOIN tab2 AS cor1 GROUP BY cor1.col0
 91
 92
 
+query I rowsort label-851
+SELECT DISTINCT cor0.col2 / ( - cor0.col2 ) AS col0 FROM tab2 AS cor0 GROUP BY cor0.col2
+----
+-1
+
 query I rowsort
 SELECT ALL - 26 FROM tab1 AS cor0 GROUP BY cor0.col2, cor0.col2
 ----
@@ -5892,9 +5933,11 @@ SELECT DISTINCT cor0.col1 / + 7 AS col0 FROM tab1 AS cor0 GROUP BY cor0.col1, co
 6
 8
 
-# PostgreSQL has strict column usage for GROUP BY clauses
+#  PostgreSQL has strict column usage for GROUP BY clauses
 skipif postgresql
 # Datafusion - Error during planning: Projection references non-aggregate values: Expression cor0.col2 could not be resolved from available colum
+# Postgresql - Postgres error: db error: ERROR: column "cor0.col2" must appear in the GROUP BY clause or be used in an aggregate function
+skipif postgres
 skipif Datafusion
 query I rowsort
 SELECT ALL COALESCE ( - 8, + col2, + col0 ) AS col1 FROM tab0 cor0 GROUP BY cor0.col0
@@ -6368,6 +6411,11 @@ SELECT - NULLIF ( - cor0.col0, cor0.col0 ) AS col0 FROM tab0 AS cor0 GROUP BY co
 43
 83
 
+query I rowsort label-961
+SELECT DISTINCT - tab2.col2 / tab2.col2 FROM tab2 GROUP BY tab2.col2
+----
+-1
+
 query I rowsort
 SELECT + cor0.col2 FROM tab1 AS cor0 CROSS JOIN tab0 AS cor1 GROUP BY cor0.col2
 ----
@@ -6500,6 +6548,11 @@ SELECT + 46 AS col1 FROM tab0 AS cor0 GROUP BY cor0.col2, cor0.col0
 46
 46
 46
+
+query I rowsort label-982
+SELECT DISTINCT cor0.col1 / - cor0.col1 col2 FROM tab2 AS cor0 GROUP BY cor0.col1
+----
+-1
 
 query I rowsort
 SELECT 68 FROM tab1 AS cor0 GROUP BY cor0.col1
@@ -6737,6 +6790,11 @@ SELECT - + 94 AS col1 FROM tab2 GROUP BY tab2.col2
 -94
 -94
 
+query I rowsort label-1019
+SELECT DISTINCT 95 / 28 AS col1 FROM tab0 AS cor0 GROUP BY cor0.col0
+----
+3
+
 query I rowsort
 SELECT + 94 AS col0 FROM tab1 cor0 GROUP BY col1
 ----
@@ -6744,9 +6802,11 @@ SELECT + 94 AS col0 FROM tab1 cor0 GROUP BY col1
 94
 94
 
-# PostgreSQL has strict column usage for GROUP BY clauses
+#  PostgreSQL has strict column usage for GROUP BY clauses
 skipif postgresql
 # Datafusion - Error during planning: Projection references non-aggregate values: Expression cor0.col1 could not be resolved from available colum
+# Postgresql - Postgres error: db error: ERROR: column "cor0.col1" must appear in the GROUP BY clause or be used in an aggregate function
+skipif postgres
 skipif Datafusion
 query I rowsort
 SELECT COALESCE ( - 62, cor0.col1, - 51, - 15 * + cor0.col1 ) FROM tab1 AS cor0 GROUP BY cor0.col2
@@ -6811,9 +6871,11 @@ SELECT DISTINCT col1 AS col1 FROM tab2 AS cor0 GROUP BY col1
 59
 61
 
-# PostgreSQL has strict column usage for GROUP BY clauses
+#  PostgreSQL has strict column usage for GROUP BY clauses
 skipif postgresql
 # Datafusion - Error during planning: Projection references non-aggregate values: Expression cor0.col2 could not be resolved from available colum
+# Postgresql - Postgres error: db error: ERROR: column "cor0.col2" must appear in the GROUP BY clause or be used in an aggregate function
+skipif postgres
 skipif Datafusion
 query I rowsort
 SELECT DISTINCT + COALESCE ( + 35, + col2, NULLIF ( cor0.col0, - cor0.col0 ) + cor0.col1 * + cor0.col1 ) FROM tab0 AS cor0 GROUP BY cor0.col0
@@ -7219,9 +7281,11 @@ SELECT ALL col2 * + 94 FROM tab0 AS cor0 GROUP BY cor0.col2
 3572
 7426
 
-# PostgreSQL has strict column usage for GROUP BY clauses
+#  PostgreSQL has strict column usage for GROUP BY clauses
 skipif postgresql
 # Datafusion - Error during planning: Projection references non-aggregate values: Expression tab0.col2 could not be resolved from available colum
+# Postgresql - Postgres error: db error: ERROR: column "tab0.col2" must appear in the GROUP BY clause or be used in an aggregate function
+skipif postgres
 skipif Datafusion
 query I rowsort
 SELECT DISTINCT COALESCE ( 35, - tab0.col2, + tab0.col1 ) FROM tab0 GROUP BY tab0.col0
@@ -7441,9 +7505,11 @@ SELECT 4 FROM tab1 AS cor0 CROSS JOIN tab0 AS cor1 GROUP BY cor0.col0
 4
 4
 
-# PostgreSQL has strict column usage for GROUP BY clauses
+#  PostgreSQL has strict column usage for GROUP BY clauses
 skipif postgresql
 # Datafusion - Error during planning: Projection references non-aggregate values: Expression cor0.col1 could not be resolved from available colum
+# Postgresql - Postgres error: db error: ERROR: column "cor0.col1" must appear in the GROUP BY clause or be used in an aggregate function
+skipif postgres
 skipif Datafusion
 query I rowsort label-1123
 SELECT COALESCE ( 30, col1 ) + cor0.col0 / - cor0.col0 FROM tab1 AS cor0 GROUP BY col2, cor0.col0
@@ -7851,6 +7917,11 @@ SELECT DISTINCT ( 81 ) AS col0 FROM tab2 GROUP BY tab2.col2
 ----
 81
 
+query I rowsort label-1185
+SELECT DISTINCT + + CAST ( NULL AS INTEGER ) AS col1 FROM tab1 GROUP BY tab1.col2
+----
+NULL
+
 query I rowsort
 SELECT DISTINCT 15 AS col1 FROM tab2 AS cor0 GROUP BY cor0.col0
 ----
@@ -8021,9 +8092,11 @@ SELECT + ( 94 ) * - tab1.col2 FROM tab1 GROUP BY col2
 -6674
 -752
 
-# PostgreSQL has strict column usage for GROUP BY clauses
+#  PostgreSQL has strict column usage for GROUP BY clauses
 skipif postgresql
 # Datafusion - Error during planning: Projection references non-aggregate values: Expression tab2.col2 could not be resolved from available colum
+# Postgresql - Postgres error: db error: ERROR: column "tab2.col2" must appear in the GROUP BY clause or be used in an aggregate function
+skipif postgres
 skipif Datafusion
 query I rowsort
 SELECT ALL + - COALESCE ( + 25, tab2.col2 + + tab2.col1, tab2.col1 * tab2.col0 ) AS col0 FROM tab2 GROUP BY col1
@@ -8032,9 +8105,11 @@ SELECT ALL + - COALESCE ( + 25, tab2.col2 + + tab2.col1, tab2.col1 * tab2.col0 )
 -25
 -25
 
-# PostgreSQL has strict column usage for GROUP BY clauses
+#  PostgreSQL has strict column usage for GROUP BY clauses
 skipif postgresql
 # Datafusion - Error during planning: Projection references non-aggregate values: Expression tab2.col2 could not be resolved from available colum
+# Postgresql - Postgres error: db error: ERROR: column "tab2.col2" must appear in the GROUP BY clause or be used in an aggregate function
+skipif postgres
 skipif Datafusion
 query I rowsort
 SELECT + CASE - 35 WHEN + tab2.col0 + - tab2.col0 THEN NULL WHEN - 76 THEN - tab2.col2 ELSE + 3 END FROM tab2 GROUP BY tab2.col0
@@ -8298,6 +8373,11 @@ SELECT ALL 50 AS col0 FROM tab0 GROUP BY tab0.col0
 50
 50
 50
+
+query I rowsort label-1253
+SELECT DISTINCT + - tab1.col2 / tab1.col2 FROM tab1 GROUP BY col2
+----
+-1
 
 query I rowsort
 SELECT ALL + 35 AS col1 FROM tab1 cor0 GROUP BY cor0.col0
@@ -9039,6 +9119,11 @@ SELECT + 50 AS col2 FROM tab0 AS cor0 GROUP BY cor0.col0
 50
 50
 
+query I rowsort label-1365
+SELECT DISTINCT CAST ( NULL AS INTEGER ) + - cor0.col0 FROM tab0 AS cor0 GROUP BY cor0.col0
+----
+NULL
+
 query I rowsort
 SELECT col1 * 96 AS col1 FROM tab0 GROUP BY col1
 ----
@@ -9498,6 +9583,11 @@ SELECT - 92 + + 81 * tab0.col0 FROM tab0 GROUP BY tab0.col0
 3391
 6631
 
+query I rowsort label-1435
+SELECT DISTINCT + + tab1.col0 / 84 - + 96 AS col2 FROM tab1 GROUP BY tab1.col0
+----
+-96
+
 query I rowsort
 SELECT DISTINCT + cor0.col1 + cor0.col1 FROM tab1 cor0 GROUP BY cor0.col1
 ----
@@ -9808,6 +9898,11 @@ SELECT DISTINCT + - 85 FROM tab2 GROUP BY tab2.col0
 ----
 -85
 
+query I rowsort label-1482
+SELECT DISTINCT - 28 / 2 AS col0 FROM tab1 GROUP BY tab1.col1
+----
+-14
+
 query I rowsort
 SELECT ALL + 1 AS col2 FROM tab2 GROUP BY tab2.col1
 ----
@@ -9827,6 +9922,11 @@ SELECT ALL 63 FROM tab0 GROUP BY tab0.col2
 63
 63
 63
+
+query I rowsort label-1486
+SELECT DISTINCT + cor0.col2 / 92 + + 53 / + cor0.col2 FROM tab2 cor0 GROUP BY cor0.col2, cor0.col2
+----
+0
 
 query I rowsort
 SELECT ALL + 79 AS col0 FROM tab0 GROUP BY tab0.col0
@@ -10019,6 +10119,11 @@ SELECT cor0.col1 - 15 FROM tab0 AS cor0 GROUP BY col0, cor0.col1
 -15
 -15
 66
+
+query I rowsort label-1516
+SELECT DISTINCT cor0.col2 / cor0.col2 AS col1 FROM tab0 AS cor0 GROUP BY cor0.col2, cor0.col1
+----
+1
 
 query I rowsort
 SELECT ALL + 81 AS col0 FROM tab1 AS cor0 GROUP BY cor0.col1
@@ -10552,6 +10657,17 @@ SELECT DISTINCT - tab0.col2 - 48 FROM tab0 GROUP BY tab0.col2
 -72
 -86
 
+#  PostgreSQL has strict column usage for GROUP BY clauses
+skipif postgresql
+# Datafusion - Error during planning: Projection references non-aggregate values: Expression cor0.col0 could not be resolved from available colum
+# Postgresql - Postgres error: db error: ERROR: column "cor0.col0" must appear in the GROUP BY clause or be used in an aggregate function
+skipif postgres
+skipif Datafusion
+query I rowsort label-1597
+SELECT DISTINCT cor0.col1 / COALESCE ( + 80, cor0.col1 * cor0.col0 ) + 54 FROM tab1 cor0 GROUP BY cor0.col1
+----
+54
+
 query I rowsort
 SELECT DISTINCT - 35 + - tab2.col2 AS col1 FROM tab2 GROUP BY tab2.col2
 ----
@@ -10851,9 +10967,11 @@ SELECT DISTINCT + 89 + + tab0.col2 AS col0 FROM tab0 GROUP BY col2
 127
 168
 
-# PostgreSQL has strict column usage for GROUP BY clauses
+#  PostgreSQL has strict column usage for GROUP BY clauses
 skipif postgresql
 # Datafusion - Error during planning: Projection references non-aggregate values: Expression cor0.col0 could not be resolved from available colum
+# Postgresql - Postgres error: db error: ERROR: column "cor0.col0" must appear in the GROUP BY clause or be used in an aggregate function
+skipif postgres
 skipif Datafusion
 query I rowsort
 SELECT ALL CASE + 71 WHEN + 85 THEN col0 * cor0.col1 ELSE NULL END + 43 AS col0 FROM tab2 AS cor0 GROUP BY cor0.col1
@@ -11428,9 +11546,11 @@ SELECT ALL + 21 * cor0.col2 col2 FROM tab0 AS cor0 GROUP BY cor0.col2
 504
 798
 
-# PostgreSQL has strict column usage for GROUP BY clauses
+#  PostgreSQL has strict column usage for GROUP BY clauses
 skipif postgresql
 # Datafusion - Error during planning: Projection references non-aggregate values: Expression cor0.col2 could not be resolved from available colum
+# Postgresql - Postgres error: db error: ERROR: column "cor0.col2" must appear in the GROUP BY clause or be used in an aggregate function
+skipif postgres
 skipif Datafusion
 query I rowsort
 SELECT COALESCE ( - 41, cor0.col2, cor0.col1 ) + cor0.col0 FROM tab1 cor0 GROUP BY col0
@@ -11868,6 +11988,11 @@ SELECT DISTINCT - cor0.col1 AS col0 FROM tab2 AS cor0 GROUP BY cor0.col1, cor0.c
 -41
 -59
 -61
+
+query I rowsort label-1796
+SELECT DISTINCT CAST ( NULL AS INTEGER ) * + 64 FROM tab0 AS cor0 GROUP BY cor0.col2, cor0.col2
+----
+NULL
 
 query I rowsort
 SELECT DISTINCT - + COALESCE ( + tab2.col0, 73 * - 59, + tab2.col0 ) * - tab2.col0 col0 FROM tab2 GROUP BY tab2.col0
@@ -12517,6 +12642,11 @@ SELECT ALL 5 AS col1 FROM tab1 GROUP BY tab1.col2
 5
 5
 5
+
+query I rowsort label-1897
+SELECT DISTINCT + CAST ( - 82 AS INTEGER ) AS col1 FROM tab1 GROUP BY tab1.col2
+----
+-82
 
 query I rowsort
 SELECT + 45 - tab0.col2 FROM tab0 GROUP BY tab0.col2
@@ -13178,9 +13308,16 @@ SELECT DISTINCT + tab0.col1 + - 87 * - 85 FROM tab0 GROUP BY tab0.col1
 7395
 7476
 
-# PostgreSQL has strict column usage for GROUP BY clauses
+query I rowsort label-1997
+SELECT DISTINCT - 11 / col0 AS col1 FROM tab2 AS cor0 GROUP BY col0
+----
+0
+
+#  PostgreSQL has strict column usage for GROUP BY clauses
 skipif postgresql
 # Datafusion - Error during planning: Projection references non-aggregate values: Expression tab2.col2 could not be resolved from available colum
+# Postgresql - Postgres error: db error: ERROR: column "tab2.col2" must appear in the GROUP BY clause or be used in an aggregate function
+skipif postgres
 skipif Datafusion
 query I rowsort
 SELECT - tab2.col0 + COALESCE ( - 87, - tab2.col2 + - tab2.col1 * + COALESCE ( + tab2.col1, tab2.col0 ) ) FROM tab2 GROUP BY tab2.col0
@@ -13371,6 +13508,11 @@ SELECT + 38 + col0 FROM tab2 AS cor0 GROUP BY cor0.col0
 129
 130
 53
+
+query I rowsort label-2026
+SELECT DISTINCT - + tab2.col2 / col2 AS col2 FROM tab2 GROUP BY tab2.col2
+----
+-1
 
 query I rowsort
 SELECT - col0 * + cor0.col0 AS col2 FROM tab1 AS cor0 GROUP BY cor0.col0, cor0.col1
@@ -13749,6 +13891,11 @@ SELECT ALL cor0.col1 / + col1 AS col1 FROM tab2 AS cor0 GROUP BY cor0.col1
 1
 1
 
+query I rowsort label-2085
+SELECT DISTINCT + + CAST ( NULL AS INTEGER ) AS col1 FROM tab0 GROUP BY tab0.col2
+----
+NULL
+
 query I rowsort
 SELECT DISTINCT - - 31 + - 56 col2 FROM tab0 GROUP BY tab0.col1
 ----
@@ -13843,6 +13990,11 @@ SELECT + 19 AS col1 FROM tab2 AS cor0 CROSS JOIN tab2 AS cor1 GROUP BY cor1.col0
 19
 19
 19
+
+query I rowsort label-2100
+SELECT DISTINCT + cor0.col2 / - cor0.col2 FROM tab2 cor0 GROUP BY cor0.col2
+----
+-1
 
 query I rowsort
 SELECT DISTINCT - 82 * 13 col0 FROM tab0 GROUP BY col1
@@ -14075,6 +14227,11 @@ SELECT DISTINCT ( - col1 * cor0.col1 ) AS col1 FROM tab1 AS cor0 GROUP BY cor0.c
 -1936
 -3249
 -36
+
+query I rowsort label-2137
+SELECT DISTINCT CAST ( NULL AS INTEGER ) AS col1 FROM tab2 cor0 GROUP BY cor0.col2
+----
+NULL
 
 query I rowsort
 SELECT DISTINCT cor0.col0 * + cor0.col0 AS col0 FROM tab0 AS cor0 GROUP BY cor0.col0
@@ -14360,6 +14517,11 @@ SELECT col0 AS col2 FROM tab1 AS cor0 GROUP BY cor0.col0
 28
 82
 
+query I rowsort label-2178
+SELECT DISTINCT - CAST ( NULL AS INTEGER ) FROM tab1 AS cor0 GROUP BY cor0.col2
+----
+NULL
+
 query I rowsort
 SELECT DISTINCT + - 66 * 20 AS col1 FROM tab0, tab0 AS cor0 GROUP BY cor0.col0
 ----
@@ -14579,6 +14741,11 @@ SELECT col0 * cor0.col0 * ( - cor0.col2 ) + + cor0.col0 FROM tab1 AS cor0 GROUP 
 -35252
 -3850
 -477322
+
+query I rowsort label-2212
+SELECT DISTINCT - 10 / col2 AS col0 FROM tab0 cor0 GROUP BY cor0.col2
+----
+0
 
 query I rowsort
 SELECT ALL 1 FROM tab1 AS cor0 GROUP BY cor0.col2
@@ -15636,6 +15803,11 @@ SELECT ALL cor0.col2 AS col1 FROM tab0 cor0 GROUP BY cor0.col2, cor0.col2
 38
 79
 
+query I rowsort label-2371
+SELECT DISTINCT CAST ( NULL AS INTEGER ) AS col0 FROM tab2 AS cor0 GROUP BY cor0.col1
+----
+NULL
+
 query I rowsort
 SELECT DISTINCT cor0.col0 + cor0.col1 col1 FROM tab1 AS cor0 GROUP BY cor0.col1, cor0.col2, cor0.col0
 ----
@@ -15730,6 +15902,11 @@ query I rowsort
 SELECT DISTINCT 19 * 98 AS col2 FROM tab1, tab0 AS cor0, tab2 AS cor1 GROUP BY tab1.col1
 ----
 1862
+
+query I rowsort label-2387
+SELECT DISTINCT - 1 / - cor0.col1 AS col2 FROM tab1 AS cor0 GROUP BY cor0.col1
+----
+0
 
 query I rowsort
 SELECT DISTINCT + 98 FROM tab2 AS cor0 GROUP BY cor0.col1, cor0.col2
@@ -16725,6 +16902,14 @@ SELECT DISTINCT 70 FROM tab2 AS cor0 GROUP BY cor0.col1
 ----
 70
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
+query R rowsort label-2536
+SELECT DISTINCT cor0.col0 * - CAST ( NULL AS REAL ) FROM tab0 AS cor0 GROUP BY cor0.col2, cor0.col0
+----
+NULL
+
 query I rowsort
 SELECT - 45 FROM tab1 AS cor0 GROUP BY cor0.col1
 ----
@@ -17287,6 +17472,11 @@ SELECT + cor0.col1 FROM tab1 AS cor0 GROUP BY cor0.col0, cor0.col1
 57
 6
 
+query I rowsort label-2621
+SELECT DISTINCT - CAST ( - 23 AS INTEGER ) AS col0 FROM tab1 AS cor0 GROUP BY cor0.col1
+----
+23
+
 query I rowsort
 SELECT col1 FROM tab2 AS cor0 GROUP BY cor0.col1, cor0.col0
 ----
@@ -17703,6 +17893,11 @@ SELECT + 47 + cor0.col2 FROM tab1 AS cor0 GROUP BY cor0.col1, cor0.col1, cor0.co
 55
 92
 
+query I rowsort label-2684
+SELECT DISTINCT - CAST ( NULL AS INTEGER ) AS col2 FROM tab1 AS cor0 GROUP BY cor0.col1
+----
+NULL
+
 query I rowsort
 SELECT + 62 FROM tab1 AS cor0 GROUP BY cor0.col1
 ----
@@ -17823,9 +18018,11 @@ SELECT - cor0.col0 + - col0 AS col2 FROM tab1 AS cor0 GROUP BY cor0.col0
 -44
 -56
 
-# PostgreSQL has strict column usage for GROUP BY clauses
+#  PostgreSQL has strict column usage for GROUP BY clauses
 skipif postgresql
 # Datafusion - Error during planning: HAVING clause references non-aggregate values: Expression cor0.col0 could not be resolved from available co
+# Postgresql - Postgres error: db error: ERROR: column "cor0.col0" must appear in the GROUP BY clause or be used in an aggregate function
+skipif postgres
 skipif Datafusion
 query I rowsort
 SELECT ALL + cor0.col2 * - cor0.col2 + cor0.col2 AS col0 FROM tab2 AS cor0 GROUP BY cor0.col2 HAVING NULL <= - col0
@@ -18798,6 +18995,11 @@ SELECT ALL - cor0.col1 col1 FROM tab1 cor0 GROUP BY cor0.col0, col1
 -57
 -6
 
+query I rowsort label-2848
+SELECT DISTINCT - 35 / 83 FROM tab2, tab1 cor0 GROUP BY cor0.col2
+----
+0
+
 query I rowsort
 SELECT ALL 7 FROM tab2 AS cor0 GROUP BY col2
 ----
@@ -19191,6 +19393,11 @@ SELECT - cor0.col0 AS col1 FROM tab0 cor0 GROUP BY cor0.col0
 -43
 -83
 
+query I rowsort label-2907
+SELECT DISTINCT cor0.col2 / - cor0.col2 AS col2 FROM tab2 AS cor0 GROUP BY cor0.col2
+----
+-1
+
 query I rowsort
 SELECT ALL + cor0.col2 + + col2 AS col1 FROM tab0 AS cor0 GROUP BY col2, cor0.col2
 ----
@@ -19399,12 +19606,30 @@ SELECT - 74 FROM tab0 cor0 GROUP BY cor0.col0
 -74
 -74
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
+query R rowsort label-2939
+SELECT DISTINCT + CAST ( NULL AS REAL ) FROM tab2 AS cor0 GROUP BY cor0.col0
+----
+NULL
+
 query I rowsort
 SELECT ALL + col0 AS col0 FROM tab1 AS cor0 GROUP BY col0
 ----
 22
 28
 82
+
+query I rowsort label-2941
+SELECT DISTINCT 8 + - cor0.col0 / col0 AS col2 FROM tab0 AS cor0 GROUP BY cor0.col0
+----
+7
+
+query I rowsort label-2942
+SELECT DISTINCT - CAST ( NULL AS INTEGER ) FROM tab1 cor0 GROUP BY cor0.col0
+----
+NULL
 
 query I rowsort
 SELECT DISTINCT cor0.col2 AS col0 FROM tab2 AS cor0 GROUP BY cor0.col2, cor0.col1
@@ -19419,6 +19644,11 @@ SELECT col2 AS col1 FROM tab0 AS cor0 GROUP BY cor0.col2, cor0.col0
 24
 38
 79
+
+query I rowsort label-2945
+SELECT DISTINCT + cor0.col0 - + CAST ( NULL AS INTEGER ) FROM tab0 AS cor0 GROUP BY col0
+----
+NULL
 
 query I rowsort
 SELECT - 99 FROM tab1, tab1 AS cor0 GROUP BY tab1.col2
@@ -19656,6 +19886,11 @@ SELECT ALL cor0.col1 * col1 AS col2 FROM tab2 AS cor0 GROUP BY cor0.col1, cor0.c
 3481
 3721
 
+query I rowsort label-2981
+SELECT DISTINCT + 8 / + cor0.col0 FROM tab2, tab0 cor0 GROUP BY cor0.col0
+----
+0
+
 query I rowsort
 SELECT DISTINCT 66 FROM tab0 cor0 GROUP BY cor0.col1
 ----
@@ -19708,12 +19943,27 @@ SELECT CAST ( 25 AS INTEGER ) AS col2 FROM tab2 cor0 GROUP BY cor0.col1, cor0.co
 25
 25
 
+query I rowsort label-2990
+SELECT DISTINCT CAST ( NULL AS INTEGER ) col2 FROM tab1 AS cor0 GROUP BY cor0.col0
+----
+NULL
+
+query I rowsort label-2991
+SELECT DISTINCT + col1 / - cor0.col1 AS col2 FROM tab2 AS cor0 GROUP BY cor0.col1
+----
+-1
+
 query I rowsort
 SELECT + tab2.col1 FROM tab2 GROUP BY col1
 ----
 41
 59
 61
+
+query I rowsort label-2993
+SELECT DISTINCT + CAST ( NULL AS INTEGER ) * - cor0.col0 AS col0 FROM tab1 cor0 GROUP BY col0
+----
+NULL
 
 query I rowsort
 SELECT DISTINCT + 60 FROM tab2 AS cor0 GROUP BY cor0.col1
@@ -20061,6 +20311,11 @@ SELECT 17 FROM tab1 AS cor0 GROUP BY cor0.col0
 17
 17
 17
+
+query I rowsort label-3045
+SELECT DISTINCT - + CAST ( NULL AS INTEGER ) * - 26 FROM tab2, tab2 AS cor0, tab0 cor1 GROUP BY cor0.col0
+----
+NULL
 
 query I rowsort
 SELECT ALL - cor1.col2 * 89 AS col2 FROM tab1 AS cor0 CROSS JOIN tab2 AS cor1 GROUP BY cor1.col2
@@ -20617,6 +20872,11 @@ SELECT ALL - CAST ( NULL AS INTEGER ) FROM tab0 AS cor0 CROSS JOIN tab0 cor1 GRO
 NULL
 NULL
 
+query I rowsort label-3128
+SELECT DISTINCT - cor0.col0 - + CAST ( NULL AS INTEGER ) FROM tab1 AS cor0 GROUP BY col2, cor0.col0
+----
+NULL
+
 query I rowsort
 SELECT + cor0.col2 col0 FROM tab0 AS cor0 GROUP BY cor0.col2
 ----
@@ -20651,6 +20911,11 @@ SELECT DISTINCT cor0.col0 FROM tab2 cor0 GROUP BY col0
 15
 91
 92
+
+query I rowsort label-3134
+SELECT DISTINCT CAST ( NULL AS INTEGER ) * - cor0.col0 AS col2 FROM tab1 AS cor0 GROUP BY cor0.col0
+----
+NULL
 
 query I rowsort
 SELECT DISTINCT - cor0.col2 FROM tab2 AS cor0 GROUP BY cor0.col1, col2
@@ -20905,6 +21170,11 @@ SELECT 56 AS col0 FROM tab2 cor0 GROUP BY cor0.col2
 56
 56
 56
+
+query I rowsort label-3173
+SELECT DISTINCT - cor0.col0 * CAST ( NULL AS INTEGER ) FROM tab1, tab2 AS cor0 GROUP BY cor0.col0
+----
+NULL
 
 query I rowsort
 SELECT DISTINCT 79 * 10 FROM tab0, tab2 AS cor0, tab2 AS cor1 GROUP BY cor1.col2
@@ -21296,6 +21566,11 @@ SELECT + 91 AS col2 FROM tab1 AS cor0 GROUP BY cor0.col0, col1
 91
 91
 91
+
+query I rowsort label-3232
+SELECT DISTINCT - CAST ( NULL AS INTEGER ) AS col2 FROM tab0 AS cor0 GROUP BY cor0.col0
+----
+NULL
 
 query I rowsort
 SELECT + 99 FROM tab1 cor0 GROUP BY col2
@@ -21693,6 +21968,11 @@ SELECT DISTINCT - 40 * cor0.col0 FROM tab2 cor0 GROUP BY cor0.col0, col0
 -3640
 -3680
 -600
+
+query I rowsort label-3293
+SELECT DISTINCT CAST ( NULL AS INTEGER ) * - col2 AS col2 FROM tab2 AS cor0 GROUP BY cor0.col2
+----
+NULL
 
 query I rowsort
 SELECT DISTINCT + 66 FROM tab0 GROUP BY tab0.col1
@@ -22587,6 +22867,11 @@ SELECT ALL + - ( - cor0.col2 ) * + cor0.col2 AS col1 FROM tab2, tab1 AS cor0 GRO
 5041
 64
 
+query I rowsort label-3430
+SELECT DISTINCT cor0.col2 + - CAST ( NULL AS INTEGER ) FROM tab2 AS cor0 GROUP BY cor0.col2
+----
+NULL
+
 query I rowsort
 SELECT - ( ( tab2.col0 ) ) FROM tab2 GROUP BY tab2.col0
 ----
@@ -23004,6 +23289,11 @@ SELECT + cor0.col0 FROM tab1, tab1 AS cor0 GROUP BY cor0.col0
 
 query I rowsort
 SELECT DISTINCT 0 FROM tab1 cor0 GROUP BY cor0.col0
+----
+0
+
+query I rowsort label-3493
+SELECT DISTINCT ( - cor0.col1 ) / ( + 98 ) AS col1 FROM tab2 AS cor0 GROUP BY cor0.col1
 ----
 0
 
@@ -23884,6 +24174,14 @@ SELECT DISTINCT + tab2.col0 * ( - tab2.col0 ) FROM tab2, tab1 AS cor0 GROUP BY t
 -8281
 -8464
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
+query R rowsort label-3625
+SELECT DISTINCT - CAST ( NULL AS REAL ) AS col0 FROM tab1 AS cor0 GROUP BY col1, col0
+----
+NULL
+
 query I rowsort
 SELECT + 67 FROM tab2 AS cor0 GROUP BY col0
 ----
@@ -23980,6 +24278,11 @@ SELECT ALL + ( col1 ) AS col0 FROM tab1 AS cor0 GROUP BY cor0.col1
 44
 57
 6
+
+query I rowsort label-3640
+SELECT DISTINCT - CAST ( NULL AS INTEGER ) col1 FROM tab1 AS cor0 GROUP BY cor0.col1
+----
+NULL
 
 query I rowsort
 SELECT DISTINCT + 74 - cor0.col0 AS col1 FROM tab1 AS cor0 GROUP BY cor0.col0
@@ -24544,6 +24847,11 @@ SELECT - col2 AS col2 FROM tab2 GROUP BY tab2.col2
 -79
 -87
 
+query I rowsort label-3724
+SELECT DISTINCT CAST ( NULL AS INTEGER ) * - 8 FROM tab1 AS cor0 GROUP BY cor0.col2
+----
+NULL
+
 query I rowsort
 SELECT DISTINCT + ( cor0.col2 ) AS col1 FROM tab2 AS cor0 GROUP BY cor0.col2
 ----
@@ -24709,6 +25017,11 @@ SELECT + ( - cor0.col0 ) FROM tab2, tab2 AS cor0 GROUP BY cor0.col0
 -91
 -92
 
+query I rowsort label-3749
+SELECT DISTINCT + CAST ( NULL AS INTEGER ) AS col0 FROM tab0 cor0 GROUP BY cor0.col0, cor0.col1
+----
+NULL
+
 query I rowsort
 SELECT ALL cor0.col2 AS col2 FROM tab0 cor0 GROUP BY cor0.col2
 ----
@@ -24820,9 +25133,16 @@ SELECT DISTINCT + 51 AS col0 FROM tab2 cor0 GROUP BY cor0.col1
 ----
 51
 
-# PostgreSQL has strict column usage for GROUP BY clauses
+query I rowsort label-3767
+SELECT DISTINCT cor0.col0 / cor0.col0 AS col1 FROM tab2 AS cor0 GROUP BY cor0.col0
+----
+1
+
+#  PostgreSQL has strict column usage for GROUP BY clauses
 skipif postgresql
 # Datafusion - Error during planning: HAVING clause references non-aggregate values: Expression cor0.col2 could not be resolved from available co
+# Postgresql - Postgres error: db error: ERROR: column "cor0.col2" must appear in the GROUP BY clause or be used in an aggregate function
+skipif postgres
 skipif Datafusion
 query I rowsort
 SELECT ALL + cor0.col0 AS col2 FROM tab2 AS cor0 GROUP BY cor0.col0 HAVING NULL NOT IN ( - cor0.col0 * - col2 )
@@ -25009,6 +25329,11 @@ SELECT 71 AS col0 FROM tab2 AS cor0 GROUP BY cor0.col2
 71
 71
 71
+
+query I rowsort label-3797
+SELECT DISTINCT CAST ( - 76 AS INTEGER ) FROM tab2 AS cor0 GROUP BY cor0.col2
+----
+-76
 
 query I rowsort label-3798
 SELECT ALL - cor0.col1 / cor0.col0 FROM tab2 AS cor0 GROUP BY cor0.col1, col1, cor0.col0
@@ -25518,6 +25843,11 @@ SELECT col2 AS col1 FROM tab1 cor0 GROUP BY cor0.col1, cor0.col2
 45
 71
 8
+
+query I rowsort label-3874
+SELECT DISTINCT CAST ( NULL AS INTEGER ) FROM tab0 AS cor0 GROUP BY cor0.col1, col0
+----
+NULL
 
 query I rowsort
 SELECT DISTINCT - 54 FROM tab2 GROUP BY tab2.col1
@@ -26570,6 +26900,14 @@ SELECT cor0.col2 - + col2 col1 FROM tab2 AS cor0 GROUP BY col2
 0
 0
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
+query R rowsort label-4031
+SELECT DISTINCT CAST ( NULL AS REAL ) FROM tab0 AS cor0 GROUP BY col0
+----
+NULL
+
 query I rowsort
 SELECT DISTINCT + 19 FROM tab1 AS cor0 GROUP BY cor0.col0
 ----
@@ -26941,6 +27279,11 @@ SELECT ALL 28 AS col2 FROM tab0 AS cor0 GROUP BY cor0.col2
 28
 28
 28
+
+query I rowsort label-4088
+SELECT DISTINCT CAST ( + 30 AS INTEGER ) FROM tab2, tab0 AS cor0 GROUP BY cor0.col1
+----
+30
 
 query I rowsort
 SELECT ALL 54 AS col2 FROM tab1, tab2 AS cor0, tab1 AS cor1 GROUP BY cor1.col1
@@ -27600,6 +27943,11 @@ SELECT - 14 AS col0 FROM tab0 AS cor0 GROUP BY cor0.col2
 -14
 -14
 
+query I rowsort label-4187
+SELECT DISTINCT + CAST ( NULL AS INTEGER ) FROM tab0 AS cor0 GROUP BY cor0.col0
+----
+NULL
+
 query I rowsort
 SELECT ALL cor0.col2 + 66 FROM tab1 AS cor0 GROUP BY cor0.col0, cor0.col2
 ----
@@ -27857,6 +28205,11 @@ SELECT DISTINCT ( col1 ) AS col0 FROM tab2 AS cor0 GROUP BY cor0.col2, cor0.col1
 59
 61
 
+query I rowsort label-4227
+SELECT DISTINCT - CAST ( col1 AS INTEGER ) + + cor0.col1 FROM tab0 cor0 GROUP BY cor0.col1, cor0.col1
+----
+0
+
 query I rowsort
 SELECT + - 91 FROM tab1, tab2 AS cor0 GROUP BY cor0.col2
 ----
@@ -27980,6 +28333,11 @@ SELECT cor0.col0 AS col2 FROM tab2 cor0 GROUP BY cor0.col2, cor0.col0
 15
 91
 92
+
+query I rowsort label-4246
+SELECT DISTINCT - CAST ( + 28 AS INTEGER ) FROM tab2 AS cor0 GROUP BY cor0.col0
+----
+-28
 
 query I rowsort
 SELECT - 42 AS col0 FROM tab0 AS cor0 GROUP BY cor0.col2
@@ -28210,6 +28568,11 @@ SELECT - cor0.col2 FROM tab2 cor0 GROUP BY cor0.col2
 -58
 -79
 -87
+
+query I rowsort label-4281
+SELECT DISTINCT + cor0.col1 + + CAST ( NULL AS INTEGER ) FROM tab2 AS cor0 GROUP BY cor0.col1
+----
+NULL
 
 query I rowsort
 SELECT ALL - 33 + + tab0.col0 FROM tab0 GROUP BY tab0.col0
@@ -28825,6 +29188,11 @@ SELECT ALL cor0.col2 FROM tab1 AS cor0 GROUP BY cor0.col2, cor0.col1
 45
 71
 8
+
+query I rowsort label-4374
+SELECT DISTINCT + cor0.col0 / col0 FROM tab1 cor0 GROUP BY col0
+----
+1
 
 query I rowsort
 SELECT ALL - 47 FROM tab0 AS cor0 GROUP BY cor0.col0
@@ -29676,6 +30044,11 @@ SELECT DISTINCT + cor0.col1 col1 FROM tab1 AS cor0 GROUP BY cor0.col1
 57
 6
 
+query I rowsort label-4500
+SELECT DISTINCT + 41 / cor0.col2 FROM tab2 AS cor0 GROUP BY cor0.col2
+----
+0
+
 query I rowsort
 SELECT - cor0.col1 FROM tab1 cor0 GROUP BY cor0.col1
 ----
@@ -29689,6 +30062,14 @@ SELECT 62 AS col0 FROM tab0 AS cor0 GROUP BY cor0.col2
 62
 62
 62
+
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
+query R rowsort label-4503
+SELECT DISTINCT + CAST ( NULL AS REAL ) + cor0.col2 AS col0 FROM tab1, tab2 cor0 GROUP BY cor0.col2
+----
+NULL
 
 query I rowsort
 SELECT - cor0.col1 FROM tab2 cor0 GROUP BY col2, cor0.col1
@@ -30130,6 +30511,11 @@ SELECT ALL 92 * cor0.col1 FROM tab2, tab2 AS cor0 GROUP BY cor0.col1
 3772
 5428
 5612
+
+query I rowsort label-4571
+SELECT DISTINCT - CAST ( NULL AS INTEGER ) + cor0.col1 FROM tab1, tab0 AS cor0 GROUP BY cor0.col1
+----
+NULL
 
 query I rowsort
 SELECT + cor0.col2 * cor0.col2 AS col0 FROM tab1 AS cor0 GROUP BY cor0.col2
@@ -31361,6 +31747,11 @@ SELECT - 63 * cor0.col2 - + cor0.col2 col0 FROM tab0 AS cor0 GROUP BY col2
 -2432
 -5056
 
+query I rowsort label-4757
+SELECT DISTINCT CAST ( NULL AS INTEGER ) AS col0 FROM tab1 AS cor0 CROSS JOIN tab1 AS cor1 GROUP BY cor1.col1, cor1.col0
+----
+NULL
+
 query I rowsort
 SELECT DISTINCT + 15 FROM tab0 AS cor0 GROUP BY cor0.col1
 ----
@@ -31706,6 +32097,11 @@ SELECT 52 * 80 FROM tab2, tab1 cor0 GROUP BY cor0.col1
 4160
 4160
 4160
+
+query I rowsort label-4809
+SELECT DISTINCT cor0.col1 / cor0.col1 col1 FROM tab1, tab1 AS cor0 GROUP BY cor0.col1
+----
+1
 
 query I rowsort
 SELECT ALL cor0.col0 - cor0.col0 FROM tab2 AS cor0 GROUP BY col2, cor0.col0
@@ -32265,6 +32661,11 @@ query I rowsort
 SELECT DISTINCT 73 FROM tab0, tab0 AS cor0 GROUP BY cor0.col0
 ----
 73
+
+query I rowsort label-4895
+SELECT DISTINCT + 88 / 29 AS col2 FROM tab0 GROUP BY tab0.col2
+----
+3
 
 query I rowsort
 SELECT DISTINCT col1 col0 FROM tab1 AS cor0 GROUP BY cor0.col1
@@ -33871,6 +34272,14 @@ SELECT DISTINCT + 37 - - 45 * cor0.col0 AS col0 FROM tab0 AS cor0 GROUP BY cor0.
 1972
 3772
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
+query R rowsort label-5137
+SELECT DISTINCT + CAST ( NULL AS REAL ) + cor0.col0 FROM tab1 AS cor0 GROUP BY cor0.col0
+----
+NULL
+
 query I rowsort
 SELECT cor0.col0 AS col1 FROM tab0 AS cor0 GROUP BY col0
 ----
@@ -34681,6 +35090,11 @@ SELECT - cor0.col0 + cor0.col0 FROM tab0 AS cor0 GROUP BY cor0.col0
 query I rowsort
 SELECT tab1.col2 AS col1 FROM tab1 GROUP BY tab1.col2 HAVING NOT ( NULL ) = NULL
 ----
+
+query I rowsort label-5259
+SELECT DISTINCT + CAST ( NULL AS INTEGER ) FROM tab2, tab1 AS cor0 GROUP BY cor0.col1
+----
+NULL
 
 query I rowsort
 SELECT - 87 * 92 AS col1 FROM tab2 AS cor0 GROUP BY col0, cor0.col1
@@ -36122,6 +36536,14 @@ SELECT ALL 8 * cor0.col1 AS col0 FROM tab2 AS cor0 GROUP BY col1
 472
 488
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
+query R rowsort label-5474
+SELECT DISTINCT col2 * CAST ( NULL AS REAL ) AS col1 FROM tab1 GROUP BY tab1.col2
+----
+NULL
+
 query I rowsort
 SELECT DISTINCT - 68 * - col0 AS col2 FROM tab1 AS cor0 GROUP BY cor0.col0
 ----
@@ -36272,6 +36694,11 @@ SELECT DISTINCT tab0.col2 - - tab0.col2 * 26 AS col2 FROM tab0 GROUP BY col2
 1026
 2133
 648
+
+query I rowsort label-5497
+SELECT DISTINCT CAST ( + 77 AS INTEGER ) FROM tab1 AS cor0 GROUP BY cor0.col2
+----
+77
 
 query I rowsort
 SELECT + 45 AS col0 FROM tab0 AS cor0 GROUP BY cor0.col0
@@ -36529,6 +36956,11 @@ SELECT + col2 AS col1 FROM tab0 GROUP BY tab0.col2
 38
 79
 
+query I rowsort label-5537
+SELECT DISTINCT - cor0.col2 * + CAST ( NULL AS INTEGER ) FROM tab2 AS cor0 GROUP BY cor0.col2
+----
+NULL
+
 query I rowsort
 SELECT + 89 col0 FROM tab0 AS cor0 GROUP BY cor0.col1
 ----
@@ -36678,6 +37110,11 @@ SELECT ALL - cor0.col1 + 98 * cor0.col1 FROM tab0 AS cor0 GROUP BY cor0.col1
 ----
 0
 7857
+
+query I rowsort label-5560
+SELECT DISTINCT CAST ( NULL AS INTEGER ) AS col0 FROM tab2 cor0 GROUP BY cor0.col0
+----
+NULL
 
 query I rowsort
 SELECT ALL cor0.col1 AS col0 FROM tab1, tab0 AS cor0 GROUP BY cor0.col1
@@ -37571,6 +38008,11 @@ SELECT - 94 + cor0.col0 * cor0.col0 FROM tab2, tab1 AS cor0 GROUP BY cor0.col0
 6630
 690
 
+query I rowsort label-5693
+SELECT DISTINCT CAST ( NULL AS INTEGER ) col0 FROM tab1 AS cor0 GROUP BY cor0.col2
+----
+NULL
+
 query I rowsort label-5694
 SELECT - CAST ( NULL AS INTEGER ) + - 34 FROM tab0 GROUP BY tab0.col1
 ----
@@ -38007,6 +38449,14 @@ SELECT DISTINCT 18 * - 53 FROM tab0 AS cor0 GROUP BY cor0.col0
 ----
 -954
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
+query R rowsort label-5760
+SELECT DISTINCT cor0.col0 * CAST ( NULL AS REAL ) FROM tab2 AS cor0 GROUP BY cor0.col0, cor0.col0
+----
+NULL
+
 query I rowsort label-5761
 SELECT ALL - cor0.col2 / cor0.col2 col1 FROM tab0 AS cor0 GROUP BY cor0.col0, cor0.col2
 ----
@@ -38428,6 +38878,11 @@ SELECT - 88 FROM tab2 GROUP BY tab2.col2
 -88
 -88
 -88
+
+query I rowsort label-5824
+SELECT DISTINCT CAST ( NULL AS INTEGER ) AS col2 FROM tab1 AS cor0 GROUP BY col1
+----
+NULL
 
 query I rowsort
 SELECT ALL + 35 AS col0 FROM tab1, tab0 AS cor0 GROUP BY cor0.col2
@@ -41623,6 +42078,11 @@ SELECT - cor0.col1 + - cor0.col1 AS col1 FROM tab0 AS cor0 GROUP BY col0, cor0.c
 0
 0
 
+query I rowsort label-6300
+SELECT DISTINCT + 9 / - cor0.col2 AS col1 FROM tab0 AS cor0 GROUP BY cor0.col2
+----
+0
+
 query I rowsort
 SELECT 76 AS col1 FROM tab1 AS cor0 GROUP BY cor0.col2
 ----
@@ -41648,6 +42108,11 @@ SELECT + col0 AS col0 FROM tab0 AS cor0 GROUP BY cor0.col1, cor0.col0
 26
 43
 83
+
+query I rowsort label-6305
+SELECT DISTINCT + cor0.col0 / + cor0.col0 AS col0 FROM tab2 AS cor0 GROUP BY cor0.col0
+----
+1
 
 query I rowsort
 SELECT DISTINCT - 3 * - 28 FROM tab0 GROUP BY tab0.col2
@@ -42138,12 +42603,22 @@ SELECT DISTINCT - cor0.col1 AS col1 FROM tab2 AS cor0 GROUP BY cor0.col1, cor0.c
 -59
 -61
 
+query I rowsort label-6379
+SELECT DISTINCT + cor0.col2 * + CAST ( NULL AS INTEGER ) FROM tab0 AS cor0 GROUP BY col2
+----
+NULL
+
 query I rowsort
 SELECT cor0.col2 + 54 * + 6 FROM tab2 AS cor0 GROUP BY col2
 ----
 382
 403
 411
+
+query I rowsort label-6381
+SELECT DISTINCT + cor0.col2 * cor0.col2 + CAST ( NULL AS INTEGER ) AS col0 FROM tab2 AS cor0 GROUP BY cor0.col2
+----
+NULL
 
 query I rowsort
 SELECT DISTINCT - 23 AS col0 FROM tab1 AS cor0 GROUP BY cor0.col2
@@ -42320,6 +42795,11 @@ SELECT ALL cor0.col0 + + cor0.col0 FROM tab1 AS cor0 GROUP BY cor0.col0
 164
 44
 56
+
+query I rowsort label-6408
+SELECT DISTINCT CAST ( NULL AS INTEGER ) FROM tab2 AS cor0 GROUP BY cor0.col2
+----
+NULL
 
 query I rowsort
 SELECT + 63 AS col0 FROM tab2 AS cor0 GROUP BY cor0.col1
@@ -43666,6 +44146,11 @@ SELECT + cor0.col0 AS col1 FROM tab0 AS cor0 GROUP BY cor0.col0, cor0.col0
 43
 83
 
+query I rowsort label-6609
+SELECT DISTINCT CAST ( NULL AS INTEGER ) AS col2 FROM tab1 AS cor0 GROUP BY col2
+----
+NULL
+
 query I rowsort
 SELECT ALL + 67 + + 15 FROM tab0 AS cor0 GROUP BY cor0.col0
 ----
@@ -44017,6 +44502,14 @@ SELECT + 68 FROM tab1, tab0 AS cor0 GROUP BY cor0.col0
 68
 68
 68
+
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
+query R rowsort label-6662
+SELECT DISTINCT - CAST ( NULL AS REAL ) AS col1 FROM tab2, tab2 AS cor0 GROUP BY tab2.col2
+----
+NULL
 
 query I rowsort
 SELECT ALL 1 AS col2 FROM tab0 AS cor0 GROUP BY col0, cor0.col2
@@ -44546,6 +45039,11 @@ SELECT DISTINCT - cor0.col1 FROM tab1 AS cor0 GROUP BY cor0.col1, cor0.col0
 -57
 -6
 
+query I rowsort label-6741
+SELECT DISTINCT - col1 * CAST ( NULL AS INTEGER ) AS col1 FROM tab1 AS cor0 GROUP BY cor0.col1, cor0.col2
+----
+NULL
+
 query I rowsort label-6742
 SELECT cor0.col2 / + cor0.col2 AS col1 FROM tab0 AS cor0 GROUP BY cor0.col2
 ----
@@ -44635,6 +45133,11 @@ query I rowsort
 SELECT DISTINCT + 96 AS col2 FROM tab0 AS cor0 GROUP BY cor0.col0
 ----
 96
+
+query I rowsort label-6756
+SELECT DISTINCT CAST ( NULL AS INTEGER ) FROM tab0 cor0 CROSS JOIN tab2 AS cor1 GROUP BY cor0.col0
+----
+NULL
 
 query I rowsort
 SELECT cor0.col1 AS col2 FROM tab1 AS cor0 GROUP BY col1
@@ -45769,6 +46272,11 @@ SELECT ALL 54 AS col1 FROM tab2 AS cor0 GROUP BY cor0.col0
 54
 54
 
+query I rowsort label-6925
+SELECT DISTINCT CAST ( NULL AS INTEGER ) FROM tab0 AS cor0 GROUP BY cor0.col1
+----
+NULL
+
 query I rowsort
 SELECT DISTINCT cor0.col2 - - ( 61 ) FROM tab2 AS cor0 GROUP BY cor0.col2
 ----
@@ -45992,6 +46500,11 @@ SELECT cor0.col0 FROM tab2 AS cor0 CROSS JOIN tab1 AS cor1 GROUP BY cor0.col0
 15
 91
 92
+
+query I rowsort label-6960
+SELECT DISTINCT CAST ( NULL AS INTEGER ) AS col2 FROM tab0 AS cor0 GROUP BY cor0.col0
+----
+NULL
 
 query I rowsort
 SELECT + ( - 69 * + cor0.col0 ) FROM tab1 AS cor0 GROUP BY cor0.col1, cor0.col0
@@ -48113,6 +48626,11 @@ SELECT DISTINCT cor0.col2 + + 43 AS col0 FROM tab2 cor0 GROUP BY cor0.col0, cor0
 122
 130
 
+query I rowsort label-7280
+SELECT DISTINCT 15 / + 51 FROM tab0, tab0 AS cor0, tab1 AS cor1 GROUP BY cor0.col0
+----
+0
+
 query I rowsort label-7281
 SELECT - ( + cor0.col1 ) / + cor0.col1 FROM tab2, tab2 cor0 GROUP BY cor0.col1
 ----
@@ -48289,6 +48807,11 @@ query I rowsort
 SELECT DISTINCT 63 FROM tab0 AS cor0 GROUP BY col0
 ----
 63
+
+query I rowsort label-7308
+SELECT DISTINCT + CAST ( NULL AS INTEGER ) + - cor0.col0 AS col2 FROM tab2 AS cor0 GROUP BY cor0.col0
+----
+NULL
 
 query I rowsort
 SELECT ALL + 77 * - cor0.col0 col1 FROM tab1 AS cor0 GROUP BY cor0.col0, cor0.col1
@@ -48654,6 +49177,11 @@ SELECT ALL 48 AS col0 FROM tab1, tab2 AS cor0 GROUP BY cor0.col1
 48
 48
 48
+
+query I rowsort label-7364
+SELECT DISTINCT 94 / + 91 FROM tab1 AS cor0 GROUP BY cor0.col2
+----
+1
 
 query I rowsort
 SELECT + cor0.col0 * - 93 FROM tab0 AS cor0 GROUP BY col0, cor0.col2
@@ -49370,6 +49898,11 @@ SELECT - 45 FROM tab1 GROUP BY tab1.col1
 -45
 -45
 
+query I rowsort label-7471
+SELECT DISTINCT + CAST ( NULL AS INTEGER ) AS col0 FROM tab0 cor0 GROUP BY cor0.col2
+----
+NULL
+
 query I rowsort
 SELECT + tab0.col0 + - 63 FROM tab0 GROUP BY tab0.col0
 ----
@@ -49665,6 +50198,11 @@ SELECT 61 FROM tab1 AS cor0 GROUP BY cor0.col1
 61
 61
 61
+
+query I rowsort label-7517
+SELECT DISTINCT - CAST ( NULL AS INTEGER ) AS col0 FROM tab1 AS cor0 GROUP BY cor0.col2
+----
+NULL
 
 query I rowsort
 SELECT cor0.col0 * - cor0.col0 AS col0 FROM tab0 AS cor0 GROUP BY cor0.col0, cor0.col1
@@ -50178,6 +50716,11 @@ SELECT ALL - cor0.col0 * 2 + cor0.col0 AS col1 FROM tab0 AS cor0 GROUP BY cor0.c
 -43
 -83
 
+query I rowsort label-7594
+SELECT DISTINCT + CAST ( NULL AS INTEGER ) AS col1 FROM tab2, tab0 AS cor0 GROUP BY tab2.col1
+----
+NULL
+
 query I rowsort
 SELECT 96 AS col2 FROM tab0 AS cor0 CROSS JOIN tab2 AS cor1 GROUP BY cor1.col0
 ----
@@ -50240,6 +50783,11 @@ SELECT ALL - 84 AS col0 FROM tab1 AS cor0 GROUP BY cor0.col2
 -84
 -84
 -84
+
+query I rowsort label-7604
+SELECT DISTINCT ( - col2 + + cor0.col2 ) / - 24 AS col0 FROM tab2 AS cor0 GROUP BY cor0.col2
+----
+0
 
 query I rowsort
 SELECT DISTINCT + 7 AS col2 FROM tab2 cor0 GROUP BY cor0.col1
@@ -50536,6 +51084,11 @@ SELECT cor0.col2 + 63 AS col2 FROM tab2 AS cor0 GROUP BY cor0.col1, cor0.col2
 121
 142
 150
+
+query I rowsort label-7650
+SELECT DISTINCT 82 / - 85 col0 FROM tab1, tab2 AS cor0, tab0 cor1 GROUP BY cor0.col2
+----
+0
 
 query I rowsort
 SELECT 50 FROM tab1 AS cor0 GROUP BY cor0.col0
@@ -50923,6 +51476,11 @@ SELECT + 84 AS col2 FROM tab1 AS cor0 GROUP BY cor0.col2
 84
 84
 
+query I rowsort label-7709
+SELECT DISTINCT + cor0.col1 / cor0.col1 AS col0 FROM tab2 AS cor0 GROUP BY cor0.col1
+----
+1
+
 query I rowsort
 SELECT DISTINCT 68 AS col0 FROM tab0 AS cor0 GROUP BY cor0.col1
 ----
@@ -51030,6 +51588,11 @@ SELECT DISTINCT - cor0.col2 + - 62 AS col1 FROM tab1 AS cor0 GROUP BY cor0.col2
 -107
 -133
 -70
+
+query I rowsort label-7726
+SELECT DISTINCT 1 / cor0.col2 FROM tab0 cor0 GROUP BY col2
+----
+0
 
 query I rowsort
 SELECT DISTINCT 33 col1 FROM tab1 AS cor0 GROUP BY cor0.col2, cor0.col2
@@ -51359,6 +51922,11 @@ SELECT ALL 24 AS col2 FROM tab1 AS cor0 GROUP BY cor0.col1
 24
 24
 
+query I rowsort label-7776
+SELECT DISTINCT + col1 / cor0.col1 FROM tab2 AS cor0 GROUP BY col1
+----
+1
+
 query I rowsort label-7777
 SELECT CAST ( + 67 AS INTEGER ) FROM tab1 AS cor0 GROUP BY cor0.col0
 ----
@@ -51413,6 +51981,11 @@ SELECT DISTINCT ( + cor0.col0 ) FROM tab1 AS cor0 GROUP BY cor0.col0
 22
 28
 82
+
+query I rowsort label-7785
+SELECT DISTINCT + cor0.col1 * + CAST ( NULL AS INTEGER ) AS col0 FROM tab0 AS cor0 GROUP BY cor0.col1
+----
+NULL
 
 query I rowsort
 SELECT tab2.col2 AS col2 FROM tab2 GROUP BY col2
@@ -52143,6 +52716,11 @@ query I rowsort
 SELECT DISTINCT - 42 * 12 AS col2 FROM tab1 AS cor0 GROUP BY cor0.col2
 ----
 -504
+
+query I rowsort label-7895
+SELECT DISTINCT + CAST ( NULL AS INTEGER ) FROM tab0, tab1 AS cor0, tab1 AS cor1 GROUP BY cor0.col1
+----
+NULL
 
 query I rowsort
 SELECT 24 FROM tab1 GROUP BY tab1.col1
@@ -53102,6 +53680,11 @@ SELECT DISTINCT 26 * cor0.col0 AS col0 FROM tab0, tab2 AS cor0, tab1 AS cor1 GRO
 2392
 390
 
+query I rowsort label-8040
+SELECT DISTINCT CAST ( NULL AS INTEGER ) * + cor0.col2 FROM tab2 AS cor0 GROUP BY cor0.col1, cor0.col2
+----
+NULL
+
 query I rowsort
 SELECT ALL + col2 AS col0 FROM tab0 AS cor0 GROUP BY cor0.col2
 ----
@@ -53678,6 +54261,11 @@ SELECT ALL tab0.col1 * - tab0.col1 FROM tab0 GROUP BY col1
 ----
 -6561
 0
+
+query I rowsort label-8131
+SELECT DISTINCT - col1 - + cor0.col1 * CAST ( NULL AS INTEGER ) AS col1 FROM tab2 AS cor0 GROUP BY cor0.col1, cor0.col1, col2
+----
+NULL
 
 query I rowsort
 SELECT DISTINCT col2 FROM tab0 AS cor0 GROUP BY cor0.col2, cor0.col0
@@ -54272,6 +54860,11 @@ query I rowsort
 SELECT DISTINCT - 51 AS col1 FROM tab0 AS cor0 GROUP BY col0
 ----
 -51
+
+query I rowsort label-8220
+SELECT DISTINCT - CAST ( + 63 AS INTEGER ) FROM tab0 AS cor0 GROUP BY cor0.col1
+----
+-63
 
 query I rowsort
 SELECT DISTINCT 31 col1 FROM tab1 AS cor0 GROUP BY cor0.col0
@@ -55027,6 +55620,11 @@ SELECT ALL + 7 FROM tab2 GROUP BY tab2.col0
 7
 7
 
+query I rowsort label-8333
+SELECT DISTINCT + CAST ( NULL AS INTEGER ) * cor0.col0 FROM tab1 AS cor0 GROUP BY cor0.col0
+----
+NULL
+
 query I rowsort
 SELECT DISTINCT - tab1.col2 + - tab1.col2 AS col1 FROM tab1 GROUP BY tab1.col2
 ----
@@ -55388,6 +55986,11 @@ SELECT DISTINCT cor0.col0 AS col1 FROM tab1 AS cor0 GROUP BY cor0.col0, col0
 22
 28
 82
+
+query I rowsort label-8387
+SELECT DISTINCT CAST ( NULL AS INTEGER ) + - col2 FROM tab1 cor0 GROUP BY col2, col2
+----
+NULL
 
 query I rowsort
 SELECT + 95 FROM tab0 GROUP BY col2
@@ -56087,6 +56690,11 @@ SELECT ALL ( - cor0.col1 ) AS col0 FROM tab1 AS cor0 GROUP BY cor0.col1
 -57
 -6
 
+query I rowsort label-8492
+SELECT DISTINCT + cor0.col0 / cor0.col0 AS col1 FROM tab2 AS cor0 GROUP BY cor0.col0
+----
+1
+
 query I rowsort
 SELECT - 6 * cor0.col2 FROM tab0 cor0 GROUP BY col2
 ----
@@ -56279,6 +56887,14 @@ SELECT + col0 + 69 FROM tab1 AS cor0 GROUP BY col0
 151
 91
 97
+
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
+query R rowsort label-8522
+SELECT DISTINCT CAST ( NULL AS REAL ) FROM tab1 AS cor0 GROUP BY cor0.col2
+----
+NULL
 
 query I rowsort
 SELECT ALL 98 - - cor0.col2 * cor0.col2 AS col1 FROM tab2 AS cor0 GROUP BY cor0.col1, cor0.col2
@@ -56751,6 +57367,11 @@ SELECT ALL ( + cor0.col1 * + cor0.col1 ) + + col1 AS col1 FROM tab0 cor0 GROUP B
 0
 0
 6642
+
+query I rowsort label-8593
+SELECT DISTINCT + CAST ( NULL AS INTEGER ) FROM tab2 AS cor0 GROUP BY cor0.col2
+----
+NULL
 
 query I rowsort
 SELECT + 27 FROM tab1 AS cor0 GROUP BY col1
@@ -57251,6 +57872,14 @@ NULL
 NULL
 NULL
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
+query R rowsort label-8667
+SELECT DISTINCT CAST ( NULL AS REAL ) AS col2 FROM tab2 AS cor0 GROUP BY cor0.col0
+----
+NULL
+
 query I rowsort
 SELECT DISTINCT col2 + + col0 * - 32 * - cor0.col2 FROM tab1 AS cor0 GROUP BY cor0.col0, cor0.col2
 ----
@@ -57619,6 +58248,11 @@ SELECT cor0.col2 AS col0 FROM tab2 AS cor0 GROUP BY col2
 58
 79
 87
+
+query I rowsort label-8723
+SELECT DISTINCT - CAST ( NULL AS INTEGER ) col1 FROM tab1 AS cor0 GROUP BY col2
+----
+NULL
 
 query I rowsort
 SELECT DISTINCT 97 FROM tab0 AS cor0 GROUP BY cor0.col2
@@ -58495,6 +59129,11 @@ SELECT DISTINCT - cor0.col2 FROM tab0 AS cor0 GROUP BY cor0.col2, cor0.col1, cor
 -38
 -79
 
+query I rowsort label-8855
+SELECT DISTINCT - CAST ( NULL AS INTEGER ) FROM tab2 AS cor0 GROUP BY cor0.col1
+----
+NULL
+
 query I rowsort
 SELECT cor0.col0 FROM tab0, tab2 AS cor0 GROUP BY cor0.col0
 ----
@@ -58595,6 +59234,11 @@ SELECT DISTINCT + 39 + - cor0.col2 FROM tab1 AS cor0 GROUP BY cor0.col2
 -6
 31
 
+query I rowsort label-8871
+SELECT DISTINCT cor0.col2 / cor0.col2 AS col0 FROM tab0 AS cor0 GROUP BY cor0.col2
+----
+1
+
 query I rowsort
 SELECT ALL + 5 FROM tab1 AS cor0 GROUP BY cor0.col1
 ----
@@ -58689,6 +59333,11 @@ SELECT ALL + 53 AS col2 FROM tab0, tab0 AS cor0 GROUP BY cor0.col0
 53
 53
 53
+
+query I rowsort label-8886
+SELECT DISTINCT - CAST ( NULL AS INTEGER ) FROM tab1 AS cor0 GROUP BY cor0.col1
+----
+NULL
 
 query I rowsort
 SELECT DISTINCT + 0 AS col1 FROM tab0, tab0 AS cor0 GROUP BY cor0.col1
@@ -59158,6 +59807,11 @@ query I rowsort
 SELECT DISTINCT + 98 * 57 FROM tab0 AS cor0 GROUP BY cor0.col2
 ----
 5586
+
+query I rowsort label-8957
+SELECT DISTINCT CAST ( 85 AS INTEGER ) FROM tab2 AS cor0 GROUP BY cor0.col2
+----
+85
 
 query I rowsort
 SELECT DISTINCT - 5 FROM tab0 AS cor0 GROUP BY cor0.col2
@@ -59981,6 +60635,11 @@ SELECT cor0.col0 / cor0.col0 AS col0 FROM tab2 AS cor0 GROUP BY cor0.col0
 1
 1
 
+query I rowsort label-9083
+SELECT DISTINCT + 97 / 50 FROM tab2 AS cor0 GROUP BY cor0.col1, cor0.col1
+----
+1
+
 query I rowsort
 SELECT - 85 col1 FROM tab1 GROUP BY tab1.col1
 ----
@@ -60312,6 +60971,16 @@ SELECT - ( cor0.col0 ) FROM tab0 AS cor0 GROUP BY col0, col0
 -26
 -43
 -83
+
+query I rowsort label-9133
+SELECT DISTINCT - cor0.col0 / - cor0.col0 AS col0 FROM tab1 AS cor0 GROUP BY cor0.col0
+----
+1
+
+query I rowsort label-9134
+SELECT DISTINCT CAST ( NULL AS INTEGER ) * ( + cor0.col1 ) col0 FROM tab2, tab1 AS cor0 GROUP BY cor0.col1
+----
+NULL
 
 query I rowsort
 SELECT col0 * cor0.col0 * - cor0.col0 FROM tab0 AS cor0 GROUP BY cor0.col0
@@ -61458,6 +62127,11 @@ SELECT 79 AS col1 FROM tab2 AS cor0 CROSS JOIN tab1 cor1 GROUP BY cor1.col1
 79
 79
 
+query I rowsort label-9308
+SELECT DISTINCT + 21 / + cor0.col0 FROM tab0 AS cor0 GROUP BY col0
+----
+0
+
 query I rowsort
 SELECT + cor0.col0 * - col0 - + cor0.col0 AS col0 FROM tab0 AS cor0 GROUP BY col0
 ----
@@ -62021,6 +62695,14 @@ SELECT - 87 FROM tab2 AS cor0 GROUP BY cor0.col2
 -87
 -87
 -87
+
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
+query R rowsort label-9392
+SELECT DISTINCT - CAST ( NULL AS REAL ) FROM tab2, tab0 AS cor0 GROUP BY cor0.col1
+----
+NULL
 
 query I rowsort
 SELECT 58 + + col1 FROM tab1 AS cor0 GROUP BY cor0.col0, col1, cor0.col0
@@ -62796,6 +63478,11 @@ SELECT ALL + cor0.col0 AS col1 FROM tab2, tab0 AS cor0 GROUP BY cor0.col0
 43
 83
 
+query I rowsort label-9509
+SELECT DISTINCT CAST ( NULL AS INTEGER ) FROM tab0 GROUP BY tab0.col1
+----
+NULL
+
 query I rowsort
 SELECT DISTINCT - 84 AS col1 FROM tab2 GROUP BY tab2.col2
 ----
@@ -62840,6 +63527,11 @@ SELECT cor0.col0 AS col2 FROM tab0 cor0 GROUP BY cor0.col0
 26
 43
 83
+
+query I rowsort label-9517
+SELECT DISTINCT CAST ( NULL AS INTEGER ) AS col0 FROM tab0 AS cor0 GROUP BY cor0.col0
+----
+NULL
 
 query I rowsort
 SELECT + + tab2.col2 * 15 FROM tab2 GROUP BY tab2.col2
@@ -63262,6 +63954,11 @@ SELECT ALL + 36 FROM tab2 cor0 GROUP BY col2
 36
 36
 
+query I rowsort label-9579
+SELECT DISTINCT 21 / 27 FROM tab2 AS cor0 GROUP BY col2
+----
+0
+
 query I rowsort
 SELECT - - 61 FROM tab0 GROUP BY tab0.col2
 ----
@@ -63371,6 +64068,11 @@ SELECT cor0.col0 AS col2 FROM tab2, tab1 cor0 GROUP BY cor0.col0
 22
 28
 82
+
+query I rowsort label-9596
+SELECT DISTINCT + + CAST ( NULL AS INTEGER ) FROM tab2, tab1 AS cor0, tab0 AS cor1 GROUP BY cor0.col2
+----
+NULL
 
 query I rowsort
 SELECT DISTINCT 77 FROM tab1 AS cor0 GROUP BY cor0.col2
@@ -64181,6 +64883,11 @@ SELECT DISTINCT - 90 FROM tab0 AS cor0 GROUP BY cor0.col0
 ----
 -90
 
+query I rowsort label-9717
+SELECT DISTINCT - cor0.col1 * ( 58 ) / + cor0.col1 FROM tab2 AS cor0 GROUP BY cor0.col2, cor0.col1
+----
+-58
+
 query I rowsort label-9718
 SELECT DISTINCT + CAST ( cor0.col2 AS INTEGER ) FROM tab2 AS cor0 GROUP BY cor0.col2
 ----
@@ -64271,6 +64978,11 @@ query III rowsort
 SELECT * FROM tab2 AS cor0 GROUP BY col2, col1, cor0.col0
 ----
 9 values hashing to 8cac454cf7c3f07ac90f79daddc839ae
+
+query I rowsort label-9732
+SELECT DISTINCT cor0.col0 * - col0 + + CAST ( NULL AS INTEGER ) AS col1 FROM tab2 cor0 GROUP BY cor0.col2, col0
+----
+NULL
 
 query I rowsort
 SELECT ALL 41 FROM tab2 AS cor0 GROUP BY cor0.col1
@@ -65036,6 +65748,11 @@ SELECT cor0.col2 - cor0.col2 AS col0 FROM tab0 AS cor0 GROUP BY col2
 0
 0
 
+query I rowsort label-9847
+SELECT DISTINCT - CAST ( NULL AS INTEGER ) AS col2 FROM tab1, tab1 AS cor0, tab2 cor1 GROUP BY cor0.col0
+----
+NULL
+
 query I rowsort
 SELECT ALL col1 AS col1 FROM tab0 AS cor0 GROUP BY col2, cor0.col1
 ----
@@ -65167,6 +65884,11 @@ SELECT DISTINCT + cor0.col1 FROM tab1, tab2 AS cor0 GROUP BY cor0.col1
 41
 59
 61
+
+query I rowsort label-9868
+SELECT DISTINCT 0 / cor0.col1 AS col0 FROM tab2 cor0 GROUP BY cor0.col1
+----
+0
 
 query I rowsort
 SELECT - 73 AS col1 FROM tab0 GROUP BY tab0.col0
@@ -65327,6 +66049,14 @@ SELECT DISTINCT + 14 + cor0.col2 * + cor0.col2 AS col0 FROM tab0, tab0 AS cor0 G
 1458
 590
 6255
+
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
+query R rowsort label-9893
+SELECT DISTINCT + CAST ( NULL AS REAL ) * - 22 col0 FROM tab0 AS cor0 GROUP BY cor0.col0
+----
+NULL
 
 query I rowsort
 SELECT DISTINCT + col0 + - cor0.col0 FROM tab0 AS cor0 GROUP BY cor0.col0
@@ -65504,6 +66234,11 @@ query I rowsort
 SELECT DISTINCT + 30 FROM tab2 AS cor0 GROUP BY cor0.col0
 ----
 30
+
+query I rowsort label-9921
+SELECT DISTINCT cor0.col1 / cor0.col1 col1 FROM tab1 AS cor0 GROUP BY cor0.col1
+----
+1
 
 query I rowsort
 SELECT ALL + 82 FROM tab1, tab1 AS cor0 GROUP BY cor0.col0
@@ -65977,6 +66712,11 @@ SELECT cor0.col2 * 43 * cor0.col2 FROM tab2 AS cor0 GROUP BY cor0.col2
 144652
 268363
 325467
+
+query I rowsort label-9995
+SELECT DISTINCT cor0.col1 / - cor0.col1 AS col2 FROM tab1 AS cor0 GROUP BY cor0.col1
+----
+-1
 
 query I rowsort
 SELECT ALL + cor1.col1 FROM tab0, tab1 AS cor0, tab0 AS cor1 GROUP BY cor1.col1

@@ -270,6 +270,9 @@ SELECT 22 + + 52
 ----
 74
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-45
 SELECT 57 + + + CAST ( NULL AS REAL ) col1
 ----
@@ -280,6 +283,9 @@ SELECT ALL - COUNT ( * ) + + - 97
 ----
 -98
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-47
 SELECT ( - AVG ( ALL - CASE WHEN NOT ( NULL ) IS NULL THEN + 28 ELSE NULL END ) ) / - MAX ( ALL + 70 ) AS col1
 ----
@@ -543,6 +549,9 @@ SELECT COUNT ( * ) + 6 * + 37 * - 30 AS col1
 ----
 -6659
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-97
 SELECT CASE - COUNT ( * ) WHEN + - 4 THEN + - ( AVG ( 26 ) ) * + NULLIF ( CASE - - 37 WHEN COUNT ( * ) * - AVG ( - 83 ) * - 4 / COUNT ( * ) * + COUNT ( * ) + 94 THEN - NULLIF ( - 89, 36 + + CASE 61 WHEN + CASE 10 WHEN 97 THEN + 42 + 33 / - 99 ELSE + 61 END THEN 15 + 25 ELSE NULL END ) * 93 WHEN MIN ( DISTINCT 83 ) THEN COUNT ( DISTINCT + 22 ) ELSE NULL END, 78 / CAST ( + 5 AS INTEGER ) + 59 ) ELSE 76 - 48 / CASE 85 WHEN 66 THEN 76 * 9 WHEN - 15 * + COUNT ( * ) THEN NULL END END / 14 AS col1
 ----
@@ -854,6 +863,9 @@ SELECT - COUNT ( * ) AS col2, - 88
 -1
 -88
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-156
 SELECT ALL ( + CAST ( NULL AS REAL ) )
 ----
@@ -934,6 +946,9 @@ SELECT DISTINCT 71 + + - 61
 ----
 10
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]I
+# Datafusion - [Actual  ] [R]I
 query RI rowsort label-171
 SELECT + CAST ( NULL AS REAL ) + + ( - 99 ) - + + SUM ( + ( - 47 ) ) * - - 23 - 59 * - 23 AS col1, 68 + 75
 ----
@@ -1101,6 +1116,9 @@ SELECT 84 * - 64 AS col0
 ----
 -5376
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] I[I]
+# Datafusion - [Actual  ] I[R]
 query IR rowsort label-203
 SELECT ( 82 ) + SUM ( DISTINCT 52 ) AS col2, - AVG ( - 18 ) + - CASE 55 WHEN + + ( + 55 ) + - COUNT ( * ) THEN 46 END
 ----
@@ -1171,6 +1189,9 @@ SELECT ALL 89 * - + 56 AS col1
 ----
 -4984
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-216
 SELECT MAX ( DISTINCT + CAST ( NULL AS REAL ) ) AS col2
 ----
@@ -2050,6 +2071,9 @@ SELECT + 47 * - 37
 ----
 -1739
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort
 SELECT + AVG ( ALL - 93 ) / + CASE ( 44 ) WHEN + - 53 - AVG ( ALL 88 ) THEN 59 * + 92 * - + 18 WHEN - 64 THEN NULL WHEN + + 65 / + - 32 THEN NULL ELSE NULL END AS col2
 ----
@@ -2087,6 +2111,9 @@ SELECT + 65 + - + COUNT ( * ) AS col1
 ----
 64
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-391
 SELECT DISTINCT COUNT ( * ) * - + 71 * - COUNT ( * ) * + 3 * - - CAST ( NULL AS REAL ) + + CAST ( NULL AS INTEGER )
 ----
@@ -2520,6 +2547,9 @@ SELECT 10 * - - 96 - 58
 ----
 902
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-474
 SELECT DISTINCT - 1 * - CAST ( NULL AS REAL ) * 38 / + + COUNT ( * )
 ----
@@ -3400,6 +3430,9 @@ SELECT + - 69 * 90 AS col1
 ----
 -6210
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-640
 SELECT + COALESCE ( CAST ( NULL AS INTEGER ), - 8 ) / + + 4 + - 17 * - CASE + 41 WHEN - + CAST ( 84 AS INTEGER ) THEN + CASE - NULLIF ( + COUNT ( * ), - + 15 ) WHEN + NULLIF ( + - ( - 4 ), - 30 ) * + 59 * + 63 + + 31 * COALESCE ( - COALESCE ( - COALESCE ( + - 86, COUNT ( * ) ), + - ( - - 25 ), - 83 ), NULLIF ( - 82, + 39 ) + 34 + - 57 * - 38 * + 20 ) THEN 74 * 73 + AVG ( + 81 ) WHEN + 41 THEN + 72 * + 19 + + 42 WHEN - COUNT ( * ) THEN NULL ELSE NULL END * 72 END
 ----
@@ -3502,6 +3535,9 @@ SELECT ALL CAST ( NULL AS INTEGER ), - MAX ( + 43 ) AS col0
 NULL
 -43
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-660
 SELECT ALL + 62 * - - CASE 25 WHEN - 34 + 67 + - + 41 * - - 84 THEN + CAST ( + 28 AS REAL ) * + - 25 WHEN - - 90 * - 81 * - 95 THEN + 31 END * + 87 * - 12 * NULLIF ( + MIN ( ALL ( - - 4 ) ), + - 10 * + NULLIF ( + SUM ( - + 11 ), + - 37 / + 65 ) + + 72 )
 ----
@@ -4536,6 +4572,9 @@ SELECT - + 47 / 91 - - 85 / - 42 + - 90 AS col2
 ----
 -92
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-859
 SELECT ALL - CAST ( NULL AS REAL ) * + - AVG ( - CAST ( + CAST ( NULL AS INTEGER ) AS INTEGER ) ) * - - 18 - + ( - COALESCE ( + CAST ( 12 AS INTEGER ), 35 * - - 41 ) )
 ----
@@ -4675,6 +4714,9 @@ SELECT - 87 / 47 * 60 AS col2
 ----
 -60
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-885
 SELECT + 93 * - CAST ( NULL AS REAL ) * + 49 * + 7
 ----
@@ -4724,6 +4766,9 @@ SELECT - 86 * + 7
 ----
 -602
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-894
 SELECT + - MAX ( ALL - 51 ) + + CAST ( + 41 AS REAL ) * 72 + AVG ( + 94 ) + 16 + + NULLIF ( - CASE - COUNT ( * ) WHEN - 24 THEN 70 + - COUNT ( * ) + + 19 END, MIN ( + 63 ) ) / + 91 + - ( - 48 ) / - MAX ( ALL - 23 )
 ----
@@ -4980,6 +5025,9 @@ SELECT NULLIF ( + COUNT ( * ), - COUNT ( * ) + + 37 + - - 3 + - 91 * + CAST ( + 
 ----
 76
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-943
 SELECT AVG ( - - CAST ( NULL AS REAL ) ) / + 98 - - - 28
 ----
@@ -5533,6 +5581,9 @@ SELECT ALL - 59, COALESCE ( - COUNT ( * ), 87 ) AS col1
 -59
 -1
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-1049
 SELECT ALL - 26 - - CASE + 7 WHEN + 4 THEN - 53 * CAST ( + + NULLIF ( - 1, 84 ) AS INTEGER ) WHEN COALESCE ( + - 35, + COUNT ( * ) ) * + ( + 23 ) THEN + - COUNT ( * ) + + - NULLIF ( + 70, + + 9 ) + + MIN ( 97 ) * - - 82 WHEN + 21 THEN + 98 WHEN + - COUNT ( * ) THEN NULL ELSE - 67 * + - CASE - 64 WHEN 10 * + + 60 + + 0 THEN NULL WHEN + 74 THEN + AVG ( - ( 61 ) ) * + 78 / - 57 * ( - + 11 ) - + ( - + 3 ) + - - 67 + - 9 - - 98 + + 4 END * - 24 + 96 + - 25 END AS col1
 ----
@@ -5896,6 +5947,9 @@ SELECT + COUNT ( * ) / + + 2 AS col0
 ----
 0
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-1117
 SELECT DISTINCT + CASE - 41 WHEN + 85 + - 43 THEN NULL WHEN 50 THEN - 47 * + 14 END * + AVG ( - 78 ) + - MAX ( - - 88 )
 ----
@@ -5943,6 +5997,9 @@ SELECT ALL - 98 / 2 + 5 - + 23 col2
 ----
 -67
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-1126
 SELECT ALL + 62 / - + 3 + + 85 + + - 0 - - 67 * - CAST ( NULL AS REAL ) AS col1
 ----
@@ -6147,6 +6204,9 @@ SELECT DISTINCT - 29 / 30 AS col1, + 76
 0
 76
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-1165
 SELECT NULLIF ( + 33, + AVG ( ALL - 39 ) + - - CASE - 23 WHEN + + 86 * - 15 THEN - - COUNT ( * ) * - + 60 END ) + - 12 AS col0
 ----
@@ -6474,6 +6534,9 @@ SELECT + SUM ( ALL + 44 )
 ----
 44
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-1229
 SELECT ALL + CAST ( NULL AS REAL ) * 79
 ----
@@ -7002,6 +7065,9 @@ SELECT 31 + + SUM ( DISTINCT 90 ) + + 0 * ( + CAST ( NULL AS INTEGER ) + ( 71 ) 
 ----
 NULL
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-1333
 SELECT + 24 - + - 45 + 73 * - CAST ( NULL AS REAL )
 ----
@@ -7385,6 +7451,9 @@ SELECT DISTINCT + NULLIF ( + 93, - 81 * - - CAST ( - 58 AS INTEGER ) + COALESCE 
 ----
 93
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-1407
 SELECT ALL - + 48 * - + 81 / CAST ( NULL AS REAL )
 ----
@@ -7513,6 +7582,9 @@ SELECT 7, 10 AS col1
 7
 10
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-1431
 SELECT ALL - COALESCE ( - + 95, - COUNT ( * ) / - AVG ( - 49 ) ) * - + 27 + + 98 AS col1
 ----
@@ -8236,6 +8308,9 @@ SELECT ALL MIN ( 19 ) * 48
 ----
 912
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-1568
 SELECT ALL + CAST ( NULL AS REAL ) + + 26
 ----
@@ -8932,6 +9007,9 @@ SELECT 29 * + COUNT ( DISTINCT - 10 )
 ----
 29
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-1701
 SELECT - 78 + + + COUNT ( * ) + CAST ( NULL AS REAL )
 ----
@@ -9197,11 +9275,17 @@ SELECT - 35 * + - NULLIF ( ( - 12 ), - 17 )
 ----
 -420
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-1751
 SELECT - MAX ( - - 66 ) + + CAST ( NULL AS REAL ) + + + 75 AS col0
 ----
 NULL
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]I
+# Datafusion - [Actual  ] [R]I
 query RI rowsort label-1752
 SELECT ALL CAST ( NULL AS REAL ), 49 AS col0
 ----
@@ -9504,6 +9588,9 @@ SELECT DISTINCT ( 39 ) + - - 80 + - 22 * 4 + COUNT ( * ) - + 44 * + CASE + COUNT
 ----
 NULL
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-1810
 SELECT ALL CAST ( NULL AS REAL ) * + - 5 AS col2
 ----
@@ -9800,6 +9887,9 @@ SELECT + 62 * - + COUNT ( * )
 ----
 -62
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-1867
 SELECT + COUNT ( 69 ) * + - 94 - 3 + ( - + 70 ) * COUNT ( * ) / + CAST ( NULL AS REAL ) AS col2
 ----
@@ -9887,6 +9977,9 @@ SELECT + COUNT ( * ) / - MIN ( + - 58 ) * 65 AS col2
 ----
 0
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-1884
 SELECT ALL + 30 * + NULLIF ( + - 60, - AVG ( - ( 3 ) ) - - + 30 * + 90 ) * - + CAST ( + - 59 AS INTEGER ) AS col0
 ----
@@ -10252,6 +10345,9 @@ SELECT ( - 19 ) * + - 63 AS col0
 ----
 1197
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-1951
 SELECT ALL AVG ( ALL + 36 ) / + 18 * COUNT ( * ) + CASE 63 WHEN - 78 / + 86 + - SUM ( DISTINCT + CASE - + COALESCE ( - 39, ( + - 23 ), - 54 / - 18 * - 27 ) WHEN + 54 THEN + 79 + - 48 ELSE NULL END ) + - - CASE - - 41 WHEN 6 / + 23 THEN 36 - 19 END + - ( + 12 ) * + 9 THEN + COALESCE ( ( 66 ), 3 + 23 * - COUNT ( * ), MAX ( - 33 ) ) END AS col0
 ----
@@ -10262,6 +10358,9 @@ SELECT ( - 2 ) / - 74 * COUNT ( * )
 ----
 0
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-1953
 SELECT 48 + + + 92 - CASE - CAST ( NULL AS INTEGER ) WHEN - 97 * - 26 * - + COUNT ( * ) THEN - AVG ( - 7 ) END / + 20 AS col0
 ----
@@ -10299,6 +10398,9 @@ SELECT ALL 86 * - 59 AS col2
 ----
 -5074
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]I
+# Datafusion - [Actual  ] [R]I
 query RI rowsort label-1960
 SELECT ALL + COUNT ( * ) + + CAST ( NULL AS REAL ) col2, 58
 ----
@@ -10402,6 +10504,9 @@ SELECT ALL - 7 / - 28
 ----
 0
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-1980
 SELECT ALL - 85 / + CASE - 49 WHEN + 18 THEN + 37 * - COALESCE ( - - NULLIF ( + 16, 38 ), 94 * + 33 ) END / - 25 + - + AVG ( - ( - 48 ) ) * + CASE + 43 WHEN + - 9 / + NULLIF ( + CASE 32 WHEN - 41 - + - COALESCE ( 34, MIN ( - 51 ) ) THEN NULL ELSE + 34 * - 22 - 80 END, 63 / - 38 ) THEN COUNT ( * ) ELSE - 75 * 64 END - 34
 ----
@@ -10507,6 +10612,9 @@ SELECT ALL + COUNT ( * ) * + 10 * + NULLIF ( - COUNT ( * ), + + 28 ) + 26
 ----
 16
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-2000
 SELECT ALL + + 16 * + CAST ( NULL AS REAL ) + + - NULLIF ( - + 38, - ( + + 11 ) * - + 70 ) + 8 / + CASE - 79 WHEN + 23 - - 96 * 66 THEN NULL ELSE + 74 * - COUNT ( * ) END - + 67 + CASE + 38 WHEN + 73 + + 58 * - 84 THEN - 94 + + 19 WHEN 19 * 51 THEN NULL WHEN ( - 63 ) * - 49 + 96 THEN NULL ELSE - 37 END * 85 AS col1
 ----
@@ -10517,6 +10625,9 @@ SELECT + + 52 - - 90 AS col2
 ----
 142
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]I
+# Datafusion - [Actual  ] [R]I
 query RI rowsort label-2002
 SELECT + - MAX ( ALL - + 10 ) - 69 + + CAST ( NULL AS REAL ) * - 43 * + - 74 AS col2, + CAST ( 92 AS INTEGER )
 ----
@@ -10723,6 +10834,9 @@ SELECT - 87 + 21 * + 36
 ----
 669
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-2041
 SELECT ALL - COALESCE ( 24, - CASE CASE + 58 WHEN + 91 + + ( + + 3 ) THEN - - NULLIF ( - AVG ( - 81 ), - COALESCE ( 55, + CASE 87 WHEN - - 92 / + 24 + 1 - - 89 / + 11 + 50 THEN NULL WHEN - ( 6 ) * - 19 * 57 + COUNT ( * ) THEN COUNT ( + 68 ) * 72 + - COUNT ( ALL 38 ) END + + 31 ) ) ELSE - 56 END WHEN COALESCE ( - COALESCE ( + 52, 95 * + 23 + CAST ( NULL AS INTEGER ) ), 29 ) * COUNT ( * ) THEN - 87 + AVG ( 7 + 20 ) / 84 WHEN NULLIF ( + CAST ( COUNT ( * ) AS INTEGER ), 0 ) THEN NULL END, - 67, 81 * - ( + 55 * 23 ) ) * + 95
 ----
@@ -11080,6 +11194,9 @@ SELECT ALL + + 76 col1, + 14 AS col1
 76
 14
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-2109
 SELECT + - 48 * + + SUM ( ALL + CASE 27 WHEN - 62 THEN NULL ELSE + - CAST ( NULL AS REAL ) END ) col1
 ----
@@ -11144,6 +11261,9 @@ SELECT DISTINCT + ( - + 71 ) * - COUNT ( - 46 ) + - ( - - 34 ) + COALESCE ( + CA
 ----
 -32
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-2121
 SELECT - CAST ( NULL AS INTEGER ) * - 59 * + + AVG ( DISTINCT CAST ( NULL AS INTEGER ) ) + + + COUNT ( * )
 ----
@@ -11675,6 +11795,9 @@ SELECT + 28 - - 75 + ( + 90 ) * - 37 * + - 9 + - - MIN ( DISTINCT - 90 ) AS col2
 29983
 11
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]I
+# Datafusion - [Actual  ] [R]I
 query RI rowsort label-2224
 SELECT + 45 * - + 58 * - CAST ( NULL AS REAL ) AS col1, - 7 / - + ( SUM ( 58 ) ) + 27 * - - 23 * - CAST ( 12 AS INTEGER ) + - COUNT ( * ) * - - 42 * + 3
 ----
@@ -11716,11 +11839,17 @@ SELECT DISTINCT COALESCE ( MAX ( DISTINCT - CAST ( NULL AS INTEGER ) ), + 79 ) +
 ----
 113
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-2232
 SELECT - NULLIF ( 4, + - COUNT ( * ) + + + AVG ( ALL CAST ( NULL AS REAL ) ) + + 14 + 66 / - - 37 * 52 - + 69 )
 ----
 -4
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] I[I]
+# Datafusion - [Actual  ] I[R]
 query IR rowsort label-2233
 SELECT 99, CASE + 63 WHEN + + ( - 4 ) * + 38 * 74 THEN + - CASE - ( + ( - 93 ) ) WHEN 48 THEN + - 69 * - 58 WHEN COALESCE ( - + 88, + + 99 ) THEN NULL WHEN - - 55 THEN NULL ELSE NULL END WHEN + + 37 + + 49 + - - COUNT ( + - NULLIF ( + - 77, - 36 ) ) * - 26 THEN - 55 + + - 88 END * - CAST ( - 24 AS REAL ) + + 26 AS col2
 ----
@@ -11825,6 +11954,9 @@ SELECT - COALESCE ( + ( + 38 ), COUNT ( * ) ) * + + 29 + - - 79 col0
 ----
 -1023
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-2253
 SELECT CAST ( NULL AS REAL ) * - COUNT ( * ) + + 91 - - 74 / 21 * - 40 + - 79 AS col1
 ----
@@ -12004,6 +12136,9 @@ SELECT ALL - + COUNT ( * ), 45 * 55 * + 91 AS col1
 -1
 225225
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] I[I]
+# Datafusion - [Actual  ] I[R]
 query IR rowsort label-2287
 SELECT - 1, COUNT ( * ) - - + CAST ( NULL AS REAL ) AS col1
 ----
@@ -13011,6 +13146,9 @@ SELECT ALL 56 * - NULLIF ( + 42, - - 39 )
 ----
 -2352
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]I
+# Datafusion - [Actual  ] [R]I
 query RI rowsort label-2478
 SELECT + COUNT ( * ) + - - SUM ( + 85 ) / + COUNT ( * ) * CAST ( NULL AS REAL ) AS col2, - 12 * - 62 col1
 ----
@@ -13118,6 +13256,9 @@ SELECT - 35 * + - MIN ( ALL 28 )
 ----
 980
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-2499
 SELECT - + MIN ( ALL ( + 14 ) ) - 50 * + - AVG ( DISTINCT - + 27 ) / CAST ( NULL AS INTEGER ) + - COUNT ( * ) - + 17 AS col0
 ----
@@ -13410,6 +13551,9 @@ SELECT - 10 * + SUM ( - 89 ) + - CASE + + 23 WHEN - ( + + COUNT ( * ) ) THEN NUL
 ----
 NULL
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]I
+# Datafusion - [Actual  ] [R]I
 query RI rowsort label-2555
 SELECT ALL - + 1 - CAST ( NULL AS REAL ), 57 AS col1
 ----
@@ -13472,6 +13616,9 @@ SELECT 46 + + - COUNT ( * ) / - 65 AS col2, 75 * + 24 * 35
 46
 63000
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]I
+# Datafusion - [Actual  ] [R]I
 query RI rowsort label-2567
 SELECT 81 + 84 * - - 71 + + 4 - + AVG ( - 15 ) - + + 57 / - - ( - CASE - 60 WHEN + + 91 * - 90 * + - 36 * 27 + - 72 THEN + 93 WHEN - ( - + COUNT ( * ) ) THEN NULL ELSE NULL END ) AS col1, + COUNT ( * ) / 82 + - 73 + - 35 * 27 + - NULLIF ( - 43, - - 55 * - - CASE + COALESCE ( - COUNT ( ALL - 87 ), + 55 + + + 8 + - 18, + + 28 ) WHEN + + 87 THEN - + 92 * + 64 * - SUM ( + - ( 63 ) ) * 72 - COALESCE ( + 93 + - 38, - 72 ) / - 40 ELSE NULL END ) + + 38
 ----
@@ -13560,6 +13707,9 @@ SELECT ALL + + 36 * 75 AS col2
 ----
 2700
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-2584
 SELECT + CAST ( NULL AS INTEGER ) * AVG ( ALL + 72 )
 ----
@@ -14036,6 +14186,9 @@ SELECT - 96, + ( 72 ) AS col1
 -96
 72
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-2675
 SELECT 96 + - 81 + - NULLIF ( - 62, CAST ( NULL AS REAL ) * COUNT ( * ) * 22 - - COUNT ( * ) ) - - 4
 ----
@@ -14614,6 +14767,9 @@ SELECT + COALESCE ( + - 0, + COUNT ( * ) )
 ----
 0
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] I[I]
+# Datafusion - [Actual  ] I[R]
 query IR rowsort label-2786
 SELECT - 45 col2, + 94 * 30 + + ( - AVG ( - CAST ( NULL AS INTEGER ) ) )
 ----
@@ -14683,6 +14839,9 @@ SELECT DISTINCT 45 + 91
 ----
 136
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-2799
 SELECT ALL AVG ( + - 5 ) + 18 * + - ( + CAST ( NULL AS INTEGER ) )
 ----
@@ -14723,6 +14882,9 @@ SELECT 41 * NULLIF ( COUNT ( * ), - CASE + - 99 WHEN 51 - 20 THEN + 32 WHEN + 22
 ----
 1640
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-2807
 SELECT DISTINCT + 69 - + CAST ( NULL AS REAL ) - - ( + 10 ) + COALESCE ( - 38, + 55, - 78 * - 37 ) * 21 + - - COUNT ( * )
 ----
@@ -14743,6 +14905,9 @@ SELECT + 20 * + 66 - - + 35 AS col0
 ----
 1355
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-2811
 SELECT - 78 * + CAST ( NULL AS INTEGER ) * + 83 - + 13 / + AVG ( ALL ( 23 ) ) AS col2
 ----
@@ -14813,6 +14978,9 @@ SELECT 35 + - CAST ( + + 63 AS INTEGER ) + NULLIF ( + 49, - COUNT ( * ) ) * + 32
 ----
 -53340
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] I[I]
+# Datafusion - [Actual  ] I[R]
 query IR rowsort label-2825
 SELECT - 48 AS col1, - COALESCE ( SUM ( - - 64 ), - 81 * - + 98 ) * + - ( NULLIF ( 63, + 34 - + 66 * - 82 ) ) + + NULLIF ( - CAST ( NULL AS INTEGER ), 65 ) - - MIN ( ALL 84 ) + - + 74 - + 17 - CAST ( - COUNT ( * ) AS REAL ) / + + 31 * - + 91
 ----
@@ -14872,6 +15040,9 @@ SELECT + + 47 * COUNT ( * ) AS col1
 ----
 47
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-2836
 SELECT 25 * - + ( + - 29 ) * - ( - 84 ) * + + ( - ( - 20 ) ) + + COUNT ( ( + CAST ( + - 76 AS INTEGER ) ) ) + CASE - - 12 WHEN 35 + + ( - MIN ( - 58 ) ) - + AVG ( ALL + COALESCE ( + 75, 31 + - - 33 ) ) + 1 * - + 54 * 10 + 47 * - - 84 THEN + - COUNT ( * ) WHEN + 50 + - - 73 + - CAST ( NULL AS INTEGER ) THEN - 76 + - - COUNT ( * ) END - + 26 + - ( + CAST ( NULL AS REAL ) ) - - 2
 ----
@@ -15033,6 +15204,9 @@ SELECT + 49 + + 9
 ----
 58
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-2867
 SELECT + MIN ( + ( CAST ( NULL AS REAL ) ) ) * - - 83 * - 35 + 84 / - - 49 * - 38 - + CASE + COALESCE ( - - 93, - - 61 ) WHEN + NULLIF ( - COUNT ( ALL + - 83 ), 85 ) THEN - + 94 END
 ----
@@ -15053,6 +15227,9 @@ SELECT ALL 94 * 77
 ----
 7238
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-2871
 SELECT DISTINCT 12 * - 21 + CAST ( NULL AS REAL ) AS col0
 ----
@@ -15143,6 +15320,9 @@ SELECT ALL + CAST ( + 76 AS INTEGER )
 ----
 76
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-2888
 SELECT CAST ( + 43 AS REAL ) * 29 + + + 87 + + CASE + NULLIF ( + 73, COUNT ( * ) * + + CASE - + AVG ( - 44 ) WHEN + ( - 4 ) + - + CAST ( + + 55 AS INTEGER ) THEN NULL WHEN - 80 THEN - + 10 + + 30 + + 9 + 23 END + + 48 ) WHEN 28 * - 1 THEN 30 END col1
 ----
@@ -15793,6 +15973,9 @@ SELECT ALL NULLIF ( 25, - 54 * - NULLIF ( - 3, 88 + + 62 ) ) * 58
 ----
 1450
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-3017
 SELECT DISTINCT ( - 69 ) - - CAST ( NULL AS REAL ) + 12 AS col0
 ----
@@ -16034,6 +16217,9 @@ SELECT ALL 97 / + 66 + + + 96 AS col0
 ----
 97
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-3064
 SELECT CAST ( NULL AS REAL ) + COUNT ( * )
 ----
@@ -16365,6 +16551,9 @@ SELECT - 16 - - NULLIF ( 81, 74 * 61 )
 ----
 65
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-3129
 SELECT ALL - + 36 * ( AVG ( + + 61 ) ) * - CAST ( NULL AS INTEGER ) + - 5 + 18 / - 48 AS col0
 ----
@@ -16832,6 +17021,9 @@ SELECT DISTINCT + + 3 col1
 ----
 3
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-3220
 SELECT ALL CASE + 14 WHEN - - 57 * COUNT ( * ) THEN - 91 * - 47 * + 5 * + - 87 / + 4 ELSE 8 END * - CAST ( NULL AS REAL ) - + MIN ( 45 + 15 ) AS col1
 ----
@@ -16952,6 +17144,9 @@ SELECT ALL + 39 * - 79 * - ( + SUM ( DISTINCT + + 93 ) ) + - COUNT ( * ) - + 7 *
 ----
 230504
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-3244
 SELECT COUNT ( * ) / + SUM ( + - ( - CAST ( - + 23 AS INTEGER ) ) ) * CASE + 73 WHEN + + CAST ( NULL AS INTEGER ) THEN 95 ELSE NULL END + + COALESCE ( - AVG ( - 18 ), COUNT ( * ) ) / 46 AS col1
 ----
@@ -17045,6 +17240,9 @@ SELECT - 64, - 60 - - 53 AS col0
 -64
 -7
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-3262
 SELECT 7 + 47 + 29 * - COUNT ( * ) + - 40 * + 12 * - 8 * + CAST ( NULL AS REAL )
 ----
@@ -17315,6 +17513,9 @@ SELECT 54 / + 61 AS col1
 ----
 0
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-3313
 SELECT + 9 * + CAST ( NULL AS REAL ) * + 11 * - + 61
 ----
@@ -17325,6 +17526,12 @@ SELECT ALL - - NULLIF ( 41, + - 39 + 9 ) * + 66 AS col1
 ----
 2706
 
+# Datafusion - Data was automatically updated based on comparison db results
+# Datafusion - Previous results:
+# Datafusion - -36
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-3315
 SELECT - CASE - 30 WHEN - 99 THEN 84 ELSE 76 * - - 57 END / COALESCE ( + 50, 93 + - ( - 76 ) * COALESCE ( ( - 71 ), - 75 ), 44 / - ( 97 * + COALESCE ( - 84, + NULLIF ( + CAST ( NULL AS INTEGER ), - 33 ) * - CASE MAX ( + 72 ) WHEN 8 / + ( 81 ) THEN + 73 * + AVG ( DISTINCT 75 ) END + 50, CAST ( NULL AS INTEGER ) * CAST ( NULL AS INTEGER ) ) ) ) - ( - COUNT ( * ) - CAST ( + AVG ( ALL + ( - 67 ) ) AS INTEGER ) ) / 3 + + 72 AS col0
 ----
@@ -17598,6 +17805,9 @@ SELECT - ( - SUM ( 40 ) )
 ----
 40
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]I
+# Datafusion - [Actual  ] [R]I
 query RI rowsort label-3367
 SELECT - 43 * + + CAST ( NULL AS REAL ) AS col0, CAST ( - COUNT ( * ) AS INTEGER ) col1
 ----
@@ -17726,6 +17936,9 @@ SELECT DISTINCT 81 + - SUM ( DISTINCT NULLIF ( + - 8, 97 ) ) * + 78
 ----
 705
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-3392
 SELECT - COUNT ( ALL + + 21 ) * - - CASE - 2 WHEN ( 97 ) THEN 84 * - + 33 ELSE NULL END - - + 47 + + + 49 * + - 53 * - AVG ( - 13 ) * - + COUNT ( * ) + AVG ( ( NULLIF ( - 5, 70 * ( 21 ) ) ) ) + + 90 col0
 ----
@@ -19780,6 +19993,9 @@ SELECT ALL - 35 + + 57
 ----
 22
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] II[I]
+# Datafusion - [Actual  ] II[R]
 query IIR rowsort label-3784
 SELECT ALL 82, - 40 AS col0, - + 18 - - 69 + CAST ( NULL AS INTEGER ) * + AVG ( - 0 ) / + 68 AS col1
 ----
@@ -20072,6 +20288,9 @@ SELECT - SUM ( DISTINCT + - 92 ) AS col1
 ----
 92
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-3838
 SELECT DISTINCT CASE + 42 WHEN + SUM ( + 35 ) * NULLIF ( - + COALESCE ( + MAX ( DISTINCT - 87 ), 40, + - 5 + 16 ), + COUNT ( + - 53 ) ) THEN 36 + - 3 / - ( + 88 ) / - - 8 * AVG ( ALL 83 ) END AS col2
 ----
@@ -20132,6 +20351,9 @@ SELECT + NULLIF ( + - 54, - NULLIF ( - - 76, 40 + + - 82 ) ) AS col1, 77
 -54
 77
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-3849
 SELECT DISTINCT AVG ( - 70 ) * - CAST ( NULL AS INTEGER ) * - - 67 + 36 + + + 53 + - 37 + + 76 + MAX ( ALL + COALESCE ( + + 77, + - ( - ( - CAST ( NULL AS INTEGER ) ) ) / 25 * + 87 * - 64 ) ) * 32 - COALESCE ( - 15, - 63 * 11 ) * + 80 / - 79 AS col2
 ----
@@ -20361,6 +20583,12 @@ SELECT ALL ( 35 ) * + + SUM ( DISTINCT + 74 ) + - COUNT ( * ) * ( COALESCE ( 11,
 ----
 2579
 
+# Datafusion - Data was automatically updated based on comparison db results
+# Datafusion - Previous results:
+# Datafusion - 0
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-3893
 SELECT COUNT ( * ) / + NULLIF ( + - NULLIF ( + 13, - 18 + + - MAX ( ALL - - 20 ) ), + - 49 + - + 84 + 66 / ( - ( ( 91 ) ) ) * - COALESCE ( - 78, - 33 * - - AVG ( - + 70 ) + 5 + - 27 / - - 18 ) + - 32 ) col1
 ----
@@ -20430,6 +20658,9 @@ SELECT 95 - 31
 ----
 64
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-3906
 SELECT ALL 21 + + CAST ( NULL AS REAL ) AS col0
 ----
@@ -20542,11 +20773,17 @@ SELECT + 25, + 27 * + COUNT ( * ) * 26 AS col2
 25
 702
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-3927
 SELECT ALL - MIN ( DISTINCT - 78 ) + CAST ( NULL AS REAL ) AS col0
 ----
 NULL
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-3928
 SELECT - MAX ( + 60 ) * + - CAST ( NULL AS REAL ) - + 99
 ----
@@ -20582,6 +20819,9 @@ SELECT 14 + + - 96 + - COUNT ( * ) * + - 98 * + - 82 * + - ( - 33 )
 ----
 -265270
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-3935
 SELECT - CAST ( NULL AS INTEGER ) * + AVG ( 9 ) - + 61 * - MIN ( + - 2 ) * + 50 * - 98
 ----
@@ -20649,6 +20889,9 @@ SELECT ALL 47, + 41 AS col1
 47
 41
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-3948
 SELECT NULLIF ( + CAST ( NULL AS INTEGER ), + 20 * - 3 / + SUM ( 53 ) ) / - - 19 * + - CAST ( NULL AS INTEGER ) + + 82 - + - 19 * + AVG ( - 3 ) * + + 51
 ----
@@ -20727,6 +20970,9 @@ SELECT + + 6 / COUNT ( * ) col1, + 81 AS col0
 6
 81
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-3963
 SELECT + + 47 + - 79 * + 67 / - CAST ( NULL AS REAL ) * 36 col0
 ----
@@ -20836,6 +21082,9 @@ SELECT ALL NULLIF ( + + COUNT ( + 40 ), - COUNT ( * ) ) AS col1
 ----
 1
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-3984
 SELECT ALL 68 * + 92 * - CAST ( NULL AS INTEGER ) / + CAST ( - - 59 AS REAL )
 ----
@@ -21091,6 +21340,9 @@ SELECT 19 - + 24
 ----
 -5
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-4033
 SELECT ALL + CAST ( NULL AS REAL ) * + NULLIF ( + MIN ( + + 98 ), + + 78 )
 ----
@@ -21246,6 +21498,9 @@ SELECT ALL + 55 * 26 AS col1
 ----
 1430
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-4063
 SELECT ( + - 65 ) + - CAST ( NULL AS REAL )
 ----
@@ -21355,6 +21610,9 @@ SELECT ALL 9 + + + CASE + - ( + 73 ) WHEN + 41 THEN NULL ELSE + 15 - - 21 + - + 
 -17
 52
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-4084
 SELECT CAST ( NULL AS REAL ) + + ( 67 ) / + - 2 col1
 ----
@@ -21441,6 +21699,9 @@ SELECT DISTINCT - 78 / + 26
 ----
 -3
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort
 SELECT ALL AVG ( CASE + 97 WHEN 66 / 87 THEN NULL WHEN + 48 - 44 THEN + + 48 * 13 END )
 ----
@@ -21488,6 +21749,9 @@ SELECT - + 95 AS col2, - 94
 -95
 -94
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-4110
 SELECT + - CAST ( NULL AS REAL ) * - COUNT ( * )
 ----
@@ -21570,6 +21834,9 @@ SELECT + MAX ( ALL - 54 ) AS col0, - 71 AS col2
 -54
 -71
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-4126
 SELECT DISTINCT + NULLIF ( - + CAST ( NULL AS REAL ), 61 * - + 56 ) * + - 40 * 51 * - - 79 * - - AVG ( ALL + 26 ) * + + COUNT ( * ) + - 49 + + CAST ( NULL AS INTEGER ) AS col1
 ----
@@ -21699,6 +21966,9 @@ SELECT ALL + 95 + + - MAX ( + 54 ) AS col2
 ----
 41
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-4151
 SELECT DISTINCT 35 + + CAST ( NULL AS REAL ) * - ( - 38 )
 ----
@@ -22140,6 +22410,9 @@ SELECT + NULLIF ( + 80, + 97 * + + 52 / - 72 ) AS col1, 53 * 85 * + + 9 AS col1
 80
 40545
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-4234
 SELECT ALL 67 * - 27 + - ( - 80 ) + - + NULLIF ( + CAST ( NULL AS INTEGER ), - - 0 / - - NULLIF ( - - 63, - ( + ( - 49 ) ) * + COUNT ( * ) / + 82 * 97 * + + NULLIF ( + + 59, + 99 + CAST ( NULL AS REAL ) ) + + 25 / + 67 * + COUNT ( ALL + + 42 ) + + CAST ( + + 85 AS INTEGER ) * + 91 / - 42 ) ) col2
 ----
@@ -22627,6 +22900,9 @@ SELECT + 12 / + + SUM ( 39 ) * + CAST ( MAX ( - - 39 ) AS INTEGER ) col0, CAST (
 0
 NULL
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-4326
 SELECT 52 * + NULLIF ( - 94, - CASE - 97 WHEN + - COUNT ( * ) - COUNT ( ALL ( + + 5 ) ) + - 76 THEN + SUM ( DISTINCT 42 ) * + 42 ELSE - CASE 28 WHEN + ( 87 ) * + 39 * - 62 + - - 77 * + 67 * + 84 + 74 + - - ( + - 56 ) THEN + - 90 / + ( + - AVG ( ALL - - 84 ) ) + + CAST ( NULL AS INTEGER ) END END ) AS col0
 ----
@@ -23406,6 +23682,9 @@ SELECT DISTINCT MIN ( - 12 ) + 28 * + + 40 - - COUNT ( * ) * + CAST ( NULL AS IN
 ----
 NULL
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-4475
 SELECT - + CAST ( NULL AS REAL ) - - NULLIF ( - COUNT ( * ), 31 ) * + - 74 * - - CASE - COUNT ( - 54 ) WHEN - ( + 33 ) + - 92 THEN - 84 + + + 46 WHEN CASE + 10 WHEN - 41 THEN - - 45 WHEN - 73 THEN 62 * + + 73 / + 88 ELSE - - 44 - - COUNT ( * ) / - - 49 + - - 66 END * - - 12 THEN NULL END * + - CAST ( NULL AS INTEGER ) col1
 ----
@@ -23675,6 +23954,9 @@ SELECT ALL + SUM ( DISTINCT - 91 ) AS col2
 ----
 -91
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-4526
 SELECT - CAST ( NULL AS REAL ) * + 47
 ----
@@ -24176,6 +24458,9 @@ SELECT ALL - COUNT ( * ) + - 84 / COUNT ( * )
 ----
 -85
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort
 SELECT DISTINCT NULLIF ( 77, + ( AVG ( 19 ) ) * 55 )
 ----
@@ -24954,6 +25239,9 @@ SELECT ALL + 10 AS col1, - 99 col0
 10
 -99
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-4776
 SELECT ALL - CAST ( NULL AS REAL ) * - + MAX ( DISTINCT - 51 ) * MIN ( DISTINCT - - 9 ) * - ( - COUNT ( * ) ) col1
 ----
@@ -25463,6 +25751,9 @@ SELECT ALL MIN ( 77 ) * + 32 * + ( + + 14 ) + + 3 AS col0
 ----
 34499
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-4874
 SELECT COUNT ( * ) / + - AVG ( ALL + 45 ) * + 3 * + ( + 53 ) + - CASE + + 40 WHEN + COUNT ( * ) + 28 THEN 38 * + 81 + ( CASE WHEN NULL IN ( 35 ) THEN 70 * + 39 ELSE NULL END ) * 81 WHEN 47 + - CAST ( NULL AS INTEGER ) * - 46 THEN NULL END
 ----
@@ -25662,6 +25953,9 @@ SELECT 80 + + COALESCE ( 7, - ( + + 84 ), + COALESCE ( - 47, COUNT ( * ) ) )
 ----
 87
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-4913
 SELECT 93 * - 2 * + CAST ( NULL AS INTEGER ) * + COALESCE ( - COUNT ( * ), - 77, + - 48 ) - - AVG ( 76 ) + 97 AS col1
 ----
@@ -25678,6 +25972,9 @@ SELECT + ( + 56 ), CAST ( NULL AS INTEGER ) + - - CAST ( NULL AS INTEGER ) + + -
 56
 NULL
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-4916
 SELECT - CASE - + 64 WHEN + 32 THEN NULL WHEN - + 29 THEN NULL ELSE - + AVG ( - + 24 ) - - + CASE COUNT ( * ) WHEN + + MAX ( 95 ) THEN 46 END * COUNT ( * ) END AS col2
 ----
@@ -25855,6 +26152,9 @@ SELECT ALL + - ( - 81 ) + 59 + - ( - + 58 ) * 68
 ----
 4084
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-4950
 SELECT DISTINCT - + AVG ( ALL + CAST ( NULL AS INTEGER ) ) AS col1
 ----
@@ -25933,6 +26233,9 @@ SELECT DISTINCT + 87 + + 46
 ----
 133
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-4964
 SELECT DISTINCT - 28 + + + COALESCE ( 99, + AVG ( 96 ), ( - - CASE + MIN ( - 54 ) WHEN - 95 * - COALESCE ( + 35, 78 * + 11 ) THEN + 54 ELSE NULL END ) ) / ( + 11 ) AS col0
 ----
@@ -26181,6 +26484,9 @@ SELECT - 60 + - + 84
 ----
 -144
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-5009
 SELECT + CAST ( NULL AS REAL ) * COUNT ( * )
 ----
@@ -26332,6 +26638,9 @@ SELECT - 71 AS col2, NULLIF ( + COUNT ( * ), + - 31 * + 38 + 65 ) AS col0
 -71
 1
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] I[I]
+# Datafusion - [Actual  ] I[R]
 query IR rowsort label-5038
 SELECT ALL 73, + CAST ( - ( NULLIF ( - + CAST ( NULL AS INTEGER ), - + 91 + + 15 ) ) AS REAL ) * + 90 + + 60 + MIN ( ALL - CAST ( + + ( + 71 ) AS INTEGER ) ) AS col1
 ----
@@ -26364,6 +26673,9 @@ SELECT 89 / - 91 AS col2
 ----
 0
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-5044
 SELECT DISTINCT + 48 + - CAST ( NULL AS REAL ) AS col0
 ----
@@ -26423,11 +26735,17 @@ SELECT DISTINCT - + ( + 2 ) - CASE - 95 WHEN + 12 * + 6 + + - COALESCE ( + 9, + 
 ----
 -79
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-5055
 SELECT 63 / ( + CAST ( NULL AS REAL ) ) - - - COUNT ( ALL + + 52 ) + - 52 * + 51 AS col2
 ----
 NULL
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-5056
 SELECT DISTINCT CASE - 2 WHEN - 86 THEN - ( NULLIF ( CAST ( NULL AS REAL ), - + 31 ) ) WHEN + 82 THEN - - COUNT ( * ) * - COUNT ( - 96 ) * - - 46 * + CAST ( NULL AS INTEGER ) END * - COUNT ( * ) AS col2
 ----
@@ -26871,6 +27189,9 @@ SELECT - 0 + + ( + 79 )
 ----
 79
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]I
+# Datafusion - [Actual  ] [R]I
 query RI rowsort label-5141
 SELECT ALL - SUM ( ALL + 96 ) * + COUNT ( * ) * + 96 + + COUNT ( * ) * + 1 - + + CAST ( NULL AS REAL ) - - 10 + + 16 AS col0, - 46 AS col1
 ----
@@ -26969,6 +27290,9 @@ SELECT DISTINCT - 86 + - 1 AS col1
 ----
 -87
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-5160
 SELECT DISTINCT - MIN ( ALL + CAST ( NULL AS REAL ) )
 ----
@@ -27093,6 +27417,9 @@ SELECT 76 * - + CASE 13 WHEN + COUNT ( * ) THEN 55 * + 74 WHEN + - 68 + + 15 THE
 ----
 NULL
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-5184
 SELECT - 92 * + MAX ( + CAST ( NULL AS REAL ) ) AS col1
 ----
@@ -27301,6 +27628,9 @@ SELECT - CASE - CAST ( NULL AS INTEGER ) WHEN + + 9 / + MIN ( - 83 ) + 68 / - 88
 ----
 -28
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-5224
 SELECT + - 91 + - CAST ( NULL AS REAL )
 ----
@@ -27368,6 +27698,9 @@ SELECT ( 54 ), COUNT ( * ) * - 78 AS col0
 54
 -78
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] I[I]
+# Datafusion - [Actual  ] I[R]
 query IR rowsort label-5237
 SELECT ALL 1 * - 22 AS col2, NULLIF ( + ( + 1 ), + 47 * - + COALESCE ( + + 43, - + COUNT ( * ) / - 32 + - AVG ( + 12 ), + 54, + 15 ) * - 95 * + - MAX ( 99 ) )
 ----
@@ -27761,6 +28094,9 @@ SELECT ( 31 ) * - MIN ( + - 24 ) + + + 98 AS col2
 ----
 842
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]I
+# Datafusion - [Actual  ] [R]I
 query RI rowsort label-5312
 SELECT DISTINCT + 12 + + CAST ( NULL AS INTEGER ) * - ( + CASE + 40 WHEN - 24 THEN 90 END ) * + AVG ( - - ( - 84 ) ) + MIN ( ALL + 36 ) AS col1, + 67 AS col2
 ----
@@ -28003,6 +28339,9 @@ SELECT - MAX ( + + 84 )
 ----
 -84
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] I[I]
+# Datafusion - [Actual  ] I[R]
 query IR rowsort label-5357
 SELECT COUNT ( * ) + 88, CAST ( NULL AS REAL ) + + 54 AS col1
 ----
@@ -28101,6 +28440,9 @@ SELECT DISTINCT - COUNT ( * ) / + 76
 ----
 0
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-5375
 SELECT ALL - + 60 / - + NULLIF ( + + CAST ( NULL AS REAL ), - + 46 )
 ----
@@ -28431,6 +28773,9 @@ SELECT - MIN ( ALL + 39 ) / - - COALESCE ( - ( + 71 ), 42 ) + - 38 / - CAST ( NU
 ----
 NULL
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-5437
 SELECT CASE + - 14 WHEN - CAST ( NULL AS INTEGER ) + + 63 * - 4 + - MIN ( ALL - 80 ) THEN - 65 + - AVG ( + 35 ) - - 88 ELSE NULL END * COUNT ( * ) AS col2
 ----
@@ -28867,6 +29212,9 @@ SELECT - NULLIF ( - 1, - MAX ( ALL - 84 ) * 11 ) + 29 + 24 + 59 * - 12 - - 18 * 
 ----
 768
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-5520
 SELECT COALESCE ( + 74, + 44, - - 18 ) * + 5 * 30 + ( + + CASE + + 65 WHEN - - 70 - + + 14 THEN NULL WHEN 71 + 79 * - 21 / 52 * + 23 THEN ( - - CAST ( NULL AS REAL ) ) + + 20 - - - 88 * ( 5 ) * - - MIN ( - 83 ) / 43 * + 56 * - MIN ( - 87 ) / 69 + + 60 + - COUNT ( * ) WHEN + 76 * - 32 THEN NULL END ) AS col0
 ----
@@ -30006,6 +30354,9 @@ SELECT ALL + CASE + + 57 WHEN + - 96 THEN - - 79 ELSE NULL END AS col2, - 85 * +
 NULL
 3570
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-5735
 SELECT DISTINCT + ( - - 52 ) / 55 * + CASE - 22 WHEN - 54 * - ( - - 87 ) THEN 60 + + 46 + 79 * - CAST ( + + 39 AS INTEGER ) + - + 39 - - 26 - + - 83 * - COUNT ( * ) * + 69 END + COUNT ( DISTINCT - + 26 ) * - - 92 + 41 * - 81 / - + CAST ( NULL AS REAL )
 ----
@@ -30075,6 +30426,9 @@ SELECT ALL - 51 * - 96 - - CAST ( + 7 AS INTEGER ) * MIN ( + - 47 ) * + 47 * COU
 ----
 -10512
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-5748
 SELECT DISTINCT CAST ( NULL AS REAL ) * 32 * COUNT ( * )
 ----
@@ -30100,6 +30454,9 @@ SELECT ALL - + ( 12 ) * - + 47
 ----
 564
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-5753
 SELECT + ( + CAST ( NULL AS INTEGER ) ) * AVG ( - 57 ) + - COALESCE ( + 11, - 8 ) AS col2
 ----
@@ -30422,6 +30779,9 @@ SELECT ALL - 37 / + 65 AS col1, + ( + 94 ) AS col2
 0
 94
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-5813
 SELECT + - AVG ( ALL - - CAST ( NULL AS INTEGER ) ) AS col1
 ----
@@ -30558,6 +30918,9 @@ SELECT ALL + 93 / ( + 79 )
 ----
 1
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] I[I]
+# Datafusion - [Actual  ] I[R]
 query IR rowsort label-5840
 SELECT + 0 * + 45, + 50 * + CASE 30 WHEN - - 75 + - + CASE AVG ( ALL 72 ) WHEN + + ( - - 6 ) * NULLIF ( COUNT ( * ), + SUM ( ALL - 68 ) ) - 12 - - + 34 THEN + 41 ELSE - 45 * 46 + + 81 + + - 30 END THEN - 9 WHEN - AVG ( 84 ) THEN NULL ELSE NULL END * + MAX ( + 91 ) + + AVG ( + 77 ) / - COUNT ( * ) - 46 AS col1
 ----
@@ -30677,6 +31040,9 @@ SELECT DISTINCT + ( CAST ( CAST ( - 10 AS INTEGER ) AS INTEGER ) ) AS col0
 ----
 -10
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-5863
 SELECT ALL - CASE - AVG ( - 5 ) WHEN 77 THEN + COALESCE ( + 7, + + CAST ( NULL AS REAL ) ) * - + 58 + + 9 WHEN - COUNT ( * ) THEN NULL END * - - COUNT ( * ) - COUNT ( * )
 ----
@@ -30702,6 +31068,9 @@ SELECT + 87 * + 32
 ----
 2784
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-5868
 SELECT - 98 * CAST ( NULL AS REAL ) AS col0
 ----
@@ -30932,6 +31301,9 @@ SELECT - MAX ( ALL + CAST ( NULL AS INTEGER ) ) + - 0
 ----
 NULL
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-5912
 SELECT MAX ( + CAST ( NULL AS REAL ) ) * - 60
 ----
@@ -31155,6 +31527,9 @@ SELECT ALL + 68 * + - 12 * - + COUNT ( * ) + 7 AS col1
 ----
 823
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-5956
 SELECT COUNT ( * ) + CASE - 44 WHEN + 97 + - 34 THEN + 70 + AVG ( ALL + 82 ) ELSE NULL END + 10 AS col0
 ----
@@ -31326,6 +31701,9 @@ SELECT - + 3 * + 53
 ----
 -159
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-5988
 SELECT DISTINCT + + 11 - CAST ( NULL AS REAL ) + - - 98 * + 30 * + 75
 ----
@@ -31571,6 +31949,9 @@ SELECT 56 + 21 AS col0
 ----
 77
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-6035
 SELECT COALESCE ( - + 11, CASE - CASE + - MIN ( 26 ) WHEN + COUNT ( * ) + + 22 THEN NULL ELSE - ( - NULLIF ( + 83, + COUNT ( * ) ) ) * - - 24 END WHEN - 64 * - 29 THEN + COUNT ( * ) / - 30 + + COUNT ( * ) + + + 9 / - CAST ( NULL AS INTEGER ) * + AVG ( + 36 ) ELSE + 90 + - 60 + + 26 / - 22 END + - COUNT ( - 5 ) + + 94 * + - NULLIF ( MAX ( - 13 ), + 52 * 7 * - - 59 + + - 19 ) ) * + CAST ( NULL AS INTEGER ) * + NULLIF ( + COUNT ( * ), + CAST ( - + COUNT ( * ) AS INTEGER ) ) + + 72 AS col0
 ----
@@ -31703,6 +32084,9 @@ SELECT - 90 * + + 14 + + 44 - - CAST ( NULL AS INTEGER ) + CASE + ( - 2 ) WHEN +
 NULL
 -15
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-6059
 SELECT + 52 / 35 + ( - CAST ( NULL AS REAL ) ) + + - ( COUNT ( + 7 ) ) AS col0
 ----
@@ -32253,6 +32637,9 @@ SELECT ALL - 58 + + CAST ( + + 51 AS INTEGER )
 ----
 -7
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-6164
 SELECT ALL + - ( AVG ( 16 ) ) + - CAST ( NULL AS INTEGER ) AS col2
 ----
@@ -32548,6 +32935,9 @@ SELECT ALL - 54 AS col2, + 68
 -54
 68
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-6221
 SELECT - 0 + + + COUNT ( * ) + + MAX ( ALL - 30 ) + ( - 59 ) + - 23 * + - 10 * + - COUNT ( * ) * + - 29 * - + 86 - + COUNT ( * ) + 97 + + - 4 * - - SUM ( + 68 ) / - CAST ( NULL AS REAL ) + + 5 + + 59 * - 26 AS col2
 ----
@@ -32675,6 +33065,9 @@ SELECT ALL 55 * - 16 + - 69
 ----
 -949
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-6246
 SELECT DISTINCT + COUNT ( DISTINCT - 40 ) * - + CAST ( - 42 AS INTEGER ) + + - ( 99 ) + + + COUNT ( DISTINCT + 68 ) * 26 * + AVG ( - - NULLIF ( - - 29, - 60 ) ) + - CASE 32 WHEN - + 40 - + - 59 THEN + + 81 + 24 + - 72 + - 11 * - - 63 WHEN 27 THEN 54 * - + COUNT ( * ) + - 96 END
 ----
@@ -32731,6 +33124,9 @@ SELECT ( - COALESCE ( + + 57, + 72 + - 80 ) ) AS col0
 ----
 -57
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-6257
 SELECT ALL - ( - + NULLIF ( - 72, + 79 * - ( 80 ) + - AVG ( 6 ) + - ( COALESCE ( + 41, + COUNT ( * ) ) ) ) ) * + 15 AS col2
 ----
@@ -32840,6 +33236,9 @@ SELECT ALL - 6 * - 81 * + + 14 AS col0
 ----
 6804
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] I[I]
+# Datafusion - [Actual  ] I[R]
 query IR rowsort label-6278
 SELECT 28 AS col2, 12 * + 63 * - 36 * - + SUM ( ALL + 65 ) * + 19 + CAST ( NULL AS INTEGER ) + CAST ( NULL AS REAL )
 ----
@@ -33003,6 +33402,9 @@ SELECT 0 * COUNT ( * ) AS col1
 ----
 0
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-6310
 SELECT DISTINCT 23 + + CAST ( NULL AS REAL )
 ----
@@ -33098,6 +33500,9 @@ SELECT - ( + 52 ) AS col2
 ----
 -52
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-6329
 SELECT ALL + AVG ( CAST ( NULL AS INTEGER ) ) AS col1
 ----
@@ -33153,6 +33558,9 @@ SELECT ALL COUNT ( * ) * 17 AS col1
 ----
 17
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-6340
 SELECT ALL ( - 78 ) + 16 * - CAST ( NULL AS REAL )
 ----
@@ -33450,6 +33858,9 @@ SELECT ALL + 99 AS col2, 16 AS col0
 99
 16
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-6399
 SELECT DISTINCT + 94 * + + 4 * COUNT ( * ) - 15 * - CAST ( NULL AS REAL ) col1
 ----
@@ -33705,6 +34116,9 @@ SELECT 96 + - 77
 ----
 19
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-6449
 SELECT DISTINCT + CAST ( NULL AS REAL ) + + 25 col1
 ----
@@ -33720,6 +34134,9 @@ SELECT + 0 * + - ( - 35 ) + - 76 AS col1
 ----
 -76
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-6452
 SELECT CAST ( NULL AS REAL ) - + 34 + - 54 AS col0
 ----
@@ -33885,6 +34302,9 @@ SELECT ALL 12 * - 31
 ----
 -372
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-6484
 SELECT DISTINCT CASE - SUM ( ALL + - ( + 84 ) ) WHEN + - CAST ( NULL AS INTEGER ) * + - ( 81 ) + + 75 * - COUNT ( * ) THEN + AVG ( ALL 21 ) ELSE NULL END AS col2
 ----
@@ -34110,6 +34530,9 @@ SELECT - 64 * 66 * + 83
 ----
 -350592
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-6527
 SELECT 58 * - 26 + + 31 + + CAST ( NULL AS REAL ) * - - 14 AS col0
 ----
@@ -34266,6 +34689,9 @@ SELECT 38 / + - 69 AS col0
 ----
 0
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort
 SELECT DISTINCT - CASE + 76 WHEN 87 * 25 * 7 * - 96 + + 13 + - 43 / ( - 87 * 61 ) THEN CASE 26 WHEN - 44 THEN 90 * - 88 ELSE NULL END WHEN 69 THEN + 82 * + 8 - AVG ( 89 + + 0 * 36 ) * 70 WHEN 36 THEN NULL END
 ----
@@ -34395,6 +34821,9 @@ SELECT + 0 * 55 + + + 78 AS col2
 ----
 78
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-6581
 SELECT 8 - - - CAST ( NULL AS REAL ) col1
 ----
@@ -34466,6 +34895,9 @@ SELECT + MIN ( 48 ) AS col0, - 8 col0
 48
 -8
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-6593
 SELECT ALL CAST ( NULL AS REAL ) * - 14
 ----
@@ -34820,6 +35252,9 @@ SELECT - 35 / + 15 AS col2, - 56 / 34 * + - 66
 -2
 66
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-6662
 SELECT + 50 * 83 + - 53 - + CAST ( NULL AS REAL )
 ----
@@ -35113,6 +35548,9 @@ SELECT DISTINCT + 70 + + 96, - 44 * + CAST ( NULL AS INTEGER ) AS col2
 166
 NULL
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-6718
 SELECT + AVG ( + - CAST ( NULL AS INTEGER ) ) + + + 70
 ----
@@ -35247,6 +35685,9 @@ SELECT ALL 75 * + 2 * - 99 AS col0
 ----
 -14850
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-6744
 SELECT MIN ( + - 5 ) * - AVG ( - CAST ( NULL AS INTEGER ) ) * 37 + + 87 - + COUNT ( ALL + - 15 ) * - 62 + + 20 col2
 ----
@@ -35341,6 +35782,9 @@ SELECT + - 77 * CASE - - 56 WHEN + COUNT ( * ) THEN NULL ELSE - ( - 57 ) + CAST 
 ----
 NULL
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-6762
 SELECT - CASE - - COALESCE ( + + 67, - - 41 + - 6 - SUM ( DISTINCT + ( - + 75 ) ) / + - 18 * CAST ( - 98 AS REAL ) + - - 93 + 20 / + 49 ) WHEN CAST ( NULL AS INTEGER ) * + 41 - 92 THEN 21 / + 51 + + CAST ( NULL AS REAL ) * 16 WHEN COUNT ( - 11 ) THEN NULL END
 ----
@@ -35936,6 +36380,9 @@ SELECT ALL + - 44 / - 91 AS col2
 ----
 0
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-6877
 SELECT - + 18 * + + AVG ( - + 42 ) + + 1 * + + 31 + + - 80 + - + NULLIF ( CAST ( NULL AS INTEGER ), + 12 / 32 ) * - 42
 ----
@@ -36038,6 +36485,9 @@ SELECT DISTINCT 78 col1
 ----
 78
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-6897
 SELECT + 61 / CASE - 8 WHEN 65 * CAST ( SUM ( 42 ) AS INTEGER ) THEN NULL ELSE + CASE + + 27 WHEN - + ( + - 54 ) THEN + - ( + + 35 ) - 14 + + 88 + MAX ( ALL 20 ) * COALESCE ( + CAST ( - 69 AS REAL ) * ( + 8 ) + 90, 23 ) END END * ( 11 ) - + 6 AS col0
 ----
@@ -36202,6 +36652,9 @@ SELECT ALL - 71 * 64
 ----
 -4544
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]I
+# Datafusion - [Actual  ] [R]I
 query RI rowsort label-6928
 SELECT + SUM ( + CASE + ( 26 ) WHEN 0 * - 85 THEN 7 ELSE NULL END ) + + COUNT ( * ) - - + 84 / + - 50 / 8 + - CAST ( NULL AS REAL ) * - COUNT ( * ) AS col2, 30
 ----
@@ -36638,6 +37091,9 @@ SELECT + 17 + + 84
 ----
 101
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-7012
 SELECT + 76 * AVG ( - - CAST ( NULL AS INTEGER ) ) AS col1
 ----
@@ -36712,6 +37168,9 @@ SELECT ALL - 7 * + 65 * + MAX ( DISTINCT - - 75 ) + + SUM ( + 65 ) AS col0
 ----
 -34060
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-7026
 SELECT DISTINCT + CAST ( NULL AS INTEGER ) * - 93 + - COALESCE ( + + COALESCE ( + - 18, 82 ), CAST ( - - CAST ( NULL AS INTEGER ) AS REAL ) + SUM ( 84 ) * + + 50 - + 55 - - COUNT ( * ) ) col1
 ----
@@ -37467,6 +37926,9 @@ SELECT + COALESCE ( - - 44, 90 ) * - 71 + ( 35 ) + + 64 + - - COUNT ( * ) + - 88
 ----
 -3033
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-7171
 SELECT + CAST ( NULL AS REAL ) * 46 * - - 87 + + + 66 * + 25
 ----
@@ -38233,6 +38695,9 @@ SELECT DISTINCT - 40 * - 98
 ----
 3920
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-7315
 SELECT ALL COUNT ( * ) + - - 92 + 62 - - 45 + COUNT ( * ) / + 2 * + NULLIF ( + 56, AVG ( ALL - - 10 ) ) * - NULLIF ( - 51, 5 )
 ----
@@ -38349,6 +38814,9 @@ SELECT - 81 / 51 AS col2
 ----
 -1
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-7337
 SELECT + NULLIF ( - + ( + - 90 ), + - ( ( - 58 ) ) ) / 50 + + + 97 * + 28 * NULLIF ( + + COUNT ( ALL CAST ( + 88 AS INTEGER ) ), - CASE + CAST ( NULL AS INTEGER ) WHEN - 43 * 48 THEN + 35 * + 12 + + 65 + + COUNT ( * ) ELSE AVG ( ALL - - 14 ) * - - ( + 21 ) + - 77 END * - 78 - - 55 + + + 98 ) * 22 + - 79 * - 61 AS col2
 ----
@@ -38666,6 +39134,9 @@ SELECT CASE - COUNT ( * ) WHEN - 96 THEN + 96 ELSE NULL END
 ----
 NULL
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-7396
 SELECT + + 1 + - CASE + - 5 WHEN - - MIN ( ALL + CAST ( NULL AS INTEGER ) ) THEN - AVG ( ALL + + 18 ) END * + + 17 - + 36
 ----
@@ -38686,6 +39157,9 @@ SELECT - 13 + + - 64 col1
 ----
 -77
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-7400
 SELECT ALL CASE + 63 WHEN 19 * - 92 + - 61 THEN + + COUNT ( ALL + 3 ) * + + 51 + 81 - + AVG ( - - 24 ) + 0 * - 93 * - 36 * 30 END * COUNT ( ALL + - 33 )
 ----
@@ -38865,6 +39339,9 @@ SELECT ALL - 90 + + - COUNT ( * )
 ----
 -91
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] I[I]
+# Datafusion - [Actual  ] I[R]
 query IR rowsort label-7434
 SELECT DISTINCT - + 41 + 14 + + 8 AS col1, CAST ( NULL AS REAL ) * + ( + 45 ) col2
 ----
@@ -39498,6 +39975,9 @@ SELECT - - ( + ( - MIN ( - + 41 ) ) ) + - COUNT ( * ) * - 78 AS col1
 ----
 119
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort
 SELECT DISTINCT + AVG ( - CASE 44 WHEN 10 + 69 THEN - 76 END ) * AVG ( 37 ) AS col0
 ----
@@ -40073,6 +40553,9 @@ SELECT - - CAST ( NULL AS INTEGER ) + 83 * - - 44 / - 29 col1, + 34 * 67
 NULL
 2278
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-7666
 SELECT ALL + 2 * + 19 + - CAST ( NULL AS REAL )
 ----
@@ -40397,6 +40880,9 @@ SELECT ALL 39 + - - 85
 ----
 124
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort
 SELECT DISTINCT - NULLIF ( + 44, - - AVG ( - - 60 ) ) AS col2
 ----
@@ -40413,6 +40899,9 @@ SELECT - 22 * - - 48 * - NULLIF ( 73, NULLIF ( + MIN ( ALL 54 ), + CASE + COUNT 
 77088
 50
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] I[I]
+# Datafusion - [Actual  ] I[R]
 query IR rowsort label-7729
 SELECT + 41, - CAST ( NULL AS REAL ) AS col2
 ----
@@ -40477,6 +40966,9 @@ SELECT DISTINCT 57 + - 15 col1, 47 AS col0
 42
 47
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-7741
 SELECT ALL + 97 - AVG ( - + CAST ( NULL AS INTEGER ) ) + - 13 AS col0
 ----
@@ -40820,6 +41312,9 @@ SELECT ALL + ( + 1 ) AS col2
 ----
 1
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]I
+# Datafusion - [Actual  ] [R]I
 query RI rowsort label-7807
 SELECT DISTINCT - 53 * + - CAST ( NULL AS REAL ) AS col1, + 57
 ----
@@ -41001,6 +41496,9 @@ SELECT ALL + 76 + + - SUM ( CASE - 3 WHEN + 86 THEN NULL WHEN + 1 THEN NULL ELSE
 ----
 72
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-7842
 SELECT 67 + - COUNT ( * ) * + 76 + - - CAST ( 31 AS REAL ) + + + 13 * - 2 * + 33 + - - CAST ( NULL AS INTEGER ) * 40 / + COUNT ( * )
 ----
@@ -41047,6 +41545,9 @@ SELECT ALL + 32 + 46 + + 28 * 98 - - 87 AS col2
 ----
 2909
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-7851
 SELECT + + CASE + COUNT ( * ) WHEN 13 THEN NULL ELSE - 33 * 95 - COUNT ( * ) END * - + 36 + - 79 * + - 63 * + - CAST ( NULL AS REAL ) * + + 14 * + - MIN ( + ( - 83 ) )
 ----
@@ -41129,6 +41630,9 @@ SELECT ALL 22 + - 8 + - NULLIF ( + 63, - 99 ) AS col2
 ----
 -49
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-7867
 SELECT ( + CAST ( NULL AS INTEGER ) ) * + - CAST ( - 97 AS REAL ) * + + 78 * 40 AS col2
 ----
@@ -41541,6 +42045,9 @@ SELECT + NULLIF ( - 50, COALESCE ( 27, + + 41, + 20 ) + NULLIF ( - CASE - - 85 W
 ----
 234
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-7945
 SELECT ALL - AVG ( + + CAST ( NULL AS INTEGER ) ) + 42 + ( - 90 )
 ----
@@ -41913,6 +42420,9 @@ SELECT - MIN ( 19 ) - + ( 61 )
 ----
 -80
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-8017
 SELECT - CAST ( NULL AS REAL ) / + 96 AS col0
 ----
@@ -42369,6 +42879,9 @@ SELECT - 14 + + - CASE - 36 WHEN + 75 THEN NULL ELSE 96 / 14 END + 84 * - 27
 ----
 -2288
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-8107
 SELECT - CASE 4 WHEN - - 35 + - 68 THEN 80 WHEN ( 36 ) THEN COUNT ( * ) + - COALESCE ( - 41 + + 98, 17, AVG ( 31 ) + 27 / + 66 ) END - - 77 AS col2
 ----
@@ -42511,6 +43024,9 @@ SELECT 65 * - 46 + - NULLIF ( + 48, 16 )
 ----
 -3038
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-8135
 SELECT + CASE + + 72 WHEN - 73 * 7 + 35 THEN AVG ( ALL - 62 ) + - COUNT ( 46 ) * 40 END
 ----
@@ -42707,6 +43223,9 @@ SELECT ALL + 71 / 10 - + 65 + - - CASE - - ( + 71 ) WHEN + 95 THEN NULL WHEN + 3
 ----
 NULL
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] I[I]
+# Datafusion - [Actual  ] I[R]
 query IR rowsort label-8174
 SELECT CAST ( NULL AS INTEGER ), + CAST ( NULL AS REAL ) + - 36
 ----
@@ -42718,6 +43237,9 @@ SELECT - 8 * + 80
 ----
 -640
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-8176
 SELECT + COALESCE ( + MIN ( - - 5 ), - 34 / AVG ( ALL + 92 ) + + 62, - ( 40 ) / - 62 ) * COUNT ( * ) AS col1
 ----
@@ -43165,6 +43687,9 @@ SELECT - - 29 * - 17 + + 34 / + - 99 * - COUNT ( * ) * COUNT ( * ) AS col0
 ----
 -493
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]I
+# Datafusion - [Actual  ] [R]I
 query RI rowsort label-8261
 SELECT ALL - - CAST ( NULL AS REAL ) * - 18 + + 58 AS col1, + COUNT ( * ) + - 55 AS col0
 ----
@@ -43602,6 +44127,9 @@ SELECT 49 + 83
 ----
 132
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-8346
 SELECT CAST ( NULL AS REAL ) / - 95 AS col0
 ----
@@ -43799,6 +44327,9 @@ SELECT DISTINCT 83, + 47 AS col0
 83
 47
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-8383
 SELECT ALL CAST ( - 58 AS INTEGER ) + - - ( AVG ( ALL + 55 ) ) * + CASE + - 83 WHEN - NULLIF ( 70, - COUNT ( * ) * + + CASE WHEN + 43 <= ( NULL ) THEN - 94 ELSE NULL END ) THEN NULL WHEN 7 THEN 41 * CAST ( - 84 / + 39 AS REAL ) END / - 71 AS col1
 ----
@@ -44680,6 +45211,9 @@ SELECT + 36 + + + 15 AS col1
 ----
 51
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-8551
 SELECT COUNT ( * ) * - CAST ( NULL AS INTEGER ) * - ( 41 ) * - AVG ( ALL CASE + - 81 WHEN - - 40 THEN NULL ELSE + 97 END ) + + - 15 + + - COUNT ( * ) - + 86 + - + 35
 ----
@@ -44914,6 +45448,9 @@ SELECT + - COALESCE ( 80, MAX ( + 27 ) )
 ----
 -80
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-8597
 SELECT ALL - 89 - - MIN ( ALL - - 59 ) + + + 87 - - + CAST ( NULL AS REAL ) + 65
 ----
@@ -44965,6 +45502,9 @@ SELECT - SUM ( ALL 60 )
 ----
 -60
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-8607
 SELECT 9 / - - CAST ( NULL AS REAL ) / + + COALESCE ( COUNT ( * ), 10 ) AS col2
 ----
@@ -45528,6 +46068,9 @@ SELECT 83 + + MIN ( ALL + 47 ) / - - 85 AS col2
 ----
 83
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-8716
 SELECT DISTINCT + AVG ( + ( 4 ) ) + - + 13 + - + CASE COUNT ( * ) WHEN - + COUNT ( * ) * + COUNT ( * ) * - + COUNT ( * ) THEN NULL WHEN 83 * - - COUNT ( * ) THEN + 87 / 47 + - 27 * + - 36 + + + 40 END * + NULLIF ( 75, 67 / + 16 + - + 31 ) col1
 ----
@@ -45712,6 +46255,9 @@ SELECT - + 19 + SUM ( 40 ) + + + CAST ( NULL AS INTEGER ) AS col2
 ----
 NULL
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-8752
 SELECT - 80 - + + 64 + - ( - 19 ) + - 69 + + ( + CAST ( NULL AS INTEGER ) ) / + 88 * CAST ( + 11 AS INTEGER ) / - CAST ( NULL AS REAL )
 ----
@@ -46001,6 +46547,9 @@ SELECT 24 * 91 + 64
 ----
 2248
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-8807
 SELECT ALL + CAST ( + 66 AS REAL ) + - 18 + + - 40 * - 61 / - - CAST ( NULL AS INTEGER ) * - - 95 * - SUM ( DISTINCT 46 ) + + AVG ( ALL - + 81 ) - MAX ( + 62 ) / - 96 - + + 95 * - + 14 * - 64 / - 21 AS col1
 ----
@@ -46017,6 +46566,9 @@ SELECT + 62 * + + CAST ( NULL AS INTEGER ) + - + 75 + - 59 AS col2, 5 AS col1
 NULL
 5
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-8810
 SELECT DISTINCT CAST ( NULL AS REAL ) + 95 AS col2
 ----
@@ -46141,6 +46693,9 @@ SELECT DISTINCT - CAST ( - + ( + - 52 ) AS INTEGER ) * 20 AS col2
 ----
 -1040
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]I
+# Datafusion - [Actual  ] [R]I
 query RI rowsort label-8834
 SELECT ALL + COUNT ( * ) + - - CASE - 5 WHEN - 23 + 44 THEN + - 64 END + + 52 - + 8 / CAST ( NULL AS INTEGER ) * NULLIF ( + AVG ( ALL - 14 ), + 76 + - 14 ) + + COUNT ( * ) AS col1, + 23 AS col0
 ----
@@ -46464,6 +47019,9 @@ SELECT ALL - 1 + COUNT ( * ), - 62 - - 36 AS col2
 0
 -26
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] I[I]
+# Datafusion - [Actual  ] I[R]
 query IR rowsort label-8895
 SELECT - 56 - 21, COALESCE ( + ( + 33 ), + - 66 ) * 94 + - 29 + - CAST ( NULL AS REAL ) / + + 7 + - 25 AS col1
 ----
@@ -46578,6 +47136,9 @@ SELECT - - 74 / + + 32
 ----
 2
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-8917
 SELECT + 48 + + 58 * + CAST ( NULL AS REAL )
 ----
@@ -46831,6 +47392,9 @@ SELECT 62 + + 49, 9 AS col1
 111
 9
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-8964
 SELECT 33 + - 12 + CAST ( NULL AS REAL ) AS col0
 ----
@@ -46900,6 +47464,9 @@ SELECT ALL 84 * - 87 + MIN ( - + 68 ) AS col2
 ----
 -7376
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-8976
 SELECT 0 * NULLIF ( + ( 28 ), CASE AVG ( ALL 49 ) WHEN - CAST ( + 73 AS INTEGER ) THEN AVG ( - + ( - 91 ) ) END + + + 5 )
 ----
@@ -46984,6 +47551,9 @@ SELECT - MAX ( 60 )
 ----
 -60
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-8992
 SELECT + 90 / - 61 * - CAST ( NULL AS REAL ) * ( - 66 ) * - + 83 + - + 27 AS col2
 ----
@@ -47103,6 +47673,9 @@ SELECT - + 16 + + 97 col2
 ----
 81
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]I
+# Datafusion - [Actual  ] [R]I
 query RI rowsort label-9015
 SELECT DISTINCT - NULLIF ( - 78, + COUNT ( * ) * + 88 * - 41 + - 31 * - 63 * + - CAST ( NULL AS REAL ) * - COUNT ( * ) * + 9 + - NULLIF ( - COUNT ( * ), 40 ) ) / CASE - 27 WHEN + 29 THEN NULL WHEN MIN ( ALL 61 ) THEN + - 77 END * + 4 col1, + 20 * - COUNT ( * )
 ----
@@ -47599,6 +48172,9 @@ SELECT DISTINCT 71 AS col1, 84
 71
 84
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] I[I]
+# Datafusion - [Actual  ] I[R]
 query IR rowsort label-9107
 SELECT ALL + + 83 * - COUNT ( * ) * + 59 AS col1, CAST ( NULL AS REAL ) / 19 / - + 54
 ----
@@ -47626,6 +48202,9 @@ SELECT - + 98 - - + 50 AS col0
 ----
 -48
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-9112
 SELECT - - CAST ( NULL AS REAL ) col2
 ----
@@ -48352,6 +48931,9 @@ SELECT DISTINCT - + NULLIF ( - + 38, + COUNT ( * ) * 96 ) * + 77 + - ( - - 5 ) A
 ----
 2921
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-9249
 SELECT + COALESCE ( + - 49, + 50 ) + - CASE + 23 WHEN - COALESCE ( + ( 6 ), NULLIF ( 2, + 77 ) * + + MAX ( ALL - - 12 ) + 93 + + 55 ) THEN + 17 * + + CASE + MIN ( 85 ) WHEN - 31 THEN 24 + + 18 - + 57 * + CASE + 4 WHEN + 80 + - 50 THEN NULL WHEN - + 81 THEN - 45 END WHEN 88 + + + ( - 92 ) THEN 41 + CAST ( NULL AS INTEGER ) + + 82 ELSE + ( + - 73 ) + 77 * 91 END + 68 + CASE SUM ( 29 ) WHEN 54 THEN NULL ELSE COALESCE ( 0, 16, 33 * - 12 + + CAST ( NULL AS REAL ) ) / 48 END * 61 WHEN 18 + + ( 6 + 90 ) THEN NULL ELSE NULL END - - 90 / COUNT ( * )
 ----
@@ -48668,6 +49250,9 @@ SELECT 6 * - COUNT ( * ) + + + 42
 ----
 36
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]I
+# Datafusion - [Actual  ] [R]I
 query RI rowsort label-9308
 SELECT DISTINCT CAST ( NULL AS REAL ) + 97 + + COUNT ( * ) * NULLIF ( + 79, - ( - 72 ) * - 64 ) * + COUNT ( * ) * - + 24 * + NULLIF ( + - COUNT ( * ), - 52 ) + CAST ( - 6 AS INTEGER ) * + COUNT ( ALL - 64 ) AS col0, 96 AS col1
 ----
@@ -49168,6 +49753,9 @@ SELECT - 62 AS col1, + 11 AS col1
 -62
 11
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-9403
 SELECT ALL - + 54 * + CAST ( NULL AS REAL ) / - CAST ( NULL AS REAL ) + + - 15
 ----
@@ -49366,6 +49954,9 @@ SELECT DISTINCT - - 84 col1
 ----
 84
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-9442
 SELECT ALL + - COALESCE ( - 58, - AVG ( + 10 ) / - 7 * - + 94 + COALESCE ( - COUNT ( * ), - 67 * - 82 * + - 61, - 21, 78 + 97 - + 4 ) / - - 17 + - 84, 12, + 97 ) * - 17 - 71 col0
 ----
@@ -49972,6 +50563,9 @@ SELECT - 76, - 63 col1
 -76
 -63
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-9557
 SELECT + 35 * - 75 / - + 97 + 87 * 6 + - 8 - + + 70 + - 65 + MIN ( ALL - + 57 ) - + COUNT ( * ) * - 65 * MIN ( 14 ) + ( 25 ) / 17 * 35 + AVG ( 19 ) * - + CAST ( NULL AS INTEGER )
 ----
@@ -50057,6 +50651,9 @@ SELECT ALL + 53 + + + 59 - 27 col2
 ----
 85
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-9574
 SELECT DISTINCT + 80 * - 99 * + 12 * + + CASE - 1 WHEN + 8 THEN NULL WHEN + + ( - - MIN ( 90 ) ) THEN NULL WHEN + - COUNT ( DISTINCT + - 62 ) + - 42 * + 0 THEN NULL ELSE AVG ( + ( + 21 ) ) END
 ----
@@ -50082,6 +50679,9 @@ SELECT ALL - + CASE + + 54 WHEN CASE 76 WHEN + ( - COUNT ( * ) ) + - CAST ( 15 A
 ----
 NULL
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] I[I]
+# Datafusion - [Actual  ] I[R]
 query IR rowsort label-9579
 SELECT DISTINCT + 47 + - - 54, 66 + + CAST ( NULL AS REAL ) AS col1
 ----
@@ -50362,6 +50962,9 @@ SELECT + 65 / - 47 AS col0, - 96 - - 59 + 87
 -1
 50
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-9633
 SELECT + CASE + - 64 WHEN - 98 + + 58 THEN - + 0 + + 42 + CAST ( NULL AS REAL ) + - - COUNT ( * ) END
 ----
@@ -50794,6 +51397,9 @@ SELECT DISTINCT - CAST ( - 83 AS INTEGER )
 ----
 83
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-9718
 SELECT DISTINCT - CASE - 39 WHEN - 21 THEN - COUNT ( * ) WHEN - 37 THEN - NULLIF ( 25, AVG ( 74 ) ) END + + 4
 ----
@@ -50859,6 +51465,9 @@ SELECT DISTINCT 41 * 15 AS col2
 ----
 615
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-9731
 SELECT ALL SUM ( DISTINCT + CAST ( NULL AS REAL ) ) col0
 ----
@@ -51867,6 +52476,9 @@ SELECT + - 88 + + COUNT ( * )
 ----
 -87
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-9926
 SELECT DISTINCT + NULLIF ( + 52, 49 * + COUNT ( * ) / + 39 * - - SUM ( - 36 ) + 34 + CAST ( - 89 AS INTEGER ) * + CAST ( NULL AS REAL ) )
 ----
@@ -51905,6 +52517,9 @@ SELECT DISTINCT + 25 / - - NULLIF ( - - NULLIF ( + 93, - 48 ), + - 61 ) * + 19
 ----
 0
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-9933
 SELECT + CASE - + CAST ( + - NULLIF ( - - NULLIF ( - COUNT ( * ), 22 * - + 6 ), 32 ) AS REAL ) WHEN 98 * COUNT ( DISTINCT + 72 ) - - ( 64 ) THEN + ( - ( AVG ( - COALESCE ( COALESCE ( 36, - 70 ), 98 - 59 * 21 ) ) ) ) * + 34 END * 85
 ----
@@ -52165,6 +52780,9 @@ SELECT ALL ( + + 67 ) * - 12
 ----
 -804
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-9983
 SELECT CAST ( NULL AS REAL ) + - + 86 * CAST ( NULL AS INTEGER ) AS col0
 ----
@@ -52238,6 +52856,9 @@ SELECT ALL + - NULLIF ( - - 33, - COALESCE ( CAST ( NULL AS INTEGER ), + - 20 + 
 ----
 -33
 
+# Datafusion - Types were automatically converted from:
+# Datafusion - [Expected] [I]
+# Datafusion - [Actual  ] [R]
 query R rowsort label-9997
 SELECT + - 0 * + 31 + + 86 + - ( + ( - 23 ) ) * + CAST ( NULL AS INTEGER ) * + CAST ( NULL AS REAL )
 ----

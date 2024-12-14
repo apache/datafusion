@@ -49904,7 +49904,7 @@ SELECT ALL + 17 AS col2 FROM tab2, tab0 AS cor0
 ----
 9 values hashing to 43298e43365fccb5146ea32003753c92
 
-# Datafusion - Data was automatically updated based on compare with postgres results
+# Datafusion - Data was automatically updated based on comparison db results
 # Datafusion - Previous results:
 # Datafusion - 143
 # Datafusion - 41

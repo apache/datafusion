@@ -50,6 +50,7 @@ use tokio::sync::{mpsc, Mutex};
 
 const TEST_DIRECTORY: &str = "test_files/";
 const PG_COMPAT_FILE_PREFIX: &str = "pg_compat_";
+const SQLITE_PREFIX: &str = "sqlite";
 
 pub fn main() -> Result<()> {
     tokio::runtime::Builder::new_multi_thread()
@@ -192,7 +193,7 @@ async fn run_tests() -> Result<()> {
     let errors: Vec<_> = futures::stream::iter(read_test_files(&options)?)
         .map(|test_file| {
             let validator = if options.include_sqlite
-                && test_file.relative_path.starts_with("sqlite")
+                && test_file.relative_path.starts_with(SQLITE_PREFIX)
             {
                 sqlite_value_validator
             } else {
@@ -301,6 +302,7 @@ async fn run_test_file_with_postgres(
     setup_scratch_dir(&relative_path)?;
     let mut runner =
         sqllogictest::Runner::new(|| Postgres::connect(relative_path.clone()));
+    runner.add_label("postgresql");
     runner.with_column_validator(strict_column_validator);
     runner.with_normalizer(value_normalizer);
     runner.with_validator(validator);
@@ -426,7 +428,7 @@ impl TestFile {
     }
 
     fn check_sqlite(&self, options: &Options) -> bool {
-        if !self.relative_path.starts_with("sqlite") {
+        if !self.relative_path.starts_with(SQLITE_PREFIX) {
             return true;
         }
 
@@ -570,10 +572,12 @@ impl Options {
             .any(|filter| relative_path.to_string_lossy().contains(filter))
     }
 
-    /// Postgres runner executes only tests in files with specific names
+    /// Postgres runner executes only tests in files with specific names or in
+    /// specific folders
     fn check_pg_compat_file(&self, path: &Path) -> bool {
         let file_name = path.file_name().unwrap().to_str().unwrap().to_string();
-        !self.postgres_runner || file_name.starts_with(PG_COMPAT_FILE_PREFIX)
+        !self.postgres_runner || file_name.starts_with(PG_COMPAT_FILE_PREFIX) ||
+            (self.include_sqlite && path.to_string_lossy().contains(SQLITE_PREFIX))
     }
 
     /// Logs warning messages to stdout if any ignored options are passed
@@ -610,16 +614,18 @@ pub async fn start_postgres(
         .start()
         .await
         .unwrap();
-    // if you are running inside a docker container uncomment this
-    // let host = "host.docker.internal";
-    let host = container.get_host().await.unwrap();
+    let host = if in_container::in_container() {
+        "host.docker.internal".to_string()
+    } else {
+        container.get_host().await.unwrap().to_string()
+    };
     let port = container.get_host_port_ipv4(5432).await.unwrap();
 
     let mut rx = in_channel.rx.lock().await;
     while let Some(command) = rx.recv().await {
         match command {
             ContainerCommands::FetchHost => {
-                host_channel.tx.send(host.to_string()).unwrap()
+                host_channel.tx.send(host.clone()).unwrap()
             }
             ContainerCommands::FetchPort => port_channel.tx.send(port).unwrap(),
             ContainerCommands::Stop => {
