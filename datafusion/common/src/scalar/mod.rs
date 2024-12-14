@@ -5577,8 +5577,7 @@ mod tests {
             Arc::new(StringArray::from(vec![Some("foo"), None, Some("bar")])),
             Arc::new(LargeStringArray::from(vec![Some("foo"), None, Some("bar")])),
             Arc::new(StringViewArray::from(vec![Some("foo"), None, Some("bar")])),
-            // string dictionary fails due to XXX
-            /*
+            // string dictionary
             {
                 let mut builder = StringDictionaryBuilder::<Int32Type>::new();
                 builder.append("foo").unwrap();
@@ -5586,7 +5585,6 @@ mod tests {
                 builder.append("bar").unwrap();
                 Arc::new(builder.finish())
             },
-            */
             // binary array
             Arc::new(BinaryArray::from_iter(vec![
                 Some(b"foo"),
