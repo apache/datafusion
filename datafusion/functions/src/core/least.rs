@@ -80,9 +80,7 @@ fn get_smallest(lhs: &dyn Array, rhs: &dyn Array) -> Result<BooleanArray> {
     let cmp = make_comparator(lhs, rhs, SORT_OPTIONS)?;
 
     if lhs.len() != rhs.len() {
-        return exec_err!(
-            "All arrays should have the same length for least comparison"
-        );
+        return exec_err!("All arrays should have the same length for least comparison");
     }
 
     let values = BooleanBuffer::collect_bool(lhs.len(), |i| cmp(i, i).is_le());
@@ -267,9 +265,9 @@ fn get_smallest_doc() -> &'static Documentation {
 
 #[cfg(test)]
 mod test {
+    use crate::core::least::LeastFunc;
     use arrow::datatypes::DataType;
     use datafusion_expr::ScalarUDFImpl;
-    use crate::core::least::LeastFunc;
 
     #[test]
     fn test_least_return_types_without_common_supertype_in_arg_type() {
