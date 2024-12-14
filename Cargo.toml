@@ -143,7 +143,6 @@ pbjson = { version = "0.7.0" }
 prost = "0.13.1"
 prost-derive = "0.13.1"
 rand = "0.8"
-recursive = "0.1.1"
 regex = "1.8"
 rstest = "0.23.0"
 serde_json = "1"
