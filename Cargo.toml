@@ -182,6 +182,11 @@ opt-level = 0
 codegen-units = 256
 debug = false
 
+[profile.release-windows.package.datafusion-sqllogictest]
+opt-level = 0
+codegen-units = 256
+debug = false
+
 [workspace.lints.clippy]
 # Detects large stack-allocated futures that may cause stack overflow crashes (see threshold in clippy.toml)
 large_futures = "warn"
