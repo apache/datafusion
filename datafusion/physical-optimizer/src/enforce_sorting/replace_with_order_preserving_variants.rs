@@ -22,7 +22,8 @@
 use std::sync::Arc;
 
 use crate::utils::{
-    is_coalesce_partitions, is_repartition, is_sort, is_sort_preserving_merge,
+    is_coalesce_partitions, is_on_demand_repartition, is_repartition, is_sort,
+    is_sort_preserving_merge,
 };
 
 use datafusion_common::config::ConfigOptions;
@@ -30,6 +31,7 @@ use datafusion_common::tree_node::Transformed;
 use datafusion_common::{internal_err, Result};
 use datafusion_physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion_physical_plan::execution_plan::EmissionType;
+use datafusion_physical_plan::repartition::on_demand_repartition::OnDemandRepartitionExec;
 use datafusion_physical_plan::repartition::RepartitionExec;
 use datafusion_physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
 use datafusion_physical_plan::tree_node::PlanContext;
@@ -56,6 +58,7 @@ pub fn update_order_preservation_ctx_children_data(opc: &mut OrderPreservationCo
             maintains_input_order[idx]
                 || is_coalesce_partitions(plan)
                 || is_repartition(plan)
+                || is_on_demand_repartition(plan)
         };
 
         // We cut the path towards nodes that do not maintain ordering.
@@ -67,7 +70,8 @@ pub fn update_order_preservation_ctx_children_data(opc: &mut OrderPreservationCo
         *data = if plan_children.is_empty() {
             false
         } else if !children[0].data
-            && ((is_repartition(plan) && !maintains_input_order[0])
+            && (((is_repartition(plan) || is_on_demand_repartition(plan))
+                && !maintains_input_order[0])
                 || (is_coalesce_partitions(plan)
                     && plan_children[0].output_ordering().is_some()))
         {
@@ -131,6 +135,20 @@ pub fn plan_with_order_preserving_variants(
         let partitioning = sort_input.plan.output_partitioning().clone();
         sort_input.plan = Arc::new(
             RepartitionExec::try_new(child, partitioning)?.with_preserve_order(),
+        ) as _;
+        sort_input.children[0].data = true;
+        return Ok(sort_input);
+    }
+    if is_on_demand_repartition(&sort_input.plan)
+        && !sort_input.plan.maintains_input_order()[0]
+        && is_spr_better
+    {
+        // When a `OnDemandRepartitionExec` doesn't preserve ordering, replace it with
+        // a sort-preserving variant if appropriate:
+        let child = Arc::clone(&sort_input.children[0].plan);
+        let partitioning = sort_input.plan.output_partitioning().clone();
+        sort_input.plan = Arc::new(
+            OnDemandRepartitionExec::try_new(child, partitioning)?.with_preserve_order(),
         ) as _;
         sort_input.children[0].data = true;
         return Ok(sort_input);
@@ -199,6 +217,13 @@ pub fn plan_with_order_breaking_variants(
         let child = Arc::clone(&sort_input.children[0].plan);
         let partitioning = plan.output_partitioning().clone();
         sort_input.plan = Arc::new(RepartitionExec::try_new(child, partitioning)?) as _;
+    } else if is_on_demand_repartition(plan) && plan.maintains_input_order()[0] {
+        // When a `OnDemandRepartitionExec` preserves ordering, replace it with a
+        // non-sort-preserving variant:
+        let child = Arc::clone(&sort_input.children[0].plan);
+        let partitioning = plan.output_partitioning().clone();
+        sort_input.plan =
+            Arc::new(OnDemandRepartitionExec::try_new(child, partitioning)?) as _;
     } else if is_sort_preserving_merge(plan) {
         // Replace `SortPreservingMergeExec` with a `CoalescePartitionsExec`
         // SPM may have `fetch`, so pass it to the `CoalescePartitionsExec`
