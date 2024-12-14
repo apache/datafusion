@@ -33,7 +33,7 @@ use arrow_schema::{DataType, Fields};
 use datafusion_common::error::_plan_err;
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::{
-    exec_err, not_impl_err, plan_datafusion_err, plan_err, schema_err,
+    exec_err, internal_err, not_impl_err, plan_datafusion_err, plan_err, schema_err,
     unqualified_field_not_found, Column, Constraint, Constraints, DFSchema, DFSchemaRef,
     DataFusionError, Result, ScalarValue, SchemaError, SchemaReference, TableReference,
     ToDFSchema,
@@ -204,7 +204,6 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         statement: Statement,
         planner_context: &mut PlannerContext,
     ) -> Result<LogicalPlan> {
-        let sql = Some(statement.to_string());
         match statement {
             Statement::ExplainTable {
                 describe_alias: DescribeAlias::Describe, // only parse 'DESCRIBE table_name' and not 'EXPLAIN table_name'
@@ -518,6 +517,35 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     return not_impl_err!("To not supported")?;
                 }
 
+                // put the statement back together temporarily to get the SQL
+                // string representation
+                let stmt = Statement::CreateView {
+                    or_replace,
+                    materialized,
+                    name,
+                    columns,
+                    query,
+                    options: CreateTableOptions::None,
+                    cluster_by,
+                    comment,
+                    with_no_schema_binding,
+                    if_not_exists,
+                    temporary,
+                    to,
+                };
+                let sql = stmt.to_string();
+                let Statement::CreateView {
+                    name,
+                    columns,
+                    query,
+                    or_replace,
+                    temporary,
+                    ..
+                } = stmt
+                else {
+                    return internal_err!("Unreachable code in create view");
+                };
+
                 let columns = columns
                     .into_iter()
                     .map(|view_column_def| {
@@ -538,7 +566,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     name: self.object_name_to_table_reference(name)?,
                     input: Arc::new(plan),
                     or_replace,
-                    definition: sql,
+                    definition: Some(sql),
                     temporary,
                 })))
             }
@@ -1123,8 +1151,8 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     },
                 )))
             }
-            _ => {
-                not_impl_err!("Unsupported SQL statement: {sql:?}")
+            stmt => {
+                not_impl_err!("Unsupported SQL statement: {stmt}")
             }
         }
     }
