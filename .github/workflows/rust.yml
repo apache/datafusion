@@ -54,6 +54,7 @@ jobs:
           export PATH=$PATH:$HOME/d/protoc/bin
           unset RUSTFLAGS
           lld-link --version
+          export RUSTFLAGS="-C link-arg=-fuse-ld=lld"
           echo $RUSTFLAGS
           rustup show
           cargo test --lib --tests --bins --features avro,json,backtrace --profile=release-windows

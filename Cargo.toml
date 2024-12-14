@@ -175,7 +175,6 @@ debug = 'line-directives-only'
 inherits = "release"
 lto = true
 opt-level = 1
-rustflags = ["-C", "link-arg=-fuse-ld=lld"]
 incremental = false
 
 [workspace.lints.clippy]
