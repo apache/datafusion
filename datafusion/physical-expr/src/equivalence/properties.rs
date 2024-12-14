@@ -15,12 +15,12 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::fmt;
 use std::fmt::Display;
 use std::hash::{Hash, Hasher};
 use std::iter::Peekable;
 use std::slice::Iter;
 use std::sync::Arc;
+use std::{fmt, mem};
 
 use super::ordering::collapse_lex_ordering;
 use crate::equivalence::class::const_exprs_contains;
@@ -405,18 +405,19 @@ impl EquivalenceProperties {
             return self;
         }
 
-        let mut orderings = vec![filtered_exprs.clone()];
+        let mut new_orderings = vec![filtered_exprs.clone()];
 
         // Preserve valid suffixes from existing orderings
-        for existing in self.oeq_class.orderings.iter() {
-            if self.is_prefix_of(&filtered_exprs, existing) {
+        let orderings = mem::take(&mut self.oeq_class.orderings);
+        for existing in orderings {
+            if self.is_prefix_of(&filtered_exprs, &existing) {
                 let mut extended = filtered_exprs.clone();
-                extended.extend(existing[filtered_exprs.len()..].iter().cloned());
-                orderings.push(extended);
+                extended.extend(existing.into_iter().skip(filtered_exprs.len()));
+                new_orderings.push(extended);
             }
         }
 
-        self.oeq_class = OrderingEquivalenceClass::new(orderings);
+        self.oeq_class = OrderingEquivalenceClass::new(new_orderings);
         self
     }
 
