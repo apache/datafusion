@@ -708,6 +708,10 @@ config_namespace! {
         /// repartitioning to increase parallelism to leverage more CPU cores
         pub enable_round_robin_repartition: bool, default = true
 
+        /// When set to false, the physical plan optimizer will replace the round robin
+        /// repartitioning with on demand repartitioning
+        pub prefer_round_robin_repartition: bool, default = true
+
         /// When set to true, the optimizer will attempt to perform limit operations
         /// during aggregations, if possible
         pub enable_topk_aggregation: bool, default = true

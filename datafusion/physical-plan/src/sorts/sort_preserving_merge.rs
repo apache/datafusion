@@ -1467,6 +1467,7 @@ mod tests {
             Partitioning::RoundRobinBatch(partitions) => partitions,
             Partitioning::Hash(_, partitions) => partitions,
             Partitioning::UnknownPartitioning(partitions) => partitions,
+            Partitioning::OnDemand(partitions) => partitions,
         };
         let source = CongestedExec {
             schema: schema.clone(),
