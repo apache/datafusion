@@ -222,8 +222,6 @@ use sqlparser::ast::{
 /// // to 42 = 5 AND b = 6
 /// assert_eq!(rewritten.data, lit(42).eq(lit(5)).and(col("b").eq(lit(6))));
 #[derive(Clone, PartialEq, Eq, PartialOrd, Hash, Debug)]
-// TODO make the enum smaller with more boxing (looks like Wildcard is now bigger)
-#[allow(clippy::large_enum_variant)]
 pub enum Expr {
     /// An expression with a specific name.
     Alias(Alias),
@@ -315,7 +313,7 @@ pub enum Expr {
     /// plan into physical plan.
     Wildcard {
         qualifier: Option<TableReference>,
-        options: WildcardOptions,
+        options: Box<WildcardOptions>,
     },
     /// List of grouping set expressions. Only valid in the context of an aggregate
     /// GROUP BY expression list

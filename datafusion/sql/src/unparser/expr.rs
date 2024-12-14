@@ -1688,7 +1688,7 @@ mod tests {
         let dummy_logical_plan = table_scan(Some("t"), &dummy_schema, None)?
             .project(vec![Expr::Wildcard {
                 qualifier: None,
-                options: WildcardOptions::default(),
+                options: Box::new(WildcardOptions::default()),
             }])?
             .filter(col("a").eq(lit(1)))?
             .build()?;
@@ -1880,10 +1880,7 @@ mod tests {
             (sum(col("a")), r#"sum(a)"#),
             (
                 count_udaf()
-                    .call(vec![Expr::Wildcard {
-                        qualifier: None,
-                        options: WildcardOptions::default(),
-                    }])
+                    .call(vec![wildcard()])
                     .distinct()
                     .build()
                     .unwrap(),
@@ -1891,10 +1888,7 @@ mod tests {
             ),
             (
                 count_udaf()
-                    .call(vec![Expr::Wildcard {
-                        qualifier: None,
-                        options: WildcardOptions::default(),
-                    }])
+                    .call(vec![wildcard()])
                     .filter(lit(true))
                     .build()
                     .unwrap(),
