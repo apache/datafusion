@@ -172,7 +172,7 @@ rpath = false
 [profile.release-windows]
 codegen-units = 32
 debug = 'line-directives-only'
-inherits = "release"
+inherits = "dev"
 lto = true
 opt-level = 1
 incremental = false
