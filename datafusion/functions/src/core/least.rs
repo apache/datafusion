@@ -31,7 +31,7 @@ use std::any::Any;
 use std::sync::{Arc, OnceLock};
 
 const SORT_OPTIONS: SortOptions = SortOptions {
-    // We want least first
+    // Decreasing here as we will use lower than or equal to find the smallest value
     descending: false,
 
     // NULL will be greater than any other value
