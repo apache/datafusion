@@ -1843,6 +1843,17 @@ fn rewrite_placeholder(expr: &mut Expr, other: &Expr, schema: &DFSchema) -> Resu
 #[macro_export]
 macro_rules! expr_vec_fmt {
     ( $ARRAY:expr ) => {{
+        $ARRAY
+            .iter()
+            .map(|e| format!("{e}"))
+            .collect::<Vec<String>>()
+            .join(", ")
+    }};
+}
+
+#[macro_export]
+macro_rules! expr_vec_sorted_fmt {
+    ( $ARRAY:expr ) => {{
         let mut expr_str = $ARRAY
             .iter()
             .map(|e| format!("{e}"))
@@ -2317,9 +2328,9 @@ impl Display for Expr {
                 negated,
             }) => {
                 if *negated {
-                    write!(f, "{expr} NOT IN ([{}])", expr_vec_fmt!(list))
+                    write!(f, "{expr} NOT IN ([{}])", expr_vec_sorted_fmt!(list))
                 } else {
-                    write!(f, "{expr} IN ([{}])", expr_vec_fmt!(list))
+                    write!(f, "{expr} IN ([{}])", expr_vec_sorted_fmt!(list))
                 }
             }
             Expr::Wildcard { qualifier, options } => match qualifier {
