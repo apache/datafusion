@@ -37,7 +37,7 @@ macro_rules! primitive_merge_helper {
 }
 
 macro_rules! merge_helper {
-    ($t:ty, $sort:ident, $streams:ident, $schema:ident, $tracking_metrics:ident, $batch_size:ident, $fetch:ident, $reservation:ident, $enable_round_robin_tie_breaker:ident, $enable_pull_based_execution:ident) => {{
+    ($t:ty, $sort:ident, $streams:ident, $schema:ident, $tracking_metrics:ident, $batch_size:ident, $fetch:ident, $reservation:ident, $enable_round_robin_tie_breaker:ident) => {{
         let streams = FieldCursorStream::<$t>::new($sort, $streams);
         return Ok(Box::pin(SortPreservingMergeStream::new(
             Box::new(streams),
@@ -47,7 +47,6 @@ macro_rules! merge_helper {
             $fetch,
             $reservation,
             $enable_round_robin_tie_breaker,
-            $enable_pull_based_execution,
         )));
     }};
 }
@@ -61,7 +60,6 @@ pub struct StreamingMergeBuilder<'a> {
     fetch: Option<usize>,
     reservation: Option<MemoryReservation>,
     enable_round_robin_tie_breaker: bool,
-    enable_pull_based_execution: bool,
 }
 
 impl Default for StreamingMergeBuilder<'_> {
@@ -75,7 +73,6 @@ impl Default for StreamingMergeBuilder<'_> {
             fetch: None,
             reservation: None,
             enable_round_robin_tie_breaker: false,
-            enable_pull_based_execution: false,
         }
     }
 }
@@ -135,14 +132,6 @@ impl<'a> StreamingMergeBuilder<'a> {
         self
     }
 
-    pub fn with_pull_based_execution(
-        mut self,
-        enable_pull_based_execution: bool,
-    ) -> Self {
-        self.enable_pull_based_execution = enable_pull_based_execution;
-        self
-    }
-
     pub fn build(self) -> Result<SendableRecordBatchStream> {
         let Self {
             streams,
@@ -153,7 +142,6 @@ impl<'a> StreamingMergeBuilder<'a> {
             fetch,
             expressions,
             enable_round_robin_tie_breaker,
-            enable_pull_based_execution,
         } = self;
 
         // Early return if streams or expressions are empty
@@ -186,11 +174,11 @@ impl<'a> StreamingMergeBuilder<'a> {
             let sort = expressions[0].clone();
             let data_type = sort.expr.data_type(schema.as_ref())?;
             downcast_primitive! {
-                data_type => (primitive_merge_helper, sort, streams, schema, metrics, batch_size, fetch, reservation, enable_round_robin_tie_breaker, enable_pull_based_execution),
-                DataType::Utf8 => merge_helper!(StringArray, sort, streams, schema, metrics, batch_size, fetch, reservation, enable_round_robin_tie_breaker, enable_pull_based_execution),
-                DataType::LargeUtf8 => merge_helper!(LargeStringArray, sort, streams, schema, metrics, batch_size, fetch, reservation, enable_round_robin_tie_breaker, enable_pull_based_execution)
-                DataType::Binary => merge_helper!(BinaryArray, sort, streams, schema, metrics, batch_size, fetch, reservation, enable_round_robin_tie_breaker, enable_pull_based_execution)
-                DataType::LargeBinary => merge_helper!(LargeBinaryArray, sort, streams, schema, metrics, batch_size, fetch, reservation, enable_round_robin_tie_breaker, enable_pull_based_execution)
+                data_type => (primitive_merge_helper, sort, streams, schema, metrics, batch_size, fetch, reservation, enable_round_robin_tie_breaker),
+                DataType::Utf8 => merge_helper!(StringArray, sort, streams, schema, metrics, batch_size, fetch, reservation, enable_round_robin_tie_breaker),
+                DataType::LargeUtf8 => merge_helper!(LargeStringArray, sort, streams, schema, metrics, batch_size, fetch, reservation, enable_round_robin_tie_breaker)
+                DataType::Binary => merge_helper!(BinaryArray, sort, streams, schema, metrics, batch_size, fetch, reservation, enable_round_robin_tie_breaker)
+                DataType::LargeBinary => merge_helper!(LargeBinaryArray, sort, streams, schema, metrics, batch_size, fetch, reservation, enable_round_robin_tie_breaker)
                 _ => {}
             }
         }
@@ -209,7 +197,6 @@ impl<'a> StreamingMergeBuilder<'a> {
             fetch,
             reservation,
             enable_round_robin_tie_breaker,
-            enable_pull_based_execution,
         )))
     }
 }
