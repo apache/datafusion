@@ -139,7 +139,7 @@ impl ScalarUDFImpl for LeastFunc {
     }
 
     fn name(&self) -> &str {
-        "greatest"
+        "least"
     }
 
     fn signature(&self) -> &Signature {
