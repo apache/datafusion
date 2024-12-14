@@ -46,7 +46,7 @@ make_udf_function!(named_struct::NamedStructFunc, named_struct);
 make_udf_function!(getfield::GetFieldFunc, get_field);
 make_udf_function!(coalesce::CoalesceFunc, coalesce);
 make_udf_function!(greatest::GreatestFunc, greatest);
-make_udf_function!(least::GreatestFunc, least);
+make_udf_function!(least::LeastFunc, least);
 make_udf_function!(version::VersionFunc, version);
 
 pub mod expr_fn {

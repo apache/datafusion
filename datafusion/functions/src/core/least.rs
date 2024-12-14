@@ -31,25 +31,25 @@ use std::any::Any;
 use std::sync::{Arc, OnceLock};
 
 const SORT_OPTIONS: SortOptions = SortOptions {
-    // We want greatest first
-    descending: false,
+    // We want least first
+    descending: true,
 
-    // NULL will be less than any other value
-    nulls_first: true,
+    // NULL will be greater than any other value
+    nulls_first: false,
 };
 
 #[derive(Debug)]
-pub struct GreatestFunc {
+pub struct LeastFunc {
     signature: Signature,
 }
 
-impl Default for GreatestFunc {
+impl Default for LeastFunc {
     fn default() -> Self {
-        GreatestFunc::new()
+        LeastFunc::new()
     }
 }
 
-impl GreatestFunc {
+impl LeastFunc {
     pub fn new() -> Self {
         Self {
             signature: Signature::user_defined(Volatility::Immutable),
@@ -63,60 +63,60 @@ fn get_logical_null_count(arr: &dyn Array) -> usize {
         .unwrap_or_default()
 }
 
-/// Return boolean array where `arr[i] = lhs[i] >= rhs[i]` for all i, where `arr` is the result array
-/// Nulls are always considered smaller than any other value
-fn get_larger(lhs: &dyn Array, rhs: &dyn Array) -> Result<BooleanArray> {
+/// Return boolean array where `arr[i] = lhs[i] <= rhs[i]` for all i, where `arr` is the result array
+/// Nulls are always considered larger than any other value
+fn get_smallest(lhs: &dyn Array, rhs: &dyn Array) -> Result<BooleanArray> {
     // Fast path:
     // If both arrays are not nested, have the same length and no nulls, we can use the faster vectorised kernel
     // - If both arrays are not nested: Nested types, such as lists, are not supported as the null semantics are not well-defined.
-    // - both array does not have any nulls: cmp::gt_eq will return null if any of the input is null while we want to return false in that case
+    // - both array does not have any nulls: cmp::lt_eq will return null if any of the input is null while we want to return false in that case
     if !lhs.data_type().is_nested()
         && get_logical_null_count(lhs) == 0
         && get_logical_null_count(rhs) == 0
     {
-        return cmp::gt_eq(&lhs, &rhs).map_err(|e| e.into());
+        return cmp::lt_eq(&lhs, &rhs).map_err(|e| e.into());
     }
 
     let cmp = make_comparator(lhs, rhs, SORT_OPTIONS)?;
 
     if lhs.len() != rhs.len() {
         return exec_err!(
-            "All arrays should have the same length for greatest comparison"
+            "All arrays should have the same length for least comparison"
         );
     }
 
-    let values = BooleanBuffer::collect_bool(lhs.len(), |i| cmp(i, i).is_ge());
+    let values = BooleanBuffer::collect_bool(lhs.len(), |i| cmp(i, i).is_le());
 
-    // No nulls as we only want to keep the values that are larger, its either true or false
+    // No nulls as we only want to keep the values that are smaller, its either true or false
     Ok(BooleanArray::new(values, None))
 }
 
-/// Return array where the largest value at each index is kept
-fn keep_larger(lhs: ArrayRef, rhs: ArrayRef) -> Result<ArrayRef> {
+/// Return array where the smallest value at each index is kept
+fn keep_smallest(lhs: ArrayRef, rhs: ArrayRef) -> Result<ArrayRef> {
     // True for values that we should keep from the left array
-    let keep_lhs = get_larger(lhs.as_ref(), rhs.as_ref())?;
+    let keep_lhs = get_smallest(lhs.as_ref(), rhs.as_ref())?;
 
-    let larger = zip(&keep_lhs, &lhs, &rhs)?;
+    let smaller = zip(&keep_lhs, &lhs, &rhs)?;
 
-    Ok(larger)
+    Ok(smaller)
 }
 
-fn keep_larger_scalar<'a>(
+fn keep_smaller_scalar<'a>(
     lhs: &'a ScalarValue,
     rhs: &'a ScalarValue,
 ) -> Result<&'a ScalarValue> {
     if !lhs.data_type().is_nested() {
-        return if lhs >= rhs { Ok(lhs) } else { Ok(rhs) };
+        return if lhs <= rhs { Ok(lhs) } else { Ok(rhs) };
     }
 
-    // If complex type we can't compare directly as we want null values to be smaller
+    // If complex type we can't compare directly as we want null values to be larger
     let cmp = make_comparator(
         lhs.to_array()?.as_ref(),
         rhs.to_array()?.as_ref(),
         SORT_OPTIONS,
     )?;
 
-    if cmp(0, 0).is_ge() {
+    if cmp(0, 0).is_le() {
         Ok(lhs)
     } else {
         Ok(rhs)
@@ -125,7 +125,7 @@ fn keep_larger_scalar<'a>(
 
 fn find_coerced_type(data_types: &[DataType]) -> Result<DataType> {
     if data_types.is_empty() {
-        plan_err!("greatest was called without any arguments. It requires at least 1.")
+        plan_err!("least was called without any arguments. It requires at least 1.")
     } else if let Some(coerced_type) = type_union_resolution(data_types) {
         Ok(coerced_type)
     } else {
@@ -133,7 +133,7 @@ fn find_coerced_type(data_types: &[DataType]) -> Result<DataType> {
     }
 }
 
-impl ScalarUDFImpl for GreatestFunc {
+impl ScalarUDFImpl for LeastFunc {
     fn as_any(&self) -> &dyn Any {
         self
     }
@@ -153,11 +153,11 @@ impl ScalarUDFImpl for GreatestFunc {
     fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
         if args.is_empty() {
             return exec_err!(
-                "greatest was called with no arguments. It requires at least 1."
+                "least was called with no arguments. It requires at least 1."
             );
         }
 
-        // Some engines (e.g. SQL Server) allow greatest with single arg, it's a noop
+        // Some engines (e.g. SQL Server) allow least with single arg, it's a noop
         if args.len() == 1 {
             return Ok(args[0].clone());
         }
@@ -175,9 +175,9 @@ impl ScalarUDFImpl for GreatestFunc {
 
         let first_array = arrays_iter.next();
 
-        let mut largest: ArrayRef;
+        let mut smallest: ArrayRef;
 
-        // Optimization: merge all scalars into one to avoid recomputing
+        // Optimization: merge all scalars into one to avoid recomputing (constant folding)
         if !scalars.is_empty() {
             let mut scalars_iter = scalars.iter().map(|x| match x {
                 ColumnarValue::Scalar(s) => s,
@@ -185,36 +185,36 @@ impl ScalarUDFImpl for GreatestFunc {
             });
 
             // We have at least one scalar
-            let mut largest_scalar = scalars_iter.next().unwrap();
+            let mut smallest_scalar = scalars_iter.next().unwrap();
 
             for scalar in scalars_iter {
-                largest_scalar = keep_larger_scalar(largest_scalar, scalar)?;
+                smallest_scalar = keep_smaller_scalar(smallest_scalar, scalar)?;
             }
 
-            // If we only have scalars, return the largest one
+            // If we only have scalars, return the smaller one
             if arrays.is_empty() {
-                return Ok(ColumnarValue::Scalar(largest_scalar.clone()));
+                return Ok(ColumnarValue::Scalar(smallest_scalar.clone()));
             }
 
             // We have at least one array
             let first_array = first_array.unwrap();
 
-            // Start with the largest value
-            largest = keep_larger(
+            // Start with the smaller value
+            smallest = keep_smallest(
                 Arc::clone(first_array),
-                largest_scalar.to_array_of_size(first_array.len())?,
+                smallest_scalar.to_array_of_size(first_array.len())?,
             )?;
         } else {
             // If we only have arrays, start with the first array
             // (We must have at least one array)
-            largest = Arc::clone(first_array.unwrap());
+            smallest = Arc::clone(first_array.unwrap());
         }
 
         for array in arrays_iter {
-            largest = keep_larger(Arc::clone(array), largest)?;
+            smallest = keep_smallest(Arc::clone(array), smallest)?;
         }
 
-        Ok(ColumnarValue::Array(largest))
+        Ok(ColumnarValue::Array(smallest))
     }
 
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
@@ -224,29 +224,29 @@ impl ScalarUDFImpl for GreatestFunc {
     }
 
     fn documentation(&self) -> Option<&Documentation> {
-        Some(get_greatest_doc())
+        Some(get_smallest_doc())
     }
 }
 static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
 
-fn get_greatest_doc() -> &'static Documentation {
+fn get_smallest_doc() -> &'static Documentation {
     DOCUMENTATION.get_or_init(|| {
         Documentation::builder(
             DOC_SECTION_CONDITIONAL,
-            "Returns the greatest value in a list of expressions. Returns _null_ if all expressions are _null_.",
-            "greatest(expression1[, ..., expression_n])")
+            "Returns the smallest value in a list of expressions. Returns _null_ if all expressions are _null_.",
+            "least(expression1[, ..., expression_n])")
             .with_sql_example(r#"```sql
-> select greatest(4, 7, 5);
+> select least(4, 7, 5);
 +---------------------------+
-| greatest(4,7,5)           |
+| least(4,7,5)              |
 +---------------------------+
-| 7                         |
+| 4                         |
 +---------------------------+
 ```"#,
             )
             .with_argument(
                 "expression1, expression_n",
-                "Expressions to compare and return the greatest value.. Can be a constant, column, or function, and any combination of arithmetic operators. Pass as many expression arguments as necessary."
+                "Expressions to compare and return the smallest value.. Can be a constant, column, or function, and any combination of arithmetic operators. Pass as many expression arguments as necessary."
             )
             .build()
     })
@@ -254,14 +254,14 @@ fn get_greatest_doc() -> &'static Documentation {
 
 #[cfg(test)]
 mod test {
-    use crate::core;
     use arrow::datatypes::DataType;
     use datafusion_expr::ScalarUDFImpl;
+    use crate::core::least::LeastFunc;
 
     #[test]
-    fn test_greatest_return_types_without_common_supertype_in_arg_type() {
-        let greatest = core::greatest::GreatestFunc::new();
-        let return_type = greatest
+    fn test_least_return_types_without_common_supertype_in_arg_type() {
+        let least = LeastFunc::new();
+        let return_type = least
             .coerce_types(&[DataType::Decimal128(10, 3), DataType::Decimal128(10, 4)])
             .unwrap();
         assert_eq!(

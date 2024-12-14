@@ -177,7 +177,7 @@ impl ScalarUDFImpl for GreatestFunc {
 
         let mut largest: ArrayRef;
 
-        // Optimization: merge all scalars into one to avoid recomputing
+        // Optimization: merge all scalars into one to avoid recomputing (constant folding)
         if !scalars.is_empty() {
             let mut scalars_iter = scalars.iter().map(|x| match x {
                 ColumnarValue::Scalar(s) => s,
