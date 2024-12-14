@@ -33,6 +33,7 @@ pub mod nvl2;
 pub mod planner;
 pub mod r#struct;
 pub mod version;
+pub mod least;
 
 // create UDFs
 make_udf_function!(arrow_cast::ArrowCastFunc, arrow_cast);
@@ -45,6 +46,7 @@ make_udf_function!(named_struct::NamedStructFunc, named_struct);
 make_udf_function!(getfield::GetFieldFunc, get_field);
 make_udf_function!(coalesce::CoalesceFunc, coalesce);
 make_udf_function!(greatest::GreatestFunc, greatest);
+make_udf_function!(least::GreatestFunc, least);
 make_udf_function!(version::VersionFunc, version);
 
 pub mod expr_fn {
@@ -86,6 +88,10 @@ pub mod expr_fn {
         greatest,
         "Returns `greatest(args...)`, which evaluates to the greatest value in the list of expressions or NULL if all the expressions are NULL",
         args,
+    ),(
+        least,
+        "Returns `least(args...)`, which evaluates to the smallest value in the list of expressions or NULL if all the expressions are NULL",
+        args,
     ));
 
     #[doc = "Returns the value of the field with the given name from the struct"]
@@ -113,6 +119,7 @@ pub fn functions() -> Vec<Arc<ScalarUDF>> {
         get_field(),
         coalesce(),
         greatest(),
+        least(),
         version(),
         r#struct(),
     ]
