@@ -170,11 +170,11 @@ panic = 'unwind'
 rpath = false
 
 [profile.release-windows]
-codegen-units = 32
+codegen-units = 16
 debug = 'line-directives-only'
 inherits = "dev"
-lto = 'thin'
-opt-level = 1
+lto = "fat"
+opt-level = 3
 incremental = false
 
 [profile.release-windows.build-override]
