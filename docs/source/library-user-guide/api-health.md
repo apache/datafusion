@@ -57,7 +57,7 @@ version will be `44.0.0`.
 
 [`cargo.toml`]: https://github.com/apache/datafusion/blob/main/Cargo.toml
 
-To mark the API as deprecated, use the `#[deprecated(since = "...", note = "...")]` attribute. 
+To mark the API as deprecated, use the `#[deprecated(since = "...", note = "...")]` attribute.
 
 For example:
 
