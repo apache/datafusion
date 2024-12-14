@@ -173,7 +173,7 @@ rpath = false
 codegen-units = 32
 debug = 'line-directives-only'
 inherits = "dev"
-lto = true
+lto = 'thin'
 opt-level = 1
 incremental = false
 
