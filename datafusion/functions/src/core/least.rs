@@ -257,7 +257,7 @@ fn get_smallest_doc() -> &'static Documentation {
             )
             .with_argument(
                 "expression1, expression_n",
-                "Expressions to compare and return the smallest value.. Can be a constant, column, or function, and any combination of arithmetic operators. Pass as many expression arguments as necessary."
+                "Expressions to compare and return the smallest value. Can be a constant, column, or function, and any combination of arithmetic operators. Pass as many expression arguments as necessary."
             )
             .build()
     })
