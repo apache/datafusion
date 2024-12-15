@@ -68,7 +68,7 @@ use datafusion_sql::planner::{ContextProvider, ParserOptions, PlannerContext, Sq
 use itertools::Itertools;
 use log::{debug, info};
 use object_store::ObjectStore;
-use sqlparser::ast::Expr as SQLExpr;
+use sqlparser::ast::{Expr as SQLExpr, ExprWithAlias as SQLExprWithAlias};
 use sqlparser::dialect::dialect_from_str;
 use std::any::Any;
 use std::collections::hash_map::Entry;
@@ -500,11 +500,22 @@ impl SessionState {
         sql: &str,
         dialect: &str,
     ) -> datafusion_common::Result<SQLExpr> {
+        self.sql_to_expr_with_alias(sql, dialect).map(|x| x.expr)
+    }
+
+    /// parse a sql string into a sqlparser-rs AST [`SQLExprWithAlias`].
+    ///
+    /// See [`Self::create_logical_expr`] for parsing sql to [`Expr`].
+    pub fn sql_to_expr_with_alias(
+        &self,
+        sql: &str,
+        dialect: &str,
+    ) -> datafusion_common::Result<SQLExprWithAlias> {
         let dialect = dialect_from_str(dialect).ok_or_else(|| {
             plan_datafusion_err!(
                 "Unsupported SQL dialect: {dialect}. Available dialects: \
-                     Generic, MySQL, PostgreSQL, Hive, SQLite, Snowflake, Redshift, \
-                     MsSQL, ClickHouse, BigQuery, Ansi."
+                         Generic, MySQL, PostgreSQL, Hive, SQLite, Snowflake, Redshift, \
+                         MsSQL, ClickHouse, BigQuery, Ansi."
             )
         })?;
 
@@ -603,7 +614,7 @@ impl SessionState {
     ) -> datafusion_common::Result<Expr> {
         let dialect = self.config.options().sql_parser.dialect.as_str();
 
-        let sql_expr = self.sql_to_expr(sql, dialect)?;
+        let sql_expr = self.sql_to_expr_with_alias(sql, dialect)?;
 
         let provider = SessionContextProvider {
             state: self,
@@ -611,7 +622,7 @@ impl SessionState {
         };
 
         let query = SqlToRel::new_with_options(&provider, self.get_parser_options());
-        query.sql_to_expr(sql_expr, df_schema, &mut PlannerContext::new())
+        query.sql_to_expr_with_alias(sql_expr, df_schema, &mut PlannerContext::new())
     }
 
     /// Returns the [`Analyzer`] for this session

@@ -38,25 +38,14 @@ path = "src/lib.rs"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-ahash = { workspace = true }
 arrow = { workspace = true }
-arrow-schema = { workspace = true }
 async-trait = { workspace = true }
 datafusion-catalog = { workspace = true }
 datafusion-common = { workspace = true }
-datafusion-execution = { workspace = true }
 datafusion-expr = { workspace = true }
-datafusion-functions-aggregate-common = { workspace = true }
-datafusion-physical-expr = { workspace = true }
-datafusion-physical-expr-common = { workspace = true }
 datafusion-physical-plan = { workspace = true }
-half = { workspace = true }
-indexmap = { workspace = true }
-log = { workspace = true }
 parking_lot = { workspace = true }
 paste = "1.0.14"
 
 [dev-dependencies]
 arrow = { workspace = true, features = ["test_utils"] }
-criterion = "0.5"
-rand = { workspace = true }

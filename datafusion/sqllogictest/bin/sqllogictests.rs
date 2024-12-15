@@ -15,10 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::ffi::OsStr;
-use std::fs;
-use std::path::{Path, PathBuf};
-
 use clap::Parser;
 use datafusion_common::utils::get_available_parallelism;
 use datafusion_sqllogictest::{DataFusion, TestContext};
@@ -26,6 +22,9 @@ use futures::stream::StreamExt;
 use itertools::Itertools;
 use log::info;
 use sqllogictest::strict_column_validator;
+use std::ffi::OsStr;
+use std::fs;
+use std::path::{Path, PathBuf};
 
 use datafusion_common::{exec_datafusion_err, exec_err, DataFusionError, Result};
 use datafusion_common_runtime::SpawnedTask;
@@ -100,14 +99,15 @@ async fn run_tests() -> Result<()> {
     let errors: Vec<_> = futures::stream::iter(read_test_files(&options)?)
         .map(|test_file| {
             SpawnedTask::spawn(async move {
-                println!("Running {:?}", test_file.relative_path);
-                if options.complete {
-                    run_complete_file(test_file).await?;
-                } else if options.postgres_runner {
-                    run_test_file_with_postgres(test_file).await?;
-                } else {
-                    run_test_file(test_file).await?;
+                let file_path = test_file.relative_path.clone();
+                let start = datafusion::common::instant::Instant::now();
+                match (options.postgres_runner, options.complete) {
+                    (false, false) => run_test_file(test_file).await?,
+                    (false, true) => run_complete_file(test_file).await?,
+                    (true, false) => run_test_file_with_postgres(test_file).await?,
+                    (true, true) => run_complete_file_with_postgres(test_file).await?,
                 }
+                println!("Executed {:?}. Took {:?}", file_path, start.elapsed());
                 Ok(()) as Result<()>
             })
             .join()
@@ -224,6 +224,41 @@ async fn run_complete_file(test_file: TestFile) -> Result<()> {
         .map_err(|e| {
             DataFusionError::Execution(format!("Error completing {relative_path:?}: {e}"))
         })
+}
+
+#[cfg(feature = "postgres")]
+async fn run_complete_file_with_postgres(test_file: TestFile) -> Result<()> {
+    use datafusion_sqllogictest::Postgres;
+    let TestFile {
+        path,
+        relative_path,
+    } = test_file;
+    info!(
+        "Using complete mode to complete with Postgres runner: {}",
+        path.display()
+    );
+    setup_scratch_dir(&relative_path)?;
+    let mut runner =
+        sqllogictest::Runner::new(|| Postgres::connect(relative_path.clone()));
+    let col_separator = " ";
+    runner
+        .update_test_file(
+            path,
+            col_separator,
+            value_validator,
+            strict_column_validator,
+        )
+        .await
+        // Can't use e directly because it isn't marked Send, so turn it into a string.
+        .map_err(|e| {
+            DataFusionError::Execution(format!("Error completing {relative_path:?}: {e}"))
+        })
+}
+
+#[cfg(not(feature = "postgres"))]
+async fn run_complete_file_with_postgres(_test_file: TestFile) -> Result<()> {
+    use datafusion_common::plan_err;
+    plan_err!("Can not run with postgres as postgres feature is not enabled")
 }
 
 /// Represents a parsed test file
