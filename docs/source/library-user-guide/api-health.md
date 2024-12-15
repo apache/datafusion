@@ -31,7 +31,7 @@ APIs to give users time to adjust to the changes.
 In general, a function is part of the public API if it appears on the [docs.rs page]
 
 Breaking public API changes are those that _require_ users to change their code
-for it to compile, and are listed as "Major Changes" in the [SemVer
+for it to compile and execute, and are listed as "Major Changes" in the [SemVer
 Compatibility Section of the cargo book]. Common examples of breaking changes:
 
 - Adding new required parameters to a function (`foo(a: i32, b: i32)` -> `foo(a: i32, b: i32, c: i32)`)
@@ -57,11 +57,7 @@ version will be `44.0.0`.
 
 [`cargo.toml`]: https://github.com/apache/datafusion/blob/main/Cargo.toml
 
-To mark the API as deprecated, use the `#[deprecated]` attribute like this:
-
-```rust
-    #[deprecated(since = "...", note = "...")]
-```
+To mark the API as deprecated, use the `#[deprecated(since = "...", note = "...")]` attribute.
 
 For example:
 
