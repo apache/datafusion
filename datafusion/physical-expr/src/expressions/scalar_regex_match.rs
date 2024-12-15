@@ -19,7 +19,7 @@ use super::Literal;
 use arrow_array::{
     Array, ArrayAccessor, BooleanArray, LargeStringArray, StringArray, StringViewArray,
 };
-use arrow_buffer::{BooleanBuffer, BooleanBufferBuilder};
+use arrow_buffer::{bit_util, BooleanBuffer, MutableBuffer};
 use arrow_schema::{DataType, Schema};
 use datafusion_common::{Result as DFResult, ScalarValue};
 use datafusion_expr::ColumnarValue;
@@ -298,13 +298,17 @@ fn array_regexp_match(
     let bool_buffer = if regex.as_str().is_empty() {
         BooleanBuffer::new_set(array.len())
     } else {
-        let mut bool_buffer_builder = BooleanBufferBuilder::new(array.len());
-        bool_buffer_builder.advance(array.len());
+        let mut mutable_buffer = MutableBuffer::new(0);
         for i in 0..array.len() {
             let value = unsafe { array.value_unchecked(i) };
-            bool_buffer_builder.set_bit(i, regex.is_match(value));
+            if i % 8 == 0 {
+                mutable_buffer.push(0u8);
+            }
+            if regex.is_match(value) {
+                unsafe { bit_util::set_bit_raw(mutable_buffer.as_mut_ptr(), i) };
+            }
         }
-        bool_buffer_builder.finish()
+        BooleanBuffer::new(mutable_buffer.into(), 0, array.len())
     };
 
     let bool_array = BooleanArray::new(bool_buffer, null_buffer);
@@ -378,99 +382,99 @@ mod tests {
         negated, case_insensitive, typ, a_vec, b_lit, c_vec,
         case(
             false, false, DataType::Utf8,
-            Arc::new(StringArray::from(vec!["abc", "bbb", "ABC", "ba", "cba"])),
+            Arc::new(StringArray::from(vec!["abc", "bbb", "ABC", "ba", "cba", "abc", "bbb", "ABC", "ba", "cba"])),
             "^a",
-            Arc::new(BooleanArray::from(vec![true, false, false, false, false])),
+            Arc::new(BooleanArray::from(vec![true, false, false, false, false, true, false, false, false, false])),
         ),
         case(
             false, true, DataType::Utf8,
-            Arc::new(StringArray::from(vec!["abc", "bbb", "ABC", "ba", "cba"])),
+            Arc::new(StringArray::from(vec!["abc", "bbb", "ABC", "ba", "cba", "abc", "bbb", "ABC", "ba", "cba"])),
             "^a",
-            Arc::new(BooleanArray::from(vec![true, false, true, false, false])),
+            Arc::new(BooleanArray::from(vec![true, false, true, false, false, true, false, true, false, false])),
         ),
         case(
             true, false, DataType::Utf8,
-            Arc::new(StringArray::from(vec!["abc", "bbb", "ABC", "ba", "cba"])),
+            Arc::new(StringArray::from(vec!["abc", "bbb", "ABC", "ba", "cba", "abc", "bbb", "ABC", "ba", "cba"])),
             "^a",
-            Arc::new(BooleanArray::from(vec![false, true, true, true, true])),
+            Arc::new(BooleanArray::from(vec![false, true, true, true, true, false, true, true, true, true])),
         ),
         case(
             true, true, DataType::Utf8,
-            Arc::new(StringArray::from(vec!["abc", "bbb", "ABC", "ba", "cba"])),
+            Arc::new(StringArray::from(vec!["abc", "bbb", "ABC", "ba", "cba", "abc", "bbb", "ABC", "ba", "cba"])),
             "^a",
-            Arc::new(BooleanArray::from(vec![false, true, false, true, true])),
+            Arc::new(BooleanArray::from(vec![false, true, false, true, true, false, true, false, true, true])),
         ),
         case(
             true, true, DataType::Utf8,
-            Arc::new(StringArray::from(vec!["abc", "bbb", "ABC", "ba", "cba"])),
+            Arc::new(StringArray::from(vec!["abc", "bbb", "ABC", "ba", "cba", "abc", "bbb", "ABC", "ba", "cba"])),
             ScalarValue::Utf8(None),
-            Arc::new(BooleanArray::from(vec![None, None, None, None, None])),
+            Arc::new(BooleanArray::from(vec![None, None, None, None, None, None, None, None, None, None])),
         ),
         case(
             false, false, DataType::LargeUtf8,
-            Arc::new(LargeStringArray::from(vec!["abc", "bbb", "ABC", "ba", "cba"])),
+            Arc::new(LargeStringArray::from(vec!["abc", "bbb", "ABC", "ba", "cba", "abc", "bbb", "ABC", "ba", "cba"])),
             ScalarValue::LargeUtf8(Some("^a".to_string())),
-            Arc::new(BooleanArray::from(vec![true, false, false, false, false])),
+            Arc::new(BooleanArray::from(vec![true, false, false, false, false, true, false, false, false, false])),
         ),
         case(
             false, true, DataType::LargeUtf8,
-            Arc::new(LargeStringArray::from(vec!["abc", "bbb", "ABC", "ba", "cba"])),
+            Arc::new(LargeStringArray::from(vec!["abc", "bbb", "ABC", "ba", "cba", "abc", "bbb", "ABC", "ba", "cba"])),
             ScalarValue::LargeUtf8(Some("^a".to_string())),
-            Arc::new(BooleanArray::from(vec![true, false, true, false, false])),
+            Arc::new(BooleanArray::from(vec![true, false, true, false, false, true, false, true, false, false])),
         ),
         case(
             true, false, DataType::LargeUtf8,
-            Arc::new(LargeStringArray::from(vec!["abc", "bbb", "ABC", "ba", "cba"])),
+            Arc::new(LargeStringArray::from(vec!["abc", "bbb", "ABC", "ba", "cba", "abc", "bbb", "ABC", "ba", "cba"])),
             ScalarValue::LargeUtf8(Some("^a".to_string())),
-            Arc::new(BooleanArray::from(vec![false, true, true, true, true])),
+            Arc::new(BooleanArray::from(vec![false, true, true, true, true, false, true, true, true, true])),
         ),
         case(
             true, true, DataType::LargeUtf8,
-            Arc::new(LargeStringArray::from(vec!["abc", "bbb", "ABC", "ba", "cba"])),
+            Arc::new(LargeStringArray::from(vec!["abc", "bbb", "ABC", "ba", "cba", "abc", "bbb", "ABC", "ba", "cba"])),
             ScalarValue::LargeUtf8(Some("^a".to_string())),
-            Arc::new(BooleanArray::from(vec![false, true, false, true, true])),
+            Arc::new(BooleanArray::from(vec![false, true, false, true, true, false, true, false, true, true])),
         ),
         case(
             true, true, DataType::LargeUtf8,
-            Arc::new(LargeStringArray::from(vec!["abc", "bbb", "ABC", "ba", "cba"])),
+            Arc::new(LargeStringArray::from(vec!["abc", "bbb", "ABC", "ba", "cba", "abc", "bbb", "ABC", "ba", "cba"])),
             ScalarValue::LargeUtf8(None),
-            Arc::new(BooleanArray::from(vec![None, None, None, None, None])),
+            Arc::new(BooleanArray::from(vec![None, None, None, None, None, None, None, None, None, None])),
         ),
         case(
             false, false, DataType::Utf8View,
-            Arc::new(StringViewArray::from(vec!["abc", "bbb", "ABC", "ba", "cba"])),
+            Arc::new(StringViewArray::from(vec!["abc", "bbb", "ABC", "ba", "cba", "abc", "bbb", "ABC", "ba", "cba"])),
             ScalarValue::Utf8View(Some("^a".to_string())),
-            Arc::new(BooleanArray::from(vec![true, false, false, false, false])),
+            Arc::new(BooleanArray::from(vec![true, false, false, false, false, true, false, false, false, false])),
         ),
         case(
             false, true, DataType::Utf8View,
-            Arc::new(StringViewArray::from(vec!["abc", "bbb", "ABC", "ba", "cba"])),
+            Arc::new(StringViewArray::from(vec!["abc", "bbb", "ABC", "ba", "cba", "abc", "bbb", "ABC", "ba", "cba"])),
             ScalarValue::Utf8View(Some("^a".to_string())),
-            Arc::new(BooleanArray::from(vec![true, false, true, false, false])),
+            Arc::new(BooleanArray::from(vec![true, false, true, false, false, true, false, true, false, false])),
         ),
         case(
             true, false, DataType::Utf8View,
-            Arc::new(StringViewArray::from(vec!["abc", "bbb", "ABC", "ba", "cba"])),
+            Arc::new(StringViewArray::from(vec!["abc", "bbb", "ABC", "ba", "cba", "abc", "bbb", "ABC", "ba", "cba"])),
             ScalarValue::Utf8View(Some("^a".to_string())),
-            Arc::new(BooleanArray::from(vec![false, true, true, true, true])),
+            Arc::new(BooleanArray::from(vec![false, true, true, true, true, false, true, true, true, true])),
         ),
         case(
             true, true, DataType::Utf8View,
-            Arc::new(StringViewArray::from(vec!["abc", "bbb", "ABC", "ba", "cba"])),
+            Arc::new(StringViewArray::from(vec!["abc", "bbb", "ABC", "ba", "cba", "abc", "bbb", "ABC", "ba", "cba"])),
             ScalarValue::Utf8View(Some("^a".to_string())),
-            Arc::new(BooleanArray::from(vec![false, true, false, true, true])),
+            Arc::new(BooleanArray::from(vec![false, true, false, true, true, false, true, false, true, true])),
         ),
         case(
             true, true, DataType::Utf8View,
-            Arc::new(StringViewArray::from(vec!["abc", "bbb", "ABC", "ba", "cba"])),
+            Arc::new(StringViewArray::from(vec!["abc", "bbb", "ABC", "ba", "cba", "abc", "bbb", "ABC", "ba", "cba"])),
             ScalarValue::Utf8View(None),
-            Arc::new(BooleanArray::from(vec![None, None, None, None, None])),
+            Arc::new(BooleanArray::from(vec![None, None, None, None, None, None, None, None, None, None])),
         ),
         case(
             true, true, DataType::Null,
-            Arc::new(NullArray::new(5)),
+            Arc::new(NullArray::new(10)),
             ScalarValue::Utf8View(Some("^a".to_string())),
-            Arc::new(BooleanArray::from(vec![None, None, None, None, None])),
+            Arc::new(BooleanArray::from(vec![None, None, None, None, None, None, None, None, None, None])),
         ),
     )]
     fn test_scalar_regex_match_array(

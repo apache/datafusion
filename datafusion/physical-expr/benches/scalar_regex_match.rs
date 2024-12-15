@@ -16,6 +16,7 @@
 // under the License.
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use arrow_array::{RecordBatch, StringArray};
 use arrow_schema::{DataType, Field, Schema};
@@ -70,7 +71,7 @@ fn init_benchmark() -> (
     let column = "s";
     let schema = Schema::new(vec![Field::new(column, DataType::Utf8, true)]);
 
-    // meke test record batch
+    // make test record batch
     let batch_data = vec![
         // (20, 10_usize, make_record_batch(20, 10, 100, schema.clone())),
         // (20, 100_usize, make_record_batch(20, 100, 100, schema.clone())),
@@ -131,6 +132,11 @@ fn regex_match_benchmark(c: &mut Criterion) {
                 name, batch_iter, batch_size
             );
             let mut group = c.benchmark_group(group_name.as_str());
+
+            group
+            .sample_size(50)
+            .measurement_time(Duration::new(30,0));
+
             // binary expr match benchmarks
             group.bench_function("binary_expr_match", |b| {
                 b.iter(|| {
