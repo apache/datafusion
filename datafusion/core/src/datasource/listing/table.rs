@@ -843,9 +843,18 @@ impl TableProvider for ListingTable {
             });
         // TODO (https://github.com/apache/datafusion/issues/11600) remove downcast_ref from here?
         let session_state = state.as_any().downcast_ref::<SessionState>().unwrap();
+
+        // We should not limit the number of partitioned files to scan if there are filters and limit
+        // at the same time. This is because the limit should be applied after the filters are applied.
+        let mut statistic_file_limit = limit;
+        if !filters.is_empty() {
+            statistic_file_limit = None;
+        }
+
         let (mut partitioned_file_lists, statistics) = self
-            .list_files_for_scan(session_state, &partition_filters, limit)
+            .list_files_for_scan(session_state, &partition_filters, statistic_file_limit)
             .await?;
+
 
         // if no files need to be read, return an `EmptyExec`
         if partitioned_file_lists.is_empty() {
