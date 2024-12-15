@@ -2349,6 +2349,7 @@ pub(crate) mod tests {
         Ok(())
     }
 
+    #[cfg(feature = "recursive-protection")]
     #[test]
     fn test_large_tree() {
         let mut item = TestTreeNode::new_leaf("initial".to_string());
