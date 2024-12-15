@@ -846,10 +846,7 @@ impl TableProvider for ListingTable {
 
         // We should not limit the number of partitioned files to scan if there are filters and limit
         // at the same time. This is because the limit should be applied after the filters are applied.
-        let mut statistic_file_limit = limit;
-        if !filters.is_empty() {
-            statistic_file_limit = None;
-        }
+        let statistic_file_limit = if filters.is_empty() { limit } else { None };
 
         let (mut partitioned_file_lists, statistics) = self
             .list_files_for_scan(session_state, &partition_filters, statistic_file_limit)
