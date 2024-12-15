@@ -570,7 +570,7 @@ APIs to give users time to adjust to the changes.</p>
 <h2>Breaking Changes<a class="headerlink" href="#breaking-changes" title="Link to this heading">¶</a></h2>
 <p>In general, a function is part of the public API if it appears on the <a class="reference external" href="https://docs.rs/datafusion/latest/datafusion/index.html">docs.rs page</a></p>
 <p>Breaking public API changes are those that <em>require</em> users to change their code
-for it to compile, and are listed as “Major Changes” in the <a class="reference external" href="https://doc.rust-lang.org/cargo/reference/semver.html#change-categories">SemVer
+for it to compile and execute, and are listed as “Major Changes” in the <a class="reference external" href="https://doc.rust-lang.org/cargo/reference/semver.html#change-categories">SemVer
 Compatibility Section of the cargo book</a>. Common examples of breaking changes:</p>
 <ul class="simple">
 <li><p>Adding new required parameters to a function (<code class="docutils literal notranslate"><span class="pre">foo(a:</span> <span class="pre">i32,</span> <span class="pre">b:</span> <span class="pre">i32)</span></code> -&gt; <code class="docutils literal notranslate"><span class="pre">foo(a:</span> <span class="pre">i32,</span> <span class="pre">b:</span> <span class="pre">i32,</span> <span class="pre">c:</span> <span class="pre">i32)</span></code>)</p></li>
@@ -590,10 +590,7 @@ the PR so we can highlight the changes in the release notes.</p>
 <p>The deprecated version is the next version which contains the deprecation. For
 example, if the current version listed in <a class="reference external" href="https://github.com/apache/datafusion/blob/main/Cargo.toml"><code class="docutils literal notranslate"><span class="pre">Cargo.toml</span></code></a> is <code class="docutils literal notranslate"><span class="pre">43.0.0</span></code> then the next
 version will be <code class="docutils literal notranslate"><span class="pre">44.0.0</span></code>.</p>
-<p>To mark the API as deprecated, use the <code class="docutils literal notranslate"><span class="pre">#[deprecated]</span></code> attribute like this:</p>
-<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="w">    </span><span class="cp">#[deprecated(since = </span><span class="s">&quot;...&quot;</span><span class="cp">, note = </span><span class="s">&quot;...&quot;</span><span class="cp">)]</span>
-</pre></div>
-</div>
+<p>To mark the API as deprecated, use the <code class="docutils literal notranslate"><span class="pre">#[deprecated(since</span> <span class="pre">=</span> <span class="pre">&quot;...&quot;,</span> <span class="pre">note</span> <span class="pre">=</span> <span class="pre">&quot;...&quot;)]</span></code> attribute.</p>
 <p>For example:</p>
 <div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="w">    </span><span class="cp">#[deprecated(since = </span><span class="s">&quot;41.0.0&quot;</span><span class="cp">, note = </span><span class="s">&quot;Use SessionStateBuilder&quot;</span><span class="cp">)]</span>
 <span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="k">fn</span><span class="w"> </span><span class="nf">new_with_config_rt</span><span class="p">(</span><span class="n">config</span><span class="p">:</span><span class="w"> </span><span class="nc">SessionConfig</span><span class="p">,</span><span class="w"> </span><span class="n">runtime</span><span class="p">:</span><span class="w"> </span><span class="nc">Arc</span><span class="o">&lt;</span><span class="n">RuntimeEnv</span><span class="o">&gt;</span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nc">Self</span>
