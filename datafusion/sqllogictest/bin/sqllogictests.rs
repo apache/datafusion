@@ -24,14 +24,14 @@ use std::future::Future;
 use std::path::{Path, PathBuf};
 #[cfg(feature = "postgres")]
 use std::{env, thread};
-
+use std::time::Instant;
 use clap::Parser;
 use datafusion_common::utils::get_available_parallelism;
 use datafusion_common::{exec_datafusion_err, exec_err, DataFusionError, Result};
 use datafusion_common_runtime::SpawnedTask;
 use datafusion_sqllogictest::{DataFusion, TestContext};
 use futures::stream::StreamExt;
-use indicatif::{MultiProgress, ProgressBar, ProgressDrawTarget, ProgressStyle};
+use indicatif::{HumanDuration, MultiProgress, ProgressBar, ProgressDrawTarget, ProgressStyle};
 use itertools::Itertools;
 use log::Level::{Info, Warn};
 use log::{info, log_enabled, warn};
@@ -201,6 +201,8 @@ async fn run_tests() -> Result<()> {
     .unwrap()
     .progress_chars("##-");
 
+    let start = Instant::now();
+
     let errors: Vec<_> = futures::stream::iter(read_test_files(&options)?)
         .map(|test_file| {
             let validator = if options.include_sqlite
@@ -265,7 +267,7 @@ async fn run_tests() -> Result<()> {
         .collect()
         .await;
 
-    m.println("Completed")?;
+    m.println(format!("Completed in {}", HumanDuration(start.elapsed())))?;
 
     #[cfg(feature = "postgres")]
     if options.postgres_runner {
