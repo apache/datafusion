@@ -5691,7 +5691,7 @@ mod tests {
                 let values_builder = Int32Builder::new();
                 let mut builder = FixedSizeListBuilder::new(values_builder, 3);
 
-                //  [[0, 1, 2], null, [3, null, 5], [6, 7, null]]
+                //  [[0, 1, 2], null, [3, null, 5]
                 builder.values().append_value(0);
                 builder.values().append_value(1);
                 builder.values().append_value(2);
@@ -5730,7 +5730,10 @@ mod tests {
         }
     }
 
-    /// for each index in array, convert to to a scalar and back to an array and compare for equality
+    /// for each row in `arr`:
+    /// 1. convert to a `ScalarValue`
+    /// 2. Convert `ScalarValue` back to an `ArrayRef`
+    /// 3. Compare the original array (sliced) and new array for equality
     fn round_trip_through_scalar(arr: ArrayRef) {
         for i in 0..arr.len() {
             // convert Scalar --> Array
