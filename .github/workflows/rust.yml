@@ -53,10 +53,10 @@ jobs:
         run: |
           export PATH=$PATH:$HOME/d/protoc/bin
           lld-link --version
-          export RUSTFLAGS=$RUSTFLAGS" -C link-arg=-fuse-ld=lld -C target-cpu=native -C opt-level=1"
+          # export RUSTFLAGS=$RUSTFLAGS" -C link-arg=-fuse-ld=lld -C target-cpu=native -C opt-level=1"
           echo $RUSTFLAGS
           rustup show
-          cargo test --lib --tests --bins --features avro,json,backtrace
+          cargo test --lib --tests --bins --features avro,json,backtrace --release
           cd datafusion-cli
           cargo test --lib --tests --bins --all-features
 
