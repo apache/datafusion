@@ -576,8 +576,9 @@ impl Options {
     /// specific folders
     fn check_pg_compat_file(&self, path: &Path) -> bool {
         let file_name = path.file_name().unwrap().to_str().unwrap().to_string();
-        !self.postgres_runner || file_name.starts_with(PG_COMPAT_FILE_PREFIX) ||
-            (self.include_sqlite && path.to_string_lossy().contains(SQLITE_PREFIX))
+        !self.postgres_runner
+            || file_name.starts_with(PG_COMPAT_FILE_PREFIX)
+            || (self.include_sqlite && path.to_string_lossy().contains(SQLITE_PREFIX))
     }
 
     /// Logs warning messages to stdout if any ignored options are passed
@@ -624,9 +625,7 @@ pub async fn start_postgres(
     let mut rx = in_channel.rx.lock().await;
     while let Some(command) = rx.recv().await {
         match command {
-            ContainerCommands::FetchHost => {
-                host_channel.tx.send(host.clone()).unwrap()
-            }
+            ContainerCommands::FetchHost => host_channel.tx.send(host.clone()).unwrap(),
             ContainerCommands::FetchPort => port_channel.tx.send(port).unwrap(),
             ContainerCommands::Stop => {
                 container.stop().await.unwrap();
