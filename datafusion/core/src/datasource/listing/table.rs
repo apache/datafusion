@@ -855,7 +855,6 @@ impl TableProvider for ListingTable {
             .list_files_for_scan(session_state, &partition_filters, statistic_file_limit)
             .await?;
 
-
         // if no files need to be read, return an `EmptyExec`
         if partitioned_file_lists.is_empty() {
             let projected_schema = project_schema(&self.schema(), projection)?;
