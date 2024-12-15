@@ -133,9 +133,7 @@ fn regex_match_benchmark(c: &mut Criterion) {
             );
             let mut group = c.benchmark_group(group_name.as_str());
 
-            group
-            .sample_size(50)
-            .measurement_time(Duration::new(30,0));
+            group.sample_size(50).measurement_time(Duration::new(30, 0));
 
             // binary expr match benchmarks
             group.bench_function("binary_expr_match", |b| {
