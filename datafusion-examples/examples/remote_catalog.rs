@@ -42,7 +42,7 @@ use datafusion::physical_plan::ExecutionPlan;
 use datafusion::prelude::{DataFrame, SessionContext};
 use datafusion_catalog::Session;
 use datafusion_common::{
-    assert_batches_eq, internal_datafusion_err, plan_err, TableReference,
+    assert_batches_eq, internal_datafusion_err, plan_err, HashMap, TableReference,
 };
 use datafusion_expr::{Expr, TableType};
 use futures::TryStreamExt;
@@ -194,7 +194,7 @@ struct RemoteSchema {
     remote_catalog_interface: Arc<RemoteCatalogInterface>,
     /// Local cache of tables that have been preloaded from the remote
     /// catalog
-    tables: Mutex<Vec<Arc<dyn TableProvider>>>,
+    tables: Mutex<HashMap<String, Arc<dyn TableProvider>>>,
 }
 
 impl RemoteSchema {
@@ -202,7 +202,7 @@ impl RemoteSchema {
     pub fn new(remote_catalog_interface: Arc<RemoteCatalogInterface>) -> Self {
         Self {
             remote_catalog_interface,
-            tables: Mutex::new(vec![]),
+            tables: Mutex::new(HashMap::new()),
         }
     }
 
@@ -230,7 +230,7 @@ impl RemoteSchema {
                 self.tables
                     .lock()
                     .expect("mutex invalid")
-                    .push(Arc::new(remote_table));
+                    .insert(table_name.to_string(), Arc::new(remote_table));
             };
         }
         Ok(())
@@ -250,16 +250,8 @@ impl SchemaProvider for RemoteSchema {
         self.tables
             .lock()
             .expect("mutex valid")
-            .iter()
-            .map(|remote_table| {
-                // note it is possible to downcast to RemoteTable and call methods on it
-                remote_table
-                    .as_any()
-                    .downcast_ref::<RemoteTable>()
-                    .expect("downcast to RemoteTable")
-                    .name()
-                    .to_string()
-            })
+            .keys()
+            .cloned()
             .collect()
     }
 
@@ -275,35 +267,14 @@ impl SchemaProvider for RemoteSchema {
             .tables
             .lock()
             .expect("mutex valid")
-            .iter()
-            .find(|remote_table| {
-                // note it is possible to downcast to RemoteTable and call methods on it
-                remote_table
-                    .as_any()
-                    .downcast_ref::<RemoteTable>()
-                    .expect("downcast to RemoteTable")
-                    .name()
-                    == name
-            })
+            .get(name)
             .map(Arc::clone);
         Ok(table)
     }
 
     fn table_exist(&self, name: &str) -> bool {
         // Look for any pre-loaded tables, note this function is also `async`
-        self.tables
-            .lock()
-            .expect("mutex valid")
-            .iter()
-            .any(|remote_table| {
-                // note it is possible to downcast to RemoteTable and call methods on it
-                remote_table
-                    .as_any()
-                    .downcast_ref::<RemoteTable>()
-                    .expect("downcast to RemoteTable")
-                    .name()
-                    == name
-            })
+        self.tables.lock().expect("mutex valid").contains_key(name)
     }
 }
 
@@ -327,11 +298,6 @@ impl RemoteTable {
             name: name.into(),
             schema,
         }
-    }
-
-    /// Return the name of this table
-    pub fn name(&self) -> &str {
-        &self.name
     }
 }
 
