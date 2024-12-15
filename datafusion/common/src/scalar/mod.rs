@@ -5683,7 +5683,6 @@ mod tests {
                 // [ ] (empty list)
                 builder.append(true);
                 // Null
-                builder.values().append_value("?"); // irrelevant
                 builder.append(false);
                 Arc::new(builder.finish())
             },
