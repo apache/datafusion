@@ -76,7 +76,7 @@ impl ScalarUDFImpl for InitcapFunc {
             DataType::LargeUtf8 => make_scalar_function(initcap::<i64>, vec![])(args),
             DataType::Utf8View => make_scalar_function(initcap_utf8view, vec![])(args),
             other => {
-                exec_err!("Unsupported data type {other:?} for function `initcap`")
+                internal_err!("Unsupported data type {other:?} for function `initcap`")
             }
         }
     }
