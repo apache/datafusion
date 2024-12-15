@@ -83,7 +83,8 @@ use datafusion_common::Result;
 ///
 /// The pattern that DataFusion itself uses to plan SQL queries is to walk over
 /// the query to find all table references, performing required remote catalog
-/// in parallel, and then plans the query using that snapshot.
+/// lookups in parallel, storing the results in a cached snapshot, and then plans
+/// the query using that snapshot.
 ///
 /// # Example Catalog Implementations
 ///

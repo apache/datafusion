@@ -1,5 +1,4 @@
 // Licensed to the Apache Software Foundation (ASF) under one
-// Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
 // regarding copyright ownership.  The ASF licenses this file
@@ -71,7 +70,7 @@ async fn main() -> Result<()> {
     // Here is a query that selects data from a table in the remote catalog.
     let sql = "SELECT * from remote_schema.remote_table";
 
-    // While the `SessionContext::sql` interface is async, but it does not
+    // The `SessionContext::sql` interface is async, but it does not
     // support asynchronous access to catalogs, so the following query errors.
     let results = ctx.sql(sql).await;
     assert_eq!(
