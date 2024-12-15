@@ -43,7 +43,6 @@ chrono = { version = "0.4", features = ["wasmbind"] }
 # code size when deploying.
 console_error_panic_hook = { version = "0.1.1", optional = true }
 datafusion = { workspace = true }
-
 datafusion-common = { workspace = true, default-features = true }
 datafusion-execution = { workspace = true }
 datafusion-expr = { workspace = true }

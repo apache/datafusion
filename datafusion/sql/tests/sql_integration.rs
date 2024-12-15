@@ -3129,9 +3129,8 @@ fn lateral_constant() {
             \n  Cross Join: \
             \n    TableScan: j1\
             \n    SubqueryAlias: j2\
-            \n      Subquery:\
-            \n        Projection: Int64(1)\
-            \n          EmptyRelation";
+            \n      Projection: Int64(1)\
+            \n        EmptyRelation";
     quick_test(sql, expected);
 }
 
@@ -3227,6 +3226,21 @@ fn lateral_nested_left_join() {
             \n          Projection: *\
             \n            Filter: outer_ref(j1.j1_id) + outer_ref(j2.j2_id) = j3.j3_id\
             \n              TableScan: j3";
+    quick_test(sql, expected);
+}
+
+#[test]
+fn lateral_unnest() {
+    let sql = "SELECT * from unnest_table u, unnest(u.array_col)";
+    let expected = "Projection: *\
+            \n  Cross Join: \
+            \n    SubqueryAlias: u\
+            \n      TableScan: unnest_table\
+            \n    Subquery:\
+            \n      Projection: __unnest_placeholder(outer_ref(u.array_col),depth=1) AS UNNEST(outer_ref(u.array_col))\
+            \n        Unnest: lists[__unnest_placeholder(outer_ref(u.array_col))|depth=1] structs[]\
+            \n          Projection: outer_ref(u.array_col) AS __unnest_placeholder(outer_ref(u.array_col))\
+            \n            EmptyRelation";
     quick_test(sql, expected);
 }
 

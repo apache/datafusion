@@ -19,7 +19,7 @@
 
 use std::any::Any;
 use std::fmt::Debug;
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
 use crate::utils::{
     get_scalar_value_from_args, get_signed_integer, get_unsigned_integer,
@@ -27,12 +27,12 @@ use crate::utils::{
 use datafusion_common::arrow::array::{ArrayRef, UInt64Array};
 use datafusion_common::arrow::datatypes::{DataType, Field};
 use datafusion_common::{exec_err, DataFusionError, Result};
-use datafusion_expr::window_doc_sections::DOC_SECTION_RANKING;
 use datafusion_expr::{
     Documentation, Expr, PartitionEvaluator, Signature, Volatility, WindowUDFImpl,
 };
 use datafusion_functions_window_common::field;
 use datafusion_functions_window_common::partition::PartitionEvaluatorArgs;
+use datafusion_macros::user_doc;
 use field::WindowUDFFieldArgs;
 
 get_or_init_udwf!(
@@ -45,6 +45,15 @@ pub fn ntile(arg: Expr) -> Expr {
     ntile_udwf().call(vec![arg])
 }
 
+#[user_doc(
+    doc_section(label = "Ranking Functions"),
+    description = "Integer ranging from 1 to the argument value, dividing the partition as equally as possible",
+    syntax_example = "ntile(expression)",
+    argument(
+        name = "expression",
+        description = "An integer describing the number groups the partition should be split into"
+    )
+)]
 #[derive(Debug)]
 pub struct Ntile {
     signature: Signature,
@@ -76,16 +85,6 @@ impl Default for Ntile {
     fn default() -> Self {
         Self::new()
     }
-}
-
-static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
-
-fn get_ntile_doc() -> &'static Documentation {
-    DOCUMENTATION.get_or_init(|| {
-        Documentation::builder(DOC_SECTION_RANKING, "Integer ranging from 1 to the argument value, dividing the partition as equally as possible", "ntile(expression)")
-            .with_argument("expression","An integer describing the number groups the partition should be split into")
-            .build()
-    })
 }
 
 impl WindowUDFImpl for Ntile {
@@ -135,7 +134,7 @@ impl WindowUDFImpl for Ntile {
     }
 
     fn documentation(&self) -> Option<&Documentation> {
-        Some(get_ntile_doc())
+        self.doc()
     }
 }
 
