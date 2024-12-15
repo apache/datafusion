@@ -31,12 +31,16 @@ use datafusion_common::{exec_datafusion_err, exec_err, DataFusionError, Result};
 use datafusion_common_runtime::SpawnedTask;
 use datafusion_sqllogictest::{DataFusion, TestContext};
 use futures::stream::StreamExt;
+use indicatif::{MultiProgress, ProgressBar, ProgressDrawTarget, ProgressStyle};
 use itertools::Itertools;
 use log::Level::{Info, Warn};
 use log::{info, log_enabled, warn};
 #[cfg(feature = "postgres")]
 use once_cell::sync::Lazy;
-use sqllogictest::{strict_column_validator, Normalizer, Validator};
+use sqllogictest::{
+    parse_file, strict_column_validator, AsyncDB, Condition, Normalizer, Record,
+    Validator,
+};
 #[cfg(feature = "postgres")]
 use testcontainers::core::IntoContainerPort;
 #[cfg(feature = "postgres")]
@@ -190,6 +194,13 @@ async fn run_tests() -> Result<()> {
     // Doing so is safe because each slt file runs with its own
     // `SessionContext` and should not have side effects (like
     // modifying shared state like `/tmp/`)
+    let m = MultiProgress::with_draw_target(ProgressDrawTarget::stderr_with_hz(1));
+    let m_style = ProgressStyle::with_template(
+        "[{elapsed_precise}] {bar:40.cyan/blue} {pos:>7}/{len:7} {msg}",
+    )
+    .unwrap()
+    .progress_chars("##-");
+
     let errors: Vec<_> = futures::stream::iter(read_test_files(&options)?)
         .map(|test_file| {
             let validator = if options.include_sqlite
@@ -200,20 +211,38 @@ async fn run_tests() -> Result<()> {
                 df_value_validator
             };
 
+            let m_clone = m.clone();
+            let m_style_clone = m_style.clone();
+
             SpawnedTask::spawn(async move {
-                let file_path = test_file.relative_path.clone();
-                let start = datafusion::common::instant::Instant::now();
                 match (options.postgres_runner, options.complete) {
-                    (false, false) => run_test_file(test_file, validator).await?,
-                    (false, true) => run_complete_file(test_file, validator).await?,
+                    (false, false) => {
+                        run_test_file(test_file, validator, m_clone, m_style_clone)
+                            .await?
+                    }
+                    (false, true) => {
+                        run_complete_file(test_file, validator, m_clone, m_style_clone)
+                            .await?
+                    }
                     (true, false) => {
-                        run_test_file_with_postgres(test_file, validator).await?
+                        run_test_file_with_postgres(
+                            test_file,
+                            validator,
+                            m_clone,
+                            m_style_clone,
+                        )
+                        .await?
                     }
                     (true, true) => {
-                        run_complete_file_with_postgres(test_file, validator).await?
+                        run_complete_file_with_postgres(
+                            test_file,
+                            validator,
+                            m_clone,
+                            m_style_clone,
+                        )
+                        .await?
                     }
                 }
-                println!("Executed {:?}. Took {:?}", file_path, start.elapsed());
                 Ok(()) as Result<()>
             })
             .join()
@@ -235,6 +264,8 @@ async fn run_tests() -> Result<()> {
         })
         .collect()
         .await;
+
+    m.println("Completed")?;
 
     #[cfg(feature = "postgres")]
     if options.postgres_runner {
@@ -261,47 +292,109 @@ fn is_pg_uri_set() -> bool {
     }
 }
 
-async fn run_test_file(test_file: TestFile, validator: Validator) -> Result<()> {
+async fn run_test_file(
+    test_file: TestFile,
+    validator: Validator,
+    mp: MultiProgress,
+    mp_style: ProgressStyle,
+) -> Result<()> {
     let TestFile {
         path,
         relative_path,
     } = test_file;
-    println!("Running with DataFusion runner: {}", path.display());
     let Some(test_ctx) = TestContext::try_new_for_test_file(&relative_path).await else {
         info!("Skipping: {}", path.display());
         return Ok(());
     };
     setup_scratch_dir(&relative_path)?;
+
+    let count: u64 = get_record_count(&path, "Datafusion".to_string());
+    let pb = mp.add(ProgressBar::new(count));
+
+    pb.set_style(mp_style);
+    pb.set_message(format!("{:?}", &relative_path));
+
     let mut runner = sqllogictest::Runner::new(|| async {
         Ok(DataFusion::new(
             test_ctx.session_ctx().clone(),
             relative_path.clone(),
+            pb.clone(),
         ))
     });
     runner.add_label("Datafusion");
     runner.with_column_validator(strict_column_validator);
     runner.with_normalizer(value_normalizer);
     runner.with_validator(validator);
-    runner
+
+    let res = runner
         .run_file_async(path)
         .await
-        .map_err(|e| DataFusionError::External(Box::new(e)))
+        .map_err(|e| DataFusionError::External(Box::new(e)));
+
+    pb.finish_and_clear();
+
+    res
+}
+
+fn get_record_count(path: &PathBuf, label: String) -> u64 {
+    let records: Vec<Record<<DataFusion as AsyncDB>::ColumnType>> =
+        parse_file(path).unwrap();
+    let mut count: u64 = 0;
+
+    records.iter().for_each(|rec| match rec {
+        Record::Query { conditions, .. } => {
+            if conditions.is_empty()
+                || !conditions.contains(&Condition::SkipIf {
+                    label: label.clone(),
+                })
+                || conditions.contains(&Condition::OnlyIf {
+                    label: label.clone(),
+                })
+            {
+                count += 1;
+            }
+        }
+        Record::Statement { conditions, .. } => {
+            if conditions.is_empty()
+                || !conditions.contains(&Condition::SkipIf {
+                    label: label.clone(),
+                })
+                || conditions.contains(&Condition::OnlyIf {
+                    label: label.clone(),
+                })
+            {
+                count += 1;
+            }
+        }
+        _ => {}
+    });
+
+    count
 }
 
 #[cfg(feature = "postgres")]
 async fn run_test_file_with_postgres(
     test_file: TestFile,
     validator: Validator,
+    mp: MultiProgress,
+    mp_style: ProgressStyle,
 ) -> Result<()> {
     use datafusion_sqllogictest::Postgres;
     let TestFile {
         path,
         relative_path,
     } = test_file;
-    info!("Running with Postgres runner: {}", path.display());
     setup_scratch_dir(&relative_path)?;
-    let mut runner =
-        sqllogictest::Runner::new(|| Postgres::connect(relative_path.clone()));
+
+    let count: u64 = get_record_count(&path, "postgresql".to_string());
+    let pb = mp.add(ProgressBar::new(count));
+
+    pb.set_style(mp_style);
+    pb.set_message(format!("{:?}", &relative_path));
+
+    let mut runner = sqllogictest::Runner::new(|| {
+        Postgres::connect(relative_path.clone(), pb.clone())
+    });
     runner.add_label("postgresql");
     runner.with_column_validator(strict_column_validator);
     runner.with_normalizer(value_normalizer);
@@ -310,6 +403,9 @@ async fn run_test_file_with_postgres(
         .run_file_async(path)
         .await
         .map_err(|e| DataFusionError::External(Box::new(e)))?;
+
+    pb.finish_and_clear();
+
     Ok(())
 }
 
@@ -317,12 +413,19 @@ async fn run_test_file_with_postgres(
 async fn run_test_file_with_postgres(
     _test_file: TestFile,
     _validator: Validator,
+    _mp: MultiProgress,
+    _mp_style: ProgressStyle,
 ) -> Result<()> {
     use datafusion_common::plan_err;
     plan_err!("Can not run with postgres as postgres feature is not enabled")
 }
 
-async fn run_complete_file(test_file: TestFile, validator: Validator) -> Result<()> {
+async fn run_complete_file(
+    test_file: TestFile,
+    validator: Validator,
+    mp: MultiProgress,
+    mp_style: ProgressStyle,
+) -> Result<()> {
     let TestFile {
         path,
         relative_path,
@@ -335,15 +438,23 @@ async fn run_complete_file(test_file: TestFile, validator: Validator) -> Result<
         return Ok(());
     };
     setup_scratch_dir(&relative_path)?;
+
+    let count: u64 = get_record_count(&path, "Datafusion".to_string());
+    let pb = mp.add(ProgressBar::new(count));
+
+    pb.set_style(mp_style);
+    pb.set_message(format!("{:?}", &relative_path));
+
     let mut runner = sqllogictest::Runner::new(|| async {
         Ok(DataFusion::new(
             test_ctx.session_ctx().clone(),
             relative_path.clone(),
+            pb.clone(),
         ))
     });
 
     let col_separator = " ";
-    runner
+    let res = runner
         .update_test_file(
             path,
             col_separator,
@@ -355,13 +466,19 @@ async fn run_complete_file(test_file: TestFile, validator: Validator) -> Result<
         // Can't use e directly because it isn't marked Send, so turn it into a string.
         .map_err(|e| {
             DataFusionError::Execution(format!("Error completing {relative_path:?}: {e}"))
-        })
+        });
+
+    pb.finish_and_clear();
+
+    res
 }
 
 #[cfg(feature = "postgres")]
 async fn run_complete_file_with_postgres(
     test_file: TestFile,
     validator: Validator,
+    mp: MultiProgress,
+    mp_style: ProgressStyle,
 ) -> Result<()> {
     use datafusion_sqllogictest::Postgres;
     let TestFile {
@@ -373,10 +490,23 @@ async fn run_complete_file_with_postgres(
         path.display()
     );
     setup_scratch_dir(&relative_path)?;
-    let mut runner =
-        sqllogictest::Runner::new(|| Postgres::connect(relative_path.clone()));
+
+    let count: u64 = get_record_count(&path, "postgresql".to_string());
+    let pb = mp.add(ProgressBar::new(count));
+
+    pb.set_style(mp_style);
+    pb.set_message(format!("{:?}", &relative_path));
+
+    let mut runner = sqllogictest::Runner::new(|| {
+        Postgres::connect(relative_path.clone(), pb.clone())
+    });
+    runner.add_label("postgresql");
+    runner.with_column_validator(strict_column_validator);
+    runner.with_normalizer(value_normalizer);
+    runner.with_validator(validator);
+
     let col_separator = " ";
-    runner
+    let res = runner
         .update_test_file(
             path,
             col_separator,
@@ -388,13 +518,19 @@ async fn run_complete_file_with_postgres(
         // Can't use e directly because it isn't marked Send, so turn it into a string.
         .map_err(|e| {
             DataFusionError::Execution(format!("Error completing {relative_path:?}: {e}"))
-        })
+        });
+
+    pb.finish_and_clear();
+
+    res
 }
 
 #[cfg(not(feature = "postgres"))]
 async fn run_complete_file_with_postgres(
     _test_file: TestFile,
     _validator: Validator,
+    _mp: MultiProgress,
+    _mp_style: ProgressStyle,
 ) -> Result<()> {
     use datafusion_common::plan_err;
     plan_err!("Can not run with postgres as postgres feature is not enabled")

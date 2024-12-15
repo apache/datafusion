@@ -24,6 +24,7 @@ use async_trait::async_trait;
 use datafusion::physical_plan::common::collect;
 use datafusion::physical_plan::execute_stream;
 use datafusion::prelude::SessionContext;
+use indicatif::ProgressBar;
 use log::Level::{Debug, Info};
 use log::{debug, log_enabled, warn};
 use sqllogictest::DBOutput;
@@ -34,11 +35,32 @@ use crate::engines::output::{DFColumnType, DFOutput};
 pub struct DataFusion {
     ctx: SessionContext,
     relative_path: PathBuf,
+    pb: ProgressBar,
 }
 
 impl DataFusion {
-    pub fn new(ctx: SessionContext, relative_path: PathBuf) -> Self {
-        Self { ctx, relative_path }
+    pub fn new(ctx: SessionContext, relative_path: PathBuf, pb: ProgressBar) -> Self {
+        Self {
+            ctx,
+            relative_path,
+            pb,
+        }
+    }
+
+    fn update_slow_count(&self) {
+        let msg = self.pb.message();
+        let split: Vec<&str> = msg.split(" ").collect();
+        let mut current_count = 0;
+
+        if split.len() > 2 {
+            // third match will be current slow count
+            current_count = split[2].parse::<i32>().unwrap();
+        }
+
+        current_count += 1;
+
+        self.pb
+            .set_message(format!("{} - {} took > 500 ms", split[0], current_count));
     }
 }
 
@@ -59,6 +81,12 @@ impl sqllogictest::AsyncDB for DataFusion {
         let start = Instant::now();
         let result = run_query(&self.ctx, sql).await;
         let duration = start.elapsed();
+
+        if duration.gt(&Duration::from_millis(500)) {
+            self.update_slow_count();
+        }
+
+        self.pb.inc(1);
 
         if log_enabled!(Info) && duration.gt(&Duration::from_secs(2)) {
             warn!(

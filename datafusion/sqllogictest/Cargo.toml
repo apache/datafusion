@@ -45,6 +45,7 @@ datafusion-common = { workspace = true, default-features = true }
 datafusion-common-runtime = { workspace = true, default-features = true }
 futures = { workspace = true }
 half = { workspace = true, default-features = true }
+indicatif = "0.17"
 itertools = { workspace = true }
 log = { workspace = true }
 object_store = { workspace = true }
