@@ -138,7 +138,10 @@ Note: If a Rust hotfix is released for the current MSRV, the MSRV will be update
 
 DataFusion enforces MSRV policy using a [MSRV CI Check](https://github.com/search?q=repo%3Aapache%2Fdatafusion+rust-version+language%3ATOML+path%3A%2F%5ECargo.toml%2F&type=code)
 
-## DataFusion API evolution policy
+## DataFusion API Evolution and Deprecation Guidelines
 
-Public methods in Apache DataFusion are subject to evolve as part of the API lifecycle.
-Deprecated methods will be phased out in accordance with the [policy](https://datafusion.apache.org/library-user-guide/api-health.html), ensuring the API is stable and healthy.
+Public methods in Apache DataFusion evolve over time: while we try to maintain a
+stable API, we also improve the API over time. As a result, we typically
+deprecate methods before removing them, according to the [deprecation guidelines].
+
+[deprecation guidelines]: https://datafusion.apache.org/library-user-guide/api-health.html

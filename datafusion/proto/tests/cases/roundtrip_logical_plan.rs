@@ -25,6 +25,8 @@ use arrow::datatypes::{
 };
 use arrow::util::pretty::pretty_format_batches;
 use datafusion::datasource::file_format::json::JsonFormatFactory;
+use datafusion::optimizer::eliminate_nested_union::EliminateNestedUnion;
+use datafusion::optimizer::Optimizer;
 use datafusion_common::parsers::CompressionTypeVariant;
 use prost::Message;
 use std::any::Any;
@@ -2554,4 +2556,36 @@ async fn roundtrip_recursive_query() {
         format!("{}", pretty_format_batches(&output).unwrap()),
         format!("{}", pretty_format_batches(&output_round_trip).unwrap())
     );
+}
+
+#[tokio::test]
+async fn roundtrip_union_query() -> Result<()> {
+    let query = "SELECT a FROM t1
+        UNION (SELECT a from t1 UNION SELECT a from t2)";
+
+    let ctx = SessionContext::new();
+    ctx.register_csv("t1", "tests/testdata/test.csv", CsvReadOptions::default())
+        .await?;
+    ctx.register_csv("t2", "tests/testdata/test.csv", CsvReadOptions::default())
+        .await?;
+    let dataframe = ctx.sql(query).await?;
+    let plan = dataframe.into_optimized_plan()?;
+
+    let bytes = logical_plan_to_bytes(&plan)?;
+
+    let ctx = SessionContext::new();
+    ctx.register_csv("t1", "tests/testdata/test.csv", CsvReadOptions::default())
+        .await?;
+    ctx.register_csv("t2", "tests/testdata/test.csv", CsvReadOptions::default())
+        .await?;
+    let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx)?;
+    // proto deserialisation only supports 2-way union, hence this plan has nested unions
+    // apply the flatten unions optimizer rule to be able to compare
+    let optimizer = Optimizer::with_rules(vec![Arc::new(EliminateNestedUnion::new())]);
+    let unnested = optimizer.optimize(logical_round_trip, &(ctx.state()), |_x, _y| {})?;
+    assert_eq!(
+        format!("{}", plan.display_indent_schema()),
+        format!("{}", unnested.display_indent_schema()),
+    );
+    Ok(())
 }
