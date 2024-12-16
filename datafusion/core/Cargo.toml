@@ -215,4 +215,3 @@ required-features = ["nested_expressions"]
 [[bench]]
 harness = false
 name = "scalar_regex_match_query_sql"
-
