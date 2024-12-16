@@ -5270,7 +5270,7 @@ select array_has([], null),
 ----
 NULL NULL NULL
 
-# If lhs is has any Nulls, we return Null instead of false
+# Always return false if not contained even if list has null elements
 query BB
 select array_has([1, null, 2], 3),
        array_has([null, null, null], 3);
