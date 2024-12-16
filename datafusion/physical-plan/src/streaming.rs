@@ -146,16 +146,16 @@ impl StreamingTableExec {
         schema: SchemaRef,
         orderings: &[LexOrdering],
         partitions: &[Arc<dyn PartitionStream>],
-        infinte: bool,
+        infinite: bool,
     ) -> PlanProperties {
         // Calculate equivalence properties:
         let eq_properties = EquivalenceProperties::new_with_orderings(schema, orderings);
 
         // Get output partitioning:
         let output_partitioning = Partitioning::UnknownPartitioning(partitions.len());
-        let boundedness = if infinte {
+        let boundedness = if infinite {
             Boundedness::Unbounded {
-                requires_finite_memory: false,
+                requires_infinite_memory: false,
             }
         } else {
             Boundedness::Bounded

@@ -519,23 +519,26 @@ impl HashJoinExec {
             }
         };
 
-        let emission_type = if !left.boundedness().requires_finite_memory() {
+        let emission_type = if left.boundedness().is_unbounded() {
             EmissionType::Final
-        } else {
-            // TOOD: Adjusted based on children's pipeline behavior?
+        } else if right.pipeline_behavior() == EmissionType::Incremental {
             match join_type {
-                // If we only need to generate matched rows from the probe side, we can emit rows incrementally.
+                // If we only need to generate matched rows from the probe side,
+                // we can emit rows incrementally.
                 JoinType::Inner
                 | JoinType::LeftSemi
                 | JoinType::RightSemi
                 | JoinType::Right
                 | JoinType::RightAnti => EmissionType::Incremental,
-                // If we need to generate unmatched rows from the *build side*, we need to emit them at the end.
+                // If we need to generate unmatched rows from the *build side*,
+                // we need to emit them at the end.
                 JoinType::Left
                 | JoinType::LeftAnti
                 | JoinType::LeftMark
                 | JoinType::Full => EmissionType::Both,
             }
+        } else {
+            right.pipeline_behavior()
         };
 
         // If contains projection, update the PlanProperties.
@@ -548,6 +551,7 @@ impl HashJoinExec {
                 output_partitioning.project(&projection_mapping, &eq_properties);
             eq_properties = eq_properties.project(&projection_mapping, out_schema);
         }
+
         Ok(PlanProperties::new(
             eq_properties,
             output_partitioning,

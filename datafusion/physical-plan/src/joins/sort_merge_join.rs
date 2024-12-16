@@ -53,7 +53,6 @@ use datafusion_execution::TaskContext;
 use datafusion_physical_expr::equivalence::join_equivalence_properties;
 use datafusion_physical_expr::PhysicalExprRef;
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, LexRequirement};
-use futures::{Stream, StreamExt};
 
 use crate::execution_plan::{boundedness_from_children, EmissionType};
 use crate::expressions::PhysicalSortExpr;
@@ -68,6 +67,8 @@ use crate::{
     ExecutionPlanProperties, PhysicalExpr, PlanProperties, RecordBatchStream,
     SendableRecordBatchStream, Statistics,
 };
+
+use futures::{Stream, StreamExt};
 
 /// Join execution plan that executes equi-join predicates on multiple partitions using Sort-Merge
 /// join algorithm and applies an optional filter post join. Can be used to join arbitrarily large

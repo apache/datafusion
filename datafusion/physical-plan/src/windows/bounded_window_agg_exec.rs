@@ -202,8 +202,9 @@ impl BoundedWindowAggExec {
 
         // Construct properties cache
         PlanProperties::new(
-            eq_properties,       // Equivalence Properties
-            output_partitioning, // Output Partitioning
+            eq_properties,
+            output_partitioning,
+            // TODO: Emission type and boundedness information can be enhanced here
             input.pipeline_behavior(),
             input.boundedness(),
         )

@@ -59,7 +59,7 @@ pub struct FFI_PlanProperties {
     /// Return the emission type of the plan.
     pub emission_type: unsafe extern "C" fn(plan: &Self) -> FFI_EmissionType,
 
-    /// Indicates whether the plan has finite memory requirements.
+    /// Indicate boundedness of the plan and its memory requirements.
     pub boundedness: unsafe extern "C" fn(plan: &Self) -> FFI_Boundedness,
 
     /// The output ordering is a [`PhysicalSortExprNodeCollection`] protobuf message
@@ -263,7 +263,7 @@ impl TryFrom<FFI_PlanProperties> for PlanProperties {
 #[derive(Clone, StableAbi)]
 pub enum FFI_Boundedness {
     Bounded,
-    Unbounded { requires_finite_memory: bool },
+    Unbounded { requires_infinite_memory: bool },
 }
 
 impl From<Boundedness> for FFI_Boundedness {
@@ -271,9 +271,9 @@ impl From<Boundedness> for FFI_Boundedness {
         match value {
             Boundedness::Bounded => FFI_Boundedness::Bounded,
             Boundedness::Unbounded {
-                requires_finite_memory,
+                requires_infinite_memory,
             } => FFI_Boundedness::Unbounded {
-                requires_finite_memory,
+                requires_infinite_memory,
             },
         }
     }
@@ -284,9 +284,9 @@ impl From<FFI_Boundedness> for Boundedness {
         match value {
             FFI_Boundedness::Bounded => Boundedness::Bounded,
             FFI_Boundedness::Unbounded {
-                requires_finite_memory,
+                requires_infinite_memory,
             } => Boundedness::Unbounded {
-                requires_finite_memory,
+                requires_infinite_memory,
             },
         }
     }

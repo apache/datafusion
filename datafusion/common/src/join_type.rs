@@ -49,7 +49,6 @@ pub enum JoinType {
     LeftAnti,
     /// Right Anti Join - Returns rows from the right table that do not have a matching row in the left table.
     RightAnti,
-
     /// Left Mark join
     ///
     /// Returns one record for each record from the left input. The output contains an additional

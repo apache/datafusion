@@ -289,7 +289,7 @@ impl MemoryExec {
     ) -> PlanProperties {
         PlanProperties::new(
             EquivalenceProperties::new_with_orderings(schema, orderings),
-            Partitioning::UnknownPartitioning(partitions.len()), // Output Partitioning
+            Partitioning::UnknownPartitioning(partitions.len()),
             EmissionType::Incremental,
             Boundedness::Bounded,
         )

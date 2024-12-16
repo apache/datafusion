@@ -139,8 +139,8 @@ impl SortPreservingMergeExec {
         PlanProperties::new(
             eq_properties,                        // Equivalence Properties
             Partitioning::UnknownPartitioning(1), // Output Partitioning
-            input.pipeline_behavior(),
-            input.boundedness(),
+            input.pipeline_behavior(),            // Pipeline Behavior
+            input.boundedness(),                  // Boundedness
         )
     }
 }
@@ -1274,7 +1274,9 @@ mod tests {
                 eq_properties,
                 Partitioning::Hash(columns, 3),
                 EmissionType::Incremental,
-                Boundedness::Bounded,
+                Boundedness::Unbounded {
+                    requires_infinite_memory: false,
+                },
             )
         }
     }

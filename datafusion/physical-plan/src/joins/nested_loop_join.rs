@@ -28,7 +28,7 @@ use super::utils::{
     BatchTransformer, NoopBatchTransformer, StatefulStreamResult,
 };
 use crate::coalesce_partitions::CoalescePartitionsExec;
-use crate::execution_plan::{emission_type_from_children, EmissionType};
+use crate::execution_plan::{boundedness_from_children, EmissionType};
 use crate::joins::utils::{
     adjust_indices_by_join_type, apply_join_filter_to_indices, build_batch_from_indices,
     build_join_schema, check_join_is_valid, estimate_join_statistics,
@@ -242,17 +242,33 @@ impl NestedLoopJoinExec {
         let output_partitioning =
             asymmetric_join_output_partitioning(left, right, &join_type);
 
-        let emission_type = if left.boundedness().requires_finite_memory() {
-            emission_type_from_children([left, right])
-        } else {
+        let emission_type = if left.boundedness().is_unbounded() {
             EmissionType::Final
+        } else if right.pipeline_behavior() == EmissionType::Incremental {
+            match join_type {
+                // If we only need to generate matched rows from the probe side,
+                // we can emit rows incrementally.
+                JoinType::Inner
+                | JoinType::LeftSemi
+                | JoinType::RightSemi
+                | JoinType::Right
+                | JoinType::RightAnti => EmissionType::Incremental,
+                // If we need to generate unmatched rows from the *build side*,
+                // we need to emit them at the end.
+                JoinType::Left
+                | JoinType::LeftAnti
+                | JoinType::LeftMark
+                | JoinType::Full => EmissionType::Both,
+            }
+        } else {
+            right.pipeline_behavior()
         };
 
         PlanProperties::new(
             eq_properties,
             output_partitioning,
             emission_type,
-            left.boundedness(),
+            boundedness_from_children([left, right]),
         )
     }
 

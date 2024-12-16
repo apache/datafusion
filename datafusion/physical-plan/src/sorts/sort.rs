@@ -25,6 +25,7 @@ use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
 
 use crate::common::spawn_buffered;
+use crate::execution_plan::{Boundedness, CardinalityEffect, EmissionType};
 use crate::expressions::PhysicalSortExpr;
 use crate::limit::LimitStream;
 use crate::metrics::{
@@ -56,9 +57,6 @@ use datafusion_execution::TaskContext;
 use datafusion_physical_expr::LexOrdering;
 use datafusion_physical_expr_common::sort_expr::LexRequirement;
 
-use crate::execution_plan::{
-    is_pipeline_breaking, Boundedness, CardinalityEffect, EmissionType,
-};
 use futures::{StreamExt, TryStreamExt};
 use log::{debug, trace};
 
@@ -765,12 +763,14 @@ impl SortExec {
     /// can be dropped.
     pub fn with_fetch(&self, fetch: Option<usize>) -> Self {
         let mut cache = self.cache.clone();
-        // If execution mode is pipeline breaking, keep it as it is.
-        let is_pipeline_breaking = is_pipeline_breaking(self);
-        if fetch.is_some() && !is_pipeline_breaking {
-            // When a theoretically unnecessary sort becomes a top-K (which
-            // sometimes arises as an intermediate state before full removal),
-            // its execution mode should become `Bounded`.
+        // If the SortExec can emit incrementally (that means the sort requirements and
+        // properties of the input are matched), existance of a fetch value sets
+        // the boundedness of the SortExec as `bounded`.
+        let is_pipeline_friendly = matches!(
+            self.cache.emission_type,
+            EmissionType::Incremental | EmissionType::Both
+        );
+        if fetch.is_some() && is_pipeline_friendly {
             cache = cache.with_boundedness(Boundedness::Bounded);
         }
         SortExec {
@@ -823,12 +823,28 @@ impl SortExec {
             .ordering_satisfy_requirement(&requirement);
 
         // The emission type depends on whether the input is already sorted:
-        // - If not sorted, we must wait until all data is processed to emit results (Final)
         // - If already sorted, we can emit results in the same way as the input
-        let emission_type = if !sort_satisfied {
-            EmissionType::Final
-        } else {
+        // - If not sorted, we must wait until all data is processed to emit results (Final)
+        let emission_type = if sort_satisfied {
             input.pipeline_behavior()
+        } else {
+            EmissionType::Final
+        };
+
+        // The boundedness depends on whether the input is already sorted:
+        // - If already sorted, we have the same property as the input
+        // - If not sorted and input is unbounded, we require infinite memory and generates
+        //   unbounded data (not practical).
+        // - If not sorted and input is bounded, then the SortExec is bounded, too.
+        let boundedness = if sort_satisfied {
+            input.boundedness()
+        } else {
+            match input.boundedness() {
+                Boundedness::Unbounded { .. } => Boundedness::Unbounded {
+                    requires_infinite_memory: true,
+                },
+                bounded => bounded,
+            }
         };
 
         // Calculate equivalence properties; i.e. reset the ordering equivalence
@@ -847,7 +863,7 @@ impl SortExec {
             eq_properties,
             output_partitioning,
             emission_type,
-            input.boundedness(),
+            boundedness,
         )
     }
 }
@@ -1068,7 +1084,7 @@ mod tests {
                 Partitioning::UnknownPartitioning(1),
                 EmissionType::Final,
                 Boundedness::Unbounded {
-                    requires_finite_memory: false,
+                    requires_infinite_memory: false,
                 },
             )
         }

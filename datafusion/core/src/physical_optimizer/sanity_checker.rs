@@ -30,7 +30,7 @@ use datafusion_common::config::{ConfigOptions, OptimizerOptions};
 use datafusion_common::plan_err;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_physical_expr::intervals::utils::{check_support, is_datatype_supported};
-use datafusion_physical_plan::execution_plan::is_pipeline_breaking;
+use datafusion_physical_plan::execution_plan::{Boundedness, EmissionType};
 use datafusion_physical_plan::joins::SymmetricHashJoinExec;
 use datafusion_physical_plan::{get_plan_string, ExecutionPlanProperties};
 
@@ -87,7 +87,14 @@ pub fn check_finiteness_requirements(
         }
     }
 
-    if is_pipeline_breaking(input.as_ref()) {
+    if matches!(
+        input.boundedness(),
+        Boundedness::Unbounded {
+            requires_infinite_memory: true
+        }
+    ) || (input.boundedness().is_unbounded()
+        && input.pipeline_behavior() == EmissionType::Final)
+    {
         plan_err!(
             "Cannot execute pipeline breaking queries, operator: {:?}",
             input
@@ -217,7 +224,6 @@ mod tests {
 
         let test2 = BinaryTestCase {
             source_types: (SourceType::Bounded, SourceType::Unbounded),
-            // Left join for bounded build side and unbounded probe side can generate both incremental matched rows and final non-matched rows.
             expect_fail: false,
         };
         let test3 = BinaryTestCase {
@@ -228,7 +234,7 @@ mod tests {
             sql: "SELECT t2.c1 FROM left as t1 LEFT JOIN right as t2 ON t1.c1 = t2.c1"
                 .to_string(),
             cases: vec![Arc::new(test1), Arc::new(test2), Arc::new(test3)],
-            error_operator: "".to_string(),
+            error_operator: "operator: HashJoinExec".to_string(),
         };
 
         case.run().await?;
@@ -293,7 +299,6 @@ mod tests {
         };
         let test2 = BinaryTestCase {
             source_types: (SourceType::Bounded, SourceType::Unbounded),
-            // Full join for bounded build side and unbounded probe side can generate both incremental matched rows and final non-matched rows.
             expect_fail: false,
         };
         let test3 = BinaryTestCase {

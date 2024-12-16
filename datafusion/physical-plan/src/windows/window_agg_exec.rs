@@ -129,11 +129,11 @@ impl WindowAggExec {
         let output_partitioning = input.output_partitioning().clone();
 
         // Construct properties cache:
-        // TODO: Adjust emission type based on the aggregation function?
         PlanProperties::new(
             eq_properties,
             output_partitioning,
-            EmissionType::Incremental,
+            // TODO: Emission type and boundedness information can be enhanced here
+            EmissionType::Final,
             input.boundedness(),
         )
     }

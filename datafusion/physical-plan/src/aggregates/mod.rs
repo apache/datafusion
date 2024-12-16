@@ -25,6 +25,7 @@ use crate::aggregates::{
     no_grouping::AggregateStream, row_hash::GroupedHashAggregateStream,
     topk_stream::GroupedTopKAggregateStream,
 };
+use crate::execution_plan::{CardinalityEffect, EmissionType};
 use crate::metrics::{ExecutionPlanMetricsSet, MetricsSet};
 use crate::projection::get_field_metadata;
 use crate::windows::get_ordered_partition_by_indices;
@@ -41,6 +42,7 @@ use datafusion_common::stats::Precision;
 use datafusion_common::{internal_err, not_impl_err, Result};
 use datafusion_execution::TaskContext;
 use datafusion_expr::{Accumulator, Aggregate};
+use datafusion_physical_expr::aggregate::AggregateFunctionExpr;
 use datafusion_physical_expr::{
     equivalence::{collapse_lex_req, ProjectionMapping},
     expressions::Column,
@@ -48,8 +50,6 @@ use datafusion_physical_expr::{
     PhysicalExpr, PhysicalSortRequirement,
 };
 
-use crate::execution_plan::{CardinalityEffect, EmissionType};
-use datafusion_physical_expr::aggregate::AggregateFunctionExpr;
 use itertools::Itertools;
 
 pub(crate) mod group_values;
@@ -663,6 +663,7 @@ impl AggregateExec {
             input_partitioning.clone()
         };
 
+        // TODO: Emission type and boundedness information can be enhanced here
         let emission_type = if *input_order_mode == InputOrderMode::Linear {
             EmissionType::Final
         } else {

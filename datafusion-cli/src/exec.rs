@@ -34,10 +34,12 @@ use crate::{
 
 use datafusion::common::instant::Instant;
 use datafusion::common::plan_datafusion_err;
+use datafusion::common::plan_err;
 use datafusion::config::ConfigFileType;
 use datafusion::datasource::listing::ListingTableUrl;
 use datafusion::error::{DataFusionError, Result};
 use datafusion::logical_expr::{DdlStatement, LogicalPlan};
+use datafusion::physical_plan::execution_plan::EmissionType;
 use datafusion::physical_plan::ExecutionPlanProperties;
 use datafusion::physical_plan::{collect, execute_stream};
 use datafusion::sql::parser::{DFParser, Statement};
@@ -235,10 +237,20 @@ pub(super) async fn exec_and_print(
         let df = ctx.execute_logical_plan(plan).await?;
         let physical_plan = df.create_physical_plan().await?;
 
-        if physical_plan.boundedness().is_unbounded() {
+        if physical_plan.boundedness().is_unbounded()
+            && physical_plan.pipeline_behavior() == EmissionType::Final
+        {
+            return plan_err!(
+                "The given query can generate a valid result only once \
+                the source ends, but the source is unbounded"
+            );
+        } else if physical_plan.boundedness().is_unbounded() {
+            // As the input stream comes, we can generate results.
+            // However, memory safety is not guaranteed.
             let stream = execute_stream(physical_plan, task_ctx.clone())?;
             print_options.print_stream(stream, now).await?;
         } else {
+            // Bounded stream; collected results are printed after all input consumed.
             let schema = physical_plan.schema();
             let results = collect(physical_plan, task_ctx.clone()).await?;
             adjusted.into_inner().print_batches(schema, &results, now)?;

@@ -121,8 +121,8 @@ impl OutputRequirementExec {
         PlanProperties::new(
             input.equivalence_properties().clone(), // Equivalence Properties
             input.output_partitioning().clone(),    // Output Partitioning
-            input.pipeline_behavior(),
-            input.boundedness(),
+            input.pipeline_behavior(),              // Pipeline Behavior
+            input.boundedness(),                    // Boundedness
         )
     }
 }

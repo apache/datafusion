@@ -58,6 +58,7 @@ use datafusion_physical_plan::windows::{get_best_fitting_window, BoundedWindowAg
 use datafusion_physical_plan::ExecutionPlanProperties;
 
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
+use datafusion_physical_plan::execution_plan::EmissionType;
 use itertools::izip;
 
 /// The `EnforceDistribution` rule ensures that distribution requirements are
@@ -1161,13 +1162,17 @@ fn ensure_distribution(
     let should_use_estimates = config
         .execution
         .use_row_number_estimates_to_optimize_partitioning;
-    // let is_unbounded = !dist_context.plan.has_finite_memory();
-    let is_unbounded = dist_context.plan.boundedness().is_unbounded();
+    let unbounded_and_pipeline_friendly = dist_context.plan.boundedness().is_unbounded()
+        && matches!(
+            dist_context.plan.pipeline_behavior(),
+            EmissionType::Incremental | EmissionType::Both
+        );
     // Use order preserving variants either of the conditions true
     // - it is desired according to config
     // - when plan is unbounded
+    // - when it is pipeline friendly (can incrementally produce results)
     let order_preserving_variants_desirable =
-        is_unbounded || config.optimizer.prefer_existing_sort;
+        unbounded_and_pipeline_friendly || config.optimizer.prefer_existing_sort;
 
     // Remove unnecessary repartition from the physical plan if any
     let DistributionContext {
@@ -1460,8 +1465,8 @@ pub(crate) mod tests {
             PlanProperties::new(
                 input.equivalence_properties().clone(), // Equivalence Properties
                 input.output_partitioning().clone(),    // Output Partitioning
-                input.pipeline_behavior(),
-                input.boundedness(),
+                input.pipeline_behavior(),              // Pipeline Behavior
+                input.boundedness(),                    // Boundedness
             )
         }
     }

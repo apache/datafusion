@@ -262,7 +262,7 @@ impl UnboundedExec {
     ) -> PlanProperties {
         let boundedness = if batch_produce.is_none() {
             Boundedness::Unbounded {
-                requires_finite_memory: true,
+                requires_infinite_memory: false,
             }
         } else {
             Boundedness::Bounded

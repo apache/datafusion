@@ -424,22 +424,6 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
     }
 }
 
-/// Returns true if this execution plan node is pipeline breaking, meaning it needs to
-/// consume all input before producing output and has unbounded memory usage.
-///
-/// A node is pipeline breaking if it:
-/// 1. Has unbounded memory usage (boundedness is unbounded)
-/// 2. Only emits output after consuming all input (emission type is Final)
-///
-/// Examples of pipeline breaking nodes include:
-/// - Sort operations that need to buffer all input before sorting
-/// - Aggregations that need to group all input rows
-/// - Window functions that need the complete partition to compute
-pub fn is_pipeline_breaking(plan: &dyn ExecutionPlan) -> bool {
-    !plan.boundedness().requires_finite_memory()
-        && plan.pipeline_behavior() == EmissionType::Final
-}
-
 /// Extension trait provides an easy API to fetch various properties of
 /// [`ExecutionPlan`] objects based on [`ExecutionPlan::properties`].
 pub trait ExecutionPlanProperties {
@@ -456,8 +440,12 @@ pub trait ExecutionPlanProperties {
     /// output if its input is sorted as it does not reorder the input rows.
     fn output_ordering(&self) -> Option<&LexOrdering>;
 
+    /// Boundedness information of the stream corresponding to this ExecutionPlan.
+    /// For more details, see [`Boundedness`].
     fn boundedness(&self) -> Boundedness;
 
+    /// Indicates how the stream of this ExecutionPlan emits its results.
+    /// For more details, see [`EmissionType`].
     fn pipeline_behavior(&self) -> EmissionType;
 
     /// Get the [`EquivalenceProperties`] within the plan.
@@ -524,7 +512,8 @@ impl ExecutionPlanProperties for &dyn ExecutionPlan {
     }
 }
 
-/// Represents whether a stream of data is bounded (finite) or unbounded (infinite).
+/// Represents whether a stream of data **generated** by an operator is bounded (finite)
+/// or unbounded (infinite).
 ///
 /// This is used to determine whether an execution plan will eventually complete
 /// processing all its data (bounded) or could potentially run forever (unbounded).
@@ -537,26 +526,16 @@ pub enum Boundedness {
     Bounded,
     /// The data stream is unbounded (infinite) and could run forever
     Unbounded {
-        /// Whether this operator requires finite memory to process the unbounded stream.
-        /// If true, the operator can process an infinite stream with bounded memory.
-        /// If false, memory usage may grow unbounded while processing the stream.
-        requires_finite_memory: bool,
+        /// Whether this operator requires infinite memory to process the unbounded stream.
+        /// If false, the operator can process an infinite stream with bounded memory.
+        /// If true, memory usage may grow unbounded while processing the stream.
+        requires_infinite_memory: bool,
     },
 }
 
 impl Boundedness {
     pub fn is_unbounded(&self) -> bool {
         matches!(self, Boundedness::Unbounded { .. })
-    }
-
-    pub fn requires_finite_memory(&self) -> bool {
-        matches!(
-            self,
-            Boundedness::Bounded
-                | Boundedness::Unbounded {
-                    requires_finite_memory: true
-                }
-        )
     }
 }
 
@@ -592,52 +571,72 @@ pub enum EmissionType {
     Both,
 }
 
+/// Utility to determine an operator's boundedness based on its children's boundedness.
+///
+/// Assumes boundedness can be inferred from child operators:
+/// - Unbounded (requires_infinite_memory: true) takes precedence.
+/// - Unbounded (requires_infinite_memory: false) is considered next.
+/// - Otherwise, the operator is bounded.
+///
+/// **Note:** This is a general-purpose utility and may not apply to
+/// all multi-child operators. Ensure your operator's behavior aligns
+/// with these assumptions before using.
 pub(crate) fn boundedness_from_children<'a>(
     children: impl IntoIterator<Item = &'a Arc<dyn ExecutionPlan>>,
 ) -> Boundedness {
-    let mut is_unbounded_with_finite_memory = false;
+    let mut unbounded_with_finite_mem = false;
 
     for child in children {
         match child.boundedness() {
             Boundedness::Unbounded {
-                requires_finite_memory: false,
+                requires_infinite_memory: true,
             } => {
                 return Boundedness::Unbounded {
-                    requires_finite_memory: false,
+                    requires_infinite_memory: true,
                 }
             }
             Boundedness::Unbounded {
-                requires_finite_memory: true,
-            } => is_unbounded_with_finite_memory = true,
-            _ => {}
+                requires_infinite_memory: false,
+            } => {
+                unbounded_with_finite_mem = true;
+            }
+            Boundedness::Bounded => {}
         }
     }
 
-    if is_unbounded_with_finite_memory {
+    if unbounded_with_finite_mem {
         Boundedness::Unbounded {
-            requires_finite_memory: true,
+            requires_infinite_memory: false,
         }
     } else {
         Boundedness::Bounded
     }
 }
 
+/// Determines the emission type of an operator based on its children's pipeline behavior.
+///
+/// The precedence of emission types is:
+/// - `Final` has the highest precedence.
+/// - `Both` is next: if any child emits both incremental and final results, the parent inherits this behavior unless a `Final` is present.
+/// - `Incremental` is the default if all children emit incremental results.
+///
+/// **Note:** This is a general-purpose utility and may not apply to
+/// all multi-child operators. Verify your operator's behavior aligns
+/// with these assumptions.
 pub(crate) fn emission_type_from_children<'a>(
     children: impl IntoIterator<Item = &'a Arc<dyn ExecutionPlan>>,
 ) -> EmissionType {
-    // If any children is Final, the parent is Final as well since it is the earliest time we can emit the final result
-    // The precedence is Final > Both > Incremental
-    let mut has_both = false;
+    let mut inc_and_final = false;
 
     for child in children {
         match child.pipeline_behavior() {
             EmissionType::Final => return EmissionType::Final,
-            EmissionType::Both => has_both = true,
-            _ => {}
+            EmissionType::Both => inc_and_final = true,
+            EmissionType::Incremental => continue,
         }
     }
 
-    if has_both {
+    if inc_and_final {
         EmissionType::Both
     } else {
         EmissionType::Incremental
@@ -656,8 +655,9 @@ pub struct PlanProperties {
     pub eq_properties: EquivalenceProperties,
     /// See [ExecutionPlanProperties::output_partitioning]
     pub partitioning: Partitioning,
-    // Store input's emission type and memory usage to avoid stackoverflow
+    /// See [ExecutionPlanProperties::pipeline_behavior]
     pub emission_type: EmissionType,
+    /// See [ExecutionPlanProperties::boundedness]
     pub boundedness: Boundedness,
     /// See [ExecutionPlanProperties::output_ordering]
     output_ordering: Option<LexOrdering>,
@@ -700,6 +700,12 @@ impl PlanProperties {
     /// Overwrite boundedness with its new value.
     pub fn with_boundedness(mut self, boundedness: Boundedness) -> Self {
         self.boundedness = boundedness;
+        self
+    }
+
+    /// Overwrite emission type with its new value.
+    pub fn with_emission_type(mut self, emission_type: EmissionType) -> Self {
+        self.emission_type = emission_type;
         self
     }
 

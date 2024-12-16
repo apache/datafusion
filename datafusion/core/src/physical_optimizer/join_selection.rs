@@ -43,6 +43,7 @@ use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::PhysicalExpr;
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
+use datafusion_physical_plan::execution_plan::EmissionType;
 
 /// The [`JoinSelection`] rule tries to modify a given plan so that it can
 /// accommodate infinite sources and optimize joins in the plan according to
@@ -516,7 +517,7 @@ fn statistical_join_selection_subrule(
 pub type PipelineFixerSubrule =
     dyn Fn(Arc<dyn ExecutionPlan>, &ConfigOptions) -> Result<Arc<dyn ExecutionPlan>>;
 
-/// Converts a hash join to a symmetric hash join in the case of infinite inputs on both sides.
+/// Converts a hash join to a symmetric hash join if infinite and incremental inputs exist on both sides.
 ///
 /// This subrule checks if a hash join can be replaced with a symmetric hash join when dealing
 /// with unbounded (infinite) inputs on both sides. This replacement avoids pipeline breaking and
@@ -538,9 +539,17 @@ fn hash_join_convert_symmetric_subrule(
     // Check if the current plan node is a HashJoinExec.
     if let Some(hash_join) = input.as_any().downcast_ref::<HashJoinExec>() {
         let left_unbounded = hash_join.left.boundedness().is_unbounded();
+        let left_incremental = matches!(
+            hash_join.left.pipeline_behavior(),
+            EmissionType::Incremental | EmissionType::Both
+        );
         let right_unbounded = hash_join.right.boundedness().is_unbounded();
-        // Process only if both left and right sides are unbounded.
-        if left_unbounded && right_unbounded {
+        let right_incremental = matches!(
+            hash_join.right.pipeline_behavior(),
+            EmissionType::Incremental | EmissionType::Both
+        );
+        // Process only if both left and right sides are unbounded and incrementally emit.
+        if left_unbounded && right_unbounded & left_incremental & right_incremental {
             // Determine the partition mode based on configuration.
             let mode = if config_options.optimizer.repartition_joins {
                 StreamJoinPartitionMode::Partitioned

@@ -728,7 +728,7 @@ impl RepartitionExec {
     ) -> PlanProperties {
         PlanProperties::new(
             Self::eq_properties_helper(input, preserve_order),
-            partitioning, // Output Partitioning
+            partitioning,
             input.pipeline_behavior(),
             input.boundedness(),
         )
