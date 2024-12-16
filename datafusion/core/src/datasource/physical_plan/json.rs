@@ -275,7 +275,7 @@ impl FileOpener for JsonOpener {
         let file_compression_type = self.file_compression_type.to_owned();
 
         Ok(Box::pin(async move {
-            let calculated_range = calculate_range(&file_meta, &store).await?;
+            let calculated_range = calculate_range(&file_meta, &store, None).await?;
 
             let range = match calculated_range {
                 RangeCalculation::Range(None) => None,

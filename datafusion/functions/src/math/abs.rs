@@ -18,7 +18,7 @@
 //! math expressions
 
 use std::any::Any;
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
 use arrow::array::{
     ArrayRef, Decimal128Array, Decimal256Array, Float32Array, Float64Array, Int16Array,
@@ -27,7 +27,6 @@ use arrow::array::{
 use arrow::datatypes::DataType;
 use arrow::error::ArrowError;
 use datafusion_common::{exec_err, not_impl_err, DataFusionError, Result};
-use datafusion_doc::DocSection;
 use datafusion_expr::interval_arithmetic::Interval;
 use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
 use datafusion_expr::{

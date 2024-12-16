@@ -22,12 +22,10 @@ use std::any::Any;
 use crate::string::common::*;
 use crate::utils::{make_scalar_function, utf8_to_str_type};
 use datafusion_common::{exec_err, Result};
-use datafusion_doc::DocSection;
 use datafusion_expr::function::Hint;
 use datafusion_expr::{ColumnarValue, Documentation, TypeSignature, Volatility};
 use datafusion_expr::{ScalarUDFImpl, Signature};
 use datafusion_macros::user_doc;
-use std::sync::OnceLock;
 
 /// Returns the longest string  with leading characters removed. If the characters are not specified, whitespace is removed.
 /// ltrim('zzzytest', 'xyz') = 'test'
@@ -148,7 +146,7 @@ mod tests {
         // String view cases for checking normal logic
         test_function!(
             LtrimFunc::new(),
-            &[ColumnarValue::Scalar(ScalarValue::Utf8View(Some(
+            vec![ColumnarValue::Scalar(ScalarValue::Utf8View(Some(
                 String::from("alphabet  ")
             ))),],
             Ok(Some("alphabet  ")),
@@ -158,7 +156,7 @@ mod tests {
         );
         test_function!(
             LtrimFunc::new(),
-            &[ColumnarValue::Scalar(ScalarValue::Utf8View(Some(
+            vec![ColumnarValue::Scalar(ScalarValue::Utf8View(Some(
                 String::from("  alphabet  ")
             ))),],
             Ok(Some("alphabet  ")),
@@ -168,7 +166,7 @@ mod tests {
         );
         test_function!(
             LtrimFunc::new(),
-            &[
+            vec![
                 ColumnarValue::Scalar(ScalarValue::Utf8View(Some(String::from(
                     "alphabet"
                 )))),
@@ -181,7 +179,7 @@ mod tests {
         );
         test_function!(
             LtrimFunc::new(),
-            &[
+            vec![
                 ColumnarValue::Scalar(ScalarValue::Utf8View(Some(String::from(
                     "alphabet"
                 )))),
@@ -196,7 +194,7 @@ mod tests {
         );
         test_function!(
             LtrimFunc::new(),
-            &[
+            vec![
                 ColumnarValue::Scalar(ScalarValue::Utf8View(Some(String::from(
                     "alphabet"
                 )))),
@@ -210,7 +208,7 @@ mod tests {
         // Special string view case for checking unlined output(len > 12)
         test_function!(
             LtrimFunc::new(),
-            &[
+            vec![
                 ColumnarValue::Scalar(ScalarValue::Utf8View(Some(String::from(
                     "xxxalphabetalphabet"
                 )))),
@@ -224,7 +222,7 @@ mod tests {
         // String cases
         test_function!(
             LtrimFunc::new(),
-            &[ColumnarValue::Scalar(ScalarValue::Utf8(Some(
+            vec![ColumnarValue::Scalar(ScalarValue::Utf8(Some(
                 String::from("alphabet  ")
             ))),],
             Ok(Some("alphabet  ")),
@@ -234,7 +232,7 @@ mod tests {
         );
         test_function!(
             LtrimFunc::new(),
-            &[ColumnarValue::Scalar(ScalarValue::Utf8(Some(
+            vec![ColumnarValue::Scalar(ScalarValue::Utf8(Some(
                 String::from("alphabet  ")
             ))),],
             Ok(Some("alphabet  ")),
@@ -244,7 +242,7 @@ mod tests {
         );
         test_function!(
             LtrimFunc::new(),
-            &[
+            vec![
                 ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from("alphabet")))),
                 ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from("t")))),
             ],
@@ -255,7 +253,7 @@ mod tests {
         );
         test_function!(
             LtrimFunc::new(),
-            &[
+            vec![
                 ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from("alphabet")))),
                 ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from("alphabe")))),
             ],
@@ -266,7 +264,7 @@ mod tests {
         );
         test_function!(
             LtrimFunc::new(),
-            &[
+            vec![
                 ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from("alphabet")))),
                 ColumnarValue::Scalar(ScalarValue::Utf8(None)),
             ],

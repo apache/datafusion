@@ -614,11 +614,13 @@ impl FileOpener for CsvOpener {
         }
 
         let store = Arc::clone(&self.config.object_store);
+        let terminator = self.config.terminator;
 
         Ok(Box::pin(async move {
             // Current partition contains bytes [start_byte, end_byte) (might contain incomplete lines at boundaries)
 
-            let calculated_range = calculate_range(&file_meta, &store).await?;
+            let calculated_range =
+                calculate_range(&file_meta, &store, terminator).await?;
 
             let range = match calculated_range {
                 RangeCalculation::Range(None) => None,

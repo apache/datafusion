@@ -31,7 +31,6 @@ use datafusion_common::ScalarValue;
 use datafusion_common::{
     downcast_value, internal_err, not_impl_err, DataFusionError, Result,
 };
-use datafusion_doc::DocSection;
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::utils::format_state_name;
 use datafusion_expr::{
@@ -42,7 +41,6 @@ use std::any::Any;
 use std::fmt::{Debug, Formatter};
 use std::hash::Hash;
 use std::marker::PhantomData;
-use std::sync::OnceLock;
 
 make_udaf_expr_and_func!(
     ApproxDistinct,
