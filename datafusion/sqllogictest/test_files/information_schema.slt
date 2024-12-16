@@ -625,19 +625,19 @@ select routine_name, data_type, function_type from information_schema.routines w
 string_agg LargeUtf8 AGGREGATE
 
 # test every function type are included in the result
-query TTTTTTTBTTT rowsort
-select * from information_schema.routines where routine_name = 'date_trunc' OR routine_name = 'string_agg' OR routine_name = 'rank';
+query TTTTTTTBTTTT rowsort
+select * from information_schema.routines where routine_name = 'date_trunc' OR routine_name = 'string_agg' OR routine_name = 'rank' ORDER BY routine_name
 ----
-datafusion public date_trunc datafusion public date_trunc FUNCTION true Timestamp(Microsecond, None) SCALAR Truncates a timestamp value to a specified precision.
-datafusion public date_trunc datafusion public date_trunc FUNCTION true Timestamp(Microsecond, Some("+TZ")) SCALAR Truncates a timestamp value to a specified precision.
-datafusion public date_trunc datafusion public date_trunc FUNCTION true Timestamp(Millisecond, None) SCALAR Truncates a timestamp value to a specified precision.
-datafusion public date_trunc datafusion public date_trunc FUNCTION true Timestamp(Millisecond, Some("+TZ")) SCALAR Truncates a timestamp value to a specified precision.
-datafusion public date_trunc datafusion public date_trunc FUNCTION true Timestamp(Nanosecond, None) SCALAR Truncates a timestamp value to a specified precision.
-datafusion public date_trunc datafusion public date_trunc FUNCTION true Timestamp(Nanosecond, Some("+TZ")) SCALAR Truncates a timestamp value to a specified precision.
-datafusion public date_trunc datafusion public date_trunc FUNCTION true Timestamp(Second, None) SCALAR Truncates a timestamp value to a specified precision.
-datafusion public date_trunc datafusion public date_trunc FUNCTION true Timestamp(Second, Some("+TZ")) SCALAR Truncates a timestamp value to a specified precision.
-datafusion public rank datafusion public rank FUNCTION true NULL WINDOW Returns the rank of the current row within its partition, allowing gaps between ranks. This function provides a ranking similar to `row_number`, but skips ranks for identical values.
-datafusion public string_agg datafusion public string_agg FUNCTION true LargeUtf8 AGGREGATE Concatenates the values of string expressions and places separator values between them.
+datafusion public date_trunc datafusion public date_trunc FUNCTION true Timestamp(Microsecond, None) SCALAR Truncates a timestamp value to a specified precision. date_trunc(precision, expression)
+datafusion public date_trunc datafusion public date_trunc FUNCTION true Timestamp(Microsecond, Some("+TZ")) SCALAR Truncates a timestamp value to a specified precision. date_trunc(precision, expression)
+datafusion public date_trunc datafusion public date_trunc FUNCTION true Timestamp(Millisecond, None) SCALAR Truncates a timestamp value to a specified precision. date_trunc(precision, expression)
+datafusion public date_trunc datafusion public date_trunc FUNCTION true Timestamp(Millisecond, Some("+TZ")) SCALAR Truncates a timestamp value to a specified precision. date_trunc(precision, expression)
+datafusion public date_trunc datafusion public date_trunc FUNCTION true Timestamp(Nanosecond, None) SCALAR Truncates a timestamp value to a specified precision. date_trunc(precision, expression)
+datafusion public date_trunc datafusion public date_trunc FUNCTION true Timestamp(Nanosecond, Some("+TZ")) SCALAR Truncates a timestamp value to a specified precision. date_trunc(precision, expression)
+datafusion public date_trunc datafusion public date_trunc FUNCTION true Timestamp(Second, None) SCALAR Truncates a timestamp value to a specified precision. date_trunc(precision, expression)
+datafusion public date_trunc datafusion public date_trunc FUNCTION true Timestamp(Second, Some("+TZ")) SCALAR Truncates a timestamp value to a specified precision. date_trunc(precision, expression)
+datafusion public rank datafusion public rank FUNCTION true NULL WINDOW Returns the rank of the current row within its partition, allowing gaps between ranks. This function provides a ranking similar to `row_number`, but skips ranks for identical values. rank()
+datafusion public string_agg datafusion public string_agg FUNCTION true LargeUtf8 AGGREGATE Concatenates the values of string expressions and places separator values between them. string_agg(expression, delimiter)
 
 query B
 select is_deterministic from information_schema.routines where routine_name = 'now';
@@ -731,18 +731,25 @@ repeat Utf8 1 OUT 0
 repeat Utf8 1 OUT 2
 repeat Utf8View 1 IN 2
 
-query TTTTT??T rowsort
-show functions like 'regexp_count';
+query TT??TTT rowsort
+show functions like 'date_trunc';
 ----
-datafusion public regexp_count SCALAR Int64 [str, regexp, start, flags] [LargeUtf8, LargeUtf8, Int64, LargeUtf8] Returns the number of matches that a [regular expression](https://docs.rs/regex/latest/regex/#syntax) has in a string.
-datafusion public regexp_count SCALAR Int64 [str, regexp, start, flags] [Utf8, Utf8, Int64, Utf8] Returns the number of matches that a [regular expression](https://docs.rs/regex/latest/regex/#syntax) has in a string.
-datafusion public regexp_count SCALAR Int64 [str, regexp, start, flags] [Utf8View, Utf8View, Int64, Utf8View] Returns the number of matches that a [regular expression](https://docs.rs/regex/latest/regex/#syntax) has in a string.
-datafusion public regexp_count SCALAR Int64 [str, regexp, start] [LargeUtf8, LargeUtf8, Int64] Returns the number of matches that a [regular expression](https://docs.rs/regex/latest/regex/#syntax) has in a string.
-datafusion public regexp_count SCALAR Int64 [str, regexp, start] [Utf8, Utf8, Int64] Returns the number of matches that a [regular expression](https://docs.rs/regex/latest/regex/#syntax) has in a string.
-datafusion public regexp_count SCALAR Int64 [str, regexp, start] [Utf8View, Utf8View, Int64] Returns the number of matches that a [regular expression](https://docs.rs/regex/latest/regex/#syntax) has in a string.
-datafusion public regexp_count SCALAR Int64 [str, regexp] [LargeUtf8, LargeUtf8] Returns the number of matches that a [regular expression](https://docs.rs/regex/latest/regex/#syntax) has in a string.
-datafusion public regexp_count SCALAR Int64 [str, regexp] [Utf8, Utf8] Returns the number of matches that a [regular expression](https://docs.rs/regex/latest/regex/#syntax) has in a string.
-datafusion public regexp_count SCALAR Int64 [str, regexp] [Utf8View, Utf8View] Returns the number of matches that a [regular expression](https://docs.rs/regex/latest/regex/#syntax) has in a string.
+date_trunc Timestamp(Microsecond, None) [precision, expression] [Utf8, Timestamp(Microsecond, None)] FUNCTION Truncates a timestamp value to a specified precision. date_trunc(precision, expression)
+date_trunc Timestamp(Microsecond, None) [precision, expression] [Utf8View, Timestamp(Microsecond, None)] FUNCTION Truncates a timestamp value to a specified precision. date_trunc(precision, expression)
+date_trunc Timestamp(Microsecond, Some("+TZ")) [precision, expression] [Utf8, Timestamp(Microsecond, Some("+TZ"))] FUNCTION Truncates a timestamp value to a specified precision. date_trunc(precision, expression)
+date_trunc Timestamp(Microsecond, Some("+TZ")) [precision, expression] [Utf8View, Timestamp(Microsecond, Some("+TZ"))] FUNCTION Truncates a timestamp value to a specified precision. date_trunc(precision, expression)
+date_trunc Timestamp(Millisecond, None) [precision, expression] [Utf8, Timestamp(Millisecond, None)] FUNCTION Truncates a timestamp value to a specified precision. date_trunc(precision, expression)
+date_trunc Timestamp(Millisecond, None) [precision, expression] [Utf8View, Timestamp(Millisecond, None)] FUNCTION Truncates a timestamp value to a specified precision. date_trunc(precision, expression)
+date_trunc Timestamp(Millisecond, Some("+TZ")) [precision, expression] [Utf8, Timestamp(Millisecond, Some("+TZ"))] FUNCTION Truncates a timestamp value to a specified precision. date_trunc(precision, expression)
+date_trunc Timestamp(Millisecond, Some("+TZ")) [precision, expression] [Utf8View, Timestamp(Millisecond, Some("+TZ"))] FUNCTION Truncates a timestamp value to a specified precision. date_trunc(precision, expression)
+date_trunc Timestamp(Nanosecond, None) [precision, expression] [Utf8, Timestamp(Nanosecond, None)] FUNCTION Truncates a timestamp value to a specified precision. date_trunc(precision, expression)
+date_trunc Timestamp(Nanosecond, None) [precision, expression] [Utf8View, Timestamp(Nanosecond, None)] FUNCTION Truncates a timestamp value to a specified precision. date_trunc(precision, expression)
+date_trunc Timestamp(Nanosecond, Some("+TZ")) [precision, expression] [Utf8, Timestamp(Nanosecond, Some("+TZ"))] FUNCTION Truncates a timestamp value to a specified precision. date_trunc(precision, expression)
+date_trunc Timestamp(Nanosecond, Some("+TZ")) [precision, expression] [Utf8View, Timestamp(Nanosecond, Some("+TZ"))] FUNCTION Truncates a timestamp value to a specified precision. date_trunc(precision, expression)
+date_trunc Timestamp(Second, None) [precision, expression] [Utf8, Timestamp(Second, None)] FUNCTION Truncates a timestamp value to a specified precision. date_trunc(precision, expression)
+date_trunc Timestamp(Second, None) [precision, expression] [Utf8View, Timestamp(Second, None)] FUNCTION Truncates a timestamp value to a specified precision. date_trunc(precision, expression)
+date_trunc Timestamp(Second, Some("+TZ")) [precision, expression] [Utf8, Timestamp(Second, Some("+TZ"))] FUNCTION Truncates a timestamp value to a specified precision. date_trunc(precision, expression)
+date_trunc Timestamp(Second, Some("+TZ")) [precision, expression] [Utf8View, Timestamp(Second, Some("+TZ"))] FUNCTION Truncates a timestamp value to a specified precision. date_trunc(precision, expression)
 
 statement ok
-show functions;
+show functions

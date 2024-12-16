@@ -1890,7 +1890,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         let where_clause = if let Some(filter) = filter {
             match filter {
                 ShowStatementFilter::Like(like) => {
-                    format!("WHERE i.specific_name like '{like}'")
+                    format!("WHERE p.function_name like '{like}'")
                 }
                 _ => return plan_err!("Unsupported SHOW FUNCTIONS filter"),
             }
@@ -1900,52 +1900,56 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
 
         let query = format!(
             r#"
-SELECT
-    i.specific_catalog catalog_name,
-    i.specific_schema schema_name,
-    i.specific_name function_name,
-    r.function_type function_type,
-    o.data_type return_type,
-    array_agg(i.parameter_name ORDER BY i.ordinal_position ASC) parameters,
-    array_agg(i.data_type ORDER BY i.ordinal_position ASC) parameter_types,
-    r.description description
-FROM (
-    SELECT
-        specific_catalog,
-        specific_schema,
-        specific_name,
-        ordinal_position,
-        parameter_name,
-        data_type,
-        rid
-    FROM
-        information_schema.parameters
-    WHERE
-        parameter_mode = 'IN'
-    ) i
-JOIN
+SELECT DISTINCT
+    p.*,
+    r.routine_type function_type,
+    r.description description,
+    r.syntax_example syntax_example
+FROM
     (
-    SELECT
-        specific_catalog,
-        specific_schema,
-        specific_name,
-        ordinal_position,
-        parameter_name,
-        data_type,
-        rid
-    FROM
-        information_schema.parameters
-    WHERE
-        parameter_mode = 'OUT'
-    ) o
-ON i.specific_catalog = o.specific_catalog
-       AND i.specific_schema = o.specific_schema
-       AND i.specific_name = o.specific_name
-       AND i.rid = o.rid
+        SELECT
+            i.specific_name function_name,
+            o.data_type return_type,
+            array_agg(i.parameter_name ORDER BY i.ordinal_position ASC) parameters,
+            array_agg(i.data_type ORDER BY i.ordinal_position ASC) parameter_types
+        FROM (
+                 SELECT
+                     specific_catalog,
+                     specific_schema,
+                     specific_name,
+                     ordinal_position,
+                     parameter_name,
+                     data_type,
+                     rid
+                 FROM
+                     information_schema.parameters
+                 WHERE
+                     parameter_mode = 'IN'
+             ) i
+                 JOIN
+             (
+                 SELECT
+                     specific_catalog,
+                     specific_schema,
+                     specific_name,
+                     ordinal_position,
+                     parameter_name,
+                     data_type,
+                     rid
+                 FROM
+                     information_schema.parameters
+                 WHERE
+                     parameter_mode = 'OUT'
+             ) o
+             ON i.specific_catalog = o.specific_catalog
+                 AND i.specific_schema = o.specific_schema
+                 AND i.specific_name = o.specific_name
+                 AND i.rid = o.rid
+        GROUP BY 1, 2, i.rid
+    ) as p
 JOIN information_schema.routines r
-ON i.specific_name = r.routine_name
+ON p.function_name = r.routine_name
 {where_clause}
-GROUP BY 1, 2, 3, 4, 5, i.rid, r.description
             "#
         );
         let mut rewrite = DFParser::parse_sql(&query)?;
