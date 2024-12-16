@@ -247,6 +247,7 @@ impl InformationSchemaConfig {
                     return_type,
                     "SCALAR",
                     udf.documentation().map(|d| d.description.to_string()),
+                    udf.documentation().map(|d| d.syntax_example.to_string()),
                 )
             }
         }
@@ -266,6 +267,7 @@ impl InformationSchemaConfig {
                     return_type,
                     "AGGREGATE",
                     udaf.documentation().map(|d| d.description.to_string()),
+                    udaf.documentation().map(|d| d.syntax_example.to_string()),
                 )
             }
         }
@@ -285,6 +287,7 @@ impl InformationSchemaConfig {
                     return_type,
                     "WINDOW",
                     udwf.documentation().map(|d| d.description.to_string()),
+                    udwf.documentation().map(|d| d.syntax_example.to_string()),
                 )
             }
         }
@@ -374,7 +377,6 @@ impl InformationSchemaConfig {
                 );
                 rid += 1;
             }
-
         }
 
         for (func_name, udwf) in udwfs {
@@ -1108,6 +1110,7 @@ impl InformationSchemaRoutines {
             Field::new("data_type", DataType::Utf8, true),
             Field::new("function_type", DataType::Utf8, true),
             Field::new("description", DataType::Utf8, true),
+            Field::new("syntax_example", DataType::Utf8, true),
         ]));
 
         Self { schema, config }
@@ -1127,6 +1130,7 @@ impl InformationSchemaRoutines {
             data_type: StringBuilder::new(),
             function_type: StringBuilder::new(),
             description: StringBuilder::new(),
+            syntax_example: StringBuilder::new(),
         }
     }
 }
@@ -1144,6 +1148,7 @@ struct InformationSchemaRoutinesBuilder {
     data_type: StringBuilder,
     function_type: StringBuilder,
     description: StringBuilder,
+    syntax_example: StringBuilder,
 }
 
 impl InformationSchemaRoutinesBuilder {
@@ -1158,6 +1163,7 @@ impl InformationSchemaRoutinesBuilder {
         data_type: Option<impl AsRef<str>>,
         function_type: impl AsRef<str>,
         description: Option<impl AsRef<str>>,
+        syntax_example: Option<impl AsRef<str>>,
     ) {
         self.specific_catalog.append_value(catalog_name.as_ref());
         self.specific_schema.append_value(schema_name.as_ref());
@@ -1170,6 +1176,7 @@ impl InformationSchemaRoutinesBuilder {
         self.data_type.append_option(data_type.as_ref());
         self.function_type.append_value(function_type.as_ref());
         self.description.append_option(description);
+        self.syntax_example.append_option(syntax_example);
     }
 
     fn finish(&mut self) -> RecordBatch {
@@ -1187,6 +1194,7 @@ impl InformationSchemaRoutinesBuilder {
                 Arc::new(self.data_type.finish()),
                 Arc::new(self.function_type.finish()),
                 Arc::new(self.description.finish()),
+                Arc::new(self.syntax_example.finish()),
             ],
         )
         .unwrap()
