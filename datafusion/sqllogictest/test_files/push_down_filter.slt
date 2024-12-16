@@ -186,6 +186,7 @@ logical_plan
 query II
 select * from test_filter_with_limit where value = 2 limit 1;
 ----
+2 2
 
 # Tear down test_filter_with_limit table:
 statement ok
