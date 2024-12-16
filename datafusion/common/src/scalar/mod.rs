@@ -2444,7 +2444,7 @@ impl ScalarValue {
                 e,
                 size
             ),
-            ScalarValue::Union(value, fields, _mode) => match value {
+            ScalarValue::Union(value, fields, mode) => match value {
                 Some((v_id, value)) => {
                     let mut new_fields = Vec::with_capacity(fields.len());
                     let mut child_arrays = Vec::<ArrayRef>::with_capacity(fields.len());
@@ -2453,7 +2453,12 @@ impl ScalarValue {
                             value.to_array_of_size(size)?
                         } else {
                             let dt = field.data_type();
-                            new_null_array(dt, size)
+                            match mode {
+                                UnionMode::Sparse => new_null_array(dt, size),
+                                // In a dense union, only the child with values needs to be
+                                // allocated
+                                UnionMode::Dense => new_null_array(dt, 0),
+                            }
                         };
                         let field = (**field).clone();
                         child_arrays.push(ar);
@@ -2461,7 +2466,10 @@ impl ScalarValue {
                     }
                     let type_ids = repeat(*v_id).take(size);
                     let type_ids = ScalarBuffer::<i8>::from_iter(type_ids);
-                    let value_offsets: Option<ScalarBuffer<i32>> = None;
+                    let value_offsets = match mode {
+                        UnionMode::Sparse => None,
+                        UnionMode::Dense => Some(ScalarBuffer::from_iter(0..size as i32)),
+                    };
                     let ar = UnionArray::try_new(
                         fields.clone(),
                         type_ids,
@@ -5642,14 +5650,12 @@ mod tests {
             // null array
             Arc::new(NullArray::new(3)),
             // dense union
-            /* Dense union fails due to https://github.com/apache/datafusion/issues/13762
             {
                 let mut builder = UnionBuilder::new_dense();
                 builder.append::<Int32Type>("a", 1).unwrap();
                 builder.append::<Float64Type>("b", 3.4).unwrap();
                 Arc::new(builder.build().unwrap())
-            }
-             */
+            },
             // sparse union
             {
                 let mut builder = UnionBuilder::new_sparse();
