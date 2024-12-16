@@ -37,7 +37,7 @@ struct ResolvedSchemaProvider {
 #[async_trait]
 impl SchemaProvider for ResolvedSchemaProvider {
     fn owner_name(&self) -> Option<&str> {
-        self.owner_name.as_ref().map(|o| o.as_str())
+        self.owner_name.as_deref()
     }
 
     fn as_any(&self) -> &dyn std::any::Any {
@@ -372,8 +372,8 @@ pub trait AsyncCatalogProviderList: Send + Sync {
                 catalog
             } else {
                 let resolved_catalog = self.catalog(catalog_name).await?;
-                let resolved_catalog = resolved_catalog
-                    .map(|async_cat| ResolvedCatalogProviderBuilder::new(async_cat));
+                let resolved_catalog =
+                    resolved_catalog.map(ResolvedCatalogProviderBuilder::new);
                 cached_catalogs.insert(catalog_name.to_string(), resolved_catalog);
                 cached_catalogs.get_mut(catalog_name).unwrap()
             };
