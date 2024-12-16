@@ -51,6 +51,7 @@ log = { workspace = true }
 recursive = { workspace = true }
 regex = { workspace = true }
 sqlparser = { workspace = true }
+bigdecimal = { workspace = true }
 
 [dev-dependencies]
 ctor = { workspace = true }
