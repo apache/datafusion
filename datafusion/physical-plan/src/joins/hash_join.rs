@@ -104,7 +104,7 @@ impl JoinLeftData {
         batch: RecordBatch,
         visited_indices_bitmap: SharedBitmapBuilder,
         probe_threads_counter: AtomicUsize,
-        reservation: MemoryReservation
+        reservation: MemoryReservation,
     ) -> Self {
         Self {
             hash_map,
@@ -904,7 +904,7 @@ async fn collect_left_input(
         single_batch,
         Mutex::new(visited_indices_bitmap),
         AtomicUsize::new(probe_threads_count),
-        reservation
+        reservation,
     );
 
     Ok(data)
