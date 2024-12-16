@@ -2061,8 +2061,10 @@ mod tests {
             "i",
             ContainerStats::new_i32(
                 vec![Some(0)], // min
-                vec![Some(0)],     // max
-            ).with_null_counts(vec![Some(1)]).with_row_counts(vec![Some(1)]),
+                vec![Some(0)], // max
+            )
+            .with_null_counts(vec![Some(1)])
+            .with_row_counts(vec![Some(1)]),
         );
         let expected_ret = &[false];
         prune_with_expr(col("i").eq(lit(0)), &schema, &statistics, expected_ret);
@@ -2076,10 +2078,7 @@ mod tests {
             row_counts: Some(Arc::new(UInt64Array::from(vec![Some(1)]))),
             ..ContainerStats::default()
         };
-        let statistics = TestStatistics::new().with(
-            "i",
-            container_stats,
-        );
+        let statistics = TestStatistics::new().with("i", container_stats);
         let expected_ret = &[false];
         prune_with_expr(col("i").eq(lit(0)), &schema, &statistics, expected_ret);
 
@@ -2092,10 +2091,7 @@ mod tests {
             row_counts: Some(Arc::new(UInt64Array::from(vec![Some(1)]))),
             ..ContainerStats::default()
         };
-        let statistics = TestStatistics::new().with(
-            "i",
-            container_stats,
-        );
+        let statistics = TestStatistics::new().with("i", container_stats);
         let expected_ret = &[true];
         prune_with_expr(col("i").eq(lit(0)), &schema, &statistics, expected_ret);
 
@@ -2108,10 +2104,7 @@ mod tests {
             row_counts: Some(Arc::new(UInt64Array::from(vec![Some(1)]))),
             ..ContainerStats::default()
         };
-        let statistics = TestStatistics::new().with(
-            "i",
-            container_stats,
-        );
+        let statistics = TestStatistics::new().with("i", container_stats);
         let expected_ret = &[true];
         prune_with_expr(col("i").eq(lit(0)), &schema, &statistics, expected_ret);
         let expected_ret = &[false];
@@ -2126,10 +2119,7 @@ mod tests {
             row_counts: Some(Arc::new(UInt64Array::from(vec![None]))),
             ..ContainerStats::default()
         };
-        let statistics = TestStatistics::new().with(
-            "i",
-            container_stats,
-        );
+        let statistics = TestStatistics::new().with("i", container_stats);
         let expected_ret = &[true];
         prune_with_expr(col("i").eq(lit(0)), &schema, &statistics, expected_ret);
         let expected_ret = &[false];
@@ -2147,10 +2137,7 @@ mod tests {
             row_counts: Some(Arc::new(UInt64Array::from(vec![Some(1), Some(1)]))),
             ..ContainerStats::default()
         };
-        let statistics = TestStatistics::new().with(
-            "i",
-            container_stats,
-        );
+        let statistics = TestStatistics::new().with("i", container_stats);
         let expected_ret = &[true, true];
         prune_with_expr(col("i").eq(lit(0)), &schema, &statistics, expected_ret);
         let expected_ret = &[false, true];
@@ -2169,8 +2156,10 @@ mod tests {
             "i",
             ContainerStats::new_i32(
                 vec![Some(0)], // min
-                vec![Some(0)],     // max
-            ).with_null_counts(vec![Some(1)]).with_row_counts(vec![Some(1)]),
+                vec![Some(0)], // max
+            )
+            .with_null_counts(vec![Some(1)])
+            .with_row_counts(vec![Some(1)]),
         );
 
         let expected_ret = &[false];
