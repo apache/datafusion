@@ -944,7 +944,8 @@ impl GroupedHashAggregateStream {
         // over the target memory size after emission, we can emit again rather than returning Err.
         let _ = self.update_memory_reservation();
         let batch = RecordBatch::try_new(schema, output)?;
-        Ok((batch.num_rows() > 0).then_some(batch))
+        debug_assert!(batch.num_rows() > 0);
+        Ok(Some(batch))
     }
 
     /// Optimistically, [`Self::group_aggregate_batch`] allows to exceed the memory target slightly

@@ -411,7 +411,7 @@ fn list_unnest_at_level(
     temp_unnested_arrs: &mut HashMap<ListUnnest, ArrayRef>,
     level_to_unnest: usize,
     options: &UnnestOptions,
-) -> Result<(Vec<ArrayRef>, usize)> {
+) -> Result<Option<Vec<ArrayRef>>> {
     // Extract unnestable columns at this level
     let (arrs_to_unnest, list_unnest_specs): (Vec<Arc<dyn Array>>, Vec<_>) =
         list_type_unnests
@@ -447,7 +447,7 @@ fn list_unnest_at_level(
         })? as usize
     };
     if total_length == 0 {
-        return Ok((vec![], 0));
+        return Ok(None);
     }
 
     // Unnest all the list arrays
@@ -486,7 +486,7 @@ fn list_unnest_at_level(
     // as the side effect of unnesting
     let ret = repeat_arrs_from_indices(batch, &take_indices, &repeat_mask)?;
 
-    Ok((ret, total_length))
+    Ok(Some(ret))
 }
 struct UnnestingResult {
     arr: ArrayRef,
@@ -576,16 +576,16 @@ fn build_batch(
                     true => batch.columns(),
                     false => &flatten_arrs,
                 };
-                let (temp_result, num_rows) = list_unnest_at_level(
+                let temp_result = list_unnest_at_level(
                     input,
                     list_type_columns,
                     &mut temp_unnested_result,
                     depth,
                     options,
                 )?;
-                if num_rows == 0 {
+                let Some(temp_result) = temp_result else {
                     return Ok(None);
-                }
+                };
                 flatten_arrs = temp_result;
             }
             let unnested_array_map: HashMap<usize, Vec<UnnestingResult>> =
