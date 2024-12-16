@@ -519,13 +519,13 @@
       </a>
      </li>
      <li class="toc-h3 nav-item toc-entry">
-      <a class="reference internal nav-link" href="#file-tickets-to-discuss-new-features">
-       File Tickets to Discuss New Features
+      <a class="reference internal nav-link" href="#discussing-new-features">
+       Discussing New Features
       </a>
      </li>
      <li class="toc-h3 nav-item toc-entry">
-      <a class="reference internal nav-link" href="#what-features-are-good-fits-for-datafusion">
-       What Features are Good Fits for DataFusion?
+      <a class="reference internal nav-link" href="#what-contributions-are-good-fits">
+       What Contributions are Good Fits?
       </a>
      </li>
     </ul>
@@ -656,8 +656,8 @@ unable to make progress you should unassign the issue by using the <code class="
 link at the top of the issue page (and ask for help if are stuck) so that
 someone else can get involved in the work.</p>
 </section>
-<section id="file-tickets-to-discuss-new-features">
-<h3>File Tickets to Discuss New Features<a class="headerlink" href="#file-tickets-to-discuss-new-features" title="Link to this heading">¶</a></h3>
+<section id="discussing-new-features">
+<h3>Discussing New Features<a class="headerlink" href="#discussing-new-features" title="Link to this heading">¶</a></h3>
 <p>If you plan to work on a new feature that doesn’t have an existing ticket, it is
 a good idea to open a ticket to discuss the feature. Advanced discussion often
 helps avoid wasted effort by determining early if the feature is a good fit for
@@ -667,12 +667,35 @@ line PR.</p>
 <p>If you open a ticket and it doesn’t get any response, you can try <code class="docutils literal notranslate"><span class="pre">&#64;</span></code>-mentioning
 recently active community members in the ticket to get their attention.</p>
 </section>
-<section id="what-features-are-good-fits-for-datafusion">
-<h3>What Features are Good Fits for DataFusion?<a class="headerlink" href="#what-features-are-good-fits-for-datafusion" title="Link to this heading">¶</a></h3>
-<p>DataFusion is designed to highly extensible, and many features can be implemented
-as extensions without changing the core of DataFusion.</p>
-<p>We are <a class="reference external" href="https://github.com/apache/datafusion/issues/12357">working on criteria for what features are good fits for DataFusion</a>, and
-will update this section when we have more to share.</p>
+<section id="what-contributions-are-good-fits">
+<h3>What Contributions are Good Fits?<a class="headerlink" href="#what-contributions-are-good-fits" title="Link to this heading">¶</a></h3>
+<p>DataFusion is designed to be highly extensible, and many features can be
+implemented as extensions without changes or additions to the core. Support for
+new functions, data formats, and similar functionality can be added using those
+extension APIs, and there are already many existing community supported
+extensions listed in the <a class="reference internal" href="../library-user-guide/extensions.html"><span class="std std-doc">extensions list</span></a>.</p>
+<p>Query engines are complex pieces of software to develop and maintain. Given our
+limited maintenance bandwidth, we try to keep the DataFusion core as simple and
+focused as possible, while still satisfying the <a class="reference external" href="https://docs.rs/datafusion/latest/datafusion/index.html#design-goals">design goal</a> of an easy to
+start initial experience.</p>
+<p>With that in mind, contributions that meet the following criteria are more likely
+to be accepted:</p>
+<ol class="arabic simple">
+<li><p>Bug fixes for existing features</p></li>
+<li><p>Test coverage for existing features</p></li>
+<li><p>Documentation improvements / examples</p></li>
+<li><p>Performance improvements to existing features (with benchmarks)</p></li>
+<li><p>“Small” functional improvements to existing features (if they don’t change existing behavior)</p></li>
+<li><p>Additional APIs for extending DataFusion’s capabilities</p></li>
+<li><p>CI improvements</p></li>
+</ol>
+<p>Contributions that will likely involve more discussion (see Discussing New
+Features above) prior to acceptance include:</p>
+<ol class="arabic simple">
+<li><p>Major new functionality (even if it is part of the “standard SQL”)</p></li>
+<li><p>New functions, especially if they aren’t part of “standard SQL”</p></li>
+<li><p>New data sources (e.g. support for Apache ORC)</p></li>
+</ol>
 </section>
 </section>
 </section>
