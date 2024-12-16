@@ -1128,6 +1128,7 @@ impl LogicalPlan {
 
     /// These are invariants to hold true for each logical plan.
     pub fn assert_invariants(&self) -> Result<()> {
+        // Refer to <https://datafusion.apache.org/contributor-guide/specification/invariants.html#relation-name-tuples-in-logical-fields-and-logical-columns-are-unique>
         assert_unique_field_names(self)?;
 
         Ok(())

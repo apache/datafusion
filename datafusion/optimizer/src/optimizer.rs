@@ -487,6 +487,7 @@ fn assert_valid_optimization(
     prev_schema: &Arc<DFSchema>,
 ) -> Result<()> {
     // verify invariant: optimizer rule didn't change the schema
+    // Refer to <https://datafusion.apache.org/contributor-guide/specification/invariants.html#logical-schema-is-invariant-under-logical-optimization>
     assert_expected_schema(rule_name, prev_schema, plan)?;
 
     Ok(())
