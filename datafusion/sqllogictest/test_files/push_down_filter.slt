@@ -137,16 +137,16 @@ statement ok
 CREATE TABLE src_table (
     part_key INT,
     value INT
-) AS VALUES(1, 0), (1, 1), (1, 100), (2, 0), (2, 2), (2, 2), (2, 100);
+) AS VALUES(1, 0), (1, 1), (1, 100), (2, 0), (2, 2), (2, 2), (2, 100), (3, 4), (3, 5), (3, 6);
 
 
-# There will be 2 records filtered from the table to check that `limit 1` actually applied.
-# Setup 2 files, i.e., as many as there are partitions:
+# There will be more than 2 records filtered from the table to check that `limit 1` actually applied.
+# Setup 3 files, i.e., as many as there are partitions:
 
 # File 1:
 query I
 COPY (SELECT * FROM src_table where part_key = 1)
-TO 'test_files/scratch/parquet/test_filter_with_limit/0.parquet'
+TO 'test_files/scratch/parquet/test_filter_with_limit/part-0.parquet'
 STORED AS PARQUET;
 ----
 3
@@ -154,10 +154,18 @@ STORED AS PARQUET;
 # File 2:
 query I
 COPY (SELECT * FROM src_table where part_key = 2)
-TO 'test_files/scratch/parquet/test_filter_with_limit/1.parquet'
+TO 'test_files/scratch/parquet/test_filter_with_limit/part-1.parquet'
 STORED AS PARQUET;
 ----
 4
+
+# File 3:
+query I
+COPY (SELECT * FROM src_table where part_key = 3)
+TO 'test_files/scratch/parquet/test_filter_with_limit/part-2.parquet'
+STORED AS PARQUET;
+----
+3
 
 statement ok
 CREATE EXTERNAL TABLE test_filter_with_limit
@@ -167,6 +175,13 @@ CREATE EXTERNAL TABLE test_filter_with_limit
 )
 STORED AS PARQUET
 LOCATION 'test_files/scratch/parquet/test_filter_with_limit/';
+
+query TT
+explain select * from test_filter_with_limit where value = 2 limit 1;
+----
+logical_plan
+01)Limit: skip=0, fetch=1
+02)--TableScan: test_filter_with_limit projection=[part_key, value], full_filters=[test_filter_with_limit.value = Int32(2)], fetch=1
 
 query II
 select * from test_filter_with_limit where value = 2 limit 1;
