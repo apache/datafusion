@@ -860,6 +860,47 @@ select count(*) from (select unnest(range(0, 100000)) id) t inner join (select u
 ----
 100000
 
+# Test implicit LATERAL support for UNNEST
+# Issue: https://github.com/apache/datafusion/issues/13659
+# TODO: https://github.com/apache/datafusion/issues/10048
+query error DataFusion error: This feature is not implemented: Physical plan does not support logical expression OuterReferenceColumn\(List\(Field \{ name: "item", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: \{\} \}\), Column \{ relation: Some\(Bare \{ table: "u" \}\), name: "column1" \}\)
+select * from unnest_table u, unnest(u.column1);
+
+# Test implicit LATERAL support for UNNEST (INNER JOIN)
+query error DataFusion error: This feature is not implemented: Physical plan does not support logical expression OuterReferenceColumn\(List\(Field \{ name: "item", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: \{\} \}\), Column \{ relation: Some\(Bare \{ table: "u" \}\), name: "column1" \}\)
+select * from unnest_table u INNER JOIN unnest(u.column1) AS t(column1) ON u.column3 = t.column1;
+
+# Test implicit LATERAL planning for UNNEST
+query TT
+explain select * from unnest_table u, unnest(u.column1);
+----
+logical_plan
+01)Cross Join: 
+02)--SubqueryAlias: u
+03)----TableScan: unnest_table projection=[column1, column2, column3, column4, column5]
+04)--Subquery:
+05)----Projection: __unnest_placeholder(outer_ref(u.column1),depth=1) AS UNNEST(outer_ref(u.column1))
+06)------Unnest: lists[__unnest_placeholder(outer_ref(u.column1))|depth=1] structs[]
+07)--------Projection: outer_ref(u.column1) AS __unnest_placeholder(outer_ref(u.column1))
+08)----------EmptyRelation
+physical_plan_error This feature is not implemented: Physical plan does not support logical expression OuterReferenceColumn(List(Field { name: "item", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), Column { relation: Some(Bare { table: "u" }), name: "column1" })
+
+# Test implicit LATERAL planning for UNNEST (INNER JOIN)
+query TT
+explain select * from unnest_table u INNER JOIN unnest(u.column1) AS t(column1) ON u.column3 = t.column1;
+----
+logical_plan
+01)Inner Join: u.column3 = t.column1
+02)--SubqueryAlias: u
+03)----TableScan: unnest_table projection=[column1, column2, column3, column4, column5]
+04)--SubqueryAlias: t
+05)----Subquery:
+06)------Projection: __unnest_placeholder(outer_ref(u.column1),depth=1) AS column1
+07)--------Unnest: lists[__unnest_placeholder(outer_ref(u.column1))|depth=1] structs[]
+08)----------Projection: outer_ref(u.column1) AS __unnest_placeholder(outer_ref(u.column1))
+09)------------EmptyRelation
+physical_plan_error This feature is not implemented: Physical plan does not support logical expression OuterReferenceColumn(List(Field { name: "item", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), Column { relation: Some(Bare { table: "u" }), name: "column1" })
+
 
 ## Unnest in subquery
 query IIII
