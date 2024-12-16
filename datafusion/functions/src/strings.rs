@@ -452,3 +452,14 @@ impl ColumnarValueRef<'_> {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_overflow_string_array_builders() {
+        let _builder = StringArrayBuilder::with_capacity(usize::MAX, usize::MAX);
+        let _builder = LargeStringArrayBuilder::with_capacity(usize::MAX, usize::MAX);
+    }
+}
