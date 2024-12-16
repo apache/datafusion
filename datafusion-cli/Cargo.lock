@@ -1557,6 +1557,7 @@ dependencies = [
  "log",
  "paste",
  "petgraph",
+ "regex",
 ]
 
 [[package]]

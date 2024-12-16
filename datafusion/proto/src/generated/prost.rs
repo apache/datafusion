@@ -1165,7 +1165,7 @@ pub struct PhysicalExtensionNode {
 pub struct PhysicalExprNode {
     #[prost(
         oneof = "physical_expr_node::ExprType",
-        tags = "1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 14, 15, 16, 18, 19, 20"
+        tags = "1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 14, 15, 16, 18, 19, 20, 21"
     )]
     pub expr_type: ::core::option::Option<physical_expr_node::ExprType>,
 }
@@ -1216,6 +1216,10 @@ pub mod physical_expr_node {
         Extension(super::PhysicalExtensionExprNode),
         #[prost(message, tag = "20")]
         UnknownColumn(super::UnknownColumn),
+        #[prost(message, tag = "21")]
+        ScalarRegexMatchExpr(
+            ::prost::alloc::boxed::Box<super::PhysicalScalarRegexMatchExprNode>,
+        ),
     }
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -1394,6 +1398,17 @@ pub struct PhysicalExtensionExprNode {
     pub expr: ::prost::alloc::vec::Vec<u8>,
     #[prost(message, repeated, tag = "2")]
     pub inputs: ::prost::alloc::vec::Vec<PhysicalExprNode>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct PhysicalScalarRegexMatchExprNode {
+    #[prost(bool, tag = "1")]
+    pub negated: bool,
+    #[prost(bool, tag = "2")]
+    pub case_insensitive: bool,
+    #[prost(message, optional, boxed, tag = "3")]
+    pub expr: ::core::option::Option<::prost::alloc::boxed::Box<PhysicalExprNode>>,
+    #[prost(message, optional, boxed, tag = "4")]
+    pub pattern: ::core::option::Option<::prost::alloc::boxed::Box<PhysicalExprNode>>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct FilterExecNode {
