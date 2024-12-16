@@ -2002,7 +2002,7 @@ mod tests {
 
         assert_contains!(
             &display,
-            "pruning_predicate=CASE WHEN c1_null_count@2 = c1_row_count@3 THEN false ELSE c1_min@0 != bar OR bar != c1_max@1 END"
+            "pruning_predicate=NOT c1_null_count@2 = c1_row_count@3 AND (c1_min@0 != bar OR bar != c1_max@1)"
         );
 
         assert_contains!(&display, r#"predicate=c1@0 != bar"#);
