@@ -5275,7 +5275,7 @@ query BB
 select array_has([1, null, 2], 3),
        array_has([null, null, null], 3);
 ----
-NULL NULL
+false false
 
 #TODO: array_has_all and array_has_any cannot handle NULL
 #query BBBB
@@ -5362,8 +5362,8 @@ from array_has_table_null;
 true
 true
 false
-NULL
-NULL
+false
+false
 
 query B
 select array_has(column1, column2)
@@ -5568,9 +5568,9 @@ select array_has(column1, make_array(5, 6)),
 from arrays;
 ----
 false false false true
-true false true NULL
+true false true false
 true false false true
-false true NULL false
+false true false false
 NULL NULL false false
 false false NULL false
 false false false NULL
@@ -5583,9 +5583,9 @@ select array_has(arrow_cast(column1, 'LargeList(List(Int64))'), make_array(5, 6)
 from arrays;
 ----
 false false false true
-true false true NULL
+true false true false
 true false false true
-false true NULL false
+false true false false
 NULL NULL false false
 false false NULL false
 false false false NULL
@@ -5598,12 +5598,12 @@ select array_has(column1, make_array(5, 6)),
 from fixed_size_arrays;
 ----
 false false false true
-true false true NULL
+true false true false
 true false false true
-false true NULL false
-NULL NULL false false
-false false NULL false
-false false false NULL
+false true false false
+false false false false
+false false false false
+false false false false
 
 query BBBBBBBBBBBBB
 select array_has_all(make_array(1,2,3), make_array(1,3)),
