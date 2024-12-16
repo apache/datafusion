@@ -293,10 +293,10 @@ impl UnnestStream {
                         &self.struct_column_indices,
                         &self.options,
                     )?;
+                    timer.done();
                     let Some(result_batch) = result else {
                         continue;
                     };
-                    timer.done();
                     self.metrics.output_batches.add(1);
                     self.metrics.output_rows.add(result_batch.num_rows());
 
@@ -1137,7 +1137,8 @@ mod tests {
                 preserve_nulls: true,
                 recursions: vec![],
             },
-        )?.unwrap();
+        )?
+        .unwrap();
 
         let expected = &[
 "+---------------------------------+---------------------------------+---------------------------------+",

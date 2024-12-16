@@ -421,7 +421,7 @@ impl TopKHeap {
         let num_rows = self.inner.len();
         let (new_batch, mut topk_rows) = self.emit_with_state()?;
         let Some(new_batch) = new_batch else {
-            return Ok(())
+            return Ok(());
         };
 
         // clear all old entries in store (this invalidates all
