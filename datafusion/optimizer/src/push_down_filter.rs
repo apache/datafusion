@@ -17,10 +17,10 @@
 
 //! [`PushDownFilter`] applies filters as early as possible
 
-use indexmap::IndexSet;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
+use indexmap::IndexSet;
 use itertools::Itertools;
 
 use datafusion_common::tree_node::{

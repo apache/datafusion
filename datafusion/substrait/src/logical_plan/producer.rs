@@ -56,6 +56,7 @@ use datafusion::prelude::Expr;
 use pbjson_types::Any as ProtoAny;
 use substrait::proto::exchange_rel::{ExchangeKind, RoundRobin, ScatterFields};
 use substrait::proto::expression::cast::FailureBehavior;
+use substrait::proto::expression::field_reference::{RootReference, RootType};
 use substrait::proto::expression::literal::interval_day_to_second::PrecisionMode;
 use substrait::proto::expression::literal::map::KeyValue;
 use substrait::proto::expression::literal::{
@@ -2150,7 +2151,7 @@ fn try_to_substrait_field_reference(
                         }),
                     )),
                 })),
-                root_type: None,
+                root_type: Some(RootType::RootReference(RootReference {})),
             })
         }
         _ => substrait_err!("Expect a `Column` expr, but found {expr:?}"),
@@ -2192,13 +2193,14 @@ fn substrait_field_ref(index: usize) -> Result<Expression> {
                     }),
                 )),
             })),
-            root_type: None,
+            root_type: Some(RootType::RootReference(RootReference {})),
         }))),
     })
 }
 
 #[cfg(test)]
 mod test {
+
     use super::*;
     use crate::logical_plan::consumer::{
         from_substrait_extended_expr, from_substrait_literal_without_names,
@@ -2423,6 +2425,26 @@ mod test {
     }
 
     #[test]
+    fn to_field_reference() -> Result<()> {
+        let expression = substrait_field_ref(2)?;
+
+        match &expression.rex_type {
+            Some(RexType::Selection(field_ref)) => {
+                assert_eq!(
+                    field_ref
+                        .root_type
+                        .clone()
+                        .expect("root type should be set"),
+                    RootType::RootReference(RootReference {})
+                );
+            }
+
+            _ => panic!("Should not be anything other than field reference"),
+        }
+        Ok(())
+    }
+
+    #[test]
     fn named_struct_names() -> Result<()> {
         let schema = DFSchemaRef::new(DFSchema::try_from(Schema::new(vec![
             Field::new("int", DataType::Int32, true),
@@ -2430,7 +2452,7 @@ mod test {
                 "struct",
                 DataType::Struct(Fields::from(vec![Field::new(
                     "inner",
-                    DataType::List(Arc::new(Field::new("item", DataType::Utf8, true))),
+                    DataType::List(Arc::new(Field::new_list_field(DataType::Utf8, true))),
                     true,
                 )])),
                 true,

@@ -33,7 +33,19 @@ use datafusion_expr::{
 };
 use datafusion_physical_plan::ExecutionPlan;
 
-/// Source table
+/// A named table which can be queried.
+///
+/// Please see [`CatalogProvider`] for details of implementing a custom catalog.
+///
+/// [`TableProvider`] represents a source of data which can provide data as
+/// Apache Arrow `RecordBatch`es. Implementations of this trait provide
+/// important information for planning such as:
+///
+/// 1. [`Self::schema`]: The schema (columns and their types) of the table
+/// 2. [`Self::supports_filters_pushdown`]: Should filters be pushed into this scan
+/// 2. [`Self::scan`]: An [`ExecutionPlan`] that can read data
+///
+/// [`CatalogProvider`]: super::CatalogProvider
 #[async_trait]
 pub trait TableProvider: Debug + Sync + Send {
     /// Returns the table provider as [`Any`](std::any::Any) so that it can be

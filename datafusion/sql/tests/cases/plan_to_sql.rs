@@ -525,6 +525,96 @@ fn roundtrip_statement_with_dialect() -> Result<()> {
             parser_dialect: Box::new(GenericDialect {}),
             unparser_dialect: Box::new(SqliteDialect {}),
         },
+        TestStatementWithDialect {
+            sql: "SELECT * FROM UNNEST([1,2,3])",
+            expected: r#"SELECT * FROM (SELECT UNNEST([1, 2, 3]) AS "UNNEST(make_array(Int64(1),Int64(2),Int64(3)))")"#,
+            parser_dialect: Box::new(GenericDialect {}),
+            unparser_dialect: Box::new(UnparserDefaultDialect {}),
+        },
+        TestStatementWithDialect {
+            sql: "SELECT * FROM UNNEST([1,2,3]) AS t1 (c1)",
+            expected: r#"SELECT * FROM (SELECT UNNEST([1, 2, 3]) AS "UNNEST(make_array(Int64(1),Int64(2),Int64(3)))") AS t1 (c1)"#,
+            parser_dialect: Box::new(GenericDialect {}),
+            unparser_dialect: Box::new(UnparserDefaultDialect {}),
+        },
+        TestStatementWithDialect {
+            sql: "SELECT * FROM UNNEST([1,2,3]) AS t1 (c1)",
+            expected: r#"SELECT * FROM (SELECT UNNEST([1, 2, 3]) AS "UNNEST(make_array(Int64(1),Int64(2),Int64(3)))") AS t1 (c1)"#,
+            parser_dialect: Box::new(GenericDialect {}),
+            unparser_dialect: Box::new(UnparserDefaultDialect {}),
+        },
+        TestStatementWithDialect {
+            sql: "SELECT * FROM UNNEST([1,2,3]), j1",
+            expected: r#"SELECT * FROM (SELECT UNNEST([1, 2, 3]) AS "UNNEST(make_array(Int64(1),Int64(2),Int64(3)))") CROSS JOIN j1"#,
+            parser_dialect: Box::new(GenericDialect {}),
+            unparser_dialect: Box::new(UnparserDefaultDialect {}),
+        },
+        TestStatementWithDialect {
+            sql: "SELECT * FROM UNNEST([1,2,3]) u(c1) JOIN j1 ON u.c1 = j1.j1_id",
+            expected: r#"SELECT * FROM (SELECT UNNEST([1, 2, 3]) AS "UNNEST(make_array(Int64(1),Int64(2),Int64(3)))") AS u (c1) JOIN j1 ON (u.c1 = j1.j1_id)"#,
+            parser_dialect: Box::new(GenericDialect {}),
+            unparser_dialect: Box::new(UnparserDefaultDialect {}),
+        },
+        TestStatementWithDialect {
+            sql: "SELECT * FROM UNNEST([1,2,3]) u(c1) UNION ALL SELECT * FROM UNNEST([4,5,6]) u(c1)",
+            expected: r#"SELECT * FROM (SELECT UNNEST([1, 2, 3]) AS "UNNEST(make_array(Int64(1),Int64(2),Int64(3)))") AS u (c1) UNION ALL SELECT * FROM (SELECT UNNEST([4, 5, 6]) AS "UNNEST(make_array(Int64(4),Int64(5),Int64(6)))") AS u (c1)"#,
+            parser_dialect: Box::new(GenericDialect {}),
+            unparser_dialect: Box::new(UnparserDefaultDialect {}),
+        },
+        TestStatementWithDialect {
+            sql: "SELECT * FROM UNNEST([1,2,3])",
+            expected: r#"SELECT * FROM UNNEST([1, 2, 3])"#,
+            parser_dialect: Box::new(GenericDialect {}),
+            unparser_dialect: Box::new(CustomDialectBuilder::default().with_unnest_as_table_factor(true).build()),
+        },
+        TestStatementWithDialect {
+            sql: "SELECT * FROM UNNEST([1,2,3]) AS t1 (c1)",
+            expected: r#"SELECT * FROM UNNEST([1, 2, 3]) AS t1 (c1)"#,
+            parser_dialect: Box::new(GenericDialect {}),
+            unparser_dialect: Box::new(CustomDialectBuilder::default().with_unnest_as_table_factor(true).build()),
+        },
+        TestStatementWithDialect {
+            sql: "SELECT * FROM UNNEST([1,2,3]) AS t1 (c1)",
+            expected: r#"SELECT * FROM UNNEST([1, 2, 3]) AS t1 (c1)"#,
+            parser_dialect: Box::new(GenericDialect {}),
+            unparser_dialect: Box::new(CustomDialectBuilder::default().with_unnest_as_table_factor(true).build()),
+        },
+        TestStatementWithDialect {
+            sql: "SELECT * FROM UNNEST([1,2,3]), j1",
+            expected: r#"SELECT * FROM UNNEST([1, 2, 3]) CROSS JOIN j1"#,
+            parser_dialect: Box::new(GenericDialect {}),
+            unparser_dialect: Box::new(CustomDialectBuilder::default().with_unnest_as_table_factor(true).build()),
+        },
+        TestStatementWithDialect {
+            sql: "SELECT * FROM UNNEST([1,2,3]) u(c1) JOIN j1 ON u.c1 = j1.j1_id",
+            expected: r#"SELECT * FROM UNNEST([1, 2, 3]) AS u (c1) JOIN j1 ON (u.c1 = j1.j1_id)"#,
+            parser_dialect: Box::new(GenericDialect {}),
+            unparser_dialect: Box::new(CustomDialectBuilder::default().with_unnest_as_table_factor(true).build()),
+        },
+        TestStatementWithDialect {
+            sql: "SELECT * FROM UNNEST([1,2,3]) u(c1) UNION ALL SELECT * FROM UNNEST([4,5,6]) u(c1)",
+            expected: r#"SELECT * FROM UNNEST([1, 2, 3]) AS u (c1) UNION ALL SELECT * FROM UNNEST([4, 5, 6]) AS u (c1)"#,
+            parser_dialect: Box::new(GenericDialect {}),
+            unparser_dialect: Box::new(CustomDialectBuilder::default().with_unnest_as_table_factor(true).build()),
+        },
+        TestStatementWithDialect {
+            sql: "SELECT UNNEST([1,2,3])",
+            expected: r#"SELECT * FROM UNNEST([1, 2, 3])"#,
+            parser_dialect: Box::new(GenericDialect {}),
+            unparser_dialect: Box::new(CustomDialectBuilder::default().with_unnest_as_table_factor(true).build()),
+        },
+        TestStatementWithDialect {
+            sql: "SELECT UNNEST([1,2,3]) as c1",
+            expected: r#"SELECT UNNEST([1, 2, 3]) AS c1"#,
+            parser_dialect: Box::new(GenericDialect {}),
+            unparser_dialect: Box::new(CustomDialectBuilder::default().with_unnest_as_table_factor(true).build()),
+        },
+        TestStatementWithDialect {
+            sql: "SELECT UNNEST([1,2,3]), 1",
+            expected: r#"SELECT UNNEST([1, 2, 3]) AS UNNEST(make_array(Int64(1),Int64(2),Int64(3))), Int64(1)"#,
+            parser_dialect: Box::new(GenericDialect {}),
+            unparser_dialect: Box::new(CustomDialectBuilder::default().with_unnest_as_table_factor(true).build()),
+        },
     ];
 
     for query in tests {
@@ -535,7 +625,8 @@ fn roundtrip_statement_with_dialect() -> Result<()> {
         let state = MockSessionState::default()
             .with_aggregate_function(max_udaf())
             .with_aggregate_function(min_udaf())
-            .with_expr_planner(Arc::new(CoreFunctionPlanner::default()));
+            .with_expr_planner(Arc::new(CoreFunctionPlanner::default()))
+            .with_expr_planner(Arc::new(NestedFunctionPlanner));
 
         let context = MockContextProvider { state };
         let sql_to_rel = SqlToRel::new(&context);
@@ -571,9 +662,9 @@ fn test_unnest_logical_plan() -> Result<()> {
     let sql_to_rel = SqlToRel::new(&context);
     let plan = sql_to_rel.sql_statement_to_plan(statement).unwrap();
     let expected = r#"
-Projection: unnest_placeholder(unnest_table.struct_col).field1, unnest_placeholder(unnest_table.struct_col).field2, unnest_placeholder(unnest_table.array_col,depth=1) AS UNNEST(unnest_table.array_col), unnest_table.struct_col, unnest_table.array_col
-  Unnest: lists[unnest_placeholder(unnest_table.array_col)|depth=1] structs[unnest_placeholder(unnest_table.struct_col)]
-    Projection: unnest_table.struct_col AS unnest_placeholder(unnest_table.struct_col), unnest_table.array_col AS unnest_placeholder(unnest_table.array_col), unnest_table.struct_col, unnest_table.array_col
+Projection: __unnest_placeholder(unnest_table.struct_col).field1, __unnest_placeholder(unnest_table.struct_col).field2, __unnest_placeholder(unnest_table.array_col,depth=1) AS UNNEST(unnest_table.array_col), unnest_table.struct_col, unnest_table.array_col
+  Unnest: lists[__unnest_placeholder(unnest_table.array_col)|depth=1] structs[__unnest_placeholder(unnest_table.struct_col)]
+    Projection: unnest_table.struct_col AS __unnest_placeholder(unnest_table.struct_col), unnest_table.array_col AS __unnest_placeholder(unnest_table.array_col), unnest_table.struct_col, unnest_table.array_col
       TableScan: unnest_table"#.trim_start();
 
     assert_eq!(plan.to_string(), expected);
@@ -601,7 +692,7 @@ fn test_aggregation_without_projection() -> Result<()> {
 
     assert_eq!(
         actual,
-        r#"SELECT sum(users.age), users."name" FROM (SELECT users."name", users.age FROM users) GROUP BY users."name""#
+        r#"SELECT sum(users.age), users."name" FROM users GROUP BY users."name""#
     );
 
     Ok(())
@@ -926,12 +1017,25 @@ fn test_table_scan_pushdown() -> Result<()> {
     let query_from_table_scan_with_projection = LogicalPlanBuilder::from(
         table_scan(Some("t1"), &schema, Some(vec![0, 1]))?.build()?,
     )
-    .project(vec![wildcard()])?
+    .project(vec![col("id"), col("age")])?
     .build()?;
     let query_from_table_scan_with_projection =
         plan_to_sql(&query_from_table_scan_with_projection)?;
     assert_eq!(
         query_from_table_scan_with_projection.to_string(),
+        "SELECT t1.id, t1.age FROM t1"
+    );
+
+    let query_from_table_scan_with_two_projections = LogicalPlanBuilder::from(
+        table_scan(Some("t1"), &schema, Some(vec![0, 1]))?.build()?,
+    )
+    .project(vec![col("id"), col("age")])?
+    .project(vec![wildcard()])?
+    .build()?;
+    let query_from_table_scan_with_two_projections =
+        plan_to_sql(&query_from_table_scan_with_two_projections)?;
+    assert_eq!(
+        query_from_table_scan_with_two_projections.to_string(),
         "SELECT * FROM (SELECT t1.id, t1.age FROM t1)"
     );
 

@@ -252,7 +252,7 @@ impl ScalarUDFImpl for ArrayPositions {
     }
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        Ok(List(Arc::new(Field::new("item", UInt64, true))))
+        Ok(List(Arc::new(Field::new_list_field(UInt64, true))))
     }
 
     fn invoke_batch(

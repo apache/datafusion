@@ -30,7 +30,7 @@ authors = { workspace = true }
 # Specify MSRV here as `cargo msrv` doesn't support workspace version and fails with
 # "Unable to find key 'package.rust-version' (or 'package.metadata.msrv') in 'arrow-datafusion/Cargo.toml'"
 # https://github.com/foresterre/cargo-msrv/issues/590
-rust-version = "1.79"
+rust-version = "1.80.1"
 
 [lints]
 workspace = true
@@ -77,7 +77,7 @@ unicode_expressions = [
 ]
 
 [dependencies]
-apache-avro = { version = "0.16", optional = true }
+apache-avro = { version = "0.17", optional = true }
 arrow = { workspace = true }
 arrow-array = { workspace = true }
 arrow-ipc = { workspace = true }
@@ -120,7 +120,6 @@ num-traits = { version = "0.2", optional = true }
 object_store = { workspace = true }
 parking_lot = { workspace = true }
 parquet = { workspace = true, optional = true, default-features = true }
-paste = "1.0.15"
 rand = { workspace = true }
 sqlparser = { workspace = true }
 tempfile = { workspace = true }
@@ -140,17 +139,13 @@ datafusion-functions-window-common = { workspace = true }
 doc-comment = { workspace = true }
 env_logger = { workspace = true }
 paste = "^1.0"
-postgres-protocol = "0.6.4"
-postgres-types = { version = "0.2.4", features = ["derive", "with-chrono-0_4"] }
 rand = { workspace = true, features = ["small_rng"] }
 rand_distr = "0.4.3"
 regex = { workspace = true }
 rstest = { workspace = true }
-rust_decimal = { version = "1.27.0", features = ["tokio-pg"] }
 serde_json = { workspace = true }
 test-utils = { path = "../../test-utils" }
 tokio = { workspace = true, features = ["rt-multi-thread", "parking_lot", "fs"] }
-tokio-postgres = "0.7.7"
 
 [target.'cfg(not(target_os = "windows"))'.dev-dependencies]
 nix = { version = "0.29.0", features = ["fs"] }
@@ -158,6 +153,10 @@ nix = { version = "0.29.0", features = ["fs"] }
 [[bench]]
 harness = false
 name = "aggregate_query_sql"
+
+[[bench]]
+harness = false
+name = "csv_load"
 
 [[bench]]
 harness = false

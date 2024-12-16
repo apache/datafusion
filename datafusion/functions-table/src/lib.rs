@@ -34,15 +34,15 @@ pub fn all_default_table_functions() -> Vec<Arc<TableFunction>> {
 macro_rules! create_udtf_function {
     ($module:path, $name:expr) => {
         paste::paste! {
-            static INSTANCE: std::sync::OnceLock<Arc<TableFunction>> = std::sync::OnceLock::new();
-
             pub fn [<$name:lower>]() -> Arc<TableFunction> {
-                INSTANCE.get_or_init(|| {
-                    Arc::new(TableFunction::new(
-                        $name.to_string(),
-                        Arc::new($module {}),
-                    ))
-                }).clone()
+                static INSTANCE: std::sync::LazyLock<Arc<TableFunction>> =
+                    std::sync::LazyLock::new(|| {
+                        std::sync::Arc::new(TableFunction::new(
+                            $name.to_string(),
+                            Arc::new($module {}),
+                        ))
+                    });
+                std::sync::Arc::clone(&INSTANCE)
             }
         }
     };

@@ -26,16 +26,19 @@ use syn::{parse_macro_input, DeriveInput, LitStr};
 /// declared on `AggregateUDF`, `WindowUDFImpl`, `ScalarUDFImpl` traits.
 ///
 /// Example:
+/// ```ignore
 /// #[user_doc(
 ///     doc_section(include = "true", label = "Time and Date Functions"),
-///     description = r"Converts a value to a date (`YYYY-MM-DD`)."
-///     sql_example = "```sql\n\
-/// \> select to_date('2023-01-31');\n\
-/// +-----------------------------+\n\
-/// | to_date(Utf8(\"2023-01-31\")) |\n\
-/// +-----------------------------+\n\
-/// | 2023-01-31                  |\n\
-/// +-----------------------------+\n\"),
+///     description = r"Converts a value to a date (`YYYY-MM-DD`).",
+///     syntax_example = "to_date('2017-05-31', '%Y-%m-%d')",
+///     sql_example = r#"```sql
+/// > select to_date('2023-01-31');
+/// +-----------------------------+
+/// | to_date(Utf8(\"2023-01-31\")) |
+/// +-----------------------------+
+/// | 2023-01-31                  |
+/// +-----------------------------+
+/// ```"#,
 ///     standard_argument(name = "expression", prefix = "String"),
 ///     argument(
 ///         name = "format_n",
@@ -48,40 +51,50 @@ use syn::{parse_macro_input, DeriveInput, LitStr};
 /// pub struct ToDateFunc {
 ///     signature: Signature,
 /// }
-///
+/// ```
 /// will generate the following code
 ///
-/// #[derive(Debug)] pub struct ToDateFunc { signature : Signature, }
-/// use datafusion_doc :: DocSection;
-/// use datafusion_doc :: DocumentationBuilder;
-/// static DOCUMENTATION : OnceLock < Documentation > = OnceLock :: new();
-/// impl ToDateFunc
-/// {
-///     fn doc(& self) -> Option < & Documentation >
-///     {
-///         Some(DOCUMENTATION.get_or_init(||
-///         {
-///             Documentation ::
-///             builder(DocSection
-///             {
-///                 include : true, label : "Time and Date Functions", description
-///                 : None
-///             }, r"Converts a value to a date (`YYYY-MM-DD`).")
-/// .with_syntax_example("to_date('2017-05-31', '%Y-%m-%d')".to_string(),"```sql\n\
-/// \> select to_date('2023-01-31');\n\
-/// +-----------------------------+\n\
-/// | to_date(Utf8(\"2023-01-31\")) |\n\
-/// +-----------------------------+\n\
-/// | 2023-01-31                  |\n\
-/// +-----------------------------+\n\)
-/// .with_standard_argument("expression", "String".into())
-/// .with_argument("format_n",
-///             r"Optional [Chrono format](https://docs.rs/chrono/latest/chrono/format/strftime/index.html) strings to use to parse the expression. Formats will be tried in the order
-///   they appear with the first successful one being returned. If none of the formats successfully parse the expression
-///   an error will be returned.").build()
-///         }))
+/// ```ignore
+/// pub struct ToDateFunc {
+///     signature: Signature,
+/// }
+/// impl ToDateFunc {
+///     fn doc(&self) -> Option<&datafusion_doc::Documentation> {
+///         static DOCUMENTATION: std::sync::LazyLock<
+///             datafusion_doc::Documentation,
+///         > = std::sync::LazyLock::new(|| {
+///             datafusion_doc::Documentation::builder(
+///                     datafusion_doc::DocSection {
+///                         include: true,
+///                         label: "Time and Date Functions",
+///                         description: None,
+///                     },
+///                     r"Converts a value to a date (`YYYY-MM-DD`).".to_string(),
+///                     "to_date('2017-05-31', '%Y-%m-%d')".to_string(),
+///                 )
+///                 .with_sql_example(
+///                     r#"```sql
+/// > select to_date('2023-01-31');
+/// +-----------------------------+
+/// | to_date(Utf8(\"2023-01-31\")) |
+/// +-----------------------------+
+/// | 2023-01-31                  |
+/// +-----------------------------+
+/// ```"#,
+///                 )
+///                 .with_standard_argument("expression", "String".into())
+///                 .with_argument(
+///                     "format_n",
+///                     r"Optional [Chrono format](https://docs.rs/chrono/latest/chrono/format/strftime/index.html) strings to use to parse the expression. Formats will be tried in the order
+/// they appear with the first successful one being returned. If none of the formats successfully parse the expression
+/// an error will be returned.",
+///                 )
+///                 .build()
+///         });
+///         Some(&DOCUMENTATION)
 ///     }
 /// }
+/// ```
 #[proc_macro_attribute]
 pub fn user_doc(args: TokenStream, input: TokenStream) -> TokenStream {
     let mut doc_section_include: Option<LitStr> = None;
@@ -190,6 +203,12 @@ pub fn user_doc(args: TokenStream, input: TokenStream) -> TokenStream {
         .map(|desc| quote! { Some(#desc)})
         .unwrap_or(quote! { None });
 
+    let sql_example = sql_example.map(|ex| {
+        quote! {
+            .with_sql_example(#ex)
+        }
+    });
+
     let udf_args = udf_args
         .iter()
         .map(|(name, desc)| {
@@ -202,8 +221,14 @@ pub fn user_doc(args: TokenStream, input: TokenStream) -> TokenStream {
     let standard_args = standard_args
         .iter()
         .map(|(name, desc)| {
+            let desc = if let Some(d) = desc {
+                quote! { #d.into() }
+            } else {
+                quote! { None }
+            };
+
             quote! {
-                .with_standard_argument(#name, #desc.into())
+                .with_standard_argument(#name, #desc)
             }
         })
         .collect::<Vec<_>>();
@@ -226,29 +251,28 @@ pub fn user_doc(args: TokenStream, input: TokenStream) -> TokenStream {
     let generated = quote! {
         #input
 
-        use datafusion_doc::DocSection;
-        use datafusion_doc::DocumentationBuilder;
-
-        static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
-
         impl #name {
-                fn doc(&self) -> Option<&Documentation> {
-                    Some(DOCUMENTATION.get_or_init(|| {
-                        Documentation::builder(DocSection { include: #doc_section_include, label: #doc_section_lbl, description: #doc_section_description },
+            fn doc(&self) -> Option<&datafusion_doc::Documentation> {
+                static DOCUMENTATION: std::sync::LazyLock<datafusion_doc::Documentation> =
+                    std::sync::LazyLock::new(|| {
+                        datafusion_doc::Documentation::builder(datafusion_doc::DocSection { include: #doc_section_include, label: #doc_section_lbl, description: #doc_section_description },
                     #description.to_string(), #syntax_example.to_string())
-                        .with_sql_example(#sql_example.to_string())
+                        #sql_example
                         #alt_syntax_example
                         #(#standard_args)*
                         #(#udf_args)*
                         #(#related_udfs)*
                         .build()
-                    }))
+                    });
+                Some(&DOCUMENTATION)
             }
         }
     };
 
     // Debug the generated code if needed
-    //eprintln!("Generated code: {}", generated);
+    // if name == "ArrayAgg" {
+    //     eprintln!("Generated code: {}", generated);
+    // }
 
     // Return the generated code
     TokenStream::from(generated)

@@ -18,7 +18,7 @@
 use crate::strings::StringArrayType;
 use crate::utils::{make_scalar_function, utf8_to_int_type};
 use arrow::array::{
-    Array, ArrayRef, ArrowPrimitiveType, AsArray, OffsetSizeTrait, PrimitiveArray,
+    Array, ArrayRef, ArrowPrimitiveType, AsArray, OffsetSizeTrait, PrimitiveBuilder,
 };
 use arrow::datatypes::{ArrowNativeType, DataType, Int32Type, Int64Type};
 use datafusion_common::Result;
@@ -136,31 +136,52 @@ fn character_length(args: &[ArrayRef]) -> Result<ArrayRef> {
     }
 }
 
-fn character_length_general<'a, T: ArrowPrimitiveType, V: StringArrayType<'a>>(
-    array: V,
-) -> Result<ArrayRef>
+fn character_length_general<'a, T, V>(array: V) -> Result<ArrayRef>
 where
+    T: ArrowPrimitiveType,
     T::Native: OffsetSizeTrait,
+    V: StringArrayType<'a>,
 {
+    let mut builder = PrimitiveBuilder::<T>::with_capacity(array.len());
+
     // String characters are variable length encoded in UTF-8, counting the
     // number of chars requires expensive decoding, however checking if the
     // string is ASCII only is relatively cheap.
     // If strings are ASCII only, count bytes instead.
     let is_array_ascii_only = array.is_ascii();
-    let iter = array.iter();
-    let result = iter
-        .map(|string| {
-            string.map(|string: &str| {
-                if is_array_ascii_only {
-                    T::Native::usize_as(string.len())
-                } else {
-                    T::Native::usize_as(string.chars().count())
-                }
-            })
-        })
-        .collect::<PrimitiveArray<T>>();
+    if array.null_count() == 0 {
+        if is_array_ascii_only {
+            for i in 0..array.len() {
+                let value = array.value(i);
+                builder.append_value(T::Native::usize_as(value.len()));
+            }
+        } else {
+            for i in 0..array.len() {
+                let value = array.value(i);
+                builder.append_value(T::Native::usize_as(value.chars().count()));
+            }
+        }
+    } else if is_array_ascii_only {
+        for i in 0..array.len() {
+            if array.is_null(i) {
+                builder.append_null();
+            } else {
+                let value = array.value(i);
+                builder.append_value(T::Native::usize_as(value.len()));
+            }
+        }
+    } else {
+        for i in 0..array.len() {
+            if array.is_null(i) {
+                builder.append_null();
+            } else {
+                let value = array.value(i);
+                builder.append_value(T::Native::usize_as(value.chars().count()));
+            }
+        }
+    }
 
-    Ok(Arc::new(result) as ArrayRef)
+    Ok(Arc::new(builder.finish()) as ArrayRef)
 }
 
 #[cfg(test)]
@@ -176,7 +197,7 @@ mod tests {
         ($INPUT:expr, $EXPECTED:expr) => {
             test_function!(
                 CharacterLengthFunc::new(),
-                &[ColumnarValue::Scalar(ScalarValue::Utf8($INPUT))],
+                vec![ColumnarValue::Scalar(ScalarValue::Utf8($INPUT))],
                 $EXPECTED,
                 i32,
                 Int32,
@@ -185,7 +206,7 @@ mod tests {
 
             test_function!(
                 CharacterLengthFunc::new(),
-                &[ColumnarValue::Scalar(ScalarValue::LargeUtf8($INPUT))],
+                vec![ColumnarValue::Scalar(ScalarValue::LargeUtf8($INPUT))],
                 $EXPECTED,
                 i64,
                 Int64,
@@ -194,7 +215,7 @@ mod tests {
 
             test_function!(
                 CharacterLengthFunc::new(),
-                &[ColumnarValue::Scalar(ScalarValue::Utf8View($INPUT))],
+                vec![ColumnarValue::Scalar(ScalarValue::Utf8View($INPUT))],
                 $EXPECTED,
                 i32,
                 Int32,
