@@ -2053,6 +2053,133 @@ mod tests {
     }
 
     #[test]
+    fn prune_all_rows_null_counts() {
+        // if null_count = row_count then we should prune the container for i = 0
+        // regardless of the statistics
+        let schema = Arc::new(Schema::new(vec![Field::new("i", DataType::Int32, true)]));
+        let statistics = TestStatistics::new().with(
+            "i",
+            ContainerStats::new_i32(
+                vec![Some(0)], // min
+                vec![Some(0)],     // max
+            ).with_null_counts(vec![Some(1)]).with_row_counts(vec![Some(1)]),
+        );
+        let expected_ret = &[false];
+        prune_with_expr(col("i").eq(lit(0)), &schema, &statistics, expected_ret);
+
+        // this should be true even if the container stats are missing
+        let schema = Arc::new(Schema::new(vec![Field::new("i", DataType::Int32, true)]));
+        let container_stats = ContainerStats {
+            min: Some(Arc::new(Int32Array::from(vec![None]))),
+            max: Some(Arc::new(Int32Array::from(vec![None]))),
+            null_counts: Some(Arc::new(UInt64Array::from(vec![Some(1)]))),
+            row_counts: Some(Arc::new(UInt64Array::from(vec![Some(1)]))),
+            ..ContainerStats::default()
+        };
+        let statistics = TestStatistics::new().with(
+            "i",
+            container_stats,
+        );
+        let expected_ret = &[false];
+        prune_with_expr(col("i").eq(lit(0)), &schema, &statistics, expected_ret);
+
+        // If the null counts themselves are missing we should be able to fall back to the stats
+        let schema = Arc::new(Schema::new(vec![Field::new("i", DataType::Int32, true)]));
+        let container_stats = ContainerStats {
+            min: Some(Arc::new(Int32Array::from(vec![Some(0)]))),
+            max: Some(Arc::new(Int32Array::from(vec![Some(0)]))),
+            null_counts: Some(Arc::new(UInt64Array::from(vec![None]))),
+            row_counts: Some(Arc::new(UInt64Array::from(vec![Some(1)]))),
+            ..ContainerStats::default()
+        };
+        let statistics = TestStatistics::new().with(
+            "i",
+            container_stats,
+        );
+        let expected_ret = &[true];
+        prune_with_expr(col("i").eq(lit(0)), &schema, &statistics, expected_ret);
+
+        // If the null counts themselves are missing we should be able to fall back to the stats
+        let schema = Arc::new(Schema::new(vec![Field::new("i", DataType::Int32, true)]));
+        let container_stats = ContainerStats {
+            min: Some(Arc::new(Int32Array::from(vec![Some(0)]))),
+            max: Some(Arc::new(Int32Array::from(vec![Some(0)]))),
+            null_counts: Some(Arc::new(UInt64Array::from(vec![None]))),
+            row_counts: Some(Arc::new(UInt64Array::from(vec![Some(1)]))),
+            ..ContainerStats::default()
+        };
+        let statistics = TestStatistics::new().with(
+            "i",
+            container_stats,
+        );
+        let expected_ret = &[true];
+        prune_with_expr(col("i").eq(lit(0)), &schema, &statistics, expected_ret);
+        let expected_ret = &[false];
+        prune_with_expr(col("i").gt(lit(0)), &schema, &statistics, expected_ret);
+
+        // Same for the row counts
+        let schema = Arc::new(Schema::new(vec![Field::new("i", DataType::Int32, true)]));
+        let container_stats = ContainerStats {
+            min: Some(Arc::new(Int32Array::from(vec![Some(0)]))),
+            max: Some(Arc::new(Int32Array::from(vec![Some(0)]))),
+            null_counts: Some(Arc::new(UInt64Array::from(vec![Some(1)]))),
+            row_counts: Some(Arc::new(UInt64Array::from(vec![None]))),
+            ..ContainerStats::default()
+        };
+        let statistics = TestStatistics::new().with(
+            "i",
+            container_stats,
+        );
+        let expected_ret = &[true];
+        prune_with_expr(col("i").eq(lit(0)), &schema, &statistics, expected_ret);
+        let expected_ret = &[false];
+        prune_with_expr(col("i").gt(lit(0)), &schema, &statistics, expected_ret);
+    }
+
+    #[test]
+    fn prune_missing_statistics() {
+        // If the min or max stats are missing we should not prune
+        let schema = Arc::new(Schema::new(vec![Field::new("i", DataType::Int32, true)]));
+        let container_stats = ContainerStats {
+            min: Some(Arc::new(Int32Array::from(vec![None, Some(0)]))),
+            max: Some(Arc::new(Int32Array::from(vec![Some(0), None]))),
+            null_counts: Some(Arc::new(UInt64Array::from(vec![Some(0), Some(0)]))),
+            row_counts: Some(Arc::new(UInt64Array::from(vec![Some(1), Some(1)]))),
+            ..ContainerStats::default()
+        };
+        let statistics = TestStatistics::new().with(
+            "i",
+            container_stats,
+        );
+        let expected_ret = &[true, true];
+        prune_with_expr(col("i").eq(lit(0)), &schema, &statistics, expected_ret);
+        let expected_ret = &[false, true];
+        prune_with_expr(col("i").gt(lit(0)), &schema, &statistics, expected_ret);
+        let expected_ret = &[true, false];
+        prune_with_expr(col("i").lt(lit(0)), &schema, &statistics, expected_ret);
+    }
+
+    #[test]
+    fn prune_null_stats() {
+        // if null_count = row_count then we should prune the container for i = 0
+        // regardless of the statistics
+        let schema = Arc::new(Schema::new(vec![Field::new("i", DataType::Int32, true)]));
+
+        let statistics = TestStatistics::new().with(
+            "i",
+            ContainerStats::new_i32(
+                vec![Some(0)], // min
+                vec![Some(0)],     // max
+            ).with_null_counts(vec![Some(1)]).with_row_counts(vec![Some(1)]),
+        );
+
+        let expected_ret = &[false];
+
+        // i = 0
+        prune_with_expr(col("i").eq(lit(0)), &schema, &statistics, expected_ret);
+    }
+
+    #[test]
     fn test_build_statistics_record_batch() {
         // Request a record batch with of s1_min, s2_max, s3_max, s3_min
         let required_columns = RequiredColumns::from(vec![
