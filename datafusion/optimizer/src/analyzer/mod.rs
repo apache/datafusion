@@ -137,18 +137,13 @@ impl Analyzer {
     where
         F: FnMut(&LogicalPlan, &dyn AnalyzerRule),
     {
-        /* current test failure:
-           External error: statement is expected to fail with error:
-                   (regex) DataFusion error: check_analyzed_plan\ncaused by\nError during planning: Scalar subquery should only return one column, but found 2: t2.t2_id, t2.t2_name
-               but got error:
-                   DataFusion error: Error during planning: Scalar subquery should only return one column, but found 2: t2.t2_id, t2.t2_name
-               [SQL] SELECT t1_id, t1_name, t1_int, (select t2_id, t2_name FROM t2 WHERE t2.t2_id = t1.t1_int) FROM t1
-               at test_files/subquery.slt:436
-        */
         // verify at the start, before the first LP analyzer pass.
-        // check_plan(&plan).map_err(|e| {
-        //     DataFusionError::Context("check_plan_before_analyzers".to_string(), Box::new(e))
-        // })?;
+        assert_valid_semantic_plan(&plan).map_err(|e| {
+            DataFusionError::Context(
+                "check_plan_before_analyzers".to_string(),
+                Box::new(e),
+            )
+        })?;
 
         let start_time = Instant::now();
         let mut new_plan = plan;
@@ -177,22 +172,38 @@ impl Analyzer {
             log_plan(rule.name(), &new_plan);
             observer(&new_plan, rule.as_ref());
         }
-        // for easier display in explain output
-        check_plan(&new_plan).map_err(|e| {
+
+        // verify at the end, after the last LP analyzer pass.
+        assert_valid_semantic_plan(&new_plan).map_err(|e| {
             DataFusionError::Context("check_analyzed_plan".to_string(), Box::new(e))
         })?;
+
         log_plan("Final analyzed plan", &new_plan);
         debug!("Analyzer took {} ms", start_time.elapsed().as_millis());
         Ok(new_plan)
     }
 }
 
-/// These are invariants to hold true for each logical plan.
-/// Do necessary check and fail the invalid plan.
+/// These are invariants which should hold true before and after each analyzer.
 ///
-/// Checks for elements which are immutable across analyzer passes.
+/// This differs from [`LogicalPlan::assert_invariants`], which addresses if a singular
+/// LogicalPlan is valid. Instead this address if the analyzer (before and after)
+/// is valid based upon permitted changes.
+///
 /// Does not check elements which are mutated by the analyzers (e.g. the schema).
-fn check_plan(plan: &LogicalPlan) -> Result<()> {
+fn assert_valid_semantic_plan(plan: &LogicalPlan) -> Result<()> {
+    plan.assert_invariants()?;
+
+    // TODO: should this be moved to LogicalPlan::assert_invariants?
+    assert_subqueries_are_valid(plan)?;
+
+    Ok(())
+}
+
+/// Asserts that the subqueries are structured properly with valid node placement.
+///
+/// Refer to [`check_subquery_expr`] for more details.
+fn assert_subqueries_are_valid(plan: &LogicalPlan) -> Result<()> {
     plan.apply_with_subqueries(|plan: &LogicalPlan| {
         plan.apply_expressions(|expr| {
             // recursively look for subqueries

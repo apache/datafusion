@@ -24,6 +24,7 @@ use std::hash::{Hash, Hasher};
 use std::sync::{Arc, OnceLock};
 
 use super::dml::CopyTo;
+use super::invariants::assert_unique_field_names;
 use super::DdlStatement;
 use crate::builder::{change_redundant_column, unnest_with_options};
 use crate::expr::{Placeholder, Sort as SortExpr, WindowFunction};
@@ -1123,6 +1124,13 @@ impl LogicalPlan {
                 Ok(new_plan)
             }
         }
+    }
+
+    /// These are invariants to hold true for each logical plan.
+    pub fn assert_invariants(&self) -> Result<()> {
+        assert_unique_field_names(self)?;
+
+        Ok(())
     }
 
     /// Helper for [Self::with_new_exprs] to use when no expressions are expected.

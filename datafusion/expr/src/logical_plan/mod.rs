@@ -20,6 +20,8 @@ mod ddl;
 pub mod display;
 pub mod dml;
 mod extension;
+pub(crate) mod invariants;
+pub use invariants::assert_expected_schema;
 mod plan;
 mod statement;
 pub mod tree_node;

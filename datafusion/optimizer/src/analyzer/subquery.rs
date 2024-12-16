@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::analyzer::check_plan;
+use crate::analyzer::assert_subqueries_are_valid;
 use crate::utils::collect_subquery_cols;
 use recursive::recursive;
 
@@ -37,7 +37,7 @@ pub fn check_subquery_expr(
     inner_plan: &LogicalPlan,
     expr: &Expr,
 ) -> Result<()> {
-    check_plan(inner_plan)?;
+    assert_subqueries_are_valid(inner_plan)?;
     if let Expr::ScalarSubquery(subquery) = expr {
         // Scalar subquery should only return one column
         if subquery.subquery.schema().fields().len() > 1 {
