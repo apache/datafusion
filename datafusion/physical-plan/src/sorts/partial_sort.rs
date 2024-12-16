@@ -407,6 +407,7 @@ impl PartialSortStream {
                 self.is_closed = true;
             }
         }
+        debug_assert!(result.num_rows() > 0);
         Ok(result)
     }
 

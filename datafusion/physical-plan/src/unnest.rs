@@ -284,25 +284,24 @@ impl UnnestStream {
             return Poll::Ready(match ready!(self.input.poll_next_unpin(cx)) {
                 Some(Ok(batch)) => {
                     let timer = self.metrics.elapsed_compute.timer();
+                    self.metrics.input_batches.add(1);
+                    self.metrics.input_rows.add(batch.num_rows());
                     let result = build_batch(
                         &batch,
                         &self.schema,
                         &self.list_type_columns,
                         &self.struct_column_indices,
                         &self.options,
-                    );
-                    self.metrics.input_batches.add(1);
-                    self.metrics.input_rows.add(batch.num_rows());
-                    if let Ok(ref batch) = result {
-                        if batch.num_rows() == 0 {
-                            continue;
-                        }
-                        timer.done();
-                        self.metrics.output_batches.add(1);
-                        self.metrics.output_rows.add(batch.num_rows());
-                    }
+                    )?;
+                    let Some(result_batch) = result else {
+                        continue;
+                    };
+                    timer.done();
+                    self.metrics.output_batches.add(1);
+                    self.metrics.output_rows.add(result_batch.num_rows());
 
-                    Some(result)
+                    debug_assert!(result_batch.num_rows() > 0);
+                    Some(Ok(result_batch))
                 }
                 other => {
                     trace!(
@@ -556,7 +555,7 @@ fn build_batch(
     list_type_columns: &[ListUnnest],
     struct_column_indices: &HashSet<usize>,
     options: &UnnestOptions,
-) -> Result<RecordBatch> {
+) -> Result<Option<RecordBatch>> {
     let transformed = match list_type_columns.len() {
         0 => flatten_struct_cols(batch.columns(), schema, struct_column_indices),
         _ => {
@@ -585,7 +584,7 @@ fn build_batch(
                     options,
                 )?;
                 if num_rows == 0 {
-                    return Ok(RecordBatch::new_empty(Arc::clone(schema)));
+                    return Ok(None);
                 }
                 flatten_arrs = temp_result;
             }
@@ -670,8 +669,8 @@ fn build_batch(
 
             flatten_struct_cols(&ret, schema, struct_column_indices)
         }
-    };
-    transformed
+    }?;
+    Ok(Some(transformed))
 }
 
 /// Find the longest list length among the given list arrays for each row.
@@ -1138,7 +1137,7 @@ mod tests {
                 preserve_nulls: true,
                 recursions: vec![],
             },
-        )?;
+        )?.unwrap();
 
         let expected = &[
 "+---------------------------------+---------------------------------+---------------------------------+",

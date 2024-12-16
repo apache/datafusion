@@ -200,23 +200,23 @@ impl TopK {
         } = self;
         let _timer = metrics.baseline.elapsed_compute().timer(); // time updated on drop
 
-        let mut batch = heap.emit()?;
-        metrics.baseline.output_rows().add(batch.num_rows());
-
         // break into record batches as needed
         let mut batches = vec![];
-        loop {
-            if batch.num_rows() <= batch_size {
-                if batch.num_rows() > 0 {
+        let batch = heap.emit()?;
+        if let Some(mut batch) = batch {
+            metrics.baseline.output_rows().add(batch.num_rows());
+
+            loop {
+                if batch.num_rows() <= batch_size {
                     batches.push(Ok(batch));
+                    break;
+                } else {
+                    batches.push(Ok(batch.slice(0, batch_size)));
+                    let remaining_length = batch.num_rows() - batch_size;
+                    batch = batch.slice(batch_size, remaining_length);
                 }
-                break;
-            } else {
-                batches.push(Ok(batch.slice(0, batch_size)));
-                let remaining_length = batch.num_rows() - batch_size;
-                batch = batch.slice(batch_size, remaining_length);
             }
-        }
+        };
         Ok(Box::pin(RecordBatchStreamAdapter::new(
             schema,
             futures::stream::iter(batches),
@@ -347,21 +347,21 @@ impl TopKHeap {
 
     /// Returns the values stored in this heap, from values low to
     /// high, as a single [`RecordBatch`], resetting the inner heap
-    pub fn emit(&mut self) -> Result<RecordBatch> {
+    pub fn emit(&mut self) -> Result<Option<RecordBatch>> {
         Ok(self.emit_with_state()?.0)
     }
 
     /// Returns the values stored in this heap, from values low to
     /// high, as a single [`RecordBatch`], and a sorted vec of the
     /// current heap's contents
-    pub fn emit_with_state(&mut self) -> Result<(RecordBatch, Vec<TopKRow>)> {
+    pub fn emit_with_state(&mut self) -> Result<(Option<RecordBatch>, Vec<TopKRow>)> {
         let schema = Arc::clone(self.store.schema());
 
         // generate sorted rows
         let topk_rows = std::mem::take(&mut self.inner).into_sorted_vec();
 
         if self.store.is_empty() {
-            return Ok((RecordBatch::new_empty(schema), topk_rows));
+            return Ok((None, topk_rows));
         }
 
         // Indices for each row within its respective RecordBatch
@@ -395,7 +395,7 @@ impl TopKHeap {
             .collect::<Result<_>>()?;
 
         let new_batch = RecordBatch::try_new(schema, output_columns)?;
-        Ok((new_batch, topk_rows))
+        Ok((Some(new_batch), topk_rows))
     }
 
     /// Compact this heap, rewriting all stored batches into a single
@@ -420,6 +420,9 @@ impl TopKHeap {
         // Note: new batch is in the same order as inner
         let num_rows = self.inner.len();
         let (new_batch, mut topk_rows) = self.emit_with_state()?;
+        let Some(new_batch) = new_batch else {
+            return Ok(())
+        };
 
         // clear all old entries in store (this invalidates all
         // store_ids in `inner`)

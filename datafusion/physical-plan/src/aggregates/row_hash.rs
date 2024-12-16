@@ -655,6 +655,10 @@ impl Stream for GroupedHashAggregateStream {
 
                             if let Some(to_emit) = self.group_ordering.emit_to() {
                                 let batch = extract_ok!(self.emit(to_emit, false));
+                                let Some(batch) = batch else {
+                                    timer.done();
+                                    break 'reading_input;
+                                };
                                 self.exec_state = ExecutionState::ProducingOutput(batch);
                                 timer.done();
                                 // make sure the exec_state just set is not overwritten below
@@ -694,6 +698,10 @@ impl Stream for GroupedHashAggregateStream {
 
                             if let Some(to_emit) = self.group_ordering.emit_to() {
                                 let batch = extract_ok!(self.emit(to_emit, false));
+                                let Some(batch) = batch else {
+                                    timer.done();
+                                    break 'reading_input;
+                                };
                                 self.exec_state = ExecutionState::ProducingOutput(batch);
                                 timer.done();
                                 // make sure the exec_state just set is not overwritten below
@@ -768,12 +776,10 @@ impl Stream for GroupedHashAggregateStream {
                         let output = batch.slice(0, size);
                         (ExecutionState::ProducingOutput(remaining), output)
                     };
-                    if output_batch.num_rows() > 0 {
-                        return Poll::Ready(Some(Ok(
-                            output_batch.record_output(&self.baseline_metrics)
-                        )));
-                    }
-                    continue;
+                    debug_assert!(output_batch.num_rows() > 0);
+                    return Poll::Ready(Some(Ok(
+                        output_batch.record_output(&self.baseline_metrics)
+                    )));
                 }
 
                 ExecutionState::Done => {
@@ -905,14 +911,14 @@ impl GroupedHashAggregateStream {
 
     /// Create an output RecordBatch with the group keys and
     /// accumulator states/values specified in emit_to
-    fn emit(&mut self, emit_to: EmitTo, spilling: bool) -> Result<RecordBatch> {
+    fn emit(&mut self, emit_to: EmitTo, spilling: bool) -> Result<Option<RecordBatch>> {
         let schema = if spilling {
             Arc::clone(&self.spill_state.spill_schema)
         } else {
             self.schema()
         };
         if self.group_values.is_empty() {
-            return Ok(RecordBatch::new_empty(schema));
+            return Ok(None);
         }
 
         let mut output = self.group_values.emit(emit_to)?;
@@ -940,7 +946,7 @@ impl GroupedHashAggregateStream {
         // over the target memory size after emission, we can emit again rather than returning Err.
         let _ = self.update_memory_reservation();
         let batch = RecordBatch::try_new(schema, output)?;
-        Ok(batch)
+        Ok((batch.num_rows() > 0).then_some(batch))
     }
 
     /// Optimistically, [`Self::group_aggregate_batch`] allows to exceed the memory target slightly
@@ -966,7 +972,9 @@ impl GroupedHashAggregateStream {
 
     /// Emit all rows, sort them, and store them on disk.
     fn spill(&mut self) -> Result<()> {
-        let emit = self.emit(EmitTo::All, true)?;
+        let Some(emit) = self.emit(EmitTo::All, true)? else {
+            return Ok(())
+        };
         let sorted = sort_batch(&emit, self.spill_state.spill_expr.as_ref(), None)?;
         let spillfile = self.runtime.disk_manager.create_tmp_file("HashAggSpill")?;
         // TODO: slice large `sorted` and write to multiple files in parallel
@@ -1011,8 +1019,9 @@ impl GroupedHashAggregateStream {
         {
             assert_eq!(self.mode, AggregateMode::Partial);
             let n = self.group_values.len() / self.batch_size * self.batch_size;
-            let batch = self.emit(EmitTo::First(n), false)?;
-            self.exec_state = ExecutionState::ProducingOutput(batch);
+            if let Some(batch) = self.emit(EmitTo::First(n), false)? {
+                self.exec_state = ExecutionState::ProducingOutput(batch);
+            };
         }
         Ok(())
     }
@@ -1022,7 +1031,9 @@ impl GroupedHashAggregateStream {
     /// Conduct a streaming merge sort between the batch and spilled data. Since the stream is fully
     /// sorted, set `self.group_ordering` to Full, then later we can read with [`EmitTo::First`].
     fn update_merged_stream(&mut self) -> Result<()> {
-        let batch = self.emit(EmitTo::All, true)?;
+        let Some(batch) = self.emit(EmitTo::All, true)? else {
+            return Ok(())
+        };
         // clear up memory for streaming_merge
         self.clear_all();
         self.update_memory_reservation()?;
@@ -1070,7 +1081,7 @@ impl GroupedHashAggregateStream {
         let timer = elapsed_compute.timer();
         self.exec_state = if self.spill_state.spills.is_empty() {
             let batch = self.emit(EmitTo::All, false)?;
-            ExecutionState::ProducingOutput(batch)
+            batch.map_or(ExecutionState::Done, ExecutionState::ProducingOutput)
         } else {
             // If spill files exist, stream-merge them.
             self.update_merged_stream()?;
@@ -1099,8 +1110,9 @@ impl GroupedHashAggregateStream {
     fn switch_to_skip_aggregation(&mut self) -> Result<()> {
         if let Some(probe) = self.skip_aggregation_probe.as_mut() {
             if probe.should_skip() {
-                let batch = self.emit(EmitTo::All, false)?;
-                self.exec_state = ExecutionState::ProducingOutput(batch);
+                if let Some(batch) = self.emit(EmitTo::All, false)? {
+                    self.exec_state = ExecutionState::ProducingOutput(batch);
+                };
             }
         }
 

@@ -389,11 +389,12 @@ impl WindowAggStream {
                     }
                     self.compute_aggregates(batch)
                 }
-            };
+            }?;
 
             self.finished = true;
 
-            return Poll::Ready(Some(result));
+            debug_assert!(result.num_rows() > 0);
+            return Poll::Ready(Some(Ok(result)));
         }
     }
 }
