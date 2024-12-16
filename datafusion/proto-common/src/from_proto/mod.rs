@@ -321,6 +321,8 @@ impl TryFrom<&protobuf::Field> for Field {
     fn try_from(field: &protobuf::Field) -> Result<Self, Self::Error> {
         let datatype = field.arrow_type.as_deref().required("arrow_type")?;
         let field = if field.dict_id != 0 {
+            // TODO file a ticket about handling deprecated dict_id attributes
+            #[allow(deprecated)]
             Self::new_dict(
                 field.name.as_str(),
                 datatype,
@@ -365,6 +367,8 @@ impl TryFrom<&protobuf::ScalarValue> for ScalarValue {
             .as_ref()
             .ok_or_else(|| Error::required("value"))?;
 
+        // TODO file a ticket about handling deprecated dict_id attributes
+        #[allow(deprecated)]
         Ok(match value {
             Value::BoolValue(v) => Self::Boolean(Some(*v)),
             Value::Utf8Value(v) => Self::Utf8(Some(v.to_owned())),
