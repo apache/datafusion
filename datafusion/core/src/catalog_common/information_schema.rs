@@ -34,7 +34,7 @@ use arrow::{
     datatypes::{DataType, Field, Schema, SchemaRef},
     record_batch::RecordBatch,
 };
-use arrow_array::builder::BooleanBuilder;
+use arrow_array::builder::{BooleanBuilder, UInt8Builder};
 use async_trait::async_trait;
 use datafusion_common::error::Result;
 use datafusion_common::DataFusionError;
@@ -308,7 +308,8 @@ impl InformationSchemaConfig {
                                   args: Option<&Vec<(String, String)>>,
                                   arg_types: Vec<String>,
                                   return_type: Option<String>,
-                                  is_variadic: bool| {
+                                  is_variadic: bool,
+                                  rid: u8| {
             for (position, type_name) in arg_types.iter().enumerate() {
                 let param_name =
                     args.and_then(|a| a.get(position).map(|arg| arg.0.as_str()));
@@ -322,6 +323,7 @@ impl InformationSchemaConfig {
                     type_name,
                     None::<&str>,
                     is_variadic,
+                    rid,
                 );
             }
             if let Some(return_type) = return_type {
@@ -335,6 +337,7 @@ impl InformationSchemaConfig {
                     return_type.as_str(),
                     None::<&str>,
                     false,
+                    rid,
                 );
             }
         };
@@ -342,6 +345,7 @@ impl InformationSchemaConfig {
         for (func_name, udf) in udfs {
             let args = udf.documentation().and_then(|d| d.arguments.clone());
             let combinations = get_udf_args_and_return_types(udf)?;
+            let mut rid = 0u8;
             for (arg_types, return_type) in combinations {
                 add_parameters(
                     func_name,
@@ -349,13 +353,16 @@ impl InformationSchemaConfig {
                     arg_types,
                     return_type,
                     Self::is_variadic(udf.signature()),
+                    rid,
                 );
+                rid += 1;
             }
         }
 
         for (func_name, udaf) in udafs {
             let args = udaf.documentation().and_then(|d| d.arguments.clone());
             let combinations = get_udaf_args_and_return_types(udaf)?;
+            let mut rid = 0u8;
             for (arg_types, return_type) in combinations {
                 add_parameters(
                     func_name,
@@ -363,13 +370,17 @@ impl InformationSchemaConfig {
                     arg_types,
                     return_type,
                     Self::is_variadic(udaf.signature()),
+                    rid,
                 );
+                rid += 1;
             }
+
         }
 
         for (func_name, udwf) in udwfs {
             let args = udwf.documentation().and_then(|d| d.arguments.clone());
             let combinations = get_udwf_args_and_return_types(udwf)?;
+            let mut rid = 0u8;
             for (arg_types, return_type) in combinations {
                 add_parameters(
                     func_name,
@@ -377,7 +388,9 @@ impl InformationSchemaConfig {
                     arg_types,
                     return_type,
                     Self::is_variadic(udwf.signature()),
+                    rid,
                 );
+                rid += 1;
             }
         }
 
@@ -1222,6 +1235,7 @@ impl InformationSchemaParameters {
             Field::new("data_type", DataType::Utf8, false),
             Field::new("parameter_default", DataType::Utf8, true),
             Field::new("is_variadic", DataType::Boolean, false),
+            Field::new("rid", DataType::UInt8, false),
         ]));
 
         Self { schema, config }
@@ -1239,7 +1253,7 @@ impl InformationSchemaParameters {
             data_type: StringBuilder::new(),
             parameter_default: StringBuilder::new(),
             is_variadic: BooleanBuilder::new(),
-            inserted: HashSet::new(),
+            rid: UInt8Builder::new(),
         }
     }
 }
@@ -1255,8 +1269,7 @@ struct InformationSchemaParametersBuilder {
     data_type: StringBuilder,
     parameter_default: StringBuilder,
     is_variadic: BooleanBuilder,
-    // use HashSet to avoid duplicate rows. The key is (specific_name, ordinal_position, parameter_mode, data_type)
-    inserted: HashSet<(String, u64, String, String)>,
+    rid: UInt8Builder,
 }
 
 impl InformationSchemaParametersBuilder {
@@ -1272,25 +1285,19 @@ impl InformationSchemaParametersBuilder {
         data_type: impl AsRef<str>,
         parameter_default: Option<impl AsRef<str>>,
         is_variadic: bool,
+        rid: u8,
     ) {
-        let key = (
-            specific_name.as_ref().to_string(),
-            ordinal_position,
-            parameter_mode.as_ref().to_string(),
-            data_type.as_ref().to_string(),
-        );
-        if self.inserted.insert(key) {
-            self.specific_catalog
-                .append_value(specific_catalog.as_ref());
-            self.specific_schema.append_value(specific_schema.as_ref());
-            self.specific_name.append_value(specific_name.as_ref());
-            self.ordinal_position.append_value(ordinal_position);
-            self.parameter_mode.append_value(parameter_mode.as_ref());
-            self.parameter_name.append_option(parameter_name.as_ref());
-            self.data_type.append_value(data_type.as_ref());
-            self.parameter_default.append_option(parameter_default);
-            self.is_variadic.append_value(is_variadic);
-        }
+        self.specific_catalog
+            .append_value(specific_catalog.as_ref());
+        self.specific_schema.append_value(specific_schema.as_ref());
+        self.specific_name.append_value(specific_name.as_ref());
+        self.ordinal_position.append_value(ordinal_position);
+        self.parameter_mode.append_value(parameter_mode.as_ref());
+        self.parameter_name.append_option(parameter_name.as_ref());
+        self.data_type.append_value(data_type.as_ref());
+        self.parameter_default.append_option(parameter_default);
+        self.is_variadic.append_value(is_variadic);
+        self.rid.append_value(rid);
     }
 
     fn finish(&mut self) -> RecordBatch {
@@ -1306,6 +1313,7 @@ impl InformationSchemaParametersBuilder {
                 Arc::new(self.data_type.finish()),
                 Arc::new(self.parameter_default.finish()),
                 Arc::new(self.is_variadic.finish()),
+                Arc::new(self.rid.finish()),
             ],
         )
         .unwrap()
