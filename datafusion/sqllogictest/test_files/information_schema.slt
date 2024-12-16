@@ -730,3 +730,19 @@ repeat Utf8 1 IN 0
 repeat Utf8 1 OUT 0
 repeat Utf8 1 OUT 2
 repeat Utf8View 1 IN 2
+
+query TTTTT??T rowsort
+show functions like 'regexp_count';
+----
+datafusion public regexp_count SCALAR Int64 [str, regexp, start, flags] [LargeUtf8, LargeUtf8, Int64, LargeUtf8] Returns the number of matches that a [regular expression](https://docs.rs/regex/latest/regex/#syntax) has in a string.
+datafusion public regexp_count SCALAR Int64 [str, regexp, start, flags] [Utf8, Utf8, Int64, Utf8] Returns the number of matches that a [regular expression](https://docs.rs/regex/latest/regex/#syntax) has in a string.
+datafusion public regexp_count SCALAR Int64 [str, regexp, start, flags] [Utf8View, Utf8View, Int64, Utf8View] Returns the number of matches that a [regular expression](https://docs.rs/regex/latest/regex/#syntax) has in a string.
+datafusion public regexp_count SCALAR Int64 [str, regexp, start] [LargeUtf8, LargeUtf8, Int64] Returns the number of matches that a [regular expression](https://docs.rs/regex/latest/regex/#syntax) has in a string.
+datafusion public regexp_count SCALAR Int64 [str, regexp, start] [Utf8, Utf8, Int64] Returns the number of matches that a [regular expression](https://docs.rs/regex/latest/regex/#syntax) has in a string.
+datafusion public regexp_count SCALAR Int64 [str, regexp, start] [Utf8View, Utf8View, Int64] Returns the number of matches that a [regular expression](https://docs.rs/regex/latest/regex/#syntax) has in a string.
+datafusion public regexp_count SCALAR Int64 [str, regexp] [LargeUtf8, LargeUtf8] Returns the number of matches that a [regular expression](https://docs.rs/regex/latest/regex/#syntax) has in a string.
+datafusion public regexp_count SCALAR Int64 [str, regexp] [Utf8, Utf8] Returns the number of matches that a [regular expression](https://docs.rs/regex/latest/regex/#syntax) has in a string.
+datafusion public regexp_count SCALAR Int64 [str, regexp] [Utf8View, Utf8View] Returns the number of matches that a [regular expression](https://docs.rs/regex/latest/regex/#syntax) has in a string.
+
+statement ok
+show functions;

@@ -699,6 +699,10 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 filter,
             } => self.show_columns_to_plan(extended, full, table_name, filter),
 
+            Statement::ShowFunctions { filter, .. } => {
+                self.show_functions_to_plan(filter)
+            }
+
             Statement::Insert(Insert {
                 or,
                 into,
@@ -1874,6 +1878,76 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             "SELECT {select_list} FROM information_schema.columns WHERE {where_clause}"
         );
 
+        let mut rewrite = DFParser::parse_sql(&query)?;
+        assert_eq!(rewrite.len(), 1);
+        self.statement_to_plan(rewrite.pop_front().unwrap()) // length of rewrite is 1
+    }
+
+    fn show_functions_to_plan(
+        &self,
+        filter: Option<ShowStatementFilter>,
+    ) -> Result<LogicalPlan> {
+        let where_clause = if let Some(filter) = filter {
+            match filter {
+                ShowStatementFilter::Like(like) => {
+                    format!("WHERE i.specific_name like '{like}'")
+                }
+                _ => return plan_err!("Unsupported SHOW FUNCTIONS filter"),
+            }
+        } else {
+            "".to_string()
+        };
+
+        let query = format!(
+            r#"
+SELECT
+    i.specific_catalog catalog_name,
+    i.specific_schema schema_name,
+    i.specific_name function_name,
+    r.function_type function_type,
+    o.data_type return_type,
+    array_agg(i.parameter_name ORDER BY i.ordinal_position ASC) parameters,
+    array_agg(i.data_type ORDER BY i.ordinal_position ASC) parameter_types,
+    r.description description
+FROM (
+    SELECT
+        specific_catalog,
+        specific_schema,
+        specific_name,
+        ordinal_position,
+        parameter_name,
+        data_type,
+        rid
+    FROM
+        information_schema.parameters
+    WHERE
+        parameter_mode = 'IN'
+    ) i
+JOIN
+    (
+    SELECT
+        specific_catalog,
+        specific_schema,
+        specific_name,
+        ordinal_position,
+        parameter_name,
+        data_type,
+        rid
+    FROM
+        information_schema.parameters
+    WHERE
+        parameter_mode = 'OUT'
+    ) o
+ON i.specific_catalog = o.specific_catalog
+       AND i.specific_schema = o.specific_schema
+       AND i.specific_name = o.specific_name
+       AND i.rid = o.rid
+JOIN information_schema.routines r
+ON i.specific_name = r.routine_name
+{where_clause}
+GROUP BY 1, 2, 3, 4, 5, i.rid, r.description
+            "#
+        );
         let mut rewrite = DFParser::parse_sql(&query)?;
         assert_eq!(rewrite.len(), 1);
         self.statement_to_plan(rewrite.pop_front().unwrap()) // length of rewrite is 1
