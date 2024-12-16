@@ -202,8 +202,7 @@ impl TopK {
 
         // break into record batches as needed
         let mut batches = vec![];
-        let batch = heap.emit()?;
-        if let Some(mut batch) = batch {
+        if let Some(mut batch) = heap.emit()? {
             metrics.baseline.output_rows().add(batch.num_rows());
 
             loop {
