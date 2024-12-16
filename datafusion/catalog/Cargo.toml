@@ -36,5 +36,8 @@ datafusion-expr = { workspace = true }
 datafusion-physical-plan = { workspace = true }
 parking_lot = { workspace = true }
 
+[dev-dependencies]
+tokio = { workspace = true }
+
 [lints]
 workspace = true
