@@ -680,6 +680,7 @@ mod tests {
         );
     }
 
+    /// Describe a partition as a (path, depth, files) tuple for easier assertions
     fn describe_partition(partition: &Partition) -> (&str, usize, Vec<&str>) {
         (
             partition.path.as_ref(),

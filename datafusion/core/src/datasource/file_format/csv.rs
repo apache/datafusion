@@ -1320,7 +1320,12 @@ mod tests {
     /// (file is empty)
     #[tokio::test]
     async fn test_csv_multiple_empty_files() -> Result<()> {
-        let ctx = SessionContext::new();
+        // Testing that partitioning doesn't break with empty files
+        let config = SessionConfig::new()
+            .with_repartition_file_scans(true)
+            .with_repartition_file_min_size(0)
+            .with_target_partitions(4);
+        let ctx = SessionContext::new_with_config(config);
         let file_format = Arc::new(CsvFormat::default().with_has_header(false));
         let listing_options = ListingOptions::new(file_format.clone())
             .with_file_extension(file_format.get_ext());
