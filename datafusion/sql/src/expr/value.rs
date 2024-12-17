@@ -321,9 +321,9 @@ const fn try_decode_hex_char(c: u8) -> Option<u8> {
     }
 }
 
-/// Callers ensure the value is within i256 range
+/// Returns None if the value can't be converted to i256.
 /// Modified from <https://github.com/apache/arrow-rs/blob/c4dbf0d8af6ca5a19b8b2ea777da3c276807fc5e/arrow-buffer/src/bigint/mod.rs#L303>
-fn bigint_to_i256(v: BigInt) -> Result<i256> {
+fn bigint_to_i256(v: &BigInt) -> Option<i256> {
     let v_bytes = v.to_signed_bytes_le();
     match v_bytes.len().cmp(&32) {
         Ordering::Less => {
@@ -333,12 +333,10 @@ fn bigint_to_i256(v: BigInt) -> Result<i256> {
                 [0; 32]
             };
             bytes[0..v_bytes.len()].copy_from_slice(&v_bytes[..v_bytes.len()]);
-            Ok(i256::from_le_bytes(bytes))
+            Some(i256::from_le_bytes(bytes))
         }
-        Ordering::Equal => Ok(i256::from_le_bytes(v_bytes.try_into().unwrap())),
-        Ordering::Greater => {
-            internal_err!("Unexpected overflow when converting {} to i256", v)
-        }
+        Ordering::Equal => Some(i256::from_le_bytes(v_bytes.try_into().unwrap())),
+        Ordering::Greater => None,
     }
 }
 
@@ -382,7 +380,13 @@ fn parse_decimal(unsigned_number: &str, negative: bool) -> Result<Expr> {
             scale as i8,
         )))
     } else if precision <= DECIMAL256_MAX_PRECISION as u64 {
-        let val = bigint_to_i256(int_val)?;
+        let val = bigint_to_i256(&int_val).ok_or_else(|| {
+            // Failures are unexpected here as we have already checked the precision
+            internal_datafusion_err!(
+                "Unexpected overflow when converting {} to i256",
+                int_val
+            )
+        })?;
         Ok(Expr::Literal(ScalarValue::Decimal256(
             Some(val),
             precision as u8,
