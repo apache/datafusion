@@ -24,8 +24,8 @@ use arrow_schema::{DataType, DECIMAL256_MAX_PRECISION};
 use bigdecimal::num_bigint::BigInt;
 use bigdecimal::{BigDecimal, Signed, ToPrimitive};
 use datafusion_common::{
-    internal_datafusion_err, internal_err, not_impl_datafusion_err, not_impl_err,
-    plan_err, DFSchema, DataFusionError, Result, ScalarValue,
+    internal_datafusion_err, internal_err, not_impl_err, plan_err, DFSchema,
+    DataFusionError, Result, ScalarValue,
 };
 use datafusion_expr::expr::{BinaryExpr, Placeholder};
 use datafusion_expr::planner::PlannerResult;
@@ -321,8 +321,8 @@ const fn try_decode_hex_char(c: u8) -> Option<u8> {
     }
 }
 
-// Callers ensure the value is within i256 range
-// Modified from https://github.com/apache/arrow-rs/blob/c4dbf0d8af6ca5a19b8b2ea777da3c276807fc5e/arrow-buffer/src/bigint/mod.rs#L303
+/// Callers ensure the value is within i256 range
+/// Modified from https://github.com/apache/arrow-rs/blob/c4dbf0d8af6ca5a19b8b2ea777da3c276807fc5e/arrow-buffer/src/bigint/mod.rs#L303
 fn bigint_to_i256(v: BigInt) -> Result<i256> {
     let v_bytes = v.to_signed_bytes_le();
     match v_bytes.len().cmp(&32) {
@@ -342,19 +342,11 @@ fn bigint_to_i256(v: BigInt) -> Result<i256> {
     }
 }
 
-fn parse_precision(digits: u64, scale: i64) -> Result<u64> {
-    if scale < 0 {
-        digits.checked_add(scale.unsigned_abs()).ok_or_else(|| {
-            not_impl_datafusion_err!(
-                "too large precision and scale: {} and {}",
-                digits,
-                scale
-            )
-        })
-    } else if scale > 0 {
-        Ok(std::cmp::max(digits, scale.unsigned_abs()))
-    } else {
-        Ok(digits)
+fn get_precision(digits: u64, scale: i64) -> u64 {
+    match scale.cmp(&0) {
+        Ordering::Greater => std::cmp::max(digits, scale.unsigned_abs()),
+        Ordering::Less => digits.wrapping_add(scale.unsigned_abs()),
+        Ordering::Equal => digits,
     }
 }
 
@@ -370,10 +362,10 @@ fn parse_decimal(unsigned_number: &str, negative: bool) -> Result<Expr> {
 
     let digits = dec.digits();
     let (int_val, scale) = dec.into_bigint_and_exponent();
-    let precision = parse_precision(digits, scale)?;
+    let precision = get_precision(digits, scale);
     if precision <= DECIMAL128_MAX_PRECISION as u64 {
-        // Failures are unexpected here as we have already checked the precision
         let val = int_val.to_i128().ok_or_else(|| {
+            // Failures are unexpected here as we have already checked the precision
             internal_datafusion_err!(
                 "Unexpected overflow when converting {} to i128",
                 int_val
@@ -393,7 +385,7 @@ fn parse_decimal(unsigned_number: &str, negative: bool) -> Result<Expr> {
         )))
     } else {
         not_impl_err!(
-            "Decimal precision {} is greater than the maximum supported precision: {}",
+            "Decimal precision {} exceeds the maximum supported precision: {}",
             precision,
             DECIMAL256_MAX_PRECISION
         )
