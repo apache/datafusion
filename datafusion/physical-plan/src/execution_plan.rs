@@ -440,7 +440,7 @@ pub trait ExecutionPlanProperties {
     /// output if its input is sorted as it does not reorder the input rows.
     fn output_ordering(&self) -> Option<&LexOrdering>;
 
-    /// Boundedness information of the stream corresponding to this ExecutionPlan.
+    /// Boundedness information of the stream corresponding to this `ExecutionPlan`.
     /// For more details, see [`Boundedness`].
     fn boundedness(&self) -> Boundedness;
 
