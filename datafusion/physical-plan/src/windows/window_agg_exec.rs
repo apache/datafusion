@@ -381,23 +381,23 @@ impl WindowAggStream {
         }
 
         loop {
-            let maybe_batch = match ready!(self.input.poll_next_unpin(cx)) {
+            return Poll::Ready(Some(match ready!(self.input.poll_next_unpin(cx)) {
                 Some(Ok(batch)) => {
                     self.batches.push(batch);
                     continue;
                 }
                 Some(Err(e)) => Err(e),
-                None => self.compute_aggregates(),
-            }?;
-            let Some(result) = maybe_batch else {
-                return Poll::Ready(None);
-            };
-
-            self.finished = true;
-            // Empty record batches should not be emitted.
-            // They need to be treated as  [`Option<RecordBatch>`]es and handled separately
-            debug_assert!(result.num_rows() > 0);
-            return Poll::Ready(Some(Ok(result)));
+                None => {
+                    let Some(result) = self.compute_aggregates()? else {
+                        return Poll::Ready(None);
+                    };
+                    self.finished = true;
+                    // Empty record batches should not be emitted.
+                    // They need to be treated as  [`Option<RecordBatch>`]es and handled separately
+                    debug_assert!(result.num_rows() > 0);
+                    Ok(result)
+                }
+            }));
         }
     }
 }
