@@ -287,7 +287,12 @@ pub trait PruningStatistics {
 ///   predicate can never possibly be true). The container can be pruned (skipped)
 ///   entirely.
 ///
-/// Note that in order to be correct, `PruningPredicate` must return false
+/// While `PruningPredicate` will never return a `NULL` value, the
+/// rewritten predicate (as returned by `build_predicate_expression` and used internally
+/// by `PruningPredicate`) may evaluate to `NULL` when some of the min/max values
+/// or null / row counts are not known.
+///
+/// In order to be correct, `PruningPredicate` must return false
 /// **only** if it can determine that for all rows in the container, the
 /// predicate could never evaluate to `true` (always evaluates to either `NULL`
 /// or `false`).
@@ -327,12 +332,12 @@ pub trait PruningStatistics {
 ///
 /// Original Predicate | Rewritten Predicate
 /// ------------------ | --------------------
-/// `x = 5` | `CASE WHEN x_null_count = x_row_count THEN false ELSE x_min <= 5 AND 5 <= x_max END`
-/// `x < 5` | `CASE WHEN x_null_count = x_row_count THEN false ELSE x_max < 5 END`
-/// `x = 5 AND y = 10` | `CASE WHEN x_null_count = x_row_count THEN false ELSE x_min <= 5 AND 5 <= x_max END AND CASE WHEN y_null_count = y_row_count THEN false ELSE y_min <= 10 AND 10 <= y_max END`
+/// `x = 5` | `x_null_count != x_row_count AND (x_min <= 5 AND 5 <= x_max)`
+/// `x < 5` | `x_null_count != x_row_count THEN false (x_max < 5)`
+/// `x = 5 AND y = 10` | `x_null_count != x_row_count AND (x_min <= 5 AND 5 <= x_max) AND y_null_count != y_row_count (y_min <= 10 AND 10 <= y_max)`
 /// `x IS NULL`  | `x_null_count > 0`
 /// `x IS NOT NULL`  | `x_null_count != row_count`
-/// `CAST(x as int) = 5` | `CASE WHEN x_null_count = x_row_count THEN false ELSE CAST(x_min as int) <= 5 AND 5 <= CAST(x_max as int) END`
+/// `CAST(x as int) = 5` | `x_null_count != x_row_count (CAST(x_min as int) <= 5 AND 5 <= CAST(x_max as int))`
 ///
 /// ## Predicate Evaluation
 /// The PruningPredicate works in two passes
@@ -352,15 +357,9 @@ pub trait PruningStatistics {
 /// Given the predicate, `x = 5 AND y = 10`, the rewritten predicate would look like:
 ///
 /// ```sql
-/// CASE
-///     WHEN x_null_count = x_row_count THEN false
-///     ELSE x_min <= 5 AND 5 <= x_max
-/// END
+/// x_null_count != x_row_count AND (x_min <= 5 AND 5 <= x_max)
 /// AND
-/// CASE
-///     WHEN y_null_count = y_row_count THEN false
-///     ELSE y_min <= 10 AND 10 <= y_max
-/// END
+/// y_null_count != y_row_count AND (y_min <= 10 AND 10 <= y_max)
 /// ```
 ///
 /// If we know that for a given container, `x` is between `1 and 100` and we know that
@@ -381,8 +380,11 @@ pub trait PruningStatistics {
 /// When these statistics values are substituted in to the rewritten predicate and
 /// simplified, the result is `false`:
 ///
-/// * `CASE WHEN null = null THEN false ELSE 1 <= 5 AND 5 <= 100 END AND CASE WHEN null = null THEN false ELSE 4 <= 10 AND 10 <= 7 END`
-/// * `null = null` is `null` which is not true, so the `CASE` expression will use the `ELSE` clause
+/// * `null != null AND (1 <= 5 AND 5 <= 100) AND null != null AND (4 <= 10 AND 10 <= 7)`
+/// * `null = null` is `null` which is not true, so the AND moves on to the next clause
+/// * `null and (1 <= 5 AND 5 <= 100) AND null AND (4 <= 10 AND 10 <= 7)`
+/// * evaluating the clauses further we get:
+/// * `null and true and null and false`
 /// * `1 <= 5 AND 5 <= 100 AND 4 <= 10 AND 10 <= 7`
 /// * `true AND true AND true AND false`
 /// * `false`
@@ -390,6 +392,10 @@ pub trait PruningStatistics {
 /// Returning `false` means the container can be pruned, which matches the
 /// intuition that  `x = 5 AND y = 10` can’t be true for any row if all values of `y`
 /// are `7` or less.
+///
+/// Note that if we had ended up with `null AND true AND null AND true` the result
+/// would have been `null`.
+/// We treat `null` as `true` because we can't prove that the predicate is false.
 ///
 /// If, for some other container, we knew `y` was between the values `4` and
 /// `15`, then the rewritten predicate evaluates to `true` (verifying this is
@@ -405,15 +411,9 @@ pub trait PruningStatistics {
 /// look like the same as example 1:
 ///
 /// ```sql
-/// CASE
-///   WHEN x_null_count = x_row_count THEN false
-///   ELSE x_min <= 5 AND 5 <= x_max
-/// END
+/// x_null_count != x_row_count AND (x_min <= 5 AND 5 <= x_max)
 /// AND
-/// CASE
-///   WHEN y_null_count = y_row_count THEN false
-///  ELSE y_min <= 10 AND 10 <= y_max
-/// END
+/// y_null_count != y_row_count AND (y_min <= 10 AND 10 <= y_max)
 /// ```
 ///
 /// If we know that for another given container, `x_min` is NULL and `x_max` is
@@ -435,14 +435,13 @@ pub trait PruningStatistics {
 /// When these statistics values are substituted in to the rewritten predicate and
 /// simplified, the result is `false`:
 ///
-/// * `CASE WHEN 100 = 100 THEN false ELSE null <= 5 AND 5 <= null END AND CASE WHEN null = null THEN false ELSE 4 <= 10 AND 10 <= 7 END`
-/// * Since `100 = 100` is `true`, the `CASE` expression will use the `THEN` clause, i.e. `false`
-/// * The other `CASE` expression will use the `ELSE` clause, i.e. `4 <= 10 AND 10 <= 7`
-/// * `false AND true`
+/// * `100 != 100 AND (null <= 5 AND 5 <= null) AND null = null AND (4 <= 10 AND 10 <= 7)`
+/// * `false AND null AND null AND false`
+/// * `false AND false`
 /// * `false`
 ///
 /// Returning `false` means the container can be pruned, which matches the
-/// intuition that  `x = 5 AND y = 10` can’t be true for all values in `x`
+/// intuition that  `x = 5 AND y = 10` can’t be true because all values in `x`
 /// are known to be NULL.
 ///
 /// # Related Work
