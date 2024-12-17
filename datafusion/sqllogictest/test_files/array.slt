@@ -7142,7 +7142,7 @@ select array_resize(arrow_cast(NULL, 'List(Int8)'), 1);
 NULL
 
 statement ok
-CREATE TABLE array_resize_values
+CREATE TABLE array_resize_values 
 AS VALUES
   (make_array(1, NULL, 3, 4, 5, 6, 7, 8, 9, 10), 2, 1),
   (make_array(11, 12, NULL, 14, 15, 16, 17, 18, 19, 20), 5, 2),
