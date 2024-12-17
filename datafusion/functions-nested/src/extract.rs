@@ -1003,14 +1003,16 @@ mod tests {
     use datafusion_expr::{cast, Expr, ExprSchemable};
     use std::collections::HashMap;
 
+    // Regression test for https://github.com/apache/datafusion/issues/13755
     #[test]
-    fn test_array_element_return_type() {
-        let complex_type = DataType::FixedSizeList(
+    fn test_array_element_return_type_fixed_size_list() {
+        let fixed_size_list_type = DataType::FixedSizeList(
             Field::new("some_arbitrary_test_field", DataType::Int32, false).into(),
             13,
         );
-        let array_type =
-            DataType::List(Field::new_list_field(complex_type.clone(), true).into());
+        let array_type = DataType::List(
+            Field::new_list_field(fixed_size_list_type.clone(), true).into(),
+        );
         let index_type = DataType::Int64;
 
         let schema = DFSchema::from_unqualified_fields(
@@ -1029,7 +1031,7 @@ mod tests {
         assert_eq!(
             udf.return_type(&[array_type.clone(), index_type.clone()])
                 .unwrap(),
-            complex_type
+            fixed_size_list_type
         );
 
         // ScalarUDFImpl::return_type_from_exprs with typed exprs
@@ -1043,7 +1045,7 @@ mod tests {
                 &[array_type.clone(), index_type.clone()]
             )
             .unwrap(),
-            complex_type
+            fixed_size_list_type
         );
 
         // ScalarUDFImpl::return_type_from_exprs with exprs not carrying type
@@ -1057,7 +1059,7 @@ mod tests {
                 &[array_type.clone(), index_type.clone()]
             )
             .unwrap(),
-            complex_type
+            fixed_size_list_type
         );
 
         // Via ExprSchemable::get_type (e.g. SimplifyInfo)
@@ -1070,7 +1072,7 @@ mod tests {
         });
         assert_eq!(
             ExprSchemable::get_type(&udf_expr, &schema).unwrap(),
-            complex_type
+            fixed_size_list_type
         );
     }
 }
