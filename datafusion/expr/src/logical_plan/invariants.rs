@@ -210,12 +210,13 @@ pub fn check_subquery_expr(
         match outer_plan {
             LogicalPlan::Projection(_)
             | LogicalPlan::Filter(_)
+            | LogicalPlan::TableScan(_)
             | LogicalPlan::Window(_)
             | LogicalPlan::Aggregate(_)
             | LogicalPlan::Join(_) => Ok(()),
             _ => plan_err!(
                 "In/Exist subquery can only be used in \
-                Projection, Filter, Window functions, Aggregate and Join plan nodes, \
+                Projection, Filter, TableScan, Window functions, Aggregate and Join plan nodes, \
                 but was used in [{}]",
                 outer_plan.display()
             ),
