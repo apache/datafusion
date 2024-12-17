@@ -17,7 +17,6 @@
 
 use std::mem::size_of;
 
-use arrow::alloc::ALIGNMENT;
 use arrow::array::{
     make_view, Array, ArrayAccessor, ArrayDataBuilder, ArrayIter, ByteView,
     GenericStringArray, LargeStringArray, OffsetSizeTrait, StringArray, StringViewArray,
@@ -125,16 +124,10 @@ pub struct StringArrayBuilder {
 
 impl StringArrayBuilder {
     pub fn with_capacity(item_capacity: usize, data_capacity: usize) -> Self {
-        // MutableBuffer::with_capacity will round up to multiples of `ALIGNMENT`
-        let capacity = std::cmp::max(
-            item_capacity.saturating_add(1).saturating_mul(ALIGNMENT),
-            data_capacity,
-        );
-        // rust core's Layout::from_size_align is capped at isize::Max
-        let capacity = std::cmp::min(
-            capacity,
-            isize::MAX as usize - (isize::MAX as usize % ALIGNMENT),
-        );
+        let capacity = item_capacity
+            .checked_add(1)
+            .map(|i| i.saturating_mul(size_of::<i32>()))
+            .expect("capacity integer overflow");
 
         let mut offsets_buffer = MutableBuffer::with_capacity(capacity);
         // SAFETY: the first offset value is definitely not going to exceed the bounds.
@@ -193,7 +186,7 @@ impl StringArrayBuilder {
             .len()
             .try_into()
             .expect("byte array offset overflow");
-        unsafe { self.offsets_buffer.push_unchecked(next_offset) };
+        self.offsets_buffer.push(next_offset);
     }
 
     /// Finalise the builder into a concrete [`StringArray`].
@@ -300,16 +293,10 @@ pub struct LargeStringArrayBuilder {
 
 impl LargeStringArrayBuilder {
     pub fn with_capacity(item_capacity: usize, data_capacity: usize) -> Self {
-        // MutableBuffer::with_capacity will round up to multiples of `ALIGNMENT`
-        let capacity = std::cmp::max(
-            item_capacity.saturating_add(1).saturating_mul(ALIGNMENT),
-            data_capacity,
-        );
-        // rust core's Layout::from_size_align is capped at isize::Max
-        let capacity = std::cmp::min(
-            capacity,
-            isize::MAX as usize - (isize::MAX as usize % ALIGNMENT),
-        );
+        let capacity = item_capacity
+            .checked_add(1)
+            .map(|i| i.saturating_mul(size_of::<i64>()))
+            .expect("capacity integer overflow");
 
         let mut offsets_buffer = MutableBuffer::with_capacity(capacity);
         // SAFETY: the first offset value is definitely not going to exceed the bounds.
@@ -368,7 +355,7 @@ impl LargeStringArrayBuilder {
             .len()
             .try_into()
             .expect("byte array offset overflow");
-        unsafe { self.offsets_buffer.push_unchecked(next_offset) };
+        self.offsets_buffer.push(next_offset);
     }
 
     /// Finalise the builder into a concrete [`LargeStringArray`].
@@ -476,50 +463,17 @@ impl ColumnarValueRef<'_> {
 
 #[cfg(test)]
 mod tests {
-    use std::alloc::{GlobalAlloc, Layout, System};
-
     use super::*;
 
-    #[derive(Default, Copy, Clone)]
-    pub struct MockAllocator;
-
-    unsafe impl GlobalAlloc for MockAllocator {
-        /// only need to check it's valid
-        #[inline]
-        unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-            if layout.size() >= isize::MAX as usize - (isize::MAX as usize % ALIGNMENT) {
-                // system allocator will abort in such a way that is not detectable in tests
-                // instead, throw a panic we can detect
-                panic!("successfully tried to allocate for max size possible");
-            } else {
-                System.alloc(layout)
-            }
-        }
-
-        #[inline]
-        unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
-            System.dealloc(ptr, layout)
-        }
-    }
-
-    #[global_allocator]
-    static ALLOCATOR: MockAllocator = MockAllocator;
-
     #[test]
-    #[should_panic(expected = "successfully tried to allocate for max size possible")]
+    #[should_panic(expected = "capacity integer overflow")]
     fn test_overflow_string_array_builder() {
-        // should successfully handle overflow
-        // while providing a number that passes upstream checks
-        // and will then panic (by trying to allocate too much)
         let _builder = StringArrayBuilder::with_capacity(usize::MAX, usize::MAX);
     }
 
     #[test]
-    #[should_panic(expected = "successfully tried to allocate for max size possible")]
+    #[should_panic(expected = "capacity integer overflow")]
     fn test_overflow_large_string_array_builder() {
-        // should successfully handle overflow
-        // while providing a number that passes upstream checks
-        // and will then panic (by trying to allocate too much)
         let _builder = LargeStringArrayBuilder::with_capacity(usize::MAX, usize::MAX);
     }
 }
