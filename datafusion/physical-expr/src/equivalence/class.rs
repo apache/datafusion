@@ -63,12 +63,14 @@ pub struct ConstExpr {
     /// struct docs for more details
     across_partitions: bool,
     /// The value of the constant expression
-    value: Option<ScalarValue>
+    value: Option<ScalarValue>,
 }
 
 impl PartialEq for ConstExpr {
     fn eq(&self, other: &Self) -> bool {
-        self.across_partitions == other.across_partitions && self.expr.eq(&other.expr) && self.value == other.value
+        self.across_partitions == other.across_partitions
+            && self.expr.eq(&other.expr)
+            && self.value == other.value
     }
 }
 

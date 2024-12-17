@@ -294,28 +294,27 @@ impl EquivalenceProperties {
         constants: impl IntoIterator<Item = ConstExpr>,
     ) -> Self {
         let normalized_constants = constants
-        .into_iter()
-        .filter_map(|c| {
-            let across_partitions = c.across_partitions();
-            let value = c.value().cloned();
-            let expr = c.owned_expr();
-            let normalized_expr = self.eq_group.normalize_expr(expr);
+            .into_iter()
+            .filter_map(|c| {
+                let across_partitions = c.across_partitions();
+                let value = c.value().cloned();
+                let expr = c.owned_expr();
+                let normalized_expr = self.eq_group.normalize_expr(expr);
 
-            if const_exprs_contains(&self.constants, &normalized_expr) {
-                return None;
-            }
+                if const_exprs_contains(&self.constants, &normalized_expr) {
+                    return None;
+                }
 
-            let mut const_expr = ConstExpr::from(normalized_expr)
-                .with_across_partitions(across_partitions);
+                let mut const_expr = ConstExpr::from(normalized_expr)
+                    .with_across_partitions(across_partitions);
 
+                if let Some(value) = value {
+                    const_expr = const_expr.with_value(value);
+                }
 
-            if let Some(value) = value {
-                const_expr = const_expr.with_value(value);
-            }
-
-            Some(const_expr)
-        })
-        .collect::<Vec<_>>();
+                Some(const_expr)
+            })
+            .collect::<Vec<_>>();
 
         // Add all new normalized constants
         self.constants.extend(normalized_constants);
@@ -1878,7 +1877,9 @@ fn calculate_union_binary(
                     let mut const_expr = ConstExpr::new(Arc::clone(lhs_const.expr()));
 
                     // If both sides have matching constant values, preserve the value and set across_partitions=true
-                    if let (Some(lhs_val), Some(rhs_val)) = (lhs_const.value(), rhs_const.value()) {
+                    if let (Some(lhs_val), Some(rhs_val)) =
+                        (lhs_const.value(), rhs_const.value())
+                    {
                         if lhs_val == rhs_val {
                             const_expr = const_expr
                                 .with_across_partitions(true)
@@ -3711,12 +3712,14 @@ mod tests {
         let literal_10 = ScalarValue::Int32(Some(10));
 
         // Create first input with a=10
-        let const_expr1 = ConstExpr::new(Arc::clone(&col_a)).with_value(literal_10.clone());
+        let const_expr1 =
+            ConstExpr::new(Arc::clone(&col_a)).with_value(literal_10.clone());
         let input1 = EquivalenceProperties::new(Arc::clone(&schema))
             .with_constants(vec![const_expr1]);
 
         // Create second input with a=10
-        let const_expr2 = ConstExpr::new(Arc::clone(&col_a)).with_value(literal_10.clone());
+        let const_expr2 =
+            ConstExpr::new(Arc::clone(&col_a)).with_value(literal_10.clone());
         let input2 = EquivalenceProperties::new(Arc::clone(&schema))
             .with_constants(vec![const_expr2]);
 
