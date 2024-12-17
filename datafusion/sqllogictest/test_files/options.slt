@@ -217,6 +217,55 @@ select -123456789.0123456789012345678901234567890,
 ----
 -123456789.012345678901 Decimal256(40, 31)
 
+# max precision of Decimal256
+query RTRT
+select 1e75, arrow_typeof(1e75),
+    -1e-76, arrow_typeof(-1e-76)
+----
+1000000000000000000000000000000000000000000000000000000000000000000000000000 Decimal256(76, -75) 0 Decimal256(76, 76)
+
+# unsupported precision
+query error Decimal precision 77 exceeds the maximum supported precision: 76
+select 1e76;
+
+query error Decimal precision 77 exceeds the maximum supported precision: 76
+select -1e-77;
+
+query error Decimal precision 79 exceeds the maximum supported precision: 76
+select 1.000000000000000000000000000000000000000000000000000000000000000000000000000001;
+
+# boundaries between decimal128 and decimal256
+query RTRT
+select 1e37, arrow_typeof(1e37),
+    1e38, arrow_typeof(1e38);
+----
+10000000000000000000000000000000000000 Decimal128(38, -37) 100000000000000000000000000000000000000 Decimal256(39, -38)
+
+query RTRT
+select -1e37, arrow_typeof(-1e37),
+    -1e38, arrow_typeof(-1e38);
+----
+-10000000000000000000000000000000000000 Decimal128(38, -37) -100000000000000000000000000000000000000 Decimal256(39, -38)
+
+query RTRT
+select 1e-38, arrow_typeof(1e-38),
+    1e-39, arrow_typeof(1e-39);
+----
+0 Decimal128(38, 38) 0 Decimal256(39, 39)
+
+query RTRT
+select -1e-38, arrow_typeof(-1e-38),
+    -1e-39, arrow_typeof(-1e-39);
+----
+0 Decimal128(38, 38) 0 Decimal256(39, 39)
+
+# simple arithmetic
+query RTRT
+select 1e40 + 1e40, arrow_typeof(1e40 + 1e40),
+    1e-40 + -1e-40, arrow_typeof(1e-40 + -1e-40)
+----
+20000000000000000000000000000000000000000 Decimal256(42, -40) 0 Decimal256(41, 40)
+
 # Restore option to default value
 statement ok
 set datafusion.sql_parser.parse_float_as_decimal = false;

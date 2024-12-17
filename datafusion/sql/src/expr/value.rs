@@ -322,7 +322,7 @@ const fn try_decode_hex_char(c: u8) -> Option<u8> {
 }
 
 /// Callers ensure the value is within i256 range
-/// Modified from https://github.com/apache/arrow-rs/blob/c4dbf0d8af6ca5a19b8b2ea777da3c276807fc5e/arrow-buffer/src/bigint/mod.rs#L303
+/// Modified from <https://github.com/apache/arrow-rs/blob/c4dbf0d8af6ca5a19b8b2ea777da3c276807fc5e/arrow-buffer/src/bigint/mod.rs#L303>
 fn bigint_to_i256(v: BigInt) -> Result<i256> {
     let v_bytes = v.to_signed_bytes_le();
     match v_bytes.len().cmp(&32) {
