@@ -342,14 +342,6 @@ fn bigint_to_i256(v: BigInt) -> Result<i256> {
     }
 }
 
-fn get_precision(digits: u64, scale: i64) -> u64 {
-    match scale.cmp(&0) {
-        Ordering::Greater => std::cmp::max(digits, scale.unsigned_abs()),
-        Ordering::Less => digits.wrapping_add(scale.unsigned_abs()),
-        Ordering::Equal => digits,
-    }
-}
-
 fn parse_decimal(unsigned_number: &str, negative: bool) -> Result<Expr> {
     let mut dec = BigDecimal::from_str(unsigned_number).map_err(|e| {
         DataFusionError::from(ParserError(format!(
@@ -362,7 +354,20 @@ fn parse_decimal(unsigned_number: &str, negative: bool) -> Result<Expr> {
 
     let digits = dec.digits();
     let (int_val, scale) = dec.into_bigint_and_exponent();
-    let precision = get_precision(digits, scale);
+    if scale < i8::MIN as i64 {
+        return not_impl_err!(
+            "Decimal scale {} exceeds the minimum supported scale: {}",
+            scale,
+            i8::MIN
+        );
+    }
+    let precision = if scale > 0 {
+        // arrow-rs requires the precision to include the positive scale.
+        // See <https://github.com/apache/arrow-rs/blob/123045cc766d42d1eb06ee8bb3f09e39ea995ddc/arrow-array/src/types.rs#L1230>
+        std::cmp::max(digits, scale.unsigned_abs())
+    } else {
+        digits
+    };
     if precision <= DECIMAL128_MAX_PRECISION as u64 {
         let val = int_val.to_i128().ok_or_else(|| {
             // Failures are unexpected here as we have already checked the precision

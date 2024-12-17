@@ -198,7 +198,7 @@ select 1.23e3, arrow_typeof(1.23e3),
     +1.23e1, arrow_typeof(+1.23e1),
     -1234.56e-3, arrow_typeof(-1234.56e-3)
 ----
-1230 Decimal128(4, -1) 12.3 Decimal128(3, 1) -1.23456 Decimal128(6, 5)
+1230 Decimal128(3, -1) 12.3 Decimal128(3, 1) -1.23456 Decimal128(6, 5)
 
 query RTRTRT
 select 1.23e-2, arrow_typeof(1.23e-2),
@@ -241,29 +241,7 @@ select -999999999999999999999999999999999999999999999999999999999999999999999999
 ----
 -9999999999999999999999999999999999999999999999999999999999999999999999999999 Decimal256(76, 0)
 
-# unsupported precision
-query error Decimal precision 77 exceeds the maximum supported precision: 76
-select 1e76;
-
-query error Decimal precision 77 exceeds the maximum supported precision: 76
-select -1e-77;
-
-query error Decimal precision 79 exceeds the maximum supported precision: 76
-select 1.000000000000000000000000000000000000000000000000000000000000000000000000000001;
-
 # boundaries between decimal128 and decimal256
-query RTRT
-select 1e37, arrow_typeof(1e37),
-    1e38, arrow_typeof(1e38);
-----
-10000000000000000000000000000000000000 Decimal128(38, -37) 100000000000000000000000000000000000000 Decimal256(39, -38)
-
-query RTRT
-select -1e37, arrow_typeof(-1e37),
-    -1e38, arrow_typeof(-1e38);
-----
--10000000000000000000000000000000000000 Decimal128(38, -37) -100000000000000000000000000000000000000 Decimal256(39, -38)
-
 query RTRT
 select 1e-38, arrow_typeof(1e-38),
     1e-39, arrow_typeof(1e-39);
@@ -276,12 +254,33 @@ select -1e-38, arrow_typeof(-1e-38),
 ----
 0 Decimal128(38, 38) 0 Decimal256(39, 39)
 
+# unsupported precision
+query error Decimal precision 77 exceeds the maximum supported precision: 76
+select -1e-77;
+
+query error Decimal precision 79 exceeds the maximum supported precision: 76
+select 1.000000000000000000000000000000000000000000000000000000000000000000000000000001;
+
+# negative scales
+query TR
+select arrow_typeof(1e77), 1e77
+----
+Decimal128(1, -77) 100000000000000000000000000000000000000000000000000000000000000000000000000000
+
+query T
+select arrow_typeof(1e128)
+----
+Decimal128(1, -128)
+
+query error Decimal scale \-129 exceeds the minimum supported scale: \-128
+select 1e129
+
 # simple arithmetic
 query RTRT
 select 1e40 + 1e40, arrow_typeof(1e40 + 1e40),
     1e-40 + -1e-40, arrow_typeof(1e-40 + -1e-40)
 ----
-20000000000000000000000000000000000000000 Decimal256(42, -40) 0 Decimal256(41, 40)
+20000000000000000000000000000000000000000 Decimal128(2, -40) 0 Decimal256(41, 40)
 
 # Restore option to default value
 statement ok
