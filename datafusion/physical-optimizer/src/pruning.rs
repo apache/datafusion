@@ -2116,6 +2116,7 @@ mod tests {
     #[test]
     fn prune_missing_statistics() {
         // If the min or max stats are missing we should not prune
+        // (unless we know all rows are null, see `prune_all_rows_null_counts`)
         let schema = Arc::new(Schema::new(vec![Field::new("i", DataType::Int32, true)]));
         let container_stats = ContainerStats {
             min: Some(Arc::new(Int32Array::from(vec![None, Some(0)]))),
