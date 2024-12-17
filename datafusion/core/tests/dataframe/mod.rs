@@ -1247,6 +1247,31 @@ async fn unnest_aggregate_columns() -> Result<()> {
 }
 
 #[tokio::test]
+async fn unnest_no_empty_batches() -> Result<()> {
+    let mut shape_id_builder = UInt32Builder::new();
+
+    for shape_id in 1..=5 {
+        shape_id_builder.append_value(shape_id as u32);
+    }
+
+    let batch = RecordBatch::try_from_iter(vec![
+        ("shape_id", Arc::new(shape_id_builder.finish()) as ArrayRef),
+    ])?;
+
+    let ctx = SessionContext::new();
+    ctx.register_batch("shapes", batch)?;
+    let df = ctx.table("shapes").await?;
+
+    let results = df.clone().collect().await?;
+
+    // Assert that there are no empty batches in result
+    for rb in results {
+        assert!(rb.num_rows() > 0);
+    }
+    Ok(())
+}
+
+#[tokio::test]
 async fn unnest_array_agg() -> Result<()> {
     let mut shape_id_builder = UInt32Builder::new();
     let mut tag_id_builder = UInt32Builder::new();
@@ -1268,6 +1293,12 @@ async fn unnest_array_agg() -> Result<()> {
     let df = ctx.table("shapes").await?;
 
     let results = df.clone().collect().await?;
+
+    // Assert that there are no empty batches in result
+    for rb in results.clone() {
+        assert!(rb.num_rows() > 0);
+    }
+
     let expected = vec![
         "+----------+--------+",
         "| shape_id | tag_id |",
