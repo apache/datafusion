@@ -17,7 +17,7 @@
 
 use arrow::array::{as_largestring_array, Array};
 use arrow::datatypes::DataType;
-use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
+use datafusion_expr::sort_properties::ExprProperties;
 use std::any::Any;
 use std::sync::{Arc, OnceLock};
 
