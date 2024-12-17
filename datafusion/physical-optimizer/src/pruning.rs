@@ -1496,7 +1496,11 @@ fn build_predicate_expression(
                 (false, true) => Operator::ILikeMatch,
                 (true, true) => Operator::NotILikeMatch,
             };
-            (like_expr.expr().clone(), op, like_expr.pattern().clone())
+            (
+                Arc::clone(like_expr.expr()),
+                op,
+                Arc::clone(like_expr.pattern()),
+            )
         } else {
             return unhandled_hook.handle(expr);
         }
@@ -1680,15 +1684,15 @@ fn build_like_match(
     } else {
         // the like expression is a literal and can be converted into a comparison
         let bound = Arc::new(phys_expr::Literal::new(ScalarValue::Utf8(Some(s.clone()))));
-        (bound.clone(), bound)
+        (Arc::clone(&bound), bound)
     };
     let lower_bound_expr = Arc::new(phys_expr::BinaryExpr::new(
         lower_bound,
         Operator::LtEq,
-        max_column_expr.clone(),
+        Arc::clone(&max_column_expr),
     ));
     let upper_bound_expr = Arc::new(phys_expr::BinaryExpr::new(
-        min_column_expr.clone(),
+        Arc::clone(&min_column_expr),
         Operator::LtEq,
         upper_bound,
     ));
