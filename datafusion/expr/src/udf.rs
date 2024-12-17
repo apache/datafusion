@@ -659,13 +659,31 @@ pub trait ScalarUDFImpl: Debug + Send + Sync {
 
     /// Calculates the [`SortProperties`] of this function based on its
     /// children's properties.
-    fn output_ordering(&self, _inputs: &[ExprProperties]) -> Result<SortProperties> {
-        Ok(SortProperties::Unordered)
+    fn output_ordering(&self, inputs: &[ExprProperties]) -> Result<SortProperties> {
+        if !self.output_preserves_lex_ordering(inputs)? {
+            return Ok(SortProperties::Unordered);
+        }
+
+        let Some(first_order) = inputs.first().map(|p| &p.sort_properties) else {
+            return Ok(SortProperties::Unordered);
+        };
+
+        if inputs.iter().skip(1).all(|input| &input.sort_properties == first_order) {
+            Ok(first_order.clone())
+        } else {
+            Ok(SortProperties::Unordered)
+        }
     }
 
     /// Whether the function preserves lexicographical ordering based on the input ordering
-    fn output_preserves_lex_ordering(&self, _inputs: &[ExprProperties]) -> Result<bool> {
-        Ok(false)
+    fn output_preserves_lex_ordering(&self, inputs: &[ExprProperties]) -> Result<bool> {
+        Ok(inputs
+            .first()
+            .map(|first| &first.sort_properties)
+            .filter(|&first_ordering| {
+                inputs.iter().skip(1).all(|input| &input.sort_properties == first_ordering)
+            })
+            .is_some())
     }
 
     /// Coerce arguments of a function call to types that the function can evaluate.
