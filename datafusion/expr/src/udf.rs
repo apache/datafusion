@@ -668,7 +668,11 @@ pub trait ScalarUDFImpl: Debug + Send + Sync {
             return Ok(SortProperties::Unordered);
         };
 
-        if inputs.iter().skip(1).all(|input| &input.sort_properties == first_order) {
+        if inputs
+            .iter()
+            .skip(1)
+            .all(|input| &input.sort_properties == first_order)
+        {
             Ok(first_order.clone())
         } else {
             Ok(SortProperties::Unordered)
@@ -681,7 +685,10 @@ pub trait ScalarUDFImpl: Debug + Send + Sync {
             .first()
             .map(|first| &first.sort_properties)
             .filter(|&first_ordering| {
-                inputs.iter().skip(1).all(|input| &input.sort_properties == first_ordering)
+                inputs
+                    .iter()
+                    .skip(1)
+                    .all(|input| &input.sort_properties == first_ordering)
             })
             .is_some())
     }
