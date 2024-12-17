@@ -41,6 +41,9 @@ mod kernels;
 mod list;
 mod regexp;
 pub mod scalar_funcs;
+mod schema_adapter;
+pub use schema_adapter::SparkSchemaAdapterFactory;
+
 pub mod spark_hash;
 mod stddev;
 pub use stddev::Stddev;
@@ -51,6 +54,8 @@ mod negative;
 pub use negative::{create_negate_expr, NegativeExpr};
 mod normalize_nan;
 mod temporal;
+
+pub mod test_common;
 pub mod timezone;
 mod to_json;
 mod unbound;
