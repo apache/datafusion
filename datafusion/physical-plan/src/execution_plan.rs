@@ -444,7 +444,7 @@ pub trait ExecutionPlanProperties {
     /// For more details, see [`Boundedness`].
     fn boundedness(&self) -> Boundedness;
 
-    /// Indicates how the stream of this ExecutionPlan emits its results.
+    /// Indicates how the stream of this `ExecutionPlan` emits its results.
     /// For more details, see [`EmissionType`].
     fn pipeline_behavior(&self) -> EmissionType;
 
