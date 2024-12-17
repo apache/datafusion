@@ -682,10 +682,12 @@ pub trait ScalarUDFImpl: Debug + Send + Sync {
     /// Whether the function preserves lexicographical ordering based on the input ordering
     fn output_preserves_lex_ordering(&self, inputs: &[ExprProperties]) -> Result<bool> {
         // Check for non-empty input and verify all elements have same sort properties as first
-        Ok(inputs.first().is_some_and(|first| inputs
-            .iter()
-            .skip(1)
-            .all(|input| input.sort_properties == first.sort_properties)))
+        Ok(inputs.first().is_some_and(|first| {
+            inputs
+                .iter()
+                .skip(1)
+                .all(|input| input.sort_properties == first.sort_properties)
+        }))
     }
 
     /// Coerce arguments of a function call to types that the function can evaluate.
