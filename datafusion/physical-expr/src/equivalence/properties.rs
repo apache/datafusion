@@ -1891,12 +1891,6 @@ fn calculate_union_binary(
         })
         .collect::<Vec<_>>();
 
-    // Remove any constants that are shared in both outputs (avoid double counting them)
-    for c in &constants {
-        lhs = lhs.remove_constant(c);
-        rhs = rhs.remove_constant(c);
-    }
-
     // Next, calculate valid orderings for the union by searching for prefixes
     // in both sides.
     let mut orderings = UnionEquivalentOrderingBuilder::new();
