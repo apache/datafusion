@@ -348,21 +348,14 @@ impl EquivalenceProperties {
         let mut new_orderings: Vec<LexOrdering> = vec![];
 
         let normalized_oeq = self.normalized_oeq_class();
-        for (original_ordering, ordering) in self.oeq_class.iter().zip(normalized_oeq.iter()) {
+        for ordering in normalized_oeq.iter() {
             if !ordering[0].expr.eq(&normalized_expr) {
                 continue;
             }
 
             let leading_ordering_options = ordering[0].options;
-            let original_leading_ordering_expr = original_ordering[0].expr.clone();
 
             for equivalent_expr in &eq_class {
-                // Skip if original ordering starts with the equivalent expression
-                // This avoids unintended simplifications that may not be valid
-                if original_leading_ordering_expr.eq(&equivalent_expr) {
-                    continue;
-                }
-
                 let children = equivalent_expr.children();
 
                 if children.is_empty() {
@@ -394,7 +387,7 @@ impl EquivalenceProperties {
                 if all_children_match {
                     // Check if the expression is monotonic in all arguments
                     if let Ok(expr_properties) = equivalent_expr.get_properties(&child_properties) {
-                        if SortProperties::Ordered(leading_ordering_options) == expr_properties.sort_properties {
+                        if expr_properties.preserves_lex_ordering && SortProperties::Ordered(leading_ordering_options) == expr_properties.sort_properties {
                             // Assume existing ordering is [c ASC, a ASC, b ASC]
                             // When equality c = f(a,b) is given, if we know that given ordering `[a ASC, b ASC]`,
                             // ordering `[f(a,b) ASC]` is valid, then we can deduce that ordering `[a ASC, b ASC]` is also valid.
