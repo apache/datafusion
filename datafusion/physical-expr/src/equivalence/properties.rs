@@ -383,6 +383,7 @@ impl EquivalenceProperties {
                         child_properties.push(ExprProperties {
                             sort_properties: SortProperties::Ordered(next.options),
                             range: Interval::make_unbounded(&child.data_type(&self.schema)?)?,
+                            preserves_lex_ordering: true,
                         });
                     } else {
                         all_children_match = false;
@@ -1451,16 +1452,19 @@ fn get_expr_properties(
         Ok(ExprProperties {
             sort_properties: SortProperties::Ordered(column_order.options),
             range: Interval::make_unbounded(&expr.data_type(schema)?)?,
+            preserves_lex_ordering: false,
         })
     } else if expr.as_any().downcast_ref::<Column>().is_some() {
         Ok(ExprProperties {
             sort_properties: SortProperties::Unordered,
             range: Interval::make_unbounded(&expr.data_type(schema)?)?,
+            preserves_lex_ordering: false,
         })
     } else if let Some(literal) = expr.as_any().downcast_ref::<Literal>() {
         Ok(ExprProperties {
             sort_properties: SortProperties::Singleton,
             range: Interval::try_new(literal.value().clone(), literal.value().clone())?,
+            preserves_lex_ordering: true,
         })
     } else {
         // Find orderings of its children

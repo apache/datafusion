@@ -202,6 +202,7 @@ impl PhysicalExpr for ScalarFunctionExpr {
 
     fn get_properties(&self, children: &[ExprProperties]) -> Result<ExprProperties> {
         let sort_properties = self.fun.output_ordering(children)?;
+        let preserves_lex_ordering = self.fun.output_preserves_lex_ordering(children)?;
         let children_range = children
             .iter()
             .map(|props| &props.range)
@@ -211,6 +212,7 @@ impl PhysicalExpr for ScalarFunctionExpr {
         Ok(ExprProperties {
             sort_properties,
             range,
+            preserves_lex_ordering,
         })
     }
 }

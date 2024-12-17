@@ -303,6 +303,13 @@ impl ScalarUDF {
         self.inner.output_ordering(inputs)
     }
 
+    pub fn output_preserves_lex_ordering(
+        &self,
+        inputs: &[ExprProperties],
+    ) -> Result<bool> {
+        self.inner.output_preserves_lex_ordering(inputs)
+    }
+
     /// See [`ScalarUDFImpl::coerce_types`] for more details.
     pub fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
         self.inner.coerce_types(arg_types)
@@ -656,6 +663,11 @@ pub trait ScalarUDFImpl: Debug + Send + Sync {
         Ok(SortProperties::Unordered)
     }
 
+    /// Whether the function preserves lexicographical ordering based on the input ordering
+    fn output_preserves_lex_ordering(&self, _inputs: &[ExprProperties]) -> Result<bool> {
+        Ok(false)
+    }
+
     /// Coerce arguments of a function call to types that the function can evaluate.
     ///
     /// This function is only called if [`ScalarUDFImpl::signature`] returns [`crate::TypeSignature::UserDefined`]. Most
@@ -807,6 +819,10 @@ impl ScalarUDFImpl for AliasedScalarUDFImpl {
 
     fn output_ordering(&self, inputs: &[ExprProperties]) -> Result<SortProperties> {
         self.inner.output_ordering(inputs)
+    }
+
+    fn output_preserves_lex_ordering(&self, inputs: &[ExprProperties]) -> Result<bool> {
+        self.inner.output_preserves_lex_ordering(inputs)
     }
 
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
