@@ -1855,7 +1855,7 @@ impl Hash for ExprWrapper {
 /// *all* output partitions, that is the same as being true for all *input*
 /// partitions
 fn calculate_union_binary(
-    mut lhs: EquivalenceProperties,
+    lhs: EquivalenceProperties,
     mut rhs: EquivalenceProperties,
 ) -> Result<EquivalenceProperties> {
     // Harmonize the schema of the rhs with the schema of the lhs (which is the accumulator schema):
