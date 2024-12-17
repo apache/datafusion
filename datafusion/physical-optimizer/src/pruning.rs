@@ -385,8 +385,7 @@ pub trait PruningStatistics {
 /// * `null and (1 <= 5 AND 5 <= 100) AND null AND (4 <= 10 AND 10 <= 7)`
 /// * evaluating the clauses further we get:
 /// * `null and true and null and false`
-/// * `1 <= 5 AND 5 <= 100 AND 4 <= 10 AND 10 <= 7`
-/// * `true AND true AND true AND false`
+/// * `null and false`
 /// * `false`
 ///
 /// Returning `false` means the container can be pruned, which matches the
