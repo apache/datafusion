@@ -459,10 +459,6 @@ config_namespace! {
         /// default parquet writer setting
         pub statistics_enabled: Option<String>, transform = str::to_lowercase, default = Some("page".into())
 
-        /// (writing) Sets max statistics size for any column. If NULL, uses
-        /// default parquet writer setting
-        pub max_statistics_size: Option<usize>, default = Some(4096)
-
         /// (writing) Target maximum number of rows in each row group (defaults to 1M
         /// rows). Writing larger row groups requires more memory to write, but
         /// can get better compression and be faster to read.
@@ -1653,10 +1649,6 @@ config_namespace_with_hashmap! {
         /// Sets bloom filter number of distinct values. If NULL, uses
         /// default parquet options
         pub bloom_filter_ndv: Option<u64>, default = None
-
-        /// Sets max statistics size for the column path. If NULL, uses
-        /// default parquet options
-        pub max_statistics_size: Option<usize>, default = None
     }
 }
 

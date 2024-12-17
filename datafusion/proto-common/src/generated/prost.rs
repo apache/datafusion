@@ -664,10 +664,6 @@ pub struct ParquetColumnOptions {
     pub bloom_filter_ndv_opt: ::core::option::Option<
         parquet_column_options::BloomFilterNdvOpt,
     >,
-    #[prost(oneof = "parquet_column_options::MaxStatisticsSizeOpt", tags = "8")]
-    pub max_statistics_size_opt: ::core::option::Option<
-        parquet_column_options::MaxStatisticsSizeOpt,
-    >,
 }
 /// Nested message and enum types in `ParquetColumnOptions`.
 pub mod parquet_column_options {
@@ -705,11 +701,6 @@ pub mod parquet_column_options {
     pub enum BloomFilterNdvOpt {
         #[prost(uint64, tag = "7")]
         BloomFilterNdv(u64),
-    }
-    #[derive(Clone, Copy, PartialEq, ::prost::Oneof)]
-    pub enum MaxStatisticsSizeOpt {
-        #[prost(uint32, tag = "8")]
-        MaxStatisticsSize(u32),
     }
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -785,10 +776,6 @@ pub struct ParquetOptions {
     pub statistics_enabled_opt: ::core::option::Option<
         parquet_options::StatisticsEnabledOpt,
     >,
-    #[prost(oneof = "parquet_options::MaxStatisticsSizeOpt", tags = "14")]
-    pub max_statistics_size_opt: ::core::option::Option<
-        parquet_options::MaxStatisticsSizeOpt,
-    >,
     #[prost(oneof = "parquet_options::ColumnIndexTruncateLengthOpt", tags = "17")]
     pub column_index_truncate_length_opt: ::core::option::Option<
         parquet_options::ColumnIndexTruncateLengthOpt,
@@ -821,11 +808,6 @@ pub mod parquet_options {
     pub enum StatisticsEnabledOpt {
         #[prost(string, tag = "13")]
         StatisticsEnabled(::prost::alloc::string::String),
-    }
-    #[derive(Clone, Copy, PartialEq, ::prost::Oneof)]
-    pub enum MaxStatisticsSizeOpt {
-        #[prost(uint64, tag = "14")]
-        MaxStatisticsSize(u64),
     }
     #[derive(Clone, Copy, PartialEq, ::prost::Oneof)]
     pub enum ColumnIndexTruncateLengthOpt {
