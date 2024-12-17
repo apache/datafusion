@@ -301,7 +301,6 @@ async fn bounded_window_causal_non_causal() -> Result<()> {
                 let task_ctx = ctx.task_ctx();
                 let mut collected_results =
                     collect(running_window_exec, task_ctx).await?;
-                collected_results.retain(|batch| batch.num_rows() > 0);
                 let input_batch_sizes = batches
                     .iter()
                     .map(|batch| batch.num_rows())
@@ -310,6 +309,8 @@ async fn bounded_window_causal_non_causal() -> Result<()> {
                     .iter()
                     .map(|batch| batch.num_rows())
                     .collect::<Vec<_>>();
+                // There should be no empty batches at results
+                assert!(result_batch_sizes.iter().all(|e| *e > 0));
                 if causal {
                     // For causal window frames, we can generate results immediately
                     // for each input batch. Hence, batch sizes should match.
