@@ -777,7 +777,7 @@ impl Stream for GroupedHashAggregateStream {
                         (ExecutionState::ProducingOutput(remaining), output)
                     };
                     // Empty record batches should not be emitted.
-                    // They need to be treated as  [`Option<RecordBatch>`]es and handle separately
+                    // They need to be treated as  [`Option<RecordBatch>`]es and handled separately
                     debug_assert!(output_batch.num_rows() > 0);
                     return Poll::Ready(Some(Ok(
                         output_batch.record_output(&self.baseline_metrics)

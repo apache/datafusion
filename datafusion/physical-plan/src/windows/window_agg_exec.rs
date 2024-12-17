@@ -395,7 +395,7 @@ impl WindowAggStream {
 
             self.finished = true;
             // Empty record batches should not be emitted.
-            // They need to be treated as  [`Option<RecordBatch>`]es and handle separately
+            // They need to be treated as  [`Option<RecordBatch>`]es and handled separately
             debug_assert!(result.num_rows() > 0);
             return Poll::Ready(Some(Ok(result)));
         }

@@ -987,8 +987,7 @@ impl BoundedWindowAggStream {
                     &self.window_expr,
                     &mut self.partition_buffers,
                 )?;
-                let batch = self.compute_aggregates()?;
-                if let Some(batch) = batch {
+                if let Some(batch) = self.compute_aggregates()? {
                     return Poll::Ready(Some(Ok(batch)));
                 }
                 self.poll_next_inner(cx)
@@ -999,8 +998,7 @@ impl BoundedWindowAggStream {
                 for (_, partition_batch_state) in self.partition_buffers.iter_mut() {
                     partition_batch_state.is_end = true;
                 }
-                let batch = self.compute_aggregates()?;
-                if let Some(batch) = batch {
+                if let Some(batch) = self.compute_aggregates()? {
                     return Poll::Ready(Some(Ok(batch)));
                 }
                 Poll::Ready(None)

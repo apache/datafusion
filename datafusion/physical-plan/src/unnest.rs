@@ -301,7 +301,7 @@ impl UnnestStream {
                     self.metrics.output_rows.add(result_batch.num_rows());
 
                     // Empty record batches should not be emitted.
-                    // They need to be treated as  [`Option<RecordBatch>`]es and handle separately
+                    // They need to be treated as  [`Option<RecordBatch>`]es and handled separately
                     debug_assert!(result_batch.num_rows() > 0);
                     Some(Ok(result_batch))
                 }
@@ -578,14 +578,14 @@ fn build_batch(
                     true => batch.columns(),
                     false => &flatten_arrs,
                 };
-                let temp_result = list_unnest_at_level(
+                let Some(temp_result) = list_unnest_at_level(
                     input,
                     list_type_columns,
                     &mut temp_unnested_result,
                     depth,
                     options,
-                )?;
-                let Some(temp_result) = temp_result else {
+                )?
+                else {
                     return Ok(None);
                 };
                 flatten_arrs = temp_result;
