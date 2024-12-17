@@ -288,12 +288,12 @@ pub trait SubstraitConsumer: Send + Sync + Sized {
         from_literal(self, expr).await
     }
 
-    async fn consume_selection(
+    async fn consume_field_reference(
         &self,
         expr: &FieldReference,
         input_schema: &DFSchema,
     ) -> Result<Expr> {
-        from_selection(self, expr, input_schema).await
+        from_field_reference(self, expr, input_schema).await
     }
 
     async fn consume_scalar_function(
@@ -1948,7 +1948,7 @@ pub async fn from_substrait_rex(
         Some(t) => match t {
             RexType::Literal(expr) => consumer.consume_literal(expr).await,
             RexType::Selection(expr) => {
-                consumer.consume_selection(expr, input_schema).await
+                consumer.consume_field_reference(expr, input_schema).await
             }
             RexType::ScalarFunction(expr) => {
                 consumer.consume_scalar_function(expr, input_schema).await
@@ -1996,7 +1996,7 @@ pub async fn from_singular_or_list(
     }))
 }
 
-pub async fn from_selection(
+pub async fn from_field_reference(
     _consumer: &impl SubstraitConsumer,
     field_ref: &FieldReference,
     input_schema: &DFSchema,
