@@ -213,13 +213,13 @@ pub fn cell_to_string(col: &ArrayRef, row: usize) -> Result<String> {
             DataType::Float64 => {
                 Ok(f64_to_str(get_row_value!(array::Float64Array, col, row)))
             }
-            DataType::Decimal128(precision, scale) => {
+            DataType::Decimal128(_, scale) => {
                 let value = get_row_value!(array::Decimal128Array, col, row);
-                Ok(i128_to_str(value, precision, scale))
+                Ok(decimal_128_to_str(value, *scale))
             }
-            DataType::Decimal256(precision, scale) => {
+            DataType::Decimal256(_, scale) => {
                 let value = get_row_value!(array::Decimal256Array, col, row);
-                Ok(i256_to_str(value, precision, scale))
+                Ok(decimal_256_to_str(value, *scale))
             }
             DataType::LargeUtf8 => Ok(varchar_to_str(get_row_value!(
                 array::LargeStringArray,

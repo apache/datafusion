@@ -23,25 +23,28 @@ use arrow::array::{Array, ArrayRef, Float64Array, Int32Array};
 use arrow::compute::kernels::cast_utils::IntervalUnit;
 use arrow::compute::{binary, date_part, DatePart};
 use arrow::datatypes::DataType::{
-    Date32, Date64, Duration, Interval, Time32, Time64, Timestamp, Utf8, Utf8View,
+    Date32, Date64, Duration, Interval, Time32, Time64, Timestamp,
 };
-use arrow::datatypes::IntervalUnit::{DayTime, MonthDayNano, YearMonth};
 use arrow::datatypes::TimeUnit::{Microsecond, Millisecond, Nanosecond, Second};
 use arrow::datatypes::{DataType, TimeUnit};
 
-use datafusion_common::cast::{
-    as_date32_array, as_date64_array, as_int32_array, as_time32_millisecond_array,
-    as_time32_second_array, as_time64_microsecond_array, as_time64_nanosecond_array,
-    as_timestamp_microsecond_array, as_timestamp_millisecond_array,
-    as_timestamp_nanosecond_array, as_timestamp_second_array,
+use datafusion_common::not_impl_err;
+use datafusion_common::{
+    cast::{
+        as_date32_array, as_date64_array, as_int32_array, as_time32_millisecond_array,
+        as_time32_second_array, as_time64_microsecond_array, as_time64_nanosecond_array,
+        as_timestamp_microsecond_array, as_timestamp_millisecond_array,
+        as_timestamp_nanosecond_array, as_timestamp_second_array,
+    },
+    exec_err, internal_err,
+    types::logical_string,
+    ExprSchema, Result, ScalarValue,
 };
-use datafusion_common::{exec_err, internal_err, ExprSchema, Result, ScalarValue};
-use datafusion_expr::scalar_doc_sections::DOC_SECTION_DATETIME;
-use datafusion_expr::TypeSignature::Exact;
 use datafusion_expr::{
-    ColumnarValue, Documentation, Expr, ScalarUDFImpl, Signature, Volatility,
-    TIMEZONE_WILDCARD,
+    scalar_doc_sections::DOC_SECTION_DATETIME, ColumnarValue, Documentation, Expr,
+    ScalarUDFImpl, Signature, TypeSignature, Volatility,
 };
+use datafusion_expr_common::signature::TypeSignatureClass;
 
 #[derive(Debug)]
 pub struct DatePartFunc {
@@ -60,72 +63,26 @@ impl DatePartFunc {
         Self {
             signature: Signature::one_of(
                 vec![
-                    Exact(vec![Utf8, Timestamp(Nanosecond, None)]),
-                    Exact(vec![Utf8View, Timestamp(Nanosecond, None)]),
-                    Exact(vec![
-                        Utf8,
-                        Timestamp(Nanosecond, Some(TIMEZONE_WILDCARD.into())),
+                    TypeSignature::Coercible(vec![
+                        TypeSignatureClass::Native(logical_string()),
+                        TypeSignatureClass::Timestamp,
                     ]),
-                    Exact(vec![
-                        Utf8View,
-                        Timestamp(Nanosecond, Some(TIMEZONE_WILDCARD.into())),
+                    TypeSignature::Coercible(vec![
+                        TypeSignatureClass::Native(logical_string()),
+                        TypeSignatureClass::Date,
                     ]),
-                    Exact(vec![Utf8, Timestamp(Millisecond, None)]),
-                    Exact(vec![Utf8View, Timestamp(Millisecond, None)]),
-                    Exact(vec![
-                        Utf8,
-                        Timestamp(Millisecond, Some(TIMEZONE_WILDCARD.into())),
+                    TypeSignature::Coercible(vec![
+                        TypeSignatureClass::Native(logical_string()),
+                        TypeSignatureClass::Time,
                     ]),
-                    Exact(vec![
-                        Utf8View,
-                        Timestamp(Millisecond, Some(TIMEZONE_WILDCARD.into())),
+                    TypeSignature::Coercible(vec![
+                        TypeSignatureClass::Native(logical_string()),
+                        TypeSignatureClass::Interval,
                     ]),
-                    Exact(vec![Utf8, Timestamp(Microsecond, None)]),
-                    Exact(vec![Utf8View, Timestamp(Microsecond, None)]),
-                    Exact(vec![
-                        Utf8,
-                        Timestamp(Microsecond, Some(TIMEZONE_WILDCARD.into())),
+                    TypeSignature::Coercible(vec![
+                        TypeSignatureClass::Native(logical_string()),
+                        TypeSignatureClass::Duration,
                     ]),
-                    Exact(vec![
-                        Utf8View,
-                        Timestamp(Microsecond, Some(TIMEZONE_WILDCARD.into())),
-                    ]),
-                    Exact(vec![Utf8, Timestamp(Second, None)]),
-                    Exact(vec![Utf8View, Timestamp(Second, None)]),
-                    Exact(vec![
-                        Utf8,
-                        Timestamp(Second, Some(TIMEZONE_WILDCARD.into())),
-                    ]),
-                    Exact(vec![
-                        Utf8View,
-                        Timestamp(Second, Some(TIMEZONE_WILDCARD.into())),
-                    ]),
-                    Exact(vec![Utf8, Date64]),
-                    Exact(vec![Utf8View, Date64]),
-                    Exact(vec![Utf8, Date32]),
-                    Exact(vec![Utf8View, Date32]),
-                    Exact(vec![Utf8, Time32(Second)]),
-                    Exact(vec![Utf8View, Time32(Second)]),
-                    Exact(vec![Utf8, Time32(Millisecond)]),
-                    Exact(vec![Utf8View, Time32(Millisecond)]),
-                    Exact(vec![Utf8, Time64(Microsecond)]),
-                    Exact(vec![Utf8View, Time64(Microsecond)]),
-                    Exact(vec![Utf8, Time64(Nanosecond)]),
-                    Exact(vec![Utf8View, Time64(Nanosecond)]),
-                    Exact(vec![Utf8, Interval(YearMonth)]),
-                    Exact(vec![Utf8View, Interval(YearMonth)]),
-                    Exact(vec![Utf8, Interval(DayTime)]),
-                    Exact(vec![Utf8View, Interval(DayTime)]),
-                    Exact(vec![Utf8, Interval(MonthDayNano)]),
-                    Exact(vec![Utf8View, Interval(MonthDayNano)]),
-                    Exact(vec![Utf8, Duration(Second)]),
-                    Exact(vec![Utf8View, Duration(Second)]),
-                    Exact(vec![Utf8, Duration(Millisecond)]),
-                    Exact(vec![Utf8View, Duration(Millisecond)]),
-                    Exact(vec![Utf8, Duration(Microsecond)]),
-                    Exact(vec![Utf8View, Duration(Microsecond)]),
-                    Exact(vec![Utf8, Duration(Nanosecond)]),
-                    Exact(vec![Utf8View, Duration(Nanosecond)]),
                 ],
                 Volatility::Immutable,
             ),
@@ -290,9 +247,10 @@ fn get_date_part_doc() -> &'static Documentation {
 /// result to a total number of seconds, milliseconds, microseconds or
 /// nanoseconds
 fn seconds_as_i32(array: &dyn Array, unit: TimeUnit) -> Result<ArrayRef> {
-    // Nanosecond is neither supported in Postgres nor DuckDB, to avoid to deal with overflow and precision issue we don't support nanosecond
+    // Nanosecond is neither supported in Postgres nor DuckDB, to avoid dealing
+    // with overflow and precision issue we don't support nanosecond
     if unit == Nanosecond {
-        return internal_err!("unit {unit:?} not supported");
+        return not_impl_err!("Date part {unit:?} not supported");
     }
 
     let conversion_factor = match unit {
