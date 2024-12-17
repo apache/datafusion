@@ -29,8 +29,8 @@ use datafusion::datasource::provider_as_source;
 use datafusion::logical_expr::expr::{Exists, InSubquery, Sort};
 
 use datafusion::logical_expr::{
-    Aggregate, BinaryExpr, Case, Cast, EmptyRelation, Expr, ExprSchemable, LogicalPlan,
-    Operator, Projection, SortExpr, Subquery, TryCast, Values,
+    Aggregate, BinaryExpr, Case, Cast, EmptyRelation, Expr, ExprSchemable, Extension,
+    LogicalPlan, Operator, Projection, SortExpr, Subquery, TryCast, Values,
 };
 use substrait::proto::aggregate_rel::Grouping;
 use substrait::proto::expression as substrait_expression;
@@ -476,6 +476,12 @@ pub struct DefaultSubstraitConsumer {
     state: Arc<SessionState>,
 }
 
+impl DefaultSubstraitConsumer {
+    pub fn new(extensions: Arc<Extensions>, state: Arc<SessionState>) -> Self {
+        DefaultSubstraitConsumer { extensions, state }
+    }
+}
+
 impl Default for DefaultSubstraitConsumer {
     fn default() -> Self {
         DefaultSubstraitConsumer {
@@ -500,6 +506,61 @@ impl SubstraitConsumer for DefaultSubstraitConsumer {
 
     fn get_state(&self) -> &SessionState {
         self.state.as_ref()
+    }
+
+    async fn consume_extension_leaf(
+        &self,
+        rel: &ExtensionLeafRel,
+    ) -> Result<LogicalPlan> {
+        let Some(ext_detail) = &rel.detail else {
+            return substrait_err!("Unexpected empty detail in ExtensionLeafRel");
+        };
+        let plan = self
+            .state
+            .serializer_registry()
+            .deserialize_logical_plan(&ext_detail.type_url, &ext_detail.value)?;
+        Ok(LogicalPlan::Extension(Extension { node: plan }))
+    }
+
+    async fn consume_extension_single(
+        &self,
+        rel: &ExtensionSingleRel,
+    ) -> Result<LogicalPlan> {
+        let Some(ext_detail) = &rel.detail else {
+            return substrait_err!("Unexpected empty detail in ExtensionSingleRel");
+        };
+        let plan = self
+            .state
+            .serializer_registry()
+            .deserialize_logical_plan(&ext_detail.type_url, &ext_detail.value)?;
+        let Some(input_rel) = &rel.input else {
+            return substrait_err!(
+                    "ExtensionSingleRel missing input rel, try using ExtensionLeafRel instead"
+                );
+        };
+        let input_plan = from_substrait_rel(self, input_rel).await?;
+        let plan = plan.with_exprs_and_inputs(plan.expressions(), vec![input_plan])?;
+        Ok(LogicalPlan::Extension(Extension { node: plan }))
+    }
+
+    async fn consume_extension_multi(
+        &self,
+        rel: &ExtensionMultiRel,
+    ) -> Result<LogicalPlan> {
+        let Some(ext_detail) = &rel.detail else {
+            return substrait_err!("Unexpected empty detail in ExtensionMultiRel");
+        };
+        let plan = self
+            .state
+            .serializer_registry()
+            .deserialize_logical_plan(&ext_detail.type_url, &ext_detail.value)?;
+        let mut inputs = Vec::with_capacity(rel.inputs.len());
+        for input in &rel.inputs {
+            let input_plan = from_substrait_rel(self, input).await?;
+            inputs.push(input_plan);
+        }
+        let plan = plan.with_exprs_and_inputs(plan.expressions(), inputs)?;
+        Ok(LogicalPlan::Extension(Extension { node: plan }))
     }
 }
 
@@ -1419,29 +1480,6 @@ pub async fn from_set_rel(
             set_op => not_impl_err!("Unsupported set operator: {set_op:?}"),
         }
     }
-}
-
-pub async fn from_extension_leaf_rel(
-    consumer: &impl SubstraitConsumer,
-    extension_leaf_rel: &ExtensionLeafRel,
-) -> Result<LogicalPlan> {
-    consumer.consume_extension_leaf(extension_leaf_rel).await
-}
-
-pub async fn from_extension_single_rel(
-    consumer: &impl SubstraitConsumer,
-    extension_single_rel: &ExtensionSingleRel,
-) -> Result<LogicalPlan> {
-    consumer
-        .consume_extension_single(extension_single_rel)
-        .await
-}
-
-pub async fn from_extension_multi_rel(
-    consumer: &impl SubstraitConsumer,
-    extension_multi_rel: &ExtensionMultiRel,
-) -> Result<LogicalPlan> {
-    consumer.consume_extension_multi(extension_multi_rel).await
 }
 
 pub async fn from_exchange_rel(
