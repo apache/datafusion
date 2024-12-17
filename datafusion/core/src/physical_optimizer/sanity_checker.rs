@@ -236,7 +236,7 @@ mod tests {
             sql: "SELECT t2.c1 FROM left as t1 LEFT JOIN right as t2 ON t1.c1 = t2.c1"
                 .to_string(),
             cases: vec![Arc::new(test1), Arc::new(test2), Arc::new(test3)],
-            error_operator: "".to_string(),
+            error_operator: "operator: HashJoinExec".to_string(),
         };
 
         case.run().await?;

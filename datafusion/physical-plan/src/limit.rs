@@ -27,6 +27,7 @@ use super::{
     DisplayAs, ExecutionPlanProperties, PlanProperties, RecordBatchStream,
     SendableRecordBatchStream, Statistics,
 };
+use crate::execution_plan::{Boundedness, CardinalityEffect};
 use crate::{DisplayFormatType, Distribution, ExecutionPlan, Partitioning};
 
 use arrow::datatypes::SchemaRef;
@@ -34,7 +35,6 @@ use arrow::record_batch::RecordBatch;
 use datafusion_common::{internal_err, Result};
 use datafusion_execution::TaskContext;
 
-use crate::execution_plan::{Boundedness, CardinalityEffect};
 use futures::stream::{Stream, StreamExt};
 use log::trace;
 

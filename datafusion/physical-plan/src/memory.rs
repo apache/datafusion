@@ -23,12 +23,11 @@ use std::fmt;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
-use crate::execution_plan::{Boundedness, EmissionType};
-
 use super::{
     common, DisplayAs, DisplayFormatType, ExecutionPlan, Partitioning, PlanProperties,
     RecordBatchStream, SendableRecordBatchStream, Statistics,
 };
+use crate::execution_plan::{Boundedness, EmissionType};
 
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;

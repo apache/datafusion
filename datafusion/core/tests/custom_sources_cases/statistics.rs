@@ -32,12 +32,12 @@ use datafusion::{
     prelude::SessionContext,
     scalar::ScalarValue,
 };
+use datafusion_catalog::Session;
 use datafusion_common::{project_schema, stats::Precision};
 use datafusion_physical_expr::EquivalenceProperties;
+use datafusion_physical_plan::execution_plan::{Boundedness, EmissionType};
 
 use async_trait::async_trait;
-use datafusion_catalog::Session;
-use datafusion_physical_plan::execution_plan::{Boundedness, EmissionType};
 
 /// This is a testing structure for statistics
 /// It will act both as a table provider and execution plan

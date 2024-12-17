@@ -763,9 +763,9 @@ impl SortExec {
     /// can be dropped.
     pub fn with_fetch(&self, fetch: Option<usize>) -> Self {
         let mut cache = self.cache.clone();
-        // If the SortExec can emit incrementally (that means the sort requirements and
-        // properties of the input are matched), existance of a fetch value sets
-        // the boundedness of the SortExec as `bounded`.
+        // If the SortExec can emit incrementally (that means the sort requirements
+        // and properties of the input match), the SortExec can generate its result
+        // without scanning the entire input when a fetch value exists.
         let is_pipeline_friendly = matches!(
             self.cache.emission_type,
             EmissionType::Incremental | EmissionType::Both

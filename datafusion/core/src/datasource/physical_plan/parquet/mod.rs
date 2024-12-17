@@ -41,8 +41,8 @@ use crate::{
 
 use arrow::datatypes::SchemaRef;
 use datafusion_physical_expr::{EquivalenceProperties, LexOrdering, PhysicalExpr};
-
 use datafusion_physical_plan::execution_plan::{Boundedness, EmissionType};
+
 use itertools::Itertools;
 use log::debug;
 

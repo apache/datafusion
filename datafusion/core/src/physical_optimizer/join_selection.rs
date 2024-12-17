@@ -517,7 +517,8 @@ fn statistical_join_selection_subrule(
 pub type PipelineFixerSubrule =
     dyn Fn(Arc<dyn ExecutionPlan>, &ConfigOptions) -> Result<Arc<dyn ExecutionPlan>>;
 
-/// Converts a hash join to a symmetric hash join if unbounded and incremental inputs exist on both sides.
+/// Converts a hash join to a symmetric hash join if both its inputs are
+/// unbounded and incremental.
 ///
 /// This subrule checks if a hash join can be replaced with a symmetric hash join when dealing
 /// with unbounded (infinite) inputs on both sides. This replacement avoids pipeline breaking and

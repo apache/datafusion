@@ -29,12 +29,12 @@ use crate::physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
 
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::Transformed;
+use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use datafusion_physical_plan::coalesce_partitions::CoalescePartitionsExec;
+use datafusion_physical_plan::execution_plan::EmissionType;
 use datafusion_physical_plan::tree_node::PlanContext;
 use datafusion_physical_plan::ExecutionPlanProperties;
 
-use datafusion_physical_expr_common::sort_expr::LexOrdering;
-use datafusion_physical_plan::execution_plan::EmissionType;
 use itertools::izip;
 
 /// For a given `plan`, this object carries the information one needs from its
