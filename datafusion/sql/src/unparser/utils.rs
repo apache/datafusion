@@ -20,12 +20,14 @@ use std::{cmp::Ordering, sync::Arc, vec};
 use datafusion_common::{
     internal_err,
     tree_node::{Transformed, TransformedResult, TreeNode},
-    Column, DataFusionError, IndexSet, Result, ScalarValue,
+    Column, DataFusionError, Result, ScalarValue,
 };
 use datafusion_expr::{
     expr, utils::grouping_set_to_exprlist, Aggregate, Expr, LogicalPlan,
     LogicalPlanBuilder, Projection, SortExpr, Unnest, Window,
 };
+
+use indexmap::IndexSet;
 use sqlparser::ast;
 
 use super::{
@@ -131,7 +133,7 @@ pub(crate) fn find_window_nodes_within_select<'a>(
 
 /// Recursively identify Column expressions and transform them into the appropriate unnest expression
 ///
-/// For example, if expr contains the column expr "unnest_placeholder(make_array(Int64(1),Int64(2),Int64(2),Int64(5),NULL),depth=1)"
+/// For example, if expr contains the column expr "__unnest_placeholder(make_array(Int64(1),Int64(2),Int64(2),Int64(5),NULL),depth=1)"
 /// it will be transformed into an actual unnest expression UNNEST([1, 2, 2, 5, NULL])
 pub(crate) fn unproject_unnest_expr(expr: Expr, unnest: &Unnest) -> Result<Expr> {
     expr.transform(|sub_expr| {

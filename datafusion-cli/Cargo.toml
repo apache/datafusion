@@ -26,7 +26,7 @@ license = "Apache-2.0"
 homepage = "https://datafusion.apache.org"
 repository = "https://github.com/apache/datafusion"
 # Specify MSRV here as `cargo msrv` doesn't support workspace version
-rust-version = "1.80"
+rust-version = "1.80.1"
 readme = "README.md"
 
 [dependencies]
@@ -53,6 +53,8 @@ datafusion-catalog = { path = "../datafusion/catalog", version = "43.0.0" }
 dirs = "5.0.1"
 env_logger = "0.11"
 futures = "0.3"
+# pin as home 0.5.11 has MSRV 1.81. Can remove this once we bump MSRV to 1.81
+home = "=0.5.9"
 mimalloc = { version = "0.1", default-features = false }
 object_store = { version = "0.11.0", features = ["aws", "gcp", "http"] }
 parking_lot = { version = "0.12" }

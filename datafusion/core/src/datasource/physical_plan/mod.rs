@@ -426,9 +426,11 @@ enum RangeCalculation {
 async fn calculate_range(
     file_meta: &FileMeta,
     store: &Arc<dyn ObjectStore>,
+    terminator: Option<u8>,
 ) -> Result<RangeCalculation> {
     let location = file_meta.location();
     let file_size = file_meta.object_meta.size;
+    let newline = terminator.unwrap_or(b'\n');
 
     match file_meta.range {
         None => Ok(RangeCalculation::Range(None)),
@@ -436,13 +438,13 @@ async fn calculate_range(
             let (start, end) = (start as usize, end as usize);
 
             let start_delta = if start != 0 {
-                find_first_newline(store, location, start - 1, file_size).await?
+                find_first_newline(store, location, start - 1, file_size, newline).await?
             } else {
                 0
             };
 
             let end_delta = if end != file_size {
-                find_first_newline(store, location, end - 1, file_size).await?
+                find_first_newline(store, location, end - 1, file_size, newline).await?
             } else {
                 0
             };
@@ -462,7 +464,7 @@ async fn calculate_range(
 /// within an object, such as a file, in an object store.
 ///
 /// This function scans the contents of the object starting from the specified `start` position
-/// up to the `end` position, looking for the first occurrence of a newline (`'\n'`) character.
+/// up to the `end` position, looking for the first occurrence of a newline character.
 /// It returns the position of the first newline relative to the start of the range.
 ///
 /// Returns a `Result` wrapping a `usize` that represents the position of the first newline character found within the specified range. If no newline is found, it returns the length of the scanned data, effectively indicating the end of the range.
@@ -474,6 +476,7 @@ async fn find_first_newline(
     location: &Path,
     start: usize,
     end: usize,
+    newline: u8,
 ) -> Result<usize> {
     let options = GetOptions {
         range: Some(GetRange::Bounded(start..end)),
@@ -486,7 +489,7 @@ async fn find_first_newline(
     let mut index = 0;
 
     while let Some(chunk) = result_stream.next().await.transpose()? {
-        if let Some(position) = chunk.iter().position(|&byte| byte == b'\n') {
+        if let Some(position) = chunk.iter().position(|&byte| byte == newline) {
             return Ok(index + position);
         }
 
