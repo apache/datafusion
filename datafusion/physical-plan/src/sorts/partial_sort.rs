@@ -407,6 +407,8 @@ impl PartialSortStream {
                 self.is_closed = true;
             }
         }
+        // Empty record batches should not be emitted.
+        // They need to be treated as [`Option<RecordBatch>`]es and handle separately
         debug_assert!(result.num_rows() > 0);
         Ok(result)
     }

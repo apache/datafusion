@@ -655,11 +655,12 @@ impl Stream for GroupedHashAggregateStream {
 
                             if let Some(to_emit) = self.group_ordering.emit_to() {
                                 timer.done();
-                                let Some(batch) = extract_ok!(self.emit(to_emit, false))
-                                else {
-                                    break 'reading_input;
+                                if let Some(batch) =
+                                    extract_ok!(self.emit(to_emit, false))
+                                {
+                                    self.exec_state =
+                                        ExecutionState::ProducingOutput(batch);
                                 };
-                                self.exec_state = ExecutionState::ProducingOutput(batch);
                                 // make sure the exec_state just set is not overwritten below
                                 break 'reading_input;
                             }
@@ -697,11 +698,12 @@ impl Stream for GroupedHashAggregateStream {
 
                             if let Some(to_emit) = self.group_ordering.emit_to() {
                                 timer.done();
-                                let Some(batch) = extract_ok!(self.emit(to_emit, false))
-                                else {
-                                    break 'reading_input;
+                                if let Some(batch) =
+                                    extract_ok!(self.emit(to_emit, false))
+                                {
+                                    self.exec_state =
+                                        ExecutionState::ProducingOutput(batch);
                                 };
-                                self.exec_state = ExecutionState::ProducingOutput(batch);
                                 // make sure the exec_state just set is not overwritten below
                                 break 'reading_input;
                             }
@@ -774,6 +776,8 @@ impl Stream for GroupedHashAggregateStream {
                         let output = batch.slice(0, size);
                         (ExecutionState::ProducingOutput(remaining), output)
                     };
+                    // Empty record batches should not be emitted.
+                    // They need to be treated as  [`Option<RecordBatch>`]es and handle separately
                     debug_assert!(output_batch.num_rows() > 0);
                     return Poll::Ready(Some(Ok(
                         output_batch.record_output(&self.baseline_metrics)

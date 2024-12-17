@@ -312,9 +312,14 @@ impl WindowAggStream {
         })
     }
 
-    fn compute_aggregates(&self, batch: RecordBatch) -> Result<RecordBatch> {
+    fn compute_aggregates(&self) -> Result<Option<RecordBatch>> {
         // record compute time on drop
         let _timer = self.baseline_metrics.elapsed_compute().timer();
+
+        let batch = concat_batches(&self.input.schema(), &self.batches)?;
+        if batch.num_rows() == 0 {
+            return Ok(None);
+        }
 
         let partition_by_sort_keys = self
             .ordered_partition_by_indices
@@ -346,10 +351,10 @@ impl WindowAggStream {
         let mut batch_columns = batch.columns().to_vec();
         // calculate window cols
         batch_columns.extend_from_slice(&columns);
-        Ok(RecordBatch::try_new(
+        Ok(Some(RecordBatch::try_new(
             Arc::clone(&self.schema),
             batch_columns,
-        )?)
+        )?))
     }
 }
 
@@ -376,23 +381,21 @@ impl WindowAggStream {
         }
 
         loop {
-            let result = match ready!(self.input.poll_next_unpin(cx)) {
+            let maybe_batch = match ready!(self.input.poll_next_unpin(cx)) {
                 Some(Ok(batch)) => {
                     self.batches.push(batch);
                     continue;
                 }
                 Some(Err(e)) => Err(e),
-                None => {
-                    let batch = concat_batches(&self.input.schema(), &self.batches)?;
-                    if batch.num_rows() == 0 {
-                        return Poll::Ready(None);
-                    }
-                    self.compute_aggregates(batch)
-                }
+                None => self.compute_aggregates(),
             }?;
+            let Some(result) = maybe_batch else {
+                return Poll::Ready(None);
+            };
 
             self.finished = true;
-
+            // Empty record batches should not be emitted.
+            // They need to be treated as  [`Option<RecordBatch>`]es and handle separately
             debug_assert!(result.num_rows() > 0);
             return Poll::Ready(Some(Ok(result)));
         }

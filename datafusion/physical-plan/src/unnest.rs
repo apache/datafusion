@@ -300,6 +300,8 @@ impl UnnestStream {
                     self.metrics.output_batches.add(1);
                     self.metrics.output_rows.add(result_batch.num_rows());
 
+                    // Empty record batches should not be emitted.
+                    // They need to be treated as  [`Option<RecordBatch>`]es and handle separately
                     debug_assert!(result_batch.num_rows() > 0);
                     Some(Ok(result_batch))
                 }
