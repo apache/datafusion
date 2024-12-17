@@ -533,6 +533,9 @@ fn general_array_distinct<OffsetSize: OffsetSizeTrait>(
     array: &GenericListArray<OffsetSize>,
     field: &FieldRef,
 ) -> Result<ArrayRef> {
+    if array.len() == 0 {
+        return Ok(Arc::new(array.clone()) as ArrayRef);
+    }
     let dt = array.value_type();
     let mut offsets = Vec::with_capacity(array.len());
     offsets.push(OffsetSize::usize_as(0));
