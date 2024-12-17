@@ -348,51 +348,45 @@ impl InformationSchemaConfig {
         for (func_name, udf) in udfs {
             let args = udf.documentation().and_then(|d| d.arguments.clone());
             let combinations = get_udf_args_and_return_types(udf)?;
-            let mut rid = 0u8;
-            for (arg_types, return_type) in combinations {
+            for (rid, (arg_types, return_type)) in combinations.into_iter().enumerate() {
                 add_parameters(
                     func_name,
                     args.as_ref(),
                     arg_types,
                     return_type,
                     Self::is_variadic(udf.signature()),
-                    rid,
+                    rid as u8,
                 );
-                rid += 1;
             }
         }
 
         for (func_name, udaf) in udafs {
             let args = udaf.documentation().and_then(|d| d.arguments.clone());
             let combinations = get_udaf_args_and_return_types(udaf)?;
-            let mut rid = 0u8;
-            for (arg_types, return_type) in combinations {
+            for (rid, (arg_types, return_type)) in combinations.into_iter().enumerate() {
                 add_parameters(
                     func_name,
                     args.as_ref(),
                     arg_types,
                     return_type,
                     Self::is_variadic(udaf.signature()),
-                    rid,
+                    rid as u8,
                 );
-                rid += 1;
             }
         }
 
         for (func_name, udwf) in udwfs {
             let args = udwf.documentation().and_then(|d| d.arguments.clone());
             let combinations = get_udwf_args_and_return_types(udwf)?;
-            let mut rid = 0u8;
-            for (arg_types, return_type) in combinations {
+            for (rid, (arg_types, return_type)) in combinations.into_iter().enumerate() {
                 add_parameters(
                     func_name,
                     args.as_ref(),
                     arg_types,
                     return_type,
                     Self::is_variadic(udwf.signature()),
-                    rid,
+                    rid as u8,
                 );
-                rid += 1;
             }
         }
 
