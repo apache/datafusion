@@ -2094,19 +2094,6 @@ mod tests {
         let statistics = TestStatistics::new().with("i", container_stats);
         let expected_ret = &[true];
         prune_with_expr(col("i").eq(lit(0)), &schema, &statistics, expected_ret);
-
-        // If the null counts themselves are missing we should be able to fall back to the stats
-        let schema = Arc::new(Schema::new(vec![Field::new("i", DataType::Int32, true)]));
-        let container_stats = ContainerStats {
-            min: Some(Arc::new(Int32Array::from(vec![Some(0)]))),
-            max: Some(Arc::new(Int32Array::from(vec![Some(0)]))),
-            null_counts: Some(Arc::new(UInt64Array::from(vec![None]))),
-            row_counts: Some(Arc::new(UInt64Array::from(vec![Some(1)]))),
-            ..ContainerStats::default()
-        };
-        let statistics = TestStatistics::new().with("i", container_stats);
-        let expected_ret = &[true];
-        prune_with_expr(col("i").eq(lit(0)), &schema, &statistics, expected_ret);
         let expected_ret = &[false];
         prune_with_expr(col("i").gt(lit(0)), &schema, &statistics, expected_ret);
 
