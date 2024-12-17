@@ -24,7 +24,9 @@ use std::hash::{Hash, Hasher};
 use std::sync::{Arc, LazyLock};
 
 use super::dml::CopyTo;
-use super::invariants::assert_unique_field_names;
+use super::invariants::{
+    assert_executable_invariants, assert_required_invariants, InvariantLevel,
+};
 use super::DdlStatement;
 use crate::builder::{change_redundant_column, unnest_with_options};
 use crate::expr::{Placeholder, Sort as SortExpr, WindowFunction};
@@ -1127,12 +1129,12 @@ impl LogicalPlan {
         }
     }
 
-    /// These are invariants to hold true for each logical plan.
-    pub fn assert_invariants(&self) -> Result<()> {
-        // Refer to <https://datafusion.apache.org/contributor-guide/specification/invariants.html#relation-name-tuples-in-logical-fields-and-logical-columns-are-unique>
-        assert_unique_field_names(self)?;
-
-        Ok(())
+    /// checks that the plan conforms to the listed invariant level, returning an Error if not
+    pub fn check_invariants(&self, check: InvariantLevel) -> Result<()> {
+        match check {
+            InvariantLevel::Always => assert_required_invariants(self),
+            InvariantLevel::Executable => assert_executable_invariants(self),
+        }
     }
 
     /// Helper for [Self::with_new_exprs] to use when no expressions are expected.

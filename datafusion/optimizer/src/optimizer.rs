@@ -21,8 +21,8 @@ use std::fmt::Debug;
 use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
-use datafusion_expr::assert_expected_schema;
 use datafusion_expr::registry::FunctionRegistry;
+use datafusion_expr::{assert_expected_schema, InvariantLevel};
 use log::{debug, warn};
 
 use datafusion_common::alias::AliasGenerator;
@@ -357,12 +357,13 @@ impl Optimizer {
         F: FnMut(&LogicalPlan, &dyn OptimizerRule),
     {
         // verify LP is valid, before the first LP optimizer pass.
-        plan.assert_invariants().map_err(|e| {
-            DataFusionError::Context(
-                "check_plan_before_optimizers".to_string(),
-                Box::new(e),
-            )
-        })?;
+        plan.check_invariants(InvariantLevel::Executable)
+            .map_err(|e| {
+                DataFusionError::Context(
+                    "check_plan_before_optimizers".to_string(),
+                    Box::new(e),
+                )
+            })?;
 
         let start_time = Instant::now();
         let options = config.options();
@@ -463,12 +464,14 @@ impl Optimizer {
         }
 
         // verify LP is valid, after the last optimizer pass.
-        new_plan.assert_invariants().map_err(|e| {
-            DataFusionError::Context(
-                "check_plan_after_optimizers".to_string(),
-                Box::new(e),
-            )
-        })?;
+        new_plan
+            .check_invariants(InvariantLevel::Executable)
+            .map_err(|e| {
+                DataFusionError::Context(
+                    "check_plan_after_optimizers".to_string(),
+                    Box::new(e),
+                )
+            })?;
 
         log_plan("Final optimized plan", &new_plan);
         debug!("Optimizer took {} ms", start_time.elapsed().as_millis());
@@ -478,7 +481,7 @@ impl Optimizer {
 
 /// These are invariants which should hold true before and after each optimization.
 ///
-/// This differs from [`LogicalPlan::assert_invariants`], which addresses if a singular
+/// This differs from [`LogicalPlan::check_invariants`], which addresses if a singular
 /// LogicalPlan is valid. Instead this address if the optimization (before and after)
 /// is valid based upon permitted changes.
 fn assert_valid_optimization(

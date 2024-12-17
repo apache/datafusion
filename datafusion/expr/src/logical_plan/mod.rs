@@ -21,7 +21,7 @@ pub mod display;
 pub mod dml;
 mod extension;
 pub(crate) mod invariants;
-pub use invariants::assert_expected_schema;
+pub use invariants::{assert_expected_schema, check_subquery_expr, InvariantLevel};
 mod plan;
 mod statement;
 pub mod tree_node;

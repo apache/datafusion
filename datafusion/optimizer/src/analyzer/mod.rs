@@ -24,18 +24,14 @@ use log::debug;
 
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::instant::Instant;
-use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
 use datafusion_common::{DataFusionError, Result};
-use datafusion_expr::expr::Exists;
-use datafusion_expr::expr::InSubquery;
 use datafusion_expr::expr_rewriter::FunctionRewrite;
-use datafusion_expr::{Expr, LogicalPlan};
+use datafusion_expr::{InvariantLevel, LogicalPlan};
 
 use crate::analyzer::count_wildcard_rule::CountWildcardRule;
 use crate::analyzer::expand_wildcard_rule::ExpandWildcardRule;
 use crate::analyzer::inline_table_scan::InlineTableScan;
 use crate::analyzer::resolve_grouping_function::ResolveGroupingFunction;
-use crate::analyzer::subquery::check_subquery_expr;
 use crate::analyzer::type_coercion::TypeCoercion;
 use crate::utils::log_plan;
 
@@ -46,8 +42,15 @@ pub mod expand_wildcard_rule;
 pub mod function_rewrite;
 pub mod inline_table_scan;
 pub mod resolve_grouping_function;
-pub mod subquery;
 pub mod type_coercion;
+
+pub mod subquery {
+    #[deprecated(
+        since = "44.0.0",
+        note = "please use `datafusion_expr::check_subquery_expr` instead"
+    )]
+    pub use datafusion_expr::check_subquery_expr;
+}
 
 /// [`AnalyzerRule`]s transform [`LogicalPlan`]s in some way to make
 /// the plan valid prior to the rest of the DataFusion optimization process.
@@ -56,7 +59,7 @@ pub mod type_coercion;
 /// which must preserve the semantics of the `LogicalPlan`, while computing
 /// results in a more optimal way.
 ///
-/// For example, an `AnalyzerRule` may resolve [`Expr`]s into more specific
+/// For example, an `AnalyzerRule` may resolve [`Expr`](datafusion_expr::Expr)s into more specific
 /// forms such as a subquery reference, or do type coercion to ensure the types
 /// of operands are correct.
 ///
@@ -140,10 +143,10 @@ impl Analyzer {
     where
         F: FnMut(&LogicalPlan, &dyn AnalyzerRule),
     {
-        // verify at the start, before the first LP analyzer pass.
-        assert_valid_semantic_plan(&plan).map_err(|e| {
+        // verify the logical plan required invariants at the start, before analyzer
+        plan.check_invariants(InvariantLevel::Always).map_err(|e| {
             DataFusionError::Context(
-                "check_plan_before_analyzers".to_string(),
+                "assert_lp_invariants_before_analyzers".to_string(),
                 Box::new(e),
             )
         })?;
@@ -176,52 +179,15 @@ impl Analyzer {
             observer(&new_plan, rule.as_ref());
         }
 
-        // verify at the end, after the last LP analyzer pass.
-        assert_valid_semantic_plan(&new_plan).map_err(|e| {
-            DataFusionError::Context("check_analyzed_plan".to_string(), Box::new(e))
-        })?;
+        // verify at the end, after the last LP analyzer pass, that the plan is executable.
+        new_plan
+            .check_invariants(InvariantLevel::Executable)
+            .map_err(|e| {
+                DataFusionError::Context("check_analyzed_plan".to_string(), Box::new(e))
+            })?;
 
         log_plan("Final analyzed plan", &new_plan);
         debug!("Analyzer took {} ms", start_time.elapsed().as_millis());
         Ok(new_plan)
     }
-}
-
-/// These are invariants which should hold true before and after each analyzer.
-///
-/// This differs from [`LogicalPlan::assert_invariants`], which addresses if a singular
-/// LogicalPlan is valid. Instead this address if the analyzer (before and after)
-/// is valid based upon permitted changes.
-///
-/// Does not check elements which are mutated by the analyzers (e.g. the schema).
-fn assert_valid_semantic_plan(plan: &LogicalPlan) -> Result<()> {
-    plan.assert_invariants()?;
-
-    // TODO: should this be moved to LogicalPlan::assert_invariants?
-    assert_subqueries_are_valid(plan)?;
-
-    Ok(())
-}
-
-/// Asserts that the subqueries are structured properly with valid node placement.
-///
-/// Refer to [`check_subquery_expr`] for more details.
-fn assert_subqueries_are_valid(plan: &LogicalPlan) -> Result<()> {
-    plan.apply_with_subqueries(|plan: &LogicalPlan| {
-        plan.apply_expressions(|expr| {
-            // recursively look for subqueries
-            expr.apply(|expr| {
-                match expr {
-                    Expr::Exists(Exists { subquery, .. })
-                    | Expr::InSubquery(InSubquery { subquery, .. })
-                    | Expr::ScalarSubquery(subquery) => {
-                        check_subquery_expr(plan, &subquery.subquery, expr)?;
-                    }
-                    _ => {}
-                };
-                Ok(TreeNodeRecursion::Continue)
-            })
-        })
-    })
-    .map(|_| ())
 }
