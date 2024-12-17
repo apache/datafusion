@@ -820,7 +820,6 @@ impl TryFrom<&ParquetOptions> for protobuf::ParquetOptions {
             dictionary_enabled_opt: value.dictionary_enabled.map(protobuf::parquet_options::DictionaryEnabledOpt::DictionaryEnabled),
             dictionary_page_size_limit: value.dictionary_page_size_limit as u64,
             statistics_enabled_opt: value.statistics_enabled.clone().map(protobuf::parquet_options::StatisticsEnabledOpt::StatisticsEnabled),
-            max_statistics_size_opt: value.max_statistics_size.map(|v| protobuf::parquet_options::MaxStatisticsSizeOpt::MaxStatisticsSize(v as u64)),
             max_row_group_size: value.max_row_group_size as u64,
             created_by: value.created_by.clone(),
             column_index_truncate_length_opt: value.column_index_truncate_length.map(|v| protobuf::parquet_options::ColumnIndexTruncateLengthOpt::ColumnIndexTruncateLength(v as u64)),
@@ -857,11 +856,6 @@ impl TryFrom<&ParquetColumnOptions> for protobuf::ParquetColumnOptions {
                 .statistics_enabled
                 .clone()
                 .map(protobuf::parquet_column_options::StatisticsEnabledOpt::StatisticsEnabled),
-            max_statistics_size_opt: value.max_statistics_size.map(|v| {
-                protobuf::parquet_column_options::MaxStatisticsSizeOpt::MaxStatisticsSize(
-                    v as u32,
-                )
-            }),
             encoding_opt: value
                 .encoding
                 .clone()

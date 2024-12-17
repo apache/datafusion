@@ -472,10 +472,6 @@ message ParquetColumnOptions {
   oneof bloom_filter_ndv_opt {
     uint64 bloom_filter_ndv = 7;
   }
-
-  oneof max_statistics_size_opt {
-    uint32 max_statistics_size = 8;
-  }
 }
 
 message ParquetOptions {
@@ -511,10 +507,6 @@ message ParquetOptions {
 
   oneof statistics_enabled_opt {
     string statistics_enabled = 13;
-  }
-
-  oneof max_statistics_size_opt {
-    uint64 max_statistics_size = 14;
   }
 
   oneof column_index_truncate_length_opt {
