@@ -549,7 +549,9 @@ mod tests {
         let err = opt.optimize(plan, &config, &observe).unwrap_err();
         assert_eq!(
             "Optimizer rule 'get table_scan rule' failed\n\
-            caused by\nget table_scan rule\ncaused by\n\
+            caused by\ncheck_optimized_plan\n\
+            caused by\nget table_scan rule\n\
+            caused by\n\
             Internal error: Failed due to a difference in schemas, \
             original schema: DFSchema { inner: Schema { \
             fields: [], \
