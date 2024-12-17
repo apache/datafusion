@@ -1902,7 +1902,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             r#"
 SELECT DISTINCT
     p.*,
-    r.routine_type function_type,
+    r.function_type function_type,
     r.description description,
     r.syntax_example syntax_example
 FROM
