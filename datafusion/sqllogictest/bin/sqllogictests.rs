@@ -15,23 +15,16 @@
 // specific language governing permissions and limitations
 // under the License.
 
-#[cfg(feature = "postgres")]
-use std::env::set_var;
-use std::ffi::OsStr;
-use std::fs;
-#[cfg(feature = "postgres")]
-use std::future::Future;
-use std::path::{Path, PathBuf};
-#[cfg(feature = "postgres")]
-use std::{env, thread};
-use std::time::Instant;
 use clap::Parser;
+use datafusion_common::instant::Instant;
 use datafusion_common::utils::get_available_parallelism;
 use datafusion_common::{exec_datafusion_err, exec_err, DataFusionError, Result};
 use datafusion_common_runtime::SpawnedTask;
 use datafusion_sqllogictest::{DataFusion, TestContext};
 use futures::stream::StreamExt;
-use indicatif::{HumanDuration, MultiProgress, ProgressBar, ProgressDrawTarget, ProgressStyle};
+use indicatif::{
+    HumanDuration, MultiProgress, ProgressBar, ProgressDrawTarget, ProgressStyle,
+};
 use itertools::Itertools;
 use log::Level::{Info, Warn};
 use log::{info, log_enabled, warn};
@@ -41,6 +34,15 @@ use sqllogictest::{
     parse_file, strict_column_validator, AsyncDB, Condition, Normalizer, Record,
     Validator,
 };
+#[cfg(feature = "postgres")]
+use std::env::set_var;
+use std::ffi::OsStr;
+use std::fs;
+#[cfg(feature = "postgres")]
+use std::future::Future;
+use std::path::{Path, PathBuf};
+#[cfg(feature = "postgres")]
+use std::{env, thread};
 #[cfg(feature = "postgres")]
 use testcontainers::core::IntoContainerPort;
 #[cfg(feature = "postgres")]
