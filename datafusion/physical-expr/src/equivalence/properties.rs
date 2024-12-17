@@ -375,7 +375,9 @@ impl EquivalenceProperties {
                         }
                         child_properties.push(ExprProperties {
                             sort_properties: SortProperties::Ordered(next.options),
-                            range: Interval::make_unbounded(&child.data_type(&self.schema)?)?,
+                            range: Interval::make_unbounded(
+                                &child.data_type(&self.schema)?,
+                            )?,
                             preserves_lex_ordering: true,
                         });
                     } else {
@@ -386,8 +388,13 @@ impl EquivalenceProperties {
 
                 if all_children_match {
                     // Check if the expression is monotonic in all arguments
-                    if let Ok(expr_properties) = equivalent_expr.get_properties(&child_properties) {
-                        if expr_properties.preserves_lex_ordering && SortProperties::Ordered(leading_ordering_options) == expr_properties.sort_properties {
+                    if let Ok(expr_properties) =
+                        equivalent_expr.get_properties(&child_properties)
+                    {
+                        if expr_properties.preserves_lex_ordering
+                            && SortProperties::Ordered(leading_ordering_options)
+                                == expr_properties.sort_properties
+                        {
                             // Assume existing ordering is [c ASC, a ASC, b ASC]
                             // When equality c = f(a,b) is given, if we know that given ordering `[a ASC, b ASC]`,
                             // ordering `[f(a,b) ASC]` is valid, then we can deduce that ordering `[a ASC, b ASC]` is also valid.
@@ -2163,10 +2170,13 @@ mod tests {
         create_test_params, create_test_schema, output_schema,
     };
     use crate::expressions::{col, BinaryExpr, Column};
+    use crate::ScalarFunctionExpr;
 
     use arrow::datatypes::{DataType, Field, Schema};
     use arrow_schema::{Fields, TimeUnit};
     use datafusion_expr::Operator;
+
+    use datafusion_functions::string::concat;
 
     #[test]
     fn project_equivalence_properties_test() -> Result<()> {
@@ -3706,21 +3716,22 @@ mod tests {
     }
 
     #[test]
-    fn test_discover_new_orderings_with_multiple_children_monotonic() -> Result<()> {
+    fn test_ordering_equivalence_with_monotonic_concat() -> Result<()> {
         let schema = Arc::new(Schema::new(vec![
-            Field::new("a", DataType::Int32, false),
-            Field::new("b", DataType::Int32, false),
-            Field::new("c", DataType::Int32, false),
+            Field::new("a", DataType::Utf8, false),
+            Field::new("b", DataType::Utf8, false),
+            Field::new("c", DataType::Utf8, false),
         ]));
 
         let col_a = col("a", &schema)?;
         let col_b = col("b", &schema)?;
         let col_c = col("c", &schema)?;
 
-        let a_plus_b: Arc<dyn PhysicalExpr> = Arc::new(BinaryExpr::new(
-            Arc::clone(&col_a),
-            Operator::Plus,
-            Arc::clone(&col_b),
+        let a_concat_b: Arc<dyn PhysicalExpr> = Arc::new(ScalarFunctionExpr::new(
+            "concat",
+            concat(),
+            vec![Arc::clone(&col_a), Arc::clone(&col_b)],
+            DataType::Utf8,
         ));
 
         // Assume existing ordering is [c ASC, a ASC, b ASC]
@@ -3732,12 +3743,16 @@ mod tests {
             PhysicalSortExpr::new_default(Arc::clone(&col_b)).asc(),
         ]));
 
-        // Add equality condition c = a + b
-        eq_properties.add_equal_conditions(&col_c, &a_plus_b)?;
+        // Add equality condition c = concat(a, b)
+        eq_properties.add_equal_conditions(&col_c, &a_concat_b)?;
 
         let orderings = eq_properties.oeq_class().orderings.clone();
 
-        let expected_ordering1 = LexOrdering::from(vec![PhysicalSortExpr::new_default(Arc::clone(&col_c)).asc()]);
+        let expected_ordering1 =
+            LexOrdering::from(vec![
+                PhysicalSortExpr::new_default(Arc::clone(&col_c)).asc()
+            ]);
+
         let expected_ordering2 = LexOrdering::from(vec![
             PhysicalSortExpr::new_default(Arc::clone(&col_a)).asc(),
             PhysicalSortExpr::new_default(Arc::clone(&col_b)).asc(),
@@ -3752,7 +3767,7 @@ mod tests {
     }
 
     #[test]
-    fn test_discover_new_orderings_with_multiple_children_non_monotonic() -> Result<()> {
+    fn test_ordering_equivalence_with_non_monotonic_multiply() -> Result<()> {
         let schema = Arc::new(Schema::new(vec![
             Field::new("a", DataType::Int32, false),
             Field::new("b", DataType::Int32, false),
@@ -3793,41 +3808,51 @@ mod tests {
     }
 
     #[test]
-    fn test_discover_new_orderings_with_multiple_children_same_ordering() -> Result<()> {
+    fn test_ordering_equivalence_with_concat_equality() -> Result<()> {
         let schema = Arc::new(Schema::new(vec![
-            Field::new("a", DataType::Int32, false),
-            Field::new("b", DataType::Int32, false),
-            Field::new("c", DataType::Int32, false),
+            Field::new("a", DataType::Utf8, false),
+            Field::new("b", DataType::Utf8, false),
+            Field::new("c", DataType::Utf8, false),
         ]));
 
         let col_a = col("a", &schema)?;
         let col_b = col("b", &schema)?;
         let col_c = col("c", &schema)?;
 
-        let a_plus_b: Arc<dyn PhysicalExpr> = Arc::new(BinaryExpr::new(
-            Arc::clone(&col_a),
-            Operator::Plus,
-            Arc::clone(&col_b),
+        let a_concat_b: Arc<dyn PhysicalExpr> = Arc::new(ScalarFunctionExpr::new(
+            "concat",
+            concat(),
+            vec![Arc::clone(&col_a), Arc::clone(&col_b)],
+            DataType::Utf8,
         ));
 
-        // Assume existing ordering is [c ASC, a ASC, b ASC]
+        // Assume existing ordering is [concat(a, b) ASC, a ASC, b ASC]
         let mut eq_properties = EquivalenceProperties::new(Arc::clone(&schema));
-        let initial_ordering = LexOrdering::from(vec![
-            PhysicalSortExpr::new_default(Arc::clone(&a_plus_b)).asc(),
+
+        eq_properties.add_new_ordering(LexOrdering::from(vec![
+            PhysicalSortExpr::new_default(Arc::clone(&a_concat_b)).asc(),
+            PhysicalSortExpr::new_default(Arc::clone(&col_a)).asc(),
+            PhysicalSortExpr::new_default(Arc::clone(&col_b)).asc(),
+        ]));
+
+        // Add equality condition c = concat(a, b)
+        eq_properties.add_equal_conditions(&col_c, &a_concat_b)?;
+
+        let orderings = eq_properties.oeq_class().orderings.clone();
+
+        let expected_ordering1 = LexOrdering::from(vec![PhysicalSortExpr::new_default(
+            Arc::clone(&a_concat_b),
+        )
+        .asc()]);
+        let expected_ordering2 = LexOrdering::from(vec![
             PhysicalSortExpr::new_default(Arc::clone(&col_a)).asc(),
             PhysicalSortExpr::new_default(Arc::clone(&col_b)).asc(),
         ]);
 
-        eq_properties.add_new_ordering(initial_ordering.clone());
-
-        // Add equality condition c = a + b
-        eq_properties.add_equal_conditions(&col_c, &a_plus_b)?;
-
-        let orderings = eq_properties.oeq_class().orderings.clone();
-
-        // The ordering should not change
-        assert_eq!(orderings.len(), 1);
-        assert!(orderings.contains(&initial_ordering));
+        // The ordering should be [concat(a, b) ASC] and [a ASC, b ASC]
+        assert_eq!(orderings.len(), 2);
+        assert!(orderings.contains(&expected_ordering1));
+        assert!(orderings.contains(&expected_ordering2));
 
         Ok(())
     }
