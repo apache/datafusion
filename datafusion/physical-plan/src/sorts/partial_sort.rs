@@ -814,6 +814,48 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_partial_sort_no_empty_batches() -> Result<()> {
+        let task_ctx = Arc::new(TaskContext::default());
+        let mem_exec = prepare_partitioned_input();
+        let schema = mem_exec.schema();
+        let option_asc = SortOptions {
+            descending: false,
+            nulls_first: false,
+        };
+        for (fetch_size, expected_batch_num_rows) in [
+            (Some(50), vec![50]),
+            (Some(120), vec![120]),
+            (Some(150), vec![125, 25]),
+            (Some(250), vec![125, 125]),
+        ] {
+            let partial_sort_executor = PartialSortExec::new(
+                LexOrdering::new(vec![
+                    PhysicalSortExpr {
+                        expr: col("a", &schema)?,
+                        options: option_asc,
+                    },
+                    PhysicalSortExpr {
+                        expr: col("c", &schema)?,
+                        options: option_asc,
+                    },
+                ]),
+                Arc::clone(&mem_exec),
+                1,
+            )
+            .with_fetch(fetch_size);
+
+            let partial_sort_exec =
+                Arc::new(partial_sort_executor.clone()) as Arc<dyn ExecutionPlan>;
+            let result = collect(partial_sort_exec, Arc::clone(&task_ctx)).await?;
+            for rb in result {
+                assert!(rb.num_rows() > 0);
+            }
+        }
+
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn test_sort_metadata() -> Result<()> {
         let task_ctx = Arc::new(TaskContext::default());
         let field_metadata: HashMap<String, String> =
