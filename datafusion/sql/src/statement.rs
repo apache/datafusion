@@ -1883,6 +1883,16 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         self.statement_to_plan(rewrite.pop_front().unwrap()) // length of rewrite is 1
     }
 
+    /// Rewrite `SHOW FUNCTIONS` to another SQL query
+    /// The query is based on the `information_schema.routines` and `information_schema.parameters` tables
+    ///
+    /// The output columns:
+    /// - function_name: The name of function
+    /// - return_type: The return type of the function
+    /// - parameters: The name of parameters (ordered by the ordinal position)
+    /// - parameter_types: The type of parameters (ordered by the ordinal position)
+    /// - description: The description of the function (the description defined in the document)
+    /// - syntax_example: The syntax_example of the function (the syntax_example defined in the document)
     fn show_functions_to_plan(
         &self,
         filter: Option<ShowStatementFilter>,

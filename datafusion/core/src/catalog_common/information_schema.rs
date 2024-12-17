@@ -1237,6 +1237,11 @@ impl InformationSchemaParameters {
             Field::new("data_type", DataType::Utf8, false),
             Field::new("parameter_default", DataType::Utf8, true),
             Field::new("is_variadic", DataType::Boolean, false),
+            // `rid` (short for `routine id`) is used to differentiate parameters from different signatures
+            // (It serves as the group-by key when generating the `SHOW FUNCTIONS` query).
+            // For example, the following signatures have different `rid` values:
+            //     - `datetrunc(Utf8, Timestamp(Microsecond, Some("+TZ"))) -> Timestamp(Microsecond, Some("+TZ"))`
+            //     - `datetrunc(Utf8View, Timestamp(Nanosecond, None)) -> Timestamp(Nanosecond, None)`
             Field::new("rid", DataType::UInt8, false),
         ]));
 
