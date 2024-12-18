@@ -76,6 +76,7 @@ pub enum Volatility {
 /// # Data Types
 ///
 /// ## Timestamps
+///
 /// Types to match are represented using Arrow's [`DataType`].  [`DataType::Timestamp`] has an optional variable
 /// timezone specification. To specify a function can handle a timestamp with *ANY* timezone, use
 /// the [`TIMEZONE_WILDCARD`]. For example:
@@ -98,7 +99,9 @@ pub enum TypeSignature {
     /// For functions that take no arguments (e.g. `random()` see [`TypeSignature::Nullary`]).
     ///
     /// # Examples
-    /// A function such as `concat` is `Variadic(vec![DataType::Utf8, DataType::LargeUtf8])`
+    ///
+    /// A function such as `concat` is `Variadic(vec![DataType::Utf8,
+    /// DataType::LargeUtf8])`
     Variadic(Vec<DataType>),
     /// The acceptable signature and coercions rules to coerce arguments to this
     /// signature are special for this function. If this signature is specified,
@@ -109,6 +112,7 @@ pub enum TypeSignature {
     /// One or more arguments of an arbitrary but equal type out of a list of valid types.
     ///
     /// # Examples
+    ///
     /// 1. A function of one argument of f64 is `Uniform(1, vec![DataType::Float64])`
     /// 2. A function of one argument of f64 or f32 is `Uniform(1, vec![DataType::Float32, DataType::Float64])`
     Uniform(usize, Vec<DataType>),
@@ -171,7 +175,7 @@ pub enum TypeSignature {
     /// For example, if a function is called with (utf8, large_utf8), all
     /// arguments will be coerced to  `LargeUtf8`
     ///
-    /// For functions that take no arguments (e.g. `random()` see [`TypeSignature::Nullary`]).
+    /// For functions that take no arguments (e.g. `random()` use [`TypeSignature::Nullary`]).
     String(usize),
     /// No arguments
     Nullary,
