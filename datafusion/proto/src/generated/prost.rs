@@ -1228,6 +1228,8 @@ pub struct PhysicalScalarUdfNode {
     pub fun_definition: ::core::option::Option<::prost::alloc::vec::Vec<u8>>,
     #[prost(message, optional, tag = "4")]
     pub return_type: ::core::option::Option<super::datafusion_common::ArrowType>,
+    #[prost(bool, tag = "5")]
+    pub nullable: bool,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct PhysicalAggregateExprNode {
