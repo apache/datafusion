@@ -1150,6 +1150,12 @@ impl ScalarValue {
             DataType::Float16 => ScalarValue::Float16(Some(f16::from_f32(0.0))),
             DataType::Float32 => ScalarValue::Float32(Some(0.0)),
             DataType::Float64 => ScalarValue::Float64(Some(0.0)),
+            DataType::Decimal128(precision, scale) => {
+                ScalarValue::Decimal128(Some(0), *precision, *scale)
+            }
+            DataType::Decimal256(precision, scale) => {
+                ScalarValue::Decimal256(Some(i256::ZERO), *precision, *scale)
+            }
             DataType::Timestamp(TimeUnit::Second, tz) => {
                 ScalarValue::TimestampSecond(Some(0), tz.clone())
             }
@@ -1193,12 +1199,6 @@ impl ScalarValue {
             }
             DataType::Date32 => ScalarValue::Date32(Some(0)),
             DataType::Date64 => ScalarValue::Date64(Some(0)),
-            DataType::Decimal128(precision, scale) => {
-                ScalarValue::Decimal128(Some(0), *precision, *scale)
-            }
-            DataType::Decimal256(precision, scale) => {
-                ScalarValue::Decimal256(Some(i256::ZERO), *precision, *scale)
-            }
             _ => {
                 return _not_impl_err!(
                     "Can't create a zero scalar from data_type \"{datatype:?}\""
