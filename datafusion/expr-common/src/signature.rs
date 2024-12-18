@@ -204,6 +204,9 @@ pub enum ArrayFunctionSignature {
     /// The function takes a single argument that must be a List/LargeList/FixedSizeList
     /// or something that can be coerced to one of those types.
     Array,
+    /// A function takes a single argument that must be a List/LargeList/FixedSizeList
+    /// which gets coerced to List, with element type recursively coerced to List too if it is list-like.
+    RecursiveArray,
     /// Specialized Signature for MapArray
     /// The function takes a single argument that must be a MapArray
     MapArray,
@@ -226,6 +229,9 @@ impl Display for ArrayFunctionSignature {
             }
             ArrayFunctionSignature::Array => {
                 write!(f, "array")
+            }
+            ArrayFunctionSignature::RecursiveArray => {
+                write!(f, "recursive_array")
             }
             ArrayFunctionSignature::MapArray => {
                 write!(f, "map_array")
