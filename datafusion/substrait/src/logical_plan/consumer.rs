@@ -38,7 +38,6 @@ use substrait::proto::expression::subquery::set_predicate::PredicateOp;
 use substrait::proto::expression_reference::ExprType;
 use url::Url;
 
-use super::state::SubstraitPlanningState;
 use crate::extensions::Extensions;
 use crate::variation_const::{
     DATE_32_TYPE_VARIATION_REF, DATE_64_TYPE_VARIATION_REF,
@@ -134,8 +133,6 @@ use substrait::proto::{ExtendedExpression, FunctionArgument, SortField};
 ///     from_project_rel, from_substrait_rel, from_substrait_rex, SubstraitConsumer
 /// };
 ///
-/// use datafusion_substrait::logical_plan::state::SubstraitPlanningState;
-///
 /// struct CustomSubstraitConsumer {
 ///     extensions: Arc<Extensions>,
 ///     state: Arc<SessionState>,
@@ -147,7 +144,10 @@ use substrait::proto::{ExtendedExpression, FunctionArgument, SortField};
 ///         &self,
 ///         table_ref: &TableReference,
 ///     ) -> Result<Option<Arc<dyn TableProvider>>> {
-///         self.state.table(table_ref).await
+///         let table = table_ref.table().to_string();
+///         let schema = self.state.schema_for_ref(table_ref.clone())?;
+///         let table_provider = schema.table(&table).await?;
+///         Ok(table_provider)
 ///     }
 ///
 ///     fn get_extensions(&self) -> &Extensions {
@@ -497,7 +497,10 @@ impl SubstraitConsumer for DefaultSubstraitConsumer {
         &self,
         table_ref: &TableReference,
     ) -> Result<Option<Arc<dyn TableProvider>>> {
-        self.state.table(table_ref).await
+        let table = table_ref.table().to_string();
+        let schema = self.state.schema_for_ref(table_ref.clone())?;
+        let table_provider = schema.table(&table).await?;
+        Ok(table_provider)
     }
 
     fn get_extensions(&self) -> &Extensions {
