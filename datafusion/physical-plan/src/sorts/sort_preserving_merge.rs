@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Defines the sort preserving merge plan
+//! [`SortPreservingMergeExec`] merges multiple sorted streams into one sorted stream.
 
 use std::any::Any;
 use std::sync::Arc;
@@ -38,10 +38,22 @@ use log::{debug, trace};
 
 /// Sort preserving merge execution plan
 ///
-/// This takes an input execution plan and a list of sort expressions, and
-/// provided each partition of the input plan is sorted with respect to
-/// these sort expressions, this operator will yield a single partition
-/// that is also sorted with respect to them
+/// # Overview
+///
+/// This operator implements a K-way merge. It is used to merge multiple sorted
+/// streams into a single sorted stream and is highly optimized.
+///
+/// ## Inputs:
+///
+/// 1. A list of sort expressions
+/// 2. An input plan, where each partition is sorted with respect to
+///    these sort expressions.
+///
+/// ## Output:
+///
+/// 1. A single partition that is also sorted with respect to the expressions
+///
+/// ## Diagram
 ///
 /// ```text
 /// ┌─────────────────────────┐
@@ -60,7 +72,7 @@ use log::{debug, trace};
 ///   Stream 2
 ///
 ///
-///  Input Streams                                             Output stream
+///  Input Partitions                                          Output Partition
 ///    (sorted)                                                  (sorted)
 /// ```
 ///
@@ -70,7 +82,7 @@ use log::{debug, trace};
 /// the output and inputs are not polled again.
 #[derive(Debug, Clone)]
 pub struct SortPreservingMergeExec {
-    /// Input plan
+    /// Input plan with sorted partitions
     input: Arc<dyn ExecutionPlan>,
     /// Sort expressions
     expr: LexOrdering,
