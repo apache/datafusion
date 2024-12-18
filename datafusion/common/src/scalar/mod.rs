@@ -1183,6 +1183,12 @@ impl ScalarValue {
             }
             DataType::Date32 => ScalarValue::Date32(Some(0)),
             DataType::Date64 => ScalarValue::Date64(Some(0)),
+            DataType::Decimal128(precision, scale) => {
+                ScalarValue::Decimal128(Some(0), *precision, *scale)
+            }
+            DataType::Decimal256(precision, scale) => {
+                ScalarValue::Decimal256(Some(i256::ZERO), *precision, *scale)
+            }
             _ => {
                 return _not_impl_err!(
                     "Can't create a zero scalar from data_type \"{datatype:?}\""
