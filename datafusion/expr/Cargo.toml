@@ -37,7 +37,7 @@ path = "src/lib.rs"
 
 [features]
 default = ["recursive-protection"]
-recursive-protection = ["recursive"]
+recursive-protection = ["dep:recursive"]
 
 [dependencies]
 arrow = { workspace = true }
@@ -50,7 +50,7 @@ datafusion-functions-window-common = { workspace = true }
 datafusion-physical-expr-common = { workspace = true }
 indexmap = { workspace = true }
 paste = "^1.0"
-recursive = { version = "0.1.1", optional = true }
+recursive = { workspace = true, optional = true }
 serde_json = { workspace = true }
 sqlparser = { workspace = true }
 
