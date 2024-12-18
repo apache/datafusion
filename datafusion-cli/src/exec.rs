@@ -39,8 +39,7 @@ use datafusion::datasource::listing::ListingTableUrl;
 use datafusion::error::{DataFusionError, Result};
 use datafusion::logical_expr::{DdlStatement, LogicalPlan};
 use datafusion::physical_plan::execution_plan::EmissionType;
-use datafusion::physical_plan::ExecutionPlanProperties;
-use datafusion::physical_plan::{collect, execute_stream};
+use datafusion::physical_plan::{collect, execute_stream, ExecutionPlanProperties};
 use datafusion::sql::parser::{DFParser, Statement};
 use datafusion::sql::sqlparser::dialect::dialect_from_str;
 
