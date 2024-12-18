@@ -1920,11 +1920,6 @@ fn calculate_union_binary(
                 .map(|rhs_const| {
                     let mut const_expr = ConstExpr::new(Arc::clone(lhs_const.expr()));
 
-                    // If both sides are constant across partitions, set across_partitions=true
-                    if lhs_const.across_partitions() && rhs_const.across_partitions() {
-                        const_expr = const_expr.with_across_partitions(true);
-                    }
-
                     // If both sides have matching constant values, preserve the value and set across_partitions=true
                     if let (Some(lhs_val), Some(rhs_val)) =
                         (lhs_const.value(), rhs_const.value())
