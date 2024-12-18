@@ -257,14 +257,34 @@ impl EquivalenceProperties {
         if self.is_expr_constant(left) {
             // Left expression is constant, add right as constant
             if !const_exprs_contains(&self.constants, right) {
-                self.constants
-                    .push(ConstExpr::from(right).with_across_partitions(true));
+                // Try to get value from left constant expression
+                let value = self
+                    .constants
+                    .iter()
+                    .find(|c| c.expr().eq(left))
+                    .and_then(|c| c.value().cloned());
+
+                let mut const_expr = ConstExpr::from(right).with_across_partitions(true);
+                if let Some(val) = value {
+                    const_expr = const_expr.with_value(val);
+                }
+                self.constants.push(const_expr);
             }
         } else if self.is_expr_constant(right) {
             // Right expression is constant, add left as constant
             if !const_exprs_contains(&self.constants, left) {
-                self.constants
-                    .push(ConstExpr::from(left).with_across_partitions(true));
+                // Try to get value from right constant expression
+                let value = self
+                    .constants
+                    .iter()
+                    .find(|c| c.expr().eq(right))
+                    .and_then(|c| c.value().cloned());
+
+                let mut const_expr = ConstExpr::from(left).with_across_partitions(true);
+                if let Some(val) = value {
+                    const_expr = const_expr.with_value(val);
+                }
+                self.constants.push(const_expr);
             }
         }
 
@@ -878,19 +898,38 @@ impl EquivalenceProperties {
             .constants
             .iter()
             .flat_map(|const_expr| {
-                const_expr.map(|expr| self.eq_group.project_expr(mapping, expr))
+                const_expr
+                    .map(|expr| self.eq_group.project_expr(mapping, expr))
+                    .map(|projected_expr| {
+                        let mut new_const = ConstExpr::from(projected_expr)
+                            .with_across_partitions(const_expr.across_partitions());
+                        if let Some(value) = const_expr.value() {
+                            new_const = new_const.with_value(value.clone());
+                        }
+                        new_const
+                    })
             })
             .collect::<Vec<_>>();
+
         // Add projection expressions that are known to be constant:
         for (source, target) in mapping.iter() {
             if self.is_expr_constant(source)
                 && !const_exprs_contains(&projected_constants, target)
             {
                 let across_partitions = self.is_expr_constant_accross_partitions(source);
+                // Try to get value from source constant expression
+                let value = self
+                    .constants
+                    .iter()
+                    .find(|c| c.expr().eq(source))
+                    .and_then(|c| c.value().cloned());
+
                 // Expression evaluates to single value
-                projected_constants.push(
-                    ConstExpr::from(target).with_across_partitions(across_partitions),
-                );
+                let mut const_expr = ConstExpr::from(target).with_across_partitions(across_partitions);
+                if let Some(val) = value {
+                    const_expr = const_expr.with_value(val);
+                }
+                projected_constants.push(const_expr);
             }
         }
         projected_constants
@@ -1102,9 +1141,14 @@ impl EquivalenceProperties {
             .into_iter()
             .map(|const_expr| {
                 let across_partitions = const_expr.across_partitions();
+                let value = const_expr.value().cloned();
                 let new_const_expr = with_new_schema(const_expr.owned_expr(), &schema)?;
-                Ok(ConstExpr::new(new_const_expr)
-                    .with_across_partitions(across_partitions))
+                let mut new_const_expr = ConstExpr::new(new_const_expr)
+                    .with_across_partitions(across_partitions);
+                if let Some(value) = value {
+                    new_const_expr = new_const_expr.with_value(value.clone());
+                }
+                Ok(new_const_expr)
             })
             .collect::<Result<Vec<_>>>()?;
 

@@ -268,8 +268,15 @@ impl FilterExec {
             .into_iter()
             .filter(|column| stats.column_statistics[column.index()].is_singleton())
             .map(|column| {
+                let value = stats.column_statistics[column.index()]
+                    .min_value
+                    .get_value();
                 let expr = Arc::new(column) as _;
-                ConstExpr::new(expr).with_across_partitions(true)
+                let mut const_expr = ConstExpr::new(expr).with_across_partitions(true);
+                if let Some(value) = value {
+                    const_expr = const_expr.with_value(value.clone());
+                }
+                return const_expr;
             });
         // This is for statistics
         eq_properties = eq_properties.with_constants(constants);
