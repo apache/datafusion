@@ -190,10 +190,11 @@ pub(super) fn rewrite_plan_for_sort_on_non_projected_fields(
     }
 }
 
-/// This logic is to work out the columns and inner query for SubqueryAlias plan for both types of
-/// subquery
+/// This logic is to work out the columns and inner query for SubqueryAlias plan for some types of
+/// subquery or unnest
 /// - `(SELECT column_a as a from table) AS A`
 /// - `(SELECT column_a from table) AS A (a)`
+/// - `SELECT * FROM t1 CROSS JOIN UNNEST(t1.c1) AS u(c1)` (see [find_unnest_column_alias])
 ///
 /// A roundtrip example for table alias with columns
 ///
@@ -221,6 +222,15 @@ pub(super) fn subquery_alias_inner_query_and_columns(
     subquery_alias: &datafusion_expr::SubqueryAlias,
 ) -> (&LogicalPlan, Vec<Ident>) {
     let plan: &LogicalPlan = subquery_alias.input.as_ref();
+
+    if let LogicalPlan::Subquery(subquery) = plan {
+        let (inner_projection, Some(column)) =
+            find_unnest_column_alias(subquery.subquery.as_ref())
+        else {
+            return (plan, vec![]);
+        };
+        return (inner_projection, vec![Ident::new(column)]);
+    }
 
     let LogicalPlan::Projection(outer_projections) = plan else {
         return (plan, vec![]);
@@ -255,6 +265,45 @@ pub(super) fn subquery_alias_inner_query_and_columns(
     }
 
     (outer_projections.input.as_ref(), columns)
+}
+
+/// Try to find the column alias for UNNEST in the inner projection.
+/// For example:
+/// ```sql
+///     SELECT * FROM t1 CROSS JOIN UNNEST(t1.c1) AS u(c1)
+/// ```
+/// The above query will be parsed into the following plan:
+/// ```text
+/// Projection: *
+///   Cross Join:
+///     SubqueryAlias: t1
+///       TableScan: t
+///     SubqueryAlias: u
+///       Subquery:
+///         Projection: UNNEST(outer_ref(t1.c1)) AS c1
+///           Projection: __unnest_placeholder(outer_ref(t1.c1),depth=1) AS UNNEST(outer_ref(t1.c1))
+///             Unnest: lists[__unnest_placeholder(outer_ref(t1.c1))|depth=1] structs[]
+///               Projection: outer_ref(t1.c1) AS __unnest_placeholder(outer_ref(t1.c1))
+///                 EmptyRelation
+/// ```
+/// The function will return the inner projection and the column alias `c1` if the column name
+/// starts with `UNNEST(` (the `Display` result of [Expr::Unnest]) in the inner projection.
+pub(super) fn find_unnest_column_alias(
+    plan: &LogicalPlan,
+) -> (&LogicalPlan, Option<String>) {
+    if let LogicalPlan::Projection(projection) = plan {
+        if projection.expr.len() != 1 {
+            return (plan, None);
+        }
+        if let Some(expr) = projection.expr.get(0) {
+            if let Expr::Alias(alias) = expr {
+                if alias.expr.schema_name().to_string().starts_with("UNNEST(") {
+                    return (projection.input.as_ref(), Some(alias.name.clone()));
+                }
+            }
+        }
+    }
+    (plan, None)
 }
 
 /// Injects column aliases into a subquery's logical plan. The function searches for a `Projection`
