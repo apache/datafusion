@@ -121,6 +121,7 @@ object_store = { workspace = true }
 parking_lot = { workspace = true }
 parquet = { workspace = true, optional = true, default-features = true }
 rand = { workspace = true }
+regex = { workspace = true }
 sqlparser = { workspace = true }
 tempfile = { workspace = true }
 tokio = { workspace = true }
