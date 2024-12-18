@@ -1162,6 +1162,16 @@ impl ScalarValue {
             DataType::Timestamp(TimeUnit::Nanosecond, tz) => {
                 ScalarValue::TimestampNanosecond(Some(0), tz.clone())
             }
+            DataType::Time32(TimeUnit::Second) => ScalarValue::Time32Second(Some(0)),
+            DataType::Time32(TimeUnit::Millisecond) => {
+                ScalarValue::Time32Millisecond(Some(0))
+            }
+            DataType::Time64(TimeUnit::Microsecond) => {
+                ScalarValue::Time64Microsecond(Some(0))
+            }
+            DataType::Time64(TimeUnit::Nanosecond) => {
+                ScalarValue::Time64Nanosecond(Some(0))
+            }
             DataType::Interval(IntervalUnit::YearMonth) => {
                 ScalarValue::IntervalYearMonth(Some(0))
             }
