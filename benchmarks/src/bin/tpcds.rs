@@ -29,27 +29,30 @@ use test_utils::tpcds::tpcds_schemas;
 
 /// Global list of TPC-DS table names
 static TPCDS_TABLES: &[&str] = &[
-    "store_sales",
-    "catalog_sales",
-    "web_sales",
-    "store_returns",
-    "catalog_returns",
-    "web_returns",
-    "inventory",
-    "store",
+    "call_center",
     "catalog_page",
-    "web_page",
-    "warehouse",
+    "catalog_returns",
+    "catalog_sales",
     "customer",
     "customer_address",
     "customer_demographics",
     "date_dim",
     "household_demographics",
+    "income_band",
+    "inventory",
     "item",
     "promotion",
     "reason",
     "ship_mode",
+    "store",
+    "store_returns",
+    "store_sales",
     "time_dim",
+    "warehouse",
+    "web_page",
+    "web_returns",
+    "web_sales",
+    "web_site",
 ];
 
 #[cfg(all(feature = "snmalloc", feature = "mimalloc"))]
@@ -68,24 +71,30 @@ static ALLOC: mimalloc::MiMalloc = mimalloc::MiMalloc;
 /// Command-line options for the TPC-DS benchmark tool
 #[derive(Debug, StructOpt)]
 #[structopt(name = "tpcds", about = "TPC-DS Benchmark Tool.")]
+/// Enum for TPC-DS command-line options
+/// Includes options to run a single query or all queries
 enum TpcdsOpt {
-    /// Run TPC-DS queries
+    /// Run a single TPC-DS query
     Run(RunOpt),
+
+    /// Run all TPC-DS queries
+    QueryAll(QueryAllOpt),
 }
 
-/// Options for running TPC-DS queries
+/// Options for running a single query
 #[derive(Debug, StructOpt)]
 pub struct RunOpt {
-    /// Query number (e.g., 1 for query1.sql)
+    /// The query number (e.g., 1 for query1.sql)
     #[structopt(short, long)]
     query: usize,
 
-    /// Path to the data directory containing Parquet files
+    /// The path to the data directory containing Parquet files
     #[structopt(short, long)]
     data_dir: String,
 }
 
 impl RunOpt {
+    /// Executes a single query
     pub async fn run(&self) -> Result<()> {
         let query_number = self.query;
         let parquet_dir = &self.data_dir;
@@ -95,8 +104,12 @@ impl RunOpt {
 
         println!("▶️ Running query {}", query_number);
 
-        // Compare DuckDB and DataFusion results
-        if let Err(e) = compare_duckdb_datafusion(&sql, parquet_dir).await {
+        // Create a new DuckDB connection and register tables
+        let conn = create_duckdb_connection(parquet_dir)?;
+        let ctx = create_tpcds_context(parquet_dir).await?;
+
+        // Compare results between DuckDB and DataFusion
+        if let Err(e) = compare_duckdb_datafusion(&sql, &conn, &ctx).await {
             eprintln!("❌ Query {} failed: {}", query_number, e);
             return Err(e);
         }
@@ -106,47 +119,53 @@ impl RunOpt {
     }
 }
 
-/// Unified function to register all TPC-DS tables in DataFusion's SessionContext
-async fn create_tpcds_context(parquet_dir: &str) -> Result<SessionContext> {
-    let ctx = SessionContext::new();
-
-    for table_def in tpcds_schemas() {
-        let path = format!("{}/{}.parquet", parquet_dir, table_def.name);
-
-        ctx.register_parquet(table_def.name, &path, ParquetReadOptions::default())
-            .await?;
-    }
-
-    Ok(ctx)
+/// Options for running all queries
+#[derive(Debug, StructOpt)]
+pub struct QueryAllOpt {
+    /// The path to the data directory containing Parquet files
+    #[structopt(short, long)]
+    data_dir: String,
 }
 
-/// Compare RecordBatch results from DuckDB and DataFusion
-async fn compare_duckdb_datafusion(
-    sql: &str,
-    parquet_dir: &str,
-) -> Result<(), DataFusionError> {
-    let expected_batches = execute_duckdb_query(sql, parquet_dir)?;
-    let ctx = create_tpcds_context(parquet_dir).await?;
-    let actual_batches = execute_datafusion_query(sql, ctx).await?;
-    let expected_output = pretty_format_batches(&expected_batches)?.to_string();
-    let actual_output = pretty_format_batches(&actual_batches)?.to_string();
+impl QueryAllOpt {
+    /// Executes all queries sequentially
+    pub async fn run(&self) -> Result<()> {
+        let parquet_dir = &self.data_dir;
 
-    if expected_output != actual_output {
-        eprintln!("❌ Query failed: Results do not match!");
-        eprintln!("SQL:\n{}", sql);
-        eprintln!("Expected:\n{}", expected_output);
-        eprintln!("Actual:\n{}", actual_output);
-        return Err(DataFusionError::Execution(
-            "Results do not match!".to_string(),
-        ));
+        println!("▶️ Running all TPC-DS queries...");
+
+        // Create a single DuckDB connection and register tables once
+        let conn = create_duckdb_connection(parquet_dir)?;
+        let ctx = create_tpcds_context(parquet_dir).await?;
+
+        // Iterate through query numbers 1 to 99 and execute each query
+        for query_number in 1..=99 {
+            match load_query(query_number) {
+                Ok(sql) => {
+                    println!("▶️ Running query {}", query_number);
+
+                    // Compare results between DuckDB and DataFusion
+                    if let Err(e) = compare_duckdb_datafusion(&sql, &conn, &ctx).await {
+                        eprintln!("❌ Query {} failed: {}", query_number, e);
+                        continue;
+                    }
+
+                    println!("✅ Query {} passed.", query_number);
+                }
+                Err(e) => {
+                    eprintln!("❌ Failed to load query {}: {}", query_number, e);
+                    continue;
+                }
+            }
+        }
+
+        println!("✅ All TPC-DS queries completed.");
+        Ok(())
     }
-
-    println!("✅ Query succeeded: Results match!");
-    Ok(())
 }
 
-/// Execute a query in DuckDB and return the results as RecordBatch
-fn execute_duckdb_query(sql: &str, parquet_dir: &str) -> Result<Vec<RecordBatch>> {
+/// Creates a new DuckDB connection and registers all TPC-DS tables
+fn create_duckdb_connection(parquet_dir: &str) -> Result<Connection> {
     let conn = Connection::open_in_memory().map_err(|e| {
         DataFusionError::Execution(format!("DuckDB connection error: {}", e))
     })?;
@@ -165,6 +184,52 @@ fn execute_duckdb_query(sql: &str, parquet_dir: &str) -> Result<Vec<RecordBatch>
         })?;
     }
 
+    println!("✅ All TPC-DS tables registered in DuckDB.");
+    Ok(conn)
+}
+
+/// Registers all TPC-DS tables in DataFusion's SessionContext
+async fn create_tpcds_context(parquet_dir: &str) -> Result<SessionContext> {
+    let ctx = SessionContext::new();
+
+    for table_def in tpcds_schemas() {
+        let path = format!("{}/{}.parquet", parquet_dir, table_def.name);
+
+        ctx.register_parquet(table_def.name, &path, ParquetReadOptions::default())
+            .await?;
+    }
+
+    println!("✅ All TPC-DS tables registered in DataFusion.");
+    Ok(ctx)
+}
+
+/// Compares results of a query between DuckDB and DataFusion
+async fn compare_duckdb_datafusion(
+    sql: &str,
+    conn: &Connection,
+    ctx: &SessionContext,
+) -> Result<(), DataFusionError> {
+    let expected_batches = execute_duckdb_query(sql, conn)?;
+    let actual_batches = execute_datafusion_query(sql, ctx).await?;
+    let expected_output = pretty_format_batches(&expected_batches)?.to_string();
+    let actual_output = pretty_format_batches(&actual_batches)?.to_string();
+
+    if expected_output != actual_output {
+        eprintln!("❌ Query failed: Results do not match!");
+        eprintln!("SQL:\n{}", sql);
+        eprintln!("Expected:\n{}", expected_output);
+        eprintln!("Actual:\n{}", actual_output);
+        return Err(DataFusionError::Execution(
+            "Results do not match!".to_string(),
+        ));
+    }
+
+    println!("✅ Query succeeded: Results match!");
+    Ok(())
+}
+
+/// Executes a query in DuckDB and returns the results as RecordBatch
+fn execute_duckdb_query(sql: &str, conn: &Connection) -> Result<Vec<RecordBatch>> {
     let mut stmt = conn.prepare(sql).map_err(|e| {
         DataFusionError::Execution(format!("SQL preparation error: {}", e))
     })?;
@@ -176,17 +241,18 @@ fn execute_duckdb_query(sql: &str, parquet_dir: &str) -> Result<Vec<RecordBatch>
     Ok(batches)
 }
 
-/// Execute a query in DataFusion and return the results as RecordBatch
+/// Executes a query in DataFusion and returns the results as RecordBatch
 async fn execute_datafusion_query(
     sql: &str,
-    ctx: SessionContext,
+    ctx: &SessionContext,
 ) -> Result<Vec<RecordBatch>> {
     let df = ctx.sql(sql).await?;
     df.collect().await
 }
 
+/// Loads the SQL file for a given query number
 fn load_query(query_number: usize) -> Result<String> {
-    let query_path = format!("datafusion/core/tests/tpc-ds/{}.sql", query_number);
+    let query_path = format!("../datafusion/core/tests/tpc-ds/{}.sql", query_number);
     fs::read_to_string(&query_path).map_err(|e| {
         DataFusionError::Execution(format!(
             "Failed to load query {}: {}",
@@ -195,11 +261,17 @@ fn load_query(query_number: usize) -> Result<String> {
     })
 }
 
+/// Main function
 #[tokio::main]
 async fn main() -> Result<()> {
     env_logger::init();
+
+    // Parse command-line arguments
     let opt = TpcdsOpt::from_args();
+
+    // Execute based on the selected option
     match opt {
         TpcdsOpt::Run(opt) => opt.run().await,
+        TpcdsOpt::QueryAll(opt) => opt.run().await,
     }
 }
