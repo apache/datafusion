@@ -424,4 +424,31 @@ mod tests {
             assert_eq!(output, expect);
         }
     }
+
+    #[test]
+    fn test_bigint_to_i256() {
+        let cases = [
+            (BigInt::from(0), Some(i256::from(0))),
+            (BigInt::from(1), Some(i256::from(1))),
+            (BigInt::from(-1), Some(i256::from(-1))),
+            (
+                BigInt::from_str(i256::MAX.to_string().as_str()).unwrap(),
+                Some(i256::MAX),
+            ),
+            (
+                BigInt::from_str(i256::MIN.to_string().as_str()).unwrap(),
+                Some(i256::MIN),
+            ),
+            (
+                // Can't fit into i256
+                BigInt::from_str((i256::MAX.to_string() + "1").as_str()).unwrap(),
+                None,
+            ),
+        ];
+
+        for (input, expect) in cases {
+            let output = bigint_to_i256(&input);
+            assert_eq!(output, expect);
+        }
+    }
 }
