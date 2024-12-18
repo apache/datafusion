@@ -769,11 +769,8 @@ impl Unparser<'_> {
     fn is_unnest_placeholder_with_outer_ref(expr: &Expr) -> (bool, bool) {
         if let Expr::Alias(Alias { expr, .. }) = expr {
             if let Expr::Column(Column { name, .. }) = expr.as_ref() {
-                if name.starts_with(UNNEST_PLACEHOLDER) {
-                    return (
-                        true,
-                        name[UNNEST_PLACEHOLDER.len()..].starts_with("(outer_ref("),
-                    );
+                if let Some(prefix) = name.strip_prefix(UNNEST_PLACEHOLDER) {
+                    return (true, prefix.starts_with("(outer_ref("));
                 }
             }
         }

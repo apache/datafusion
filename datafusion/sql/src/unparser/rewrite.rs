@@ -295,11 +295,9 @@ pub(super) fn find_unnest_column_alias(
         if projection.expr.len() != 1 {
             return (plan, None);
         }
-        if let Some(expr) = projection.expr.get(0) {
-            if let Expr::Alias(alias) = expr {
-                if alias.expr.schema_name().to_string().starts_with("UNNEST(") {
-                    return (projection.input.as_ref(), Some(alias.name.clone()));
-                }
+        if let Some(Expr::Alias(alias)) = projection.expr.first() {
+            if alias.expr.schema_name().to_string().starts_with("UNNEST(") {
+                return (projection.input.as_ref(), Some(alias.name.clone()));
             }
         }
     }
