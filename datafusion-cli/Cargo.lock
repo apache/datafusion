@@ -1549,6 +1549,7 @@ dependencies = [
  "datafusion-common",
  "datafusion-expr",
  "datafusion-expr-common",
+ "datafusion-functions",
  "datafusion-functions-aggregate-common",
  "datafusion-physical-expr-common",
  "half",
