@@ -121,7 +121,7 @@ use substrait::proto::{ExtendedExpression, FunctionArgument, SortField};
 /// use datafusion::catalog::TableProvider;
 /// use datafusion::common::{not_impl_err, substrait_err, DFSchema, ScalarValue, TableReference};
 /// use datafusion::error::Result;
-/// use datafusion::execution::SessionState;
+/// use datafusion::execution::{FunctionRegistry, SessionState};
 /// use datafusion::logical_expr::{Expr, LogicalPlan, LogicalPlanBuilder};
 /// use std::sync::Arc;
 /// use substrait::proto;
@@ -154,7 +154,7 @@ use substrait::proto::{ExtendedExpression, FunctionArgument, SortField};
 ///         self.extensions.as_ref()
 ///     }
 ///
-///     fn get_state(&self) -> &SessionState {
+///     fn get_function_registry(&self) -> &impl FunctionRegistry {
 ///         self.state.as_ref()
 ///     }
 ///
@@ -222,10 +222,10 @@ pub trait SubstraitConsumer: Send + Sync + Sized {
 
     // TODO: Remove these two methods
     //   Ideally, the abstract consumer should not place any constraints on implementations.
-    //   The functionality for which the Extensions and SessionState is needed should be abstracted
+    //   The functionality for which the Extensions and FunctionRegistry is needed should be abstracted
     //   out into methods on the trait. As an example, resolve_table_reference is such a method.
     fn get_extensions(&self) -> &Extensions;
-    fn get_state(&self) -> &SessionState;
+    fn get_function_registry(&self) -> &impl FunctionRegistry;
 
     // Relation Methods
     // There is one method per Substrait relation to allow for easy overriding of consumer behaviour.
@@ -507,7 +507,7 @@ impl SubstraitConsumer for DefaultSubstraitConsumer {
         self.extensions.as_ref()
     }
 
-    fn get_state(&self) -> &SessionState {
+    fn get_function_registry(&self) -> &impl FunctionRegistry {
         self.state.as_ref()
     }
 
@@ -1918,7 +1918,7 @@ pub async fn from_substrait_agg_func(
     };
 
     let fn_name = substrait_fun_name(fn_signature);
-    let udaf = consumer.get_state().udaf(fn_name);
+    let udaf = consumer.get_function_registry().udaf(fn_name);
     let udaf = udaf.map_err(|_| {
         not_impl_datafusion_err!(
             "Aggregate function {} is not supported: function anchor = {:?}",
@@ -2084,7 +2084,7 @@ pub async fn from_scalar_function(
 
     // try to first match the requested function into registered udfs, then built-in ops
     // and finally built-in expressions
-    if let Ok(func) = consumer.get_state().udf(fn_name) {
+    if let Ok(func) = consumer.get_function_registry().udf(fn_name) {
         Ok(Expr::ScalarFunction(expr::ScalarFunction::new_udf(
             func.to_owned(),
             args,
@@ -2172,9 +2172,9 @@ pub async fn from_window_function(
     let fn_name = substrait_fun_name(fn_signature);
 
     // check udwf first, then udaf, then built-in window and aggregate functions
-    let fun = if let Ok(udwf) = consumer.get_state().udwf(fn_name) {
+    let fun = if let Ok(udwf) = consumer.get_function_registry().udwf(fn_name) {
         Ok(WindowFunctionDefinition::WindowUDF(udwf))
-    } else if let Ok(udaf) = consumer.get_state().udaf(fn_name) {
+    } else if let Ok(udaf) = consumer.get_function_registry().udaf(fn_name) {
         Ok(WindowFunctionDefinition::AggregateUDF(udaf))
     } else {
         not_impl_err!(
