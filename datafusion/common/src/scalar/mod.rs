@@ -1181,6 +1181,8 @@ impl ScalarValue {
             DataType::Duration(TimeUnit::Nanosecond) => {
                 ScalarValue::DurationNanosecond(Some(0))
             }
+            DataType::Date32 => ScalarValue::Date32(Some(0)),
+            DataType::Date64 => ScalarValue::Date64(Some(0)),
             _ => {
                 return _not_impl_err!(
                     "Can't create a zero scalar from data_type \"{datatype:?}\""
