@@ -451,4 +451,52 @@ mod tests {
             assert_eq!(output, expect);
         }
     }
+
+    #[test]
+    fn test_parse_decimal() {
+        // Supported cases
+        let cases = [
+            ("0", ScalarValue::Decimal128(Some(0), 1, 0)),
+            ("1", ScalarValue::Decimal128(Some(1), 1, 0)),
+            ("123.45", ScalarValue::Decimal128(Some(12345), 5, 2)),
+            // Digit count is less than scale
+            ("0.001", ScalarValue::Decimal128(Some(1), 3, 3)),
+            // Scientific notation
+            ("123.456e-2", ScalarValue::Decimal128(Some(123456), 6, 5)),
+            // Negative scale
+            ("123456e128", ScalarValue::Decimal128(Some(123456), 6, -128)),
+            // Decimal256
+            (
+                &("9".repeat(39) + "." + "99999"),
+                ScalarValue::Decimal256(
+                    Some(i256::from_string(&"9".repeat(44)).unwrap()),
+                    44,
+                    5,
+                ),
+            ),
+        ];
+        for (input, expect) in cases {
+            let output = parse_decimal(input, true).unwrap();
+            assert_eq!(output, Expr::Literal(expect.arithmetic_negate().unwrap()));
+
+            let output = parse_decimal(input, false).unwrap();
+            assert_eq!(output, Expr::Literal(expect));
+        }
+
+        // scale < i8::MIN
+        assert_eq!(
+            parse_decimal("1e129", false)
+                .unwrap_err()
+                .strip_backtrace(),
+            "This feature is not implemented: Decimal scale -129 exceeds the minimum supported scale: -128"
+        );
+
+        // Unsupported precision
+        assert_eq!(
+            parse_decimal(&"1".repeat(77), false)
+                .unwrap_err()
+                .strip_backtrace(),
+            "This feature is not implemented: Decimal precision 77 exceeds the maximum supported precision: 76"
+        );
+    }
 }
