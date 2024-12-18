@@ -55,8 +55,8 @@ use log::{debug, trace};
 /// ┌─────────────────────────┐  │  └───────────────────┘    └─┬─────┴───────────────────────┘
 /// │ ╔═══╦═══╗               │  │
 /// │ ║ B ║ E ║     ...       │──┘                             │
-/// │ ╚═══╩═══╝               │              Note Stable Sort: the merged stream
-/// └─────────────────────────┘                places equal rows from stream 1
+/// │ ╚═══╩═══╝               │              Stable sort if `enable_round_robin_repartition=false`:
+/// └─────────────────────────┘              the merged stream places equal rows from stream 1
 ///   Stream 2
 ///
 ///
@@ -80,7 +80,9 @@ pub struct SortPreservingMergeExec {
     fetch: Option<usize>,
     /// Cache holding plan properties like equivalences, output partitioning etc.
     cache: PlanProperties,
-    /// Configuration parameter to enable round-robin selection of tied winners of loser tree.
+    /// Use round-robin selection of tied winners of loser tree
+    ///
+    /// See [`Self::with_round_robin_repartition`] for more information.
     enable_round_robin_repartition: bool,
 }
 
@@ -105,6 +107,14 @@ impl SortPreservingMergeExec {
     }
 
     /// Sets the selection strategy of tied winners of the loser tree algorithm
+    ///
+    /// When true (the default) equal output rows are placed in the merged
+    /// stream when ready, which is faster but not stable (can vary from
+    /// run to run).
+    ///
+    /// If false, equal output rows are placed in the merged stream in the order
+    /// of the inputs, resulting in potentially slower execution but in a stable
+    /// output order.
     pub fn with_round_robin_repartition(
         mut self,
         enable_round_robin_repartition: bool,
@@ -128,7 +138,8 @@ impl SortPreservingMergeExec {
         self.fetch
     }
 
-    /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
+    /// Creates the cache object that stores the plan properties
+    /// such as schema, equivalence properties, ordering, partitioning, etc.
     fn compute_properties(
         input: &Arc<dyn ExecutionPlan>,
         ordering: LexOrdering,
