@@ -1655,7 +1655,10 @@ config_namespace! {
         pub timestamp_format: Option<String>, default = None
         pub timestamp_tz_format: Option<String>, default = None
         pub time_format: Option<String>, default = None
+        // The output format for Nulls in the CSV writer.
         pub null_value: Option<String>, default = None
+        // The input regex for Nulls when loading CSVs.
+        pub null_regex: Option<String>, default = None
         pub comment: Option<u8>, default = None
     }
 }

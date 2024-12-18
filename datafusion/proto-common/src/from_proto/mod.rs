@@ -882,6 +882,8 @@ impl TryFrom<&protobuf::CsvOptions> for CsvOptions {
                 .then(|| proto_opts.time_format.clone()),
             null_value: (!proto_opts.null_value.is_empty())
                 .then(|| proto_opts.null_value.clone()),
+            null_regex: (!proto_opts.null_regex.is_empty())
+                .then(|| proto_opts.null_regex.clone()),
             comment: proto_opts.comment.first().copied(),
         })
     }
