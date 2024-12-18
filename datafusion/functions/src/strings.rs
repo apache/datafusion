@@ -124,8 +124,12 @@ pub struct StringArrayBuilder {
 
 impl StringArrayBuilder {
     pub fn with_capacity(item_capacity: usize, data_capacity: usize) -> Self {
-        let mut offsets_buffer =
-            MutableBuffer::with_capacity((item_capacity + 1) * size_of::<i32>());
+        let capacity = item_capacity
+            .checked_add(1)
+            .map(|i| i.saturating_mul(size_of::<i32>()))
+            .expect("capacity integer overflow");
+
+        let mut offsets_buffer = MutableBuffer::with_capacity(capacity);
         // SAFETY: the first offset value is definitely not going to exceed the bounds.
         unsafe { offsets_buffer.push_unchecked(0_i32) };
         Self {
@@ -182,12 +186,27 @@ impl StringArrayBuilder {
             .len()
             .try_into()
             .expect("byte array offset overflow");
-        unsafe { self.offsets_buffer.push_unchecked(next_offset) };
+        self.offsets_buffer.push(next_offset);
     }
 
+    /// Finalise the builder into a concrete [`StringArray`].
+    ///
+    /// # Panics
+    ///
+    /// This method can panic when:
+    ///
+    /// - the provided `null_buffer` is not the same length as the `offsets_buffer`.
     pub fn finish(self, null_buffer: Option<NullBuffer>) -> StringArray {
+        let row_count = self.offsets_buffer.len() / size_of::<i32>() - 1;
+        if let Some(ref null_buffer) = null_buffer {
+            assert_eq!(
+                null_buffer.len(),
+                row_count,
+                "Null buffer and offsets buffer must be the same length"
+            );
+        }
         let array_builder = ArrayDataBuilder::new(DataType::Utf8)
-            .len(self.offsets_buffer.len() / size_of::<i32>() - 1)
+            .len(row_count)
             .add_buffer(self.offsets_buffer.into())
             .add_buffer(self.value_buffer.into())
             .nulls(null_buffer);
@@ -274,8 +293,12 @@ pub struct LargeStringArrayBuilder {
 
 impl LargeStringArrayBuilder {
     pub fn with_capacity(item_capacity: usize, data_capacity: usize) -> Self {
-        let mut offsets_buffer =
-            MutableBuffer::with_capacity((item_capacity + 1) * size_of::<i64>());
+        let capacity = item_capacity
+            .checked_add(1)
+            .map(|i| i.saturating_mul(size_of::<i64>()))
+            .expect("capacity integer overflow");
+
+        let mut offsets_buffer = MutableBuffer::with_capacity(capacity);
         // SAFETY: the first offset value is definitely not going to exceed the bounds.
         unsafe { offsets_buffer.push_unchecked(0_i64) };
         Self {
@@ -332,12 +355,27 @@ impl LargeStringArrayBuilder {
             .len()
             .try_into()
             .expect("byte array offset overflow");
-        unsafe { self.offsets_buffer.push_unchecked(next_offset) };
+        self.offsets_buffer.push(next_offset);
     }
 
+    /// Finalise the builder into a concrete [`LargeStringArray`].
+    ///
+    /// # Panics
+    ///
+    /// This method can panic when:
+    ///
+    /// - the provided `null_buffer` is not the same length as the `offsets_buffer`.
     pub fn finish(self, null_buffer: Option<NullBuffer>) -> LargeStringArray {
+        let row_count = self.offsets_buffer.len() / size_of::<i64>() - 1;
+        if let Some(ref null_buffer) = null_buffer {
+            assert_eq!(
+                null_buffer.len(),
+                row_count,
+                "Null buffer and offsets buffer must be the same length"
+            );
+        }
         let array_builder = ArrayDataBuilder::new(DataType::LargeUtf8)
-            .len(self.offsets_buffer.len() / size_of::<i64>() - 1)
+            .len(row_count)
             .add_buffer(self.offsets_buffer.into())
             .add_buffer(self.value_buffer.into())
             .nulls(null_buffer);
@@ -420,5 +458,22 @@ impl ColumnarValueRef<'_> {
             Self::NullableStringViewArray(array) => array.nulls().cloned(),
             Self::NullableLargeStringArray(array) => array.nulls().cloned(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    #[should_panic(expected = "capacity integer overflow")]
+    fn test_overflow_string_array_builder() {
+        let _builder = StringArrayBuilder::with_capacity(usize::MAX, usize::MAX);
+    }
+
+    #[test]
+    #[should_panic(expected = "capacity integer overflow")]
+    fn test_overflow_large_string_array_builder() {
+        let _builder = LargeStringArrayBuilder::with_capacity(usize::MAX, usize::MAX);
     }
 }
