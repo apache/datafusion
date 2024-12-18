@@ -125,19 +125,13 @@ async fn compare_duckdb_datafusion(
     sql: &str,
     parquet_dir: &str,
 ) -> Result<(), DataFusionError> {
-    // Step 1: Execute query in DuckDB (used as the expected result)
     let expected_batches = execute_duckdb_query(sql, parquet_dir)?;
-
-    // Step 2: Execute query in DataFusion (actual result)
     let ctx = create_tpcds_context(parquet_dir).await?;
     let actual_batches = execute_datafusion_query(sql, ctx).await?;
-
-    // Step 3: Format the batches for comparison
     let expected_output = pretty_format_batches(&expected_batches)?.to_string();
     let actual_output = pretty_format_batches(&actual_batches)?.to_string();
 
     if expected_output != actual_output {
-        // Print detailed error information if outputs do not match
         eprintln!("❌ Query failed: Results do not match!");
         eprintln!("SQL:\n{}", sql);
         eprintln!("Expected:\n{}", expected_output);
@@ -153,19 +147,16 @@ async fn compare_duckdb_datafusion(
 
 /// Execute a query in DuckDB and return the results as RecordBatch
 fn execute_duckdb_query(sql: &str, parquet_dir: &str) -> Result<Vec<RecordBatch>> {
-    // Initialize DuckDB connection
     let conn = Connection::open_in_memory().map_err(|e| {
         DataFusionError::Execution(format!("DuckDB connection error: {}", e))
     })?;
 
-    // Register all TPC-DS tables in DuckDB
     for table in TPCDS_TABLES {
         let path = format!("{}/{}.parquet", parquet_dir, table);
         let sql = format!(
             "CREATE TABLE {} AS SELECT * FROM read_parquet('{}')",
             table, path
         );
-        println!("sql is {:?}", sql);
         conn.execute(&sql, []).map_err(|e| {
             DataFusionError::Execution(format!(
                 "Error registering table '{}': {}",
@@ -174,7 +165,6 @@ fn execute_duckdb_query(sql: &str, parquet_dir: &str) -> Result<Vec<RecordBatch>
         })?;
     }
 
-    // Execute the query
     let mut stmt = conn.prepare(sql).map_err(|e| {
         DataFusionError::Execution(format!("SQL preparation error: {}", e))
     })?;
@@ -191,14 +181,10 @@ async fn execute_datafusion_query(
     sql: &str,
     ctx: SessionContext,
 ) -> Result<Vec<RecordBatch>> {
-    // Execute the query
     let df = ctx.sql(sql).await?;
-
-    // Collect the results into RecordBatch
     df.collect().await
 }
 
-/// Load SQL query from a file
 fn load_query(query_number: usize) -> Result<String> {
     let query_path = format!("datafusion/core/tests/tpc-ds/{}.sql", query_number);
     fs::read_to_string(&query_path).map_err(|e| {
@@ -211,10 +197,7 @@ fn load_query(query_number: usize) -> Result<String> {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    // Initialize logger
     env_logger::init();
-
-    // Parse command-line arguments
     let opt = TpcdsOpt::from_args();
     match opt {
         TpcdsOpt::Run(opt) => opt.run().await,

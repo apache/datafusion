@@ -15,12 +15,17 @@
 # KIND, either express or implied.  See the License for the
 # specific language governing permissions and limitations
 # under the License.
+
 import os
 import pyarrow as pa
 import pyarrow.parquet as pq
 import chardet
 from datetime import datetime
 import pandas as pd
+import re
+from decimal import Decimal, getcontext
+import argparse
+
 
 # Define TPC-DS table schemas with column names
 TABLE_SCHEMAS = {
@@ -553,13 +558,166 @@ TABLE_SCHEMAS = {
             "t_sub_shift": "string",
             "t_meal_time": "string"
         }
-    }
+    },
+    "web_page": {
+        "columns": [
+            "wp_web_page_sk", "wp_web_page_id", "wp_rec_start_date", "wp_rec_end_date",
+            "wp_creation_date_sk", "wp_access_date_sk", "wp_autogen_flag", 
+            "wp_customer_sk", "wp_url", "wp_type", 
+            "wp_char_count", "wp_link_count", "wp_image_count", "wp_max_ad_count"
+        ],
+        "dtype": {
+            "wp_web_page_sk": "int32",
+            "wp_web_page_id": "string",
+            "wp_rec_start_date": "date32",
+            "wp_rec_end_date": "date32",
+            "wp_creation_date_sk": "int32",
+            "wp_access_date_sk": "int32",
+            "wp_autogen_flag": "string",
+            "wp_customer_sk": "int32",
+            "wp_url": "string",
+            "wp_type": "string",
+            "wp_char_count": "int32",
+            "wp_link_count": "int32",
+            "wp_image_count": "int32",
+            "wp_max_ad_count": "int32"
+        }
+    },
+    "web_site": {
+        "columns": [
+            "web_site_sk", "web_site_id", "web_rec_start_date", "web_rec_end_date",
+            "web_name", "web_open_date_sk", "web_close_date_sk", "web_class",
+            "web_manager", "web_mkt_id", "web_mkt_class", "web_mkt_desc",
+            "web_market_manager", "web_company_id", "web_company_name",
+            "web_street_number", "web_street_name", "web_street_type",
+            "web_suite_number", "web_city", "web_county", "web_state",
+            "web_zip", "web_country", "web_gmt_offset", "web_tax_percentage"
+        ],
+        "dtype": {
+            "web_site_sk": "int32",
+            "web_site_id": "string",
+            "web_rec_start_date": "date32",
+            "web_rec_end_date": "date32",
+            "web_name": "string",
+            "web_open_date_sk": "int32",
+            "web_close_date_sk": "int32",
+            "web_class": "string",
+            "web_manager": "string",
+            "web_mkt_id": "int32",
+            "web_mkt_class": "string",
+            "web_mkt_desc": "string",
+            "web_market_manager": "string",
+            "web_company_id": "int32",
+            "web_company_name": "string",
+            "web_street_number": "string",
+            "web_street_name": "string",
+            "web_street_type": "string",
+            "web_suite_number": "string",
+            "web_city": "string",
+            "web_county": "string",
+            "web_state": "string",
+            "web_zip": "string",
+            "web_country": "string",
+            "web_gmt_offset": "decimal(5, 2)",
+            "web_tax_percentage": "decimal(5, 2)"
+        }
+    },
+    "store_sales": {
+        "columns": [
+            "ss_sold_date_sk", "ss_sold_time_sk", "ss_item_sk", "ss_customer_sk",
+            "ss_cdemo_sk", "ss_hdemo_sk", "ss_addr_sk", "ss_store_sk", "ss_promo_sk",
+            "ss_ticket_number", "ss_quantity", "ss_wholesale_cost", "ss_list_price",
+            "ss_sales_price", "ss_ext_discount_amt", "ss_ext_sales_price",
+            "ss_ext_wholesale_cost", "ss_ext_list_price", "ss_ext_tax", "ss_coupon_amt",
+            "ss_net_paid", "ss_net_paid_inc_tax", "ss_net_profit"
+        ],
+        "dtype": {
+            "ss_sold_date_sk": "int32",
+            "ss_sold_time_sk": "int32",
+            "ss_item_sk": "int32",
+            "ss_customer_sk": "int32",
+            "ss_cdemo_sk": "int32",
+            "ss_hdemo_sk": "int32",
+            "ss_addr_sk": "int32",
+            "ss_store_sk": "int32",
+            "ss_promo_sk": "int32",
+            "ss_ticket_number": "int64",
+            "ss_quantity": "int32",
+            "ss_wholesale_cost": "decimal(7, 2)",
+            "ss_list_price": "decimal(7, 2)",
+            "ss_sales_price": "decimal(7, 2)",
+            "ss_ext_discount_amt": "decimal(7, 2)",
+            "ss_ext_sales_price": "decimal(7, 2)",
+            "ss_ext_wholesale_cost": "decimal(7, 2)",
+            "ss_ext_list_price": "decimal(7, 2)",
+            "ss_ext_tax": "decimal(7, 2)",
+            "ss_coupon_amt": "decimal(7, 2)",
+            "ss_net_paid": "decimal(7, 2)",
+            "ss_net_paid_inc_tax": "decimal(7, 2)",
+            "ss_net_profit": "decimal(7, 2)"
+        }
+    },
+    "store_returns": {
+        "columns": [
+            "sr_returned_date_sk", "sr_return_time_sk", "sr_item_sk", "sr_customer_sk",
+            "sr_cdemo_sk", "sr_hdemo_sk", "sr_addr_sk", "sr_store_sk", "sr_reason_sk",
+            "sr_ticket_number", "sr_return_quantity", "sr_return_amt", "sr_return_tax",
+            "sr_return_amt_inc_tax", "sr_fee", "sr_return_ship_cost", "sr_refunded_cash",
+            "sr_reversed_charge", "sr_store_credit", "sr_net_loss"
+        ],
+        "dtype": {
+            "sr_returned_date_sk": "int32",
+            "sr_return_time_sk": "int32",
+            "sr_item_sk": "int32",
+            "sr_customer_sk": "int32",
+            "sr_cdemo_sk": "int32",
+            "sr_hdemo_sk": "int32",
+            "sr_addr_sk": "int32",
+            "sr_store_sk": "int32",
+            "sr_reason_sk": "int32",
+            "sr_ticket_number": "int64",
+            "sr_return_quantity": "int32",
+            "sr_return_amt": "decimal(7, 2)",
+            "sr_return_tax": "decimal(7, 2)",
+            "sr_return_amt_inc_tax": "decimal(7, 2)",
+            "sr_fee": "decimal(7, 2)",
+            "sr_return_ship_cost": "decimal(7, 2)",
+            "sr_refunded_cash": "decimal(7, 2)",
+            "sr_reversed_charge": "decimal(7, 2)",
+            "sr_store_credit": "decimal(7, 2)",
+            "sr_net_loss": "decimal(7, 2)"
+        }
+    },
+    "warehouse": {
+        "columns": [
+            "w_warehouse_sk", "w_warehouse_id", "w_warehouse_name",
+            "w_warehouse_sq_ft", "w_street_number", "w_street_name",
+            "w_street_type", "w_suite_number", "w_city", "w_county",
+            "w_state", "w_zip", "w_country", "w_gmt_offset"
+        ],
+        "dtype": {
+            "w_warehouse_sk": "int32",
+            "w_warehouse_id": "string",
+            "w_warehouse_name": "string",
+            "w_warehouse_sq_ft": "int32",
+            "w_street_number": "string",
+            "w_street_name": "string",
+            "w_street_type": "string",
+            "w_suite_number": "string",
+            "w_city": "string",
+            "w_county": "string",
+            "w_state": "string",
+            "w_zip": "string",
+            "w_country": "string",
+            "w_gmt_offset": "decimal(5, 2)"
+        }
+    },
 }
 
 
 def detect_encoding(file_path, default_encoding="utf-8"):
     """
-    Detect the encoding of a file using chardet. Falls back to a default encoding.
+    Detect the encoding of a file using chardet. Falls back to a default encoding if detection fails.
     """
     try:
         with open(file_path, 'rb') as f:
@@ -572,25 +730,27 @@ def detect_encoding(file_path, default_encoding="utf-8"):
 
 def convert_and_delete_dat_files(data_dir, default_value=0):
     """
-    Convert `.dat` files in a directory to Parquet format based on the global TABLE_SCHEMAS.
-    If `NULL` or missing values are encountered, replace them with `default_value`.
+    Convert .dat files in the specified directory to .parquet format and delete the original .dat files.
+
+    Args:
+        data_dir (str): The directory containing the .dat files.
+        default_value (int, optional): The default value to fill missing data. Defaults to 0.
     """
     if not os.path.exists(data_dir):
         print(f"Error: The directory {data_dir} does not exist.")
         return
 
-    files_processed = False  # Track if any files were processed
-
+    files_processed = False
     for file_name in os.listdir(data_dir):
         if file_name.endswith(".dat"):
             files_processed = True
-            table_name, _ = os.path.splitext(file_name)  # Extract table name (without extension)
+            base_name = os.path.basename(file_name)  # Get the file name without the directory path
+            table_name = os.path.splitext(base_name)[0]  # Extract table name by removing file extension
             input_file = os.path.join(data_dir, file_name)
             output_file = os.path.join(data_dir, f"{table_name}.parquet")
 
             print(f"Processing: {input_file} -> {output_file}")
 
-            # Check if a schema is defined for the table
             if table_name in TABLE_SCHEMAS:
                 schema = TABLE_SCHEMAS[table_name]
                 columns = schema.get("columns")
@@ -600,11 +760,8 @@ def convert_and_delete_dat_files(data_dir, default_value=0):
                 continue
 
             try:
-                # Detect encoding
+                # Detect encoding and read the .dat file
                 encoding = detect_encoding(input_file)
-                print(f"Detected encoding for {file_name}: {encoding}")
-
-                # Read .dat file using pandas
                 df = pd.read_csv(
                     input_file,
                     sep="|",
@@ -612,32 +769,77 @@ def convert_and_delete_dat_files(data_dir, default_value=0):
                     header=None,
                     engine="python",
                     skipfooter=1,
-                    encoding=encoding,
-                    na_values=["NULL", ""],  # Treat "NULL" and empty strings as missing values
-                    dtype=dtype
+                    na_values=["NULL", ""],
+                    dtype="object",  # Read as objects (strings) to avoid type issues during parsing
+                    encoding=encoding,  # Use detected encoding
                 )
 
-                # Replace NULL/missing values with the default value
+                # Replace missing values
                 df = df.fillna(default_value)
 
-                # Convert to Parquet
+                # Convert column types based on schema
+                for col, col_type in dtype.items():
+                    try:
+                        if col_type == "Int64" or col_type == "int64":
+                            df[col] = pd.to_numeric(df[col], errors="coerce")
+                            df[col] = df[col].fillna(default_value).astype(int).astype("Int64")
+                        elif col_type == "int32":
+                            df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0).astype(int).astype('int32')
+                        elif col_type == "float64":
+                            df[col] = pd.to_numeric(df[col], errors="coerce").fillna(default_value).astype("float64")
+                        elif col_type == "datetime64[ns]":
+                            df[col] = pd.to_datetime(df[col], format="%Y-%m-%d", errors="coerce").fillna(pd.Timestamp("1970-01-01"))
+                        elif col_type == "date32":
+                            df[col] = pd.to_datetime(df[col], format="%Y-%m-%d", errors="coerce").dt.date.fillna(pd.Timestamp("1970-01-01").date())
+                        elif col_type == "string":
+                            df[col] = df[col].fillna("").astype(str)
+                        elif re.match(r"decimal\(\d+, \d+\)", col_type):
+                            match = re.match(r"decimal\((\d+), (\d+)\)", col_type)
+                            precision = int(match.group(1))  # Extract precision
+                            scale = int(match.group(2))      # Extract scale
+                            getcontext().prec = precision
+                            df[col] = df[col].apply(
+                                lambda x: Decimal(str(x)).quantize(Decimal(f"1.{'0' * scale}")) 
+                                if pd.notnull(x) and str(x).replace(".", "", 1).isdigit() 
+                                else Decimal(f"0.{'0' * scale}")
+                            )
+                    except Exception as e:
+                        print(f"Error converting column {col}: {e}")
+                        continue
+
+                # Convert the DataFrame to Parquet format
                 table = pa.Table.from_pandas(df)
                 pq.write_table(table, output_file)
 
                 print(f"Conversion completed: {output_file}")
 
-                # Delete original .dat file
+                # Delete the original .dat file
                 os.remove(input_file)
                 print(f"Original file deleted: {input_file}")
 
             except Exception as e:
-                error_message = f"Error processing {table_name}: {e}"
-                print(error_message)
+                print(f"Error processing {table_name}: {e}")
 
     if not files_processed:
         print(f"No `.dat` files found in the directory {data_dir}.")
 
-if __name__ == "__main__":
-    DATA_DIR = "/Users/xiangyanxin/personal/DATAFUSION/tpcds-kit/tpcds-data"  
 
-    convert_and_delete_dat_files(DATA_DIR)
+if __name__ == "__main__":
+    # Use argparse to handle command-line arguments
+    parser = argparse.ArgumentParser(description="Convert .dat files to .parquet format.")
+    parser.add_argument(
+        "--dir",
+        required=True,
+        help="Path to the directory containing .dat files."
+    )
+    args = parser.parse_args()
+
+    # Set the directory from command-line arguments
+    data_dir = args.dir
+
+    # Check if the directory exists
+    if not os.path.exists(data_dir):
+        print(f"Error: The specified directory '{data_dir}' does not exist.")
+    else:
+        pd.set_option('future.no_silent_downcasting', True)
+        convert_and_delete_dat_files(data_dir)

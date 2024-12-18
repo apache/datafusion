@@ -16,3 +16,6 @@
 # under the License.
 
 rich
+pandas
+pyarrow
+chardet
