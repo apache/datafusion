@@ -114,7 +114,7 @@ pub enum TypeSignature {
     Uniform(usize, Vec<DataType>),
     /// One or more arguments with exactly the specified types in order.
     ///
-    /// For functions that take no arguments (e.g. `random()` see [`TypeSignature::Nullary`]).
+    /// For functions that take no arguments (e.g. `random()`) use [`TypeSignature::Nullary`].
     Exact(Vec<DataType>),
     /// One or more arguments belonging to the [`TypeSignatureClass`], in order.
     ///
@@ -122,7 +122,7 @@ pub enum TypeSignature {
     /// arguments like `vec![DataType::Int32]` or `vec![DataType::Float32]`
     /// since i32 and f32 can be cast to f64
     ///
-    /// For functions that take no arguments (e.g. `random()` see [`TypeSignature::Nullary`]).
+    /// For functions that take no arguments (e.g. `random()`) see [`TypeSignature::Nullary`].
     Coercible(Vec<TypeSignatureClass>),
     /// One or more arguments that can be "compared"
     ///
@@ -140,7 +140,7 @@ pub enum TypeSignature {
     Comparable(usize),
     /// One or more arguments of arbitrary types.
     ///
-    /// For functions that take no arguments (e.g. `random()` see [`TypeSignature::Nullary`]).
+    /// For functions that take no arguments (e.g. `random()`) use [`TypeSignature::Nullary`].
     Any(usize),
     /// Matches exactly one of a list of [`TypeSignature`]s.
     ///
@@ -158,7 +158,7 @@ pub enum TypeSignature {
     ///
     /// See [`NativeType::is_numeric`] to know which type is considered numeric
     ///
-    /// For functions that take no arguments (e.g. `random()` see [`TypeSignature::Nullary`]).
+    /// For functions that take no arguments (e.g. `random()`) use [`TypeSignature::Nullary`].
     ///
     /// [`NativeType::is_numeric`]: datafusion_common::types::NativeType::is_numeric
     Numeric(usize),
