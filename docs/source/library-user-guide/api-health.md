@@ -38,7 +38,7 @@ Compatibility Section of the cargo book]. Common examples of breaking changes:
 - Removing a `pub` function
 - Changing the return type of a function
 
-When making breaking public API changes, please add the `api-change` label to
+When making breaking public API changes, please add the `api change` label to
 the PR so we can highlight the changes in the release notes.
 
 [docs.rs page]: https://docs.rs/datafusion/latest/datafusion/index.html
@@ -72,7 +72,7 @@ Please refer to [DataFusion releases](https://crates.io/crates/datafusion/versio
 
 ## Migration Guidelines
 
-To ensure smooth upgrades and maintain application stability, the following guidelines must be followed for changes involving:
+To ensure smooth upgrades and maintain application stability, the following guidelines should be followed for changes involving:
 
 - Public API changes
 - Introducing deprecated methods
