@@ -86,6 +86,11 @@ pub mod udaf {
     pub use datafusion_physical_expr::aggregate::AggregateFunctionExpr;
 }
 
+pub use dedicated_executor::{DedicatedExecutor, DedicatedExecutorBuilder};
+
 pub mod coalesce;
+mod cross_rt_stream;
+pub mod dedicated_executor;
+mod io_object_store;
 #[cfg(test)]
 pub mod test;
