@@ -30,16 +30,19 @@ use datafusion::common::{not_impl_err, plan_err, DFSchema, DFSchemaRef};
 use datafusion::error::Result;
 use datafusion::execution::registry::SerializerRegistry;
 use datafusion::execution::runtime_env::RuntimeEnv;
+use datafusion::execution::session_state::SessionStateBuilder;
 use datafusion::logical_expr::{
     Extension, LogicalPlan, PartitionEvaluator, Repartition, UserDefinedLogicalNode,
     Values, Volatility,
 };
 use datafusion::optimizer::simplify_expressions::expr_simplifier::THRESHOLD_INLINE_INLIST;
 use datafusion::prelude::*;
+use datafusion_substrait::extensions::Extensions;
+use datafusion_substrait::logical_plan::consumer::{
+    from_substrait_plan_with_consumer, DefaultSubstraitConsumer,
+};
 use std::hash::Hash;
 use std::sync::Arc;
-
-use datafusion::execution::session_state::SessionStateBuilder;
 use substrait::proto::extensions::simple_extension_declaration::MappingType;
 use substrait::proto::rel::RelType;
 use substrait::proto::{plan_rel, Plan, Rel};
@@ -989,8 +992,13 @@ async fn extension_logical_plan() -> Result<()> {
         }),
     });
 
+    let consumer = DefaultSubstraitConsumer::new(
+        Arc::new(Extensions::default()),
+        Arc::new(ctx.state()),
+    );
+
     let proto = to_substrait_plan(&ext_plan, &ctx.state())?;
-    let plan2 = from_substrait_plan(&ctx.state(), &proto).await?;
+    let plan2 = from_substrait_plan_with_consumer(&consumer, &proto).await?;
 
     let plan1str = format!("{ext_plan}");
     let plan2str = format!("{plan2}");
