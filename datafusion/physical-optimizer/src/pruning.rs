@@ -1628,7 +1628,7 @@ fn wrap_null_count_check_expr(
     statistics_expr: Arc<dyn PhysicalExpr>,
     expr_builder: &mut PruningExpressionBuilder,
 ) -> Result<Arc<dyn PhysicalExpr>> {
-    // x_null_count = x_row_count
+    // x_null_count != x_row_count
     let not_when_null_count_eq_row_count = Arc::new(phys_expr::BinaryExpr::new(
         expr_builder.null_count_column_expr()?,
         Operator::NotEq,
