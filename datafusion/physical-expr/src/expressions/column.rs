@@ -18,7 +18,7 @@
 //! Physical column reference: [`Column`]
 
 use std::any::Any;
-use std::hash::Hash;
+use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
 use crate::physical_expr::PhysicalExpr;
@@ -27,6 +27,7 @@ use arrow::{
     record_batch::RecordBatch,
 };
 use arrow_schema::SchemaRef;
+use datafusion_common::cse::HashNode;
 use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::{internal_err, plan_err, Result};
 use datafusion_expr::ColumnarValue;
@@ -137,6 +138,13 @@ impl PhysicalExpr for Column {
         _children: Vec<Arc<dyn PhysicalExpr>>,
     ) -> Result<Arc<dyn PhysicalExpr>> {
         Ok(self)
+    }
+}
+
+impl HashNode for Column {
+    fn hash_node<H: Hasher>(&self, state: &mut H) {
+        self.name.hash(state);
+        self.index.hash(state);
     }
 }
 
