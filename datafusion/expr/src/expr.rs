@@ -313,7 +313,7 @@ pub enum Expr {
     /// plan into physical plan.
     Wildcard {
         qualifier: Option<TableReference>,
-        options: WildcardOptions,
+        options: Box<WildcardOptions>,
     },
     /// List of grouping set expressions. Only valid in the context of an aggregate
     /// GROUP BY expression list
