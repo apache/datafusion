@@ -394,7 +394,7 @@ pub trait PruningStatistics {
 ///
 /// Note that if we had ended up with `null AND true AND null AND true` the result
 /// would have been `null`.
-/// We treat `null` as `true` because we can't prove that the predicate is false.
+/// `null` is treated the same as`true`, because we can't prove that the predicate is `false.`
 ///
 /// If, for some other container, we knew `y` was between the values `4` and
 /// `15`, then the rewritten predicate evaluates to `true` (verifying this is
@@ -1635,7 +1635,7 @@ fn wrap_null_count_check_expr(
         expr_builder.row_count_column_expr()?,
     ));
 
-    // NOT (x_null_count = x_row_count) AND (<statistics_expr>)
+    // (x_null_count != x_row_count) AND (<statistics_expr>)
     Ok(Arc::new(phys_expr::BinaryExpr::new(
         not_when_null_count_eq_row_count,
         Operator::And,
