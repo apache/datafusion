@@ -96,6 +96,7 @@ impl fmt::Display for AggregateUDF {
 }
 
 /// Arguments passed to [`AggregateUDFImpl::value_from_stats`]
+#[derive(Debug)]
 pub struct StatisticsArgs<'a> {
     /// The statistics of the aggregate input
     pub statistics: &'a Statistics,

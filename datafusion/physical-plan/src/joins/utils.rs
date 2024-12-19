@@ -1996,6 +1996,7 @@ mod tests {
             distinct_count,
             min_value: min.map(ScalarValue::from),
             max_value: max.map(ScalarValue::from),
+            sum_value: Absent,
             null_count,
         }
     }
