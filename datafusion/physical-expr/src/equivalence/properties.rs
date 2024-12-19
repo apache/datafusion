@@ -258,11 +258,11 @@ impl EquivalenceProperties {
             // Left expression is constant, add right as constant
             if !const_exprs_contains(&self.constants, right) {
                 // Try to get value from left constant expression
-                let value = self
-                    .constants
-                    .iter()
-                    .find(|c| c.expr().eq(left))
-                    .and_then(|c| c.value().cloned());
+                let value = if let Some(lit) = left.as_any().downcast_ref::<Literal>() {
+                    Some(lit.value().clone())
+                } else {
+                    None
+                };
 
                 let mut const_expr = ConstExpr::from(right).with_across_partitions(true);
                 if let Some(val) = value {
@@ -274,11 +274,11 @@ impl EquivalenceProperties {
             // Right expression is constant, add left as constant
             if !const_exprs_contains(&self.constants, left) {
                 // Try to get value from right constant expression
-                let value = self
-                    .constants
-                    .iter()
-                    .find(|c| c.expr().eq(right))
-                    .and_then(|c| c.value().cloned());
+                let value = if let Some(lit) = right.as_any().downcast_ref::<Literal>() {
+                    Some(lit.value().clone())
+                } else {
+                    None
+                };
 
                 let mut const_expr = ConstExpr::from(left).with_across_partitions(true);
                 if let Some(val) = value {
