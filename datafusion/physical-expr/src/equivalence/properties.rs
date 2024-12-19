@@ -923,7 +923,8 @@ impl EquivalenceProperties {
                     .and_then(|c| c.value().cloned());
 
                 // Expression evaluates to single value
-                let mut const_expr = ConstExpr::from(target).with_across_partitions(across_partitions);
+                let mut const_expr =
+                    ConstExpr::from(target).with_across_partitions(across_partitions);
                 if let Some(val) = value {
                     const_expr = const_expr.with_value(val);
                 }
