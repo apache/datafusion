@@ -549,7 +549,7 @@ trunc(numeric_expression[, decimal_places])
 - [coalesce](#coalesce)
 - [greatest](#greatest)
 - [ifnull](#ifnull)
-- [](#)
+- [least](#least)
 - [nullif](#nullif)
 - [nvl](#nvl)
 - [nvl2](#nvl2)
@@ -604,7 +604,7 @@ greatest(expression1[, ..., expression_n])
 
 _Alias of [nvl](#nvl)._
 
-### ``
+### `least`
 
 Returns the smallest value in a list of expressions. Returns _null_ if all expressions are _null_.
 
