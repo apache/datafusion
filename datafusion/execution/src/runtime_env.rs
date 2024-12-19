@@ -118,7 +118,7 @@ impl RuntimeEnv {
     /// runtime_env.register_object_store(&url, Arc::new(object_store));
     /// ```
     ///
-    /// # Example: Register local file system object store
+    /// # Example: Register remote URL object store like [Github](https://github.com)
     ///
     /// To register reading from urls such as <https://github.com>
     ///
