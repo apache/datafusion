@@ -856,8 +856,7 @@ fn get_corrected_filter_mask(
             }
 
             // Generate null joined rows for records which have no matching join key
-            let null_matched = expected_size - corrected_mask.len();
-            corrected_mask.extend(vec![Some(false); null_matched]);
+            corrected_mask.append_n(expected_size - corrected_mask.len(), false);
             Some(corrected_mask.finish())
         }
         JoinType::LeftMark => {
@@ -879,8 +878,7 @@ fn get_corrected_filter_mask(
             }
 
             // Generate null joined rows for records which have no matching join key
-            let null_matched = expected_size - corrected_mask.len();
-            corrected_mask.extend(vec![Some(false); null_matched]);
+            corrected_mask.append_n(expected_size - corrected_mask.len(), false);
             Some(corrected_mask.finish())
         }
         JoinType::LeftSemi => {
@@ -922,9 +920,9 @@ fn get_corrected_filter_mask(
                     corrected_mask.append_null();
                 }
             }
-
-            let null_matched = expected_size - corrected_mask.len();
-            corrected_mask.extend(vec![Some(true); null_matched]);
+            // Generate null joined rows for records which have no matching join key,
+            // for LeftAnti non-matched considered as true
+            corrected_mask.append_n(expected_size - corrected_mask.len(), true);
             Some(corrected_mask.finish())
         }
         JoinType::Full => {
@@ -1569,10 +1567,10 @@ impl SortMergeJoinStream {
                 let num_rows = record_batch.num_rows();
                 self.output_record_batches
                     .filter_mask
-                    .extend(&BooleanArray::from(vec![None; num_rows]));
+                    .append_nulls(num_rows);
                 self.output_record_batches
                     .row_indices
-                    .extend(&UInt64Array::from(vec![None; num_rows]));
+                    .append_nulls(num_rows);
                 self.output_record_batches
                     .batch_ids
                     .extend(vec![0; num_rows]);
@@ -1613,10 +1611,10 @@ impl SortMergeJoinStream {
 
             self.output_record_batches
                 .filter_mask
-                .extend(&BooleanArray::from(vec![None; num_rows]));
+                .append_nulls(num_rows);
             self.output_record_batches
                 .row_indices
-                .extend(&UInt64Array::from(vec![None; num_rows]));
+                .append_nulls(num_rows);
             self.output_record_batches
                 .batch_ids
                 .extend(vec![0; num_rows]);
