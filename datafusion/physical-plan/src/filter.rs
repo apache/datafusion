@@ -276,7 +276,7 @@ impl FilterExec {
                 if let Some(value) = value {
                     const_expr = const_expr.with_value(value.clone());
                 }
-                return const_expr;
+                const_expr
             });
         // This is for statistics
         eq_properties = eq_properties.with_constants(constants);

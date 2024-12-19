@@ -258,11 +258,10 @@ impl EquivalenceProperties {
             // Left expression is constant, add right as constant
             if !const_exprs_contains(&self.constants, right) {
                 // Try to get value from left constant expression
-                let value = if let Some(lit) = left.as_any().downcast_ref::<Literal>() {
-                    Some(lit.value().clone())
-                } else {
-                    None
-                };
+                let value = left
+                    .as_any()
+                    .downcast_ref::<Literal>()
+                    .map(|lit| lit.value().clone());
 
                 let mut const_expr = ConstExpr::from(right).with_across_partitions(true);
                 if let Some(val) = value {
@@ -274,11 +273,10 @@ impl EquivalenceProperties {
             // Right expression is constant, add left as constant
             if !const_exprs_contains(&self.constants, left) {
                 // Try to get value from right constant expression
-                let value = if let Some(lit) = right.as_any().downcast_ref::<Literal>() {
-                    Some(lit.value().clone())
-                } else {
-                    None
-                };
+                let value = right
+                    .as_any()
+                    .downcast_ref::<Literal>()
+                    .map(|lit| lit.value().clone());
 
                 let mut const_expr = ConstExpr::from(left).with_across_partitions(true);
                 if let Some(val) = value {
@@ -901,12 +899,12 @@ impl EquivalenceProperties {
                 const_expr
                     .map(|expr| self.eq_group.project_expr(mapping, expr))
                     .map(|projected_expr| {
-                        let mut new_const = ConstExpr::from(projected_expr)
+                        let mut new_const_expr = projected_expr
                             .with_across_partitions(const_expr.across_partitions());
                         if let Some(value) = const_expr.value() {
-                            new_const = new_const.with_value(value.clone());
+                            new_const_expr = new_const_expr.with_value(value.clone());
                         }
-                        new_const
+                        new_const_expr
                     })
             })
             .collect::<Vec<_>>();
