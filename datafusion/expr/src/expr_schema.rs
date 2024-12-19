@@ -437,6 +437,8 @@ impl ExprSchemable for Expr {
     /// This function errors when it is impossible to cast the
     /// expression to the target [arrow::datatypes::DataType].
     fn cast_to(self, cast_to_type: &DataType, schema: &dyn ExprSchema) -> Result<Expr> {
+        use datafusion_common::ScalarValue;
+
         let this_type = self.get_type(schema)?;
         if this_type == *cast_to_type {
             return Ok(self);
@@ -452,6 +454,26 @@ impl ExprSchemable for Expr {
                     Ok(Expr::ScalarSubquery(cast_subquery(subquery, cast_to_type)?))
                 }
                 _ => Ok(Expr::Cast(Cast::new(Box::new(self), cast_to_type.clone()))),
+            }
+        } else if matches!(
+            (&this_type, cast_to_type),
+            (DataType::Int32 | DataType::Int64, DataType::Interval(_))
+        ) {
+            // Convert integer (days) to the corresponding DayTime interval
+            match self {
+                Expr::Literal(ScalarValue::Int32(Some(days))) => {
+                    Ok(Expr::Literal(ScalarValue::IntervalDayTime(Some(
+                        arrow_buffer::IntervalDayTime::new(days, 0),
+                    ))))
+                }
+                Expr::Literal(ScalarValue::Int64(Some(days))) => {
+                    Ok(Expr::Literal(ScalarValue::IntervalDayTime(Some(
+                        arrow_buffer::IntervalDayTime::new(days as i32, 0),
+                    ))))
+                }
+                _ => plan_err!(
+                    "Cannot automatically convert {this_type:?} to {cast_to_type:?}"
+                ),
             }
         } else {
             plan_err!("Cannot automatically convert {this_type:?} to {cast_to_type:?}")
@@ -760,5 +782,43 @@ mod tests {
         fn data_type_and_nullable(&self, col: &Column) -> Result<(&DataType, bool)> {
             Ok((self.data_type(col)?, self.nullable(col)?))
         }
+    }
+
+    #[test]
+    fn test_cast_int_to_interval() -> Result<()> {
+        use arrow::datatypes::IntervalUnit;
+
+        let schema = MockExprSchema::new().with_data_type(DataType::Int32);
+
+        // Test casting Int32 literal to Interval
+        let expr = lit(ScalarValue::Int32(Some(5)));
+        let result = expr.cast_to(&DataType::Interval(IntervalUnit::DayTime), &schema)?;
+        assert_eq!(
+            result,
+            Expr::Literal(ScalarValue::IntervalDayTime(Some(
+                arrow_buffer::IntervalDayTime::new(5, 0)
+            )))
+        );
+
+        // Test casting Int64 literal to Interval
+        let expr = lit(ScalarValue::Int64(Some(7)));
+        let result = expr.cast_to(&DataType::Interval(IntervalUnit::DayTime), &schema)?;
+        assert_eq!(
+            result,
+            Expr::Literal(ScalarValue::IntervalDayTime(Some(
+                arrow_buffer::IntervalDayTime::new(7, 0)
+            )))
+        );
+
+        // Test that non-literal expressions cannot be cast from int to interval
+        let expr = col("foo") + lit(1);
+        let err = expr
+            .cast_to(&DataType::Interval(IntervalUnit::DayTime), &schema)
+            .unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("Cannot automatically convert Int32 to Interval(DayTime)"));
+
+        Ok(())
     }
 }
