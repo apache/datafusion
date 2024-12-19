@@ -77,6 +77,8 @@ use datafusion_physical_expr_common::sort_expr::{LexOrdering, LexRequirement};
 use futures::{ready, Stream, StreamExt};
 use parking_lot::Mutex;
 
+use super::hash_join::retain_with_eq_arr;
+
 const HASHMAP_SHRINK_SCALE_FACTOR: usize = 4;
 
 /// A symmetric hash join with range conditions is when both streams are hashed on the
@@ -989,18 +991,21 @@ fn lookup_join_hashmap(
     matched_probe.reverse();
     matched_build.reverse();
 
-    let build_indices: UInt64Array = matched_build.into();
-    let probe_indices: UInt32Array = matched_probe.into();
+    let mut equal = vec![true; matched_build.len()];
 
-    let (build_indices, probe_indices) = equal_rows_arr(
-        &build_indices,
-        &probe_indices,
+    equal_rows_arr(
+        &mut equal,
+        &matched_build,
+        &matched_probe,
         &build_join_values,
         &keys_values,
         null_equals_null,
     )?;
 
-    Ok((build_indices, probe_indices))
+    retain_with_eq_arr::<u64>(&mut matched_build, &equal);
+    retain_with_eq_arr::<u32>(&mut matched_probe, &equal);
+
+    Ok((matched_build.into(), matched_probe.into()))
 }
 
 pub struct OneSideHashJoiner {
