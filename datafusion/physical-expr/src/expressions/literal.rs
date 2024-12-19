@@ -90,6 +90,7 @@ impl PhysicalExpr for Literal {
         Ok(ExprProperties {
             sort_properties: SortProperties::Singleton,
             range: Interval::try_new(self.value().clone(), self.value().clone())?,
+            preserves_lex_ordering: true,
         })
     }
 }

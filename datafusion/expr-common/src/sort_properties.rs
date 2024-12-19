@@ -129,19 +129,21 @@ impl Neg for SortProperties {
     }
 }
 
-/// Represents the properties of a `PhysicalExpr`, including its sorting and range attributes.
+/// Represents the properties of a `PhysicalExpr`, including its sorting, range, and whether it preserves lexicographical ordering.
 #[derive(Debug, Clone)]
 pub struct ExprProperties {
     pub sort_properties: SortProperties,
     pub range: Interval,
+    pub preserves_lex_ordering: bool,
 }
 
 impl ExprProperties {
-    /// Creates a new `ExprProperties` instance with unknown sort properties and unknown range.
+    /// Creates a new `ExprProperties` instance with unknown sort properties, unknown range, and unknown lexicographical ordering preservation.
     pub fn new_unknown() -> Self {
         Self {
             sort_properties: SortProperties::default(),
             range: Interval::make_unbounded(&DataType::Null).unwrap(),
+            preserves_lex_ordering: false,
         }
     }
 
@@ -154,6 +156,12 @@ impl ExprProperties {
     /// Sets the range of the expression and returns the modified instance.
     pub fn with_range(mut self, range: Interval) -> Self {
         self.range = range;
+        self
+    }
+
+    /// Sets whether the expression maintains lexicographical ordering and returns the modified instance.
+    pub fn with_preserves_lex_ordering(mut self, preserves_lex_ordering: bool) -> Self {
+        self.preserves_lex_ordering = preserves_lex_ordering;
         self
     }
 }
