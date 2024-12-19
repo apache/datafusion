@@ -120,7 +120,7 @@ impl RuntimeEnv {
     ///
     /// # Example: Register local file system object store
     ///
-    /// To register reading from urls such as <https://github.com>`
+    /// To register reading from urls such as <https://github.com>
     ///
     /// ```
     /// # use std::sync::Arc;
