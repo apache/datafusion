@@ -103,9 +103,13 @@ pub enum TypeSignature {
     /// A function such as `concat` is `Variadic(vec![DataType::Utf8,
     /// DataType::LargeUtf8])`
     Variadic(Vec<DataType>),
-    /// The acceptable signature and coercions rules to coerce arguments to this
-    /// signature are special for this function. If this signature is specified,
-    /// DataFusion will call `ScalarUDFImpl::coerce_types` to prepare argument types.
+    /// The acceptable signature and coercions rules  are special for this
+    /// function.
+    ///
+    /// If this signature is specified,
+    /// DataFusion will call [`ScalarUDFImpl::coerce_types`] to prepare argument types.
+    ///
+    /// [`ScalarUDFImpl::coerce_types`]: https://docs.rs/datafusion/latest/datafusion/logical_expr/trait.ScalarUDFImpl.html#method.coerce_types
     UserDefined,
     /// One or more arguments with arbitrary types
     VariadicAny,
@@ -123,24 +127,29 @@ pub enum TypeSignature {
     /// One or more arguments belonging to the [`TypeSignatureClass`], in order.
     ///
     /// For example, `Coercible(vec![logical_float64()])` accepts
-    /// arguments like `vec![DataType::Int32]` or `vec![DataType::Float32]`
+    /// arguments like `vec![Int32]` or `vec![Float32]`
     /// since i32 and f32 can be cast to f64
     ///
     /// For functions that take no arguments (e.g. `random()`) see [`TypeSignature::Nullary`].
     Coercible(Vec<TypeSignatureClass>),
-    /// One or more arguments that can be "compared"
+    /// One or more arguments cast to single, comparable type.
     ///
-    /// Each argument will be coerced to a single type based on comparison rules.
-    /// For example a function called with `i32` and `i64` has coerced type `Int64` so
-    /// each argument will be coerced to `Int64` before the function is invoked.
+    /// Each argument will be coerced to a single type using the
+    /// coercion rules described in [`comparison_coercion_numeric`].
+    ///
+    /// # Examples
+    ///
+    /// If the `nullif(1, 2)` function is called with `i32` and `i64` arguments
+    /// the types will both be coerced to `i64` before the function is invoked.
+    ///
+    /// If the `nullif('1', 2)` function is called with `Utf8` and `i64` arguments
+    /// the types will both be coerced to `Utf8` before the function is invoked.
     ///
     /// Note:
-    /// - If compares with numeric and string, numeric is preferred for numeric string cases. For example, `nullif('2', 1)` has coerced types `Int64`.
-    /// - If the result is Null, it will be coerced to String (Utf8View).
-    /// - See [`comparison_coercion`] for more details.
     /// - For functions that take no arguments (e.g. `random()` see [`TypeSignature::Nullary`]).
+    /// - If all arguments have type [`DataType::Null`], they are coerced to `Utf8`
     ///
-    /// [`comparison_coercion`]: crate::type_coercion::binary::comparison_coercion
+    /// [`comparison_coercion_numeric`]: crate::type_coercion::binary::comparison_coercion_numeric
     Comparable(usize),
     /// One or more arguments of arbitrary types.
     ///
