@@ -62,7 +62,7 @@ impl TableProviderFactory for StreamTableFactory {
         let header = if let Ok(opt) = cmd
             .options
             .get("format.has_header")
-            .map(|has_header| bool::from_str(has_header))
+            .map(|has_header| bool::from_str(has_header.to_lowercase().as_str()))
             .transpose()
         {
             opt.unwrap_or(false)
