@@ -17,6 +17,10 @@
 
 use std::{cmp::Ordering, sync::Arc, vec};
 
+use super::{
+    dialect::CharacterLengthStyle, dialect::DateFieldExtractStyle,
+    rewrite::TableAliasRewriter, Unparser,
+};
 use datafusion_common::{
     internal_err,
     tree_node::{Transformed, TransformedResult, TreeNode},
@@ -29,11 +33,7 @@ use datafusion_expr::{
 
 use indexmap::IndexSet;
 use sqlparser::ast;
-
-use super::{
-    dialect::CharacterLengthStyle, dialect::DateFieldExtractStyle,
-    rewrite::TableAliasRewriter, Unparser,
-};
+use sqlparser::tokenizer::Span;
 
 /// Recursively searches children of [LogicalPlan] to find an Aggregate node if exists
 /// prior to encountering a Join, TableScan, or a nested subquery (derived table factor).
@@ -426,6 +426,7 @@ pub(crate) fn date_part_to_sql(
                     name: ast::ObjectName(vec![ast::Ident {
                         value: "strftime".to_string(),
                         quote_style: None,
+                        span: Span::empty(),
                     }]),
                     args: ast::FunctionArguments::List(ast::FunctionArgumentList {
                         duplicate_treatment: None,
