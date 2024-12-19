@@ -34,13 +34,14 @@ use crate::{
     physical_optimizer::pruning::PruningPredicate,
     physical_plan::{
         metrics::{ExecutionPlanMetricsSet, MetricBuilder, MetricsSet},
-        DisplayFormatType, ExecutionMode, ExecutionPlan, Partitioning, PlanProperties,
+        DisplayFormatType, ExecutionPlan, Partitioning, PlanProperties,
         SendableRecordBatchStream, Statistics,
     },
 };
 
 use arrow::datatypes::SchemaRef;
 use datafusion_physical_expr::{EquivalenceProperties, LexOrdering, PhysicalExpr};
+use datafusion_physical_plan::execution_plan::{Boundedness, EmissionType};
 
 use itertools::Itertools;
 use log::debug;
@@ -654,13 +655,11 @@ impl ParquetExec {
         orderings: &[LexOrdering],
         file_config: &FileScanConfig,
     ) -> PlanProperties {
-        // Equivalence Properties
-        let eq_properties = EquivalenceProperties::new_with_orderings(schema, orderings);
-
         PlanProperties::new(
-            eq_properties,
+            EquivalenceProperties::new_with_orderings(schema, orderings),
             Self::output_partitioning_helper(file_config), // Output Partitioning
-            ExecutionMode::Bounded,                        // Execution Mode
+            EmissionType::Incremental,
+            Boundedness::Bounded,
         )
     }
 

@@ -24,9 +24,10 @@ use std::task::{Context, Poll};
 
 use super::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
 use super::{
-    DisplayAs, ExecutionMode, ExecutionPlanProperties, PlanProperties, RecordBatchStream,
+    DisplayAs, ExecutionPlanProperties, PlanProperties, RecordBatchStream,
     SendableRecordBatchStream, Statistics,
 };
+use crate::execution_plan::{Boundedness, CardinalityEffect};
 use crate::{DisplayFormatType, Distribution, ExecutionPlan, Partitioning};
 
 use arrow::datatypes::SchemaRef;
@@ -34,7 +35,6 @@ use arrow::record_batch::RecordBatch;
 use datafusion_common::{internal_err, Result};
 use datafusion_execution::TaskContext;
 
-use crate::execution_plan::CardinalityEffect;
 use futures::stream::{Stream, StreamExt};
 use log::trace;
 
@@ -86,7 +86,9 @@ impl GlobalLimitExec {
         PlanProperties::new(
             input.equivalence_properties().clone(), // Equivalence Properties
             Partitioning::UnknownPartitioning(1),   // Output Partitioning
-            ExecutionMode::Bounded,                 // Execution Mode
+            input.pipeline_behavior(),
+            // Limit operations are always bounded since they output a finite number of rows
+            Boundedness::Bounded,
         )
     }
 }
@@ -242,7 +244,9 @@ impl LocalLimitExec {
         PlanProperties::new(
             input.equivalence_properties().clone(), // Equivalence Properties
             input.output_partitioning().clone(),    // Output Partitioning
-            ExecutionMode::Bounded,                 // Execution Mode
+            input.pipeline_behavior(),
+            // Limit operations are always bounded since they output a finite number of rows
+            Boundedness::Bounded,
         )
     }
 }
