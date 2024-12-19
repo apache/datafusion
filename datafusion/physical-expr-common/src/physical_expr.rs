@@ -24,7 +24,7 @@ use crate::utils::scatter;
 
 use arrow::array::BooleanArray;
 use arrow::compute::filter_record_batch;
-use arrow::datatypes::{DataType, Schema};
+use arrow::datatypes::{DataType, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::{internal_err, not_impl_err, Result};
 use datafusion_expr_common::columnar_value::ColumnarValue;
@@ -109,6 +109,11 @@ pub trait PhysicalExpr: Send + Sync + Display + Debug + DynEq + DynHash {
     /// and `b: [3, 4]`, then the output interval would be `[4, 6]`.
     fn evaluate_bounds(&self, _children: &[&Interval]) -> Result<Interval> {
         not_impl_err!("Not implemented for {self}")
+    }
+
+    /// Indicates whether interval arithmetic is supported for this expression.
+    fn supports_bounds_evaluation(&self, _schema: &SchemaRef) -> bool {
+        false
     }
 
     /// Updates bounds for child expressions, given a known interval for this

@@ -58,6 +58,7 @@ where d3_date > d2_date + INTERVAL '5 days';
 g
 h
 
+
 # date and other predicate
 query T rowsort
 select i_item_desc

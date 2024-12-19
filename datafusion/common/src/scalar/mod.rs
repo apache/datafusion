@@ -1459,6 +1459,17 @@ impl ScalarValue {
         }
     }
 
+    /// Returns negation for a boolean scalar value
+    pub fn boolean_negate(&self) -> Result<Self> {
+        match self {
+            ScalarValue::Boolean(None) => Ok(self.clone()),
+            ScalarValue::Boolean(Some(value)) => Ok(ScalarValue::Boolean(Some(!value))),
+            value => {
+                _internal_err!("Can not run boolean negative on scalar value {value:?}")
+            }
+        }
+    }
+
     /// Wrapping addition of `ScalarValue`
     ///
     /// NB: operating on `ScalarValue` directly is not efficient, performance sensitive code

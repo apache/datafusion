@@ -44,6 +44,7 @@ use datafusion_expr::ColumnarValue;
 use datafusion_physical_expr_common::datum::compare_with_eq;
 
 use ahash::RandomState;
+use datafusion_expr::interval_arithmetic::Interval;
 use datafusion_common::HashMap;
 use hashbrown::hash_map::RawEntryMut;
 
@@ -397,6 +398,56 @@ impl PhysicalExpr for InListExpr {
             self.negated,
             self.static_filter.clone(),
         )))
+    }
+
+    /// The output interval is computed by checking if the list item intervals are
+    /// a subset of, overlap, or are disjoint with the input expression's interval.
+    ///
+    /// If [InListExpr::negated] is true, the output interval gets negated.
+    ///
+    /// # Example:
+    /// If the input expression's interval is a superset of the
+    /// conjunction of the list items intervals, the output
+    /// interval is [`Interval::CERTAINLY_TRUE`].
+    ///
+    /// ```text
+    /// interval of expr:   ....---------------------....
+    /// Some list items:    ..........|..|.....|.|.......
+    ///
+    /// output interval:    [`true`, `true`]
+    /// ```
+    fn evaluate_bounds(&self, children: &[&Interval]) -> Result<Interval> {
+        let expr_bounds = children[0];
+
+        // conjunction of list item intervals
+        let mut list_bounds = children[1].clone();
+        if children.len() > 2 {
+            list_bounds = children[2..]
+                .iter()
+                .try_fold(Some(list_bounds), |acc, item| {
+                    if let Some(acc) = acc {
+                        acc.union(*item)
+                    } else {
+                        Some(Interval::make_unbounded(&expr_bounds.data_type()))
+                            .transpose()
+                    }
+                })?
+                .unwrap_or(Interval::make_unbounded(&expr_bounds.data_type())?);
+        }
+
+        if self.negated {
+            expr_bounds.contains(list_bounds)?.boolean_negate()
+        } else {
+            expr_bounds.contains(list_bounds)
+        }
+    }
+
+    fn supports_bounds_evaluation(&self, schema: &SchemaRef) -> bool {
+        self.expr.supports_bounds_evaluation(schema)
+            && self
+            .list
+            .iter()
+            .all(|expr| expr.supports_bounds_evaluation(schema))
     }
 }
 

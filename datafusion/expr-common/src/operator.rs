@@ -164,6 +164,26 @@ impl Operator {
         )
     }
 
+    /// Indicates whether this operator supports interval arithmetic
+    pub fn supports_bounds_evaluation(&self) -> bool {
+        matches!(
+            &self,
+            &Operator::Plus
+                | &Operator::Minus
+                | &Operator::And
+                | &Operator::Gt
+                | &Operator::GtEq
+                | &Operator::Lt
+                | &Operator::LtEq
+                | &Operator::Eq
+                | &Operator::NotEq
+                | &Operator::Multiply
+                | &Operator::Divide
+                | &Operator::IsDistinctFrom
+                | &Operator::IsNotDistinctFrom
+        )
+    }
+
     /// Return true if the comparison operator can be used in interval arithmetic and constraint
     /// propagation
     ///

@@ -30,7 +30,7 @@ use arrow::datatypes::{
     MIN_DECIMAL128_FOR_EACH_PRECISION, MIN_DECIMAL256_FOR_EACH_PRECISION,
 };
 use datafusion_common::rounding::{alter_fp_rounding_mode, next_down, next_up};
-use datafusion_common::{internal_err, Result, ScalarValue};
+use datafusion_common::{internal_err, DataFusionError, Result, ScalarValue};
 
 macro_rules! get_extreme_value {
     ($extreme:ident, $value:expr) => {
@@ -306,23 +306,15 @@ impl Interval {
             // Standardize floating-point endpoints:
             DataType::Float32 => handle_float_intervals!(Float32, f32, lower, upper),
             DataType::Float64 => handle_float_intervals!(Float64, f64, lower, upper),
-            // Unsigned null values for lower bounds are set to zero:
-            DataType::UInt8 if lower.is_null() => Self {
-                lower: ScalarValue::UInt8(Some(0)),
-                upper,
-            },
-            DataType::UInt16 if lower.is_null() => Self {
-                lower: ScalarValue::UInt16(Some(0)),
-                upper,
-            },
-            DataType::UInt32 if lower.is_null() => Self {
-                lower: ScalarValue::UInt32(Some(0)),
-                upper,
-            },
-            DataType::UInt64 if lower.is_null() => Self {
-                lower: ScalarValue::UInt64(Some(0)),
-                upper,
-            },
+            // Lower bounds of unsigned integer null values are set to zero:
+            DataType::UInt8 | DataType::UInt16 | DataType::UInt32 | DataType::UInt64
+                if lower.is_null() =>
+            {
+                Self {
+                    lower: ScalarValue::new_zero(&lower.data_type()).unwrap(),
+                    upper,
+                }
+            }
             // Other data types do not require standardization:
             _ => Self { lower, upper },
         }
@@ -405,8 +397,8 @@ impl Interval {
 
         // There must be no way to create an interval whose endpoints have
         // different types.
-        assert!(
-            lower_type == upper_type,
+        assert_eq!(
+            lower_type, upper_type,
             "Interval bounds have different types: {lower_type} != {upper_type}"
         );
         lower_type
@@ -422,6 +414,10 @@ impl Interval {
             cast_scalar_value(&self.lower, data_type, cast_options)?,
             cast_scalar_value(&self.upper, data_type, cast_options)?,
         )
+    }
+
+    pub fn is_null(&self) -> bool {
+        self.lower.is_null() && self.upper.is_null()
     }
 
     pub const CERTAINLY_FALSE: Self = Self {
@@ -617,6 +613,66 @@ impl Interval {
         }
     }
 
+    /// Compute the union of this interval with the given interval.
+    ///
+    /// NOTE: This function only works with intervals of the same data type.
+    ///       Attempting to compare intervals of different data types will lead
+    ///       to an error.
+    pub fn union<T: Borrow<Self>>(&self, other: T) -> Result<Option<Self>> {
+        let rhs = other.borrow();
+
+        if self.data_type().ne(&rhs.data_type()) {
+            BinaryTypeCoercer::new(&self.data_type(), &Operator::Plus, &rhs.data_type()).get_result_type()
+                .map_err(|e|
+                    DataFusionError::Internal(
+                        format!(
+                            "Cannot coerce data types for interval union, lhs:{}, rhs:{}. internal error: {}",
+                            self.data_type(),
+                            rhs.data_type(),
+                            e
+                        ))
+                )?;
+        };
+
+        // If the upper bound of one side is less than the lower bound of the
+        // other side or vice versa, then the resulting interval is expanded
+        // accordingly. Note that, this can only happen if one side has a null
+        // value.
+        //
+        // Examples:
+        // [1, 2] ∪ [3, NULL] = [1, 3]
+        // [3, NULL] ∪ [1, NULL] = [1, 3]
+        // [3, NULL] ∪ [NULL, 1] = [1, 3]
+        let (lower, upper) = if (!(self.lower.is_null() || rhs.upper.is_null())
+            && self.lower > rhs.upper)
+            || (!(self.upper.is_null() || rhs.lower.is_null()) && self.upper < rhs.lower)
+        {
+            (
+                min_of_bounds(
+                    &min_of_bounds(&min_of_bounds(&self.lower, &rhs.lower), &self.upper),
+                    &rhs.upper,
+                ),
+                max_of_bounds(
+                    &max_of_bounds(&max_of_bounds(&self.lower, &rhs.lower), &self.upper),
+                    &rhs.upper,
+                ),
+            )
+        } else {
+            (
+                min_of_bounds(&self.lower, &rhs.lower),
+                max_of_bounds(&self.upper, &rhs.upper),
+            )
+        };
+
+        // New lower and upper bounds must always construct a valid interval.
+        assert!(
+            lower.is_null() || upper.is_null() || (lower <= upper),
+            "The union of two intervals can not be an invalid interval"
+        );
+
+        Ok(Some(Self { lower, upper }))
+    }
+
     /// Compute the intersection of this interval with the given interval.
     /// If the intersection is empty, return `None`.
     ///
@@ -625,13 +681,19 @@ impl Interval {
     ///       to an error.
     pub fn intersect<T: Borrow<Self>>(&self, other: T) -> Result<Option<Self>> {
         let rhs = other.borrow();
+
         if self.data_type().ne(&rhs.data_type()) {
-            return internal_err!(
-                "Only intervals with the same data type are intersectable, lhs:{}, rhs:{}",
-                self.data_type(),
-                rhs.data_type()
-            );
-        };
+            BinaryTypeCoercer::new(&self.data_type(), &Operator::Plus, &rhs.data_type()).get_result_type()
+                .map_err(|e|
+                    DataFusionError::Internal(
+                        format!(
+                            "Cannot coerce data types for interval intersection, lhs:{}, rhs:{}. internal error: {}",
+                            self.data_type(),
+                            rhs.data_type(),
+                            e
+                        ))
+                )?;
+        }
 
         // If it is evident that the result is an empty interval, short-circuit
         // and directly return `None`.
@@ -646,7 +708,7 @@ impl Interval {
 
         // New lower and upper bounds must always construct a valid interval.
         assert!(
-            (lower.is_null() || upper.is_null() || (lower <= upper)),
+            lower.is_null() || upper.is_null() || (lower <= upper),
             "The intersection of two intervals can not be an invalid interval"
         );
 
@@ -880,6 +942,19 @@ impl Interval {
             upper: self.lower().clone().arithmetic_negate()?,
         })
     }
+
+    pub fn boolean_negate(self) -> Result<Self> {
+        if self.data_type() != DataType::Boolean {
+            return internal_err!(
+                "Boolean negation is only supported for boolean intervals"
+            );
+        }
+
+        Ok(Self {
+            lower: self.lower().clone().boolean_negate()?,
+            upper: self.upper().clone().boolean_negate()?,
+        })
+    }
 }
 
 impl Display for Interval {
@@ -902,6 +977,15 @@ pub fn apply_operator(op: &Operator, lhs: &Interval, rhs: &Interval) -> Result<I
         Operator::Minus => lhs.sub(rhs),
         Operator::Multiply => lhs.mul(rhs),
         Operator::Divide => lhs.div(rhs),
+        Operator::IsDistinctFrom | Operator::IsNotDistinctFrom => {
+            NullableInterval::from(lhs)
+                .apply_operator(op, &rhs.into())
+                .and_then(|x| {
+                    x.values().cloned().ok_or(DataFusionError::Internal(
+                        "Unexpected null value interval".to_string(),
+                    ))
+                })
+        }
         _ => internal_err!("Interval arithmetic does not support the operator {op}"),
     }
 }
@@ -1058,14 +1142,14 @@ fn handle_overflow<const UPPER: bool>(
     }
 }
 
-// This function should remain private since it may corrupt the an interval if
+// This function should remain private since it may corrupt an interval if
 // used without caution.
 fn next_value(value: ScalarValue) -> ScalarValue {
     use ScalarValue::*;
     value_transition!(MAX, true, value)
 }
 
-// This function should remain private since it may corrupt the an interval if
+// This function should remain private since it may corrupt an interval if
 // used without caution.
 fn prev_value(value: ScalarValue) -> ScalarValue {
     use ScalarValue::*;
@@ -1075,10 +1159,10 @@ fn prev_value(value: ScalarValue) -> ScalarValue {
 trait OneTrait: Sized + std::ops::Add + std::ops::Sub {
     fn one() -> Self;
 }
-macro_rules! impl_OneTrait{
+macro_rules! impl_one_trait {
     ($($m:ty),*) => {$( impl OneTrait for $m  { fn one() -> Self { 1 as $m } })*}
 }
-impl_OneTrait! {u8, u16, u32, u64, i8, i16, i32, i64, i128}
+impl_one_trait! {u8, u16, u32, u64, i8, i16, i32, i64, i128}
 
 impl OneTrait for IntervalDayTime {
     fn one() -> Self {
@@ -1237,18 +1321,18 @@ pub fn satisfy_greater(
     }
 
     if !left.upper.is_null() && left.upper <= right.lower {
-        if !strict && left.upper == right.lower {
+        return if !strict && left.upper == right.lower {
             // Singleton intervals:
-            return Ok(Some((
+            Ok(Some((
                 Interval::new(left.upper.clone(), left.upper.clone()),
                 Interval::new(left.upper.clone(), left.upper.clone()),
-            )));
+            )))
         } else {
             // Left-hand side:  <--======----0------------>
             // Right-hand side: <------------0--======---->
             // No intersection, infeasible to propagate:
-            return Ok(None);
-        }
+            Ok(None)
+        };
     }
 
     // Only the lower bound of left-hand side and the upper bound of the right-hand
@@ -1629,6 +1713,24 @@ impl Display for NullableInterval {
     }
 }
 
+impl From<&Interval> for NullableInterval {
+    fn from(value: &Interval) -> Self {
+        if value.is_null() {
+            Self::Null {
+                datatype: value.data_type(),
+            }
+        } else if value.lower.is_null() || value.upper.is_null() {
+            Self::MaybeNull {
+                values: value.clone(),
+            }
+        } else {
+            Self::NotNull {
+                values: value.clone(),
+            }
+        }
+    }
+}
+
 impl From<ScalarValue> for NullableInterval {
     /// Create an interval that represents a single value.
     fn from(value: ScalarValue) -> Self {
@@ -1868,7 +1970,13 @@ mod tests {
     };
 
     use arrow::datatypes::DataType;
+    use arrow_buffer::IntervalDayTime as ArrowIntervalDayTime;
+    use datafusion_common::ScalarValue::{
+        Date32, DurationMillisecond, DurationSecond, IntervalDayTime, IntervalYearMonth,
+        TimestampSecond,
+    };
     use datafusion_common::{Result, ScalarValue};
+    use ScalarValue::{Date64, Time32Millisecond};
 
     #[test]
     fn test_next_prev_value() -> Result<()> {
@@ -2085,6 +2193,33 @@ mod tests {
                     prev_value(ScalarValue::Float32(Some(-1.0))),
                 )?,
             ),
+            (
+                Interval::new(Date64(Some(1)), Date64(Some(1))),
+                Interval::new(
+                    Date64(Some(-1)),
+                    Date64(Some(-1)),
+                ),
+            ),
+            (
+                Interval::new(
+                    TimestampSecond(Some(1), None),
+                    TimestampSecond(Some(10), None),
+                ),
+                Interval::new(
+                    TimestampSecond(Some(-10), None),
+                    TimestampSecond(Some(-1), None),
+                ),
+            ),
+            (
+                Interval::new(
+                    DurationSecond(Some(1)),
+                    DurationSecond(Some(10)),
+                ),
+                Interval::new(
+                    DurationSecond(Some(-10)),
+                    DurationSecond(Some(-1)),
+                ),
+            ),
         ];
         for (first, second) in exactly_gt_cases {
             assert_eq!(first.gt(second.clone())?, Interval::CERTAINLY_TRUE);
@@ -2122,6 +2257,33 @@ mod tests {
                     ScalarValue::Float32(Some(-1.0_f32)),
                 )?,
             ),
+            (
+                Interval::new(
+                    Date64(Some(1)),
+                    Date64(Some(10)),
+                ),
+                Interval::new(Date64(Some(1)), Date64(Some(1))),
+            ),
+            (
+                Interval::new(
+                    TimestampSecond(Some(1), None),
+                    TimestampSecond(Some(10), None),
+                ),
+                Interval::new(
+                    TimestampSecond(Some(1), None),
+                    TimestampSecond(Some(1), None),
+                ),
+            ),
+            (
+                Interval::new(
+                    DurationSecond(Some(1)),
+                    DurationSecond(Some(10)),
+                ),
+                Interval::new(
+                    DurationSecond(Some(1)),
+                    DurationSecond(Some(1)),
+                ),
+            ),
         ];
         for (first, second) in possibly_gt_cases {
             assert_eq!(first.gt(second.clone())?, Interval::UNCERTAIN);
@@ -2158,6 +2320,36 @@ mod tests {
                     ScalarValue::Float32(Some(-1.0_f32)),
                     next_value(ScalarValue::Float32(Some(-1.0_f32))),
                 )?,
+            ),
+            (
+                Interval::new(
+                    Date64(Some(1)),
+                    Date64(Some(10)),
+                ),
+                Interval::new(
+                    Date64(Some(10)),
+                    Date64(Some(100)),
+                ),
+            ),
+            (
+                Interval::new(
+                    TimestampSecond(Some(1), None),
+                    TimestampSecond(Some(10), None),
+                ),
+                Interval::new(
+                    TimestampSecond(Some(10), None),
+                    TimestampSecond(None, None),
+                ),
+            ),
+            (
+                Interval::new(
+                    DurationSecond(Some(-10)),
+                    DurationSecond(Some(-1)),
+                ),
+                Interval::new(
+                    DurationSecond(Some(1)),
+                    DurationSecond(Some(1)),
+                ),
             ),
         ];
         for (first, second) in not_gt_cases {
@@ -2205,6 +2397,36 @@ mod tests {
                     ScalarValue::Float32(Some(-1.0)),
                 )?,
             ),
+            (
+                Interval::new(
+                    ScalarValue::Time32Second(Some(0)),
+                    ScalarValue::Time32Second(Some(10)),
+                ),
+                Interval::new(
+                    ScalarValue::Time32Second(Some(-1)),
+                    ScalarValue::Time32Second(Some(-1)),
+                ),
+            ),
+            (
+                Interval::new(
+                    TimestampSecond(Some(1), None),
+                    TimestampSecond(Some(10), None),
+                ),
+                Interval::new(
+                    TimestampSecond(Some(1), None),
+                    TimestampSecond(Some(1), None),
+                ),
+            ),
+            (
+                Interval::new(
+                    DurationSecond(Some(-10)),
+                    DurationSecond(Some(1)),
+                ),
+                Interval::new(
+                    DurationSecond(Some(-10)),
+                    DurationSecond(Some(-10)),
+                ),
+            ),
         ];
         for (first, second) in exactly_gteq_cases {
             assert_eq!(first.gt_eq(second.clone())?, Interval::CERTAINLY_TRUE);
@@ -2242,6 +2464,36 @@ mod tests {
                     next_value(ScalarValue::Float32(Some(-1.0_f32))),
                 )?,
             ),
+            (
+                Interval::new(
+                    ScalarValue::Time32Second(Some(0)),
+                    ScalarValue::Time32Second(Some(10)),
+                ),
+                Interval::new(
+                    ScalarValue::Time32Second(Some(0)),
+                    ScalarValue::Time32Second(None),
+                ),
+            ),
+            (
+                Interval::new(
+                    TimestampSecond(Some(1), None),
+                    TimestampSecond(Some(10), None),
+                ),
+                Interval::new(
+                    TimestampSecond(Some(1), None),
+                    TimestampSecond(Some(10), None),
+                ),
+            ),
+            (
+                Interval::new(
+                    DurationSecond(Some(-10)),
+                    DurationSecond(Some(1)),
+                ),
+                Interval::new(
+                    DurationSecond(None),
+                    DurationSecond(Some(0)),
+                ),
+            ),
         ];
         for (first, second) in possibly_gteq_cases {
             assert_eq!(first.gt_eq(second.clone())?, Interval::UNCERTAIN);
@@ -2275,6 +2527,36 @@ mod tests {
                     next_value(ScalarValue::Float32(Some(-1.0))),
                 )?,
             ),
+            (
+                Interval::new(
+                    ScalarValue::Time32Second(Some(-10)),
+                    ScalarValue::Time32Second(Some(0)),
+                ),
+                Interval::new(
+                    ScalarValue::Time32Second(Some(1)),
+                    ScalarValue::Time32Second(Some(10)),
+                ),
+            ),
+            (
+                Interval::new(
+                    TimestampSecond(Some(5), None),
+                    TimestampSecond(Some(9), None),
+                ),
+                Interval::new(
+                    TimestampSecond(Some(10), None),
+                    TimestampSecond(Some(100), None),
+                ),
+            ),
+            (
+                Interval::new(
+                    DurationSecond(None),
+                    DurationSecond(Some(-1)),
+                ),
+                Interval::new(
+                    DurationSecond(Some(0)),
+                    DurationSecond(Some(1)),
+                ),
+            ),
         ];
         for (first, second) in not_gteq_cases {
             assert_eq!(first.gt_eq(second.clone())?, Interval::CERTAINLY_FALSE);
@@ -2302,6 +2584,46 @@ mod tests {
             (
                 Interval::make(Some(f64::MIN), Some(f64::MIN))?,
                 Interval::make(Some(f64::MIN), Some(f64::MIN))?,
+            ),
+            (
+                Interval::new(
+                    Date64(Some(1000)),
+                    Date64(Some(1000)),
+                ),
+                Interval::new(
+                    Date64(Some(1000)),
+                    Date64(Some(1000)),
+                ),
+            ),
+            (
+                Interval::new(
+                    Time32Millisecond(Some(1000)),
+                    Time32Millisecond(Some(1000)),
+                ),
+                Interval::new(
+                    Time32Millisecond(Some(1000)),
+                    Time32Millisecond(Some(1000)),
+                ),
+            ),
+            (
+                Interval::new(
+                    IntervalYearMonth(Some(10)),
+                    IntervalYearMonth(Some(10)),
+                ),
+                Interval::new(
+                    IntervalYearMonth(Some(10)),
+                    IntervalYearMonth(Some(10)),
+                ),
+            ),
+            (
+                Interval::new(
+                    DurationSecond(Some(10)),
+                    DurationSecond(Some(10)),
+                ),
+                Interval::new(
+                    DurationSecond(Some(10)),
+                    DurationSecond(Some(10)),
+                ),
             ),
         ];
         for (first, second) in exactly_eq_cases {
@@ -2488,6 +2810,17 @@ mod tests {
                 Interval::make(Some(32.0_f64), Some(64.0_f64))?,
                 Interval::make(Some(32.0_f64), Some(32.0_f64))?,
             ),
+            (
+                Interval::new(DurationSecond(Some(1)), DurationSecond(Some(10))),
+                Interval::new(
+                    DurationMillisecond(Some(1001)),
+                    DurationMillisecond(Some(1010)),
+                ),
+                Interval::new(
+                    DurationMillisecond(Some(1001)),
+                    DurationMillisecond(Some(1010)),
+                ),
+            ),
         ];
         for (first, second, expected) in possible_cases {
             assert_eq!(first.intersect(second)?.unwrap(), expected)
@@ -2533,6 +2866,107 @@ mod tests {
     }
 
     #[test]
+    fn test_union() -> Result<()> {
+        let possible_cases: Vec<(Interval, Interval, Interval)> = vec![
+            (
+                Interval::make(Some(1000_i64), None)?,
+                Interval::make::<i64>(None, None)?,
+                Interval::make(Some(1000_i64), None)?,
+            ),
+            (
+                Interval::make(Some(1000_i64), None)?,
+                Interval::make(Some(1000_i64), None)?,
+                Interval::make(Some(1000_i64), None)?,
+            ),
+            (
+                Interval::make(Some(1000_i64), None)?,
+                Interval::make(None, Some(2000_i64))?,
+                Interval::make(Some(1000_i64), Some(2000_i64))?,
+            ),
+            (
+                Interval::make::<i64>(None, None)?,
+                Interval::make(Some(1000_i64), Some(2000_i64))?,
+                Interval::make(Some(1000_i64), Some(2000_i64))?,
+            ),
+            (
+                Interval::make(Some(1000_i64), Some(2000_i64))?,
+                Interval::make::<i64>(None, None)?,
+                Interval::make(Some(1000_i64), Some(2000_i64))?,
+            ),
+            (
+                Interval::make::<i64>(None, None)?,
+                Interval::make::<i64>(None, None)?,
+                Interval::make::<i64>(None, None)?,
+            ),
+            (
+                Interval::make(Some(1000_i64), Some(2000_i64))?,
+                Interval::make(Some(1000_i64), None)?,
+                Interval::make(Some(1000_i64), Some(2000_i64))?,
+            ),
+            (
+                Interval::make(Some(1000_i64), Some(2000_i64))?,
+                Interval::make(Some(1000_i64), Some(1500_i64))?,
+                Interval::make(Some(1000_i64), Some(2000_i64))?,
+            ),
+            (
+                Interval::make(Some(1000_i64), Some(2000_i64))?,
+                Interval::make(Some(500_i64), Some(1500_i64))?,
+                Interval::make(Some(500_i64), Some(2000_i64))?,
+            ),
+            (
+                Interval::make(Some(1000_i64), None)?,
+                Interval::make(None, Some(10_i64))?,
+                Interval::make(Some(10_i64), Some(1000_i64))?,
+            ),
+            (
+                Interval::make(Some(1000_i64), None)?,
+                Interval::make(Some(1_i64), Some(10_i64))?,
+                Interval::make(Some(1_i64), Some(1000_i64))?,
+            ),
+            (
+                Interval::make(None, Some(2000_u64))?,
+                Interval::make(Some(500_u64), None)?,
+                Interval::make(Some(0_u64), Some(2000_u64))?,
+            ),
+            (
+                Interval::make(Some(0_u64), Some(0_u64))?,
+                Interval::make(Some(0_u64), None)?,
+                Interval::make(Some(0_u64), Some(0_u64))?,
+            ),
+            (
+                Interval::make(Some(1000.0_f32), None)?,
+                Interval::make(None, Some(1000.0_f32))?,
+                Interval::make(Some(1000.0_f32), Some(1000.0_f32))?,
+            ),
+            (
+                Interval::make(Some(1000.0_f32), Some(1500.0_f32))?,
+                Interval::make(Some(0.0_f32), Some(1500.0_f32))?,
+                Interval::make(Some(0.0_f32), Some(1500.0_f32))?,
+            ),
+            (
+                Interval::make(Some(-1000.0_f64), Some(1500.0_f64))?,
+                Interval::make(Some(-1500.0_f64), Some(2000.0_f64))?,
+                Interval::make(Some(-1500.0_f64), Some(2000.0_f64))?,
+            ),
+            (
+                Interval::make(Some(16.0_f64), Some(32.0_f64))?,
+                Interval::make(Some(32.0_f64), Some(64.0_f64))?,
+                Interval::make(Some(16.0_f64), Some(64.0_f64))?,
+            ),
+            (
+                Interval::new(DurationSecond(Some(1)), DurationSecond(Some(10))),
+                Interval::new(DurationSecond(Some(10)), DurationSecond(Some(100))),
+                Interval::new(DurationSecond(Some(1)), DurationSecond(Some(100))),
+            ),
+        ];
+        for (first, second, expected) in possible_cases {
+            assert_eq!(first.union(second.clone())?.unwrap(), expected)
+        }
+
+        Ok(())
+    }
+
+    #[test]
     fn test_contains() -> Result<()> {
         let possible_cases = vec![
             (
@@ -2543,6 +2977,28 @@ mod tests {
             (
                 Interval::make(Some(1500_i64), Some(2000_i64))?,
                 Interval::make(Some(1501_i64), Some(1999_i64))?,
+                Interval::CERTAINLY_TRUE,
+            ),
+            (
+                Interval::new(
+                    TimestampSecond(Some(1), None),
+                    TimestampSecond(Some(10), None),
+                ),
+                Interval::new(
+                    TimestampSecond(Some(2), None),
+                    TimestampSecond(Some(5), None),
+                ),
+                Interval::CERTAINLY_TRUE,
+            ),
+            (
+                Interval::new(
+                    DurationSecond(Some(0)),
+                    DurationSecond(Some(600)),
+                ),
+                Interval::new(
+                    DurationSecond(Some(1)),
+                    DurationSecond(Some(599)),
+                ),
                 Interval::CERTAINLY_TRUE,
             ),
             (
@@ -2584,6 +3040,17 @@ mod tests {
                     next_value(ScalarValue::Float32(Some(1.0))),
                 )?,
                 Interval::make(Some(1.0_f32), Some(1.0_f32))?,
+                Interval::CERTAINLY_FALSE,
+            ),
+            (
+                Interval::new(
+                    ScalarValue::Time32Second(Some(0)),
+                    ScalarValue::Time32Second(Some(60)),
+                ),
+                Interval::new(
+                    ScalarValue::Time32Second(Some(61)),
+                    ScalarValue::Time32Second(Some(120)),
+                ),
                 Interval::CERTAINLY_FALSE,
             ),
         ];
@@ -2661,6 +3128,41 @@ mod tests {
                 Interval::make(None, Some(100_f64))?,
                 Interval::make(None, Some(200_f64))?,
                 Interval::make(None, Some(300_f64))?,
+            ),
+            (
+                Interval::new(
+                    TimestampSecond(Some(100), None),
+                    TimestampSecond(Some(200), None),
+                ),
+                Interval::new(DurationSecond(Some(100)), DurationSecond(Some(200))),
+                Interval::new(
+                    TimestampSecond(Some(200), None),
+                    TimestampSecond(Some(400), None),
+                ),
+            ),
+            (
+                Interval::new(Date32(Some(100)), Date32(Some(100))),
+                Interval::new(
+                    IntervalDayTime(Some(ArrowIntervalDayTime {
+                        days: 1,
+                        milliseconds: 0,
+                    })),
+                    IntervalDayTime(Some(ArrowIntervalDayTime {
+                        days: 10,
+                        milliseconds: 0,
+                    })),
+                ),
+                Interval::new(Date32(Some(101)), Date32(Some(110))),
+            ),
+            (
+                Interval::new(DurationSecond(Some(100)), DurationSecond(Some(100))),
+                Interval::new(DurationSecond(Some(100)), DurationSecond(Some(100))),
+                Interval::new(DurationSecond(Some(200)), DurationSecond(Some(200))),
+            ),
+            (
+                Interval::new(IntervalYearMonth(Some(100)), IntervalYearMonth(Some(100))),
+                Interval::new(IntervalYearMonth(Some(100)), IntervalYearMonth(Some(100))),
+                Interval::new(IntervalYearMonth(Some(200)), IntervalYearMonth(Some(200))),
             ),
         ];
         for case in cases {

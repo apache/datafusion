@@ -28,6 +28,7 @@ use arrow::{
     datatypes::{DataType, Schema},
     record_batch::RecordBatch,
 };
+use arrow_schema::SchemaRef;
 use datafusion_common::{plan_err, Result};
 use datafusion_expr::interval_arithmetic::Interval;
 use datafusion_expr::sort_properties::ExprProperties;
@@ -120,6 +121,10 @@ impl PhysicalExpr for NegativeExpr {
             children[0].upper().arithmetic_negate()?,
             children[0].lower().arithmetic_negate()?,
         )
+    }
+
+    fn supports_bounds_evaluation(&self, schema: &SchemaRef) -> bool {
+        self.arg().supports_bounds_evaluation(schema)
     }
 
     /// Returns a new [`Interval`] of a NegativeExpr  that has the existing `interval` given that

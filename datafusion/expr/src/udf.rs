@@ -23,7 +23,7 @@ use crate::sort_properties::{ExprProperties, SortProperties};
 use crate::{
     ColumnarValue, Documentation, Expr, ScalarFunctionImplementation, Signature,
 };
-use arrow::datatypes::DataType;
+use arrow::datatypes::{DataType, SchemaRef};
 use datafusion_common::{not_impl_err, ExprSchema, Result, ScalarValue};
 use datafusion_expr_common::interval_arithmetic::Interval;
 use std::any::Any;
@@ -279,6 +279,11 @@ impl ScalarUDF {
     /// then the output interval would be `[0, 3]`.
     pub fn evaluate_bounds(&self, inputs: &[&Interval]) -> Result<Interval> {
         self.inner.evaluate_bounds(inputs)
+    }
+
+    /// Indicates whether this ['ScalarUDF'] supports interval arithmetic.
+    pub fn supports_bounds_evaluation(&self, schema: &SchemaRef) -> bool {
+        self.inner.supports_bounds_evaluation(schema)
     }
 
     /// Updates bounds for child expressions, given a known interval for this
@@ -733,9 +738,18 @@ pub trait ScalarUDFImpl: Debug + Send + Sync {
     ///
     /// If the function is `ABS(a)`, and the input interval is `a: [-3, 2]`,
     /// then the output interval would be `[0, 3]`.
-    fn evaluate_bounds(&self, _input: &[&Interval]) -> Result<Interval> {
-        // We cannot assume the input datatype is the same of output type.
-        Interval::make_unbounded(&DataType::Null)
+    fn evaluate_bounds(&self, input: &[&Interval]) -> Result<Interval> {
+        let input_data_types = input
+            .iter()
+            .map(|i| i.data_type())
+            .collect::<Vec<DataType>>();
+        let return_type = self.return_type(&input_data_types)?;
+        Interval::make_unbounded(&return_type)
+    }
+
+    /// Indicates whether this ['ScalarUDFImpl'] supports interval arithmetic.
+    fn supports_bounds_evaluation(&self, _schema: &SchemaRef) -> bool {
+        false
     }
 
     /// Updates bounds for child expressions, given a known interval for this

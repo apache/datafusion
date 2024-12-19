@@ -1484,6 +1484,7 @@ fn null_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use arrow::datatypes::IntervalUnit::{MonthDayNano, YearMonth};
 
     use datafusion_common::assert_contains;
 
@@ -1870,6 +1871,35 @@ mod tests {
             DataType::UInt32,
             Operator::BitwiseAnd,
             DataType::UInt32
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_type_coercion_temporal() -> Result<()> {
+        test_coercion_binary_rule!(
+            DataType::Duration(TimeUnit::Second),
+            DataType::Duration(TimeUnit::Second),
+            Operator::Plus,
+            DataType::Duration(TimeUnit::Second)
+        );
+        test_coercion_binary_rule!(
+            DataType::Duration(TimeUnit::Second),
+            DataType::Duration(TimeUnit::Nanosecond),
+            Operator::Plus,
+            DataType::Duration(TimeUnit::Nanosecond)
+        );
+        test_coercion_binary_rule!(
+            DataType::Interval(YearMonth),
+            DataType::Interval(YearMonth),
+            Operator::Plus,
+            DataType::Interval(YearMonth)
+        );
+        test_coercion_binary_rule!(
+            DataType::Interval(YearMonth),
+            DataType::Interval(MonthDayNano),
+            Operator::Plus,
+            DataType::Interval(MonthDayNano)
         );
         Ok(())
     }

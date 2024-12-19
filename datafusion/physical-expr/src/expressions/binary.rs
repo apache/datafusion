@@ -376,6 +376,22 @@ impl PhysicalExpr for BinaryExpr {
         ))
     }
 
+    fn supports_bounds_evaluation(&self, schema: &SchemaRef) -> bool {
+        // Interval data types must be compatible for the given operation
+        if let (Ok(lhs), Ok(rhs)) = (
+            self.left.data_type(schema.as_ref()),
+            self.right.data_type(schema.as_ref()),
+        ) {
+            if BinaryTypeCoercer::new(&lhs, &self.op, &rhs).get_result_type().is_err() {
+                return false;
+            }
+        }
+
+        self.op().supports_bounds_evaluation()
+            && self.left.supports_bounds_evaluation(schema)
+            && self.right.supports_bounds_evaluation(schema)
+    }
+
     fn evaluate_bounds(&self, children: &[&Interval]) -> Result<Interval> {
         // Get children intervals:
         let left_interval = children[0];
