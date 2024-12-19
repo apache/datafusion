@@ -186,7 +186,7 @@ async fn test_full_join_1k_filtered() {
 }
 
 #[tokio::test]
-async fn test_semi_join_1k() {
+async fn test_left_semi_join_1k() {
     JoinFuzzTestCase::new(
         make_staggered_batches(1000),
         make_staggered_batches(1000),
@@ -198,7 +198,7 @@ async fn test_semi_join_1k() {
 }
 
 #[tokio::test]
-async fn test_semi_join_1k_filtered() {
+async fn test_left_semi_join_1k_filtered() {
     JoinFuzzTestCase::new(
         make_staggered_batches(1000),
         make_staggered_batches(1000),
@@ -206,6 +206,30 @@ async fn test_semi_join_1k_filtered() {
         Some(Box::new(col_lt_col_filter)),
     )
     .run_test(&[HjSmj, NljHj], false)
+    .await
+}
+
+#[tokio::test]
+async fn test_right_semi_join_1k() {
+    JoinFuzzTestCase::new(
+        make_staggered_batches(1000),
+        make_staggered_batches(1000),
+        JoinType::RightSemi,
+        None,
+    )
+    .run_test(&[HjSmj, NljHj], true)
+    .await
+}
+
+#[tokio::test]
+async fn test_right_semi_join_1k_filtered() {
+    JoinFuzzTestCase::new(
+        make_staggered_batches(1000),
+        make_staggered_batches(1000),
+        JoinType::RightSemi,
+        Some(Box::new(col_lt_col_filter)),
+    )
+    .run_test(&[HjSmj, NljHj], true)
     .await
 }
 
