@@ -63,7 +63,7 @@ use substrait::proto::expression::literal::{
 };
 use substrait::proto::expression::subquery::InPredicate;
 use substrait::proto::expression::window_function::BoundsType;
-use substrait::proto::read_rel::VirtualTable;
+use substrait::proto::read_rel::{ExtensionTable, VirtualTable};
 use substrait::proto::rel_common::EmitKind;
 use substrait::proto::rel_common::EmitKind::Emit;
 use substrait::proto::{
@@ -211,6 +211,23 @@ pub fn to_substrait_rel(
             let table_schema = scan.source.schema().to_dfschema_ref()?;
             let base_schema = to_substrait_named_struct(&table_schema)?;
 
+            let table = if let Ok(bytes) = state
+                .serializer_registry()
+                .serialize_custom_table(scan.source.as_ref())
+            {
+                ReadType::ExtensionTable(ExtensionTable {
+                    detail: Some(ProtoAny {
+                        type_url: scan.table_name.to_string(),
+                        value: bytes.into(),
+                    }),
+                })
+            } else {
+                ReadType::NamedTable(NamedTable {
+                    names: scan.table_name.to_vec(),
+                    advanced_extension: None,
+                })
+            };
+
             Ok(Box::new(Rel {
                 rel_type: Some(RelType::Read(Box::new(ReadRel {
                     common: None,
@@ -219,10 +236,7 @@ pub fn to_substrait_rel(
                     best_effort_filter: None,
                     projection,
                     advanced_extension: None,
-                    read_type: Some(ReadType::NamedTable(NamedTable {
-                        names: scan.table_name.to_vec(),
-                        advanced_extension: None,
-                    })),
+                    read_type: Some(table),
                 }))),
             }))
         }
@@ -2215,7 +2229,8 @@ mod test {
     use super::*;
     use crate::logical_plan::consumer::{
         from_substrait_extended_expr, from_substrait_literal_without_names,
-        from_substrait_named_struct, from_substrait_type_without_names,
+        from_substrait_named_struct, from_substrait_plan,
+        from_substrait_type_without_names,
     };
     use arrow_buffer::{IntervalDayTime, IntervalMonthDayNano};
     use datafusion::arrow::array::{
@@ -2223,8 +2238,13 @@ mod test {
     };
     use datafusion::arrow::datatypes::{Field, Fields, Schema};
     use datafusion::common::scalar::ScalarStructBuilder;
-    use datafusion::common::DFSchema;
+    use datafusion::common::{assert_contains, DFSchema};
+    use datafusion::datasource::empty::EmptyTable;
+    use datafusion::datasource::{DefaultTableSource, TableProvider};
+    use datafusion::execution::registry::SerializerRegistry;
     use datafusion::execution::SessionStateBuilder;
+    use datafusion::logical_expr::TableSource;
+    use datafusion::prelude::SessionContext;
 
     #[test]
     fn round_trip_literals() -> Result<()> {
@@ -2550,5 +2570,111 @@ mod test {
         let err = to_substrait_extended_expr(&[(&expr, &field)], &empty_schema, &state);
 
         assert!(matches!(err, Err(DataFusionError::SchemaError(_, _))));
+    }
+
+    #[tokio::test]
+    async fn round_trip_extension_table() {
+        const TABLE_NAME: &str = "custom_table";
+        const SERIALIZED: &[u8] = "table definition".as_bytes();
+
+        fn custom_table() -> Arc<dyn TableProvider> {
+            Arc::new(EmptyTable::new(Arc::new(Schema::new([
+                Arc::new(Field::new("id", DataType::Int32, false)),
+                Arc::new(Field::new("name", DataType::Utf8, false)),
+            ]))))
+        }
+
+        #[derive(Debug)]
+        struct Registry;
+        impl SerializerRegistry for Registry {
+            fn serialize_custom_table(&self, table: &dyn TableSource) -> Result<Vec<u8>> {
+                if table.schema() == custom_table().schema() {
+                    Ok(SERIALIZED.to_vec())
+                } else {
+                    Err(DataFusionError::Internal("Not our table".into()))
+                }
+            }
+            fn deserialize_custom_table(
+                &self,
+                name: &str,
+                bytes: &[u8],
+            ) -> Result<Arc<dyn TableSource>> {
+                if name == TABLE_NAME && bytes == SERIALIZED {
+                    Ok(Arc::new(DefaultTableSource::new(custom_table())))
+                } else {
+                    panic!("Unexpected extension table: {name}");
+                }
+            }
+        }
+
+        async fn round_trip_logical_plans(
+            local: &SessionContext,
+            remote: &SessionContext,
+        ) -> Result<()> {
+            local.register_table(TABLE_NAME, custom_table())?;
+            remote.table_provider(TABLE_NAME).await.expect_err(
+                "The remote context is not supposed to know about custom_table",
+            );
+            let initial_plan = local
+                .sql(&format!("select id from {TABLE_NAME}"))
+                .await?
+                .logical_plan()
+                .clone();
+
+            // write substrait locally
+            let substrait = to_substrait_plan(&initial_plan, &local.state())?;
+
+            // read substrait remotely
+            // since we know there's no `custom_table` registered in the remote context, this will only succeed
+            // if our table got encoded as an ExtensionTable and is now decoded back to a table source.
+            let restored = from_substrait_plan(&remote.state(), &substrait).await?;
+            assert_contains!(
+                // confirm that the Substrait plan contains our custom_table as an ExtensionTable
+                serde_json::to_string(substrait.as_ref()).unwrap(),
+                format!(r#""extensionTable":{{"detail":{{"typeUrl":"{TABLE_NAME}","#)
+            );
+            remote // make sure the restored plan is fully working in the remote context
+                .execute_logical_plan(restored.clone())
+                .await?
+                .collect()
+                .await
+                .expect("Restored plan cannot be executed remotely");
+            assert_eq!(
+                // check that the restored plan is functionally equivalent (and almost identical) to the initial one
+                initial_plan.to_string(),
+                restored.to_string().replace(
+                    // substrait will add an explicit full-schema projection if the original table had none
+                    &format!("TableScan: {TABLE_NAME} projection=[id, name]"),
+                    &format!("TableScan: {TABLE_NAME}"),
+                )
+            );
+            Ok(())
+        }
+
+        // take 1
+        let failed_attempt =
+            round_trip_logical_plans(&SessionContext::new(), &SessionContext::new())
+                .await
+                .expect_err(
+                    "The round trip should fail in the absence of a SerializerRegistry",
+                );
+        assert_contains!(
+            failed_attempt.message(),
+            format!("No table named '{TABLE_NAME}'")
+        );
+
+        // take 2
+        fn proper_context() -> SessionContext {
+            SessionContext::new_with_state(
+                SessionStateBuilder::new()
+                    // This will transport our custom_table as a Substrait ExtensionTable
+                    .with_serializer_registry(Arc::new(Registry))
+                    .build(),
+            )
+        }
+
+        round_trip_logical_plans(&proper_context(), &proper_context())
+            .await
+            .expect("Local plan could not be restored remotely");
     }
 }
