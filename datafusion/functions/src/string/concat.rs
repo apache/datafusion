@@ -305,6 +305,7 @@ pub fn simplify_concat(args: Vec<Expr>) -> Result<ExprSimplifyResult> {
                 _ => None,
             })
             .collect();
+        #[allow(deprecated)]
         ConcatFunc::new().return_type(&data_types)
     }?;
 
