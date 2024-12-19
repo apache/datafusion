@@ -120,7 +120,6 @@ impl RuntimeEnv {
     ///
     /// # Example: Register remote URL object store like [Github](https://github.com)
     ///
-    /// To register reading from urls such as <https://github.com>
     ///
     /// ```
     /// # use std::sync::Arc;
