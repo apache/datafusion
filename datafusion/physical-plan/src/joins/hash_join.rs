@@ -90,6 +90,11 @@ struct JoinLeftData {
     /// Counter of running probe-threads, potentially
     /// able to update `visited_indices_bitmap`
     probe_threads_counter: AtomicUsize,
+    /// We need to keep this field to maintain accurate memory accounting, even though we don't directly use it.
+    /// Without holding onto this reservation, the recorded memory usage would become inconsistent with actual usage.
+    /// This could hide potential out-of-memory issues, especially when upstream operators increase their memory consumption.
+    /// The MemoryReservation ensures proper tracking of memory resources throughout the join operation's lifecycle.
+    _reservation: MemoryReservation,
 }
 
 impl JoinLeftData {
@@ -99,12 +104,14 @@ impl JoinLeftData {
         batch: RecordBatch,
         visited_indices_bitmap: SharedBitmapBuilder,
         probe_threads_counter: AtomicUsize,
+        reservation: MemoryReservation,
     ) -> Self {
         Self {
             hash_map,
             batch,
             visited_indices_bitmap,
             probe_threads_counter,
+            _reservation: reservation,
         }
     }
 
@@ -897,6 +904,7 @@ async fn collect_left_input(
         single_batch,
         Mutex::new(visited_indices_bitmap),
         AtomicUsize::new(probe_threads_count),
+        reservation,
     );
 
     Ok(data)

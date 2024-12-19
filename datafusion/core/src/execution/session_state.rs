@@ -296,7 +296,7 @@ impl SessionState {
     }
 
     /// Retrieve the [`SchemaProvider`] for a specific [`TableReference`], if it
-    /// esists.
+    /// exists.
     pub fn schema_for_ref(
         &self,
         table_ref: impl Into<TableReference>,

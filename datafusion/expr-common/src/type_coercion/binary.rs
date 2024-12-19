@@ -642,7 +642,7 @@ pub fn comparison_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<D
         .or_else(|| struct_coercion(lhs_type, rhs_type))
 }
 
-// Similar to comparison_coercion but prefer numeric if compares with numeric and string
+/// Similar to [`comparison_coercion`] but prefer numeric if compares with numeric and string
 pub fn comparison_coercion_numeric(
     lhs_type: &DataType,
     rhs_type: &DataType,
