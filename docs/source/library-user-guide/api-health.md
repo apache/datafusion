@@ -70,10 +70,10 @@ Deprecated methods will remain in the codebase for a period of 6 major versions 
 
 Please refer to [DataFusion releases](https://crates.io/crates/datafusion/versions) to plan ahead API migration
 
-
 ## Migration Guidelines
 
-To ensure smooth upgrades and maintain application stability, the following guidelines must be followed for changes involving: 
+To ensure smooth upgrades and maintain application stability, the following guidelines must be followed for changes involving:
+
 - Public API changes
 - Introducing deprecated methods
 - Removal of obsolete methods
@@ -85,13 +85,16 @@ Highlight all breaking changes, deprecated methods, and obsolete methods in the 
 For each upgrade, append a section in [migration guide](../../../MIGRATION_GUIDE.md) outlining the following:
 
 #### Breaking Changes:
+
 - Describe all changes that break backward compatibility.
 - Provide detailed steps to migrate from old to new APIs.
 
 #### Deprecations:
+
 - List all deprecated methods and expected removal timelines.
 - Provide alternative methods or workarounds.
 
 #### Removals:
+
 - List all methods or APIs that are removed in the current release.
 - Suggest migration paths for impacted functionalities
