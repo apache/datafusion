@@ -172,3 +172,15 @@ def
 
 statement ok
 drop table vals;
+
+# test numeric_string_conversion
+statement ok
+create table foo as values (arrow_cast('1', 'Utf8View')), (arrow_cast('2', 'Utf8View'));
+
+query T
+select column1 = 1 from foo1;
+----
+
+
+statement ok 
+drop table foo;
