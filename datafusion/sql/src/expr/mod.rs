@@ -20,7 +20,6 @@ use arrow_schema::TimeUnit;
 use datafusion_expr::planner::{
     PlannerResult, RawBinaryExpr, RawDictionaryExpr, RawFieldAccessExpr,
 };
-use recursive::recursive;
 use sqlparser::ast::{
     BinaryOperator, CastFormat, CastKind, DataType as SQLDataType, DictionaryField,
     Expr as SQLExpr, ExprWithAlias as SQLExprWithAlias, MapEntry, StructField, Subscript,
@@ -197,7 +196,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
 
     /// Internal implementation. Use
     /// [`Self::sql_expr_to_logical_expr`] to plan exprs.
-    #[recursive]
+    #[cfg_attr(feature = "recursive-protection", recursive::recursive)]
     fn sql_expr_to_logical_expr_internal(
         &self,
         sql: SQLExpr,

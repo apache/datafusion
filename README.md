@@ -112,7 +112,8 @@ Default features:
 - `parquet`: support for reading the [Apache Parquet] format
 - `regex_expressions`: regular expression functions, such as `regexp_match`
 - `unicode_expressions`: Include unicode aware functions such as `character_length`
-- `unparser` : enables support to reverse LogicalPlans back into SQL
+- `unparser`: enables support to reverse LogicalPlans back into SQL
+- `recursive-protection`: uses [recursive](https://docs.rs/recursive/latest/recursive/) for stack overflow protection.
 
 Optional features:
 

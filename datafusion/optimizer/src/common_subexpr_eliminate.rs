@@ -22,7 +22,6 @@ use std::fmt::Debug;
 use std::sync::Arc;
 
 use crate::{OptimizerConfig, OptimizerRule};
-use recursive::recursive;
 
 use crate::optimizer::ApplyOrder;
 use crate::utils::NamePreserver;
@@ -532,7 +531,7 @@ impl OptimizerRule for CommonSubexprEliminate {
         None
     }
 
-    #[recursive]
+    #[cfg_attr(feature = "recursive-protection", recursive::recursive)]
     fn rewrite(
         &self,
         plan: LogicalPlan,
@@ -951,7 +950,7 @@ mod test {
             )?
             .build()?;
 
-        let expected ="Aggregate: groupBy=[[]], aggr=[[avg(__common_expr_1) AS col1, my_agg(__common_expr_1) AS col2]]\
+        let expected = "Aggregate: groupBy=[[]], aggr=[[avg(__common_expr_1) AS col1, my_agg(__common_expr_1) AS col2]]\
         \n  Projection: UInt32(1) + test.a AS __common_expr_1, test.a, test.b, test.c\
         \n    TableScan: test";
 
