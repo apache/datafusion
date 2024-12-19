@@ -172,6 +172,7 @@ Some things to specifically check:
 
 1. Is the feature or fix covered sufficiently with tests (see the [Testing](testing.md) section)?
 2. Is the code clear, and fits the style of the existing codebase?
+3. Does the PR introduce a [breaking change](https://datafusion.apache.org/library-user-guide/api-health.html#breaking-changes)? If so the `api_change` Github badge needs to be added to the PR and migration documentation need to reflect changes according to [Migration Guidelines](https://datafusion.apache.org/library-user-guide/api-health.html#migration-guidelines)
 
 ## Performance Improvements
 
