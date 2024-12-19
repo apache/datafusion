@@ -517,7 +517,7 @@ impl EquivalenceProperties {
         }
     }
 
-    /// Checks whether the `given`` sort requirements are equal or more specific
+    /// Checks whether the `given` sort requirements are equal or more specific
     /// than the `reference` sort requirements.
     pub fn requirements_compatible(
         &self,
