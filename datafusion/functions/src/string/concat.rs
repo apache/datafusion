@@ -267,7 +267,7 @@ impl ScalarUDFImpl for ConcatFunc {
         Some(get_concat_doc())
     }
 
-    fn output_preserves_lex_ordering(&self, _inputs: &[ExprProperties]) -> Result<bool> {
+    fn preserves_lex_ordering(&self, _inputs: &[ExprProperties]) -> Result<bool> {
         Ok(true)
     }
 }

@@ -303,11 +303,8 @@ impl ScalarUDF {
         self.inner.output_ordering(inputs)
     }
 
-    pub fn output_preserves_lex_ordering(
-        &self,
-        inputs: &[ExprProperties],
-    ) -> Result<bool> {
-        self.inner.output_preserves_lex_ordering(inputs)
+    pub fn preserves_lex_ordering(&self, inputs: &[ExprProperties]) -> Result<bool> {
+        self.inner.preserves_lex_ordering(inputs)
     }
 
     /// See [`ScalarUDFImpl::coerce_types`] for more details.
@@ -660,7 +657,7 @@ pub trait ScalarUDFImpl: Debug + Send + Sync {
     /// Calculates the [`SortProperties`] of this function based on its
     /// children's properties.
     fn output_ordering(&self, inputs: &[ExprProperties]) -> Result<SortProperties> {
-        if !self.output_preserves_lex_ordering(inputs)? {
+        if !self.preserves_lex_ordering(inputs)? {
             return Ok(SortProperties::Unordered);
         }
 
@@ -680,7 +677,7 @@ pub trait ScalarUDFImpl: Debug + Send + Sync {
     }
 
     /// Whether the function preserves lexicographical ordering based on the input ordering
-    fn output_preserves_lex_ordering(&self, _inputs: &[ExprProperties]) -> Result<bool> {
+    fn preserves_lex_ordering(&self, _inputs: &[ExprProperties]) -> Result<bool> {
         Ok(false)
     }
 
@@ -837,8 +834,8 @@ impl ScalarUDFImpl for AliasedScalarUDFImpl {
         self.inner.output_ordering(inputs)
     }
 
-    fn output_preserves_lex_ordering(&self, inputs: &[ExprProperties]) -> Result<bool> {
-        self.inner.output_preserves_lex_ordering(inputs)
+    fn preserves_lex_ordering(&self, inputs: &[ExprProperties]) -> Result<bool> {
+        self.inner.preserves_lex_ordering(inputs)
     }
 
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
