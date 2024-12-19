@@ -31,7 +31,7 @@ use datafusion::logical_expr::expr::{Exists, InSubquery, Sort};
 
 use datafusion::logical_expr::{
     Aggregate, BinaryExpr, Case, EmptyRelation, Expr, ExprSchemable, LogicalPlan,
-    Operator, Projection, SortExpr, TryCast, Values,
+    Operator, Projection, SortExpr, TableScan, TryCast, Values,
 };
 use substrait::proto::aggregate_rel::Grouping;
 use substrait::proto::expression::subquery::set_predicate::PredicateOp;
@@ -994,8 +994,34 @@ pub async fn from_substrait_rel(
                     )
                     .await
                 }
-                _ => {
-                    not_impl_err!("Unsupported ReadType: {:?}", &read.as_ref().read_type)
+                Some(ReadType::ExtensionTable(ext)) => {
+                    if let Some(ext_detail) = &ext.detail {
+                        let source =
+                            state.serializer_registry().deserialize_custom_table(
+                                &ext_detail.type_url,
+                                &ext_detail.value,
+                            )?;
+                        let table_name = ext_detail
+                            .type_url
+                            .rsplit_once('/')
+                            .map(|(_, name)| name)
+                            .unwrap_or(&ext_detail.type_url);
+                        let plan = LogicalPlan::TableScan(TableScan::try_new(
+                            table_name,
+                            source,
+                            None,
+                            vec![],
+                            None,
+                        )?);
+                        let schema = apply_masking(substrait_schema, &read.projection)?;
+                        ensure_schema_compatability(plan.schema(), schema.clone())?;
+                        apply_projection(plan, schema)
+                    } else {
+                        substrait_err!("Unexpected empty detail in ExtensionTable")
+                    }
+                }
+                None => {
+                    substrait_err!("Unexpected empty read_type")
                 }
             }
         }
