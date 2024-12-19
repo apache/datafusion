@@ -22,6 +22,7 @@ use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
 use datafusion_expr::registry::FunctionRegistry;
+use datafusion_expr::{assert_expected_schema, InvariantLevel};
 use log::{debug, warn};
 
 use datafusion_common::alias::AliasGenerator;
@@ -355,6 +356,15 @@ impl Optimizer {
     where
         F: FnMut(&LogicalPlan, &dyn OptimizerRule),
     {
+        // verify LP is valid, before the first LP optimizer pass.
+        plan.check_invariants(InvariantLevel::Executable)
+            .map_err(|e| {
+                DataFusionError::Context(
+                    "check_plan_before_optimizers".to_string(),
+                    Box::new(e),
+                )
+            })?;
+
         let start_time = Instant::now();
         let options = config.options();
         let mut new_plan = plan;
@@ -384,9 +394,16 @@ impl Optimizer {
                     // rule handles recursion itself
                     None => optimize_plan_node(new_plan, rule.as_ref(), config),
                 }
-                // verify the rule didn't change the schema
                 .and_then(|tnr| {
-                    assert_schema_is_the_same(rule.name(), &starting_schema, &tnr.data)?;
+                    // verify after each optimizer pass.
+                    assert_valid_optimization(rule.name(), &tnr.data, &starting_schema)
+                        .map_err(|e| {
+                        DataFusionError::Context(
+                            "check_optimized_plan".to_string(),
+                            Box::new(e),
+                        )
+                    })?;
+
                     Ok(tnr)
                 });
 
@@ -445,35 +462,38 @@ impl Optimizer {
             }
             i += 1;
         }
+
+        // verify LP is valid, after the last optimizer pass.
+        new_plan
+            .check_invariants(InvariantLevel::Executable)
+            .map_err(|e| {
+                DataFusionError::Context(
+                    "check_plan_after_optimizers".to_string(),
+                    Box::new(e),
+                )
+            })?;
+
         log_plan("Final optimized plan", &new_plan);
         debug!("Optimizer took {} ms", start_time.elapsed().as_millis());
         Ok(new_plan)
     }
 }
 
-/// Returns an error if `new_plan`'s schema is different than `prev_schema`
+/// These are invariants which should hold true before and after each optimization.
 ///
-/// It ignores metadata and nullability.
-pub(crate) fn assert_schema_is_the_same(
+/// This differs from [`LogicalPlan::check_invariants`], which addresses if a singular
+/// LogicalPlan is valid. Instead this address if the optimization (before and after)
+/// is valid based upon permitted changes.
+fn assert_valid_optimization(
     rule_name: &str,
-    prev_schema: &DFSchema,
-    new_plan: &LogicalPlan,
+    plan: &LogicalPlan,
+    prev_schema: &Arc<DFSchema>,
 ) -> Result<()> {
-    let equivalent = new_plan.schema().equivalent_names_and_types(prev_schema);
+    // verify invariant: optimizer rule didn't change the schema
+    // Refer to <https://datafusion.apache.org/contributor-guide/specification/invariants.html#logical-schema-is-invariant-under-logical-optimization>
+    assert_expected_schema(rule_name, prev_schema, plan)?;
 
-    if !equivalent {
-        let e = DataFusionError::Internal(format!(
-            "Failed due to a difference in schemas, original schema: {:?}, new schema: {:?}",
-            prev_schema,
-            new_plan.schema()
-        ));
-        Err(DataFusionError::Context(
-            String::from(rule_name),
-            Box::new(e),
-        ))
-    } else {
-        Ok(())
-    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -529,7 +549,9 @@ mod tests {
         let err = opt.optimize(plan, &config, &observe).unwrap_err();
         assert_eq!(
             "Optimizer rule 'get table_scan rule' failed\n\
-            caused by\nget table_scan rule\ncaused by\n\
+            caused by\ncheck_optimized_plan\n\
+            caused by\nget table_scan rule\n\
+            caused by\n\
             Internal error: Failed due to a difference in schemas, \
             original schema: DFSchema { inner: Schema { \
             fields: [], \
