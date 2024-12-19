@@ -1618,7 +1618,7 @@ fn build_statistics_expr(
 /// will become
 ///
 /// ```sql
-/// NOT (x_null_count = x_row_count) AND (x_min <= 10 AND 10 <= x_max)
+/// x_null_count != x_row_count AND (x_min <= 10 AND 10 <= x_max)
 /// ````
 ///
 /// If the column is known to be all nulls, then the expression
