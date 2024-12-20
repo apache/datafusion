@@ -471,7 +471,9 @@ pub async fn from_substrait_rel(
     apply_emit_kind(retrieve_rel_common(relation), plan?)
 }
 
-/// Can be used to consume standard Substrait without user-defined extensions
+/// Default SubstraitConsumer for converting standard Substrait without user-defined extensions.
+///
+/// Used as the consumer in [from_substrait_plan]
 pub struct DefaultSubstraitConsumer<'a> {
     extensions: &'a Extensions,
     state: &'a SessionState,
