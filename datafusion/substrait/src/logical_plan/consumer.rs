@@ -117,21 +117,21 @@ use substrait::proto::{
 /// # Example Usage
 ///
 /// ```
-/// use async_trait::async_trait;
-/// use datafusion::catalog::TableProvider;
-/// use datafusion::common::{not_impl_err, substrait_err, DFSchema, ScalarValue, TableReference};
-/// use datafusion::error::Result;
-/// use datafusion::execution::{FunctionRegistry, SessionState};
-/// use datafusion::logical_expr::{Expr, LogicalPlan, LogicalPlanBuilder};
-/// use std::sync::Arc;
-/// use substrait::proto;
-/// use substrait::proto::{ExtensionLeafRel, FilterRel, ProjectRel};
-/// use datafusion::arrow::datatypes::DataType;
-/// use datafusion::logical_expr::expr::ScalarFunction;
-/// use datafusion_substrait::extensions::Extensions;
-/// use datafusion_substrait::logical_plan::consumer::{
-///     from_project_rel, from_substrait_rel, from_substrait_rex, SubstraitConsumer
-/// };
+/// # use async_trait::async_trait;
+/// # use datafusion::catalog::TableProvider;
+/// # use datafusion::common::{not_impl_err, substrait_err, DFSchema, ScalarValue, TableReference};
+/// # use datafusion::error::Result;
+/// # use datafusion::execution::{FunctionRegistry, SessionState};
+/// # use datafusion::logical_expr::{Expr, LogicalPlan, LogicalPlanBuilder};
+/// # use std::sync::Arc;
+/// # use substrait::proto;
+/// # use substrait::proto::{ExtensionLeafRel, FilterRel, ProjectRel};
+/// # use datafusion::arrow::datatypes::DataType;
+/// # use datafusion::logical_expr::expr::ScalarFunction;
+/// # use datafusion_substrait::extensions::Extensions;
+/// # use datafusion_substrait::logical_plan::consumer::{
+/// #     from_project_rel, from_substrait_rel, from_substrait_rex, SubstraitConsumer
+/// # };
 ///
 /// struct CustomSubstraitConsumer {
 ///     extensions: Arc<Extensions>,
