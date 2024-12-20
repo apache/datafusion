@@ -123,7 +123,7 @@ pub fn placeholder(id: impl Into<String>) -> Expr {
 pub fn wildcard() -> Expr {
     Expr::Wildcard {
         qualifier: None,
-        options: WildcardOptions::default(),
+        options: Box::new(WildcardOptions::default()),
     }
 }
 
@@ -131,7 +131,7 @@ pub fn wildcard() -> Expr {
 pub fn wildcard_with_options(options: WildcardOptions) -> Expr {
     Expr::Wildcard {
         qualifier: None,
-        options,
+        options: Box::new(options),
     }
 }
 
@@ -148,7 +148,7 @@ pub fn wildcard_with_options(options: WildcardOptions) -> Expr {
 pub fn qualified_wildcard(qualifier: impl Into<TableReference>) -> Expr {
     Expr::Wildcard {
         qualifier: Some(qualifier.into()),
-        options: WildcardOptions::default(),
+        options: Box::new(WildcardOptions::default()),
     }
 }
 
@@ -159,7 +159,7 @@ pub fn qualified_wildcard_with_options(
 ) -> Expr {
     Expr::Wildcard {
         qualifier: Some(qualifier.into()),
-        options,
+        options: Box::new(options),
     }
 }
 
