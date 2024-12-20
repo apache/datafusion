@@ -63,6 +63,10 @@ log = { workspace = true }
 parking_lot = { workspace = true }
 pin-project-lite = "^0.2.7"
 tokio = { workspace = true }
+# todo figure out if we need to use tokio_stream / could use record batch receiver stream
+tokio-stream = {version = "0.1"}
+object_store = { workspace = true }
+
 
 [dev-dependencies]
 criterion = { version = "0.5", features = ["async_futures"] }
