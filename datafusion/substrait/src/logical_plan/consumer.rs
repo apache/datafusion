@@ -224,6 +224,7 @@ pub trait SubstraitConsumer: Send + Sync + Sized {
     //   Ideally, the abstract consumer should not place any constraints on implementations.
     //   The functionality for which the Extensions and FunctionRegistry is needed should be abstracted
     //   out into methods on the trait. As an example, resolve_table_reference is such a method.
+    //   See: https://github.com/apache/datafusion/issues/13863
     fn get_extensions(&self) -> &Extensions;
     fn get_function_registry(&self) -> &impl FunctionRegistry;
 
