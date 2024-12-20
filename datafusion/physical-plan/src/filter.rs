@@ -41,7 +41,7 @@ use datafusion_common::{
 use datafusion_execution::TaskContext;
 use datafusion_expr::Operator;
 use datafusion_physical_expr::equivalence::ProjectionMapping;
-use datafusion_physical_expr::expressions::BinaryExpr;
+use datafusion_physical_expr::expressions::{BinaryExpr, Literal};
 use datafusion_physical_expr::intervals::utils::check_support;
 use datafusion_physical_expr::utils::collect_columns;
 use datafusion_physical_expr::{
@@ -218,13 +218,29 @@ impl FilterExec {
                 if binary.op() == &Operator::Eq {
                     // Filter evaluates to single value for all partitions
                     if input_eqs.is_expr_constant(binary.left()) {
-                        res_constants.push(
-                            ConstExpr::from(binary.right()).with_across_partitions(true),
-                        )
+                        // When left side is constant, extract value from right side if it's a literal
+                        let (expr, lit) = (
+                            binary.right(),
+                            binary.right().as_any().downcast_ref::<Literal>(),
+                        );
+                        let mut const_expr =
+                            ConstExpr::from(expr).with_across_partitions(true);
+                        if let Some(lit) = lit {
+                            const_expr = const_expr.with_value(lit.value().clone());
+                        }
+                        res_constants.push(const_expr);
                     } else if input_eqs.is_expr_constant(binary.right()) {
-                        res_constants.push(
-                            ConstExpr::from(binary.left()).with_across_partitions(true),
-                        )
+                        // When right side is constant, extract value from left side if it's a literal
+                        let (expr, lit) = (
+                            binary.left(),
+                            binary.left().as_any().downcast_ref::<Literal>(),
+                        );
+                        let mut const_expr =
+                            ConstExpr::from(expr).with_across_partitions(true);
+                        if let Some(lit) = lit {
+                            const_expr = const_expr.with_value(lit.value().clone());
+                        }
+                        res_constants.push(const_expr);
                     }
                 }
             }
@@ -252,8 +268,15 @@ impl FilterExec {
             .into_iter()
             .filter(|column| stats.column_statistics[column.index()].is_singleton())
             .map(|column| {
+                let value = stats.column_statistics[column.index()]
+                    .min_value
+                    .get_value();
                 let expr = Arc::new(column) as _;
-                ConstExpr::new(expr).with_across_partitions(true)
+                let mut const_expr = ConstExpr::new(expr).with_across_partitions(true);
+                if let Some(value) = value {
+                    const_expr = const_expr.with_value(value.clone());
+                }
+                const_expr
             });
         // This is for statistics
         eq_properties = eq_properties.with_constants(constants);
