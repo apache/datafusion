@@ -358,12 +358,15 @@ pub fn parse_physical_expr(
 
             let args = parse_physical_exprs(&e.args, registry, input_schema, codec)?;
 
-            Arc::new(ScalarFunctionExpr::new(
-                e.name.as_str(),
-                scalar_fun_def,
-                args,
-                convert_required!(e.return_type)?,
-            ))
+            Arc::new(
+                ScalarFunctionExpr::new(
+                    e.name.as_str(),
+                    scalar_fun_def,
+                    args,
+                    convert_required!(e.return_type)?,
+                )
+                .with_nullable(e.nullable),
+            )
         }
         ExprType::LikeExpr(like_expr) => Arc::new(LikeExpr::new(
             like_expr.negated,

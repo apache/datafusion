@@ -272,7 +272,13 @@ impl ExecutionPlan for ForeignExecutionPlan {
 
 #[cfg(test)]
 mod tests {
-    use datafusion::{physical_plan::Partitioning, prelude::SessionContext};
+    use datafusion::{
+        physical_plan::{
+            execution_plan::{Boundedness, EmissionType},
+            Partitioning,
+        },
+        prelude::SessionContext,
+    };
 
     use super::*;
 
@@ -287,7 +293,8 @@ mod tests {
                 props: PlanProperties::new(
                     datafusion::physical_expr::EquivalenceProperties::new(schema),
                     Partitioning::UnknownPartitioning(3),
-                    datafusion::physical_plan::ExecutionMode::Unbounded,
+                    EmissionType::Incremental,
+                    Boundedness::Bounded,
                 ),
             }
         }

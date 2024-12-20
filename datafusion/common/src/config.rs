@@ -30,7 +30,9 @@ use crate::{DataFusionError, Result};
 
 /// A macro that wraps a configuration struct and automatically derives
 /// [`Default`] and [`ConfigField`] for it, allowing it to be used
-/// in the [`ConfigOptions`] configuration tree
+/// in the [`ConfigOptions`] configuration tree.
+///
+/// `transform` is used to normalize values before parsing.
 ///
 /// For example,
 ///
@@ -113,7 +115,7 @@ macro_rules! config_namespace {
      $vis:vis struct $struct_name:ident {
         $(
         $(#[doc = $d:tt])*
-        $field_vis:vis $field_name:ident : $field_type:ty, $(transform = $transform:expr,)? default = $default:expr
+        $field_vis:vis $field_name:ident : $field_type:ty, $(warn = $warn: expr,)? $(transform = $transform:expr,)? default = $default:expr
         )*$(,)*
     }
     ) => {
@@ -135,6 +137,7 @@ macro_rules! config_namespace {
                     $(
                        stringify!($field_name) => {
                            $(let value = $transform(value);)?
+                           $(log::warn!($warn);)?
                            self.$field_name.set(rem, value.as_ref())
                        },
                     )*
@@ -218,13 +221,15 @@ config_namespace! {
         /// When set to true, SQL parser will normalize ident (convert ident to lowercase when not quoted)
         pub enable_ident_normalization: bool, default = true
 
-        /// When set to true, SQL parser will normalize options value (convert value to lowercase)
-        pub enable_options_value_normalization: bool, default = false
+        /// When set to true, SQL parser will normalize options value (convert value to lowercase).
+        /// Note that this option is ignored and will be removed in the future. All case-insensitive values
+        /// are normalized automatically.
+        pub enable_options_value_normalization: bool, warn = "`enable_options_value_normalization` is deprecated and ignored", default = false
 
         /// Configure the SQL dialect used by DataFusion's parser; supported values include: Generic,
         /// MySQL, PostgreSQL, Hive, SQLite, Snowflake, Redshift, MsSQL, ClickHouse, BigQuery, and Ansi.
-        pub dialect: String, default = "generic".to_string() // no need to lowercase because
-        // [`sqlparser::dialect_from_str`] is case-insensitive
+        pub dialect: String, default = "generic".to_string()
+        // no need to lowercase because `sqlparser::dialect_from_str`] is case-insensitive
 
         /// If true, permit lengths for `VARCHAR` such as `VARCHAR(20)`, but
         /// ignore the length. If false, error if a `VARCHAR` with a length is
@@ -979,10 +984,9 @@ impl<F: ConfigField + Default> ConfigField for Option<F> {
     }
 }
 
-fn parse<T>(input: &str) -> Result<T>
+fn default_transform<T>(input: &str) -> Result<T>
 where
     T: FromStr,
-    T::Err: Display,
     <T as FromStr>::Err: Sync + Send + Error + 'static,
 {
     input.parse().map_err(|e| {
@@ -1000,7 +1004,7 @@ where
 #[macro_export]
 macro_rules! config_field {
     ($t:ty) => {
-        config_field!($t, value => parse(value)?);
+        config_field!($t, value => default_transform(value)?);
     };
 
     ($t:ty, $arg:ident => $transform:expr) => {
@@ -1018,7 +1022,7 @@ macro_rules! config_field {
 }
 
 config_field!(String);
-config_field!(bool, value => parse(value.to_lowercase().as_str())?);
+config_field!(bool, value => default_transform(value.to_lowercase().as_str())?);
 config_field!(usize);
 config_field!(f64);
 config_field!(u64);
@@ -1533,7 +1537,7 @@ macro_rules! config_namespace_with_hashmap {
      $vis:vis struct $struct_name:ident {
         $(
         $(#[doc = $d:tt])*
-        $field_vis:vis $field_name:ident : $field_type:ty, default = $default:expr
+        $field_vis:vis $field_name:ident : $field_type:ty, $(transform = $transform:expr,)? default = $default:expr
         )*$(,)*
     }
     ) => {
@@ -1552,7 +1556,10 @@ macro_rules! config_namespace_with_hashmap {
                 let (key, rem) = key.split_once('.').unwrap_or((key, ""));
                 match key {
                     $(
-                       stringify!($field_name) => self.$field_name.set(rem, value),
+                       stringify!($field_name) => {
+                           $(let value = $transform(value);)?
+                           self.$field_name.set(rem, value.as_ref())
+                       },
                     )*
                     _ => _config_err!(
                         "Config value \"{}\" not found on {}", key, stringify!($struct_name)
@@ -1631,7 +1638,7 @@ config_namespace_with_hashmap! {
         /// lzo, brotli(level), lz4, zstd(level), and lz4_raw.
         /// These values are not case-sensitive. If NULL, uses
         /// default parquet options
-        pub compression: Option<String>, default = None
+        pub compression: Option<String>, transform = str::to_lowercase, default = None
 
         /// Sets if statistics are enabled for the column
         /// Valid values are: "none", "chunk", and "page"
@@ -1680,7 +1687,10 @@ config_namespace! {
         pub timestamp_format: Option<String>, default = None
         pub timestamp_tz_format: Option<String>, default = None
         pub time_format: Option<String>, default = None
+        // The output format for Nulls in the CSV writer.
         pub null_value: Option<String>, default = None
+        // The input regex for Nulls when loading CSVs.
+        pub null_regex: Option<String>, default = None
         pub comment: Option<u8>, default = None
     }
 }

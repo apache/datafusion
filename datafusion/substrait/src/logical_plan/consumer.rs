@@ -62,7 +62,7 @@ use datafusion::logical_expr::{
     col, expr, Cast, Extension, GroupingSet, Like, LogicalPlanBuilder, Partitioning,
     Repartition, Subquery, WindowFrameBound, WindowFrameUnits, WindowFunctionDefinition,
 };
-use datafusion::prelude::JoinType;
+use datafusion::prelude::{lit, JoinType};
 use datafusion::sql::TableReference;
 use datafusion::{
     error::Result, logical_expr::utils::split_conjunction, prelude::Column,
@@ -98,7 +98,7 @@ use substrait::proto::{
     sort_field::{SortDirection, SortKind::*},
     AggregateFunction, Expression, NamedStruct, Plan, Rel, RelCommon, Type,
 };
-use substrait::proto::{ExtendedExpression, FunctionArgument, SortField};
+use substrait::proto::{fetch_rel, ExtendedExpression, FunctionArgument, SortField};
 
 use super::state::SubstraitPlanningState;
 
@@ -640,14 +640,27 @@ pub async fn from_substrait_rel(
                 let input = LogicalPlanBuilder::from(
                     from_substrait_rel(state, input, extensions).await?,
                 );
-                let offset = fetch.offset as usize;
-                // -1 means that ALL records should be returned
-                let count = if fetch.count == -1 {
-                    None
-                } else {
-                    Some(fetch.count as usize)
+                let empty_schema = DFSchemaRef::new(DFSchema::empty());
+                let offset = match &fetch.offset_mode {
+                    Some(fetch_rel::OffsetMode::Offset(offset)) => Some(lit(*offset)),
+                    Some(fetch_rel::OffsetMode::OffsetExpr(expr)) => Some(
+                        from_substrait_rex(state, expr, &empty_schema, extensions)
+                            .await?,
+                    ),
+                    None => None,
                 };
-                input.limit(offset, count)?.build()
+                let count = match &fetch.count_mode {
+                    Some(fetch_rel::CountMode::Count(count)) => {
+                        // -1 means that ALL records should be returned, equivalent to None
+                        (*count != -1).then(|| lit(*count))
+                    }
+                    Some(fetch_rel::CountMode::CountExpr(expr)) => Some(
+                        from_substrait_rex(state, expr, &empty_schema, extensions)
+                            .await?,
+                    ),
+                    None => None,
+                };
+                input.limit_by_expr(offset, count)?.build()
             } else {
                 not_impl_err!("Fetch without an input is not valid")
             }

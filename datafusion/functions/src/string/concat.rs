@@ -17,6 +17,7 @@
 
 use arrow::array::{as_largestring_array, Array};
 use arrow::datatypes::DataType;
+use datafusion_expr::sort_properties::ExprProperties;
 use std::any::Any;
 use std::sync::{Arc, OnceLock};
 
@@ -264,6 +265,10 @@ impl ScalarUDFImpl for ConcatFunc {
 
     fn documentation(&self) -> Option<&Documentation> {
         Some(get_concat_doc())
+    }
+
+    fn preserves_lex_ordering(&self, _inputs: &[ExprProperties]) -> Result<bool> {
+        Ok(true)
     }
 }
 

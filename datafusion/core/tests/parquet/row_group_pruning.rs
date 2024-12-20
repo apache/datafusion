@@ -1323,3 +1323,215 @@ async fn test_row_group_with_null_values() {
         .test_row_group_prune()
         .await;
 }
+
+#[tokio::test]
+async fn test_bloom_filter_utf8_dict() {
+    RowGroupPruningTest::new()
+        .with_scenario(Scenario::Dictionary)
+        .with_query("SELECT * FROM t WHERE utf8 = 'h'")
+        .with_expected_errors(Some(0))
+        .with_matched_by_stats(Some(1))
+        .with_pruned_by_stats(Some(1))
+        .with_expected_rows(1)
+        .with_pruned_by_bloom_filter(Some(0))
+        .with_matched_by_bloom_filter(Some(1))
+        .test_row_group_prune()
+        .await;
+
+    RowGroupPruningTest::new()
+        .with_scenario(Scenario::Dictionary)
+        .with_query("SELECT * FROM t WHERE utf8 = 'ab'")
+        .with_expected_errors(Some(0))
+        .with_matched_by_stats(Some(1))
+        .with_pruned_by_stats(Some(1))
+        .with_expected_rows(0)
+        .with_pruned_by_bloom_filter(Some(1))
+        .with_matched_by_bloom_filter(Some(0))
+        .test_row_group_prune()
+        .await;
+
+    RowGroupPruningTest::new()
+        .with_scenario(Scenario::Dictionary)
+        .with_query("SELECT * FROM t WHERE large_utf8 = 'b'")
+        .with_expected_errors(Some(0))
+        .with_matched_by_stats(Some(1))
+        .with_pruned_by_stats(Some(1))
+        .with_expected_rows(1)
+        .with_pruned_by_bloom_filter(Some(0))
+        .with_matched_by_bloom_filter(Some(1))
+        .test_row_group_prune()
+        .await;
+
+    RowGroupPruningTest::new()
+        .with_scenario(Scenario::Dictionary)
+        .with_query("SELECT * FROM t WHERE large_utf8 = 'cd'")
+        .with_expected_errors(Some(0))
+        .with_matched_by_stats(Some(1))
+        .with_pruned_by_stats(Some(1))
+        .with_expected_rows(0)
+        .with_pruned_by_bloom_filter(Some(1))
+        .with_matched_by_bloom_filter(Some(0))
+        .test_row_group_prune()
+        .await;
+}
+
+#[tokio::test]
+async fn test_bloom_filter_integer_dict() {
+    RowGroupPruningTest::new()
+        .with_scenario(Scenario::Dictionary)
+        .with_query("SELECT * FROM t WHERE int32 = arrow_cast(8, 'Int32')")
+        .with_expected_errors(Some(0))
+        .with_matched_by_stats(Some(1))
+        .with_pruned_by_stats(Some(1))
+        .with_expected_rows(1)
+        .with_pruned_by_bloom_filter(Some(0))
+        .with_matched_by_bloom_filter(Some(1))
+        .test_row_group_prune()
+        .await;
+
+    RowGroupPruningTest::new()
+        .with_scenario(Scenario::Dictionary)
+        .with_query("SELECT * FROM t WHERE int32 = arrow_cast(7, 'Int32')")
+        .with_expected_errors(Some(0))
+        .with_matched_by_stats(Some(1))
+        .with_pruned_by_stats(Some(1))
+        .with_expected_rows(0)
+        .with_pruned_by_bloom_filter(Some(1))
+        .with_matched_by_bloom_filter(Some(0))
+        .test_row_group_prune()
+        .await;
+
+    RowGroupPruningTest::new()
+        .with_scenario(Scenario::Dictionary)
+        .with_query("SELECT * FROM t WHERE int64 = 8")
+        .with_expected_errors(Some(0))
+        .with_matched_by_stats(Some(1))
+        .with_pruned_by_stats(Some(1))
+        .with_expected_rows(1)
+        .with_pruned_by_bloom_filter(Some(0))
+        .with_matched_by_bloom_filter(Some(1))
+        .test_row_group_prune()
+        .await;
+
+    RowGroupPruningTest::new()
+        .with_scenario(Scenario::Dictionary)
+        .with_query("SELECT * FROM t WHERE int64 = 7")
+        .with_expected_errors(Some(0))
+        .with_matched_by_stats(Some(1))
+        .with_pruned_by_stats(Some(1))
+        .with_expected_rows(0)
+        .with_pruned_by_bloom_filter(Some(1))
+        .with_matched_by_bloom_filter(Some(0))
+        .test_row_group_prune()
+        .await;
+}
+
+#[tokio::test]
+async fn test_bloom_filter_unsigned_integer_dict() {
+    RowGroupPruningTest::new()
+        .with_scenario(Scenario::Dictionary)
+        .with_query("SELECT * FROM t WHERE uint32 = arrow_cast(8, 'UInt32')")
+        .with_expected_errors(Some(0))
+        .with_matched_by_stats(Some(1))
+        .with_pruned_by_stats(Some(1))
+        .with_expected_rows(1)
+        .with_pruned_by_bloom_filter(Some(0))
+        .with_matched_by_bloom_filter(Some(1))
+        .test_row_group_prune()
+        .await;
+
+    RowGroupPruningTest::new()
+        .with_scenario(Scenario::Dictionary)
+        .with_query("SELECT * FROM t WHERE uint32 = arrow_cast(7, 'UInt32')")
+        .with_expected_errors(Some(0))
+        .with_matched_by_stats(Some(1))
+        .with_pruned_by_stats(Some(1))
+        .with_expected_rows(0)
+        .with_pruned_by_bloom_filter(Some(1))
+        .with_matched_by_bloom_filter(Some(0))
+        .test_row_group_prune()
+        .await;
+}
+
+#[tokio::test]
+async fn test_bloom_filter_binary_dict() {
+    RowGroupPruningTest::new()
+        .with_scenario(Scenario::Dictionary)
+        .with_query("SELECT * FROM t WHERE binary = arrow_cast('b', 'Binary')")
+        .with_expected_errors(Some(0))
+        .with_matched_by_stats(Some(1))
+        .with_pruned_by_stats(Some(1))
+        .with_expected_rows(1)
+        .with_pruned_by_bloom_filter(Some(0))
+        .with_matched_by_bloom_filter(Some(1))
+        .test_row_group_prune()
+        .await;
+
+    RowGroupPruningTest::new()
+        .with_scenario(Scenario::Dictionary)
+        .with_query("SELECT * FROM t WHERE binary = arrow_cast('banana', 'Binary')")
+        .with_expected_errors(Some(0))
+        .with_matched_by_stats(Some(1))
+        .with_pruned_by_stats(Some(1))
+        .with_expected_rows(0)
+        .with_pruned_by_bloom_filter(Some(1))
+        .with_matched_by_bloom_filter(Some(0))
+        .test_row_group_prune()
+        .await;
+
+    RowGroupPruningTest::new()
+        .with_scenario(Scenario::Dictionary)
+        .with_query("SELECT * FROM t WHERE large_binary = arrow_cast('d', 'LargeBinary')")
+        .with_expected_errors(Some(0))
+        .with_matched_by_stats(Some(1))
+        .with_pruned_by_stats(Some(1))
+        .with_expected_rows(1)
+        .with_pruned_by_bloom_filter(Some(0))
+        .with_matched_by_bloom_filter(Some(1))
+        .test_row_group_prune()
+        .await;
+
+    RowGroupPruningTest::new()
+        .with_scenario(Scenario::Dictionary)
+        .with_query(
+            "SELECT * FROM t WHERE large_binary = arrow_cast('dre', 'LargeBinary')",
+        )
+        .with_expected_errors(Some(0))
+        .with_matched_by_stats(Some(1))
+        .with_pruned_by_stats(Some(1))
+        .with_expected_rows(0)
+        .with_pruned_by_bloom_filter(Some(1))
+        .with_matched_by_bloom_filter(Some(0))
+        .test_row_group_prune()
+        .await;
+}
+
+// Makes sense to enable (or at least try to) after
+// https://github.com/apache/datafusion/issues/13821
+#[ignore]
+#[tokio::test]
+async fn test_bloom_filter_decimal_dict() {
+    RowGroupPruningTest::new()
+        .with_scenario(Scenario::Dictionary)
+        .with_query("SELECT * FROM t WHERE decimal = arrow_cast(8, 'Decimal128(6, 2)')")
+        .with_expected_errors(Some(0))
+        .with_matched_by_stats(Some(1))
+        .with_pruned_by_stats(Some(1))
+        .with_expected_rows(1)
+        .with_pruned_by_bloom_filter(Some(0))
+        .with_matched_by_bloom_filter(Some(1))
+        .test_row_group_prune()
+        .await;
+
+    RowGroupPruningTest::new()
+        .with_scenario(Scenario::Dictionary)
+        .with_query("SELECT * FROM t WHERE decimal = arrow_cast(7, 'Decimal128(6, 2)')")
+        .with_expected_errors(Some(0))
+        .with_matched_by_stats(Some(1))
+        .with_pruned_by_stats(Some(1))
+        .with_expected_rows(0)
+        .with_pruned_by_bloom_filter(Some(1))
+        .with_matched_by_bloom_filter(Some(0))
+        .test_row_group_prune()
+        .await;
+}
