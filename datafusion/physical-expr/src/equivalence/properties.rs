@@ -517,7 +517,7 @@ impl EquivalenceProperties {
         }
     }
 
-    /// Checks whether the `given`` sort requirements are equal or more specific
+    /// Checks whether the `given` sort requirements are equal or more specific
     /// than the `reference` sort requirements.
     pub fn requirements_compatible(
         &self,
@@ -883,9 +883,11 @@ impl EquivalenceProperties {
             if self.is_expr_constant(source)
                 && !const_exprs_contains(&projected_constants, target)
             {
+                let across_partitions = self.is_expr_constant_accross_partitions(source);
                 // Expression evaluates to single value
-                projected_constants
-                    .push(ConstExpr::from(target).with_across_partitions(true));
+                projected_constants.push(
+                    ConstExpr::from(target).with_across_partitions(across_partitions),
+                );
             }
         }
         projected_constants
@@ -1009,6 +1011,37 @@ impl EquivalenceProperties {
             .constants
             .iter()
             .map(|const_expr| Arc::clone(const_expr.expr()));
+        let normalized_constants = self.eq_group.normalize_exprs(const_exprs);
+        let normalized_expr = self.eq_group.normalize_expr(Arc::clone(expr));
+        is_constant_recurse(&normalized_constants, &normalized_expr)
+    }
+
+    /// This function determines whether the provided expression is constant
+    /// across partitions based on the known constants.
+    ///
+    /// # Arguments
+    ///
+    /// - `expr`: A reference to a `Arc<dyn PhysicalExpr>` representing the
+    ///   expression to be checked.
+    ///
+    /// # Returns
+    ///
+    /// Returns `true` if the expression is constant across all partitions according
+    /// to equivalence group, `false` otherwise.
+    pub fn is_expr_constant_accross_partitions(
+        &self,
+        expr: &Arc<dyn PhysicalExpr>,
+    ) -> bool {
+        // As an example, assume that we know columns `a` and `b` are constant.
+        // Then, `a`, `b` and `a + b` will all return `true` whereas `c` will
+        // return `false`.
+        let const_exprs = self.constants.iter().flat_map(|const_expr| {
+            if const_expr.across_partitions() {
+                Some(Arc::clone(const_expr.expr()))
+            } else {
+                None
+            }
+        });
         let normalized_constants = self.eq_group.normalize_exprs(const_exprs);
         let normalized_expr = self.eq_group.normalize_expr(Arc::clone(expr));
         is_constant_recurse(&normalized_constants, &normalized_expr)

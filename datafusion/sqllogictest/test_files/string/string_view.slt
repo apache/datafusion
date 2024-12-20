@@ -37,22 +37,6 @@ select arrow_cast(col1, 'Utf8View') as c1 from test_substr_base;
 statement ok
 drop table test_source
 
-# TODO: Revisit this issue after upgrading to the arrow-rs version that includes apache/arrow-rs#6671.
-# see issue https://github.com/apache/datafusion/issues/13329
-query IIII
-select bit_length(ascii_1), bit_length(ascii_2), bit_length(unicode_1), bit_length(unicode_2) from test_basic_operator;
-----
-48 8 144 32
-72 72 176 176
-56 8 240 64
-88 88 104 256
-56 24 216 288
-0 8 0 0
-8 16 0 0
-8 16 0 0
-NULL 8 NULL NULL
-NULL 8 NULL 32
-
 #
 # common test for string-like functions and operators
 #
@@ -747,7 +731,7 @@ EXPLAIN SELECT
 FROM test;
 ----
 logical_plan
-01)Projection: regexp_like(test.column1_utf8view, Utf8("^https?://(?:www\.)?([^/]+)/.*$")) AS k
+01)Projection: regexp_like(test.column1_utf8view, Utf8View("^https?://(?:www\.)?([^/]+)/.*$")) AS k
 02)--TableScan: test projection=[column1_utf8view]
 
 ## Ensure no casts for REGEXP_MATCH

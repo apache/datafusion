@@ -38,7 +38,39 @@ pub enum DisplayFormatType {
     Verbose,
 }
 
-/// Wraps an `ExecutionPlan` with various ways to display this plan
+/// Wraps an `ExecutionPlan` with various methods for formatting
+///
+///
+/// # Example
+/// ```
+/// # use std::sync::Arc;
+/// # use arrow_schema::{Field, Schema, DataType};
+/// # use datafusion_expr::Operator;
+/// # use datafusion_physical_expr::expressions::{binary, col, lit};
+/// # use datafusion_physical_plan::{displayable, ExecutionPlan};
+/// # use datafusion_physical_plan::empty::EmptyExec;
+/// # use datafusion_physical_plan::filter::FilterExec;
+/// # let schema = Schema::new(vec![Field::new("i", DataType::Int32, false)]);
+/// # let plan = EmptyExec::new(Arc::new(schema));
+/// # let i = col("i", &plan.schema()).unwrap();
+/// # let predicate = binary(i, Operator::Eq, lit(1), &plan.schema()).unwrap();
+/// # let plan: Arc<dyn ExecutionPlan> = Arc::new(FilterExec::try_new(predicate, Arc::new(plan)).unwrap());
+/// // Get a one line description (Displayable)
+/// let display_plan = displayable(plan.as_ref());
+///
+/// // you can use the returned objects to format plans
+/// // where you can use `Display` such as  format! or println!
+/// assert_eq!(
+///    &format!("The plan is: {}", display_plan.one_line()),
+///   "The plan is: FilterExec: i@0 = 1\n"
+/// );
+/// // You can also print out the plan and its children in indented mode
+/// assert_eq!(display_plan.indent(false).to_string(),
+///   "FilterExec: i@0 = 1\
+///   \n  EmptyExec\
+///   \n"
+/// );
+/// ```
 #[derive(Debug, Clone)]
 pub struct DisplayableExecutionPlan<'a> {
     inner: &'a dyn ExecutionPlan,
@@ -124,7 +156,7 @@ impl<'a> DisplayableExecutionPlan<'a> {
             show_statistics: bool,
             show_schema: bool,
         }
-        impl<'a> fmt::Display for Wrapper<'a> {
+        impl fmt::Display for Wrapper<'_> {
             fn fmt(&self, f: &mut Formatter) -> fmt::Result {
                 let mut visitor = IndentVisitor {
                     t: self.format_type,
@@ -163,7 +195,7 @@ impl<'a> DisplayableExecutionPlan<'a> {
             show_metrics: ShowMetrics,
             show_statistics: bool,
         }
-        impl<'a> fmt::Display for Wrapper<'a> {
+        impl fmt::Display for Wrapper<'_> {
             fn fmt(&self, f: &mut Formatter) -> fmt::Result {
                 let t = DisplayFormatType::Default;
 
@@ -202,7 +234,7 @@ impl<'a> DisplayableExecutionPlan<'a> {
             show_schema: bool,
         }
 
-        impl<'a> fmt::Display for Wrapper<'a> {
+        impl fmt::Display for Wrapper<'_> {
             fn fmt(&self, f: &mut Formatter) -> fmt::Result {
                 let mut visitor = IndentVisitor {
                     f,
@@ -268,7 +300,7 @@ struct IndentVisitor<'a, 'b> {
     show_schema: bool,
 }
 
-impl<'a, 'b> ExecutionPlanVisitor for IndentVisitor<'a, 'b> {
+impl ExecutionPlanVisitor for IndentVisitor<'_, '_> {
     type Error = fmt::Error;
     fn pre_visit(&mut self, plan: &dyn ExecutionPlan) -> Result<bool, Self::Error> {
         write!(self.f, "{:indent$}", "", indent = self.indent * 2)?;
@@ -349,7 +381,7 @@ impl ExecutionPlanVisitor for GraphvizVisitor<'_, '_> {
 
         struct Wrapper<'a>(&'a dyn ExecutionPlan, DisplayFormatType);
 
-        impl<'a> fmt::Display for Wrapper<'a> {
+        impl fmt::Display for Wrapper<'_> {
             fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
                 self.0.fmt_as(self.1, f)
             }
@@ -447,7 +479,7 @@ impl<T: DisplayAs> fmt::Display for VerboseDisplay<T> {
 #[derive(Debug)]
 pub struct ProjectSchemaDisplay<'a>(pub &'a SchemaRef);
 
-impl<'a> fmt::Display for ProjectSchemaDisplay<'a> {
+impl fmt::Display for ProjectSchemaDisplay<'_> {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         let parts: Vec<_> = self
             .0

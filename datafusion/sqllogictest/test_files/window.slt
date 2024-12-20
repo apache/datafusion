@@ -5046,3 +5046,84 @@ statement ok
 DROP TABLE t1;
 
 ## end test handle NULL of lead
+
+# row_number on bool column
+query II
+select b, row_number() over (order by a) from (select TRUE as a, 1 as b);
+----
+1 1
+
+# test window functions on boolean columns
+query T
+create table t1 (id int, bool_col boolean) as values 
+    (1, true),
+    (2, false),
+    (3, true),
+    (4, false);
+
+query I
+select row_number() over (order by bool_col) from t1;
+----
+1
+2
+3
+4
+
+query I
+select rank() over (order by bool_col) from t1;
+----
+1
+1
+3
+3
+
+query I
+select dense_rank() over (order by bool_col) from t1;
+----
+1
+1
+2
+2
+
+query R
+select cume_dist() over (order by bool_col) from t1;
+----
+0.5
+0.5
+1
+1
+
+query R
+select percent_rank() over (order by bool_col) from t1;
+----
+0
+0
+0.666666666667
+0.666666666667
+
+query I
+select ntile(2) over (order by bool_col) from t1;
+----
+1
+1
+2
+2
+
+query IIIRRI
+select 
+    row_number() over (order by bool_col) as row_num,
+    rank() over (order by bool_col) as rank,
+    dense_rank() over (order by bool_col) as dense_rank,
+    cume_dist() over (order by bool_col) as cume_dist,
+    percent_rank() over (order by bool_col) as percent_rank,
+    ntile(2) over (order by bool_col) as ntile
+from t1
+order by id;
+----
+3 3 2 1 0.666666666667 2
+1 1 1 0.5 0 1
+4 3 2 1 0.666666666667 2
+2 1 1 0.5 0 1
+
+statement ok
+drop table t1;

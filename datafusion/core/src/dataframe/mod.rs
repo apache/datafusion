@@ -50,7 +50,8 @@ use arrow::datatypes::{DataType, Field};
 use arrow_schema::{Schema, SchemaRef};
 use datafusion_common::config::{CsvOptions, JsonOptions};
 use datafusion_common::{
-    plan_err, Column, DFSchema, DataFusionError, ParamValues, SchemaError, UnnestOptions,
+    exec_err, not_impl_err, plan_err, Column, DFSchema, DataFusionError, ParamValues,
+    SchemaError, UnnestOptions,
 };
 use datafusion_expr::dml::InsertOp;
 use datafusion_expr::{case, is_null, lit, SortExpr};
@@ -869,16 +870,16 @@ impl DataFrame {
             for result in describe_record_batch.iter() {
                 let array_ref = match result {
                     Ok(df) => {
-                        let batchs = df.clone().collect().await;
-                        match batchs {
-                            Ok(batchs)
-                                if batchs.len() == 1
-                                    && batchs[0]
+                        let batches = df.clone().collect().await;
+                        match batches {
+                            Ok(batches)
+                                if batches.len() == 1
+                                    && batches[0]
                                         .column_by_name(field.name())
                                         .is_some() =>
                             {
                                 let column =
-                                    batchs[0].column_by_name(field.name()).unwrap();
+                                    batches[0].column_by_name(field.name()).unwrap();
 
                                 if column.data_type().is_null() {
                                     Arc::new(StringArray::from(vec!["null"]))
@@ -901,9 +902,7 @@ impl DataFrame {
                     {
                         Arc::new(StringArray::from(vec!["null"]))
                     }
-                    Err(other_err) => {
-                        panic!("{other_err}")
-                    }
+                    Err(e) => return exec_err!("{}", e),
                 };
                 array_datas.push(array_ref);
             }
@@ -1564,10 +1563,10 @@ impl DataFrame {
         writer_options: Option<CsvOptions>,
     ) -> Result<Vec<RecordBatch>, DataFusionError> {
         if options.insert_op != InsertOp::Append {
-            return Err(DataFusionError::NotImplemented(format!(
+            return not_impl_err!(
                 "{} is not implemented for DataFrame::write_csv.",
                 options.insert_op
-            )));
+            );
         }
 
         let format = if let Some(csv_opts) = writer_options {
@@ -1625,10 +1624,10 @@ impl DataFrame {
         writer_options: Option<JsonOptions>,
     ) -> Result<Vec<RecordBatch>, DataFusionError> {
         if options.insert_op != InsertOp::Append {
-            return Err(DataFusionError::NotImplemented(format!(
+            return not_impl_err!(
                 "{} is not implemented for DataFrame::write_json.",
                 options.insert_op
-            )));
+            );
         }
 
         let format = if let Some(json_opts) = writer_options {
@@ -2377,6 +2376,30 @@ mod tests {
                 "+----+-----------------------------+-----------------------------+-----------------------------+-----------------------------+-------------------------------+----------------------------------------+"],
             &df
         );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn aggregate_assert_no_empty_batches() -> Result<()> {
+        // build plan using DataFrame API
+        let df = test_table().await?;
+        let group_expr = vec![col("c1")];
+        let aggr_expr = vec![
+            min(col("c12")),
+            max(col("c12")),
+            avg(col("c12")),
+            sum(col("c12")),
+            count(col("c12")),
+            count_distinct(col("c12")),
+            median(col("c12")),
+        ];
+
+        let df: Vec<RecordBatch> = df.aggregate(group_expr, aggr_expr)?.collect().await?;
+        // Empty batches should not be produced
+        for batch in df {
+            assert!(batch.num_rows() > 0);
+        }
 
         Ok(())
     }

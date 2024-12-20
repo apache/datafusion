@@ -127,7 +127,7 @@ mod tests {
     use super::*;
     use crate::expressions::col;
     use arrow::{array::BooleanArray, datatypes::*};
-    use std::sync::OnceLock;
+    use std::sync::LazyLock;
 
     #[test]
     fn neg_op() -> Result<()> {
@@ -190,10 +190,9 @@ mod tests {
     }
 
     fn schema() -> SchemaRef {
-        Arc::clone(SCHEMA.get_or_init(|| {
+        static SCHEMA: LazyLock<SchemaRef> = LazyLock::new(|| {
             Arc::new(Schema::new(vec![Field::new("a", DataType::Boolean, true)]))
-        }))
+        });
+        Arc::clone(&SCHEMA)
     }
-
-    static SCHEMA: OnceLock<SchemaRef> = OnceLock::new();
 }

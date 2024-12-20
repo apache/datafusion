@@ -96,7 +96,11 @@ impl ScalarUDFImpl for ArrayDistance {
         Ok(result)
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         make_scalar_function(array_distance_inner)(args)
     }
 
@@ -113,12 +117,11 @@ static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
 
 fn get_array_distance_doc() -> &'static Documentation {
     DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_ARRAY)
-            .with_description(
+        Documentation::builder(
+            DOC_SECTION_ARRAY,
                 "Returns the Euclidean distance between two input arrays of equal length.",
-            )
-            .with_syntax_example("array_distance(array1, array2)")
+
+            "array_distance(array1, array2)")
             .with_sql_example(
                 r#"```sql
 > select array_distance([1, 2], [1, 4]);
@@ -138,7 +141,6 @@ fn get_array_distance_doc() -> &'static Documentation {
                 "Array expression. Can be a constant, column, or function, and any combination of array operators.",
             )
             .build()
-            .unwrap()
     })
 }
 

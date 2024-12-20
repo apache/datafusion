@@ -49,7 +49,7 @@ use datafusion_common::file_options::parquet_writer::ParquetWriterOptions;
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::stats::Precision;
 use datafusion_common::{
-    internal_datafusion_err, not_impl_err, DataFusionError, GetExt,
+    internal_datafusion_err, internal_err, not_impl_err, DataFusionError, GetExt,
     DEFAULT_PARQUET_EXTENSION,
 };
 use datafusion_common_runtime::SpawnedTask;
@@ -323,9 +323,7 @@ impl FileFormat for ParquetFormat {
         let ext = self.get_ext();
         match file_compression_type.get_variant() {
             CompressionTypeVariant::UNCOMPRESSED => Ok(ext),
-            _ => Err(DataFusionError::Internal(
-                "Parquet FileFormat does not support compression.".into(),
-            )),
+            _ => internal_err!("Parquet FileFormat does not support compression."),
         }
     }
 
@@ -479,7 +477,7 @@ impl<'a> ObjectStoreFetch<'a> {
     }
 }
 
-impl<'a> MetadataFetch for ObjectStoreFetch<'a> {
+impl MetadataFetch for ObjectStoreFetch<'_> {
     fn fetch(
         &mut self,
         range: Range<usize>,
@@ -1314,7 +1312,7 @@ mod tests {
 
     use crate::datasource::file_format::parquet::test_util::store_parquet;
     use crate::physical_plan::metrics::MetricValue;
-    use crate::prelude::{SessionConfig, SessionContext};
+    use crate::prelude::{ParquetReadOptions, SessionConfig, SessionContext};
     use arrow::array::{Array, ArrayRef, StringArray};
     use arrow_array::types::Int32Type;
     use arrow_array::{DictionaryArray, Int32Array, Int64Array};
@@ -1325,8 +1323,8 @@ mod tests {
         as_float64_array, as_int32_array, as_timestamp_nanosecond_array,
     };
     use datafusion_common::config::ParquetOptions;
-    use datafusion_common::ScalarValue;
     use datafusion_common::ScalarValue::Utf8;
+    use datafusion_common::{assert_batches_eq, ScalarValue};
     use datafusion_execution::object_store::ObjectStoreUrl;
     use datafusion_execution::runtime_env::RuntimeEnv;
     use datafusion_physical_plan::stream::RecordBatchStreamAdapter;
@@ -2251,6 +2249,59 @@ mod tests {
             .unwrap_or(Arc::new(ParquetFormat::new()));
 
         scan_format(state, &*format, &testdata, file_name, projection, limit).await
+    }
+
+    /// Test that 0-byte files don't break while reading
+    #[tokio::test]
+    async fn test_read_empty_parquet() -> Result<()> {
+        let tmp_dir = tempfile::TempDir::new().unwrap();
+        let path = format!("{}/empty.parquet", tmp_dir.path().to_string_lossy());
+        File::create(&path).await?;
+
+        let ctx = SessionContext::new();
+
+        let df = ctx
+            .read_parquet(&path, ParquetReadOptions::default())
+            .await
+            .expect("read_parquet should succeed");
+
+        let result = df.collect().await?;
+        #[rustfmt::skip]
+        let expected = ["++",
+            "++"];
+        assert_batches_eq!(expected, &result);
+
+        Ok(())
+    }
+
+    /// Test that 0-byte files don't break while reading
+    #[tokio::test]
+    async fn test_read_partitioned_empty_parquet() -> Result<()> {
+        let tmp_dir = tempfile::TempDir::new().unwrap();
+        let partition_dir = tmp_dir.path().join("col1=a");
+        std::fs::create_dir(&partition_dir).unwrap();
+        File::create(partition_dir.join("empty.parquet"))
+            .await
+            .unwrap();
+
+        let ctx = SessionContext::new();
+
+        let df = ctx
+            .read_parquet(
+                tmp_dir.path().to_str().unwrap(),
+                ParquetReadOptions::new()
+                    .table_partition_cols(vec![("col1".to_string(), DataType::Utf8)]),
+            )
+            .await
+            .expect("read_parquet should succeed");
+
+        let result = df.collect().await?;
+        #[rustfmt::skip]
+        let expected = ["++",
+            "++"];
+        assert_batches_eq!(expected, &result);
+
+        Ok(())
     }
 
     fn build_ctx(store_url: &url::Url) -> Arc<TaskContext> {

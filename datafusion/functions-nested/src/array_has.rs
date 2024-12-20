@@ -98,11 +98,15 @@ impl ScalarUDFImpl for ArrayHas {
         Ok(DataType::Boolean)
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         match &args[1] {
             ColumnarValue::Array(array_needle) => {
                 // the needle is already an array, convert the haystack to an array of the same length
-                let haystack = args[0].to_owned().into_array(array_needle.len())?;
+                let haystack = args[0].to_array(array_needle.len())?;
                 let array = array_has_inner_for_array(&haystack, array_needle)?;
                 Ok(ColumnarValue::Array(array))
             }
@@ -114,7 +118,7 @@ impl ScalarUDFImpl for ArrayHas {
                 }
 
                 // since the needle is a scalar, convert it to an array of size 1
-                let haystack = args[0].to_owned().into_array(1)?;
+                let haystack = args[0].to_array(1)?;
                 let needle = scalar_needle.to_array_of_size(1)?;
                 let needle = Scalar::new(needle);
                 let array = array_has_inner_for_scalar(&haystack, &needle)?;
@@ -142,12 +146,11 @@ static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
 
 fn get_array_has_doc() -> &'static Documentation {
     DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_ARRAY)
-            .with_description(
+        Documentation::builder(
+            DOC_SECTION_ARRAY,
                 "Returns true if the array contains the element.",
-            )
-            .with_syntax_example("array_has(array, element)")
+
+            "array_has(array, element)")
             .with_sql_example(
                 r#"```sql
 > select array_has([1, 2, 3], 2);
@@ -167,7 +170,6 @@ fn get_array_has_doc() -> &'static Documentation {
                 "Scalar or Array expression. Can be a constant, column, or function, and any combination of array operators.",
             )
             .build()
-            .unwrap()
     })
 }
 
@@ -322,7 +324,11 @@ impl ScalarUDFImpl for ArrayHasAll {
         Ok(DataType::Boolean)
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         make_scalar_function(array_has_all_inner)(args)
     }
 
@@ -337,12 +343,11 @@ impl ScalarUDFImpl for ArrayHasAll {
 
 fn get_array_has_all_doc() -> &'static Documentation {
     DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_ARRAY)
-            .with_description(
+        Documentation::builder(
+            DOC_SECTION_ARRAY,
                 "Returns true if all elements of sub-array exist in array.",
-            )
-            .with_syntax_example("array_has_all(array, sub-array)")
+
+            "array_has_all(array, sub-array)")
             .with_sql_example(
                 r#"```sql
 > select array_has_all([1, 2, 3, 4], [2, 3]);
@@ -362,7 +367,6 @@ fn get_array_has_all_doc() -> &'static Documentation {
                 "Array expression. Can be a constant, column, or function, and any combination of array operators.",
             )
             .build()
-            .unwrap()
     })
 }
 
@@ -403,7 +407,11 @@ impl ScalarUDFImpl for ArrayHasAny {
         Ok(DataType::Boolean)
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         make_scalar_function(array_has_any_inner)(args)
     }
 
@@ -418,12 +426,11 @@ impl ScalarUDFImpl for ArrayHasAny {
 
 fn get_array_has_any_doc() -> &'static Documentation {
     DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_ARRAY)
-            .with_description(
+        Documentation::builder(
+            DOC_SECTION_ARRAY,
                 "Returns true if any elements exist in both arrays.",
-            )
-            .with_syntax_example("array_has_any(array, sub-array)")
+
+            "array_has_any(array, sub-array)")
             .with_sql_example(
                 r#"```sql
 > select array_has_any([1, 2, 3], [3, 4]);
@@ -443,7 +450,6 @@ fn get_array_has_any_doc() -> &'static Documentation {
                 "Array expression. Can be a constant, column, or function, and any combination of array operators.",
             )
             .build()
-            .unwrap()
     })
 }
 

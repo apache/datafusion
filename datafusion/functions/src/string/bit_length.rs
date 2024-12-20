@@ -62,7 +62,11 @@ impl ScalarUDFImpl for BitLengthFunc {
         utf8_to_int_type(&arg_types[0], "bit_length")
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         if args.len() != 1 {
             return exec_err!(
                 "bit_length function requires 1 argument, got {}",
@@ -96,12 +100,13 @@ static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
 
 fn get_bit_length_doc() -> &'static Documentation {
     DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_STRING)
-            .with_description("Returns the bit length of a string.")
-            .with_syntax_example("bit_length(str)")
-            .with_sql_example(
-                r#"```sql
+        Documentation::builder(
+            DOC_SECTION_STRING,
+            "Returns the bit length of a string.",
+            "bit_length(str)",
+        )
+        .with_sql_example(
+            r#"```sql
 > select bit_length('datafusion');
 +--------------------------------+
 | bit_length(Utf8("datafusion")) |
@@ -109,11 +114,10 @@ fn get_bit_length_doc() -> &'static Documentation {
 | 80                             |
 +--------------------------------+
 ```"#,
-            )
-            .with_standard_argument("str", Some("String"))
-            .with_related_udf("length")
-            .with_related_udf("octet_length")
-            .build()
-            .unwrap()
+        )
+        .with_standard_argument("str", Some("String"))
+        .with_related_udf("length")
+        .with_related_udf("octet_length")
+        .build()
     })
 }

@@ -64,7 +64,11 @@ impl ScalarUDFImpl for InitcapFunc {
         utf8_to_str_type(&arg_types[0], "initcap")
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         match args[0].data_type() {
             DataType::Utf8 => make_scalar_function(initcap::<i32>, vec![])(args),
             DataType::LargeUtf8 => make_scalar_function(initcap::<i64>, vec![])(args),
@@ -84,28 +88,38 @@ static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
 
 fn get_initcap_doc() -> &'static Documentation {
     DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_STRING)
-            .with_description("Capitalizes the first character in each word in the input string. Words are delimited by non-alphanumeric characters.")
-            .with_syntax_example("initcap(str)")
-            .with_sql_example(r#"```sql
+        Documentation::builder(
+            DOC_SECTION_STRING,
+            "Capitalizes the first character in each word in the ASCII input string. \
+            Words are delimited by non-alphanumeric characters.\n\n\
+            Note this function does not support UTF-8 characters.",
+            "initcap(str)",
+        )
+        .with_sql_example(
+            r#"```sql
 > select initcap('apache datafusion');
 +------------------------------------+
 | initcap(Utf8("apache datafusion")) |
 +------------------------------------+
 | Apache Datafusion                  |
 +------------------------------------+
-```"#)
-            .with_standard_argument("str", Some("String"))
-            .with_related_udf("lower")
-            .with_related_udf("upper")
-            .build()
-            .unwrap()
+```"#,
+        )
+        .with_standard_argument("str", Some("String"))
+        .with_related_udf("lower")
+        .with_related_udf("upper")
+        .build()
     })
 }
 
-/// Converts the first letter of each word to upper case and the rest to lower case. Words are sequences of alphanumeric characters separated by non-alphanumeric characters.
+/// Converts the first letter of each word to upper case and the rest to lower
+/// case. Words are sequences of alphanumeric characters separated by
+/// non-alphanumeric characters.
+///
+/// Example:
+/// ```sql
 /// initcap('hi THOMAS') = 'Hi Thomas'
+/// ```
 fn initcap<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
     let string_array = as_generic_string_array::<T>(&args[0])?;
 
@@ -129,21 +143,22 @@ fn initcap_utf8view(args: &[ArrayRef]) -> Result<ArrayRef> {
     Ok(Arc::new(result) as ArrayRef)
 }
 
-fn initcap_string(string: Option<&str>) -> Option<String> {
-    let mut char_vector = Vec::<char>::new();
-    string.map(|string: &str| {
-        char_vector.clear();
-        let mut previous_character_letter_or_number = false;
-        for c in string.chars() {
-            if previous_character_letter_or_number {
-                char_vector.push(c.to_ascii_lowercase());
+fn initcap_string(input: Option<&str>) -> Option<String> {
+    input.map(|s| {
+        let mut result = String::with_capacity(s.len());
+        let mut prev_is_alphanumeric = false;
+
+        for c in s.chars() {
+            let transformed = if prev_is_alphanumeric {
+                c.to_ascii_lowercase()
             } else {
-                char_vector.push(c.to_ascii_uppercase());
-            }
-            previous_character_letter_or_number =
-                c.is_ascii_uppercase() || c.is_ascii_lowercase() || c.is_ascii_digit();
+                c.to_ascii_uppercase()
+            };
+            result.push(transformed);
+            prev_is_alphanumeric = c.is_ascii_alphanumeric();
         }
-        char_vector.iter().collect::<String>()
+
+        result
     })
 }
 
@@ -160,7 +175,7 @@ mod tests {
     fn test_functions() -> Result<()> {
         test_function!(
             InitcapFunc::new(),
-            &[ColumnarValue::Scalar(ScalarValue::from("hi THOMAS"))],
+            vec![ColumnarValue::Scalar(ScalarValue::from("hi THOMAS"))],
             Ok(Some("Hi Thomas")),
             &str,
             Utf8,
@@ -168,7 +183,7 @@ mod tests {
         );
         test_function!(
             InitcapFunc::new(),
-            &[ColumnarValue::Scalar(ScalarValue::from(""))],
+            vec![ColumnarValue::Scalar(ScalarValue::from(""))],
             Ok(Some("")),
             &str,
             Utf8,
@@ -176,7 +191,7 @@ mod tests {
         );
         test_function!(
             InitcapFunc::new(),
-            &[ColumnarValue::Scalar(ScalarValue::from(""))],
+            vec![ColumnarValue::Scalar(ScalarValue::from(""))],
             Ok(Some("")),
             &str,
             Utf8,
@@ -184,7 +199,7 @@ mod tests {
         );
         test_function!(
             InitcapFunc::new(),
-            &[ColumnarValue::Scalar(ScalarValue::Utf8(None))],
+            vec![ColumnarValue::Scalar(ScalarValue::Utf8(None))],
             Ok(None),
             &str,
             Utf8,
@@ -192,7 +207,7 @@ mod tests {
         );
         test_function!(
             InitcapFunc::new(),
-            &[ColumnarValue::Scalar(ScalarValue::Utf8View(Some(
+            vec![ColumnarValue::Scalar(ScalarValue::Utf8View(Some(
                 "hi THOMAS".to_string()
             )))],
             Ok(Some("Hi Thomas")),
@@ -202,7 +217,7 @@ mod tests {
         );
         test_function!(
             InitcapFunc::new(),
-            &[ColumnarValue::Scalar(ScalarValue::Utf8View(Some(
+            vec![ColumnarValue::Scalar(ScalarValue::Utf8View(Some(
                 "hi THOMAS wIth M0re ThAN 12 ChaRs".to_string()
             )))],
             Ok(Some("Hi Thomas With M0re Than 12 Chars")),
@@ -212,7 +227,7 @@ mod tests {
         );
         test_function!(
             InitcapFunc::new(),
-            &[ColumnarValue::Scalar(ScalarValue::Utf8View(Some(
+            vec![ColumnarValue::Scalar(ScalarValue::Utf8View(Some(
                 "".to_string()
             )))],
             Ok(Some("")),
@@ -222,7 +237,7 @@ mod tests {
         );
         test_function!(
             InitcapFunc::new(),
-            &[ColumnarValue::Scalar(ScalarValue::Utf8View(None))],
+            vec![ColumnarValue::Scalar(ScalarValue::Utf8View(None))],
             Ok(None),
             &str,
             Utf8,

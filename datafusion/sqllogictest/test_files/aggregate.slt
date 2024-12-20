@@ -76,26 +76,26 @@ statement error DataFusion error: Schema error: Schema contains duplicate unqual
 SELECT approx_distinct(c9) count_c9, approx_distinct(cast(c9 as varchar)) count_c9_str FROM aggregate_test_100
 
 # csv_query_approx_percentile_cont_with_weight
-statement error DataFusion error: Error during planning: Error during planning: Coercion from \[Utf8, Int8, Float64\] to the signature OneOf(.*) failed(.|\n)*
+statement error DataFusion error: Error during planning: Error during planning: Failed to coerce arguments to satisfy a call to approx_percentile_cont_with_weight function: coercion from \[Utf8, Int8, Float64\] to the signature OneOf(.*) failed(.|\n)*
 SELECT approx_percentile_cont_with_weight(c1, c2, 0.95) FROM aggregate_test_100
 
-statement error DataFusion error: Error during planning: Error during planning: Coercion from \[Int16, Utf8, Float64\] to the signature OneOf(.*) failed(.|\n)*
+statement error DataFusion error: Error during planning: Error during planning: Failed to coerce arguments to satisfy a call to approx_percentile_cont_with_weight function: coercion from \[Int16, Utf8, Float64\] to the signature OneOf(.*) failed(.|\n)*
 SELECT approx_percentile_cont_with_weight(c3, c1, 0.95) FROM aggregate_test_100
 
-statement error DataFusion error: Error during planning: Error during planning: Coercion from \[Int16, Int8, Utf8\] to the signature OneOf(.*) failed(.|\n)*
+statement error DataFusion error: Error during planning: Error during planning: Failed to coerce arguments to satisfy a call to approx_percentile_cont_with_weight function: coercion from \[Int16, Int8, Utf8\] to the signature OneOf(.*) failed(.|\n)*
 SELECT approx_percentile_cont_with_weight(c3, c2, c1) FROM aggregate_test_100
 
 # csv_query_approx_percentile_cont_with_histogram_bins
 statement error DataFusion error: External error: This feature is not implemented: Tdigest max_size value for 'APPROX_PERCENTILE_CONT' must be UInt > 0 literal \(got data type Int64\)\.
 SELECT c1, approx_percentile_cont(c3, 0.95, -1000) AS c3_p95 FROM aggregate_test_100 GROUP BY 1 ORDER BY 1
 
-statement error DataFusion error: Error during planning: Error during planning: Coercion from \[Int16, Float64, Utf8\] to the signature OneOf(.*) failed(.|\n)*
+statement error DataFusion error: Error during planning: Error during planning: Failed to coerce arguments to satisfy a call to approx_percentile_cont function: coercion from \[Int16, Float64, Utf8\] to the signature OneOf(.*) failed(.|\n)*
 SELECT approx_percentile_cont(c3, 0.95, c1) FROM aggregate_test_100
 
-statement error DataFusion error: Error during planning: Error during planning: Coercion from \[Int16, Float64, Float64\] to the signature OneOf(.*) failed(.|\n)*
+statement error DataFusion error: Error during planning: Error during planning: Failed to coerce arguments to satisfy a call to approx_percentile_cont function: coercion from \[Int16, Float64, Float64\] to the signature OneOf(.*) failed(.|\n)*
 SELECT approx_percentile_cont(c3, 0.95, 111.1) FROM aggregate_test_100
 
-statement error DataFusion error: Error during planning: Error during planning: Coercion from \[Float64, Float64, Float64\] to the signature OneOf(.*) failed(.|\n)*
+statement error DataFusion error: Error during planning: Error during planning: Failed to coerce arguments to satisfy a call to approx_percentile_cont function: coercion from \[Float64, Float64, Float64\] to the signature OneOf(.*) failed(.|\n)*
 SELECT approx_percentile_cont(c12, 0.95, 111.1) FROM aggregate_test_100
 
 statement error DataFusion error: This feature is not implemented: Percentile value for 'APPROX_PERCENTILE_CONT' must be a literal
@@ -2179,11 +2179,62 @@ SELECT COUNT(c1), COUNT(c2) FROM test
 ----
 4 4
 
-# TODO: count_partitioned
 
-# TODO: count_aggregated
+statement ok
+CREATE EXTERNAL TABLE partitioned_test (c1 int, c2 bigint, c3 boolean)
+STORED AS CSV LOCATION '../core/tests/data/partitioned_csv'
+OPTIONS('format.has_header' 'false');
 
-# TODO: count_aggregated_cube
+# count partitioned
+query II
+SELECT COUNT(c1), COUNT(c2) FROM partitioned_test
+----
+44 44
+
+# count partitioned with multiple columns
+query I
+SELECT COUNT(c1,c2) FROM partitioned_test
+----
+44
+
+statement ok
+DROP TABLE partitioned_test;
+
+
+# count aggregated
+query II
+SELECT c1, count(c2) FROM test WHERE c1 IS NOT NULL group by c1 order by c1
+----
+0 0
+1 1
+3 2
+
+statement ok
+create table table_agg_cube (c1 int, c2 int, c3 int) as values (1, 1, 1), (1, 2, 2), (1, 3, 3), (2, 1, 1), (2, 2, 2), (2, 3, 3), (3, 1, 1), (3, 2, 2), (3, 3, 3);
+
+# count aggregated cube
+query III
+SELECT c1, c2, count(c3) FROM table_agg_cube GROUP BY CUBE (c1, c2) ORDER BY c1, c2
+----
+1 1 1
+1 2 1
+1 3 1
+1 NULL 3
+2 1 1
+2 2 1
+2 3 1
+2 NULL 3
+3 1 1
+3 2 1
+3 3 1
+3 NULL 3
+NULL 1 3
+NULL 2 3
+NULL 3 3
+NULL NULL 9
+
+statement ok
+drop table table_agg_cube;
 
 # count_multi_expr
 query I

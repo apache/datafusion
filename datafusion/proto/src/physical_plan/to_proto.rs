@@ -19,11 +19,11 @@ use std::sync::Arc;
 
 #[cfg(feature = "parquet")]
 use datafusion::datasource::file_format::parquet::ParquetSink;
-use datafusion::physical_expr::window::{BuiltInWindowExpr, SlidingAggregateWindowExpr};
+use datafusion::physical_expr::window::{SlidingAggregateWindowExpr, StandardWindowExpr};
 use datafusion::physical_expr::{LexOrdering, PhysicalSortExpr, ScalarFunctionExpr};
 use datafusion::physical_plan::expressions::{
     BinaryExpr, CaseExpr, CastExpr, Column, InListExpr, IsNotNullExpr, IsNullExpr,
-    Literal, NegativeExpr, NotExpr, TryCastExpr,
+    Literal, NegativeExpr, NotExpr, TryCastExpr, UnKnownColumn,
 };
 use datafusion::physical_plan::udaf::AggregateFunctionExpr;
 use datafusion::physical_plan::windows::{PlainAggregateWindowExpr, WindowUDFExpr};
@@ -120,9 +120,9 @@ pub fn serialize_physical_window_expr(
             window_frame,
             codec,
         )?
-    } else if let Some(built_in_window_expr) = expr.downcast_ref::<BuiltInWindowExpr>() {
-        if let Some(expr) = built_in_window_expr
-            .get_built_in_func_expr()
+    } else if let Some(udf_window_expr) = expr.downcast_ref::<StandardWindowExpr>() {
+        if let Some(expr) = udf_window_expr
+            .get_standard_func_expr()
             .as_any()
             .downcast_ref::<WindowUDFExpr>()
         {
@@ -217,6 +217,14 @@ pub fn serialize_physical_expr(
                 protobuf::PhysicalColumn {
                     name: expr.name().to_string(),
                     index: expr.index() as u32,
+                },
+            )),
+        })
+    } else if let Some(expr) = expr.downcast_ref::<UnKnownColumn>() {
+        Ok(protobuf::PhysicalExprNode {
+            expr_type: Some(protobuf::physical_expr_node::ExprType::UnknownColumn(
+                protobuf::UnknownColumn {
+                    name: expr.name().to_string(),
                 },
             )),
         })
@@ -339,6 +347,7 @@ pub fn serialize_physical_expr(
                     args: serialize_physical_exprs(expr.args(), codec)?,
                     fun_definition: (!buf.is_empty()).then_some(buf),
                     return_type: Some(expr.return_type().try_into()?),
+                    nullable: expr.nullable(),
                 },
             )),
         })

@@ -163,7 +163,7 @@ fn calc_inline_constraints_from_columns(columns: &[ColumnDef]) -> Vec<TableConst
     constraints
 }
 
-impl<'a, S: ContextProvider> SqlToRel<'a, S> {
+impl<S: ContextProvider> SqlToRel<'_, S> {
     /// Generate a logical plan from an DataFusion SQL statement
     pub fn statement_to_plan(&self, statement: DFStatement) -> Result<LogicalPlan> {
         match statement {

@@ -38,12 +38,10 @@ path = "src/lib.rs"
 [features]
 
 [dependencies]
-ahash = { workspace = true }
 arrow = { workspace = true }
-arrow-array = { workspace = true }
-arrow-buffer = { workspace = true }
 chrono = { workspace = true }
 datafusion-common = { workspace = true }
+datafusion-doc = { workspace = true }
 datafusion-expr-common = { workspace = true }
 datafusion-functions-aggregate-common = { workspace = true }
 datafusion-functions-window-common = { workspace = true }
@@ -53,8 +51,6 @@ paste = "^1.0"
 recursive = { workspace = true }
 serde_json = { workspace = true }
 sqlparser = { workspace = true }
-strum = { version = "0.26.1", features = ["derive"] }
-strum_macros = "0.26.0"
 
 [dev-dependencies]
 ctor = { workspace = true }

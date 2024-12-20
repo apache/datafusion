@@ -416,9 +416,10 @@ pub struct SimpleScalarUDF {
 
 impl Debug for SimpleScalarUDF {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        f.debug_struct("ScalarUDF")
+        f.debug_struct("SimpleScalarUDF")
             .field("name", &self.name)
             .field("signature", &self.signature)
+            .field("return_type", &self.return_type)
             .field("fun", &"<FUNC>")
             .finish()
     }
@@ -434,10 +435,24 @@ impl SimpleScalarUDF {
         volatility: Volatility,
         fun: ScalarFunctionImplementation,
     ) -> Self {
-        let name = name.into();
-        let signature = Signature::exact(input_types, volatility);
-        Self {
+        Self::new_with_signature(
             name,
+            Signature::exact(input_types, volatility),
+            return_type,
+            fun,
+        )
+    }
+
+    /// Create a new `SimpleScalarUDF` from a name, signature, return type and
+    /// implementation. Implementing [`ScalarUDFImpl`] allows more flexibility
+    pub fn new_with_signature(
+        name: impl Into<String>,
+        signature: Signature,
+        return_type: DataType,
+        fun: ScalarFunctionImplementation,
+    ) -> Self {
+        Self {
+            name: name.into(),
             signature,
             return_type,
             fun,
@@ -462,7 +477,11 @@ impl ScalarUDFImpl for SimpleScalarUDF {
         Ok(self.return_type.clone())
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         (self.fun)(args)
     }
 }
@@ -506,16 +525,17 @@ pub struct SimpleAggregateUDF {
 
 impl Debug for SimpleAggregateUDF {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        f.debug_struct("AggregateUDF")
+        f.debug_struct("SimpleAggregateUDF")
             .field("name", &self.name)
             .field("signature", &self.signature)
+            .field("return_type", &self.return_type)
             .field("fun", &"<FUNC>")
             .finish()
     }
 }
 
 impl SimpleAggregateUDF {
-    /// Create a new `AggregateUDFImpl` from a name, input types, return type, state type and
+    /// Create a new `SimpleAggregateUDF` from a name, input types, return type, state type and
     /// implementation. Implementing [`AggregateUDFImpl`] allows more flexibility
     pub fn new(
         name: impl Into<String>,
@@ -536,6 +556,8 @@ impl SimpleAggregateUDF {
         }
     }
 
+    /// Create a new `SimpleAggregateUDF` from a name, signature, return type, state type and
+    /// implementation. Implementing [`AggregateUDFImpl`] allows more flexibility
     pub fn new_with_signature(
         name: impl Into<String>,
         signature: Signature,

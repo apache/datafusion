@@ -31,7 +31,7 @@ use datafusion::logical_expr::expr::{Exists, InSubquery, Sort};
 
 use datafusion::logical_expr::{
     Aggregate, BinaryExpr, Case, EmptyRelation, Expr, ExprSchemable, LogicalPlan,
-    Operator, Projection, SortExpr, Values,
+    Operator, Projection, SortExpr, TryCast, Values,
 };
 use substrait::proto::aggregate_rel::Grouping;
 use substrait::proto::expression::subquery::set_predicate::PredicateOp;
@@ -62,7 +62,7 @@ use datafusion::logical_expr::{
     col, expr, Cast, Extension, GroupingSet, Like, LogicalPlanBuilder, Partitioning,
     Repartition, Subquery, WindowFrameBound, WindowFrameUnits, WindowFunctionDefinition,
 };
-use datafusion::prelude::JoinType;
+use datafusion::prelude::{lit, JoinType};
 use datafusion::sql::TableReference;
 use datafusion::{
     error::Result, logical_expr::utils::split_conjunction, prelude::Column,
@@ -71,6 +71,7 @@ use datafusion::{
 use std::collections::HashSet;
 use std::sync::Arc;
 use substrait::proto::exchange_rel::ExchangeKind;
+use substrait::proto::expression::cast::FailureBehavior::ReturnNull;
 use substrait::proto::expression::literal::user_defined::Val;
 use substrait::proto::expression::literal::{
     interval_day_to_second, IntervalCompound, IntervalDayToSecond, IntervalYearToMonth,
@@ -97,7 +98,7 @@ use substrait::proto::{
     sort_field::{SortDirection, SortKind::*},
     AggregateFunction, Expression, NamedStruct, Plan, Rel, RelCommon, Type,
 };
-use substrait::proto::{ExtendedExpression, FunctionArgument, SortField};
+use substrait::proto::{fetch_rel, ExtendedExpression, FunctionArgument, SortField};
 
 use super::state::SubstraitPlanningState;
 
@@ -639,14 +640,27 @@ pub async fn from_substrait_rel(
                 let input = LogicalPlanBuilder::from(
                     from_substrait_rel(state, input, extensions).await?,
                 );
-                let offset = fetch.offset as usize;
-                // -1 means that ALL records should be returned
-                let count = if fetch.count == -1 {
-                    None
-                } else {
-                    Some(fetch.count as usize)
+                let empty_schema = DFSchemaRef::new(DFSchema::empty());
+                let offset = match &fetch.offset_mode {
+                    Some(fetch_rel::OffsetMode::Offset(offset)) => Some(lit(*offset)),
+                    Some(fetch_rel::OffsetMode::OffsetExpr(expr)) => Some(
+                        from_substrait_rex(state, expr, &empty_schema, extensions)
+                            .await?,
+                    ),
+                    None => None,
                 };
-                input.limit(offset, count)?.build()
+                let count = match &fetch.count_mode {
+                    Some(fetch_rel::CountMode::Count(count)) => {
+                        // -1 means that ALL records should be returned, equivalent to None
+                        (*count != -1).then(|| lit(*count))
+                    }
+                    Some(fetch_rel::CountMode::CountExpr(expr)) => Some(
+                        from_substrait_rex(state, expr, &empty_schema, extensions)
+                            .await?,
+                    ),
+                    None => None,
+                };
+                input.limit_by_expr(offset, count)?.build()
             } else {
                 not_impl_err!("Fetch without an input is not valid")
             }
@@ -1682,8 +1696,8 @@ pub async fn from_substrait_rex(
             Ok(Expr::Literal(scalar_value))
         }
         Some(RexType::Cast(cast)) => match cast.as_ref().r#type.as_ref() {
-            Some(output_type) => Ok(Expr::Cast(Cast::new(
-                Box::new(
+            Some(output_type) => {
+                let input_expr = Box::new(
                     from_substrait_rex(
                         state,
                         cast.as_ref().input.as_ref().unwrap().as_ref(),
@@ -1691,9 +1705,15 @@ pub async fn from_substrait_rex(
                         extensions,
                     )
                     .await?,
-                ),
-                from_substrait_type_without_names(output_type, extensions)?,
-            ))),
+                );
+                let data_type =
+                    from_substrait_type_without_names(output_type, extensions)?;
+                if cast.failure_behavior() == ReturnNull {
+                    Ok(Expr::TryCast(TryCast::new(input_expr, data_type)))
+                } else {
+                    Ok(Expr::Cast(Cast::new(input_expr, data_type)))
+                }
+            }
             None => substrait_err!("Cast expression without output type is not allowed"),
         },
         Some(RexType::WindowFunction(window)) => {

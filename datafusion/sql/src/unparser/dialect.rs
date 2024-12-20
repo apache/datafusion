@@ -21,7 +21,7 @@ use arrow_schema::TimeUnit;
 use datafusion_expr::Expr;
 use regex::Regex;
 use sqlparser::{
-    ast::{self, Function, Ident, ObjectName, TimezoneInfo},
+    ast::{self, BinaryOperator, Function, Ident, ObjectName, TimezoneInfo},
     keywords::ALL_KEYWORDS,
 };
 
@@ -131,6 +131,13 @@ pub trait Dialect: Send + Sync {
         false
     }
 
+    /// The division operator for the dialect
+    /// Most dialect uses ` BinaryOperator::Divide` (/)
+    /// But DuckDB dialect uses `BinaryOperator::DuckIntegerDivide` (//)
+    fn division_operator(&self) -> BinaryOperator {
+        BinaryOperator::Divide
+    }
+
     /// Allows the dialect to override scalar function unparsing if the dialect has specific rules.
     /// Returns None if the default unparsing should be used, or Some(ast::Expr) if there is
     /// a custom implementation for the function.
@@ -148,6 +155,15 @@ pub trait Dialect: Send + Sync {
     /// Otherwise, the column will be unparsed with only the table name and colum name
     /// (e.g. table_name.column_name)
     fn full_qualified_col(&self) -> bool {
+        false
+    }
+
+    /// Allow to unparse the unnest plan as [ast::TableFactor::UNNEST].
+    ///
+    /// Some dialects like BigQuery require UNNEST to be used in the FROM clause but
+    /// the LogicalPlan planner always puts UNNEST in the SELECT clause. This flag allows
+    /// to unparse the UNNEST plan as [ast::TableFactor::UNNEST] instead of a subquery.
+    fn unnest_as_table_factor(&self) -> bool {
         false
     }
 }
@@ -298,6 +314,10 @@ impl Dialect for DuckDBDialect {
         CharacterLengthStyle::Length
     }
 
+    fn division_operator(&self) -> BinaryOperator {
+        BinaryOperator::DuckIntegerDivide
+    }
+
     fn scalar_function_to_sql_overrides(
         &self,
         unparser: &Unparser,
@@ -435,7 +455,9 @@ pub struct CustomDialect {
     date32_cast_dtype: ast::DataType,
     supports_column_alias_in_table_alias: bool,
     requires_derived_table_alias: bool,
+    division_operator: BinaryOperator,
     full_qualified_col: bool,
+    unnest_as_table_factor: bool,
 }
 
 impl Default for CustomDialect {
@@ -460,14 +482,16 @@ impl Default for CustomDialect {
             date32_cast_dtype: ast::DataType::Date,
             supports_column_alias_in_table_alias: true,
             requires_derived_table_alias: false,
+            division_operator: BinaryOperator::Divide,
             full_qualified_col: false,
+            unnest_as_table_factor: false,
         }
     }
 }
 
 impl CustomDialect {
     // Create a CustomDialect
-    #[deprecated(note = "please use `CustomDialectBuilder` instead")]
+    #[deprecated(since = "41.0.0", note = "please use `CustomDialectBuilder` instead")]
     pub fn new(identifier_quote_style: Option<char>) -> Self {
         Self {
             identifier_quote_style,
@@ -562,8 +586,16 @@ impl Dialect for CustomDialect {
         self.requires_derived_table_alias
     }
 
+    fn division_operator(&self) -> BinaryOperator {
+        self.division_operator.clone()
+    }
+
     fn full_qualified_col(&self) -> bool {
         self.full_qualified_col
+    }
+
+    fn unnest_as_table_factor(&self) -> bool {
+        self.unnest_as_table_factor
     }
 }
 
@@ -598,7 +630,9 @@ pub struct CustomDialectBuilder {
     date32_cast_dtype: ast::DataType,
     supports_column_alias_in_table_alias: bool,
     requires_derived_table_alias: bool,
+    division_operator: BinaryOperator,
     full_qualified_col: bool,
+    unnest_as_table_factor: bool,
 }
 
 impl Default for CustomDialectBuilder {
@@ -629,7 +663,9 @@ impl CustomDialectBuilder {
             date32_cast_dtype: ast::DataType::Date,
             supports_column_alias_in_table_alias: true,
             requires_derived_table_alias: false,
+            division_operator: BinaryOperator::Divide,
             full_qualified_col: false,
+            unnest_as_table_factor: false,
         }
     }
 
@@ -652,7 +688,9 @@ impl CustomDialectBuilder {
             supports_column_alias_in_table_alias: self
                 .supports_column_alias_in_table_alias,
             requires_derived_table_alias: self.requires_derived_table_alias,
+            division_operator: self.division_operator,
             full_qualified_col: self.full_qualified_col,
+            unnest_as_table_factor: self.unnest_as_table_factor,
         }
     }
 
@@ -770,9 +808,19 @@ impl CustomDialectBuilder {
         self
     }
 
+    pub fn with_division_operator(mut self, division_operator: BinaryOperator) -> Self {
+        self.division_operator = division_operator;
+        self
+    }
+
     /// Customize the dialect to allow full qualified column names
     pub fn with_full_qualified_col(mut self, full_qualified_col: bool) -> Self {
         self.full_qualified_col = full_qualified_col;
+        self
+    }
+
+    pub fn with_unnest_as_table_factor(mut self, _unnest_as_table_factor: bool) -> Self {
+        self.unnest_as_table_factor = _unnest_as_table_factor;
         self
     }
 }

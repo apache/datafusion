@@ -642,7 +642,7 @@ pub fn comparison_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<D
         .or_else(|| struct_coercion(lhs_type, rhs_type))
 }
 
-// Similar to comparison_coercion but prefer numeric if compares with numeric and string
+/// Similar to [`comparison_coercion`] but prefer numeric if compares with numeric and string
 pub fn comparison_coercion_numeric(
     lhs_type: &DataType,
     rhs_type: &DataType,
@@ -2098,7 +2098,7 @@ mod tests {
         );
 
         // list
-        let inner_field = Arc::new(Field::new("item", DataType::Int64, true));
+        let inner_field = Arc::new(Field::new_list_field(DataType::Int64, true));
         test_coercion_binary_rule!(
             DataType::List(Arc::clone(&inner_field)),
             DataType::List(Arc::clone(&inner_field)),
@@ -2155,8 +2155,7 @@ mod tests {
         );
 
         // Negative test: inner_timestamp_field and inner_field are not compatible because their inner types are not compatible
-        let inner_timestamp_field = Arc::new(Field::new(
-            "item",
+        let inner_timestamp_field = Arc::new(Field::new_list_field(
             DataType::Timestamp(TimeUnit::Microsecond, None),
             true,
         ));

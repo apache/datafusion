@@ -88,7 +88,11 @@ impl ScalarUDFImpl for FromUnixtimeFunc {
         internal_err!("call return_type_from_exprs instead")
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         let len = args.len();
         if len != 1 && len != 2 {
             return exec_err!(
@@ -129,10 +133,10 @@ static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
 
 fn get_from_unixtime_doc() -> &'static Documentation {
     DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_DATETIME)
-            .with_description("Converts an integer to RFC3339 timestamp format (`YYYY-MM-DDT00:00:00.000000000Z`). Integers and unsigned integers are interpreted as nanoseconds since the unix epoch (`1970-01-01T00:00:00Z`) return the corresponding timestamp.")
-            .with_syntax_example("from_unixtime(expression[, timezone])")
+        Documentation::builder(
+            DOC_SECTION_DATETIME,
+            "Converts an integer to RFC3339 timestamp format (`YYYY-MM-DDT00:00:00.000000000Z`). Integers and unsigned integers are interpreted as nanoseconds since the unix epoch (`1970-01-01T00:00:00Z`) return the corresponding timestamp.",
+            "from_unixtime(expression[, timezone])")
             .with_standard_argument("expression", None)
             .with_argument(
                 "timezone",
@@ -147,7 +151,6 @@ fn get_from_unixtime_doc() -> &'static Documentation {
 +-----------------------------------------------------------+
 ```"#)
             .build()
-            .unwrap()
     })
 }
 
@@ -162,8 +165,8 @@ mod test {
     fn test_without_timezone() {
         let args = [ColumnarValue::Scalar(Int64(Some(1729900800)))];
 
-        #[allow(deprecated)] // TODO use invoke_batch
-        let result = FromUnixtimeFunc::new().invoke(&args).unwrap();
+        // TODO use invoke_with_args
+        let result = FromUnixtimeFunc::new().invoke_batch(&args, 1).unwrap();
 
         match result {
             ColumnarValue::Scalar(ScalarValue::TimestampSecond(Some(sec), None)) => {
@@ -182,8 +185,8 @@ mod test {
             ))),
         ];
 
-        #[allow(deprecated)] // TODO use invoke_batch
-        let result = FromUnixtimeFunc::new().invoke(&args).unwrap();
+        // TODO use invoke_with_args
+        let result = FromUnixtimeFunc::new().invoke_batch(&args, 2).unwrap();
 
         match result {
             ColumnarValue::Scalar(ScalarValue::TimestampSecond(Some(sec), Some(tz))) => {

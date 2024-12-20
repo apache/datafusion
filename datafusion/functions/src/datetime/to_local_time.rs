@@ -320,7 +320,11 @@ impl ScalarUDFImpl for ToLocalTimeFunc {
         }
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         if args.len() != 1 {
             return exec_err!(
                 "to_local_time function requires 1 argument, got {:?}",
@@ -363,10 +367,10 @@ static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
 
 fn get_to_local_time_doc() -> &'static Documentation {
     DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_DATETIME)
-            .with_description("Converts a timestamp with a timezone to a timestamp without a timezone (with no offset or timezone information). This function handles daylight saving time changes.")
-            .with_syntax_example("to_local_time(expression)")
+        Documentation::builder(
+            DOC_SECTION_DATETIME,
+            "Converts a timestamp with a timezone to a timestamp without a timezone (with no offset or timezone information). This function handles daylight saving time changes.",
+            "to_local_time(expression)")
             .with_argument(
                 "expression",
                 "Time expression to operate on. Can be a constant, column, or function."
@@ -418,7 +422,6 @@ FROM (
 +---------------------------+
 ```"#)
             .build()
-            .unwrap()
     })
 }
 
@@ -559,7 +562,7 @@ mod tests {
     fn test_to_local_time_helper(input: ScalarValue, expected: ScalarValue) {
         let res = ToLocalTimeFunc::new()
             .invoke_with_args(ScalarFunctionArgs {
-                args: &[ColumnarValue::Scalar(input)],
+                args: vec![ColumnarValue::Scalar(input)],
                 number_rows: 1,
                 return_type: &expected.data_type(),
             })

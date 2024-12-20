@@ -18,8 +18,10 @@
 //! Signature module contains foundational types that are used to represent signatures, types,
 //! and return types of functions in DataFusion.
 
+use std::fmt::Display;
+
 use crate::type_coercion::aggregates::NUMERICS;
-use arrow::datatypes::DataType;
+use arrow::datatypes::{DataType, IntervalUnit, TimeUnit};
 use datafusion_common::types::{LogicalTypeRef, NativeType};
 use itertools::Itertools;
 
@@ -72,6 +74,9 @@ pub enum Volatility {
 /// adds a cast such as `cos(CAST int_column AS DOUBLE)` during planning.
 ///
 /// # Data Types
+///
+/// ## Timestamps
+///
 /// Types to match are represented using Arrow's [`DataType`].  [`DataType::Timestamp`] has an optional variable
 /// timezone specification. To specify a function can handle a timestamp with *ANY* timezone, use
 /// the [`TIMEZONE_WILDCARD`]. For example:
@@ -91,8 +96,12 @@ pub enum Volatility {
 pub enum TypeSignature {
     /// One or more arguments of a common type out of a list of valid types.
     ///
+    /// For functions that take no arguments (e.g. `random()` see [`TypeSignature::Nullary`]).
+    ///
     /// # Examples
-    /// A function such as `concat` is `Variadic(vec![DataType::Utf8, DataType::LargeUtf8])`
+    ///
+    /// A function such as `concat` is `Variadic(vec![DataType::Utf8,
+    /// DataType::LargeUtf8])`
     Variadic(Vec<DataType>),
     /// The acceptable signature and coercions rules to coerce arguments to this
     /// signature are special for this function. If this signature is specified,
@@ -100,57 +109,109 @@ pub enum TypeSignature {
     UserDefined,
     /// One or more arguments with arbitrary types
     VariadicAny,
-    /// Fixed number of arguments of an arbitrary but equal type out of a list of valid types.
+    /// One or more arguments of an arbitrary but equal type out of a list of valid types.
     ///
     /// # Examples
+    ///
     /// 1. A function of one argument of f64 is `Uniform(1, vec![DataType::Float64])`
     /// 2. A function of one argument of f64 or f32 is `Uniform(1, vec![DataType::Float32, DataType::Float64])`
     Uniform(usize, Vec<DataType>),
-    /// Exact number of arguments of an exact type
+    /// One or more arguments with exactly the specified types in order.
+    ///
+    /// For functions that take no arguments (e.g. `random()`) use [`TypeSignature::Nullary`].
     Exact(Vec<DataType>),
-    /// The number of arguments that can be coerced to in order
+    /// One or more arguments belonging to the [`TypeSignatureClass`], in order.
+    ///
     /// For example, `Coercible(vec![logical_float64()])` accepts
     /// arguments like `vec![DataType::Int32]` or `vec![DataType::Float32]`
-    /// since i32 and f32 can be casted to f64
-    Coercible(Vec<LogicalTypeRef>),
-    /// The arguments will be coerced to a single type based on the comparison rules.
-    /// For example, i32 and i64 has coerced type Int64.
+    /// since i32 and f32 can be cast to f64
+    ///
+    /// For functions that take no arguments (e.g. `random()`) see [`TypeSignature::Nullary`].
+    Coercible(Vec<TypeSignatureClass>),
+    /// One or more arguments that can be "compared"
+    ///
+    /// Each argument will be coerced to a single type based on comparison rules.
+    /// For example a function called with `i32` and `i64` has coerced type `Int64` so
+    /// each argument will be coerced to `Int64` before the function is invoked.
     ///
     /// Note:
-    /// - If compares with numeric and string, numeric is preferred for numeric string cases. For example, nullif('2', 1) has coerced types Int64.
+    /// - If compares with numeric and string, numeric is preferred for numeric string cases. For example, `nullif('2', 1)` has coerced types `Int64`.
     /// - If the result is Null, it will be coerced to String (Utf8View).
+    /// - See [`comparison_coercion`] for more details.
+    /// - For functions that take no arguments (e.g. `random()` see [`TypeSignature::Nullary`]).
     ///
-    /// See `comparison_coercion_numeric` for more details.
+    /// [`comparison_coercion`]: crate::type_coercion::binary::comparison_coercion
     Comparable(usize),
-    /// Fixed number of arguments of arbitrary types, number should be larger than 0
+    /// One or more arguments of arbitrary types.
+    ///
+    /// For functions that take no arguments (e.g. `random()`) use [`TypeSignature::Nullary`].
     Any(usize),
-    /// Matches exactly one of a list of [`TypeSignature`]s. Coercion is attempted to match
-    /// the signatures in order, and stops after the first success, if any.
+    /// Matches exactly one of a list of [`TypeSignature`]s.
+    ///
+    /// Coercion is attempted to match the signatures in order, and stops after
+    /// the first success, if any.
     ///
     /// # Examples
-    /// Function `make_array` takes 0 or more arguments with arbitrary types, its `TypeSignature`
+    ///
+    /// Since `make_array` takes 0 or more arguments with arbitrary types, its `TypeSignature`
     /// is `OneOf(vec![Any(0), VariadicAny])`.
     OneOf(Vec<TypeSignature>),
-    /// Specifies Signatures for array functions
+    /// A function that has an [`ArrayFunctionSignature`]
     ArraySignature(ArrayFunctionSignature),
-    /// Fixed number of arguments of numeric types.
+    /// One or more arguments of numeric types.
+    ///
     /// See [`NativeType::is_numeric`] to know which type is considered numeric
     ///
-    /// [`NativeType::is_numeric`]: datafusion_common
+    /// For functions that take no arguments (e.g. `random()`) use [`TypeSignature::Nullary`].
+    ///
+    /// [`NativeType::is_numeric`]: datafusion_common::types::NativeType::is_numeric
     Numeric(usize),
-    /// Fixed number of arguments of all the same string types.
+    /// One or arguments of all the same string types.
+    ///
     /// The precedence of type from high to low is Utf8View, LargeUtf8 and Utf8.
     /// Null is considered as `Utf8` by default
     /// Dictionary with string value type is also handled.
+    ///
+    /// For example, if a function is called with (utf8, large_utf8), all
+    /// arguments will be coerced to  `LargeUtf8`
+    ///
+    /// For functions that take no arguments (e.g. `random()` use [`TypeSignature::Nullary`]).
     String(usize),
-    /// Zero argument
-    NullAry,
+    /// No arguments
+    Nullary,
 }
 
 impl TypeSignature {
     #[inline]
     pub fn is_one_of(&self) -> bool {
         matches!(self, TypeSignature::OneOf(_))
+    }
+}
+
+/// Represents the class of types that can be used in a function signature.
+///
+/// This is used to specify what types are valid for function arguments in a more flexible way than
+/// just listing specific DataTypes. For example, TypeSignatureClass::Timestamp matches any timestamp
+/// type regardless of timezone or precision.
+///
+/// Used primarily with TypeSignature::Coercible to define function signatures that can accept
+/// arguments that can be coerced to a particular class of types.
+#[derive(Debug, Clone, Eq, PartialEq, PartialOrd, Hash)]
+pub enum TypeSignatureClass {
+    Timestamp,
+    Date,
+    Time,
+    Interval,
+    Duration,
+    Native(LogicalTypeRef),
+    // TODO:
+    // Numeric
+    // Integer
+}
+
+impl Display for TypeSignatureClass {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "TypeSignatureClass::{self:?}")
     }
 }
 
@@ -175,12 +236,15 @@ pub enum ArrayFunctionSignature {
     /// The function takes a single argument that must be a List/LargeList/FixedSizeList
     /// or something that can be coerced to one of those types.
     Array,
+    /// A function takes a single argument that must be a List/LargeList/FixedSizeList
+    /// which gets coerced to List, with element type recursively coerced to List too if it is list-like.
+    RecursiveArray,
     /// Specialized Signature for MapArray
     /// The function takes a single argument that must be a MapArray
     MapArray,
 }
 
-impl std::fmt::Display for ArrayFunctionSignature {
+impl Display for ArrayFunctionSignature {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             ArrayFunctionSignature::ArrayAndElement => {
@@ -198,6 +262,9 @@ impl std::fmt::Display for ArrayFunctionSignature {
             ArrayFunctionSignature::Array => {
                 write!(f, "array")
             }
+            ArrayFunctionSignature::RecursiveArray => {
+                write!(f, "recursive_array")
+            }
             ArrayFunctionSignature::MapArray => {
                 write!(f, "map_array")
             }
@@ -208,7 +275,7 @@ impl std::fmt::Display for ArrayFunctionSignature {
 impl TypeSignature {
     pub fn to_string_repr(&self) -> Vec<String> {
         match self {
-            TypeSignature::NullAry => {
+            TypeSignature::Nullary => {
                 vec!["NullAry()".to_string()]
             }
             TypeSignature::Variadic(types) => {
@@ -255,7 +322,7 @@ impl TypeSignature {
     }
 
     /// Helper function to join types with specified delimiter.
-    pub fn join_types<T: std::fmt::Display>(types: &[T], delimiter: &str) -> String {
+    pub fn join_types<T: Display>(types: &[T], delimiter: &str) -> String {
         types
             .iter()
             .map(|t| t.to_string())
@@ -267,7 +334,7 @@ impl TypeSignature {
     pub fn supports_zero_argument(&self) -> bool {
         match &self {
             TypeSignature::Exact(vec) => vec.is_empty(),
-            TypeSignature::NullAry => true,
+            TypeSignature::Nullary => true,
             TypeSignature::OneOf(types) => types
                 .iter()
                 .any(|type_sig| type_sig.supports_zero_argument()),
@@ -290,7 +357,30 @@ impl TypeSignature {
                 .collect(),
             TypeSignature::Coercible(types) => types
                 .iter()
-                .map(|logical_type| get_data_types(logical_type.native()))
+                .map(|logical_type| match logical_type {
+                    TypeSignatureClass::Native(l) => get_data_types(l.native()),
+                    TypeSignatureClass::Timestamp => {
+                        vec![
+                            DataType::Timestamp(TimeUnit::Nanosecond, None),
+                            DataType::Timestamp(
+                                TimeUnit::Nanosecond,
+                                Some(TIMEZONE_WILDCARD.into()),
+                            ),
+                        ]
+                    }
+                    TypeSignatureClass::Date => {
+                        vec![DataType::Date64]
+                    }
+                    TypeSignatureClass::Time => {
+                        vec![DataType::Time64(TimeUnit::Nanosecond)]
+                    }
+                    TypeSignatureClass::Interval => {
+                        vec![DataType::Interval(IntervalUnit::DayTime)]
+                    }
+                    TypeSignatureClass::Duration => {
+                        vec![DataType::Duration(TimeUnit::Nanosecond)]
+                    }
+                })
                 .multi_cartesian_product()
                 .collect(),
             TypeSignature::Variadic(types) => types
@@ -310,7 +400,7 @@ impl TypeSignature {
             // TODO: Implement for other types
             TypeSignature::Any(_)
             | TypeSignature::Comparable(_)
-            | TypeSignature::NullAry
+            | TypeSignature::Nullary
             | TypeSignature::VariadicAny
             | TypeSignature::ArraySignature(_)
             | TypeSignature::UserDefined => vec![],
@@ -424,7 +514,10 @@ impl Signature {
         }
     }
     /// Target coerce types in order
-    pub fn coercible(target_types: Vec<LogicalTypeRef>, volatility: Volatility) -> Self {
+    pub fn coercible(
+        target_types: Vec<TypeSignatureClass>,
+        volatility: Volatility,
+    ) -> Self {
         Self {
             type_signature: TypeSignature::Coercible(target_types),
             volatility,
@@ -441,7 +534,7 @@ impl Signature {
 
     pub fn nullary(volatility: Volatility) -> Self {
         Signature {
-            type_signature: TypeSignature::NullAry,
+            type_signature: TypeSignature::Nullary,
             volatility,
         }
     }
@@ -518,10 +611,10 @@ mod tests {
             TypeSignature::Exact(vec![]),
             TypeSignature::OneOf(vec![
                 TypeSignature::Exact(vec![DataType::Int8]),
-                TypeSignature::NullAry,
+                TypeSignature::Nullary,
                 TypeSignature::Uniform(1, vec![DataType::Int8]),
             ]),
-            TypeSignature::NullAry,
+            TypeSignature::Nullary,
         ];
 
         for case in positive_cases {
@@ -618,8 +711,10 @@ mod tests {
             ]
         );
 
-        let type_signature =
-            TypeSignature::Coercible(vec![logical_string(), logical_int64()]);
+        let type_signature = TypeSignature::Coercible(vec![
+            TypeSignatureClass::Native(logical_string()),
+            TypeSignatureClass::Native(logical_int64()),
+        ]);
         let possible_types = type_signature.get_possible_types();
         assert_eq!(
             possible_types,

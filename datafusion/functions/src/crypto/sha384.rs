@@ -65,7 +65,11 @@ impl ScalarUDFImpl for SHA384Func {
         utf8_or_binary_to_binary_type(&arg_types[0], self.name())
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         sha384(args)
     }
 
@@ -78,12 +82,13 @@ static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
 
 fn get_sha384_doc() -> &'static Documentation {
     DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_HASHING)
-            .with_description("Computes the SHA-384 hash of a binary string.")
-            .with_syntax_example("sha384(expression)")
-            .with_sql_example(
-                r#"```sql
+        Documentation::builder(
+            DOC_SECTION_HASHING,
+            "Computes the SHA-384 hash of a binary string.",
+            "sha384(expression)",
+        )
+        .with_sql_example(
+            r#"```sql
 > select sha384('foo');
 +-----------------------------------------+
 | sha384(Utf8("foo"))                     |
@@ -91,9 +96,8 @@ fn get_sha384_doc() -> &'static Documentation {
 | <sha384_hash_result>                    |
 +-----------------------------------------+
 ```"#,
-            )
-            .with_standard_argument("expression", Some("String"))
-            .build()
-            .unwrap()
+        )
+        .with_standard_argument("expression", Some("String"))
+        .build()
     })
 }

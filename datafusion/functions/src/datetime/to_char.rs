@@ -107,7 +107,11 @@ impl ScalarUDFImpl for ToCharFunc {
         Ok(Utf8)
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         if args.len() != 2 {
             return exec_err!(
                 "to_char function requires 2 arguments, got {}",
@@ -147,10 +151,10 @@ static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
 
 fn get_to_char_doc() -> &'static Documentation {
     DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_DATETIME)
-            .with_description("Returns a string representation of a date, time, timestamp or duration based on a [Chrono format](https://docs.rs/chrono/latest/chrono/format/strftime/index.html). Unlike the PostgreSQL equivalent of this function numerical formatting is not supported.")
-            .with_syntax_example("to_char(expression, format)")
+        Documentation::builder(
+            DOC_SECTION_DATETIME,
+            "Returns a string representation of a date, time, timestamp or duration based on a [Chrono format](https://docs.rs/chrono/latest/chrono/format/strftime/index.html). Unlike the PostgreSQL equivalent of this function numerical formatting is not supported.",
+            "to_char(expression, format)")
             .with_argument(
                 "expression",
                 " Expression to operate on. Can be a constant, column, or function that results in a date, time, timestamp or duration."
@@ -172,7 +176,6 @@ fn get_to_char_doc() -> &'static Documentation {
 Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/to_char.rs)
 "#)
             .build()
-            .unwrap()
     })
 }
 
@@ -384,6 +387,7 @@ mod tests {
         ];
 
         for (value, format, expected) in scalar_data {
+            #[allow(deprecated)] // TODO migrate UDF to invoke from invoke_batch
             let result = ToCharFunc::new()
                 .invoke_batch(
                     &[ColumnarValue::Scalar(value), ColumnarValue::Scalar(format)],
@@ -461,14 +465,15 @@ mod tests {
         ];
 
         for (value, format, expected) in scalar_array_data {
-            let batch_size = format.len();
+            let batch_len = format.len();
+            #[allow(deprecated)] // TODO migrate UDF to invoke from invoke_batch
             let result = ToCharFunc::new()
                 .invoke_batch(
                     &[
                         ColumnarValue::Scalar(value),
                         ColumnarValue::Array(Arc::new(format) as ArrayRef),
                     ],
-                    batch_size,
+                    batch_len,
                 )
                 .expect("that to_char parsed values without error");
 
@@ -590,14 +595,15 @@ mod tests {
         ];
 
         for (value, format, expected) in array_scalar_data {
-            let batch_size = value.len();
+            let batch_len = value.len();
+            #[allow(deprecated)] // TODO migrate UDF to invoke from invoke_batch
             let result = ToCharFunc::new()
                 .invoke_batch(
                     &[
                         ColumnarValue::Array(value as ArrayRef),
                         ColumnarValue::Scalar(format),
                     ],
-                    batch_size,
+                    batch_len,
                 )
                 .expect("that to_char parsed values without error");
 
@@ -610,14 +616,15 @@ mod tests {
         }
 
         for (value, format, expected) in array_array_data {
-            let batch_size = value.len();
+            let batch_len = value.len();
+            #[allow(deprecated)] // TODO migrate UDF to invoke from invoke_batch
             let result = ToCharFunc::new()
                 .invoke_batch(
                     &[
                         ColumnarValue::Array(value),
                         ColumnarValue::Array(Arc::new(format) as ArrayRef),
                     ],
-                    batch_size,
+                    batch_len,
                 )
                 .expect("that to_char parsed values without error");
 
@@ -634,6 +641,7 @@ mod tests {
         //
 
         // invalid number of arguments
+        #[allow(deprecated)] // TODO migrate UDF to invoke from invoke_batch
         let result = ToCharFunc::new()
             .invoke_batch(&[ColumnarValue::Scalar(ScalarValue::Int32(Some(1)))], 1);
         assert_eq!(
@@ -642,6 +650,7 @@ mod tests {
         );
 
         // invalid type
+        #[allow(deprecated)] // TODO migrate UDF to invoke from invoke_batch
         let result = ToCharFunc::new().invoke_batch(
             &[
                 ColumnarValue::Scalar(ScalarValue::Int32(Some(1))),

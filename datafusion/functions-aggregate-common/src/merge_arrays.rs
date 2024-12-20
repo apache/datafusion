@@ -65,7 +65,7 @@ impl<'a> CustomElement<'a> {
 // Overwrite ordering implementation such that
 // - `self.ordering` values are used for comparison,
 // - When used inside `BinaryHeap` it is a min-heap.
-impl<'a> Ord for CustomElement<'a> {
+impl Ord for CustomElement<'_> {
     fn cmp(&self, other: &Self) -> Ordering {
         // Compares according to custom ordering
         self.ordering(&self.ordering, &other.ordering)
@@ -78,7 +78,7 @@ impl<'a> Ord for CustomElement<'a> {
     }
 }
 
-impl<'a> PartialOrd for CustomElement<'a> {
+impl PartialOrd for CustomElement<'_> {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(self.cmp(other))
     }

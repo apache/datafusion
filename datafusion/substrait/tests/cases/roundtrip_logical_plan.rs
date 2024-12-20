@@ -240,17 +240,20 @@ async fn select_with_filter_bool_expr() -> Result<()> {
 
 #[tokio::test]
 async fn select_with_limit() -> Result<()> {
-    roundtrip_fill_na("SELECT * FROM data LIMIT 100").await
+    roundtrip_fill_na("SELECT * FROM data LIMIT 100").await?;
+    roundtrip_fill_na("SELECT * FROM data LIMIT 98+100/50").await
 }
 
 #[tokio::test]
 async fn select_without_limit() -> Result<()> {
-    roundtrip_fill_na("SELECT * FROM data OFFSET 10").await
+    roundtrip_fill_na("SELECT * FROM data OFFSET 10").await?;
+    roundtrip_fill_na("SELECT * FROM data OFFSET 5+7-2").await
 }
 
 #[tokio::test]
 async fn select_with_limit_offset() -> Result<()> {
-    roundtrip("SELECT * FROM data LIMIT 200 OFFSET 10").await
+    roundtrip("SELECT * FROM data LIMIT 200 OFFSET 10").await?;
+    roundtrip("SELECT * FROM data LIMIT 100+100 OFFSET 20/2").await
 }
 
 #[tokio::test]
@@ -409,6 +412,16 @@ async fn cast_decimal_to_int() -> Result<()> {
 #[tokio::test]
 async fn implicit_cast() -> Result<()> {
     roundtrip("SELECT * FROM data WHERE a = b").await
+}
+
+#[tokio::test]
+async fn try_cast_decimal_to_int() -> Result<()> {
+    roundtrip("SELECT * FROM data WHERE a = TRY_CAST(b AS int)").await
+}
+
+#[tokio::test]
+async fn try_cast_decimal_to_string() -> Result<()> {
+    roundtrip("SELECT * FROM data WHERE a = TRY_CAST(b AS string)").await
 }
 
 #[tokio::test]
@@ -1443,10 +1456,14 @@ async fn create_all_type_context() -> Result<SessionContext> {
         Field::new("utf8_col", DataType::Utf8, true),
         Field::new("large_utf8_col", DataType::LargeUtf8, true),
         Field::new("view_utf8_col", DataType::Utf8View, true),
-        Field::new_list("list_col", Field::new("item", DataType::Int64, true), true),
+        Field::new_list(
+            "list_col",
+            Field::new_list_field(DataType::Int64, true),
+            true,
+        ),
         Field::new_list(
             "large_list_col",
-            Field::new("item", DataType::Int64, true),
+            Field::new_list_field(DataType::Int64, true),
             true,
         ),
         Field::new("decimal_128_col", DataType::Decimal128(10, 2), true),

@@ -25,7 +25,7 @@ use crate::utils::{
 };
 
 use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
-use datafusion_common::{not_impl_err, plan_err, DataFusionError, Result};
+use datafusion_common::{not_impl_err, plan_err, Result};
 use datafusion_common::{RecursionUnnestOption, UnnestOptions};
 use datafusion_expr::expr::{Alias, PlannedReplaceSelectItem, WildcardOptions};
 use datafusion_expr::expr_rewriter::{
@@ -38,6 +38,7 @@ use datafusion_expr::{
     qualified_wildcard_with_options, wildcard_with_options, Aggregate, Expr, Filter,
     GroupingSet, LogicalPlan, LogicalPlanBuilder, Partitioning,
 };
+
 use indexmap::IndexMap;
 use sqlparser::ast::{
     Distinct, Expr as SQLExpr, GroupByExpr, NamedWindowExpr, OrderByExpr,
@@ -45,7 +46,7 @@ use sqlparser::ast::{
 };
 use sqlparser::ast::{NamedWindowDefinition, Select, SelectItem, TableWithJoins};
 
-impl<'a, S: ContextProvider> SqlToRel<'a, S> {
+impl<S: ContextProvider> SqlToRel<'_, S> {
     /// Generate a logic plan from an SQL select
     pub(super) fn select_to_plan(
         &self,
@@ -657,9 +658,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         } = options;
 
         if opt_rename.is_some() {
-            Err(DataFusionError::NotImplemented(
-                "wildcard * with RENAME not supported ".to_string(),
-            ))
+            not_impl_err!("wildcard * with RENAME not supported ")
         } else {
             Ok(())
         }

@@ -66,7 +66,11 @@ impl ScalarUDFImpl for StrposFunc {
         utf8_to_int_type(&arg_types[0], "strpos/instr/position")
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         make_scalar_function(strpos, vec![])(args)
     }
 
@@ -83,10 +87,10 @@ static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
 
 fn get_strpos_doc() -> &'static Documentation {
     DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_STRING)
-            .with_description("Returns the starting position of a specified substring in a string. Positions begin at 1. If the substring does not exist in the string, the function returns 0.")
-            .with_syntax_example("strpos(str, substr)")
+        Documentation::builder(
+            DOC_SECTION_STRING,
+            "Returns the starting position of a specified substring in a string. Positions begin at 1. If the substring does not exist in the string, the function returns 0.",
+            "strpos(str, substr)")
             .with_sql_example(r#"```sql
 > select strpos('datafusion', 'fus');
 +----------------------------------------+
@@ -99,7 +103,6 @@ fn get_strpos_doc() -> &'static Documentation {
             .with_argument("substr", "Substring expression to search for.")
             .with_alternative_syntax("position(substr in origstr)")
             .build()
-            .unwrap()
     })
 }
 
@@ -170,13 +173,13 @@ where
                 // the sub vector in the main vector. This is faster than string.find() method.
                 if ascii_only {
                     // If the substring is empty, the result is 1.
-                    if substring.as_bytes().is_empty() {
+                    if substring.is_empty() {
                         T::Native::from_usize(1)
                     } else {
                         T::Native::from_usize(
                             string
                                 .as_bytes()
-                                .windows(substring.as_bytes().len())
+                                .windows(substring.len())
                                 .position(|w| w == substring.as_bytes())
                                 .map(|x| x + 1)
                                 .unwrap_or(0),
@@ -215,7 +218,7 @@ mod tests {
         ($lhs:literal, $rhs:literal -> $result:literal; $t1:ident $t2:ident $t3:ident $t4:ident $t5:ident) => {
             test_function!(
                 StrposFunc::new(),
-                &[
+                vec![
                     ColumnarValue::Scalar(ScalarValue::$t1(Some($lhs.to_owned()))),
                     ColumnarValue::Scalar(ScalarValue::$t2(Some($rhs.to_owned()))),
                 ],

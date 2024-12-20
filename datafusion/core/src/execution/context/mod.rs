@@ -30,9 +30,8 @@ use crate::{
     catalog_common::memory::MemorySchemaProvider,
     catalog_common::MemoryCatalogProvider,
     dataframe::DataFrame,
-    datasource::{
-        function::{TableFunction, TableFunctionImpl},
-        listing::{ListingOptions, ListingTable, ListingTableConfig, ListingTableUrl},
+    datasource::listing::{
+        ListingOptions, ListingTable, ListingTableConfig, ListingTableUrl,
     },
     datasource::{provider_as_source, MemTable, ViewTable},
     error::{DataFusionError, Result},
@@ -74,7 +73,9 @@ use crate::datasource::dynamic_file::DynamicListTableFactory;
 use crate::execution::session_state::SessionStateBuilder;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use datafusion_catalog::{DynamicFileCatalog, SessionStore, UrlTableFactory};
+use datafusion_catalog::{
+    DynamicFileCatalog, SessionStore, TableFunction, TableFunctionImpl, UrlTableFactory,
+};
 pub use datafusion_execution::config::SessionConfig;
 pub use datafusion_execution::TaskContext;
 pub use datafusion_expr::execution_props::ExecutionProps;
@@ -1764,7 +1765,7 @@ impl<'a> BadPlanVisitor<'a> {
     }
 }
 
-impl<'n, 'a> TreeNodeVisitor<'n> for BadPlanVisitor<'a> {
+impl<'n> TreeNodeVisitor<'n> for BadPlanVisitor<'_> {
     type Node = LogicalPlan;
 
     fn f_down(&mut self, node: &'n Self::Node) -> Result<TreeNodeRecursion> {
@@ -1791,7 +1792,6 @@ mod tests {
     use super::{super::options::CsvReadOptions, *};
     use crate::assert_batches_eq;
     use crate::execution::memory_pool::MemoryConsumer;
-    use crate::execution::runtime_env::RuntimeEnvBuilder;
     use crate::test;
     use crate::test_util::{plan_and_collect, populate_csv_partitions};
     use arrow_schema::{DataType, TimeUnit};
@@ -1931,14 +1931,12 @@ mod tests {
         let path = path.join("tests/tpch-csv");
         let url = format!("file://{}", path.display());
 
-        let runtime = RuntimeEnvBuilder::new().build_arc()?;
         let cfg = SessionConfig::new()
             .set_str("datafusion.catalog.location", url.as_str())
             .set_str("datafusion.catalog.format", "CSV")
             .set_str("datafusion.catalog.has_header", "true");
         let session_state = SessionStateBuilder::new()
             .with_config(cfg)
-            .with_runtime_env(runtime)
             .with_default_features()
             .build();
         let ctx = SessionContext::new_with_state(session_state);

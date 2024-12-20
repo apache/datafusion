@@ -706,9 +706,11 @@ pub fn with_new_children_if_necessary(
     }
 }
 
-/// Return a [wrapper](DisplayableExecutionPlan) around an
+/// Return a [`DisplayableExecutionPlan`] wrapper around an
 /// [`ExecutionPlan`] which can be displayed in various easier to
 /// understand ways.
+///
+/// See examples on [`DisplayableExecutionPlan`]
 pub fn displayable(plan: &dyn ExecutionPlan) -> DisplayableExecutionPlan<'_> {
     DisplayableExecutionPlan::new(plan)
 }
@@ -1098,9 +1100,9 @@ mod tests {
             &vec![0],
         );
         assert!(result.is_err());
-        assert_starts_with(
-            result.err().unwrap().message().as_ref(),
-            "Invalid batch column at '0' has null but schema specifies non-nullable",
+        assert_eq!(
+            result.err().unwrap().strip_backtrace(),
+            "Execution error: Invalid batch column at '0' has null but schema specifies non-nullable",
         );
         Ok(())
     }
@@ -1123,9 +1125,9 @@ mod tests {
             &vec![0],
         );
         assert!(result.is_err());
-        assert_starts_with(
-            result.err().unwrap().message().as_ref(),
-            "Invalid batch column at '0' has null but schema specifies non-nullable",
+        assert_eq!(
+            result.err().unwrap().strip_backtrace(),
+            "Execution error: Invalid batch column at '0' has null but schema specifies non-nullable",
         );
         Ok(())
     }
@@ -1147,9 +1149,9 @@ mod tests {
             &vec![0],
         );
         assert!(result.is_err());
-        assert_starts_with(
-            result.err().unwrap().message().as_ref(),
-            "Invalid batch column at '0' has null but schema specifies non-nullable",
+        assert_eq!(
+            result.err().unwrap().strip_backtrace(),
+            "Execution error: Invalid batch column at '0' has null but schema specifies non-nullable",
         );
         Ok(())
     }
@@ -1190,21 +1192,10 @@ mod tests {
             &vec![0],
         );
         assert!(result.is_err());
-        assert_starts_with(
-            result.err().unwrap().message().as_ref(),
-            "Invalid batch column at '0' has null but schema specifies non-nullable",
+        assert_eq!(
+            result.err().unwrap().strip_backtrace(),
+            "Execution error: Invalid batch column at '0' has null but schema specifies non-nullable",
         );
         Ok(())
-    }
-
-    fn assert_starts_with(actual: impl AsRef<str>, expected_prefix: impl AsRef<str>) {
-        let actual = actual.as_ref();
-        let expected_prefix = expected_prefix.as_ref();
-        assert!(
-            actual.starts_with(expected_prefix),
-            "Expected '{}' to start with '{}'",
-            actual,
-            expected_prefix
-        );
     }
 }

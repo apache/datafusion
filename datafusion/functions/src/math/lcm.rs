@@ -69,7 +69,11 @@ impl ScalarUDFImpl for LcmFunc {
         Ok(Int64)
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         make_scalar_function(lcm, vec![])(args)
     }
 
@@ -82,16 +86,14 @@ static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
 
 fn get_lcm_doc() -> &'static Documentation {
     DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_MATH)
-            .with_description(
+        Documentation::builder(
+            DOC_SECTION_MATH,
                 "Returns the least common multiple of `expression_x` and `expression_y`. Returns 0 if either input is zero.",
-            )
-            .with_syntax_example("lcm(expression_x, expression_y)")
+
+            "lcm(expression_x, expression_y)")
             .with_standard_argument("expression_x", Some("First numeric"))
             .with_standard_argument("expression_y", Some("Second numeric"))
             .build()
-            .unwrap()
     })
 }
 
