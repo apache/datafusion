@@ -1578,7 +1578,7 @@ impl SortMergeJoinStream {
                     .append_nulls(num_rows);
                 self.output_record_batches
                     .batch_ids
-                    .extend(vec![0; num_rows]);
+                    .resize(self.output_record_batches.batch_ids.len() + num_rows, 0);
 
                 self.output_record_batches.batches.push(record_batch);
             }
@@ -1622,7 +1622,7 @@ impl SortMergeJoinStream {
                 .append_nulls(num_rows);
             self.output_record_batches
                 .batch_ids
-                .extend(vec![0; num_rows]);
+                .resize(self.output_record_batches.batch_ids.len() + num_rows, 0);
             self.output_record_batches.batches.push(record_batch);
         }
         buffered_batch.join_filter_not_matched_map.clear();
@@ -1757,10 +1757,10 @@ impl SortMergeJoinStream {
                         self.output_record_batches.filter_mask.extend(pre_mask);
                     }
                     self.output_record_batches.row_indices.extend(&left_indices);
-                    self.output_record_batches.batch_ids.extend(vec![
-                        self.streamed_batch_counter.load(Relaxed);
-                        left_indices.len()
-                        ]);
+                    self.output_record_batches.batch_ids.resize(
+                        self.output_record_batches.batch_ids.len() + left_indices.len(),
+                        self.streamed_batch_counter.load(Relaxed),
+                    );
 
                     // For outer joins, we need to push the null joined rows to the output if
                     // all joined rows are failed on the join filter.
