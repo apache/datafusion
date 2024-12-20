@@ -24,8 +24,8 @@ use arrow_schema::{DataType, DECIMAL256_MAX_PRECISION};
 use bigdecimal::num_bigint::BigInt;
 use bigdecimal::{BigDecimal, Signed, ToPrimitive};
 use datafusion_common::{
-    internal_datafusion_err, not_impl_err, plan_err, DFSchema,
-    DataFusionError, Result, ScalarValue,
+    internal_datafusion_err, not_impl_err, plan_err, DFSchema, DataFusionError, Result,
+    ScalarValue,
 };
 use datafusion_expr::expr::{BinaryExpr, Placeholder};
 use datafusion_expr::planner::PlannerResult;
