@@ -103,7 +103,7 @@ pub enum TypeSignature {
     /// A function such as `concat` is `Variadic(vec![DataType::Utf8,
     /// DataType::LargeUtf8])`
     Variadic(Vec<DataType>),
-    /// The acceptable signature and coercions rules  are special for this
+    /// The acceptable signature and coercions rules are special for this
     /// function.
     ///
     /// If this signature is specified,
@@ -132,7 +132,7 @@ pub enum TypeSignature {
     ///
     /// For functions that take no arguments (e.g. `random()`) see [`TypeSignature::Nullary`].
     Coercible(Vec<TypeSignatureClass>),
-    /// One or more arguments cast to single, comparable type.
+    /// One or more arguments coercible to a single, comparable type.
     ///
     /// Each argument will be coerced to a single type using the
     /// coercion rules described in [`comparison_coercion_numeric`].
