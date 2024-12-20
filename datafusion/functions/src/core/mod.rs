@@ -26,6 +26,7 @@ pub mod coalesce;
 pub mod expr_ext;
 pub mod getfield;
 pub mod greatest;
+mod greatest_least_utils;
 pub mod least;
 pub mod named_struct;
 pub mod nullif;
