@@ -1386,8 +1386,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 return plan_err!("Option {key} is specified multiple times");
             }
 
-            let Some(value_string) = self.value_normalizer.normalize(value.clone())
-            else {
+            let Some(value_string) = crate::utils::value_to_string(&value) else {
                 return plan_err!("Unsupported Value {}", value);
             };
 
