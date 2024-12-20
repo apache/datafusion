@@ -25,9 +25,7 @@ use std::sync::{Arc, Mutex};
 use crate::catalog::{SchemaProvider, TableProvider, TableProviderFactory};
 use crate::execution::context::SessionState;
 
-use datafusion_common::{
-    Constraints, DFSchema, DataFusionError, HashMap, TableReference,
-};
+use datafusion_common::{DFSchema, DataFusionError, HashMap, TableReference};
 use datafusion_expr::CreateExternalTable;
 
 use async_trait::async_trait;
@@ -131,21 +129,12 @@ impl ListingSchemaProvider {
                     .factory
                     .create(
                         state,
-                        &CreateExternalTable {
-                            schema: Arc::new(DFSchema::empty()),
-                            name,
-                            location: table_url,
-                            file_type: self.format.clone(),
-                            table_partition_cols: vec![],
-                            if_not_exists: false,
-                            temporary: false,
-                            definition: None,
-                            order_exprs: vec![],
-                            unbounded: false,
-                            options: Default::default(),
-                            constraints: Constraints::empty(),
-                            column_defaults: Default::default(),
-                        },
+                        &CreateExternalTable::builder()
+                            .schema(Arc::new(DFSchema::empty()))
+                            .name(name)
+                            .location(table_url)
+                            .file_type(self.format.clone())
+                            .build()?,
                     )
                     .await?;
                 let _ =
