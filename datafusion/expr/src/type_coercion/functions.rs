@@ -21,10 +21,11 @@ use arrow::{
     compute::can_cast_types,
     datatypes::{DataType, TimeUnit},
 };
+use datafusion_common::utils::coerced_fixed_size_list_to_list;
 use datafusion_common::{
     exec_err, internal_datafusion_err, internal_err, not_impl_err, plan_err,
     types::{LogicalType, NativeType},
-    utils::{coerced_fixed_size_list_to_list, list_ndims},
+    utils::list_ndims,
     Result,
 };
 use datafusion_expr_common::{
@@ -206,7 +207,7 @@ fn is_well_supported_signature(type_signature: &TypeSignature) -> bool {
             | TypeSignature::String(_)
             | TypeSignature::Coercible(_)
             | TypeSignature::Any(_)
-            | TypeSignature::NullAry
+            | TypeSignature::Nullary
             | TypeSignature::Comparable(_)
     )
 }
@@ -418,7 +419,16 @@ fn get_valid_types(
             _ => Ok(vec![vec![]]),
         }
     }
+
     fn array(array_type: &DataType) -> Option<DataType> {
+        match array_type {
+            DataType::List(_) | DataType::LargeList(_) => Some(array_type.clone()),
+            DataType::FixedSizeList(field, _) => Some(DataType::List(Arc::clone(field))),
+            _ => None,
+        }
+    }
+
+    fn recursive_array(array_type: &DataType) -> Option<DataType> {
         match array_type {
             DataType::List(_)
             | DataType::LargeList(_)
@@ -687,6 +697,13 @@ fn get_valid_types(
                 array(&current_types[0])
                     .map_or_else(|| vec![vec![]], |array_type| vec![vec![array_type]])
             }
+            ArrayFunctionSignature::RecursiveArray => {
+                if current_types.len() != 1 {
+                    return Ok(vec![vec![]]);
+                }
+                recursive_array(&current_types[0])
+                    .map_or_else(|| vec![vec![]], |array_type| vec![vec![array_type]])
+            }
             ArrayFunctionSignature::MapArray => {
                 if current_types.len() != 1 {
                     return Ok(vec![vec![]]);
@@ -698,7 +715,7 @@ fn get_valid_types(
                 }
             }
         },
-        TypeSignature::NullAry => {
+        TypeSignature::Nullary => {
             if !current_types.is_empty() {
                 return plan_err!(
                     "The function expected zero argument but received {}",

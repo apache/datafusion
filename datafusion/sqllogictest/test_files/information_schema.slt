@@ -258,7 +258,7 @@ datafusion.optimizer.skip_failed_rules false
 datafusion.optimizer.top_down_join_key_reordering true
 datafusion.sql_parser.dialect generic
 datafusion.sql_parser.enable_ident_normalization true
-datafusion.sql_parser.enable_options_value_normalization true
+datafusion.sql_parser.enable_options_value_normalization false
 datafusion.sql_parser.parse_float_as_decimal false
 datafusion.sql_parser.support_varchar_with_length true
 
@@ -351,7 +351,7 @@ datafusion.optimizer.skip_failed_rules false When set to true, the logical plan 
 datafusion.optimizer.top_down_join_key_reordering true When set to true, the physical plan optimizer will run a top down process to reorder the join keys
 datafusion.sql_parser.dialect generic Configure the SQL dialect used by DataFusion's parser; supported values include: Generic, MySQL, PostgreSQL, Hive, SQLite, Snowflake, Redshift, MsSQL, ClickHouse, BigQuery, and Ansi.
 datafusion.sql_parser.enable_ident_normalization true When set to true, SQL parser will normalize ident (convert ident to lowercase when not quoted)
-datafusion.sql_parser.enable_options_value_normalization true When set to true, SQL parser will normalize options value (convert value to lowercase)
+datafusion.sql_parser.enable_options_value_normalization false When set to true, SQL parser will normalize options value (convert value to lowercase). Note that this option is ignored and will be removed in the future. All case-insensitive values are normalized automatically.
 datafusion.sql_parser.parse_float_as_decimal false When set to true, SQL parser will parse float as decimal type
 datafusion.sql_parser.support_varchar_with_length true If true, permit lengths for `VARCHAR` such as `VARCHAR(20)`, but ignore the length. If false, error if a `VARCHAR` with a length is specified. The Arrow type system does not have a notion of maximum string length and thus DataFusion can not enforce such limits.
 
@@ -483,10 +483,10 @@ set datafusion.catalog.information_schema = true;
 statement ok
 CREATE TABLE t AS SELECT 1::int as i;
 
-statement error Error during planning: SHOW COLUMNS with WHERE or LIKE is not supported
+statement error DataFusion error: This feature is not implemented: SHOW COLUMNS with WHERE or LIKE is not supported
 SHOW COLUMNS FROM t LIKE 'f';
 
-statement error Error during planning: SHOW COLUMNS with WHERE or LIKE is not supported
+statement error DataFusion error: This feature is not implemented: SHOW COLUMNS with WHERE or LIKE is not supported
 SHOW COLUMNS FROM t WHERE column_name = 'bar';
 
 query TTTTTT
