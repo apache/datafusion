@@ -89,10 +89,12 @@ impl AnalyzeExec {
         input: &Arc<dyn ExecutionPlan>,
         schema: SchemaRef,
     ) -> PlanProperties {
-        let eq_properties = EquivalenceProperties::new(schema);
-        let output_partitioning = Partitioning::UnknownPartitioning(1);
-        let exec_mode = input.execution_mode();
-        PlanProperties::new(eq_properties, output_partitioning, exec_mode)
+        PlanProperties::new(
+            EquivalenceProperties::new(schema),
+            Partitioning::UnknownPartitioning(1),
+            input.pipeline_behavior(),
+            input.boundedness(),
+        )
     }
 }
 

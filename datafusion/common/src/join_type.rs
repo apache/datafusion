@@ -28,21 +28,30 @@ use crate::{DataFusionError, Result};
 /// Join type
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Hash)]
 pub enum JoinType {
-    /// Inner Join
+    /// Inner Join - Returns only rows where there is a matching value in both tables based on the join condition.
+    /// For example, if joining table A and B on A.id = B.id, only rows where A.id equals B.id will be included.
+    /// All columns from both tables are returned for the matching rows. Non-matching rows are excluded entirely.
     Inner,
-    /// Left Join
+    /// Left Join - Returns all rows from the left table and matching rows from the right table.
+    /// If no match, NULL values are returned for columns from the right table.
     Left,
-    /// Right Join
+    /// Right Join - Returns all rows from the right table and matching rows from the left table.
+    /// If no match, NULL values are returned for columns from the left table.
     Right,
-    /// Full Join
+    /// Full Join (also called Full Outer Join) - Returns all rows from both tables, matching rows where possible.
+    /// When a row from either table has no match in the other table, the missing columns are filled with NULL values.
+    /// For example, if table A has row X with no match in table B, the result will contain row X with NULL values for all of table B's columns.
+    /// This join type preserves all records from both tables, making it useful when you need to see all data regardless of matches.
     Full,
-    /// Left Semi Join
+    /// Left Semi Join - Returns rows from the left table that have matching rows in the right table.
+    /// Only columns from the left table are returned.
     LeftSemi,
-    /// Right Semi Join
+    /// Right Semi Join - Returns rows from the right table that have matching rows in the left table.
+    /// Only columns from the right table are returned.
     RightSemi,
-    /// Left Anti Join
+    /// Left Anti Join - Returns rows from the left table that do not have a matching row in the right table.
     LeftAnti,
-    /// Right Anti Join
+    /// Right Anti Join - Returns rows from the right table that do not have a matching row in the left table.
     RightAnti,
     /// Left Mark join
     ///
