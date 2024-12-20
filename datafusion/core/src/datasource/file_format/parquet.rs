@@ -68,7 +68,7 @@ use log::debug;
 use object_store::buffered::BufWriter;
 use parquet::arrow::arrow_writer::{
     compute_leaves, get_column_writers, ArrowColumnChunk, ArrowColumnWriter,
-    ArrowLeafColumn,
+    ArrowLeafColumn, ArrowWriterOptions,
 };
 use parquet::arrow::{
     arrow_to_parquet_schema, parquet_to_arrow_schema, AsyncArrowWriter,
@@ -759,10 +759,14 @@ impl ParquetSink {
         parquet_props: WriterProperties,
     ) -> Result<AsyncArrowWriter<BufWriter>> {
         let buf_writer = BufWriter::new(object_store, location.clone());
-        let writer = AsyncArrowWriter::try_new(
+        let options = ArrowWriterOptions::new()
+            .with_properties(parquet_props)
+            .with_skip_arrow_metadata(self.parquet_options.global.skip_arrow_metadata);
+
+        let writer = AsyncArrowWriter::try_new_with_options(
             buf_writer,
             self.get_writer_schema(),
-            Some(parquet_props),
+            options,
         )?;
         Ok(writer)
     }
@@ -2390,6 +2394,54 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn parquet_sink_write_insert_schema_into_metadata() -> Result<()> {
+        // expected kv metadata without schema
+        let expected_without = vec![
+            KeyValue {
+                key: "my-data".to_string(),
+                value: Some("stuff".to_string()),
+            },
+            KeyValue {
+                key: "my-data-bool-key".to_string(),
+                value: None,
+            },
+        ];
+        // expected kv metadata with schema
+        let expected_with = [
+            vec![KeyValue {
+                key: "ARROW:schema".to_string(),
+                value: Some(ENCODED_ARROW_SCHEMA.to_string()),
+            }],
+            expected_without.clone(),
+        ]
+        .concat();
+
+        // single threaded write, skip insert
+        let opts = ParquetOptions {
+            allow_single_file_parallelism: false,
+            skip_arrow_metadata: true,
+            ..Default::default()
+        };
+        let parquet_sink =
+            create_written_parquet_sink_using_config("file:///", opts).await?;
+        let (_, file_metadata) = get_written(parquet_sink)?;
+        assert_file_metadata(file_metadata, expected_without.clone());
+
+        // single threaded write, do not skip insert
+        let opts = ParquetOptions {
+            allow_single_file_parallelism: false,
+            skip_arrow_metadata: false,
+            ..Default::default()
+        };
+        let parquet_sink =
+            create_written_parquet_sink_using_config("file:///", opts).await?;
+        let (_, file_metadata) = get_written(parquet_sink)?;
+        assert_file_metadata(file_metadata, expected_with.clone());
+
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn parquet_sink_write_with_extension() -> Result<()> {
         let filename = "test_file.custom_ext";
         let file_path = format!("file:///path/to/{}", filename);
@@ -2452,10 +2504,13 @@ mod tests {
             .await
     }
 
+    static ENCODED_ARROW_SCHEMA: &str = "/////5QAAAAQAAAAAAAKAAwACgAJAAQACgAAABAAAAAAAQQACAAIAAAABAAIAAAABAAAAAIAAAA8AAAABAAAANz///8UAAAADAAAAAAAAAUMAAAAAAAAAMz///8BAAAAYgAAABAAFAAQAAAADwAEAAAACAAQAAAAGAAAAAwAAAAAAAAFEAAAAAAAAAAEAAQABAAAAAEAAABhAAAA";
+
     async fn create_written_parquet_sink_using_config(
         table_path: &str,
         global: ParquetOptions,
     ) -> Result<Arc<ParquetSink>> {
+        // schema should match the ENCODED_ARROW_SCHEMA bove
         let field_a = Field::new("a", DataType::Utf8, false);
         let field_b = Field::new("b", DataType::Utf8, false);
         let schema = Arc::new(Schema::new(vec![field_a, field_b]));
