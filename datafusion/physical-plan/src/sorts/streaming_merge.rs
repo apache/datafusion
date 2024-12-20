@@ -19,7 +19,6 @@
 //! This is an order-preserving merge.
 
 use crate::metrics::BaselineMetrics;
-use crate::sorts::sort_preserving_merge::SortPreservingMergeExec;
 use crate::sorts::{
     merge::SortPreservingMergeStream,
     stream::{FieldCursorStream, RowCursorStream},
