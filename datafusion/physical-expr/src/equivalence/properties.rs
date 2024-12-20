@@ -346,9 +346,7 @@ impl EquivalenceProperties {
             .unwrap_or_else(|| vec![Arc::clone(&normalized_expr)]);
 
         let mut new_orderings: Vec<LexOrdering> = vec![];
-
-        let normalized_oeq = self.normalized_oeq_class();
-        for ordering in normalized_oeq.iter() {
+        for ordering in self.normalized_oeq_class().iter() {
             if !ordering[0].expr.eq(&normalized_expr) {
                 continue;
             }
@@ -357,7 +355,6 @@ impl EquivalenceProperties {
 
             for equivalent_expr in &eq_class {
                 let children = equivalent_expr.children();
-
                 if children.is_empty() {
                     continue;
                 }
@@ -3716,7 +3713,7 @@ mod tests {
     }
 
     #[test]
-    fn test_ordering_equivalence_with_monotonic_concat() -> Result<()> {
+    fn test_ordering_equivalence_with_lex_monotonic_concat() -> Result<()> {
         let schema = Arc::new(Schema::new(vec![
             Field::new("a", DataType::Utf8, false),
             Field::new("b", DataType::Utf8, false),
@@ -3752,7 +3749,6 @@ mod tests {
             LexOrdering::from(vec![
                 PhysicalSortExpr::new_default(Arc::clone(&col_c)).asc()
             ]);
-
         let expected_ordering2 = LexOrdering::from(vec![
             PhysicalSortExpr::new_default(Arc::clone(&col_a)).asc(),
             PhysicalSortExpr::new_default(Arc::clone(&col_b)).asc(),
@@ -3767,7 +3763,7 @@ mod tests {
     }
 
     #[test]
-    fn test_ordering_equivalence_with_non_monotonic_multiply() -> Result<()> {
+    fn test_ordering_equivalence_with_non_lex_monotonic_multiply() -> Result<()> {
         let schema = Arc::new(Schema::new(vec![
             Field::new("a", DataType::Int32, false),
             Field::new("b", DataType::Int32, false),
@@ -3800,7 +3796,7 @@ mod tests {
 
         let orderings = eq_properties.oeq_class().orderings.clone();
 
-        // The ordering should remain unchanged since multiplication is not monotonic
+        // The ordering should remain unchanged since multiplication is not lex-monotonic
         assert_eq!(orderings.len(), 1);
         assert!(orderings.contains(&initial_ordering));
 

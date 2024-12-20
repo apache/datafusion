@@ -129,16 +129,25 @@ impl Neg for SortProperties {
     }
 }
 
-/// Represents the properties of a `PhysicalExpr`, including its sorting, range, and whether it preserves lexicographical ordering.
+/// Represents the properties of a `PhysicalExpr`, including its sorting,
+/// range, and whether it preserves lexicographical ordering.
 #[derive(Debug, Clone)]
 pub struct ExprProperties {
+    /// Properties that describe the sorting behavior of the expression,
+    /// such as whether it is ordered, unordered, or a singleton value.
     pub sort_properties: SortProperties,
+    /// A closed interval representing the range of possible values for
+    /// the expression. Used to compute reliable bounds.
     pub range: Interval,
+    /// Indicates whether the expression preserves lexicographical ordering
+    /// of its inputs. For example, string concatenation preserves ordering,
+    /// while addition does not.
     pub preserves_lex_ordering: bool,
 }
 
 impl ExprProperties {
-    /// Creates a new `ExprProperties` instance with unknown sort properties, unknown range, and unknown lexicographical ordering preservation.
+    /// Creates a new `ExprProperties` instance with unknown sort properties,
+    /// unknown range, and unknown lexicographical ordering preservation.
     pub fn new_unknown() -> Self {
         Self {
             sort_properties: SortProperties::default(),

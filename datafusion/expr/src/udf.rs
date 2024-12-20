@@ -654,15 +654,14 @@ pub trait ScalarUDFImpl: Debug + Send + Sync {
         Ok(Some(vec![]))
     }
 
-    /// Calculates the [`SortProperties`] of this function based on its
-    /// children's properties.
+    /// Calculates the [`SortProperties`] of this function based on its children's properties.
     fn output_ordering(&self, inputs: &[ExprProperties]) -> Result<SortProperties> {
         if !self.preserves_lex_ordering(inputs)? {
             return Ok(SortProperties::Unordered);
         }
 
         let Some(first_order) = inputs.first().map(|p| &p.sort_properties) else {
-            return Ok(SortProperties::Unordered);
+            return Ok(SortProperties::Singleton);
         };
 
         if inputs
