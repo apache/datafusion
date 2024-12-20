@@ -177,3 +177,6 @@ large_futures = "warn"
 [workspace.lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ["cfg(tarpaulin)"] }
 unused_qualifications = "deny"
+
+[patch.crates-io]
+object_store = {  git = "https://github.com/alamb/arrow-rs.git", rev="07e613e" }
