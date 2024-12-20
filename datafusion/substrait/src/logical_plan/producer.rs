@@ -368,14 +368,45 @@ pub fn to_substrait_rel(
                 .iter()
                 .map(|e| substrait_sort_field(state, e, sort.input.schema(), extensions))
                 .collect::<Result<Vec<_>>>()?;
-            Ok(Box::new(Rel {
+
+            let sort_rel = Box::new(Rel {
                 rel_type: Some(RelType::Sort(Box::new(SortRel {
                     common: None,
                     input: Some(input),
                     sorts: sort_fields,
                     advanced_extension: None,
                 }))),
-            }))
+            });
+
+            match sort.fetch {
+                Some(_) => {
+                    let empty_schema = Arc::new(DFSchema::empty());
+                    let count_mode = sort
+                        .fetch
+                        .map(|amount| {
+                            to_substrait_rex(
+                                state,
+                                &Expr::Literal(ScalarValue::Int64(Some(amount as i64))),
+                                &empty_schema,
+                                0,
+                                extensions,
+                            )
+                        })
+                        .transpose()?
+                        .map(Box::new)
+                        .map(fetch_rel::CountMode::CountExpr);
+                    Ok(Box::new(Rel {
+                        rel_type: Some(RelType::Fetch(Box::new(FetchRel {
+                            common: None,
+                            input: Some(sort_rel),
+                            offset_mode: None,
+                            count_mode,
+                            advanced_extension: None,
+                        }))),
+                    }))
+                }
+                None => Ok(sort_rel),
+            }
         }
         LogicalPlan::Aggregate(agg) => {
             let input = to_substrait_rel(agg.input.as_ref(), state, extensions)?;

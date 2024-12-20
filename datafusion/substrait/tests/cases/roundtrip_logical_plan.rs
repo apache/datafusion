@@ -201,6 +201,11 @@ async fn select_with_filter() -> Result<()> {
 }
 
 #[tokio::test]
+async fn select_with_filter_sort_limit() -> Result<()> {
+    roundtrip("SELECT * FROM data WHERE a > 1 ORDER BY b ASC LIMIT 2").await
+}
+
+#[tokio::test]
 async fn select_with_reused_functions() -> Result<()> {
     let ctx = create_context().await?;
     let sql = "SELECT * FROM data WHERE a > 1 AND a < 10 AND b > 0";
