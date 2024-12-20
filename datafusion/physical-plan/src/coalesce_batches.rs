@@ -97,7 +97,8 @@ impl CoalesceBatchesExec {
         PlanProperties::new(
             input.equivalence_properties().clone(), // Equivalence Properties
             input.output_partitioning().clone(),    // Output Partitioning
-            input.execution_mode(),                 // Execution Mode
+            input.pipeline_behavior(),
+            input.boundedness(),
         )
     }
 }
