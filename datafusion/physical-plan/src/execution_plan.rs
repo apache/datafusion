@@ -520,6 +520,9 @@ impl ExecutionPlanProperties for &dyn ExecutionPlan {
 ///
 /// For unbounded streams, it also tracks whether the operator requires finite memory
 /// to process the stream or if memory usage could grow unbounded.
+///
+/// Bounedness of the output stream is based on the the boundedness of the input stream and the nature of
+/// the operator. For example, limit or topk with fetch operator can convert an unbounded stream to a bounded stream.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Boundedness {
     /// The data stream is bounded (finite) and will eventually complete
@@ -529,6 +532,9 @@ pub enum Boundedness {
         /// Whether this operator requires infinite memory to process the unbounded stream.
         /// If false, the operator can process an infinite stream with bounded memory.
         /// If true, memory usage may grow unbounded while processing the stream.
+        ///
+        /// For example, `Median` requires infinite memory to compute the median of an unbounded stream.
+        /// `Min/Max` requires infinite memory if the stream is unordered, but can be computed with bounded memory if the stream is ordered.
         requires_infinite_memory: bool,
     },
 }
@@ -542,7 +548,8 @@ impl Boundedness {
 /// Represents how an operator emits its output records.
 ///
 /// This is used to determine whether an operator emits records incrementally as they arrive,
-/// only emits a final result at the end, or can do both.
+/// only emits a final result at the end, or can do both. Note that it generates the output -- record batch with `batch_size` rows
+/// but it may still buffer data internally until it has enough data to emit a record batch or the source is exhausted.
 ///
 /// For example, in the following plan:
 /// ```text
