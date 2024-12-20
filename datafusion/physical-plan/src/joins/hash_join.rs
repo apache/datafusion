@@ -90,8 +90,10 @@ struct JoinLeftData {
     /// Counter of running probe-threads, potentially
     /// able to update `visited_indices_bitmap`
     probe_threads_counter: AtomicUsize,
-    /// Memory reservation that tracks memory used by `hash_map` hash table
-    /// `batch`. Cleared on drop.
+    /// We need to keep this field to maintain accurate memory accounting, even though we don't directly use it.
+    /// Without holding onto this reservation, the recorded memory usage would become inconsistent with actual usage.
+    /// This could hide potential out-of-memory issues, especially when upstream operators increase their memory consumption.
+    /// The MemoryReservation ensures proper tracking of memory resources throughout the join operation's lifecycle.
     _reservation: MemoryReservation,
 }
 
@@ -1019,6 +1021,7 @@ impl BuildSide {
 ///  └─ ProcessProbeBatch
 ///
 /// ```
+#[derive(Debug, Clone)]
 enum HashJoinStreamState {
     /// Initial state for HashJoinStream indicating that build-side data not collected yet
     WaitBuildSide,
@@ -1044,6 +1047,7 @@ impl HashJoinStreamState {
 }
 
 /// Container for HashJoinStreamState::ProcessProbeBatch related data
+#[derive(Debug, Clone)]
 struct ProcessProbeBatchState {
     /// Current probe-side batch
     batch: RecordBatch,
@@ -1560,7 +1564,7 @@ mod tests {
     use rstest_reuse::*;
 
     fn div_ceil(a: usize, b: usize) -> usize {
-        (a + b - 1) / b
+        a.div_ceil(b)
     }
 
     #[template]

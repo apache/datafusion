@@ -214,9 +214,9 @@ impl ScalarUDFImpl for MapFunc {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        if arg_types.len() % 2 != 0 {
+        if arg_types.len() != 2 {
             return exec_err!(
-                "map requires an even number of arguments, got {} instead",
+                "map requires exactly 2 arguments, got {} instead",
                 arg_types.len()
             );
         }
@@ -238,7 +238,11 @@ impl ScalarUDFImpl for MapFunc {
         ))
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         make_map_batch(args)
     }
 
@@ -251,13 +255,11 @@ static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
 
 fn get_map_doc() -> &'static Documentation {
     DOCUMENTATION.get_or_init(|| {
-                Documentation::builder()
-                    .with_doc_section(DOC_SECTION_MAP)
-                    .with_description(
+                Documentation::builder(
+                    DOC_SECTION_MAP,
                         "Returns an Arrow map with the specified key-value pairs.\n\n\
-                        The `make_map` function creates a map from two lists: one for keys and one for values. Each key must be unique and non-null."
-                    )
-                    .with_syntax_example(
+                        The `make_map` function creates a map from two lists: one for keys and one for values. Each key must be unique and non-null.",
+
                         "map(key, value)\nmap(key: value)\nmake_map(['key1', 'key2'], ['value1', 'value2'])"
                     )
                     .with_sql_example(
@@ -301,7 +303,6 @@ SELECT MAKE_MAP(['key1', 'key2'], ['value1', null]);
                         For `make_map`: The list of values to be mapped to the corresponding keys."
                     )
                     .build()
-                    .unwrap()
             })
 }
 
@@ -372,7 +373,6 @@ fn get_element_type(data_type: &DataType) -> Result<&DataType> {
 /// | +-------+ |      | +-------+ |
 /// +-----------+      +-----------+
 /// ```text
-
 fn make_map_array_internal<O: OffsetSizeTrait>(
     keys: ArrayRef,
     values: ArrayRef,

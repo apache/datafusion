@@ -73,7 +73,11 @@ impl ScalarUDFImpl for NanvlFunc {
         }
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         make_scalar_function(nanvl, vec![])(args)
     }
 
@@ -86,17 +90,15 @@ static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
 
 fn get_nanvl_doc() -> &'static Documentation {
     DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_MATH)
-            .with_description(
+        Documentation::builder(
+            DOC_SECTION_MATH,
                 r#"Returns the first argument if it's not _NaN_.
 Returns the second argument otherwise."#,
-            )
-            .with_syntax_example("nanvl(expression_x, expression_y)")
+
+            "nanvl(expression_x, expression_y)")
             .with_argument("expression_x", "Numeric expression to return if it's not _NaN_. Can be a constant, column, or function, and any combination of arithmetic operators.")
             .with_argument("expression_y", "Numeric expression to return if the first expression is _NaN_. Can be a constant, column, or function, and any combination of arithmetic operators.")
             .build()
-            .unwrap()
     })
 }
 

@@ -33,6 +33,7 @@ struct GeneratorOptions {
     pods_per_host: Range<usize>,
     containers_per_pod: Range<usize>,
     entries_per_container: Range<usize>,
+    include_nulls: bool,
 }
 
 impl Default for GeneratorOptions {
@@ -42,6 +43,7 @@ impl Default for GeneratorOptions {
             pods_per_host: 1..15,
             containers_per_pod: 1..3,
             entries_per_container: 1024..8192,
+            include_nulls: false,
         }
     }
 }
@@ -149,13 +151,23 @@ impl BatchBuilder {
         self.image.append(image).unwrap();
         self.time.append_value(time);
 
-        self.client_addr.append_value(format!(
-            "{}.{}.{}.{}",
-            rng.gen::<u8>(),
-            rng.gen::<u8>(),
-            rng.gen::<u8>(),
-            rng.gen::<u8>()
-        ));
+        if self.options.include_nulls {
+            // Append a null value if the option is set
+            // Use both "NULL" as a string and a null value
+            if rng.gen_bool(0.5) {
+                self.client_addr.append_null();
+            } else {
+                self.client_addr.append_value("NULL");
+            }
+        } else {
+            self.client_addr.append_value(format!(
+                "{}.{}.{}.{}",
+                rng.gen::<u8>(),
+                rng.gen::<u8>(),
+                rng.gen::<u8>(),
+                rng.gen::<u8>()
+            ));
+        }
         self.request_duration.append_value(rng.gen());
         self.request_user_agent
             .append_value(random_string(rng, 20..100));
@@ -315,6 +327,12 @@ impl AccessLogGenerator {
     /// Set the number of log entries per container
     pub fn with_entries_per_container(mut self, range: Range<usize>) -> Self {
         self.options.entries_per_container = range;
+        self
+    }
+
+    // Set the condition for null values in the generated data
+    pub fn with_include_nulls(mut self, include_nulls: bool) -> Self {
+        self.options.include_nulls = include_nulls;
         self
     }
 }

@@ -26,9 +26,14 @@ use datafusion_expr::{
     expr, utils::grouping_set_to_exprlist, Aggregate, Expr, LogicalPlan,
     LogicalPlanBuilder, Projection, SortExpr, Unnest, Window,
 };
+
+use indexmap::IndexSet;
 use sqlparser::ast;
 
-use super::{dialect::DateFieldExtractStyle, rewrite::TableAliasRewriter, Unparser};
+use super::{
+    dialect::CharacterLengthStyle, dialect::DateFieldExtractStyle,
+    rewrite::TableAliasRewriter, Unparser,
+};
 
 /// Recursively searches children of [LogicalPlan] to find an Aggregate node if exists
 /// prior to encountering a Join, TableScan, or a nested subquery (derived table factor).
@@ -128,7 +133,7 @@ pub(crate) fn find_window_nodes_within_select<'a>(
 
 /// Recursively identify Column expressions and transform them into the appropriate unnest expression
 ///
-/// For example, if expr contains the column expr "unnest_placeholder(make_array(Int64(1),Int64(2),Int64(2),Int64(5),NULL),depth=1)"
+/// For example, if expr contains the column expr "__unnest_placeholder(make_array(Int64(1),Int64(2),Int64(2),Int64(5),NULL),depth=1)"
 /// it will be transformed into an actual unnest expression UNNEST([1, 2, 2, 5, NULL])
 pub(crate) fn unproject_unnest_expr(expr: Expr, unnest: &Unnest) -> Result<Expr> {
     expr.transform(|sub_expr| {
@@ -307,7 +312,7 @@ pub(crate) fn unproject_sort_expr(
 pub(crate) fn try_transform_to_simple_table_scan_with_filters(
     plan: &LogicalPlan,
 ) -> Result<Option<(LogicalPlan, Vec<Expr>)>> {
-    let mut filters: Vec<Expr> = vec![];
+    let mut filters: IndexSet<Expr> = IndexSet::new();
     let mut plan_stack = vec![plan];
     let mut table_alias = None;
 
@@ -318,7 +323,9 @@ pub(crate) fn try_transform_to_simple_table_scan_with_filters(
                 plan_stack.push(alias.input.as_ref());
             }
             LogicalPlan::Filter(filter) => {
-                filters.push(filter.predicate.clone());
+                if !filters.contains(&filter.predicate) {
+                    filters.insert(filter.predicate.clone());
+                }
                 plan_stack.push(filter.input.as_ref());
             }
             LogicalPlan::TableScan(table_scan) => {
@@ -344,7 +351,11 @@ pub(crate) fn try_transform_to_simple_table_scan_with_filters(
                     })
                     .collect::<Result<Vec<_>, DataFusionError>>()?;
 
-                filters.extend(table_scan_filters);
+                for table_scan_filter in table_scan_filters {
+                    if !filters.contains(&table_scan_filter) {
+                        filters.insert(table_scan_filter);
+                    }
+                }
 
                 let mut builder = LogicalPlanBuilder::scan(
                     table_scan.table_name.clone(),
@@ -357,6 +368,7 @@ pub(crate) fn try_transform_to_simple_table_scan_with_filters(
                 }
 
                 let plan = builder.build()?;
+                let filters = filters.into_iter().collect();
 
                 return Ok(Some((plan, filters)));
             }
@@ -444,4 +456,20 @@ pub(crate) fn date_part_to_sql(
     };
 
     Ok(None)
+}
+
+pub(crate) fn character_length_to_sql(
+    unparser: &Unparser,
+    style: CharacterLengthStyle,
+    character_length_args: &[Expr],
+) -> Result<Option<ast::Expr>> {
+    let func_name = match style {
+        CharacterLengthStyle::CharacterLength => "character_length",
+        CharacterLengthStyle::Length => "length",
+    };
+
+    Ok(Some(unparser.scalar_function_to_sql(
+        func_name,
+        character_length_args,
+    )?))
 }

@@ -20,9 +20,10 @@
 use std::collections::VecDeque;
 use std::fmt;
 
+use sqlparser::ast::ExprWithAlias;
 use sqlparser::{
     ast::{
-        ColumnDef, ColumnOptionDef, Expr, ObjectName, OrderByExpr, Query,
+        ColumnDef, ColumnOptionDef, ObjectName, OrderByExpr, Query,
         Statement as SQLStatement, TableConstraint, Value,
     },
     dialect::{keywords::Keyword, Dialect, GenericDialect},
@@ -328,7 +329,7 @@ impl<'a> DFParser<'a> {
     pub fn parse_sql_into_expr_with_dialect(
         sql: &str,
         dialect: &dyn Dialect,
-    ) -> Result<Expr, ParserError> {
+    ) -> Result<ExprWithAlias, ParserError> {
         let mut parser = DFParser::new_with_dialect(sql, dialect)?;
         parser.parse_expr()
     }
@@ -377,7 +378,7 @@ impl<'a> DFParser<'a> {
         }
     }
 
-    pub fn parse_expr(&mut self) -> Result<Expr, ParserError> {
+    pub fn parse_expr(&mut self) -> Result<ExprWithAlias, ParserError> {
         if let Token::Word(w) = self.parser.peek_token().token {
             match w.keyword {
                 Keyword::CREATE | Keyword::COPY | Keyword::EXPLAIN => {
@@ -387,7 +388,7 @@ impl<'a> DFParser<'a> {
             }
         }
 
-        self.parser.parse_expr()
+        self.parser.parse_expr_with_alias()
     }
 
     /// Parse a SQL `COPY TO` statement

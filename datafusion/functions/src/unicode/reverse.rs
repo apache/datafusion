@@ -72,7 +72,11 @@ impl ScalarUDFImpl for ReverseFunc {
         utf8_to_str_type(&arg_types[0], "reverse")
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         match args[0].data_type() {
             Utf8 | Utf8View => make_scalar_function(reverse::<i32>, vec![])(args),
             LargeUtf8 => make_scalar_function(reverse::<i64>, vec![])(args),
@@ -91,12 +95,13 @@ static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
 
 fn get_reverse_doc() -> &'static Documentation {
     DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_STRING)
-            .with_description("Reverses the character order of a string.")
-            .with_syntax_example("reverse(str)")
-            .with_sql_example(
-                r#"```sql
+        Documentation::builder(
+            DOC_SECTION_STRING,
+            "Reverses the character order of a string.",
+            "reverse(str)",
+        )
+        .with_sql_example(
+            r#"```sql
 > select reverse('datafusion');
 +-----------------------------+
 | reverse(Utf8("datafusion")) |
@@ -104,10 +109,9 @@ fn get_reverse_doc() -> &'static Documentation {
 | noisufatad                  |
 +-----------------------------+
 ```"#,
-            )
-            .with_standard_argument("str", Some("String"))
-            .build()
-            .unwrap()
+        )
+        .with_standard_argument("str", Some("String"))
+        .build()
     })
 }
 
@@ -147,7 +151,7 @@ mod tests {
         ($INPUT:expr, $EXPECTED:expr) => {
             test_function!(
                 ReverseFunc::new(),
-                &[ColumnarValue::Scalar(ScalarValue::Utf8($INPUT))],
+                vec![ColumnarValue::Scalar(ScalarValue::Utf8($INPUT))],
                 $EXPECTED,
                 &str,
                 Utf8,
@@ -156,7 +160,7 @@ mod tests {
 
             test_function!(
                 ReverseFunc::new(),
-                &[ColumnarValue::Scalar(ScalarValue::LargeUtf8($INPUT))],
+                vec![ColumnarValue::Scalar(ScalarValue::LargeUtf8($INPUT))],
                 $EXPECTED,
                 &str,
                 LargeUtf8,
@@ -165,7 +169,7 @@ mod tests {
 
             test_function!(
                 ReverseFunc::new(),
-                &[ColumnarValue::Scalar(ScalarValue::Utf8View($INPUT))],
+                vec![ColumnarValue::Scalar(ScalarValue::Utf8View($INPUT))],
                 $EXPECTED,
                 &str,
                 Utf8,

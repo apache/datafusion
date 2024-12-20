@@ -68,8 +68,54 @@ use crate::{
     RecordBatchStream, SendableRecordBatchStream, Statistics,
 };
 
-/// join execution plan executes partitions in parallel and combines them into a set of
-/// partitions.
+/// Join execution plan that executes equi-join predicates on multiple partitions using Sort-Merge
+/// join algorithm and applies an optional filter post join. Can be used to join arbitrarily large
+/// inputs where one or both of the inputs don't fit in the available memory.
+///  
+/// # Join Expressions
+///
+/// Equi-join predicate (e.g. `<col1> = <col2>`) expressions are represented by [`Self::on`].
+///
+/// Non-equality predicates, which can not be pushed down to join inputs (e.g.
+/// `<col1> != <col2>`) are known as "filter expressions" and are evaluated
+/// after the equijoin predicates. They are represented by [`Self::filter`]. These are optional
+/// expressions.
+///
+/// # Sorting
+///
+/// Assumes that both the left and right input to the join are pre-sorted. It is not the
+/// responisibility of this execution plan to sort the inputs.
+///
+/// # "Streamed" vs "Buffered"
+///
+/// The number of record batches of streamed input currently present in the memory will depend
+/// on the output batch size of the execution plan. There is no spilling support for streamed input.
+/// The comparisons are performed from values of join keys in streamed input with the values of
+/// join keys in buffered input. One row in streamed record batch could be matched with multiple rows in
+/// buffered input batches. The streamed input is managed through the states in `StreamedState`
+/// and streamed input batches are represented by `StreamedBatch`.
+///
+/// Buffered input is buffered for all record batches having the same value of join key.
+/// If the memory limit increases beyond the specified value and spilling is enabled,
+/// buffered batches could be spilled to disk. If spilling is disabled, the execution
+/// will fail under the same conditions. Multiple record batches of buffered could currently reside
+/// in memory/disk during the exectution. The number of buffered batches residing in
+/// memory/disk depends on the number of rows of buffered input having the same value
+/// of join key as that of streamed input rows currently present in memory. Due to pre-sorted inputs,
+/// the algorithm understands when it is not needed anymore, and releases the buffered batches
+/// from memory/disk. The buffered input is managed through the states in `BufferedState`
+/// and buffered input batches are represented by `BufferedBatch`.
+///
+/// Depending on the type of join, left or right input may be selected as streamed or buffered
+/// respectively. For example, in a left-outer join, the left execution plan will be selected as
+/// streamed input while in a right-outer join, the right execution plan will be selected as the
+/// streamed input.
+///
+/// Reference for the algorithm:
+/// <https://en.wikipedia.org/wiki/Sort-merge_join>.
+///
+/// Helpful short video demonstration:
+/// <https://www.youtube.com/watch?v=jiWCPJtDE2c>.
 #[derive(Debug, Clone)]
 pub struct SortMergeJoinExec {
     /// Left sorted joining execution plan
@@ -529,6 +575,9 @@ struct StreamedJoinedChunk {
     buffered_indices: UInt64Builder,
 }
 
+/// Represents a record batch from streamed input.
+///
+/// Also stores information of matching rows from buffered batches.
 struct StreamedBatch {
     /// The streamed record batch
     pub batch: RecordBatch,
@@ -667,8 +716,8 @@ impl BufferedBatch {
     }
 }
 
-/// Sort-merge join stream that consumes streamed and buffered data stream
-/// and produces joined output
+/// Sort-Merge join stream that consumes streamed and buffered data streams
+/// and produces joined output stream.
 struct SortMergeJoinStream {
     /// Current state of the stream
     pub state: SortMergeJoinState,
@@ -807,8 +856,7 @@ fn get_corrected_filter_mask(
             }
 
             // Generate null joined rows for records which have no matching join key
-            let null_matched = expected_size - corrected_mask.len();
-            corrected_mask.extend(vec![Some(false); null_matched]);
+            corrected_mask.append_n(expected_size - corrected_mask.len(), false);
             Some(corrected_mask.finish())
         }
         JoinType::LeftMark => {
@@ -830,8 +878,7 @@ fn get_corrected_filter_mask(
             }
 
             // Generate null joined rows for records which have no matching join key
-            let null_matched = expected_size - corrected_mask.len();
-            corrected_mask.extend(vec![Some(false); null_matched]);
+            corrected_mask.append_n(expected_size - corrected_mask.len(), false);
             Some(corrected_mask.finish())
         }
         JoinType::LeftSemi => {
@@ -873,9 +920,9 @@ fn get_corrected_filter_mask(
                     corrected_mask.append_null();
                 }
             }
-
-            let null_matched = expected_size - corrected_mask.len();
-            corrected_mask.extend(vec![Some(true); null_matched]);
+            // Generate null joined rows for records which have no matching join key,
+            // for LeftAnti non-matched considered as true
+            corrected_mask.append_n(expected_size - corrected_mask.len(), true);
             Some(corrected_mask.finish())
         }
         JoinType::Full => {
@@ -1520,10 +1567,10 @@ impl SortMergeJoinStream {
                 let num_rows = record_batch.num_rows();
                 self.output_record_batches
                     .filter_mask
-                    .extend(&BooleanArray::from(vec![None; num_rows]));
+                    .append_nulls(num_rows);
                 self.output_record_batches
                     .row_indices
-                    .extend(&UInt64Array::from(vec![None; num_rows]));
+                    .append_nulls(num_rows);
                 self.output_record_batches
                     .batch_ids
                     .extend(vec![0; num_rows]);
@@ -1564,10 +1611,10 @@ impl SortMergeJoinStream {
 
             self.output_record_batches
                 .filter_mask
-                .extend(&BooleanArray::from(vec![None; num_rows]));
+                .append_nulls(num_rows);
             self.output_record_batches
                 .row_indices
-                .extend(&UInt64Array::from(vec![None; num_rows]));
+                .append_nulls(num_rows);
             self.output_record_batches
                 .batch_ids
                 .extend(vec![0; num_rows]);

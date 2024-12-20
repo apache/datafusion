@@ -39,6 +39,7 @@ use crate::cases::{
 use datafusion::arrow::array::ArrayRef;
 use datafusion::arrow::compute::kernels::sort::SortOptions;
 use datafusion::arrow::datatypes::{DataType, Field, IntervalUnit, Schema};
+use datafusion::datasource::empty::EmptyTable;
 use datafusion::datasource::file_format::csv::CsvSink;
 use datafusion::datasource::file_format::json::JsonSink;
 use datafusion::datasource::file_format::parquet::ParquetSink;
@@ -54,7 +55,7 @@ use datafusion::functions_window::nth_value::nth_value_udwf;
 use datafusion::functions_window::row_number::row_number_udwf;
 use datafusion::logical_expr::{create_udf, JoinType, Operator, Volatility};
 use datafusion::physical_expr::expressions::Literal;
-use datafusion::physical_expr::window::{BuiltInWindowExpr, SlidingAggregateWindowExpr};
+use datafusion::physical_expr::window::{SlidingAggregateWindowExpr, StandardWindowExpr};
 use datafusion::physical_expr::{
     LexOrdering, LexRequirement, PhysicalSortRequirement, ScalarFunctionExpr,
 };
@@ -83,7 +84,7 @@ use datafusion::physical_plan::windows::{
     WindowAggExec,
 };
 use datafusion::physical_plan::{
-    ExecutionPlan, InputOrderMode, Partitioning, PhysicalExpr, Statistics,
+    displayable, ExecutionPlan, InputOrderMode, Partitioning, PhysicalExpr, Statistics,
 };
 use datafusion::prelude::SessionContext;
 use datafusion::scalar::ScalarValue;
@@ -106,6 +107,7 @@ use datafusion_proto::physical_plan::{
     AsExecutionPlan, DefaultPhysicalExtensionCodec, PhysicalExtensionCodec,
 };
 use datafusion_proto::protobuf;
+use datafusion_proto::protobuf::PhysicalPlanNode;
 
 /// Perform a serde roundtrip and assert that the string representation of the before and after plans
 /// are identical. Note that this often isn't sufficient to guarantee that no information is
@@ -279,7 +281,7 @@ fn roundtrip_udwf() -> Result<()> {
     let field_b = Field::new("b", DataType::Int64, false);
     let schema = Arc::new(Schema::new(vec![field_a, field_b]));
 
-    let udwf_expr = Arc::new(BuiltInWindowExpr::new(
+    let udwf_expr = Arc::new(StandardWindowExpr::new(
         create_udwf_window_expr(
             &row_number_udwf(),
             &[],
@@ -326,7 +328,7 @@ fn roundtrip_window() -> Result<()> {
             "NTH_VALUE(a, 2) PARTITION BY [b] ORDER BY [a ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW".to_string(),
             false,
         )?;
-    let udwf_expr = Arc::new(BuiltInWindowExpr::new(
+    let udwf_expr = Arc::new(StandardWindowExpr::new(
         nth_value_window,
         &[col("b", &schema)?],
         &LexOrdering {
@@ -1125,7 +1127,7 @@ fn roundtrip_udwf_extension_codec() -> Result<()> {
         WindowFrameBound::CurrentRow,
     );
 
-    let udwf_expr = Arc::new(BuiltInWindowExpr::new(
+    let udwf_expr = Arc::new(StandardWindowExpr::new(
         udwf,
         &[col("b", &schema)?],
         &LexOrdering {
@@ -1524,4 +1526,43 @@ fn roundtrip_unnest() -> Result<()> {
         options,
     );
     roundtrip_test(Arc::new(unnest))
+}
+
+#[tokio::test]
+async fn roundtrip_coalesce() -> Result<()> {
+    let ctx = SessionContext::new();
+    ctx.register_table(
+        "t",
+        Arc::new(EmptyTable::new(Arc::new(Schema::new(Fields::from([
+            Arc::new(Field::new("f", DataType::Int64, false)),
+        ]))))),
+    )?;
+    let df = ctx.sql("select coalesce(f) as f from t").await?;
+    let plan = df.create_physical_plan().await?;
+
+    let node = PhysicalPlanNode::try_from_physical_plan(
+        plan.clone(),
+        &DefaultPhysicalExtensionCodec {},
+    )?;
+    let node = PhysicalPlanNode::decode(node.encode_to_vec().as_slice())
+        .map_err(|e| DataFusionError::External(Box::new(e)))?;
+    let restored = node.try_into_physical_plan(
+        &ctx,
+        ctx.runtime_env().as_ref(),
+        &DefaultPhysicalExtensionCodec {},
+    )?;
+
+    assert_eq!(
+        plan.schema(),
+        restored.schema(),
+        "Schema mismatch for plans:\n>> initial:\n{}>> final: \n{}",
+        displayable(plan.as_ref())
+            .set_show_schema(true)
+            .indent(true),
+        displayable(restored.as_ref())
+            .set_show_schema(true)
+            .indent(true),
+    );
+
+    Ok(())
 }

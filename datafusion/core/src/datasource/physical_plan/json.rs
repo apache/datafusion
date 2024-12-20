@@ -273,7 +273,7 @@ impl FileOpener for JsonOpener {
         let file_compression_type = self.file_compression_type.to_owned();
 
         Ok(Box::pin(async move {
-            let calculated_range = calculate_range(&file_meta, &store).await?;
+            let calculated_range = calculate_range(&file_meta, &store, None).await?;
 
             let range = match calculated_range {
                 RangeCalculation::Range(None) => None,
@@ -430,7 +430,7 @@ mod tests {
             .object_meta;
         let schema = JsonFormat::default()
             .with_file_compression_type(file_compression_type.to_owned())
-            .infer_schema(state, &store, &[meta.clone()])
+            .infer_schema(state, &store, std::slice::from_ref(&meta))
             .await
             .unwrap();
 

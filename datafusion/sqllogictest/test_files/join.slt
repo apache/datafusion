@@ -1226,3 +1226,89 @@ select t1.v1 from t1 join t1 using(v1) cross join (select struct('foo' as v1) as
 
 statement ok
 drop table t1;
+
+
+statement ok
+CREATE TABLE t1(a INTEGER, b INTEGER, c INTEGER, d INTEGER, e INTEGER);
+
+statement ok
+INSERT INTO t1(e,c,b,d,a) VALUES(103,102,100,101,104);
+
+statement ok
+INSERT INTO t1(a,c,d,e,b) VALUES(107,106,108,109,105);
+
+statement ok
+INSERT INTO t1(d,c,e,a,b) VALUES(116,119,117,115,118);
+
+statement ok
+INSERT INTO t1(c,d,b,e,a) VALUES(123,122,124,120,121);
+
+statement ok
+INSERT INTO t1(b,a,e,d,c) VALUES(145,149,146,148,147);
+
+statement ok
+INSERT INTO t1(b,c,a,d,e) VALUES(151,150,153,154,152);
+
+statement ok
+INSERT INTO t1(c,b,a,d,e) VALUES(161,160,163,164,162);
+
+statement ok
+INSERT INTO t1(b,d,a,e,c) VALUES(167,169,168,165,166);
+
+statement ok
+INSERT INTO t1(d,b,c,e,a) VALUES(171,170,172,173,174);
+
+statement ok
+INSERT INTO t1(e,c,a,d,b) VALUES(177,176,179,178,175);
+
+statement ok
+INSERT INTO t1(b,e,a,d,c) VALUES(181,180,182,183,184);
+
+statement ok
+INSERT INTO t1(c,e,a,b,d) VALUES(208,209,205,206,207);
+
+statement ok
+INSERT INTO t1(c,e,a,d,b) VALUES(214,210,213,212,211);
+
+statement ok
+INSERT INTO t1(b,c,a,d,e) VALUES(218,215,216,217,219);
+
+statement ok
+INSERT INTO t1(e,c,b,a,d) VALUES(242,244,240,243,241);
+
+statement ok
+INSERT INTO t1(e,d,c,b,a) VALUES(246,248,247,249,245);
+
+# Regression test for https://github.com/apache/datafusion/issues/13425
+query IIIIII
+SELECT a+b*2,
+       a+b*2+c*3+d*4,
+       CASE WHEN a<b-3 THEN 111 WHEN a<=b THEN 222
+        WHEN a<b+3 THEN 333 ELSE 444 END,
+       b,
+       c-d,
+       a+b*2+c*3+d*4+e*5
+  FROM t1
+ WHERE (e>c OR e<d)
+    OR EXISTS(SELECT 1 FROM t1 AS x WHERE x.b<t1.b)
+ ORDER BY 3,5,2,1,4,6;
+----
+743 2476 111 249 -1 3706
+652 2165 222 218 -2 3260
+369 1226 222 124 1 1826
+617 2069 222 206 1 3114
+351 1172 222 118 3 1757
+455 1521 333 151 -4 2281
+502 1676 333 167 -3 2501
+317 1067 333 105 -2 1612
+544 1828 333 181 1 2728
+635 2125 333 211 2 3175
+483 1622 444 160 -3 2432
+529 1769 444 175 -2 2654
+439 1472 444 145 -1 2202
+304 1014 444 100 1 1529
+514 1714 444 170 1 2579
+723 2419 444 240 3 3629
+
+statement ok
+drop table t1;

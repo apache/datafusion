@@ -32,7 +32,7 @@ use crate::{udaf, ExprSchemable, Operator, Signature, WindowFrame, WindowUDF};
 use arrow::datatypes::{DataType, FieldRef};
 use datafusion_common::cse::HashNode;
 use datafusion_common::tree_node::{
-    Transformed, TransformedResult, TreeNode, TreeNodeRecursion,
+    Transformed, TransformedResult, TreeNode, TreeNodeContainer, TreeNodeRecursion,
 };
 use datafusion_common::{
     plan_err, Column, DFSchema, HashMap, Result, ScalarValue, TableReference,
@@ -351,6 +351,22 @@ impl<'a> From<(Option<&'a TableReference>, &'a FieldRef)> for Expr {
     }
 }
 
+impl<'a> TreeNodeContainer<'a, Self> for Expr {
+    fn apply_elements<F: FnMut(&'a Self) -> Result<TreeNodeRecursion>>(
+        &'a self,
+        mut f: F,
+    ) -> Result<TreeNodeRecursion> {
+        f(self)
+    }
+
+    fn map_elements<F: FnMut(Self) -> Result<Transformed<Self>>>(
+        self,
+        mut f: F,
+    ) -> Result<Transformed<Self>> {
+        f(self)
+    }
+}
+
 /// UNNEST expression.
 #[derive(Clone, PartialEq, Eq, PartialOrd, Hash, Debug)]
 pub struct Unnest {
@@ -650,6 +666,24 @@ impl Display for Sort {
             write!(f, " NULLS LAST")?;
         }
         Ok(())
+    }
+}
+
+impl<'a> TreeNodeContainer<'a, Expr> for Sort {
+    fn apply_elements<F: FnMut(&'a Expr) -> Result<TreeNodeRecursion>>(
+        &'a self,
+        f: F,
+    ) -> Result<TreeNodeRecursion> {
+        self.expr.apply_elements(f)
+    }
+
+    fn map_elements<F: FnMut(Expr) -> Result<Transformed<Expr>>>(
+        self,
+        f: F,
+    ) -> Result<Transformed<Self>> {
+        self.expr
+            .map_elements(f)?
+            .map_data(|expr| Ok(Self { expr, ..self }))
     }
 }
 
@@ -1084,7 +1118,7 @@ impl Expr {
     }
 
     /// Returns a full and complete string representation of this expression.
-    #[deprecated(note = "use format! instead")]
+    #[deprecated(since = "42.0.0", note = "use format! instead")]
     pub fn canonical_name(&self) -> String {
         format!("{self}")
     }
@@ -1818,7 +1852,7 @@ macro_rules! expr_vec_fmt {
 }
 
 struct SchemaDisplay<'a>(&'a Expr);
-impl<'a> Display for SchemaDisplay<'a> {
+impl Display for SchemaDisplay<'_> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self.0 {
             // The same as Display
@@ -2355,7 +2389,7 @@ mod test {
     use crate::expr_fn::col;
     use crate::{
         case, lit, qualified_wildcard, wildcard, wildcard_with_options, ColumnarValue,
-        ScalarUDF, ScalarUDFImpl, Volatility,
+        ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Volatility,
     };
     use sqlparser::ast;
     use sqlparser::ast::{Ident, IdentWithAlias};
@@ -2484,7 +2518,10 @@ mod test {
                 Ok(DataType::Utf8)
             }
 
-            fn invoke(&self, _args: &[ColumnarValue]) -> Result<ColumnarValue> {
+            fn invoke_with_args(
+                &self,
+                _args: ScalarFunctionArgs,
+            ) -> Result<ColumnarValue> {
                 Ok(ColumnarValue::Scalar(ScalarValue::from("a")))
             }
         }

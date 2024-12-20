@@ -1155,6 +1155,18 @@ select column1, column5 from arrays_values_without_nulls;
 [21, 22, 23, 24, 25, 26, 27, 28, 29, 30] [6, 7]
 [31, 32, 33, 34, 35, 26, 37, 38, 39, 40] [8, 9]
 
+# make array with arrays of different types
+query ?
+select make_array(make_array(1), arrow_cast(make_array(-1), 'LargeList(Int8)'))
+----
+[[1], [-1]]
+
+query T
+select arrow_typeof(make_array(make_array(1), arrow_cast(make_array(-1), 'LargeList(Int8)')));
+----
+List(Field { name: "item", data_type: LargeList(Field { name: "item", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} })
+
+
 query ???
 select make_array(column1),
        make_array(column1, column5),
@@ -3973,6 +3985,30 @@ ORDER BY column1;
 3 [bar] bar
 NULL [baz] baz
 
+# verify make_array does force to Utf8View
+query T
+SELECT arrow_typeof(make_array(arrow_cast('a', 'Utf8View'), 'b', 'c', 'd'));
+----
+List(Field { name: "item", data_type: Utf8View, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} })
+
+# expect a,b,c,d. make_array forces all types to be of a common type (see above)
+query T
+SELECT array_to_string(make_array(arrow_cast('a', 'Utf8View'), 'b', 'c', 'd'), ',');
+----
+a,b,c,d
+
+# array_to_string using largeutf8 for second arg
+query TTT
+select array_to_string(['h', 'e', 'l', 'l', 'o'], arrow_cast(',', 'LargeUtf8')), array_to_string([1, 2, 3, 4, 5], arrow_cast('-', 'LargeUtf8')), array_to_string([1.0, 2.0, 3.0], arrow_cast('|', 'LargeUtf8'));
+----
+h,e,l,l,o 1-2-3-4-5 1|2|3
+
+# array_to_string using utf8view for second arg
+query TTT
+select array_to_string(['h', 'e', 'l', 'l', 'o'], arrow_cast(',', 'Utf8View')), array_to_string([1, 2, 3, 4, 5], arrow_cast('-', 'Utf8View')), array_to_string([1.0, 2.0, 3.0], arrow_cast('|', 'Utf8View'));
+----
+h,e,l,l,o 1-2-3-4-5 1|2|3
+
 statement ok
 drop table table1;
 
@@ -5624,6 +5660,20 @@ select count(*) from arrays where 'X'>any(column3);
 #----
 #NULL
 
+# test with empty row, the row that does not match the condition has row count 0
+statement ok
+create table t1(a int, b int) as values (100, 1), (101, 2), (102, 3), (101, 2);
+
+# rowsort is to ensure the order of group by is deterministic, array_sort has no effect here, since the sum() always returns single row.
+query ? rowsort
+select array_distinct([sum(a)]) from t1 where a > 100 group by b;
+----
+[102]
+[202]
+
+statement ok
+drop table t1;
+
 query ?
 select array_distinct([]);
 ----
@@ -6916,6 +6966,79 @@ select string_to_array(e, ',') from values;
 [adipiscing]
 NULL
 
+# karge string tests for string_to_array
+
+# string_to_array scalar function
+query ?
+SELECT string_to_array(arrow_cast('abcxxxdef', 'LargeUtf8'), 'xxx')
+----
+[abc, def]
+
+# string_to_array scalar function
+query ?
+SELECT string_to_array(arrow_cast('abcxxxdef', 'LargeUtf8'), arrow_cast('xxx', 'LargeUtf8'))
+----
+[abc, def]
+
+query ?
+SELECT string_to_array(arrow_cast('abc', 'LargeUtf8'), NULL)
+----
+[a, b, c]
+
+query ?
+select string_to_array(arrow_cast(e, 'LargeUtf8'), ',') from values;
+----
+[Lorem]
+[ipsum]
+[dolor]
+[sit]
+[amet]
+[, ]
+[consectetur]
+[adipiscing]
+NULL
+
+query ?
+select string_to_array(arrow_cast(e, 'LargeUtf8'), ',', arrow_cast('Lorem', 'LargeUtf8')) from values;
+----
+[]
+[ipsum]
+[dolor]
+[sit]
+[amet]
+[, ]
+[consectetur]
+[adipiscing]
+NULL
+
+# string view tests for string_to_array
+
+# string_to_array scalar function
+query ?
+SELECT string_to_array(arrow_cast('abcxxxdef', 'Utf8View'), 'xxx')
+----
+[abc, def]
+
+query ?
+SELECT string_to_array(arrow_cast('abc', 'Utf8View'), NULL)
+----
+[a, b, c]
+
+query ?
+select string_to_array(arrow_cast(e, 'Utf8View'), ',') from values;
+----
+[Lorem]
+[ipsum]
+[dolor]
+[sit]
+[amet]
+[, ]
+[consectetur]
+[adipiscing]
+NULL
+
+# test string_to_array aliases
+
 query ?
 select string_to_list(e, 'm') from values;
 ----
@@ -7020,7 +7143,7 @@ select array_resize(arrow_cast(NULL, 'List(Int8)'), 1);
 NULL
 
 statement ok
-CREATE TABLE array_resize_values 
+CREATE TABLE array_resize_values
 AS VALUES
   (make_array(1, NULL, 3, 4, 5, 6, 7, 8, 9, 10), 2, 1),
   (make_array(11, 12, NULL, 14, 15, 16, 17, 18, 19, 20), 5, 2),

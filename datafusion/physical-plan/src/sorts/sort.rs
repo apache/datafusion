@@ -203,39 +203,54 @@ impl ExternalSorterMetrics {
 ///  in_mem_batches
 /// ```
 struct ExternalSorter {
-    /// schema of the output (and the input)
+    // ========================================================================
+    // PROPERTIES:
+    // Fields that define the sorter's configuration and remain constant
+    // ========================================================================
+    /// Schema of the output (and the input)
     schema: SchemaRef,
-    /// Potentially unsorted in memory buffer
-    in_mem_batches: Vec<RecordBatch>,
-    /// if `Self::in_mem_batches` are sorted
-    in_mem_batches_sorted: bool,
-    /// If data has previously been spilled, the locations of the
-    /// spill files (in Arrow IPC format)
-    spills: Vec<RefCountedTempFile>,
     /// Sort expressions
     expr: Arc<[PhysicalSortExpr]>,
-    /// Runtime metrics
-    metrics: ExternalSorterMetrics,
-    /// If Some, the maximum number of output rows that will be
-    /// produced.
+    /// If Some, the maximum number of output rows that will be produced
     fetch: Option<usize>,
-    /// Reservation for in_mem_batches
-    reservation: MemoryReservation,
-    /// Reservation for the merging of in-memory batches. If the sort
-    /// might spill, `sort_spill_reservation_bytes` will be
-    /// pre-reserved to ensure there is some space for this sort/merge.
-    merge_reservation: MemoryReservation,
-    /// A handle to the runtime to get spill files
-    runtime: Arc<RuntimeEnv>,
     /// The target number of rows for output batches
     batch_size: usize,
-    /// How much memory to reserve for performing in-memory sort/merges
-    /// prior to spilling.
-    sort_spill_reservation_bytes: usize,
     /// If the in size of buffered memory batches is below this size,
     /// the data will be concatenated and sorted in place rather than
     /// sort/merged.
     sort_in_place_threshold_bytes: usize,
+
+    // ========================================================================
+    // STATE BUFFERS:
+    // Fields that hold intermediate data during sorting
+    // ========================================================================
+    /// Potentially unsorted in memory buffer
+    in_mem_batches: Vec<RecordBatch>,
+    /// if `Self::in_mem_batches` are sorted
+    in_mem_batches_sorted: bool,
+
+    /// If data has previously been spilled, the locations of the
+    /// spill files (in Arrow IPC format)
+    spills: Vec<RefCountedTempFile>,
+
+    // ========================================================================
+    // EXECUTION RESOURCES:
+    // Fields related to managing execution resources and monitoring performance.
+    // ========================================================================
+    /// Runtime metrics
+    metrics: ExternalSorterMetrics,
+    /// A handle to the runtime to get spill files
+    runtime: Arc<RuntimeEnv>,
+    /// Reservation for in_mem_batches
+    reservation: MemoryReservation,
+
+    /// Reservation for the merging of in-memory batches. If the sort
+    /// might spill, `sort_spill_reservation_bytes` will be
+    /// pre-reserved to ensure there is some space for this sort/merge.
+    merge_reservation: MemoryReservation,
+    /// How much memory to reserve for performing in-memory sort/merges
+    /// prior to spilling.
+    sort_spill_reservation_bytes: usize,
 }
 
 impl ExternalSorter {
@@ -917,7 +932,6 @@ impl ExecutionPlan for SortExec {
                     context.session_config().batch_size(),
                     context.runtime_env(),
                     &self.metrics_set,
-                    partition,
                 )?;
                 Ok(Box::pin(RecordBatchStreamAdapter::new(
                     self.schema(),
@@ -1330,7 +1344,7 @@ mod tests {
             Field::new("a", DataType::Int32, true),
             Field::new(
                 "b",
-                DataType::List(Arc::new(Field::new("item", DataType::Int32, true))),
+                DataType::List(Arc::new(Field::new_list_field(DataType::Int32, true))),
                 true,
             ),
         ]));
@@ -1375,7 +1389,7 @@ mod tests {
 
         assert_eq!(DataType::Int32, *sort_exec.schema().field(0).data_type());
         assert_eq!(
-            DataType::List(Arc::new(Field::new("item", DataType::Int32, true))),
+            DataType::List(Arc::new(Field::new_list_field(DataType::Int32, true))),
             *sort_exec.schema().field(1).data_type()
         );
 

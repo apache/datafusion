@@ -746,7 +746,7 @@ mod tests {
 
     // Split the provided record batch into multiple batch_size record batches
     fn split_batch(sorted: &RecordBatch, batch_size: usize) -> Vec<RecordBatch> {
-        let batches = (sorted.num_rows() + batch_size - 1) / batch_size;
+        let batches = sorted.num_rows().div_ceil(batch_size);
 
         // Split the sorted RecordBatch into multiple
         (0..batches)

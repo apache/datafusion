@@ -43,7 +43,7 @@ use datafusion_common::{internal_err, DFSchema, Result, ScalarValue};
 use datafusion_expr::interval_arithmetic::Interval;
 use datafusion_expr::sort_properties::ExprProperties;
 use datafusion_expr::type_coercion::functions::data_types_with_scalar_udf;
-use datafusion_expr::{expr_vec_fmt, ColumnarValue, Expr, ScalarUDF};
+use datafusion_expr::{expr_vec_fmt, ColumnarValue, Expr, ScalarFunctionArgs, ScalarUDF};
 
 /// Physical expression of a scalar function
 #[derive(Eq, PartialEq, Hash)]
@@ -134,29 +134,35 @@ impl PhysicalExpr for ScalarFunctionExpr {
     }
 
     fn evaluate(&self, batch: &RecordBatch) -> Result<ColumnarValue> {
-        let inputs = self
+        let args = self
             .args
             .iter()
             .map(|e| e.evaluate(batch))
             .collect::<Result<Vec<_>>>()?;
 
+        let input_empty = args.is_empty();
+        let input_all_scalar = args
+            .iter()
+            .all(|arg| matches!(arg, ColumnarValue::Scalar(_)));
+
         // evaluate the function
-        let output = self.fun.invoke_batch(&inputs, batch.num_rows())?;
+        let output = self.fun.invoke_with_args(ScalarFunctionArgs {
+            args,
+            number_rows: batch.num_rows(),
+            return_type: &self.return_type,
+        })?;
 
         if let ColumnarValue::Array(array) = &output {
             if array.len() != batch.num_rows() {
                 // If the arguments are a non-empty slice of scalar values, we can assume that
                 // returning a one-element array is equivalent to returning a scalar.
-                let preserve_scalar = array.len() == 1
-                    && !inputs.is_empty()
-                    && inputs
-                        .iter()
-                        .all(|arg| matches!(arg, ColumnarValue::Scalar(_)));
+                let preserve_scalar =
+                    array.len() == 1 && !input_empty && input_all_scalar;
                 return if preserve_scalar {
                     ScalarValue::try_from_array(array, 0).map(ColumnarValue::Scalar)
                 } else {
-                    internal_err!("UDF returned a different number of rows than expected. Expected: {}, Got: {}",
-                            batch.num_rows(), array.len())
+                    internal_err!("UDF {} returned a different number of rows than expected. Expected: {}, Got: {}",
+                            self.name, batch.num_rows(), array.len())
                 };
             }
         }
@@ -196,6 +202,7 @@ impl PhysicalExpr for ScalarFunctionExpr {
 
     fn get_properties(&self, children: &[ExprProperties]) -> Result<ExprProperties> {
         let sort_properties = self.fun.output_ordering(children)?;
+        let preserves_lex_ordering = self.fun.preserves_lex_ordering(children)?;
         let children_range = children
             .iter()
             .map(|props| &props.range)
@@ -205,6 +212,7 @@ impl PhysicalExpr for ScalarFunctionExpr {
         Ok(ExprProperties {
             sort_properties,
             range,
+            preserves_lex_ordering,
         })
     }
 }

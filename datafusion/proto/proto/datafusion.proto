@@ -828,6 +828,8 @@ message PhysicalExprNode {
     PhysicalLikeExprNode like_expr = 18;
 
     PhysicalExtensionExprNode extension = 19;
+
+    UnknownColumn unknown_column = 20;
   }
 }
 
@@ -836,6 +838,7 @@ message PhysicalScalarUdfNode {
   repeated PhysicalExprNode args = 2;
   optional bytes fun_definition = 3;
   datafusion_common.ArrowType return_type = 4;
+  bool nullable = 5;
 }
 
 message PhysicalAggregateExprNode {
@@ -1065,6 +1068,10 @@ message CrossJoinExecNode {
 message PhysicalColumn {
   string name = 1;
   uint32 index = 2;
+}
+
+message UnknownColumn {
+  string name = 1;
 }
 
 message JoinOn {

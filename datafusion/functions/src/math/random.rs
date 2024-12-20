@@ -90,14 +90,12 @@ static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
 
 fn get_random_doc() -> &'static Documentation {
     DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_MATH)
-            .with_description(
-                r#"Returns a random float value in the range [0, 1).
+        Documentation::builder(
+            DOC_SECTION_MATH,
+            r#"Returns a random float value in the range [0, 1).
 The random seed is unique to each row."#,
-            )
-            .with_syntax_example("random()")
-            .build()
-            .unwrap()
+            "random()",
+        )
+        .build()
     })
 }

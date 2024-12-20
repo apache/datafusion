@@ -148,7 +148,7 @@ async fn main() -> Result<()> {
 
     // invalid flags will result in an error
     let result = ctx
-        .sql(r"select regexp_like('\b4(?!000)\d\d\d\b', 4010, 'g')")
+        .sql(r"select regexp_like('\b4(?!000)\d\d\d\b', '4010', 'g')")
         .await?
         .collect()
         .await;

@@ -82,14 +82,16 @@ fn patterns(rng: &mut ThreadRng) -> StringArray {
 fn criterion_benchmark(c: &mut Criterion) {
     c.bench_function("to_char_array_array_1000", |b| {
         let mut rng = rand::thread_rng();
-        let data = ColumnarValue::Array(Arc::new(data(&mut rng)) as ArrayRef);
+        let data_arr = data(&mut rng);
+        let batch_len = data_arr.len();
+        let data = ColumnarValue::Array(Arc::new(data_arr) as ArrayRef);
         let patterns = ColumnarValue::Array(Arc::new(patterns(&mut rng)) as ArrayRef);
 
         b.iter(|| {
-            #[allow(deprecated)] // TODO use invoke_batch
+            // TODO use invoke_with_args
             black_box(
                 to_char()
-                    .invoke(&[data.clone(), patterns.clone()])
+                    .invoke_batch(&[data.clone(), patterns.clone()], batch_len)
                     .expect("to_char should work on valid values"),
             )
         })
@@ -97,15 +99,17 @@ fn criterion_benchmark(c: &mut Criterion) {
 
     c.bench_function("to_char_array_scalar_1000", |b| {
         let mut rng = rand::thread_rng();
-        let data = ColumnarValue::Array(Arc::new(data(&mut rng)) as ArrayRef);
+        let data_arr = data(&mut rng);
+        let batch_len = data_arr.len();
+        let data = ColumnarValue::Array(Arc::new(data_arr) as ArrayRef);
         let patterns =
             ColumnarValue::Scalar(ScalarValue::Utf8(Some("%Y-%m-%d".to_string())));
 
         b.iter(|| {
-            #[allow(deprecated)] // TODO use invoke_batch
+            // TODO use invoke_with_args
             black_box(
                 to_char()
-                    .invoke(&[data.clone(), patterns.clone()])
+                    .invoke_batch(&[data.clone(), patterns.clone()], batch_len)
                     .expect("to_char should work on valid values"),
             )
         })
@@ -126,10 +130,10 @@ fn criterion_benchmark(c: &mut Criterion) {
         )));
 
         b.iter(|| {
-            #[allow(deprecated)] // TODO use invoke_batch
+            // TODO use invoke_with_args
             black_box(
                 to_char()
-                    .invoke(&[data.clone(), pattern.clone()])
+                    .invoke_batch(&[data.clone(), pattern.clone()], 1)
                     .expect("to_char should work on valid values"),
             )
         })

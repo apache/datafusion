@@ -72,14 +72,17 @@ impl ScalarUDFImpl for MapValuesFunc {
         }
         let map_type = &arg_types[0];
         let map_fields = get_map_entry_field(map_type)?;
-        Ok(DataType::List(Arc::new(Field::new(
-            "item",
+        Ok(DataType::List(Arc::new(Field::new_list_field(
             map_fields.last().unwrap().data_type().clone(),
             true,
         ))))
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         make_scalar_function(map_values_inner)(args)
     }
 
@@ -92,12 +95,11 @@ static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
 
 fn get_map_values_doc() -> &'static Documentation {
     DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_MAP)
-            .with_description(
-                "Returns a list of all values in the map."
-            )
-            .with_syntax_example("map_values(map)")
+        Documentation::builder(
+            DOC_SECTION_MAP,
+                "Returns a list of all values in the map.",
+
+            "map_values(map)")
             .with_sql_example(
                 r#"```sql
 SELECT map_values(MAP {'a': 1, 'b': NULL, 'c': 3});
@@ -114,7 +116,6 @@ SELECT map_values(map([100, 5], [42, 43]));
                 "Map expression. Can be a constant, column, or function, and any combination of map operators."
             )
             .build()
-            .unwrap()
     })
 }
 
@@ -129,7 +130,7 @@ fn map_values_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
     };
 
     Ok(Arc::new(ListArray::new(
-        Arc::new(Field::new("item", map_array.value_type().clone(), true)),
+        Arc::new(Field::new_list_field(map_array.value_type().clone(), true)),
         map_array.offsets().clone(),
         Arc::clone(map_array.values()),
         None,

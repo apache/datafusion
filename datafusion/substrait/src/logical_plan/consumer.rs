@@ -26,12 +26,12 @@ use datafusion::common::{
     not_impl_err, plan_datafusion_err, substrait_datafusion_err, substrait_err, DFSchema,
     DFSchemaRef,
 };
-use datafusion::execution::FunctionRegistry;
+use datafusion::datasource::provider_as_source;
 use datafusion::logical_expr::expr::{Exists, InSubquery, Sort};
 
 use datafusion::logical_expr::{
     Aggregate, BinaryExpr, Case, EmptyRelation, Expr, ExprSchemable, LogicalPlan,
-    Operator, Projection, SortExpr, Values,
+    Operator, Projection, SortExpr, TryCast, Values,
 };
 use substrait::proto::aggregate_rel::Grouping;
 use substrait::proto::expression::subquery::set_predicate::PredicateOp;
@@ -56,24 +56,22 @@ use crate::variation_const::{
 use datafusion::arrow::array::{new_empty_array, AsArray};
 use datafusion::arrow::temporal_conversions::NANOSECONDS;
 use datafusion::common::scalar::ScalarStructBuilder;
-use datafusion::dataframe::DataFrame;
 use datafusion::logical_expr::builder::project;
 use datafusion::logical_expr::expr::InList;
 use datafusion::logical_expr::{
     col, expr, Cast, Extension, GroupingSet, Like, LogicalPlanBuilder, Partitioning,
     Repartition, Subquery, WindowFrameBound, WindowFrameUnits, WindowFunctionDefinition,
 };
-use datafusion::prelude::JoinType;
+use datafusion::prelude::{lit, JoinType};
 use datafusion::sql::TableReference;
 use datafusion::{
-    error::Result,
-    logical_expr::utils::split_conjunction,
-    prelude::{Column, SessionContext},
+    error::Result, logical_expr::utils::split_conjunction, prelude::Column,
     scalar::ScalarValue,
 };
 use std::collections::HashSet;
 use std::sync::Arc;
 use substrait::proto::exchange_rel::ExchangeKind;
+use substrait::proto::expression::cast::FailureBehavior::ReturnNull;
 use substrait::proto::expression::literal::user_defined::Val;
 use substrait::proto::expression::literal::{
     interval_day_to_second, IntervalCompound, IntervalDayToSecond, IntervalYearToMonth,
@@ -100,7 +98,9 @@ use substrait::proto::{
     sort_field::{SortDirection, SortKind::*},
     AggregateFunction, Expression, NamedStruct, Plan, Rel, RelCommon, Type,
 };
-use substrait::proto::{ExtendedExpression, FunctionArgument, SortField};
+use substrait::proto::{fetch_rel, ExtendedExpression, FunctionArgument, SortField};
+
+use super::state::SubstraitPlanningState;
 
 // Substrait PrecisionTimestampTz indicates that the timestamp is relative to UTC, which
 // is the same as the expectation for any non-empty timezone in DF, so any non-empty timezone
@@ -203,15 +203,15 @@ fn split_eq_and_noneq_join_predicate_with_nulls_equality(
 
 async fn union_rels(
     rels: &[Rel],
-    ctx: &SessionContext,
+    state: &dyn SubstraitPlanningState,
     extensions: &Extensions,
     is_all: bool,
 ) -> Result<LogicalPlan> {
     let mut union_builder = Ok(LogicalPlanBuilder::from(
-        from_substrait_rel(ctx, &rels[0], extensions).await?,
+        from_substrait_rel(state, &rels[0], extensions).await?,
     ));
     for input in &rels[1..] {
-        let rel_plan = from_substrait_rel(ctx, input, extensions).await?;
+        let rel_plan = from_substrait_rel(state, input, extensions).await?;
 
         union_builder = if is_all {
             union_builder?.union(rel_plan)
@@ -224,16 +224,16 @@ async fn union_rels(
 
 async fn intersect_rels(
     rels: &[Rel],
-    ctx: &SessionContext,
+    state: &dyn SubstraitPlanningState,
     extensions: &Extensions,
     is_all: bool,
 ) -> Result<LogicalPlan> {
-    let mut rel = from_substrait_rel(ctx, &rels[0], extensions).await?;
+    let mut rel = from_substrait_rel(state, &rels[0], extensions).await?;
 
     for input in &rels[1..] {
         rel = LogicalPlanBuilder::intersect(
             rel,
-            from_substrait_rel(ctx, input, extensions).await?,
+            from_substrait_rel(state, input, extensions).await?,
             is_all,
         )?
     }
@@ -243,16 +243,16 @@ async fn intersect_rels(
 
 async fn except_rels(
     rels: &[Rel],
-    ctx: &SessionContext,
+    state: &dyn SubstraitPlanningState,
     extensions: &Extensions,
     is_all: bool,
 ) -> Result<LogicalPlan> {
-    let mut rel = from_substrait_rel(ctx, &rels[0], extensions).await?;
+    let mut rel = from_substrait_rel(state, &rels[0], extensions).await?;
 
     for input in &rels[1..] {
         rel = LogicalPlanBuilder::except(
             rel,
-            from_substrait_rel(ctx, input, extensions).await?,
+            from_substrait_rel(state, input, extensions).await?,
             is_all,
         )?
     }
@@ -262,7 +262,7 @@ async fn except_rels(
 
 /// Convert Substrait Plan to DataFusion LogicalPlan
 pub async fn from_substrait_plan(
-    ctx: &SessionContext,
+    state: &dyn SubstraitPlanningState,
     plan: &Plan,
 ) -> Result<LogicalPlan> {
     // Register function extension
@@ -277,10 +277,10 @@ pub async fn from_substrait_plan(
             match plan.relations[0].rel_type.as_ref() {
                 Some(rt) => match rt {
                     plan_rel::RelType::Rel(rel) => {
-                        Ok(from_substrait_rel(ctx, rel, &extensions).await?)
+                        Ok(from_substrait_rel(state, rel, &extensions).await?)
                     },
                     plan_rel::RelType::Root(root) => {
-                        let plan = from_substrait_rel(ctx, root.input.as_ref().unwrap(), &extensions).await?;
+                        let plan = from_substrait_rel(state, root.input.as_ref().unwrap(), &extensions).await?;
                         if root.names.is_empty() {
                             // Backwards compatibility for plans missing names
                             return Ok(plan);
@@ -341,7 +341,7 @@ pub struct ExprContainer {
 /// between systems.  This is often useful for scenarios like pushdown where filter
 /// expressions need to be sent to remote systems.
 pub async fn from_substrait_extended_expr(
-    ctx: &SessionContext,
+    state: &dyn SubstraitPlanningState,
     extended_expr: &ExtendedExpression,
 ) -> Result<ExprContainer> {
     // Register function extension
@@ -370,7 +370,7 @@ pub async fn from_substrait_extended_expr(
             }
         }?;
         let expr =
-            from_substrait_rex(ctx, scalar_expr, &input_schema, &extensions).await?;
+            from_substrait_rex(state, scalar_expr, &input_schema, &extensions).await?;
         let (output_type, expected_nullability) =
             expr.data_type_and_nullable(&input_schema)?;
         let output_field = Field::new("", output_type, expected_nullability);
@@ -561,7 +561,7 @@ fn make_renamed_schema(
 #[allow(deprecated)]
 #[async_recursion]
 pub async fn from_substrait_rel(
-    ctx: &SessionContext,
+    state: &dyn SubstraitPlanningState,
     rel: &Rel,
     extensions: &Extensions,
 ) -> Result<LogicalPlan> {
@@ -569,7 +569,7 @@ pub async fn from_substrait_rel(
         Some(RelType::Project(p)) => {
             if let Some(input) = p.input.as_ref() {
                 let mut input = LogicalPlanBuilder::from(
-                    from_substrait_rel(ctx, input, extensions).await?,
+                    from_substrait_rel(state, input, extensions).await?,
                 );
                 let original_schema = input.schema().clone();
 
@@ -587,9 +587,13 @@ pub async fn from_substrait_rel(
 
                 let mut explicit_exprs: Vec<Expr> = vec![];
                 for expr in &p.expressions {
-                    let e =
-                        from_substrait_rex(ctx, expr, input.clone().schema(), extensions)
-                            .await?;
+                    let e = from_substrait_rex(
+                        state,
+                        expr,
+                        input.clone().schema(),
+                        extensions,
+                    )
+                    .await?;
                     // if the expression is WindowFunction, wrap in a Window relation
                     if let Expr::WindowFunction(_) = &e {
                         // Adding the same expression here and in the project below
@@ -617,11 +621,11 @@ pub async fn from_substrait_rel(
         Some(RelType::Filter(filter)) => {
             if let Some(input) = filter.input.as_ref() {
                 let input = LogicalPlanBuilder::from(
-                    from_substrait_rel(ctx, input, extensions).await?,
+                    from_substrait_rel(state, input, extensions).await?,
                 );
                 if let Some(condition) = filter.condition.as_ref() {
                     let expr =
-                        from_substrait_rex(ctx, condition, input.schema(), extensions)
+                        from_substrait_rex(state, condition, input.schema(), extensions)
                             .await?;
                     input.filter(expr)?.build()
                 } else {
@@ -634,16 +638,29 @@ pub async fn from_substrait_rel(
         Some(RelType::Fetch(fetch)) => {
             if let Some(input) = fetch.input.as_ref() {
                 let input = LogicalPlanBuilder::from(
-                    from_substrait_rel(ctx, input, extensions).await?,
+                    from_substrait_rel(state, input, extensions).await?,
                 );
-                let offset = fetch.offset as usize;
-                // -1 means that ALL records should be returned
-                let count = if fetch.count == -1 {
-                    None
-                } else {
-                    Some(fetch.count as usize)
+                let empty_schema = DFSchemaRef::new(DFSchema::empty());
+                let offset = match &fetch.offset_mode {
+                    Some(fetch_rel::OffsetMode::Offset(offset)) => Some(lit(*offset)),
+                    Some(fetch_rel::OffsetMode::OffsetExpr(expr)) => Some(
+                        from_substrait_rex(state, expr, &empty_schema, extensions)
+                            .await?,
+                    ),
+                    None => None,
                 };
-                input.limit(offset, count)?.build()
+                let count = match &fetch.count_mode {
+                    Some(fetch_rel::CountMode::Count(count)) => {
+                        // -1 means that ALL records should be returned, equivalent to None
+                        (*count != -1).then(|| lit(*count))
+                    }
+                    Some(fetch_rel::CountMode::CountExpr(expr)) => Some(
+                        from_substrait_rex(state, expr, &empty_schema, extensions)
+                            .await?,
+                    ),
+                    None => None,
+                };
+                input.limit_by_expr(offset, count)?.build()
             } else {
                 not_impl_err!("Fetch without an input is not valid")
             }
@@ -651,10 +668,10 @@ pub async fn from_substrait_rel(
         Some(RelType::Sort(sort)) => {
             if let Some(input) = sort.input.as_ref() {
                 let input = LogicalPlanBuilder::from(
-                    from_substrait_rel(ctx, input, extensions).await?,
+                    from_substrait_rel(state, input, extensions).await?,
                 );
                 let sorts =
-                    from_substrait_sorts(ctx, &sort.sorts, input.schema(), extensions)
+                    from_substrait_sorts(state, &sort.sorts, input.schema(), extensions)
                         .await?;
                 input.sort(sorts)?.build()
             } else {
@@ -664,13 +681,13 @@ pub async fn from_substrait_rel(
         Some(RelType::Aggregate(agg)) => {
             if let Some(input) = agg.input.as_ref() {
                 let input = LogicalPlanBuilder::from(
-                    from_substrait_rel(ctx, input, extensions).await?,
+                    from_substrait_rel(state, input, extensions).await?,
                 );
                 let mut ref_group_exprs = vec![];
 
                 for e in &agg.grouping_expressions {
                     let x =
-                        from_substrait_rex(ctx, e, input.schema(), extensions).await?;
+                        from_substrait_rex(state, e, input.schema(), extensions).await?;
                     ref_group_exprs.push(x);
                 }
 
@@ -681,7 +698,7 @@ pub async fn from_substrait_rel(
                     1 => {
                         group_exprs.extend_from_slice(
                             &from_substrait_grouping(
-                                ctx,
+                                state,
                                 &agg.groupings[0],
                                 &ref_group_exprs,
                                 input.schema(),
@@ -694,7 +711,7 @@ pub async fn from_substrait_rel(
                         let mut grouping_sets = vec![];
                         for grouping in &agg.groupings {
                             let grouping_set = from_substrait_grouping(
-                                ctx,
+                                state,
                                 grouping,
                                 &ref_group_exprs,
                                 input.schema(),
@@ -716,7 +733,7 @@ pub async fn from_substrait_rel(
                 for m in &agg.measures {
                     let filter = match &m.filter {
                         Some(fil) => Some(Box::new(
-                            from_substrait_rex(ctx, fil, input.schema(), extensions)
+                            from_substrait_rex(state, fil, input.schema(), extensions)
                                 .await?,
                         )),
                         None => None,
@@ -739,7 +756,7 @@ pub async fn from_substrait_rel(
                             let order_by = if !f.sorts.is_empty() {
                                 Some(
                                     from_substrait_sorts(
-                                        ctx,
+                                        state,
                                         &f.sorts,
                                         input.schema(),
                                         extensions,
@@ -751,7 +768,7 @@ pub async fn from_substrait_rel(
                             };
 
                             from_substrait_agg_func(
-                                ctx,
+                                state,
                                 f,
                                 input.schema(),
                                 extensions,
@@ -780,10 +797,12 @@ pub async fn from_substrait_rel(
             }
 
             let left: LogicalPlanBuilder = LogicalPlanBuilder::from(
-                from_substrait_rel(ctx, join.left.as_ref().unwrap(), extensions).await?,
+                from_substrait_rel(state, join.left.as_ref().unwrap(), extensions)
+                    .await?,
             );
             let right = LogicalPlanBuilder::from(
-                from_substrait_rel(ctx, join.right.as_ref().unwrap(), extensions).await?,
+                from_substrait_rel(state, join.right.as_ref().unwrap(), extensions)
+                    .await?,
             );
             let (left, right) = requalify_sides_if_needed(left, right)?;
 
@@ -796,7 +815,7 @@ pub async fn from_substrait_rel(
             // Otherwise, build join with only the filter, without join keys
             match &join.expression.as_ref() {
                 Some(expr) => {
-                    let on = from_substrait_rex(ctx, expr, &in_join_schema, extensions)
+                    let on = from_substrait_rex(state, expr, &in_join_schema, extensions)
                         .await?;
                     // The join expression can contain both equal and non-equal ops.
                     // As of datafusion 31.0.0, the equal and non equal join conditions are in separate fields.
@@ -831,26 +850,44 @@ pub async fn from_substrait_rel(
         }
         Some(RelType::Cross(cross)) => {
             let left = LogicalPlanBuilder::from(
-                from_substrait_rel(ctx, cross.left.as_ref().unwrap(), extensions).await?,
+                from_substrait_rel(state, cross.left.as_ref().unwrap(), extensions)
+                    .await?,
             );
             let right = LogicalPlanBuilder::from(
-                from_substrait_rel(ctx, cross.right.as_ref().unwrap(), extensions)
+                from_substrait_rel(state, cross.right.as_ref().unwrap(), extensions)
                     .await?,
             );
             let (left, right) = requalify_sides_if_needed(left, right)?;
             left.cross_join(right.build()?)?.build()
         }
         Some(RelType::Read(read)) => {
-            fn read_with_schema(
-                df: DataFrame,
+            async fn read_with_schema(
+                state: &dyn SubstraitPlanningState,
+                table_ref: TableReference,
                 schema: DFSchema,
                 projection: &Option<MaskExpression>,
             ) -> Result<LogicalPlan> {
-                ensure_schema_compatability(df.schema().to_owned(), schema.clone())?;
+                let schema = schema.replace_qualifier(table_ref.clone());
+
+                let plan = {
+                    let provider = match state.table(&table_ref).await? {
+                        Some(ref provider) => Arc::clone(provider),
+                        _ => return plan_err!("No table named '{table_ref}'"),
+                    };
+
+                    LogicalPlanBuilder::scan(
+                        table_ref,
+                        provider_as_source(Arc::clone(&provider)),
+                        None,
+                    )?
+                    .build()?
+                };
+
+                ensure_schema_compatability(plan.schema(), schema.clone())?;
 
                 let schema = apply_masking(schema, projection)?;
 
-                apply_projection(df, schema)
+                apply_projection(plan, schema)
             }
 
             let named_struct = read.base_schema.as_ref().ok_or_else(|| {
@@ -879,12 +916,13 @@ pub async fn from_substrait_rel(
                         },
                     };
 
-                    let t = ctx.table(table_reference.clone()).await?;
-
-                    let substrait_schema =
-                        substrait_schema.replace_qualifier(table_reference);
-
-                    read_with_schema(t, substrait_schema, &read.projection)
+                    read_with_schema(
+                        state,
+                        table_reference,
+                        substrait_schema,
+                        &read.projection,
+                    )
+                    .await
                 }
                 Some(ReadType::VirtualTable(vt)) => {
                     if vt.values.is_empty() {
@@ -960,12 +998,14 @@ pub async fn from_substrait_rel(
                     let name = filename.unwrap();
                     // directly use unwrap here since we could determine it is a valid one
                     let table_reference = TableReference::Bare { table: name.into() };
-                    let t = ctx.table(table_reference.clone()).await?;
 
-                    let substrait_schema =
-                        substrait_schema.replace_qualifier(table_reference);
-
-                    read_with_schema(t, substrait_schema, &read.projection)
+                    read_with_schema(
+                        state,
+                        table_reference,
+                        substrait_schema,
+                        &read.projection,
+                    )
+                    .await
                 }
                 _ => {
                     not_impl_err!("Unsupported ReadType: {:?}", &read.as_ref().read_type)
@@ -979,31 +1019,31 @@ pub async fn from_substrait_rel(
                 } else {
                     match set_op {
                         set_rel::SetOp::UnionAll => {
-                            union_rels(&set.inputs, ctx, extensions, true).await
+                            union_rels(&set.inputs, state, extensions, true).await
                         }
                         set_rel::SetOp::UnionDistinct => {
-                            union_rels(&set.inputs, ctx, extensions, false).await
+                            union_rels(&set.inputs, state, extensions, false).await
                         }
                         set_rel::SetOp::IntersectionPrimary => {
                             LogicalPlanBuilder::intersect(
-                                from_substrait_rel(ctx, &set.inputs[0], extensions)
+                                from_substrait_rel(state, &set.inputs[0], extensions)
                                     .await?,
-                                union_rels(&set.inputs[1..], ctx, extensions, true)
+                                union_rels(&set.inputs[1..], state, extensions, true)
                                     .await?,
                                 false,
                             )
                         }
                         set_rel::SetOp::IntersectionMultiset => {
-                            intersect_rels(&set.inputs, ctx, extensions, false).await
+                            intersect_rels(&set.inputs, state, extensions, false).await
                         }
                         set_rel::SetOp::IntersectionMultisetAll => {
-                            intersect_rels(&set.inputs, ctx, extensions, true).await
+                            intersect_rels(&set.inputs, state, extensions, true).await
                         }
                         set_rel::SetOp::MinusPrimary => {
-                            except_rels(&set.inputs, ctx, extensions, false).await
+                            except_rels(&set.inputs, state, extensions, false).await
                         }
                         set_rel::SetOp::MinusPrimaryAll => {
-                            except_rels(&set.inputs, ctx, extensions, true).await
+                            except_rels(&set.inputs, state, extensions, true).await
                         }
                         _ => not_impl_err!("Unsupported set operator: {set_op:?}"),
                     }
@@ -1015,8 +1055,7 @@ pub async fn from_substrait_rel(
             let Some(ext_detail) = &extension.detail else {
                 return substrait_err!("Unexpected empty detail in ExtensionLeafRel");
             };
-            let plan = ctx
-                .state()
+            let plan = state
                 .serializer_registry()
                 .deserialize_logical_plan(&ext_detail.type_url, &ext_detail.value)?;
             Ok(LogicalPlan::Extension(Extension { node: plan }))
@@ -1025,8 +1064,7 @@ pub async fn from_substrait_rel(
             let Some(ext_detail) = &extension.detail else {
                 return substrait_err!("Unexpected empty detail in ExtensionSingleRel");
             };
-            let plan = ctx
-                .state()
+            let plan = state
                 .serializer_registry()
                 .deserialize_logical_plan(&ext_detail.type_url, &ext_detail.value)?;
             let Some(input_rel) = &extension.input else {
@@ -1034,7 +1072,7 @@ pub async fn from_substrait_rel(
                     "ExtensionSingleRel doesn't contains input rel. Try use ExtensionLeafRel instead"
                 );
             };
-            let input_plan = from_substrait_rel(ctx, input_rel, extensions).await?;
+            let input_plan = from_substrait_rel(state, input_rel, extensions).await?;
             let plan =
                 plan.with_exprs_and_inputs(plan.expressions(), vec![input_plan])?;
             Ok(LogicalPlan::Extension(Extension { node: plan }))
@@ -1043,13 +1081,12 @@ pub async fn from_substrait_rel(
             let Some(ext_detail) = &extension.detail else {
                 return substrait_err!("Unexpected empty detail in ExtensionSingleRel");
             };
-            let plan = ctx
-                .state()
+            let plan = state
                 .serializer_registry()
                 .deserialize_logical_plan(&ext_detail.type_url, &ext_detail.value)?;
             let mut inputs = Vec::with_capacity(extension.inputs.len());
             for input in &extension.inputs {
-                let input_plan = from_substrait_rel(ctx, input, extensions).await?;
+                let input_plan = from_substrait_rel(state, input, extensions).await?;
                 inputs.push(input_plan);
             }
             let plan = plan.with_exprs_and_inputs(plan.expressions(), inputs)?;
@@ -1059,7 +1096,7 @@ pub async fn from_substrait_rel(
             let Some(input) = exchange.input.as_ref() else {
                 return substrait_err!("Unexpected empty input in ExchangeRel");
             };
-            let input = Arc::new(from_substrait_rel(ctx, input, extensions).await?);
+            let input = Arc::new(from_substrait_rel(state, input, extensions).await?);
 
             let Some(exchange_kind) = &exchange.exchange_kind else {
                 return substrait_err!("Unexpected empty input in ExchangeRel");
@@ -1124,6 +1161,7 @@ fn retrieve_rel_common(rel: &Rel) -> Option<&RelCommon> {
             RelType::Window(w) => w.common.as_ref(),
             RelType::Exchange(e) => e.common.as_ref(),
             RelType::Expand(e) => e.common.as_ref(),
+            RelType::Update(_) => None,
         },
     }
 }
@@ -1237,7 +1275,7 @@ impl NameTracker {
 ///    DataFusion schema may have MORE fields, but not the other way around.
 /// 2. All fields are compatible. See [`ensure_field_compatability`] for details
 fn ensure_schema_compatability(
-    table_schema: DFSchema,
+    table_schema: &DFSchema,
     substrait_schema: DFSchema,
 ) -> Result<()> {
     substrait_schema
@@ -1253,16 +1291,19 @@ fn ensure_schema_compatability(
 
 /// This function returns a DataFrame with fields adjusted if necessary in the event that the
 /// Substrait schema is a subset of the DataFusion schema.
-fn apply_projection(table: DataFrame, substrait_schema: DFSchema) -> Result<LogicalPlan> {
-    let df_schema = table.schema().to_owned();
-
-    let t = table.into_unoptimized_plan();
+fn apply_projection(
+    plan: LogicalPlan,
+    substrait_schema: DFSchema,
+) -> Result<LogicalPlan> {
+    let df_schema = plan.schema();
 
     if df_schema.logically_equivalent_names_and_types(&substrait_schema) {
-        return Ok(t);
+        return Ok(plan);
     }
 
-    match t {
+    let df_schema = df_schema.to_owned();
+
+    match plan {
         LogicalPlan::TableScan(mut scan) => {
             let column_indices: Vec<usize> = substrait_schema
                 .strip_qualifiers()
@@ -1389,7 +1430,7 @@ fn from_substrait_jointype(join_type: i32) -> Result<JoinType> {
 
 /// Convert Substrait Sorts to DataFusion Exprs
 pub async fn from_substrait_sorts(
-    ctx: &SessionContext,
+    state: &dyn SubstraitPlanningState,
     substrait_sorts: &Vec<SortField>,
     input_schema: &DFSchema,
     extensions: &Extensions,
@@ -1397,7 +1438,7 @@ pub async fn from_substrait_sorts(
     let mut sorts: Vec<Sort> = vec![];
     for s in substrait_sorts {
         let expr =
-            from_substrait_rex(ctx, s.expr.as_ref().unwrap(), input_schema, extensions)
+            from_substrait_rex(state, s.expr.as_ref().unwrap(), input_schema, extensions)
                 .await?;
         let asc_nullfirst = match &s.sort_kind {
             Some(k) => match k {
@@ -1439,14 +1480,15 @@ pub async fn from_substrait_sorts(
 
 /// Convert Substrait Expressions to DataFusion Exprs
 pub async fn from_substrait_rex_vec(
-    ctx: &SessionContext,
+    state: &dyn SubstraitPlanningState,
     exprs: &Vec<Expression>,
     input_schema: &DFSchema,
     extensions: &Extensions,
 ) -> Result<Vec<Expr>> {
     let mut expressions: Vec<Expr> = vec![];
     for expr in exprs {
-        let expression = from_substrait_rex(ctx, expr, input_schema, extensions).await?;
+        let expression =
+            from_substrait_rex(state, expr, input_schema, extensions).await?;
         expressions.push(expression);
     }
     Ok(expressions)
@@ -1454,7 +1496,7 @@ pub async fn from_substrait_rex_vec(
 
 /// Convert Substrait FunctionArguments to DataFusion Exprs
 pub async fn from_substrait_func_args(
-    ctx: &SessionContext,
+    state: &dyn SubstraitPlanningState,
     arguments: &Vec<FunctionArgument>,
     input_schema: &DFSchema,
     extensions: &Extensions,
@@ -1463,7 +1505,7 @@ pub async fn from_substrait_func_args(
     for arg in arguments {
         let arg_expr = match &arg.arg_type {
             Some(ArgType::Value(e)) => {
-                from_substrait_rex(ctx, e, input_schema, extensions).await
+                from_substrait_rex(state, e, input_schema, extensions).await
             }
             _ => not_impl_err!("Function argument non-Value type not supported"),
         };
@@ -1474,7 +1516,7 @@ pub async fn from_substrait_func_args(
 
 /// Convert Substrait AggregateFunction to DataFusion Expr
 pub async fn from_substrait_agg_func(
-    ctx: &SessionContext,
+    state: &dyn SubstraitPlanningState,
     f: &AggregateFunction,
     input_schema: &DFSchema,
     extensions: &Extensions,
@@ -1483,7 +1525,7 @@ pub async fn from_substrait_agg_func(
     distinct: bool,
 ) -> Result<Arc<Expr>> {
     let args =
-        from_substrait_func_args(ctx, &f.arguments, input_schema, extensions).await?;
+        from_substrait_func_args(state, &f.arguments, input_schema, extensions).await?;
 
     let Some(function_name) = extensions.functions.get(&f.function_reference) else {
         return plan_err!(
@@ -1494,7 +1536,7 @@ pub async fn from_substrait_agg_func(
 
     let function_name = substrait_fun_name(function_name);
     // try udaf first, then built-in aggr fn.
-    if let Ok(fun) = ctx.udaf(function_name) {
+    if let Ok(fun) = state.udaf(function_name) {
         // deal with situation that count(*) got no arguments
         let args = if fun.name() == "count" && args.is_empty() {
             vec![Expr::Literal(ScalarValue::Int64(Some(1)))]
@@ -1517,7 +1559,7 @@ pub async fn from_substrait_agg_func(
 /// Convert Substrait Rex to DataFusion Expr
 #[async_recursion]
 pub async fn from_substrait_rex(
-    ctx: &SessionContext,
+    state: &dyn SubstraitPlanningState,
     e: &Expression,
     input_schema: &DFSchema,
     extensions: &Extensions,
@@ -1528,11 +1570,11 @@ pub async fn from_substrait_rex(
             let substrait_list = s.options.as_ref();
             Ok(Expr::InList(InList {
                 expr: Box::new(
-                    from_substrait_rex(ctx, substrait_expr, input_schema, extensions)
+                    from_substrait_rex(state, substrait_expr, input_schema, extensions)
                         .await?,
                 ),
                 list: from_substrait_rex_vec(
-                    ctx,
+                    state,
                     substrait_list,
                     input_schema,
                     extensions,
@@ -1555,7 +1597,7 @@ pub async fn from_substrait_rex(
                     if if_expr.then.is_none() {
                         expr = Some(Box::new(
                             from_substrait_rex(
-                                ctx,
+                                state,
                                 if_expr.r#if.as_ref().unwrap(),
                                 input_schema,
                                 extensions,
@@ -1568,7 +1610,7 @@ pub async fn from_substrait_rex(
                 when_then_expr.push((
                     Box::new(
                         from_substrait_rex(
-                            ctx,
+                            state,
                             if_expr.r#if.as_ref().unwrap(),
                             input_schema,
                             extensions,
@@ -1577,7 +1619,7 @@ pub async fn from_substrait_rex(
                     ),
                     Box::new(
                         from_substrait_rex(
-                            ctx,
+                            state,
                             if_expr.then.as_ref().unwrap(),
                             input_schema,
                             extensions,
@@ -1589,7 +1631,7 @@ pub async fn from_substrait_rex(
             // Parse `else`
             let else_expr = match &if_then.r#else {
                 Some(e) => Some(Box::new(
-                    from_substrait_rex(ctx, e, input_schema, extensions).await?,
+                    from_substrait_rex(state, e, input_schema, extensions).await?,
                 )),
                 None => None,
             };
@@ -1609,12 +1651,12 @@ pub async fn from_substrait_rex(
             let fn_name = substrait_fun_name(fn_name);
 
             let args =
-                from_substrait_func_args(ctx, &f.arguments, input_schema, extensions)
+                from_substrait_func_args(state, &f.arguments, input_schema, extensions)
                     .await?;
 
             // try to first match the requested function into registered udfs, then built-in ops
             // and finally built-in expressions
-            if let Some(func) = ctx.state().scalar_functions().get(fn_name) {
+            if let Ok(func) = state.udf(fn_name) {
                 Ok(Expr::ScalarFunction(expr::ScalarFunction::new_udf(
                     func.to_owned(),
                     args,
@@ -1644,7 +1686,7 @@ pub async fn from_substrait_rex(
 
                 Ok(combined_expr)
             } else if let Some(builder) = BuiltinExprBuilder::try_from_name(fn_name) {
-                builder.build(ctx, f, input_schema, extensions).await
+                builder.build(state, f, input_schema, extensions).await
             } else {
                 not_impl_err!("Unsupported function name: {fn_name:?}")
             }
@@ -1654,18 +1696,24 @@ pub async fn from_substrait_rex(
             Ok(Expr::Literal(scalar_value))
         }
         Some(RexType::Cast(cast)) => match cast.as_ref().r#type.as_ref() {
-            Some(output_type) => Ok(Expr::Cast(Cast::new(
-                Box::new(
+            Some(output_type) => {
+                let input_expr = Box::new(
                     from_substrait_rex(
-                        ctx,
+                        state,
                         cast.as_ref().input.as_ref().unwrap().as_ref(),
                         input_schema,
                         extensions,
                     )
                     .await?,
-                ),
-                from_substrait_type_without_names(output_type, extensions)?,
-            ))),
+                );
+                let data_type =
+                    from_substrait_type_without_names(output_type, extensions)?;
+                if cast.failure_behavior() == ReturnNull {
+                    Ok(Expr::TryCast(TryCast::new(input_expr, data_type)))
+                } else {
+                    Ok(Expr::Cast(Cast::new(input_expr, data_type)))
+                }
+            }
             None => substrait_err!("Cast expression without output type is not allowed"),
         },
         Some(RexType::WindowFunction(window)) => {
@@ -1679,9 +1727,9 @@ pub async fn from_substrait_rex(
             let fn_name = substrait_fun_name(fn_name);
 
             // check udwf first, then udaf, then built-in window and aggregate functions
-            let fun = if let Ok(udwf) = ctx.udwf(fn_name) {
+            let fun = if let Ok(udwf) = state.udwf(fn_name) {
                 Ok(WindowFunctionDefinition::WindowUDF(udwf))
-            } else if let Ok(udaf) = ctx.udaf(fn_name) {
+            } else if let Ok(udaf) = state.udaf(fn_name) {
                 Ok(WindowFunctionDefinition::AggregateUDF(udaf))
             } else {
                 not_impl_err!(
@@ -1692,7 +1740,7 @@ pub async fn from_substrait_rex(
             }?;
 
             let order_by =
-                from_substrait_sorts(ctx, &window.sorts, input_schema, extensions)
+                from_substrait_sorts(state, &window.sorts, input_schema, extensions)
                     .await?;
 
             let bound_units =
@@ -1715,14 +1763,14 @@ pub async fn from_substrait_rex(
             Ok(Expr::WindowFunction(expr::WindowFunction {
                 fun,
                 args: from_substrait_func_args(
-                    ctx,
+                    state,
                     &window.arguments,
                     input_schema,
                     extensions,
                 )
                 .await?,
                 partition_by: from_substrait_rex_vec(
-                    ctx,
+                    state,
                     &window.partitions,
                     input_schema,
                     extensions,
@@ -1747,13 +1795,13 @@ pub async fn from_substrait_rex(
                         let haystack_expr = &in_predicate.haystack;
                         if let Some(haystack_expr) = haystack_expr {
                             let haystack_expr =
-                                from_substrait_rel(ctx, haystack_expr, extensions)
+                                from_substrait_rel(state, haystack_expr, extensions)
                                     .await?;
                             let outer_refs = haystack_expr.all_out_ref_exprs();
                             Ok(Expr::InSubquery(InSubquery {
                                 expr: Box::new(
                                     from_substrait_rex(
-                                        ctx,
+                                        state,
                                         needle_expr,
                                         input_schema,
                                         extensions,
@@ -1773,7 +1821,7 @@ pub async fn from_substrait_rex(
                 }
                 SubqueryType::Scalar(query) => {
                     let plan = from_substrait_rel(
-                        ctx,
+                        state,
                         &(query.input.clone()).unwrap_or_default(),
                         extensions,
                     )
@@ -1790,7 +1838,7 @@ pub async fn from_substrait_rex(
                         PredicateOp::Exists => {
                             let relation = &predicate.tuples;
                             let plan = from_substrait_rel(
-                                ctx,
+                                state,
                                 &relation.clone().unwrap_or_default(),
                                 extensions,
                             )
@@ -2772,7 +2820,7 @@ fn from_substrait_null(
 
 #[allow(deprecated)]
 async fn from_substrait_grouping(
-    ctx: &SessionContext,
+    state: &dyn SubstraitPlanningState,
     grouping: &Grouping,
     expressions: &[Expr],
     input_schema: &DFSchemaRef,
@@ -2781,7 +2829,7 @@ async fn from_substrait_grouping(
     let mut group_exprs = vec![];
     if !grouping.grouping_expressions.is_empty() {
         for e in &grouping.grouping_expressions {
-            let expr = from_substrait_rex(ctx, e, input_schema, extensions).await?;
+            let expr = from_substrait_rex(state, e, input_schema, extensions).await?;
             group_exprs.push(expr);
         }
         return Ok(group_exprs);
@@ -2834,23 +2882,29 @@ impl BuiltinExprBuilder {
 
     pub async fn build(
         self,
-        ctx: &SessionContext,
+        state: &dyn SubstraitPlanningState,
         f: &ScalarFunction,
         input_schema: &DFSchema,
         extensions: &Extensions,
     ) -> Result<Expr> {
         match self.expr_name.as_str() {
             "like" => {
-                Self::build_like_expr(ctx, false, f, input_schema, extensions).await
+                Self::build_like_expr(state, false, f, input_schema, extensions).await
             }
             "ilike" => {
-                Self::build_like_expr(ctx, true, f, input_schema, extensions).await
+                Self::build_like_expr(state, true, f, input_schema, extensions).await
             }
             "not" | "negative" | "negate" | "is_null" | "is_not_null" | "is_true"
             | "is_false" | "is_not_true" | "is_not_false" | "is_unknown"
             | "is_not_unknown" => {
-                Self::build_unary_expr(ctx, &self.expr_name, f, input_schema, extensions)
-                    .await
+                Self::build_unary_expr(
+                    state,
+                    &self.expr_name,
+                    f,
+                    input_schema,
+                    extensions,
+                )
+                .await
             }
             _ => {
                 not_impl_err!("Unsupported builtin expression: {}", self.expr_name)
@@ -2859,7 +2913,7 @@ impl BuiltinExprBuilder {
     }
 
     async fn build_unary_expr(
-        ctx: &SessionContext,
+        state: &dyn SubstraitPlanningState,
         fn_name: &str,
         f: &ScalarFunction,
         input_schema: &DFSchema,
@@ -2872,7 +2926,7 @@ impl BuiltinExprBuilder {
             return substrait_err!("Invalid arguments type for {fn_name} expr");
         };
         let arg =
-            from_substrait_rex(ctx, expr_substrait, input_schema, extensions).await?;
+            from_substrait_rex(state, expr_substrait, input_schema, extensions).await?;
         let arg = Box::new(arg);
 
         let expr = match fn_name {
@@ -2893,7 +2947,7 @@ impl BuiltinExprBuilder {
     }
 
     async fn build_like_expr(
-        ctx: &SessionContext,
+        state: &dyn SubstraitPlanningState,
         case_insensitive: bool,
         f: &ScalarFunction,
         input_schema: &DFSchema,
@@ -2908,12 +2962,13 @@ impl BuiltinExprBuilder {
             return substrait_err!("Invalid arguments type for `{fn_name}` expr");
         };
         let expr =
-            from_substrait_rex(ctx, expr_substrait, input_schema, extensions).await?;
+            from_substrait_rex(state, expr_substrait, input_schema, extensions).await?;
         let Some(ArgType::Value(pattern_substrait)) = &f.arguments[1].arg_type else {
             return substrait_err!("Invalid arguments type for `{fn_name}` expr");
         };
         let pattern =
-            from_substrait_rex(ctx, pattern_substrait, input_schema, extensions).await?;
+            from_substrait_rex(state, pattern_substrait, input_schema, extensions)
+                .await?;
 
         // Default case: escape character is Literal(Utf8(None))
         let escape_char = if f.arguments.len() == 3 {
@@ -2922,9 +2977,13 @@ impl BuiltinExprBuilder {
                 return substrait_err!("Invalid arguments type for `{fn_name}` expr");
             };
 
-            let escape_char_expr =
-                from_substrait_rex(ctx, escape_char_substrait, input_schema, extensions)
-                    .await?;
+            let escape_char_expr = from_substrait_rex(
+                state,
+                escape_char_substrait,
+                input_schema,
+                extensions,
+            )
+            .await?;
 
             match escape_char_expr {
                 Expr::Literal(ScalarValue::Utf8(escape_char_string)) => {

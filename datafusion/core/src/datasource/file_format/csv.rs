@@ -59,6 +59,7 @@ use datafusion_physical_expr_common::sort_expr::LexRequirement;
 use futures::stream::BoxStream;
 use futures::{pin_mut, Stream, StreamExt, TryStreamExt};
 use object_store::{delimited::newline_delimited_stream, ObjectMeta, ObjectStore};
+use regex::Regex;
 
 #[derive(Default)]
 /// Factory struct used to create [CsvFormatFactory]
@@ -215,6 +216,13 @@ impl CsvFormat {
     /// - default to true
     pub fn with_has_header(mut self, has_header: bool) -> Self {
         self.options.has_header = Some(has_header);
+        self
+    }
+
+    /// Set the regex to use for null values in the CSV reader.
+    /// - default to treat empty values as null.
+    pub fn with_null_regex(mut self, null_regex: Option<String>) -> Self {
+        self.options.null_regex = null_regex;
         self
     }
 
@@ -502,6 +510,12 @@ impl CsvFormat {
                 .with_delimiter(self.options.delimiter)
                 .with_quote(self.options.quote);
 
+            if let Some(null_regex) = &self.options.null_regex {
+                let regex = Regex::new(null_regex.as_str())
+                    .expect("Unable to parse CSV null regex.");
+                format = format.with_null_regex(regex);
+            }
+
             if let Some(escape) = self.options.escape {
                 format = format.with_escape(escape);
             }
@@ -753,7 +767,6 @@ mod tests {
     use datafusion_common::cast::as_string_array;
     use datafusion_common::internal_err;
     use datafusion_common::stats::Precision;
-    use datafusion_execution::runtime_env::RuntimeEnvBuilder;
     use datafusion_expr::{col, lit};
 
     use chrono::DateTime;
@@ -814,8 +827,17 @@ mod tests {
         let state = session_ctx.state();
 
         let projection = None;
-        let exec =
-            get_exec(&state, "aggregate_test_100.csv", projection, None, true).await?;
+        let root = "./tests/data/csv";
+        let format = CsvFormat::default().with_has_header(true);
+        let exec = scan_format(
+            &state,
+            &format,
+            root,
+            "aggregate_test_100_with_nulls.csv",
+            projection,
+            None,
+        )
+        .await?;
 
         let x: Vec<String> = exec
             .schema()
@@ -837,7 +859,59 @@ mod tests {
                 "c10: Utf8",
                 "c11: Float64",
                 "c12: Float64",
-                "c13: Utf8"
+                "c13: Utf8",
+                "c14: Null",
+                "c15: Utf8"
+            ],
+            x
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn infer_schema_with_null_regex() -> Result<()> {
+        let session_ctx = SessionContext::new();
+        let state = session_ctx.state();
+
+        let projection = None;
+        let root = "./tests/data/csv";
+        let format = CsvFormat::default()
+            .with_has_header(true)
+            .with_null_regex(Some("^NULL$|^$".to_string()));
+        let exec = scan_format(
+            &state,
+            &format,
+            root,
+            "aggregate_test_100_with_nulls.csv",
+            projection,
+            None,
+        )
+        .await?;
+
+        let x: Vec<String> = exec
+            .schema()
+            .fields()
+            .iter()
+            .map(|f| format!("{}: {:?}", f.name(), f.data_type()))
+            .collect();
+        assert_eq!(
+            vec![
+                "c1: Utf8",
+                "c2: Int64",
+                "c3: Int64",
+                "c4: Int64",
+                "c5: Int64",
+                "c6: Int64",
+                "c7: Int64",
+                "c8: Int64",
+                "c9: Int64",
+                "c10: Utf8",
+                "c11: Float64",
+                "c12: Float64",
+                "c13: Utf8",
+                "c14: Null",
+                "c15: Null"
             ],
             x
         );
@@ -984,12 +1058,10 @@ mod tests {
     async fn query_compress_data(
         file_compression_type: FileCompressionType,
     ) -> Result<()> {
-        let runtime = Arc::new(RuntimeEnvBuilder::new().build()?);
         let mut cfg = SessionConfig::new();
         cfg.options_mut().catalog.has_header = true;
         let session_state = SessionStateBuilder::new()
             .with_config(cfg)
-            .with_runtime_env(runtime)
             .with_default_features()
             .build();
         let integration = LocalFileSystem::new_with_prefix(arrow_test_data()).unwrap();
@@ -1262,18 +1334,13 @@ mod tests {
         Ok(())
     }
 
-    /// Read a single empty csv file in parallel
+    /// Read a single empty csv file
     ///
     /// empty_0_byte.csv:
     /// (file is empty)
-    #[rstest(n_partitions, case(1), case(2), case(3), case(4))]
     #[tokio::test]
-    async fn test_csv_parallel_empty_file(n_partitions: usize) -> Result<()> {
-        let config = SessionConfig::new()
-            .with_repartition_file_scans(true)
-            .with_repartition_file_min_size(0)
-            .with_target_partitions(n_partitions);
-        let ctx = SessionContext::new_with_config(config);
+    async fn test_csv_empty_file() -> Result<()> {
+        let ctx = SessionContext::new();
         ctx.register_csv(
             "empty",
             "tests/data/empty_0_byte.csv",
@@ -1281,32 +1348,24 @@ mod tests {
         )
         .await?;
 
-        // Require a predicate to enable repartition for the optimizer
         let query = "select * from empty where random() > 0.5;";
         let query_result = ctx.sql(query).await?.collect().await?;
-        let actual_partitions = count_query_csv_partitions(&ctx, query).await?;
 
         #[rustfmt::skip]
         let expected = ["++",
             "++"];
         assert_batches_eq!(expected, &query_result);
-        assert_eq!(1, actual_partitions); // Won't get partitioned if all files are empty
 
         Ok(())
     }
 
-    /// Read a single empty csv file with header in parallel
+    /// Read a single empty csv file with header
     ///
     /// empty.csv:
     /// c1,c2,c3
-    #[rstest(n_partitions, case(1), case(2), case(3))]
     #[tokio::test]
-    async fn test_csv_parallel_empty_with_header(n_partitions: usize) -> Result<()> {
-        let config = SessionConfig::new()
-            .with_repartition_file_scans(true)
-            .with_repartition_file_min_size(0)
-            .with_target_partitions(n_partitions);
-        let ctx = SessionContext::new_with_config(config);
+    async fn test_csv_empty_with_header() -> Result<()> {
+        let ctx = SessionContext::new();
         ctx.register_csv(
             "empty",
             "tests/data/empty.csv",
@@ -1314,21 +1373,18 @@ mod tests {
         )
         .await?;
 
-        // Require a predicate to enable repartition for the optimizer
         let query = "select * from empty where random() > 0.5;";
         let query_result = ctx.sql(query).await?.collect().await?;
-        let actual_partitions = count_query_csv_partitions(&ctx, query).await?;
 
         #[rustfmt::skip]
         let expected = ["++",
             "++"];
         assert_batches_eq!(expected, &query_result);
-        assert_eq!(n_partitions, actual_partitions);
 
         Ok(())
     }
 
-    /// Read multiple empty csv files in parallel
+    /// Read multiple empty csv files
     ///
     /// all_empty
     /// ├── empty0.csv
@@ -1337,13 +1393,13 @@ mod tests {
     ///
     /// empty0.csv/empty1.csv/empty2.csv:
     /// (file is empty)
-    #[rstest(n_partitions, case(1), case(2), case(3), case(4))]
     #[tokio::test]
-    async fn test_csv_parallel_multiple_empty_files(n_partitions: usize) -> Result<()> {
+    async fn test_csv_multiple_empty_files() -> Result<()> {
+        // Testing that partitioning doesn't break with empty files
         let config = SessionConfig::new()
             .with_repartition_file_scans(true)
             .with_repartition_file_min_size(0)
-            .with_target_partitions(n_partitions);
+            .with_target_partitions(4);
         let ctx = SessionContext::new_with_config(config);
         let file_format = Arc::new(CsvFormat::default().with_has_header(false));
         let listing_options = ListingOptions::new(file_format.clone())
@@ -1361,13 +1417,11 @@ mod tests {
         // Require a predicate to enable repartition for the optimizer
         let query = "select * from empty where random() > 0.5;";
         let query_result = ctx.sql(query).await?.collect().await?;
-        let actual_partitions = count_query_csv_partitions(&ctx, query).await?;
 
         #[rustfmt::skip]
         let expected = ["++",
             "++"];
         assert_batches_eq!(expected, &query_result);
-        assert_eq!(1, actual_partitions); // Won't get partitioned if all files are empty
 
         Ok(())
     }

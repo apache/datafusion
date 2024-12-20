@@ -19,7 +19,7 @@ extern crate criterion;
 
 use std::sync::Arc;
 
-use arrow::array::{ArrayRef, Int32Array};
+use arrow::array::{Array, ArrayRef, Int32Array};
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use rand::rngs::ThreadRng;
 use rand::Rng;
@@ -57,15 +57,20 @@ fn days(rng: &mut ThreadRng) -> Int32Array {
 fn criterion_benchmark(c: &mut Criterion) {
     c.bench_function("make_date_col_col_col_1000", |b| {
         let mut rng = rand::thread_rng();
-        let years = ColumnarValue::Array(Arc::new(years(&mut rng)) as ArrayRef);
+        let years_array = Arc::new(years(&mut rng)) as ArrayRef;
+        let batch_len = years_array.len();
+        let years = ColumnarValue::Array(years_array);
         let months = ColumnarValue::Array(Arc::new(months(&mut rng)) as ArrayRef);
         let days = ColumnarValue::Array(Arc::new(days(&mut rng)) as ArrayRef);
 
         b.iter(|| {
-            #[allow(deprecated)] // TODO use invoke_batch
+            // TODO use invoke_with_args
             black_box(
                 make_date()
-                    .invoke(&[years.clone(), months.clone(), days.clone()])
+                    .invoke_batch(
+                        &[years.clone(), months.clone(), days.clone()],
+                        batch_len,
+                    )
                     .expect("make_date should work on valid values"),
             )
         })
@@ -74,14 +79,19 @@ fn criterion_benchmark(c: &mut Criterion) {
     c.bench_function("make_date_scalar_col_col_1000", |b| {
         let mut rng = rand::thread_rng();
         let year = ColumnarValue::Scalar(ScalarValue::Int32(Some(2025)));
-        let months = ColumnarValue::Array(Arc::new(months(&mut rng)) as ArrayRef);
+        let months_arr = Arc::new(months(&mut rng)) as ArrayRef;
+        let batch_len = months_arr.len();
+        let months = ColumnarValue::Array(months_arr);
         let days = ColumnarValue::Array(Arc::new(days(&mut rng)) as ArrayRef);
 
         b.iter(|| {
-            #[allow(deprecated)] // TODO use invoke_batch
+            // TODO use invoke_with_args
             black_box(
                 make_date()
-                    .invoke(&[year.clone(), months.clone(), days.clone()])
+                    .invoke_batch(
+                        &[year.clone(), months.clone(), days.clone()],
+                        batch_len,
+                    )
                     .expect("make_date should work on valid values"),
             )
         })
@@ -91,13 +101,15 @@ fn criterion_benchmark(c: &mut Criterion) {
         let mut rng = rand::thread_rng();
         let year = ColumnarValue::Scalar(ScalarValue::Int32(Some(2025)));
         let month = ColumnarValue::Scalar(ScalarValue::Int32(Some(11)));
-        let days = ColumnarValue::Array(Arc::new(days(&mut rng)) as ArrayRef);
+        let day_arr = Arc::new(days(&mut rng));
+        let batch_len = day_arr.len();
+        let days = ColumnarValue::Array(day_arr);
 
         b.iter(|| {
-            #[allow(deprecated)] // TODO use invoke_batch
+            // TODO use invoke_with_args
             black_box(
                 make_date()
-                    .invoke(&[year.clone(), month.clone(), days.clone()])
+                    .invoke_batch(&[year.clone(), month.clone(), days.clone()], batch_len)
                     .expect("make_date should work on valid values"),
             )
         })
@@ -109,10 +121,10 @@ fn criterion_benchmark(c: &mut Criterion) {
         let day = ColumnarValue::Scalar(ScalarValue::Int32(Some(26)));
 
         b.iter(|| {
-            #[allow(deprecated)] // TODO use invoke_batch
+            // TODO use invoke_with_args
             black_box(
                 make_date()
-                    .invoke(&[year.clone(), month.clone(), day.clone()])
+                    .invoke_batch(&[year.clone(), month.clone(), day.clone()], 1)
                     .expect("make_date should work on valid values"),
             )
         })

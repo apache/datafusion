@@ -68,7 +68,11 @@ impl ScalarUDFImpl for FactorialFunc {
         Ok(Int64)
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         make_scalar_function(factorial, vec![])(args)
     }
 
@@ -81,13 +85,13 @@ static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
 
 fn get_factorial_doc() -> &'static Documentation {
     DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_MATH)
-            .with_description("Factorial. Returns 1 if value is less than 2.")
-            .with_syntax_example("factorial(numeric_expression)")
-            .with_standard_argument("numeric_expression", Some("Numeric"))
-            .build()
-            .unwrap()
+        Documentation::builder(
+            DOC_SECTION_MATH,
+            "Factorial. Returns 1 if value is less than 2.",
+            "factorial(numeric_expression)",
+        )
+        .with_standard_argument("numeric_expression", Some("Numeric"))
+        .build()
     })
 }
 

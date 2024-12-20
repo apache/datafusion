@@ -47,10 +47,7 @@ static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
 
 fn get_regexp_like_doc() -> &'static Documentation {
     DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_REGEX)
-            .with_description("Returns true if a [regular expression](https://docs.rs/regex/latest/regex/#syntax) has at least one match in a string, false otherwise.")
-            .with_syntax_example("regexp_like(str, regexp[, flags])")
+        Documentation::builder(DOC_SECTION_REGEX,"Returns true if a [regular expression](https://docs.rs/regex/latest/regex/#syntax) has at least one match in a string, false otherwise.","regexp_like(str, regexp[, flags])")
             .with_sql_example(r#"```sql
 select regexp_like('Köln', '[a-zA-Z]ö[a-zA-Z]{2}');
 +--------------------------------------------------------+
@@ -77,7 +74,6 @@ Additional examples can be found [here](https://github.com/apache/datafusion/blo
   - **R**: enables CRLF mode: when multi-line mode is enabled, \r\n is used
   - **U**: swap the meaning of x* and x*?"#)
             .build()
-            .unwrap()
     })
 }
 
@@ -85,26 +81,7 @@ impl RegexpLikeFunc {
     pub fn new() -> Self {
         Self {
             signature: Signature::one_of(
-                vec![
-                    TypeSignature::Exact(vec![Utf8View, Utf8]),
-                    TypeSignature::Exact(vec![Utf8View, Utf8View]),
-                    TypeSignature::Exact(vec![Utf8View, LargeUtf8]),
-                    TypeSignature::Exact(vec![Utf8, Utf8]),
-                    TypeSignature::Exact(vec![Utf8, Utf8View]),
-                    TypeSignature::Exact(vec![Utf8, LargeUtf8]),
-                    TypeSignature::Exact(vec![LargeUtf8, Utf8]),
-                    TypeSignature::Exact(vec![LargeUtf8, Utf8View]),
-                    TypeSignature::Exact(vec![LargeUtf8, LargeUtf8]),
-                    TypeSignature::Exact(vec![Utf8View, Utf8, Utf8]),
-                    TypeSignature::Exact(vec![Utf8View, Utf8View, Utf8]),
-                    TypeSignature::Exact(vec![Utf8View, LargeUtf8, Utf8]),
-                    TypeSignature::Exact(vec![Utf8, Utf8, Utf8]),
-                    TypeSignature::Exact(vec![Utf8, Utf8View, Utf8]),
-                    TypeSignature::Exact(vec![Utf8, LargeUtf8, Utf8]),
-                    TypeSignature::Exact(vec![LargeUtf8, Utf8, Utf8]),
-                    TypeSignature::Exact(vec![LargeUtf8, Utf8View, Utf8]),
-                    TypeSignature::Exact(vec![LargeUtf8, LargeUtf8, Utf8]),
-                ],
+                vec![TypeSignature::String(2), TypeSignature::String(3)],
                 Volatility::Immutable,
             ),
         }
@@ -135,7 +112,11 @@ impl ScalarUDFImpl for RegexpLikeFunc {
         })
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         let len = args
             .iter()
             .fold(Option::<usize>::None, |acc, arg| match arg {
@@ -147,7 +128,7 @@ impl ScalarUDFImpl for RegexpLikeFunc {
         let inferred_length = len.unwrap_or(1);
         let args = args
             .iter()
-            .map(|arg| arg.clone().into_array(inferred_length))
+            .map(|arg| arg.to_array(inferred_length))
             .collect::<Result<Vec<_>>>()?;
 
         let result = regexp_like(&args);
@@ -211,7 +192,34 @@ pub fn regexp_like(args: &[ArrayRef]) -> Result<ArrayRef> {
     match args.len() {
         2 => handle_regexp_like(&args[0], &args[1], None),
         3 => {
-            let flags = args[2].as_string::<i32>();
+            let flags = match args[2].data_type() {
+                Utf8 => args[2].as_string::<i32>(),
+                LargeUtf8 => {
+                    let large_string_array = args[2].as_string::<i64>();
+                    let string_vec: Vec<Option<&str>> = (0..large_string_array.len()).map(|i| {
+                        if large_string_array.is_null(i) {
+                            None
+                        } else {
+                            Some(large_string_array.value(i))
+                        }
+                    })
+                    .collect();
+
+                    &GenericStringArray::<i32>::from(string_vec)
+                },
+                _ => {
+                    let string_view_array = args[2].as_string_view();
+                    let string_vec: Vec<Option<String>> = (0..string_view_array.len()).map(|i| {
+                        if string_view_array.is_null(i) {
+                            None
+                        } else {
+                            Some(string_view_array.value(i).to_string())
+                        }
+                    })
+                    .collect();
+                    &GenericStringArray::<i32>::from(string_vec)
+                },
+            };
 
             if flags.iter().any(|s| s == Some("g")) {
                 return plan_err!("regexp_like() does not support the \"global\" option");

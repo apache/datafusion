@@ -67,6 +67,7 @@ impl CsvOptionsProto {
                     .unwrap_or_default(),
                 time_format: options.time_format.clone().unwrap_or_default(),
                 null_value: options.null_value.clone().unwrap_or_default(),
+                null_regex: options.null_regex.clone().unwrap_or_default(),
                 comment: options.comment.map_or(vec![], |v| vec![v]),
                 newlines_in_values: options
                     .newlines_in_values
@@ -140,6 +141,11 @@ impl From<&CsvOptionsProto> for CsvOptions {
                 None
             } else {
                 Some(proto.null_value.clone())
+            },
+            null_regex: if proto.null_regex.is_empty() {
+                None
+            } else {
+                Some(proto.null_regex.clone())
             },
             comment: if !proto.comment.is_empty() {
                 Some(proto.comment[0])
