@@ -19,6 +19,7 @@
 //! This is an order-preserving merge.
 
 use crate::metrics::BaselineMetrics;
+use crate::sorts::sort_preserving_merge::SortPreservingMergeExec;
 use crate::sorts::{
     merge::SortPreservingMergeStream,
     stream::{FieldCursorStream, RowCursorStream},
@@ -120,6 +121,8 @@ impl<'a> StreamingMergeBuilder<'a> {
         self
     }
 
+    /// See [SortPreservingMergeExec::with_round_robin_repartition] for more
+    /// information.
     pub fn with_round_robin_tie_breaker(
         mut self,
         enable_round_robin_tie_breaker: bool,

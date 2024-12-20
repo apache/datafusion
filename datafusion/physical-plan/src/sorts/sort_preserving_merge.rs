@@ -120,13 +120,13 @@ impl SortPreservingMergeExec {
 
     /// Sets the selection strategy of tied winners of the loser tree algorithm
     ///
-    /// When true (the default) equal output rows are placed in the merged
-    /// stream when ready, which is faster but not stable (can vary from
-    /// run to run).
+    /// If true (the default) equal output rows are placed in the merged stream
+    /// in round robin fashion. This approach consumes input streams at more
+    /// even rates when there are many rows with the same sort key.
     ///
-    /// If false, equal output rows are placed in the merged stream in the order
-    /// of the inputs, resulting in potentially slower execution but in a stable
-    /// output order.
+    /// If false, equal output rows are always placed in the merged stream in
+    /// the order of the inputs, resulting in potentially slower execution but a
+    /// stable output order.
     pub fn with_round_robin_repartition(
         mut self,
         enable_round_robin_repartition: bool,
