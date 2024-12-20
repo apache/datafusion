@@ -177,6 +177,7 @@ impl ParquetOptions {
             bloom_filter_on_read: _, // reads not used for writer props
             schema_force_view_types: _,
             binary_as_string: _, // not used for writer props
+            skip_arrow_metadata: _,
         } = self;
 
         let mut builder = WriterProperties::builder()
@@ -444,6 +445,7 @@ mod tests {
             bloom_filter_on_read: defaults.bloom_filter_on_read,
             schema_force_view_types: defaults.schema_force_view_types,
             binary_as_string: defaults.binary_as_string,
+            skip_arrow_metadata: defaults.skip_arrow_metadata,
         }
     }
 
@@ -546,6 +548,7 @@ mod tests {
                 bloom_filter_on_read: global_options_defaults.bloom_filter_on_read,
                 schema_force_view_types: global_options_defaults.schema_force_view_types,
                 binary_as_string: global_options_defaults.binary_as_string,
+                skip_arrow_metadata: global_options_defaults.skip_arrow_metadata,
             },
             column_specific_options,
             key_value_metadata,
