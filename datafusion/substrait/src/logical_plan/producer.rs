@@ -2211,7 +2211,6 @@ fn substrait_field_ref(index: usize) -> Result<Expression> {
 
 #[cfg(test)]
 mod test {
-
     use super::*;
     use crate::logical_plan::consumer::{
         from_substrait_extended_expr, from_substrait_literal_without_names,
@@ -2225,10 +2224,16 @@ mod test {
     use datafusion::arrow::datatypes::{Field, Fields, Schema};
     use datafusion::common::scalar::ScalarStructBuilder;
     use datafusion::common::DFSchema;
-    use datafusion::execution::SessionStateBuilder;
+    use datafusion::execution::{SessionState, SessionStateBuilder};
+    use datafusion::prelude::SessionContext;
+    use std::sync::OnceLock;
 
-    fn test_consumer() -> DefaultSubstraitConsumer {
-        DefaultSubstraitConsumer::default()
+    static TEST_SESSION_STATE: OnceLock<SessionState> = OnceLock::new();
+    static TEST_EXTENSIONS: OnceLock<Extensions> = OnceLock::new();
+    fn test_consumer() -> DefaultSubstraitConsumer<'static> {
+        let extensions = TEST_EXTENSIONS.get_or_init(Extensions::default);
+        let state = TEST_SESSION_STATE.get_or_init(|| SessionContext::default().state());
+        DefaultSubstraitConsumer::new(extensions, state)
     }
 
     #[test]

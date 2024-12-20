@@ -23,6 +23,7 @@ pub mod test {
     use datafusion::datasource::TableProvider;
     use datafusion::error::Result;
     use datafusion::prelude::SessionContext;
+    use datafusion_substrait::extensions::Extensions;
     use datafusion_substrait::logical_plan::consumer::{
         from_substrait_named_struct, DefaultSubstraitConsumer, SubstraitConsumer,
     };
@@ -51,7 +52,17 @@ pub mod test {
         ctx: SessionContext,
         plan: &Plan,
     ) -> Result<SessionContext> {
-        let consumer = Arc::new(DefaultSubstraitConsumer::default());
+        let extensions = Extensions::default();
+        let state = ctx.state();
+        let consumer = DefaultSubstraitConsumer::new(&extensions, &state);
+        add_plan_schemas_to_ctx_with_consumer(&consumer, ctx, plan)
+    }
+
+    fn add_plan_schemas_to_ctx_with_consumer(
+        consumer: &impl SubstraitConsumer,
+        ctx: SessionContext,
+        plan: &Plan,
+    ) -> Result<SessionContext> {
         let schemas = TestSchemaCollector::collect_schemas(consumer, plan)?;
         let mut schema_map: HashMap<TableReference, Arc<dyn TableProvider>> =
             HashMap::new();
@@ -73,13 +84,13 @@ pub mod test {
         Ok(ctx)
     }
 
-    pub struct TestSchemaCollector<T: SubstraitConsumer> {
+    pub struct TestSchemaCollector<'a, T: SubstraitConsumer> {
+        consumer: &'a T,
         schemas: Vec<(TableReference, Arc<dyn TableProvider>)>,
-        consumer: Arc<T>,
     }
 
-    impl<T: SubstraitConsumer> TestSchemaCollector<T> {
-        fn new(consumer: Arc<T>) -> Self {
+    impl<'a, T: SubstraitConsumer> TestSchemaCollector<'a, T> {
+        fn new(consumer: &'a T) -> Self {
             TestSchemaCollector {
                 schemas: Vec::new(),
                 consumer,
@@ -87,7 +98,7 @@ pub mod test {
         }
 
         fn collect_schemas(
-            consumer: Arc<T>,
+            consumer: &'a T,
             plan: &Plan,
         ) -> Result<Vec<(TableReference, Arc<dyn TableProvider>)>> {
             let mut schema_collector = Self::new(consumer);
@@ -137,9 +148,8 @@ pub mod test {
                     "No base schema found for NamedTable: {}",
                     table_reference
                 ))?;
-            let df_schema =
-                from_substrait_named_struct(self.consumer.as_ref(), substrait_schema)?
-                    .replace_qualifier(table_reference.clone());
+            let df_schema = from_substrait_named_struct(self.consumer, substrait_schema)?
+                .replace_qualifier(table_reference.clone());
 
             let table = EmptyTable::new(df_schema.inner().clone());
             self.schemas.push((table_reference, Arc::new(table)));

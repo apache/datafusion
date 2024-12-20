@@ -65,7 +65,7 @@ use datafusion::logical_expr::{
     col, expr, GroupingSet, Like, LogicalPlanBuilder, Partitioning, Repartition,
     WindowFrameBound, WindowFrameUnits, WindowFunctionDefinition,
 };
-use datafusion::prelude::{lit, JoinType, SessionContext};
+use datafusion::prelude::{lit, JoinType};
 use datafusion::sql::TableReference;
 use datafusion::{
     error::Result, logical_expr::utils::split_conjunction, prelude::Column,
@@ -471,28 +471,19 @@ pub async fn from_substrait_rel(
 }
 
 /// Can be used to consume standard Substrait without user-defined extensions
-pub struct DefaultSubstraitConsumer {
-    extensions: Arc<Extensions>,
-    state: Arc<SessionState>,
+pub struct DefaultSubstraitConsumer<'a> {
+    extensions: &'a Extensions,
+    state: &'a SessionState,
 }
 
-impl DefaultSubstraitConsumer {
-    pub fn new(extensions: Arc<Extensions>, state: Arc<SessionState>) -> Self {
+impl<'a> DefaultSubstraitConsumer<'a> {
+    pub fn new(extensions: &'a Extensions, state: &'a SessionState) -> Self {
         DefaultSubstraitConsumer { extensions, state }
     }
 }
 
-impl Default for DefaultSubstraitConsumer {
-    fn default() -> Self {
-        DefaultSubstraitConsumer {
-            extensions: Arc::new(Extensions::default()),
-            state: Arc::new(SessionContext::default().state()),
-        }
-    }
-}
-
 #[async_trait]
-impl SubstraitConsumer for DefaultSubstraitConsumer {
+impl SubstraitConsumer for DefaultSubstraitConsumer<'_> {
     async fn resolve_table_ref(
         &self,
         table_ref: &TableReference,
@@ -504,11 +495,11 @@ impl SubstraitConsumer for DefaultSubstraitConsumer {
     }
 
     fn get_extensions(&self) -> &Extensions {
-        self.extensions.as_ref()
+        self.extensions
     }
 
     fn get_function_registry(&self) -> &impl FunctionRegistry {
-        self.state.as_ref()
+        self.state
     }
 
     async fn consume_extension_leaf(
@@ -734,8 +725,8 @@ pub async fn from_substrait_plan(
     }
 
     let consumer = DefaultSubstraitConsumer {
-        extensions: Arc::new(extensions),
-        state: Arc::new(state.clone()),
+        extensions: &extensions,
+        state,
     };
     from_substrait_plan_with_consumer(&consumer, plan).await
 }
@@ -831,8 +822,8 @@ pub async fn from_substrait_extended_expr(
     }
 
     let consumer = DefaultSubstraitConsumer {
-        extensions: Arc::new(extensions),
-        state: Arc::new(state.clone()),
+        extensions: &extensions,
+        state,
     };
 
     let input_schema = DFSchemaRef::new(match &extended_expr.base_schema {
@@ -3440,17 +3431,29 @@ impl BuiltinExprBuilder {
 
 #[cfg(test)]
 mod test {
+    use crate::extensions::Extensions;
     use crate::logical_plan::consumer::{
         from_substrait_literal_without_names, DefaultSubstraitConsumer,
     };
     use arrow_buffer::IntervalMonthDayNano;
     use datafusion::error::Result;
+    use datafusion::execution::SessionState;
+    use datafusion::prelude::SessionContext;
     use datafusion::scalar::ScalarValue;
+    use std::sync::OnceLock;
     use substrait::proto::expression::literal::{
         interval_day_to_second, IntervalCompound, IntervalDayToSecond,
         IntervalYearToMonth, LiteralType,
     };
     use substrait::proto::expression::Literal;
+
+    static TEST_SESSION_STATE: OnceLock<SessionState> = OnceLock::new();
+    static TEST_EXTENSIONS: OnceLock<Extensions> = OnceLock::new();
+    fn test_consumer() -> DefaultSubstraitConsumer<'static> {
+        let extensions = TEST_EXTENSIONS.get_or_init(Extensions::default);
+        let state = TEST_SESSION_STATE.get_or_init(|| SessionContext::default().state());
+        DefaultSubstraitConsumer::new(extensions, state)
+    }
 
     #[test]
     fn interval_compound_different_precision() -> Result<()> {
@@ -3475,7 +3478,7 @@ mod test {
             })),
         };
 
-        let consumer = DefaultSubstraitConsumer::default();
+        let consumer = test_consumer();
         assert_eq!(
             from_substrait_literal_without_names(&consumer, &substrait)?,
             ScalarValue::IntervalMonthDayNano(Some(IntervalMonthDayNano {
