@@ -65,7 +65,7 @@ use datafusion::logical_expr::{
     col, expr, GroupingSet, Like, LogicalPlanBuilder, Partitioning, Repartition,
     WindowFrameBound, WindowFrameUnits, WindowFunctionDefinition,
 };
-use datafusion::prelude::{JoinType, SessionContext};
+use datafusion::prelude::{lit, JoinType, SessionContext};
 use datafusion::sql::TableReference;
 use datafusion::{
     error::Result, logical_expr::utils::split_conjunction, prelude::Column,
@@ -97,6 +97,7 @@ use substrait::proto::{
         window_function::bound::Kind as BoundKind, window_function::Bound,
         window_function::BoundsType, MaskExpression, RexType,
     },
+    fetch_rel,
     function_argument::ArgType,
     join_rel, plan_rel, r#type,
     read_rel::ReadType,
@@ -104,11 +105,10 @@ use substrait::proto::{
     rel_common,
     sort_field::{SortDirection, SortKind::*},
     AggregateFunction, AggregateRel, ConsistentPartitionWindowRel, CrossRel, ExchangeRel,
-    Expression, ExtensionLeafRel, ExtensionMultiRel, ExtensionSingleRel, FetchRel,
-    FilterRel, JoinRel, NamedStruct, Plan, ProjectRel, ReadRel, Rel, RelCommon, SetRel,
-    SortRel, Type,
+    Expression, ExtendedExpression, ExtensionLeafRel, ExtensionMultiRel,
+    ExtensionSingleRel, FetchRel, FilterRel, FunctionArgument, JoinRel, NamedStruct,
+    Plan, ProjectRel, ReadRel, Rel, RelCommon, SetRel, SortField, SortRel, Type,
 };
-use substrait::proto::{ExtendedExpression, FunctionArgument, SortField};
 
 #[async_trait]
 /// This trait is used to consume Substrait plans, converting them into DataFusion Logical Plans.
@@ -1113,14 +1113,25 @@ pub async fn from_fetch_rel(
 ) -> Result<LogicalPlan> {
     if let Some(input) = fetch.input.as_ref() {
         let input = LogicalPlanBuilder::from(from_substrait_rel(consumer, input).await?);
-        let offset = fetch.offset as usize;
-        // -1 means that ALL records should be returned
-        let count = if fetch.count == -1 {
-            None
-        } else {
-            Some(fetch.count as usize)
+        let empty_schema = DFSchemaRef::new(DFSchema::empty());
+        let offset = match &fetch.offset_mode {
+            Some(fetch_rel::OffsetMode::Offset(offset)) => Some(lit(*offset)),
+            Some(fetch_rel::OffsetMode::OffsetExpr(expr)) => {
+                Some(from_substrait_rex(consumer, expr, &empty_schema).await?)
+            }
+            None => None,
         };
-        input.limit(offset, count)?.build()
+        let count = match &fetch.count_mode {
+            Some(fetch_rel::CountMode::Count(count)) => {
+                // -1 means that ALL records should be returned, equivalent to None
+                (*count != -1).then(|| lit(*count))
+            }
+            Some(fetch_rel::CountMode::CountExpr(expr)) => {
+                Some(from_substrait_rex(consumer, expr, &empty_schema).await?)
+            }
+            None => None,
+        };
+        input.limit_by_expr(offset, count)?.build()
     } else {
         not_impl_err!("Fetch without an input is not valid")
     }
