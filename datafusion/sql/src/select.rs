@@ -655,6 +655,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             opt_rename,
             opt_replace: _opt_replace,
             opt_ilike: _opt_ilike,
+            wildcard_token: _wildcard_token,
         } = options;
 
         if opt_rename.is_some() {
