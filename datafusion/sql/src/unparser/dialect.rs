@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::sync::Arc;
+use std::{collections::HashMap, sync::Arc};
 
 use arrow_schema::TimeUnit;
 use datafusion_common::Result;
@@ -28,6 +28,9 @@ use sqlparser::{
 };
 
 use super::{utils::character_length_to_sql, utils::date_part_to_sql, Unparser};
+
+pub type ScalarFnToSqlHandler =
+    Box<dyn Fn(&Unparser, &[Expr]) -> Result<Option<ast::Expr>> + Send + Sync>;
 
 /// `Dialect` to use for Unparsing
 ///
@@ -305,7 +308,30 @@ impl PostgreSqlDialect {
     }
 }
 
-pub struct DuckDBDialect {}
+#[derive(Default)]
+pub struct DuckDBDialect {
+    custom_scalar_fn_overrides: HashMap<String, ScalarFnToSqlHandler>,
+}
+
+impl DuckDBDialect {
+    #[must_use]
+    pub fn new() -> Self {
+        Self {
+            custom_scalar_fn_overrides: HashMap::new(),
+        }
+    }
+
+    pub fn with_custom_scalar_overrides(
+        mut self,
+        handlers: Vec<(&str, ScalarFnToSqlHandler)>,
+    ) -> Self {
+        for (func_name, handler) in handlers {
+            self.custom_scalar_fn_overrides
+                .insert(func_name.to_string(), handler);
+        }
+        self
+    }
+}
 
 impl Dialect for DuckDBDialect {
     fn identifier_quote_style(&self, _: &str) -> Option<char> {
@@ -326,6 +352,10 @@ impl Dialect for DuckDBDialect {
         func_name: &str,
         args: &[Expr],
     ) -> Result<Option<ast::Expr>> {
+        if let Some(handler) = self.custom_scalar_fn_overrides.get(func_name) {
+            return handler(unparser, args);
+        }
+
         if func_name == "character_length" {
             return character_length_to_sql(
                 unparser,
