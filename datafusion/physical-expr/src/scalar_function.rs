@@ -31,7 +31,7 @@
 
 use std::any::Any;
 use std::fmt::{self, Debug, Formatter};
-use std::hash::Hash;
+use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
 use crate::PhysicalExpr;
@@ -39,11 +39,13 @@ use crate::PhysicalExpr;
 use arrow::datatypes::{DataType, Schema};
 use arrow::record_batch::RecordBatch;
 use arrow_array::Array;
+use datafusion_common::cse::HashNode;
 use datafusion_common::{internal_err, DFSchema, Result, ScalarValue};
 use datafusion_expr::interval_arithmetic::Interval;
 use datafusion_expr::sort_properties::ExprProperties;
 use datafusion_expr::type_coercion::functions::data_types_with_scalar_udf;
 use datafusion_expr::{expr_vec_fmt, ColumnarValue, Expr, ScalarFunctionArgs, ScalarUDF};
+use datafusion_expr_common::signature::Volatility;
 
 /// Physical expression of a scalar function
 #[derive(Eq, PartialEq, Hash)]
@@ -214,6 +216,19 @@ impl PhysicalExpr for ScalarFunctionExpr {
             range,
             preserves_lex_ordering,
         })
+    }
+
+    fn is_volatile(&self) -> bool {
+        self.fun.signature().volatility == Volatility::Volatile
+    }
+}
+
+impl HashNode for ScalarFunctionExpr {
+    fn hash_node<H: Hasher>(&self, state: &mut H) {
+        self.name.hash(state);
+        self.return_type.hash(state);
+        self.nullable.hash(state);
+        self.fun.hash(state);
     }
 }
 

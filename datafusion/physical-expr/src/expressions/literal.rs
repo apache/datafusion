@@ -18,7 +18,7 @@
 //! Literal expressions for physical operations
 
 use std::any::Any;
-use std::hash::Hash;
+use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
 use crate::physical_expr::PhysicalExpr;
@@ -27,6 +27,7 @@ use arrow::{
     datatypes::{DataType, Schema},
     record_batch::RecordBatch,
 };
+use datafusion_common::cse::HashNode;
 use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::Expr;
 use datafusion_expr_common::columnar_value::ColumnarValue;
@@ -92,6 +93,12 @@ impl PhysicalExpr for Literal {
             range: Interval::try_new(self.value().clone(), self.value().clone())?,
             preserves_lex_ordering: true,
         })
+    }
+}
+
+impl HashNode for Literal {
+    fn hash_node<H: Hasher>(&self, state: &mut H) {
+        self.value.hash(state);
     }
 }
 

@@ -44,6 +44,7 @@ use datafusion_expr::ColumnarValue;
 use datafusion_physical_expr_common::datum::compare_with_eq;
 
 use ahash::RandomState;
+use datafusion_common::cse::HashNode;
 use datafusion_common::HashMap;
 use hashbrown::hash_map::RawEntryMut;
 
@@ -415,6 +416,13 @@ impl Hash for InListExpr {
         self.expr.hash(state);
         self.negated.hash(state);
         self.list.hash(state);
+        // Add `self.static_filter` when hash is available
+    }
+}
+
+impl HashNode for InListExpr {
+    fn hash_node<H: Hasher>(&self, state: &mut H) {
+        self.negated.hash(state);
         // Add `self.static_filter` when hash is available
     }
 }

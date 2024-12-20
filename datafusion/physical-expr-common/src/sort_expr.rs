@@ -42,6 +42,7 @@ use itertools::Itertools;
 /// # use std::sync::Arc;
 /// # use arrow::array::RecordBatch;
 /// # use datafusion_common::Result;
+/// # use datafusion_common::cse::HashNode;
 /// # use arrow::compute::SortOptions;
 /// # use arrow::datatypes::{DataType, Schema};
 /// # use datafusion_expr_common::columnar_value::ColumnarValue;
@@ -61,6 +62,9 @@ use itertools::Itertools;
 /// # }
 /// # impl Display for MyPhysicalExpr {
 /// #    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result { write!(f, "a") }
+/// # }
+/// # impl HashNode for MyPhysicalExpr {
+/// #    fn hash_node<H: Hasher>(&self, _state: &mut H) {}
 /// # }
 /// # fn col(name: &str) -> Arc<dyn PhysicalExpr> { Arc::new(MyPhysicalExpr) }
 /// // Sort by a ASC

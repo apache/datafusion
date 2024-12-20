@@ -17,7 +17,7 @@
 
 //! IS NULL expression
 
-use std::hash::Hash;
+use std::hash::{Hash, Hasher};
 use std::{any::Any, sync::Arc};
 
 use crate::PhysicalExpr;
@@ -25,6 +25,7 @@ use arrow::{
     datatypes::{DataType, Schema},
     record_batch::RecordBatch,
 };
+use datafusion_common::cse::HashNode;
 use datafusion_common::Result;
 use datafusion_common::ScalarValue;
 use datafusion_expr::ColumnarValue;
@@ -44,7 +45,7 @@ impl PartialEq for IsNullExpr {
 }
 
 impl Hash for IsNullExpr {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+    fn hash<H: Hasher>(&self, state: &mut H) {
         self.arg.hash(state);
     }
 }
@@ -103,6 +104,10 @@ impl PhysicalExpr for IsNullExpr {
     ) -> Result<Arc<dyn PhysicalExpr>> {
         Ok(Arc::new(IsNullExpr::new(Arc::clone(&children[0]))))
     }
+}
+
+impl HashNode for IsNullExpr {
+    fn hash_node<H: Hasher>(&self, _state: &mut H) {}
 }
 
 /// Create an IS NULL expression
