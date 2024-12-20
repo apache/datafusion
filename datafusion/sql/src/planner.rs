@@ -24,10 +24,10 @@ use arrow_schema::*;
 use datafusion_common::{
     field_not_found, internal_err, plan_datafusion_err, DFSchemaRef, SchemaError,
 };
+use sqlparser::ast::TimezoneInfo;
 use sqlparser::ast::{ArrayElemTypeDef, ExactNumberInfo};
 use sqlparser::ast::{ColumnDef as SQLColumnDef, ColumnOption};
 use sqlparser::ast::{DataType as SQLDataType, Ident, ObjectName, TableAlias};
-use sqlparser::ast::{TimezoneInfo, Value};
 
 use datafusion_common::TableReference;
 use datafusion_common::{
@@ -38,7 +38,7 @@ use datafusion_expr::logical_plan::{LogicalPlan, LogicalPlanBuilder};
 use datafusion_expr::utils::find_column_exprs;
 use datafusion_expr::{col, Expr};
 
-use crate::utils::{make_decimal_type, value_to_string};
+use crate::utils::make_decimal_type;
 pub use datafusion_expr::planner::ContextProvider;
 
 /// SQL parser options
@@ -56,7 +56,7 @@ impl Default for ParserOptions {
             parse_float_as_decimal: false,
             enable_ident_normalization: true,
             support_varchar_with_length: true,
-            enable_options_value_normalization: true,
+            enable_options_value_normalization: false,
         }
     }
 }
@@ -83,32 +83,6 @@ impl IdentNormalizer {
             crate::utils::normalize_ident(ident)
         } else {
             ident.value
-        }
-    }
-}
-
-/// Value Normalizer
-#[derive(Debug)]
-pub struct ValueNormalizer {
-    normalize: bool,
-}
-
-impl Default for ValueNormalizer {
-    fn default() -> Self {
-        Self { normalize: true }
-    }
-}
-
-impl ValueNormalizer {
-    pub fn new(normalize: bool) -> Self {
-        Self { normalize }
-    }
-
-    pub fn normalize(&self, value: Value) -> Option<String> {
-        match (value_to_string(&value), self.normalize) {
-            (Some(s), true) => Some(s.to_ascii_lowercase()),
-            (Some(s), false) => Some(s),
-            (None, _) => None,
         }
     }
 }
@@ -254,7 +228,6 @@ pub struct SqlToRel<'a, S: ContextProvider> {
     pub(crate) context_provider: &'a S,
     pub(crate) options: ParserOptions,
     pub(crate) ident_normalizer: IdentNormalizer,
-    pub(crate) value_normalizer: ValueNormalizer,
 }
 
 impl<'a, S: ContextProvider> SqlToRel<'a, S> {
@@ -266,13 +239,11 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     /// Create a new query planner
     pub fn new_with_options(context_provider: &'a S, options: ParserOptions) -> Self {
         let ident_normalize = options.enable_ident_normalization;
-        let options_value_normalize = options.enable_options_value_normalization;
 
         SqlToRel {
             context_provider,
             options,
             ident_normalizer: IdentNormalizer::new(ident_normalize),
-            value_normalizer: ValueNormalizer::new(options_value_normalize),
         }
     }
 
