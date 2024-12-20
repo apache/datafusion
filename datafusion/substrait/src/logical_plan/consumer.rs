@@ -739,13 +739,6 @@ pub async fn from_substrait_plan_with_consumer(
     consumer: &impl SubstraitConsumer,
     plan: &Plan,
 ) -> Result<LogicalPlan> {
-    // Register function extension
-    let extensions = Extensions::try_from(&plan.extensions)?;
-    if !extensions.type_variations.is_empty() {
-        return not_impl_err!("Type variation extensions are not supported");
-    }
-
-    // Parse relations
     match plan.relations.len() {
         1 => {
             match plan.relations[0].rel_type.as_ref() {
