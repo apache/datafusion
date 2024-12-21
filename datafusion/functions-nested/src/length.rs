@@ -17,20 +17,19 @@
 
 //! [`ScalarUDFImpl`] definitions for array_length function.
 
-use crate::utils::{downcast_arg, make_scalar_function};
+use crate::utils::make_scalar_function;
 use arrow_array::{
     Array, ArrayRef, Int64Array, LargeListArray, ListArray, OffsetSizeTrait, UInt64Array,
 };
 use arrow_schema::DataType;
 use arrow_schema::DataType::{FixedSizeList, LargeList, List, UInt64};
-use core::any::type_name;
 use datafusion_common::cast::{as_generic_list_array, as_int64_array};
-use datafusion_common::DataFusionError;
-use datafusion_common::{exec_err, plan_err, Result};
+use datafusion_common::{exec_err, internal_datafusion_err, plan_err, Result};
 use datafusion_expr::scalar_doc_sections::DOC_SECTION_ARRAY;
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
 };
+use datafusion_functions::{downcast_arg, downcast_named_arg};
 use std::any::Any;
 use std::sync::{Arc, OnceLock};
 
