@@ -448,14 +448,14 @@ impl<T: ArrowNumericType + Send> GroupsAccumulator for MedianGroupsAccumulator<T
         // `nulls` for converted `ListArray`
         let nulls = filtered_null_mask(opt_filter, input_array);
 
-        let converted_list_array = Arc::new(ListArray::new(
+        let converted_list_array = ListArray::new(
             Arc::new(Field::new_list_field(self.data_type.clone(), false)),
             offsets,
             Arc::new(values),
             nulls,
-        ));
+        );
 
-        Ok(vec![converted_list_array])
+        Ok(vec![Arc::new(converted_list_array)])
     }
 
     fn supports_convert_to_state(&self) -> bool {
