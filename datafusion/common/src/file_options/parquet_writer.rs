@@ -59,6 +59,17 @@ impl ParquetWriterOptions {
 }
 
 impl TableParquetOptions {
+    #[deprecated(
+        since = "44.0.0",
+        note = "Please use `TableParquetOptions::into_writer_properties_builder` and `TableParquetOptions::into_writer_properties_builder_with_arrow_schema`"
+    )]
+    pub fn try_from(table_opts: &TableParquetOptions) -> Result<ParquetWriterOptions> {
+        // ParquetWriterOptions will have defaults for the remaining fields (e.g. sorting_columns)
+        Ok(ParquetWriterOptions {
+            writer_options: table_opts.into_writer_properties_builder()?.build(),
+        })
+    }
+
     /// Convert the session's [`TableParquetOptions`] into a single write action's [`WriterPropertiesBuilder`].
     ///
     /// The returned [`WriterPropertiesBuilder`] includes customizations applicable per column.
