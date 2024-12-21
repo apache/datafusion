@@ -993,3 +993,86 @@ where
     let data = mutable.freeze();
     Ok(arrow::array::make_array(data))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::array_element_udf;
+    use arrow_schema::{DataType, Field};
+    use datafusion_common::{Column, DFSchema, ScalarValue};
+    use datafusion_expr::expr::ScalarFunction;
+    use datafusion_expr::{cast, Expr, ExprSchemable};
+    use std::collections::HashMap;
+
+    // Regression test for https://github.com/apache/datafusion/issues/13755
+    #[test]
+    fn test_array_element_return_type_fixed_size_list() {
+        let fixed_size_list_type = DataType::FixedSizeList(
+            Field::new("some_arbitrary_test_field", DataType::Int32, false).into(),
+            13,
+        );
+        let array_type = DataType::List(
+            Field::new_list_field(fixed_size_list_type.clone(), true).into(),
+        );
+        let index_type = DataType::Int64;
+
+        let schema = DFSchema::from_unqualified_fields(
+            vec![
+                Field::new("my_array", array_type.clone(), false),
+                Field::new("my_index", index_type.clone(), false),
+            ]
+            .into(),
+            HashMap::default(),
+        )
+        .unwrap();
+
+        let udf = array_element_udf();
+
+        // ScalarUDFImpl::return_type
+        assert_eq!(
+            udf.return_type(&[array_type.clone(), index_type.clone()])
+                .unwrap(),
+            fixed_size_list_type
+        );
+
+        // ScalarUDFImpl::return_type_from_exprs with typed exprs
+        assert_eq!(
+            udf.return_type_from_exprs(
+                &[
+                    cast(Expr::Literal(ScalarValue::Null), array_type.clone()),
+                    cast(Expr::Literal(ScalarValue::Null), index_type.clone()),
+                ],
+                &schema,
+                &[array_type.clone(), index_type.clone()]
+            )
+            .unwrap(),
+            fixed_size_list_type
+        );
+
+        // ScalarUDFImpl::return_type_from_exprs with exprs not carrying type
+        assert_eq!(
+            udf.return_type_from_exprs(
+                &[
+                    Expr::Column(Column::new_unqualified("my_array")),
+                    Expr::Column(Column::new_unqualified("my_index")),
+                ],
+                &schema,
+                &[array_type.clone(), index_type.clone()]
+            )
+            .unwrap(),
+            fixed_size_list_type
+        );
+
+        // Via ExprSchemable::get_type (e.g. SimplifyInfo)
+        let udf_expr = Expr::ScalarFunction(ScalarFunction {
+            func: array_element_udf(),
+            args: vec![
+                Expr::Column(Column::new_unqualified("my_array")),
+                Expr::Column(Column::new_unqualified("my_index")),
+            ],
+        });
+        assert_eq!(
+            ExprSchemable::get_type(&udf_expr, &schema).unwrap(),
+            fixed_size_list_type
+        );
+    }
+}

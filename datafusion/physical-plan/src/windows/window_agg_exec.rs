@@ -23,15 +23,16 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 
 use super::utils::create_schema;
+use crate::execution_plan::EmissionType;
 use crate::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
 use crate::windows::{
     calc_requirements, get_ordered_partition_by_indices, get_partition_by_sort_exprs,
     window_equivalence_properties,
 };
 use crate::{
-    ColumnStatistics, DisplayAs, DisplayFormatType, Distribution, ExecutionMode,
-    ExecutionPlan, ExecutionPlanProperties, PhysicalExpr, PlanProperties,
-    RecordBatchStream, SendableRecordBatchStream, Statistics, WindowExpr,
+    ColumnStatistics, DisplayAs, DisplayFormatType, Distribution, ExecutionPlan,
+    ExecutionPlanProperties, PhysicalExpr, PlanProperties, RecordBatchStream,
+    SendableRecordBatchStream, Statistics, WindowExpr,
 };
 use arrow::array::ArrayRef;
 use arrow::compute::{concat, concat_batches};
@@ -127,16 +128,14 @@ impl WindowAggExec {
         // would be either 1 or more than 1 depending on the presence of repartitioning.
         let output_partitioning = input.output_partitioning().clone();
 
-        // Determine execution mode:
-        let mode = match input.execution_mode() {
-            ExecutionMode::Bounded => ExecutionMode::Bounded,
-            ExecutionMode::Unbounded | ExecutionMode::PipelineBreaking => {
-                ExecutionMode::PipelineBreaking
-            }
-        };
-
         // Construct properties cache:
-        PlanProperties::new(eq_properties, output_partitioning, mode)
+        PlanProperties::new(
+            eq_properties,
+            output_partitioning,
+            // TODO: Emission type and boundedness information can be enhanced here
+            EmissionType::Final,
+            input.boundedness(),
+        )
     }
 }
 
@@ -312,12 +311,13 @@ impl WindowAggStream {
         })
     }
 
-    fn compute_aggregates(&self) -> Result<RecordBatch> {
+    fn compute_aggregates(&self) -> Result<Option<RecordBatch>> {
         // record compute time on drop
         let _timer = self.baseline_metrics.elapsed_compute().timer();
+
         let batch = concat_batches(&self.input.schema(), &self.batches)?;
         if batch.num_rows() == 0 {
-            return Ok(RecordBatch::new_empty(Arc::clone(&self.schema)));
+            return Ok(None);
         }
 
         let partition_by_sort_keys = self
@@ -350,10 +350,10 @@ impl WindowAggStream {
         let mut batch_columns = batch.columns().to_vec();
         // calculate window cols
         batch_columns.extend_from_slice(&columns);
-        Ok(RecordBatch::try_new(
+        Ok(Some(RecordBatch::try_new(
             Arc::clone(&self.schema),
             batch_columns,
-        )?)
+        )?))
     }
 }
 
@@ -380,18 +380,23 @@ impl WindowAggStream {
         }
 
         loop {
-            let result = match ready!(self.input.poll_next_unpin(cx)) {
+            return Poll::Ready(Some(match ready!(self.input.poll_next_unpin(cx)) {
                 Some(Ok(batch)) => {
                     self.batches.push(batch);
                     continue;
                 }
                 Some(Err(e)) => Err(e),
-                None => self.compute_aggregates(),
-            };
-
-            self.finished = true;
-
-            return Poll::Ready(Some(result));
+                None => {
+                    let Some(result) = self.compute_aggregates()? else {
+                        return Poll::Ready(None);
+                    };
+                    self.finished = true;
+                    // Empty record batches should not be emitted.
+                    // They need to be treated as  [`Option<RecordBatch>`]es and handled separately
+                    debug_assert!(result.num_rows() > 0);
+                    Ok(result)
+                }
+            }));
         }
     }
 }

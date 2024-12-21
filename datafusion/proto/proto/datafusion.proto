@@ -838,6 +838,7 @@ message PhysicalScalarUdfNode {
   repeated PhysicalExprNode args = 2;
   optional bytes fun_definition = 3;
   datafusion_common.ArrowType return_type = 4;
+  bool nullable = 5;
 }
 
 message PhysicalAggregateExprNode {
