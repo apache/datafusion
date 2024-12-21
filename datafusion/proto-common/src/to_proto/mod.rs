@@ -833,6 +833,7 @@ impl TryFrom<&ParquetOptions> for protobuf::ParquetOptions {
             maximum_buffered_record_batches_per_stream: value.maximum_buffered_record_batches_per_stream as u64,
             schema_force_view_types: value.schema_force_view_types,
             binary_as_string: value.binary_as_string,
+            skip_arrow_metadata: value.skip_arrow_metadata,
         })
     }
 }

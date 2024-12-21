@@ -763,6 +763,9 @@ pub struct ParquetOptions {
     /// default = false
     #[prost(bool, tag = "29")]
     pub binary_as_string: bool,
+    /// default = false
+    #[prost(bool, tag = "30")]
+    pub skip_arrow_metadata: bool,
     #[prost(uint64, tag = "12")]
     pub dictionary_page_size_limit: u64,
     #[prost(uint64, tag = "18")]
