@@ -1119,6 +1119,63 @@ async fn create_scalar_function_from_sql_statement() -> Result<()> {
     Ok(())
 }
 
+#[tokio::test]
+async fn test_valid_zero_argument_signatures() {
+    let signatures = vec![
+        Signature::exact(vec![], Volatility::Immutable),
+        Signature::any(0, Volatility::Immutable),
+        Signature::nullary(Volatility::Immutable),
+    ];
+    for signature in signatures {
+        let ctx = SessionContext::new();
+        let udf = ScalarFunctionWrapper {
+            name: "good_signature".to_string(),
+            expr: lit(1),
+            signature,
+            return_type: DataType::Int32,
+        };
+        ctx.register_udf(ScalarUDF::from(udf));
+        let results = ctx
+            .sql("select good_signature()")
+            .await
+            .unwrap()
+            .collect()
+            .await
+            .unwrap();
+        let expected = [
+            "+------------------+",
+            "| good_signature() |",
+            "+------------------+",
+            "| 1                |",
+            "+------------------+",
+        ];
+        assert_batches_eq!(expected, &results);
+    }
+}
+
+#[tokio::test]
+async fn test_invalid_zero_argument_signatures() {
+    let signatures = vec![
+        Signature::variadic(vec![], Volatility::Immutable),
+        Signature::variadic_any(Volatility::Immutable),
+        Signature::uniform(0, vec![], Volatility::Immutable),
+        Signature::coercible(vec![], Volatility::Immutable),
+        Signature::comparable(0, Volatility::Immutable),
+    ];
+    for signature in signatures {
+        let ctx = SessionContext::new();
+        let udf = ScalarFunctionWrapper {
+            name: "bad_signature".to_string(),
+            expr: lit(1),
+            signature,
+            return_type: DataType::Int32,
+        };
+        ctx.register_udf(ScalarUDF::from(udf));
+        let results = ctx.sql("select bad_signature()").await.unwrap_err();
+        assert_contains!(results.to_string(), "Error during planning: Error during planning: bad_signature does not support zero arguments");
+    }
+}
+
 /// Saves whatever is passed to it as a scalar function
 #[derive(Debug, Default)]
 struct RecordingFunctionFactory {
