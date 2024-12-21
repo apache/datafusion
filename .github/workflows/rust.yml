@@ -184,14 +184,8 @@ jobs:
         uses: ./.github/actions/setup-builder
         with:
           rust-version: stable
-      - name: Install nextest
-        uses: taiki-e/install-action@e37f44c
-        with:
-          tool: cargo-nextest
       - name: Run tests (excluding doctests)
-        run: cargo nextest run --hide-progress-bar --no-fail-fast --cargo-profile ci --exclude datafusion-examples --exclude datafusion-benchmarks --exclude datafusion-sqllogictest --workspace --lib --tests --bins --features avro,json,backtrace
-      - name: Run sqllogictests
-        run: cargo test --profile ci --package datafusion-sqllogictest --test sqllogictests
+        run: cargo test --profile ci --exclude datafusion-examples --exclude datafusion-benchmarks --lib --tests --bins --features avro,json,backtrace
       - name: Verify Working Directory Clean
         run: git diff --exit-code
 
@@ -210,14 +204,10 @@ jobs:
         uses: ./.github/actions/setup-builder
         with:
           rust-version: stable
-      - name: Install nextest
-        uses: taiki-e/install-action@e37f44c
-        with:
-          tool: cargo-nextest
       - name: Run tests (excluding doctests)
         run: |
           cd datafusion-cli
-          cargo nextest run --hide-progress-bar --no-fail-fast --cargo-profile ci --lib --tests --bins --all-features
+          cargo test --profile ci --lib --tests --bins --all-features
       - name: Verify Working Directory Clean
         run: git diff --exit-code
 
@@ -406,17 +396,12 @@ jobs:
 #          fetch-depth: 1
 #      - name: Setup Rust toolchain
 #        uses: ./.github/actions/setup-macos-builder
-#      - name: Install nextest
-#        uses: taiki-e/install-action@e37f44c
-#        with:
-#          tool: cargo-nextest
 #      - name: Run tests (excluding doctests)
 #        shell: bash
 #        run: |
-#          cargo nextest run --hide-progress-bar --no-fail-fast --cargo-profile ci --exclude datafusion-examples --exclude datafusion-benchmarks --exclude datafusion-sqllogictest --workspace --lib --tests --bins --features avro,json,backtrace
-#          cargo test --profile ci --package datafusion-sqllogictest --test sqllogictests
+#          cargo test run --profile ci --exclude datafusion-examples --exclude datafusion-benchmarks --workspace --lib --tests --bins --features avro,json,backtrace
 #          cd datafusion-cli
-#          cargo nextest run --hide-progress-bar --no-fail-fast --cargo-profile ci --lib --tests --bins --all-features
+#          cargo test run --profile ci --lib --tests --bins --all-features
 
   macos-aarch64:
     name: cargo test (macos-aarch64)
@@ -428,17 +413,12 @@ jobs:
           fetch-depth: 1
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-macos-aarch64-builder
-      - name: Install nextest
-        uses: taiki-e/install-action@e37f44c
-        with:
-          tool: cargo-nextest
       - name: Run tests (excluding doctests)
         shell: bash
         run: |
-          cargo nextest run --hide-progress-bar --no-fail-fast --cargo-profile ci --exclude datafusion-examples --exclude datafusion-benchmarks --exclude datafusion-sqllogictest --workspace --lib --tests --bins --features avro,json,backtrace
-          cargo test --profile ci --package datafusion-sqllogictest --test sqllogictests
+          cargo test --profile ci --lib --tests --bins --features avro,json,backtrace
           cd datafusion-cli
-          cargo nextest run --hide-progress-bar --no-fail-fast --cargo-profile ci --lib --tests --bins --all-features
+          cargo test --profile ci --lib --tests --bins --all-features
 
   test-datafusion-pyarrow:
     name: cargo test pyarrow (amd64)
@@ -462,12 +442,8 @@ jobs:
         uses: ./.github/actions/setup-builder
         with:
           rust-version: stable
-      - name: Install nextest
-        uses: taiki-e/install-action@e37f44c
-        with:
-          tool: cargo-nextest
       - name: Run datafusion-common tests
-        run: cargo nextest run --hide-progress-bar --no-fail-fast --cargo-profile ci -p datafusion-common --features=pyarrow
+        run: cargo test --profile ci -p datafusion-common --features=pyarrow
 
   vendor:
     name: Verify Vendored Code
@@ -580,14 +556,10 @@ jobs:
         uses: ./.github/actions/setup-builder
         with:
           rust-version: stable
-      - name: Install nextest
-        uses: taiki-e/install-action@e37f44c
-        with:
-          tool: cargo-nextest
       - name: Run tests
         run: |
           cd datafusion
-          cargo nextest run --hide-progress-bar --no-fail-fast --cargo-profile ci --exclude datafusion-examples --exclude datafusion-benchmarks --exclude datafusion-sqllogictest --workspace --lib --tests --features=force_hash_collisions,avro
+          cargo test  --profile ci --exclude datafusion-examples --exclude datafusion-benchmarks --exclude datafusion-sqllogictest --workspace --lib --tests --features=force_hash_collisions,avro
 
   cargo-toml-formatting-checks:
     name: check Cargo.toml formatting
