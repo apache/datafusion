@@ -30,7 +30,6 @@ pub mod parquet_writer;
 mod tests {
     use std::collections::HashMap;
 
-    use super::parquet_writer::ParquetWriterOptions;
     use crate::{
         config::{ConfigFileType, TableOptions},
         file_options::{csv_writer::CsvWriterOptions, json_writer::JsonWriterOptions},
@@ -79,8 +78,10 @@ mod tests {
         table_config.set_config_format(ConfigFileType::PARQUET);
         table_config.alter_with_string_hash_map(&option_map)?;
 
-        let parquet_options = ParquetWriterOptions::try_from(&table_config.parquet)?;
-        let properties = parquet_options.writer_options();
+        let properties = table_config
+            .parquet
+            .into_writer_properties_builder()?
+            .build();
 
         // Verify the expected options propagated down to parquet crate WriterProperties struct
         assert_eq!(properties.max_row_group_size(), 123);
@@ -184,8 +185,10 @@ mod tests {
         table_config.set_config_format(ConfigFileType::PARQUET);
         table_config.alter_with_string_hash_map(&option_map)?;
 
-        let parquet_options = ParquetWriterOptions::try_from(&table_config.parquet)?;
-        let properties = parquet_options.writer_options();
+        let properties = table_config
+            .parquet
+            .into_writer_properties_builder()?
+            .build();
 
         let col1 = ColumnPath::from(vec!["col1".to_owned()]);
         let col2_nested = ColumnPath::from(vec!["col2".to_owned(), "nested".to_owned()]);
