@@ -1119,6 +1119,45 @@ async fn create_scalar_function_from_sql_statement() -> Result<()> {
     Ok(())
 }
 
+#[tokio::test]
+async fn test_valid_zero_argument_signatures() {
+    let signatures = vec![
+        Signature::exact(vec![], Volatility::Immutable),
+        Signature::any(0, Volatility::Immutable),
+        Signature::variadic(vec![], Volatility::Immutable),
+        Signature::variadic_any(Volatility::Immutable),
+        Signature::uniform(0, vec![], Volatility::Immutable),
+        Signature::coercible(vec![], Volatility::Immutable),
+        Signature::comparable(0, Volatility::Immutable),
+        Signature::nullary(Volatility::Immutable),
+    ];
+    for signature in signatures {
+        let ctx = SessionContext::new();
+        let udf = ScalarFunctionWrapper {
+            name: "bad_signature".to_string(),
+            expr: lit(1),
+            signature,
+            return_type: DataType::Int32,
+        };
+        ctx.register_udf(ScalarUDF::from(udf));
+        let results = ctx
+            .sql("select bad_signature()")
+            .await
+            .unwrap()
+            .collect()
+            .await
+            .unwrap();
+        let expected = vec![
+            "+-----------------+",
+            "| bad_signature() |",
+            "+-----------------+",
+            "| 1               |",
+            "+-----------------+",
+        ];
+        assert_batches_eq!(expected, &results);
+    }
+}
+
 /// Saves whatever is passed to it as a scalar function
 #[derive(Debug, Default)]
 struct RecordingFunctionFactory {

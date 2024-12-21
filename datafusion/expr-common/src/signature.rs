@@ -343,6 +343,12 @@ impl TypeSignature {
     pub fn supports_zero_argument(&self) -> bool {
         match &self {
             TypeSignature::Exact(vec) => vec.is_empty(),
+            TypeSignature::Any(0) => true,
+            TypeSignature::Variadic(vec) => vec.is_empty(),
+            TypeSignature::VariadicAny => true,
+            TypeSignature::Uniform(0, _) => true,
+            TypeSignature::Coercible(vec) => vec.is_empty(),
+            TypeSignature::Comparable(0) => true,
             TypeSignature::Nullary => true,
             TypeSignature::OneOf(types) => types
                 .iter()
@@ -639,7 +645,6 @@ mod tests {
             TypeSignature::Exact(vec![DataType::Utf8]),
             TypeSignature::Uniform(1, vec![DataType::Float64]),
             TypeSignature::Any(1),
-            TypeSignature::VariadicAny,
             TypeSignature::OneOf(vec![
                 TypeSignature::Exact(vec![DataType::Int8]),
                 TypeSignature::Uniform(1, vec![DataType::Int8]),
