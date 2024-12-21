@@ -16,6 +16,18 @@
 # under the License.
 
 # Test generate_series table function
+query I
+SELECT * FROM generate_series(6)
+----
+0
+1
+2
+3
+4
+5
+6
+
+
 
 query I rowsort
 SELECT * FROM generate_series(1, 5)
@@ -39,10 +51,34 @@ SELECT * FROM generate_series(3, 6)
 5
 6
 
+# #generated_data > batch_size
+query I
+SELECT count(v1) FROM generate_series(-66666,66666) t1(v1)
+----
+133333
+
+
+
+
 query I rowsort
 SELECT SUM(v1) FROM generate_series(1, 5) t1(v1)
 ----
 15
+
+query I
+SELECT * FROM generate_series(6, -1, -2)
+----
+6 
+4 
+2 
+0 
+
+query I
+SELECT * FROM generate_series(6, 66, 666)
+----
+6 
+
+
 
 # Test generate_series with WHERE clause
 query I rowsort
@@ -93,6 +129,10 @@ ON a.v1 = b.v1 - 1
 2 3
 3 4
 
+#
+# Test generate_series with null arguments
+#
+
 query I
 SELECT * FROM generate_series(NULL, 5)
 ----
@@ -105,6 +145,11 @@ query I
 SELECT * FROM generate_series(NULL, NULL)
 ----
 
+query I
+SELECT * FROM generate_series(1, 5, NULL)
+----
+
+
 query TT
 EXPLAIN SELECT * FROM generate_series(1, 5)
 ----
@@ -115,20 +160,22 @@ physical_plan LazyMemoryExec: partitions=1, batch_generators=[generate_series: s
 # Test generate_series with invalid arguments
 #
 
-query error DataFusion error: Error during planning: End value must be greater than or equal to start value
+query error DataFusion error: Error during planning: start is bigger than end, but increment is positive: cannot generate infinite series
 SELECT * FROM generate_series(5, 1)
 
-statement error DataFusion error: This feature is not implemented: generate_series does not support 1 or 3 arguments
-SELECT * FROM generate_series(1, 5, NULL)
+query error DataFusion error: Error during planning: start is smaller than end, but increment is negative: cannot generate infinite series
+SELECT * FROM generate_series(-6, 6, -1)
 
-statement error DataFusion error: This feature is not implemented: generate_series does not support 1 or 3 arguments
-SELECT * FROM generate_series(1)
+query error DataFusion error: Error during planning: step cannot be zero
+SELECT * FROM generate_series(-6, 6, 0)
 
-statement error DataFusion error: Error during planning: generate_series expects 2 arguments
+query error DataFusion error: Error during planning: start is bigger than end, but increment is positive: cannot generate infinite series
+SELECT * FROM generate_series(6, -6, 1)
+
+
+statement error DataFusion error: Error during planning: generate_series function requires 1 to 3 arguments
 SELECT * FROM generate_series(1, 2, 3, 4)
 
-statement error DataFusion error: Error during planning: Second argument must be an integer literal
-SELECT * FROM generate_series(1, '2')
 
 statement error DataFusion error: Error during planning: First argument must be an integer literal
 SELECT * FROM generate_series('foo', 'bar')
