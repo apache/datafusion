@@ -53,7 +53,7 @@ once_cell = { version = "1.20", optional = true }
 postgres-protocol = { version = "0.6.7", optional = true }
 postgres-types = { version = "0.2.8", features = ["derive", "with-chrono-0_4"], optional = true }
 rust_decimal = { version = "1.36.0", features = ["tokio-pg"] }
-sqllogictest = { git = "https://github.com/Omega359/sqllogictest-rs.git", branch = "main" }
+sqllogictest = "0.24.0"
 sqlparser = { workspace = true }
 tempfile = { workspace = true }
 testcontainers = { version = "0.23", features = ["default"], optional = true }
@@ -77,7 +77,6 @@ postgres = [
 
 [dev-dependencies]
 env_logger = { workspace = true }
-in-container = "^1"
 tokio = { workspace = true, features = ["rt-multi-thread"] }
 
 [[test]]

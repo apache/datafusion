@@ -226,10 +226,10 @@ INCLUDE_SQLITE=true cargo test --test sqllogictests
 ```
 
 Note that there are well over 5 million queries in these tests and running the
-sqlite tests will take a long time. You may wish to run them in release mode:
+sqlite tests will take a long time. You may wish to run them in release-nonlto mode:
 
 ```shell
-INCLUDE_SQLITE=true cargo test --release --test sqllogictests
+INCLUDE_SQLITE=true cargo test --profile release-nonlto --test sqllogictests
 ```
 
 The sqlite tests can also be run with the postgres runner to verify compatibility:
