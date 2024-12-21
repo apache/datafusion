@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+mod r#async;
 mod catalog;
 mod dynamic_file;
 mod schema;
@@ -23,6 +24,7 @@ mod table;
 
 pub use catalog::*;
 pub use dynamic_file::catalog::*;
+pub use r#async::*;
 pub use schema::*;
 pub use session::*;
 pub use table::*;
