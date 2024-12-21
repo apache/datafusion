@@ -28,7 +28,7 @@ use arrow::{
 };
 use arrow_schema::SchemaRef;
 use datafusion_common::tree_node::{Transformed, TreeNode};
-use datafusion_common::{internal_err, plan_err, Result};
+use datafusion_common::{internal_err, plan_err, ColumnStatistics, Result, Statistics};
 use datafusion_expr::ColumnarValue;
 
 /// Represents the column at a given index in a RecordBatch
@@ -137,6 +137,10 @@ impl PhysicalExpr for Column {
         _children: Vec<Arc<dyn PhysicalExpr>>,
     ) -> Result<Arc<dyn PhysicalExpr>> {
         Ok(self)
+    }
+
+    fn column_statistics(&self, statistics: &Statistics) -> Result<ColumnStatistics> {
+        Ok(statistics.column_statistics[self.index()].clone())
     }
 }
 
