@@ -185,7 +185,7 @@ jobs:
         with:
           rust-version: stable
       - name: Install nextest
-        uses: taiki-e/install-action@e37f44cf370f5ab2495787a3f6f30f092bc9a53e
+        uses: taiki-e/install-action@e37f44c
         with:
           tool: cargo-nextest
       - name: Run tests (excluding doctests)
@@ -211,7 +211,7 @@ jobs:
         with:
           rust-version: stable
       - name: Install nextest
-        uses: taiki-e/install-action@e37f44cf370f5ab2495787a3f6f30f092bc9a53e
+        uses: taiki-e/install-action@e37f44c
         with:
           tool: cargo-nextest
       - name: Run tests (excluding doctests)
@@ -407,7 +407,7 @@ jobs:
 #      - name: Setup Rust toolchain
 #        uses: ./.github/actions/setup-macos-builder
 #      - name: Install nextest
-#        uses: taiki-e/install-action@e37f44cf370f5ab2495787a3f6f30f092bc9a53e
+#        uses: taiki-e/install-action@e37f44c
 #        with:
 #          tool: cargo-nextest
 #      - name: Run tests (excluding doctests)
@@ -429,7 +429,7 @@ jobs:
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-macos-aarch64-builder
       - name: Install nextest
-        uses: taiki-e/install-action@e37f44cf370f5ab2495787a3f6f30f092bc9a53e
+        uses: taiki-e/install-action@e37f44c
         with:
           tool: cargo-nextest
       - name: Run tests (excluding doctests)
@@ -463,7 +463,7 @@ jobs:
         with:
           rust-version: stable
       - name: Install nextest
-        uses: taiki-e/install-action@e37f44cf370f5ab2495787a3f6f30f092bc9a53e
+        uses: taiki-e/install-action@e37f44c
         with:
           tool: cargo-nextest
       - name: Run datafusion-common tests
@@ -581,7 +581,7 @@ jobs:
         with:
           rust-version: stable
       - name: Install nextest
-        uses: taiki-e/install-action@e37f44cf370f5ab2495787a3f6f30f092bc9a53e
+        uses: taiki-e/install-action@e37f44c
         with:
           tool: cargo-nextest
       - name: Run tests
