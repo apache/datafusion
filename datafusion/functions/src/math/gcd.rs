@@ -25,7 +25,9 @@ use arrow::datatypes::DataType;
 use arrow::datatypes::DataType::Int64;
 
 use crate::utils::make_scalar_function;
-use datafusion_common::{arrow_datafusion_err, exec_err, DataFusionError, Result};
+use datafusion_common::{
+    arrow_datafusion_err, exec_err, internal_datafusion_err, DataFusionError, Result,
+};
 use datafusion_expr::scalar_doc_sections::DOC_SECTION_MATH;
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
@@ -100,8 +102,8 @@ fn get_gcd_doc() -> &'static Documentation {
 fn gcd(args: &[ArrayRef]) -> Result<ArrayRef> {
     match args[0].data_type() {
         Int64 => {
-            let arg1 = downcast_arg!(&args[0], "x", Int64Array);
-            let arg2 = downcast_arg!(&args[1], "y", Int64Array);
+            let arg1 = downcast_named_arg!(&args[0], "x", Int64Array);
+            let arg2 = downcast_named_arg!(&args[1], "y", Int64Array);
 
             Ok(arg1
                 .iter()

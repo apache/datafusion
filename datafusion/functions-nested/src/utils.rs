@@ -28,23 +28,12 @@ use arrow_array::{
 use arrow_buffer::OffsetBuffer;
 use arrow_schema::{Field, Fields};
 use datafusion_common::cast::{as_large_list_array, as_list_array};
-use datafusion_common::{exec_err, internal_err, plan_err, Result, ScalarValue};
+use datafusion_common::{
+    exec_err, internal_datafusion_err, internal_err, plan_err, Result, ScalarValue,
+};
 
-use core::any::type_name;
-use datafusion_common::DataFusionError;
 use datafusion_expr::ColumnarValue;
-
-macro_rules! downcast_arg {
-    ($ARG:expr, $ARRAY_TYPE:ident) => {{
-        $ARG.as_any().downcast_ref::<$ARRAY_TYPE>().ok_or_else(|| {
-            DataFusionError::Internal(format!(
-                "could not cast to {}",
-                type_name::<$ARRAY_TYPE>()
-            ))
-        })?
-    }};
-}
-pub(crate) use downcast_arg;
+use datafusion_functions::{downcast_arg, downcast_named_arg};
 
 pub(crate) fn check_datatypes(name: &str, args: &[&ArrayRef]) -> Result<()> {
     let data_type = args[0].data_type();
