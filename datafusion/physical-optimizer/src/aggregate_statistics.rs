@@ -410,7 +410,7 @@ mod tests {
             Arc::clone(&schema),
         )?;
 
-        // We introduce an intermediate optimization step between the partial and final aggregtator
+        // We introduce an intermediate optimization step between the partial and final aggregator
         let coalesce = CoalescePartitionsExec::new(Arc::new(partial_agg));
 
         let final_agg = AggregateExec::try_new(

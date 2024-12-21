@@ -2216,7 +2216,7 @@ impl ScalarValue {
     ///
     /// Errors if `self` is
     /// - a decimal that fails be converted to a decimal array of size
-    /// - a `Fixedsizelist` that fails to be concatenated into an array of size
+    /// - a `FixedsizeList` that fails to be concatenated into an array of size
     /// - a `List` that fails to be concatenated into an array of size
     /// - a `Dictionary` that fails be converted to a dictionary array of size
     pub fn to_array_of_size(&self, size: usize) -> Result<ArrayRef> {
@@ -2925,7 +2925,7 @@ impl ScalarValue {
     /// preferred over this function if at all possible as they can be
     /// vectorized and are generally much faster.
     ///
-    /// This function has a few narrow usescases such as hash table key
+    /// This function has a few narrow use cases such as hash table key
     /// comparisons where comparing a single row at a time is necessary.
     ///
     /// # Errors
@@ -4465,7 +4465,7 @@ mod tests {
         Ok(())
     }
 
-    // Verifies that ScalarValue has the same behavior with compute kernal when it overflows.
+    // Verifies that ScalarValue has the same behavior with compute kernel when it overflows.
     fn check_scalar_add_overflow<T>(left: ScalarValue, right: ScalarValue)
     where
         T: ArrowNumericType,

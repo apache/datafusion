@@ -808,7 +808,7 @@ mod test {
             vec![not_in_guarantee("b", [1, 2, 3]), in_guarantee("b", [3, 4])],
         );
         // b IN (1, 2, 3) OR b = 2
-        // TODO this should be in_guarantee("b", [1, 2, 3]) but currently we don't support to anylize this kind of disjunction. Only `ColOpLit OR ColOpLit` is supported.
+        // TODO this should be in_guarantee("b", [1, 2, 3]) but currently we don't support to analyze this kind of disjunction. Only `ColOpLit OR ColOpLit` is supported.
         test_analyze(
             col("b")
                 .in_list(vec![lit(1), lit(2), lit(3)], false)

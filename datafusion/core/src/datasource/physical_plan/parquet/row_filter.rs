@@ -692,7 +692,7 @@ mod test {
 
         let mut parquet_reader = parquet_reader_builder.build().expect("building reader");
 
-        // Parquet file is small, we only need 1 recordbatch
+        // Parquet file is small, we only need 1 record batch
         let first_rb = parquet_reader
             .next()
             .expect("expected record batch")

@@ -578,7 +578,7 @@ impl ExecutionPlan for StatisticsExec {
 
 /// Execution plan that emits streams that block forever.
 ///
-/// This is useful to test shutdown / cancelation behavior of certain execution plans.
+/// This is useful to test shutdown / cancellation behavior of certain execution plans.
 #[derive(Debug)]
 pub struct BlockingExec {
     /// Schema that is mocked by this plan.

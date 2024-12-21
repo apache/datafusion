@@ -3279,7 +3279,7 @@ mod tests {
             &df_results
         );
 
-        // check that col with the same name ovwewritten
+        // check that col with the same name overwritten
         let df_results_overwrite = df
             .clone()
             .with_column("c1", col("c2") + col("c3"))?
@@ -3302,7 +3302,7 @@ mod tests {
             &df_results_overwrite
         );
 
-        // check that col with the same name ovwewritten using same name as reference
+        // check that col with the same name overwritten using same name as reference
         let df_results_overwrite_self = df
             .clone()
             .with_column("c2", col("c2") + lit(1))?

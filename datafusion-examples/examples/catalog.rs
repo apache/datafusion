@@ -46,11 +46,11 @@ async fn main() -> Result<()> {
 
     let ctx = SessionContext::new();
     let state = ctx.state();
-    let cataloglist = Arc::new(CustomCatalogProviderList::new());
+    let catalog_list = Arc::new(CustomCatalogProviderList::new());
 
     // use our custom catalog list for context. each context has a single catalog list.
     // context will by default have [`MemoryCatalogProviderList`]
-    ctx.register_catalog_list(cataloglist.clone());
+    ctx.register_catalog_list(catalog_list.clone());
 
     // initialize our catalog and schemas
     let catalog = DirCatalog::new();
@@ -81,7 +81,7 @@ async fn main() -> Result<()> {
     ctx.register_catalog("dircat", Arc::new(catalog));
     {
         // catalog was passed down into our custom catalog list since we override the ctx's default
-        let catalogs = cataloglist.catalogs.read().unwrap();
+        let catalogs = catalog_list.catalogs.read().unwrap();
         assert!(catalogs.contains_key("dircat"));
     };
 
@@ -144,8 +144,8 @@ impl DirSchema {
     async fn create(state: &SessionState, opts: DirSchemaOpts<'_>) -> Result<Arc<Self>> {
         let DirSchemaOpts { ext, dir, format } = opts;
         let mut tables = HashMap::new();
-        let direntries = std::fs::read_dir(dir).unwrap();
-        for res in direntries {
+        let directories = std::fs::read_dir(dir).unwrap();
+        for res in directories {
             let entry = res.unwrap();
             let filename = entry.file_name().to_str().unwrap().to_string();
             if !filename.ends_with(ext) {
