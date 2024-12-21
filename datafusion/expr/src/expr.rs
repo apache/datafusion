@@ -30,7 +30,7 @@ use crate::Volatility;
 use crate::{udaf, ExprSchemable, Operator, Signature, WindowFrame, WindowUDF};
 
 use arrow::datatypes::{DataType, FieldRef};
-use datafusion_common::cse::HashNode;
+use datafusion_common::cse::{HashNode, NormalizeEq, Normalizeable};
 use datafusion_common::tree_node::{
     Transformed, TransformedResult, TreeNode, TreeNodeContainer, TreeNodeRecursion,
 };
@@ -313,7 +313,7 @@ pub enum Expr {
     /// plan into physical plan.
     Wildcard {
         qualifier: Option<TableReference>,
-        options: WildcardOptions,
+        options: Box<WildcardOptions>,
     },
     /// List of grouping set expressions. Only valid in the context of an aggregate
     /// GROUP BY expression list
@@ -1661,6 +1661,393 @@ impl Expr {
             | Expr::WindowFunction(..)
             | Expr::Literal(..)
             | Expr::Placeholder(..) => false,
+        }
+    }
+}
+
+impl Normalizeable for Expr {
+    fn can_normalize(&self) -> bool {
+        #[allow(clippy::match_like_matches_macro)]
+        match self {
+            Expr::BinaryExpr(BinaryExpr {
+                op:
+                    _op @ (Operator::Plus
+                    | Operator::Multiply
+                    | Operator::BitwiseAnd
+                    | Operator::BitwiseOr
+                    | Operator::BitwiseXor
+                    | Operator::Eq
+                    | Operator::NotEq),
+                ..
+            }) => true,
+            _ => false,
+        }
+    }
+}
+
+impl NormalizeEq for Expr {
+    fn normalize_eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (
+                Expr::BinaryExpr(BinaryExpr {
+                    left: self_left,
+                    op: self_op,
+                    right: self_right,
+                }),
+                Expr::BinaryExpr(BinaryExpr {
+                    left: other_left,
+                    op: other_op,
+                    right: other_right,
+                }),
+            ) => {
+                if self_op != other_op {
+                    return false;
+                }
+
+                if matches!(
+                    self_op,
+                    Operator::Plus
+                        | Operator::Multiply
+                        | Operator::BitwiseAnd
+                        | Operator::BitwiseOr
+                        | Operator::BitwiseXor
+                        | Operator::Eq
+                        | Operator::NotEq
+                ) {
+                    (self_left.normalize_eq(other_left)
+                        && self_right.normalize_eq(other_right))
+                        || (self_left.normalize_eq(other_right)
+                            && self_right.normalize_eq(other_left))
+                } else {
+                    self_left.normalize_eq(other_left)
+                        && self_right.normalize_eq(other_right)
+                }
+            }
+            (
+                Expr::Alias(Alias {
+                    expr: self_expr,
+                    relation: self_relation,
+                    name: self_name,
+                }),
+                Expr::Alias(Alias {
+                    expr: other_expr,
+                    relation: other_relation,
+                    name: other_name,
+                }),
+            ) => {
+                self_name == other_name
+                    && self_relation == other_relation
+                    && self_expr.normalize_eq(other_expr)
+            }
+            (
+                Expr::Like(Like {
+                    negated: self_negated,
+                    expr: self_expr,
+                    pattern: self_pattern,
+                    escape_char: self_escape_char,
+                    case_insensitive: self_case_insensitive,
+                }),
+                Expr::Like(Like {
+                    negated: other_negated,
+                    expr: other_expr,
+                    pattern: other_pattern,
+                    escape_char: other_escape_char,
+                    case_insensitive: other_case_insensitive,
+                }),
+            )
+            | (
+                Expr::SimilarTo(Like {
+                    negated: self_negated,
+                    expr: self_expr,
+                    pattern: self_pattern,
+                    escape_char: self_escape_char,
+                    case_insensitive: self_case_insensitive,
+                }),
+                Expr::SimilarTo(Like {
+                    negated: other_negated,
+                    expr: other_expr,
+                    pattern: other_pattern,
+                    escape_char: other_escape_char,
+                    case_insensitive: other_case_insensitive,
+                }),
+            ) => {
+                self_negated == other_negated
+                    && self_escape_char == other_escape_char
+                    && self_case_insensitive == other_case_insensitive
+                    && self_expr.normalize_eq(other_expr)
+                    && self_pattern.normalize_eq(other_pattern)
+            }
+            (Expr::Not(self_expr), Expr::Not(other_expr))
+            | (Expr::IsNull(self_expr), Expr::IsNull(other_expr))
+            | (Expr::IsTrue(self_expr), Expr::IsTrue(other_expr))
+            | (Expr::IsFalse(self_expr), Expr::IsFalse(other_expr))
+            | (Expr::IsUnknown(self_expr), Expr::IsUnknown(other_expr))
+            | (Expr::IsNotNull(self_expr), Expr::IsNotNull(other_expr))
+            | (Expr::IsNotTrue(self_expr), Expr::IsNotTrue(other_expr))
+            | (Expr::IsNotFalse(self_expr), Expr::IsNotFalse(other_expr))
+            | (Expr::IsNotUnknown(self_expr), Expr::IsNotUnknown(other_expr))
+            | (Expr::Negative(self_expr), Expr::Negative(other_expr))
+            | (
+                Expr::Unnest(Unnest { expr: self_expr }),
+                Expr::Unnest(Unnest { expr: other_expr }),
+            ) => self_expr.normalize_eq(other_expr),
+            (
+                Expr::Between(Between {
+                    expr: self_expr,
+                    negated: self_negated,
+                    low: self_low,
+                    high: self_high,
+                }),
+                Expr::Between(Between {
+                    expr: other_expr,
+                    negated: other_negated,
+                    low: other_low,
+                    high: other_high,
+                }),
+            ) => {
+                self_negated == other_negated
+                    && self_expr.normalize_eq(other_expr)
+                    && self_low.normalize_eq(other_low)
+                    && self_high.normalize_eq(other_high)
+            }
+            (
+                Expr::Cast(Cast {
+                    expr: self_expr,
+                    data_type: self_data_type,
+                }),
+                Expr::Cast(Cast {
+                    expr: other_expr,
+                    data_type: other_data_type,
+                }),
+            )
+            | (
+                Expr::TryCast(TryCast {
+                    expr: self_expr,
+                    data_type: self_data_type,
+                }),
+                Expr::TryCast(TryCast {
+                    expr: other_expr,
+                    data_type: other_data_type,
+                }),
+            ) => self_data_type == other_data_type && self_expr.normalize_eq(other_expr),
+            (
+                Expr::ScalarFunction(ScalarFunction {
+                    func: self_func,
+                    args: self_args,
+                }),
+                Expr::ScalarFunction(ScalarFunction {
+                    func: other_func,
+                    args: other_args,
+                }),
+            ) => {
+                self_func.name() == other_func.name()
+                    && self_args.len() == other_args.len()
+                    && self_args
+                        .iter()
+                        .zip(other_args.iter())
+                        .all(|(a, b)| a.normalize_eq(b))
+            }
+            (
+                Expr::AggregateFunction(AggregateFunction {
+                    func: self_func,
+                    args: self_args,
+                    distinct: self_distinct,
+                    filter: self_filter,
+                    order_by: self_order_by,
+                    null_treatment: self_null_treatment,
+                }),
+                Expr::AggregateFunction(AggregateFunction {
+                    func: other_func,
+                    args: other_args,
+                    distinct: other_distinct,
+                    filter: other_filter,
+                    order_by: other_order_by,
+                    null_treatment: other_null_treatment,
+                }),
+            ) => {
+                self_func.name() == other_func.name()
+                    && self_distinct == other_distinct
+                    && self_null_treatment == other_null_treatment
+                    && self_args.len() == other_args.len()
+                    && self_args
+                        .iter()
+                        .zip(other_args.iter())
+                        .all(|(a, b)| a.normalize_eq(b))
+                    && match (self_filter, other_filter) {
+                        (Some(self_filter), Some(other_filter)) => {
+                            self_filter.normalize_eq(other_filter)
+                        }
+                        (None, None) => true,
+                        _ => false,
+                    }
+                    && match (self_order_by, other_order_by) {
+                        (Some(self_order_by), Some(other_order_by)) => self_order_by
+                            .iter()
+                            .zip(other_order_by.iter())
+                            .all(|(a, b)| {
+                                a.asc == b.asc
+                                    && a.nulls_first == b.nulls_first
+                                    && a.expr.normalize_eq(&b.expr)
+                            }),
+                        (None, None) => true,
+                        _ => false,
+                    }
+            }
+            (
+                Expr::WindowFunction(WindowFunction {
+                    fun: self_fun,
+                    args: self_args,
+                    partition_by: self_partition_by,
+                    order_by: self_order_by,
+                    window_frame: self_window_frame,
+                    null_treatment: self_null_treatment,
+                }),
+                Expr::WindowFunction(WindowFunction {
+                    fun: other_fun,
+                    args: other_args,
+                    partition_by: other_partition_by,
+                    order_by: other_order_by,
+                    window_frame: other_window_frame,
+                    null_treatment: other_null_treatment,
+                }),
+            ) => {
+                self_fun.name() == other_fun.name()
+                    && self_window_frame == other_window_frame
+                    && self_null_treatment == other_null_treatment
+                    && self_args.len() == other_args.len()
+                    && self_args
+                        .iter()
+                        .zip(other_args.iter())
+                        .all(|(a, b)| a.normalize_eq(b))
+                    && self_partition_by
+                        .iter()
+                        .zip(other_partition_by.iter())
+                        .all(|(a, b)| a.normalize_eq(b))
+                    && self_order_by
+                        .iter()
+                        .zip(other_order_by.iter())
+                        .all(|(a, b)| {
+                            a.asc == b.asc
+                                && a.nulls_first == b.nulls_first
+                                && a.expr.normalize_eq(&b.expr)
+                        })
+            }
+            (
+                Expr::Exists(Exists {
+                    subquery: self_subquery,
+                    negated: self_negated,
+                }),
+                Expr::Exists(Exists {
+                    subquery: other_subquery,
+                    negated: other_negated,
+                }),
+            ) => {
+                self_negated == other_negated
+                    && self_subquery.normalize_eq(other_subquery)
+            }
+            (
+                Expr::InSubquery(InSubquery {
+                    expr: self_expr,
+                    subquery: self_subquery,
+                    negated: self_negated,
+                }),
+                Expr::InSubquery(InSubquery {
+                    expr: other_expr,
+                    subquery: other_subquery,
+                    negated: other_negated,
+                }),
+            ) => {
+                self_negated == other_negated
+                    && self_expr.normalize_eq(other_expr)
+                    && self_subquery.normalize_eq(other_subquery)
+            }
+            (
+                Expr::ScalarSubquery(self_subquery),
+                Expr::ScalarSubquery(other_subquery),
+            ) => self_subquery.normalize_eq(other_subquery),
+            (
+                Expr::GroupingSet(GroupingSet::Rollup(self_exprs)),
+                Expr::GroupingSet(GroupingSet::Rollup(other_exprs)),
+            )
+            | (
+                Expr::GroupingSet(GroupingSet::Cube(self_exprs)),
+                Expr::GroupingSet(GroupingSet::Cube(other_exprs)),
+            ) => {
+                self_exprs.len() == other_exprs.len()
+                    && self_exprs
+                        .iter()
+                        .zip(other_exprs.iter())
+                        .all(|(a, b)| a.normalize_eq(b))
+            }
+            (
+                Expr::GroupingSet(GroupingSet::GroupingSets(self_exprs)),
+                Expr::GroupingSet(GroupingSet::GroupingSets(other_exprs)),
+            ) => {
+                self_exprs.len() == other_exprs.len()
+                    && self_exprs.iter().zip(other_exprs.iter()).all(|(a, b)| {
+                        a.len() == b.len()
+                            && a.iter().zip(b.iter()).all(|(x, y)| x.normalize_eq(y))
+                    })
+            }
+            (
+                Expr::InList(InList {
+                    expr: self_expr,
+                    list: self_list,
+                    negated: self_negated,
+                }),
+                Expr::InList(InList {
+                    expr: other_expr,
+                    list: other_list,
+                    negated: other_negated,
+                }),
+            ) => {
+                // TODO: normalize_eq for lists, for example `a IN (c1 + c3, c3)` is equal to `a IN (c3, c1 + c3)`
+                self_negated == other_negated
+                    && self_expr.normalize_eq(other_expr)
+                    && self_list.len() == other_list.len()
+                    && self_list
+                        .iter()
+                        .zip(other_list.iter())
+                        .all(|(a, b)| a.normalize_eq(b))
+            }
+            (
+                Expr::Case(Case {
+                    expr: self_expr,
+                    when_then_expr: self_when_then_expr,
+                    else_expr: self_else_expr,
+                }),
+                Expr::Case(Case {
+                    expr: other_expr,
+                    when_then_expr: other_when_then_expr,
+                    else_expr: other_else_expr,
+                }),
+            ) => {
+                // TODO: normalize_eq for when_then_expr
+                // for example `CASE a WHEN 1 THEN 2 WHEN 3 THEN 4 ELSE 5 END` is equal to `CASE a WHEN 3 THEN 4 WHEN 1 THEN 2 ELSE 5 END`
+                self_when_then_expr.len() == other_when_then_expr.len()
+                    && self_when_then_expr
+                        .iter()
+                        .zip(other_when_then_expr.iter())
+                        .all(|((self_when, self_then), (other_when, other_then))| {
+                            self_when.normalize_eq(other_when)
+                                && self_then.normalize_eq(other_then)
+                        })
+                    && match (self_expr, other_expr) {
+                        (Some(self_expr), Some(other_expr)) => {
+                            self_expr.normalize_eq(other_expr)
+                        }
+                        (None, None) => true,
+                        (_, _) => false,
+                    }
+                    && match (self_else_expr, other_else_expr) {
+                        (Some(self_else_expr), Some(other_else_expr)) => {
+                            self_else_expr.normalize_eq(other_else_expr)
+                        }
+                        (None, None) => true,
+                        (_, _) => false,
+                    }
+            }
+            (_, _) => self == other,
         }
     }
 }

@@ -1150,6 +1150,12 @@ impl ScalarValue {
             DataType::Float16 => ScalarValue::Float16(Some(f16::from_f32(0.0))),
             DataType::Float32 => ScalarValue::Float32(Some(0.0)),
             DataType::Float64 => ScalarValue::Float64(Some(0.0)),
+            DataType::Decimal128(precision, scale) => {
+                ScalarValue::Decimal128(Some(0), *precision, *scale)
+            }
+            DataType::Decimal256(precision, scale) => {
+                ScalarValue::Decimal256(Some(i256::ZERO), *precision, *scale)
+            }
             DataType::Timestamp(TimeUnit::Second, tz) => {
                 ScalarValue::TimestampSecond(Some(0), tz.clone())
             }
@@ -1161,6 +1167,16 @@ impl ScalarValue {
             }
             DataType::Timestamp(TimeUnit::Nanosecond, tz) => {
                 ScalarValue::TimestampNanosecond(Some(0), tz.clone())
+            }
+            DataType::Time32(TimeUnit::Second) => ScalarValue::Time32Second(Some(0)),
+            DataType::Time32(TimeUnit::Millisecond) => {
+                ScalarValue::Time32Millisecond(Some(0))
+            }
+            DataType::Time64(TimeUnit::Microsecond) => {
+                ScalarValue::Time64Microsecond(Some(0))
+            }
+            DataType::Time64(TimeUnit::Nanosecond) => {
+                ScalarValue::Time64Nanosecond(Some(0))
             }
             DataType::Interval(IntervalUnit::YearMonth) => {
                 ScalarValue::IntervalYearMonth(Some(0))
@@ -1181,6 +1197,8 @@ impl ScalarValue {
             DataType::Duration(TimeUnit::Nanosecond) => {
                 ScalarValue::DurationNanosecond(Some(0))
             }
+            DataType::Date32 => ScalarValue::Date32(Some(0)),
+            DataType::Date64 => ScalarValue::Date64(Some(0)),
             _ => {
                 return _not_impl_err!(
                     "Can't create a zero scalar from data_type \"{datatype:?}\""
@@ -2444,7 +2462,7 @@ impl ScalarValue {
                 e,
                 size
             ),
-            ScalarValue::Union(value, fields, _mode) => match value {
+            ScalarValue::Union(value, fields, mode) => match value {
                 Some((v_id, value)) => {
                     let mut new_fields = Vec::with_capacity(fields.len());
                     let mut child_arrays = Vec::<ArrayRef>::with_capacity(fields.len());
@@ -2453,7 +2471,12 @@ impl ScalarValue {
                             value.to_array_of_size(size)?
                         } else {
                             let dt = field.data_type();
-                            new_null_array(dt, size)
+                            match mode {
+                                UnionMode::Sparse => new_null_array(dt, size),
+                                // In a dense union, only the child with values needs to be
+                                // allocated
+                                UnionMode::Dense => new_null_array(dt, 0),
+                            }
                         };
                         let field = (**field).clone();
                         child_arrays.push(ar);
@@ -2461,7 +2484,10 @@ impl ScalarValue {
                     }
                     let type_ids = repeat(*v_id).take(size);
                     let type_ids = ScalarBuffer::<i8>::from_iter(type_ids);
-                    let value_offsets: Option<ScalarBuffer<i32>> = None;
+                    let value_offsets = match mode {
+                        UnionMode::Sparse => None,
+                        UnionMode::Dense => Some(ScalarBuffer::from_iter(0..size as i32)),
+                    };
                     let ar = UnionArray::try_new(
                         fields.clone(),
                         type_ids,
@@ -3892,6 +3918,7 @@ mod tests {
     use arrow::compute::{is_null, kernels};
     use arrow::error::ArrowError;
     use arrow::util::pretty::pretty_format_columns;
+    use arrow_array::types::Float64Type;
     use arrow_buffer::{Buffer, NullBuffer};
     use arrow_schema::Fields;
     use chrono::NaiveDate;
@@ -5552,6 +5579,194 @@ mod tests {
         ])) as ArrayRef;
 
         assert_eq!(&array, &expected);
+    }
+
+    #[test]
+    fn round_trip() {
+        // Each array type should be able to round tripped through a scalar
+        let cases: Vec<ArrayRef> = vec![
+            // int
+            Arc::new(Int8Array::from(vec![Some(1), None, Some(3)])),
+            Arc::new(Int16Array::from(vec![Some(1), None, Some(3)])),
+            Arc::new(Int32Array::from(vec![Some(1), None, Some(3)])),
+            Arc::new(Int64Array::from(vec![Some(1), None, Some(3)])),
+            Arc::new(UInt8Array::from(vec![Some(1), None, Some(3)])),
+            Arc::new(UInt16Array::from(vec![Some(1), None, Some(3)])),
+            Arc::new(UInt32Array::from(vec![Some(1), None, Some(3)])),
+            Arc::new(UInt64Array::from(vec![Some(1), None, Some(3)])),
+            // bool
+            Arc::new(BooleanArray::from(vec![Some(true), None, Some(false)])),
+            // float
+            Arc::new(Float32Array::from(vec![Some(1.0), None, Some(3.0)])),
+            Arc::new(Float64Array::from(vec![Some(1.0), None, Some(3.0)])),
+            // string array
+            Arc::new(StringArray::from(vec![Some("foo"), None, Some("bar")])),
+            Arc::new(LargeStringArray::from(vec![Some("foo"), None, Some("bar")])),
+            Arc::new(StringViewArray::from(vec![Some("foo"), None, Some("bar")])),
+            // string dictionary
+            {
+                let mut builder = StringDictionaryBuilder::<Int32Type>::new();
+                builder.append("foo").unwrap();
+                builder.append_null();
+                builder.append("bar").unwrap();
+                Arc::new(builder.finish())
+            },
+            // binary array
+            Arc::new(BinaryArray::from_iter(vec![
+                Some(b"foo"),
+                None,
+                Some(b"bar"),
+            ])),
+            Arc::new(LargeBinaryArray::from_iter(vec![
+                Some(b"foo"),
+                None,
+                Some(b"bar"),
+            ])),
+            Arc::new(BinaryViewArray::from_iter(vec![
+                Some(b"foo"),
+                None,
+                Some(b"bar"),
+            ])),
+            // timestamp
+            Arc::new(TimestampSecondArray::from(vec![Some(1), None, Some(3)])),
+            Arc::new(TimestampMillisecondArray::from(vec![
+                Some(1),
+                None,
+                Some(3),
+            ])),
+            Arc::new(TimestampMicrosecondArray::from(vec![
+                Some(1),
+                None,
+                Some(3),
+            ])),
+            Arc::new(TimestampNanosecondArray::from(vec![Some(1), None, Some(3)])),
+            // timestamp with timezone
+            Arc::new(
+                TimestampSecondArray::from(vec![Some(1), None, Some(3)])
+                    .with_timezone_opt(Some("UTC")),
+            ),
+            Arc::new(
+                TimestampMillisecondArray::from(vec![Some(1), None, Some(3)])
+                    .with_timezone_opt(Some("UTC")),
+            ),
+            Arc::new(
+                TimestampMicrosecondArray::from(vec![Some(1), None, Some(3)])
+                    .with_timezone_opt(Some("UTC")),
+            ),
+            Arc::new(
+                TimestampNanosecondArray::from(vec![Some(1), None, Some(3)])
+                    .with_timezone_opt(Some("UTC")),
+            ),
+            // date
+            Arc::new(Date32Array::from(vec![Some(1), None, Some(3)])),
+            Arc::new(Date64Array::from(vec![Some(1), None, Some(3)])),
+            // time
+            Arc::new(Time32SecondArray::from(vec![Some(1), None, Some(3)])),
+            Arc::new(Time32MillisecondArray::from(vec![Some(1), None, Some(3)])),
+            Arc::new(Time64MicrosecondArray::from(vec![Some(1), None, Some(3)])),
+            Arc::new(Time64NanosecondArray::from(vec![Some(1), None, Some(3)])),
+            // null array
+            Arc::new(NullArray::new(3)),
+            // dense union
+            {
+                let mut builder = UnionBuilder::new_dense();
+                builder.append::<Int32Type>("a", 1).unwrap();
+                builder.append::<Float64Type>("b", 3.4).unwrap();
+                Arc::new(builder.build().unwrap())
+            },
+            // sparse union
+            {
+                let mut builder = UnionBuilder::new_sparse();
+                builder.append::<Int32Type>("a", 1).unwrap();
+                builder.append::<Float64Type>("b", 3.4).unwrap();
+                Arc::new(builder.build().unwrap())
+            },
+            // list array
+            {
+                let values_builder = StringBuilder::new();
+                let mut builder = ListBuilder::new(values_builder);
+                // [A, B]
+                builder.values().append_value("A");
+                builder.values().append_value("B");
+                builder.append(true);
+                // [ ] (empty list)
+                builder.append(true);
+                // Null
+                builder.values().append_value("?"); // irrelevant
+                builder.append(false);
+                Arc::new(builder.finish())
+            },
+            // large list array
+            {
+                let values_builder = StringBuilder::new();
+                let mut builder = LargeListBuilder::new(values_builder);
+                // [A, B]
+                builder.values().append_value("A");
+                builder.values().append_value("B");
+                builder.append(true);
+                // [ ] (empty list)
+                builder.append(true);
+                // Null
+                builder.append(false);
+                Arc::new(builder.finish())
+            },
+            // fixed size list array
+            {
+                let values_builder = Int32Builder::new();
+                let mut builder = FixedSizeListBuilder::new(values_builder, 3);
+
+                //  [[0, 1, 2], null, [3, null, 5]
+                builder.values().append_value(0);
+                builder.values().append_value(1);
+                builder.values().append_value(2);
+                builder.append(true);
+                builder.values().append_null();
+                builder.values().append_null();
+                builder.values().append_null();
+                builder.append(false);
+                builder.values().append_value(3);
+                builder.values().append_null();
+                builder.values().append_value(5);
+                builder.append(true);
+                Arc::new(builder.finish())
+            },
+            // map
+            {
+                let string_builder = StringBuilder::new();
+                let int_builder = Int32Builder::with_capacity(4);
+
+                let mut builder = MapBuilder::new(None, string_builder, int_builder);
+                // {"joe": 1}
+                builder.keys().append_value("joe");
+                builder.values().append_value(1);
+                builder.append(true).unwrap();
+                // {}
+                builder.append(true).unwrap();
+                // null
+                builder.append(false).unwrap();
+
+                Arc::new(builder.finish())
+            },
+        ];
+
+        for arr in cases {
+            round_trip_through_scalar(arr);
+        }
+    }
+
+    /// for each row in `arr`:
+    /// 1. convert to a `ScalarValue`
+    /// 2. Convert `ScalarValue` back to an `ArrayRef`
+    /// 3. Compare the original array (sliced) and new array for equality
+    fn round_trip_through_scalar(arr: ArrayRef) {
+        for i in 0..arr.len() {
+            // convert Scalar --> Array
+            let scalar = ScalarValue::try_from_array(&arr, i).unwrap();
+            let array = scalar.to_array_of_size(1).unwrap();
+            assert_eq!(array.len(), 1);
+            assert_eq!(array.data_type(), arr.data_type());
+            assert_eq!(array.as_ref(), arr.slice(i, 1).as_ref());
+        }
     }
 
     #[test]

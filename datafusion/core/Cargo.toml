@@ -92,7 +92,7 @@ async-compression = { version = "0.4.0", features = [
 ], optional = true }
 async-trait = { workspace = true }
 bytes = { workspace = true }
-bzip2 = { version = "0.4.3", optional = true }
+bzip2 = { version = "0.5.0", optional = true }
 chrono = { workspace = true }
 dashmap = { workspace = true }
 datafusion-catalog = { workspace = true }
@@ -121,6 +121,7 @@ object_store = { workspace = true }
 parking_lot = { workspace = true }
 parquet = { workspace = true, optional = true, default-features = true }
 rand = { workspace = true }
+regex = { workspace = true }
 sqlparser = { workspace = true }
 tempfile = { workspace = true }
 tokio = { workspace = true }

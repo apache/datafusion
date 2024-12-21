@@ -513,7 +513,7 @@ pub fn parse_expr(
             let qualifier = qualifier.to_owned().map(|x| x.try_into()).transpose()?;
             Ok(Expr::Wildcard {
                 qualifier,
-                options: WildcardOptions::default(),
+                options: Box::new(WildcardOptions::default()),
             })
         }
         ExprType::ScalarUdfExpr(protobuf::ScalarUdfExprNode {
