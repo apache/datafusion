@@ -77,7 +77,9 @@ impl DataFrame {
         let plan = if options.sort_by.is_empty() {
             self.plan
         } else {
-            LogicalPlanBuilder::from(self.plan).sort(options.sort_by)?.build()?
+            LogicalPlanBuilder::from(self.plan)
+                .sort(options.sort_by)?
+                .build()?
         };
 
         let plan = LogicalPlanBuilder::copy_to(
