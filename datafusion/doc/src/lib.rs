@@ -207,7 +207,10 @@ pub struct DocumentationBuilder {
 }
 
 impl DocumentationBuilder {
-    #[deprecated(since = "44.0.0", note = "please use `DocumentationBuilder::new_with_details` instead")]
+    #[deprecated(
+        since = "44.0.0",
+        note = "please use `DocumentationBuilder::new_with_details` instead"
+    )]
     pub fn new() -> Self {
         Self::new_with_details(DocSection::default(), "<no description>", "<no example>")
     }
