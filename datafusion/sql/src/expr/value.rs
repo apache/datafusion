@@ -169,7 +169,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             }
         }
 
-        not_impl_err!("Could not plan array literal. Hint: is `nested_expressions` DataFusion feature selected?")
+        not_impl_err!("Could not plan array literal. Hint: Please try with `nested_expressions` DataFusion feature enabled")
     }
 
     /// Convert a SQL interval expression to a DataFusion logical plan
