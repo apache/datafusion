@@ -320,7 +320,6 @@ OPTIONS (
 'format.dictionary_enabled' false,
 'format.statistics_enabled' page,
 'format.statistics_enabled::col2' none,
-'format.max_statistics_size' 123,
 'format.bloom_filter_fpp' 0.001,
 'format.bloom_filter_ndv' 100,
 'format.metadata::key' 'value'
