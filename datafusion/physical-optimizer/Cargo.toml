@@ -31,6 +31,10 @@ rust-version = { workspace = true }
 [lints]
 workspace = true
 
+[features]
+default = ["recursive-protection"]
+recursive-protection = ["dep:recursive"]
+
 [dependencies]
 arrow = { workspace = true }
 datafusion-common = { workspace = true, default-features = true }
@@ -40,7 +44,7 @@ datafusion-physical-expr = { workspace = true }
 datafusion-physical-plan = { workspace = true }
 itertools = { workspace = true }
 log = { workspace = true }
-recursive = { workspace = true }
+recursive = { workspace = true, optional = true }
 
 [dev-dependencies]
 datafusion-expr = { workspace = true }
