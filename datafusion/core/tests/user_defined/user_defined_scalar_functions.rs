@@ -1142,7 +1142,7 @@ async fn test_valid_zero_argument_signatures() {
             .collect()
             .await
             .unwrap();
-        let expected = vec![
+        let expected = [
             "+------------------+",
             "| good_signature() |",
             "+------------------+",
