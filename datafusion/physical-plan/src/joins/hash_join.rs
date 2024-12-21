@@ -49,16 +49,15 @@ use crate::{
     PlanProperties, RecordBatchStream, SendableRecordBatchStream, Statistics,
 };
 
-use arrow::array::{
-    Array, ArrayRef, BooleanArray, BooleanBufferBuilder, UInt32Array, UInt64Array,
-};
-use arrow::compute::kernels::cmp::{eq, not_distinct};
-use arrow::compute::{and, concat_batches, take, FilterBuilder};
+use arrow::array::AsArray;
+use arrow::array::{Array, ArrayRef, BooleanBufferBuilder, UInt32Array, UInt64Array};
+use arrow::compute::{concat_batches, FilterBuilder};
 use arrow::datatypes::{Schema, SchemaRef};
+use arrow::downcast_primitive_array;
 use arrow::record_batch::RecordBatch;
 use arrow::util::bit_util;
 use arrow_array::cast::downcast_array;
-use arrow_schema::ArrowError;
+use arrow_schema::{ArrowError, DataType};
 use datafusion_common::utils::memory::estimate_memory_size;
 use datafusion_common::{
     internal_datafusion_err, internal_err, plan_err, project_schema, DataFusionError,
@@ -72,9 +71,8 @@ use datafusion_physical_expr::equivalence::{
 use datafusion_physical_expr::PhysicalExprRef;
 
 use ahash::RandomState;
-use datafusion_expr::Operator;
-use datafusion_physical_expr_common::datum::compare_op_for_nested;
 use futures::{ready, Stream, StreamExt, TryStreamExt};
+use itertools::izip;
 use parking_lot::Mutex;
 
 type SharedBitmapBuilder = Mutex<BooleanBufferBuilder>;
@@ -1189,13 +1187,13 @@ fn lookup_join_hashmap(
         })
         .collect::<Result<Vec<_>>>()?;
 
-    let (probe_indices, build_indices, next_offset) = build_hashmap
+    let (mut probe_indices, mut build_indices, next_offset) = build_hashmap
         .get_matched_indices_with_limit_offset(hashes_buffer, None, limit, offset);
 
-    let build_indices: UInt64Array = build_indices.into();
-    let probe_indices: UInt32Array = probe_indices.into();
+    let mut equal = vec![true; build_indices.len()];
 
-    let (build_indices, probe_indices) = equal_rows_arr(
+    equal_rows_arr(
+        &mut equal,
         &build_indices,
         &probe_indices,
         &build_join_values,
@@ -1203,39 +1201,87 @@ fn lookup_join_hashmap(
         null_equals_null,
     )?;
 
-    Ok((build_indices, probe_indices, next_offset))
+    retain_with_eq_arr::<u64>(&mut build_indices, &equal);
+    retain_with_eq_arr::<u32>(&mut probe_indices, &equal);
+
+    Ok((build_indices.into(), probe_indices.into(), next_offset))
 }
 
-// version of eq_dyn supporting equality on null arrays
-fn eq_dyn_null(
-    left: &dyn Array,
-    right: &dyn Array,
+pub fn retain_with_eq_arr<T>(indices: &mut Vec<T>, equal: &[bool]) {
+    let mut iter = equal.iter();
+    indices.retain(|_| {
+        *iter.next().unwrap()
+    });
+}
+
+/// Compare two arrays based on the indices and update equal boolean buffer.
+fn equal_with_indices(
+    equal: &mut [bool],
+    indices_left: &[u64],
+    indices_right: &[u32],
+    arr_left: &dyn Array,
+    arr_right: &dyn Array,
     null_equals_null: bool,
-) -> Result<BooleanArray, ArrowError> {
-    // Nested datatypes cannot use the underlying not_distinct/eq function and must use a special
-    // implementation
-    // <https://github.com/apache/datafusion/issues/10749>
-    if left.data_type().is_nested() {
-        let op = if null_equals_null {
-            Operator::IsNotDistinctFrom
-        } else {
-            Operator::Eq
-        };
-        return Ok(compare_op_for_nested(op, &left, &right)?);
-    }
-    match (left.data_type(), right.data_type()) {
-        _ if null_equals_null => not_distinct(&left, &right),
-        _ => eq(&left, &right),
+) -> Result<(), ArrowError> {
+    // TODO: Write a reusable framework and support more arrow types.
+    downcast_primitive_array! {
+        (arr_left, arr_right) => {
+            let iter = izip!(
+                indices_left.iter(),
+                indices_right.iter(),
+                equal.iter_mut(),
+            );
+
+            Ok(match (
+                arr_left.null_count() == 0,
+                arr_right.null_count() == 0,
+            ) {
+                (true, true) => {
+                    // Both arrays do not have nulls, compare the values directly.
+                    for (&idx_left, &idx_right, eq) in iter {
+                        let idx_left = idx_left as usize;
+                        let idx_right = idx_right as usize;
+
+                        *eq = unsafe {
+                            arr_left.value_unchecked(idx_left) == arr_right.value_unchecked(idx_right)
+                        };
+                    }
+                }
+
+                _ => {
+                    for (&idx_left, &idx_right, eq) in iter {
+                        let idx_left = idx_left as usize;
+                        let idx_right = idx_right as usize;
+
+                        let null_left = arr_left.is_null(idx_left);
+                        let null_right = arr_right.is_null(idx_right);
+
+                        match (null_left, null_right) {
+                            (true, true) => *eq = null_equals_null,
+                            (true, false) | (false, true) => *eq = false,
+                            (false, false) => {
+                                *eq = unsafe {
+                                    arr_left.value_unchecked(idx_left) == arr_right.value_unchecked(idx_right)
+                                };
+                            },
+                        };
+                    }
+                }
+            })
+        }
+
+        t => unimplemented!("Take not supported for data type {:?}", t)
     }
 }
 
 pub fn equal_rows_arr(
-    indices_left: &UInt64Array,
-    indices_right: &UInt32Array,
+    equal: &mut Vec<bool>,
+    indices_left: &[u64],
+    indices_right: &[u32],
     left_arrays: &[ArrayRef],
     right_arrays: &[ArrayRef],
     null_equals_null: bool,
-) -> Result<(UInt64Array, UInt32Array)> {
+) -> Result<()> {
     let mut iter = left_arrays.iter().zip(right_arrays.iter());
 
     let (first_left, first_right) = iter.next().ok_or_else(|| {
@@ -1244,31 +1290,27 @@ pub fn equal_rows_arr(
         )
     })?;
 
-    let arr_left = take(first_left.as_ref(), indices_left, None)?;
-    let arr_right = take(first_right.as_ref(), indices_right, None)?;
+    equal_with_indices(
+        equal,
+        indices_left,
+        indices_right,
+        &first_left,
+        &first_right,
+        null_equals_null,
+    )?;
 
-    let mut equal: BooleanArray = eq_dyn_null(&arr_left, &arr_right, null_equals_null)?;
+    iter.try_for_each(|(left, right)| {
+        equal_with_indices(
+            equal,
+            indices_left,
+            indices_right,
+            &left,
+            &right,
+            null_equals_null,
+        )
+    })?;
 
-    // Use map and try_fold to iterate over the remaining pairs of arrays.
-    // In each iteration, take is used on the pair of arrays and their equality is determined.
-    // The results are then folded (combined) using the and function to get a final equality result.
-    equal = iter
-        .map(|(left, right)| {
-            let arr_left = take(left.as_ref(), indices_left, None)?;
-            let arr_right = take(right.as_ref(), indices_right, None)?;
-            eq_dyn_null(arr_left.as_ref(), arr_right.as_ref(), null_equals_null)
-        })
-        .try_fold(equal, |acc, equal2| and(&acc, &equal2?))?;
-
-    let filter_builder = FilterBuilder::new(&equal).optimize().build();
-
-    let left_filtered = filter_builder.filter(indices_left)?;
-    let right_filtered = filter_builder.filter(indices_right)?;
-
-    Ok((
-        downcast_array(left_filtered.as_ref()),
-        downcast_array(right_filtered.as_ref()),
-    ))
+    Ok(())
 }
 
 fn get_final_indices_from_shared_bitmap(
