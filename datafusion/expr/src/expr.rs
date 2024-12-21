@@ -2536,6 +2536,9 @@ pub fn schema_name_from_sorts(sorts: &[Sort]) -> Result<String, fmt::Error> {
     Ok(s)
 }
 
+pub const OUTER_REFERENCE_COLUMN_PREFIX: &str = "outer_ref";
+pub const UNNEST_COLUMN_PREFIX: &str = "UNNEST";
+
 /// Format expressions for display as part of a logical plan. In many cases, this will produce
 /// similar output to `Expr.name()` except that column names will be prefixed with '#'.
 impl Display for Expr {
@@ -2543,7 +2546,9 @@ impl Display for Expr {
         match self {
             Expr::Alias(Alias { expr, name, .. }) => write!(f, "{expr} AS {name}"),
             Expr::Column(c) => write!(f, "{c}"),
-            Expr::OuterReferenceColumn(_, c) => write!(f, "outer_ref({c})"),
+            Expr::OuterReferenceColumn(_, c) => {
+                write!(f, "{OUTER_REFERENCE_COLUMN_PREFIX}({c})")
+            }
             Expr::ScalarVariable(_, var_names) => write!(f, "{}", var_names.join(".")),
             Expr::Literal(v) => write!(f, "{v:?}"),
             Expr::Case(case) => {
@@ -2736,7 +2741,7 @@ impl Display for Expr {
             },
             Expr::Placeholder(Placeholder { id, .. }) => write!(f, "{id}"),
             Expr::Unnest(Unnest { expr }) => {
-                write!(f, "UNNEST({expr})")
+                write!(f, "{UNNEST_COLUMN_PREFIX}({expr})")
             }
         }
     }

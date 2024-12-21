@@ -615,6 +615,30 @@ fn roundtrip_statement_with_dialect() -> Result<()> {
             parser_dialect: Box::new(GenericDialect {}),
             unparser_dialect: Box::new(CustomDialectBuilder::default().with_unnest_as_table_factor(true).build()),
         },
+        TestStatementWithDialect {
+            sql: "SELECT * FROM unnest_table u, UNNEST(u.array_col)",
+            expected: r#"SELECT * FROM unnest_table AS u CROSS JOIN UNNEST(u.array_col)"#,
+            parser_dialect: Box::new(GenericDialect {}),
+            unparser_dialect: Box::new(CustomDialectBuilder::default().with_unnest_as_table_factor(true).build()),
+        },
+        TestStatementWithDialect {
+            sql: "SELECT * FROM unnest_table u, UNNEST(u.array_col) AS t1 (c1)",
+            expected: r#"SELECT * FROM unnest_table AS u CROSS JOIN UNNEST(u.array_col) AS t1 (c1)"#,
+            parser_dialect: Box::new(GenericDialect {}),
+            unparser_dialect: Box::new(CustomDialectBuilder::default().with_unnest_as_table_factor(true).build()),
+        },
+        TestStatementWithDialect {
+            sql: "SELECT * FROM unnest_table u, UNNEST(u.array_col)",
+            expected: r#"SELECT * FROM unnest_table AS u CROSS JOIN LATERAL (SELECT UNNEST(u.array_col) AS "UNNEST(outer_ref(u.array_col))")"#,
+            parser_dialect: Box::new(GenericDialect {}),
+            unparser_dialect: Box::new(UnparserDefaultDialect {}),
+        },
+        TestStatementWithDialect {
+            sql: "SELECT * FROM unnest_table u, UNNEST(u.array_col) AS t1 (c1)",
+            expected: r#"SELECT * FROM unnest_table AS u CROSS JOIN LATERAL (SELECT UNNEST(u.array_col) AS "UNNEST(outer_ref(u.array_col))") AS t1 (c1)"#,
+            parser_dialect: Box::new(GenericDialect {}),
+            unparser_dialect: Box::new(UnparserDefaultDialect {}),
+        },
     ];
 
     for query in tests {
