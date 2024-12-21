@@ -344,11 +344,6 @@ impl TypeSignature {
         match &self {
             TypeSignature::Exact(vec) => vec.is_empty(),
             TypeSignature::Any(0) => true,
-            TypeSignature::Variadic(vec) => vec.is_empty(),
-            TypeSignature::VariadicAny => true,
-            TypeSignature::Uniform(0, _) => true,
-            TypeSignature::Coercible(vec) => vec.is_empty(),
-            TypeSignature::Comparable(0) => true,
             TypeSignature::Nullary => true,
             TypeSignature::OneOf(types) => types
                 .iter()
