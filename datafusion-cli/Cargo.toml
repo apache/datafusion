@@ -30,7 +30,7 @@ rust-version = "1.80.1"
 readme = "README.md"
 
 [dependencies]
-arrow = { version = "53.0.0" }
+arrow = { version = "54.0.0" }
 async-trait = "0.1.73"
 aws-config = "1.5.5"
 aws-sdk-sso = "1.43.0"
@@ -58,7 +58,7 @@ home = "=0.5.9"
 mimalloc = { version = "0.1", default-features = false }
 object_store = { version = "0.11.0", features = ["aws", "gcp", "http"] }
 parking_lot = { version = "0.12" }
-parquet = { version = "53.0.0", default-features = false }
+parquet = { version = "54.0.0", default-features = false }
 regex = "1.8"
 rustyline = "14.0"
 tokio = { version = "1.24", features = ["macros", "rt", "rt-multi-thread", "sync", "parking_lot", "signal"] }
@@ -69,3 +69,18 @@ assert_cmd = "2.0"
 ctor = "0.2.0"
 predicates = "3.0"
 rstest = "0.22"
+
+# Temp patch to main of arrow-rs
+[patch.crates-io]
+arrow = { git = "https://github.com/apache/arrow-rs.git", tag = "54.0.0" }
+arrow-array = { git = "https://github.com/apache/arrow-rs.git", tag = "54.0.0" }
+arrow-buffer = { git = "https://github.com/apache/arrow-rs.git", tag = "54.0.0" }
+arrow-cast = { git = "https://github.com/apache/arrow-rs.git", tag = "54.0.0" }
+arrow-data = { git = "https://github.com/apache/arrow-rs.git", tag = "54.0.0" }
+arrow-ipc = { git = "https://github.com/apache/arrow-rs.git", tag = "54.0.0" }
+arrow-schema = { git = "https://github.com/apache/arrow-rs.git", tag = "54.0.0" }
+arrow-select = { git = "https://github.com/apache/arrow-rs.git", tag = "54.0.0" }
+arrow-string = { git = "https://github.com/apache/arrow-rs.git", tag = "54.0.0" }
+arrow-ord = { git = "https://github.com/apache/arrow-rs.git", tag = "54.0.0" }
+arrow-flight = { git = "https://github.com/apache/arrow-rs.git", tag = "54.0.0" }
+parquet = { git = "https://github.com/apache/arrow-rs.git", tag = "54.0.0" }

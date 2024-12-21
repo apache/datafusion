@@ -321,6 +321,8 @@ impl TryFrom<&protobuf::Field> for Field {
     fn try_from(field: &protobuf::Field) -> Result<Self, Self::Error> {
         let datatype = field.arrow_type.as_deref().required("arrow_type")?;
         let field = if field.dict_id != 0 {
+            // TODO file a ticket about handling deprecated dict_id attributes
+            #[allow(deprecated)]
             Self::new_dict(
                 field.name.as_str(),
                 datatype,
@@ -365,6 +367,8 @@ impl TryFrom<&protobuf::ScalarValue> for ScalarValue {
             .as_ref()
             .ok_or_else(|| Error::required("value"))?;
 
+        // TODO file a ticket about handling deprecated dict_id attributes
+        #[allow(deprecated)]
         Ok(match value {
             Value::BoolValue(v) => Self::Boolean(Some(*v)),
             Value::Utf8Value(v) => Self::Utf8(Some(v.to_owned())),
@@ -922,12 +926,6 @@ impl TryFrom<&protobuf::ParquetOptions> for ParquetOptions {
                     protobuf::parquet_options::StatisticsEnabledOpt::StatisticsEnabled(v) => Some(v),
                 })
                 .unwrap_or(None),
-            max_statistics_size: value
-                .max_statistics_size_opt.as_ref()
-                .map(|opt| match opt {
-                    protobuf::parquet_options::MaxStatisticsSizeOpt::MaxStatisticsSize(v) => Some(*v as usize),
-                })
-                .unwrap_or(None),
             max_row_group_size: value.max_row_group_size as usize,
             created_by: value.created_by.clone(),
             column_index_truncate_length: value
@@ -980,12 +978,6 @@ impl TryFrom<&protobuf::ParquetColumnOptions> for ParquetColumnOptions {
                 .statistics_enabled_opt.clone()
                 .map(|opt| match opt {
                     protobuf::parquet_column_options::StatisticsEnabledOpt::StatisticsEnabled(v) => Some(v),
-                })
-                .unwrap_or(None),
-            max_statistics_size: value
-                .max_statistics_size_opt
-                .map(|opt| match opt {
-                    protobuf::parquet_column_options::MaxStatisticsSizeOpt::MaxStatisticsSize(v) => Some(v as usize),
                 })
                 .unwrap_or(None),
             encoding: value
