@@ -185,7 +185,9 @@ jobs:
         with:
           rust-version: stable
       - name: Install nextest
-        uses: taiki-e/install-action@nextest
+        uses: taiki-e/install-action@e37f44cf370f5ab2495787a3f6f30f092bc9a53e
+        with:
+          tool: cargo-nextest
       - name: Run tests (excluding doctests)
         run: cargo nextest run --hide-progress-bar --no-fail-fast --cargo-profile ci --exclude datafusion-examples --exclude datafusion-benchmarks --exclude datafusion-sqllogictest --workspace --lib --tests --bins --features avro,json,backtrace
       - name: Run sqllogictests
@@ -209,7 +211,9 @@ jobs:
         with:
           rust-version: stable
       - name: Install nextest
-        uses: taiki-e/install-action@nextest
+        uses: taiki-e/install-action@e37f44cf370f5ab2495787a3f6f30f092bc9a53e
+        with:
+          tool: cargo-nextest
       - name: Run tests (excluding doctests)
         run: |
           cd datafusion-cli
@@ -403,7 +407,9 @@ jobs:
 #      - name: Setup Rust toolchain
 #        uses: ./.github/actions/setup-macos-builder
 #      - name: Install nextest
-#        uses: taiki-e/install-action@nextest
+#        uses: taiki-e/install-action@e37f44cf370f5ab2495787a3f6f30f092bc9a53e
+#        with:
+#          tool: cargo-nextest
 #      - name: Run tests (excluding doctests)
 #        shell: bash
 #        run: |
@@ -423,7 +429,9 @@ jobs:
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-macos-aarch64-builder
       - name: Install nextest
-        uses: taiki-e/install-action@nextest
+        uses: taiki-e/install-action@e37f44cf370f5ab2495787a3f6f30f092bc9a53e
+        with:
+          tool: cargo-nextest
       - name: Run tests (excluding doctests)
         shell: bash
         run: |
@@ -455,7 +463,9 @@ jobs:
         with:
           rust-version: stable
       - name: Install nextest
-        uses: taiki-e/install-action@nextest
+        uses: taiki-e/install-action@e37f44cf370f5ab2495787a3f6f30f092bc9a53e
+        with:
+          tool: cargo-nextest
       - name: Run datafusion-common tests
         run: cargo nextest run --hide-progress-bar --no-fail-fast --cargo-profile ci -p datafusion-common --features=pyarrow
 
@@ -571,7 +581,9 @@ jobs:
         with:
           rust-version: stable
       - name: Install nextest
-        uses: taiki-e/install-action@nextest
+        uses: taiki-e/install-action@e37f44cf370f5ab2495787a3f6f30f092bc9a53e
+        with:
+          tool: cargo-nextest
       - name: Run tests
         run: |
           cd datafusion
