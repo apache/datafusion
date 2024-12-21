@@ -173,7 +173,9 @@ impl ScalarUDF {
     /// its [`ScalarUDFImpl::return_type`] should raise an error.
     ///
     /// See [`ScalarUDFImpl::return_type`] for more details.
+    #[deprecated(since = "44.0.0", note = "Use return_type_from_exprs() instead")]
     pub fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
+        #[allow(deprecated)]
         self.inner.return_type(arg_types)
     }
 
@@ -454,6 +456,7 @@ pub trait ScalarUDFImpl: Debug + Send + Sync {
     /// is recommended to return [`DataFusionError::Internal`].
     ///
     /// [`DataFusionError::Internal`]: datafusion_common::DataFusionError::Internal
+    #[deprecated(since = "44.0.0", note = "Use `return_type_from_exprs` instead")]
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType>;
 
     /// What [`DataType`] will be returned by this function, given the
@@ -487,6 +490,7 @@ pub trait ScalarUDFImpl: Debug + Send + Sync {
         _schema: &dyn ExprSchema,
         arg_types: &[DataType],
     ) -> Result<DataType> {
+        #[allow(deprecated)]
         self.return_type(arg_types)
     }
 
@@ -780,6 +784,7 @@ impl ScalarUDFImpl for AliasedScalarUDFImpl {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
+        #[allow(deprecated)]
         self.inner.return_type(arg_types)
     }
 
