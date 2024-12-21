@@ -207,6 +207,7 @@ pub struct DocumentationBuilder {
 }
 
 impl DocumentationBuilder {
+    #[allow(clippy::new_without_default)]
     #[deprecated(
         since = "44.0.0",
         note = "please use `DocumentationBuilder::new_with_details` instead"
