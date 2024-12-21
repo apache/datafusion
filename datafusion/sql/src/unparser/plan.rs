@@ -40,6 +40,7 @@ use datafusion_common::{
     tree_node::{TransformedResult, TreeNode},
     Column, DataFusionError, Result, TableReference,
 };
+use datafusion_expr::expr::OUTER_REFERENCE_COLUMN_PREFIX;
 use datafusion_expr::{
     expr::Alias, BinaryExpr, Distinct, Expr, JoinConstraint, JoinType, LogicalPlan,
     LogicalPlanBuilder, Operator, Projection, SortExpr, TableScan, Unnest,
@@ -338,7 +339,9 @@ impl Unparser<'_> {
                         "derived_projection",
                         plan,
                         relation,
-                        unnest_input_type.filter(|t| matches!(t, UnnestInputType::OuterReference)).is_some(),
+                        unnest_input_type
+                            .filter(|t| matches!(t, UnnestInputType::OuterReference))
+                            .is_some(),
                     );
                 }
                 self.reconstruct_select_statement(plan, p, select)?;
@@ -772,10 +775,11 @@ impl Unparser<'_> {
         if let Expr::Alias(Alias { expr, .. }) = expr {
             if let Expr::Column(Column { name, .. }) = expr.as_ref() {
                 if let Some(prefix) = name.strip_prefix(UNNEST_PLACEHOLDER) {
-                    if prefix.starts_with("(outer_ref(") {
-                        return Some(UnnestInputType::OuterReference)
+                    if prefix.starts_with(&format!("({}(", OUTER_REFERENCE_COLUMN_PREFIX))
+                    {
+                        return Some(UnnestInputType::OuterReference);
                     }
-                    return Some(UnnestInputType::Scalar)
+                    return Some(UnnestInputType::Scalar);
                 }
             }
         }
@@ -1136,7 +1140,6 @@ impl From<BuilderError> for DataFusionError {
         DataFusionError::External(Box::new(e))
     }
 }
-
 
 /// The type of the input to the UNNEST table factor.
 #[derive(Debug)]

@@ -23,7 +23,7 @@ use datafusion_common::{
     tree_node::{Transformed, TransformedResult, TreeNode, TreeNodeRewriter},
     Column, HashMap, Result, TableReference,
 };
-use datafusion_expr::expr::Alias;
+use datafusion_expr::expr::{Alias, UNNEST_COLUMN_PREFIX};
 use datafusion_expr::{Expr, LogicalPlan, Projection, Sort, SortExpr};
 use sqlparser::ast::Ident;
 
@@ -296,7 +296,12 @@ pub(super) fn find_unnest_column_alias(
             return (plan, None);
         }
         if let Some(Expr::Alias(alias)) = projection.expr.first() {
-            if alias.expr.schema_name().to_string().starts_with("UNNEST(") {
+            if alias
+                .expr
+                .schema_name()
+                .to_string()
+                .starts_with(&format!("{UNNEST_COLUMN_PREFIX}("))
+            {
                 return (projection.input.as_ref(), Some(alias.name.clone()));
             }
         }
