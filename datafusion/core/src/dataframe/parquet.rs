@@ -74,8 +74,14 @@ impl DataFrame {
 
         let file_type = format_as_file_type(format);
 
+        let plan = if options.sort_by.is_empty() {
+            self.plan
+        } else {
+            LogicalPlanBuilder::from(self.plan).sort(options.sort_by)?.build()?
+        };
+
         let plan = LogicalPlanBuilder::copy_to(
-            self.plan,
+            plan,
             path.into(),
             file_type,
             Default::default(),
