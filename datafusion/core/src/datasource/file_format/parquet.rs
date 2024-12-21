@@ -2354,6 +2354,11 @@ mod tests {
 
         // check the file metadata
         let expected_kv_meta = vec![
+            // default is to include arrow schema
+            KeyValue {
+                key: "ARROW:schema".to_string(),
+                value: Some(ENCODED_ARROW_SCHEMA.to_string()),
+            },
             KeyValue {
                 key: "my-data".to_string(),
                 value: Some("stuff".to_string()),
@@ -2387,6 +2392,11 @@ mod tests {
 
         // check the file metadata
         let expected_kv_meta = vec![
+            // default is to include arrow schema
+            KeyValue {
+                key: "ARROW:schema".to_string(),
+                value: Some(ENCODED_ARROW_SCHEMA.to_string()),
+            },
             KeyValue {
                 key: "my-data".to_string(),
                 value: Some("stuff".to_string()),
