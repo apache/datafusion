@@ -87,7 +87,6 @@ async-compression = { version = "0.4.0", features = [
     "gzip",
     "xz",
     "zstd",
-    "futures-io",
     "tokio",
 ], optional = true }
 async-trait = { workspace = true }
