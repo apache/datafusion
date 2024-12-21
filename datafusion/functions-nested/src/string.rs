@@ -26,11 +26,13 @@ use arrow::array::{
 use arrow::datatypes::{DataType, Field};
 use datafusion_expr::TypeSignature;
 
-use datafusion_common::{not_impl_err, plan_err, DataFusionError, Result};
+use datafusion_common::{
+    internal_datafusion_err, not_impl_err, plan_err, DataFusionError, Result,
+};
 
-use std::any::{type_name, Any};
+use std::any::Any;
 
-use crate::utils::{downcast_arg, make_scalar_function};
+use crate::utils::make_scalar_function;
 use arrow::compute::cast;
 use arrow_array::builder::{ArrayBuilder, LargeStringBuilder, StringViewBuilder};
 use arrow_array::cast::AsArray;
@@ -45,6 +47,7 @@ use datafusion_expr::{
     ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
 };
 use datafusion_functions::strings::StringArrayType;
+use datafusion_functions::{downcast_arg, downcast_named_arg};
 use std::sync::{Arc, OnceLock};
 
 macro_rules! call_array_function {

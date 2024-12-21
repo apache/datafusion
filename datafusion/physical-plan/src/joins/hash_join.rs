@@ -29,11 +29,12 @@ use super::{
     utils::{OnceAsync, OnceFut},
     PartitionMode,
 };
+use crate::execution_plan::{boundedness_from_children, EmissionType};
 use crate::ExecutionPlanProperties;
 use crate::{
     coalesce_partitions::CoalescePartitionsExec,
     common::can_project,
-    execution_mode_from_children, handle_state,
+    handle_state,
     hash_utils::create_hashes,
     joins::utils::{
         adjust_indices_by_join_type, apply_join_filter_to_indices,
@@ -44,9 +45,8 @@ use crate::{
         JoinHashMapType, JoinOn, JoinOnRef, StatefulStreamResult,
     },
     metrics::{ExecutionPlanMetricsSet, MetricsSet},
-    DisplayAs, DisplayFormatType, Distribution, ExecutionMode, ExecutionPlan,
-    Partitioning, PlanProperties, RecordBatchStream, SendableRecordBatchStream,
-    Statistics,
+    DisplayAs, DisplayFormatType, Distribution, ExecutionPlan, Partitioning,
+    PlanProperties, RecordBatchStream, SendableRecordBatchStream, Statistics,
 };
 
 use arrow::array::{
@@ -90,6 +90,11 @@ struct JoinLeftData {
     /// Counter of running probe-threads, potentially
     /// able to update `visited_indices_bitmap`
     probe_threads_counter: AtomicUsize,
+    /// We need to keep this field to maintain accurate memory accounting, even though we don't directly use it.
+    /// Without holding onto this reservation, the recorded memory usage would become inconsistent with actual usage.
+    /// This could hide potential out-of-memory issues, especially when upstream operators increase their memory consumption.
+    /// The MemoryReservation ensures proper tracking of memory resources throughout the join operation's lifecycle.
+    _reservation: MemoryReservation,
 }
 
 impl JoinLeftData {
@@ -99,12 +104,14 @@ impl JoinLeftData {
         batch: RecordBatch,
         visited_indices_bitmap: SharedBitmapBuilder,
         probe_threads_counter: AtomicUsize,
+        reservation: MemoryReservation,
     ) -> Self {
         Self {
             hash_map,
             batch,
             visited_indices_bitmap,
             probe_threads_counter,
+            _reservation: reservation,
         }
     }
 
@@ -519,24 +526,26 @@ impl HashJoinExec {
             }
         };
 
-        // Determine execution mode by checking whether this join is pipeline
-        // breaking. This happens when the left side is unbounded, or the right
-        // side is unbounded with `Left`, `Full`, `LeftAnti` or `LeftSemi` join types.
-        let pipeline_breaking = left.execution_mode().is_unbounded()
-            || (right.execution_mode().is_unbounded()
-                && matches!(
-                    join_type,
-                    JoinType::Left
-                        | JoinType::Full
-                        | JoinType::LeftAnti
-                        | JoinType::LeftSemi
-                        | JoinType::LeftMark
-                ));
-
-        let mode = if pipeline_breaking {
-            ExecutionMode::PipelineBreaking
+        let emission_type = if left.boundedness().is_unbounded() {
+            EmissionType::Final
+        } else if right.pipeline_behavior() == EmissionType::Incremental {
+            match join_type {
+                // If we only need to generate matched rows from the probe side,
+                // we can emit rows incrementally.
+                JoinType::Inner
+                | JoinType::LeftSemi
+                | JoinType::RightSemi
+                | JoinType::Right
+                | JoinType::RightAnti => EmissionType::Incremental,
+                // If we need to generate unmatched rows from the *build side*,
+                // we need to emit them at the end.
+                JoinType::Left
+                | JoinType::LeftAnti
+                | JoinType::LeftMark
+                | JoinType::Full => EmissionType::Both,
+            }
         } else {
-            execution_mode_from_children([left, right])
+            right.pipeline_behavior()
         };
 
         // If contains projection, update the PlanProperties.
@@ -549,10 +558,12 @@ impl HashJoinExec {
                 output_partitioning.project(&projection_mapping, &eq_properties);
             eq_properties = eq_properties.project(&projection_mapping, out_schema);
         }
+
         Ok(PlanProperties::new(
             eq_properties,
             output_partitioning,
-            mode,
+            emission_type,
+            boundedness_from_children([left, right]),
         ))
     }
 }
@@ -897,6 +908,7 @@ async fn collect_left_input(
         single_batch,
         Mutex::new(visited_indices_bitmap),
         AtomicUsize::new(probe_threads_count),
+        reservation,
     );
 
     Ok(data)

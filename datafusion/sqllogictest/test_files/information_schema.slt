@@ -258,7 +258,7 @@ datafusion.optimizer.skip_failed_rules false
 datafusion.optimizer.top_down_join_key_reordering true
 datafusion.sql_parser.dialect generic
 datafusion.sql_parser.enable_ident_normalization true
-datafusion.sql_parser.enable_options_value_normalization true
+datafusion.sql_parser.enable_options_value_normalization false
 datafusion.sql_parser.parse_float_as_decimal false
 datafusion.sql_parser.support_varchar_with_length true
 
@@ -351,7 +351,7 @@ datafusion.optimizer.skip_failed_rules false When set to true, the logical plan 
 datafusion.optimizer.top_down_join_key_reordering true When set to true, the physical plan optimizer will run a top down process to reorder the join keys
 datafusion.sql_parser.dialect generic Configure the SQL dialect used by DataFusion's parser; supported values include: Generic, MySQL, PostgreSQL, Hive, SQLite, Snowflake, Redshift, MsSQL, ClickHouse, BigQuery, and Ansi.
 datafusion.sql_parser.enable_ident_normalization true When set to true, SQL parser will normalize ident (convert ident to lowercase when not quoted)
-datafusion.sql_parser.enable_options_value_normalization true When set to true, SQL parser will normalize options value (convert value to lowercase)
+datafusion.sql_parser.enable_options_value_normalization false When set to true, SQL parser will normalize options value (convert value to lowercase). Note that this option is ignored and will be removed in the future. All case-insensitive values are normalized automatically.
 datafusion.sql_parser.parse_float_as_decimal false When set to true, SQL parser will parse float as decimal type
 datafusion.sql_parser.support_varchar_with_length true If true, permit lengths for `VARCHAR` such as `VARCHAR(20)`, but ignore the length. If false, error if a `VARCHAR` with a length is specified. The Arrow type system does not have a notion of maximum string length and thus DataFusion can not enforce such limits.
 
@@ -483,10 +483,10 @@ set datafusion.catalog.information_schema = true;
 statement ok
 CREATE TABLE t AS SELECT 1::int as i;
 
-statement error Error during planning: SHOW COLUMNS with WHERE or LIKE is not supported
+statement error DataFusion error: This feature is not implemented: SHOW COLUMNS with WHERE or LIKE is not supported
 SHOW COLUMNS FROM t LIKE 'f';
 
-statement error Error during planning: SHOW COLUMNS with WHERE or LIKE is not supported
+statement error DataFusion error: This feature is not implemented: SHOW COLUMNS with WHERE or LIKE is not supported
 SHOW COLUMNS FROM t WHERE column_name = 'bar';
 
 query TTTTTT
@@ -625,19 +625,19 @@ select routine_name, data_type, function_type from information_schema.routines w
 string_agg LargeUtf8 AGGREGATE
 
 # test every function type are included in the result
-query TTTTTTTBTTT rowsort
-select * from information_schema.routines where routine_name = 'date_trunc' OR routine_name = 'string_agg' OR routine_name = 'rank';
+query TTTTTTTBTTTT rowsort
+select * from information_schema.routines where routine_name = 'date_trunc' OR routine_name = 'string_agg' OR routine_name = 'rank' ORDER BY routine_name
 ----
-datafusion public date_trunc datafusion public date_trunc FUNCTION true Timestamp(Microsecond, None) SCALAR Truncates a timestamp value to a specified precision.
-datafusion public date_trunc datafusion public date_trunc FUNCTION true Timestamp(Microsecond, Some("+TZ")) SCALAR Truncates a timestamp value to a specified precision.
-datafusion public date_trunc datafusion public date_trunc FUNCTION true Timestamp(Millisecond, None) SCALAR Truncates a timestamp value to a specified precision.
-datafusion public date_trunc datafusion public date_trunc FUNCTION true Timestamp(Millisecond, Some("+TZ")) SCALAR Truncates a timestamp value to a specified precision.
-datafusion public date_trunc datafusion public date_trunc FUNCTION true Timestamp(Nanosecond, None) SCALAR Truncates a timestamp value to a specified precision.
-datafusion public date_trunc datafusion public date_trunc FUNCTION true Timestamp(Nanosecond, Some("+TZ")) SCALAR Truncates a timestamp value to a specified precision.
-datafusion public date_trunc datafusion public date_trunc FUNCTION true Timestamp(Second, None) SCALAR Truncates a timestamp value to a specified precision.
-datafusion public date_trunc datafusion public date_trunc FUNCTION true Timestamp(Second, Some("+TZ")) SCALAR Truncates a timestamp value to a specified precision.
-datafusion public rank datafusion public rank FUNCTION true NULL WINDOW Returns the rank of the current row within its partition, allowing gaps between ranks. This function provides a ranking similar to `row_number`, but skips ranks for identical values.
-datafusion public string_agg datafusion public string_agg FUNCTION true LargeUtf8 AGGREGATE Concatenates the values of string expressions and places separator values between them.
+datafusion public date_trunc datafusion public date_trunc FUNCTION true Timestamp(Microsecond, None) SCALAR Truncates a timestamp value to a specified precision. date_trunc(precision, expression)
+datafusion public date_trunc datafusion public date_trunc FUNCTION true Timestamp(Microsecond, Some("+TZ")) SCALAR Truncates a timestamp value to a specified precision. date_trunc(precision, expression)
+datafusion public date_trunc datafusion public date_trunc FUNCTION true Timestamp(Millisecond, None) SCALAR Truncates a timestamp value to a specified precision. date_trunc(precision, expression)
+datafusion public date_trunc datafusion public date_trunc FUNCTION true Timestamp(Millisecond, Some("+TZ")) SCALAR Truncates a timestamp value to a specified precision. date_trunc(precision, expression)
+datafusion public date_trunc datafusion public date_trunc FUNCTION true Timestamp(Nanosecond, None) SCALAR Truncates a timestamp value to a specified precision. date_trunc(precision, expression)
+datafusion public date_trunc datafusion public date_trunc FUNCTION true Timestamp(Nanosecond, Some("+TZ")) SCALAR Truncates a timestamp value to a specified precision. date_trunc(precision, expression)
+datafusion public date_trunc datafusion public date_trunc FUNCTION true Timestamp(Second, None) SCALAR Truncates a timestamp value to a specified precision. date_trunc(precision, expression)
+datafusion public date_trunc datafusion public date_trunc FUNCTION true Timestamp(Second, Some("+TZ")) SCALAR Truncates a timestamp value to a specified precision. date_trunc(precision, expression)
+datafusion public rank datafusion public rank FUNCTION true NULL WINDOW Returns the rank of the current row within its partition, allowing gaps between ranks. This function provides a ranking similar to `row_number`, but skips ranks for identical values. rank()
+datafusion public string_agg datafusion public string_agg FUNCTION true LargeUtf8 AGGREGATE Concatenates the values of string expressions and places separator values between them. string_agg(expression, delimiter)
 
 query B
 select is_deterministic from information_schema.routines where routine_name = 'now';
@@ -645,51 +645,111 @@ select is_deterministic from information_schema.routines where routine_name = 'n
 false
 
 # test every function type are included in the result
-query TTTITTTTB rowsort
-select * from information_schema.parameters where specific_name = 'date_trunc' OR specific_name = 'string_agg' OR specific_name = 'rank';
+query TTTITTTTBI
+select * from information_schema.parameters where specific_name = 'date_trunc' OR specific_name = 'string_agg' OR specific_name = 'rank' ORDER BY specific_name, rid;
 ----
-datafusion public date_trunc 1 IN precision Utf8 NULL false
-datafusion public date_trunc 1 IN precision Utf8View NULL false
-datafusion public date_trunc 1 OUT NULL Timestamp(Microsecond, None) NULL false
-datafusion public date_trunc 1 OUT NULL Timestamp(Microsecond, Some("+TZ")) NULL false
-datafusion public date_trunc 1 OUT NULL Timestamp(Millisecond, None) NULL false
-datafusion public date_trunc 1 OUT NULL Timestamp(Millisecond, Some("+TZ")) NULL false
-datafusion public date_trunc 1 OUT NULL Timestamp(Nanosecond, None) NULL false
-datafusion public date_trunc 1 OUT NULL Timestamp(Nanosecond, Some("+TZ")) NULL false
-datafusion public date_trunc 1 OUT NULL Timestamp(Second, None) NULL false
-datafusion public date_trunc 1 OUT NULL Timestamp(Second, Some("+TZ")) NULL false
-datafusion public date_trunc 2 IN expression Timestamp(Microsecond, None) NULL false
-datafusion public date_trunc 2 IN expression Timestamp(Microsecond, Some("+TZ")) NULL false
-datafusion public date_trunc 2 IN expression Timestamp(Millisecond, None) NULL false
-datafusion public date_trunc 2 IN expression Timestamp(Millisecond, Some("+TZ")) NULL false
-datafusion public date_trunc 2 IN expression Timestamp(Nanosecond, None) NULL false
-datafusion public date_trunc 2 IN expression Timestamp(Nanosecond, Some("+TZ")) NULL false
-datafusion public date_trunc 2 IN expression Timestamp(Second, None) NULL false
-datafusion public date_trunc 2 IN expression Timestamp(Second, Some("+TZ")) NULL false
-datafusion public string_agg 1 IN expression LargeUtf8 NULL false
-datafusion public string_agg 1 OUT NULL LargeUtf8 NULL false
-datafusion public string_agg 2 IN delimiter LargeUtf8 NULL false
-datafusion public string_agg 2 IN delimiter Null NULL false
-datafusion public string_agg 2 IN delimiter Utf8 NULL false
+datafusion public date_trunc 1 IN precision Utf8 NULL false 0
+datafusion public date_trunc 2 IN expression Timestamp(Nanosecond, None) NULL false 0
+datafusion public date_trunc 1 OUT NULL Timestamp(Nanosecond, None) NULL false 0
+datafusion public date_trunc 1 IN precision Utf8View NULL false 1
+datafusion public date_trunc 2 IN expression Timestamp(Nanosecond, None) NULL false 1
+datafusion public date_trunc 1 OUT NULL Timestamp(Nanosecond, None) NULL false 1
+datafusion public date_trunc 1 IN precision Utf8 NULL false 2
+datafusion public date_trunc 2 IN expression Timestamp(Nanosecond, Some("+TZ")) NULL false 2
+datafusion public date_trunc 1 OUT NULL Timestamp(Nanosecond, Some("+TZ")) NULL false 2
+datafusion public date_trunc 1 IN precision Utf8View NULL false 3
+datafusion public date_trunc 2 IN expression Timestamp(Nanosecond, Some("+TZ")) NULL false 3
+datafusion public date_trunc 1 OUT NULL Timestamp(Nanosecond, Some("+TZ")) NULL false 3
+datafusion public date_trunc 1 IN precision Utf8 NULL false 4
+datafusion public date_trunc 2 IN expression Timestamp(Microsecond, None) NULL false 4
+datafusion public date_trunc 1 OUT NULL Timestamp(Microsecond, None) NULL false 4
+datafusion public date_trunc 1 IN precision Utf8View NULL false 5
+datafusion public date_trunc 2 IN expression Timestamp(Microsecond, None) NULL false 5
+datafusion public date_trunc 1 OUT NULL Timestamp(Microsecond, None) NULL false 5
+datafusion public date_trunc 1 IN precision Utf8 NULL false 6
+datafusion public date_trunc 2 IN expression Timestamp(Microsecond, Some("+TZ")) NULL false 6
+datafusion public date_trunc 1 OUT NULL Timestamp(Microsecond, Some("+TZ")) NULL false 6
+datafusion public date_trunc 1 IN precision Utf8View NULL false 7
+datafusion public date_trunc 2 IN expression Timestamp(Microsecond, Some("+TZ")) NULL false 7
+datafusion public date_trunc 1 OUT NULL Timestamp(Microsecond, Some("+TZ")) NULL false 7
+datafusion public date_trunc 1 IN precision Utf8 NULL false 8
+datafusion public date_trunc 2 IN expression Timestamp(Millisecond, None) NULL false 8
+datafusion public date_trunc 1 OUT NULL Timestamp(Millisecond, None) NULL false 8
+datafusion public date_trunc 1 IN precision Utf8View NULL false 9
+datafusion public date_trunc 2 IN expression Timestamp(Millisecond, None) NULL false 9
+datafusion public date_trunc 1 OUT NULL Timestamp(Millisecond, None) NULL false 9
+datafusion public date_trunc 1 IN precision Utf8 NULL false 10
+datafusion public date_trunc 2 IN expression Timestamp(Millisecond, Some("+TZ")) NULL false 10
+datafusion public date_trunc 1 OUT NULL Timestamp(Millisecond, Some("+TZ")) NULL false 10
+datafusion public date_trunc 1 IN precision Utf8View NULL false 11
+datafusion public date_trunc 2 IN expression Timestamp(Millisecond, Some("+TZ")) NULL false 11
+datafusion public date_trunc 1 OUT NULL Timestamp(Millisecond, Some("+TZ")) NULL false 11
+datafusion public date_trunc 1 IN precision Utf8 NULL false 12
+datafusion public date_trunc 2 IN expression Timestamp(Second, None) NULL false 12
+datafusion public date_trunc 1 OUT NULL Timestamp(Second, None) NULL false 12
+datafusion public date_trunc 1 IN precision Utf8View NULL false 13
+datafusion public date_trunc 2 IN expression Timestamp(Second, None) NULL false 13
+datafusion public date_trunc 1 OUT NULL Timestamp(Second, None) NULL false 13
+datafusion public date_trunc 1 IN precision Utf8 NULL false 14
+datafusion public date_trunc 2 IN expression Timestamp(Second, Some("+TZ")) NULL false 14
+datafusion public date_trunc 1 OUT NULL Timestamp(Second, Some("+TZ")) NULL false 14
+datafusion public date_trunc 1 IN precision Utf8View NULL false 15
+datafusion public date_trunc 2 IN expression Timestamp(Second, Some("+TZ")) NULL false 15
+datafusion public date_trunc 1 OUT NULL Timestamp(Second, Some("+TZ")) NULL false 15
+datafusion public string_agg 1 IN expression LargeUtf8 NULL false 0
+datafusion public string_agg 2 IN delimiter Utf8 NULL false 0
+datafusion public string_agg 1 OUT NULL LargeUtf8 NULL false 0
+datafusion public string_agg 1 IN expression LargeUtf8 NULL false 1
+datafusion public string_agg 2 IN delimiter LargeUtf8 NULL false 1
+datafusion public string_agg 1 OUT NULL LargeUtf8 NULL false 1
+datafusion public string_agg 1 IN expression LargeUtf8 NULL false 2
+datafusion public string_agg 2 IN delimiter Null NULL false 2
+datafusion public string_agg 1 OUT NULL LargeUtf8 NULL false 2
 
 # test variable length arguments
-query TTTB rowsort
-select specific_name, data_type, parameter_mode, is_variadic from information_schema.parameters where specific_name = 'concat';
+query TTTBI rowsort
+select specific_name, data_type, parameter_mode, is_variadic, rid from information_schema.parameters where specific_name = 'concat';
 ----
-concat LargeUtf8 IN true
-concat LargeUtf8 OUT false
-concat Utf8 IN true
-concat Utf8 OUT false
-concat Utf8View IN true
-concat Utf8View OUT false
+concat LargeUtf8 IN true 2
+concat LargeUtf8 OUT false 2
+concat Utf8 IN true 1
+concat Utf8 OUT false 1
+concat Utf8View IN true 0
+concat Utf8View OUT false 0
 
 # test ceorcion signature
-query TTIT rowsort
-select specific_name, data_type, ordinal_position, parameter_mode from information_schema.parameters where specific_name = 'repeat';
+query TTITI rowsort
+select specific_name, data_type, ordinal_position, parameter_mode, rid from information_schema.parameters where specific_name = 'repeat';
 ----
-repeat Int64 2 IN
-repeat LargeUtf8 1 IN
-repeat LargeUtf8 1 OUT
-repeat Utf8 1 IN
-repeat Utf8 1 OUT
-repeat Utf8View 1 IN
+repeat Int64 2 IN 0
+repeat Int64 2 IN 1
+repeat Int64 2 IN 2
+repeat LargeUtf8 1 IN 1
+repeat LargeUtf8 1 OUT 1
+repeat Utf8 1 IN 0
+repeat Utf8 1 OUT 0
+repeat Utf8 1 OUT 2
+repeat Utf8View 1 IN 2
+
+query TT??TTT rowsort
+show functions like 'date_trunc';
+----
+date_trunc Timestamp(Microsecond, None) [precision, expression] [Utf8, Timestamp(Microsecond, None)] SCALAR Truncates a timestamp value to a specified precision. date_trunc(precision, expression)
+date_trunc Timestamp(Microsecond, None) [precision, expression] [Utf8View, Timestamp(Microsecond, None)] SCALAR Truncates a timestamp value to a specified precision. date_trunc(precision, expression)
+date_trunc Timestamp(Microsecond, Some("+TZ")) [precision, expression] [Utf8, Timestamp(Microsecond, Some("+TZ"))] SCALAR Truncates a timestamp value to a specified precision. date_trunc(precision, expression)
+date_trunc Timestamp(Microsecond, Some("+TZ")) [precision, expression] [Utf8View, Timestamp(Microsecond, Some("+TZ"))] SCALAR Truncates a timestamp value to a specified precision. date_trunc(precision, expression)
+date_trunc Timestamp(Millisecond, None) [precision, expression] [Utf8, Timestamp(Millisecond, None)] SCALAR Truncates a timestamp value to a specified precision. date_trunc(precision, expression)
+date_trunc Timestamp(Millisecond, None) [precision, expression] [Utf8View, Timestamp(Millisecond, None)] SCALAR Truncates a timestamp value to a specified precision. date_trunc(precision, expression)
+date_trunc Timestamp(Millisecond, Some("+TZ")) [precision, expression] [Utf8, Timestamp(Millisecond, Some("+TZ"))] SCALAR Truncates a timestamp value to a specified precision. date_trunc(precision, expression)
+date_trunc Timestamp(Millisecond, Some("+TZ")) [precision, expression] [Utf8View, Timestamp(Millisecond, Some("+TZ"))] SCALAR Truncates a timestamp value to a specified precision. date_trunc(precision, expression)
+date_trunc Timestamp(Nanosecond, None) [precision, expression] [Utf8, Timestamp(Nanosecond, None)] SCALAR Truncates a timestamp value to a specified precision. date_trunc(precision, expression)
+date_trunc Timestamp(Nanosecond, None) [precision, expression] [Utf8View, Timestamp(Nanosecond, None)] SCALAR Truncates a timestamp value to a specified precision. date_trunc(precision, expression)
+date_trunc Timestamp(Nanosecond, Some("+TZ")) [precision, expression] [Utf8, Timestamp(Nanosecond, Some("+TZ"))] SCALAR Truncates a timestamp value to a specified precision. date_trunc(precision, expression)
+date_trunc Timestamp(Nanosecond, Some("+TZ")) [precision, expression] [Utf8View, Timestamp(Nanosecond, Some("+TZ"))] SCALAR Truncates a timestamp value to a specified precision. date_trunc(precision, expression)
+date_trunc Timestamp(Second, None) [precision, expression] [Utf8, Timestamp(Second, None)] SCALAR Truncates a timestamp value to a specified precision. date_trunc(precision, expression)
+date_trunc Timestamp(Second, None) [precision, expression] [Utf8View, Timestamp(Second, None)] SCALAR Truncates a timestamp value to a specified precision. date_trunc(precision, expression)
+date_trunc Timestamp(Second, Some("+TZ")) [precision, expression] [Utf8, Timestamp(Second, Some("+TZ"))] SCALAR Truncates a timestamp value to a specified precision. date_trunc(precision, expression)
+date_trunc Timestamp(Second, Some("+TZ")) [precision, expression] [Utf8View, Timestamp(Second, Some("+TZ"))] SCALAR Truncates a timestamp value to a specified precision. date_trunc(precision, expression)
+
+statement ok
+show functions

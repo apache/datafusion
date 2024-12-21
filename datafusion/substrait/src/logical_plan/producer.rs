@@ -22,9 +22,7 @@ use std::sync::Arc;
 use substrait::proto::expression_reference::ExprType;
 
 use datafusion::arrow::datatypes::{Field, IntervalUnit};
-use datafusion::logical_expr::{
-    Distinct, FetchType, Like, Partitioning, SkipType, TryCast, WindowFrameUnits,
-};
+use datafusion::logical_expr::{Distinct, Like, Partitioning, TryCast, WindowFrameUnits};
 use datafusion::{
     arrow::datatypes::{DataType, TimeUnit},
     error::{DataFusionError, Result},
@@ -45,7 +43,7 @@ use datafusion::arrow::array::{Array, GenericListArray, OffsetSizeTrait};
 use datafusion::arrow::temporal_conversions::NANOSECONDS;
 use datafusion::common::{
     exec_err, internal_err, not_impl_err, plan_err, substrait_datafusion_err,
-    substrait_err, DFSchemaRef, ToDFSchema,
+    substrait_err, DFSchema, DFSchemaRef, ToDFSchema,
 };
 #[allow(unused_imports)]
 use datafusion::logical_expr::expr::{
@@ -69,7 +67,8 @@ use substrait::proto::read_rel::VirtualTable;
 use substrait::proto::rel_common::EmitKind;
 use substrait::proto::rel_common::EmitKind::Emit;
 use substrait::proto::{
-    rel_common, ExchangeRel, ExpressionReference, ExtendedExpression, RelCommon,
+    fetch_rel, rel_common, ExchangeRel, ExpressionReference, ExtendedExpression,
+    RelCommon,
 };
 use substrait::{
     proto::{
@@ -333,19 +332,31 @@ pub fn to_substrait_rel(
         }
         LogicalPlan::Limit(limit) => {
             let input = to_substrait_rel(limit.input.as_ref(), state, extensions)?;
-            let FetchType::Literal(fetch) = limit.get_fetch_type()? else {
-                return not_impl_err!("Non-literal limit fetch");
-            };
-            let SkipType::Literal(skip) = limit.get_skip_type()? else {
-                return not_impl_err!("Non-literal limit skip");
-            };
+            let empty_schema = Arc::new(DFSchema::empty());
+            let offset_mode = limit
+                .skip
+                .as_ref()
+                .map(|expr| {
+                    to_substrait_rex(state, expr.as_ref(), &empty_schema, 0, extensions)
+                })
+                .transpose()?
+                .map(Box::new)
+                .map(fetch_rel::OffsetMode::OffsetExpr);
+            let count_mode = limit
+                .fetch
+                .as_ref()
+                .map(|expr| {
+                    to_substrait_rex(state, expr.as_ref(), &empty_schema, 0, extensions)
+                })
+                .transpose()?
+                .map(Box::new)
+                .map(fetch_rel::CountMode::CountExpr);
             Ok(Box::new(Rel {
                 rel_type: Some(RelType::Fetch(Box::new(FetchRel {
                     common: None,
                     input: Some(input),
-                    offset: skip as i64,
-                    // use -1 to signal that ALL records should be returned
-                    count: fetch.map(|f| f as i64).unwrap_or(-1),
+                    offset_mode,
+                    count_mode,
                     advanced_extension: None,
                 }))),
             }))
