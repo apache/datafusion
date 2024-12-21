@@ -63,7 +63,7 @@ use datafusion_expr::{
     expr_rewriter::FunctionRewrite,
     logical_plan::{DdlStatement, Statement},
     planner::ExprPlanner,
-    Expr, UserDefinedLogicalNode, WindowUDF,
+    Expr, WindowUDF,
 };
 
 // backwards compatibility
@@ -1679,27 +1679,7 @@ pub enum RegisterFunction {
 #[derive(Debug)]
 pub struct EmptySerializerRegistry;
 
-impl SerializerRegistry for EmptySerializerRegistry {
-    fn serialize_logical_plan(
-        &self,
-        node: &dyn UserDefinedLogicalNode,
-    ) -> Result<Vec<u8>> {
-        not_impl_err!(
-            "Serializing user defined logical plan node `{}` is not supported",
-            node.name()
-        )
-    }
-
-    fn deserialize_logical_plan(
-        &self,
-        name: &str,
-        _bytes: &[u8],
-    ) -> Result<Arc<dyn UserDefinedLogicalNode>> {
-        not_impl_err!(
-            "Deserializing user defined logical plan node `{name}` is not supported"
-        )
-    }
-}
+impl SerializerRegistry for EmptySerializerRegistry {}
 
 /// Describes which SQL statements can be run.
 ///
