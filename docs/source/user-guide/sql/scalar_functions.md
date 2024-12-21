@@ -1070,9 +1070,7 @@ find_in_set(str, strlist)
 
 ### `initcap`
 
-Capitalizes the first character in each word in the ASCII input string. Words are delimited by non-alphanumeric characters.
-
-Note this function does not support UTF-8 characters.
+Capitalizes the first character in each word in the input string. Words are delimited by non-alphanumeric characters.
 
 ```
 initcap(str)
