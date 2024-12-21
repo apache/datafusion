@@ -592,13 +592,13 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 }
                 not_impl_err!("AnyOp not supported by ExprPlanner: {binary_expr:?}")
             }
-            SQLExpr::Wildcard => Ok(Expr::Wildcard {
+            SQLExpr::Wildcard(_token) => Ok(Expr::Wildcard {
                 qualifier: None,
-                options: WildcardOptions::default(),
+                options: Box::new(WildcardOptions::default()),
             }),
-            SQLExpr::QualifiedWildcard(object_name) => Ok(Expr::Wildcard {
+            SQLExpr::QualifiedWildcard(object_name, _token) => Ok(Expr::Wildcard {
                 qualifier: Some(self.object_name_to_table_reference(object_name)?),
-                options: WildcardOptions::default(),
+                options: Box::new(WildcardOptions::default()),
             }),
             SQLExpr::Tuple(values) => self.parse_tuple(schema, planner_context, values),
             _ => not_impl_err!("Unsupported ast node in sqltorel: {sql:?}"),

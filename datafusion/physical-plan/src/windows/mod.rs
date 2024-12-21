@@ -383,7 +383,7 @@ pub fn get_best_fitting_window(
         } else {
             return Ok(None);
         };
-    let is_unbounded = input.execution_mode().is_unbounded();
+    let is_unbounded = input.boundedness().is_unbounded();
     if !is_unbounded && input_order_mode != InputOrderMode::Sorted {
         // Executor has bounded input and `input_order_mode` is not `InputOrderMode::Sorted`
         // in this case removing the sort is not helpful, return:

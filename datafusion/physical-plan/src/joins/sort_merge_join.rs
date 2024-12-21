@@ -53,8 +53,8 @@ use datafusion_execution::TaskContext;
 use datafusion_physical_expr::equivalence::join_equivalence_properties;
 use datafusion_physical_expr::PhysicalExprRef;
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, LexRequirement};
-use futures::{Stream, StreamExt};
 
+use crate::execution_plan::{boundedness_from_children, EmissionType};
 use crate::expressions::PhysicalSortExpr;
 use crate::joins::utils::{
     build_join_schema, check_join_is_valid, estimate_join_statistics,
@@ -63,10 +63,12 @@ use crate::joins::utils::{
 use crate::metrics::{Count, ExecutionPlanMetricsSet, MetricBuilder, MetricsSet};
 use crate::spill::spill_record_batches;
 use crate::{
-    execution_mode_from_children, metrics, DisplayAs, DisplayFormatType, Distribution,
-    ExecutionPlan, ExecutionPlanProperties, PhysicalExpr, PlanProperties,
-    RecordBatchStream, SendableRecordBatchStream, Statistics,
+    metrics, DisplayAs, DisplayFormatType, Distribution, ExecutionPlan,
+    ExecutionPlanProperties, PhysicalExpr, PlanProperties, RecordBatchStream,
+    SendableRecordBatchStream, Statistics,
 };
+
+use futures::{Stream, StreamExt};
 
 /// Join execution plan that executes equi-join predicates on multiple partitions using Sort-Merge
 /// join algorithm and applies an optional filter post join. Can be used to join arbitrarily large
@@ -302,10 +304,13 @@ impl SortMergeJoinExec {
         let output_partitioning =
             symmetric_join_output_partitioning(left, right, &join_type);
 
-        // Determine execution mode:
-        let mode = execution_mode_from_children([left, right]);
-
-        PlanProperties::new(eq_properties, output_partitioning, mode)
+        // TODO: Emission type may be incremental if the input is sorted
+        PlanProperties::new(
+            eq_properties,
+            output_partitioning,
+            EmissionType::Final,
+            boundedness_from_children([left, right]),
+        )
     }
 }
 
@@ -856,8 +861,7 @@ fn get_corrected_filter_mask(
             }
 
             // Generate null joined rows for records which have no matching join key
-            let null_matched = expected_size - corrected_mask.len();
-            corrected_mask.extend(vec![Some(false); null_matched]);
+            corrected_mask.append_n(expected_size - corrected_mask.len(), false);
             Some(corrected_mask.finish())
         }
         JoinType::LeftMark => {
@@ -879,8 +883,7 @@ fn get_corrected_filter_mask(
             }
 
             // Generate null joined rows for records which have no matching join key
-            let null_matched = expected_size - corrected_mask.len();
-            corrected_mask.extend(vec![Some(false); null_matched]);
+            corrected_mask.append_n(expected_size - corrected_mask.len(), false);
             Some(corrected_mask.finish())
         }
         JoinType::LeftSemi => {
@@ -922,9 +925,9 @@ fn get_corrected_filter_mask(
                     corrected_mask.append_null();
                 }
             }
-
-            let null_matched = expected_size - corrected_mask.len();
-            corrected_mask.extend(vec![Some(true); null_matched]);
+            // Generate null joined rows for records which have no matching join key,
+            // for LeftAnti non-matched considered as true
+            corrected_mask.append_n(expected_size - corrected_mask.len(), true);
             Some(corrected_mask.finish())
         }
         JoinType::Full => {
@@ -1569,13 +1572,13 @@ impl SortMergeJoinStream {
                 let num_rows = record_batch.num_rows();
                 self.output_record_batches
                     .filter_mask
-                    .extend(&BooleanArray::from(vec![None; num_rows]));
+                    .append_nulls(num_rows);
                 self.output_record_batches
                     .row_indices
-                    .extend(&UInt64Array::from(vec![None; num_rows]));
+                    .append_nulls(num_rows);
                 self.output_record_batches
                     .batch_ids
-                    .extend(vec![0; num_rows]);
+                    .resize(self.output_record_batches.batch_ids.len() + num_rows, 0);
 
                 self.output_record_batches.batches.push(record_batch);
             }
@@ -1613,13 +1616,13 @@ impl SortMergeJoinStream {
 
             self.output_record_batches
                 .filter_mask
-                .extend(&BooleanArray::from(vec![None; num_rows]));
+                .append_nulls(num_rows);
             self.output_record_batches
                 .row_indices
-                .extend(&UInt64Array::from(vec![None; num_rows]));
+                .append_nulls(num_rows);
             self.output_record_batches
                 .batch_ids
-                .extend(vec![0; num_rows]);
+                .resize(self.output_record_batches.batch_ids.len() + num_rows, 0);
             self.output_record_batches.batches.push(record_batch);
         }
         buffered_batch.join_filter_not_matched_map.clear();
@@ -1754,10 +1757,10 @@ impl SortMergeJoinStream {
                         self.output_record_batches.filter_mask.extend(pre_mask);
                     }
                     self.output_record_batches.row_indices.extend(&left_indices);
-                    self.output_record_batches.batch_ids.extend(vec![
-                        self.streamed_batch_counter.load(Relaxed);
-                        left_indices.len()
-                        ]);
+                    self.output_record_batches.batch_ids.resize(
+                        self.output_record_batches.batch_ids.len() + left_indices.len(),
+                        self.streamed_batch_counter.load(Relaxed),
+                    );
 
                     // For outer joins, we need to push the null joined rows to the output if
                     // all joined rows are failed on the join filter.

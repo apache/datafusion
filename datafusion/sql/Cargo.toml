@@ -45,6 +45,7 @@ recursive-protection = ["dep:recursive"]
 arrow = { workspace = true }
 arrow-array = { workspace = true }
 arrow-schema = { workspace = true }
+bigdecimal = { workspace = true }
 datafusion-common = { workspace = true, default-features = true }
 datafusion-expr = { workspace = true }
 indexmap = { workspace = true }

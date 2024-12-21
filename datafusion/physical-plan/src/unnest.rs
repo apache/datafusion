@@ -100,12 +100,11 @@ impl UnnestExec {
         input: &Arc<dyn ExecutionPlan>,
         schema: SchemaRef,
     ) -> PlanProperties {
-        let eq_properties = EquivalenceProperties::new(schema);
-
         PlanProperties::new(
-            eq_properties,
-            input.output_partitioning().clone(),
-            input.execution_mode(),
+            EquivalenceProperties::new(schema),
+            input.output_partitioning().to_owned(),
+            input.pipeline_behavior(),
+            input.boundedness(),
         )
     }
 
