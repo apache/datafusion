@@ -26,7 +26,7 @@ use arrow::array::{
 };
 use arrow::datatypes::DataType;
 use arrow::error::ArrowError;
-use datafusion_common::{exec_err, not_impl_err, DataFusionError, Result};
+use datafusion_common::{exec_err, internal_datafusion_err, not_impl_err, Result};
 use datafusion_expr::interval_arithmetic::Interval;
 use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
 use datafusion_expr::{
@@ -39,7 +39,7 @@ type MathArrayFunction = fn(&Vec<ArrayRef>) -> Result<ArrayRef>;
 macro_rules! make_abs_function {
     ($ARRAY_TYPE:ident) => {{
         |args: &Vec<ArrayRef>| {
-            let array = downcast_arg!(&args[0], "abs arg", $ARRAY_TYPE);
+            let array = downcast_named_arg!(&args[0], "abs arg", $ARRAY_TYPE);
             let res: $ARRAY_TYPE = array.unary(|x| x.abs());
             Ok(Arc::new(res) as ArrayRef)
         }
@@ -49,7 +49,7 @@ macro_rules! make_abs_function {
 macro_rules! make_try_abs_function {
     ($ARRAY_TYPE:ident) => {{
         |args: &Vec<ArrayRef>| {
-            let array = downcast_arg!(&args[0], "abs arg", $ARRAY_TYPE);
+            let array = downcast_named_arg!(&args[0], "abs arg", $ARRAY_TYPE);
             let res: $ARRAY_TYPE = array.try_unary(|x| {
                 x.checked_abs().ok_or_else(|| {
                     ArrowError::ComputeError(format!(
@@ -67,7 +67,7 @@ macro_rules! make_try_abs_function {
 macro_rules! make_decimal_abs_function {
     ($ARRAY_TYPE:ident) => {{
         |args: &Vec<ArrayRef>| {
-            let array = downcast_arg!(&args[0], "abs arg", $ARRAY_TYPE);
+            let array = downcast_named_arg!(&args[0], "abs arg", $ARRAY_TYPE);
             let res: $ARRAY_TYPE = array
                 .unary(|x| x.wrapping_abs())
                 .with_data_type(args[0].data_type().clone());
