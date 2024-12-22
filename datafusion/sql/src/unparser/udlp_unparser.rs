@@ -22,7 +22,12 @@ use crate::unparser::Unparser;
 use datafusion_expr::UserDefinedLogicalNode;
 use sqlparser::ast::Statement;
 
+/// This trait allows users to define custom unparser logic for their custom logical nodes.
 pub trait UserDefinedLogicalNodeUnparser {
+    /// Unparse the custom logical node to SQL within a statement.
+    ///
+    /// This method is called when the custom logical node is part of a statement.
+    /// e.g. `SELECT * FROM custom_logical_node`
     fn unparse(
         &self,
         _node: &dyn UserDefinedLogicalNode,
@@ -34,6 +39,9 @@ pub trait UserDefinedLogicalNodeUnparser {
         Ok(())
     }
 
+    /// Unparse the custom logical node to a statement.
+    ///
+    /// This method is called when the custom logical node is a custom statement.
     fn unparse_to_statement(
         &self,
         _node: &dyn UserDefinedLogicalNode,

@@ -124,6 +124,9 @@ impl Unparser<'_> {
         }
     }
 
+    /// Try to unparse a [UserDefinedLogicalNode] to a SQL statement.
+    /// If multiple unparsers are registered for the same [UserDefinedLogicalNode],
+    /// the last unparsing result will be returned.
     fn extension_to_statement(
         &self,
         node: &dyn UserDefinedLogicalNode,
@@ -139,6 +142,9 @@ impl Unparser<'_> {
         }
     }
 
+    /// Try to unparse a [UserDefinedLogicalNode] to a SQL statement.
+    /// If multiple unparsers are registered for the same [UserDefinedLogicalNode],
+    /// all of them will be called in order.
     fn extension_to_sql(
         &self,
         node: &dyn UserDefinedLogicalNode,

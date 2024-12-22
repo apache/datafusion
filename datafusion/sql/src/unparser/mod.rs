@@ -110,6 +110,13 @@ impl<'a> Unparser<'a> {
         self
     }
 
+    /// Add a custom unparser for user defined logical nodes
+    ///
+    /// DataFusion allows user to define custom logical nodes. This method allows to add custom child unparsers for these nodes.
+    /// Implementation of [`UserDefinedLogicalNodeUnparser`] can be added to the root unparser to handle custom logical nodes.
+    ///
+    /// The child unparsers are called iteratively.
+    /// see [Unparser::extension_to_sql] and [Unparser::extension_to_statement] for more details.
     pub fn with_udlp_unparsers(
         mut self,
         udlp_unparsers: Vec<Arc<dyn UserDefinedLogicalNodeUnparser>>,
