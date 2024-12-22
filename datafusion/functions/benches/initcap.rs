@@ -24,7 +24,7 @@ use arrow::util::bench_util::{
 };
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs};
-use datafusion_functions::string;
+use datafusion_functions::unicode;
 use std::sync::Arc;
 
 fn create_args<O: OffsetSizeTrait>(
@@ -46,7 +46,7 @@ fn create_args<O: OffsetSizeTrait>(
 }
 
 fn criterion_benchmark(c: &mut Criterion) {
-    let initcap = string::initcap();
+    let initcap = unicode::initcap();
     for size in [1024, 4096] {
         let args = create_args::<i32>(size, 8, true);
         c.bench_function(
