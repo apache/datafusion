@@ -1140,7 +1140,7 @@ async fn unnest_fixed_list_drop_nulls() -> Result<()> {
 }
 
 #[tokio::test]
-async fn unnest_fixed_list_nonull() -> Result<()> {
+async fn unnest_fixed_list_non_null() -> Result<()> {
     let mut shape_id_builder = UInt32Builder::new();
     let mut tags_builder = FixedSizeListBuilder::new(StringBuilder::new(), 2);
 

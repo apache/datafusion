@@ -6150,9 +6150,9 @@ mod tests {
             &DataType::Timestamp(TimeUnit::Nanosecond, Some("UTC".into()))
         );
 
-        let newscalar = ScalarValue::try_from_array(&array, 0).unwrap();
+        let new_scalar = ScalarValue::try_from_array(&array, 0).unwrap();
         assert_eq!(
-            newscalar.data_type(),
+            new_scalar.data_type(),
             DataType::Timestamp(TimeUnit::Nanosecond, Some("UTC".into()))
         );
     }
