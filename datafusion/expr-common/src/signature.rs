@@ -342,8 +342,6 @@ impl TypeSignature {
     /// Check whether 0 input argument is valid for given `TypeSignature`
     pub fn supports_zero_argument(&self) -> bool {
         match &self {
-            TypeSignature::Exact(vec) => vec.is_empty(),
-            TypeSignature::Any(0) => true,
             TypeSignature::Nullary => true,
             TypeSignature::OneOf(types) => types
                 .iter()

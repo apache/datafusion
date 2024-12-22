@@ -270,7 +270,7 @@ async fn scalar_udf_zero_params() -> Result<()> {
 
     let get_100_udf = Simple0ArgsScalarUDF {
         name: "get_100".to_string(),
-        signature: Signature::exact(vec![], Volatility::Immutable),
+        signature: Signature::nullary(Volatility::Immutable),
         return_type: DataType::Int32,
     };
 
@@ -1121,11 +1121,7 @@ async fn create_scalar_function_from_sql_statement() -> Result<()> {
 
 #[tokio::test]
 async fn test_valid_zero_argument_signatures() {
-    let signatures = vec![
-        Signature::exact(vec![], Volatility::Immutable),
-        Signature::any(0, Volatility::Immutable),
-        Signature::nullary(Volatility::Immutable),
-    ];
+    let signatures = vec![Signature::nullary(Volatility::Immutable)];
     for signature in signatures {
         let ctx = SessionContext::new();
         let udf = ScalarFunctionWrapper {
@@ -1161,6 +1157,8 @@ async fn test_invalid_zero_argument_signatures() {
         Signature::uniform(0, vec![], Volatility::Immutable),
         Signature::coercible(vec![], Volatility::Immutable),
         Signature::comparable(0, Volatility::Immutable),
+        Signature::any(0, Volatility::Immutable),
+        Signature::exact(vec![], Volatility::Immutable),
     ];
     for signature in signatures {
         let ctx = SessionContext::new();
