@@ -886,6 +886,8 @@ pub fn get_wider_type(lhs: &DataType, rhs: &DataType) -> Result<DataType> {
     use arrow::datatypes::DataType::*;
     Ok(match (lhs, rhs) {
         (lhs, rhs) if lhs == rhs => lhs.clone(),
+        // Either Utf8View + Utf8  will return Utf8View
+        (Utf8View, Utf8) | (Utf8, Utf8View) => Utf8View,
         // Right UInt is larger than left UInt.
         (UInt8, UInt16 | UInt32 | UInt64) | (UInt16, UInt32 | UInt64) | (UInt32, UInt64) |
         // Right Int is larger than left Int.
@@ -893,7 +895,7 @@ pub fn get_wider_type(lhs: &DataType, rhs: &DataType) -> Result<DataType> {
         // Right Float is larger than left Float.
         (Float16, Float32 | Float64) | (Float32, Float64) |
         // Right String is larger than left String.
-        (Utf8, LargeUtf8) |
+        (Utf8 | Utf8View, LargeUtf8) |
         // Any right type is wider than a left hand side Null.
         (Null, _) => rhs.clone(),
         // Left UInt is larger than right UInt.
@@ -903,7 +905,7 @@ pub fn get_wider_type(lhs: &DataType, rhs: &DataType) -> Result<DataType> {
         // Left Float is larger than right Float.
         (Float32 | Float64, Float16) | (Float64, Float32) |
         // Left String is larger than right String.
-        (LargeUtf8, Utf8) |
+        (LargeUtf8, Utf8 | Utf8View) |
         // Any left type is wider than a right hand side Null.
         (_, Null) => lhs.clone(),
         (List(lhs_field), List(rhs_field)) => {
@@ -1243,16 +1245,22 @@ fn binary_to_string_coercion(
     match (lhs_type, rhs_type) {
         (Binary, Utf8) => Some(Utf8),
         (Binary, LargeUtf8) => Some(LargeUtf8),
+        (Binary, Utf8View) => Some(Utf8View),
         (BinaryView, Utf8) => Some(Utf8View),
         (BinaryView, LargeUtf8) => Some(LargeUtf8),
+        (BinaryView, Utf8View) => Some(Utf8View),
         (LargeBinary, Utf8) => Some(LargeUtf8),
         (LargeBinary, LargeUtf8) => Some(LargeUtf8),
+        (LargeBinary, Utf8View) => Some(LargeUtf8),
         (Utf8, Binary) => Some(Utf8),
         (Utf8, LargeBinary) => Some(LargeUtf8),
         (Utf8, BinaryView) => Some(Utf8View),
         (LargeUtf8, Binary) => Some(LargeUtf8),
         (LargeUtf8, LargeBinary) => Some(LargeUtf8),
         (LargeUtf8, BinaryView) => Some(LargeUtf8),
+        (Utf8View, Binary) => Some(Utf8View),
+        (Utf8View, LargeBinary) => Some(LargeUtf8),
+        (Utf8View, BinaryView) => Some(Utf8View),
         _ => None,
     }
 }
@@ -1612,6 +1620,59 @@ mod tests {
         assert_eq!(
             dictionary_comparison_coercion(&lhs_type, &rhs_type, true),
             Some(rhs_type.clone())
+        );
+    }
+
+    #[test]
+    fn test_get_wider_type_with_utf8view() {
+        assert_eq!(
+            get_wider_type(&DataType::Utf8View, &DataType::Utf8View).unwrap(),
+            DataType::Utf8View
+        );
+
+        assert_eq!(
+            get_wider_type(&DataType::Utf8View, &DataType::Utf8).unwrap(),
+            DataType::Utf8View
+        );
+
+        assert_eq!(
+            get_wider_type(&DataType::Utf8View, &DataType::LargeUtf8).unwrap(),
+            DataType::LargeUtf8
+        );
+
+        assert_eq!(
+            get_wider_type(&DataType::Utf8View, &DataType::Null).unwrap(),
+            DataType::Utf8View
+        );
+
+        assert!(get_wider_type(&DataType::Utf8View, &DataType::Int32).is_err());
+    }
+
+    #[test]
+    fn test_binary_to_string_coercion_with_utf8view() {
+        assert_eq!(
+            binary_to_string_coercion(&DataType::Binary, &DataType::Utf8View),
+            Some(DataType::Utf8View)
+        );
+        assert_eq!(
+            binary_to_string_coercion(&DataType::Utf8View, &DataType::Binary),
+            Some(DataType::Utf8View)
+        );
+        assert_eq!(
+            binary_to_string_coercion(&DataType::BinaryView, &DataType::Utf8View),
+            Some(DataType::Utf8View)
+        );
+        assert_eq!(
+            binary_to_string_coercion(&DataType::Utf8View, &DataType::LargeBinary),
+            Some(DataType::LargeUtf8)
+        );
+        assert_eq!(
+            binary_to_string_coercion(&DataType::LargeBinary, &DataType::Utf8View),
+            Some(DataType::LargeUtf8)
+        );
+        assert_eq!(
+            binary_to_string_coercion(&DataType::Utf8View, &DataType::Int32),
+            None
         );
     }
 
