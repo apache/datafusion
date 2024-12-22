@@ -131,7 +131,7 @@ fn initcap<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
 
     string_array.iter().for_each(|str| match str {
         Some(s) => {
-            let initcap_str = initcap_string(Some(s)).unwrap();
+            let initcap_str = initcap_string(s);
             builder.append_value(initcap_str);
         }
         None => builder.append_null(),
@@ -147,7 +147,7 @@ fn initcap_utf8view(args: &[ArrayRef]) -> Result<ArrayRef> {
 
     string_view_array.iter().for_each(|str| match str {
         Some(s) => {
-            let initcap_str = initcap_string(Some(s)).unwrap();
+            let initcap_str = initcap_string(s);
             builder.append_value(initcap_str);
         }
         None => builder.append_null(),
@@ -156,26 +156,31 @@ fn initcap_utf8view(args: &[ArrayRef]) -> Result<ArrayRef> {
     Ok(Arc::new(builder.finish()) as ArrayRef)
 }
 
-fn initcap_string(input: Option<&str>) -> Option<String> {
-    input.map(|s| {
-        let mut result = String::with_capacity(s.len());
-        let mut prev_is_alphanumeric = false;
+fn initcap_string(input: &str) -> String {
+    let mut result = String::with_capacity(input.len());
+    let mut prev_is_alphanumeric = false;
 
-        for c in s.chars() {
+    if input.is_ascii() {
+        for c in input.chars() {
             if prev_is_alphanumeric {
-                for lc in c.to_lowercase() {
-                    result.push(lc);
-                }
+                result.push(c.to_ascii_lowercase());
             } else {
-                for uc in c.to_uppercase() {
-                    result.push(uc);
-                }
+                result.push(c.to_ascii_uppercase());
+            };
+            prev_is_alphanumeric = c.is_ascii_alphanumeric();
+        }
+    } else {
+        for c in input.chars() {
+            if prev_is_alphanumeric {
+                result.extend(c.to_lowercase());
+            } else {
+                result.extend(c.to_uppercase());
             }
             prev_is_alphanumeric = c.is_alphanumeric();
         }
+    }
 
-        result
-    })
+    result
 }
 
 #[cfg(test)]
@@ -258,11 +263,11 @@ mod tests {
         test_function!(
             InitcapFunc::new(),
             vec![ColumnarValue::Scalar(ScalarValue::Utf8View(Some(
-                "êM ả ñAnDÚ ÁrBOL ОлЕГ ИвАНОВИч ÍslENsku ÞjóðaRiNNaR εΛλΗΝΙκΉ"
+                "đẸp đẼ êM ả ñAnDÚ ÁrBOL ОлЕГ ИвАНОВИч ÍslENsku ÞjóðaRiNNaR εΛλΗΝΙκΉ"
                     .to_string()
             )))],
             Ok(Some(
-                "Êm Ả Ñandú Árbol Олег Иванович Íslensku Þjóðarinnar Ελληνική"
+                "Đẹp Đẽ Êm Ả Ñandú Árbol Олег Иванович Íslensku Þjóðarinnar Ελληνική"
             )),
             &str,
             Utf8,
