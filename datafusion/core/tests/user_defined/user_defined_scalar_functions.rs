@@ -1158,7 +1158,7 @@ async fn test_invalid_zero_argument_signatures() {
         Signature::coercible(vec![], Volatility::Immutable),
         Signature::comparable(0, Volatility::Immutable),
         Signature::any(0, Volatility::Immutable),
-        Signature::exact(vec![], Volatility::Immutable),
+        Signature::nullary(Volatility::Immutable),
     ];
     for signature in signatures {
         let ctx = SessionContext::new();
