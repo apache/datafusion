@@ -42,19 +42,16 @@ use crate::physical_plan::{
     collect, collect_partitioned, execute_stream, execute_stream_partitioned,
     ExecutionPlan, SendableRecordBatchStream,
 };
-use crate::prelude::{
-    CsvReadOptions, NdJsonReadOptions, ParquetReadOptions, SessionContext,
-};
+use crate::prelude::SessionContext;
 
 use arrow::array::{Array, ArrayRef, Int64Array, StringArray};
 use arrow::compute::{cast, concat};
 use arrow::datatypes::{DataType, Field};
-use arrow_array::Int32Array;
 use arrow_schema::{Schema, SchemaRef};
 use datafusion_common::config::{CsvOptions, JsonOptions};
 use datafusion_common::{
-    assert_batches_eq, exec_err, not_impl_err, plan_err, Column, DFSchema,
-    DataFusionError, ParamValues, SchemaError, UnnestOptions,
+    exec_err, not_impl_err, plan_err, Column, DFSchema, DataFusionError, ParamValues,
+    SchemaError, UnnestOptions,
 };
 use datafusion_expr::dml::InsertOp;
 use datafusion_expr::{case, is_null, lit, SortExpr};
@@ -67,7 +64,6 @@ use datafusion_functions_aggregate::expr_fn::{
 
 use async_trait::async_trait;
 use datafusion_catalog::Session;
-use tempfile::TempDir;
 
 /// Contains options that control how data is
 /// written out from a DataFrame
@@ -1979,6 +1975,7 @@ mod tests {
     use crate::physical_plan::{ColumnarValue, Partitioning, PhysicalExpr};
     use crate::test_util::{register_aggregate_csv, test_table, test_table_with_name};
 
+    use crate::prelude::{CsvReadOptions, NdJsonReadOptions, ParquetReadOptions};
     use arrow::array::Int32Array;
     use datafusion_common::{assert_batches_eq, Constraint, Constraints, ScalarValue};
     use datafusion_common_runtime::SpawnedTask;
@@ -1993,6 +1990,7 @@ mod tests {
     use datafusion_physical_expr::expressions::Column;
     use datafusion_physical_plan::{get_plan_string, ExecutionPlanProperties};
     use sqlparser::ast::NullTreatment;
+    use tempfile::TempDir;
 
     // Get string representation of the plan
     async fn assert_physical_plan(df: &DataFrame, expected: Vec<&str>) {
@@ -4096,175 +4094,178 @@ mod tests {
 
         Ok(())
     }
-}
 
-// Test issue: https://github.com/apache/datafusion/issues/13873
-#[tokio::test]
-async fn write_parquet_with_order() -> Result<()> {
-    let tmp_dir = TempDir::new()?;
-    let schema = Arc::new(Schema::new(vec![
-        Field::new("a", DataType::Int32, true),
-        Field::new("b", DataType::Int32, true),
-    ]));
+    // Test issue: https://github.com/apache/datafusion/issues/13873
+    #[tokio::test]
+    async fn write_parquet_with_order() -> Result<()> {
+        let tmp_dir = TempDir::new()?;
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, true),
+            Field::new("b", DataType::Int32, true),
+        ]));
 
-    let ctx = SessionContext::new();
-    let write_df = ctx.read_batch(RecordBatch::try_new(
-        schema.clone(),
-        vec![
-            Arc::new(Int32Array::from(vec![1, 5, 7, 3, 2])),
-            Arc::new(Int32Array::from(vec![2, 3, 4, 5, 6])),
-        ],
-    )?)?;
+        let ctx = SessionContext::new();
+        let write_df = ctx.read_batch(RecordBatch::try_new(
+            schema.clone(),
+            vec![
+                Arc::new(Int32Array::from(vec![1, 5, 7, 3, 2])),
+                Arc::new(Int32Array::from(vec![2, 3, 4, 5, 6])),
+            ],
+        )?)?;
 
-    let test_path = tmp_dir.path().join("test.parquet");
+        let test_path = tmp_dir.path().join("test.parquet");
 
-    write_df
-        .clone()
-        .write_parquet(
+        write_df
+            .clone()
+            .write_parquet(
+                test_path.to_str().unwrap(),
+                DataFrameWriteOptions::new()
+                    .with_sort_by(vec![col("a").sort(true, true)]),
+                None,
+            )
+            .await?;
+
+        let ctx = SessionContext::new();
+        ctx.register_parquet(
+            "data",
             test_path.to_str().unwrap(),
-            DataFrameWriteOptions::new().with_sort_by(vec![col("a").sort(true, true)]),
-            None,
+            ParquetReadOptions::default(),
         )
         .await?;
 
-    let ctx = SessionContext::new();
-    ctx.register_parquet(
-        "data",
-        test_path.to_str().unwrap(),
-        ParquetReadOptions::default(),
-    )
-    .await?;
+        let df = ctx.sql("SELECT * FROM data").await?;
+        let results = df.collect().await?;
 
-    let df = ctx.sql("SELECT * FROM data").await?;
-    let results = df.collect().await?;
+        assert_batches_eq!(
+            &[
+                "+---+---+",
+                "| a | b |",
+                "+---+---+",
+                "| 1 | 2 |",
+                "| 2 | 6 |",
+                "| 3 | 5 |",
+                "| 5 | 3 |",
+                "| 7 | 4 |",
+                "+---+---+",
+            ],
+            &results
+        );
+        Ok(())
+    }
 
-    assert_batches_eq!(
-        &[
-            "+---+---+",
-            "| a | b |",
-            "+---+---+",
-            "| 1 | 2 |",
-            "| 2 | 6 |",
-            "| 3 | 5 |",
-            "| 5 | 3 |",
-            "| 7 | 4 |",
-            "+---+---+",
-        ],
-        &results
-    );
-    Ok(())
-}
+    // Test issue: https://github.com/apache/datafusion/issues/13873
+    #[tokio::test]
+    async fn write_csv_with_order() -> Result<()> {
+        let tmp_dir = TempDir::new()?;
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, true),
+            Field::new("b", DataType::Int32, true),
+        ]));
 
-// Test issue: https://github.com/apache/datafusion/issues/13873
-#[tokio::test]
-async fn write_csv_with_order() -> Result<()> {
-    let tmp_dir = TempDir::new()?;
-    let schema = Arc::new(Schema::new(vec![
-        Field::new("a", DataType::Int32, true),
-        Field::new("b", DataType::Int32, true),
-    ]));
+        let ctx = SessionContext::new();
+        let write_df = ctx.read_batch(RecordBatch::try_new(
+            schema.clone(),
+            vec![
+                Arc::new(Int32Array::from(vec![1, 5, 7, 3, 2])),
+                Arc::new(Int32Array::from(vec![2, 3, 4, 5, 6])),
+            ],
+        )?)?;
 
-    let ctx = SessionContext::new();
-    let write_df = ctx.read_batch(RecordBatch::try_new(
-        schema.clone(),
-        vec![
-            Arc::new(Int32Array::from(vec![1, 5, 7, 3, 2])),
-            Arc::new(Int32Array::from(vec![2, 3, 4, 5, 6])),
-        ],
-    )?)?;
+        let test_path = tmp_dir.path().join("test.csv");
 
-    let test_path = tmp_dir.path().join("test.csv");
+        write_df
+            .clone()
+            .write_csv(
+                test_path.to_str().unwrap(),
+                DataFrameWriteOptions::new()
+                    .with_sort_by(vec![col("a").sort(true, true)]),
+                None,
+            )
+            .await?;
 
-    write_df
-        .clone()
-        .write_csv(
+        let ctx = SessionContext::new();
+        ctx.register_csv(
+            "data",
             test_path.to_str().unwrap(),
-            DataFrameWriteOptions::new().with_sort_by(vec![col("a").sort(true, true)]),
-            None,
+            CsvReadOptions::new().schema(&schema),
         )
         .await?;
 
-    let ctx = SessionContext::new();
-    ctx.register_csv(
-        "data",
-        test_path.to_str().unwrap(),
-        CsvReadOptions::new().schema(&schema),
-    )
-    .await?;
+        let df = ctx.sql("SELECT * FROM data").await?;
+        let results = df.collect().await?;
 
-    let df = ctx.sql("SELECT * FROM data").await?;
-    let results = df.collect().await?;
+        assert_batches_eq!(
+            &[
+                "+---+---+",
+                "| a | b |",
+                "+---+---+",
+                "| 1 | 2 |",
+                "| 2 | 6 |",
+                "| 3 | 5 |",
+                "| 5 | 3 |",
+                "| 7 | 4 |",
+                "+---+---+",
+            ],
+            &results
+        );
+        Ok(())
+    }
 
-    assert_batches_eq!(
-        &[
-            "+---+---+",
-            "| a | b |",
-            "+---+---+",
-            "| 1 | 2 |",
-            "| 2 | 6 |",
-            "| 3 | 5 |",
-            "| 5 | 3 |",
-            "| 7 | 4 |",
-            "+---+---+",
-        ],
-        &results
-    );
-    Ok(())
-}
+    // Test issue: https://github.com/apache/datafusion/issues/13873
+    #[tokio::test]
+    async fn write_json_with_order() -> Result<()> {
+        let tmp_dir = TempDir::new()?;
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, true),
+            Field::new("b", DataType::Int32, true),
+        ]));
 
-// Test issue: https://github.com/apache/datafusion/issues/13873
-#[tokio::test]
-async fn write_json_with_order() -> Result<()> {
-    let tmp_dir = TempDir::new()?;
-    let schema = Arc::new(Schema::new(vec![
-        Field::new("a", DataType::Int32, true),
-        Field::new("b", DataType::Int32, true),
-    ]));
+        let ctx = SessionContext::new();
+        let write_df = ctx.read_batch(RecordBatch::try_new(
+            schema.clone(),
+            vec![
+                Arc::new(Int32Array::from(vec![1, 5, 7, 3, 2])),
+                Arc::new(Int32Array::from(vec![2, 3, 4, 5, 6])),
+            ],
+        )?)?;
 
-    let ctx = SessionContext::new();
-    let write_df = ctx.read_batch(RecordBatch::try_new(
-        schema.clone(),
-        vec![
-            Arc::new(Int32Array::from(vec![1, 5, 7, 3, 2])),
-            Arc::new(Int32Array::from(vec![2, 3, 4, 5, 6])),
-        ],
-    )?)?;
+        let test_path = tmp_dir.path().join("test.json");
 
-    let test_path = tmp_dir.path().join("test.json");
+        write_df
+            .clone()
+            .write_json(
+                test_path.to_str().unwrap(),
+                DataFrameWriteOptions::new()
+                    .with_sort_by(vec![col("a").sort(true, true)]),
+                None,
+            )
+            .await?;
 
-    write_df
-        .clone()
-        .write_json(
+        let ctx = SessionContext::new();
+        ctx.register_json(
+            "data",
             test_path.to_str().unwrap(),
-            DataFrameWriteOptions::new().with_sort_by(vec![col("a").sort(true, true)]),
-            None,
+            NdJsonReadOptions::default().schema(&schema),
         )
         .await?;
 
-    let ctx = SessionContext::new();
-    ctx.register_json(
-        "data",
-        test_path.to_str().unwrap(),
-        NdJsonReadOptions::default().schema(&schema),
-    )
-    .await?;
+        let df = ctx.sql("SELECT * FROM data").await?;
+        let results = df.collect().await?;
 
-    let df = ctx.sql("SELECT * FROM data").await?;
-    let results = df.collect().await?;
-
-    assert_batches_eq!(
-        &[
-            "+---+---+",
-            "| a | b |",
-            "+---+---+",
-            "| 1 | 2 |",
-            "| 2 | 6 |",
-            "| 3 | 5 |",
-            "| 5 | 3 |",
-            "| 7 | 4 |",
-            "+---+---+",
-        ],
-        &results
-    );
-    Ok(())
+        assert_batches_eq!(
+            &[
+                "+---+---+",
+                "| a | b |",
+                "+---+---+",
+                "| 1 | 2 |",
+                "| 2 | 6 |",
+                "| 3 | 5 |",
+                "| 5 | 3 |",
+                "| 7 | 4 |",
+                "+---+---+",
+            ],
+            &results
+        );
+        Ok(())
+    }
 }
