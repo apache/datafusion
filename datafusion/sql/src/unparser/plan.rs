@@ -43,6 +43,7 @@ use datafusion_common::{
 use datafusion_expr::{
     expr::Alias, BinaryExpr, Distinct, Expr, JoinConstraint, JoinType, LogicalPlan,
     LogicalPlanBuilder, Operator, Projection, SortExpr, TableScan, Unnest,
+    UserDefinedLogicalNode,
 };
 use sqlparser::ast::{self, Ident, SetExpr, TableAliasColumnDef};
 use std::sync::Arc;
@@ -110,15 +111,51 @@ impl Unparser<'_> {
             | LogicalPlan::Values(_)
             | LogicalPlan::Distinct(_) => self.select_to_sql_statement(&plan),
             LogicalPlan::Dml(_) => self.dml_to_sql(&plan),
+            LogicalPlan::Extension(extension) => {
+                self.extension_to_statement(extension.node.as_ref())
+            }
             LogicalPlan::Explain(_)
             | LogicalPlan::Analyze(_)
-            | LogicalPlan::Extension(_)
             | LogicalPlan::Ddl(_)
             | LogicalPlan::Copy(_)
             | LogicalPlan::DescribeTable(_)
             | LogicalPlan::RecursiveQuery(_)
             | LogicalPlan::Unnest(_) => not_impl_err!("Unsupported plan: {plan:?}"),
         }
+    }
+
+    fn extension_to_statement(
+        &self,
+        node: &dyn UserDefinedLogicalNode,
+    ) -> Result<ast::Statement> {
+        let mut statement = None;
+        for unparser in &self.udlp_unparsers {
+            statement = unparser.unparse_to_statement(node, self)?;
+        }
+        if let Some(statement) = statement {
+            Ok(statement)
+        } else {
+            not_impl_err!("Unsupported extension node: {node:?}")
+        }
+    }
+
+    fn extension_to_sql(
+        &self,
+        node: &dyn UserDefinedLogicalNode,
+        query: &mut Option<&mut QueryBuilder>,
+        select: &mut Option<&mut SelectBuilder>,
+        relation: &mut Option<&mut RelationBuilder>,
+    ) -> Result<()> {
+        for unparser in &self.udlp_unparsers {
+            unparser.unparse(
+                node,
+                self,
+                query,
+                select,
+                relation,
+            )?;
+        }
+        Ok(())
     }
 
     fn select_to_sql_statement(&self, plan: &LogicalPlan) -> Result<ast::Statement> {
@@ -700,7 +737,23 @@ impl Unparser<'_> {
                 }
                 Ok(())
             }
-            LogicalPlan::Extension(_) => not_impl_err!("Unsupported operator: {plan:?}"),
+            LogicalPlan::Extension(extension) => {
+                if let Some(query) = query.as_mut() {
+                    self.extension_to_sql(
+                        extension.node.as_ref(),
+                        &mut Some(query),
+                        &mut Some(select),
+                        &mut Some(relation),
+                    )
+                } else {
+                    self.extension_to_sql(
+                        extension.node.as_ref(),
+                        &mut None,
+                        &mut Some(select),
+                        &mut Some(relation),
+                    )
+                }
+            }
             LogicalPlan::Unnest(unnest) => {
                 if !unnest.struct_type_columns.is_empty() {
                     return internal_err!(

@@ -17,17 +17,19 @@
 
 //! [`Unparser`] for converting `Expr` to SQL text
 
-mod ast;
+pub mod ast;
 mod expr;
 mod plan;
 mod rewrite;
 mod utils;
 
+use std::sync::Arc;
+use self::dialect::{DefaultDialect, Dialect};
+use crate::unparser::udlp_unparser::UserDefinedLogicalNodeUnparser;
 pub use expr::expr_to_sql;
 pub use plan::plan_to_sql;
-
-use self::dialect::{DefaultDialect, Dialect};
 pub mod dialect;
+pub mod udlp_unparser;
 
 /// Convert a DataFusion [`Expr`] to [`sqlparser::ast::Expr`]
 ///
@@ -55,6 +57,7 @@ pub mod dialect;
 pub struct Unparser<'a> {
     dialect: &'a dyn Dialect,
     pretty: bool,
+    udlp_unparsers: Vec<Arc<dyn UserDefinedLogicalNodeUnparser>>,
 }
 
 impl<'a> Unparser<'a> {
@@ -62,6 +65,7 @@ impl<'a> Unparser<'a> {
         Self {
             dialect,
             pretty: false,
+            udlp_unparsers: vec![],
         }
     }
 
@@ -105,6 +109,14 @@ impl<'a> Unparser<'a> {
         self.pretty = pretty;
         self
     }
+
+    pub fn with_udlp_unparsers(
+        mut self,
+        udlp_unparsers: Vec<Arc<dyn UserDefinedLogicalNodeUnparser>>,
+    ) -> Self {
+        self.udlp_unparsers = udlp_unparsers;
+        self
+    }
 }
 
 impl Default for Unparser<'_> {
@@ -112,6 +124,7 @@ impl Default for Unparser<'_> {
         Self {
             dialect: &DefaultDialect {},
             pretty: false,
+            udlp_unparsers: vec![],
         }
     }
 }
