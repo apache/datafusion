@@ -55,18 +55,16 @@ pub fn data_types_with_scalar_udf(
     if current_types.is_empty() {
         if type_signature.supports_zero_argument() {
             return Ok(vec![]);
+        } else if type_signature.used_to_support_zero_arguments() {
+            // Special error to help during upgrade: https://github.com/apache/datafusion/issues/13763
+            return plan_err!("{} does not support zero arguments. Use TypeSignature::Nullary for zero arguments.", func.name());
         } else {
-            if type_signature.used_to_support_zero_arguments() {
-                // Special error to help during upgrade: https://github.com/apache/datafusion/issues/13763
-                return plan_err!("{} does not support zero arguments. Use TypeSignature::Nullary for zero arguments.", func.name());
-            } else {
-                return plan_err!("{} does not support zero arguments.", func.name());
-            }
+            return plan_err!("{} does not support zero arguments.", func.name());
         }
     }
 
     let valid_types =
-        get_valid_types_with_scalar_udf(&type_signature, current_types, func)?;
+        get_valid_types_with_scalar_udf(type_signature, current_types, func)?;
 
     if valid_types
         .iter()
@@ -95,13 +93,11 @@ pub fn data_types_with_aggregate_udf(
     if current_types.is_empty() {
         if type_signature.supports_zero_argument() {
             return Ok(vec![]);
+        } else if type_signature.used_to_support_zero_arguments() {
+            // Special error to help during upgrade: https://github.com/apache/datafusion/issues/13763
+            return plan_err!("{} does not support zero arguments. Use TypeSignature::Nullary for zero arguments.", func.name());
         } else {
-            if type_signature.used_to_support_zero_arguments() {
-                // Special error to help during upgrade: https://github.com/apache/datafusion/issues/13763
-                return plan_err!("{} does not support zero arguments. Use TypeSignature::Nullary for zero arguments.", func.name());
-            } else {
-                return plan_err!("{} does not support zero arguments.", func.name());
-            }
+            return plan_err!("{} does not support zero arguments.", func.name());
         }
     }
 
@@ -134,13 +130,11 @@ pub fn data_types_with_window_udf(
     if current_types.is_empty() {
         if type_signature.supports_zero_argument() {
             return Ok(vec![]);
+        } else if type_signature.used_to_support_zero_arguments() {
+            // Special error to help during upgrade: https://github.com/apache/datafusion/issues/13763
+            return plan_err!("{} does not support zero arguments. Use TypeSignature::Nullary for zero arguments.", func.name());
         } else {
-            if type_signature.used_to_support_zero_arguments() {
-                // Special error to help during upgrade: https://github.com/apache/datafusion/issues/13763
-                return plan_err!("{} does not support zero arguments. Use TypeSignature::Nullary for zero arguments.", func.name());
-            } else {
-                return plan_err!("{} does not support zero arguments.", func.name());
-            }
+            return plan_err!("{} does not support zero arguments.", func.name());
         }
     }
 
@@ -173,19 +167,17 @@ pub fn data_types(
     if current_types.is_empty() {
         if type_signature.supports_zero_argument() {
             return Ok(vec![]);
-        } else {
-            if type_signature.used_to_support_zero_arguments() {
-                // Special error to help during upgrade: https://github.com/apache/datafusion/issues/13763
-                return plan_err!(
+        } else if type_signature.used_to_support_zero_arguments() {
+            // Special error to help during upgrade: https://github.com/apache/datafusion/issues/13763
+            return plan_err!(
                 "signature {:?} does not support zero arguments. Use TypeSignature::Nullary for zero arguments.",
                 type_signature
             );
-            } else {
-                return plan_err!(
-                    "signature {:?} does not support zero arguments.",
-                    type_signature
-                );
-            }
+        } else {
+            return plan_err!(
+                "signature {:?} does not support zero arguments.",
+                type_signature
+            );
         }
     }
 
