@@ -842,13 +842,8 @@ SELECT greatest(-1, 1, 2.3, 123456789, 3 + 5, -(-4), abs(-9.0))
 123456789
 
 
-query error
+query error greatest does not support zero arguments
 SELECT greatest()
-----
-DataFusion error: Error during planning: Error during planning: greatest does not support zero arguments. No function matches the given name and argument types 'greatest()'. You might need to add explicit type casts.
-	Candidate functions:
-	greatest(UserDefined)
-
 
 query I
 SELECT greatest(4, 5, 7, 1, 2)
@@ -1045,13 +1040,8 @@ SELECT least(-1, 1, 2.3, 123456789, 3 + 5, -(-4), abs(-9.0))
 -1
 
 
-query error
+query error least does not support zero arguments
 SELECT least()
-----
-DataFusion error: Error during planning: Error during planning: least does not support zero arguments. No function matches the given name and argument types 'least()'. You might need to add explicit type casts.
-	Candidate functions:
-	least(UserDefined)
-
 
 query I
 SELECT least(4, 5, 7, 1, 2)
