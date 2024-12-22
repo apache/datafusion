@@ -22,13 +22,30 @@ use arrow::array::{
 };
 use arrow::datatypes::{ArrowNativeType, DataType, Int32Type, Int64Type};
 use datafusion_common::Result;
-use datafusion_expr::scalar_doc_sections::DOC_SECTION_STRING;
+use datafusion_doc::DocSection;
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
 };
+use datafusion_macros::user_doc;
 use std::any::Any;
 use std::sync::{Arc, OnceLock};
 
+#[user_doc(
+    doc_section(label = "String Functions"),
+    description = "Returns the number of characters in a string.",
+    syntax_example = "character_length(str)",
+    sql_example = r#"```sql
+> select character_length('Ångström');
++------------------------------------+
+| character_length(Utf8("Ångström")) |
++------------------------------------+
+| 8                                  |
++------------------------------------+
+```"#,
+    standard_argument(name = "str", prefix = "String"),
+    related_udf(name = "bit_length"),
+    related_udf(name = "octet_length")
+)]
 #[derive(Debug)]
 pub struct CharacterLengthFunc {
     signature: Signature,
@@ -85,34 +102,8 @@ impl ScalarUDFImpl for CharacterLengthFunc {
     }
 
     fn documentation(&self) -> Option<&Documentation> {
-        Some(get_character_length_doc())
+        self.doc()
     }
-}
-
-static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
-
-fn get_character_length_doc() -> &'static Documentation {
-    DOCUMENTATION.get_or_init(|| {
-        Documentation::builder(
-            DOC_SECTION_STRING,
-            "Returns the number of characters in a string.",
-            "character_length(str)",
-        )
-        .with_sql_example(
-            r#"```sql
-> select character_length('Ångström');
-+------------------------------------+
-| character_length(Utf8("Ångström")) |
-+------------------------------------+
-| 8                                  |
-+------------------------------------+
-```"#,
-        )
-        .with_standard_argument("str", Some("String"))
-        .with_related_udf("bit_length")
-        .with_related_udf("octet_length")
-        .build()
-    })
 }
 
 /// Returns number of characters in the string.

@@ -31,12 +31,29 @@ use datafusion_common::cast::{
 };
 use datafusion_common::exec_err;
 use datafusion_common::Result;
-use datafusion_expr::scalar_doc_sections::DOC_SECTION_STRING;
+use datafusion_doc::DocSection;
 use datafusion_expr::TypeSignature::Exact;
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
 };
+use datafusion_macros::user_doc;
 
+#[user_doc(
+    doc_section(label = "String Functions"),
+    description = "Returns a specified number of characters from the right side of a string.",
+    syntax_example = "right(str, n)",
+    sql_example = r#"```sql
+> select right('datafusion', 6);
++------------------------------------+
+| right(Utf8("datafusion"),Int64(6)) |
++------------------------------------+
+| fusion                             |
++------------------------------------+
+```"#,
+    standard_argument(name = "str", prefix = "String"),
+    argument(name = "n", description = "Number of characters to return."),
+    related_udf(name = "left")
+)]
 #[derive(Debug)]
 pub struct RightFunc {
     signature: Signature,
@@ -99,34 +116,8 @@ impl ScalarUDFImpl for RightFunc {
     }
 
     fn documentation(&self) -> Option<&Documentation> {
-        Some(get_right_doc())
+        self.doc()
     }
-}
-
-static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
-
-fn get_right_doc() -> &'static Documentation {
-    DOCUMENTATION.get_or_init(|| {
-        Documentation::builder(
-            DOC_SECTION_STRING,
-            "Returns a specified number of characters from the right side of a string.",
-            "right(str, n)",
-        )
-        .with_sql_example(
-            r#"```sql
-> select right('datafusion', 6);
-+------------------------------------+
-| right(Utf8("datafusion"),Int64(6)) |
-+------------------------------------+
-| fusion                             |
-+------------------------------------+
-```"#,
-        )
-        .with_standard_argument("str", Some("String"))
-        .with_argument("n", "Number of characters to return")
-        .with_related_udf("left")
-        .build()
-    })
 }
 
 /// Returns last n characters in the string, or when n is negative, returns all but first |n| characters.

@@ -26,11 +26,19 @@ use arrow::datatypes::DataType::Int64;
 
 use crate::utils::make_scalar_function;
 use datafusion_common::{arrow_datafusion_err, exec_err, DataFusionError, Result};
-use datafusion_expr::scalar_doc_sections::DOC_SECTION_MATH;
+use datafusion_doc::DocSection;
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
 };
+use datafusion_macros::user_doc;
 
+#[user_doc(
+    doc_section(label = "Math Functions"),
+    description = "Returns the greatest common divisor of `expression_x` and `expression_y`. Returns 0 if both inputs are zero..",
+    syntax_example = "gcd(expression_x, expression_y)",
+    standard_argument(name = "expression_x", prefix = "First numeric"),
+    standard_argument(name = "expression_y", prefix = "Second numeric")
+)]
 #[derive(Debug)]
 pub struct GcdFunc {
     signature: Signature,
@@ -77,23 +85,8 @@ impl ScalarUDFImpl for GcdFunc {
     }
 
     fn documentation(&self) -> Option<&Documentation> {
-        Some(get_gcd_doc())
+        self.doc()
     }
-}
-
-static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
-
-fn get_gcd_doc() -> &'static Documentation {
-    DOCUMENTATION.get_or_init(|| {
-        Documentation::builder(
-            DOC_SECTION_MATH,
-                "Returns the greatest common divisor of `expression_x` and `expression_y`. Returns 0 if both inputs are zero.",
-
-            "gcd(expression_x, expression_y)")
-            .with_standard_argument("expression_x", Some("First numeric"))
-            .with_standard_argument("expression_y", Some("Second numeric"))
-            .build()
-    })
 }
 
 /// Gcd SQL function

@@ -25,13 +25,24 @@ use arrow::compute::{cast_with_options, CastOptions};
 use arrow::datatypes::DataType::{Float32, Float64, Int32};
 use arrow::datatypes::{DataType, Float32Type, Float64Type, Int32Type};
 use datafusion_common::{exec_datafusion_err, exec_err, Result, ScalarValue};
-use datafusion_expr::scalar_doc_sections::DOC_SECTION_MATH;
+use datafusion_doc::DocSection;
 use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
 use datafusion_expr::TypeSignature::Exact;
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
 };
+use datafusion_macros::user_doc;
 
+#[user_doc(
+    doc_section(label = "Math Functions"),
+    description = "Rounds a number to the nearest integer.",
+    syntax_example = "round(numeric_expression[, decimal_places])",
+    standard_argument(name = "numeric_expression", prefix = "Numeric"),
+    argument(
+        name = "decimal_places",
+        description = "Optional. The number of decimal places to round to. Defaults to 0."
+    )
+)]
 #[derive(Debug)]
 pub struct RoundFunc {
     signature: Signature,
@@ -104,26 +115,8 @@ impl ScalarUDFImpl for RoundFunc {
     }
 
     fn documentation(&self) -> Option<&Documentation> {
-        Some(get_round_doc())
+        self.doc()
     }
-}
-
-static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
-
-fn get_round_doc() -> &'static Documentation {
-    DOCUMENTATION.get_or_init(|| {
-        Documentation::builder(
-            DOC_SECTION_MATH,
-            "Rounds a number to the nearest integer.",
-            "round(numeric_expression[, decimal_places])",
-        )
-        .with_standard_argument("numeric_expression", Some("Numeric"))
-        .with_argument(
-            "decimal_places",
-            "Optional. The number of decimal places to round to. Defaults to 0.",
-        )
-        .build()
-    })
 }
 
 /// Round SQL function

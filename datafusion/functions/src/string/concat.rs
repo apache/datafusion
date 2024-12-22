@@ -26,12 +26,32 @@ use crate::strings::{
 };
 use datafusion_common::cast::{as_string_array, as_string_view_array};
 use datafusion_common::{internal_err, plan_err, Result, ScalarValue};
+use datafusion_doc::DocSection;
 use datafusion_expr::expr::ScalarFunction;
-use datafusion_expr::scalar_doc_sections::DOC_SECTION_STRING;
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyInfo};
 use datafusion_expr::{lit, ColumnarValue, Documentation, Expr, Volatility};
 use datafusion_expr::{ScalarUDFImpl, Signature};
+use datafusion_macros::user_doc;
 
+#[user_doc(
+    doc_section(label = "String Functions"),
+    description = "Concatenates multiple strings together.",
+    syntax_example = "concat(str[, ..., str_n])",
+    sql_example = r#"```sql
+> select concat('data', 'f', 'us', 'ion');
++-------------------------------------------------------+
+| concat(Utf8("data"),Utf8("f"),Utf8("us"),Utf8("ion")) |
++-------------------------------------------------------+
+| datafusion                                            |
++-------------------------------------------------------+
+```"#,
+    standard_argument(name = "str", prefix = "String"),
+    argument(
+        name = "str_n",
+        description = "Subsequent string expressions to concatenate."
+    ),
+    related_udf(name = "concat_ws")
+)]
 #[derive(Debug)]
 pub struct ConcatFunc {
     signature: Signature,
@@ -263,34 +283,8 @@ impl ScalarUDFImpl for ConcatFunc {
     }
 
     fn documentation(&self) -> Option<&Documentation> {
-        Some(get_concat_doc())
+        self.doc()
     }
-}
-
-static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
-
-fn get_concat_doc() -> &'static Documentation {
-    DOCUMENTATION.get_or_init(|| {
-        Documentation::builder(
-            DOC_SECTION_STRING,
-            "Concatenates multiple strings together.",
-            "concat(str[, ..., str_n])",
-        )
-        .with_sql_example(
-            r#"```sql
-> select concat('data', 'f', 'us', 'ion');
-+-------------------------------------------------------+
-| concat(Utf8("data"),Utf8("f"),Utf8("us"),Utf8("ion")) |
-+-------------------------------------------------------+
-| datafusion                                            |
-+-------------------------------------------------------+
-```"#,
-        )
-        .with_standard_argument("str", Some("String"))
-        .with_argument("str_n", "Subsequent string expressions to concatenate.")
-        .with_related_udf("concat_ws")
-        .build()
-    })
 }
 
 pub fn simplify_concat(args: Vec<Expr>) -> Result<ExprSimplifyResult> {

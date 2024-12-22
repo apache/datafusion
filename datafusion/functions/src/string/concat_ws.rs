@@ -26,12 +26,36 @@ use crate::string::concat_ws;
 use crate::strings::{ColumnarValueRef, StringArrayBuilder};
 use datafusion_common::cast::{as_string_array, as_string_view_array};
 use datafusion_common::{exec_err, internal_err, plan_err, Result, ScalarValue};
+use datafusion_doc::DocSection;
 use datafusion_expr::expr::ScalarFunction;
-use datafusion_expr::scalar_doc_sections::DOC_SECTION_STRING;
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyInfo};
 use datafusion_expr::{lit, ColumnarValue, Documentation, Expr, Volatility};
 use datafusion_expr::{ScalarUDFImpl, Signature};
+use datafusion_macros::user_doc;
 
+#[user_doc(
+    doc_section(label = "String Functions"),
+    description = "Concatenates multiple strings together with a specified separator.",
+    syntax_example = "concat_ws(separator, str[, ..., str_n])",
+    sql_example = r#"```sql
+> select concat_ws('_', 'data', 'fusion');
++--------------------------------------------------+
+| concat_ws(Utf8("_"),Utf8("data"),Utf8("fusion")) |
++--------------------------------------------------+
+| data_fusion                                      |
++--------------------------------------------------+
+```"#,
+    standard_argument(name = "str", prefix = "String"),
+    argument(
+        name = "separator",
+        description = "Separator to insert between concatenated strings."
+    ),
+    argument(
+        name = "str_n",
+        description = "Subsequent string expressions to concatenate."
+    ),
+    related_udf(name = "concat")
+)]
 #[derive(Debug)]
 pub struct ConcatWsFunc {
     signature: Signature,
@@ -271,38 +295,8 @@ impl ScalarUDFImpl for ConcatWsFunc {
     }
 
     fn documentation(&self) -> Option<&Documentation> {
-        Some(get_concat_ws_doc())
+        self.doc()
     }
-}
-
-static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
-
-fn get_concat_ws_doc() -> &'static Documentation {
-    DOCUMENTATION.get_or_init(|| {
-        Documentation::builder(
-            DOC_SECTION_STRING,
-            "Concatenates multiple strings together with a specified separator.",
-            "concat_ws(separator, str[, ..., str_n])",
-        )
-        .with_sql_example(
-            r#"```sql
-> select concat_ws('_', 'data', 'fusion');
-+--------------------------------------------------+
-| concat_ws(Utf8("_"),Utf8("data"),Utf8("fusion")) |
-+--------------------------------------------------+
-| data_fusion                                      |
-+--------------------------------------------------+
-```"#,
-        )
-        .with_argument(
-            "separator",
-            "Separator to insert between concatenated strings.",
-        )
-        .with_standard_argument("str", Some("String"))
-        .with_argument("str_n", "Subsequent string expressions to concatenate.")
-        .with_related_udf("concat")
-        .build()
-    })
 }
 
 fn simplify_concat_ws(delimiter: &Expr, args: &[Expr]) -> Result<ExprSimplifyResult> {

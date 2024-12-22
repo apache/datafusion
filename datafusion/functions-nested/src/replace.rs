@@ -27,10 +27,11 @@ use arrow_buffer::{BooleanBufferBuilder, NullBuffer, OffsetBuffer};
 use arrow_schema::Field;
 use datafusion_common::cast::as_int64_array;
 use datafusion_common::{exec_err, Result};
-use datafusion_expr::scalar_doc_sections::DOC_SECTION_ARRAY;
+use datafusion_doc::DocSection;
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
 };
+use datafusion_macros::user_doc;
 
 use crate::utils::compare_element_to_list;
 use crate::utils::make_scalar_function;
@@ -58,6 +59,25 @@ make_udf_expr_and_func!(ArrayReplaceAll,
     array_replace_all_udf
 );
 
+#[user_doc(
+    doc_section(label = "Array Functions"),
+    description = "Replaces the first occurrence of the specified element with another specified element.",
+    syntax_example = "array_replace(array, from, to)",
+    sql_example = r#"```sql
+> select array_replace([1, 2, 2, 3, 2, 1, 4], 2, 5);
++--------------------------------------------------------+
+| array_replace(List([1,2,2,3,2,1,4]),Int64(2),Int64(5)) |
++--------------------------------------------------------+
+| [1, 5, 2, 3, 2, 1, 4]                                  |
++--------------------------------------------------------+
+```"#,
+    argument(
+        name = "array",
+        description = "Array expression. Can be a constant, column, or function, and any combination of array operators."
+    ),
+    argument(name = "from", description = "Initial element."),
+    argument(name = "to", description = "Final element.")
+)]
 #[derive(Debug)]
 pub(super) struct ArrayReplace {
     signature: Signature,
@@ -103,21 +123,15 @@ impl ScalarUDFImpl for ArrayReplace {
     }
 
     fn documentation(&self) -> Option<&Documentation> {
-        Some(get_array_replace_doc())
+        self.doc()
     }
 }
 
-static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
-
-fn get_array_replace_doc() -> &'static Documentation {
-    DOCUMENTATION.get_or_init(|| {
-        Documentation::builder(
-            DOC_SECTION_ARRAY,
-                "Replaces the first occurrence of the specified element with another specified element.",
-
-            "array_replace(array, from, to)")
-            .with_sql_example(
-                r#"```sql
+#[user_doc(
+    doc_section(label = "Array Functions"),
+    description = "Replaces the first occurrence of the specified element with another specified element.",
+    syntax_example = "array_replace(array, from, to)",
+    sql_example = r#"```sql
 > select array_replace([1, 2, 2, 3, 2, 1, 4], 2, 5);
 +--------------------------------------------------------+
 | array_replace(List([1,2,2,3,2,1,4]),Int64(2),Int64(5)) |
@@ -125,23 +139,14 @@ fn get_array_replace_doc() -> &'static Documentation {
 | [1, 5, 2, 3, 2, 1, 4]                                  |
 +--------------------------------------------------------+
 ```"#,
-            )
-            .with_argument(
-                "array",
-                "Array expression. Can be a constant, column, or function, and any combination of array operators.",
-            )
-            .with_argument(
-                "from",
-                "Initial element.",
-            )
-            .with_argument(
-                "to",
-                "Final element.",
-            )
-            .build()
-    })
-}
-
+    argument(
+        name = "array",
+        description = "Array expression. Can be a constant, column, or function, and any combination of array operators."
+    ),
+    argument(name = "from", description = "Initial element."),
+    argument(name = "to", description = "Final element."),
+    argument(name = "max", description = "Number of first occurrences to replace.")
+)]
 #[derive(Debug)]
 pub(super) struct ArrayReplaceN {
     signature: Signature,
@@ -187,47 +192,29 @@ impl ScalarUDFImpl for ArrayReplaceN {
     }
 
     fn documentation(&self) -> Option<&Documentation> {
-        Some(get_array_replace_n_doc())
+        self.doc()
     }
 }
 
-fn get_array_replace_n_doc() -> &'static Documentation {
-    DOCUMENTATION.get_or_init(|| {
-        Documentation::builder(
-            DOC_SECTION_ARRAY,
-                "Replaces the first `max` occurrences of the specified element with another specified element.",
-
-            "array_replace_n(array, from, to, max)")
-            .with_sql_example(
-                r#"```sql
-> select array_replace_n([1, 2, 2, 3, 2, 1, 4], 2, 5, 2);
-+-------------------------------------------------------------------+
-| array_replace_n(List([1,2,2,3,2,1,4]),Int64(2),Int64(5),Int64(2)) |
-+-------------------------------------------------------------------+
-| [1, 5, 5, 3, 2, 1, 4]                                             |
-+-------------------------------------------------------------------+
+#[user_doc(
+    doc_section(label = "Array Functions"),
+    description = "Replaces all occurrences of the specified element with another specified element.",
+    syntax_example = "array_replace_all(array, from, to)",
+    sql_example = r#"```sql
+> select array_replace_all([1, 2, 2, 3, 2, 1, 4], 2, 5);
++------------------------------------------------------------+
+| array_replace_all(List([1,2,2,3,2,1,4]),Int64(2),Int64(5)) |
++------------------------------------------------------------+
+| [1, 5, 5, 3, 5, 1, 4]                                      |
++------------------------------------------------------------+
 ```"#,
-            )
-            .with_argument(
-                "array",
-                "Array expression. Can be a constant, column, or function, and any combination of array operators.",
-            )
-            .with_argument(
-                "from",
-                "Initial element.",
-            )
-            .with_argument(
-                "to",
-                "Final element.",
-            )
-            .with_argument(
-                "max",
-                "Number of first occurrences to replace.",
-            )
-            .build()
-    })
-}
-
+    argument(
+        name = "array",
+        description = "Array expression. Can be a constant, column, or function, and any combination of array operators."
+    ),
+    argument(name = "from", description = "Initial element."),
+    argument(name = "to", description = "Final element.")
+)]
 #[derive(Debug)]
 pub(super) struct ArrayReplaceAll {
     signature: Signature,
@@ -273,41 +260,8 @@ impl ScalarUDFImpl for ArrayReplaceAll {
     }
 
     fn documentation(&self) -> Option<&Documentation> {
-        Some(get_array_replace_all_doc())
+        self.doc()
     }
-}
-
-fn get_array_replace_all_doc() -> &'static Documentation {
-    DOCUMENTATION.get_or_init(|| {
-        Documentation::builder(
-            DOC_SECTION_ARRAY,
-                "Replaces all occurrences of the specified element with another specified element.",
-
-            "array_replace_all(array, from, to)")
-            .with_sql_example(
-                r#"```sql
-> select array_replace_all([1, 2, 2, 3, 2, 1, 4], 2, 5);
-+------------------------------------------------------------+
-| array_replace_all(List([1,2,2,3,2,1,4]),Int64(2),Int64(5)) |
-+------------------------------------------------------------+
-| [1, 5, 5, 3, 5, 1, 4]                                      |
-+------------------------------------------------------------+
-```"#,
-            )
-            .with_argument(
-                "array",
-                "Array expression. Can be a constant, column, or function, and any combination of array operators.",
-            )
-            .with_argument(
-                "from",
-                "Initial element.",
-            )
-            .with_argument(
-                "to",
-                "Final element.",
-            )
-            .build()
-    })
 }
 
 /// For each element of `list_array[i]`, replaces up to `arr_n[i]`  occurrences

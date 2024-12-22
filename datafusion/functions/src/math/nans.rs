@@ -19,14 +19,21 @@
 
 use arrow::datatypes::{DataType, Float32Type, Float64Type};
 use datafusion_common::{exec_err, Result};
+use datafusion_doc::DocSection;
 use datafusion_expr::{ColumnarValue, TypeSignature};
 
 use arrow::array::{ArrayRef, AsArray, BooleanArray};
-use datafusion_expr::scalar_doc_sections::DOC_SECTION_MATH;
 use datafusion_expr::{Documentation, ScalarUDFImpl, Signature, Volatility};
+use datafusion_macros::user_doc;
 use std::any::Any;
 use std::sync::{Arc, OnceLock};
 
+#[user_doc(
+    doc_section(label = "Math Functions"),
+    description = "Returns true if a given number is +NaN or -NaN otherwise returns false.",
+    syntax_example = "isnan(numeric_expression)",
+    standard_argument(name = "numeric_expression", prefix = "Numeric")
+)]
 #[derive(Debug)]
 pub struct IsNanFunc {
     signature: Signature,
@@ -97,20 +104,6 @@ impl ScalarUDFImpl for IsNanFunc {
     }
 
     fn documentation(&self) -> Option<&Documentation> {
-        Some(get_isnan_doc())
+        self.doc()
     }
-}
-
-static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
-
-fn get_isnan_doc() -> &'static Documentation {
-    DOCUMENTATION.get_or_init(|| {
-        Documentation::builder(
-            DOC_SECTION_MATH,
-            "Returns true if a given number is +NaN or -NaN otherwise returns false.",
-            "isnan(numeric_expression)",
-        )
-        .with_standard_argument("numeric_expression", Some("Numeric"))
-        .build()
-    })
 }

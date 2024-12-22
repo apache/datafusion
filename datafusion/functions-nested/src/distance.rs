@@ -31,10 +31,11 @@ use datafusion_common::cast::{
 use datafusion_common::utils::coerced_fixed_size_list_to_list;
 use datafusion_common::DataFusionError;
 use datafusion_common::{exec_err, Result};
-use datafusion_expr::scalar_doc_sections::DOC_SECTION_ARRAY;
+use datafusion_doc::DocSection;
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
 };
+use datafusion_macros::user_doc;
 use std::any::Any;
 use std::sync::{Arc, OnceLock};
 
@@ -46,6 +47,27 @@ make_udf_expr_and_func!(
     array_distance_udf
 );
 
+#[user_doc(
+    doc_section(label = "Array Functions"),
+    description = "Returns the Euclidean distance between two input arrays of equal length.",
+    syntax_example = "array_distance(array1, array2)",
+    sql_example = r#"```sql
+> select array_distance([1, 2], [1, 4]);
++------------------------------------+
+| array_distance(List([1,2], [1,4])) |
++------------------------------------+
+| 2.0                                |
++------------------------------------+
+```"#,
+    argument(
+        name = "array1",
+        description = "Array expression. Can be a constant, column, or function, and any combination of array operators."
+    ),
+    argument(
+        name = "array2",
+        description = "Array expression. Can be a constant, column, or function, and any combination of array operators."
+    )
+)]
 #[derive(Debug)]
 pub(super) struct ArrayDistance {
     signature: Signature,
@@ -109,39 +131,8 @@ impl ScalarUDFImpl for ArrayDistance {
     }
 
     fn documentation(&self) -> Option<&Documentation> {
-        Some(get_array_distance_doc())
+        self.doc()
     }
-}
-
-static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
-
-fn get_array_distance_doc() -> &'static Documentation {
-    DOCUMENTATION.get_or_init(|| {
-        Documentation::builder(
-            DOC_SECTION_ARRAY,
-                "Returns the Euclidean distance between two input arrays of equal length.",
-
-            "array_distance(array1, array2)")
-            .with_sql_example(
-                r#"```sql
-> select array_distance([1, 2], [1, 4]);
-+------------------------------------+
-| array_distance(List([1,2], [1,4])) |
-+------------------------------------+
-| 2.0                                |
-+------------------------------------+
-```"#,
-            )
-            .with_argument(
-                "array1",
-                "Array expression. Can be a constant, column, or function, and any combination of array operators.",
-            )
-            .with_argument(
-                "array2",
-                "Array expression. Can be a constant, column, or function, and any combination of array operators.",
-            )
-            .build()
-    })
 }
 
 pub fn array_distance_inner(args: &[ArrayRef]) -> Result<ArrayRef> {

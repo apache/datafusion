@@ -21,12 +21,19 @@ use std::sync::OnceLock;
 use arrow::datatypes::DataType;
 use arrow::datatypes::DataType::Float64;
 use datafusion_common::{internal_err, Result, ScalarValue};
+use datafusion_doc::DocSection;
 use datafusion_expr::scalar_doc_sections::DOC_SECTION_MATH;
 use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
 };
+use datafusion_macros::user_doc;
 
+#[user_doc(
+    doc_section(label = "Math Functions"),
+    description = "Returns an approximate value of π.",
+    syntax_example = "pi()"
+)]
 #[derive(Debug)]
 pub struct PiFunc {
     signature: Signature,
@@ -82,19 +89,6 @@ impl ScalarUDFImpl for PiFunc {
     }
 
     fn documentation(&self) -> Option<&Documentation> {
-        Some(get_pi_doc())
+        self.doc()
     }
-}
-
-static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
-
-fn get_pi_doc() -> &'static Documentation {
-    DOCUMENTATION.get_or_init(|| {
-        Documentation::builder(
-            DOC_SECTION_MATH,
-            "Returns an approximate value of π.",
-            "pi()",
-        )
-        .build()
-    })
 }

@@ -27,9 +27,10 @@ use arrow::datatypes::DataType::Utf8;
 use crate::utils::make_scalar_function;
 use datafusion_common::cast::as_int64_array;
 use datafusion_common::{exec_err, Result};
-use datafusion_expr::scalar_doc_sections::DOC_SECTION_STRING;
+use datafusion_doc::DocSection;
 use datafusion_expr::{ColumnarValue, Documentation, Volatility};
 use datafusion_expr::{ScalarUDFImpl, Signature};
+use datafusion_macros::user_doc;
 
 /// Returns the character with the given code. chr(0) is disallowed because text data types cannot store that character.
 /// chr(65) = 'A'
@@ -60,6 +61,23 @@ pub fn chr(args: &[ArrayRef]) -> Result<ArrayRef> {
     Ok(Arc::new(result) as ArrayRef)
 }
 
+#[user_doc(
+    doc_section(label = "String Functions"),
+    description = "Returns the character with the specified ASCII or Unicode code value.",
+    syntax_example = "chr(expression)",
+    alternative_syntax = "trim(BOTH trim_str FROM str)",
+    alternative_syntax = "trim(trim_str FROM str)",
+    sql_example = r#"```sql
+> select chr(128640);
++--------------------+
+| chr(Int64(128640)) |
++--------------------+
+| 🚀                 |
++--------------------+ 
+```"#,
+    standard_argument(name = "str", prefix = "String"),
+    related_udf(name = "ascii")
+)]
 #[derive(Debug)]
 pub struct ChrFunc {
     signature: Signature,
@@ -105,31 +123,6 @@ impl ScalarUDFImpl for ChrFunc {
     }
 
     fn documentation(&self) -> Option<&Documentation> {
-        Some(get_chr_doc())
+        self.doc()
     }
-}
-
-static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
-
-fn get_chr_doc() -> &'static Documentation {
-    DOCUMENTATION.get_or_init(|| {
-        Documentation::builder(
-            DOC_SECTION_STRING,
-            "Returns the character with the specified ASCII or Unicode code value.",
-            "chr(expression)",
-        )
-        .with_sql_example(
-            r#"```sql
-> select chr(128640);
-+--------------------+
-| chr(Int64(128640)) |
-+--------------------+
-| 🚀                 |
-+--------------------+ 
-```"#,
-        )
-        .with_standard_argument("expression", Some("String"))
-        .with_related_udf("ascii")
-        .build()
-    })
 }

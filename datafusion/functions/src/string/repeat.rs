@@ -29,10 +29,29 @@ use arrow::datatypes::DataType::{LargeUtf8, Utf8, Utf8View};
 use datafusion_common::cast::as_int64_array;
 use datafusion_common::types::{logical_int64, logical_string};
 use datafusion_common::{exec_err, Result};
-use datafusion_expr::scalar_doc_sections::DOC_SECTION_STRING;
+use datafusion_doc::DocSection;
 use datafusion_expr::{ColumnarValue, Documentation, Volatility};
 use datafusion_expr::{ScalarUDFImpl, Signature};
+use datafusion_macros::user_doc;
 
+#[user_doc(
+    doc_section(label = "String Functions"),
+    description = "Returns a string with an input string repeated a specified number.",
+    syntax_example = "repeat(str, n)",
+    sql_example = r#"```sql
+> select repeat('data', 3);
++-------------------------------+
+| repeat(Utf8("data"),Int64(3)) |
++-------------------------------+
+| datadatadata                  |
++-------------------------------+
+```"#,
+    standard_argument(name = "str", prefix = "String"),
+    argument(
+        name = "n",
+        description = "Number of times to repeat the input string."
+    )
+)]
 #[derive(Debug)]
 pub struct RepeatFunc {
     signature: Signature,
@@ -81,33 +100,8 @@ impl ScalarUDFImpl for RepeatFunc {
     }
 
     fn documentation(&self) -> Option<&Documentation> {
-        Some(get_repeat_doc())
+        self.doc()
     }
-}
-
-static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
-
-fn get_repeat_doc() -> &'static Documentation {
-    DOCUMENTATION.get_or_init(|| {
-        Documentation::builder(
-            DOC_SECTION_STRING,
-            "Returns a string with an input string repeated a specified number.",
-            "repeat(str, n)",
-        )
-        .with_sql_example(
-            r#"```sql
-> select repeat('data', 3);
-+-------------------------------+
-| repeat(Utf8("data"),Int64(3)) |
-+-------------------------------+
-| datadatadata                  |
-+-------------------------------+
-```"#,
-        )
-        .with_standard_argument("str", Some("String"))
-        .with_argument("n", "Number of times to repeat the input string.")
-        .build()
-    })
 }
 
 /// Repeats string the specified number of times.

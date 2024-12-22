@@ -25,12 +25,29 @@ use arrow::datatypes::DataType;
 use datafusion_common::cast::as_int64_array;
 use datafusion_common::ScalarValue;
 use datafusion_common::{exec_err, DataFusionError, Result};
-use datafusion_expr::scalar_doc_sections::DOC_SECTION_STRING;
+use datafusion_doc::DocSection;
 use datafusion_expr::{ColumnarValue, Documentation, TypeSignature, Volatility};
 use datafusion_expr::{ScalarUDFImpl, Signature};
+use datafusion_macros::user_doc;
 use std::any::Any;
 use std::sync::{Arc, OnceLock};
 
+#[user_doc(
+    doc_section(label = "String Functions"),
+    description = "Splits a string based on a specified delimiter and returns the substring in the specified position.",
+    syntax_example = "split_part(str, delimiter, pos)",
+    sql_example = r#"```sql
+> select split_part('1.2.3.4.5', '.', 3);
++--------------------------------------------------+
+| split_part(Utf8("1.2.3.4.5"),Utf8("."),Int64(3)) |
++--------------------------------------------------+
+| 3                                                |
++--------------------------------------------------+
+```"#,
+    standard_argument(name = "str", prefix = "String"),
+    argument(name = "delimiter", description = "String or character to split on."),
+    argument(name = "pos", description = "Position of the part to return.")
+)]
 #[derive(Debug)]
 pub struct SplitPartFunc {
     signature: Signature,
@@ -182,31 +199,8 @@ impl ScalarUDFImpl for SplitPartFunc {
     }
 
     fn documentation(&self) -> Option<&Documentation> {
-        Some(get_split_part_doc())
+        self.doc()
     }
-}
-
-static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
-
-fn get_split_part_doc() -> &'static Documentation {
-    DOCUMENTATION.get_or_init(|| {
-        Documentation::builder(
-            DOC_SECTION_STRING,
-            "Splits a string based on a specified delimiter and returns the substring in the specified position.",
-            "split_part(str, delimiter, pos)")
-            .with_sql_example(r#"```sql
-> select split_part('1.2.3.4.5', '.', 3);
-+--------------------------------------------------+
-| split_part(Utf8("1.2.3.4.5"),Utf8("."),Int64(3)) |
-+--------------------------------------------------+
-| 3                                                |
-+--------------------------------------------------+
-```"#)
-            .with_standard_argument("str", Some("String"))
-            .with_argument("delimiter", "String or character to split on.")
-            .with_argument("pos", "Position of the part to return.")
-            .build()
-    })
 }
 
 /// impl

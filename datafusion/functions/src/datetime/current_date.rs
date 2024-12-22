@@ -22,13 +22,23 @@ use arrow::datatypes::DataType::Date32;
 use chrono::{Datelike, NaiveDate};
 
 use datafusion_common::{internal_err, Result, ScalarValue};
-use datafusion_expr::scalar_doc_sections::DOC_SECTION_DATETIME;
+use datafusion_doc::DocSection;
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyInfo};
 use datafusion_expr::{
     ColumnarValue, Documentation, Expr, ScalarUDFImpl, Signature, Volatility,
 };
+use datafusion_macros::user_doc;
 use std::sync::OnceLock;
 
+#[user_doc(
+    doc_section(label = "Time and Date Functions"),
+    description = r#"
+Returns the current UTC date.
+
+The `current_date()` return value is determined at query time and will return the same date, no matter when in the query plan the function executes.
+"#,
+    syntax_example = "current_date()"
+)]
 #[derive(Debug)]
 pub struct CurrentDateFunc {
     signature: Signature,
@@ -105,22 +115,6 @@ impl ScalarUDFImpl for CurrentDateFunc {
     }
 
     fn documentation(&self) -> Option<&Documentation> {
-        Some(get_current_date_doc())
+        self.doc()
     }
-}
-
-static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
-
-fn get_current_date_doc() -> &'static Documentation {
-    DOCUMENTATION.get_or_init(|| {
-        Documentation::builder(
-            DOC_SECTION_DATETIME,
-            r#"
-Returns the current UTC date.
-
-The `current_date()` return value is determined at query time and will return the same date, no matter when in the query plan the function executes.
-"#,
-            "current_date()")
-            .build()
-    })
 }

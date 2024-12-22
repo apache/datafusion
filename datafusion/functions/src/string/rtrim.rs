@@ -23,10 +23,11 @@ use std::sync::OnceLock;
 use crate::string::common::*;
 use crate::utils::{make_scalar_function, utf8_to_str_type};
 use datafusion_common::{exec_err, Result};
+use datafusion_doc::DocSection;
 use datafusion_expr::function::Hint;
-use datafusion_expr::scalar_doc_sections::DOC_SECTION_STRING;
 use datafusion_expr::{ColumnarValue, Documentation, TypeSignature, Volatility};
 use datafusion_expr::{ScalarUDFImpl, Signature};
+use datafusion_macros::user_doc;
 
 /// Returns the longest string  with trailing characters removed. If the characters are not specified, whitespace is removed.
 /// rtrim('testxxzx', 'xyz') = 'test'
@@ -35,6 +36,33 @@ fn rtrim<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
     general_trim::<T>(args, TrimType::Right, use_string_view)
 }
 
+#[user_doc(
+    doc_section(label = "String Functions"),
+    description = "Trims the specified trim string from the end of a string. If no trim string is provided, all whitespace is removed from the end of the input string.",
+    syntax_example = "rtrim(str[, trim_str])",
+    alternative_syntax = "trim(TRAILING trim_str FROM str)",
+    sql_example = r#"```sql
+> select rtrim('  datafusion  ');
++-------------------------------+
+| rtrim(Utf8("  datafusion  ")) |
++-------------------------------+
+|   datafusion                  |
++-------------------------------+
+> select rtrim('___datafusion___', '_');
++-------------------------------------------+
+| rtrim(Utf8("___datafusion___"),Utf8("_")) |
++-------------------------------------------+
+| ___datafusion                             |
++-------------------------------------------+
+```"#,
+    standard_argument(name = "str", prefix = "String"),
+    argument(
+        name = "trim_str",
+        description = "String expression to trim from the end of the input string. Can be a constant, column, or function, and any combination of arithmetic operators. _Default is whitespace characters._"
+    ),
+    related_udf(name = "btrim"),
+    related_udf(name = "ltrim")
+)]
 #[derive(Debug)]
 pub struct RtrimFunc {
     signature: Signature,
@@ -100,39 +128,8 @@ impl ScalarUDFImpl for RtrimFunc {
     }
 
     fn documentation(&self) -> Option<&Documentation> {
-        Some(get_rtrim_doc())
+        self.doc()
     }
-}
-
-static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
-
-fn get_rtrim_doc() -> &'static Documentation {
-    DOCUMENTATION.get_or_init(|| {
-        Documentation::builder(
-            DOC_SECTION_STRING,
-            "Trims the specified trim string from the end of a string. If no trim string is provided, all whitespace is removed from the end of the input string.",
-            "rtrim(str[, trim_str])")
-            .with_sql_example(r#"```sql
-> select rtrim('  datafusion  ');
-+-------------------------------+
-| rtrim(Utf8("  datafusion  ")) |
-+-------------------------------+
-|   datafusion                  |
-+-------------------------------+
-> select rtrim('___datafusion___', '_');
-+-------------------------------------------+
-| rtrim(Utf8("___datafusion___"),Utf8("_")) |
-+-------------------------------------------+
-| ___datafusion                             |
-+-------------------------------------------+
-```"#)
-            .with_standard_argument("str", Some("String"))
-            .with_argument("trim_str", "String expression to trim from the end of the input string. Can be a constant, column, or function, and any combination of arithmetic operators. _Default is whitespace characters._")
-            .with_alternative_syntax("trim(TRAILING trim_str FROM str)")
-            .with_related_udf("btrim")
-            .with_related_udf("ltrim")
-            .build()
-    })
 }
 
 #[cfg(test)]

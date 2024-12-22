@@ -33,17 +33,41 @@ use arrow::datatypes::DataType::{self, Null, Timestamp, Utf8, Utf8View};
 use arrow::datatypes::TimeUnit::{self, Microsecond, Millisecond, Nanosecond, Second};
 use datafusion_common::cast::as_primitive_array;
 use datafusion_common::{exec_err, plan_err, DataFusionError, Result, ScalarValue};
+use datafusion_doc::DocSection;
 use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
 use datafusion_expr::TypeSignature::Exact;
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility, TIMEZONE_WILDCARD,
 };
+use datafusion_macros::user_doc;
 
 use chrono::{
     DateTime, Datelike, Duration, LocalResult, NaiveDateTime, Offset, TimeDelta, Timelike,
 };
-use datafusion_expr::scalar_doc_sections::DOC_SECTION_DATETIME;
 
+#[user_doc(
+    doc_section(label = "Time and Date Functions"),
+    description = "Truncates a timestamp value to a specified precision.",
+    syntax_example = "date_trunc(precision, expression)",
+    argument(
+        name = "precision",
+        description = r#"Time precision to truncate to. The following precisions are supported:
+
+    - year / YEAR
+    - quarter / QUARTER
+    - month / MONTH
+    - week / WEEK
+    - day / DAY
+    - hour / HOUR
+    - minute / MINUTE
+    - second / SECOND
+"#
+    ),
+    argument(
+        name = "expression",
+        description = "Time expression to operate on. Can be a constant, column, or function."
+    )
+)]
 #[derive(Debug)]
 pub struct DateTruncFunc {
     signature: Signature,
@@ -247,39 +271,8 @@ impl ScalarUDFImpl for DateTruncFunc {
         }
     }
     fn documentation(&self) -> Option<&Documentation> {
-        Some(get_date_trunc_doc())
+        self.doc()
     }
-}
-
-static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
-
-fn get_date_trunc_doc() -> &'static Documentation {
-    DOCUMENTATION.get_or_init(|| {
-        Documentation::builder(
-            DOC_SECTION_DATETIME,
-            "Truncates a timestamp value to a specified precision.",
-            "date_trunc(precision, expression)",
-        )
-        .with_argument(
-            "precision",
-            r#"Time precision to truncate to. The following precisions are supported:
-
-    - year / YEAR
-    - quarter / QUARTER
-    - month / MONTH
-    - week / WEEK
-    - day / DAY
-    - hour / HOUR
-    - minute / MINUTE
-    - second / SECOND
-"#,
-        )
-        .with_argument(
-            "expression",
-            "Time expression to operate on. Can be a constant, column, or function.",
-        )
-        .build()
-    })
 }
 
 fn _date_trunc_coarse<T>(granularity: &str, value: Option<T>) -> Result<Option<T>>

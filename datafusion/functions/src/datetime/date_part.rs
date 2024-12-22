@@ -36,13 +36,43 @@ use datafusion_common::cast::{
     as_timestamp_nanosecond_array, as_timestamp_second_array,
 };
 use datafusion_common::{exec_err, internal_err, ExprSchema, Result, ScalarValue};
-use datafusion_expr::scalar_doc_sections::DOC_SECTION_DATETIME;
+use datafusion_doc::DocSection;
 use datafusion_expr::TypeSignature::Exact;
 use datafusion_expr::{
     ColumnarValue, Documentation, Expr, ScalarUDFImpl, Signature, Volatility,
     TIMEZONE_WILDCARD,
 };
+use datafusion_macros::user_doc;
 
+#[user_doc(
+    doc_section(label = "Time and Date Functions"),
+    description = "Returns the specified part of the date as an integer.",
+    syntax_example = "date_part(part, expression)",
+    argument(
+        name = "part",
+        description = "Optional. Starting point used to determine bin boundaries. If not specified defaults 1970-01-01T00:00:00Z (the UNIX epoch in UTC).
+
+The following intervals are supported:
+
+- nanoseconds
+- microseconds
+- milliseconds
+- seconds
+- minutes
+- hours
+- days
+- weeks
+- months
+- years
+- century
+"
+    ),
+    argument(
+        name = "expression",
+        description = "Time expression to operate on. Can be a constant, column, or function."
+    ),
+    alternative_syntax = "extract(field FROM source)"
+)]
 #[derive(Debug)]
 pub struct DatePartFunc {
     signature: Signature,
@@ -233,7 +263,7 @@ impl ScalarUDFImpl for DatePartFunc {
         &self.aliases
     }
     fn documentation(&self) -> Option<&Documentation> {
-        Some(get_date_part_doc())
+        self.doc()
     }
 }
 
@@ -247,43 +277,6 @@ fn part_normalization(part: &str) -> &str {
     part.strip_prefix(|c| c == '\'' || c == '\"')
         .and_then(|s| s.strip_suffix(|c| c == '\'' || c == '\"'))
         .unwrap_or(part)
-}
-
-static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
-
-fn get_date_part_doc() -> &'static Documentation {
-    DOCUMENTATION.get_or_init(|| {
-        Documentation::builder(
-            DOC_SECTION_DATETIME,
-            "Returns the specified part of the date as an integer.",
-            "date_part(part, expression)")
-            .with_argument(
-                "part",
-                r#"Part of the date to return. The following date parts are supported:
-
-    - year
-    - quarter (emits value in inclusive range [1, 4] based on which quartile of the year the date is in)
-    - month
-    - week (week of the year)
-    - day (day of the month)
-    - hour
-    - minute
-    - second
-    - millisecond
-    - microsecond
-    - nanosecond
-    - dow (day of the week)
-    - doy (day of the year)
-    - epoch (seconds since Unix epoch)
-"#,
-            )
-            .with_argument(
-                "expression",
-                "Time expression to operate on. Can be a constant, column, or function.",
-            )
-            .with_alternative_syntax("extract(field FROM source)")
-            .build()
-    })
 }
 
 /// Invoke [`date_part`] on an `array` (e.g. Timestamp) and convert the

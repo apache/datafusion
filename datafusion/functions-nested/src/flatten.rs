@@ -26,10 +26,11 @@ use datafusion_common::cast::{
     as_generic_list_array, as_large_list_array, as_list_array,
 };
 use datafusion_common::{exec_err, Result};
-use datafusion_expr::scalar_doc_sections::DOC_SECTION_ARRAY;
+use datafusion_doc::DocSection;
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
 };
+use datafusion_macros::user_doc;
 use std::any::Any;
 use std::sync::{Arc, OnceLock};
 
@@ -41,6 +42,23 @@ make_udf_expr_and_func!(
     flatten_udf
 );
 
+#[user_doc(
+    doc_section(label = "Array Functions"),
+    description = "Converts an array of arrays to a flat array.\n\n- Applies to any depth of nested arrays\n- Does not change arrays that are already flat\n\nThe flattened array contains all the elements from all source arrays.",
+    syntax_example = "flatten(array)",
+    sql_example = r#"```sql
+> select flatten([[1, 2], [3, 4]]);
++------------------------------+
+| flatten(List([1,2], [3,4]))  |
++------------------------------+
+| [1, 2, 3, 4]                 |
++------------------------------+
+```"#,
+    argument(
+        name = "array",
+        description = "Array expression. Can be a constant, column, or function, and any combination of array operators."
+    )
+)]
 #[derive(Debug)]
 pub struct Flatten {
     signature: Signature,
@@ -111,34 +129,8 @@ impl ScalarUDFImpl for Flatten {
     }
 
     fn documentation(&self) -> Option<&Documentation> {
-        Some(get_flatten_doc())
+        self.doc()
     }
-}
-static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
-
-fn get_flatten_doc() -> &'static Documentation {
-    DOCUMENTATION.get_or_init(|| {
-        Documentation::builder(
-            DOC_SECTION_ARRAY,
-                "Converts an array of arrays to a flat array.\n\n- Applies to any depth of nested arrays\n- Does not change arrays that are already flat\n\nThe flattened array contains all the elements from all source arrays.",
-
-            "flatten(array)")
-            .with_sql_example(
-                r#"```sql
-> select flatten([[1, 2], [3, 4]]);
-+------------------------------+
-| flatten(List([1,2], [3,4]))  |
-+------------------------------+
-| [1, 2, 3, 4]                 |
-+------------------------------+
-```"#,
-            )
-            .with_argument(
-                "array",
-                "Array expression. Can be a constant, column, or function, and any combination of array operators.",
-            )
-            .build()
-    })
 }
 
 /// Flatten SQL function

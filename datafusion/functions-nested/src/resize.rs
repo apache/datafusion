@@ -27,10 +27,11 @@ use arrow_schema::DataType::{FixedSizeList, LargeList, List};
 use arrow_schema::{DataType, FieldRef};
 use datafusion_common::cast::{as_int64_array, as_large_list_array, as_list_array};
 use datafusion_common::{exec_err, internal_datafusion_err, Result, ScalarValue};
-use datafusion_expr::scalar_doc_sections::DOC_SECTION_ARRAY;
+use datafusion_doc::DocSection;
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
 };
+use datafusion_macros::user_doc;
 use std::any::Any;
 use std::sync::{Arc, OnceLock};
 
@@ -42,6 +43,28 @@ make_udf_expr_and_func!(
     array_resize_udf
 );
 
+#[user_doc(
+    doc_section(label = "Array Functions"),
+    description = "Resizes the list to contain size elements. Initializes new elements with value or empty if value is not set.",
+    syntax_example = "array_resize(array, size, value)",
+    sql_example = r#"```sql
+> select array_resize([1, 2, 3], 5, 0);
++-------------------------------------+
+| array_resize(List([1,2,3],5,0))     |
++-------------------------------------+
+| [1, 2, 3, 0, 0]                     |
++-------------------------------------+
+```"#,
+    argument(
+        name = "array",
+        description = "Array expression. Can be a constant, column, or function, and any combination of array operators."
+    ),
+    argument(name = "size", description = "New size of given array."),
+    argument(
+        name = "value",
+        description = "Defines new elements' value or empty if value is not set."
+    )
+)]
 #[derive(Debug)]
 pub(super) struct ArrayResize {
     signature: Signature,
@@ -93,43 +116,8 @@ impl ScalarUDFImpl for ArrayResize {
     }
 
     fn documentation(&self) -> Option<&Documentation> {
-        Some(get_array_resize_doc())
+        self.doc()
     }
-}
-
-static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
-
-fn get_array_resize_doc() -> &'static Documentation {
-    DOCUMENTATION.get_or_init(|| {
-        Documentation::builder(
-            DOC_SECTION_ARRAY,
-                "Resizes the list to contain size elements. Initializes new elements with value or empty if value is not set.",
-
-            "array_resize(array, size, value)")
-            .with_sql_example(
-                r#"```sql
-> select array_resize([1, 2, 3], 5, 0);
-+-------------------------------------+
-| array_resize(List([1,2,3],5,0))     |
-+-------------------------------------+
-| [1, 2, 3, 0, 0]                     |
-+-------------------------------------+
-```"#,
-            )
-            .with_argument(
-                "array",
-                "Array expression. Can be a constant, column, or function, and any combination of array operators.",
-            )
-            .with_argument(
-                "size",
-                "New size of given array.",
-            )
-            .with_argument(
-                "value",
-                "Defines new elements' value or empty if value is not set.",
-            )
-            .build()
-    })
 }
 
 /// array_resize SQL function

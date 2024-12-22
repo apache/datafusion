@@ -24,12 +24,27 @@ use arrow::array::{ArrayRef, AsArray, Float32Array, Float64Array};
 use arrow::datatypes::DataType::{Float32, Float64};
 use arrow::datatypes::{DataType, Float32Type, Float64Type};
 use datafusion_common::{exec_err, DataFusionError, Result};
-use datafusion_expr::scalar_doc_sections::DOC_SECTION_MATH;
+use datafusion_doc::DocSection;
 use datafusion_expr::TypeSignature::Exact;
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
 };
+use datafusion_macros::user_doc;
 
+#[user_doc(
+    doc_section(label = "Math Functions"),
+    description = r#"Returns the first argument if it's not _NaN_.
+Returns the second argument otherwise."#,
+    syntax_example = "nanvl(expression_x, expression_y)",
+    argument(
+        name = "expression_x",
+        description = "Numeric expression to return if it's not _NaN_. Can be a constant, column, or function, and any combination of arithmetic operators."
+    ),
+    argument(
+        name = "expression_y",
+        description = "Numeric expression to return if the first expression is _NaN_. Can be a constant, column, or function, and any combination of arithmetic operators."
+    )
+)]
 #[derive(Debug)]
 pub struct NanvlFunc {
     signature: Signature,
@@ -82,24 +97,8 @@ impl ScalarUDFImpl for NanvlFunc {
     }
 
     fn documentation(&self) -> Option<&Documentation> {
-        Some(get_nanvl_doc())
+        self.doc()
     }
-}
-
-static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
-
-fn get_nanvl_doc() -> &'static Documentation {
-    DOCUMENTATION.get_or_init(|| {
-        Documentation::builder(
-            DOC_SECTION_MATH,
-                r#"Returns the first argument if it's not _NaN_.
-Returns the second argument otherwise."#,
-
-            "nanvl(expression_x, expression_y)")
-            .with_argument("expression_x", "Numeric expression to return if it's not _NaN_. Can be a constant, column, or function, and any combination of arithmetic operators.")
-            .with_argument("expression_y", "Numeric expression to return if the first expression is _NaN_. Can be a constant, column, or function, and any combination of arithmetic operators.")
-            .build()
-    })
 }
 
 /// Nanvl SQL function

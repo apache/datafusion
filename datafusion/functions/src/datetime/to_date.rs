@@ -40,21 +40,23 @@ Returns the corresponding date.
 
 Note: `to_date` returns Date32, which represents its values as the number of days since unix epoch(`1970-01-01`) stored as signed 32 bit value. The largest supported date value is `9999-12-31`.",
     syntax_example = "to_date('2017-05-31', '%Y-%m-%d')",
-    sql_example = "```sql\n\
-> select to_date('2023-01-31');\n\
-+-----------------------------+\n\
-| to_date(Utf8(\"2023-01-31\")) |\n\
-+-----------------------------+\n\
-| 2023-01-31                  |\n\
-+-----------------------------+\n\
-> select to_date('2023/01/31', '%Y-%m-%d', '%Y/%m/%d');\n\
-+---------------------------------------------------------------+\n\
-| to_date(Utf8(\"2023/01/31\"),Utf8(\"%Y-%m-%d\"),Utf8(\"%Y/%m/%d\")) |\n\
-+---------------------------------------------------------------+\n\
-| 2023-01-31                                                    |\n\
-+---------------------------------------------------------------+\n\
-```\n\n\
-Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/to_date.rs)",
+    sql_example = r#"```sql
+> select to_date('2023-01-31'); 
++-------------------------------+
+| to_date(Utf8(\"2023-01-31\")) |
++-------------------------------+
+| 2023-01-31                    |
++-------------------------------+
+> select to_date('2023/01/31', '%Y-%m-%d', '%Y/%m/%d');
++---------------------------------------------------------------------+
+| to_date(Utf8(\"2023/01/31\"),Utf8(\"%Y-%m-%d\"),Utf8(\"%Y/%m/%d\")) |
++---------------------------------------------------------------------+
+| 2023-01-31                                                          |
++---------------------------------------------------------------------+
+```
+
+Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/to_date.rs)
+"#,
     standard_argument(name = "expression", prefix = "String"),
     argument(
         name = "format_n",

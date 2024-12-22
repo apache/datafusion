@@ -27,11 +27,18 @@ use arrow::datatypes::DataType::Int64;
 
 use crate::utils::make_scalar_function;
 use datafusion_common::{arrow_datafusion_err, exec_err, DataFusionError, Result};
-use datafusion_expr::scalar_doc_sections::DOC_SECTION_MATH;
+use datafusion_doc::DocSection;
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
 };
+use datafusion_macros::user_doc;
 
+#[user_doc(
+    doc_section(label = "Math Functions"),
+    description = "Factorial. Returns 1 if value is less than 2.",
+    syntax_example = "factorial(numeric_expression)",
+    standard_argument(name = "numeric_expression", prefix = "Numeric")
+)]
 #[derive(Debug)]
 pub struct FactorialFunc {
     signature: Signature,
@@ -77,22 +84,8 @@ impl ScalarUDFImpl for FactorialFunc {
     }
 
     fn documentation(&self) -> Option<&Documentation> {
-        Some(get_factorial_doc())
+        self.doc()
     }
-}
-
-static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
-
-fn get_factorial_doc() -> &'static Documentation {
-    DOCUMENTATION.get_or_init(|| {
-        Documentation::builder(
-            DOC_SECTION_MATH,
-            "Factorial. Returns 1 if value is less than 2.",
-            "factorial(numeric_expression)",
-        )
-        .with_standard_argument("numeric_expression", Some("Numeric"))
-        .build()
-    })
 }
 
 /// Factorial SQL function

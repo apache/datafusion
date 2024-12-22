@@ -22,12 +22,22 @@ use std::any::Any;
 use std::sync::OnceLock;
 
 use datafusion_common::{internal_err, ExprSchema, Result, ScalarValue};
-use datafusion_expr::scalar_doc_sections::DOC_SECTION_DATETIME;
+use datafusion_doc::DocSection;
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyInfo};
 use datafusion_expr::{
     ColumnarValue, Documentation, Expr, ScalarUDFImpl, Signature, Volatility,
 };
+use datafusion_macros::user_doc;
 
+#[user_doc(
+    doc_section(label = "Time and Date Functions"),
+    description = r#"
+Returns the current UTC timestamp.
+
+The `now()` return value is determined at query time and will return the same timestamp, no matter when in the query plan the function executes.
+"#,
+    syntax_example = "now()"
+)]
 #[derive(Debug)]
 pub struct NowFunc {
     signature: Signature,
@@ -93,9 +103,6 @@ impl ScalarUDFImpl for NowFunc {
             ScalarValue::TimestampNanosecond(now_ts, Some("+00:00".into())),
         )))
     }
-    fn documentation(&self) -> Option<&Documentation> {
-        Some(get_to_unixtime_doc())
-    }
 
     fn aliases(&self) -> &[String] {
         &self.aliases
@@ -104,20 +111,8 @@ impl ScalarUDFImpl for NowFunc {
     fn is_nullable(&self, _args: &[Expr], _schema: &dyn ExprSchema) -> bool {
         false
     }
-}
 
-static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
-
-fn get_to_unixtime_doc() -> &'static Documentation {
-    DOCUMENTATION.get_or_init(|| {
-        Documentation::builder(
-            DOC_SECTION_DATETIME,
-            r#"
-Returns the current UTC timestamp.
-
-The `now()` return value is determined at query time and will return the same timestamp, no matter when in the query plan the function executes.
-"#,
-            "now()")
-            .build()
-    })
+    fn documentation(&self) -> Option<&Documentation> {
+        self.doc()
+    }
 }

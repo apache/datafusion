@@ -31,14 +31,29 @@ use datafusion_common::{
 };
 use datafusion_common::{exec_err, ScalarValue};
 use datafusion_common::{DataFusionError, Result};
+use datafusion_doc::DocSection;
 use datafusion_expr::{ColumnarValue, Documentation};
 use std::sync::{Arc, OnceLock};
 use std::{fmt, str::FromStr};
 
-use datafusion_expr::scalar_doc_sections::DOC_SECTION_BINARY_STRING;
 use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
+use datafusion_macros::user_doc;
 use std::any::Any;
 
+#[user_doc(
+    doc_section(label = "Binary String Functions"),
+    description = "Encode binary data into a textual representation.",
+    syntax_example = "encode(expression, format)",
+    argument(
+        name = "expression",
+        description = "Expression containing string or binary data"
+    ),
+    argument(
+        name = "format",
+        description = "Supported formats are: `base64`, `hex`"
+    ),
+    related_udf(name = "decode")
+)]
 #[derive(Debug)]
 pub struct EncodeFunc {
     signature: Signature,
@@ -56,22 +71,6 @@ impl EncodeFunc {
             signature: Signature::user_defined(Volatility::Immutable),
         }
     }
-}
-
-static ENCODE_DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
-
-fn get_encode_doc() -> &'static Documentation {
-    ENCODE_DOCUMENTATION.get_or_init(|| {
-        Documentation::builder(
-            DOC_SECTION_BINARY_STRING,
-            "Encode binary data into a textual representation.",
-            "encode(expression, format)",
-        )
-        .with_argument("expression", "Expression containing string or binary data")
-        .with_argument("format", "Supported formats are: `base64`, `hex`")
-        .with_related_udf("decode")
-        .build()
-    })
 }
 
 impl ScalarUDFImpl for EncodeFunc {
@@ -126,10 +125,21 @@ impl ScalarUDFImpl for EncodeFunc {
     }
 
     fn documentation(&self) -> Option<&Documentation> {
-        Some(get_encode_doc())
+        self.doc()
     }
 }
 
+#[user_doc(
+    doc_section(label = "Binary String Functions"),
+    description = "Decode binary data from textual representation in string.",
+    syntax_example = "decode(e xpression, format)",
+    argument(
+        name = "expression",
+        description = "Expression containing string or binary data"
+    ),
+    argument(name = "format", description = "Same arguments as [encode](#encode)"),
+    related_udf(name = "encode")
+)]
 #[derive(Debug)]
 pub struct DecodeFunc {
     signature: Signature,
@@ -147,22 +157,6 @@ impl DecodeFunc {
             signature: Signature::user_defined(Volatility::Immutable),
         }
     }
-}
-
-static DECODE_DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
-
-fn get_decode_doc() -> &'static Documentation {
-    DECODE_DOCUMENTATION.get_or_init(|| {
-        Documentation::builder(
-            DOC_SECTION_BINARY_STRING,
-            "Decode binary data from textual representation in string.",
-            "decode(expression, format)",
-        )
-        .with_argument("expression", "Expression containing encoded string data")
-        .with_argument("format", "Same arguments as [encode](#encode)")
-        .with_related_udf("encode")
-        .build()
-    })
 }
 
 impl ScalarUDFImpl for DecodeFunc {
@@ -217,7 +211,7 @@ impl ScalarUDFImpl for DecodeFunc {
     }
 
     fn documentation(&self) -> Option<&Documentation> {
-        Some(get_decode_doc())
+        self.doc()
     }
 }
 

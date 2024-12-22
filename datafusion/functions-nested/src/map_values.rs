@@ -21,11 +21,12 @@ use crate::utils::{get_map_entry_field, make_scalar_function};
 use arrow_array::{Array, ArrayRef, ListArray};
 use arrow_schema::{DataType, Field};
 use datafusion_common::{cast::as_map_array, exec_err, Result};
-use datafusion_expr::scalar_doc_sections::DOC_SECTION_MAP;
+use datafusion_doc::DocSection;
 use datafusion_expr::{
     ArrayFunctionSignature, ColumnarValue, Documentation, ScalarUDFImpl, Signature,
     TypeSignature, Volatility,
 };
+use datafusion_macros::user_doc;
 use std::any::Any;
 use std::sync::{Arc, OnceLock};
 
@@ -37,6 +38,24 @@ make_udf_expr_and_func!(
     map_values_udf
 );
 
+#[user_doc(
+    doc_section(label = "Map Functions"),
+    description = "Returns a list of all values in the map.",
+    syntax_example = "map_values(map)",
+    sql_example = r#"```sql
+SELECT map_values(MAP {'a': 1, 'b': NULL, 'c': 3});
+----
+[1, , 3]
+
+SELECT map_values(map([100, 5], [42, 43]));
+----
+[42, 43]
+```"#,
+    argument(
+        name = "map",
+        description = "Map expression. Can be a constant, column, or function, and any combination of map operators."
+    )
+)]
 #[derive(Debug)]
 pub(crate) struct MapValuesFunc {
     signature: Signature,
@@ -87,36 +106,8 @@ impl ScalarUDFImpl for MapValuesFunc {
     }
 
     fn documentation(&self) -> Option<&Documentation> {
-        Some(get_map_values_doc())
+        self.doc()
     }
-}
-
-static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
-
-fn get_map_values_doc() -> &'static Documentation {
-    DOCUMENTATION.get_or_init(|| {
-        Documentation::builder(
-            DOC_SECTION_MAP,
-                "Returns a list of all values in the map.",
-
-            "map_values(map)")
-            .with_sql_example(
-                r#"```sql
-SELECT map_values(MAP {'a': 1, 'b': NULL, 'c': 3});
-----
-[1, , 3]
-
-SELECT map_values(map([100, 5], [42, 43]));
-----
-[42, 43]
-```"#,
-            )
-            .with_argument(
-                "map",
-                "Map expression. Can be a constant, column, or function, and any combination of map operators."
-            )
-            .build()
-    })
 }
 
 fn map_values_inner(args: &[ArrayRef]) -> Result<ArrayRef> {

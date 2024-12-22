@@ -29,12 +29,41 @@ use arrow::error::ArrowError;
 use arrow::util::display::{ArrayFormatter, DurationFormat, FormatOptions};
 
 use datafusion_common::{exec_err, Result, ScalarValue};
-use datafusion_expr::scalar_doc_sections::DOC_SECTION_DATETIME;
+use datafusion_doc::DocSection;
 use datafusion_expr::TypeSignature::Exact;
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility, TIMEZONE_WILDCARD,
 };
+use datafusion_macros::user_doc;
 
+#[user_doc(
+    doc_section(label = "Time and Date Functions"),
+    description = "Returns a string representation of a date, time, timestamp or duration based on a [Chrono format](https://docs.rs/chrono/latest/chrono/format/strftime/index.html). Unlike the PostgreSQL equivalent of this function numerical formatting is not supported.",
+    syntax_example = "to_char(expression, format)",
+    sql_example = r#"```sql
+> select to_char('2023-03-01'::date, '%d-%m-%Y');
++----------------------------------------------+
+| to_char(Utf8("2023-03-01"),Utf8("%d-%m-%Y")) |
++----------------------------------------------+
+| 01-03-2023                                   |
++----------------------------------------------+
+```
+
+Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/to_char.rs)
+"#,
+    argument(
+        name = "expression",
+        description = "Expression to operate on. Can be a constant, column, or function that results in a date, time, timestamp or duration."
+    ),
+    argument(
+        name = "format",
+        description = "A [Chrono format](https://docs.rs/chrono/latest/chrono/format/strftime/index.html) string to use to convert the expression."
+    ),
+    argument(
+        name = "day",
+        description = "Day to use when making the date. Can be a constant, column or function, and any combination of arithmetic operators."
+    )
+)]
 #[derive(Debug)]
 pub struct ToCharFunc {
     signature: Signature,
@@ -143,40 +172,8 @@ impl ScalarUDFImpl for ToCharFunc {
         &self.aliases
     }
     fn documentation(&self) -> Option<&Documentation> {
-        Some(get_to_char_doc())
+        self.doc()
     }
-}
-
-static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
-
-fn get_to_char_doc() -> &'static Documentation {
-    DOCUMENTATION.get_or_init(|| {
-        Documentation::builder(
-            DOC_SECTION_DATETIME,
-            "Returns a string representation of a date, time, timestamp or duration based on a [Chrono format](https://docs.rs/chrono/latest/chrono/format/strftime/index.html). Unlike the PostgreSQL equivalent of this function numerical formatting is not supported.",
-            "to_char(expression, format)")
-            .with_argument(
-                "expression",
-                " Expression to operate on. Can be a constant, column, or function that results in a date, time, timestamp or duration."
-            )
-            .with_argument(
-                "format",
-                "A [Chrono format](https://docs.rs/chrono/latest/chrono/format/strftime/index.html) string to use to convert the expression.",
-            )
-            .with_argument("day", "Day to use when making the date. Can be a constant, column or function, and any combination of arithmetic operators.")
-            .with_sql_example(r#"```sql
-> select to_char('2023-03-01'::date, '%d-%m-%Y');
-+----------------------------------------------+
-| to_char(Utf8("2023-03-01"),Utf8("%d-%m-%Y")) |
-+----------------------------------------------+
-| 01-03-2023                                   |
-+----------------------------------------------+
-```
-
-Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/to_char.rs)
-"#)
-            .build()
-    })
 }
 
 fn _build_format_options<'a>(

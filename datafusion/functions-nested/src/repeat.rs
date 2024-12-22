@@ -29,10 +29,11 @@ use arrow_schema::DataType::{LargeList, List};
 use arrow_schema::{DataType, Field};
 use datafusion_common::cast::{as_int64_array, as_large_list_array, as_list_array};
 use datafusion_common::{exec_err, Result};
-use datafusion_expr::scalar_doc_sections::DOC_SECTION_ARRAY;
+use datafusion_doc::DocSection;
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
 };
+use datafusion_macros::user_doc;
 use std::any::Any;
 use std::sync::{Arc, OnceLock};
 
@@ -43,6 +44,34 @@ make_udf_expr_and_func!(
     "returns an array containing element `count` times.", // doc
     array_repeat_udf // internal function name
 );
+
+#[user_doc(
+    doc_section(label = "Array Functions"),
+    description = "Returns an array containing element `count` times.",
+    syntax_example = "array_repeat(element, count)",
+    sql_example = r#"```sql
+> select array_repeat(1, 3);
++---------------------------------+
+| array_repeat(Int64(1),Int64(3)) |
++---------------------------------+
+| [1, 1, 1]                       |
++---------------------------------+
+> select array_repeat([1, 2], 2);
++------------------------------------+
+| array_repeat(List([1,2]),Int64(2)) |
++------------------------------------+
+| [[1, 2], [1, 2]]                   |
++------------------------------------+
+```"#,
+    argument(
+        name = "element",
+        description = "Element expression. Can be a constant, column, or function, and any combination of array operators."
+    ),
+    argument(
+        name = "count",
+        description = "Value of how many times to repeat the element."
+    )
+)]
 #[derive(Debug)]
 pub(super) struct ArrayRepeat {
     signature: Signature,
@@ -91,45 +120,8 @@ impl ScalarUDFImpl for ArrayRepeat {
     }
 
     fn documentation(&self) -> Option<&Documentation> {
-        Some(get_array_repeat_doc())
+        self.doc()
     }
-}
-
-static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
-
-fn get_array_repeat_doc() -> &'static Documentation {
-    DOCUMENTATION.get_or_init(|| {
-        Documentation::builder(
-            DOC_SECTION_ARRAY,
-                "Returns an array containing element `count` times.",
-
-            "array_repeat(element, count)")
-            .with_sql_example(
-                r#"```sql
-> select array_repeat(1, 3);
-+---------------------------------+
-| array_repeat(Int64(1),Int64(3)) |
-+---------------------------------+
-| [1, 1, 1]                       |
-+---------------------------------+
-> select array_repeat([1, 2], 2);
-+------------------------------------+
-| array_repeat(List([1,2]),Int64(2)) |
-+------------------------------------+
-| [[1, 2], [1, 2]]                   |
-+------------------------------------+
-```"#,
-            )
-            .with_argument(
-                "element",
-                "Element expression. Can be a constant, column, or function, and any combination of array operators.",
-            )
-            .with_argument(
-                "count",
-                "Value of how many times to repeat the element.",
-            )
-            .build()
-    })
 }
 
 /// Array_repeat SQL function
