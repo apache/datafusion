@@ -20,7 +20,6 @@ use crate::datetime::common::*;
 use arrow::datatypes::{DataType, TimeUnit};
 use datafusion_common::{exec_err, Result};
 use datafusion_doc::DocSection;
-use datafusion_expr::scalar_doc_sections::DOC_SECTION_DATETIME;
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
 };

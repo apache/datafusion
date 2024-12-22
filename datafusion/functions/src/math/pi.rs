@@ -22,7 +22,6 @@ use arrow::datatypes::DataType;
 use arrow::datatypes::DataType::Float64;
 use datafusion_common::{internal_err, Result, ScalarValue};
 use datafusion_doc::DocSection;
-use datafusion_expr::scalar_doc_sections::DOC_SECTION_MATH;
 use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,

@@ -23,7 +23,6 @@ use std::sync::OnceLock;
 use crate::utils::utf8_to_int_type;
 use datafusion_common::{exec_err, Result, ScalarValue};
 use datafusion_doc::DocSection;
-use datafusion_expr::scalar_doc_sections::DOC_SECTION_STRING;
 use datafusion_expr::{ColumnarValue, Documentation, Volatility};
 use datafusion_expr::{ScalarUDFImpl, Signature};
 use datafusion_macros::user_doc;
