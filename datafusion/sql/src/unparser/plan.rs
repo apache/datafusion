@@ -153,13 +153,7 @@ impl Unparser<'_> {
         relation: &mut Option<&mut RelationBuilder>,
     ) -> Result<()> {
         for unparser in &self.udlp_unparsers {
-            unparser.unparse(
-                node,
-                self,
-                query,
-                select,
-                relation,
-            )?;
+            unparser.unparse(node, self, query, select, relation)?;
         }
         Ok(())
     }

@@ -15,16 +15,15 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::sync::Arc;
-use std::{fmt, vec};
-use std::hash::{Hash};
 use arrow_schema::*;
-use sqlparser::ast::Statement;
-use datafusion_common::{DFSchema, DFSchemaRef, Result, TableReference};
+use datafusion_common::{assert_contains, DFSchema, DFSchemaRef, Result, TableReference};
 use datafusion_expr::test::function_stub::{
     count_udaf, max_udaf, min_udaf, sum, sum_udaf,
 };
-use datafusion_expr::{col, lit, table_scan, wildcard, Expr, Extension, LogicalPlan, LogicalPlanBuilder, UserDefinedLogicalNode, UserDefinedLogicalNodeCore};
+use datafusion_expr::{
+    col, lit, table_scan, wildcard, Expr, Extension, LogicalPlan, LogicalPlanBuilder,
+    UserDefinedLogicalNode, UserDefinedLogicalNodeCore,
+};
 use datafusion_functions::unicode;
 use datafusion_functions_aggregate::grouping::grouping_udaf;
 use datafusion_functions_nested::make_array::make_array_udf;
@@ -36,6 +35,10 @@ use datafusion_sql::unparser::dialect::{
     Dialect as UnparserDialect, MySqlDialect as UnparserMySqlDialect, SqliteDialect,
 };
 use datafusion_sql::unparser::{expr_to_sql, plan_to_sql, Unparser};
+use sqlparser::ast::Statement;
+use std::hash::Hash;
+use std::sync::Arc;
+use std::{fmt, vec};
 
 use crate::common::{MockContextProvider, MockSessionState};
 use datafusion_expr::builder::{
@@ -44,10 +47,12 @@ use datafusion_expr::builder::{
 use datafusion_functions::core::planner::CoreFunctionPlanner;
 use datafusion_functions_nested::extract::array_element_udf;
 use datafusion_functions_nested::planner::{FieldAccessPlanner, NestedFunctionPlanner};
+use datafusion_sql::unparser::ast::{
+    DerivedRelationBuilder, QueryBuilder, RelationBuilder, SelectBuilder,
+};
+use datafusion_sql::unparser::udlp_unparser::UserDefinedLogicalNodeUnparser;
 use sqlparser::dialect::{Dialect, GenericDialect, MySqlDialect};
 use sqlparser::parser::Parser;
-use datafusion_sql::unparser::ast::{DerivedRelationBuilder, QueryBuilder, RelationBuilder, SelectBuilder};
-use datafusion_sql::unparser::udlp_unparser::UserDefinedLogicalNodeUnparser;
 
 #[test]
 fn roundtrip_expr() {
@@ -1436,7 +1441,11 @@ impl UserDefinedLogicalNodeCore for MockUserDefinedLogicalPlan {
         write!(f, "MockUserDefinedLogicalPlan")
     }
 
-    fn with_exprs_and_inputs(&self, _exprs: Vec<Expr>, inputs: Vec<LogicalPlan>) -> Result<Self> {
+    fn with_exprs_and_inputs(
+        &self,
+        _exprs: Vec<Expr>,
+        inputs: Vec<LogicalPlan>,
+    ) -> Result<Self> {
         Ok(MockUserDefinedLogicalPlan {
             input: inputs.into_iter().next().unwrap(),
         })
@@ -1446,12 +1455,15 @@ impl UserDefinedLogicalNodeCore for MockUserDefinedLogicalPlan {
 struct MockStatementUnparser {}
 
 impl UserDefinedLogicalNodeUnparser for MockStatementUnparser {
-    fn unparse_to_statement(&self, node: &dyn UserDefinedLogicalNode, unparser: &Unparser) -> Result<Option<Statement>> {
+    fn unparse_to_statement(
+        &self,
+        node: &dyn UserDefinedLogicalNode,
+        unparser: &Unparser,
+    ) -> Result<Option<Statement>> {
         if let Some(plan) = node.as_any().downcast_ref::<MockUserDefinedLogicalPlan>() {
             let input = unparser.plan_to_sql(&plan.input)?;
             Ok(Some(input))
-        }
-        else {
+        } else {
             Ok(None)
         }
     }
@@ -1472,10 +1484,19 @@ fn test_unparse_udlp_to_statement() -> Result<()> {
     let extension = LogicalPlan::Extension(Extension {
         node: Arc::new(udlp),
     });
-    let unparser = Unparser::default().with_udlp_unparsers(vec![Arc::new(MockStatementUnparser {})]);
+    let unparser =
+        Unparser::default().with_udlp_unparsers(vec![Arc::new(MockStatementUnparser {})]);
     let sql = unparser.plan_to_sql(&extension)?;
     let expected = "SELECT * FROM j1";
     assert_eq!(sql.to_string(), expected);
+
+    if let Some(err) = plan_to_sql(&extension).err() {
+        assert_contains!(
+            err.to_string(),
+            "This feature is not implemented: Unsupported extension node: MockUserDefinedLogicalPlan");
+    } else {
+        panic!("Expected error");
+    }
     Ok(())
 }
 
@@ -1521,10 +1542,22 @@ fn test_unparse_udlp_to_sql() -> Result<()> {
         node: Arc::new(udlp),
     });
 
-    let plan = LogicalPlanBuilder::from(extension).project(vec![col("j1_id").alias("user_id")])?.build()?;
-    let unparser = Unparser::default().with_udlp_unparsers(vec![Arc::new(MockSqlUnparser {})]);
+    let plan = LogicalPlanBuilder::from(extension)
+        .project(vec![col("j1_id").alias("user_id")])?
+        .build()?;
+    let unparser =
+        Unparser::default().with_udlp_unparsers(vec![Arc::new(MockSqlUnparser {})]);
     let sql = unparser.plan_to_sql(&plan)?;
     let expected = "SELECT j1.j1_id AS user_id FROM (SELECT * FROM j1)";
     assert_eq!(sql.to_string(), expected);
+
+    if let Some(err) = plan_to_sql(&plan).err() {
+        assert_eq!(
+            err.to_string(),
+            "External error: `relation` must be initialized"
+        )
+    } else {
+        panic!("Expected error")
+    }
     Ok(())
 }

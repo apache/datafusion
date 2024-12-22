@@ -15,9 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::unparser::ast::{
-    QueryBuilder, RelationBuilder, SelectBuilder,
-};
+use crate::unparser::ast::{QueryBuilder, RelationBuilder, SelectBuilder};
 use crate::unparser::Unparser;
 use datafusion_expr::UserDefinedLogicalNode;
 use sqlparser::ast::Statement;

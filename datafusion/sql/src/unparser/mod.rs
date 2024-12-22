@@ -23,11 +23,11 @@ mod plan;
 mod rewrite;
 mod utils;
 
-use std::sync::Arc;
 use self::dialect::{DefaultDialect, Dialect};
 use crate::unparser::udlp_unparser::UserDefinedLogicalNodeUnparser;
 pub use expr::expr_to_sql;
 pub use plan::plan_to_sql;
+use std::sync::Arc;
 pub mod dialect;
 pub mod udlp_unparser;
 
