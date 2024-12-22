@@ -342,8 +342,6 @@ impl TypeSignature {
     /// Check whether 0 input argument is valid for given `TypeSignature`
     pub fn supports_zero_argument(&self) -> bool {
         match &self {
-            TypeSignature::Exact(vec) => vec.is_empty(),
-            TypeSignature::Any(0) => true,
             TypeSignature::Nullary => true,
             TypeSignature::OneOf(types) => types
                 .iter()
@@ -613,47 +611,6 @@ mod tests {
     use datafusion_common::types::{logical_int64, logical_string};
 
     use super::*;
-
-    #[test]
-    fn supports_zero_argument_tests() {
-        // Testing `TypeSignature`s which supports 0 arg
-        let positive_cases = vec![
-            TypeSignature::Exact(vec![]),
-            TypeSignature::OneOf(vec![
-                TypeSignature::Exact(vec![DataType::Int8]),
-                TypeSignature::Nullary,
-                TypeSignature::Uniform(1, vec![DataType::Int8]),
-            ]),
-            TypeSignature::Nullary,
-        ];
-
-        for case in positive_cases {
-            assert!(
-                case.supports_zero_argument(),
-                "Expected {:?} to support zero arguments",
-                case
-            );
-        }
-
-        // Testing `TypeSignature`s which doesn't support 0 arg
-        let negative_cases = vec![
-            TypeSignature::Exact(vec![DataType::Utf8]),
-            TypeSignature::Uniform(1, vec![DataType::Float64]),
-            TypeSignature::Any(1),
-            TypeSignature::OneOf(vec![
-                TypeSignature::Exact(vec![DataType::Int8]),
-                TypeSignature::Uniform(1, vec![DataType::Int8]),
-            ]),
-        ];
-
-        for case in negative_cases {
-            assert!(
-                !case.supports_zero_argument(),
-                "Expected {:?} not to support zero arguments",
-                case
-            );
-        }
-    }
 
     #[test]
     fn type_signature_partial_ord() {
