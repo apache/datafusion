@@ -212,4 +212,4 @@ required-features = ["math_expressions"]
 [[bench]]
 harness = false
 name = "initcap"
-required-features = ["string_expressions"]
+required-features = ["unicode_expressions"]
