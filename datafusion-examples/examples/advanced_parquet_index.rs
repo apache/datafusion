@@ -211,7 +211,7 @@ async fn main() -> Result<()> {
     //
     // Note: in order to prune pages, the Page Index must be loaded and the
     // ParquetExec will load it on demand if not present. To avoid a second IO
-    // during query, this example loaded the Page Index pre-emptily by setting
+    // during query, this example loaded the Page Index preemptively by setting
     // `ArrowReader::with_page_index` in `IndexedFile::try_new`
     provider.set_use_row_selection(true);
     println!("** Select data, predicate `id = 950`");
