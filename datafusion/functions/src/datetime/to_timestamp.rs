@@ -74,7 +74,7 @@ pub struct ToTimestampFunc {
 #[user_doc(
     doc_section(label = "Time and Date Functions"),
     description = "Converts a value to a timestamp (`YYYY-MM-DDT00:00:00.000Z`). Supports strings, integer, and unsigned integer types as input. Strings are parsed as RFC3339 (e.g. '2023-07-20T05:44:00') if no [Chrono format](https://docs.rs/chrono/latest/chrono/format/strftime/index.html)s are provided. Integers and unsigned integers are interpreted as seconds since the unix epoch (`1970-01-01T00:00:00Z`). Returns the corresponding timestamp.",
-    syntax_example = "to_timestamp(expression[, ..., format_n])",
+    syntax_example = "to_timestamp_seconds(expression[, ..., format_n])",
     sql_example = r#"```sql
 > select to_timestamp_seconds('2023-01-31T09:26:56.123456789-05:00');
 +-------------------------------------------------------------------+

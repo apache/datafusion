@@ -35,7 +35,7 @@ use datafusion_macros::user_doc;
 
 #[user_doc(
     doc_section(label = "String Functions"),
-    description = "Returns a value in the range of 1 to N if the string str is in the string list strlist consisting of N substrings..",
+    description = "Returns a value in the range of 1 to N if the string str is in the string list strlist consisting of N substrings.",
     syntax_example = "find_in_set(str, strlist)",
     sql_example = r#"```sql
 > select find_in_set('b', 'a,b,c,d');

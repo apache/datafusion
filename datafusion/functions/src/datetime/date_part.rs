@@ -48,6 +48,7 @@ use datafusion_macros::user_doc;
     doc_section(label = "Time and Date Functions"),
     description = "Returns the specified part of the date as an integer.",
     syntax_example = "date_part(part, expression)",
+    alternative_syntax = "extract(field FROM source)",
     argument(
         name = "part",
         description = "Optional. Starting point used to determine bin boundaries. If not specified defaults 1970-01-01T00:00:00Z (the UNIX epoch in UTC).
@@ -70,8 +71,7 @@ The following intervals are supported:
     argument(
         name = "expression",
         description = "Time expression to operate on. Can be a constant, column, or function."
-    ),
-    alternative_syntax = "extract(field FROM source)"
+    )
 )]
 #[derive(Debug)]
 pub struct DatePartFunc {

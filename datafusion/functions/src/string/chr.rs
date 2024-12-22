@@ -65,8 +65,6 @@ pub fn chr(args: &[ArrayRef]) -> Result<ArrayRef> {
     doc_section(label = "String Functions"),
     description = "Returns the character with the specified ASCII or Unicode code value.",
     syntax_example = "chr(expression)",
-    alternative_syntax = "trim(BOTH trim_str FROM str)",
-    alternative_syntax = "trim(trim_str FROM str)",
     sql_example = r#"```sql
 > select chr(128640);
 +--------------------+

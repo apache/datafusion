@@ -129,15 +129,15 @@ impl ScalarUDFImpl for ArrayReplace {
 
 #[user_doc(
     doc_section(label = "Array Functions"),
-    description = "Replaces the first occurrence of the specified element with another specified element.",
-    syntax_example = "array_replace(array, from, to)",
+    description = "Replaces the first `max` occurrences of the specified element with another specified element.",
+    syntax_example = "array_replace_n(array, from, to, max)",
     sql_example = r#"```sql
-> select array_replace([1, 2, 2, 3, 2, 1, 4], 2, 5);
-+--------------------------------------------------------+
-| array_replace(List([1,2,2,3,2,1,4]),Int64(2),Int64(5)) |
-+--------------------------------------------------------+
-| [1, 5, 2, 3, 2, 1, 4]                                  |
-+--------------------------------------------------------+
+> select array_replace_n([1, 2, 2, 3, 2, 1, 4], 2, 5, 2);
++-------------------------------------------------------------------+
+| array_replace_n(List([1,2,2,3,2,1,4]),Int64(2),Int64(5),Int64(2)) |
++-------------------------------------------------------------------+
+| [1, 5, 5, 3, 2, 1, 4]                                             |
++-------------------------------------------------------------------+
 ```"#,
     argument(
         name = "array",

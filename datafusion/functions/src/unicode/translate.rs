@@ -37,7 +37,7 @@ use datafusion_macros::user_doc;
 #[user_doc(
     doc_section(label = "String Functions"),
     description = "Translates characters in a string to specified translation characters.",
-    syntax_example = "substr(str, start_pos[, length])",
+    syntax_example = "translate(str, chars, translation)",
     sql_example = r#"```sql
 > select translate('twice', 'wic', 'her');
 +--------------------------------------------------+

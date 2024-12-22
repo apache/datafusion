@@ -55,7 +55,7 @@ use DataType::{LargeUtf8, Utf8, Utf8View};
         name = "padding_str",
         description = "String expression to pad with. Can be a constant, column, or function, and any combination of string operators. _Default is a space._"
     ),
-    related_udf(name = "light")
+    related_udf(name = "lpad")
 )]
 #[derive(Debug)]
 pub struct RPadFunc {

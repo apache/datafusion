@@ -61,10 +61,9 @@ make_udf_expr_and_func!(
 +----------------------------------------------------------+
 ```"#,
     argument(
-        name = "array",
-        description = "Array expression. Can be a constant, column, or function, and any combination of array operators."
-    ),
-    argument(name = "dimension", description = "Array dimension")
+        name = "expression_n",
+        description = "Expression to include in the output array. Can be a constant, column, or function, and any combination of arithmetic or string operators."
+    )
 )]
 #[derive(Debug)]
 pub struct MakeArray {
