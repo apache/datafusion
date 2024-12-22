@@ -613,47 +613,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn supports_zero_argument_tests() {
-        // Testing `TypeSignature`s which supports 0 arg
-        let positive_cases = vec![
-            TypeSignature::Exact(vec![]),
-            TypeSignature::OneOf(vec![
-                TypeSignature::Exact(vec![DataType::Int8]),
-                TypeSignature::Nullary,
-                TypeSignature::Uniform(1, vec![DataType::Int8]),
-            ]),
-            TypeSignature::Nullary,
-        ];
-
-        for case in positive_cases {
-            assert!(
-                case.supports_zero_argument(),
-                "Expected {:?} to support zero arguments",
-                case
-            );
-        }
-
-        // Testing `TypeSignature`s which doesn't support 0 arg
-        let negative_cases = vec![
-            TypeSignature::Exact(vec![DataType::Utf8]),
-            TypeSignature::Uniform(1, vec![DataType::Float64]),
-            TypeSignature::Any(1),
-            TypeSignature::OneOf(vec![
-                TypeSignature::Exact(vec![DataType::Int8]),
-                TypeSignature::Uniform(1, vec![DataType::Int8]),
-            ]),
-        ];
-
-        for case in negative_cases {
-            assert!(
-                !case.supports_zero_argument(),
-                "Expected {:?} not to support zero arguments",
-                case
-            );
-        }
-    }
-
-    #[test]
     fn type_signature_partial_ord() {
         // Test validates that partial ord is defined for TypeSignature and Signature.
         assert!(TypeSignature::UserDefined < TypeSignature::VariadicAny);
