@@ -192,19 +192,95 @@ select arrow_typeof(00009999999999999999999999999999999999.9999),
 ----
 Decimal128(38, 4) Decimal128(38, 4) Decimal128(20, 0)
 
-# precision overflow
-statement error DataFusion error: SQL error: ParserError\("Cannot parse 123456789012345678901234567890123456789 as i128 when building decimal: precision overflow"\)
-select 123456789.012345678901234567890123456789
+# scientific notation
+query RTRTRT
+select 1.23e3, arrow_typeof(1.23e3),
+    +1.23e1, arrow_typeof(+1.23e1),
+    -1234.56e-3, arrow_typeof(-1234.56e-3)
+----
+1230 Decimal128(3, -1) 12.3 Decimal128(3, 1) -1.23456 Decimal128(6, 5)
 
-statement error SQL error: ParserError\("Cannot parse 123456789012345678901234567890123456789 as i128 when building decimal: precision overflow"\)
-select -123456789.012345678901234567890123456789
+query RTRTRT
+select 1.23e-2, arrow_typeof(1.23e-2),
+    1.23456e0, arrow_typeof(1.23456e0),
+    -.0123e2, arrow_typeof(-.0123e2)
+----
+0.0123 Decimal128(4, 4) 1.23456 Decimal128(6, 5) -1.23 Decimal128(3, 2)
 
-# can not fit in i128
-statement error SQL error: ParserError\("Cannot parse 1234567890123456789012345678901234567890 as i128 when building decimal: number too large to fit in target type"\)
-select 123456789.0123456789012345678901234567890
+# Decimal256 cases
+query RT
+select 123456789.0123456789012345678901234567890,
+    arrow_typeof(123456789.0123456789012345678901234567890)
+----
+123456789.012345678901 Decimal256(40, 31)
 
-statement error SQL error: ParserError\("Cannot parse 1234567890123456789012345678901234567890 as i128 when building decimal: number too large to fit in target type"\)
-select -123456789.0123456789012345678901234567890
+query RT
+select -123456789.0123456789012345678901234567890,
+    arrow_typeof(-123456789.0123456789012345678901234567890)
+----
+-123456789.012345678901 Decimal256(40, 31)
+
+# max precision and scale of Decimal256
+query RTRT
+select -1e-76, arrow_typeof(-1e-76),
+    -1.234567e-70, arrow_typeof(-1.234567e-70)
+----
+0 Decimal256(76, 76) 0 Decimal256(76, 76)
+
+# Decimal256::MAX for nonnegative scale
+query RT
+select 9999999999999999999999999999999999999999999999999999999999999999999999999999,
+    arrow_typeof(9999999999999999999999999999999999999999999999999999999999999999999999999999);
+----
+9999999999999999999999999999999999999999999999999999999999999999999999999999 Decimal256(76, 0)
+
+# Decimal256::MIN
+query RT
+select -9999999999999999999999999999999999999999999999999999999999999999999999999999,
+    arrow_typeof(-9999999999999999999999999999999999999999999999999999999999999999999999999999);
+----
+-9999999999999999999999999999999999999999999999999999999999999999999999999999 Decimal256(76, 0)
+
+# boundaries between decimal128 and decimal256
+query RTRT
+select 1e-38, arrow_typeof(1e-38),
+    1e-39, arrow_typeof(1e-39);
+----
+0 Decimal128(38, 38) 0 Decimal256(39, 39)
+
+query RTRT
+select -1e-38, arrow_typeof(-1e-38),
+    -1e-39, arrow_typeof(-1e-39);
+----
+0 Decimal128(38, 38) 0 Decimal256(39, 39)
+
+# unsupported precision
+query error Decimal precision 77 exceeds the maximum supported precision: 76
+select -1e-77;
+
+query error Decimal precision 79 exceeds the maximum supported precision: 76
+select 1.000000000000000000000000000000000000000000000000000000000000000000000000000001;
+
+# negative scales
+query TR
+select arrow_typeof(1e77), 1e77
+----
+Decimal128(1, -77) 100000000000000000000000000000000000000000000000000000000000000000000000000000
+
+query T
+select arrow_typeof(1e128)
+----
+Decimal128(1, -128)
+
+query error Decimal scale \-129 exceeds the minimum supported scale: \-128
+select 1e129
+
+# simple arithmetic
+query RTRT
+select 1e40 + 1e40, arrow_typeof(1e40 + 1e40),
+    1e-40 + -1e-40, arrow_typeof(1e-40 + -1e-40)
+----
+20000000000000000000000000000000000000000 Decimal128(2, -40) 0 Decimal256(41, 40)
 
 # Restore option to default value
 statement ok

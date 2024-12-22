@@ -619,13 +619,11 @@ mod tests {
         Ok(())
     }
 
-    #[rstest(n_partitions, case(1), case(2), case(3), case(4))]
     #[tokio::test]
-    async fn it_can_read_empty_ndjson_in_parallel(n_partitions: usize) -> Result<()> {
+    async fn it_can_read_empty_ndjson() -> Result<()> {
         let config = SessionConfig::new()
             .with_repartition_file_scans(true)
-            .with_repartition_file_min_size(0)
-            .with_target_partitions(n_partitions);
+            .with_repartition_file_min_size(0);
 
         let ctx = SessionContext::new_with_config(config);
 
@@ -638,7 +636,6 @@ mod tests {
         let query = "SELECT * FROM json_parallel_empty WHERE random() > 0.5;";
 
         let result = ctx.sql(query).await?.collect().await?;
-        let actual_partitions = count_num_partitions(&ctx, query).await?;
 
         #[rustfmt::skip]
         let expected = [
@@ -647,7 +644,6 @@ mod tests {
         ];
 
         assert_batches_eq!(expected, &result);
-        assert_eq!(1, actual_partitions);
 
         Ok(())
     }

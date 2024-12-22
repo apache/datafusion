@@ -230,6 +230,98 @@ async fn test_parameter_invalid_types() -> Result<()> {
 }
 
 #[tokio::test]
+async fn test_positional_parameter_not_bound() -> Result<()> {
+    let ctx = SessionContext::new();
+    let signed_ints: Int32Array = vec![-1, 0, 1].into();
+    let unsigned_ints: UInt64Array = vec![1, 2, 3].into();
+    let batch = RecordBatch::try_from_iter(vec![
+        ("signed", Arc::new(signed_ints) as ArrayRef),
+        ("unsigned", Arc::new(unsigned_ints) as ArrayRef),
+    ])?;
+    ctx.register_batch("test", batch)?;
+
+    let query = "SELECT signed, unsigned FROM test \
+            WHERE $1 >= signed AND signed <= $2 \
+            AND unsigned <= $3 AND unsigned = $4";
+
+    let results = ctx.sql(query).await?.collect().await;
+
+    assert_eq!(
+        results.unwrap_err().strip_backtrace(),
+        "Execution error: Placeholder '$1' was not provided a value for execution."
+    );
+
+    let results = ctx
+        .sql(query)
+        .await?
+        .with_param_values(vec![
+            ScalarValue::from(4_i32),
+            ScalarValue::from(-1_i64),
+            ScalarValue::from(2_i32),
+            ScalarValue::from("1"),
+        ])?
+        .collect()
+        .await?;
+
+    let expected = [
+        "+--------+----------+",
+        "| signed | unsigned |",
+        "+--------+----------+",
+        "| -1     | 1        |",
+        "+--------+----------+",
+    ];
+    assert_batches_sorted_eq!(expected, &results);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_named_parameter_not_bound() -> Result<()> {
+    let ctx = SessionContext::new();
+    let signed_ints: Int32Array = vec![-1, 0, 1].into();
+    let unsigned_ints: UInt64Array = vec![1, 2, 3].into();
+    let batch = RecordBatch::try_from_iter(vec![
+        ("signed", Arc::new(signed_ints) as ArrayRef),
+        ("unsigned", Arc::new(unsigned_ints) as ArrayRef),
+    ])?;
+    ctx.register_batch("test", batch)?;
+
+    let query = "SELECT signed, unsigned FROM test \
+            WHERE $foo >= signed AND signed <= $bar \
+            AND unsigned <= $baz AND unsigned = $str";
+
+    let results = ctx.sql(query).await?.collect().await;
+
+    assert_eq!(
+        results.unwrap_err().strip_backtrace(),
+        "Execution error: Placeholder '$foo' was not provided a value for execution."
+    );
+
+    let results = ctx
+        .sql(query)
+        .await?
+        .with_param_values(vec![
+            ("foo", ScalarValue::from(4_i32)),
+            ("bar", ScalarValue::from(-1_i64)),
+            ("baz", ScalarValue::from(2_i32)),
+            ("str", ScalarValue::from("1")),
+        ])?
+        .collect()
+        .await?;
+
+    let expected = [
+        "+--------+----------+",
+        "| signed | unsigned |",
+        "+--------+----------+",
+        "| -1     | 1        |",
+        "+--------+----------+",
+    ];
+    assert_batches_sorted_eq!(expected, &results);
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn test_version_function() {
     let expected_version = format!(
         "Apache DataFusion {}, {} on {}",

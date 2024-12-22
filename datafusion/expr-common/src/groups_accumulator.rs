@@ -82,7 +82,7 @@ impl EmitTo {
 ///                     group
 /// ```
 ///
-/// # Notes on Implementing `GroupAccumulator`
+/// # Notes on Implementing `GroupsAccumulator`
 ///
 /// All aggregates must first implement the simpler [`Accumulator`] trait, which
 /// handles state for a single group. Implementing `GroupsAccumulator` is
@@ -100,7 +100,7 @@ impl EmitTo {
 /// accumulator manages the specific state, one per `group_index`.
 ///
 /// `group_index`es are contiguous (there aren't gaps), and thus it is
-/// expected that each `GroupAccumulator` will use something like `Vec<..>`
+/// expected that each `GroupsAccumulator` will use something like `Vec<..>`
 /// to store the group states.
 ///
 /// [`Accumulator`]: crate::accumulator::Accumulator

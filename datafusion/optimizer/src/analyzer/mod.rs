@@ -52,7 +52,7 @@ pub mod type_coercion;
 /// [`AnalyzerRule`]s transform [`LogicalPlan`]s in some way to make
 /// the plan valid prior to the rest of the DataFusion optimization process.
 ///
-/// This is different than an [`OptimizerRule`](crate::OptimizerRule)
+/// `AnalyzerRule`s are different than an [`OptimizerRule`](crate::OptimizerRule)s
 /// which must preserve the semantics of the `LogicalPlan`, while computing
 /// results in a more optimal way.
 ///
@@ -72,10 +72,13 @@ pub trait AnalyzerRule: Debug {
     fn name(&self) -> &str;
 }
 
-/// A rule-based Analyzer.
+/// Rule-based Analyzer.
 ///
-/// An `Analyzer` transforms a `LogicalPlan`
-/// prior to the rest of the DataFusion optimization process.
+/// Applies [`FunctionRewrite`]s and [`AnalyzerRule`]s to transform a
+/// [`LogicalPlan`] in preparation for execution.
+///
+/// For example, the `Analyzer` applies type coercion to ensure the types of
+/// operands match the types required by functions.
 #[derive(Clone, Debug)]
 pub struct Analyzer {
     /// Expr --> Function writes to apply prior to analysis passes

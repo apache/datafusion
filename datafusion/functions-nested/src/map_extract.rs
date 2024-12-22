@@ -78,8 +78,7 @@ impl ScalarUDFImpl for MapExtract {
         }
         let map_type = &arg_types[0];
         let map_fields = get_map_entry_field(map_type)?;
-        Ok(DataType::List(Arc::new(Field::new(
-            "item",
+        Ok(DataType::List(Arc::new(Field::new_list_field(
             map_fields.last().unwrap().data_type().clone(),
             true,
         ))))
@@ -118,12 +117,10 @@ static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
 
 fn get_map_extract_doc() -> &'static Documentation {
     DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_MAP)
-            .with_description(
+        Documentation::builder(
+            DOC_SECTION_MAP,
                 "Returns a list containing the value for the given key or an empty list if the key is not present in the map.",
-            )
-            .with_syntax_example("map_extract(map, key)")
+            "map_extract(map, key)")
             .with_sql_example(
                 r#"```sql
 SELECT map_extract(MAP {'a': 1, 'b': NULL, 'c': 3}, 'a');
@@ -189,7 +186,7 @@ fn general_map_extract_inner(
     let data = mutable.freeze();
 
     Ok(Arc::new(ListArray::new(
-        Arc::new(Field::new("item", map_array.value_type().clone(), true)),
+        Arc::new(Field::new_list_field(map_array.value_type().clone(), true)),
         OffsetBuffer::<i32>::new(offsets.into()),
         Arc::new(make_array(data)),
         None,

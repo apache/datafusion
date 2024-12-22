@@ -28,6 +28,7 @@ use super::utils::{
     BatchTransformer, NoopBatchTransformer, StatefulStreamResult,
 };
 use crate::coalesce_partitions::CoalescePartitionsExec;
+use crate::execution_plan::{boundedness_from_children, EmissionType};
 use crate::joins::utils::{
     adjust_indices_by_join_type, apply_join_filter_to_indices, build_batch_from_indices,
     build_join_schema, check_join_is_valid, estimate_join_statistics,
@@ -36,16 +37,15 @@ use crate::joins::utils::{
 };
 use crate::metrics::{ExecutionPlanMetricsSet, MetricsSet};
 use crate::{
-    execution_mode_from_children, handle_state, DisplayAs, DisplayFormatType,
-    Distribution, ExecutionMode, ExecutionPlan, ExecutionPlanProperties, PlanProperties,
-    RecordBatchStream, SendableRecordBatchStream,
+    handle_state, DisplayAs, DisplayFormatType, Distribution, ExecutionPlan,
+    ExecutionPlanProperties, PlanProperties, RecordBatchStream,
+    SendableRecordBatchStream,
 };
 
 use arrow::array::{BooleanBufferBuilder, UInt32Array, UInt64Array};
 use arrow::compute::concat_batches;
 use arrow::datatypes::{Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
-use arrow::util::bit_util;
 use datafusion_common::{
     exec_datafusion_err, internal_err, JoinSide, Result, Statistics,
 };
@@ -242,14 +242,34 @@ impl NestedLoopJoinExec {
         let output_partitioning =
             asymmetric_join_output_partitioning(left, right, &join_type);
 
-        // Determine execution mode:
-        let mode = if left.execution_mode().is_unbounded() {
-            ExecutionMode::PipelineBreaking
+        let emission_type = if left.boundedness().is_unbounded() {
+            EmissionType::Final
+        } else if right.pipeline_behavior() == EmissionType::Incremental {
+            match join_type {
+                // If we only need to generate matched rows from the probe side,
+                // we can emit rows incrementally.
+                JoinType::Inner
+                | JoinType::LeftSemi
+                | JoinType::RightSemi
+                | JoinType::Right
+                | JoinType::RightAnti => EmissionType::Incremental,
+                // If we need to generate unmatched rows from the *build side*,
+                // we need to emit them at the end.
+                JoinType::Left
+                | JoinType::LeftAnti
+                | JoinType::LeftMark
+                | JoinType::Full => EmissionType::Both,
+            }
         } else {
-            execution_mode_from_children([left, right])
+            right.pipeline_behavior()
         };
 
-        PlanProperties::new(eq_properties, output_partitioning, mode)
+        PlanProperties::new(
+            eq_properties,
+            output_partitioning,
+            emission_type,
+            boundedness_from_children([left, right]),
+        )
     }
 
     /// Returns a vector indicating whether the left and right inputs maintain their order.
@@ -440,17 +460,17 @@ async fn collect_left_input(
     let (batches, metrics, mut reservation) = stream
         .try_fold(
             (Vec::new(), join_metrics, reservation),
-            |mut acc, batch| async {
+            |(mut batches, metrics, mut reservation), batch| async {
                 let batch_size = batch.get_array_memory_size();
                 // Reserve memory for incoming batch
-                acc.2.try_grow(batch_size)?;
+                reservation.try_grow(batch_size)?;
                 // Update metrics
-                acc.1.build_mem_used.add(batch_size);
-                acc.1.build_input_batches.add(1);
-                acc.1.build_input_rows.add(batch.num_rows());
+                metrics.build_mem_used.add(batch_size);
+                metrics.build_input_batches.add(1);
+                metrics.build_input_rows.add(batch.num_rows());
                 // Push batch to output
-                acc.0.push(batch);
-                Ok(acc)
+                batches.push(batch);
+                Ok((batches, metrics, reservation))
             },
         )
         .await?;
@@ -459,14 +479,13 @@ async fn collect_left_input(
 
     // Reserve memory for visited_left_side bitmap if required by join type
     let visited_left_side = if with_visited_left_side {
-        // TODO: Replace `ceil` wrapper with stable `div_cell` after
-        // https://github.com/rust-lang/rust/issues/88581
-        let buffer_size = bit_util::ceil(merged_batch.num_rows(), 8);
+        let n_rows = merged_batch.num_rows();
+        let buffer_size = n_rows.div_ceil(8);
         reservation.try_grow(buffer_size)?;
         metrics.build_mem_used.add(buffer_size);
 
-        let mut buffer = BooleanBufferBuilder::new(merged_batch.num_rows());
-        buffer.append_n(merged_batch.num_rows(), false);
+        let mut buffer = BooleanBufferBuilder::new(n_rows);
+        buffer.append_n(n_rows, false);
         buffer
     } else {
         BooleanBufferBuilder::new(0)

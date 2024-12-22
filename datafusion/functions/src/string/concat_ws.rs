@@ -279,14 +279,13 @@ static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
 
 fn get_concat_ws_doc() -> &'static Documentation {
     DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_STRING)
-            .with_description(
-                "Concatenates multiple strings together with a specified separator.",
-            )
-            .with_syntax_example("concat_ws(separator, str[, ..., str_n])")
-            .with_sql_example(
-                r#"```sql
+        Documentation::builder(
+            DOC_SECTION_STRING,
+            "Concatenates multiple strings together with a specified separator.",
+            "concat_ws(separator, str[, ..., str_n])",
+        )
+        .with_sql_example(
+            r#"```sql
 > select concat_ws('_', 'data', 'fusion');
 +--------------------------------------------------+
 | concat_ws(Utf8("_"),Utf8("data"),Utf8("fusion")) |
@@ -294,15 +293,15 @@ fn get_concat_ws_doc() -> &'static Documentation {
 | data_fusion                                      |
 +--------------------------------------------------+
 ```"#,
-            )
-            .with_argument(
-                "separator",
-                "Separator to insert between concatenated strings.",
-            )
-            .with_standard_argument("str", Some("String"))
-            .with_argument("str_n", "Subsequent string expressions to concatenate.")
-            .with_related_udf("concat")
-            .build()
+        )
+        .with_argument(
+            "separator",
+            "Separator to insert between concatenated strings.",
+        )
+        .with_standard_argument("str", Some("String"))
+        .with_argument("str_n", "Subsequent string expressions to concatenate.")
+        .with_related_udf("concat")
+        .build()
     })
 }
 
@@ -405,7 +404,7 @@ mod tests {
     fn test_functions() -> Result<()> {
         test_function!(
             ConcatWsFunc::new(),
-            &[
+            vec![
                 ColumnarValue::Scalar(ScalarValue::from("|")),
                 ColumnarValue::Scalar(ScalarValue::from("aa")),
                 ColumnarValue::Scalar(ScalarValue::from("bb")),
@@ -418,7 +417,7 @@ mod tests {
         );
         test_function!(
             ConcatWsFunc::new(),
-            &[
+            vec![
                 ColumnarValue::Scalar(ScalarValue::from("|")),
                 ColumnarValue::Scalar(ScalarValue::Utf8(None)),
             ],
@@ -429,7 +428,7 @@ mod tests {
         );
         test_function!(
             ConcatWsFunc::new(),
-            &[
+            vec![
                 ColumnarValue::Scalar(ScalarValue::Utf8(None)),
                 ColumnarValue::Scalar(ScalarValue::from("aa")),
                 ColumnarValue::Scalar(ScalarValue::from("bb")),
@@ -442,7 +441,7 @@ mod tests {
         );
         test_function!(
             ConcatWsFunc::new(),
-            &[
+            vec![
                 ColumnarValue::Scalar(ScalarValue::from("|")),
                 ColumnarValue::Scalar(ScalarValue::from("aa")),
                 ColumnarValue::Scalar(ScalarValue::Utf8(None)),

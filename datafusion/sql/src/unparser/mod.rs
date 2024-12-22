@@ -107,7 +107,7 @@ impl<'a> Unparser<'a> {
     }
 }
 
-impl<'a> Default for Unparser<'a> {
+impl Default for Unparser<'_> {
     fn default() -> Self {
         Self {
             dialect: &DefaultDialect {},

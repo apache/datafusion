@@ -124,12 +124,13 @@ static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
 
 fn get_to_hex_doc() -> &'static Documentation {
     DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_STRING)
-            .with_description("Converts an integer to a hexadecimal string.")
-            .with_syntax_example("to_hex(int)")
-            .with_sql_example(
-                r#"```sql
+        Documentation::builder(
+            DOC_SECTION_STRING,
+            "Converts an integer to a hexadecimal string.",
+            "to_hex(int)",
+        )
+        .with_sql_example(
+            r#"```sql
 > select to_hex(12345689);
 +-------------------------+
 | to_hex(Int64(12345689)) |
@@ -137,9 +138,9 @@ fn get_to_hex_doc() -> &'static Documentation {
 | bc6159                  |
 +-------------------------+
 ```"#,
-            )
-            .with_standard_argument("int", Some("Integer"))
-            .build()
+        )
+        .with_standard_argument("int", Some("Integer"))
+        .build()
     })
 }
 

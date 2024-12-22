@@ -81,16 +81,18 @@ pub(crate) fn f64_to_str(value: f64) -> String {
     }
 }
 
-pub(crate) fn i128_to_str(value: i128, precision: &u8, scale: &i8) -> String {
+pub(crate) fn decimal_128_to_str(value: i128, scale: i8) -> String {
+    let precision = u8::MAX; // does not matter
     big_decimal_to_str(
-        BigDecimal::from_str(&Decimal128Type::format_decimal(value, *precision, *scale))
+        BigDecimal::from_str(&Decimal128Type::format_decimal(value, precision, scale))
             .unwrap(),
     )
 }
 
-pub(crate) fn i256_to_str(value: i256, precision: &u8, scale: &i8) -> String {
+pub(crate) fn decimal_256_to_str(value: i256, scale: i8) -> String {
+    let precision = u8::MAX; // does not matter
     big_decimal_to_str(
-        BigDecimal::from_str(&Decimal256Type::format_decimal(value, *precision, *scale))
+        BigDecimal::from_str(&Decimal256Type::format_decimal(value, precision, scale))
             .unwrap(),
     )
 }
@@ -104,30 +106,7 @@ pub(crate) fn big_decimal_to_str(value: BigDecimal) -> String {
     // Round the value to limit the number of decimal places
     let value = value.round(12).normalized();
     // Format the value to a string
-    format_big_decimal(value)
-}
-
-fn format_big_decimal(value: BigDecimal) -> String {
-    let (integer, scale) = value.into_bigint_and_exponent();
-    let mut str = integer.to_str_radix(10);
-    if scale <= 0 {
-        // Append zeros to the right of the integer part
-        str.extend(std::iter::repeat('0').take(scale.unsigned_abs() as usize));
-        str
-    } else {
-        let (sign, unsigned_len, unsigned_str) = if integer.is_negative() {
-            ("-", str.len() - 1, &str[1..])
-        } else {
-            ("", str.len(), &str[..])
-        };
-        let scale = scale as usize;
-        if unsigned_len <= scale {
-            format!("{}0.{:0>scale$}", sign, unsigned_str)
-        } else {
-            str.insert(str.len() - scale, '.');
-            str
-        }
-    }
+    value.to_plain_string()
 }
 
 #[cfg(test)]
@@ -149,19 +128,41 @@ mod tests {
 
     #[test]
     fn test_big_decimal_to_str() {
+        assert_decimal_str_eq!(110, 3, "0.11");
         assert_decimal_str_eq!(11, 3, "0.011");
         assert_decimal_str_eq!(11, 2, "0.11");
         assert_decimal_str_eq!(11, 1, "1.1");
         assert_decimal_str_eq!(11, 0, "11");
         assert_decimal_str_eq!(11, -1, "110");
         assert_decimal_str_eq!(0, 0, "0");
+        assert_decimal_str_eq!(
+            12345678901234567890123456789012345678_i128,
+            0,
+            "12345678901234567890123456789012345678"
+        );
+        assert_decimal_str_eq!(
+            12345678901234567890123456789012345678_i128,
+            38,
+            "0.123456789012"
+        );
 
         // Negative cases
+        assert_decimal_str_eq!(-110, 3, "-0.11");
         assert_decimal_str_eq!(-11, 3, "-0.011");
         assert_decimal_str_eq!(-11, 2, "-0.11");
         assert_decimal_str_eq!(-11, 1, "-1.1");
         assert_decimal_str_eq!(-11, 0, "-11");
         assert_decimal_str_eq!(-11, -1, "-110");
+        assert_decimal_str_eq!(
+            -12345678901234567890123456789012345678_i128,
+            0,
+            "-12345678901234567890123456789012345678"
+        );
+        assert_decimal_str_eq!(
+            -12345678901234567890123456789012345678_i128,
+            38,
+            "-0.123456789012"
+        );
 
         // Round to 12 decimal places
         // 1.0000000000011 -> 1.000000000001

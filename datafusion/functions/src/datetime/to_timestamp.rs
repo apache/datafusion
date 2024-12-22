@@ -197,14 +197,14 @@ static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
 
 fn get_to_timestamp_doc() -> &'static Documentation {
     DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_DATETIME)
-            .with_description(r#"
+        Documentation::builder(
+            DOC_SECTION_DATETIME,
+            r#"
 Converts a value to a timestamp (`YYYY-MM-DDT00:00:00Z`). Supports strings, integer, unsigned integer, and double types as input. Strings are parsed as RFC3339 (e.g. '2023-07-20T05:44:00') if no [Chrono formats] are provided. Integers, unsigned integers, and doubles are interpreted as seconds since the unix epoch (`1970-01-01T00:00:00Z`). Returns the corresponding timestamp.
 
 Note: `to_timestamp` returns `Timestamp(Nanosecond)`. The supported range for integer input is between `-9223372037` and `9223372036`. Supported range for string input is between `1677-09-21T00:12:44.0` and `2262-04-11T23:47:16.0`. Please use `to_timestamp_seconds` for the input outside of supported bounds.
-"#)
-            .with_syntax_example("to_timestamp(expression[, ..., format_n])")
+"#,
+            "to_timestamp(expression[, ..., format_n])")
             .with_argument(
                 "expression",
                 "Expression to operate on. Can be a constant, column, or function, and any combination of arithmetic operators."
@@ -292,10 +292,10 @@ static TO_TIMESTAMP_SECONDS_DOC: OnceLock<Documentation> = OnceLock::new();
 
 fn get_to_timestamp_seconds_doc() -> &'static Documentation {
     TO_TIMESTAMP_SECONDS_DOC.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_DATETIME)
-            .with_description("Converts a value to a timestamp (`YYYY-MM-DDT00:00:00.000Z`). Supports strings, integer, and unsigned integer types as input. Strings are parsed as RFC3339 (e.g. '2023-07-20T05:44:00') if no [Chrono format](https://docs.rs/chrono/latest/chrono/format/strftime/index.html)s are provided. Integers and unsigned integers are interpreted as seconds since the unix epoch (`1970-01-01T00:00:00Z`). Returns the corresponding timestamp.")
-            .with_syntax_example("to_timestamp_seconds(expression[, ..., format_n])")
+        Documentation::builder(
+            DOC_SECTION_DATETIME,
+            "Converts a value to a timestamp (`YYYY-MM-DDT00:00:00.000Z`). Supports strings, integer, and unsigned integer types as input. Strings are parsed as RFC3339 (e.g. '2023-07-20T05:44:00') if no [Chrono format](https://docs.rs/chrono/latest/chrono/format/strftime/index.html)s are provided. Integers and unsigned integers are interpreted as seconds since the unix epoch (`1970-01-01T00:00:00Z`). Returns the corresponding timestamp.",
+            "to_timestamp_seconds(expression[, ..., format_n])")
             .with_argument(
                 "expression",
                 "Expression to operate on. Can be a constant, column, or function, and any combination of arithmetic operators."
@@ -385,10 +385,10 @@ static TO_TIMESTAMP_MILLIS_DOC: OnceLock<Documentation> = OnceLock::new();
 
 fn get_to_timestamp_millis_doc() -> &'static Documentation {
     TO_TIMESTAMP_MILLIS_DOC.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_DATETIME)
-            .with_description("Converts a value to a timestamp (`YYYY-MM-DDT00:00:00.000Z`). Supports strings, integer, and unsigned integer types as input. Strings are parsed as RFC3339 (e.g. '2023-07-20T05:44:00') if no [Chrono formats](https://docs.rs/chrono/latest/chrono/format/strftime/index.html) are provided. Integers and unsigned integers are interpreted as milliseconds since the unix epoch (`1970-01-01T00:00:00Z`). Returns the corresponding timestamp.")
-            .with_syntax_example("to_timestamp_millis(expression[, ..., format_n])")
+        Documentation::builder(
+            DOC_SECTION_DATETIME,
+            "Converts a value to a timestamp (`YYYY-MM-DDT00:00:00.000Z`). Supports strings, integer, and unsigned integer types as input. Strings are parsed as RFC3339 (e.g. '2023-07-20T05:44:00') if no [Chrono formats](https://docs.rs/chrono/latest/chrono/format/strftime/index.html) are provided. Integers and unsigned integers are interpreted as milliseconds since the unix epoch (`1970-01-01T00:00:00Z`). Returns the corresponding timestamp.",
+            "to_timestamp_millis(expression[, ..., format_n])")
             .with_argument(
                 "expression",
                 "Expression to operate on. Can be a constant, column, or function, and any combination of arithmetic operators."
@@ -478,10 +478,10 @@ static TO_TIMESTAMP_MICROS_DOC: OnceLock<Documentation> = OnceLock::new();
 
 fn get_to_timestamp_micros_doc() -> &'static Documentation {
     TO_TIMESTAMP_MICROS_DOC.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_DATETIME)
-            .with_description("Converts a value to a timestamp (`YYYY-MM-DDT00:00:00.000000Z`). Supports strings, integer, and unsigned integer types as input. Strings are parsed as RFC3339 (e.g. '2023-07-20T05:44:00') if no [Chrono format](https://docs.rs/chrono/latest/chrono/format/strftime/index.html)s are provided. Integers and unsigned integers are interpreted as microseconds since the unix epoch (`1970-01-01T00:00:00Z`) Returns the corresponding timestamp.")
-            .with_syntax_example("to_timestamp_micros(expression[, ..., format_n])")
+        Documentation::builder(
+            DOC_SECTION_DATETIME,
+            "Converts a value to a timestamp (`YYYY-MM-DDT00:00:00.000000Z`). Supports strings, integer, and unsigned integer types as input. Strings are parsed as RFC3339 (e.g. '2023-07-20T05:44:00') if no [Chrono format](https://docs.rs/chrono/latest/chrono/format/strftime/index.html)s are provided. Integers and unsigned integers are interpreted as microseconds since the unix epoch (`1970-01-01T00:00:00Z`) Returns the corresponding timestamp.",
+            "to_timestamp_micros(expression[, ..., format_n])")
             .with_argument(
                 "expression",
                 "Expression to operate on. Can be a constant, column, or function, and any combination of arithmetic operators."
@@ -571,10 +571,10 @@ static TO_TIMESTAMP_NANOS_DOC: OnceLock<Documentation> = OnceLock::new();
 
 fn get_to_timestamp_nanos_doc() -> &'static Documentation {
     TO_TIMESTAMP_NANOS_DOC.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_DATETIME)
-            .with_description("Converts a value to a timestamp (`YYYY-MM-DDT00:00:00.000000000Z`). Supports strings, integer, and unsigned integer types as input. Strings are parsed as RFC3339 (e.g. '2023-07-20T05:44:00') if no [Chrono format](https://docs.rs/chrono/latest/chrono/format/strftime/index.html)s are provided. Integers and unsigned integers are interpreted as nanoseconds since the unix epoch (`1970-01-01T00:00:00Z`). Returns the corresponding timestamp.")
-            .with_syntax_example("to_timestamp_nanos(expression[, ..., format_n])")
+        Documentation::builder(
+            DOC_SECTION_DATETIME,
+            "Converts a value to a timestamp (`YYYY-MM-DDT00:00:00.000000000Z`). Supports strings, integer, and unsigned integer types as input. Strings are parsed as RFC3339 (e.g. '2023-07-20T05:44:00') if no [Chrono format](https://docs.rs/chrono/latest/chrono/format/strftime/index.html)s are provided. Integers and unsigned integers are interpreted as nanoseconds since the unix epoch (`1970-01-01T00:00:00Z`). Returns the corresponding timestamp.",
+            "to_timestamp_nanos(expression[, ..., format_n])")
             .with_argument(
                 "expression",
                 "Expression to operate on. Can be a constant, column, or function, and any combination of arithmetic operators."

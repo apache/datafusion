@@ -81,14 +81,13 @@ static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
 
 fn get_ascii_doc() -> &'static Documentation {
     DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_STRING)
-            .with_description(
-                "Returns the Unicode character code of the first character in a string.",
-            )
-            .with_syntax_example("ascii(str)")
-            .with_sql_example(
-                r#"```sql
+        Documentation::builder(
+            DOC_SECTION_STRING,
+            "Returns the Unicode character code of the first character in a string.",
+            "ascii(str)",
+        )
+        .with_sql_example(
+            r#"```sql
 > select ascii('abc');
 +--------------------+
 | ascii(Utf8("abc")) |
@@ -102,10 +101,10 @@ fn get_ascii_doc() -> &'static Documentation {
 | 128640            |
 +-------------------+
 ```"#,
-            )
-            .with_standard_argument("str", Some("String"))
-            .with_related_udf("chr")
-            .build()
+        )
+        .with_standard_argument("str", Some("String"))
+        .with_related_udf("chr")
+        .build()
     })
 }
 
@@ -158,7 +157,7 @@ mod tests {
         ($INPUT:expr, $EXPECTED:expr) => {
             test_function!(
                 AsciiFunc::new(),
-                &[ColumnarValue::Scalar(ScalarValue::Utf8($INPUT))],
+                vec![ColumnarValue::Scalar(ScalarValue::Utf8($INPUT))],
                 $EXPECTED,
                 i32,
                 Int32,
@@ -167,7 +166,7 @@ mod tests {
 
             test_function!(
                 AsciiFunc::new(),
-                &[ColumnarValue::Scalar(ScalarValue::LargeUtf8($INPUT))],
+                vec![ColumnarValue::Scalar(ScalarValue::LargeUtf8($INPUT))],
                 $EXPECTED,
                 i32,
                 Int32,
@@ -176,7 +175,7 @@ mod tests {
 
             test_function!(
                 AsciiFunc::new(),
-                &[ColumnarValue::Scalar(ScalarValue::Utf8View($INPUT))],
+                vec![ColumnarValue::Scalar(ScalarValue::Utf8View($INPUT))],
                 $EXPECTED,
                 i32,
                 Int32,

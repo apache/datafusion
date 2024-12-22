@@ -99,12 +99,12 @@ static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
 
 fn get_substr_index_doc() -> &'static Documentation {
     DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_STRING)
-            .with_description(r#"Returns the substring from str before count occurrences of the delimiter delim.
+        Documentation::builder(
+            DOC_SECTION_STRING,
+            r#"Returns the substring from str before count occurrences of the delimiter delim.
 If count is positive, everything to the left of the final delimiter (counting from the left) is returned.
-If count is negative, everything to the right of the final delimiter (counting from the right) is returned."#)
-            .with_syntax_example("substr_index(str, delim, count)")
+If count is negative, everything to the right of the final delimiter (counting from the right) is returned."#,
+            "substr_index(str, delim, count)")
             .with_sql_example(r#"```sql
 > select substr_index('www.apache.org', '.', 1);
 +---------------------------------------------------------+
@@ -253,7 +253,7 @@ mod tests {
     fn test_functions() -> Result<()> {
         test_function!(
             SubstrIndexFunc::new(),
-            &[
+            vec![
                 ColumnarValue::Scalar(ScalarValue::from("www.apache.org")),
                 ColumnarValue::Scalar(ScalarValue::from(".")),
                 ColumnarValue::Scalar(ScalarValue::from(1i64)),
@@ -265,7 +265,7 @@ mod tests {
         );
         test_function!(
             SubstrIndexFunc::new(),
-            &[
+            vec![
                 ColumnarValue::Scalar(ScalarValue::from("www.apache.org")),
                 ColumnarValue::Scalar(ScalarValue::from(".")),
                 ColumnarValue::Scalar(ScalarValue::from(2i64)),
@@ -277,7 +277,7 @@ mod tests {
         );
         test_function!(
             SubstrIndexFunc::new(),
-            &[
+            vec![
                 ColumnarValue::Scalar(ScalarValue::from("www.apache.org")),
                 ColumnarValue::Scalar(ScalarValue::from(".")),
                 ColumnarValue::Scalar(ScalarValue::from(-2i64)),
@@ -289,7 +289,7 @@ mod tests {
         );
         test_function!(
             SubstrIndexFunc::new(),
-            &[
+            vec![
                 ColumnarValue::Scalar(ScalarValue::from("www.apache.org")),
                 ColumnarValue::Scalar(ScalarValue::from(".")),
                 ColumnarValue::Scalar(ScalarValue::from(-1i64)),
@@ -301,7 +301,7 @@ mod tests {
         );
         test_function!(
             SubstrIndexFunc::new(),
-            &[
+            vec![
                 ColumnarValue::Scalar(ScalarValue::from("www.apache.org")),
                 ColumnarValue::Scalar(ScalarValue::from(".")),
                 ColumnarValue::Scalar(ScalarValue::from(0i64)),
@@ -313,7 +313,7 @@ mod tests {
         );
         test_function!(
             SubstrIndexFunc::new(),
-            &[
+            vec![
                 ColumnarValue::Scalar(ScalarValue::from("")),
                 ColumnarValue::Scalar(ScalarValue::from(".")),
                 ColumnarValue::Scalar(ScalarValue::from(1i64)),
@@ -325,7 +325,7 @@ mod tests {
         );
         test_function!(
             SubstrIndexFunc::new(),
-            &[
+            vec![
                 ColumnarValue::Scalar(ScalarValue::from("www.apache.org")),
                 ColumnarValue::Scalar(ScalarValue::from("")),
                 ColumnarValue::Scalar(ScalarValue::from(1i64)),

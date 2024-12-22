@@ -955,3 +955,201 @@ Infinity
 
 statement ok
 drop table t1
+
+# test for least
+statement ok
+CREATE TABLE t1 (a int, b int, c int) as VALUES
+(4, NULL, NULL),
+(1, 2, 3),
+(3, 1, 2),
+(1, NULL, -1),
+(NULL, NULL, NULL),
+(3, 0, -1);
+
+query I
+SELECT least(a, b, c) FROM t1
+----
+4
+1
+1
+-1
+NULL
+-1
+
+statement ok
+drop table t1
+
+query I
+SELECT least(1)
+----
+1
+
+query I
+SELECT least(1, 2)
+----
+1
+
+query I
+SELECT least(3, 1)
+----
+1
+
+query ?
+SELECT least(NULL)
+----
+NULL
+
+query I
+SELECT least(1, NULL, -1)
+----
+-1
+
+query I
+SELECT least((3), (0), (-1));
+----
+-1
+
+query ?
+SELECT least([4, 3], [4, 2], [4, 4]);
+----
+[4, 2]
+
+query ?
+SELECT least([2, 3], [1, 4], [5, 0]);
+----
+[1, 4]
+
+query I
+SELECT least(1::int, 2::text)
+----
+1
+
+query R
+SELECT least(-1, 1, 2.3, 123456789, 3 + 5, -(-4))
+----
+-1
+
+query R
+SELECT least(-1.123, 1.21313, 2.3, 123456789.321, 3 + 5.3213, -(-4.3213), abs(-9))
+----
+-1.123
+
+query R
+SELECT least(-1, 1, 2.3, 123456789, 3 + 5, -(-4), abs(-9.0))
+----
+-1
+
+
+query error least does not support zero arguments
+SELECT least()
+
+query I
+SELECT least(4, 5, 7, 1, 2)
+----
+1
+
+query I
+SELECT least(4, NULL, 7, 1, 2)
+----
+1
+
+query I
+SELECT least(NULL, NULL, 7, NULL, 2)
+----
+2
+
+query I
+SELECT least(NULL, NULL, NULL, NULL, 2)
+----
+2
+
+query I
+SELECT least(2, NULL, NULL, NULL, NULL)
+----
+2
+
+query ?
+SELECT least(NULL, NULL, NULL)
+----
+NULL
+
+query I
+SELECT least(2, '4')
+----
+2
+
+query T
+SELECT least('foo', 'bar', 'foobar')
+----
+bar
+
+query R
+SELECT least(1, 1.2)
+----
+1
+
+statement ok
+CREATE TABLE foo (a int)
+
+statement ok
+INSERT INTO foo (a) VALUES (1)
+
+# Test homogenous functions that can't be constant folded.
+query I
+SELECT least(NULL, a, 5, NULL) FROM foo
+----
+1
+
+query I
+SELECT least(NULL, NULL, NULL, a, -1) FROM foo
+----
+-1
+
+statement ok
+drop table foo
+
+query R
+select least(arrow_cast('NAN','Float64'), arrow_cast('NAN','Float64'))
+----
+NaN
+
+query R
+select least(arrow_cast('NAN','Float64'), arrow_cast('NAN','Float32'))
+----
+NaN
+
+query R
+select least(arrow_cast('NAN','Float64'), '+Inf'::Double)
+----
+Infinity
+
+query R
+select least(arrow_cast('NAN','Float64'), NULL)
+----
+NaN
+
+query R
+select least(NULL, '+Inf'::Double)
+----
+Infinity
+
+query R
+select least(NULL, '-Inf'::Double)
+----
+-Infinity
+
+statement ok
+CREATE TABLE t1 (a double, b double, c double) as VALUES
+(1, arrow_cast('NAN', 'Float64'), '+Inf'::Double),
+(NULL, arrow_cast('NAN','Float64'), '+Inf'::Double),
+(1, '+Inf'::Double, NULL);
+
+query R
+SELECT least(a, b, c) FROM t1
+----
+1
+Infinity
+1
+
+statement ok
+drop table t1

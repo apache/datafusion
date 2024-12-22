@@ -109,21 +109,23 @@ impl Column {
     /// where `"foo.BAR"` would be parsed to a reference to column named `foo.BAR`
     pub fn from_qualified_name(flat_name: impl Into<String>) -> Self {
         let flat_name = flat_name.into();
-        Self::from_idents(&mut parse_identifiers_normalized(&flat_name, false))
-            .unwrap_or_else(|| Self {
+        Self::from_idents(&mut parse_identifiers_normalized(&flat_name, false)).unwrap_or(
+            Self {
                 relation: None,
                 name: flat_name,
-            })
+            },
+        )
     }
 
     /// Deserialize a fully qualified name string into a column preserving column text case
     pub fn from_qualified_name_ignore_case(flat_name: impl Into<String>) -> Self {
         let flat_name = flat_name.into();
-        Self::from_idents(&mut parse_identifiers_normalized(&flat_name, true))
-            .unwrap_or_else(|| Self {
+        Self::from_idents(&mut parse_identifiers_normalized(&flat_name, true)).unwrap_or(
+            Self {
                 relation: None,
                 name: flat_name,
-            })
+            },
+        )
     }
 
     /// return the column's name.

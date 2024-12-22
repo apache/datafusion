@@ -32,6 +32,7 @@ use datafusion::prelude::*;
 use datafusion::test_util;
 use datafusion::{assert_batches_eq, assert_batches_sorted_eq};
 use datafusion::{execution::context::SessionContext, physical_plan::displayable};
+use datafusion_common::utils::get_available_parallelism;
 use datafusion_common::{assert_contains, assert_not_contains};
 use object_store::path::Path;
 use std::fs::File;
@@ -259,7 +260,7 @@ impl ExplainNormalizer {
 
         // convert things like partitioning=RoundRobinBatch(16)
         // to partitioning=RoundRobinBatch(NUM_CORES)
-        let needle = format!("RoundRobinBatch({})", num_cpus::get());
+        let needle = format!("RoundRobinBatch({})", get_available_parallelism());
         replacements.push((needle, "RoundRobinBatch(NUM_CORES)".to_string()));
 
         Self { replacements }

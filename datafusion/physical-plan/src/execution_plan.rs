@@ -431,11 +431,6 @@ pub trait ExecutionPlanProperties {
     /// partitions.
     fn output_partitioning(&self) -> &Partitioning;
 
-    /// Specifies whether this plan generates an infinite stream of records.
-    /// If the plan does not support pipelining, but its input(s) are
-    /// infinite, returns [`ExecutionMode::PipelineBreaking`] to indicate this.
-    fn execution_mode(&self) -> ExecutionMode;
-
     /// If the output of this `ExecutionPlan` within each partition is sorted,
     /// returns `Some(keys)` describing the ordering. A `None` return value
     /// indicates no assumptions should be made on the output ordering.
@@ -444,6 +439,14 @@ pub trait ExecutionPlanProperties {
     /// `SortPreservingMergeStream`. Less obviously, `Projection` produces sorted
     /// output if its input is sorted as it does not reorder the input rows.
     fn output_ordering(&self) -> Option<&LexOrdering>;
+
+    /// Boundedness information of the stream corresponding to this `ExecutionPlan`.
+    /// For more details, see [`Boundedness`].
+    fn boundedness(&self) -> Boundedness;
+
+    /// Indicates how the stream of this `ExecutionPlan` emits its results.
+    /// For more details, see [`EmissionType`].
+    fn pipeline_behavior(&self) -> EmissionType;
 
     /// Get the [`EquivalenceProperties`] within the plan.
     ///
@@ -470,12 +473,16 @@ impl ExecutionPlanProperties for Arc<dyn ExecutionPlan> {
         self.properties().output_partitioning()
     }
 
-    fn execution_mode(&self) -> ExecutionMode {
-        self.properties().execution_mode()
-    }
-
     fn output_ordering(&self) -> Option<&LexOrdering> {
         self.properties().output_ordering()
+    }
+
+    fn boundedness(&self) -> Boundedness {
+        self.properties().boundedness
+    }
+
+    fn pipeline_behavior(&self) -> EmissionType {
+        self.properties().emission_type
     }
 
     fn equivalence_properties(&self) -> &EquivalenceProperties {
@@ -488,12 +495,16 @@ impl ExecutionPlanProperties for &dyn ExecutionPlan {
         self.properties().output_partitioning()
     }
 
-    fn execution_mode(&self) -> ExecutionMode {
-        self.properties().execution_mode()
-    }
-
     fn output_ordering(&self) -> Option<&LexOrdering> {
         self.properties().output_ordering()
+    }
+
+    fn boundedness(&self) -> Boundedness {
+        self.properties().boundedness
+    }
+
+    fn pipeline_behavior(&self) -> EmissionType {
+        self.properties().emission_type
     }
 
     fn equivalence_properties(&self) -> &EquivalenceProperties {
@@ -501,82 +512,142 @@ impl ExecutionPlanProperties for &dyn ExecutionPlan {
     }
 }
 
-/// Describes the execution mode of the result of calling
-/// [`ExecutionPlan::execute`] with respect to its size and behavior.
+/// Represents whether a stream of data **generated** by an operator is bounded (finite)
+/// or unbounded (infinite).
 ///
-/// The mode of the execution plan is determined by the mode of its input
-/// execution plans and the details of the operator itself. For example, a
-/// `FilterExec` operator will have the same execution mode as its input, but a
-/// `SortExec` operator may have a different execution mode than its input,
-/// depending on how the input stream is sorted.
+/// This is used to determine whether an execution plan will eventually complete
+/// processing all its data (bounded) or could potentially run forever (unbounded).
 ///
-/// There are three possible execution modes: `Bounded`, `Unbounded` and
-/// `PipelineBreaking`.
-#[derive(Clone, Copy, PartialEq, Debug)]
-pub enum ExecutionMode {
-    /// The stream is bounded / finite.
-    ///
-    /// In this case the stream will eventually return `None` to indicate that
-    /// there are no more records to process.
+/// For unbounded streams, it also tracks whether the operator requires finite memory
+/// to process the stream or if memory usage could grow unbounded.
+///
+/// Bounedness of the output stream is based on the the boundedness of the input stream and the nature of
+/// the operator. For example, limit or topk with fetch operator can convert an unbounded stream to a bounded stream.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Boundedness {
+    /// The data stream is bounded (finite) and will eventually complete
     Bounded,
-    /// The stream is unbounded / infinite.
-    ///
-    /// In this case, the stream will never be done (never return `None`),
-    /// except in case of error.
-    ///
-    /// This mode is often used in "Steaming" use cases where data is
-    /// incrementally processed as it arrives.
-    ///
-    /// Note that even though the operator generates an unbounded stream of
-    /// results, it can execute with bounded memory and incrementally produces
-    /// output.
-    Unbounded,
-    /// Some of the operator's input stream(s) are unbounded, but the operator
-    /// cannot generate streaming results from these streaming inputs.
-    ///
-    /// In this case, the execution mode will be pipeline breaking, e.g. the
-    /// operator requires unbounded memory to generate results. This
-    /// information is used by the planner when performing sanity checks
-    /// on plans processings unbounded data sources.
-    PipelineBreaking,
+    /// The data stream is unbounded (infinite) and could run forever
+    Unbounded {
+        /// Whether this operator requires infinite memory to process the unbounded stream.
+        /// If false, the operator can process an infinite stream with bounded memory.
+        /// If true, memory usage may grow unbounded while processing the stream.
+        ///
+        /// For example, `Median` requires infinite memory to compute the median of an unbounded stream.
+        /// `Min/Max` requires infinite memory if the stream is unordered, but can be computed with bounded memory if the stream is ordered.
+        requires_infinite_memory: bool,
+    },
 }
 
-impl ExecutionMode {
-    /// Check whether the execution mode is unbounded or not.
+impl Boundedness {
     pub fn is_unbounded(&self) -> bool {
-        matches!(self, ExecutionMode::Unbounded)
-    }
-
-    /// Check whether the execution is pipeline friendly. If so, operator can
-    /// execute safely.
-    pub fn pipeline_friendly(&self) -> bool {
-        matches!(self, ExecutionMode::Bounded | ExecutionMode::Unbounded)
+        matches!(self, Boundedness::Unbounded { .. })
     }
 }
 
-/// Conservatively "combines" execution modes of a given collection of operators.
-pub(crate) fn execution_mode_from_children<'a>(
+/// Represents how an operator emits its output records.
+///
+/// This is used to determine whether an operator emits records incrementally as they arrive,
+/// only emits a final result at the end, or can do both. Note that it generates the output -- record batch with `batch_size` rows
+/// but it may still buffer data internally until it has enough data to emit a record batch or the source is exhausted.
+///
+/// For example, in the following plan:
+/// ```text
+///   SortExec [EmissionType::Final]
+///     |_ on: [col1 ASC]
+///     FilterExec [EmissionType::Incremental]
+///       |_ pred: col2 > 100
+///       CsvExec [EmissionType::Incremental]
+///         |_ file: "data.csv"
+/// ```
+/// - CsvExec emits records incrementally as it reads from the file
+/// - FilterExec processes and emits filtered records incrementally as they arrive
+/// - SortExec must wait for all input records before it can emit the sorted result,
+///   since it needs to see all values to determine their final order
+///
+/// Left joins can emit both incrementally and finally:
+/// - Incrementally emit matches as they are found
+/// - Finally emit non-matches after all input is processed
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EmissionType {
+    /// Records are emitted incrementally as they arrive and are processed
+    Incremental,
+    /// Records are only emitted once all input has been processed
+    Final,
+    /// Records can be emitted both incrementally and as a final result
+    Both,
+}
+
+/// Utility to determine an operator's boundedness based on its children's boundedness.
+///
+/// Assumes boundedness can be inferred from child operators:
+/// - Unbounded (requires_infinite_memory: true) takes precedence.
+/// - Unbounded (requires_infinite_memory: false) is considered next.
+/// - Otherwise, the operator is bounded.
+///
+/// **Note:** This is a general-purpose utility and may not apply to
+/// all multi-child operators. Ensure your operator's behavior aligns
+/// with these assumptions before using.
+pub(crate) fn boundedness_from_children<'a>(
     children: impl IntoIterator<Item = &'a Arc<dyn ExecutionPlan>>,
-) -> ExecutionMode {
-    let mut result = ExecutionMode::Bounded;
-    for mode in children.into_iter().map(|child| child.execution_mode()) {
-        match (mode, result) {
-            (ExecutionMode::PipelineBreaking, _)
-            | (_, ExecutionMode::PipelineBreaking) => {
-                // If any of the modes is `PipelineBreaking`, so is the result:
-                return ExecutionMode::PipelineBreaking;
+) -> Boundedness {
+    let mut unbounded_with_finite_mem = false;
+
+    for child in children {
+        match child.boundedness() {
+            Boundedness::Unbounded {
+                requires_infinite_memory: true,
+            } => {
+                return Boundedness::Unbounded {
+                    requires_infinite_memory: true,
+                }
             }
-            (ExecutionMode::Unbounded, _) | (_, ExecutionMode::Unbounded) => {
-                // Unbounded mode eats up bounded mode:
-                result = ExecutionMode::Unbounded;
+            Boundedness::Unbounded {
+                requires_infinite_memory: false,
+            } => {
+                unbounded_with_finite_mem = true;
             }
-            (ExecutionMode::Bounded, ExecutionMode::Bounded) => {
-                // When both modes are bounded, so is the result:
-                result = ExecutionMode::Bounded;
-            }
+            Boundedness::Bounded => {}
         }
     }
-    result
+
+    if unbounded_with_finite_mem {
+        Boundedness::Unbounded {
+            requires_infinite_memory: false,
+        }
+    } else {
+        Boundedness::Bounded
+    }
+}
+
+/// Determines the emission type of an operator based on its children's pipeline behavior.
+///
+/// The precedence of emission types is:
+/// - `Final` has the highest precedence.
+/// - `Both` is next: if any child emits both incremental and final results, the parent inherits this behavior unless a `Final` is present.
+/// - `Incremental` is the default if all children emit incremental results.
+///
+/// **Note:** This is a general-purpose utility and may not apply to
+/// all multi-child operators. Verify your operator's behavior aligns
+/// with these assumptions.
+pub(crate) fn emission_type_from_children<'a>(
+    children: impl IntoIterator<Item = &'a Arc<dyn ExecutionPlan>>,
+) -> EmissionType {
+    let mut inc_and_final = false;
+
+    for child in children {
+        match child.pipeline_behavior() {
+            EmissionType::Final => return EmissionType::Final,
+            EmissionType::Both => inc_and_final = true,
+            EmissionType::Incremental => continue,
+        }
+    }
+
+    if inc_and_final {
+        EmissionType::Both
+    } else {
+        EmissionType::Incremental
+    }
 }
 
 /// Stores certain, often expensive to compute, plan properties used in query
@@ -591,8 +662,10 @@ pub struct PlanProperties {
     pub eq_properties: EquivalenceProperties,
     /// See [ExecutionPlanProperties::output_partitioning]
     pub partitioning: Partitioning,
-    /// See [ExecutionPlanProperties::execution_mode]
-    pub execution_mode: ExecutionMode,
+    /// See [ExecutionPlanProperties::pipeline_behavior]
+    pub emission_type: EmissionType,
+    /// See [ExecutionPlanProperties::boundedness]
+    pub boundedness: Boundedness,
     /// See [ExecutionPlanProperties::output_ordering]
     output_ordering: Option<LexOrdering>,
 }
@@ -602,14 +675,16 @@ impl PlanProperties {
     pub fn new(
         eq_properties: EquivalenceProperties,
         partitioning: Partitioning,
-        execution_mode: ExecutionMode,
+        emission_type: EmissionType,
+        boundedness: Boundedness,
     ) -> Self {
         // Output ordering can be derived from `eq_properties`.
         let output_ordering = eq_properties.output_ordering();
         Self {
             eq_properties,
             partitioning,
-            execution_mode,
+            emission_type,
+            boundedness,
             output_ordering,
         }
     }
@@ -620,18 +695,24 @@ impl PlanProperties {
         self
     }
 
-    /// Overwrite the execution Mode with its new value.
-    pub fn with_execution_mode(mut self, execution_mode: ExecutionMode) -> Self {
-        self.execution_mode = execution_mode;
-        self
-    }
-
     /// Overwrite equivalence properties with its new value.
     pub fn with_eq_properties(mut self, eq_properties: EquivalenceProperties) -> Self {
         // Changing equivalence properties also changes output ordering, so
         // make sure to overwrite it:
         self.output_ordering = eq_properties.output_ordering();
         self.eq_properties = eq_properties;
+        self
+    }
+
+    /// Overwrite boundedness with its new value.
+    pub fn with_boundedness(mut self, boundedness: Boundedness) -> Self {
+        self.boundedness = boundedness;
+        self
+    }
+
+    /// Overwrite emission type with its new value.
+    pub fn with_emission_type(mut self, emission_type: EmissionType) -> Self {
+        self.emission_type = emission_type;
         self
     }
 
@@ -645,10 +726,6 @@ impl PlanProperties {
 
     pub fn output_ordering(&self) -> Option<&LexOrdering> {
         self.output_ordering.as_ref()
-    }
-
-    pub fn execution_mode(&self) -> ExecutionMode {
-        self.execution_mode
     }
 
     /// Get schema of the node.
@@ -706,9 +783,11 @@ pub fn with_new_children_if_necessary(
     }
 }
 
-/// Return a [wrapper](DisplayableExecutionPlan) around an
+/// Return a [`DisplayableExecutionPlan`] wrapper around an
 /// [`ExecutionPlan`] which can be displayed in various easier to
 /// understand ways.
+///
+/// See examples on [`DisplayableExecutionPlan`]
 pub fn displayable(plan: &dyn ExecutionPlan) -> DisplayableExecutionPlan<'_> {
     DisplayableExecutionPlan::new(plan)
 }

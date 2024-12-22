@@ -214,7 +214,7 @@ fn replace_with_partial_sort(
     let plan_any = plan.as_any();
     if let Some(sort_plan) = plan_any.downcast_ref::<SortExec>() {
         let child = Arc::clone(sort_plan.children()[0]);
-        if !child.execution_mode().is_unbounded() {
+        if !child.boundedness().is_unbounded() {
             return Ok(plan);
         }
 

@@ -94,12 +94,11 @@ static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
 
 fn get_empty_doc() -> &'static Documentation {
     DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_ARRAY)
-            .with_description(
+        Documentation::builder(
+            DOC_SECTION_ARRAY,
                 "Returns 1 for an empty array or 0 for a non-empty array.",
-            )
-            .with_syntax_example("empty(array)")
+
+            "empty(array)")
             .with_sql_example(
                 r#"```sql
 > select empty([1]);

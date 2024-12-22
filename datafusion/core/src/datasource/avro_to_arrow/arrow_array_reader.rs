@@ -60,7 +60,7 @@ pub struct AvroArrowArrayReader<'a, R: Read> {
     schema_lookup: BTreeMap<String, usize>,
 }
 
-impl<'a, R: Read> AvroArrowArrayReader<'a, R> {
+impl<R: Read> AvroArrowArrayReader<'_, R> {
     pub fn try_new(
         reader: R,
         schema: SchemaRef,
@@ -138,7 +138,11 @@ impl<'a, R: Read> AvroArrowArrayReader<'a, R> {
             }
             AvroSchema::Array(schema) => {
                 let sub_parent_field_name = format!("{}.element", parent_field_name);
-                Self::child_schema_lookup(&sub_parent_field_name, schema, schema_lookup)?;
+                Self::child_schema_lookup(
+                    &sub_parent_field_name,
+                    &schema.items,
+                    schema_lookup,
+                )?;
             }
             _ => (),
         }

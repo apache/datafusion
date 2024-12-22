@@ -313,7 +313,7 @@ pub struct ScopedTimerGuard<'a> {
     start: Option<Instant>,
 }
 
-impl<'a> ScopedTimerGuard<'a> {
+impl ScopedTimerGuard<'_> {
     /// Stop the timer timing and record the time taken
     pub fn stop(&mut self) {
         if let Some(start) = self.start.take() {
@@ -332,7 +332,7 @@ impl<'a> ScopedTimerGuard<'a> {
     }
 }
 
-impl<'a> Drop for ScopedTimerGuard<'a> {
+impl Drop for ScopedTimerGuard<'_> {
     fn drop(&mut self) {
         self.stop()
     }

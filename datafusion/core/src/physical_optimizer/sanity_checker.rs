@@ -30,6 +30,7 @@ use datafusion_common::config::{ConfigOptions, OptimizerOptions};
 use datafusion_common::plan_err;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_physical_expr::intervals::utils::{check_support, is_datatype_supported};
+use datafusion_physical_plan::execution_plan::{Boundedness, EmissionType};
 use datafusion_physical_plan::joins::SymmetricHashJoinExec;
 use datafusion_physical_plan::{get_plan_string, ExecutionPlanProperties};
 
@@ -85,7 +86,15 @@ pub fn check_finiteness_requirements(
                               the 'allow_symmetric_joins_without_pruning' configuration flag");
         }
     }
-    if !input.execution_mode().pipeline_friendly() {
+
+    if matches!(
+        input.boundedness(),
+        Boundedness::Unbounded {
+            requires_infinite_memory: true
+        }
+    ) || (input.boundedness().is_unbounded()
+        && input.pipeline_behavior() == EmissionType::Final)
+    {
         plan_err!(
             "Cannot execute pipeline breaking queries, operator: {:?}",
             input
@@ -103,7 +112,7 @@ pub fn check_finiteness_requirements(
 /// [`PhysicalExpr`]: crate::physical_plan::PhysicalExpr
 /// [`Operator`]: datafusion_expr::Operator
 fn is_prunable(join: &SymmetricHashJoinExec) -> bool {
-    join.filter().map_or(false, |filter| {
+    join.filter().is_some_and(|filter| {
         check_support(filter.expression(), &join.schema())
             && filter
                 .schema()
@@ -215,7 +224,9 @@ mod tests {
 
         let test2 = BinaryTestCase {
             source_types: (SourceType::Bounded, SourceType::Unbounded),
-            expect_fail: true,
+            // Left join for bounded build side and unbounded probe side can generate
+            // both incremental matched rows and final non-matched rows.
+            expect_fail: false,
         };
         let test3 = BinaryTestCase {
             source_types: (SourceType::Bounded, SourceType::Bounded),
@@ -290,7 +301,9 @@ mod tests {
         };
         let test2 = BinaryTestCase {
             source_types: (SourceType::Bounded, SourceType::Unbounded),
-            expect_fail: true,
+            // Full join for bounded build side and unbounded probe side can generate
+            // both incremental matched rows and final non-matched rows.
+            expect_fail: false,
         };
         let test3 = BinaryTestCase {
             source_types: (SourceType::Bounded, SourceType::Bounded),

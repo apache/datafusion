@@ -26,6 +26,8 @@ pub mod coalesce;
 pub mod expr_ext;
 pub mod getfield;
 pub mod greatest;
+mod greatest_least_utils;
+pub mod least;
 pub mod named_struct;
 pub mod nullif;
 pub mod nvl;
@@ -35,17 +37,18 @@ pub mod r#struct;
 pub mod version;
 
 // create UDFs
-make_udf_function!(arrow_cast::ArrowCastFunc, ARROW_CAST, arrow_cast);
-make_udf_function!(nullif::NullIfFunc, NULLIF, nullif);
-make_udf_function!(nvl::NVLFunc, NVL, nvl);
-make_udf_function!(nvl2::NVL2Func, NVL2, nvl2);
-make_udf_function!(arrowtypeof::ArrowTypeOfFunc, ARROWTYPEOF, arrow_typeof);
-make_udf_function!(r#struct::StructFunc, STRUCT, r#struct);
-make_udf_function!(named_struct::NamedStructFunc, NAMED_STRUCT, named_struct);
-make_udf_function!(getfield::GetFieldFunc, GET_FIELD, get_field);
-make_udf_function!(coalesce::CoalesceFunc, COALESCE, coalesce);
-make_udf_function!(greatest::GreatestFunc, GREATEST, greatest);
-make_udf_function!(version::VersionFunc, VERSION, version);
+make_udf_function!(arrow_cast::ArrowCastFunc, arrow_cast);
+make_udf_function!(nullif::NullIfFunc, nullif);
+make_udf_function!(nvl::NVLFunc, nvl);
+make_udf_function!(nvl2::NVL2Func, nvl2);
+make_udf_function!(arrowtypeof::ArrowTypeOfFunc, arrow_typeof);
+make_udf_function!(r#struct::StructFunc, r#struct);
+make_udf_function!(named_struct::NamedStructFunc, named_struct);
+make_udf_function!(getfield::GetFieldFunc, get_field);
+make_udf_function!(coalesce::CoalesceFunc, coalesce);
+make_udf_function!(greatest::GreatestFunc, greatest);
+make_udf_function!(least::LeastFunc, least);
+make_udf_function!(version::VersionFunc, version);
 
 pub mod expr_fn {
     use datafusion_expr::{Expr, Literal};
@@ -86,6 +89,10 @@ pub mod expr_fn {
         greatest,
         "Returns `greatest(args...)`, which evaluates to the greatest value in the list of expressions or NULL if all the expressions are NULL",
         args,
+    ),(
+        least,
+        "Returns `least(args...)`, which evaluates to the smallest value in the list of expressions or NULL if all the expressions are NULL",
+        args,
     ));
 
     #[doc = "Returns the value of the field with the given name from the struct"]
@@ -113,6 +120,7 @@ pub fn functions() -> Vec<Arc<ScalarUDF>> {
         get_field(),
         coalesce(),
         greatest(),
+        least(),
         version(),
         r#struct(),
     ]

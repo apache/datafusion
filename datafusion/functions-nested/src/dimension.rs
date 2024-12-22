@@ -73,7 +73,7 @@ impl ScalarUDFImpl for ArrayDims {
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
         Ok(match arg_types[0] {
             List(_) | LargeList(_) | FixedSizeList(_, _) => {
-                List(Arc::new(Field::new("item", UInt64, true)))
+                List(Arc::new(Field::new_list_field(UInt64, true)))
             }
             _ => {
                 return plan_err!("The array_dims function can only accept List/LargeList/FixedSizeList.");
@@ -102,12 +102,11 @@ static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
 
 fn get_array_dims_doc() -> &'static Documentation {
     DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_ARRAY)
-            .with_description(
+        Documentation::builder(
+            DOC_SECTION_ARRAY,
                 "Returns an array of the array's dimensions.",
-            )
-            .with_syntax_example("array_dims(array)")
+
+            "array_dims(array)")
             .with_sql_example(
                 r#"```sql
 > select array_dims([[1, 2, 3], [4, 5, 6]]);
@@ -188,12 +187,11 @@ impl ScalarUDFImpl for ArrayNdims {
 
 fn get_array_ndims_doc() -> &'static Documentation {
     DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_ARRAY)
-            .with_description(
+        Documentation::builder(
+            DOC_SECTION_ARRAY,
                 "Returns the number of dimensions of the array.",
-            )
-            .with_syntax_example("array_ndims(array, element)")
+
+            "array_ndims(array, element)")
             .with_sql_example(
                 r#"```sql
 > select array_ndims([[1, 2, 3], [4, 5, 6]]);

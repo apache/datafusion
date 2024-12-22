@@ -24,7 +24,9 @@ pub mod test {
     use datafusion::error::Result;
     use datafusion::prelude::SessionContext;
     use datafusion_substrait::extensions::Extensions;
-    use datafusion_substrait::logical_plan::consumer::from_substrait_named_struct;
+    use datafusion_substrait::logical_plan::consumer::{
+        from_substrait_named_struct, DefaultSubstraitConsumer, SubstraitConsumer,
+    };
     use std::collections::HashMap;
     use std::fs::File;
     use std::io::BufReader;
@@ -50,7 +52,18 @@ pub mod test {
         ctx: SessionContext,
         plan: &Plan,
     ) -> Result<SessionContext> {
-        let schemas = TestSchemaCollector::collect_schemas(plan)?;
+        let extensions = Extensions::default();
+        let state = ctx.state();
+        let consumer = DefaultSubstraitConsumer::new(&extensions, &state);
+        add_plan_schemas_to_ctx_with_consumer(&consumer, ctx, plan)
+    }
+
+    fn add_plan_schemas_to_ctx_with_consumer(
+        consumer: &impl SubstraitConsumer,
+        ctx: SessionContext,
+        plan: &Plan,
+    ) -> Result<SessionContext> {
+        let schemas = TestSchemaCollector::collect_schemas(consumer, plan)?;
         let mut schema_map: HashMap<TableReference, Arc<dyn TableProvider>> =
             HashMap::new();
         for (table_reference, table) in schemas.into_iter() {
@@ -71,21 +84,24 @@ pub mod test {
         Ok(ctx)
     }
 
-    pub struct TestSchemaCollector {
+    pub struct TestSchemaCollector<'a, T: SubstraitConsumer> {
+        consumer: &'a T,
         schemas: Vec<(TableReference, Arc<dyn TableProvider>)>,
     }
 
-    impl TestSchemaCollector {
-        fn new() -> Self {
+    impl<'a, T: SubstraitConsumer> TestSchemaCollector<'a, T> {
+        fn new(consumer: &'a T) -> Self {
             TestSchemaCollector {
                 schemas: Vec::new(),
+                consumer,
             }
         }
 
         fn collect_schemas(
+            consumer: &'a T,
             plan: &Plan,
         ) -> Result<Vec<(TableReference, Arc<dyn TableProvider>)>> {
-            let mut schema_collector = Self::new();
+            let mut schema_collector = Self::new(consumer);
 
             for plan_rel in plan.relations.iter() {
                 let rel_type = plan_rel
@@ -132,15 +148,8 @@ pub mod test {
                     "No base schema found for NamedTable: {}",
                     table_reference
                 ))?;
-            let empty_extensions = Extensions {
-                functions: Default::default(),
-                types: Default::default(),
-                type_variations: Default::default(),
-            };
-
-            let df_schema =
-                from_substrait_named_struct(substrait_schema, &empty_extensions)?
-                    .replace_qualifier(table_reference.clone());
+            let df_schema = from_substrait_named_struct(self.consumer, substrait_schema)?
+                .replace_qualifier(table_reference.clone());
 
             let table = EmptyTable::new(df_schema.inner().clone());
             self.schemas.push((table_reference, Arc::new(table)));

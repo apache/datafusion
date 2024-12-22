@@ -100,12 +100,13 @@ static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
 
 fn get_octet_length_doc() -> &'static Documentation {
     DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_STRING)
-            .with_description("Returns the length of a string in bytes.")
-            .with_syntax_example("octet_length(str)")
-            .with_sql_example(
-                r#"```sql
+        Documentation::builder(
+            DOC_SECTION_STRING,
+            "Returns the length of a string in bytes.",
+            "octet_length(str)",
+        )
+        .with_sql_example(
+            r#"```sql
 > select octet_length('Ångström');
 +--------------------------------+
 | octet_length(Utf8("Ångström")) |
@@ -113,11 +114,11 @@ fn get_octet_length_doc() -> &'static Documentation {
 | 10                             |
 +--------------------------------+
 ```"#,
-            )
-            .with_standard_argument("str", Some("String"))
-            .with_related_udf("bit_length")
-            .with_related_udf("length")
-            .build()
+        )
+        .with_standard_argument("str", Some("String"))
+        .with_related_udf("bit_length")
+        .with_related_udf("length")
+        .build()
     })
 }
 
@@ -139,7 +140,7 @@ mod tests {
     fn test_functions() -> Result<()> {
         test_function!(
             OctetLengthFunc::new(),
-            &[ColumnarValue::Scalar(ScalarValue::Int32(Some(12)))],
+            vec![ColumnarValue::Scalar(ScalarValue::Int32(Some(12)))],
             exec_err!(
                 "The OCTET_LENGTH function can only accept strings, but got Int32."
             ),
@@ -149,7 +150,7 @@ mod tests {
         );
         test_function!(
             OctetLengthFunc::new(),
-            &[ColumnarValue::Array(Arc::new(StringArray::from(vec![
+            vec![ColumnarValue::Array(Arc::new(StringArray::from(vec![
                 String::from("chars"),
                 String::from("chars2"),
             ])))],
@@ -160,7 +161,7 @@ mod tests {
         );
         test_function!(
             OctetLengthFunc::new(),
-            &[
+            vec![
                 ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from("chars")))),
                 ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from("chars"))))
             ],
@@ -171,7 +172,7 @@ mod tests {
         );
         test_function!(
             OctetLengthFunc::new(),
-            &[ColumnarValue::Scalar(ScalarValue::Utf8(Some(
+            vec![ColumnarValue::Scalar(ScalarValue::Utf8(Some(
                 String::from("chars")
             )))],
             Ok(Some(5)),
@@ -181,7 +182,7 @@ mod tests {
         );
         test_function!(
             OctetLengthFunc::new(),
-            &[ColumnarValue::Scalar(ScalarValue::Utf8(Some(
+            vec![ColumnarValue::Scalar(ScalarValue::Utf8(Some(
                 String::from("josé")
             )))],
             Ok(Some(5)),
@@ -191,7 +192,7 @@ mod tests {
         );
         test_function!(
             OctetLengthFunc::new(),
-            &[ColumnarValue::Scalar(ScalarValue::Utf8(Some(
+            vec![ColumnarValue::Scalar(ScalarValue::Utf8(Some(
                 String::from("")
             )))],
             Ok(Some(0)),
@@ -201,7 +202,7 @@ mod tests {
         );
         test_function!(
             OctetLengthFunc::new(),
-            &[ColumnarValue::Scalar(ScalarValue::Utf8(None))],
+            vec![ColumnarValue::Scalar(ScalarValue::Utf8(None))],
             Ok(None),
             i32,
             Int32,
@@ -209,7 +210,7 @@ mod tests {
         );
         test_function!(
             OctetLengthFunc::new(),
-            &[ColumnarValue::Scalar(ScalarValue::Utf8View(Some(
+            vec![ColumnarValue::Scalar(ScalarValue::Utf8View(Some(
                 String::from("joséjoséjoséjosé")
             )))],
             Ok(Some(20)),
@@ -219,7 +220,7 @@ mod tests {
         );
         test_function!(
             OctetLengthFunc::new(),
-            &[ColumnarValue::Scalar(ScalarValue::Utf8View(Some(
+            vec![ColumnarValue::Scalar(ScalarValue::Utf8View(Some(
                 String::from("josé")
             )))],
             Ok(Some(5)),
@@ -229,7 +230,7 @@ mod tests {
         );
         test_function!(
             OctetLengthFunc::new(),
-            &[ColumnarValue::Scalar(ScalarValue::Utf8View(Some(
+            vec![ColumnarValue::Scalar(ScalarValue::Utf8View(Some(
                 String::from("")
             )))],
             Ok(Some(0)),

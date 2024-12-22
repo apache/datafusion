@@ -22,9 +22,7 @@ use std::sync::Arc;
 use substrait::proto::expression_reference::ExprType;
 
 use datafusion::arrow::datatypes::{Field, IntervalUnit};
-use datafusion::logical_expr::{
-    Distinct, FetchType, Like, Partitioning, SkipType, WindowFrameUnits,
-};
+use datafusion::logical_expr::{Distinct, Like, Partitioning, TryCast, WindowFrameUnits};
 use datafusion::{
     arrow::datatypes::{DataType, TimeUnit},
     error::{DataFusionError, Result},
@@ -45,7 +43,7 @@ use datafusion::arrow::array::{Array, GenericListArray, OffsetSizeTrait};
 use datafusion::arrow::temporal_conversions::NANOSECONDS;
 use datafusion::common::{
     exec_err, internal_err, not_impl_err, plan_err, substrait_datafusion_err,
-    substrait_err, DFSchemaRef, ToDFSchema,
+    substrait_err, DFSchema, DFSchemaRef, ToDFSchema,
 };
 #[allow(unused_imports)]
 use datafusion::logical_expr::expr::{
@@ -55,6 +53,8 @@ use datafusion::logical_expr::{expr, Between, JoinConstraint, LogicalPlan, Opera
 use datafusion::prelude::Expr;
 use pbjson_types::Any as ProtoAny;
 use substrait::proto::exchange_rel::{ExchangeKind, RoundRobin, ScatterFields};
+use substrait::proto::expression::cast::FailureBehavior;
+use substrait::proto::expression::field_reference::{RootReference, RootType};
 use substrait::proto::expression::literal::interval_day_to_second::PrecisionMode;
 use substrait::proto::expression::literal::map::KeyValue;
 use substrait::proto::expression::literal::{
@@ -67,7 +67,8 @@ use substrait::proto::read_rel::VirtualTable;
 use substrait::proto::rel_common::EmitKind;
 use substrait::proto::rel_common::EmitKind::Emit;
 use substrait::proto::{
-    rel_common, ExchangeRel, ExpressionReference, ExtendedExpression, RelCommon,
+    fetch_rel, rel_common, ExchangeRel, ExpressionReference, ExtendedExpression,
+    RelCommon,
 };
 use substrait::{
     proto::{
@@ -331,38 +332,74 @@ pub fn to_substrait_rel(
         }
         LogicalPlan::Limit(limit) => {
             let input = to_substrait_rel(limit.input.as_ref(), state, extensions)?;
-            let FetchType::Literal(fetch) = limit.get_fetch_type()? else {
-                return not_impl_err!("Non-literal limit fetch");
-            };
-            let SkipType::Literal(skip) = limit.get_skip_type()? else {
-                return not_impl_err!("Non-literal limit skip");
-            };
+            let empty_schema = Arc::new(DFSchema::empty());
+            let offset_mode = limit
+                .skip
+                .as_ref()
+                .map(|expr| {
+                    to_substrait_rex(state, expr.as_ref(), &empty_schema, 0, extensions)
+                })
+                .transpose()?
+                .map(Box::new)
+                .map(fetch_rel::OffsetMode::OffsetExpr);
+            let count_mode = limit
+                .fetch
+                .as_ref()
+                .map(|expr| {
+                    to_substrait_rex(state, expr.as_ref(), &empty_schema, 0, extensions)
+                })
+                .transpose()?
+                .map(Box::new)
+                .map(fetch_rel::CountMode::CountExpr);
             Ok(Box::new(Rel {
                 rel_type: Some(RelType::Fetch(Box::new(FetchRel {
                     common: None,
                     input: Some(input),
-                    offset: skip as i64,
-                    // use -1 to signal that ALL records should be returned
-                    count: fetch.map(|f| f as i64).unwrap_or(-1),
+                    offset_mode,
+                    count_mode,
                     advanced_extension: None,
                 }))),
             }))
         }
-        LogicalPlan::Sort(sort) => {
-            let input = to_substrait_rel(sort.input.as_ref(), state, extensions)?;
-            let sort_fields = sort
-                .expr
+        LogicalPlan::Sort(datafusion::logical_expr::Sort { expr, input, fetch }) => {
+            let sort_fields = expr
                 .iter()
-                .map(|e| substrait_sort_field(state, e, sort.input.schema(), extensions))
+                .map(|e| substrait_sort_field(state, e, input.schema(), extensions))
                 .collect::<Result<Vec<_>>>()?;
-            Ok(Box::new(Rel {
+
+            let input = to_substrait_rel(input.as_ref(), state, extensions)?;
+
+            let sort_rel = Box::new(Rel {
                 rel_type: Some(RelType::Sort(Box::new(SortRel {
                     common: None,
                     input: Some(input),
                     sorts: sort_fields,
                     advanced_extension: None,
                 }))),
-            }))
+            });
+
+            match fetch {
+                Some(amount) => {
+                    let count_mode =
+                        Some(fetch_rel::CountMode::CountExpr(Box::new(Expression {
+                            rex_type: Some(RexType::Literal(Literal {
+                                nullable: false,
+                                type_variation_reference: DEFAULT_TYPE_VARIATION_REF,
+                                literal_type: Some(LiteralType::I64(*amount as i64)),
+                            })),
+                        })));
+                    Ok(Box::new(Rel {
+                        rel_type: Some(RelType::Fetch(Box::new(FetchRel {
+                            common: None,
+                            input: Some(sort_rel),
+                            offset_mode: None,
+                            count_mode,
+                            advanced_extension: None,
+                        }))),
+                    }))
+                }
+                None => Ok(sort_rel),
+            }
         }
         LogicalPlan::Aggregate(agg) => {
             let input = to_substrait_rel(agg.input.as_ref(), state, extensions)?;
@@ -1182,23 +1219,36 @@ pub fn to_substrait_rex(
                 rex_type: Some(RexType::IfThen(Box::new(IfThen { ifs, r#else }))),
             })
         }
-        Expr::Cast(Cast { expr, data_type }) => {
-            Ok(Expression {
-                rex_type: Some(RexType::Cast(Box::new(
-                    substrait::proto::expression::Cast {
-                        r#type: Some(to_substrait_type(data_type, true)?),
-                        input: Some(Box::new(to_substrait_rex(
-                            state,
-                            expr,
-                            schema,
-                            col_ref_offset,
-                            extensions,
-                        )?)),
-                        failure_behavior: 0, // FAILURE_BEHAVIOR_UNSPECIFIED
-                    },
-                ))),
-            })
-        }
+        Expr::Cast(Cast { expr, data_type }) => Ok(Expression {
+            rex_type: Some(RexType::Cast(Box::new(
+                substrait::proto::expression::Cast {
+                    r#type: Some(to_substrait_type(data_type, true)?),
+                    input: Some(Box::new(to_substrait_rex(
+                        state,
+                        expr,
+                        schema,
+                        col_ref_offset,
+                        extensions,
+                    )?)),
+                    failure_behavior: FailureBehavior::ThrowException.into(),
+                },
+            ))),
+        }),
+        Expr::TryCast(TryCast { expr, data_type }) => Ok(Expression {
+            rex_type: Some(RexType::Cast(Box::new(
+                substrait::proto::expression::Cast {
+                    r#type: Some(to_substrait_type(data_type, true)?),
+                    input: Some(Box::new(to_substrait_rex(
+                        state,
+                        expr,
+                        schema,
+                        col_ref_offset,
+                        extensions,
+                    )?)),
+                    failure_behavior: FailureBehavior::ReturnNull.into(),
+                },
+            ))),
+        }),
         Expr::Literal(value) => to_substrait_literal_expr(value, extensions),
         Expr::Alias(Alias { expr, .. }) => {
             to_substrait_rex(state, expr, schema, col_ref_offset, extensions)
@@ -2136,7 +2186,7 @@ fn try_to_substrait_field_reference(
                         }),
                     )),
                 })),
-                root_type: None,
+                root_type: Some(RootType::RootReference(RootReference {})),
             })
         }
         _ => substrait_err!("Expect a `Column` expr, but found {expr:?}"),
@@ -2178,7 +2228,7 @@ fn substrait_field_ref(index: usize) -> Result<Expression> {
                     }),
                 )),
             })),
-            root_type: None,
+            root_type: Some(RootType::RootReference(RootReference {})),
         }))),
     })
 }
@@ -2189,6 +2239,7 @@ mod test {
     use crate::logical_plan::consumer::{
         from_substrait_extended_expr, from_substrait_literal_without_names,
         from_substrait_named_struct, from_substrait_type_without_names,
+        DefaultSubstraitConsumer,
     };
     use arrow_buffer::{IntervalDayTime, IntervalMonthDayNano};
     use datafusion::arrow::array::{
@@ -2197,7 +2248,17 @@ mod test {
     use datafusion::arrow::datatypes::{Field, Fields, Schema};
     use datafusion::common::scalar::ScalarStructBuilder;
     use datafusion::common::DFSchema;
-    use datafusion::execution::SessionStateBuilder;
+    use datafusion::execution::{SessionState, SessionStateBuilder};
+    use datafusion::prelude::SessionContext;
+    use std::sync::OnceLock;
+
+    static TEST_SESSION_STATE: OnceLock<SessionState> = OnceLock::new();
+    static TEST_EXTENSIONS: OnceLock<Extensions> = OnceLock::new();
+    fn test_consumer() -> DefaultSubstraitConsumer<'static> {
+        let extensions = TEST_EXTENSIONS.get_or_init(Extensions::default);
+        let state = TEST_SESSION_STATE.get_or_init(|| SessionContext::default().state());
+        DefaultSubstraitConsumer::new(extensions, state)
+    }
 
     #[test]
     fn round_trip_literals() -> Result<()> {
@@ -2323,7 +2384,7 @@ mod test {
         let mut extensions = Extensions::default();
         let substrait_literal = to_substrait_literal(&scalar, &mut extensions)?;
         let roundtrip_scalar =
-            from_substrait_literal_without_names(&substrait_literal, &extensions)?;
+            from_substrait_literal_without_names(&test_consumer(), &substrait_literal)?;
         assert_eq!(scalar, roundtrip_scalar);
         Ok(())
     }
@@ -2402,9 +2463,29 @@ mod test {
         // As DataFusion doesn't consider nullability as a property of the type, but field,
         // it doesn't matter if we set nullability to true or false here.
         let substrait = to_substrait_type(&dt, true)?;
-        let roundtrip_dt =
-            from_substrait_type_without_names(&substrait, &Extensions::default())?;
+        let consumer = test_consumer();
+        let roundtrip_dt = from_substrait_type_without_names(&consumer, &substrait)?;
         assert_eq!(dt, roundtrip_dt);
+        Ok(())
+    }
+
+    #[test]
+    fn to_field_reference() -> Result<()> {
+        let expression = substrait_field_ref(2)?;
+
+        match &expression.rex_type {
+            Some(RexType::Selection(field_ref)) => {
+                assert_eq!(
+                    field_ref
+                        .root_type
+                        .clone()
+                        .expect("root type should be set"),
+                    RootType::RootReference(RootReference {})
+                );
+            }
+
+            _ => panic!("Should not be anything other than field reference"),
+        }
         Ok(())
     }
 
@@ -2416,7 +2497,7 @@ mod test {
                 "struct",
                 DataType::Struct(Fields::from(vec![Field::new(
                     "inner",
-                    DataType::List(Arc::new(Field::new("item", DataType::Utf8, true))),
+                    DataType::List(Arc::new(Field::new_list_field(DataType::Utf8, true))),
                     true,
                 )])),
                 true,
@@ -2434,7 +2515,7 @@ mod test {
         );
 
         let roundtrip_schema =
-            from_substrait_named_struct(&named_struct, &Extensions::default())?;
+            from_substrait_named_struct(&test_consumer(), &named_struct)?;
         assert_eq!(schema.as_ref(), &roundtrip_schema);
         Ok(())
     }

@@ -20,14 +20,16 @@
 use std::collections::VecDeque;
 use std::fmt;
 
+use sqlparser::ast::ExprWithAlias;
+use sqlparser::tokenizer::TokenWithSpan;
 use sqlparser::{
     ast::{
-        ColumnDef, ColumnOptionDef, Expr, ObjectName, OrderByExpr, Query,
+        ColumnDef, ColumnOptionDef, ObjectName, OrderByExpr, Query,
         Statement as SQLStatement, TableConstraint, Value,
     },
     dialect::{keywords::Keyword, Dialect, GenericDialect},
     parser::{Parser, ParserError},
-    tokenizer::{Token, TokenWithLocation, Tokenizer, Word},
+    tokenizer::{Token, Tokenizer, Word},
 };
 
 // Use `Parser::expected` instead, if possible
@@ -328,7 +330,7 @@ impl<'a> DFParser<'a> {
     pub fn parse_sql_into_expr_with_dialect(
         sql: &str,
         dialect: &dyn Dialect,
-    ) -> Result<Expr, ParserError> {
+    ) -> Result<ExprWithAlias, ParserError> {
         let mut parser = DFParser::new_with_dialect(sql, dialect)?;
         parser.parse_expr()
     }
@@ -337,7 +339,7 @@ impl<'a> DFParser<'a> {
     fn expected<T>(
         &self,
         expected: &str,
-        found: TokenWithLocation,
+        found: TokenWithSpan,
     ) -> Result<T, ParserError> {
         parser_err!(format!("Expected {expected}, found: {found}"))
     }
@@ -377,7 +379,7 @@ impl<'a> DFParser<'a> {
         }
     }
 
-    pub fn parse_expr(&mut self) -> Result<Expr, ParserError> {
+    pub fn parse_expr(&mut self) -> Result<ExprWithAlias, ParserError> {
         if let Token::Word(w) = self.parser.peek_token().token {
             match w.keyword {
                 Keyword::CREATE | Keyword::COPY | Keyword::EXPLAIN => {
@@ -387,7 +389,7 @@ impl<'a> DFParser<'a> {
             }
         }
 
-        self.parser.parse_expr()
+        self.parser.parse_expr_with_alias()
     }
 
     /// Parse a SQL `COPY TO` statement
@@ -875,6 +877,7 @@ mod tests {
     use super::*;
     use sqlparser::ast::Expr::Identifier;
     use sqlparser::ast::{BinaryOperator, DataType, Expr, Ident};
+    use sqlparser::tokenizer::Span;
 
     fn expect_parse_ok(sql: &str, expected: Statement) -> Result<(), ParserError> {
         let statements = DFParser::parse_sql(sql)?;
@@ -910,6 +913,7 @@ mod tests {
             name: Ident {
                 value: name.into(),
                 quote_style: None,
+                span: Span::empty(),
             },
             data_type,
             collation: None,
@@ -1218,6 +1222,7 @@ mod tests {
                     expr: Identifier(Ident {
                         value: "c1".to_owned(),
                         quote_style: None,
+                        span: Span::empty(),
                     }),
                     asc,
                     nulls_first,
@@ -1249,6 +1254,7 @@ mod tests {
                     expr: Identifier(Ident {
                         value: "c1".to_owned(),
                         quote_style: None,
+                        span: Span::empty(),
                     }),
                     asc: Some(true),
                     nulls_first: None,
@@ -1258,6 +1264,7 @@ mod tests {
                     expr: Identifier(Ident {
                         value: "c2".to_owned(),
                         quote_style: None,
+                        span: Span::empty(),
                     }),
                     asc: Some(false),
                     nulls_first: Some(true),
@@ -1289,11 +1296,13 @@ mod tests {
                     left: Box::new(Identifier(Ident {
                         value: "c1".to_owned(),
                         quote_style: None,
+                        span: Span::empty(),
                     })),
                     op: BinaryOperator::Minus,
                     right: Box::new(Identifier(Ident {
                         value: "c2".to_owned(),
                         quote_style: None,
+                        span: Span::empty(),
                     })),
                 },
                 asc: Some(true),
@@ -1334,11 +1343,13 @@ mod tests {
                     left: Box::new(Identifier(Ident {
                         value: "c1".to_owned(),
                         quote_style: None,
+                        span: Span::empty(),
                     })),
                     op: BinaryOperator::Minus,
                     right: Box::new(Identifier(Ident {
                         value: "c2".to_owned(),
                         quote_style: None,
+                        span: Span::empty(),
                     })),
                 },
                 asc: Some(true),

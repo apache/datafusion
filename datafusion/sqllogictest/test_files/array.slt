@@ -5660,6 +5660,20 @@ select count(*) from arrays where 'X'>any(column3);
 #----
 #NULL
 
+# test with empty row, the row that does not match the condition has row count 0
+statement ok
+create table t1(a int, b int) as values (100, 1), (101, 2), (102, 3), (101, 2);
+
+# rowsort is to ensure the order of group by is deterministic, array_sort has no effect here, since the sum() always returns single row.
+query ? rowsort
+select array_distinct([sum(a)]) from t1 where a > 100 group by b;
+----
+[102]
+[202]
+
+statement ok
+drop table t1;
+
 query ?
 select array_distinct([]);
 ----
@@ -7129,7 +7143,7 @@ select array_resize(arrow_cast(NULL, 'List(Int8)'), 1);
 NULL
 
 statement ok
-CREATE TABLE array_resize_values 
+CREATE TABLE array_resize_values
 AS VALUES
   (make_array(1, NULL, 3, 4, 5, 6, 7, 8, 9, 10), 2, 1),
   (make_array(11, 12, NULL, 14, 15, 16, 17, 18, 19, 20), 5, 2),

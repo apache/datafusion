@@ -87,9 +87,11 @@ pub struct CsvReadOptions<'a> {
     pub file_compression_type: FileCompressionType,
     /// Indicates how the file is sorted
     pub file_sort_order: Vec<Vec<SortExpr>>,
+    /// Optional regex to match null values
+    pub null_regex: Option<String>,
 }
 
-impl<'a> Default for CsvReadOptions<'a> {
+impl Default for CsvReadOptions<'_> {
     fn default() -> Self {
         Self::new()
     }
@@ -112,6 +114,7 @@ impl<'a> CsvReadOptions<'a> {
             file_compression_type: FileCompressionType::UNCOMPRESSED,
             file_sort_order: vec![],
             comment: None,
+            null_regex: None,
         }
     }
 
@@ -212,6 +215,12 @@ impl<'a> CsvReadOptions<'a> {
         self.file_sort_order = file_sort_order;
         self
     }
+
+    /// Configure the null parsing regex.
+    pub fn null_regex(mut self, null_regex: Option<String>) -> Self {
+        self.null_regex = null_regex;
+        self
+    }
 }
 
 /// Options that control the reading of Parquet files.
@@ -243,7 +252,7 @@ pub struct ParquetReadOptions<'a> {
     pub file_sort_order: Vec<Vec<SortExpr>>,
 }
 
-impl<'a> Default for ParquetReadOptions<'a> {
+impl Default for ParquetReadOptions<'_> {
     fn default() -> Self {
         Self {
             file_extension: DEFAULT_PARQUET_EXTENSION,
@@ -323,7 +332,7 @@ pub struct ArrowReadOptions<'a> {
     pub table_partition_cols: Vec<(String, DataType)>,
 }
 
-impl<'a> Default for ArrowReadOptions<'a> {
+impl Default for ArrowReadOptions<'_> {
     fn default() -> Self {
         Self {
             schema: None,
@@ -368,7 +377,7 @@ pub struct AvroReadOptions<'a> {
     pub table_partition_cols: Vec<(String, DataType)>,
 }
 
-impl<'a> Default for AvroReadOptions<'a> {
+impl Default for AvroReadOptions<'_> {
     fn default() -> Self {
         Self {
             schema: None,
@@ -420,7 +429,7 @@ pub struct NdJsonReadOptions<'a> {
     pub file_sort_order: Vec<Vec<SortExpr>>,
 }
 
-impl<'a> Default for NdJsonReadOptions<'a> {
+impl Default for NdJsonReadOptions<'_> {
     fn default() -> Self {
         Self {
             schema: None,
@@ -534,7 +543,8 @@ impl ReadOptions<'_> for CsvReadOptions<'_> {
             .with_terminator(self.terminator)
             .with_newlines_in_values(self.newlines_in_values)
             .with_schema_infer_max_rec(self.schema_infer_max_records)
-            .with_file_compression_type(self.file_compression_type.to_owned());
+            .with_file_compression_type(self.file_compression_type.to_owned())
+            .with_null_regex(self.null_regex.clone());
 
         ListingOptions::new(Arc::new(file_format))
             .with_file_extension(self.file_extension)

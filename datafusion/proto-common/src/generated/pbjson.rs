@@ -1533,6 +1533,9 @@ impl serde::Serialize for CsvOptions {
         if !self.null_value.is_empty() {
             len += 1;
         }
+        if !self.null_regex.is_empty() {
+            len += 1;
+        }
         if !self.comment.is_empty() {
             len += 1;
         }
@@ -1594,6 +1597,9 @@ impl serde::Serialize for CsvOptions {
         if !self.null_value.is_empty() {
             struct_ser.serialize_field("nullValue", &self.null_value)?;
         }
+        if !self.null_regex.is_empty() {
+            struct_ser.serialize_field("nullRegex", &self.null_regex)?;
+        }
         if !self.comment.is_empty() {
             #[allow(clippy::needless_borrow)]
             #[allow(clippy::needless_borrows_for_generic_args)]
@@ -1644,6 +1650,8 @@ impl<'de> serde::Deserialize<'de> for CsvOptions {
             "timeFormat",
             "null_value",
             "nullValue",
+            "null_regex",
+            "nullRegex",
             "comment",
             "double_quote",
             "doubleQuote",
@@ -1666,6 +1674,7 @@ impl<'de> serde::Deserialize<'de> for CsvOptions {
             TimestampTzFormat,
             TimeFormat,
             NullValue,
+            NullRegex,
             Comment,
             DoubleQuote,
             NewlinesInValues,
@@ -1703,6 +1712,7 @@ impl<'de> serde::Deserialize<'de> for CsvOptions {
                             "timestampTzFormat" | "timestamp_tz_format" => Ok(GeneratedField::TimestampTzFormat),
                             "timeFormat" | "time_format" => Ok(GeneratedField::TimeFormat),
                             "nullValue" | "null_value" => Ok(GeneratedField::NullValue),
+                            "nullRegex" | "null_regex" => Ok(GeneratedField::NullRegex),
                             "comment" => Ok(GeneratedField::Comment),
                             "doubleQuote" | "double_quote" => Ok(GeneratedField::DoubleQuote),
                             "newlinesInValues" | "newlines_in_values" => Ok(GeneratedField::NewlinesInValues),
@@ -1738,6 +1748,7 @@ impl<'de> serde::Deserialize<'de> for CsvOptions {
                 let mut timestamp_tz_format__ = None;
                 let mut time_format__ = None;
                 let mut null_value__ = None;
+                let mut null_regex__ = None;
                 let mut comment__ = None;
                 let mut double_quote__ = None;
                 let mut newlines_in_values__ = None;
@@ -1826,6 +1837,12 @@ impl<'de> serde::Deserialize<'de> for CsvOptions {
                             }
                             null_value__ = Some(map_.next_value()?);
                         }
+                        GeneratedField::NullRegex => {
+                            if null_regex__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("nullRegex"));
+                            }
+                            null_regex__ = Some(map_.next_value()?);
+                        }
                         GeneratedField::Comment => {
                             if comment__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("comment"));
@@ -1873,6 +1890,7 @@ impl<'de> serde::Deserialize<'de> for CsvOptions {
                     timestamp_tz_format: timestamp_tz_format__.unwrap_or_default(),
                     time_format: time_format__.unwrap_or_default(),
                     null_value: null_value__.unwrap_or_default(),
+                    null_regex: null_regex__.unwrap_or_default(),
                     comment: comment__.unwrap_or_default(),
                     double_quote: double_quote__.unwrap_or_default(),
                     newlines_in_values: newlines_in_values__.unwrap_or_default(),

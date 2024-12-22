@@ -35,7 +35,7 @@ use datafusion_physical_plan::spill::get_record_batch_memory_size;
 use futures::StreamExt;
 use std::any::Any;
 use std::num::NonZeroUsize;
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, LazyLock};
 use tokio::fs::File;
 
 use datafusion::datasource::streaming::StreamingTable;
@@ -730,15 +730,14 @@ fn maybe_split_batches(
         .collect()
 }
 
-static DICT_BATCHES: OnceLock<Vec<RecordBatch>> = OnceLock::new();
-
 /// Returns 5 sorted string dictionary batches each with 50 rows with
 /// this schema.
 ///
 /// a: Dictionary<Utf8, Int32>,
 /// b: Dictionary<Utf8, Int32>,
 fn dict_batches() -> Vec<RecordBatch> {
-    DICT_BATCHES.get_or_init(make_dict_batches).clone()
+    static DICT_BATCHES: LazyLock<Vec<RecordBatch>> = LazyLock::new(make_dict_batches);
+    DICT_BATCHES.clone()
 }
 
 fn make_dict_batches() -> Vec<RecordBatch> {

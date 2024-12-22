@@ -87,12 +87,13 @@ static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
 
 fn get_ends_with_doc() -> &'static Documentation {
     DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_STRING)
-            .with_description("Tests if a string ends with a substring.")
-            .with_syntax_example("ends_with(str, substr)")
-            .with_sql_example(
-                r#"```sql
+        Documentation::builder(
+            DOC_SECTION_STRING,
+            "Tests if a string ends with a substring.",
+            "ends_with(str, substr)",
+        )
+        .with_sql_example(
+            r#"```sql
 >  select ends_with('datafusion', 'soin');
 +--------------------------------------------+
 | ends_with(Utf8("datafusion"),Utf8("soin")) |
@@ -106,10 +107,10 @@ fn get_ends_with_doc() -> &'static Documentation {
 | true                                       |
 +--------------------------------------------+
 ```"#,
-            )
-            .with_standard_argument("str", Some("String"))
-            .with_argument("substr", "Substring to test for.")
-            .build()
+        )
+        .with_standard_argument("str", Some("String"))
+        .with_argument("substr", "Substring to test for.")
+        .build()
     })
 }
 
@@ -137,7 +138,7 @@ mod tests {
     fn test_functions() -> Result<()> {
         test_function!(
             EndsWithFunc::new(),
-            &[
+            vec![
                 ColumnarValue::Scalar(ScalarValue::from("alphabet")),
                 ColumnarValue::Scalar(ScalarValue::from("alph")),
             ],
@@ -148,7 +149,7 @@ mod tests {
         );
         test_function!(
             EndsWithFunc::new(),
-            &[
+            vec![
                 ColumnarValue::Scalar(ScalarValue::from("alphabet")),
                 ColumnarValue::Scalar(ScalarValue::from("bet")),
             ],
@@ -159,7 +160,7 @@ mod tests {
         );
         test_function!(
             EndsWithFunc::new(),
-            &[
+            vec![
                 ColumnarValue::Scalar(ScalarValue::Utf8(None)),
                 ColumnarValue::Scalar(ScalarValue::from("alph")),
             ],
@@ -170,7 +171,7 @@ mod tests {
         );
         test_function!(
             EndsWithFunc::new(),
-            &[
+            vec![
                 ColumnarValue::Scalar(ScalarValue::from("alphabet")),
                 ColumnarValue::Scalar(ScalarValue::Utf8(None)),
             ],

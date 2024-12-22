@@ -108,10 +108,10 @@ static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
 
 fn get_rtrim_doc() -> &'static Documentation {
     DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_STRING)
-            .with_description("Trims the specified trim string from the end of a string. If no trim string is provided, all whitespace is removed from the end of the input string.")
-            .with_syntax_example("rtrim(str[, trim_str])")
+        Documentation::builder(
+            DOC_SECTION_STRING,
+            "Trims the specified trim string from the end of a string. If no trim string is provided, all whitespace is removed from the end of the input string.",
+            "rtrim(str[, trim_str])")
             .with_sql_example(r#"```sql
 > select rtrim('  datafusion  ');
 +-------------------------------+
@@ -151,7 +151,7 @@ mod tests {
         // String view cases for checking normal logic
         test_function!(
             RtrimFunc::new(),
-            &[ColumnarValue::Scalar(ScalarValue::Utf8View(Some(
+            vec![ColumnarValue::Scalar(ScalarValue::Utf8View(Some(
                 String::from("alphabet  ")
             ))),],
             Ok(Some("alphabet")),
@@ -161,7 +161,7 @@ mod tests {
         );
         test_function!(
             RtrimFunc::new(),
-            &[ColumnarValue::Scalar(ScalarValue::Utf8View(Some(
+            vec![ColumnarValue::Scalar(ScalarValue::Utf8View(Some(
                 String::from("  alphabet  ")
             ))),],
             Ok(Some("  alphabet")),
@@ -171,7 +171,7 @@ mod tests {
         );
         test_function!(
             RtrimFunc::new(),
-            &[
+            vec![
                 ColumnarValue::Scalar(ScalarValue::Utf8View(Some(String::from(
                     "alphabet"
                 )))),
@@ -184,7 +184,7 @@ mod tests {
         );
         test_function!(
             RtrimFunc::new(),
-            &[
+            vec![
                 ColumnarValue::Scalar(ScalarValue::Utf8View(Some(String::from(
                     "alphabet"
                 )))),
@@ -199,7 +199,7 @@ mod tests {
         );
         test_function!(
             RtrimFunc::new(),
-            &[
+            vec![
                 ColumnarValue::Scalar(ScalarValue::Utf8View(Some(String::from(
                     "alphabet"
                 )))),
@@ -213,7 +213,7 @@ mod tests {
         // Special string view case for checking unlined output(len > 12)
         test_function!(
             RtrimFunc::new(),
-            &[
+            vec![
                 ColumnarValue::Scalar(ScalarValue::Utf8View(Some(String::from(
                     "alphabetalphabetxxx"
                 )))),
@@ -227,7 +227,7 @@ mod tests {
         // String cases
         test_function!(
             RtrimFunc::new(),
-            &[ColumnarValue::Scalar(ScalarValue::Utf8(Some(
+            vec![ColumnarValue::Scalar(ScalarValue::Utf8(Some(
                 String::from("alphabet  ")
             ))),],
             Ok(Some("alphabet")),
@@ -237,7 +237,7 @@ mod tests {
         );
         test_function!(
             RtrimFunc::new(),
-            &[ColumnarValue::Scalar(ScalarValue::Utf8(Some(
+            vec![ColumnarValue::Scalar(ScalarValue::Utf8(Some(
                 String::from("  alphabet  ")
             ))),],
             Ok(Some("  alphabet")),
@@ -247,7 +247,7 @@ mod tests {
         );
         test_function!(
             RtrimFunc::new(),
-            &[
+            vec![
                 ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from("alphabet")))),
                 ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from("t ")))),
             ],
@@ -258,7 +258,7 @@ mod tests {
         );
         test_function!(
             RtrimFunc::new(),
-            &[
+            vec![
                 ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from("alphabet")))),
                 ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from("alphabe")))),
             ],
@@ -269,7 +269,7 @@ mod tests {
         );
         test_function!(
             RtrimFunc::new(),
-            &[
+            vec![
                 ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from("alphabet")))),
                 ColumnarValue::Scalar(ScalarValue::Utf8(None)),
             ],

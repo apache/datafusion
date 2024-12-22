@@ -625,6 +625,19 @@ pub fn try_type_union_resolution_with_struct(
 /// data type. However, users can write queries where the two arguments are
 /// different data types. In such cases, the data types are automatically cast
 /// (coerced) to a single data type to pass to the kernels.
+///
+/// # Numeric comparisons
+///
+/// When comparing numeric values, the lower precision type is coerced to the
+/// higher precision type to avoid losing data. For example when comparing
+/// `Int32` to `Int64` the coerced type is `Int64` so the `Int32` argument will
+/// be cast.
+///
+/// # Numeric / String comparisons
+///
+/// When comparing numeric values and strings, both values will be coerced to
+/// strings.  For example when comparing `'2' > 1`,  the arguments will be
+/// coerced to `Utf8` for comparison
 pub fn comparison_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
     if lhs_type == rhs_type {
         // same type => equality is possible
@@ -642,7 +655,14 @@ pub fn comparison_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<D
         .or_else(|| struct_coercion(lhs_type, rhs_type))
 }
 
-// Similar to comparison_coercion but prefer numeric if compares with numeric and string
+/// Similar to [`comparison_coercion`] but prefers numeric if compares with
+/// numeric and string
+///
+/// # Numeric comparisons
+///
+/// When comparing numeric values and strings, the values will be coerced to the
+/// numeric type.  For example, `'2' > 1` if `1` is an `Int32`, the arguments
+/// will be coerced to `Int32`.
 pub fn comparison_coercion_numeric(
     lhs_type: &DataType,
     rhs_type: &DataType,
@@ -2098,7 +2118,7 @@ mod tests {
         );
 
         // list
-        let inner_field = Arc::new(Field::new("item", DataType::Int64, true));
+        let inner_field = Arc::new(Field::new_list_field(DataType::Int64, true));
         test_coercion_binary_rule!(
             DataType::List(Arc::clone(&inner_field)),
             DataType::List(Arc::clone(&inner_field)),
@@ -2155,8 +2175,7 @@ mod tests {
         );
 
         // Negative test: inner_timestamp_field and inner_field are not compatible because their inner types are not compatible
-        let inner_timestamp_field = Arc::new(Field::new(
-            "item",
+        let inner_timestamp_field = Arc::new(Field::new_list_field(
             DataType::Timestamp(TimeUnit::Microsecond, None),
             true,
         ));

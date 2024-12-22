@@ -5499,3 +5499,42 @@ SELECT
 GROUP BY ts, text
 ----
 foo 2024-01-01T08:00:00+08:00
+
+# Test multi group by int + Decimal128
+statement ok
+create table source as values
+(1, '123.45'),
+(1, '123.45'),
+(2, '678.90'),
+(2, '1011.12'),
+(3, '1314.15'),
+(3, '1314.15'),
+(2, '1011.12'),
+(null, null),
+(null, '123.45'),
+(null, null),
+(null, '123.45'),
+(2, '678.90'),
+(2, '678.90'),
+(1, null)
+;
+
+statement ok
+create view t as select column1 as a, arrow_cast(column2, 'Decimal128(10, 2)') as b from source;
+
+query IRI
+select a, b, count(*) from t group by a, b order by a, b;
+----
+1 123.45 2
+1 NULL 1
+2 678.9 3
+2 1011.12 2
+3 1314.15 2
+NULL 123.45 2
+NULL NULL 2
+
+statement ok
+drop view t
+
+statement ok
+drop table source;

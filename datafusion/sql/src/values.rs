@@ -22,7 +22,7 @@ use datafusion_common::{DFSchema, Result};
 use datafusion_expr::{LogicalPlan, LogicalPlanBuilder};
 use sqlparser::ast::Values as SQLValues;
 
-impl<'a, S: ContextProvider> SqlToRel<'a, S> {
+impl<S: ContextProvider> SqlToRel<'_, S> {
     pub(super) fn sql_values_to_plan(
         &self,
         values: SQLValues,

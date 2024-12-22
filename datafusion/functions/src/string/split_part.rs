@@ -190,10 +190,10 @@ static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
 
 fn get_split_part_doc() -> &'static Documentation {
     DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_STRING)
-            .with_description("Splits a string based on a specified delimiter and returns the substring in the specified position.")
-            .with_syntax_example("split_part(str, delimiter, pos)")
+        Documentation::builder(
+            DOC_SECTION_STRING,
+            "Splits a string based on a specified delimiter and returns the substring in the specified position.",
+            "split_part(str, delimiter, pos)")
             .with_sql_example(r#"```sql
 > select split_part('1.2.3.4.5', '.', 3);
 +--------------------------------------------------+
@@ -270,7 +270,7 @@ mod tests {
     fn test_functions() -> Result<()> {
         test_function!(
             SplitPartFunc::new(),
-            &[
+            vec![
                 ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from(
                     "abc~@~def~@~ghi"
                 )))),
@@ -284,7 +284,7 @@ mod tests {
         );
         test_function!(
             SplitPartFunc::new(),
-            &[
+            vec![
                 ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from(
                     "abc~@~def~@~ghi"
                 )))),
@@ -298,7 +298,7 @@ mod tests {
         );
         test_function!(
             SplitPartFunc::new(),
-            &[
+            vec![
                 ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from(
                     "abc~@~def~@~ghi"
                 )))),
@@ -312,7 +312,7 @@ mod tests {
         );
         test_function!(
             SplitPartFunc::new(),
-            &[
+            vec![
                 ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from(
                     "abc~@~def~@~ghi"
                 )))),

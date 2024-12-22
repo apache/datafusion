@@ -85,7 +85,7 @@ I propose to invite $PERSONS_NAME to be a committer. See discussion here [1].
 [ ] +0: ...
 [ ] -1: I disagree because ...
 
-The vote will be open for at least 48 hours.
+The vote will be open for at least 7 days.
 
 My vote: +1
 

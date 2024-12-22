@@ -105,13 +105,12 @@ static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
 
 fn get_isnan_doc() -> &'static Documentation {
     DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_MATH)
-            .with_description(
-                "Returns true if a given number is +NaN or -NaN otherwise returns false.",
-            )
-            .with_syntax_example("isnan(numeric_expression)")
-            .with_standard_argument("numeric_expression", Some("Numeric"))
-            .build()
+        Documentation::builder(
+            DOC_SECTION_MATH,
+            "Returns true if a given number is +NaN or -NaN otherwise returns false.",
+            "isnan(numeric_expression)",
+        )
+        .with_standard_argument("numeric_expression", Some("Numeric"))
+        .build()
     })
 }

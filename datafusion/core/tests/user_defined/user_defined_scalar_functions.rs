@@ -27,10 +27,6 @@ use arrow_array::{
     Array, ArrayRef, Float32Array, Float64Array, Int32Array, RecordBatch, StringArray,
 };
 use arrow_schema::{DataType, Field, Schema};
-use parking_lot::Mutex;
-use regex::Regex;
-use sqlparser::ast::Ident;
-
 use datafusion::execution::context::{FunctionFactory, RegisterFunction, SessionState};
 use datafusion::prelude::*;
 use datafusion::{execution::registry::FunctionRegistry, test_util};
@@ -48,6 +44,10 @@ use datafusion_expr::{
     Volatility,
 };
 use datafusion_functions_nested::range::range_udf;
+use parking_lot::Mutex;
+use regex::Regex;
+use sqlparser::ast::Ident;
+use sqlparser::tokenizer::Span;
 
 /// test that casting happens on udfs.
 /// c11 is f32, but `custom_sqrt` requires f64. Casting happens but the logical plan and
@@ -251,7 +251,7 @@ async fn test_row_mismatch_error_in_scalar_udf() -> Result<()> {
             .err()
             .unwrap()
             .to_string(),
-        "UDF returned a different number of rows than expected"
+        "Internal error: UDF buggy_func returned a different number of rows than expected. Expected: 2, Got: 1"
     );
     Ok(())
 }
@@ -1187,6 +1187,7 @@ async fn create_scalar_function_from_sql_statement_postgres_syntax() -> Result<(
             name: Some(Ident {
                 value: "name".into(),
                 quote_style: None,
+                span: Span::empty(),
             }),
             data_type: DataType::Utf8,
             default_expr: None,
@@ -1196,6 +1197,7 @@ async fn create_scalar_function_from_sql_statement_postgres_syntax() -> Result<(
             language: Some(Ident {
                 value: "plrust".into(),
                 quote_style: None,
+                span: Span::empty(),
             }),
             behavior: None,
             function_body: Some(lit(body)),

@@ -32,11 +32,12 @@ use datafusion::datasource::listing::{
 };
 use datafusion::datasource::{MemTable, TableProvider};
 use datafusion::error::Result;
-use datafusion::execution::runtime_env::RuntimeConfig;
+use datafusion::execution::SessionStateBuilder;
 use datafusion::physical_plan::display::DisplayableExecutionPlan;
 use datafusion::physical_plan::{displayable, execute_stream};
 use datafusion::prelude::*;
 use datafusion_common::instant::Instant;
+use datafusion_common::utils::get_available_parallelism;
 use datafusion_common::DEFAULT_PARQUET_EXTENSION;
 
 use crate::util::{BenchmarkRun, CommonOpt};
@@ -187,9 +188,11 @@ impl RunOpt {
     /// Benchmark query `query_id` in `SORT_QUERIES`
     async fn benchmark_query(&self, query_id: usize) -> Result<Vec<QueryResult>> {
         let config = self.common.config();
-
-        let runtime_config = RuntimeConfig::new().build_arc()?;
-        let ctx = SessionContext::new_with_config_rt(config, runtime_config);
+        let state = SessionStateBuilder::new()
+            .with_config(config)
+            .with_default_features()
+            .build();
+        let ctx = SessionContext::from(state);
 
         // register tables
         self.register_tables(&ctx).await?;
@@ -315,6 +318,8 @@ impl RunOpt {
     }
 
     fn partitions(&self) -> usize {
-        self.common.partitions.unwrap_or(num_cpus::get())
+        self.common
+            .partitions
+            .unwrap_or(get_available_parallelism())
     }
 }

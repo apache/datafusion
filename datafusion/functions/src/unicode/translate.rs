@@ -93,10 +93,7 @@ static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
 
 fn get_translate_doc() -> &'static Documentation {
     DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_STRING)
-            .with_description("Translates characters in a string to specified translation characters.")
-            .with_syntax_example("translate(str, chars, translation)")
+        Documentation::builder(DOC_SECTION_STRING,"Translates characters in a string to specified translation characters.","translate(str, chars, translation)")
             .with_sql_example(r#"```sql
 > select translate('twice', 'wic', 'her');
 +--------------------------------------------------+
@@ -204,7 +201,7 @@ mod tests {
     fn test_functions() -> Result<()> {
         test_function!(
             TranslateFunc::new(),
-            &[
+            vec![
                 ColumnarValue::Scalar(ScalarValue::from("12345")),
                 ColumnarValue::Scalar(ScalarValue::from("143")),
                 ColumnarValue::Scalar(ScalarValue::from("ax"))
@@ -216,7 +213,7 @@ mod tests {
         );
         test_function!(
             TranslateFunc::new(),
-            &[
+            vec![
                 ColumnarValue::Scalar(ScalarValue::Utf8(None)),
                 ColumnarValue::Scalar(ScalarValue::from("143")),
                 ColumnarValue::Scalar(ScalarValue::from("ax"))
@@ -228,7 +225,7 @@ mod tests {
         );
         test_function!(
             TranslateFunc::new(),
-            &[
+            vec![
                 ColumnarValue::Scalar(ScalarValue::from("12345")),
                 ColumnarValue::Scalar(ScalarValue::Utf8(None)),
                 ColumnarValue::Scalar(ScalarValue::from("ax"))
@@ -240,7 +237,7 @@ mod tests {
         );
         test_function!(
             TranslateFunc::new(),
-            &[
+            vec![
                 ColumnarValue::Scalar(ScalarValue::from("12345")),
                 ColumnarValue::Scalar(ScalarValue::from("143")),
                 ColumnarValue::Scalar(ScalarValue::Utf8(None))
@@ -252,7 +249,7 @@ mod tests {
         );
         test_function!(
             TranslateFunc::new(),
-            &[
+            vec![
                 ColumnarValue::Scalar(ScalarValue::from("é2íñ5")),
                 ColumnarValue::Scalar(ScalarValue::from("éñí")),
                 ColumnarValue::Scalar(ScalarValue::from("óü")),
@@ -265,7 +262,7 @@ mod tests {
         #[cfg(not(feature = "unicode_expressions"))]
         test_function!(
             TranslateFunc::new(),
-            &[
+            vec![
                 ColumnarValue::Scalar(ScalarValue::from("12345")),
                 ColumnarValue::Scalar(ScalarValue::from("143")),
                 ColumnarValue::Scalar(ScalarValue::from("ax")),

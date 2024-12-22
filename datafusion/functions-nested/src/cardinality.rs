@@ -104,12 +104,11 @@ static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
 
 fn get_cardinality_doc() -> &'static Documentation {
     DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_ARRAY)
-            .with_description(
+        Documentation::builder(
+            DOC_SECTION_ARRAY,
                 "Returns the total number of elements in the array.",
-            )
-            .with_syntax_example("cardinality(array)")
+
+            "cardinality(array)")
             .with_sql_example(
                 r#"```sql
 > select cardinality([[1, 2, 3, 4], [5, 6, 7, 8]]);

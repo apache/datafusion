@@ -88,10 +88,10 @@ static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
 
 fn get_replace_doc() -> &'static Documentation {
     DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_STRING)
-            .with_description("Replaces all occurrences of a specified substring in a string with a new substring.")
-            .with_syntax_example("replace(str, substr, replacement)")
+        Documentation::builder(
+            DOC_SECTION_STRING,
+            "Replaces all occurrences of a specified substring in a string with a new substring.",
+            "replace(str, substr, replacement)")
             .with_sql_example(r#"```sql
 > select replace('ABabbaBA', 'ab', 'cd');
 +-------------------------------------------------+
@@ -157,7 +157,7 @@ mod tests {
     fn test_functions() -> Result<()> {
         test_function!(
             ReplaceFunc::new(),
-            &[
+            vec![
                 ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from("aabbdqcbb")))),
                 ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from("bb")))),
                 ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from("ccc")))),
@@ -170,7 +170,7 @@ mod tests {
 
         test_function!(
             ReplaceFunc::new(),
-            &[
+            vec![
                 ColumnarValue::Scalar(ScalarValue::LargeUtf8(Some(String::from(
                     "aabbb"
                 )))),
@@ -185,7 +185,7 @@ mod tests {
 
         test_function!(
             ReplaceFunc::new(),
-            &[
+            vec![
                 ColumnarValue::Scalar(ScalarValue::Utf8View(Some(String::from(
                     "aabbbcw"
                 )))),

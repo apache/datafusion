@@ -217,8 +217,7 @@ impl FileGroupPartitioner {
             return None;
         }
 
-        let target_partition_size =
-            (total_size as usize + (target_partitions) - 1) / (target_partitions);
+        let target_partition_size = (total_size as usize).div_ceil(target_partitions);
 
         let current_partition_index: usize = 0;
         let current_partition_size: usize = 0;

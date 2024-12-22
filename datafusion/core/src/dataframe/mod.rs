@@ -2381,6 +2381,30 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn aggregate_assert_no_empty_batches() -> Result<()> {
+        // build plan using DataFrame API
+        let df = test_table().await?;
+        let group_expr = vec![col("c1")];
+        let aggr_expr = vec![
+            min(col("c12")),
+            max(col("c12")),
+            avg(col("c12")),
+            sum(col("c12")),
+            count(col("c12")),
+            count_distinct(col("c12")),
+            median(col("c12")),
+        ];
+
+        let df: Vec<RecordBatch> = df.aggregate(group_expr, aggr_expr)?.collect().await?;
+        // Empty batches should not be produced
+        for batch in df {
+            assert!(batch.num_rows() > 0);
+        }
+
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn test_aggregate_with_pk() -> Result<()> {
         // create the dataframe
         let config = SessionConfig::new().with_target_partitions(1);

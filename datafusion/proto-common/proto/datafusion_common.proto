@@ -421,10 +421,11 @@ message CsvOptions {
   string timestamp_tz_format = 10; // Optional timestamp with timezone format
   string time_format = 11; // Optional time format
   string null_value = 12; // Optional representation of null value
-  bytes comment = 13; // Optional comment character as a byte
-  bytes double_quote = 14; // Indicates if quotes are doubled
-  bytes newlines_in_values = 15; // Indicates if newlines are supported in values
-  bytes terminator = 16; // Optional terminator character as a byte
+  string null_regex = 13; // Optional representation of null loading regex
+  bytes comment = 14; // Optional comment character as a byte
+  bytes double_quote = 15; // Indicates if quotes are doubled
+  bytes newlines_in_values = 16; // Indicates if newlines are supported in values
+  bytes terminator = 17; // Optional terminator character as a byte
 }
 
 // Options controlling CSV format

@@ -29,11 +29,12 @@ use crate::physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
 
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::Transformed;
+use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use datafusion_physical_plan::coalesce_partitions::CoalescePartitionsExec;
+use datafusion_physical_plan::execution_plan::EmissionType;
 use datafusion_physical_plan::tree_node::PlanContext;
 use datafusion_physical_plan::ExecutionPlanProperties;
 
-use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use itertools::izip;
 
 /// For a given `plan`, this object carries the information one needs from its
@@ -162,7 +163,7 @@ fn plan_with_order_breaking_variants(
         // not required by intermediate operators:
         if maintains
             && (is_sort_preserving_merge(plan)
-                || !required_ordering.map_or(false, |required_ordering| {
+                || !required_ordering.is_some_and(|required_ordering| {
                     node.plan
                         .equivalence_properties()
                         .ordering_satisfy_requirement(&required_ordering)
@@ -246,7 +247,8 @@ pub(crate) fn replace_with_order_preserving_variants(
     // For unbounded cases, we replace with the order-preserving variant in any
     // case, as doing so helps fix the pipeline. Also replace if config allows.
     let use_order_preserving_variant = config.optimizer.prefer_existing_sort
-        || !requirements.plan.execution_mode().pipeline_friendly();
+        || (requirements.plan.boundedness().is_unbounded()
+            && requirements.plan.pipeline_behavior() == EmissionType::Final);
 
     // Create an alternate plan with order-preserving variants:
     let mut alternate_plan = plan_with_order_preserving_variants(

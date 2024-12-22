@@ -299,9 +299,7 @@ async fn bounded_window_causal_non_causal() -> Result<()> {
                     Linear,
                 )?);
                 let task_ctx = ctx.task_ctx();
-                let mut collected_results =
-                    collect(running_window_exec, task_ctx).await?;
-                collected_results.retain(|batch| batch.num_rows() > 0);
+                let collected_results = collect(running_window_exec, task_ctx).await?;
                 let input_batch_sizes = batches
                     .iter()
                     .map(|batch| batch.num_rows())
@@ -310,6 +308,8 @@ async fn bounded_window_causal_non_causal() -> Result<()> {
                     .iter()
                     .map(|batch| batch.num_rows())
                     .collect::<Vec<_>>();
+                // There should be no empty batches at results
+                assert!(result_batch_sizes.iter().all(|e| *e > 0));
                 if causal {
                     // For causal window frames, we can generate results immediately
                     // for each input batch. Hence, batch sizes should match.
@@ -688,8 +688,8 @@ async fn run_window_test(
     let collected_running = collect(running_window_exec, task_ctx)
         .await?
         .into_iter()
-        .filter(|b| b.num_rows() > 0)
         .collect::<Vec<_>>();
+    assert!(collected_running.iter().all(|rb| rb.num_rows() > 0));
 
     // BoundedWindowAggExec should produce more chunk than the usual WindowAggExec.
     // Otherwise it means that we cannot generate result in running mode.

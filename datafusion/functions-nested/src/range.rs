@@ -109,8 +109,7 @@ impl ScalarUDFImpl for Range {
         if arg_types.iter().any(|t| t.is_null()) {
             Ok(Null)
         } else {
-            Ok(List(Arc::new(Field::new(
-                "item",
+            Ok(List(Arc::new(Field::new_list_field(
                 arg_types[0].clone(),
                 true,
             ))))
@@ -150,12 +149,11 @@ static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
 
 fn get_range_doc() -> &'static Documentation {
     DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_ARRAY)
-            .with_description(
+        Documentation::builder(
+            DOC_SECTION_ARRAY,
                 "Returns an Arrow array between start and stop with step. The range start..end contains all values with start <= x < end. It is empty if start >= end. Step cannot be 0.",
-            )
-            .with_syntax_example("range(start, stop, step)")
+
+            "range(start, stop, step)")
             .with_sql_example(
                 r#"```sql
 > select range(2, 10, 3);
@@ -250,8 +248,7 @@ impl ScalarUDFImpl for GenSeries {
         if arg_types.iter().any(|t| t.is_null()) {
             Ok(Null)
         } else {
-            Ok(List(Arc::new(Field::new(
-                "item",
+            Ok(List(Arc::new(Field::new_list_field(
                 arg_types[0].clone(),
                 true,
             ))))
@@ -294,12 +291,11 @@ static GENERATE_SERIES_DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
 
 fn get_generate_series_doc() -> &'static Documentation {
     GENERATE_SERIES_DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_ARRAY)
-            .with_description(
+        Documentation::builder(
+            DOC_SECTION_ARRAY,
                 "Similar to the range function, but it includes the upper bound.",
-            )
-            .with_syntax_example("generate_series(start, stop, step)")
+
+            "generate_series(start, stop, step)")
             .with_sql_example(
                 r#"```sql
 > select generate_series(1,3);
@@ -395,7 +391,7 @@ pub(super) fn gen_range_inner(
         };
     }
     let arr = Arc::new(ListArray::try_new(
-        Arc::new(Field::new("item", Int64, true)),
+        Arc::new(Field::new_list_field(Int64, true)),
         OffsetBuffer::new(offsets.into()),
         Arc::new(Int64Array::from(values)),
         Some(NullBuffer::new(valid.finish())),

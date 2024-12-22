@@ -107,22 +107,25 @@ static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
 
 fn get_left_doc() -> &'static Documentation {
     DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_STRING)
-            .with_description("Returns a specified number of characters from the left side of a string.")
-            .with_syntax_example("left(str, n)")
-            .with_sql_example(r#"```sql
+        Documentation::builder(
+            DOC_SECTION_STRING,
+            "Returns a specified number of characters from the left side of a string.",
+            "left(str, n)",
+        )
+        .with_sql_example(
+            r#"```sql
 > select left('datafusion', 4);
 +-----------------------------------+
 | left(Utf8("datafusion"),Int64(4)) |
 +-----------------------------------+
 | data                              |
 +-----------------------------------+
-```"#)
-            .with_standard_argument("str", Some("String"))
-            .with_argument("n", "Number of characters to return.")
-            .with_related_udf("right")
-            .build()
+```"#,
+        )
+        .with_standard_argument("str", Some("String"))
+        .with_argument("n", "Number of characters to return.")
+        .with_related_udf("right")
+        .build()
     })
 }
 
@@ -185,7 +188,7 @@ mod tests {
     fn test_functions() -> Result<()> {
         test_function!(
             LeftFunc::new(),
-            &[
+            vec![
                 ColumnarValue::Scalar(ScalarValue::from("abcde")),
                 ColumnarValue::Scalar(ScalarValue::from(2i64)),
             ],
@@ -196,7 +199,7 @@ mod tests {
         );
         test_function!(
             LeftFunc::new(),
-            &[
+            vec![
                 ColumnarValue::Scalar(ScalarValue::from("abcde")),
                 ColumnarValue::Scalar(ScalarValue::from(200i64)),
             ],
@@ -207,7 +210,7 @@ mod tests {
         );
         test_function!(
             LeftFunc::new(),
-            &[
+            vec![
                 ColumnarValue::Scalar(ScalarValue::from("abcde")),
                 ColumnarValue::Scalar(ScalarValue::from(-2i64)),
             ],
@@ -218,7 +221,7 @@ mod tests {
         );
         test_function!(
             LeftFunc::new(),
-            &[
+            vec![
                 ColumnarValue::Scalar(ScalarValue::from("abcde")),
                 ColumnarValue::Scalar(ScalarValue::from(-200i64)),
             ],
@@ -229,7 +232,7 @@ mod tests {
         );
         test_function!(
             LeftFunc::new(),
-            &[
+            vec![
                 ColumnarValue::Scalar(ScalarValue::from("abcde")),
                 ColumnarValue::Scalar(ScalarValue::from(0i64)),
             ],
@@ -240,7 +243,7 @@ mod tests {
         );
         test_function!(
             LeftFunc::new(),
-            &[
+            vec![
                 ColumnarValue::Scalar(ScalarValue::Utf8(None)),
                 ColumnarValue::Scalar(ScalarValue::from(2i64)),
             ],
@@ -251,7 +254,7 @@ mod tests {
         );
         test_function!(
             LeftFunc::new(),
-            &[
+            vec![
                 ColumnarValue::Scalar(ScalarValue::from("abcde")),
                 ColumnarValue::Scalar(ScalarValue::Int64(None)),
             ],
@@ -262,7 +265,7 @@ mod tests {
         );
         test_function!(
             LeftFunc::new(),
-            &[
+            vec![
                 ColumnarValue::Scalar(ScalarValue::from("joséésoj")),
                 ColumnarValue::Scalar(ScalarValue::from(5i64)),
             ],
@@ -273,7 +276,7 @@ mod tests {
         );
         test_function!(
             LeftFunc::new(),
-            &[
+            vec![
                 ColumnarValue::Scalar(ScalarValue::from("joséésoj")),
                 ColumnarValue::Scalar(ScalarValue::from(-3i64)),
             ],

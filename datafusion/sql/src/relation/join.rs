@@ -21,7 +21,7 @@ use datafusion_expr::{JoinType, LogicalPlan, LogicalPlanBuilder};
 use sqlparser::ast::{Join, JoinConstraint, JoinOperator, TableFactor, TableWithJoins};
 use std::collections::HashSet;
 
-impl<'a, S: ContextProvider> SqlToRel<'a, S> {
+impl<S: ContextProvider> SqlToRel<'_, S> {
     pub(crate) fn plan_table_with_joins(
         &self,
         t: TableWithJoins,
@@ -163,6 +163,7 @@ pub(crate) fn is_lateral(factor: &TableFactor) -> bool {
     match factor {
         TableFactor::Derived { lateral, .. } => *lateral,
         TableFactor::Function { lateral, .. } => *lateral,
+        TableFactor::UNNEST { .. } => true,
         _ => false,
     }
 }

@@ -72,8 +72,7 @@ impl ScalarUDFImpl for MapKeysFunc {
         }
         let map_type = &arg_types[0];
         let map_fields = get_map_entry_field(map_type)?;
-        Ok(DataType::List(Arc::new(Field::new(
-            "item",
+        Ok(DataType::List(Arc::new(Field::new_list_field(
             map_fields.first().unwrap().data_type().clone(),
             false,
         ))))
@@ -96,12 +95,10 @@ static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
 
 fn get_map_keys_doc() -> &'static Documentation {
     DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_MAP)
-            .with_description(
-                "Returns a list of all keys in the map."
-            )
-            .with_syntax_example("map_keys(map)")
+        Documentation::builder(
+            DOC_SECTION_MAP,
+                "Returns a list of all keys in the map.",
+            "map_keys(map)")
             .with_sql_example(
                 r#"```sql
 SELECT map_keys(MAP {'a': 1, 'b': NULL, 'c': 3});
@@ -132,7 +129,7 @@ fn map_keys_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
     };
 
     Ok(Arc::new(ListArray::new(
-        Arc::new(Field::new("item", map_array.key_type().clone(), false)),
+        Arc::new(Field::new_list_field(map_array.key_type().clone(), false)),
         map_array.offsets().clone(),
         Arc::clone(map_array.keys()),
         None,

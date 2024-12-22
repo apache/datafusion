@@ -79,12 +79,13 @@ static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
 
 fn get_lower_doc() -> &'static Documentation {
     DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_STRING)
-            .with_description("Converts a string to lower-case.")
-            .with_syntax_example("lower(str)")
-            .with_sql_example(
-                r#"```sql
+        Documentation::builder(
+            DOC_SECTION_STRING,
+            "Converts a string to lower-case.",
+            "lower(str)",
+        )
+        .with_sql_example(
+            r#"```sql
 > select lower('Ångström');
 +-------------------------+
 | lower(Utf8("Ångström")) |
@@ -92,11 +93,11 @@ fn get_lower_doc() -> &'static Documentation {
 | ångström                |
 +-------------------------+
 ```"#,
-            )
-            .with_standard_argument("str", Some("String"))
-            .with_related_udf("initcap")
-            .with_related_udf("upper")
-            .build()
+        )
+        .with_standard_argument("str", Some("String"))
+        .with_related_udf("initcap")
+        .with_related_udf("upper")
+        .build()
     })
 }
 #[cfg(test)]

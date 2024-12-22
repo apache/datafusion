@@ -92,11 +92,11 @@ static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
 
 fn get_nullif_doc() -> &'static Documentation {
     DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_CONDITIONAL)
-            .with_description("Returns _null_ if _expression1_ equals _expression2_; otherwise it returns _expression1_.
-This can be used to perform the inverse operation of [`coalesce`](#coalesce).")
-            .with_syntax_example("nullif(expression1, expression2)")
+        Documentation::builder(
+            DOC_SECTION_CONDITIONAL,
+            "Returns _null_ if _expression1_ equals _expression2_; otherwise it returns _expression1_.
+This can be used to perform the inverse operation of [`coalesce`](#coalesce).",
+            "nullif(expression1, expression2)")
             .with_sql_example(r#"```sql
 > select nullif('datafusion', 'data');
 +-----------------------------------------+

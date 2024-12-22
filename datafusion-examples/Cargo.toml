@@ -60,6 +60,7 @@ async-trait = { workspace = true }
 bytes = { workspace = true }
 dashmap = { workspace = true }
 datafusion = { workspace = true, default-features = true, features = ["avro"] }
+datafusion-catalog = { workspace = true }
 datafusion-common = { workspace = true, default-features = true }
 datafusion-expr = { workspace = true }
 datafusion-functions-window-common = { workspace = true }

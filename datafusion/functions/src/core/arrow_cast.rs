@@ -147,10 +147,10 @@ static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
 
 fn get_arrow_cast_doc() -> &'static Documentation {
     DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_OTHER)
-            .with_description("Casts a value to a specific Arrow data type.")
-            .with_syntax_example("arrow_cast(expression, datatype)")
+        Documentation::builder(
+            DOC_SECTION_OTHER,
+            "Casts a value to a specific Arrow data type.",
+            "arrow_cast(expression, datatype)")
             .with_sql_example(
                 r#"```sql
 > select arrow_cast(-5, 'Int8') as a,

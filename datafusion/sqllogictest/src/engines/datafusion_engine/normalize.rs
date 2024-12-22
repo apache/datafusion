@@ -23,7 +23,7 @@ use arrow::{array, array::ArrayRef, datatypes::DataType, record_batch::RecordBat
 use datafusion_common::format::DEFAULT_FORMAT_OPTIONS;
 use datafusion_common::DataFusionError;
 use std::path::PathBuf;
-use std::sync::OnceLock;
+use std::sync::LazyLock;
 
 use super::super::conversion::*;
 use super::error::{DFSqlLogicTestError, Result};
@@ -130,7 +130,7 @@ fn expand_row(mut row: Vec<String>) -> impl Iterator<Item = Vec<String>> {
 /// ```
 fn normalize_paths(mut row: Vec<String>) -> Vec<String> {
     row.iter_mut().for_each(|s| {
-        let workspace_root: &str = workspace_root().as_ref();
+        let workspace_root: &str = WORKSPACE_ROOT.as_ref();
         if s.contains(workspace_root) {
             *s = s.replace(workspace_root, "WORKSPACE_ROOT");
         }
@@ -138,34 +138,30 @@ fn normalize_paths(mut row: Vec<String>) -> Vec<String> {
     row
 }
 
-/// return the location of the datafusion checkout
-fn workspace_root() -> &'static object_store::path::Path {
-    static WORKSPACE_ROOT_LOCK: OnceLock<object_store::path::Path> = OnceLock::new();
-    WORKSPACE_ROOT_LOCK.get_or_init(|| {
-        // e.g. /Software/datafusion/datafusion/core
-        let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+/// The location of the datafusion checkout
+static WORKSPACE_ROOT: LazyLock<object_store::path::Path> = LazyLock::new(|| {
+    // e.g. /Software/datafusion/datafusion/core
+    let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
 
-        // e.g. /Software/datafusion/datafusion
-        let workspace_root = dir
-            .parent()
-            .expect("Can not find parent of datafusion/core")
-            // e.g. /Software/datafusion
-            .parent()
-            .expect("parent of datafusion")
-            .to_string_lossy();
+    // e.g. /Software/datafusion/datafusion
+    let workspace_root = dir
+        .parent()
+        .expect("Can not find parent of datafusion/core")
+        // e.g. /Software/datafusion
+        .parent()
+        .expect("parent of datafusion")
+        .to_string_lossy();
 
-        let sanitized_workplace_root = if cfg!(windows) {
-            // Object store paths are delimited with `/`, e.g. `/datafusion/datafusion/testing/data/csv/aggregate_test_100.csv`.
-            // The default windows delimiter is `\`, so the workplace path is `datafusion\datafusion`.
-            workspace_root
-                .replace(std::path::MAIN_SEPARATOR, object_store::path::DELIMITER)
-        } else {
-            workspace_root.to_string()
-        };
+    let sanitized_workplace_root = if cfg!(windows) {
+        // Object store paths are delimited with `/`, e.g. `/datafusion/datafusion/testing/data/csv/aggregate_test_100.csv`.
+        // The default windows delimiter is `\`, so the workplace path is `datafusion\datafusion`.
+        workspace_root.replace(std::path::MAIN_SEPARATOR, object_store::path::DELIMITER)
+    } else {
+        workspace_root.to_string()
+    };
 
-        object_store::path::Path::parse(sanitized_workplace_root).unwrap()
-    })
-}
+    object_store::path::Path::parse(sanitized_workplace_root).unwrap()
+});
 
 /// Convert a single batch to a `Vec<Vec<String>>` for comparison
 fn convert_batch(batch: RecordBatch) -> Result<Vec<Vec<String>>> {
@@ -217,13 +213,13 @@ pub fn cell_to_string(col: &ArrayRef, row: usize) -> Result<String> {
             DataType::Float64 => {
                 Ok(f64_to_str(get_row_value!(array::Float64Array, col, row)))
             }
-            DataType::Decimal128(precision, scale) => {
+            DataType::Decimal128(_, scale) => {
                 let value = get_row_value!(array::Decimal128Array, col, row);
-                Ok(i128_to_str(value, precision, scale))
+                Ok(decimal_128_to_str(value, *scale))
             }
-            DataType::Decimal256(precision, scale) => {
+            DataType::Decimal256(_, scale) => {
                 let value = get_row_value!(array::Decimal256Array, col, row);
-                Ok(i256_to_str(value, precision, scale))
+                Ok(decimal_256_to_str(value, *scale))
             }
             DataType::LargeUtf8 => Ok(varchar_to_str(get_row_value!(
                 array::LargeStringArray,

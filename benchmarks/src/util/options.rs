@@ -16,6 +16,7 @@
 // under the License.
 
 use datafusion::prelude::SessionConfig;
+use datafusion_common::utils::get_available_parallelism;
 use structopt::StructOpt;
 
 // Common benchmark options (don't use doc comments otherwise this doc
@@ -48,7 +49,9 @@ impl CommonOpt {
     /// Modify the existing config appropriately
     pub fn update_config(&self, config: SessionConfig) -> SessionConfig {
         config
-            .with_target_partitions(self.partitions.unwrap_or(num_cpus::get()))
+            .with_target_partitions(
+                self.partitions.unwrap_or(get_available_parallelism()),
+            )
             .with_batch_size(self.batch_size)
     }
 }

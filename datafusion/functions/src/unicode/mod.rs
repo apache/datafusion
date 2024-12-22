@@ -34,22 +34,18 @@ pub mod substrindex;
 pub mod translate;
 
 // create UDFs
-make_udf_function!(
-    character_length::CharacterLengthFunc,
-    CHARACTER_LENGTH,
-    character_length
-);
-make_udf_function!(find_in_set::FindInSetFunc, FIND_IN_SET, find_in_set);
-make_udf_function!(left::LeftFunc, LEFT, left);
-make_udf_function!(lpad::LPadFunc, LPAD, lpad);
-make_udf_function!(right::RightFunc, RIGHT, right);
-make_udf_function!(reverse::ReverseFunc, REVERSE, reverse);
-make_udf_function!(rpad::RPadFunc, RPAD, rpad);
-make_udf_function!(strpos::StrposFunc, STRPOS, strpos);
-make_udf_function!(substr::SubstrFunc, SUBSTR, substr);
-make_udf_function!(substr::SubstrFunc, SUBSTRING, substring);
-make_udf_function!(substrindex::SubstrIndexFunc, SUBSTR_INDEX, substr_index);
-make_udf_function!(translate::TranslateFunc, TRANSLATE, translate);
+make_udf_function!(character_length::CharacterLengthFunc, character_length);
+make_udf_function!(find_in_set::FindInSetFunc, find_in_set);
+make_udf_function!(left::LeftFunc, left);
+make_udf_function!(lpad::LPadFunc, lpad);
+make_udf_function!(right::RightFunc, right);
+make_udf_function!(reverse::ReverseFunc, reverse);
+make_udf_function!(rpad::RPadFunc, rpad);
+make_udf_function!(strpos::StrposFunc, strpos);
+make_udf_function!(substr::SubstrFunc, substr);
+make_udf_function!(substr::SubstrFunc, substring);
+make_udf_function!(substrindex::SubstrIndexFunc, substr_index);
+make_udf_function!(translate::TranslateFunc, translate);
 
 pub mod expr_fn {
     use datafusion_expr::Expr;

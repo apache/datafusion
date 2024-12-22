@@ -70,7 +70,8 @@ impl CoalescePartitionsExec {
         PlanProperties::new(
             eq_properties,                        // Equivalence Properties
             Partitioning::UnknownPartitioning(1), // Output Partitioning
-            input.execution_mode(),               // Execution Mode
+            input.pipeline_behavior(),
+            input.boundedness(),
         )
     }
 }

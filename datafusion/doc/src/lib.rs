@@ -56,8 +56,96 @@ pub struct Documentation {
 
 impl Documentation {
     /// Returns a new [`DocumentationBuilder`] with no options set.
-    pub fn builder() -> DocumentationBuilder {
-        DocumentationBuilder::new()
+    pub fn builder(
+        doc_section: DocSection,
+        description: impl Into<String>,
+        syntax_example: impl Into<String>,
+    ) -> DocumentationBuilder {
+        DocumentationBuilder::new(doc_section, description, syntax_example)
+    }
+
+    /// Output the `Documentation` struct in form of custom Rust documentation attributes
+    /// It is useful to semi automate during tmigration of UDF documentation
+    /// generation from code based to attribute based and can be safely removed after
+    pub fn to_doc_attribute(&self) -> String {
+        let mut result = String::new();
+
+        result.push_str("#[user_doc(");
+        // Doc Section
+        result.push_str(
+            format!(
+                "\n    doc_section({}label = \"{}\"{}),",
+                if !self.doc_section.include {
+                    "include = \"false\", "
+                } else {
+                    ""
+                },
+                self.doc_section.label,
+                self.doc_section
+                    .description
+                    .map(|s| format!(", description = \"{}\"", s))
+                    .unwrap_or_default(),
+            )
+            .as_ref(),
+        );
+
+        // Description
+        result.push_str(format!("\n    description=\"{}\",", self.description).as_ref());
+        // Syntax Example
+        result.push_str(
+            format!("\n    syntax_example=\"{}\",", self.syntax_example).as_ref(),
+        );
+        // SQL Example
+        result.push_str(
+            &self
+                .sql_example
+                .clone()
+                .map(|s| format!("\n    sql_example = r#\"{}\"#,", s))
+                .unwrap_or_default(),
+        );
+
+        let st_arg_token = " expression to operate on. Can be a constant, column, or function, and any combination of operators.";
+        // Standard Arguments
+        if let Some(args) = self.arguments.clone() {
+            args.iter().for_each(|(name, value)| {
+                if value.contains(st_arg_token) {
+                    if name.starts_with("The ") {
+                        result.push_str(format!("\n    standard_argument(\n        name = \"{}\"),", name).as_ref());
+                    } else {
+                        result.push_str(format!("\n    standard_argument(\n        name = \"{}\",\n        prefix = \"{}\"\n    ),", name, value.replace(st_arg_token, "")).as_ref());
+                    }
+                }
+            });
+        }
+
+        // Arguments
+        if let Some(args) = self.arguments.clone() {
+            args.iter().for_each(|(name, value)| {
+                if !value.contains(st_arg_token) {
+                    result.push_str(format!("\n    argument(\n        name = \"{}\",\n        description = \"{}\"\n    ),", name, value).as_ref());
+                }
+            });
+        }
+
+        if let Some(alt_syntax) = self.alternative_syntax.clone() {
+            alt_syntax.iter().for_each(|syntax| {
+                result.push_str(
+                    format!("\n    alternative_syntax = \"{}\",", syntax).as_ref(),
+                );
+            });
+        }
+
+        // Related UDFs
+        if let Some(related_udf) = self.related_udfs.clone() {
+            related_udf.iter().for_each(|udf| {
+                result
+                    .push_str(format!("\n    related_udf(name = \"{}\"),", udf).as_ref());
+            });
+        }
+
+        result.push_str("\n)]");
+
+        result
     }
 }
 
@@ -86,17 +174,14 @@ pub struct DocSection {
 ///         description: None,
 ///     };
 ///
-///     let documentation = Documentation::builder()
-///           .with_doc_section(doc_section)
-///           .with_description("Add one to an int32")
-///           .with_syntax_example("add_one(2)")
+///     let documentation = Documentation::builder(doc_section, "Add one to an int32".to_owned(), "add_one(2)".to_owned())
 ///           .with_argument("arg_1", "The int32 number to add one to")
 ///           .build();
 /// # }
 pub struct DocumentationBuilder {
-    pub doc_section: Option<DocSection>,
-    pub description: Option<String>,
-    pub syntax_example: Option<String>,
+    pub doc_section: DocSection,
+    pub description: String,
+    pub syntax_example: String,
     pub sql_example: Option<String>,
     pub arguments: Option<Vec<(String, String)>>,
     pub alternative_syntax: Option<Vec<String>>,
@@ -104,11 +189,15 @@ pub struct DocumentationBuilder {
 }
 
 impl DocumentationBuilder {
-    pub fn new() -> Self {
+    pub fn new(
+        doc_section: DocSection,
+        description: impl Into<String>,
+        syntax_example: impl Into<String>,
+    ) -> Self {
         Self {
-            doc_section: None,
-            description: None,
-            syntax_example: None,
+            doc_section,
+            description: description.into(),
+            syntax_example: syntax_example.into(),
             sql_example: None,
             arguments: None,
             alternative_syntax: None,
@@ -117,17 +206,17 @@ impl DocumentationBuilder {
     }
 
     pub fn with_doc_section(mut self, doc_section: DocSection) -> Self {
-        self.doc_section = Some(doc_section);
+        self.doc_section = doc_section;
         self
     }
 
     pub fn with_description(mut self, description: impl Into<String>) -> Self {
-        self.description = Some(description.into());
+        self.description = description.into();
         self
     }
 
     pub fn with_syntax_example(mut self, syntax_example: impl Into<String>) -> Self {
-        self.syntax_example = Some(syntax_example.into());
+        self.syntax_example = syntax_example.into();
         self
     }
 
@@ -205,30 +294,14 @@ impl DocumentationBuilder {
             related_udfs,
         } = self;
 
-        if doc_section.is_none() {
-            panic!("Documentation must have a doc section");
-        }
-        if description.is_none() {
-            panic!("Documentation must have a description");
-        }
-        if syntax_example.is_none() {
-            panic!("Documentation must have a syntax_example");
-        }
-
         Documentation {
-            doc_section: doc_section.unwrap(),
-            description: description.unwrap(),
-            syntax_example: syntax_example.unwrap(),
+            doc_section,
+            description,
+            syntax_example,
             sql_example,
             arguments,
             alternative_syntax,
             related_udfs,
         }
-    }
-}
-
-impl Default for DocumentationBuilder {
-    fn default() -> Self {
-        Self::new()
     }
 }

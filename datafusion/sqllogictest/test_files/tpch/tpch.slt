@@ -18,5 +18,14 @@
 # under the License.
 
 include ./create_tables.slt.part
-include ./q*.slt.part
+include ./plans/q*.slt.part
+include ./answers/q*.slt.part
+
+# test answers with sort merge join
+statement ok
+set datafusion.optimizer.prefer_hash_join = false;
+
+include ./answers/q*.slt.part
+
 include ./drop_tables.slt.part
+

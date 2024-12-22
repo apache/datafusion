@@ -255,13 +255,14 @@ static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
 
 fn get_date_trunc_doc() -> &'static Documentation {
     DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_DATETIME)
-            .with_description("Truncates a timestamp value to a specified precision.")
-            .with_syntax_example("date_trunc(precision, expression)")
-            .with_argument(
-                "precision",
-                r#"Time precision to truncate to. The following precisions are supported:
+        Documentation::builder(
+            DOC_SECTION_DATETIME,
+            "Truncates a timestamp value to a specified precision.",
+            "date_trunc(precision, expression)",
+        )
+        .with_argument(
+            "precision",
+            r#"Time precision to truncate to. The following precisions are supported:
 
     - year / YEAR
     - quarter / QUARTER
@@ -272,12 +273,12 @@ fn get_date_trunc_doc() -> &'static Documentation {
     - minute / MINUTE
     - second / SECOND
 "#,
-            )
-            .with_argument(
-                "expression",
-                "Time expression to operate on. Can be a constant, column, or function.",
-            )
-            .build()
+        )
+        .with_argument(
+            "expression",
+            "Time expression to operate on. Can be a constant, column, or function.",
+        )
+        .build()
     })
 }
 

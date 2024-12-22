@@ -90,10 +90,10 @@ static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
 
 fn get_levenshtein_doc() -> &'static Documentation {
     DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_STRING)
-            .with_description("Returns the [`Levenshtein distance`](https://en.wikipedia.org/wiki/Levenshtein_distance) between the two given strings.")
-            .with_syntax_example("levenshtein(str1, str2)")
+        Documentation::builder(
+            DOC_SECTION_STRING,
+            "Returns the [`Levenshtein distance`](https://en.wikipedia.org/wiki/Levenshtein_distance) between the two given strings.",
+            "levenshtein(str1, str2)")
             .with_sql_example(r#"```sql
 > select levenshtein('kitten', 'sitting');
 +---------------------------------------------+

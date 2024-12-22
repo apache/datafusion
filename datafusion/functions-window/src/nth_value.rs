@@ -131,15 +131,14 @@ static FIRST_VALUE_DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
 
 fn get_first_value_doc() -> &'static Documentation {
     FIRST_VALUE_DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_ANALYTICAL)
-            .with_description(
-                "Returns value evaluated at the row that is the first row of the window \
+        Documentation::builder(
+            DOC_SECTION_ANALYTICAL,
+            "Returns value evaluated at the row that is the first row of the window \
                 frame.",
-            )
-            .with_syntax_example("first_value(expression)")
-            .with_argument("expression", "Expression to operate on")
-            .build()
+            "first_value(expression)",
+        )
+        .with_argument("expression", "Expression to operate on")
+        .build()
     })
 }
 
@@ -147,15 +146,14 @@ static LAST_VALUE_DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
 
 fn get_last_value_doc() -> &'static Documentation {
     LAST_VALUE_DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_ANALYTICAL)
-            .with_description(
-                "Returns value evaluated at the row that is the last row of the window \
+        Documentation::builder(
+            DOC_SECTION_ANALYTICAL,
+            "Returns value evaluated at the row that is the last row of the window \
                 frame.",
-            )
-            .with_syntax_example("last_value(expression)")
-            .with_argument("expression", "Expression to operate on")
-            .build()
+            "last_value(expression)",
+        )
+        .with_argument("expression", "Expression to operate on")
+        .build()
     })
 }
 
@@ -163,20 +161,19 @@ static NTH_VALUE_DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
 
 fn get_nth_value_doc() -> &'static Documentation {
     NTH_VALUE_DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_ANALYTICAL)
-            .with_description(
-                "Returns value evaluated at the row that is the nth row of the window \
+        Documentation::builder(
+            DOC_SECTION_ANALYTICAL,
+            "Returns value evaluated at the row that is the nth row of the window \
                 frame (counting from 1); null if no such row.",
-            )
-            .with_syntax_example("nth_value(expression, n)")
-            .with_argument(
-                "expression",
-                "The name the column of which nth \
+            "nth_value(expression, n)",
+        )
+        .with_argument(
+            "expression",
+            "The name the column of which nth \
             value to retrieve",
-            )
-            .with_argument("n", "Integer. Specifies the n in nth")
-            .build()
+        )
+        .with_argument("n", "Integer. Specifies the n in nth")
+        .build()
     })
 }
 

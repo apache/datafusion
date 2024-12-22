@@ -43,6 +43,7 @@ use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::PhysicalExpr;
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
+use datafusion_physical_plan::execution_plan::EmissionType;
 
 /// The [`JoinSelection`] rule tries to modify a given plan so that it can
 /// accommodate infinite sources and optimize joins in the plan according to
@@ -123,7 +124,7 @@ fn supports_swap(join_type: JoinType) -> bool {
 
 /// This function returns the new join type we get after swapping the given
 /// join's inputs.
-fn swap_join_type(join_type: JoinType) -> JoinType {
+pub(crate) fn swap_join_type(join_type: JoinType) -> JoinType {
     match join_type {
         JoinType::Inner => JoinType::Inner,
         JoinType::Full => JoinType::Full,
@@ -256,7 +257,7 @@ fn swap_nl_join(join: &NestedLoopJoinExec) -> Result<Arc<dyn ExecutionPlan>> {
 /// the output should not be impacted. This function creates the expressions
 /// that will allow to swap back the values from the original left as the first
 /// columns and those on the right next.
-fn swap_reverting_projection(
+pub(crate) fn swap_reverting_projection(
     left_schema: &Schema,
     right_schema: &Schema,
 ) -> Vec<(Arc<dyn PhysicalExpr>, String)> {
@@ -278,7 +279,7 @@ fn swap_reverting_projection(
 }
 
 /// Swaps join sides for filter column indices and produces new JoinFilter
-fn swap_filter(filter: &JoinFilter) -> JoinFilter {
+pub(crate) fn swap_filter(filter: &JoinFilter) -> JoinFilter {
     let column_indices = filter
         .column_indices()
         .iter()
@@ -516,7 +517,8 @@ fn statistical_join_selection_subrule(
 pub type PipelineFixerSubrule =
     dyn Fn(Arc<dyn ExecutionPlan>, &ConfigOptions) -> Result<Arc<dyn ExecutionPlan>>;
 
-/// Converts a hash join to a symmetric hash join in the case of infinite inputs on both sides.
+/// Converts a hash join to a symmetric hash join if both its inputs are
+/// unbounded and incremental.
 ///
 /// This subrule checks if a hash join can be replaced with a symmetric hash join when dealing
 /// with unbounded (infinite) inputs on both sides. This replacement avoids pipeline breaking and
@@ -537,10 +539,18 @@ fn hash_join_convert_symmetric_subrule(
 ) -> Result<Arc<dyn ExecutionPlan>> {
     // Check if the current plan node is a HashJoinExec.
     if let Some(hash_join) = input.as_any().downcast_ref::<HashJoinExec>() {
-        let left_unbounded = hash_join.left.execution_mode().is_unbounded();
-        let right_unbounded = hash_join.right.execution_mode().is_unbounded();
-        // Process only if both left and right sides are unbounded.
-        if left_unbounded && right_unbounded {
+        let left_unbounded = hash_join.left.boundedness().is_unbounded();
+        let left_incremental = matches!(
+            hash_join.left.pipeline_behavior(),
+            EmissionType::Incremental | EmissionType::Both
+        );
+        let right_unbounded = hash_join.right.boundedness().is_unbounded();
+        let right_incremental = matches!(
+            hash_join.right.pipeline_behavior(),
+            EmissionType::Incremental | EmissionType::Both
+        );
+        // Process only if both left and right sides are unbounded and incrementally emit.
+        if left_unbounded && right_unbounded & left_incremental & right_incremental {
             // Determine the partition mode based on configuration.
             let mode = if config_options.optimizer.repartition_joins {
                 StreamJoinPartitionMode::Partitioned
@@ -669,8 +679,8 @@ fn hash_join_swap_subrule(
     _config_options: &ConfigOptions,
 ) -> Result<Arc<dyn ExecutionPlan>> {
     if let Some(hash_join) = input.as_any().downcast_ref::<HashJoinExec>() {
-        if hash_join.left.execution_mode().is_unbounded()
-            && !hash_join.right.execution_mode().is_unbounded()
+        if hash_join.left.boundedness().is_unbounded()
+            && !hash_join.right.boundedness().is_unbounded()
             && matches!(
                 *hash_join.join_type(),
                 JoinType::Inner
@@ -736,6 +746,7 @@ mod tests_statistical {
     use arrow::datatypes::{DataType, Field};
     use datafusion_common::{stats::Precision, JoinType, ScalarValue};
     use datafusion_expr::Operator;
+    use datafusion_physical_expr::expressions::col;
     use datafusion_physical_expr::expressions::BinaryExpr;
     use datafusion_physical_expr::PhysicalExprRef;
 
@@ -1089,8 +1100,8 @@ mod tests_statistical {
             Arc::clone(&big),
             Arc::clone(&small),
             vec![(
-                Arc::new(Column::new_with_schema("big_col", &big.schema()).unwrap()),
-                Arc::new(Column::new_with_schema("small_col", &small.schema()).unwrap()),
+                col("big_col", &big.schema()).unwrap(),
+                col("small_col", &small.schema()).unwrap(),
             )],
             None,
             &JoinType::Inner,
@@ -1106,10 +1117,8 @@ mod tests_statistical {
             Arc::clone(&medium),
             Arc::new(child_join),
             vec![(
-                Arc::new(
-                    Column::new_with_schema("medium_col", &medium.schema()).unwrap(),
-                ),
-                Arc::new(Column::new_with_schema("small_col", &child_schema).unwrap()),
+                col("medium_col", &medium.schema()).unwrap(),
+                col("small_col", &child_schema).unwrap(),
             )],
             None,
             &JoinType::Left,
@@ -1421,8 +1430,8 @@ mod tests_statistical {
         ));
 
         let join_on = vec![(
-            Arc::new(Column::new_with_schema("small_col", &small.schema()).unwrap()) as _,
-            Arc::new(Column::new_with_schema("big_col", &big.schema()).unwrap()) as _,
+            col("small_col", &small.schema()).unwrap(),
+            col("big_col", &big.schema()).unwrap(),
         )];
         check_join_partition_mode(
             small.clone(),
@@ -1433,8 +1442,8 @@ mod tests_statistical {
         );
 
         let join_on = vec![(
-            Arc::new(Column::new_with_schema("big_col", &big.schema()).unwrap()) as _,
-            Arc::new(Column::new_with_schema("small_col", &small.schema()).unwrap()) as _,
+            col("big_col", &big.schema()).unwrap(),
+            col("small_col", &small.schema()).unwrap(),
         )];
         check_join_partition_mode(
             big,
@@ -1445,8 +1454,8 @@ mod tests_statistical {
         );
 
         let join_on = vec![(
-            Arc::new(Column::new_with_schema("small_col", &small.schema()).unwrap()) as _,
-            Arc::new(Column::new_with_schema("empty_col", &empty.schema()).unwrap()) as _,
+            col("small_col", &small.schema()).unwrap(),
+            col("empty_col", &empty.schema()).unwrap(),
         )];
         check_join_partition_mode(
             small.clone(),
@@ -1457,8 +1466,8 @@ mod tests_statistical {
         );
 
         let join_on = vec![(
-            Arc::new(Column::new_with_schema("empty_col", &empty.schema()).unwrap()) as _,
-            Arc::new(Column::new_with_schema("small_col", &small.schema()).unwrap()) as _,
+            col("empty_col", &empty.schema()).unwrap(),
+            col("small_col", &small.schema()).unwrap(),
         )];
         check_join_partition_mode(
             empty,
@@ -1627,6 +1636,7 @@ mod hash_join_tests {
 
     use arrow::datatypes::{DataType, Field};
     use arrow::record_batch::RecordBatch;
+    use datafusion_physical_expr::expressions::col;
 
     struct TestCase {
         case: String,
@@ -1969,7 +1979,7 @@ mod hash_join_tests {
                 false,
             )]))),
             2,
-        )) as Arc<dyn ExecutionPlan>;
+        )) as _;
         let right_exec = Arc::new(UnboundedExec::new(
             (!right_unbounded).then_some(1),
             RecordBatch::new_empty(Arc::new(Schema::new(vec![Field::new(
@@ -1978,21 +1988,21 @@ mod hash_join_tests {
                 false,
             )]))),
             2,
-        )) as Arc<dyn ExecutionPlan>;
+        )) as _;
 
         let join = Arc::new(HashJoinExec::try_new(
             Arc::clone(&left_exec),
             Arc::clone(&right_exec),
             vec![(
-                Arc::new(Column::new_with_schema("a", &left_exec.schema())?),
-                Arc::new(Column::new_with_schema("b", &right_exec.schema())?),
+                col("a", &left_exec.schema())?,
+                col("b", &right_exec.schema())?,
             )],
             None,
             &t.initial_join_type,
             None,
             t.initial_mode,
             false,
-        )?);
+        )?) as _;
 
         let optimized_join_plan = hash_join_swap_subrule(join, &ConfigOptions::new())?;
 
@@ -2025,12 +2035,12 @@ mod hash_join_tests {
             assert_eq!(
                 (
                     t.case.as_str(),
-                    if left.execution_mode().is_unbounded() {
+                    if left.boundedness().is_unbounded() {
                         SourceType::Unbounded
                     } else {
                         SourceType::Bounded
                     },
-                    if right.execution_mode().is_unbounded() {
+                    if right.boundedness().is_unbounded() {
                         SourceType::Unbounded
                     } else {
                         SourceType::Bounded

@@ -62,9 +62,10 @@ use datafusion_physical_expr::window::{
 };
 use datafusion_physical_expr::PhysicalExpr;
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, LexRequirement};
+
 use futures::stream::Stream;
 use futures::{ready, StreamExt};
-use hashbrown::raw::RawTable;
+use hashbrown::hash_table::HashTable;
 use indexmap::IndexMap;
 use log::debug;
 
@@ -201,9 +202,11 @@ impl BoundedWindowAggExec {
 
         // Construct properties cache
         PlanProperties::new(
-            eq_properties,          // Equivalence Properties
-            output_partitioning,    // Output Partitioning
-            input.execution_mode(), // Execution Mode
+            eq_properties,
+            output_partitioning,
+            // TODO: Emission type and boundedness information can be enhanced here
+            input.pipeline_behavior(),
+            input.boundedness(),
         )
     }
 }
@@ -441,16 +444,16 @@ pub struct LinearSearch {
     /// is ordered by a, b and the window expression contains a PARTITION BY b, a
     /// clause, this attribute stores [1, 0].
     ordered_partition_by_indices: Vec<usize>,
-    /// We use this [`RawTable`] to calculate unique partitions for each new
+    /// We use this [`HashTable`] to calculate unique partitions for each new
     /// RecordBatch. First entry in the tuple is the hash value, the second
     /// entry is the unique ID for each partition (increments from 0 to n).
-    row_map_batch: RawTable<(u64, usize)>,
-    /// We use this [`RawTable`] to calculate the output columns that we can
+    row_map_batch: HashTable<(u64, usize)>,
+    /// We use this [`HashTable`] to calculate the output columns that we can
     /// produce at each cycle. First entry in the tuple is the hash value, the
     /// second entry is the unique ID for each partition (increments from 0 to n).
     /// The third entry stores how many new outputs are calculated for the
     /// corresponding partition.
-    row_map_out: RawTable<(u64, usize, usize)>,
+    row_map_out: HashTable<(u64, usize, usize)>,
     input_schema: SchemaRef,
 }
 
@@ -609,8 +612,8 @@ impl LinearSearch {
             input_buffer_hashes: VecDeque::new(),
             random_state: Default::default(),
             ordered_partition_by_indices,
-            row_map_batch: RawTable::with_capacity(256),
-            row_map_out: RawTable::with_capacity(256),
+            row_map_batch: HashTable::with_capacity(256),
+            row_map_out: HashTable::with_capacity(256),
             input_schema,
         }
     }
@@ -630,7 +633,7 @@ impl LinearSearch {
         // res stores PartitionKey and row indices (indices where these partition occurs in the `batch`) for each partition.
         let mut result: Vec<(PartitionKey, Vec<u32>)> = vec![];
         for (hash, row_idx) in batch_hashes.into_iter().zip(0u32..) {
-            let entry = self.row_map_batch.get_mut(hash, |(_, group_idx)| {
+            let entry = self.row_map_batch.find_mut(hash, |(_, group_idx)| {
                 // We can safely get the first index of the partition indices
                 // since partition indices has one element during initialization.
                 let row = get_row_at_idx(columns, row_idx as usize).unwrap();
@@ -640,8 +643,11 @@ impl LinearSearch {
             if let Some((_, group_idx)) = entry {
                 result[*group_idx].1.push(row_idx)
             } else {
-                self.row_map_batch
-                    .insert(hash, (hash, result.len()), |(hash, _)| *hash);
+                self.row_map_batch.insert_unique(
+                    hash,
+                    (hash, result.len()),
+                    |(hash, _)| *hash,
+                );
                 let row = get_row_at_idx(columns, row_idx as usize)?;
                 // This is a new partition its only index is row_idx for now.
                 result.push((row, vec![row_idx]));
@@ -666,7 +672,7 @@ impl LinearSearch {
         self.row_map_out.clear();
         let mut partition_indices: Vec<(PartitionKey, Vec<u32>)> = vec![];
         for (hash, row_idx) in self.input_buffer_hashes.iter().zip(0u32..) {
-            let entry = self.row_map_out.get_mut(*hash, |(_, group_idx, _)| {
+            let entry = self.row_map_out.find_mut(*hash, |(_, group_idx, _)| {
                 let row =
                     get_row_at_idx(&partition_by_columns, row_idx as usize).unwrap();
                 row == partition_indices[*group_idx].0
@@ -692,7 +698,7 @@ impl LinearSearch {
                 if min_out == 0 {
                     break;
                 }
-                self.row_map_out.insert(
+                self.row_map_out.insert_unique(
                     *hash,
                     (*hash, partition_indices.len(), min_out),
                     |(hash, _, _)| *hash,
@@ -933,7 +939,7 @@ impl BoundedWindowAggStream {
         })
     }
 
-    fn compute_aggregates(&mut self) -> Result<RecordBatch> {
+    fn compute_aggregates(&mut self) -> Result<Option<RecordBatch>> {
         // calculate window cols
         for (cur_window_expr, state) in
             self.window_expr.iter().zip(&mut self.window_agg_states)
@@ -960,9 +966,9 @@ impl BoundedWindowAggStream {
                 .collect::<Vec<_>>();
             let n_generated = columns_to_show[0].len();
             self.prune_state(n_generated)?;
-            Ok(RecordBatch::try_new(schema, columns_to_show)?)
+            Ok(Some(RecordBatch::try_new(schema, columns_to_show)?))
         } else {
-            Ok(RecordBatch::new_empty(schema))
+            Ok(None)
         }
     }
 
@@ -975,7 +981,7 @@ impl BoundedWindowAggStream {
             return Poll::Ready(None);
         }
 
-        let result = match ready!(self.input.poll_next_unpin(cx)) {
+        match ready!(self.input.poll_next_unpin(cx)) {
             Some(Ok(batch)) => {
                 self.search_mode.update_partition_batch(
                     &mut self.input_buffer,
@@ -983,18 +989,23 @@ impl BoundedWindowAggStream {
                     &self.window_expr,
                     &mut self.partition_buffers,
                 )?;
-                self.compute_aggregates()
+                if let Some(batch) = self.compute_aggregates()? {
+                    return Poll::Ready(Some(Ok(batch)));
+                }
+                self.poll_next_inner(cx)
             }
-            Some(Err(e)) => Err(e),
+            Some(Err(e)) => Poll::Ready(Some(Err(e))),
             None => {
                 self.finished = true;
                 for (_, partition_batch_state) in self.partition_buffers.iter_mut() {
                     partition_batch_state.is_end = true;
                 }
-                self.compute_aggregates()
+                if let Some(batch) = self.compute_aggregates()? {
+                    return Poll::Ready(Some(Ok(batch)));
+                }
+                Poll::Ready(None)
             }
-        };
-        Poll::Ready(Some(result))
+        }
     }
 
     /// Prunes the sections of the record batch (for each partition)

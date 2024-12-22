@@ -37,7 +37,6 @@ path = "src/lib.rs"
 
 [dependencies]
 arrow = { workspace = true }
-async-trait = { workspace = true }
 chrono = { workspace = true }
 datafusion-common = { workspace = true, default-features = true }
 datafusion-expr = { workspace = true }
@@ -50,6 +49,7 @@ regex = { workspace = true }
 regex-syntax = "0.8.0"
 
 [dev-dependencies]
+async-trait = { workspace = true }
 ctor = { workspace = true }
 datafusion-functions-aggregate = { workspace = true }
 datafusion-functions-window-common = { workspace = true }

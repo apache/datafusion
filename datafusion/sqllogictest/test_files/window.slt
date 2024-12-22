@@ -5054,7 +5054,7 @@ select b, row_number() over (order by a) from (select TRUE as a, 1 as b);
 1 1
 
 # test window functions on boolean columns
-query T
+statement count 0
 create table t1 (id int, bool_col boolean) as values 
     (1, true),
     (2, false),
@@ -5127,4 +5127,3 @@ order by id;
 
 statement ok
 drop table t1;
-

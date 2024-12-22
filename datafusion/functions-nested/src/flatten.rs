@@ -28,7 +28,8 @@ use datafusion_common::cast::{
 use datafusion_common::{exec_err, Result};
 use datafusion_expr::scalar_doc_sections::DOC_SECTION_ARRAY;
 use datafusion_expr::{
-    ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
+    ArrayFunctionSignature, ColumnarValue, Documentation, ScalarUDFImpl, Signature,
+    TypeSignature, Volatility,
 };
 use std::any::Any;
 use std::sync::{Arc, OnceLock};
@@ -42,14 +43,27 @@ make_udf_expr_and_func!(
 );
 
 #[derive(Debug)]
-pub(super) struct Flatten {
+pub struct Flatten {
     signature: Signature,
     aliases: Vec<String>,
 }
+
+impl Default for Flatten {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Flatten {
     pub fn new() -> Self {
         Self {
-            signature: Signature::array(Volatility::Immutable),
+            signature: Signature {
+                // TODO (https://github.com/apache/datafusion/issues/13757) flatten should be single-step, not recursive
+                type_signature: TypeSignature::ArraySignature(
+                    ArrayFunctionSignature::RecursiveArray,
+                ),
+                volatility: Volatility::Immutable,
+            },
             aliases: vec![],
         }
     }
@@ -111,12 +125,11 @@ static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
 
 fn get_flatten_doc() -> &'static Documentation {
     DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_ARRAY)
-            .with_description(
+        Documentation::builder(
+            DOC_SECTION_ARRAY,
                 "Converts an array of arrays to a flat array.\n\n- Applies to any depth of nested arrays\n- Does not change arrays that are already flat\n\nThe flattened array contains all the elements from all source arrays.",
-            )
-            .with_syntax_example("flatten(array)")
+
+            "flatten(array)")
             .with_sql_example(
                 r#"```sql
 > select flatten([[1, 2], [3, 4]]);

@@ -17,14 +17,14 @@
 
 //! Parquet integration tests
 use crate::parquet::utils::MetricsFinder;
-use arrow::array::Decimal128Array;
 use arrow::{
     array::{
         make_array, Array, ArrayRef, BinaryArray, Date32Array, Date64Array,
-        FixedSizeBinaryArray, Float64Array, Int16Array, Int32Array, Int64Array,
-        Int8Array, LargeBinaryArray, LargeStringArray, StringArray,
-        TimestampMicrosecondArray, TimestampMillisecondArray, TimestampNanosecondArray,
-        TimestampSecondArray, UInt16Array, UInt32Array, UInt64Array, UInt8Array,
+        Decimal128Array, DictionaryArray, FixedSizeBinaryArray, Float64Array, Int16Array,
+        Int32Array, Int64Array, Int8Array, LargeBinaryArray, LargeStringArray,
+        StringArray, TimestampMicrosecondArray, TimestampMillisecondArray,
+        TimestampNanosecondArray, TimestampSecondArray, UInt16Array, UInt32Array,
+        UInt64Array, UInt8Array,
     },
     datatypes::{DataType, Field, Schema},
     record_batch::RecordBatch,
@@ -45,7 +45,6 @@ use tempfile::NamedTempFile;
 mod custom_reader;
 mod external_access_plan;
 mod file_statistics;
-#[cfg(not(target_family = "windows"))]
 mod filter_pushdown;
 mod page_pruning;
 mod row_group_pruning;
@@ -65,7 +64,7 @@ fn init() {
 // ----------------------
 
 /// What data to use
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 enum Scenario {
     Timestamps,
     Dates,
@@ -85,6 +84,7 @@ enum Scenario {
     WithNullValues,
     WithNullValuesPageLevel,
     UTF8,
+    Dictionary,
 }
 
 enum Unit {
@@ -741,6 +741,54 @@ fn make_utf8_batch(value: Vec<Option<&str>>) -> RecordBatch {
     .unwrap()
 }
 
+fn make_dictionary_batch(strings: Vec<&str>, integers: Vec<i32>) -> RecordBatch {
+    let keys = Int32Array::from_iter(0..strings.len() as i32);
+    let small_keys = Int16Array::from_iter(0..strings.len() as i16);
+
+    let utf8_values = StringArray::from(strings.clone());
+    let utf8_dict = DictionaryArray::new(keys.clone(), Arc::new(utf8_values));
+
+    let large_utf8 = LargeStringArray::from(strings.clone());
+    let large_utf8_dict = DictionaryArray::new(keys.clone(), Arc::new(large_utf8));
+
+    let binary =
+        BinaryArray::from_iter_values(strings.iter().cloned().map(|v| v.as_bytes()));
+    let binary_dict = DictionaryArray::new(keys.clone(), Arc::new(binary));
+
+    let large_binary =
+        LargeBinaryArray::from_iter_values(strings.iter().cloned().map(|v| v.as_bytes()));
+    let large_binary_dict = DictionaryArray::new(keys.clone(), Arc::new(large_binary));
+
+    let int32 = Int32Array::from_iter_values(integers.clone());
+    let int32_dict = DictionaryArray::new(small_keys.clone(), Arc::new(int32));
+
+    let int64 = Int64Array::from_iter_values(integers.iter().cloned().map(|v| v as i64));
+    let int64_dict = DictionaryArray::new(keys.clone(), Arc::new(int64));
+
+    let uint32 =
+        UInt32Array::from_iter_values(integers.iter().cloned().map(|v| v as u32));
+    let uint32_dict = DictionaryArray::new(small_keys.clone(), Arc::new(uint32));
+
+    let decimal = Decimal128Array::from_iter_values(
+        integers.iter().cloned().map(|v| (v * 100) as i128),
+    )
+    .with_precision_and_scale(6, 2)
+    .unwrap();
+    let decimal_dict = DictionaryArray::new(keys.clone(), Arc::new(decimal));
+
+    RecordBatch::try_from_iter(vec![
+        ("utf8", Arc::new(utf8_dict) as _),
+        ("large_utf8", Arc::new(large_utf8_dict) as _),
+        ("binary", Arc::new(binary_dict) as _),
+        ("large_binary", Arc::new(large_binary_dict) as _),
+        ("int32", Arc::new(int32_dict) as _),
+        ("int64", Arc::new(int64_dict) as _),
+        ("uint32", Arc::new(uint32_dict) as _),
+        ("decimal", Arc::new(decimal_dict) as _),
+    ])
+    .unwrap()
+}
+
 fn create_data_batch(scenario: Scenario) -> Vec<RecordBatch> {
     match scenario {
         Scenario::Timestamps => {
@@ -960,6 +1008,13 @@ fn create_data_batch(scenario: Scenario) -> Vec<RecordBatch> {
                     Some("h"),
                     Some("i"),
                 ]),
+            ]
+        }
+
+        Scenario::Dictionary => {
+            vec![
+                make_dictionary_batch(vec!["a", "b", "c", "d", "e"], vec![0, 1, 2, 5, 6]),
+                make_dictionary_batch(vec!["f", "g", "h", "i", "j"], vec![0, 1, 3, 8, 9]),
             ]
         }
     }

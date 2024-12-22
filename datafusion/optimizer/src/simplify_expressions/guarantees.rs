@@ -57,7 +57,7 @@ impl<'a> GuaranteeRewriter<'a> {
     }
 }
 
-impl<'a> TreeNodeRewriter for GuaranteeRewriter<'a> {
+impl TreeNodeRewriter for GuaranteeRewriter<'_> {
     type Node = Expr;
 
     fn f_up(&mut self, expr: Expr) -> Result<Transformed<Expr>> {

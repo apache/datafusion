@@ -80,8 +80,11 @@ jobs:
       - name: Check datafusion-common without default features
         run: cargo check --all-targets --no-default-features -p datafusion-common
 
-      - name: Check datafusion-functions
+      - name: Check datafusion-functions without default features
         run: cargo check --all-targets --no-default-features -p datafusion-functions
+
+      - name: Check datafusion-substrait without default features
+        run: cargo check --all-targets --no-default-features -p datafusion-substrait
 
       - name: Check workspace in debug mode
         run: cargo check --all-targets --workspace
@@ -323,22 +326,26 @@ jobs:
         env:
           POSTGRES_PORT: ${{ job.services.postgres.ports[5432] }}
 
-  windows:
-    name: cargo test (win64)
-    runs-on: windows-latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          submodules: true
-      - name: Setup Rust toolchain
-        uses: ./.github/actions/setup-windows-builder
-      - name: Run tests (excluding doctests)
-        shell: bash
-        run: |
-          export PATH=$PATH:$HOME/d/protoc/bin
-          cargo test --lib --tests --bins --features avro,json,backtrace
-          cd datafusion-cli
-          cargo test --lib --tests --bins --all-features
+#  Temporarily commenting out the Windows flow, the reason is enormously slow running build
+#  Waiting for new Windows 2025 github runner
+#  Details: https://github.com/apache/datafusion/issues/13726
+#
+#  windows:
+#    name: cargo test (win64)
+#    runs-on: windows-latest
+#    steps:
+#      - uses: actions/checkout@v4
+#        with:
+#          submodules: true
+#      - name: Setup Rust toolchain
+#        uses: ./.github/actions/setup-windows-builder
+#      - name: Run tests (excluding doctests)
+#        shell: bash
+#        run: |
+#          export PATH=$PATH:$HOME/d/protoc/bin
+#          cargo test --lib --tests --bins --features avro,json,backtrace
+#          cd datafusion-cli
+#          cargo test --lib --tests --bins --all-features
 
   macos:
     name: cargo test (macos)
@@ -582,9 +589,9 @@ jobs:
           #
           # To reproduce: 
           # 1. Install the version of Rust that is failing. Example: 
-          #    rustup install 1.79.0
+          #    rustup install 1.80.1
           # 2. Run the command that failed with that version. Example:
-          #    cargo +1.79.0 check -p datafusion
+          #    cargo +1.80.1 check -p datafusion
           # 
           # To resolve, either:
           # 1. Change your code to use older Rust features, 

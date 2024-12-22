@@ -20,6 +20,8 @@
 #[cfg(feature = "parquet")]
 pub mod parquet;
 
+pub mod csv;
+
 use std::any::Any;
 use std::collections::HashMap;
 use std::fs::File;
@@ -37,22 +39,23 @@ use crate::error::Result;
 use crate::execution::context::TaskContext;
 use crate::logical_expr::{LogicalPlanBuilder, UNNAMED_TABLE};
 use crate::physical_plan::{
-    DisplayAs, DisplayFormatType, ExecutionMode, ExecutionPlan, Partitioning,
-    PlanProperties, RecordBatchStream, SendableRecordBatchStream,
+    DisplayAs, DisplayFormatType, ExecutionPlan, Partitioning, PlanProperties,
+    RecordBatchStream, SendableRecordBatchStream,
 };
 use crate::prelude::{CsvReadOptions, SessionContext};
 
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
+use datafusion_catalog::Session;
 use datafusion_common::TableReference;
 use datafusion_expr::utils::COUNT_STAR_EXPANSION;
 use datafusion_expr::{CreateExternalTable, Expr, SortExpr, TableType};
 use datafusion_functions_aggregate::count::count_udaf;
+use datafusion_physical_expr::aggregate::{AggregateExprBuilder, AggregateFunctionExpr};
 use datafusion_physical_expr::{expressions, EquivalenceProperties, PhysicalExpr};
+use datafusion_physical_plan::execution_plan::{Boundedness, EmissionType};
 
 use async_trait::async_trait;
-use datafusion_catalog::Session;
-use datafusion_physical_expr::aggregate::{AggregateExprBuilder, AggregateFunctionExpr};
 use futures::Stream;
 use tempfile::TempDir;
 // backwards compatibility
@@ -257,16 +260,18 @@ impl UnboundedExec {
         batch_produce: Option<usize>,
         n_partitions: usize,
     ) -> PlanProperties {
-        let eq_properties = EquivalenceProperties::new(schema);
-        let mode = if batch_produce.is_none() {
-            ExecutionMode::Unbounded
+        let boundedness = if batch_produce.is_none() {
+            Boundedness::Unbounded {
+                requires_infinite_memory: false,
+            }
         } else {
-            ExecutionMode::Bounded
+            Boundedness::Bounded
         };
         PlanProperties::new(
-            eq_properties,
+            EquivalenceProperties::new(schema),
             Partitioning::UnknownPartitioning(n_partitions),
-            mode,
+            EmissionType::Incremental,
+            boundedness,
         )
     }
 }

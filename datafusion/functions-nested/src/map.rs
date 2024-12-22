@@ -255,13 +255,11 @@ static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
 
 fn get_map_doc() -> &'static Documentation {
     DOCUMENTATION.get_or_init(|| {
-                Documentation::builder()
-                    .with_doc_section(DOC_SECTION_MAP)
-                    .with_description(
+                Documentation::builder(
+                    DOC_SECTION_MAP,
                         "Returns an Arrow map with the specified key-value pairs.\n\n\
-                        The `make_map` function creates a map from two lists: one for keys and one for values. Each key must be unique and non-null."
-                    )
-                    .with_syntax_example(
+                        The `make_map` function creates a map from two lists: one for keys and one for values. Each key must be unique and non-null.",
+
                         "map(key, value)\nmap(key: value)\nmake_map(['key1', 'key2'], ['value1', 'value2'])"
                     )
                     .with_sql_example(
@@ -375,7 +373,6 @@ fn get_element_type(data_type: &DataType) -> Result<&DataType> {
 /// | +-------+ |      | +-------+ |
 /// +-----------+      +-----------+
 /// ```text
-
 fn make_map_array_internal<O: OffsetSizeTrait>(
     keys: ArrayRef,
     values: ArrayRef,

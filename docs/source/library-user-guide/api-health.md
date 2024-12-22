@@ -19,13 +19,47 @@
 
 # API health policy
 
-To maintain API health, developers must track and properly deprecate outdated methods.
+DataFusion is used extensively as a library and has a large public API, thus it
+is important that the API is well maintained. In general, we try to minimize
+breaking API changes, but they are sometimes necessary.
+
+When possible, rather than making breaking API changes, we prefer to deprecate
+APIs to give users time to adjust to the changes.
+
+## Breaking Changes
+
+In general, a function is part of the public API if it appears on the [docs.rs page]
+
+Breaking public API changes are those that _require_ users to change their code
+for it to compile and execute, and are listed as "Major Changes" in the [SemVer
+Compatibility Section of the cargo book]. Common examples of breaking changes:
+
+- Adding new required parameters to a function (`foo(a: i32, b: i32)` -> `foo(a: i32, b: i32, c: i32)`)
+- Removing a `pub` function
+- Changing the return type of a function
+
+When making breaking public API changes, please add the `api-change` label to
+the PR so we can highlight the changes in the release notes.
+
+[docs.rs page]: https://docs.rs/datafusion/latest/datafusion/index.html
+[semver compatibility section of the cargo book]: https://doc.rust-lang.org/cargo/reference/semver.html#change-categories
+
+## Deprecation Guidelines
+
 When deprecating a method:
 
-- clearly mark the API as deprecated and specify the exact DataFusion version in which it was deprecated.
-- concisely describe the preferred API, if relevant
+- Mark the API as deprecated using `#[deprecated]` and specify the exact DataFusion version in which it was deprecated
+- Concisely describe the preferred API to help the user transition
 
-API deprecation example:
+The deprecated version is the next version which contains the deprecation. For
+example, if the current version listed in [`Cargo.toml`] is `43.0.0` then the next
+version will be `44.0.0`.
+
+[`cargo.toml`]: https://github.com/apache/datafusion/blob/main/Cargo.toml
+
+To mark the API as deprecated, use the `#[deprecated(since = "...", note = "...")]` attribute.
+
+For example:
 
 ```rust
     #[deprecated(since = "41.0.0", note = "Use SessionStateBuilder")]

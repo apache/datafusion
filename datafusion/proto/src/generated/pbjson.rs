@@ -13991,6 +13991,9 @@ impl serde::Serialize for PhysicalExprNode {
                 physical_expr_node::ExprType::Extension(v) => {
                     struct_ser.serialize_field("extension", v)?;
                 }
+                physical_expr_node::ExprType::UnknownColumn(v) => {
+                    struct_ser.serialize_field("unknownColumn", v)?;
+                }
             }
         }
         struct_ser.end()
@@ -14031,6 +14034,8 @@ impl<'de> serde::Deserialize<'de> for PhysicalExprNode {
             "like_expr",
             "likeExpr",
             "extension",
+            "unknown_column",
+            "unknownColumn",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -14052,6 +14057,7 @@ impl<'de> serde::Deserialize<'de> for PhysicalExprNode {
             ScalarUdf,
             LikeExpr,
             Extension,
+            UnknownColumn,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -14090,6 +14096,7 @@ impl<'de> serde::Deserialize<'de> for PhysicalExprNode {
                             "scalarUdf" | "scalar_udf" => Ok(GeneratedField::ScalarUdf),
                             "likeExpr" | "like_expr" => Ok(GeneratedField::LikeExpr),
                             "extension" => Ok(GeneratedField::Extension),
+                            "unknownColumn" | "unknown_column" => Ok(GeneratedField::UnknownColumn),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -14229,6 +14236,13 @@ impl<'de> serde::Deserialize<'de> for PhysicalExprNode {
                                 return Err(serde::de::Error::duplicate_field("extension"));
                             }
                             expr_type__ = map_.next_value::<::std::option::Option<_>>()?.map(physical_expr_node::ExprType::Extension)
+;
+                        }
+                        GeneratedField::UnknownColumn => {
+                            if expr_type__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("unknownColumn"));
+                            }
+                            expr_type__ = map_.next_value::<::std::option::Option<_>>()?.map(physical_expr_node::ExprType::UnknownColumn)
 ;
                         }
                     }
@@ -15706,6 +15720,9 @@ impl serde::Serialize for PhysicalScalarUdfNode {
         if self.return_type.is_some() {
             len += 1;
         }
+        if self.nullable {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("datafusion.PhysicalScalarUdfNode", len)?;
         if !self.name.is_empty() {
             struct_ser.serialize_field("name", &self.name)?;
@@ -15720,6 +15737,9 @@ impl serde::Serialize for PhysicalScalarUdfNode {
         }
         if let Some(v) = self.return_type.as_ref() {
             struct_ser.serialize_field("returnType", v)?;
+        }
+        if self.nullable {
+            struct_ser.serialize_field("nullable", &self.nullable)?;
         }
         struct_ser.end()
     }
@@ -15737,6 +15757,7 @@ impl<'de> serde::Deserialize<'de> for PhysicalScalarUdfNode {
             "funDefinition",
             "return_type",
             "returnType",
+            "nullable",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -15745,6 +15766,7 @@ impl<'de> serde::Deserialize<'de> for PhysicalScalarUdfNode {
             Args,
             FunDefinition,
             ReturnType,
+            Nullable,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -15770,6 +15792,7 @@ impl<'de> serde::Deserialize<'de> for PhysicalScalarUdfNode {
                             "args" => Ok(GeneratedField::Args),
                             "funDefinition" | "fun_definition" => Ok(GeneratedField::FunDefinition),
                             "returnType" | "return_type" => Ok(GeneratedField::ReturnType),
+                            "nullable" => Ok(GeneratedField::Nullable),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -15793,6 +15816,7 @@ impl<'de> serde::Deserialize<'de> for PhysicalScalarUdfNode {
                 let mut args__ = None;
                 let mut fun_definition__ = None;
                 let mut return_type__ = None;
+                let mut nullable__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::Name => {
@@ -15821,6 +15845,12 @@ impl<'de> serde::Deserialize<'de> for PhysicalScalarUdfNode {
                             }
                             return_type__ = map_.next_value()?;
                         }
+                        GeneratedField::Nullable => {
+                            if nullable__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("nullable"));
+                            }
+                            nullable__ = Some(map_.next_value()?);
+                        }
                     }
                 }
                 Ok(PhysicalScalarUdfNode {
@@ -15828,6 +15858,7 @@ impl<'de> serde::Deserialize<'de> for PhysicalScalarUdfNode {
                     args: args__.unwrap_or_default(),
                     fun_definition: fun_definition__,
                     return_type: return_type__,
+                    nullable: nullable__.unwrap_or_default(),
                 })
             }
         }
@@ -20139,6 +20170,97 @@ impl<'de> serde::Deserialize<'de> for UnionNode {
             }
         }
         deserializer.deserialize_struct("datafusion.UnionNode", FIELDS, GeneratedVisitor)
+    }
+}
+impl serde::Serialize for UnknownColumn {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if !self.name.is_empty() {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("datafusion.UnknownColumn", len)?;
+        if !self.name.is_empty() {
+            struct_ser.serialize_field("name", &self.name)?;
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for UnknownColumn {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "name",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            Name,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "name" => Ok(GeneratedField::Name),
+                            _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = UnknownColumn;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct datafusion.UnknownColumn")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<UnknownColumn, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut name__ = None;
+                while let Some(k) = map_.next_key()? {
+                    match k {
+                        GeneratedField::Name => {
+                            if name__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("name"));
+                            }
+                            name__ = Some(map_.next_value()?);
+                        }
+                    }
+                }
+                Ok(UnknownColumn {
+                    name: name__.unwrap_or_default(),
+                })
+            }
+        }
+        deserializer.deserialize_struct("datafusion.UnknownColumn", FIELDS, GeneratedVisitor)
     }
 }
 impl serde::Serialize for Unnest {

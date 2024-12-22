@@ -17,6 +17,7 @@
 
 use arrow::array::{as_largestring_array, Array};
 use arrow::datatypes::DataType;
+use datafusion_expr::sort_properties::ExprProperties;
 use std::any::Any;
 use std::sync::{Arc, OnceLock};
 
@@ -265,18 +266,23 @@ impl ScalarUDFImpl for ConcatFunc {
     fn documentation(&self) -> Option<&Documentation> {
         Some(get_concat_doc())
     }
+
+    fn preserves_lex_ordering(&self, _inputs: &[ExprProperties]) -> Result<bool> {
+        Ok(true)
+    }
 }
 
 static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
 
 fn get_concat_doc() -> &'static Documentation {
     DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_STRING)
-            .with_description("Concatenates multiple strings together.")
-            .with_syntax_example("concat(str[, ..., str_n])")
-            .with_sql_example(
-                r#"```sql
+        Documentation::builder(
+            DOC_SECTION_STRING,
+            "Concatenates multiple strings together.",
+            "concat(str[, ..., str_n])",
+        )
+        .with_sql_example(
+            r#"```sql
 > select concat('data', 'f', 'us', 'ion');
 +-------------------------------------------------------+
 | concat(Utf8("data"),Utf8("f"),Utf8("us"),Utf8("ion")) |
@@ -284,11 +290,11 @@ fn get_concat_doc() -> &'static Documentation {
 | datafusion                                            |
 +-------------------------------------------------------+
 ```"#,
-            )
-            .with_standard_argument("str", Some("String"))
-            .with_argument("str_n", "Subsequent string expressions to concatenate.")
-            .with_related_udf("concat_ws")
-            .build()
+        )
+        .with_standard_argument("str", Some("String"))
+        .with_argument("str_n", "Subsequent string expressions to concatenate.")
+        .with_related_udf("concat_ws")
+        .build()
     })
 }
 
@@ -387,7 +393,7 @@ mod tests {
     fn test_functions() -> Result<()> {
         test_function!(
             ConcatFunc::new(),
-            &[
+            vec![
                 ColumnarValue::Scalar(ScalarValue::from("aa")),
                 ColumnarValue::Scalar(ScalarValue::from("bb")),
                 ColumnarValue::Scalar(ScalarValue::from("cc")),
@@ -399,7 +405,7 @@ mod tests {
         );
         test_function!(
             ConcatFunc::new(),
-            &[
+            vec![
                 ColumnarValue::Scalar(ScalarValue::from("aa")),
                 ColumnarValue::Scalar(ScalarValue::Utf8(None)),
                 ColumnarValue::Scalar(ScalarValue::from("cc")),
@@ -411,7 +417,7 @@ mod tests {
         );
         test_function!(
             ConcatFunc::new(),
-            &[ColumnarValue::Scalar(ScalarValue::Utf8(None))],
+            vec![ColumnarValue::Scalar(ScalarValue::Utf8(None))],
             Ok(Some("")),
             &str,
             Utf8,
@@ -419,7 +425,7 @@ mod tests {
         );
         test_function!(
             ConcatFunc::new(),
-            &[
+            vec![
                 ColumnarValue::Scalar(ScalarValue::from("aa")),
                 ColumnarValue::Scalar(ScalarValue::Utf8View(None)),
                 ColumnarValue::Scalar(ScalarValue::LargeUtf8(None)),
@@ -432,7 +438,7 @@ mod tests {
         );
         test_function!(
             ConcatFunc::new(),
-            &[
+            vec![
                 ColumnarValue::Scalar(ScalarValue::from("aa")),
                 ColumnarValue::Scalar(ScalarValue::LargeUtf8(None)),
                 ColumnarValue::Scalar(ScalarValue::from("cc")),
@@ -444,7 +450,7 @@ mod tests {
         );
         test_function!(
             ConcatFunc::new(),
-            &[
+            vec![
                 ColumnarValue::Scalar(ScalarValue::Utf8View(Some("aa".to_string()))),
                 ColumnarValue::Scalar(ScalarValue::Utf8(Some("cc".to_string()))),
             ],

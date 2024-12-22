@@ -200,10 +200,10 @@ impl<T: ArrowPrimitiveType, const NULLABLE: bool> GroupColumn
 
         let first_n_nulls = if NULLABLE { self.nulls.take_n(n) } else { None };
 
-        Arc::new(PrimitiveArray::<T>::new(
-            ScalarBuffer::from(first_n),
-            first_n_nulls,
-        ))
+        Arc::new(
+            PrimitiveArray::<T>::new(ScalarBuffer::from(first_n), first_n_nulls)
+                .with_data_type(self.data_type.clone()),
+        )
     }
 }
 
