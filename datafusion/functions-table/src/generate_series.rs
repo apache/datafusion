@@ -30,20 +30,23 @@ use parking_lot::RwLock;
 use std::fmt;
 use std::sync::Arc;
 
+/// Indicates the arguments used for generating a series.
 #[derive(Debug, Clone)]
 enum GenSeriesArgs {
+    /// ContainsNull signifies that at least one argument(start, end, step) was null, thus no series will be generated.
     ContainsNull,
+    /// AllNotNullArgs holds the start, end, and step values for generating the series when all arguments are not null.
     AllNotNullArgs { start: i64, end: i64, step: i64 },
 }
 
-/// Table that generates a series of integers from `start`(inclusive) to `end`(inclusive)
+/// Table that generates a series of integers from `start`(inclusive) to `end`(inclusive), incrementing by step
 #[derive(Debug, Clone)]
 struct GenerateSeriesTable {
     schema: SchemaRef,
     args: GenSeriesArgs,
 }
 
-/// Table state that generates a series of integers from `start`(inclusive) to `end`(inclusive)
+/// Table state that generates a series of integers from `start`(inclusive) to `end`(inclusive), incrementing by step
 #[derive(Debug, Clone)]
 struct GenerateSeriesState {
     schema: SchemaRef,
