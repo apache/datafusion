@@ -1326,7 +1326,7 @@ pub async fn from_read_rel(
             .build()?
         };
 
-        ensure_schema_compatability(plan.schema(), schema.clone())?;
+        ensure_schema_compatibility(plan.schema(), schema.clone())?;
 
         let schema = apply_masking(schema, projection)?;
 

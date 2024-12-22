@@ -58,7 +58,7 @@ pub enum JoinType {
     /// Returns one record for each record from the left input. The output contains an additional
     /// column "mark" which is true if there is at least one match in the right input where the
     /// join condition evaluates to true. Otherwise, the mark column is false. For more details see
-    /// [1]. This join type is used to decorate EXISTS subqueries used inside disjunctive
+    /// [1]. This join type is used to decorrelate EXISTS subqueries used inside disjunctive
     /// predicates.
     ///
     /// Note: This we currently do not implement the full null semantics for the mark join described
