@@ -198,7 +198,7 @@ impl JoinLeftData {
 ///
 ///  Original build-side data   Inserting build-side values into hashmap    Concatenated build-side batch
 ///                                                                         ┌───────────────────────────┐
-///                             hashmap.insert(row-hash, row-idx + offset)   │                      idx  │
+///                             hashmap.insert(row-hash, row-idx + offset)  │                      idx  │
 ///            ┌───────┐                                                    │          ┌───────┐        │
 ///            │ Row 1 │        1) update_hash for batch 3 with offset 0    │          │ Row 6 │    0   │
 ///   Batch 1  │       │           - hashmap.insert(Row 7, idx 1)           │ Batch 3  │       │        │
