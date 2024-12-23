@@ -132,7 +132,7 @@ impl Unparser<'_> {
         node: &dyn UserDefinedLogicalNode,
     ) -> Result<ast::Statement> {
         let mut statement = None;
-        for unparser in &self.udlp_unparsers {
+        for unparser in &self.extension_unparsers {
             statement = unparser.unparse_to_statement(node, self)?;
         }
         if let Some(statement) = statement {
@@ -152,7 +152,7 @@ impl Unparser<'_> {
         select: &mut Option<&mut SelectBuilder>,
         relation: &mut Option<&mut RelationBuilder>,
     ) -> Result<()> {
-        for unparser in &self.udlp_unparsers {
+        for unparser in &self.extension_unparsers {
             unparser.unparse(node, self, query, select, relation)?;
         }
         Ok(())

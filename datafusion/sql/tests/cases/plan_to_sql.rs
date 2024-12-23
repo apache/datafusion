@@ -50,7 +50,7 @@ use datafusion_functions_nested::planner::{FieldAccessPlanner, NestedFunctionPla
 use datafusion_sql::unparser::ast::{
     DerivedRelationBuilder, QueryBuilder, RelationBuilder, SelectBuilder,
 };
-use datafusion_sql::unparser::udlp_unparser::UserDefinedLogicalNodeUnparser;
+use datafusion_sql::unparser::extension_unparser::UserDefinedLogicalNodeUnparser;
 use sqlparser::dialect::{Dialect, GenericDialect, MySqlDialect};
 use sqlparser::parser::Parser;
 
@@ -1470,7 +1470,7 @@ impl UserDefinedLogicalNodeUnparser for MockStatementUnparser {
 }
 
 #[test]
-fn test_unparse_udlp_to_statement() -> Result<()> {
+fn test_unparse_extension_to_statement() -> Result<()> {
     let dialect = GenericDialect {};
     let statement = Parser::new(&dialect)
         .try_with_sql("SELECT * FROM j1")?
@@ -1480,12 +1480,12 @@ fn test_unparse_udlp_to_statement() -> Result<()> {
     let sql_to_rel = SqlToRel::new(&context);
     let plan = sql_to_rel.sql_statement_to_plan(statement)?;
 
-    let udlp = MockUserDefinedLogicalPlan { input: plan };
+    let extension = MockUserDefinedLogicalPlan { input: plan };
     let extension = LogicalPlan::Extension(Extension {
-        node: Arc::new(udlp),
+        node: Arc::new(extension),
     });
     let unparser =
-        Unparser::default().with_udlp_unparsers(vec![Arc::new(MockStatementUnparser {})]);
+        Unparser::default().with_extension_unparsers(vec![Arc::new(MockStatementUnparser {})]);
     let sql = unparser.plan_to_sql(&extension)?;
     let expected = "SELECT * FROM j1";
     assert_eq!(sql.to_string(), expected);
@@ -1527,7 +1527,7 @@ impl UserDefinedLogicalNodeUnparser for MockSqlUnparser {
 }
 
 #[test]
-fn test_unparse_udlp_to_sql() -> Result<()> {
+fn test_unparse_extension_to_sql() -> Result<()> {
     let dialect = GenericDialect {};
     let statement = Parser::new(&dialect)
         .try_with_sql("SELECT * FROM j1")?
@@ -1537,16 +1537,16 @@ fn test_unparse_udlp_to_sql() -> Result<()> {
     let sql_to_rel = SqlToRel::new(&context);
     let plan = sql_to_rel.sql_statement_to_plan(statement)?;
 
-    let udlp = MockUserDefinedLogicalPlan { input: plan };
+    let extension = MockUserDefinedLogicalPlan { input: plan };
     let extension = LogicalPlan::Extension(Extension {
-        node: Arc::new(udlp),
+        node: Arc::new(extension),
     });
 
     let plan = LogicalPlanBuilder::from(extension)
         .project(vec![col("j1_id").alias("user_id")])?
         .build()?;
     let unparser =
-        Unparser::default().with_udlp_unparsers(vec![Arc::new(MockSqlUnparser {})]);
+        Unparser::default().with_extension_unparsers(vec![Arc::new(MockSqlUnparser {})]);
     let sql = unparser.plan_to_sql(&plan)?;
     let expected = "SELECT j1.j1_id AS user_id FROM (SELECT * FROM j1)";
     assert_eq!(sql.to_string(), expected);

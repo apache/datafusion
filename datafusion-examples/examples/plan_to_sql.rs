@@ -28,7 +28,7 @@ use datafusion_sql::unparser::ast::{
     DerivedRelationBuilder, QueryBuilder, RelationBuilder, SelectBuilder,
 };
 use datafusion_sql::unparser::dialect::CustomDialectBuilder;
-use datafusion_sql::unparser::udlp_unparser::UserDefinedLogicalNodeUnparser;
+use datafusion_sql::unparser::extension_unparser::UserDefinedLogicalNodeUnparser;
 use datafusion_sql::unparser::{plan_to_sql, Unparser};
 use std::fmt;
 use std::sync::Arc;
@@ -242,7 +242,7 @@ async fn unparse_my_logical_plan_as_statement() -> Result<()> {
 
     let my_plan = LogicalPlan::Extension(Extension { node });
     let unparser =
-        Unparser::default().with_udlp_unparsers(vec![Arc::new(PlanToStatement {})]);
+        Unparser::default().with_extension_unparsers(vec![Arc::new(PlanToStatement {})]);
     let sql = unparser.plan_to_sql(&my_plan)?.to_string();
     assert_eq!(
         sql,
@@ -301,7 +301,7 @@ async fn unparse_my_logical_plan_as_subquery() -> Result<()> {
         ])?
         .build()?;
     let unparser =
-        Unparser::default().with_udlp_unparsers(vec![Arc::new(PlanToSubquery {})]);
+        Unparser::default().with_extension_unparsers(vec![Arc::new(PlanToSubquery {})]);
     let sql = unparser.plan_to_sql(&plan)?.to_string();
     assert_eq!(
         sql,

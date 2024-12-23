@@ -24,12 +24,12 @@ mod rewrite;
 mod utils;
 
 use self::dialect::{DefaultDialect, Dialect};
-use crate::unparser::udlp_unparser::UserDefinedLogicalNodeUnparser;
+use crate::unparser::extension_unparser::UserDefinedLogicalNodeUnparser;
 pub use expr::expr_to_sql;
 pub use plan::plan_to_sql;
 use std::sync::Arc;
 pub mod dialect;
-pub mod udlp_unparser;
+pub mod extension_unparser;
 
 /// Convert a DataFusion [`Expr`] to [`sqlparser::ast::Expr`]
 ///
@@ -57,7 +57,7 @@ pub mod udlp_unparser;
 pub struct Unparser<'a> {
     dialect: &'a dyn Dialect,
     pretty: bool,
-    udlp_unparsers: Vec<Arc<dyn UserDefinedLogicalNodeUnparser>>,
+    extension_unparsers: Vec<Arc<dyn UserDefinedLogicalNodeUnparser>>,
 }
 
 impl<'a> Unparser<'a> {
@@ -65,7 +65,7 @@ impl<'a> Unparser<'a> {
         Self {
             dialect,
             pretty: false,
-            udlp_unparsers: vec![],
+            extension_unparsers: vec![],
         }
     }
 
@@ -121,11 +121,11 @@ impl<'a> Unparser<'a> {
     ///     If multiple child unparsers return a non-None value, the last unparsing result will be returned.
     /// - `extension_to_sql`: This method is called when the custom logical node is part of a statement.
     ///    If multiple child unparsers are registered for the same custom logical node, all of them will be called in order.
-    pub fn with_udlp_unparsers(
+    pub fn with_extension_unparsers(
         mut self,
-        udlp_unparsers: Vec<Arc<dyn UserDefinedLogicalNodeUnparser>>,
+        extension_unparsers: Vec<Arc<dyn UserDefinedLogicalNodeUnparser>>,
     ) -> Self {
-        self.udlp_unparsers = udlp_unparsers;
+        self.extension_unparsers = extension_unparsers;
         self
     }
 }
@@ -135,7 +135,7 @@ impl Default for Unparser<'_> {
         Self {
             dialect: &DefaultDialect {},
             pretty: false,
-            udlp_unparsers: vec![],
+            extension_unparsers: vec![],
         }
     }
 }
