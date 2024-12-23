@@ -36,7 +36,9 @@ use crate::{
 
 use arrow_schema::{SchemaRef, SortOptions};
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
-use datafusion_common::{internal_err, plan_err, JoinSide, JoinType, Result};
+use datafusion_common::{
+    internal_err, plan_err, JoinSide, JoinType, Result, ScalarValue,
+};
 use datafusion_expr::interval_arithmetic::Interval;
 use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
 use datafusion_physical_expr_common::utils::ExprPropertiesNode;
@@ -1086,6 +1088,40 @@ impl EquivalenceProperties {
         let normalized_constants = self.eq_group.normalize_exprs(const_exprs);
         let normalized_expr = self.eq_group.normalize_expr(Arc::clone(expr));
         is_constant_recurse(&normalized_constants, &normalized_expr)
+    }
+
+    /// Returns the constant value of the given expression if it is known to be constant.
+    ///
+    /// This function first normalizes the expression using the equivalence group, then:
+    /// - If the normalized expression is a literal, returns its value
+    /// - If the normalized expression matches a known constant expression, returns its value
+    /// - Otherwise returns None
+    ///
+    /// # Arguments
+    ///
+    /// - `expr`: A reference to a `Arc<dyn PhysicalExpr>` representing the expression
+    ///   to check for a constant value.
+    ///
+    /// # Returns
+    ///
+    /// Returns `Some(ScalarValue)` if the expression is known to have a constant value,
+    /// `None` otherwise.
+    pub fn get_expr_constant_value(
+        &self,
+        expr: &Arc<dyn PhysicalExpr>,
+    ) -> Option<ScalarValue> {
+        let normalized_expr = self.eq_group.normalize_expr(Arc::clone(expr));
+
+        if let Some(lit) = normalized_expr.as_any().downcast_ref::<Literal>() {
+            return Some(lit.value().clone());
+        }
+
+        for const_expr in self.constants.iter() {
+            if normalized_expr.eq(const_expr.expr()) {
+                return const_expr.value().cloned();
+            }
+        }
+        None
     }
 
     /// Retrieves the properties for a given physical expression.
