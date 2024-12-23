@@ -4136,6 +4136,11 @@ mod tests {
         let df = ctx.sql("SELECT * FROM data").await?;
         let results = df.collect().await?;
 
+        let df_explain = ctx.sql("explain SELECT a FROM data").await?;
+        let explain_result = df_explain.collect().await?;
+
+        println!("explain_result {:?}", explain_result);
+
         assert_batches_eq!(
             &[
                 "+---+---+",
@@ -4263,6 +4268,60 @@ mod tests {
                 "| 5 | 3 |",
                 "| 7 | 4 |",
                 "+---+---+",
+            ],
+            &results
+        );
+        Ok(())
+    }
+
+    // Test issue: https://github.com/apache/datafusion/issues/13873
+    #[tokio::test]
+    async fn write_table_with_order() -> Result<()> {
+        let tmp_dir = TempDir::new()?;
+        let ctx = SessionContext::new();
+        let location = tmp_dir.path().join("test_table/");
+
+        let mut write_df = ctx
+            .sql("values ('z'), ('x'), ('a'), ('b'), ('c')")
+            .await
+            .unwrap();
+
+        // Ensure the column names and types match the target table
+        write_df = write_df
+            .with_column_renamed("column1", "tablecol1")
+            .unwrap();
+        let sql_str =
+            "create external table data(tablecol1 varchar) stored as parquet location '"
+                .to_owned()
+                + location.to_str().unwrap()
+                + "'";
+
+        ctx.sql(sql_str.as_str()).await?.collect().await?;
+
+        // This is equivalent to INSERT INTO test.
+        write_df
+            .clone()
+            .write_table(
+                "data",
+                DataFrameWriteOptions::new()
+                    .with_sort_by(vec![col("tablecol1").sort(true, true)]),
+            )
+            .await?;
+
+        let df = ctx.sql("SELECT * FROM data").await?;
+        let results = df.collect().await?;
+
+        assert_batches_eq!(
+            &[
+                "+-----------+",
+                "| tablecol1 |",
+                "+-----------+",
+                "| a         |",
+                "| b         |",
+                "| c         |",
+                "| x         |",
+                "| z         |",
+                "+-----------+",
             ],
             &results
         );
