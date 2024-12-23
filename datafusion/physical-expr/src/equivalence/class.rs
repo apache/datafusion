@@ -55,6 +55,18 @@ use indexmap::{IndexMap, IndexSet};
 /// // create a constant expression from a physical expression
 /// let const_expr = ConstExpr::from(col);
 /// ```
+// TODO: Consider refactoring the `across_partitions` and `value` fields into an enum:
+//
+// ```
+// enum PartitionValues {
+//     Uniform(Option<ScalarValue>),           // Same value across all partitions
+//     Heterogeneous(Vec<Option<ScalarValue>>) // Different values per partition
+// }
+// ```
+//
+// This would provide a more type-safe representation of partition values.
+// Note: This is a breaking change for the equivalence API and should be
+// addressed in a separate issue/PR.
 #[derive(Debug, Clone)]
 pub struct ConstExpr {
     /// The  expression that is known to be constant (e.g. a `Column`)
