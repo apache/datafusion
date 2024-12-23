@@ -15,18 +15,16 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::collections::BTreeSet;
-
 use datafusion_common::{
     plan_err,
     tree_node::{TreeNode, TreeNodeRecursion},
-    Column, DFSchema, DFSchemaRef, DataFusionError, Result,
+    DFSchemaRef, DataFusionError, Result,
 };
 
 use crate::{
     expr::{Exists, InSubquery},
     expr_rewriter::strip_outer_reference,
-    utils::split_conjunction,
+    utils::{collect_subquery_cols, split_conjunction},
     Aggregate, Expr, Filter, Join, JoinType, LogicalPlan, Window,
 };
 
@@ -379,23 +377,6 @@ fn check_mixed_out_refer_in_window(window: &Window) -> Result<()> {
     } else {
         Ok(())
     }
-}
-
-fn collect_subquery_cols(
-    exprs: &[Expr],
-    subquery_schema: &DFSchema,
-) -> Result<BTreeSet<Column>> {
-    exprs.iter().try_fold(BTreeSet::new(), |mut cols, expr| {
-        let mut using_cols: Vec<Column> = vec![];
-        for col in expr.column_refs().into_iter() {
-            if subquery_schema.has_column(col) {
-                using_cols.push(col.clone());
-            }
-        }
-
-        cols.extend(using_cols);
-        Result::<_>::Ok(cols)
-    })
 }
 
 #[cfg(test)]

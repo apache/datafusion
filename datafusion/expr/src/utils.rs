@@ -18,7 +18,7 @@
 //! Expression utilities
 
 use std::cmp::Ordering;
-use std::collections::HashSet;
+use std::collections::{BTreeSet, HashSet};
 use std::ops::Deref;
 use std::sync::Arc;
 
@@ -1400,6 +1400,24 @@ pub fn merge_schema(inputs: &[&LogicalPlan]) -> DFSchema {
 /// Build state name. State is the intermediate state of the aggregate function.
 pub fn format_state_name(name: &str, state_name: &str) -> String {
     format!("{name}[{state_name}]")
+}
+
+/// Determine the set of [`Column`]s produced by the subquery.
+pub fn collect_subquery_cols(
+    exprs: &[Expr],
+    subquery_schema: &DFSchema,
+) -> Result<BTreeSet<Column>> {
+    exprs.iter().try_fold(BTreeSet::new(), |mut cols, expr| {
+        let mut using_cols: Vec<Column> = vec![];
+        for col in expr.column_refs().into_iter() {
+            if subquery_schema.has_column(col) {
+                using_cols.push(col.clone());
+            }
+        }
+
+        cols.extend(using_cols);
+        Result::<_>::Ok(cols)
+    })
 }
 
 #[cfg(test)]
