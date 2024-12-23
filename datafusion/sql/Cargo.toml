@@ -36,19 +36,21 @@ name = "datafusion_sql"
 path = "src/lib.rs"
 
 [features]
-default = ["unicode_expressions", "unparser"]
+default = ["unicode_expressions", "unparser", "recursive-protection"]
 unicode_expressions = []
 unparser = []
+recursive-protection = ["dep:recursive"]
 
 [dependencies]
 arrow = { workspace = true }
 arrow-array = { workspace = true }
 arrow-schema = { workspace = true }
+bigdecimal = { workspace = true }
 datafusion-common = { workspace = true, default-features = true }
 datafusion-expr = { workspace = true }
 indexmap = { workspace = true }
 log = { workspace = true }
-recursive = { workspace = true }
+recursive = { workspace = true, optional = true }
 regex = { workspace = true }
 sqlparser = { workspace = true }
 

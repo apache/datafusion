@@ -549,6 +549,7 @@ trunc(numeric_expression[, decimal_places])
 - [coalesce](#coalesce)
 - [greatest](#greatest)
 - [ifnull](#ifnull)
+- [least](#least)
 - [nullif](#nullif)
 - [nvl](#nvl)
 - [nvl2](#nvl2)
@@ -602,6 +603,29 @@ greatest(expression1[, ..., expression_n])
 ### `ifnull`
 
 _Alias of [nvl](#nvl)._
+
+### `least`
+
+Returns the smallest value in a list of expressions. Returns _null_ if all expressions are _null_.
+
+```
+least(expression1[, ..., expression_n])
+```
+
+#### Arguments
+
+- **expression1, expression_n**: Expressions to compare and return the smallest value. Can be a constant, column, or function, and any combination of arithmetic operators. Pass as many expression arguments as necessary.
+
+#### Example
+
+```sql
+> select least(4, 7, 5);
++---------------------------+
+| least(4,7,5)              |
++---------------------------+
+| 4                         |
++---------------------------+
+```
 
 ### `nullif`
 
@@ -1046,9 +1070,7 @@ find_in_set(str, strlist)
 
 ### `initcap`
 
-Capitalizes the first character in each word in the ASCII input string. Words are delimited by non-alphanumeric characters.
-
-Note this function does not support UTF-8 characters.
+Capitalizes the first character in each word in the input string. Words are delimited by non-alphanumeric characters.
 
 ```
 initcap(str)

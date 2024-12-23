@@ -503,34 +503,42 @@ impl PhysicalExpr for BinaryExpr {
             Operator::Plus => Ok(ExprProperties {
                 sort_properties: l_order.add(&r_order),
                 range: l_range.add(r_range)?,
+                preserves_lex_ordering: false,
             }),
             Operator::Minus => Ok(ExprProperties {
                 sort_properties: l_order.sub(&r_order),
                 range: l_range.sub(r_range)?,
+                preserves_lex_ordering: false,
             }),
             Operator::Gt => Ok(ExprProperties {
                 sort_properties: l_order.gt_or_gteq(&r_order),
                 range: l_range.gt(r_range)?,
+                preserves_lex_ordering: false,
             }),
             Operator::GtEq => Ok(ExprProperties {
                 sort_properties: l_order.gt_or_gteq(&r_order),
                 range: l_range.gt_eq(r_range)?,
+                preserves_lex_ordering: false,
             }),
             Operator::Lt => Ok(ExprProperties {
                 sort_properties: r_order.gt_or_gteq(&l_order),
                 range: l_range.lt(r_range)?,
+                preserves_lex_ordering: false,
             }),
             Operator::LtEq => Ok(ExprProperties {
                 sort_properties: r_order.gt_or_gteq(&l_order),
                 range: l_range.lt_eq(r_range)?,
+                preserves_lex_ordering: false,
             }),
             Operator::And => Ok(ExprProperties {
                 sort_properties: r_order.and_or(&l_order),
                 range: l_range.and(r_range)?,
+                preserves_lex_ordering: false,
             }),
             Operator::Or => Ok(ExprProperties {
                 sort_properties: r_order.and_or(&l_order),
                 range: l_range.or(r_range)?,
+                preserves_lex_ordering: false,
             }),
             _ => Ok(ExprProperties::new_unknown()),
         }

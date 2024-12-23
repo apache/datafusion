@@ -75,6 +75,16 @@ fn criterion_benchmark(c: &mut Criterion) {
             )
         })
     });
+
+    group.bench_function("null regex override", |b| {
+        b.iter(|| {
+            load_csv(
+                ctx.clone(),
+                test_file.path().to_str().unwrap(),
+                CsvReadOptions::default().null_regex(Some("^NULL$|^$".to_string())),
+            )
+        })
+    });
 }
 
 criterion_group!(benches, criterion_benchmark);

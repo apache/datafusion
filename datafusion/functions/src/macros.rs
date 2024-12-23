@@ -109,21 +109,34 @@ macro_rules! make_stub_package {
     };
 }
 
-/// Downcast an argument to a specific array type, returning an internal error
+/// Downcast a named argument to a specific array type, returning an internal error
 /// if the cast fails
 ///
 /// $ARG: ArrayRef
 /// $NAME: name of the argument (for error messages)
 /// $ARRAY_TYPE: the type of array to cast the argument to
-macro_rules! downcast_arg {
+#[macro_export]
+macro_rules! downcast_named_arg {
     ($ARG:expr, $NAME:expr, $ARRAY_TYPE:ident) => {{
         $ARG.as_any().downcast_ref::<$ARRAY_TYPE>().ok_or_else(|| {
-            DataFusionError::Internal(format!(
+            internal_datafusion_err!(
                 "could not cast {} to {}",
                 $NAME,
                 std::any::type_name::<$ARRAY_TYPE>()
-            ))
+            )
         })?
+    }};
+}
+
+/// Downcast an argument to a specific array type, returning an internal error
+/// if the cast fails
+///
+/// $ARG: ArrayRef
+/// $ARRAY_TYPE: the type of array to cast the argument to
+#[macro_export]
+macro_rules! downcast_arg {
+    ($ARG:expr, $ARRAY_TYPE:ident) => {{
+        downcast_named_arg!($ARG, "", $ARRAY_TYPE)
     }};
 }
 

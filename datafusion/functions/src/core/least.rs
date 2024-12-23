@@ -30,25 +30,25 @@ use std::any::Any;
 use std::sync::OnceLock;
 
 const SORT_OPTIONS: SortOptions = SortOptions {
-    // We want greatest first
+    // Having the smallest result first
     descending: false,
 
-    // NULL will be less than any other value
-    nulls_first: true,
+    // NULL will be greater than any other value
+    nulls_first: false,
 };
 
 #[derive(Debug)]
-pub struct GreatestFunc {
+pub struct LeastFunc {
     signature: Signature,
 }
 
-impl Default for GreatestFunc {
+impl Default for LeastFunc {
     fn default() -> Self {
-        GreatestFunc::new()
+        LeastFunc::new()
     }
 }
 
-impl GreatestFunc {
+impl LeastFunc {
     pub fn new() -> Self {
         Self {
             signature: Signature::user_defined(Volatility::Immutable),
@@ -56,67 +56,80 @@ impl GreatestFunc {
     }
 }
 
-impl GreatestLeastOperator for GreatestFunc {
-    const NAME: &'static str = "greatest";
+impl GreatestLeastOperator for LeastFunc {
+    const NAME: &'static str = "least";
 
     fn keep_scalar<'a>(
         lhs: &'a ScalarValue,
         rhs: &'a ScalarValue,
     ) -> Result<&'a ScalarValue> {
-        if !lhs.data_type().is_nested() {
-            return if lhs >= rhs { Ok(lhs) } else { Ok(rhs) };
+        // Manual checking for nulls as:
+        // 1. If we're going to use <=, in Rust None is smaller than Some(T), which we don't want
+        // 2. And we can't use make_comparator as it has no natural order (Arrow error)
+        if lhs.is_null() {
+            return Ok(rhs);
         }
 
-        // If complex type we can't compare directly as we want null values to be smaller
+        if rhs.is_null() {
+            return Ok(lhs);
+        }
+
+        if !lhs.data_type().is_nested() {
+            return if lhs <= rhs { Ok(lhs) } else { Ok(rhs) };
+        }
+
+        // Not using <= as in Rust None is smaller than Some(T)
+
+        // If complex type we can't compare directly as we want null values to be larger
         let cmp = make_comparator(
             lhs.to_array()?.as_ref(),
             rhs.to_array()?.as_ref(),
             SORT_OPTIONS,
         )?;
 
-        if cmp(0, 0).is_ge() {
+        if cmp(0, 0).is_le() {
             Ok(lhs)
         } else {
             Ok(rhs)
         }
     }
 
-    /// Return boolean array where `arr[i] = lhs[i] >= rhs[i]` for all i, where `arr` is the result array
-    /// Nulls are always considered smaller than any other value
+    /// Return boolean array where `arr[i] = lhs[i] <= rhs[i]` for all i, where `arr` is the result array
+    /// Nulls are always considered larger than any other value
     fn get_indexes_to_keep(lhs: &dyn Array, rhs: &dyn Array) -> Result<BooleanArray> {
         // Fast path:
         // If both arrays are not nested, have the same length and no nulls, we can use the faster vectorised kernel
         // - If both arrays are not nested: Nested types, such as lists, are not supported as the null semantics are not well-defined.
-        // - both array does not have any nulls: cmp::gt_eq will return null if any of the input is null while we want to return false in that case
+        // - both array does not have any nulls: cmp::lt_eq will return null if any of the input is null while we want to return false in that case
         if !lhs.data_type().is_nested()
             && lhs.logical_null_count() == 0
             && rhs.logical_null_count() == 0
         {
-            return cmp::gt_eq(&lhs, &rhs).map_err(|e| e.into());
+            return cmp::lt_eq(&lhs, &rhs).map_err(|e| e.into());
         }
 
         let cmp = make_comparator(lhs, rhs, SORT_OPTIONS)?;
 
         if lhs.len() != rhs.len() {
             return internal_err!(
-                "All arrays should have the same length for greatest comparison"
+                "All arrays should have the same length for least comparison"
             );
         }
 
-        let values = BooleanBuffer::collect_bool(lhs.len(), |i| cmp(i, i).is_ge());
+        let values = BooleanBuffer::collect_bool(lhs.len(), |i| cmp(i, i).is_le());
 
-        // No nulls as we only want to keep the values that are larger, its either true or false
+        // No nulls as we only want to keep the values that are smaller, its either true or false
         Ok(BooleanArray::new(values, None))
     }
 }
 
-impl ScalarUDFImpl for GreatestFunc {
+impl ScalarUDFImpl for LeastFunc {
     fn as_any(&self) -> &dyn Any {
         self
     }
 
     fn name(&self) -> &str {
-        "greatest"
+        "least"
     }
 
     fn signature(&self) -> &Signature {
@@ -139,29 +152,29 @@ impl ScalarUDFImpl for GreatestFunc {
     }
 
     fn documentation(&self) -> Option<&Documentation> {
-        Some(get_greatest_doc())
+        Some(get_smallest_doc())
     }
 }
 static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
 
-fn get_greatest_doc() -> &'static Documentation {
+fn get_smallest_doc() -> &'static Documentation {
     DOCUMENTATION.get_or_init(|| {
         Documentation::builder(
             DOC_SECTION_CONDITIONAL,
-            "Returns the greatest value in a list of expressions. Returns _null_ if all expressions are _null_.",
-            "greatest(expression1[, ..., expression_n])")
+            "Returns the smallest value in a list of expressions. Returns _null_ if all expressions are _null_.",
+            "least(expression1[, ..., expression_n])")
             .with_sql_example(r#"```sql
-> select greatest(4, 7, 5);
+> select least(4, 7, 5);
 +---------------------------+
-| greatest(4,7,5)           |
+| least(4,7,5)              |
 +---------------------------+
-| 7                         |
+| 4                         |
 +---------------------------+
 ```"#,
             )
             .with_argument(
                 "expression1, expression_n",
-                "Expressions to compare and return the greatest value.. Can be a constant, column, or function, and any combination of arithmetic operators. Pass as many expression arguments as necessary."
+                "Expressions to compare and return the smallest value. Can be a constant, column, or function, and any combination of arithmetic operators. Pass as many expression arguments as necessary."
             )
             .build()
     })
@@ -169,14 +182,14 @@ fn get_greatest_doc() -> &'static Documentation {
 
 #[cfg(test)]
 mod test {
-    use crate::core;
+    use crate::core::least::LeastFunc;
     use arrow::datatypes::DataType;
     use datafusion_expr::ScalarUDFImpl;
 
     #[test]
-    fn test_greatest_return_types_without_common_supertype_in_arg_type() {
-        let greatest = core::greatest::GreatestFunc::new();
-        let return_type = greatest
+    fn test_least_return_types_without_common_supertype_in_arg_type() {
+        let least = LeastFunc::new();
+        let return_type = least
             .coerce_types(&[DataType::Decimal128(10, 3), DataType::Decimal128(10, 4)])
             .unwrap();
         assert_eq!(

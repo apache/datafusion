@@ -28,7 +28,8 @@ use datafusion_common::cast::{
 use datafusion_common::{exec_err, Result};
 use datafusion_expr::scalar_doc_sections::DOC_SECTION_ARRAY;
 use datafusion_expr::{
-    ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
+    ArrayFunctionSignature, ColumnarValue, Documentation, ScalarUDFImpl, Signature,
+    TypeSignature, Volatility,
 };
 use std::any::Any;
 use std::sync::{Arc, OnceLock};
@@ -56,7 +57,13 @@ impl Default for Flatten {
 impl Flatten {
     pub fn new() -> Self {
         Self {
-            signature: Signature::array(Volatility::Immutable),
+            signature: Signature {
+                // TODO (https://github.com/apache/datafusion/issues/13757) flatten should be single-step, not recursive
+                type_signature: TypeSignature::ArraySignature(
+                    ArrayFunctionSignature::RecursiveArray,
+                ),
+                volatility: Volatility::Immutable,
+            },
             aliases: vec![],
         }
     }
