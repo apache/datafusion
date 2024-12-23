@@ -18,7 +18,6 @@
 use crate::execution::context::SessionState;
 use datafusion_common::{DataFusionError, Result};
 use datafusion_execution::object_store::ObjectStoreUrl;
-use datafusion_optimizer::OptimizerConfig;
 use futures::stream::BoxStream;
 use futures::{StreamExt, TryStreamExt};
 use glob::Pattern;
@@ -234,7 +233,7 @@ impl ListingTableUrl {
         store: &'a dyn ObjectStore,
         file_extension: &'a str,
     ) -> Result<BoxStream<'a, Result<ObjectMeta>>> {
-        let exec_options = &ctx.options().execution;
+        let exec_options = &ctx.config_options().execution;
         let ignore_subdirectory = exec_options.listing_table_ignore_subdirectory;
         // If the prefix is a file, use a head request, otherwise list
         let list = match self.is_collection() {

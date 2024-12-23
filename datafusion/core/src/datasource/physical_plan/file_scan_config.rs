@@ -1121,7 +1121,7 @@ mod tests {
                             &expr,
                             &DFSchema::try_from(table_schema.as_ref().clone())?,
                             &ExecutionProps::default(),
-                            Arc::new(ConfigOptions::default()),
+                            &ConfigOptions::default(),
                         )
                     })
                     .collect::<Result<Vec<_>>>()?,

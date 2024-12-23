@@ -188,9 +188,9 @@ impl PruningStatistics for MyCatalog {
 fn create_pruning_predicate(expr: Expr, schema: &SchemaRef) -> PruningPredicate {
     let df_schema = DFSchema::try_from(schema.as_ref().clone()).unwrap();
     let props = ExecutionProps::new();
-    let config_options = Arc::new(ConfigOptions::default());
+    let config_options = ConfigOptions::default();
     let physical_expr =
-        create_physical_expr(&expr, &df_schema, &props, config_options).unwrap();
+        create_physical_expr(&expr, &df_schema, &props, &config_options).unwrap();
     PruningPredicate::try_new(physical_expr, schema.clone()).unwrap()
 }
 

@@ -17,7 +17,6 @@
 
 use crate::parquet::Unit::Page;
 use crate::parquet::{ContextWithParquet, Scenario};
-use std::sync::Arc;
 
 use datafusion::datasource::file_format::parquet::ParquetFormat;
 use datafusion::datasource::file_format::FileFormat;
@@ -70,13 +69,9 @@ async fn get_parquet_exec(state: &SessionState, filter: Expr) -> ParquetExec {
     let df_schema = schema.clone().to_dfschema().unwrap();
     let execution_props = state.execution_props();
     let config_options = state.config_options();
-    let predicate = create_physical_expr(
-        &filter,
-        &df_schema,
-        execution_props,
-        Arc::new(config_options.clone()),
-    )
-    .unwrap();
+    let predicate =
+        create_physical_expr(&filter, &df_schema, execution_props, config_options)
+            .unwrap();
 
     ParquetExec::builder(
         FileScanConfig::new(object_store_url, schema).with_file(partitioned_file),

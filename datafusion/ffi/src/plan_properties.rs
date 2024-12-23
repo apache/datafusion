@@ -208,7 +208,7 @@ impl TryFrom<FFI_PlanProperties> for PlanProperties {
                 Some(parse_physical_sort_exprs(
                     &proto_output_ordering.physical_sort_expr_nodes,
                     &default_ctx,
-                    Arc::new(default_ctx.state().config_options().clone()),
+                    default_ctx.state().config_options(),
                     &schema,
                     &codex,
                 )?)
@@ -225,7 +225,7 @@ impl TryFrom<FFI_PlanProperties> for PlanProperties {
                 parse_protobuf_partitioning(
                     Some(&proto_output_partitioning),
                     &default_ctx,
-                    Arc::new(default_ctx.state().config_options().clone()),
+                    default_ctx.state().config_options(),
                     &schema,
                     &codex,
                 )?

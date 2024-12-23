@@ -675,7 +675,7 @@ mod tests {
             &schema,
             &[],
             &DFSchema::empty(),
-            Arc::new(ConfigOptions::default()),
+            &ConfigOptions::default(),
         )?;
 
         let option_asc = SortOptions {

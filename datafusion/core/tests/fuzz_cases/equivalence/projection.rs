@@ -50,7 +50,7 @@ fn project_orderings_random() -> Result<()> {
             &test_schema,
             &[],
             &DFSchema::empty(),
-            Arc::new(ConfigOptions::default()),
+            &ConfigOptions::default(),
         )?;
         // a + b
         let a_plus_b = Arc::new(BinaryExpr::new(
@@ -129,7 +129,7 @@ fn ordering_satisfy_after_projection_random() -> Result<()> {
             &test_schema,
             &[],
             &DFSchema::empty(),
-            Arc::new(ConfigOptions::default()),
+            &ConfigOptions::default(),
         )?;
         // a + b
         let a_plus_b = Arc::new(BinaryExpr::new(

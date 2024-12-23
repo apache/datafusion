@@ -48,7 +48,7 @@ fn test_find_longest_permutation_random() -> Result<()> {
             &test_schema,
             &[],
             &DFSchema::empty(),
-            Arc::new(ConfigOptions::default()),
+            &ConfigOptions::default(),
         )?;
         let a_plus_b = Arc::new(BinaryExpr::new(
             col("a", &test_schema)?,

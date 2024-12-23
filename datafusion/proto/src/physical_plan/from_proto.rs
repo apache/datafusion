@@ -71,7 +71,7 @@ impl From<&protobuf::PhysicalColumn> for Column {
 pub fn parse_physical_sort_expr(
     proto: &protobuf::PhysicalSortExprNode,
     registry: &dyn FunctionRegistry,
-    config_options: Arc<ConfigOptions>,
+    config_options: &ConfigOptions,
     input_schema: &Schema,
     codec: &dyn PhysicalExtensionCodec,
 ) -> Result<PhysicalSortExpr> {
@@ -79,7 +79,7 @@ pub fn parse_physical_sort_expr(
         let expr = parse_physical_expr(
             expr.as_ref(),
             registry,
-            Arc::clone(&config_options),
+            config_options,
             input_schema,
             codec,
         )?;
@@ -105,7 +105,7 @@ pub fn parse_physical_sort_expr(
 pub fn parse_physical_sort_exprs(
     proto: &[protobuf::PhysicalSortExprNode],
     registry: &dyn FunctionRegistry,
-    config_options: Arc<ConfigOptions>,
+    config_options: &ConfigOptions,
     input_schema: &Schema,
     codec: &dyn PhysicalExtensionCodec,
 ) -> Result<LexOrdering> {
@@ -115,7 +115,7 @@ pub fn parse_physical_sort_exprs(
             parse_physical_sort_expr(
                 sort_expr,
                 registry,
-                Arc::clone(&config_options),
+                config_options,
                 input_schema,
                 codec,
             )
@@ -136,21 +136,16 @@ pub fn parse_physical_sort_exprs(
 pub fn parse_physical_window_expr(
     proto: &protobuf::PhysicalWindowExprNode,
     registry: &dyn FunctionRegistry,
-    config_options: Arc<ConfigOptions>,
+    config_options: &ConfigOptions,
     input_schema: &Schema,
     codec: &dyn PhysicalExtensionCodec,
 ) -> Result<Arc<dyn WindowExpr>> {
-    let window_node_expr = parse_physical_exprs(
-        &proto.args,
-        registry,
-        Arc::clone(&config_options),
-        input_schema,
-        codec,
-    )?;
+    let window_node_expr =
+        parse_physical_exprs(&proto.args, registry, config_options, input_schema, codec)?;
     let partition_by = parse_physical_exprs(
         &proto.partition_by,
         registry,
-        Arc::clone(&config_options),
+        config_options,
         input_schema,
         codec,
     )?;
@@ -158,7 +153,7 @@ pub fn parse_physical_window_expr(
     let order_by = parse_physical_sort_exprs(
         &proto.order_by,
         registry,
-        Arc::clone(&config_options),
+        config_options,
         input_schema,
         codec,
     )?;
@@ -213,7 +208,7 @@ pub fn parse_physical_window_expr(
 pub fn parse_physical_exprs<'a, I>(
     protos: I,
     registry: &dyn FunctionRegistry,
-    config_options: Arc<ConfigOptions>,
+    config_options: &ConfigOptions,
     input_schema: &Schema,
     codec: &dyn PhysicalExtensionCodec,
 ) -> Result<Vec<Arc<dyn PhysicalExpr>>>
@@ -222,15 +217,7 @@ where
 {
     protos
         .into_iter()
-        .map(|p| {
-            parse_physical_expr(
-                p,
-                registry,
-                Arc::clone(&config_options),
-                input_schema,
-                codec,
-            )
-        })
+        .map(|p| parse_physical_expr(p, registry, config_options, input_schema, codec))
         .collect::<Result<Vec<_>>>()
 }
 
@@ -246,7 +233,7 @@ where
 pub fn parse_physical_expr(
     proto: &protobuf::PhysicalExprNode,
     registry: &dyn FunctionRegistry,
-    config_options: Arc<ConfigOptions>,
+    config_options: &ConfigOptions,
     input_schema: &Schema,
     codec: &dyn PhysicalExtensionCodec,
 ) -> Result<Arc<dyn PhysicalExpr>> {
@@ -266,7 +253,7 @@ pub fn parse_physical_expr(
             parse_required_physical_expr(
                 binary_expr.l.as_deref(),
                 registry,
-                Arc::clone(&config_options),
+                config_options,
                 "left",
                 input_schema,
                 codec,
@@ -275,7 +262,7 @@ pub fn parse_physical_expr(
             parse_required_physical_expr(
                 binary_expr.r.as_deref(),
                 registry,
-                Arc::clone(&config_options),
+                config_options,
                 "right",
                 input_schema,
                 codec,
@@ -298,7 +285,7 @@ pub fn parse_physical_expr(
             Arc::new(IsNullExpr::new(parse_required_physical_expr(
                 e.expr.as_deref(),
                 registry,
-                Arc::clone(&config_options),
+                config_options,
                 "expr",
                 input_schema,
                 codec,
@@ -308,7 +295,7 @@ pub fn parse_physical_expr(
             Arc::new(IsNotNullExpr::new(parse_required_physical_expr(
                 e.expr.as_deref(),
                 registry,
-                Arc::clone(&config_options),
+                config_options,
                 "expr",
                 input_schema,
                 codec,
@@ -317,7 +304,7 @@ pub fn parse_physical_expr(
         ExprType::NotExpr(e) => Arc::new(NotExpr::new(parse_required_physical_expr(
             e.expr.as_deref(),
             registry,
-            Arc::clone(&config_options),
+            config_options,
             "expr",
             input_schema,
             codec,
@@ -326,7 +313,7 @@ pub fn parse_physical_expr(
             Arc::new(NegativeExpr::new(parse_required_physical_expr(
                 e.expr.as_deref(),
                 registry,
-                Arc::clone(&config_options),
+                config_options,
                 "expr",
                 input_schema,
                 codec,
@@ -336,18 +323,12 @@ pub fn parse_physical_expr(
             parse_required_physical_expr(
                 e.expr.as_deref(),
                 registry,
-                Arc::clone(&config_options),
+                config_options,
                 "expr",
                 input_schema,
                 codec,
             )?,
-            parse_physical_exprs(
-                &e.list,
-                registry,
-                Arc::clone(&config_options),
-                input_schema,
-                codec,
-            )?,
+            parse_physical_exprs(&e.list, registry, config_options, input_schema, codec)?,
             &e.negated,
             input_schema,
         )?,
@@ -358,7 +339,7 @@ pub fn parse_physical_expr(
                     parse_physical_expr(
                         e.as_ref(),
                         registry,
-                        Arc::clone(&config_options),
+                        config_options,
                         input_schema,
                         codec,
                     )
@@ -371,7 +352,7 @@ pub fn parse_physical_expr(
                         parse_required_physical_expr(
                             e.when_expr.as_ref(),
                             registry,
-                            Arc::clone(&config_options),
+                            config_options,
                             "when_expr",
                             input_schema,
                             codec,
@@ -379,7 +360,7 @@ pub fn parse_physical_expr(
                         parse_required_physical_expr(
                             e.then_expr.as_ref(),
                             registry,
-                            Arc::clone(&config_options),
+                            config_options,
                             "then_expr",
                             input_schema,
                             codec,
@@ -393,7 +374,7 @@ pub fn parse_physical_expr(
                     parse_physical_expr(
                         e.as_ref(),
                         registry,
-                        Arc::clone(&config_options),
+                        config_options,
                         input_schema,
                         codec,
                     )
@@ -404,7 +385,7 @@ pub fn parse_physical_expr(
             parse_required_physical_expr(
                 e.expr.as_deref(),
                 registry,
-                Arc::clone(&config_options),
+                config_options,
                 "expr",
                 input_schema,
                 codec,
@@ -416,7 +397,7 @@ pub fn parse_physical_expr(
             parse_required_physical_expr(
                 e.expr.as_deref(),
                 registry,
-                Arc::clone(&config_options),
+                config_options,
                 "expr",
                 input_schema,
                 codec,
@@ -433,7 +414,7 @@ pub fn parse_physical_expr(
             let args = parse_physical_exprs(
                 &e.args,
                 registry,
-                Arc::clone(&config_options),
+                config_options,
                 input_schema,
                 codec,
             )?;
@@ -444,7 +425,7 @@ pub fn parse_physical_expr(
                     scalar_fun_def,
                     args,
                     convert_required!(e.return_type)?,
-                    Arc::clone(&config_options),
+                    Arc::new(config_options.clone()),
                 )
                 .with_nullable(e.nullable),
             )
@@ -455,7 +436,7 @@ pub fn parse_physical_expr(
             parse_required_physical_expr(
                 like_expr.expr.as_deref(),
                 registry,
-                Arc::clone(&config_options),
+                config_options,
                 "expr",
                 input_schema,
                 codec,
@@ -463,7 +444,7 @@ pub fn parse_physical_expr(
             parse_required_physical_expr(
                 like_expr.pattern.as_deref(),
                 registry,
-                Arc::clone(&config_options),
+                config_options,
                 "pattern",
                 input_schema,
                 codec,
@@ -474,13 +455,7 @@ pub fn parse_physical_expr(
                 .inputs
                 .iter()
                 .map(|e| {
-                    parse_physical_expr(
-                        e,
-                        registry,
-                        Arc::clone(&config_options),
-                        input_schema,
-                        codec,
-                    )
+                    parse_physical_expr(e, registry, config_options, input_schema, codec)
                 })
                 .collect::<Result<_>>()?;
             (codec.try_decode_expr(extension.expr.as_slice(), &inputs)?) as _
@@ -493,28 +468,22 @@ pub fn parse_physical_expr(
 fn parse_required_physical_expr(
     expr: Option<&protobuf::PhysicalExprNode>,
     registry: &dyn FunctionRegistry,
-    config_options: Arc<ConfigOptions>,
+    config_options: &ConfigOptions,
     field: &str,
     input_schema: &Schema,
     codec: &dyn PhysicalExtensionCodec,
 ) -> Result<Arc<dyn PhysicalExpr>> {
-    expr.map(|e| {
-        parse_physical_expr(
-            e,
-            registry,
-            Arc::clone(&config_options),
-            input_schema,
-            codec,
-        )
-    })
-    .transpose()?
-    .ok_or_else(|| DataFusionError::Internal(format!("Missing required field {field:?}")))
+    expr.map(|e| parse_physical_expr(e, registry, config_options, input_schema, codec))
+        .transpose()?
+        .ok_or_else(|| {
+            DataFusionError::Internal(format!("Missing required field {field:?}"))
+        })
 }
 
 pub fn parse_protobuf_hash_partitioning(
     partitioning: Option<&protobuf::PhysicalHashRepartition>,
     registry: &dyn FunctionRegistry,
-    config_options: Arc<ConfigOptions>,
+    config_options: &ConfigOptions,
     input_schema: &Schema,
     codec: &dyn PhysicalExtensionCodec,
 ) -> Result<Option<Partitioning>> {
@@ -523,7 +492,7 @@ pub fn parse_protobuf_hash_partitioning(
             let expr = parse_physical_exprs(
                 &hash_part.hash_expr,
                 registry,
-                Arc::clone(&config_options),
+                config_options,
                 input_schema,
                 codec,
             )?;
@@ -540,7 +509,7 @@ pub fn parse_protobuf_hash_partitioning(
 pub fn parse_protobuf_partitioning(
     partitioning: Option<&protobuf::Partitioning>,
     registry: &dyn FunctionRegistry,
-    config_options: Arc<ConfigOptions>,
+    config_options: &ConfigOptions,
     input_schema: &Schema,
     codec: &dyn PhysicalExtensionCodec,
 ) -> Result<Option<Partitioning>> {
@@ -555,7 +524,7 @@ pub fn parse_protobuf_partitioning(
                 parse_protobuf_hash_partitioning(
                     Some(hash_repartition),
                     registry,
-                    Arc::clone(&config_options),
+                    config_options,
                     input_schema,
                     codec,
                 )
@@ -574,7 +543,7 @@ pub fn parse_protobuf_partitioning(
 pub fn parse_protobuf_file_scan_config(
     proto: &protobuf::FileScanExecConf,
     registry: &dyn FunctionRegistry,
-    config_options: Arc<ConfigOptions>,
+    config_options: &ConfigOptions,
     codec: &dyn PhysicalExtensionCodec,
 ) -> Result<FileScanConfig> {
     let schema: Arc<Schema> = Arc::new(convert_required!(proto.schema)?);
@@ -625,7 +594,7 @@ pub fn parse_protobuf_file_scan_config(
         let sort_expr = parse_physical_sort_exprs(
             &node_collection.physical_sort_expr_nodes,
             registry,
-            Arc::clone(&config_options),
+            config_options,
             &schema,
             codec,
         )?;

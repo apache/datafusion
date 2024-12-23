@@ -52,7 +52,7 @@ use datafusion_expr::{
 /// # Example: Create `PhysicalExpr` from `Expr`
 /// ```
 /// # use arrow::datatypes::{DataType, Field, Schema};
-/// use datafusion_common::config::ConfigOptions;
+/// # use datafusion_common::config::ConfigOptions;
 /// # use datafusion_common::DFSchema;
 /// # use datafusion_expr::{Expr, col, lit};
 /// # use datafusion_physical_expr::create_physical_expr;
@@ -65,9 +65,9 @@ use datafusion_expr::{
 /// // 2. ExecutionProps
 /// let props = ExecutionProps::new();
 /// // 3. ConfigOptions
-/// let config_options = std::sync::Arc::new(ConfigOptions::default());
+/// let config_options = ConfigOptions::default();
 /// // We can now create a PhysicalExpr:
-/// let physical_expr = create_physical_expr(&expr, &df_schema, &props, config_options).unwrap();
+/// let physical_expr = create_physical_expr(&expr, &df_schema, &props, &config_options).unwrap();
 /// ```
 ///
 /// # Example: Executing a PhysicalExpr to obtain [ColumnarValue]
@@ -84,9 +84,9 @@ use datafusion_expr::{
 /// # let schema = Schema::new(vec![Field::new("a", DataType::Int32, true)]);
 /// # let df_schema = DFSchema::try_from(schema.clone()).unwrap();
 /// # let props = ExecutionProps::new();
-/// # let config_options = Arc::new(ConfigOptions::default());
+/// # let config_options = ConfigOptions::default();
 /// // Given a PhysicalExpr, for `a = 1` we can evaluate it against a RecordBatch like this:
-/// let physical_expr = create_physical_expr(&expr, &df_schema, &props, config_options).unwrap();
+/// let physical_expr = create_physical_expr(&expr, &df_schema, &props, &config_options).unwrap();
 /// // Input of [1,2,3]
 /// let input_batch = RecordBatch::try_from_iter(vec![
 ///   ("a", Arc::new(Int32Array::from(vec![1, 2, 3])) as _)
@@ -113,7 +113,7 @@ pub fn create_physical_expr(
     e: &Expr,
     input_dfschema: &DFSchema,
     execution_props: &ExecutionProps,
-    config_options: Arc<ConfigOptions>,
+    config_options: &ConfigOptions,
 ) -> Result<Arc<dyn PhysicalExpr>> {
     let input_schema: &Schema = &input_dfschema.into();
 
@@ -226,13 +226,13 @@ pub fn create_physical_expr(
                 left,
                 input_dfschema,
                 execution_props,
-                Arc::clone(&config_options),
+                config_options,
             )?;
             let rhs = create_physical_expr(
                 right,
                 input_dfschema,
                 execution_props,
-                Arc::clone(&config_options),
+                config_options,
             )?;
             // Note that the logical planner is responsible
             // for type coercion on the arguments (e.g. if one
@@ -260,13 +260,13 @@ pub fn create_physical_expr(
                 expr,
                 input_dfschema,
                 execution_props,
-                Arc::clone(&config_options),
+                config_options,
             )?;
             let physical_pattern = create_physical_expr(
                 pattern,
                 input_dfschema,
                 execution_props,
-                Arc::clone(&config_options),
+                config_options,
             )?;
             like(
                 *negated,
@@ -290,13 +290,13 @@ pub fn create_physical_expr(
                 expr,
                 input_dfschema,
                 execution_props,
-                Arc::clone(&config_options),
+                config_options,
             )?;
             let physical_pattern = create_physical_expr(
                 pattern,
                 input_dfschema,
                 execution_props,
-                Arc::clone(&config_options),
+                config_options,
             )?;
             similar_to(*negated, *case_insensitive, physical_expr, physical_pattern)
         }
@@ -306,7 +306,7 @@ pub fn create_physical_expr(
                     e.as_ref(),
                     input_dfschema,
                     execution_props,
-                    Arc::clone(&config_options),
+                    config_options,
                 )?)
             } else {
                 None
@@ -320,13 +320,13 @@ pub fn create_physical_expr(
                 when_expr,
                 input_dfschema,
                 execution_props,
-                Arc::clone(&config_options),
+                config_options,
             )?;
             let then_expr = create_physical_exprs(
                 then_expr,
                 input_dfschema,
                 execution_props,
-                Arc::clone(&config_options),
+                config_options,
             )?;
             let when_then_expr: Vec<(Arc<dyn PhysicalExpr>, Arc<dyn PhysicalExpr>)> =
                 when_expr
@@ -340,7 +340,7 @@ pub fn create_physical_expr(
                         e.as_ref(),
                         input_dfschema,
                         execution_props,
-                        Arc::clone(&config_options),
+                        config_options,
                     )?)
                 } else {
                     None
@@ -371,20 +371,20 @@ pub fn create_physical_expr(
             expr,
             input_dfschema,
             execution_props,
-            Arc::clone(&config_options),
+            config_options,
         )?),
         Expr::IsNotNull(expr) => expressions::is_not_null(create_physical_expr(
             expr,
             input_dfschema,
             execution_props,
-            Arc::clone(&config_options),
+            config_options,
         )?),
         Expr::ScalarFunction(ScalarFunction { func, args }) => {
             let physical_args = create_physical_exprs(
                 args,
                 input_dfschema,
                 execution_props,
-                Arc::clone(&config_options),
+                config_options,
             )?;
 
             scalar_function::create_physical_expr(
@@ -393,7 +393,7 @@ pub fn create_physical_expr(
                 input_schema,
                 args,
                 input_dfschema,
-                Arc::clone(&config_options),
+                config_options,
             )
         }
         Expr::Between(Between {
@@ -406,19 +406,19 @@ pub fn create_physical_expr(
                 expr,
                 input_dfschema,
                 execution_props,
-                Arc::clone(&config_options),
+                config_options,
             )?;
             let low_expr = create_physical_expr(
                 low,
                 input_dfschema,
                 execution_props,
-                Arc::clone(&config_options),
+                config_options,
             )?;
             let high_expr = create_physical_expr(
                 high,
                 input_dfschema,
                 execution_props,
-                Arc::clone(&config_options),
+                config_options,
             )?;
 
             // rewrite the between into the two binary operators
@@ -458,14 +458,14 @@ pub fn create_physical_expr(
                     expr,
                     input_dfschema,
                     execution_props,
-                    Arc::clone(&config_options),
+                    config_options,
                 )?;
 
                 let list_exprs = create_physical_exprs(
                     list,
                     input_dfschema,
                     execution_props,
-                    Arc::clone(&config_options),
+                    config_options,
                 )?;
                 expressions::in_list(value_expr, list_exprs, negated, input_schema)
             }
@@ -484,7 +484,7 @@ pub fn create_physical_exprs<'a, I>(
     exprs: I,
     input_dfschema: &DFSchema,
     execution_props: &ExecutionProps,
-    config_options: Arc<ConfigOptions>,
+    config_options: &ConfigOptions,
 ) -> Result<Vec<Arc<dyn PhysicalExpr>>>
 where
     I: IntoIterator<Item = &'a Expr>,
@@ -492,12 +492,7 @@ where
     exprs
         .into_iter()
         .map(|expr| {
-            create_physical_expr(
-                expr,
-                input_dfschema,
-                execution_props,
-                Arc::clone(&config_options),
-            )
+            create_physical_expr(expr, input_dfschema, execution_props, config_options)
         })
         .collect::<Result<Vec<_>>>()
 }
@@ -507,8 +502,8 @@ pub fn logical2physical(expr: &Expr, schema: &Schema) -> Arc<dyn PhysicalExpr> {
     let df_schema = schema.clone().to_dfschema().unwrap();
     let execution_props = ExecutionProps::new();
     // usages of this are only in tests so this should be acceptable
-    let config_options = Arc::new(ConfigOptions::default());
-    create_physical_expr(expr, &df_schema, &execution_props, config_options).unwrap()
+    let config_options = ConfigOptions::default();
+    create_physical_expr(expr, &df_schema, &execution_props, &config_options).unwrap()
 }
 
 #[cfg(test)]
@@ -526,12 +521,11 @@ mod tests {
 
         let schema = Schema::new(vec![Field::new("letter", DataType::Utf8, false)]);
         let df_schema = DFSchema::try_from_qualified_schema("data", &schema)?;
-        let config_options = Arc::new(ConfigOptions::default());
         let p = create_physical_expr(
             &expr,
             &df_schema,
             &ExecutionProps::new(),
-            config_options,
+            &ConfigOptions::default(),
         )?;
 
         let batch = RecordBatch::try_new(

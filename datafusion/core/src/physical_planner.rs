@@ -199,12 +199,11 @@ impl PhysicalPlanner for DefaultPhysicalPlanner {
         input_dfschema: &DFSchema,
         session_state: &SessionState,
     ) -> Result<Arc<dyn PhysicalExpr>> {
-        let config_options = Arc::new(session_state.config_options().clone());
         create_physical_expr(
             expr,
             input_dfschema,
             session_state.execution_props(),
-            config_options,
+            session_state.config_options(),
         )
     }
 }
@@ -829,12 +828,11 @@ impl DefaultPhysicalPlanner {
             }) => {
                 let physical_input = children.one()?;
                 let input_dfschema = input.as_ref().schema();
-                let config_options = session_state.config().options().clone();
                 let sort_expr = create_physical_sort_exprs(
                     expr,
                     input_dfschema,
                     session_state.execution_props(),
-                    Arc::new(config_options),
+                    session_state.config_options(),
                 )?;
                 let new_sort =
                     SortExec::new(sort_expr, physical_input).with_fetch(*fetch);
@@ -1022,13 +1020,13 @@ impl DefaultPhysicalPlanner {
                             l,
                             left_df_schema,
                             execution_props,
-                            Arc::clone(&config_options),
+                            &config_options,
                         )?;
                         let r = create_physical_expr(
                             r,
                             right_df_schema,
                             execution_props,
-                            Arc::clone(&config_options),
+                            &config_options,
                         )?;
                         Ok((l, r))
                     })
@@ -1101,7 +1099,7 @@ impl DefaultPhysicalPlanner {
                             expr,
                             &filter_df_schema,
                             session_state.execution_props(),
-                            Arc::clone(&config_options),
+                            &config_options,
                         )?;
                         let column_indices = join_utils::JoinFilter::build_column_indices(
                             left_field_indices,
@@ -1486,12 +1484,11 @@ fn get_null_physical_expr_pair(
     input_schema: &Schema,
     session_state: &SessionState,
 ) -> Result<(Arc<dyn PhysicalExpr>, String)> {
-    let config_options = Arc::new(session_state.config_options().clone());
     let physical_expr = create_physical_expr(
         expr,
         input_dfschema,
         session_state.execution_props(),
-        config_options,
+        session_state.config_options(),
     )?;
     let physical_name = physical_name(&expr.clone())?;
 
@@ -1507,12 +1504,11 @@ fn get_physical_expr_pair(
     input_dfschema: &DFSchema,
     session_state: &SessionState,
 ) -> Result<(Arc<dyn PhysicalExpr>, String)> {
-    let config_options = Arc::new(session_state.config_options().clone());
     let physical_expr = create_physical_expr(
         expr,
         input_dfschema,
         session_state.execution_props(),
-        config_options,
+        session_state.config_options(),
     )?;
     let physical_name = physical_name(expr)?;
     Ok((physical_expr, physical_name))
@@ -1557,24 +1553,23 @@ pub fn create_window_expr_with_name(
             window_frame,
             null_treatment,
         }) => {
-            let config_options = Arc::new(config_options.clone());
             let physical_args = create_physical_exprs(
                 args,
                 logical_schema,
                 execution_props,
-                Arc::clone(&config_options),
+                config_options,
             )?;
             let partition_by = create_physical_exprs(
                 partition_by,
                 logical_schema,
                 execution_props,
-                Arc::clone(&config_options),
+                config_options,
             )?;
             let order_by = create_physical_sort_exprs(
                 order_by,
                 logical_schema,
                 execution_props,
-                Arc::clone(&config_options),
+                config_options,
             )?;
 
             if !is_window_frame_bound_valid(window_frame) {
@@ -1653,14 +1648,14 @@ pub fn create_aggregate_expr_with_name_and_maybe_filter(
                 args,
                 logical_input_schema,
                 execution_props,
-                Arc::new(config_options.clone()),
+                config_options,
             )?;
             let filter = match filter {
                 Some(e) => Some(create_physical_expr(
                     e,
                     logical_input_schema,
                     execution_props,
-                    Arc::new(config_options.clone()),
+                    config_options,
                 )?),
                 None => None,
             };
@@ -1674,7 +1669,7 @@ pub fn create_aggregate_expr_with_name_and_maybe_filter(
                         exprs,
                         logical_input_schema,
                         execution_props,
-                        Arc::new(config_options.clone()),
+                        config_options,
                     )?),
                     None => None,
                 };
@@ -1731,7 +1726,7 @@ pub fn create_physical_sort_expr(
     e: &SortExpr,
     input_dfschema: &DFSchema,
     execution_props: &ExecutionProps,
-    config_options: Arc<ConfigOptions>,
+    config_options: &ConfigOptions,
 ) -> Result<PhysicalSortExpr> {
     let SortExpr {
         expr,
@@ -1757,7 +1752,7 @@ pub fn create_physical_sort_exprs(
     exprs: &[SortExpr],
     input_dfschema: &DFSchema,
     execution_props: &ExecutionProps,
-    config_options: Arc<ConfigOptions>,
+    config_options: &ConfigOptions,
 ) -> Result<LexOrdering> {
     exprs
         .iter()
@@ -1766,7 +1761,7 @@ pub fn create_physical_sort_exprs(
                 expr,
                 input_dfschema,
                 execution_props,
-                Arc::clone(&config_options),
+                config_options,
             )
         })
         .collect::<Result<LexOrdering>>()

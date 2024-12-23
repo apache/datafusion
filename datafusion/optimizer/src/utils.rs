@@ -144,7 +144,6 @@ pub fn is_restrict_null_predicate<'a>(
     let column = new_null_array(&DataType::Null, 1);
     let input_batch = RecordBatch::try_new(Arc::new(schema.clone()), vec![column])?;
     let execution_props = ExecutionProps::default();
-    let config_options = Arc::new(config_options.clone());
     let null_column = Column::from_name(DUMMY_COL_NAME);
 
     let join_cols_to_replace = join_cols_of_predicate

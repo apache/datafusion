@@ -135,12 +135,7 @@ fn roundtrip_test_and_return(
             .expect("to proto");
     let runtime = ctx.runtime_env();
     let result_exec_plan: Arc<dyn ExecutionPlan> = proto
-        .try_into_physical_plan(
-            ctx,
-            Arc::new(ConfigOptions::default()),
-            runtime.deref(),
-            codec,
-        )
+        .try_into_physical_plan(ctx, &ConfigOptions::default(), runtime.deref(), codec)
         .expect("from proto");
     assert_eq!(format!("{exec_plan:?}"), format!("{result_exec_plan:?}"));
     Ok(result_exec_plan)
@@ -1556,6 +1551,7 @@ async fn roundtrip_coalesce() -> Result<()> {
         .map_err(|e| DataFusionError::External(Box::new(e)))?;
     let restored = node.try_into_physical_plan(
         &ctx,
+        ctx.state().config_options(),
         ctx.runtime_env().as_ref(),
         &DefaultPhysicalExtensionCodec {},
     )?;

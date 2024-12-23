@@ -238,7 +238,7 @@ impl TableProvider for MemTable {
                         sort_exprs,
                         &df_schema,
                         state.execution_props(),
-                        Arc::new(state.config_options().clone()),
+                        state.config_options(),
                     )
                 })
                 .collect::<Result<Vec<_>>>()?;

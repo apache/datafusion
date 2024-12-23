@@ -23,6 +23,7 @@ use arrow::util::bench_util::{
     create_string_array_with_len, create_string_view_array_with_len,
 };
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use datafusion_common::config::ConfigOptions;
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs};
 use datafusion_functions::string;
 use std::sync::Arc;
@@ -57,6 +58,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                         args: args.clone(),
                         number_rows: size,
                         return_type: &DataType::Utf8View,
+                        config_options: Arc::new(ConfigOptions::default()),
                     }))
                 })
             },
@@ -71,6 +73,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                         args: args.clone(),
                         number_rows: size,
                         return_type: &DataType::Utf8View,
+                        config_options: Arc::new(ConfigOptions::default()),
                     }))
                 })
             },
@@ -83,6 +86,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                     args: args.clone(),
                     number_rows: size,
                     return_type: &DataType::Utf8,
+                    config_options: Arc::new(ConfigOptions::default()),
                 }))
             })
         });

@@ -321,7 +321,7 @@ mod tests {
             &test_schema,
             &[],
             &DFSchema::empty(),
-            Arc::new(ConfigOptions::default()),
+            &ConfigOptions::default(),
         )?;
         let floor_f = &crate::udf::create_physical_expr(
             &test_fun,
@@ -329,7 +329,7 @@ mod tests {
             &test_schema,
             &[],
             &DFSchema::empty(),
-            Arc::new(ConfigOptions::default()),
+            &ConfigOptions::default(),
         )?;
         let exp_a = &crate::udf::create_physical_expr(
             &test_fun,
@@ -337,7 +337,7 @@ mod tests {
             &test_schema,
             &[],
             &DFSchema::empty(),
-            Arc::new(ConfigOptions::default()),
+            &ConfigOptions::default(),
         )?;
         let a_plus_b = Arc::new(BinaryExpr::new(
             Arc::clone(col_a),

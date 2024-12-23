@@ -28,6 +28,7 @@ use datafusion::physical_plan::memory::MemoryExec;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::prelude::SessionContext;
 use datafusion_catalog::TableFunctionImpl;
+use datafusion_common::config::ConfigOptions;
 use datafusion_common::{plan_err, ScalarValue};
 use datafusion_expr::simplify::SimplifyContext;
 use datafusion_expr::{Expr, TableType};
@@ -48,7 +49,9 @@ async fn main() -> Result<()> {
     let ctx = SessionContext::new();
 
     // register the table function that will be called in SQL statements by `read_csv`
-    ctx.register_udtf("read_csv", Arc::new(LocalCsvTableFunc {}));
+    let state = ctx.state();
+    let config_options = Arc::new(state.config_options().clone());
+    ctx.register_udtf("read_csv", Arc::new(LocalCsvTableFunc { config_options }));
 
     let testdata = datafusion::test_util::arrow_test_data();
     let csv_file = format!("{testdata}/csv/aggregate_test_100.csv");
@@ -129,7 +132,9 @@ impl TableProvider for LocalCsvTable {
 }
 
 #[derive(Debug)]
-struct LocalCsvTableFunc {}
+struct LocalCsvTableFunc {
+    config_options: Arc<ConfigOptions>,
+}
 
 impl TableFunctionImpl for LocalCsvTableFunc {
     fn call(&self, exprs: &[Expr]) -> Result<Arc<dyn TableProvider>> {
@@ -142,7 +147,8 @@ impl TableFunctionImpl for LocalCsvTableFunc {
             .map(|expr| {
                 // try to simpify the expression, so 1+2 becomes 3, for example
                 let execution_props = ExecutionProps::new();
-                let info = SimplifyContext::new(&execution_props);
+                let config_options = Arc::unwrap_or_clone(self.config_options.clone());
+                let info = SimplifyContext::new(&execution_props, &config_options);
                 let expr = ExprSimplifier::new(info).simplify(expr.clone())?;
 
                 if let Expr::Literal(ScalarValue::Int64(Some(limit))) = expr {

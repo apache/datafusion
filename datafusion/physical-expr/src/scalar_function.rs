@@ -137,12 +137,12 @@ impl DynEq for ScalarFunctionExpr {
                     .config_options
                     .entries()
                     .iter()
-                    .sorted_by(|l, r| l.key.cmp(&r.key))
+                    .sorted_by(|&l, &r| l.key.cmp(&r.key))
                     .zip(
                         o.config_options
                             .entries()
                             .iter()
-                            .sorted_by(|l, r| l.key.cmp(&r.key)),
+                            .sorted_by(|&l, &r| l.key.cmp(&r.key)),
                     )
                     .filter(|(l, r)| l.ne(r))
                     .count()
@@ -272,7 +272,7 @@ pub fn create_physical_expr(
     input_schema: &Schema,
     args: &[Expr],
     input_dfschema: &DFSchema,
-    config_options: Arc<ConfigOptions>,
+    config_options: &ConfigOptions,
 ) -> Result<Arc<dyn PhysicalExpr>> {
     let input_expr_types = input_phy_exprs
         .iter()
@@ -292,7 +292,7 @@ pub fn create_physical_expr(
             Arc::new(fun.clone()),
             input_phy_exprs.to_vec(),
             return_type,
-            Arc::clone(&config_options),
+            Arc::new(config_options.clone()),
         )
         .with_nullable(fun.is_nullable(args, input_dfschema)),
     ))

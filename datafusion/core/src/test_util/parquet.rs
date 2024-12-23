@@ -169,7 +169,9 @@ impl TestParquetFile {
 
         // run coercion on the filters to coerce types etc.
         let props = ExecutionProps::new();
-        let context = SimplifyContext::new(&props).with_schema(Arc::clone(&df_schema));
+        let config_options = ConfigOptions::default();
+        let context = SimplifyContext::new(&props, &config_options)
+            .with_schema(Arc::clone(&df_schema));
         let parquet_options = ctx.copied_table_options().parquet;
         if let Some(filter) = maybe_filter {
             let simplifier = ExprSimplifier::new(context);
@@ -178,7 +180,7 @@ impl TestParquetFile {
                 &filter,
                 &df_schema,
                 &ExecutionProps::default(),
-                Arc::new(ConfigOptions::default()),
+                &ConfigOptions::default(),
             )?;
 
             let parquet_exec =

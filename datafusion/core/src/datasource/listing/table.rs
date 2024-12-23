@@ -894,7 +894,7 @@ impl TableProvider for ListingTable {
                     &expr,
                     &table_df_schema,
                     state.execution_props(),
-                    Arc::new(state.config_options().clone()),
+                    session_state.config_options(),
                 )?;
                 Some(filters)
             }
