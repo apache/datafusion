@@ -36,7 +36,7 @@ name = "datafusion_optimizer"
 path = "src/lib.rs"
 
 [features]
-recursive-protection = ["dep:recursive"]
+recursive_protection = ["dep:recursive"]
 
 [dependencies]
 arrow = { workspace = true }

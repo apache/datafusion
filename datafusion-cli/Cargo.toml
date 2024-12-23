@@ -45,6 +45,7 @@ datafusion = { path = "../datafusion/core", version = "43.0.0", features = [
     "datetime_expressions",
     "encoding_expressions",
     "parquet",
+    "recursive_protection",
     "regex_expressions",
     "unicode_expressions",
     "compression",

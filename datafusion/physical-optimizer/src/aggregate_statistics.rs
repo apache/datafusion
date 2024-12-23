@@ -41,7 +41,7 @@ impl AggregateStatistics {
 }
 
 impl PhysicalOptimizerRule for AggregateStatistics {
-    #[cfg_attr(feature = "recursive-protection", recursive::recursive)]
+    #[cfg_attr(feature = "recursive_protection", recursive::recursive)]
     fn optimize(
         &self,
         plan: Arc<dyn ExecutionPlan>,

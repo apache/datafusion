@@ -109,7 +109,7 @@ impl OptimizerRule for OptimizeProjections {
 ///   columns.
 /// - `Ok(None)`: Signal that the given logical plan did not require any change.
 /// - `Err(error)`: An error occurred during the optimization process.
-#[cfg_attr(feature = "recursive-protection", recursive::recursive)]
+#[cfg_attr(feature = "recursive_protection", recursive::recursive)]
 fn optimize_projections(
     plan: LogicalPlan,
     config: &dyn OptimizerConfig,

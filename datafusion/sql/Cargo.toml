@@ -39,7 +39,7 @@ path = "src/lib.rs"
 default = ["unicode_expressions", "unparser"]
 unicode_expressions = []
 unparser = []
-recursive-protection = ["dep:recursive"]
+recursive_protection = ["dep:recursive"]
 
 [dependencies]
 arrow = { workspace = true }

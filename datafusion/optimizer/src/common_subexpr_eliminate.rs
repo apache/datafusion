@@ -531,7 +531,7 @@ impl OptimizerRule for CommonSubexprEliminate {
         None
     }
 
-    #[cfg_attr(feature = "recursive-protection", recursive::recursive)]
+    #[cfg_attr(feature = "recursive_protection", recursive::recursive)]
     fn rewrite(
         &self,
         plan: LogicalPlan,

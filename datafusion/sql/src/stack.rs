@@ -18,7 +18,7 @@
 pub use inner::StackGuard;
 
 /// A guard that sets the minimum stack size for the current thread to `min_stack_size` bytes.
-#[cfg(feature = "recursive-protection")]
+#[cfg(feature = "recursive_protection")]
 mod inner {
     /// Sets the stack size to `min_stack_size` bytes on call to `new()` and
     /// resets to the previous value when this structure is dropped.
@@ -47,7 +47,7 @@ mod inner {
 
 /// A stub implementation of the stack guard when the recursive protection
 /// feature is not enabled
-#[cfg(not(feature = "recursive-protection"))]
+#[cfg(not(feature = "recursive_protection"))]
 mod inner {
     /// A stub implementation of the stack guard when the recursive protection
     /// feature is not enabled that does nothing
