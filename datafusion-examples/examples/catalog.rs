@@ -144,8 +144,8 @@ impl DirSchema {
     async fn create(state: &SessionState, opts: DirSchemaOpts<'_>) -> Result<Arc<Self>> {
         let DirSchemaOpts { ext, dir, format } = opts;
         let mut tables = HashMap::new();
-        let directories = std::fs::read_dir(dir).unwrap();
-        for res in directories {
+        let dir_entries = std::fs::read_dir(dir).unwrap();
+        for res in dir_entries {
             let entry = res.unwrap();
             let filename = entry.file_name().to_str().unwrap().to_string();
             if !filename.ends_with(ext) {
