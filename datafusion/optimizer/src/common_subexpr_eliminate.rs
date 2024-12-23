@@ -382,10 +382,10 @@ impl CommonSubexprEliminate {
                         //  keep column names and get rid of additional name
                         //  preserving logic here.
                         if let Some(aggr_expr) = aggr_expr {
-                            let name_perserver = NamePreserver::new_for_projection();
+                            let name_preserver = NamePreserver::new_for_projection();
                             let saved_names = aggr_expr
                                 .iter()
-                                .map(|expr| name_perserver.save(expr))
+                                .map(|expr| name_preserver.save(expr))
                                 .collect::<Vec<_>>();
                             let new_aggr_expr = rewritten_aggr_expr
                                 .into_iter()

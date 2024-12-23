@@ -1287,7 +1287,7 @@ impl Expr {
     /// let expr = col("foo").alias("bar") + col("baz");
     /// assert_eq!(expr.clone().unalias(), expr);
     ///
-    /// // `foo as "bar" as "baz" is unalaised to foo as "bar"
+    /// // `foo as "bar" as "baz" is unaliased to foo as "bar"
     /// let expr = col("foo").alias("bar").alias("baz");
     /// assert_eq!(expr.unalias(), col("foo").alias("bar"));
     /// ```
@@ -1587,7 +1587,7 @@ impl Expr {
     /// Recursively find all [`Expr::Placeholder`] expressions, and
     /// to infer their [`DataType`] from the context of their use.
     ///
-    /// For example, gicen an expression like `<int32> = $0` will infer `$0` to
+    /// For example, given an expression like `<int32> = $0` will infer `$0` to
     /// have type `int32`.
     ///
     /// Returns transformed expression and flag that is true if expression contains
@@ -2263,7 +2263,7 @@ impl Display for SchemaDisplay<'_> {
                     "{}({}{})",
                     func.name(),
                     if *distinct { "DISTINCT " } else { "" },
-                    schema_name_from_exprs_comma_seperated_without_space(args)?
+                    schema_name_from_exprs_comma_separated_without_space(args)?
                 )?;
 
                 if let Some(null_treatment) = null_treatment {
@@ -2335,7 +2335,7 @@ impl Display for SchemaDisplay<'_> {
 
                 write!(f, "END")
             }
-            // Cast expr is not shown to be consistant with Postgres and Spark <https://github.com/apache/datafusion/pull/3222>
+            // Cast expr is not shown to be consistent with Postgres and Spark <https://github.com/apache/datafusion/pull/3222>
             Expr::Cast(Cast { expr, .. }) | Expr::TryCast(TryCast { expr, .. }) => {
                 write!(f, "{}", SchemaDisplay(expr))
             }
@@ -2465,7 +2465,7 @@ impl Display for SchemaDisplay<'_> {
                     f,
                     "{}({})",
                     fun,
-                    schema_name_from_exprs_comma_seperated_without_space(args)?
+                    schema_name_from_exprs_comma_separated_without_space(args)?
                 )?;
 
                 if let Some(null_treatment) = null_treatment {
@@ -2495,7 +2495,7 @@ impl Display for SchemaDisplay<'_> {
 /// Internal usage. Please call `schema_name_from_exprs` instead
 // TODO: Use ", " to standardize the formatting of Vec<Expr>,
 // <https://github.com/apache/datafusion/issues/10364>
-pub(crate) fn schema_name_from_exprs_comma_seperated_without_space(
+pub(crate) fn schema_name_from_exprs_comma_separated_without_space(
     exprs: &[Expr],
 ) -> Result<String, fmt::Error> {
     schema_name_from_exprs_inner(exprs, ",")
@@ -2598,7 +2598,7 @@ impl Display for Expr {
             Expr::ScalarFunction(fun) => {
                 fmt_function(f, fun.name(), false, &fun.args, true)
             }
-            // TODO: use udf's display_name, need to fix the seperator issue, <https://github.com/apache/datafusion/issues/10364>
+            // TODO: use udf's display_name, need to fix the separator issue, <https://github.com/apache/datafusion/issues/10364>
             // Expr::ScalarFunction(ScalarFunction { func, args }) => {
             //     write!(f, "{}", func.display_name(args).unwrap())
             // }

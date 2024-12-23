@@ -520,7 +520,7 @@ fn get_valid_types(
         TypeSignature::Numeric(number) => {
             function_length_check(current_types.len(), *number)?;
 
-            // Find common numeric type amongs given types except string
+            // Find common numeric type among given types except string
             let mut valid_type = current_types.first().unwrap().to_owned();
             for t in current_types.iter().skip(1) {
                 let logical_data_type: NativeType = t.into();

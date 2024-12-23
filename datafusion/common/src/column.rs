@@ -230,7 +230,7 @@ impl Column {
                         .collect::<Vec<_>>();
                     for using_col in using_columns {
                         let all_matched = columns.iter().all(|c| using_col.contains(c));
-                        // All matched fields belong to the same using column set, in orther words
+                        // All matched fields belong to the same using column set, in other words
                         // the same join clause. We simply pick the qualifier from the first match.
                         if all_matched {
                             return Ok(columns[0].clone());

@@ -17,7 +17,7 @@
 
 //! [`ScalarUDF`]: Scalar User Defined Functions
 
-use crate::expr::schema_name_from_exprs_comma_seperated_without_space;
+use crate::expr::schema_name_from_exprs_comma_separated_without_space;
 use crate::simplify::{ExprSimplifyResult, SimplifyInfo};
 use crate::sort_properties::{ExprProperties, SortProperties};
 use crate::{
@@ -436,7 +436,7 @@ pub trait ScalarUDFImpl: Debug + Send + Sync {
         Ok(format!(
             "{}({})",
             self.name(),
-            schema_name_from_exprs_comma_seperated_without_space(args)?
+            schema_name_from_exprs_comma_separated_without_space(args)?
         ))
     }
 
