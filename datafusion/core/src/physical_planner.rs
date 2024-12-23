@@ -1012,7 +1012,7 @@ impl DefaultPhysicalPlanner {
                 let left_df_schema = left.schema();
                 let right_df_schema = right.schema();
                 let execution_props = session_state.execution_props();
-                let config_options = Arc::new(session_state.config_options().clone());
+                let config_options = session_state.config_options();
                 let join_on = keys
                     .iter()
                     .map(|(l, r)| {
@@ -1020,13 +1020,13 @@ impl DefaultPhysicalPlanner {
                             l,
                             left_df_schema,
                             execution_props,
-                            &config_options,
+                            config_options,
                         )?;
                         let r = create_physical_expr(
                             r,
                             right_df_schema,
                             execution_props,
-                            &config_options,
+                            config_options,
                         )?;
                         Ok((l, r))
                     })
@@ -1099,7 +1099,7 @@ impl DefaultPhysicalPlanner {
                             expr,
                             &filter_df_schema,
                             session_state.execution_props(),
-                            &config_options,
+                            config_options,
                         )?;
                         let column_indices = join_utils::JoinFilter::build_column_indices(
                             left_field_indices,

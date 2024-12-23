@@ -137,7 +137,6 @@ impl<S: SimplifyInfo> ExprSimplifier<S> {
     /// `b > 2`
     ///
     /// ```
-    /// use std::sync::Arc;
     /// use arrow::datatypes::DataType;
     /// use datafusion_common::config::ConfigOptions;
     /// use datafusion_expr::{col, lit, Expr};

@@ -104,12 +104,8 @@ impl OptimizerRule for DecorrelatePredicateSubquery {
                 }
                 // The subquery expression is embedded within another expression
                 SubqueryPredicate::Embedded(expr) => {
-                    let (plan, expr_without_subqueries) = rewrite_inner_subqueries(
-                        cur_input,
-                        expr,
-                        config,
-                        config.options(),
-                    )?;
+                    let (plan, expr_without_subqueries) =
+                        rewrite_inner_subqueries(cur_input, expr, config)?;
                     cur_input = plan;
                     other_exprs.push(expr_without_subqueries);
                 }
@@ -137,7 +133,6 @@ fn rewrite_inner_subqueries(
     outer: LogicalPlan,
     expr: Expr,
     config: &dyn OptimizerConfig,
-    config_options: &ConfigOptions,
 ) -> Result<(LogicalPlan, Expr)> {
     let mut cur_input = outer;
     let alias = config.alias_generator();
@@ -151,7 +146,7 @@ fn rewrite_inner_subqueries(
             None,
             negated,
             alias,
-            config_options,
+            config.options(),
         )? {
             Some((plan, exists_expr)) => {
                 cur_input = plan;
@@ -176,7 +171,7 @@ fn rewrite_inner_subqueries(
                 Some(in_predicate),
                 negated,
                 alias,
-                config_options,
+                config.options(),
             )? {
                 Some((plan, exists_expr)) => {
                     cur_input = plan;
