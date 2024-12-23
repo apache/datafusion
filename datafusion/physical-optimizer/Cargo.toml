@@ -32,7 +32,6 @@ rust-version = { workspace = true }
 workspace = true
 
 [features]
-default = ["recursive-protection"]
 recursive-protection = ["dep:recursive"]
 
 [dependencies]

@@ -69,6 +69,13 @@ pyarrow = ["datafusion-common/pyarrow", "parquet"]
 regex_expressions = [
     "datafusion-functions/regex_expressions",
 ]
+recusive-protection = [
+    "datafusion-common/recursive-protection",
+    "datafusion-expr/recursive-protection",
+    "datafusion-optimizer/recursive-protection",
+    "datafusion-physical-optimizer/recursive-protection",
+    "datafusion-sql/recursive-protection"
+]
 serde = ["arrow-schema/serde"]
 string_expressions = ["datafusion-functions/string_expressions"]
 unicode_expressions = [

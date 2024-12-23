@@ -36,7 +36,6 @@ name = "datafusion_optimizer"
 path = "src/lib.rs"
 
 [features]
-default = ["recursive-protection"]
 recursive-protection = ["dep:recursive"]
 
 [dependencies]
