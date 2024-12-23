@@ -77,23 +77,15 @@ fn assert_valid_semantic_plan(plan: &LogicalPlan) -> Result<()> {
 
 /// Returns an error if the plan does not have the expected schema.
 /// Ignores metadata and nullability.
-pub fn assert_expected_schema(
-    rule_name: &str,
-    schema: &DFSchemaRef,
-    plan: &LogicalPlan,
-) -> Result<()> {
+pub fn assert_expected_schema(schema: &DFSchemaRef, plan: &LogicalPlan) -> Result<()> {
     let equivalent = plan.schema().equivalent_names_and_types(schema);
 
     if !equivalent {
-        let e = DataFusionError::Internal(format!(
+        Err(DataFusionError::Internal(format!(
             "Failed due to a difference in schemas, original schema: {:?}, new schema: {:?}",
             schema,
             plan.schema()
-        ));
-        Err(DataFusionError::Context(
-            String::from(rule_name),
-            Box::new(e),
-        ))
+        )))
     } else {
         Ok(())
     }
