@@ -50,7 +50,7 @@ NULL
 6
 NULL
 NULL
-7
+NULL
 
 # column or implicit null
 query I
@@ -61,7 +61,7 @@ NULL
 6
 NULL
 NULL
-7
+NULL
 
 # scalar or scalar (string)
 query T
