@@ -33,6 +33,7 @@ use super::{
     Unparser,
 };
 use crate::unparser::ast::UnnestRelationBuilder;
+use crate::unparser::extension_unparser::UnparseResult;
 use crate::unparser::utils::unproject_agg_exprs;
 use crate::utils::UNNEST_PLACEHOLDER;
 use datafusion_common::{
@@ -126,14 +127,25 @@ impl Unparser<'_> {
 
     /// Try to unparse a [UserDefinedLogicalNode] to a SQL statement.
     /// If multiple unparsers are registered for the same [UserDefinedLogicalNode],
-    /// the last unparsing result will be returned.
+    /// the first unparsing result will be returned.
     fn extension_to_statement(
         &self,
         node: &dyn UserDefinedLogicalNode,
     ) -> Result<ast::Statement> {
         let mut statement = None;
         for unparser in &self.extension_unparsers {
-            statement = unparser.unparse_to_statement(node, self)?;
+            match unparser.unparse_to_statement(node, self)? {
+                UnparseResult::Statement(stmt) => {
+                    statement = Some(stmt);
+                    break;
+                }
+                UnparseResult::WithinStatement => {
+                    return not_impl_err!(
+                        "UnparseResult::WithinStatement is not supported for `extension_to_statement`"
+                    );
+                }
+                UnparseResult::Original => {}
+            }
         }
         if let Some(statement) = statement {
             Ok(statement)
@@ -144,7 +156,7 @@ impl Unparser<'_> {
 
     /// Try to unparse a [UserDefinedLogicalNode] to a SQL statement.
     /// If multiple unparsers are registered for the same [UserDefinedLogicalNode],
-    /// all of them will be called in order.
+    /// the first unparser supporting the node will be used.
     fn extension_to_sql(
         &self,
         node: &dyn UserDefinedLogicalNode,
@@ -153,9 +165,17 @@ impl Unparser<'_> {
         relation: &mut Option<&mut RelationBuilder>,
     ) -> Result<()> {
         for unparser in &self.extension_unparsers {
-            unparser.unparse(node, self, query, select, relation)?;
+            match unparser.unparse(node, self, query, select, relation)? {
+                UnparseResult::WithinStatement => return Ok(()),
+                UnparseResult::Original => {}
+                UnparseResult::Statement(_) => {
+                    return not_impl_err!(
+                        "UnparseResult::Statement is not supported for `extension_to_sql`"
+                    );
+                }
+            }
         }
-        Ok(())
+        not_impl_err!("Unsupported extension node: {node:?}")
     }
 
     fn select_to_sql_statement(&self, plan: &LogicalPlan) -> Result<ast::Statement> {

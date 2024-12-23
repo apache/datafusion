@@ -50,7 +50,9 @@ use datafusion_functions_nested::planner::{FieldAccessPlanner, NestedFunctionPla
 use datafusion_sql::unparser::ast::{
     DerivedRelationBuilder, QueryBuilder, RelationBuilder, SelectBuilder,
 };
-use datafusion_sql::unparser::extension_unparser::UserDefinedLogicalNodeUnparser;
+use datafusion_sql::unparser::extension_unparser::{
+    UnparseResult, UserDefinedLogicalNodeUnparser,
+};
 use sqlparser::dialect::{Dialect, GenericDialect, MySqlDialect};
 use sqlparser::parser::Parser;
 
@@ -1459,13 +1461,36 @@ impl UserDefinedLogicalNodeUnparser for MockStatementUnparser {
         &self,
         node: &dyn UserDefinedLogicalNode,
         unparser: &Unparser,
-    ) -> Result<Option<Statement>> {
+    ) -> Result<UnparseResult> {
         if let Some(plan) = node.as_any().downcast_ref::<MockUserDefinedLogicalPlan>() {
             let input = unparser.plan_to_sql(&plan.input)?;
-            Ok(Some(input))
+            Ok(UnparseResult::Statement(input))
         } else {
-            Ok(None)
+            Ok(UnparseResult::Original)
         }
+    }
+}
+
+struct UnusedUnparser {}
+
+impl UserDefinedLogicalNodeUnparser for UnusedUnparser {
+    fn unparse(
+        &self,
+        _node: &dyn UserDefinedLogicalNode,
+        _unparser: &Unparser,
+        _query: &mut Option<&mut QueryBuilder>,
+        _select: &mut Option<&mut SelectBuilder>,
+        _relation: &mut Option<&mut RelationBuilder>,
+    ) -> Result<UnparseResult> {
+        panic!("This should not be called");
+    }
+
+    fn unparse_to_statement(
+        &self,
+        _node: &dyn UserDefinedLogicalNode,
+        _unparser: &Unparser,
+    ) -> Result<UnparseResult> {
+        panic!("This should not be called");
     }
 }
 
@@ -1484,8 +1509,10 @@ fn test_unparse_extension_to_statement() -> Result<()> {
     let extension = LogicalPlan::Extension(Extension {
         node: Arc::new(extension),
     });
-    let unparser =
-        Unparser::default().with_extension_unparsers(vec![Arc::new(MockStatementUnparser {})]);
+    let unparser = Unparser::default().with_extension_unparsers(vec![
+        Arc::new(MockStatementUnparser {}),
+        Arc::new(UnusedUnparser {}),
+    ]);
     let sql = unparser.plan_to_sql(&extension)?;
     let expected = "SELECT * FROM j1";
     assert_eq!(sql.to_string(), expected);
@@ -1510,10 +1537,10 @@ impl UserDefinedLogicalNodeUnparser for MockSqlUnparser {
         _query: &mut Option<&mut QueryBuilder>,
         _select: &mut Option<&mut SelectBuilder>,
         relation: &mut Option<&mut RelationBuilder>,
-    ) -> Result<()> {
+    ) -> Result<UnparseResult> {
         if let Some(plan) = node.as_any().downcast_ref::<MockUserDefinedLogicalPlan>() {
             let Statement::Query(input) = unparser.plan_to_sql(&plan.input)? else {
-                return Ok(());
+                return Ok(UnparseResult::Original);
             };
             let mut derived_builder = DerivedRelationBuilder::default();
             derived_builder.subquery(input);
@@ -1522,7 +1549,7 @@ impl UserDefinedLogicalNodeUnparser for MockSqlUnparser {
                 rel.derived(derived_builder);
             }
         }
-        Ok(())
+        Ok(UnparseResult::WithinStatement)
     }
 }
 
@@ -1545,17 +1572,19 @@ fn test_unparse_extension_to_sql() -> Result<()> {
     let plan = LogicalPlanBuilder::from(extension)
         .project(vec![col("j1_id").alias("user_id")])?
         .build()?;
-    let unparser =
-        Unparser::default().with_extension_unparsers(vec![Arc::new(MockSqlUnparser {})]);
+    let unparser = Unparser::default().with_extension_unparsers(vec![
+        Arc::new(MockSqlUnparser {}),
+        Arc::new(UnusedUnparser {}),
+    ]);
     let sql = unparser.plan_to_sql(&plan)?;
     let expected = "SELECT j1.j1_id AS user_id FROM (SELECT * FROM j1)";
     assert_eq!(sql.to_string(), expected);
 
     if let Some(err) = plan_to_sql(&plan).err() {
-        assert_eq!(
+        assert_contains!(
             err.to_string(),
-            "External error: `relation` must be initialized"
-        )
+            "This feature is not implemented: Unsupported extension node: MockUserDefinedLogicalPlan"
+        );
     } else {
         panic!("Expected error")
     }
