@@ -218,29 +218,25 @@ impl FilterExec {
                 if binary.op() == &Operator::Eq {
                     // Filter evaluates to single value for all partitions
                     if input_eqs.is_expr_constant(binary.left()) {
-                        // When left side is constant, extract value from right side if it's a literal
                         let (expr, value) = (
                             binary.right(),
                             input_eqs.get_expr_constant_value(binary.right()),
                         );
-                        let mut const_expr =
-                            ConstExpr::from(expr).with_across_partitions(true);
-                        if let Some(value) = value {
-                            const_expr = const_expr.with_value(value.clone());
-                        }
-                        res_constants.push(const_expr);
+                        res_constants.push(
+                            ConstExpr::new(Arc::clone(expr))
+                                .with_across_partitions(true)
+                                .with_value(value),
+                        );
                     } else if input_eqs.is_expr_constant(binary.right()) {
-                        // When right side is constant, extract value from left side if it's a literal
                         let (expr, value) = (
                             binary.left(),
                             input_eqs.get_expr_constant_value(binary.left()),
                         );
-                        let mut const_expr =
-                            ConstExpr::from(expr).with_across_partitions(true);
-                        if let Some(value) = value {
-                            const_expr = const_expr.with_value(value.clone());
-                        }
-                        res_constants.push(const_expr);
+                        res_constants.push(
+                            ConstExpr::new(Arc::clone(expr))
+                                .with_across_partitions(true)
+                                .with_value(value),
+                        );
                     }
                 }
             }
@@ -272,11 +268,9 @@ impl FilterExec {
                     .min_value
                     .get_value();
                 let expr = Arc::new(column) as _;
-                let mut const_expr = ConstExpr::new(expr).with_across_partitions(true);
-                if let Some(value) = value {
-                    const_expr = const_expr.with_value(value.clone());
-                }
-                const_expr
+                ConstExpr::new(expr)
+                    .with_across_partitions(true)
+                    .with_value(value.cloned())
             });
         // This is for statistics
         eq_properties = eq_properties.with_constants(constants);

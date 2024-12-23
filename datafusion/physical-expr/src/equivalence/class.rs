@@ -88,8 +88,8 @@ impl ConstExpr {
         }
     }
 
-    pub fn with_value(mut self, value: ScalarValue) -> Self {
-        self.value = Some(value);
+    pub fn with_value(mut self, value: Option<ScalarValue>) -> Self {
+        self.value = value;
         self
     }
 
