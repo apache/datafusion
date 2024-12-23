@@ -1683,7 +1683,7 @@ mod test {
     impl RandomStub {
         fn new() -> Self {
             Self {
-                signature: Signature::exact(vec![], Volatility::Volatile),
+                signature: Signature::nullary(Volatility::Volatile),
             }
         }
     }

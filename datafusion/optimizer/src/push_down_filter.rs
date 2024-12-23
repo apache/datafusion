@@ -3315,7 +3315,7 @@ Projection: a, b
         // SELECT t.a, t.r FROM (SELECT a, sum(b),  TestScalarUDF()+1 AS r FROM test1 GROUP BY a) AS t WHERE t.a > 5 AND t.r > 0.5;
         let table_scan = test_table_scan_with_name("test1")?;
         let fun = ScalarUDF::new_from_impl(TestScalarUDF {
-            signature: Signature::exact(vec![], Volatility::Volatile),
+            signature: Signature::nullary(Volatility::Volatile),
         });
         let expr = Expr::ScalarFunction(ScalarFunction::new_udf(Arc::new(fun), vec![]));
 
@@ -3349,7 +3349,7 @@ Projection: a, b
         // SELECT t.a, t.r FROM (SELECT test1.a AS a, TestScalarUDF() AS r FROM test1 join test2 ON test1.a = test2.a) AS t WHERE t.r > 0.5;
         let table_scan = test_table_scan_with_name("test1")?;
         let fun = ScalarUDF::new_from_impl(TestScalarUDF {
-            signature: Signature::exact(vec![], Volatility::Volatile),
+            signature: Signature::nullary(Volatility::Volatile),
         });
         let expr = Expr::ScalarFunction(ScalarFunction::new_udf(Arc::new(fun), vec![]));
         let left = LogicalPlanBuilder::from(table_scan).build()?;
@@ -3395,7 +3395,7 @@ Projection: a, b
         // SELECT test.a, test.b FROM test as t WHERE TestScalarUDF() > 0.1;
         let table_scan = test_table_scan()?;
         let fun = ScalarUDF::new_from_impl(TestScalarUDF {
-            signature: Signature::exact(vec![], Volatility::Volatile),
+            signature: Signature::nullary(Volatility::Volatile),
         });
         let expr = Expr::ScalarFunction(ScalarFunction::new_udf(Arc::new(fun), vec![]));
         let plan = LogicalPlanBuilder::from(table_scan)
@@ -3419,7 +3419,7 @@ Projection: a, b
         // SELECT test.a, test.b FROM test as t WHERE TestScalarUDF() > 0.1 and test.a > 5 and test.b > 10;
         let table_scan = test_table_scan()?;
         let fun = ScalarUDF::new_from_impl(TestScalarUDF {
-            signature: Signature::exact(vec![], Volatility::Volatile),
+            signature: Signature::nullary(Volatility::Volatile),
         });
         let expr = Expr::ScalarFunction(ScalarFunction::new_udf(Arc::new(fun), vec![]));
         let plan = LogicalPlanBuilder::from(table_scan)
@@ -3446,7 +3446,7 @@ Projection: a, b
     fn test_push_down_volatile_mixed_unsupported_table_scan() -> Result<()> {
         // SELECT test.a, test.b FROM test as t WHERE TestScalarUDF() > 0.1 and test.a > 5 and test.b > 10;
         let fun = ScalarUDF::new_from_impl(TestScalarUDF {
-            signature: Signature::exact(vec![], Volatility::Volatile),
+            signature: Signature::nullary(Volatility::Volatile),
         });
         let expr = Expr::ScalarFunction(ScalarFunction::new_udf(Arc::new(fun), vec![]));
         let plan = table_scan_with_pushdown_provider_builder(

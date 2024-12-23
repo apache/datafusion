@@ -40,7 +40,7 @@ impl Default for VersionFunc {
 impl VersionFunc {
     pub fn new() -> Self {
         Self {
-            signature: Signature::exact(vec![], Volatility::Immutable),
+            signature: Signature::nullary(Volatility::Immutable),
         }
     }
 }
