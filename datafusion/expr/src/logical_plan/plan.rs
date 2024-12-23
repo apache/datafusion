@@ -48,6 +48,7 @@ use crate::{
 };
 
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+use datafusion_common::cse::{NormalizeEq, Normalizeable};
 use datafusion_common::tree_node::{
     Transformed, TreeNode, TreeNodeContainer, TreeNodeRecursion,
 };
@@ -3363,6 +3364,25 @@ pub struct Subquery {
     pub subquery: Arc<LogicalPlan>,
     /// The outer references used in the subquery
     pub outer_ref_columns: Vec<Expr>,
+}
+
+impl Normalizeable for Subquery {
+    fn can_normalize(&self) -> bool {
+        false
+    }
+}
+
+impl NormalizeEq for Subquery {
+    fn normalize_eq(&self, other: &Self) -> bool {
+        // TODO: may be implement NormalizeEq for LogicalPlan?
+        *self.subquery == *other.subquery
+            && self.outer_ref_columns.len() == other.outer_ref_columns.len()
+            && self
+                .outer_ref_columns
+                .iter()
+                .zip(other.outer_ref_columns.iter())
+                .all(|(a, b)| a.normalize_eq(b))
+    }
 }
 
 impl Subquery {

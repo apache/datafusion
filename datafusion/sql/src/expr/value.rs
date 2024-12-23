@@ -19,10 +19,13 @@ use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 use arrow::compute::kernels::cast_utils::{
     parse_interval_month_day_nano_config, IntervalParseConfig, IntervalUnit,
 };
-use arrow::datatypes::DECIMAL128_MAX_PRECISION;
-use arrow_schema::DataType;
+use arrow::datatypes::{i256, DECIMAL128_MAX_PRECISION};
+use arrow_schema::{DataType, DECIMAL256_MAX_PRECISION};
+use bigdecimal::num_bigint::BigInt;
+use bigdecimal::{BigDecimal, Signed, ToPrimitive};
 use datafusion_common::{
-    internal_err, not_impl_err, plan_err, DFSchema, DataFusionError, Result, ScalarValue,
+    internal_datafusion_err, not_impl_err, plan_err, DFSchema, DataFusionError, Result,
+    ScalarValue,
 };
 use datafusion_expr::expr::{BinaryExpr, Placeholder};
 use datafusion_expr::planner::PlannerResult;
@@ -31,6 +34,9 @@ use log::debug;
 use sqlparser::ast::{BinaryOperator, Expr as SQLExpr, Interval, UnaryOperator, Value};
 use sqlparser::parser::ParserError::ParserError;
 use std::borrow::Cow;
+use std::cmp::Ordering;
+use std::ops::Neg;
+use std::str::FromStr;
 
 impl<S: ContextProvider> SqlToRel<'_, S> {
     pub(crate) fn parse_value(
@@ -84,7 +90,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         }
 
         if self.options.parse_float_as_decimal {
-            parse_decimal_128(unsigned_number, negative)
+            parse_decimal(unsigned_number, negative)
         } else {
             signed_number.parse::<f64>().map(lit).map_err(|_| {
                 DataFusionError::from(ParserError(format!(
@@ -163,7 +169,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             }
         }
 
-        internal_err!("Expected a simplified result, but none was found")
+        not_impl_err!("Could not plan array literal. Hint: Please try with `nested_expressions` DataFusion feature enabled")
     }
 
     /// Convert a SQL interval expression to a DataFusion logical plan
@@ -315,45 +321,84 @@ const fn try_decode_hex_char(c: u8) -> Option<u8> {
     }
 }
 
-/// Parse Decimal128 from a string
-///
-/// TODO: support parsing from scientific notation
-fn parse_decimal_128(unsigned_number: &str, negative: bool) -> Result<Expr> {
-    // remove leading zeroes
-    let trimmed = unsigned_number.trim_start_matches('0');
-    // Parse precision and scale, remove decimal point if exists
-    let (precision, scale, replaced_str) = if trimmed == "." {
-        // Special cases for numbers such as “0.”, “000.”, and so on.
-        (1, 0, Cow::Borrowed("0"))
-    } else if let Some(i) = trimmed.find('.') {
-        (
-            trimmed.len() - 1,
-            trimmed.len() - i - 1,
-            Cow::Owned(trimmed.replace('.', "")),
-        )
-    } else {
-        // No decimal point, keep as is
-        (trimmed.len(), 0, Cow::Borrowed(trimmed))
-    };
+/// Returns None if the value can't be converted to i256.
+/// Modified from <https://github.com/apache/arrow-rs/blob/c4dbf0d8af6ca5a19b8b2ea777da3c276807fc5e/arrow-buffer/src/bigint/mod.rs#L303>
+fn bigint_to_i256(v: &BigInt) -> Option<i256> {
+    let v_bytes = v.to_signed_bytes_le();
+    match v_bytes.len().cmp(&32) {
+        Ordering::Less => {
+            let mut bytes = if v.is_negative() {
+                [255_u8; 32]
+            } else {
+                [0; 32]
+            };
+            bytes[0..v_bytes.len()].copy_from_slice(&v_bytes[..v_bytes.len()]);
+            Some(i256::from_le_bytes(bytes))
+        }
+        Ordering::Equal => Some(i256::from_le_bytes(v_bytes.try_into().unwrap())),
+        Ordering::Greater => None,
+    }
+}
 
-    let number = replaced_str.parse::<i128>().map_err(|e| {
+fn parse_decimal(unsigned_number: &str, negative: bool) -> Result<Expr> {
+    let mut dec = BigDecimal::from_str(unsigned_number).map_err(|e| {
         DataFusionError::from(ParserError(format!(
-            "Cannot parse {replaced_str} as i128 when building decimal: {e}"
+            "Cannot parse {unsigned_number} as BigDecimal: {e}"
         )))
     })?;
-
-    // Check precision overflow
-    if precision as u8 > DECIMAL128_MAX_PRECISION {
-        return Err(DataFusionError::from(ParserError(format!(
-            "Cannot parse {replaced_str} as i128 when building decimal: precision overflow"
-        ))));
+    if negative {
+        dec = dec.neg();
     }
 
-    Ok(Expr::Literal(ScalarValue::Decimal128(
-        Some(if negative { -number } else { number }),
-        precision as u8,
-        scale as i8,
-    )))
+    let digits = dec.digits();
+    let (int_val, scale) = dec.into_bigint_and_exponent();
+    if scale < i8::MIN as i64 {
+        return not_impl_err!(
+            "Decimal scale {} exceeds the minimum supported scale: {}",
+            scale,
+            i8::MIN
+        );
+    }
+    let precision = if scale > 0 {
+        // arrow-rs requires the precision to include the positive scale.
+        // See <https://github.com/apache/arrow-rs/blob/123045cc766d42d1eb06ee8bb3f09e39ea995ddc/arrow-array/src/types.rs#L1230>
+        std::cmp::max(digits, scale.unsigned_abs())
+    } else {
+        digits
+    };
+    if precision <= DECIMAL128_MAX_PRECISION as u64 {
+        let val = int_val.to_i128().ok_or_else(|| {
+            // Failures are unexpected here as we have already checked the precision
+            internal_datafusion_err!(
+                "Unexpected overflow when converting {} to i128",
+                int_val
+            )
+        })?;
+        Ok(Expr::Literal(ScalarValue::Decimal128(
+            Some(val),
+            precision as u8,
+            scale as i8,
+        )))
+    } else if precision <= DECIMAL256_MAX_PRECISION as u64 {
+        let val = bigint_to_i256(&int_val).ok_or_else(|| {
+            // Failures are unexpected here as we have already checked the precision
+            internal_datafusion_err!(
+                "Unexpected overflow when converting {} to i256",
+                int_val
+            )
+        })?;
+        Ok(Expr::Literal(ScalarValue::Decimal256(
+            Some(val),
+            precision as u8,
+            scale as i8,
+        )))
+    } else {
+        not_impl_err!(
+            "Decimal precision {} exceeds the maximum supported precision: {}",
+            precision,
+            DECIMAL256_MAX_PRECISION
+        )
+    }
 }
 
 #[cfg(test)]
@@ -378,5 +423,80 @@ mod tests {
             let output = try_decode_hex_literal(input);
             assert_eq!(output, expect);
         }
+    }
+
+    #[test]
+    fn test_bigint_to_i256() {
+        let cases = [
+            (BigInt::from(0), Some(i256::from(0))),
+            (BigInt::from(1), Some(i256::from(1))),
+            (BigInt::from(-1), Some(i256::from(-1))),
+            (
+                BigInt::from_str(i256::MAX.to_string().as_str()).unwrap(),
+                Some(i256::MAX),
+            ),
+            (
+                BigInt::from_str(i256::MIN.to_string().as_str()).unwrap(),
+                Some(i256::MIN),
+            ),
+            (
+                // Can't fit into i256
+                BigInt::from_str((i256::MAX.to_string() + "1").as_str()).unwrap(),
+                None,
+            ),
+        ];
+
+        for (input, expect) in cases {
+            let output = bigint_to_i256(&input);
+            assert_eq!(output, expect);
+        }
+    }
+
+    #[test]
+    fn test_parse_decimal() {
+        // Supported cases
+        let cases = [
+            ("0", ScalarValue::Decimal128(Some(0), 1, 0)),
+            ("1", ScalarValue::Decimal128(Some(1), 1, 0)),
+            ("123.45", ScalarValue::Decimal128(Some(12345), 5, 2)),
+            // Digit count is less than scale
+            ("0.001", ScalarValue::Decimal128(Some(1), 3, 3)),
+            // Scientific notation
+            ("123.456e-2", ScalarValue::Decimal128(Some(123456), 6, 5)),
+            // Negative scale
+            ("123456e128", ScalarValue::Decimal128(Some(123456), 6, -128)),
+            // Decimal256
+            (
+                &("9".repeat(39) + "." + "99999"),
+                ScalarValue::Decimal256(
+                    Some(i256::from_string(&"9".repeat(44)).unwrap()),
+                    44,
+                    5,
+                ),
+            ),
+        ];
+        for (input, expect) in cases {
+            let output = parse_decimal(input, true).unwrap();
+            assert_eq!(output, Expr::Literal(expect.arithmetic_negate().unwrap()));
+
+            let output = parse_decimal(input, false).unwrap();
+            assert_eq!(output, Expr::Literal(expect));
+        }
+
+        // scale < i8::MIN
+        assert_eq!(
+            parse_decimal("1e129", false)
+                .unwrap_err()
+                .strip_backtrace(),
+            "This feature is not implemented: Decimal scale -129 exceeds the minimum supported scale: -128"
+        );
+
+        // Unsupported precision
+        assert_eq!(
+            parse_decimal(&"1".repeat(77), false)
+                .unwrap_err()
+                .strip_backtrace(),
+            "This feature is not implemented: Decimal precision 77 exceeds the maximum supported precision: 76"
+        );
     }
 }
