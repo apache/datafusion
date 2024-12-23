@@ -281,7 +281,7 @@ fn i64string_batch<'a>(
     .unwrap()
 }
 
-/// Run the TopK test, sorting the input batches with the specified ftch
+/// Run the TopK test, sorting the input batches with the specified fetch
 /// (limit) and compares the results to the expected values.
 async fn run_limit_test(fetch: usize, data: &SortedData) {
     let input = data.batches();

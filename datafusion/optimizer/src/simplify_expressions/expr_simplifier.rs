@@ -3661,7 +3661,7 @@ mod tests {
     }
 
     #[test]
-    fn test_like_and_ilke() {
+    fn test_like_and_ilike() {
         let null = lit(ScalarValue::Utf8(None));
 
         // expr [NOT] [I]LIKE NULL
@@ -3931,7 +3931,7 @@ mod tests {
     }
 
     #[test]
-    fn simplify_common_factor_conjuction_in_disjunction() {
+    fn simplify_common_factor_conjunction_in_disjunction() {
         let props = ExecutionProps::new();
         let schema = boolean_test_schema();
         let simplifier =

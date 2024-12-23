@@ -256,7 +256,7 @@ impl RecordBatchReceiverStreamBuilder {
     }
 
     /// Runs the `partition` of the `input` ExecutionPlan on the
-    /// tokio threadpool and writes its outputs to this stream
+    /// tokio thread pool and writes its outputs to this stream
     ///
     /// If the input partition produces an error, the error will be
     /// sent to the output stream and no further results are sent.
