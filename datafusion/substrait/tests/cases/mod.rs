@@ -22,5 +22,6 @@ mod logical_plans;
 mod roundtrip_logical_plan;
 #[cfg(feature = "physical")]
 mod roundtrip_physical_plan;
+mod roundtrip_substrait_tpch;
 mod serialize;
 mod substrait_validations;

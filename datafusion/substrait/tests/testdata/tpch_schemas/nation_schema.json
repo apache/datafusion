@@ -1,0 +1,32 @@
+{
+  "columns": [
+    {
+      "name": "n_nationkey",
+      "arrowType": {
+        "INT32": {}
+      },
+      "nullable": true
+    },
+    {
+      "name": "n_name",
+      "arrowType": {
+        "UTF8VIEW": {}
+      },
+      "nullable": true
+    },
+    {
+      "name": "n_regionkey",
+      "arrowType": {
+        "INT32": {}
+      },
+      "nullable": true
+    },
+    {
+      "name": "n_comment",
+      "arrowType": {
+        "UTF8VIEW": {}
+      },
+      "nullable": true
+    }
+  ]
+}

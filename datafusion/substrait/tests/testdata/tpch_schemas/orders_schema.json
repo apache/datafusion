@@ -1,0 +1,70 @@
+{
+  "columns": [
+    {
+      "name": "o_orderkey",
+      "arrowType": {
+        "INT64": {}
+      },
+      "nullable": true
+    },
+    {
+      "name": "o_custkey",
+      "arrowType": {
+        "INT64": {}
+      },
+      "nullable": true
+    },
+    {
+      "name": "o_orderstatus",
+      "arrowType": {
+        "UTF8VIEW": {}
+      },
+      "nullable": true
+    },
+    {
+      "name": "o_totalprice",
+      "arrowType": {
+        "DECIMAL": {
+          "precision": 15,
+          "scale": 2
+        }
+      },
+      "nullable": true
+    },
+    {
+      "name": "o_orderdate",
+      "arrowType": {
+        "DATE32": {}
+      },
+      "nullable": true
+    },
+    {
+      "name": "o_orderpriority",
+      "arrowType": {
+        "UTF8VIEW": {}
+      },
+      "nullable": true
+    },
+    {
+      "name": "o_clerk",
+      "arrowType": {
+        "UTF8VIEW": {}
+      },
+      "nullable": true
+    },
+    {
+      "name": "o_shippriority",
+      "arrowType": {
+        "INT32": {}
+      },
+      "nullable": true
+    },
+    {
+      "name": "o_comment",
+      "arrowType": {
+        "UTF8VIEW": {}
+      },
+      "nullable": true
+    }
+  ]
+}
