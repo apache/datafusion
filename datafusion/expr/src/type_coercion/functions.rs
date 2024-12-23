@@ -50,17 +50,21 @@ pub fn data_types_with_scalar_udf(
     func: &ScalarUDF,
 ) -> Result<Vec<DataType>> {
     let signature = func.signature();
+    let type_signature = &signature.type_signature;
 
     if current_types.is_empty() {
-        if signature.type_signature.supports_zero_argument() {
+        if type_signature.supports_zero_argument() {
             return Ok(vec![]);
+        } else if type_signature.used_to_support_zero_arguments() {
+            // Special error to help during upgrade: https://github.com/apache/datafusion/issues/13763
+            return plan_err!("{} does not support zero arguments. Use TypeSignature::Nullary for zero arguments.", func.name());
         } else {
             return plan_err!("{} does not support zero arguments.", func.name());
         }
     }
 
     let valid_types =
-        get_valid_types_with_scalar_udf(&signature.type_signature, current_types, func)?;
+        get_valid_types_with_scalar_udf(type_signature, current_types, func)?;
 
     if valid_types
         .iter()
@@ -69,12 +73,7 @@ pub fn data_types_with_scalar_udf(
         return Ok(current_types.to_vec());
     }
 
-    try_coerce_types(
-        func.name(),
-        valid_types,
-        current_types,
-        &signature.type_signature,
-    )
+    try_coerce_types(func.name(), valid_types, current_types, type_signature)
 }
 
 /// Performs type coercion for aggregate function arguments.
@@ -89,20 +88,21 @@ pub fn data_types_with_aggregate_udf(
     func: &AggregateUDF,
 ) -> Result<Vec<DataType>> {
     let signature = func.signature();
+    let type_signature = &signature.type_signature;
 
     if current_types.is_empty() {
-        if signature.type_signature.supports_zero_argument() {
+        if type_signature.supports_zero_argument() {
             return Ok(vec![]);
+        } else if type_signature.used_to_support_zero_arguments() {
+            // Special error to help during upgrade: https://github.com/apache/datafusion/issues/13763
+            return plan_err!("{} does not support zero arguments. Use TypeSignature::Nullary for zero arguments.", func.name());
         } else {
             return plan_err!("{} does not support zero arguments.", func.name());
         }
     }
 
-    let valid_types = get_valid_types_with_aggregate_udf(
-        &signature.type_signature,
-        current_types,
-        func,
-    )?;
+    let valid_types =
+        get_valid_types_with_aggregate_udf(type_signature, current_types, func)?;
     if valid_types
         .iter()
         .any(|data_type| data_type == current_types)
@@ -110,12 +110,7 @@ pub fn data_types_with_aggregate_udf(
         return Ok(current_types.to_vec());
     }
 
-    try_coerce_types(
-        func.name(),
-        valid_types,
-        current_types,
-        &signature.type_signature,
-    )
+    try_coerce_types(func.name(), valid_types, current_types, type_signature)
 }
 
 /// Performs type coercion for window function arguments.
@@ -130,17 +125,21 @@ pub fn data_types_with_window_udf(
     func: &WindowUDF,
 ) -> Result<Vec<DataType>> {
     let signature = func.signature();
+    let type_signature = &signature.type_signature;
 
     if current_types.is_empty() {
-        if signature.type_signature.supports_zero_argument() {
+        if type_signature.supports_zero_argument() {
             return Ok(vec![]);
+        } else if type_signature.used_to_support_zero_arguments() {
+            // Special error to help during upgrade: https://github.com/apache/datafusion/issues/13763
+            return plan_err!("{} does not support zero arguments. Use TypeSignature::Nullary for zero arguments.", func.name());
         } else {
             return plan_err!("{} does not support zero arguments.", func.name());
         }
     }
 
     let valid_types =
-        get_valid_types_with_window_udf(&signature.type_signature, current_types, func)?;
+        get_valid_types_with_window_udf(type_signature, current_types, func)?;
     if valid_types
         .iter()
         .any(|data_type| data_type == current_types)
@@ -148,12 +147,7 @@ pub fn data_types_with_window_udf(
         return Ok(current_types.to_vec());
     }
 
-    try_coerce_types(
-        func.name(),
-        valid_types,
-        current_types,
-        &signature.type_signature,
-    )
+    try_coerce_types(func.name(), valid_types, current_types, type_signature)
 }
 
 /// Performs type coercion for function arguments.
@@ -168,18 +162,26 @@ pub fn data_types(
     current_types: &[DataType],
     signature: &Signature,
 ) -> Result<Vec<DataType>> {
+    let type_signature = &signature.type_signature;
+
     if current_types.is_empty() {
-        if signature.type_signature.supports_zero_argument() {
+        if type_signature.supports_zero_argument() {
             return Ok(vec![]);
+        } else if type_signature.used_to_support_zero_arguments() {
+            // Special error to help during upgrade: https://github.com/apache/datafusion/issues/13763
+            return plan_err!(
+                "signature {:?} does not support zero arguments. Use TypeSignature::Nullary for zero arguments.",
+                type_signature
+            );
         } else {
             return plan_err!(
                 "signature {:?} does not support zero arguments.",
-                &signature.type_signature
+                type_signature
             );
         }
     }
 
-    let valid_types = get_valid_types(&signature.type_signature, current_types)?;
+    let valid_types = get_valid_types(type_signature, current_types)?;
     if valid_types
         .iter()
         .any(|data_type| data_type == current_types)
@@ -187,12 +189,7 @@ pub fn data_types(
         return Ok(current_types.to_vec());
     }
 
-    try_coerce_types(
-        function_name,
-        valid_types,
-        current_types,
-        &signature.type_signature,
-    )
+    try_coerce_types(function_name, valid_types, current_types, type_signature)
 }
 
 fn is_well_supported_signature(type_signature: &TypeSignature) -> bool {
