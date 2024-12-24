@@ -2573,7 +2573,7 @@ async fn roundtrip_union_query() -> Result<()> {
     ctx.register_csv("t2", "tests/testdata/test.csv", CsvReadOptions::default())
         .await?;
     let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx)?;
-    // proto deserialisation only supports 2-way union, hence this plan has nested unions
+    // proto deserialization only supports 2-way union, hence this plan has nested unions
     // apply the flatten unions optimizer rule to be able to compare
     let optimizer = Optimizer::with_rules(vec![Arc::new(EliminateNestedUnion::new())]);
     let unnested = optimizer.optimize(logical_round_trip, &(ctx.state()), |_x, _y| {})?;

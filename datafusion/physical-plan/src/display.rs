@@ -457,7 +457,7 @@ pub trait DisplayAs {
     fn fmt_as(&self, t: DisplayFormatType, f: &mut Formatter) -> fmt::Result;
 }
 
-/// A newtype wrapper to display `T` implementing`DisplayAs` using the `Default` mode
+/// A new type wrapper to display `T` implementing`DisplayAs` using the `Default` mode
 pub struct DefaultDisplay<T>(pub T);
 
 impl<T: DisplayAs> fmt::Display for DefaultDisplay<T> {
@@ -466,7 +466,7 @@ impl<T: DisplayAs> fmt::Display for DefaultDisplay<T> {
     }
 }
 
-/// A newtype wrapper to display `T` implementing `DisplayAs` using the `Verbose` mode
+/// A new type wrapper to display `T` implementing `DisplayAs` using the `Verbose` mode
 pub struct VerboseDisplay<T>(pub T);
 
 impl<T: DisplayAs> fmt::Display for VerboseDisplay<T> {

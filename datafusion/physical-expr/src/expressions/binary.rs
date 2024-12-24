@@ -404,7 +404,7 @@ impl PhysicalExpr for BinaryExpr {
         if self.op.eq(&Operator::And) {
             if interval.eq(&Interval::CERTAINLY_TRUE) {
                 // A certainly true logical conjunction can only derive from possibly
-                // true operands. Otherwise, we prove infeasability.
+                // true operands. Otherwise, we prove infeasibility.
                 Ok((!left_interval.eq(&Interval::CERTAINLY_FALSE)
                     && !right_interval.eq(&Interval::CERTAINLY_FALSE))
                 .then(|| vec![Interval::CERTAINLY_TRUE, Interval::CERTAINLY_TRUE]))
@@ -444,7 +444,7 @@ impl PhysicalExpr for BinaryExpr {
         } else if self.op.eq(&Operator::Or) {
             if interval.eq(&Interval::CERTAINLY_FALSE) {
                 // A certainly false logical conjunction can only derive from certainly
-                // false operands. Otherwise, we prove infeasability.
+                // false operands. Otherwise, we prove infeasibility.
                 Ok((!left_interval.eq(&Interval::CERTAINLY_TRUE)
                     && !right_interval.eq(&Interval::CERTAINLY_TRUE))
                 .then(|| vec![Interval::CERTAINLY_FALSE, Interval::CERTAINLY_FALSE]))

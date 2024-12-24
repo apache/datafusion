@@ -870,7 +870,7 @@ mod tests {
     )]
     #[cfg(feature = "compression")]
     #[tokio::test]
-    async fn test_json_with_repartitioing(
+    async fn test_json_with_repartitioning(
         file_compression_type: FileCompressionType,
     ) -> Result<()> {
         let config = SessionConfig::new()

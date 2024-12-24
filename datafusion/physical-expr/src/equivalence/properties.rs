@@ -1408,7 +1408,7 @@ fn construct_prefix_orderings(
 /// current projection expression.
 ///
 /// # Example
-///  If `dependences` is `a + b ASC` and the dependency map holds dependencies
+///  If `dependencies` is `a + b ASC` and the dependency map holds dependencies
 ///  * `a ASC` --> `[c ASC]`
 ///  * `b ASC` --> `[d DESC]`,
 ///

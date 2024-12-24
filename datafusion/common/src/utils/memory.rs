@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! This module provides a function to estimate the memory size of a HashTable prior to alloaction
+//! This module provides a function to estimate the memory size of a HashTable prior to allocation
 
 use crate::{DataFusionError, Result};
 use std::mem::size_of;
@@ -79,7 +79,7 @@ pub fn estimate_memory_size<T>(num_elements: usize, fixed_size: usize) -> Result
     // For the majority of cases hashbrown overestimates the bucket quantity
     // to keep ~1/8 of them empty. We take this factor into account by
     // multiplying the number of elements with a fixed ratio of 8/7 (~1.14).
-    // This formula leads to overallocation for small tables (< 8 elements)
+    // This formula leads to over-allocation for small tables (< 8 elements)
     // but should be fine overall.
     num_elements
         .checked_mul(8)

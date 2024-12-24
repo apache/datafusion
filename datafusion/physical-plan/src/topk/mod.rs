@@ -125,7 +125,7 @@ impl TopK {
         let row_converter = RowConverter::new(sort_fields)?;
         let scratch_rows = row_converter.empty_rows(
             batch_size,
-            20 * batch_size, // guestimate 20 bytes per row
+            20 * batch_size, // guesstimate 20 bytes per row
         );
 
         Ok(Self {
@@ -261,7 +261,7 @@ struct TopKHeap {
     k: usize,
     /// The target number of rows for output batches
     batch_size: usize,
-    /// Storage for up at most `k` items using a BinaryHeap. Reverserd
+    /// Storage for up at most `k` items using a BinaryHeap. Reversed
     /// so that the smallest k so far is on the top
     inner: BinaryHeap<TopKRow>,
     /// Storage the original row values (TopKRow only has the sort key)
