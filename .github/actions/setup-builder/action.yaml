@@ -42,8 +42,6 @@ runs:
         "${RETRY[@]}" rustup component add rustfmt
     - name: Configure rust runtime env
       uses: ./.github/actions/setup-rust-runtime
-    - name: Setup Rust cache
-      uses: Swatinem/rust-cache@v2
     - name: Fixup git permissions
       # https://github.com/actions/checkout/issues/766
       shell: bash
