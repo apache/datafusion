@@ -63,6 +63,28 @@ NULL
 NULL
 NULL
 
+# column or implicit null (no nulls)
+query I
+SELECT CASE WHEN NULLIF(NVL(a, 0) >= 0, FALSE) THEN b END FROM foo
+----
+2
+4
+6
+NULL
+NULL
+7
+
+# column or implicit null (all nulls)
+query I
+SELECT CASE WHEN NULLIF(NVL(a, 0) >= 0, TRUE) THEN b END FROM foo
+----
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+
 # scalar or scalar (string)
 query T
 SELECT CASE WHEN a > 2 THEN 'even' ELSE 'odd' END FROM foo
