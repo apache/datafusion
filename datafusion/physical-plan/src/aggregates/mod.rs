@@ -792,6 +792,11 @@ impl ExecutionPlan for AggregateExec {
         vec![self.required_input_ordering.clone()]
     }
 
+    fn maintains_input_order(&self) -> Vec<bool> {
+        // See: InputOrderMode documentation for aggregations
+        vec![self.input_order_mode != InputOrderMode::Linear]
+    }
+
     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
         vec![&self.input]
     }
