@@ -196,7 +196,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
 
     /// Internal implementation. Use
     /// [`Self::sql_expr_to_logical_expr`] to plan exprs.
-    #[cfg_attr(feature = "recursive-protection", recursive::recursive)]
+    #[cfg_attr(feature = "recursive_protection", recursive::recursive)]
     fn sql_expr_to_logical_expr_internal(
         &self,
         sql: SQLExpr,
