@@ -304,11 +304,10 @@ impl SortMergeJoinExec {
         let output_partitioning =
             symmetric_join_output_partitioning(left, right, &join_type);
 
-        // TODO: Emission type may be incremental if the input is sorted
         PlanProperties::new(
             eq_properties,
             output_partitioning,
-            EmissionType::Final,
+            EmissionType::Incremental,
             boundedness_from_children([left, right]),
         )
     }
