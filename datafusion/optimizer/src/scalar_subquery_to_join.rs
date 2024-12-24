@@ -731,7 +731,7 @@ mod tests {
             .project(vec![col("customer.c_custkey")])?
             .build()?;
 
-        let expected = "Invalid plan after Analyzer\
+        let expected = "Invalid (non-executable) plan after Analyzer\
         \ncaused by\
         \nError during planning: Scalar subquery should only return one column";
         assert_analyzer_check_err(vec![], plan, expected);
@@ -793,7 +793,7 @@ mod tests {
             .project(vec![col("customer.c_custkey")])?
             .build()?;
 
-        let expected = "Invalid plan after Analyzer\
+        let expected = "Invalid (non-executable) plan after Analyzer\
         \ncaused by\
         \nError during planning: Scalar subquery should only return one column";
         assert_analyzer_check_err(vec![], plan, expected);

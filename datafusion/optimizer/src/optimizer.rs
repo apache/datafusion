@@ -358,7 +358,7 @@ impl Optimizer {
     {
         // verify LP is valid, before the first LP optimizer pass.
         plan.check_invariants(InvariantLevel::Executable)
-            .map_err(|e| e.context("Invalid plan before LP Optimizers"))?;
+            .map_err(|e| e.context("Invalid input plan before LP Optimizers"))?;
 
         let start_time = Instant::now();
         let options = config.options();
@@ -394,12 +394,12 @@ impl Optimizer {
                 .and_then(|tnr| {
                     // run checks optimizer invariant checks, per optimizer rule applied
                     assert_valid_optimization(&tnr.data, &starting_schema)
-                        .map_err(|e| e.context(format!("check_optimizer_specific_invariants after optimizer rule: {}", rule.name())))?;
+                        .map_err(|e| e.context(format!("Check optimizer-specific invariants after optimizer rule: {}", rule.name())))?;
 
                     // run LP invariant checks only in debug mode for performance reasons
                     #[cfg(debug_assertions)]
                     tnr.data.check_invariants(InvariantLevel::Executable)
-                        .map_err(|e| e.context(format!("check_plan_is_executable after optimizer rule: {}", rule.name())))?;
+                        .map_err(|e| e.context(format!("Invalid (non-executable) plan after Optimizer rule: {}", rule.name())))?;
 
                     Ok(tnr)
                 });
@@ -462,13 +462,15 @@ impl Optimizer {
 
         // verify that the optimizer passes only mutated what was permitted.
         assert_valid_optimization(&new_plan, &starting_schema).map_err(|e| {
-            e.context("check_optimizer_specific_invariants after all passes")
+            e.context("Check optimizer-specific invariants after all passes")
         })?;
 
         // verify LP is valid, after the last optimizer pass.
         new_plan
             .check_invariants(InvariantLevel::Executable)
-            .map_err(|e| e.context("Invalid plan after LP Optimizers"))?;
+            .map_err(|e| {
+                e.context("Invalid (non-executable) plan after LP Optimizers")
+            })?;
 
         log_plan("Final optimized plan", &new_plan);
         debug!("Optimizer took {} ms", start_time.elapsed().as_millis());
@@ -545,7 +547,7 @@ mod tests {
         assert_eq!(
             "Optimizer rule 'get table_scan rule' failed\n\
             caused by\n\
-            check_optimizer_specific_invariants after optimizer rule: get table_scan rule\n\
+            Check optimizer-specific invariants after optimizer rule: get table_scan rule\n\
             caused by\n\
             Internal error: Failed due to a difference in schemas, \
             original schema: DFSchema { inner: Schema { \

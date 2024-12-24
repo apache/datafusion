@@ -145,7 +145,7 @@ impl Analyzer {
     {
         // verify the logical plan required invariants at the start, before analyzer
         plan.check_invariants(InvariantLevel::Always)
-            .map_err(|e| e.context("assert_lp_invariants_before_analyzers"))?;
+            .map_err(|e| e.context("Invalid input plan passed to Analyzer"))?;
 
         let start_time = Instant::now();
         let mut new_plan = plan;
@@ -178,7 +178,7 @@ impl Analyzer {
         // verify at the end, after the last LP analyzer pass, that the plan is executable.
         new_plan
             .check_invariants(InvariantLevel::Executable)
-            .map_err(|e| e.context("Invalid plan after Analyzer"))?;
+            .map_err(|e| e.context("Invalid (non-executable) plan after Analyzer"))?;
 
         log_plan("Final analyzed plan", &new_plan);
         debug!("Analyzer took {} ms", start_time.elapsed().as_millis());
