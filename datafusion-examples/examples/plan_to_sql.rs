@@ -28,8 +28,10 @@ use datafusion_sql::unparser::ast::{
     DerivedRelationBuilder, QueryBuilder, RelationBuilder, SelectBuilder,
 };
 use datafusion_sql::unparser::dialect::CustomDialectBuilder;
-use datafusion_sql::unparser::extension_unparser::UnparseResult;
 use datafusion_sql::unparser::extension_unparser::UserDefinedLogicalNodeUnparser;
+use datafusion_sql::unparser::extension_unparser::{
+    UnparseToStatementResult, UnparseWithinStatementResult,
+};
 use datafusion_sql::unparser::{plan_to_sql, Unparser};
 use std::fmt;
 use std::sync::Arc;
@@ -214,12 +216,12 @@ impl UserDefinedLogicalNodeUnparser for PlanToStatement {
         &self,
         node: &dyn UserDefinedLogicalNode,
         unparser: &Unparser,
-    ) -> Result<UnparseResult> {
+    ) -> Result<UnparseToStatementResult> {
         if let Some(plan) = node.as_any().downcast_ref::<MyLogicalPlan>() {
             let input = unparser.plan_to_sql(&plan.input)?;
-            Ok(UnparseResult::Statement(input))
+            Ok(UnparseToStatementResult::Modified(input))
         } else {
-            Ok(UnparseResult::Original)
+            Ok(UnparseToStatementResult::Unmodified)
         }
     }
 }
@@ -261,10 +263,10 @@ impl UserDefinedLogicalNodeUnparser for PlanToSubquery {
         _query: &mut Option<&mut QueryBuilder>,
         _select: &mut Option<&mut SelectBuilder>,
         relation: &mut Option<&mut RelationBuilder>,
-    ) -> Result<UnparseResult> {
+    ) -> Result<UnparseWithinStatementResult> {
         if let Some(plan) = node.as_any().downcast_ref::<MyLogicalPlan>() {
             let Statement::Query(input) = unparser.plan_to_sql(&plan.input)? else {
-                return Ok(UnparseResult::Original);
+                return Ok(UnparseWithinStatementResult::Unmodified);
             };
             let mut derived_builder = DerivedRelationBuilder::default();
             derived_builder.subquery(input);
@@ -273,7 +275,7 @@ impl UserDefinedLogicalNodeUnparser for PlanToSubquery {
                 rel.derived(derived_builder);
             }
         }
-        Ok(UnparseResult::WithinStatement)
+        Ok(UnparseWithinStatementResult::Modified)
     }
 }
 

@@ -51,7 +51,8 @@ use datafusion_sql::unparser::ast::{
     DerivedRelationBuilder, QueryBuilder, RelationBuilder, SelectBuilder,
 };
 use datafusion_sql::unparser::extension_unparser::{
-    UnparseResult, UserDefinedLogicalNodeUnparser,
+    UnparseToStatementResult, UnparseWithinStatementResult,
+    UserDefinedLogicalNodeUnparser,
 };
 use sqlparser::dialect::{Dialect, GenericDialect, MySqlDialect};
 use sqlparser::parser::Parser;
@@ -1461,12 +1462,12 @@ impl UserDefinedLogicalNodeUnparser for MockStatementUnparser {
         &self,
         node: &dyn UserDefinedLogicalNode,
         unparser: &Unparser,
-    ) -> Result<UnparseResult> {
+    ) -> Result<UnparseToStatementResult> {
         if let Some(plan) = node.as_any().downcast_ref::<MockUserDefinedLogicalPlan>() {
             let input = unparser.plan_to_sql(&plan.input)?;
-            Ok(UnparseResult::Statement(input))
+            Ok(UnparseToStatementResult::Modified(input))
         } else {
-            Ok(UnparseResult::Original)
+            Ok(UnparseToStatementResult::Unmodified)
         }
     }
 }
@@ -1481,7 +1482,7 @@ impl UserDefinedLogicalNodeUnparser for UnusedUnparser {
         _query: &mut Option<&mut QueryBuilder>,
         _select: &mut Option<&mut SelectBuilder>,
         _relation: &mut Option<&mut RelationBuilder>,
-    ) -> Result<UnparseResult> {
+    ) -> Result<UnparseWithinStatementResult> {
         panic!("This should not be called");
     }
 
@@ -1489,7 +1490,7 @@ impl UserDefinedLogicalNodeUnparser for UnusedUnparser {
         &self,
         _node: &dyn UserDefinedLogicalNode,
         _unparser: &Unparser,
-    ) -> Result<UnparseResult> {
+    ) -> Result<UnparseToStatementResult> {
         panic!("This should not be called");
     }
 }
@@ -1537,10 +1538,10 @@ impl UserDefinedLogicalNodeUnparser for MockSqlUnparser {
         _query: &mut Option<&mut QueryBuilder>,
         _select: &mut Option<&mut SelectBuilder>,
         relation: &mut Option<&mut RelationBuilder>,
-    ) -> Result<UnparseResult> {
+    ) -> Result<UnparseWithinStatementResult> {
         if let Some(plan) = node.as_any().downcast_ref::<MockUserDefinedLogicalPlan>() {
             let Statement::Query(input) = unparser.plan_to_sql(&plan.input)? else {
-                return Ok(UnparseResult::Original);
+                return Ok(UnparseWithinStatementResult::Unmodified);
             };
             let mut derived_builder = DerivedRelationBuilder::default();
             derived_builder.subquery(input);
@@ -1549,7 +1550,7 @@ impl UserDefinedLogicalNodeUnparser for MockSqlUnparser {
                 rel.derived(derived_builder);
             }
         }
-        Ok(UnparseResult::WithinStatement)
+        Ok(UnparseWithinStatementResult::Modified)
     }
 }
 

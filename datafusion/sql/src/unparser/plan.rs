@@ -33,7 +33,9 @@ use super::{
     Unparser,
 };
 use crate::unparser::ast::UnnestRelationBuilder;
-use crate::unparser::extension_unparser::UnparseResult;
+use crate::unparser::extension_unparser::{
+    UnparseToStatementResult, UnparseWithinStatementResult,
+};
 use crate::unparser::utils::unproject_agg_exprs;
 use crate::utils::UNNEST_PLACEHOLDER;
 use datafusion_common::{
@@ -135,16 +137,11 @@ impl Unparser<'_> {
         let mut statement = None;
         for unparser in &self.extension_unparsers {
             match unparser.unparse_to_statement(node, self)? {
-                UnparseResult::Statement(stmt) => {
+                UnparseToStatementResult::Modified(stmt) => {
                     statement = Some(stmt);
                     break;
                 }
-                UnparseResult::WithinStatement => {
-                    return not_impl_err!(
-                        "UnparseResult::WithinStatement is not supported for `extension_to_statement`"
-                    );
-                }
-                UnparseResult::Original => {}
+                UnparseToStatementResult::Unmodified => {}
             }
         }
         if let Some(statement) = statement {
@@ -166,13 +163,8 @@ impl Unparser<'_> {
     ) -> Result<()> {
         for unparser in &self.extension_unparsers {
             match unparser.unparse(node, self, query, select, relation)? {
-                UnparseResult::WithinStatement => return Ok(()),
-                UnparseResult::Original => {}
-                UnparseResult::Statement(_) => {
-                    return not_impl_err!(
-                        "UnparseResult::Statement is not supported for `extension_to_sql`"
-                    );
-                }
+                UnparseWithinStatementResult::Modified => return Ok(()),
+                UnparseWithinStatementResult::Unmodified => {}
             }
         }
         not_impl_err!("Unsupported extension node: {node:?}")

@@ -36,8 +36,8 @@ pub trait UserDefinedLogicalNodeUnparser {
         _query: &mut Option<&mut QueryBuilder>,
         _select: &mut Option<&mut SelectBuilder>,
         _relation: &mut Option<&mut RelationBuilder>,
-    ) -> datafusion_common::Result<UnparseResult> {
-        Ok(UnparseResult::Original)
+    ) -> datafusion_common::Result<UnparseWithinStatementResult> {
+        Ok(UnparseWithinStatementResult::Unmodified)
     }
 
     /// Unparse the custom logical node to a statement.
@@ -50,17 +50,23 @@ pub trait UserDefinedLogicalNodeUnparser {
         &self,
         _node: &dyn UserDefinedLogicalNode,
         _unparser: &Unparser,
-    ) -> datafusion_common::Result<UnparseResult> {
-        Ok(UnparseResult::Original)
+    ) -> datafusion_common::Result<UnparseToStatementResult> {
+        Ok(UnparseToStatementResult::Unmodified)
     }
 }
 
-/// The result of unparsing a custom logical node.
-pub enum UnparseResult {
-    /// If the custom logical node was successfully unparsed and return a statement.
-    Statement(Statement),
+/// The result of unparsing a custom logical node within a statement.
+pub enum UnparseWithinStatementResult {
     /// If the custom logical node was successfully unparsed within a statement.
-    WithinStatement,
+    Modified,
     /// If the custom logical node wasn't unparsed.
-    Original,
+    Unmodified,
+}
+
+/// The result of unparsing a custom logical node to a statement.
+pub enum UnparseToStatementResult {
+    /// If the custom logical node was successfully unparsed to a statement.
+    Modified(Statement),
+    /// If the custom logical node wasn't unparsed.
+    Unmodified,
 }
