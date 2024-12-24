@@ -59,13 +59,7 @@ pub fn assert_executable_invariants(plan: &LogicalPlan) -> Result<()> {
 /// This invariant is subject to change.
 /// refer: <https://github.com/apache/datafusion/issues/13525#issuecomment-2494046463>
 fn assert_unique_field_names(plan: &LogicalPlan) -> Result<()> {
-    plan.schema().check_names()?;
-
-    plan.apply_with_subqueries(|plan: &LogicalPlan| {
-        plan.schema().check_names()?;
-        Ok(TreeNodeRecursion::Continue)
-    })
-    .map(|_| ())
+    plan.schema().check_names()
 }
 
 /// Returns an error if the plan is not sematically valid.
