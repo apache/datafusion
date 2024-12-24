@@ -16,9 +16,9 @@
 // under the License.
 
 use datafusion_common::{
-    plan_err,
+    internal_err, plan_err,
     tree_node::{TreeNode, TreeNodeRecursion},
-    DFSchemaRef, DataFusionError, Result,
+    DFSchemaRef, Result,
 };
 
 use crate::{
@@ -75,11 +75,11 @@ pub fn assert_expected_schema(schema: &DFSchemaRef, plan: &LogicalPlan) -> Resul
     let equivalent = plan.schema().equivalent_names_and_types(schema);
 
     if !equivalent {
-        Err(DataFusionError::Internal(format!(
+        internal_err!(
             "Failed due to a difference in schemas, original schema: {:?}, new schema: {:?}",
             schema,
             plan.schema()
-        )))
+        )
     } else {
         Ok(())
     }

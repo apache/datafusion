@@ -24,7 +24,7 @@ use log::debug;
 
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::instant::Instant;
-use datafusion_common::{DataFusionError, Result};
+use datafusion_common::Result;
 use datafusion_expr::expr_rewriter::FunctionRewrite;
 use datafusion_expr::{InvariantLevel, LogicalPlan};
 
@@ -144,12 +144,8 @@ impl Analyzer {
         F: FnMut(&LogicalPlan, &dyn AnalyzerRule),
     {
         // verify the logical plan required invariants at the start, before analyzer
-        plan.check_invariants(InvariantLevel::Always).map_err(|e| {
-            DataFusionError::Context(
-                "assert_lp_invariants_before_analyzers".to_string(),
-                Box::new(e),
-            )
-        })?;
+        plan.check_invariants(InvariantLevel::Always)
+            .map_err(|e| e.context("assert_lp_invariants_before_analyzers"))?;
 
         let start_time = Instant::now();
         let mut new_plan = plan;
@@ -172,9 +168,9 @@ impl Analyzer {
 
         // TODO add common rule executor for Analyzer and Optimizer
         for rule in rules {
-            new_plan = rule.analyze(new_plan, config).map_err(|e| {
-                DataFusionError::Context(rule.name().to_string(), Box::new(e))
-            })?;
+            new_plan = rule
+                .analyze(new_plan, config)
+                .map_err(|e| e.context(rule.name()))?;
             log_plan(rule.name(), &new_plan);
             observer(&new_plan, rule.as_ref());
         }
@@ -182,12 +178,7 @@ impl Analyzer {
         // verify at the end, after the last LP analyzer pass, that the plan is executable.
         new_plan
             .check_invariants(InvariantLevel::Executable)
-            .map_err(|e| {
-                DataFusionError::Context(
-                    "Invalid plan after Analyzer".to_string(),
-                    Box::new(e),
-                )
-            })?;
+            .map_err(|e| e.context("Invalid plan after Analyzer"))?;
 
         log_plan("Final analyzed plan", &new_plan);
         debug!("Analyzer took {} ms", start_time.elapsed().as_millis());
