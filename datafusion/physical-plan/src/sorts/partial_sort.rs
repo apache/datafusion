@@ -374,9 +374,11 @@ impl PartialSortStream {
                         self.in_mem_batches.push(batch.slice(0, slice_point));
                         let remaining_batch =
                             batch.slice(slice_point, batch.num_rows() - slice_point);
+                        // Extract the sorted batch
+                        let sorted_batch = self.sort_in_mem_batches();
+                        // Refill with the remaining batch
                         self.in_mem_batches.push(remaining_batch);
 
-                        let sorted_batch = self.sort_in_mem_batches();
                         debug_assert!(sorted_batch
                             .as_ref()
                             .map(|batch| batch.num_rows() > 0)
