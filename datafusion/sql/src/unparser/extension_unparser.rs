@@ -27,8 +27,8 @@ pub trait UserDefinedLogicalNodeUnparser {
     /// This method is called when the custom logical node is part of a statement.
     /// e.g. `SELECT * FROM custom_logical_node`
     ///
-    /// The return value should be [UnparseResult::WithinStatement] if the custom logical node was successfully unparsed.
-    /// Otherwise, return [UnparseResult::Original].
+    /// The return value should be [UnparseWithinStatementResult::Modified] if the custom logical node was successfully unparsed.
+    /// Otherwise, return [UnparseWithinStatementResult::Unmodified].
     fn unparse(
         &self,
         _node: &dyn UserDefinedLogicalNode,
@@ -44,8 +44,8 @@ pub trait UserDefinedLogicalNodeUnparser {
     ///
     /// This method is called when the custom logical node is a custom statement.
     ///
-    /// The return value should be [UnparseResult::Statement] if the custom logical node was successfully unparsed.
-    /// Otherwise, return [UnparseResult::Original].
+    /// The return value should be [UnparseToStatementResult::Modified] if the custom logical node was successfully unparsed.
+    /// Otherwise, return [UnparseToStatementResult::Unmodified].
     fn unparse_to_statement(
         &self,
         _node: &dyn UserDefinedLogicalNode,
