@@ -183,7 +183,10 @@ impl Analyzer {
         new_plan
             .check_invariants(InvariantLevel::Executable)
             .map_err(|e| {
-                DataFusionError::Context("check_analyzed_plan".to_string(), Box::new(e))
+                DataFusionError::Context(
+                    "Invalid plan after Analyzer".to_string(),
+                    Box::new(e),
+                )
             })?;
 
         log_plan("Final analyzed plan", &new_plan);

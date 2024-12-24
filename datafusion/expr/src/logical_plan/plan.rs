@@ -25,7 +25,7 @@ use std::sync::{Arc, LazyLock};
 
 use super::dml::CopyTo;
 use super::invariants::{
-    assert_executable_invariants, assert_required_invariants, InvariantLevel,
+    assert_always_invariants, assert_executable_invariants, InvariantLevel,
 };
 use super::DdlStatement;
 use crate::builder::{change_redundant_column, unnest_with_options};
@@ -1133,7 +1133,7 @@ impl LogicalPlan {
     /// checks that the plan conforms to the listed invariant level, returning an Error if not
     pub fn check_invariants(&self, check: InvariantLevel) -> Result<()> {
         match check {
-            InvariantLevel::Always => assert_required_invariants(self),
+            InvariantLevel::Always => assert_always_invariants(self),
             InvariantLevel::Executable => assert_executable_invariants(self),
         }
     }

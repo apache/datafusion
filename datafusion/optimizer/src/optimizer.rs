@@ -360,7 +360,7 @@ impl Optimizer {
         plan.check_invariants(InvariantLevel::Executable)
             .map_err(|e| {
                 DataFusionError::Context(
-                    "check_plan_is_executable before optimizers".to_string(),
+                    "Invalid plan before LP Optimizers".to_string(),
                     Box::new(e),
                 )
             })?;
@@ -397,21 +397,21 @@ impl Optimizer {
                     None => optimize_plan_node(new_plan, rule.as_ref(), config),
                 }
                 .and_then(|tnr| {
-                    // run checks optimizer invariant checks, per pass
+                    // run checks optimizer invariant checks, per optimizer rule applied
                     assert_valid_optimization(&tnr.data, &starting_schema)
                         .map_err(|e| {
                             DataFusionError::Context(
-                                format!("check_optimizer_specific_invariants after optimizer pass: {}", rule.name()),
+                                format!("check_optimizer_specific_invariants after optimizer rule: {}", rule.name()),
                                 Box::new(e),
                             )
                         })?;
 
-                    // run LP invariant checks only in debug
+                    // run LP invariant checks only in debug mode for performance reasons
                     #[cfg(debug_assertions)]
                     tnr.data.check_invariants(InvariantLevel::Executable)
                         .map_err(|e| {
                             DataFusionError::Context(
-                                format!("check_plan_is_executable after optimizer pass: {}", rule.name()),
+                                format!("check_plan_is_executable after optimizer rule: {}", rule.name()),
                                 Box::new(e),
                             )
                         })?;
@@ -488,7 +488,7 @@ impl Optimizer {
             .check_invariants(InvariantLevel::Executable)
             .map_err(|e| {
                 DataFusionError::Context(
-                    "check_plan_is_executable after optimizers".to_string(),
+                    "Invalid plan after LP Optimizers".to_string(),
                     Box::new(e),
                 )
             })?;
@@ -568,7 +568,7 @@ mod tests {
         assert_eq!(
             "Optimizer rule 'get table_scan rule' failed\n\
             caused by\n\
-            check_optimizer_specific_invariants after optimizer pass: get table_scan rule\n\
+            check_optimizer_specific_invariants after optimizer rule: get table_scan rule\n\
             caused by\n\
             Internal error: Failed due to a difference in schemas, \
             original schema: DFSchema { inner: Schema { \

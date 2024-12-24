@@ -36,12 +36,12 @@ pub enum InvariantLevel {
     /// such as the type and number of function arguments are correct and
     /// that wildcards have been expanded
     ///
-    /// To ensure a LogicalPlan satisfies the `Executable` inariants, run the
+    /// To ensure a LogicalPlan satisfies the `Executable` invariants, run the
     /// `Analyzer`
     Executable,
 }
 
-pub fn assert_required_invariants(plan: &LogicalPlan) -> Result<()> {
+pub fn assert_always_invariants(plan: &LogicalPlan) -> Result<()> {
     // Refer to <https://datafusion.apache.org/contributor-guide/specification/invariants.html#relation-name-tuples-in-logical-fields-and-logical-columns-are-unique>
     assert_unique_field_names(plan)?;
 
@@ -49,7 +49,7 @@ pub fn assert_required_invariants(plan: &LogicalPlan) -> Result<()> {
 }
 
 pub fn assert_executable_invariants(plan: &LogicalPlan) -> Result<()> {
-    assert_required_invariants(plan)?;
+    assert_always_invariants(plan)?;
     assert_valid_semantic_plan(plan)?;
     Ok(())
 }

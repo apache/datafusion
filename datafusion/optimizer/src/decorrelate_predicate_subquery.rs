@@ -835,7 +835,7 @@ mod tests {
             .build()?;
 
         // Maybe okay if the table only has a single column?
-        let expected = "check_analyzed_plan\
+        let expected = "Invalid plan after Analyzer\
         \ncaused by\
         \nError during planning: InSubquery should only return one column, but found 4";
         assert_analyzer_check_err(vec![], plan, expected);
@@ -930,7 +930,7 @@ mod tests {
             .project(vec![col("customer.c_custkey")])?
             .build()?;
 
-        let expected = "check_analyzed_plan\
+        let expected = "Invalid plan after Analyzer\
         \ncaused by\
         \nError during planning: InSubquery should only return one column";
         assert_analyzer_check_err(vec![], plan, expected);
