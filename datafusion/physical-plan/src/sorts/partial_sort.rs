@@ -366,7 +366,7 @@ impl PartialSortStream {
             return Poll::Ready(None);
         }
         loop {
-            return Poll::Ready(Some(match ready!(self.input.poll_next_unpin(cx)) {
+            return Poll::Ready(match ready!(self.input.poll_next_unpin(cx)) {
                 Some(Ok(batch)) => {
                     if let Some(slice_point) =
                         self.get_slice_point(self.common_prefix_length, &batch)?
@@ -375,20 +375,33 @@ impl PartialSortStream {
                         let remaining_batch =
                             batch.slice(slice_point, batch.num_rows() - slice_point);
                         let sorted_batch = self.sort_in_mem_batches();
-                        self.in_mem_batches.push(remaining_batch);
-                        sorted_batch
+                        if sorted_batch
+                            .as_ref()
+                            .map(|batch| batch.num_rows() > 0)
+                            .unwrap_or(true)
+                        {
+                            self.in_mem_batches.push(remaining_batch);
+                            Some(sorted_batch)
+                        } else {
+                            None
+                        }
                     } else {
                         self.in_mem_batches.push(batch);
                         continue;
                     }
                 }
-                Some(Err(e)) => Err(e),
+                Some(Err(e)) => Some(Err(e)),
                 None => {
                     self.is_closed = true;
                     // once input is consumed, sort the rest of the inserted batches
-                    self.sort_in_mem_batches()
+                    let remaining_batch = self.sort_in_mem_batches()?;
+                    if remaining_batch.num_rows() > 0 {
+                        Some(Ok(remaining_batch))
+                    } else {
+                        None
+                    }
                 }
-            }));
+            });
         }
     }
 
@@ -409,9 +422,6 @@ impl PartialSortStream {
                 self.is_closed = true;
             }
         }
-        // Empty record batches should not be emitted.
-        // They need to be treated as [`Option<RecordBatch>`]es and handle separately
-        debug_assert!(result.num_rows() > 0);
         Ok(result)
     }
 
