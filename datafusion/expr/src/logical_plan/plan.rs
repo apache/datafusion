@@ -1202,7 +1202,7 @@ impl LogicalPlan {
     /// # let schema = Schema::new(vec![
     /// #     Field::new("id", DataType::Int32, false),
     /// # ]);
-    /// // Build SELECT * FROM t1 WHRERE id = $1
+    /// // Build SELECT * FROM t1 WHERE id = $1
     /// let plan = table_scan(Some("t1"), &schema, None).unwrap()
     ///     .filter(col("id").eq(placeholder("$1"))).unwrap()
     ///     .build().unwrap();
@@ -1225,7 +1225,7 @@ impl LogicalPlan {
     ///  );
     ///
     /// // Note you can also used named parameters
-    /// // Build SELECT * FROM t1 WHRERE id = $my_param
+    /// // Build SELECT * FROM t1 WHERE id = $my_param
     /// let plan = table_scan(Some("t1"), &schema, None).unwrap()
     ///     .filter(col("id").eq(placeholder("$my_param"))).unwrap()
     ///     .build().unwrap()
@@ -3633,7 +3633,7 @@ digraph {
 "#;
 
         // just test for a few key lines in the output rather than the
-        // whole thing to make test mainteance easier.
+        // whole thing to make test maintenance easier.
         let graphviz = format!("{}", plan.display_graphviz());
 
         assert_eq!(expected_graphviz, graphviz);

@@ -22,7 +22,7 @@
 This crate includes end to end, highly commented examples of how to use
 various DataFusion APIs to help you get started.
 
-## Prerequisites:
+## Prerequisites
 
 Run `git submodule update --init` to init test files.
 

@@ -79,7 +79,7 @@ impl OptimizerRule for EliminateCrossJoin {
         true
     }
 
-    #[cfg_attr(feature = "recursive-protection", recursive::recursive)]
+    #[cfg_attr(feature = "recursive_protection", recursive::recursive)]
     fn rewrite(
         &self,
         plan: LogicalPlan,
@@ -93,7 +93,7 @@ impl OptimizerRule for EliminateCrossJoin {
         let parent_predicate = if let LogicalPlan::Filter(filter) = plan {
             // if input isn't a join that can potentially be rewritten
             // avoid unwrapping the input
-            let rewriteable = matches!(
+            let rewritable = matches!(
                 filter.input.as_ref(),
                 LogicalPlan::Join(Join {
                     join_type: JoinType::Inner,
@@ -101,7 +101,7 @@ impl OptimizerRule for EliminateCrossJoin {
                 })
             );
 
-            if !rewriteable {
+            if !rewritable {
                 // recursively try to rewrite children
                 return rewrite_children(self, LogicalPlan::Filter(filter), config);
             }

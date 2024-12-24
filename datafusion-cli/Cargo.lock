@@ -1543,6 +1543,7 @@ dependencies = [
  "indexmap",
  "itertools",
  "log",
+ "recursive",
  "regex",
  "regex-syntax",
 ]

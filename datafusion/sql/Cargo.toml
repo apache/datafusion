@@ -36,10 +36,10 @@ name = "datafusion_sql"
 path = "src/lib.rs"
 
 [features]
-default = ["unicode_expressions", "unparser", "recursive-protection"]
+default = ["unicode_expressions", "unparser"]
 unicode_expressions = []
 unparser = []
-recursive-protection = ["dep:recursive"]
+recursive_protection = ["dep:recursive"]
 
 [dependencies]
 arrow = { workspace = true }

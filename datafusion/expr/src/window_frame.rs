@@ -274,7 +274,7 @@ impl WindowFrame {
         Ok(())
     }
 
-    /// Returns whether the window frame can accept multiple ORDER BY expressons.
+    /// Returns whether the window frame can accept multiple ORDER BY expressions.
     pub fn can_accept_multi_orderby(&self) -> bool {
         match self.units {
             WindowFrameUnits::Rows => true,

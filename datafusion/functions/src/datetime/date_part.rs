@@ -105,7 +105,7 @@ impl ScalarUDFImpl for DatePartFunc {
     }
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        internal_err!("return_type_from_exprs shoud be called instead")
+        internal_err!("return_type_from_exprs should be called instead")
     }
 
     fn return_type_from_exprs(

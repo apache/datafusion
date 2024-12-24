@@ -124,7 +124,7 @@ pub trait TreeNode: Sized {
     /// TreeNodeVisitor::f_up(ChildNode2)
     /// TreeNodeVisitor::f_up(ParentNode)
     /// ```
-    #[cfg_attr(feature = "recursive-protection", recursive::recursive)]
+    #[cfg_attr(feature = "recursive_protection", recursive::recursive)]
     fn visit<'n, V: TreeNodeVisitor<'n, Node = Self>>(
         &'n self,
         visitor: &mut V,
@@ -174,7 +174,7 @@ pub trait TreeNode: Sized {
     /// TreeNodeRewriter::f_up(ChildNode2)
     /// TreeNodeRewriter::f_up(ParentNode)
     /// ```
-    #[cfg_attr(feature = "recursive-protection", recursive::recursive)]
+    #[cfg_attr(feature = "recursive_protection", recursive::recursive)]
     fn rewrite<R: TreeNodeRewriter<Node = Self>>(
         self,
         rewriter: &mut R,
@@ -197,7 +197,7 @@ pub trait TreeNode: Sized {
         &'n self,
         mut f: F,
     ) -> Result<TreeNodeRecursion> {
-        #[cfg_attr(feature = "recursive-protection", recursive::recursive)]
+        #[cfg_attr(feature = "recursive_protection", recursive::recursive)]
         fn apply_impl<'n, N: TreeNode, F: FnMut(&'n N) -> Result<TreeNodeRecursion>>(
             node: &'n N,
             f: &mut F,
@@ -232,7 +232,7 @@ pub trait TreeNode: Sized {
         self,
         mut f: F,
     ) -> Result<Transformed<Self>> {
-        #[cfg_attr(feature = "recursive-protection", recursive::recursive)]
+        #[cfg_attr(feature = "recursive_protection", recursive::recursive)]
         fn transform_down_impl<N: TreeNode, F: FnMut(N) -> Result<Transformed<N>>>(
             node: N,
             f: &mut F,
@@ -256,7 +256,7 @@ pub trait TreeNode: Sized {
         self,
         mut f: F,
     ) -> Result<Transformed<Self>> {
-        #[cfg_attr(feature = "recursive-protection", recursive::recursive)]
+        #[cfg_attr(feature = "recursive_protection", recursive::recursive)]
         fn transform_up_impl<N: TreeNode, F: FnMut(N) -> Result<Transformed<N>>>(
             node: N,
             f: &mut F,
@@ -371,7 +371,7 @@ pub trait TreeNode: Sized {
         mut f_down: FD,
         mut f_up: FU,
     ) -> Result<Transformed<Self>> {
-        #[cfg_attr(feature = "recursive-protection", recursive::recursive)]
+        #[cfg_attr(feature = "recursive_protection", recursive::recursive)]
         fn transform_down_up_impl<
             N: TreeNode,
             FD: FnMut(N) -> Result<Transformed<N>>,
@@ -995,11 +995,11 @@ impl<
 /// construct a temporary container to be able to call `apply_ref_elements` on a
 /// collection of tree node references. But in that case the container's temporary
 /// lifetime is different to the lifetime of tree nodes that we put into it.
-/// Please find an example usecase in `Expr::apply_children` with the `Expr::Case` case.
+/// Please find an example use case in `Expr::apply_children` with the `Expr::Case` case.
 ///
 /// Most of the cases we don't need to create a temporary container with
 /// `TreeNodeRefContainer`, but we can just call `TreeNodeContainer::apply_elements`.
-/// Please find an example usecase in `Expr::apply_children` with the `Expr::GroupingSet`
+/// Please find an example use case in `Expr::apply_children` with the `Expr::GroupingSet`
 /// case.
 pub trait TreeNodeRefContainer<'a, T: 'a>: Sized {
     /// Applies `f` to all elements of the container.
@@ -2349,7 +2349,7 @@ pub(crate) mod tests {
         Ok(())
     }
 
-    #[cfg(feature = "recursive-protection")]
+    #[cfg(feature = "recursive_protection")]
     #[test]
     fn test_large_tree() {
         let mut item = TestTreeNode::new_leaf("initial".to_string());

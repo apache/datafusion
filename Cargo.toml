@@ -73,7 +73,7 @@ version = "44.0.0"
 # selectively turn them on if needed, since we can override default-features = true (from false)
 # for the inherited dependency but cannot do the reverse (override from true to false).
 #
-# See for more detaiils: https://github.com/rust-lang/cargo/issues/11329
+# See for more details: https://github.com/rust-lang/cargo/issues/11329
 ahash = { version = "0.8", default-features = false, features = [
     "runtime-rng",
 ] }
