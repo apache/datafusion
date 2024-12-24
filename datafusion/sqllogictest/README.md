@@ -28,7 +28,8 @@ This crate is a submodule of DataFusion that contains an implementation of [sqll
 ## Overview
 
 This crate uses [sqllogictest-rs](https://github.com/risinglightdb/sqllogictest-rs) to parse and run `.slt` files in the
-[`test_files`](test_files) directory of this crate.
+[`test_files`](test_files) directory of this crate or the [`data/sqlite`](sqlite) 
+directory of the datafusion-testing crate.
 
 ## Testing setup
 
@@ -216,12 +217,15 @@ INCLUDE_TPCH=true cargo test --test sqllogictests
 
 ## Running Tests: `sqlite`
 
-Test files in `sqlite` directory were sourced from the sqlite test suite and
-have been cleansed and updated to run within DataFusion's sqllogictest runner.
+Test files in `data/sqlite` directory of the datafusion-testing crate were
+sourced from the sqlite test suite and have been cleansed and updated to 
+run within DataFusion's sqllogictest runner.
 
-To run the sqlite tests add `INCLUDE_SQLITE=true` to run the sqlite tests:
+To run the sqlite tests you need to increase the rust stack size and add 
+`INCLUDE_SQLITE=true` to run the sqlite tests:
 
 ```shell
+export RUST_MIN_STACK=30485760; 
 INCLUDE_SQLITE=true cargo test --test sqllogictests
 ```
 
@@ -235,6 +239,7 @@ INCLUDE_SQLITE=true cargo test --profile release-nonlto --test sqllogictests
 The sqlite tests can also be run with the postgres runner to verify compatibility:
 
 ```shell
+export RUST_MIN_STACK=30485760; 
 PG_COMPAT=true INCLUDE_SQLITE=true cargo test --features=postgres --test sqllogictests
 ```
 

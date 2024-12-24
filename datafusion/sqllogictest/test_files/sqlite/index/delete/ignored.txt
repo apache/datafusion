@@ -1,1 +1,0 @@
-This directory was ignored because of too many failures caused by Datafusion's lack of support for delete

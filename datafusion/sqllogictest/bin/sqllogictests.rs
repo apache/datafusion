@@ -55,6 +55,7 @@ use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 use tokio::sync::{mpsc, Mutex};
 
 const TEST_DIRECTORY: &str = "test_files/";
+const DATAFUSION_TESTING_TEST_DIRECTORY: &str = "../../datafusion-testing/data/";
 const PG_COMPAT_FILE_PREFIX: &str = "pg_compat_";
 const SQLITE_PREFIX: &str = "sqlite";
 
@@ -167,7 +168,8 @@ async fn run_tests() -> Result<()> {
     options.warn_on_ignored();
 
     #[cfg(feature = "postgres")]
-    if options.postgres_runner && !is_pg_uri_set() {
+    let start_pg_database = options.postgres_runner && !is_pg_uri_set();
+    if start_pg_database {
         info!("Starting postgres db ...");
 
         thread::spawn(|| {
@@ -272,7 +274,8 @@ async fn run_tests() -> Result<()> {
     m.println(format!("Completed in {}", HumanDuration(start.elapsed())))?;
 
     #[cfg(feature = "postgres")]
-    if options.postgres_runner && !is_pg_uri_set() {
+    if start_pg_database {
+        println!("Stopping postgres db ...");
         POSTGRES_IN.tx.send(ContainerCommands::Stop).unwrap_or(());
         POSTGRES_STOPPED.rx.lock().await.recv().await;
     }
@@ -551,10 +554,17 @@ struct TestFile {
 
 impl TestFile {
     fn new(path: PathBuf) -> Self {
+        let p = path.to_string_lossy();
         let relative_path = PathBuf::from(
-            path.to_string_lossy()
-                .strip_prefix(TEST_DIRECTORY)
-                .unwrap_or(""),
+            if p.starts_with(TEST_DIRECTORY) {
+                p.strip_prefix(TEST_DIRECTORY).unwrap()
+            }
+            else if p.starts_with(DATAFUSION_TESTING_TEST_DIRECTORY) {
+                p.strip_prefix(DATAFUSION_TESTING_TEST_DIRECTORY).unwrap()
+            }
+            else {
+                ""
+            }
         );
 
         Self {
@@ -587,16 +597,29 @@ impl TestFile {
 fn read_test_files<'a>(
     options: &'a Options,
 ) -> Result<Box<dyn Iterator<Item = TestFile> + 'a>> {
-    Ok(Box::new(
-        read_dir_recursive(TEST_DIRECTORY)?
+    let mut paths = read_dir_recursive(TEST_DIRECTORY)?
             .into_iter()
             .map(TestFile::new)
             .filter(|f| options.check_test_file(&f.relative_path))
             .filter(|f| f.is_slt_file())
             .filter(|f| f.check_tpch(options))
             .filter(|f| f.check_sqlite(options))
-            .filter(|f| options.check_pg_compat_file(f.path.as_path())),
-    ))
+            .filter(|f| options.check_pg_compat_file(f.path.as_path()))
+            .collect::<Vec<_>>();
+    if options.include_sqlite {
+        let mut sqlite_paths = read_dir_recursive(DATAFUSION_TESTING_TEST_DIRECTORY)?
+            .into_iter()
+            .map(TestFile::new)
+            .filter(|f| options.check_test_file(&f.relative_path))
+            .filter(|f| f.is_slt_file())
+            .filter(|f| f.check_sqlite(options))
+            .filter(|f| options.check_pg_compat_file(f.path.as_path()))
+            .collect::<Vec<_>>();
+
+        paths.append(&mut sqlite_paths)
+    }
+
+    Ok(Box::new(paths.into_iter()))
 }
 
 fn read_dir_recursive<P: AsRef<Path>>(path: P) -> Result<Vec<PathBuf>> {
