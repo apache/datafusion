@@ -386,6 +386,7 @@ jobs:
 #          cargo test --lib --tests --bins --all-features
 
 # Commenting out intel mac build as so few users would ever use it
+# Details: https://github.com/apache/datafusion/issues/13846
 #  macos:
 #    name: cargo test (macos)
 #    runs-on: macos-latest
