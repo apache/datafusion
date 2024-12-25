@@ -138,13 +138,13 @@ impl JoinLeftData {
 }
 
 #[allow(rustdoc::private_intra_doc_links)]
-/// Join execution plan: Evaluates eqijoin predicates in parallel on multiple
+/// Join execution plan: Evaluates equijoin predicates in parallel on multiple
 /// partitions using a hash table and an optional filter list to apply post
 /// join.
 ///
 /// # Join Expressions
 ///
-/// This implementation is optimized for evaluating eqijoin predicates  (
+/// This implementation is optimized for evaluating equijoin predicates  (
 /// `<col1> = <col2>`) expressions, which are represented as a list of `Columns`
 /// in [`Self::on`].
 ///
@@ -198,7 +198,7 @@ impl JoinLeftData {
 ///
 ///  Original build-side data   Inserting build-side values into hashmap    Concatenated build-side batch
 ///                                                                         ┌───────────────────────────┐
-///                             hasmap.insert(row-hash, row-idx + offset)   │                      idx  │
+///                             hashmap.insert(row-hash, row-idx + offset)  │                      idx  │
 ///            ┌───────┐                                                    │          ┌───────┐        │
 ///            │ Row 1 │        1) update_hash for batch 3 with offset 0    │          │ Row 6 │    0   │
 ///   Batch 1  │       │           - hashmap.insert(Row 7, idx 1)           │ Batch 3  │       │        │
@@ -849,7 +849,7 @@ async fn collect_left_input(
             acc.2.build_mem_used.add(batch_size);
             acc.2.build_input_batches.add(1);
             acc.2.build_input_rows.add(batch.num_rows());
-            // Update rowcount
+            // Update row count
             acc.1 += batch.num_rows();
             // Push batch to output
             acc.0.push(batch);
@@ -3490,7 +3490,7 @@ mod tests {
         Ok(())
     }
 
-    /// Test for parallelised HashJoinExec with PartitionMode::CollectLeft
+    /// Test for parallelized HashJoinExec with PartitionMode::CollectLeft
     #[tokio::test]
     async fn test_collect_left_multiple_partitions_join() -> Result<()> {
         let task_ctx = Arc::new(TaskContext::default());

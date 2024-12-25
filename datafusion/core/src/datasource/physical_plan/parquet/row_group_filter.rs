@@ -294,7 +294,7 @@ impl BloomFilterStatistics {
                 }
                 _ => true,
             },
-            // One more parrern matching since not all data types are supported
+            // One more pattern matching since not all data types are supported
             // inside of a Dictionary
             ScalarValue::Dictionary(_, inner) => match inner.as_ref() {
                 ScalarValue::Int32(_)

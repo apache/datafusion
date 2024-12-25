@@ -85,7 +85,7 @@ fn simple_expr_to_sql_demo() -> Result<()> {
     Ok(())
 }
 
-/// DataFusioon can remove parentheses when converting an expression to SQL.
+/// DataFusion can remove parentheses when converting an expression to SQL.
 /// Note that output is intended for humans, not for other SQL engines,
 /// as difference in precedence rules can cause expressions to be parsed differently.
 fn simple_expr_to_pretty_sql_demo() -> Result<()> {

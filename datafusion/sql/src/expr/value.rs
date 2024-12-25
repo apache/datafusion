@@ -24,8 +24,8 @@ use arrow_schema::{DataType, DECIMAL256_MAX_PRECISION};
 use bigdecimal::num_bigint::BigInt;
 use bigdecimal::{BigDecimal, Signed, ToPrimitive};
 use datafusion_common::{
-    internal_datafusion_err, internal_err, not_impl_err, plan_err, DFSchema,
-    DataFusionError, Result, ScalarValue,
+    internal_datafusion_err, not_impl_err, plan_err, DFSchema, DataFusionError, Result,
+    ScalarValue,
 };
 use datafusion_expr::expr::{BinaryExpr, Placeholder};
 use datafusion_expr::planner::PlannerResult;
@@ -169,7 +169,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             }
         }
 
-        internal_err!("Expected a simplified result, but none was found")
+        not_impl_err!("Could not plan array literal. Hint: Please try with `nested_expressions` DataFusion feature enabled")
     }
 
     /// Convert a SQL interval expression to a DataFusion logical plan
