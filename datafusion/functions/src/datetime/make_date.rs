@@ -16,7 +16,7 @@
 // under the License.
 
 use std::any::Any;
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
 use arrow::array::builder::PrimitiveBuilder;
 use arrow::array::cast::AsArray;
@@ -27,11 +27,45 @@ use arrow::datatypes::DataType::{Date32, Int32, Int64, UInt32, UInt64, Utf8, Utf
 use chrono::prelude::*;
 
 use datafusion_common::{exec_err, Result, ScalarValue};
-use datafusion_expr::scalar_doc_sections::DOC_SECTION_DATETIME;
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
 };
+use datafusion_macros::user_doc;
 
+#[user_doc(
+    doc_section(label = "Time and Date Functions"),
+    description = "Make a date from year/month/day component parts.",
+    syntax_example = "from_unixtime(expression[, timezone])",
+    sql_example = r#"```sql
+> select make_date(2023, 1, 31);
++-------------------------------------------+
+| make_date(Int64(2023),Int64(1),Int64(31)) |
++-------------------------------------------+
+| 2023-01-31                                |
++-------------------------------------------+
+> select make_date('2023', '01', '31');
++-----------------------------------------------+
+| make_date(Utf8("2023"),Utf8("01"),Utf8("31")) |
++-----------------------------------------------+
+| 2023-01-31                                    |
++-----------------------------------------------+
+```
+
+Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/make_date.rs)
+"#,
+    argument(
+        name = "year",
+        description = "Year to use when making the date. Can be a constant, column or function, and any combination of arithmetic operators."
+    ),
+    argument(
+        name = "month",
+        description = "Month to use when making the date. Can be a constant, column or function, and any combination of arithmetic operators."
+    ),
+    argument(
+        name = "day",
+        description = "Day to use when making the date. Can be a constant, column or function, and any combination of arithmetic operators."
+    )
+)]
 #[derive(Debug)]
 pub struct MakeDateFunc {
     signature: Signature,
@@ -156,45 +190,8 @@ impl ScalarUDFImpl for MakeDateFunc {
         Ok(value)
     }
     fn documentation(&self) -> Option<&Documentation> {
-        Some(get_make_date_doc())
+        self.doc()
     }
-}
-
-static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
-
-fn get_make_date_doc() -> &'static Documentation {
-    DOCUMENTATION.get_or_init(|| {
-        Documentation::builder(
-            DOC_SECTION_DATETIME,
-            "Make a date from year/month/day component parts.",
-            "make_date(year, month, day)")
-            .with_argument(
-                "year",
-                " Year to use when making the date. Can be a constant, column or function, and any combination of arithmetic operators.", )
-            .with_argument(
-                "month",
-                "Month to use when making the date. Can be a constant, column or function, and any combination of arithmetic operators.",
-            )
-            .with_argument("day", "Day to use when making the date. Can be a constant, column or function, and any combination of arithmetic operators.")
-            .with_sql_example(r#"```sql
-> select make_date(2023, 1, 31);
-+-------------------------------------------+
-| make_date(Int64(2023),Int64(1),Int64(31)) |
-+-------------------------------------------+
-| 2023-01-31                                |
-+-------------------------------------------+
-> select make_date('2023', '01', '31');
-+-----------------------------------------------+
-| make_date(Utf8("2023"),Utf8("01"),Utf8("31")) |
-+-----------------------------------------------+
-| 2023-01-31                                    |
-+-----------------------------------------------+
-```
-
-Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/make_date.rs)
-"#)
-            .build()
-    })
 }
 
 /// Converts the year/month/day fields to an `i32` representing the days from
