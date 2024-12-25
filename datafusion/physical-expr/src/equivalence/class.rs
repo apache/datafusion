@@ -64,7 +64,7 @@ use indexmap::{IndexMap, IndexSet};
 // }
 // ```
 //
-// This would provide a more type-safe representation of partition values.
+// This would provide more flexible representation of partition values.
 // Note: This is a breaking change for the equivalence API and should be
 // addressed in a separate issue/PR.
 #[derive(Debug, Clone)]
@@ -73,16 +73,32 @@ pub struct ConstExpr {
     expr: Arc<dyn PhysicalExpr>,
     /// Does the constant have the same value across all partitions? See
     /// struct docs for more details
-    across_partitions: bool,
-    /// The value of the constant expression
-    value: Option<ScalarValue>,
+    across_partitions: AcrossPartitions,
+}
+
+#[derive(PartialEq, Clone, Debug)]
+/// Represents whether a constant expression's value is uniform or varies across partitions.
+///
+/// The `AcrossPartitions` enum is used to describe the nature of a constant expression
+/// in a physical execution plan:
+///
+/// - `Heterogeneous`: The constant expression may have different values for different partitions.
+/// - `Uniform(Option<ScalarValue>)`: The constant expression has the same value across all partitions,
+///   or is `None` if the value is not specified.
+pub enum AcrossPartitions {
+    Heterogeneous,
+    Uniform(Option<ScalarValue>),
+}
+
+impl Default for AcrossPartitions {
+    fn default() -> Self {
+        Self::Heterogeneous
+    }
 }
 
 impl PartialEq for ConstExpr {
     fn eq(&self, other: &Self) -> bool {
-        self.across_partitions == other.across_partitions
-            && self.expr.eq(&other.expr)
-            && self.value == other.value
+        self.across_partitions == other.across_partitions && self.expr.eq(&other.expr)
     }
 }
 
@@ -95,20 +111,14 @@ impl ConstExpr {
         Self {
             expr,
             // By default, assume constant expressions are not same across partitions.
-            across_partitions: false,
-            value: None,
+            across_partitions: Default::default(),
         }
-    }
-
-    pub fn with_value(mut self, value: Option<ScalarValue>) -> Self {
-        self.value = value;
-        self
     }
 
     /// Set the `across_partitions` flag
     ///
     /// See struct docs for more details
-    pub fn with_across_partitions(mut self, across_partitions: bool) -> Self {
+    pub fn with_across_partitions(mut self, across_partitions: AcrossPartitions) -> Self {
         self.across_partitions = across_partitions;
         self
     }
@@ -116,8 +126,8 @@ impl ConstExpr {
     /// Is the  expression the same across all partitions?
     ///
     /// See struct docs for more details
-    pub fn across_partitions(&self) -> bool {
-        self.across_partitions
+    pub fn across_partitions(&self) -> AcrossPartitions {
+        self.across_partitions.clone()
     }
 
     pub fn expr(&self) -> &Arc<dyn PhysicalExpr> {
@@ -128,10 +138,6 @@ impl ConstExpr {
         self.expr
     }
 
-    pub fn value(&self) -> Option<&ScalarValue> {
-        self.value.as_ref()
-    }
-
     pub fn map<F>(&self, f: F) -> Option<Self>
     where
         F: Fn(&Arc<dyn PhysicalExpr>) -> Option<Arc<dyn PhysicalExpr>>,
@@ -139,8 +145,7 @@ impl ConstExpr {
         let maybe_expr = f(&self.expr);
         maybe_expr.map(|expr| Self {
             expr,
-            across_partitions: self.across_partitions,
-            value: self.value.clone(),
+            across_partitions: self.across_partitions.clone(),
         })
     }
 
@@ -170,17 +175,20 @@ impl ConstExpr {
     }
 }
 
-/// Display implementation for `ConstExpr`
-///
-/// Example `c` or `c(across_partitions)`
 impl Display for ConstExpr {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.expr)?;
-        if self.across_partitions {
-            write!(f, "(across_partitions)")?;
-        }
-        if let Some(value) = self.value.as_ref() {
-            write!(f, "({})", value)?;
+        match &self.across_partitions {
+            AcrossPartitions::Heterogeneous => {
+                write!(f, "(heterogeneous)")?;
+            }
+            AcrossPartitions::Uniform(value) => {
+                if let Some(val) = value {
+                    write!(f, "(uniform: {})", val)?;
+                } else {
+                    write!(f, "(uniform: unknown)")?;
+                }
+            }
         }
         Ok(())
     }
