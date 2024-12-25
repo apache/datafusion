@@ -1231,7 +1231,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion"
-version = "43.0.0"
+version = "44.0.0"
 dependencies = [
  "apache-avro",
  "arrow",
@@ -1283,7 +1283,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-catalog"
-version = "43.0.0"
+version = "44.0.0"
 dependencies = [
  "arrow-schema",
  "async-trait",
@@ -1296,7 +1296,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-cli"
-version = "43.0.0"
+version = "44.0.0"
 dependencies = [
  "arrow",
  "assert_cmd",
@@ -1328,7 +1328,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-common"
-version = "43.0.0"
+version = "44.0.0"
 dependencies = [
  "ahash",
  "apache-avro",
@@ -1352,7 +1352,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-common-runtime"
-version = "43.0.0"
+version = "44.0.0"
 dependencies = [
  "log",
  "tokio",
@@ -1360,11 +1360,11 @@ dependencies = [
 
 [[package]]
 name = "datafusion-doc"
-version = "43.0.0"
+version = "44.0.0"
 
 [[package]]
 name = "datafusion-execution"
-version = "43.0.0"
+version = "44.0.0"
 dependencies = [
  "arrow",
  "dashmap",
@@ -1381,7 +1381,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-expr"
-version = "43.0.0"
+version = "44.0.0"
 dependencies = [
  "arrow",
  "chrono",
@@ -1400,7 +1400,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-expr-common"
-version = "43.0.0"
+version = "44.0.0"
 dependencies = [
  "arrow",
  "datafusion-common",
@@ -1409,7 +1409,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-functions"
-version = "43.0.0"
+version = "44.0.0"
 dependencies = [
  "arrow",
  "arrow-buffer",
@@ -1437,7 +1437,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-functions-aggregate"
-version = "43.0.0"
+version = "44.0.0"
 dependencies = [
  "ahash",
  "arrow",
@@ -1457,7 +1457,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-functions-aggregate-common"
-version = "43.0.0"
+version = "44.0.0"
 dependencies = [
  "ahash",
  "arrow",
@@ -1468,7 +1468,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-functions-nested"
-version = "43.0.0"
+version = "44.0.0"
 dependencies = [
  "arrow",
  "arrow-array",
@@ -1488,7 +1488,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-functions-table"
-version = "43.0.0"
+version = "44.0.0"
 dependencies = [
  "arrow",
  "async-trait",
@@ -1502,7 +1502,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-functions-window"
-version = "43.0.0"
+version = "44.0.0"
 dependencies = [
  "datafusion-common",
  "datafusion-doc",
@@ -1517,7 +1517,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-functions-window-common"
-version = "43.0.0"
+version = "44.0.0"
 dependencies = [
  "datafusion-common",
  "datafusion-physical-expr-common",
@@ -1525,7 +1525,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-macros"
-version = "43.0.0"
+version = "44.0.0"
 dependencies = [
  "quote",
  "syn",
@@ -1533,7 +1533,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-optimizer"
-version = "43.0.0"
+version = "44.0.0"
 dependencies = [
  "arrow",
  "chrono",
@@ -1550,7 +1550,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-physical-expr"
-version = "43.0.0"
+version = "44.0.0"
 dependencies = [
  "ahash",
  "arrow",
@@ -1573,7 +1573,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-physical-expr-common"
-version = "43.0.0"
+version = "44.0.0"
 dependencies = [
  "ahash",
  "arrow",
@@ -1585,7 +1585,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-physical-optimizer"
-version = "43.0.0"
+version = "44.0.0"
 dependencies = [
  "arrow",
  "datafusion-common",
@@ -1600,7 +1600,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-physical-plan"
-version = "43.0.0"
+version = "44.0.0"
 dependencies = [
  "ahash",
  "arrow",
@@ -1630,7 +1630,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-sql"
-version = "43.0.0"
+version = "44.0.0"
 dependencies = [
  "arrow",
  "arrow-array",
@@ -4389,7 +4389,7 @@ version = "0.1.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cf221c93e13a30d793f7645a0e7762c55d169dbb0a49671918a2319d289b10bb"
 dependencies = [
- "windows-sys 0.59.0",
+ "windows-sys 0.48.0",
 ]
 
 [[package]]
