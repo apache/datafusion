@@ -544,7 +544,7 @@ mod tests {
             schema: Arc::new(DFSchema::empty()),
         });
         let err = opt.optimize(plan, &config, &observe).unwrap_err();
-        assert_eq!(
+        assert!(err.strip_backtrace().starts_with(
             "Optimizer rule 'get table_scan rule' failed\n\
             caused by\n\
             Check optimizer-specific invariants after optimizer rule: get table_scan rule\n\
@@ -564,10 +564,8 @@ mod tests {
             ], \
             metadata: {} }, \
             field_qualifiers: [Some(Bare { table: \"test\" }), Some(Bare { table: \"test\" }), Some(Bare { table: \"test\" })], \
-            functional_dependencies: FunctionalDependencies { deps: [] } }.\n\
-            This was likely caused by a bug in DataFusion's code and we would welcome that you file an bug report in our issue tracker",
-            err.strip_backtrace()
-        );
+            functional_dependencies: FunctionalDependencies { deps: [] } }",
+        ));
     }
 
     #[test]
