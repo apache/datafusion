@@ -16,7 +16,7 @@
 // under the License.
 
 use std::any::Any;
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
 use arrow::array::temporal_conversions::NANOSECONDS;
 use arrow::array::types::{
@@ -37,10 +37,66 @@ use datafusion_expr::TypeSignature::Exact;
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility, TIMEZONE_WILDCARD,
 };
+use datafusion_macros::user_doc;
 
 use chrono::{DateTime, Datelike, Duration, Months, TimeDelta, Utc};
-use datafusion_expr::scalar_doc_sections::DOC_SECTION_DATETIME;
 
+#[user_doc(
+    doc_section(label = "Time and Date Functions"),
+    description = r#"
+Calculates time intervals and returns the start of the interval nearest to the specified timestamp. Use `date_bin` to downsample time series data by grouping rows into time-based "bins" or "windows" and applying an aggregate or selector function to each window.
+
+For example, if you "bin" or "window" data into 15 minute intervals, an input timestamp of `2023-01-01T18:18:18Z` will be updated to the start time of the 15 minute bin it is in: `2023-01-01T18:15:00Z`.
+"#,
+    syntax_example = "date_bin(interval, expression, origin-timestamp)",
+    sql_example = r#"```sql
+-- Bin the timestamp into 1 day intervals
+> SELECT date_bin(interval '1 day', time) as bin
+FROM VALUES ('2023-01-01T18:18:18Z'), ('2023-01-03T19:00:03Z')  t(time);
++---------------------+
+| bin                 |
++---------------------+
+| 2023-01-01T00:00:00 |
+| 2023-01-03T00:00:00 |
++---------------------+
+2 row(s) fetched.
+
+-- Bin the timestamp into 1 day intervals starting at 3AM on  2023-01-01
+> SELECT date_bin(interval '1 day', time,  '2023-01-01T03:00:00') as bin
+FROM VALUES ('2023-01-01T18:18:18Z'), ('2023-01-03T19:00:03Z')  t(time);
++---------------------+
+| bin                 |
++---------------------+
+| 2023-01-01T03:00:00 |
+| 2023-01-03T03:00:00 |
++---------------------+
+2 row(s) fetched.
+```"#,
+    argument(name = "interval", description = "Bin interval"),
+    argument(
+        name = "expression",
+        description = "Time expression to operate on. Can be a constant, column, or function."
+    ),
+    argument(
+        name = "origin-timestamp",
+        description = "Optional. Starting point used to determine bin boundaries. If not specified defaults 1970-01-01T00:00:00Z (the UNIX epoch in UTC).
+
+The following intervals are supported:
+
+- nanoseconds
+- microseconds
+- milliseconds
+- seconds
+- minutes
+- hours
+- days
+- weeks
+- months
+- years
+- century
+"
+    )
+)]
 #[derive(Debug)]
 pub struct DateBinFunc {
     signature: Signature,
@@ -169,66 +225,8 @@ impl ScalarUDFImpl for DateBinFunc {
         }
     }
     fn documentation(&self) -> Option<&Documentation> {
-        Some(get_date_bin_doc())
+        self.doc()
     }
-}
-
-static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
-
-fn get_date_bin_doc() -> &'static Documentation {
-    DOCUMENTATION.get_or_init(|| {
-        Documentation::builder(
-            DOC_SECTION_DATETIME,
-            r#"
-Calculates time intervals and returns the start of the interval nearest to the specified timestamp. Use `date_bin` to downsample time series data by grouping rows into time-based "bins" or "windows" and applying an aggregate or selector function to each window.
-
-For example, if you "bin" or "window" data into 15 minute intervals, an input timestamp of `2023-01-01T18:18:18Z` will be updated to the start time of the 15 minute bin it is in: `2023-01-01T18:15:00Z`.
-"#,
-            "date_bin(interval, expression, origin-timestamp)")
-            .with_sql_example(r#"```sql
--- Bin the timestamp into 1 day intervals
-> SELECT date_bin(interval '1 day', time) as bin
-FROM VALUES ('2023-01-01T18:18:18Z'), ('2023-01-03T19:00:03Z')  t(time);
-+---------------------+
-| bin                 |
-+---------------------+
-| 2023-01-01T00:00:00 |
-| 2023-01-03T00:00:00 |
-+---------------------+
-2 row(s) fetched.
-
--- Bin the timestamp into 1 day intervals starting at 3AM on  2023-01-01
-> SELECT date_bin(interval '1 day', time,  '2023-01-01T03:00:00') as bin
-FROM VALUES ('2023-01-01T18:18:18Z'), ('2023-01-03T19:00:03Z')  t(time);
-+---------------------+
-| bin                 |
-+---------------------+
-| 2023-01-01T03:00:00 |
-| 2023-01-03T03:00:00 |
-+---------------------+
-2 row(s) fetched.
-```
-"#)
-            .with_argument("interval", "Bin interval.")
-            .with_argument("expression", "Time expression to operate on. Can be a constant, column, or function.")
-            .with_argument("origin-timestamp", "Optional. Starting point used to determine bin boundaries. If not specified defaults 1970-01-01T00:00:00Z (the UNIX epoch in UTC).
-
-The following intervals are supported:
-
-- nanoseconds
-- microseconds
-- milliseconds
-- seconds
-- minutes
-- hours
-- days
-- weeks
-- months
-- years
-- century
-")
-            .build()
-    })
 }
 
 enum Interval {
