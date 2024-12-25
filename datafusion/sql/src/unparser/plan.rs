@@ -33,6 +33,9 @@ use super::{
     Unparser,
 };
 use crate::unparser::ast::UnnestRelationBuilder;
+use crate::unparser::extension_unparser::{
+    UnparseToStatementResult, UnparseWithinStatementResult,
+};
 use crate::unparser::utils::{find_unnest_node_until_relation, unproject_agg_exprs};
 use crate::utils::UNNEST_PLACEHOLDER;
 use datafusion_common::{
@@ -44,6 +47,7 @@ use datafusion_expr::expr::OUTER_REFERENCE_COLUMN_PREFIX;
 use datafusion_expr::{
     expr::Alias, BinaryExpr, Distinct, Expr, JoinConstraint, JoinType, LogicalPlan,
     LogicalPlanBuilder, Operator, Projection, SortExpr, TableScan, Unnest,
+    UserDefinedLogicalNode,
 };
 use sqlparser::ast::{self, Ident, SetExpr, TableAliasColumnDef};
 use std::sync::Arc;
@@ -111,15 +115,60 @@ impl Unparser<'_> {
             | LogicalPlan::Values(_)
             | LogicalPlan::Distinct(_) => self.select_to_sql_statement(&plan),
             LogicalPlan::Dml(_) => self.dml_to_sql(&plan),
+            LogicalPlan::Extension(extension) => {
+                self.extension_to_statement(extension.node.as_ref())
+            }
             LogicalPlan::Explain(_)
             | LogicalPlan::Analyze(_)
-            | LogicalPlan::Extension(_)
             | LogicalPlan::Ddl(_)
             | LogicalPlan::Copy(_)
             | LogicalPlan::DescribeTable(_)
             | LogicalPlan::RecursiveQuery(_)
             | LogicalPlan::Unnest(_) => not_impl_err!("Unsupported plan: {plan:?}"),
         }
+    }
+
+    /// Try to unparse a [UserDefinedLogicalNode] to a SQL statement.
+    /// If multiple unparsers are registered for the same [UserDefinedLogicalNode],
+    /// the first unparsing result will be returned.
+    fn extension_to_statement(
+        &self,
+        node: &dyn UserDefinedLogicalNode,
+    ) -> Result<ast::Statement> {
+        let mut statement = None;
+        for unparser in &self.extension_unparsers {
+            match unparser.unparse_to_statement(node, self)? {
+                UnparseToStatementResult::Modified(stmt) => {
+                    statement = Some(stmt);
+                    break;
+                }
+                UnparseToStatementResult::Unmodified => {}
+            }
+        }
+        if let Some(statement) = statement {
+            Ok(statement)
+        } else {
+            not_impl_err!("Unsupported extension node: {node:?}")
+        }
+    }
+
+    /// Try to unparse a [UserDefinedLogicalNode] to a SQL statement.
+    /// If multiple unparsers are registered for the same [UserDefinedLogicalNode],
+    /// the first unparser supporting the node will be used.
+    fn extension_to_sql(
+        &self,
+        node: &dyn UserDefinedLogicalNode,
+        query: &mut Option<&mut QueryBuilder>,
+        select: &mut Option<&mut SelectBuilder>,
+        relation: &mut Option<&mut RelationBuilder>,
+    ) -> Result<()> {
+        for unparser in &self.extension_unparsers {
+            match unparser.unparse(node, self, query, select, relation)? {
+                UnparseWithinStatementResult::Modified => return Ok(()),
+                UnparseWithinStatementResult::Unmodified => {}
+            }
+        }
+        not_impl_err!("Unsupported extension node: {node:?}")
     }
 
     fn select_to_sql_statement(&self, plan: &LogicalPlan) -> Result<ast::Statement> {
@@ -713,7 +762,23 @@ impl Unparser<'_> {
                 }
                 Ok(())
             }
-            LogicalPlan::Extension(_) => not_impl_err!("Unsupported operator: {plan:?}"),
+            LogicalPlan::Extension(extension) => {
+                if let Some(query) = query.as_mut() {
+                    self.extension_to_sql(
+                        extension.node.as_ref(),
+                        &mut Some(query),
+                        &mut Some(select),
+                        &mut Some(relation),
+                    )
+                } else {
+                    self.extension_to_sql(
+                        extension.node.as_ref(),
+                        &mut None,
+                        &mut Some(select),
+                        &mut Some(relation),
+                    )
+                }
+            }
             LogicalPlan::Unnest(unnest) => {
                 if !unnest.struct_type_columns.is_empty() {
                     return internal_err!(
