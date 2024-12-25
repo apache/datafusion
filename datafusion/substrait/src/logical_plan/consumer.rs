@@ -1326,7 +1326,7 @@ pub async fn from_read_rel(
             .build()?
         };
 
-        ensure_schema_compatability(plan.schema(), schema.clone())?;
+        ensure_schema_compatibility(plan.schema(), schema.clone())?;
 
         let schema = apply_masking(schema, projection)?;
 
@@ -1659,8 +1659,8 @@ impl NameTracker {
 /// This means:
 /// 1. All fields present in the Substrait schema are present in the DataFusion schema. The
 ///    DataFusion schema may have MORE fields, but not the other way around.
-/// 2. All fields are compatible. See [`ensure_field_compatability`] for details
-fn ensure_schema_compatability(
+/// 2. All fields are compatible. See [`ensure_field_compatibility`] for details
+fn ensure_schema_compatibility(
     table_schema: &DFSchema,
     substrait_schema: DFSchema,
 ) -> Result<()> {
@@ -1671,7 +1671,7 @@ fn ensure_schema_compatability(
         .try_for_each(|substrait_field| {
             let df_field =
                 table_schema.field_with_unqualified_name(substrait_field.name())?;
-            ensure_field_compatability(df_field, substrait_field)
+            ensure_field_compatibility(df_field, substrait_field)
         })
 }
 
@@ -1729,7 +1729,7 @@ fn apply_projection(
 ///
 /// If a Substrait field is not nullable, the Substrait plan may be built around assuming it is not
 /// nullable. As such if DataFusion has that field as nullable the plan should be rejected.
-fn ensure_field_compatability(
+fn ensure_field_compatibility(
     datafusion_field: &Field,
     substrait_field: &Field,
 ) -> Result<()> {

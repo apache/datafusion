@@ -101,7 +101,7 @@ impl FromStr for StreamEncoding {
         match s.to_ascii_lowercase().as_str() {
             "csv" => Ok(Self::Csv),
             "json" => Ok(Self::Json),
-            _ => plan_err!("Unrecognised StreamEncoding {}", s),
+            _ => plan_err!("Unrecognized StreamEncoding {}", s),
         }
     }
 }

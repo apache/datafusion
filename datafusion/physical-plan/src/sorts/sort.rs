@@ -598,7 +598,7 @@ impl ExternalSorter {
     }
 
     /// If this sort may spill, pre-allocates
-    /// `sort_spill_reservation_bytes` of memory to gurarantee memory
+    /// `sort_spill_reservation_bytes` of memory to guarantee memory
     /// left for the in memory sort/merge.
     fn reserve_memory_for_merge(&mut self) -> Result<()> {
         // Reserve headroom for next merge sort
@@ -1366,7 +1366,7 @@ mod tests {
         // Data is correct
         assert_eq!(&vec![expected_batch], &result);
 
-        // explicitlty ensure the metadata is present
+        // explicitly ensure the metadata is present
         assert_eq!(result[0].schema().fields()[0].metadata(), &field_metadata);
         assert_eq!(result[0].schema().metadata(), &schema_metadata);
 

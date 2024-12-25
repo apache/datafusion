@@ -15,9 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Verifies [Macro Hygene]
+//! Verifies [Macro Hygiene]
 //!
-//! [Macro Hygene]: https://en.wikipedia.org/wiki/Hygienic_macro
+//! [Macro Hygiene]: https://en.wikipedia.org/wiki/Hygienic_macro
 
 mod plan_err {
     // NO other imports!

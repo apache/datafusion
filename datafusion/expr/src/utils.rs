@@ -67,7 +67,7 @@ pub fn grouping_set_expr_count(group_expr: &[Expr]) -> Result<usize> {
                 "Invalid group by expressions, GroupingSet must be the only expression"
             );
         }
-        // Groupings sets have an additional interal column for the grouping id
+        // Groupings sets have an additional integral column for the grouping id
         Ok(grouping_set.distinct_expr().len() + 1)
     } else {
         grouping_set_to_exprlist(group_expr).map(|exprs| exprs.len())
@@ -1112,7 +1112,7 @@ fn split_conjunction_impl<'a>(expr: &'a Expr, mut exprs: Vec<&'a Expr>) -> Vec<&
     }
 }
 
-/// Iteratate parts in a conjunctive [`Expr`] such as `A AND B AND C` => `[A, B, C]`
+/// Iterate parts in a conjunctive [`Expr`] such as `A AND B AND C` => `[A, B, C]`
 ///
 /// See [`split_conjunction_owned`] for more details and an example.
 pub fn iter_conjunction(expr: &Expr) -> impl Iterator<Item = &Expr> {
@@ -1136,7 +1136,7 @@ pub fn iter_conjunction(expr: &Expr) -> impl Iterator<Item = &Expr> {
     })
 }
 
-/// Iteratate parts in a conjunctive [`Expr`] such as `A AND B AND C` => `[A, B, C]`
+/// Iterate parts in a conjunctive [`Expr`] such as `A AND B AND C` => `[A, B, C]`
 ///
 /// See [`split_conjunction_owned`] for more details and an example.
 pub fn iter_conjunction_owned(expr: Expr) -> impl Iterator<Item = Expr> {
@@ -1301,7 +1301,7 @@ pub fn conjunction(filters: impl IntoIterator<Item = Expr>) -> Option<Expr> {
 ///   col("b").eq(lit(2)),
 /// ];
 ///
-/// // use disjuncton to join them together with `OR`
+/// // use disjunction to join them together with `OR`
 /// assert_eq!(disjunction(split), Some(expr));
 /// ```
 pub fn disjunction(filters: impl IntoIterator<Item = Expr>) -> Option<Expr> {

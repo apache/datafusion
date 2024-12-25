@@ -213,7 +213,7 @@ fn check_correlations_in_subquery(inner_plan: &LogicalPlan) -> Result<()> {
 }
 
 // Recursively check the unsupported outer references in the sub query plan.
-#[cfg_attr(feature = "recursive-protection", recursive::recursive)]
+#[cfg_attr(feature = "recursive_protection", recursive::recursive)]
 fn check_inner_plan(inner_plan: &LogicalPlan, can_contain_outer_ref: bool) -> Result<()> {
     if !can_contain_outer_ref && inner_plan.contains_outer_reference() {
         return plan_err!("Accessing outer reference columns is not allowed in the plan");

@@ -1593,7 +1593,7 @@ mod tests {
         assert_optimized_plan_equal(plan, expected)
     }
 
-    /// Test for correlated exists subquery filter with disjustions
+    /// Test for correlated exists subquery filter with disjunctions
     #[test]
     fn exists_subquery_disjunction() -> Result<()> {
         let sq = Arc::new(

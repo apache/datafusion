@@ -69,7 +69,7 @@ pub type StateTypeFunction =
 /// * 'aggregate_function': [crate::expr::AggregateFunction] for which simplified has been invoked
 /// * 'info': [crate::simplify::SimplifyInfo]
 ///
-///Cclosure returns simplified [Expr] or an error.
+/// Closure returns simplified [Expr] or an error.
 pub type AggregateFunctionSimplification = Box<
     dyn Fn(
         crate::expr::AggregateFunction,
