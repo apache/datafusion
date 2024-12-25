@@ -16,11 +16,25 @@
 // under the License.
 
 use datafusion::error::Result;
-
+use datafusion::logical_expr::sqlparser::ast::Statement;
 use datafusion::prelude::*;
 use datafusion::sql::unparser::expr_to_sql;
+use datafusion_common::DFSchemaRef;
+use datafusion_expr::{
+    Extension, LogicalPlan, LogicalPlanBuilder, UserDefinedLogicalNode,
+    UserDefinedLogicalNodeCore,
+};
+use datafusion_sql::unparser::ast::{
+    DerivedRelationBuilder, QueryBuilder, RelationBuilder, SelectBuilder,
+};
 use datafusion_sql::unparser::dialect::CustomDialectBuilder;
+use datafusion_sql::unparser::extension_unparser::UserDefinedLogicalNodeUnparser;
+use datafusion_sql::unparser::extension_unparser::{
+    UnparseToStatementResult, UnparseWithinStatementResult,
+};
 use datafusion_sql::unparser::{plan_to_sql, Unparser};
+use std::fmt;
+use std::sync::Arc;
 
 /// This example demonstrates the programmatic construction of SQL strings using
 /// the DataFusion Expr [`Expr`] and LogicalPlan [`LogicalPlan`] API.
@@ -44,6 +58,10 @@ use datafusion_sql::unparser::{plan_to_sql, Unparser};
 ///
 /// 5. [`round_trip_plan_to_sql_demo`]: Create a logical plan from a SQL string, modify it using the
 /// DataFrames API and convert it back to a  sql string.
+///
+/// 6. [`unparse_my_logical_plan_as_statement`]: Create a custom logical plan and unparse it as a statement.
+///
+/// 7. [`unparse_my_logical_plan_as_subquery`]: Create a custom logical plan and unparse it as a subquery.
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -53,6 +71,8 @@ async fn main() -> Result<()> {
     simple_expr_to_sql_demo_escape_mysql_style()?;
     simple_plan_to_sql_demo().await?;
     round_trip_plan_to_sql_demo().await?;
+    unparse_my_logical_plan_as_statement().await?;
+    unparse_my_logical_plan_as_subquery().await?;
     Ok(())
 }
 
@@ -150,5 +170,146 @@ async fn round_trip_plan_to_sql_demo() -> Result<()> {
         r#"SELECT alltypes_plain.int_col, alltypes_plain.double_col, CAST(alltypes_plain.date_string_col AS VARCHAR) FROM alltypes_plain WHERE ((alltypes_plain.id > 1) AND (alltypes_plain.tinyint_col < alltypes_plain.double_col))"#
     );
 
+    Ok(())
+}
+
+#[derive(Debug, PartialEq, Eq, Hash, PartialOrd)]
+struct MyLogicalPlan {
+    input: LogicalPlan,
+}
+
+impl UserDefinedLogicalNodeCore for MyLogicalPlan {
+    fn name(&self) -> &str {
+        "MyLogicalPlan"
+    }
+
+    fn inputs(&self) -> Vec<&LogicalPlan> {
+        vec![&self.input]
+    }
+
+    fn schema(&self) -> &DFSchemaRef {
+        self.input.schema()
+    }
+
+    fn expressions(&self) -> Vec<Expr> {
+        vec![]
+    }
+
+    fn fmt_for_explain(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "MyLogicalPlan")
+    }
+
+    fn with_exprs_and_inputs(
+        &self,
+        _exprs: Vec<Expr>,
+        inputs: Vec<LogicalPlan>,
+    ) -> Result<Self> {
+        Ok(MyLogicalPlan {
+            input: inputs.into_iter().next().unwrap(),
+        })
+    }
+}
+
+struct PlanToStatement {}
+impl UserDefinedLogicalNodeUnparser for PlanToStatement {
+    fn unparse_to_statement(
+        &self,
+        node: &dyn UserDefinedLogicalNode,
+        unparser: &Unparser,
+    ) -> Result<UnparseToStatementResult> {
+        if let Some(plan) = node.as_any().downcast_ref::<MyLogicalPlan>() {
+            let input = unparser.plan_to_sql(&plan.input)?;
+            Ok(UnparseToStatementResult::Modified(input))
+        } else {
+            Ok(UnparseToStatementResult::Unmodified)
+        }
+    }
+}
+
+/// This example demonstrates how to unparse a custom logical plan as a statement.
+/// The custom logical plan is a simple extension of the logical plan that reads from a parquet file.
+/// It can be unparse as a statement that reads from the same parquet file.
+async fn unparse_my_logical_plan_as_statement() -> Result<()> {
+    let ctx = SessionContext::new();
+    let testdata = datafusion::test_util::parquet_test_data();
+    let inner_plan = ctx
+        .read_parquet(
+            &format!("{testdata}/alltypes_plain.parquet"),
+            ParquetReadOptions::default(),
+        )
+        .await?
+        .select_columns(&["id", "int_col", "double_col", "date_string_col"])?
+        .into_unoptimized_plan();
+
+    let node = Arc::new(MyLogicalPlan { input: inner_plan });
+
+    let my_plan = LogicalPlan::Extension(Extension { node });
+    let unparser =
+        Unparser::default().with_extension_unparsers(vec![Arc::new(PlanToStatement {})]);
+    let sql = unparser.plan_to_sql(&my_plan)?.to_string();
+    assert_eq!(
+        sql,
+        r#"SELECT "?table?".id, "?table?".int_col, "?table?".double_col, "?table?".date_string_col FROM "?table?""#
+    );
+    Ok(())
+}
+
+struct PlanToSubquery {}
+impl UserDefinedLogicalNodeUnparser for PlanToSubquery {
+    fn unparse(
+        &self,
+        node: &dyn UserDefinedLogicalNode,
+        unparser: &Unparser,
+        _query: &mut Option<&mut QueryBuilder>,
+        _select: &mut Option<&mut SelectBuilder>,
+        relation: &mut Option<&mut RelationBuilder>,
+    ) -> Result<UnparseWithinStatementResult> {
+        if let Some(plan) = node.as_any().downcast_ref::<MyLogicalPlan>() {
+            let Statement::Query(input) = unparser.plan_to_sql(&plan.input)? else {
+                return Ok(UnparseWithinStatementResult::Unmodified);
+            };
+            let mut derived_builder = DerivedRelationBuilder::default();
+            derived_builder.subquery(input);
+            derived_builder.lateral(false);
+            if let Some(rel) = relation {
+                rel.derived(derived_builder);
+            }
+        }
+        Ok(UnparseWithinStatementResult::Modified)
+    }
+}
+
+/// This example demonstrates how to unparse a custom logical plan as a subquery.
+/// The custom logical plan is a simple extension of the logical plan that reads from a parquet file.
+/// It can be unparse as a subquery that reads from the same parquet file, with some columns projected.
+async fn unparse_my_logical_plan_as_subquery() -> Result<()> {
+    let ctx = SessionContext::new();
+    let testdata = datafusion::test_util::parquet_test_data();
+    let inner_plan = ctx
+        .read_parquet(
+            &format!("{testdata}/alltypes_plain.parquet"),
+            ParquetReadOptions::default(),
+        )
+        .await?
+        .select_columns(&["id", "int_col", "double_col", "date_string_col"])?
+        .into_unoptimized_plan();
+
+    let node = Arc::new(MyLogicalPlan { input: inner_plan });
+
+    let my_plan = LogicalPlan::Extension(Extension { node });
+    let plan = LogicalPlanBuilder::from(my_plan)
+        .project(vec![
+            col("id").alias("my_id"),
+            col("int_col").alias("my_int"),
+        ])?
+        .build()?;
+    let unparser =
+        Unparser::default().with_extension_unparsers(vec![Arc::new(PlanToSubquery {})]);
+    let sql = unparser.plan_to_sql(&plan)?.to_string();
+    assert_eq!(
+        sql,
+        "SELECT \"?table?\".id AS my_id, \"?table?\".int_col AS my_int FROM \
+        (SELECT \"?table?\".id, \"?table?\".int_col, \"?table?\".double_col, \"?table?\".date_string_col FROM \"?table?\")",
+    );
     Ok(())
 }
