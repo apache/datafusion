@@ -15,21 +15,90 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::path::Path;
-use std::sync::Arc;
-
+use datafusion::arrow::array::{UInt64Array, UInt8Array};
+use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::datasource::file_format::parquet::ParquetFormat;
 use datafusion::datasource::listing::ListingOptions;
-use datafusion::prelude::*;
-
+use datafusion::datasource::MemTable;
+use datafusion::error::{DataFusionError, Result};
+use datafusion::prelude::SessionContext;
+use datafusion_common::exec_datafusion_err;
 use object_store::local::LocalFileSystem;
+use std::path::Path;
+use std::sync::Arc;
+use std::time::Duration;
+use tokio::time::timeout;
 
-/// This example demonstrates executing a simple query against an Arrow data source (a directory
-/// with multiple Parquet files) and fetching results. The query is run twice, once showing
-/// how to used `register_listing_table` with an absolute path, and once registering an
-/// ObjectStore to use a relative path.
+/// Examples of various ways to execute queries using SQL
+///
+/// [`query_memtable`]: a simple query against a [`MemTable`]
+/// [`query_parquet`]: a simple query against a directory with multiple Parquet files
+///
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+async fn main() -> Result<()> {
+    query_memtable().await?;
+    query_parquet().await?;
+    Ok(())
+}
+
+/// Run a simple query against a [`MemTable`]
+pub async fn query_memtable() -> Result<()> {
+    let mem_table = create_memtable()?;
+
+    // create local execution context
+    let ctx = SessionContext::new();
+
+    // Register the in-memory table containing the data
+    ctx.register_table("users", Arc::new(mem_table))?;
+
+    let dataframe = ctx.sql("SELECT * FROM users;").await?;
+
+    timeout(Duration::from_secs(10), async move {
+        let result = dataframe.collect().await.unwrap();
+        let record_batch = result.first().unwrap();
+
+        assert_eq!(1, record_batch.column(0).len());
+        dbg!(record_batch.columns());
+    })
+    .await
+    .unwrap();
+
+    Ok(())
+}
+
+fn create_memtable() -> Result<MemTable> {
+    MemTable::try_new(get_schema(), vec![vec![create_record_batch()?]])
+}
+
+fn create_record_batch() -> Result<RecordBatch> {
+    let id_array = UInt8Array::from(vec![1]);
+    let account_array = UInt64Array::from(vec![9000]);
+
+    Ok(RecordBatch::try_new(
+        get_schema(),
+        vec![Arc::new(id_array), Arc::new(account_array)],
+    )
+    .unwrap())
+}
+
+fn get_schema() -> SchemaRef {
+    SchemaRef::new(Schema::new(vec![
+        Field::new("id", DataType::UInt8, false),
+        Field::new("bank_account", DataType::UInt64, true),
+    ]))
+}
+
+/// The simplest way to query parquet files is to use the
+/// [`SessionContext::read_parquet`] API
+///
+/// For more control, you can use the lower level [`ListingOptions`] and
+/// [`ListingTable`] APIS
+///
+/// This example shows how to use relative and absolute paths.
+///
+/// [`ListingTable`]: datafusion::datasource::listing::ListingTable
+async fn query_parquet() -> Result<()> {
     // create local execution context
     let ctx = SessionContext::new();
 
@@ -73,13 +142,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let test_data_path = Path::new(&test_data);
     let test_data_path_parent = test_data_path
         .parent()
-        .ok_or("test_data path needs a parent")?;
+        .ok_or(exec_datafusion_err!("test_data path needs a parent"))?;
 
     std::env::set_current_dir(test_data_path_parent)?;
 
     let local_fs = Arc::new(LocalFileSystem::default());
 
-    let u = url::Url::parse("file://./")?;
+    let u = url::Url::parse("file://./")
+        .map_err(|e| DataFusionError::External(Box::new(e)))?;
     ctx.register_object_store(&u, local_fs);
 
     // Register a listing table - this will use all files in the directory as data sources
