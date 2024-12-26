@@ -53,6 +53,8 @@ use testcontainers::ImageExt;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 #[cfg(feature = "postgres")]
 use tokio::sync::{mpsc, Mutex};
+#[cfg(feature = "postgres")]
+use ContainerCommands::{FetchHost, FetchPort};
 
 const TEST_DIRECTORY: &str = "test_files/";
 const DATAFUSION_TESTING_TEST_DIRECTORY: &str = "../../datafusion-testing/data/";
@@ -168,29 +170,32 @@ async fn run_tests() -> Result<()> {
     options.warn_on_ignored();
 
     #[cfg(feature = "postgres")]
-    let start_pg_database = options.postgres_runner && !is_pg_uri_set();
-    if start_pg_database {
-        info!("Starting postgres db ...");
+    {
+        let start_pg_database = options.postgres_runner && !is_pg_uri_set();
+        if start_pg_database {
+            info!("Starting postgres db ...");
 
-        thread::spawn(|| {
-            execute_blocking(start_postgres(
-                &POSTGRES_IN,
-                &POSTGRES_HOST,
-                &POSTGRES_PORT,
-                &POSTGRES_STOPPED,
-            ))
-        });
+            thread::spawn(|| {
+                execute_blocking(start_postgres(
+                    &POSTGRES_IN,
+                    &POSTGRES_HOST,
+                    &POSTGRES_PORT,
+                    &POSTGRES_STOPPED,
+                ))
+            });
 
-        POSTGRES_IN.tx.send(ContainerCommands::FetchHost).unwrap();
-        let db_host = POSTGRES_HOST.rx.lock().await.recv().await.unwrap();
+            POSTGRES_IN.tx.send(FetchHost).unwrap();
+            let db_host = POSTGRES_HOST.rx.lock().await.recv().await.unwrap();
 
-        POSTGRES_IN.tx.send(ContainerCommands::FetchPort).unwrap();
-        let db_port = POSTGRES_PORT.rx.lock().await.recv().await.unwrap();
+            POSTGRES_IN.tx.send(FetchPort).unwrap();
+            let db_port = POSTGRES_PORT.rx.lock().await.recv().await.unwrap();
 
-        let pg_uri = format!("postgresql://postgres:postgres@{db_host}:{db_port}/test");
-        info!("Postgres uri is {pg_uri}");
+            let pg_uri =
+                format!("postgresql://postgres:postgres@{db_host}:{db_port}/test");
+            info!("Postgres uri is {pg_uri}");
 
-        set_var("PG_URI", pg_uri);
+            set_var("PG_URI", pg_uri);
+        }
     }
 
     // Run all tests in parallel, reporting failures at the end
@@ -555,17 +560,13 @@ struct TestFile {
 impl TestFile {
     fn new(path: PathBuf) -> Self {
         let p = path.to_string_lossy();
-        let relative_path = PathBuf::from(
-            if p.starts_with(TEST_DIRECTORY) {
-                p.strip_prefix(TEST_DIRECTORY).unwrap()
-            }
-            else if p.starts_with(DATAFUSION_TESTING_TEST_DIRECTORY) {
-                p.strip_prefix(DATAFUSION_TESTING_TEST_DIRECTORY).unwrap()
-            }
-            else {
-                ""
-            }
-        );
+        let relative_path = PathBuf::from(if p.starts_with(TEST_DIRECTORY) {
+            p.strip_prefix(TEST_DIRECTORY).unwrap()
+        } else if p.starts_with(DATAFUSION_TESTING_TEST_DIRECTORY) {
+            p.strip_prefix(DATAFUSION_TESTING_TEST_DIRECTORY).unwrap()
+        } else {
+            ""
+        });
 
         Self {
             path,
@@ -598,14 +599,14 @@ fn read_test_files<'a>(
     options: &'a Options,
 ) -> Result<Box<dyn Iterator<Item = TestFile> + 'a>> {
     let mut paths = read_dir_recursive(TEST_DIRECTORY)?
-            .into_iter()
-            .map(TestFile::new)
-            .filter(|f| options.check_test_file(&f.relative_path))
-            .filter(|f| f.is_slt_file())
-            .filter(|f| f.check_tpch(options))
-            .filter(|f| f.check_sqlite(options))
-            .filter(|f| options.check_pg_compat_file(f.path.as_path()))
-            .collect::<Vec<_>>();
+        .into_iter()
+        .map(TestFile::new)
+        .filter(|f| options.check_test_file(&f.relative_path))
+        .filter(|f| f.is_slt_file())
+        .filter(|f| f.check_tpch(options))
+        .filter(|f| f.check_sqlite(options))
+        .filter(|f| options.check_pg_compat_file(f.path.as_path()))
+        .collect::<Vec<_>>();
     if options.include_sqlite {
         let mut sqlite_paths = read_dir_recursive(DATAFUSION_TESTING_TEST_DIRECTORY)?
             .into_iter()
@@ -786,8 +787,8 @@ pub async fn start_postgres(
     let mut rx = in_channel.rx.lock().await;
     while let Some(command) = rx.recv().await {
         match command {
-            ContainerCommands::FetchHost => host_channel.tx.send(host.clone()).unwrap(),
-            ContainerCommands::FetchPort => port_channel.tx.send(port).unwrap(),
+            FetchHost => host_channel.tx.send(host.clone()).unwrap(),
+            FetchPort => port_channel.tx.send(port).unwrap(),
             ContainerCommands::Stop => {
                 container.stop().await.unwrap();
                 stopped_channel.tx.send(()).unwrap();
