@@ -15,14 +15,98 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::analyzer::check_plan;
-use crate::utils::collect_subquery_cols;
+use datafusion_common::{
+    internal_err, plan_err,
+    tree_node::{TreeNode, TreeNodeRecursion},
+    DFSchemaRef, Result,
+};
 
-use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
-use datafusion_common::{plan_err, Result};
-use datafusion_expr::expr_rewriter::strip_outer_reference;
-use datafusion_expr::utils::split_conjunction;
-use datafusion_expr::{Aggregate, Expr, Filter, Join, JoinType, LogicalPlan, Window};
+use crate::{
+    expr::{Exists, InSubquery},
+    expr_rewriter::strip_outer_reference,
+    utils::{collect_subquery_cols, split_conjunction},
+    Aggregate, Expr, Filter, Join, JoinType, LogicalPlan, Window,
+};
+
+pub enum InvariantLevel {
+    /// Invariants that are always true in DataFusion `LogicalPlan`s
+    /// such as the number of expected children and no duplicated output fields
+    Always,
+    /// Invariants that must hold true for the plan to be "executable"
+    /// such as the type and number of function arguments are correct and
+    /// that wildcards have been expanded
+    ///
+    /// To ensure a LogicalPlan satisfies the `Executable` invariants, run the
+    /// `Analyzer`
+    Executable,
+}
+
+pub fn assert_always_invariants(plan: &LogicalPlan) -> Result<()> {
+    // Refer to <https://datafusion.apache.org/contributor-guide/specification/invariants.html#relation-name-tuples-in-logical-fields-and-logical-columns-are-unique>
+    assert_unique_field_names(plan)?;
+
+    Ok(())
+}
+
+pub fn assert_executable_invariants(plan: &LogicalPlan) -> Result<()> {
+    assert_always_invariants(plan)?;
+    assert_valid_semantic_plan(plan)?;
+    Ok(())
+}
+
+/// Returns an error if plan, and subplans, do not have unique fields.
+///
+/// This invariant is subject to change.
+/// refer: <https://github.com/apache/datafusion/issues/13525#issuecomment-2494046463>
+fn assert_unique_field_names(plan: &LogicalPlan) -> Result<()> {
+    plan.schema().check_names()
+}
+
+/// Returns an error if the plan is not sematically valid.
+fn assert_valid_semantic_plan(plan: &LogicalPlan) -> Result<()> {
+    assert_subqueries_are_valid(plan)?;
+
+    Ok(())
+}
+
+/// Returns an error if the plan does not have the expected schema.
+/// Ignores metadata and nullability.
+pub fn assert_expected_schema(schema: &DFSchemaRef, plan: &LogicalPlan) -> Result<()> {
+    let equivalent = plan.schema().equivalent_names_and_types(schema);
+
+    if !equivalent {
+        internal_err!(
+            "Failed due to a difference in schemas, original schema: {:?}, new schema: {:?}",
+            schema,
+            plan.schema()
+        )
+    } else {
+        Ok(())
+    }
+}
+
+/// Asserts that the subqueries are structured properly with valid node placement.
+///
+/// Refer to [`check_subquery_expr`] for more details.
+fn assert_subqueries_are_valid(plan: &LogicalPlan) -> Result<()> {
+    plan.apply_with_subqueries(|plan: &LogicalPlan| {
+        plan.apply_expressions(|expr| {
+            // recursively look for subqueries
+            expr.apply(|expr| {
+                match expr {
+                    Expr::Exists(Exists { subquery, .. })
+                    | Expr::InSubquery(InSubquery { subquery, .. })
+                    | Expr::ScalarSubquery(subquery) => {
+                        check_subquery_expr(plan, &subquery.subquery, expr)?;
+                    }
+                    _ => {}
+                };
+                Ok(TreeNodeRecursion::Continue)
+            })
+        })
+    })
+    .map(|_| ())
+}
 
 /// Do necessary check on subquery expressions and fail the invalid plan
 /// 1) Check whether the outer plan is in the allowed outer plans list to use subquery expressions,
@@ -36,7 +120,7 @@ pub fn check_subquery_expr(
     inner_plan: &LogicalPlan,
     expr: &Expr,
 ) -> Result<()> {
-    check_plan(inner_plan)?;
+    assert_subqueries_are_valid(inner_plan)?;
     if let Expr::ScalarSubquery(subquery) = expr {
         // Scalar subquery should only return one column
         if subquery.subquery.schema().fields().len() > 1 {
@@ -108,12 +192,13 @@ pub fn check_subquery_expr(
         match outer_plan {
             LogicalPlan::Projection(_)
             | LogicalPlan::Filter(_)
+            | LogicalPlan::TableScan(_)
             | LogicalPlan::Window(_)
             | LogicalPlan::Aggregate(_)
             | LogicalPlan::Join(_) => Ok(()),
             _ => plan_err!(
                 "In/Exist subquery can only be used in \
-                Projection, Filter, Window functions, Aggregate and Join plan nodes, \
+                Projection, Filter, TableScan, Window functions, Aggregate and Join plan nodes, \
                 but was used in [{}]",
                 outer_plan.display()
             ),
@@ -285,8 +370,8 @@ mod test {
     use std::cmp::Ordering;
     use std::sync::Arc;
 
+    use crate::{Extension, UserDefinedLogicalNodeCore};
     use datafusion_common::{DFSchema, DFSchemaRef};
-    use datafusion_expr::{Extension, UserDefinedLogicalNodeCore};
 
     use super::*;
 

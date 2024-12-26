@@ -24,6 +24,9 @@ use std::hash::{Hash, Hasher};
 use std::sync::{Arc, LazyLock};
 
 use super::dml::CopyTo;
+use super::invariants::{
+    assert_always_invariants, assert_executable_invariants, InvariantLevel,
+};
 use super::DdlStatement;
 use crate::builder::{change_redundant_column, unnest_with_options};
 use crate::expr::{Placeholder, Sort as SortExpr, WindowFunction};
@@ -1124,6 +1127,14 @@ impl LogicalPlan {
                     unnest_with_options(input, columns.clone(), options.clone())?;
                 Ok(new_plan)
             }
+        }
+    }
+
+    /// checks that the plan conforms to the listed invariant level, returning an Error if not
+    pub fn check_invariants(&self, check: InvariantLevel) -> Result<()> {
+        match check {
+            InvariantLevel::Always => assert_always_invariants(self),
+            InvariantLevel::Executable => assert_executable_invariants(self),
         }
     }
 
