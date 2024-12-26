@@ -19,8 +19,8 @@
 //! and producing batches in parallel for the right partitions
 
 use super::utils::{
-    adjust_right_output_partitioning, BatchSplitter, BatchTransformer,
-    BuildProbeJoinMetrics, NoopBatchTransformer, OnceAsync, OnceFut,
+    adjust_right_output_partitioning, reorder_output_after_swap, BatchSplitter,
+    BatchTransformer, BuildProbeJoinMetrics, NoopBatchTransformer, OnceAsync, OnceFut,
     StatefulStreamResult,
 };
 use crate::coalesce_partitions::CoalescePartitionsExec;
@@ -166,6 +166,19 @@ impl CrossJoinExec {
             output_partitioning,
             EmissionType::Final,
             boundedness_from_children([left, right]),
+        )
+    }
+
+    /// Returns a new `ExecutionPlan` that computes the same join as this one,
+    /// with the left and right inputs swapped using the  specified
+    /// `partition_mode`.
+    pub fn swap_inputs(&self) -> Result<Arc<dyn ExecutionPlan>> {
+        let new_join =
+            CrossJoinExec::new(Arc::clone(&self.right), Arc::clone(&self.left));
+        reorder_output_after_swap(
+            Arc::new(new_join),
+            &self.left.schema(),
+            &self.right.schema(),
         )
     }
 }
