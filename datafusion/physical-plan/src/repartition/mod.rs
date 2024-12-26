@@ -60,7 +60,6 @@ use parking_lot::Mutex;
 mod distributor_channels;
 mod on_demand_repartition;
 
-
 type MaybeBatch = Option<Result<RecordBatch>>;
 type InputPartitionsToCurrentPartitionSender = Vec<DistributionSender<MaybeBatch>>;
 type InputPartitionsToCurrentPartitionReceiver = Vec<DistributionReceiver<MaybeBatch>>;
@@ -195,6 +194,9 @@ enum BatchPartitionerState {
         num_partitions: usize,
         next_idx: usize,
     },
+    OnDemand {
+        num_partitions: usize,
+    },
 }
 
 impl BatchPartitioner {
@@ -216,6 +218,9 @@ impl BatchPartitioner {
                 random_state: ahash::RandomState::with_seeds(0, 0, 0, 0),
                 hash_buffer: vec![],
             },
+            Partitioning::OnDemand(num_partitions) => {
+                BatchPartitionerState::OnDemand { num_partitions }
+            }
             other => return not_impl_err!("Unsupported repartitioning scheme {other:?}"),
         };
 
@@ -259,6 +264,9 @@ impl BatchPartitioner {
                     let idx = *next_idx;
                     *next_idx = (*next_idx + 1) % *num_partitions;
                     Box::new(std::iter::once(Ok((idx, batch))))
+                }
+                BatchPartitionerState::OnDemand { .. } => {
+                    Box::new(std::iter::once(Ok((0, batch))))
                 }
                 BatchPartitionerState::Hash {
                     random_state,
@@ -330,6 +338,7 @@ impl BatchPartitioner {
         match self.state {
             BatchPartitionerState::RoundRobin { num_partitions, .. } => num_partitions,
             BatchPartitionerState::Hash { num_partitions, .. } => num_partitions,
+            BatchPartitionerState::OnDemand { num_partitions } => num_partitions,
         }
     }
 }
