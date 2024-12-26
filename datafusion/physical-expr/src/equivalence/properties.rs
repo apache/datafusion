@@ -23,7 +23,7 @@ use std::sync::Arc;
 use std::{fmt, mem};
 
 use super::ordering::collapse_lex_ordering;
-use crate::equivalence::class::const_exprs_contains;
+use crate::equivalence::class::{const_exprs_contains, AcrossPartitions};
 use crate::equivalence::{
     collapse_lex_req, EquivalenceClass, EquivalenceGroup, OrderingEquivalenceClass,
     ProjectionMapping,
@@ -120,7 +120,7 @@ use itertools::Itertools;
 ///   PhysicalSortExpr::new_default(col_c).desc(),
 /// ]));
 ///
-/// assert_eq!(eq_properties.to_string(), "order: [[a@0 ASC, c@2 DESC]], const: [b@1]")
+/// assert_eq!(eq_properties.to_string(), "order: [[a@0 ASC, c@2 DESC]], const: [b@1(heterogeneous)]")
 /// ```
 #[derive(Debug, Clone)]
 pub struct EquivalenceProperties {
@@ -217,7 +217,9 @@ impl EquivalenceProperties {
     /// Removes constant expressions that may change across partitions.
     /// This method should be used when data from different partitions are merged.
     pub fn clear_per_partition_constants(&mut self) {
-        self.constants.retain(|item| item.across_partitions());
+        self.constants.retain(|item| {
+            matches!(item.across_partitions(), AcrossPartitions::Uniform(_))
+        })
     }
 
     /// Extends this `EquivalenceProperties` by adding the orderings inside the
@@ -257,14 +259,16 @@ impl EquivalenceProperties {
         if self.is_expr_constant(left) {
             // Left expression is constant, add right as constant
             if !const_exprs_contains(&self.constants, right) {
-                self.constants
-                    .push(ConstExpr::from(right).with_across_partitions(true));
+                let const_expr = ConstExpr::from(right)
+                    .with_across_partitions(self.get_expr_constant_value(left));
+                self.constants.push(const_expr);
             }
         } else if self.is_expr_constant(right) {
             // Right expression is constant, add left as constant
             if !const_exprs_contains(&self.constants, left) {
-                self.constants
-                    .push(ConstExpr::from(left).with_across_partitions(true));
+                let const_expr = ConstExpr::from(left)
+                    .with_across_partitions(self.get_expr_constant_value(right));
+                self.constants.push(const_expr);
             }
         }
 
@@ -293,30 +297,28 @@ impl EquivalenceProperties {
         mut self,
         constants: impl IntoIterator<Item = ConstExpr>,
     ) -> Self {
-        let (const_exprs, across_partition_flags): (
-            Vec<Arc<dyn PhysicalExpr>>,
-            Vec<bool>,
-        ) = constants
+        let normalized_constants = constants
             .into_iter()
-            .map(|const_expr| {
-                let across_partitions = const_expr.across_partitions();
-                let expr = const_expr.owned_expr();
-                (expr, across_partitions)
-            })
-            .unzip();
-        for (expr, across_partitions) in self
-            .eq_group
-            .normalize_exprs(const_exprs)
-            .into_iter()
-            .zip(across_partition_flags)
-        {
-            if !const_exprs_contains(&self.constants, &expr) {
-                let const_expr =
-                    ConstExpr::from(expr).with_across_partitions(across_partitions);
-                self.constants.push(const_expr);
-            }
-        }
+            .filter_map(|c| {
+                let across_partitions = c.across_partitions();
+                let expr = c.owned_expr();
+                let normalized_expr = self.eq_group.normalize_expr(expr);
 
+                if const_exprs_contains(&self.constants, &normalized_expr) {
+                    return None;
+                }
+
+                let const_expr = ConstExpr::from(normalized_expr)
+                    .with_across_partitions(across_partitions);
+
+                Some(const_expr)
+            })
+            .collect::<Vec<_>>();
+
+        // Add all new normalized constants
+        self.constants.extend(normalized_constants);
+
+        // Discover any new orderings based on the constants
         for ordering in self.normalized_oeq_class().iter() {
             if let Err(e) = self.discover_new_orderings(&ordering[0].expr) {
                 log::debug!("error discovering new orderings: {e}");
@@ -551,7 +553,7 @@ impl EquivalenceProperties {
     /// is satisfied based on the orderings within, equivalence classes, and
     /// constant expressions.
     ///
-    /// # Arguments
+    /// # Parameters
     ///
     /// - `req`: A reference to a `PhysicalSortRequirement` for which the ordering
     ///   satisfaction check will be done.
@@ -919,7 +921,7 @@ impl EquivalenceProperties {
     /// constants based on the existing constants and the mapping. It ensures
     /// that constants are appropriately propagated through the projection.
     ///
-    /// # Arguments
+    /// # Parameters
     ///
     /// - `mapping`: A reference to a `ProjectionMapping` representing the
     ///   mapping of source expressions to target expressions in the projection.
@@ -935,19 +937,31 @@ impl EquivalenceProperties {
             .constants
             .iter()
             .flat_map(|const_expr| {
-                const_expr.map(|expr| self.eq_group.project_expr(mapping, expr))
+                const_expr
+                    .map(|expr| self.eq_group.project_expr(mapping, expr))
+                    .map(|projected_expr| {
+                        projected_expr
+                            .with_across_partitions(const_expr.across_partitions())
+                    })
             })
             .collect::<Vec<_>>();
+
         // Add projection expressions that are known to be constant:
         for (source, target) in mapping.iter() {
             if self.is_expr_constant(source)
                 && !const_exprs_contains(&projected_constants, target)
             {
-                let across_partitions = self.is_expr_constant_accross_partitions(source);
-                // Expression evaluates to single value
-                projected_constants.push(
-                    ConstExpr::from(target).with_across_partitions(across_partitions),
-                );
+                if self.is_expr_constant_accross_partitions(source) {
+                    projected_constants.push(
+                        ConstExpr::from(target)
+                            .with_across_partitions(self.get_expr_constant_value(source)),
+                    )
+                } else {
+                    projected_constants.push(
+                        ConstExpr::from(target)
+                            .with_across_partitions(AcrossPartitions::Heterogeneous),
+                    )
+                }
             }
         }
         projected_constants
@@ -1054,7 +1068,7 @@ impl EquivalenceProperties {
     /// This function determines whether the provided expression is constant
     /// based on the known constants.
     ///
-    /// # Arguments
+    /// # Parameters
     ///
     /// - `expr`: A reference to a `Arc<dyn PhysicalExpr>` representing the
     ///   expression to be checked.
@@ -1079,7 +1093,7 @@ impl EquivalenceProperties {
     /// This function determines whether the provided expression is constant
     /// across partitions based on the known constants.
     ///
-    /// # Arguments
+    /// # Parameters
     ///
     /// - `expr`: A reference to a `Arc<dyn PhysicalExpr>` representing the
     ///   expression to be checked.
@@ -1095,16 +1109,55 @@ impl EquivalenceProperties {
         // As an example, assume that we know columns `a` and `b` are constant.
         // Then, `a`, `b` and `a + b` will all return `true` whereas `c` will
         // return `false`.
-        let const_exprs = self.constants.iter().flat_map(|const_expr| {
-            if const_expr.across_partitions() {
-                Some(Arc::clone(const_expr.expr()))
-            } else {
-                None
-            }
-        });
+        let const_exprs = self
+            .constants
+            .iter()
+            .filter_map(|const_expr| {
+                if matches!(
+                    const_expr.across_partitions(),
+                    AcrossPartitions::Uniform { .. }
+                ) {
+                    Some(Arc::clone(const_expr.expr()))
+                } else {
+                    None
+                }
+            })
+            .collect::<Vec<_>>();
         let normalized_constants = self.eq_group.normalize_exprs(const_exprs);
         let normalized_expr = self.eq_group.normalize_expr(Arc::clone(expr));
         is_constant_recurse(&normalized_constants, &normalized_expr)
+    }
+
+    /// Retrieves the constant value of a given physical expression, if it exists.
+    ///
+    /// Normalizes the input expression and checks if it matches any known constants
+    /// in the current context. Returns whether the expression has a uniform value,
+    /// varies across partitions, or is not constant.
+    ///
+    /// # Parameters
+    /// - `expr`: A reference to the physical expression to evaluate.
+    ///
+    /// # Returns
+    /// - `AcrossPartitions::Uniform(value)`: If the expression has the same value across partitions.
+    /// - `AcrossPartitions::Heterogeneous`: If the expression varies across partitions.
+    /// - `None`: If the expression is not recognized as constant.
+    pub fn get_expr_constant_value(
+        &self,
+        expr: &Arc<dyn PhysicalExpr>,
+    ) -> AcrossPartitions {
+        let normalized_expr = self.eq_group.normalize_expr(Arc::clone(expr));
+
+        if let Some(lit) = normalized_expr.as_any().downcast_ref::<Literal>() {
+            return AcrossPartitions::Uniform(Some(lit.value().clone()));
+        }
+
+        for const_expr in self.constants.iter() {
+            if normalized_expr.eq(const_expr.expr()) {
+                return const_expr.across_partitions();
+            }
+        }
+
+        AcrossPartitions::Heterogeneous
     }
 
     /// Retrieves the properties for a given physical expression.
@@ -1282,7 +1335,7 @@ fn update_properties(
 /// This function determines whether the provided expression is constant
 /// based on the known constants.
 ///
-/// # Arguments
+/// # Parameters
 ///
 /// - `constants`: A `&[Arc<dyn PhysicalExpr>]` containing expressions known to
 ///   be a constant.
@@ -1915,7 +1968,7 @@ impl Hash for ExprWrapper {
 /// *all* output partitions, that is the same as being true for all *input*
 /// partitions
 fn calculate_union_binary(
-    mut lhs: EquivalenceProperties,
+    lhs: EquivalenceProperties,
     mut rhs: EquivalenceProperties,
 ) -> Result<EquivalenceProperties> {
     // Harmonize the schema of the rhs with the schema of the lhs (which is the accumulator schema):
@@ -1924,26 +1977,34 @@ fn calculate_union_binary(
     }
 
     // First, calculate valid constants for the union. An expression is constant
-    // at the output of the union if it is constant in both sides.
-    let constants: Vec<_> = lhs
+    // at the output of the union if it is constant in both sides with matching values.
+    let constants = lhs
         .constants()
         .iter()
-        .filter(|const_expr| const_exprs_contains(rhs.constants(), const_expr.expr()))
-        .map(|const_expr| {
-            // TODO: When both sides have a constant column, and the actual
-            // constant value is the same, then the output properties could
-            // reflect the constant is valid across all partitions. However we
-            // don't track the actual value that the ConstExpr takes on, so we
-            // can't determine that yet
-            ConstExpr::new(Arc::clone(const_expr.expr())).with_across_partitions(false)
-        })
-        .collect();
+        .filter_map(|lhs_const| {
+            // Find matching constant expression in RHS
+            rhs.constants()
+                .iter()
+                .find(|rhs_const| rhs_const.expr().eq(lhs_const.expr()))
+                .map(|rhs_const| {
+                    let mut const_expr = ConstExpr::new(Arc::clone(lhs_const.expr()));
 
-    // remove any constants that are shared in both outputs (avoid double counting them)
-    for c in &constants {
-        lhs = lhs.remove_constant(c);
-        rhs = rhs.remove_constant(c);
-    }
+                    // If both sides have matching constant values, preserve the value and set across_partitions=true
+                    if let (
+                        AcrossPartitions::Uniform(Some(lhs_val)),
+                        AcrossPartitions::Uniform(Some(rhs_val)),
+                    ) = (lhs_const.across_partitions(), rhs_const.across_partitions())
+                    {
+                        if lhs_val == rhs_val {
+                            const_expr = const_expr.with_across_partitions(
+                                AcrossPartitions::Uniform(Some(lhs_val)),
+                            )
+                        }
+                    }
+                    const_expr
+                })
+        })
+        .collect::<Vec<_>>();
 
     // Next, calculate valid orderings for the union by searching for prefixes
     // in both sides.
@@ -2210,6 +2271,7 @@ mod tests {
 
     use arrow::datatypes::{DataType, Field, Schema};
     use arrow_schema::{Fields, TimeUnit};
+    use datafusion_common::ScalarValue;
     use datafusion_expr::Operator;
 
     use datafusion_functions::string::concat;
@@ -4130,6 +4192,42 @@ mod tests {
         // Second expression should be a
         assert!(ordering[1].expr.eq(&col_a));
         assert!(ordering[1].options.eq(&asc));
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_union_constant_value_preservation() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, true),
+            Field::new("b", DataType::Int32, true),
+        ]));
+
+        let col_a = col("a", &schema)?;
+        let literal_10 = ScalarValue::Int32(Some(10));
+
+        // Create first input with a=10
+        let const_expr1 = ConstExpr::new(Arc::clone(&col_a))
+            .with_across_partitions(AcrossPartitions::Uniform(Some(literal_10.clone())));
+        let input1 = EquivalenceProperties::new(Arc::clone(&schema))
+            .with_constants(vec![const_expr1]);
+
+        // Create second input with a=10
+        let const_expr2 = ConstExpr::new(Arc::clone(&col_a))
+            .with_across_partitions(AcrossPartitions::Uniform(Some(literal_10.clone())));
+        let input2 = EquivalenceProperties::new(Arc::clone(&schema))
+            .with_constants(vec![const_expr2]);
+
+        // Calculate union properties
+        let union_props = calculate_union(vec![input1, input2], schema)?;
+
+        // Verify column 'a' remains constant with value 10
+        let const_a = &union_props.constants()[0];
+        assert!(const_a.expr().eq(&col_a));
+        assert_eq!(
+            const_a.across_partitions(),
+            AcrossPartitions::Uniform(Some(literal_10))
+        );
 
         Ok(())
     }
