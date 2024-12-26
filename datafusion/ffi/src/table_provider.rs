@@ -40,6 +40,7 @@ use datafusion_proto::{
     protobuf::LogicalExprList,
 };
 use prost::Message;
+use tokio::runtime::Runtime;
 
 use crate::{
     arrow_wrappers::WrappedSchema,
@@ -149,6 +150,7 @@ unsafe impl Sync for FFI_TableProvider {}
 
 struct ProviderPrivateData {
     provider: Arc<dyn TableProvider + Send>,
+    runtime: Option<Arc<Runtime>>,
 }
 
 unsafe extern "C" fn schema_fn_wrapper(provider: &FFI_TableProvider) -> WrappedSchema {
@@ -216,6 +218,7 @@ unsafe extern "C" fn scan_fn_wrapper(
     let private_data = provider.private_data as *mut ProviderPrivateData;
     let internal_provider = &(*private_data).provider;
     let session_config = session_config.clone();
+    let runtime = &(*private_data).runtime;
 
     async move {
         let config = match ForeignSessionConfig::try_from(&session_config) {
@@ -261,7 +264,11 @@ unsafe extern "C" fn scan_fn_wrapper(
             Err(e) => return RResult::RErr(e.to_string().into()),
         };
 
-        RResult::ROk(FFI_ExecutionPlan::new(plan, ctx.task_ctx()))
+        RResult::ROk(FFI_ExecutionPlan::new(
+            plan,
+            ctx.task_ctx(),
+            runtime.clone(),
+        ))
     }
     .into_ffi()
 }
@@ -273,9 +280,11 @@ unsafe extern "C" fn release_fn_wrapper(provider: &mut FFI_TableProvider) {
 
 unsafe extern "C" fn clone_fn_wrapper(provider: &FFI_TableProvider) -> FFI_TableProvider {
     let old_private_data = provider.private_data as *const ProviderPrivateData;
+    let runtime = (*old_private_data).runtime.clone();
 
     let private_data = Box::into_raw(Box::new(ProviderPrivateData {
         provider: Arc::clone(&(*old_private_data).provider),
+        runtime,
     })) as *mut c_void;
 
     FFI_TableProvider {
@@ -300,8 +309,9 @@ impl FFI_TableProvider {
     pub fn new(
         provider: Arc<dyn TableProvider + Send>,
         can_support_pushdown_filters: bool,
+        runtime: Option<Arc<Runtime>>,
     ) -> Self {
-        let private_data = Box::new(ProviderPrivateData { provider });
+        let private_data = Box::new(ProviderPrivateData { provider, runtime });
 
         Self {
             schema: schema_fn_wrapper,
@@ -463,7 +473,7 @@ mod tests {
         let provider =
             Arc::new(MemTable::try_new(schema, vec![vec![batch1], vec![batch2]])?);
 
-        let ffi_provider = FFI_TableProvider::new(provider, true);
+        let ffi_provider = FFI_TableProvider::new(provider, true, None);
 
         let foreign_table_provider: ForeignTableProvider = (&ffi_provider).into();
 
