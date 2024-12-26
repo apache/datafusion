@@ -19,12 +19,27 @@ use crate::string::common::to_upper;
 use crate::utils::utf8_to_str_type;
 use arrow::datatypes::DataType;
 use datafusion_common::Result;
-use datafusion_expr::scalar_doc_sections::DOC_SECTION_STRING;
 use datafusion_expr::{ColumnarValue, Documentation};
 use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
+use datafusion_macros::user_doc;
 use std::any::Any;
-use std::sync::OnceLock;
 
+#[user_doc(
+    doc_section(label = "String Functions"),
+    description = "Converts a string to upper-case.",
+    syntax_example = "upper(str)",
+    sql_example = r#"```sql
+> select upper('dataFusion');
++---------------------------+
+| upper(Utf8("dataFusion")) |
++---------------------------+
+| DATAFUSION                |
++---------------------------+
+```"#,
+    standard_argument(name = "str", prefix = "String"),
+    related_udf(name = "lower"),
+    related_udf(name = "initcap")
+)]
 #[derive(Debug)]
 pub struct UpperFunc {
     signature: Signature,
@@ -70,34 +85,8 @@ impl ScalarUDFImpl for UpperFunc {
     }
 
     fn documentation(&self) -> Option<&Documentation> {
-        Some(get_upper_doc())
+        self.doc()
     }
-}
-
-static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
-
-fn get_upper_doc() -> &'static Documentation {
-    DOCUMENTATION.get_or_init(|| {
-        Documentation::builder(
-            DOC_SECTION_STRING,
-            "Converts a string to upper-case.",
-            "upper(str)",
-        )
-        .with_sql_example(
-            r#"```sql
-> select upper('dataFusion');
-+---------------------------+
-| upper(Utf8("dataFusion")) |
-+---------------------------+
-| DATAFUSION                |
-+---------------------------+
-```"#,
-        )
-        .with_standard_argument("str", Some("String"))
-        .with_related_udf("initcap")
-        .with_related_udf("lower")
-        .build()
-    })
 }
 
 #[cfg(test)]
