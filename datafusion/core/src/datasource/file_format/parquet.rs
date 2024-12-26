@@ -749,6 +749,26 @@ impl ParquetSink {
         }
     }
 
+    /// Create writer properties based upon configuration settings,
+    /// including partitioning and the inclusion of arrow schema metadata.
+    fn create_writer_props(&self) -> Result<WriterProperties> {
+        let props = if !self.parquet_options.global.skip_arrow_metadata {
+            let schema = if self.parquet_options.global.allow_single_file_parallelism {
+                &self.get_writer_schema()
+            } else {
+                self.config.output_schema()
+            };
+            self.parquet_options
+                .into_writer_properties_builder_with_arrow_schema(Some(schema))?
+                .build()
+        } else {
+            self.parquet_options
+                .into_writer_properties_builder()?
+                .build()
+        };
+        Ok(props)
+    }
+
     /// Creates an AsyncArrowWriter which serializes a parquet file to an ObjectStore
     /// AsyncArrowWriters are used when individual parquet file serialization is not parallelized
     async fn create_async_arrow_writer(
@@ -791,16 +811,7 @@ impl DataSink for ParquetSink {
         data: SendableRecordBatchStream,
         context: &Arc<TaskContext>,
     ) -> Result<u64> {
-        let parquet_props = if !self.parquet_options.global.skip_arrow_metadata {
-            let schema = self.config.output_schema();
-            self.parquet_options
-                .into_writer_properties_builder_with_arrow_schema(Some(schema))?
-                .build()
-        } else {
-            self.parquet_options
-                .into_writer_properties_builder()?
-                .build()
-        };
+        let parquet_props = self.create_writer_props()?;
 
         let object_store = context
             .runtime_env()
