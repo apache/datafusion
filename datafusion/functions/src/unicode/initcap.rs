@@ -192,7 +192,7 @@ mod tests {
     use crate::unicode::initcap::InitcapFunc;
     use crate::utils::test::test_function;
     use arrow::array::{Array, StringArray, StringViewArray};
-    use arrow::datatypes::DataType::Utf8;
+    use arrow::datatypes::DataType::{Utf8, Utf8View};
     use datafusion_common::{Result, ScalarValue};
     use datafusion_expr::{ColumnarValue, ScalarUDFImpl};
 
@@ -251,7 +251,7 @@ mod tests {
             )))],
             Ok(Some("Hi Thomas")),
             &str,
-            Utf8,
+            Utf8View,
             StringViewArray
         );
         test_function!(
@@ -261,7 +261,7 @@ mod tests {
             )))],
             Ok(Some("Hi Thomas With M0re Than 12 Chars")),
             &str,
-            Utf8,
+            Utf8View,
             StringViewArray
         );
         test_function!(
@@ -274,7 +274,7 @@ mod tests {
                 "Đẹp Đẽ Êm Ả Ñandú Árbol Олег Иванович Íslensku Þjóðarinnar Ελληνική"
             )),
             &str,
-            Utf8,
+            Utf8View,
             StringViewArray
         );
         test_function!(
@@ -284,7 +284,7 @@ mod tests {
             )))],
             Ok(Some("")),
             &str,
-            Utf8,
+            Utf8View,
             StringViewArray
         );
         test_function!(
@@ -292,7 +292,7 @@ mod tests {
             vec![ColumnarValue::Scalar(ScalarValue::Utf8View(None))],
             Ok(None),
             &str,
-            Utf8,
+            Utf8View,
             StringViewArray
         );
 
