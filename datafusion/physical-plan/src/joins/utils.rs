@@ -1645,7 +1645,7 @@ macro_rules! handle_state {
 
 /// Represents the result of a stateful operation.
 ///
-/// This enumueration indicates whether the state produced a result that is
+/// This enumeration indicates whether the state produced a result that is
 /// ready for use (`Ready`) or if the operation requires continuation (`Continue`).
 ///
 /// Variants:

@@ -59,6 +59,7 @@ default = [
     "unicode_expressions",
     "compression",
     "parquet",
+    "recursive_protection",
 ]
 encoding_expressions = ["datafusion-functions/encoding_expressions"]
 # Used for testing ONLY: causes all values to hash to the same value (test for collisions)
@@ -68,6 +69,13 @@ parquet = ["datafusion-common/parquet", "dep:parquet"]
 pyarrow = ["datafusion-common/pyarrow", "parquet"]
 regex_expressions = [
     "datafusion-functions/regex_expressions",
+]
+recursive_protection = [
+    "datafusion-common/recursive_protection",
+    "datafusion-expr/recursive_protection",
+    "datafusion-optimizer/recursive_protection",
+    "datafusion-physical-optimizer/recursive_protection",
+    "datafusion-sql/recursive_protection",
 ]
 serde = ["arrow-schema/serde"]
 string_expressions = ["datafusion-functions/string_expressions"]
@@ -87,12 +95,11 @@ async-compression = { version = "0.4.0", features = [
     "gzip",
     "xz",
     "zstd",
-    "futures-io",
     "tokio",
 ], optional = true }
 async-trait = { workspace = true }
 bytes = { workspace = true }
-bzip2 = { version = "0.4.3", optional = true }
+bzip2 = { version = "0.5.0", optional = true }
 chrono = { workspace = true }
 dashmap = { workspace = true }
 datafusion-catalog = { workspace = true }

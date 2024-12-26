@@ -40,6 +40,7 @@ avro = ["apache-avro"]
 backtrace = []
 pyarrow = ["pyo3", "arrow/pyarrow", "parquet"]
 force_hash_collisions = []
+recursive_protection = ["dep:recursive"]
 
 [dependencies]
 ahash = { workspace = true }
@@ -64,7 +65,7 @@ object_store = { workspace = true, optional = true }
 parquet = { workspace = true, optional = true, default-features = true }
 paste = "1.0.15"
 pyo3 = { version = "0.22.0", optional = true }
-recursive = { workspace = true }
+recursive = { workspace = true, optional = true }
 sqlparser = { workspace = true }
 tokio = { workspace = true }
 

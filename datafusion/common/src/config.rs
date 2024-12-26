@@ -910,12 +910,12 @@ pub trait ConfigExtension: ExtensionOptions {
 pub trait ExtensionOptions: Send + Sync + fmt::Debug + 'static {
     /// Return `self` as [`Any`]
     ///
-    /// This is needed until trait upcasting is stabilised
+    /// This is needed until trait upcasting is stabilized
     fn as_any(&self) -> &dyn Any;
 
     /// Return `self` as [`Any`]
     ///
-    /// This is needed until trait upcasting is stabilised
+    /// This is needed until trait upcasting is stabilized
     fn as_any_mut(&mut self) -> &mut dyn Any;
 
     /// Return a deep clone of this [`ExtensionOptions`]
