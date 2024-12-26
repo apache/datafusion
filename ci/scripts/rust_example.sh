@@ -23,7 +23,6 @@ export CARGO_PROFILE_CI_OPT_LEVEL="s"
 export CARGO_PROFILE_CI_STRIP=true
 
 cd datafusion-examples/examples/
-cargo check --profile ci --examples
 cargo build --profile ci --examples
 
 files=$(ls .)
