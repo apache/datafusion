@@ -35,7 +35,7 @@ use datafusion_expr::{
     TableScan, Window,
 };
 
-use crate::optimize_projections::required_indices::RequiredIndicies;
+use crate::optimize_projections::required_indices::RequiredIndices;
 use crate::utils::NamePreserver;
 use datafusion_common::tree_node::{
     Transformed, TreeNode, TreeNodeContainer, TreeNodeRecursion,
@@ -85,7 +85,7 @@ impl OptimizerRule for OptimizeProjections {
         config: &dyn OptimizerConfig,
     ) -> Result<Transformed<LogicalPlan>> {
         // All output fields are necessary:
-        let indices = RequiredIndicies::new_for_all_exprs(&plan);
+        let indices = RequiredIndices::new_for_all_exprs(&plan);
         optimize_projections(plan, config, indices)
     }
 }
@@ -109,11 +109,11 @@ impl OptimizerRule for OptimizeProjections {
 ///   columns.
 /// - `Ok(None)`: Signal that the given logical plan did not require any change.
 /// - `Err(error)`: An error occurred during the optimization process.
-#[cfg_attr(feature = "recursive-protection", recursive::recursive)]
+#[cfg_attr(feature = "recursive_protection", recursive::recursive)]
 fn optimize_projections(
     plan: LogicalPlan,
     config: &dyn OptimizerConfig,
-    indices: RequiredIndicies,
+    indices: RequiredIndices,
 ) -> Result<Transformed<LogicalPlan>> {
     // Recursively rewrite any nodes that may be able to avoid computation given
     // their parents' required indices.
@@ -176,7 +176,7 @@ fn optimize_projections(
             let all_exprs_iter = new_group_bys.iter().chain(new_aggr_expr.iter());
             let schema = aggregate.input.schema();
             let necessary_indices =
-                RequiredIndicies::new().with_exprs(schema, all_exprs_iter);
+                RequiredIndices::new().with_exprs(schema, all_exprs_iter);
             let necessary_exprs = necessary_indices.get_required_exprs(schema);
 
             return optimize_projections(
@@ -274,7 +274,7 @@ fn optimize_projections(
 
     // For other plan node types, calculate indices for columns they use and
     // try to rewrite their children
-    let mut child_required_indices: Vec<RequiredIndicies> = match &plan {
+    let mut child_required_indices: Vec<RequiredIndices> = match &plan {
         LogicalPlan::Sort(_)
         | LogicalPlan::Filter(_)
         | LogicalPlan::Repartition(_)
@@ -320,7 +320,7 @@ fn optimize_projections(
             //       EXISTS expression), we may not need to require all indices.
             plan.inputs()
                 .into_iter()
-                .map(RequiredIndicies::new_for_all_exprs)
+                .map(RequiredIndices::new_for_all_exprs)
                 .collect()
         }
         LogicalPlan::Extension(extension) => {
@@ -340,7 +340,7 @@ fn optimize_projections(
                 .into_iter()
                 .zip(necessary_children_indices)
                 .map(|(child, necessary_indices)| {
-                    RequiredIndicies::new_from_indices(necessary_indices)
+                    RequiredIndices::new_from_indices(necessary_indices)
                         .with_plan_exprs(&plan, child.schema())
                 })
                 .collect::<Result<Vec<_>>>()?
@@ -379,7 +379,7 @@ fn optimize_projections(
         LogicalPlan::Unnest(Unnest {
             dependency_indices, ..
         }) => {
-            vec![RequiredIndicies::new_from_indices(
+            vec![RequiredIndices::new_from_indices(
                 dependency_indices.clone(),
             )]
         }
@@ -443,7 +443,7 @@ fn optimize_projections(
 /// - `Ok(Some(Projection))`: Merge was beneficial and successful. Contains the
 ///   merged projection.
 /// - `Ok(None)`: Signals that merge is not beneficial (and has not taken place).
-/// - `Err(error)`: An error occured during the function call.
+/// - `Err(error)`: An error occurred during the function call.
 fn merge_consecutive_projections(proj: Projection) -> Result<Transformed<Projection>> {
     let Projection {
         expr,
@@ -672,9 +672,9 @@ fn outer_columns_helper_multi<'a, 'b>(
 /// adjusted based on the join type.
 fn split_join_requirements(
     left_len: usize,
-    indices: RequiredIndicies,
+    indices: RequiredIndices,
     join_type: &JoinType,
-) -> (RequiredIndicies, RequiredIndicies) {
+) -> (RequiredIndices, RequiredIndices) {
     match join_type {
         // In these cases requirements are split between left/right children:
         JoinType::Inner
@@ -687,10 +687,10 @@ fn split_join_requirements(
             indices.split_off(left_len)
         }
         // All requirements can be re-routed to left child directly.
-        JoinType::LeftAnti | JoinType::LeftSemi => (indices, RequiredIndicies::new()),
+        JoinType::LeftAnti | JoinType::LeftSemi => (indices, RequiredIndices::new()),
         // All requirements can be re-routed to right side directly.
         // No need to change index, join schema is right child schema.
-        JoinType::RightSemi | JoinType::RightAnti => (RequiredIndicies::new(), indices),
+        JoinType::RightSemi | JoinType::RightAnti => (RequiredIndices::new(), indices),
     }
 }
 
@@ -741,18 +741,18 @@ fn add_projection_on_top_if_helpful(
 ///
 /// - `Ok(Some(LogicalPlan))`: Contains the rewritten projection
 /// - `Ok(None)`: No rewrite necessary.
-/// - `Err(error)`: An error occured during the function call.
+/// - `Err(error)`: An error occurred during the function call.
 fn rewrite_projection_given_requirements(
     proj: Projection,
     config: &dyn OptimizerConfig,
-    indices: &RequiredIndicies,
+    indices: &RequiredIndices,
 ) -> Result<Transformed<LogicalPlan>> {
     let Projection { expr, input, .. } = proj;
 
     let exprs_used = indices.get_at_indices(&expr);
 
     let required_indices =
-        RequiredIndicies::new().with_exprs(input.schema(), exprs_used.iter());
+        RequiredIndices::new().with_exprs(input.schema(), exprs_used.iter());
 
     // rewrite the children projection, and if they are changed rewrite the
     // projection down
