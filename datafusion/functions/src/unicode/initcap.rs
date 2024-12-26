@@ -63,7 +63,11 @@ impl ScalarUDFImpl for InitcapFunc {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        utf8_to_str_type(&arg_types[0], "initcap")
+        if let DataType::Utf8View = arg_types[0] {
+            Ok(DataType::Utf8View)
+        } else {
+            utf8_to_str_type(&arg_types[0], "initcap")
+        }
     }
 
     fn invoke_batch(
