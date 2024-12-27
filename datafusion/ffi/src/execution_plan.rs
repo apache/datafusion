@@ -110,7 +110,7 @@ unsafe extern "C" fn execute_fn_wrapper(
     let private_data = plan.private_data as *const ExecutionPlanPrivateData;
     let plan = &(*private_data).plan;
     let ctx = &(*private_data).context;
-    let runtime = (*private_data).runtime.as_ref().map(|rt| Arc::clone(rt));
+    let runtime = (*private_data).runtime.as_ref().map(Arc::clone);
 
     match plan.execute(partition, Arc::clone(ctx)) {
         Ok(rbs) => RResult::ROk(FFI_RecordBatchStream::new(rbs, runtime)),
