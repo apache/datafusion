@@ -214,7 +214,7 @@ fn replace_with_partial_sort(
     let plan_any = plan.as_any();
     if let Some(sort_plan) = plan_any.downcast_ref::<SortExec>() {
         let child = Arc::clone(sort_plan.children()[0]);
-        if !child.execution_mode().is_unbounded() {
+        if !child.boundedness().is_unbounded() {
             return Ok(plan);
         }
 
@@ -720,7 +720,7 @@ mod tests {
             let state = session_ctx.state();
 
             // This file has 4 rules that use tree node, apply these rules as in the
-            // EnforSorting::optimize implementation
+            // EnforceSorting::optimize implementation
             // After these operations tree nodes should be in a consistent state.
             // This code block makes sure that these rules doesn't violate tree node integrity.
             {

@@ -90,6 +90,7 @@ impl PhysicalExpr for Literal {
         Ok(ExprProperties {
             sort_properties: SortProperties::Singleton,
             range: Interval::try_new(self.value().clone(), self.value().clone())?,
+            preserves_lex_ordering: true,
         })
     }
 }
@@ -112,7 +113,7 @@ mod tests {
 
     #[test]
     fn literal_i32() -> Result<()> {
-        // create an arbitrary record bacth
+        // create an arbitrary record batch
         let schema = Schema::new(vec![Field::new("a", DataType::Int32, true)]);
         let a = Int32Array::from(vec![Some(1), None, Some(3), Some(4), Some(5)]);
         let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(a)])?;

@@ -43,6 +43,8 @@ use datafusion_expr::{
     expr::{Alias, Exists, InList, ScalarFunction, Sort, WindowFunction},
     Between, BinaryExpr, Case, Cast, Expr, GroupingSet, Like, Operator, TryCast,
 };
+use sqlparser::ast::helpers::attached_token::AttachedToken;
+use sqlparser::tokenizer::Span;
 
 /// Convert a DataFusion [`Expr`] to [`ast::Expr`]
 ///
@@ -233,6 +235,7 @@ impl Unparser<'_> {
                     name: ObjectName(vec![Ident {
                         value: func_name.to_string(),
                         quote_style: None,
+                        span: Span::empty(),
                     }]),
                     args: ast::FunctionArguments::List(ast::FunctionArgumentList {
                         duplicate_treatment: None,
@@ -244,6 +247,7 @@ impl Unparser<'_> {
                     over,
                     within_group: vec![],
                     parameters: ast::FunctionArguments::None,
+                    uses_odbc_syntax: false,
                 }))
             }
             Expr::SimilarTo(Like {
@@ -278,6 +282,7 @@ impl Unparser<'_> {
                     name: ObjectName(vec![Ident {
                         value: func_name.to_string(),
                         quote_style: None,
+                        span: Span::empty(),
                     }]),
                     args: ast::FunctionArguments::List(ast::FunctionArgumentList {
                         duplicate_treatment: agg
@@ -291,6 +296,7 @@ impl Unparser<'_> {
                     over: None,
                     within_group: vec![],
                     parameters: ast::FunctionArguments::None,
+                    uses_odbc_syntax: false,
                 }))
             }
             Expr::ScalarSubquery(subq) => {
@@ -404,12 +410,16 @@ impl Unparser<'_> {
             }
             // TODO: unparsing wildcard addition options
             Expr::Wildcard { qualifier, .. } => {
+                let attached_token = AttachedToken::empty();
                 if let Some(qualifier) = qualifier {
                     let idents: Vec<Ident> =
                         qualifier.to_vec().into_iter().map(Ident::new).collect();
-                    Ok(ast::Expr::QualifiedWildcard(ObjectName(idents)))
+                    Ok(ast::Expr::QualifiedWildcard(
+                        ObjectName(idents),
+                        attached_token,
+                    ))
                 } else {
-                    Ok(ast::Expr::Wildcard)
+                    Ok(ast::Expr::Wildcard(attached_token))
                 }
             }
             Expr::GroupingSet(grouping_set) => match grouping_set {
@@ -480,6 +490,7 @@ impl Unparser<'_> {
             name: ObjectName(vec![Ident {
                 value: func_name.to_string(),
                 quote_style: None,
+                span: Span::empty(),
             }]),
             args: ast::FunctionArguments::List(ast::FunctionArgumentList {
                 duplicate_treatment: None,
@@ -491,6 +502,7 @@ impl Unparser<'_> {
             over: None,
             within_group: vec![],
             parameters: ast::FunctionArguments::None,
+            uses_odbc_syntax: false,
         }))
     }
 
@@ -709,6 +721,7 @@ impl Unparser<'_> {
         Ident {
             value: ident,
             quote_style,
+            span: Span::empty(),
         }
     }
 
@@ -716,6 +729,7 @@ impl Unparser<'_> {
         Ident {
             value: str,
             quote_style: None,
+            span: Span::empty(),
         }
     }
 
@@ -733,7 +747,7 @@ impl Unparser<'_> {
     }
 
     /// Given an expression of the form `((a + b) * (c * d))`,
-    /// the parenthesing is redundant if the precedence of the nested expression is already higher
+    /// the parenthesis is redundant if the precedence of the nested expression is already higher
     /// than the surrounding operators' precedence. The above expression would become
     /// `(a + b) * c * d`.
     ///
@@ -1232,7 +1246,7 @@ impl Unparser<'_> {
     /// MySQL requires INTERVAL sql to be in the format: INTERVAL 1 YEAR + INTERVAL 1 MONTH + INTERVAL 1 DAY etc
     /// `<https://dev.mysql.com/doc/refman/8.4/en/expressions.html#temporal-intervals>`
     /// Interval sequence can't be wrapped in brackets - (INTERVAL 1 YEAR + INTERVAL 1 MONTH ...) so we need to generate
-    /// a single INTERVAL expression so it works correct for interval substraction cases
+    /// a single INTERVAL expression so it works correct for interval subtraction cases
     /// MySQL supports the DAY_MICROSECOND unit type (format is DAYS HOURS:MINUTES:SECONDS.MICROSECONDS), but it is not supported by sqlparser
     /// so we calculate the best single interval to represent the provided duration
     fn interval_to_mysql_expr(
@@ -1481,6 +1495,7 @@ impl Unparser<'_> {
             name: ObjectName(vec![Ident {
                 value: "UNNEST".to_string(),
                 quote_style: None,
+                span: Span::empty(),
             }]),
             args: ast::FunctionArguments::List(ast::FunctionArgumentList {
                 duplicate_treatment: None,
@@ -1492,6 +1507,7 @@ impl Unparser<'_> {
             over: None,
             within_group: vec![],
             parameters: ast::FunctionArguments::None,
+            uses_odbc_syntax: false,
         }))
     }
 
@@ -1672,7 +1688,7 @@ mod tests {
         let dummy_logical_plan = table_scan(Some("t"), &dummy_schema, None)?
             .project(vec![Expr::Wildcard {
                 qualifier: None,
-                options: WildcardOptions::default(),
+                options: Box::new(WildcardOptions::default()),
             }])?
             .filter(col("a").eq(lit(1)))?
             .build()?;
@@ -1864,10 +1880,7 @@ mod tests {
             (sum(col("a")), r#"sum(a)"#),
             (
                 count_udaf()
-                    .call(vec![Expr::Wildcard {
-                        qualifier: None,
-                        options: WildcardOptions::default(),
-                    }])
+                    .call(vec![wildcard()])
                     .distinct()
                     .build()
                     .unwrap(),
@@ -1875,10 +1888,7 @@ mod tests {
             ),
             (
                 count_udaf()
-                    .call(vec![Expr::Wildcard {
-                        qualifier: None,
-                        options: WildcardOptions::default(),
-                    }])
+                    .call(vec![wildcard()])
                     .filter(lit(true))
                     .build()
                     .unwrap(),

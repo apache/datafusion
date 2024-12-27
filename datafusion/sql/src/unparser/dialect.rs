@@ -18,14 +18,14 @@
 use std::sync::Arc;
 
 use arrow_schema::TimeUnit;
+use datafusion_common::Result;
 use datafusion_expr::Expr;
 use regex::Regex;
+use sqlparser::tokenizer::Span;
 use sqlparser::{
     ast::{self, BinaryOperator, Function, Ident, ObjectName, TimezoneInfo},
     keywords::ALL_KEYWORDS,
 };
-
-use datafusion_common::Result;
 
 use super::{utils::character_length_to_sql, utils::date_part_to_sql, Unparser};
 
@@ -152,7 +152,7 @@ pub trait Dialect: Send + Sync {
 
     /// Allow to unparse a qualified column with a full qualified name
     /// (e.g. catalog_name.schema_name.table_name.column_name)
-    /// Otherwise, the column will be unparsed with only the table name and colum name
+    /// Otherwise, the column will be unparsed with only the table name and column name
     /// (e.g. table_name.column_name)
     fn full_qualified_col(&self) -> bool {
         false
@@ -288,6 +288,7 @@ impl PostgreSqlDialect {
             name: ObjectName(vec![Ident {
                 value: func_name.to_string(),
                 quote_style: None,
+                span: Span::empty(),
             }]),
             args: ast::FunctionArguments::List(ast::FunctionArgumentList {
                 duplicate_treatment: None,
@@ -299,6 +300,7 @@ impl PostgreSqlDialect {
             over: None,
             within_group: vec![],
             parameters: ast::FunctionArguments::None,
+            uses_odbc_syntax: false,
         }))
     }
 }

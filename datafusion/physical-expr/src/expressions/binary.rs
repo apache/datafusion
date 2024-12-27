@@ -404,7 +404,7 @@ impl PhysicalExpr for BinaryExpr {
         if self.op.eq(&Operator::And) {
             if interval.eq(&Interval::CERTAINLY_TRUE) {
                 // A certainly true logical conjunction can only derive from possibly
-                // true operands. Otherwise, we prove infeasability.
+                // true operands. Otherwise, we prove infeasibility.
                 Ok((!left_interval.eq(&Interval::CERTAINLY_FALSE)
                     && !right_interval.eq(&Interval::CERTAINLY_FALSE))
                 .then(|| vec![Interval::CERTAINLY_TRUE, Interval::CERTAINLY_TRUE]))
@@ -444,7 +444,7 @@ impl PhysicalExpr for BinaryExpr {
         } else if self.op.eq(&Operator::Or) {
             if interval.eq(&Interval::CERTAINLY_FALSE) {
                 // A certainly false logical conjunction can only derive from certainly
-                // false operands. Otherwise, we prove infeasability.
+                // false operands. Otherwise, we prove infeasibility.
                 Ok((!left_interval.eq(&Interval::CERTAINLY_TRUE)
                     && !right_interval.eq(&Interval::CERTAINLY_TRUE))
                 .then(|| vec![Interval::CERTAINLY_FALSE, Interval::CERTAINLY_FALSE]))
@@ -503,34 +503,42 @@ impl PhysicalExpr for BinaryExpr {
             Operator::Plus => Ok(ExprProperties {
                 sort_properties: l_order.add(&r_order),
                 range: l_range.add(r_range)?,
+                preserves_lex_ordering: false,
             }),
             Operator::Minus => Ok(ExprProperties {
                 sort_properties: l_order.sub(&r_order),
                 range: l_range.sub(r_range)?,
+                preserves_lex_ordering: false,
             }),
             Operator::Gt => Ok(ExprProperties {
                 sort_properties: l_order.gt_or_gteq(&r_order),
                 range: l_range.gt(r_range)?,
+                preserves_lex_ordering: false,
             }),
             Operator::GtEq => Ok(ExprProperties {
                 sort_properties: l_order.gt_or_gteq(&r_order),
                 range: l_range.gt_eq(r_range)?,
+                preserves_lex_ordering: false,
             }),
             Operator::Lt => Ok(ExprProperties {
                 sort_properties: r_order.gt_or_gteq(&l_order),
                 range: l_range.lt(r_range)?,
+                preserves_lex_ordering: false,
             }),
             Operator::LtEq => Ok(ExprProperties {
                 sort_properties: r_order.gt_or_gteq(&l_order),
                 range: l_range.lt_eq(r_range)?,
+                preserves_lex_ordering: false,
             }),
             Operator::And => Ok(ExprProperties {
                 sort_properties: r_order.and_or(&l_order),
                 range: l_range.and(r_range)?,
+                preserves_lex_ordering: false,
             }),
             Operator::Or => Ok(ExprProperties {
                 sort_properties: r_order.and_or(&l_order),
                 range: l_range.or(r_range)?,
+                preserves_lex_ordering: false,
             }),
             _ => Ok(ExprProperties::new_unknown()),
         }

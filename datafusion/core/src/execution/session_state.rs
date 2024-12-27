@@ -125,9 +125,9 @@ pub struct SessionState {
     session_id: String,
     /// Responsible for analyzing and rewrite a logical plan before optimization
     analyzer: Analyzer,
-    /// Provides support for customising the SQL planner, e.g. to add support for custom operators like `->>` or `?`
+    /// Provides support for customizing the SQL planner, e.g. to add support for custom operators like `->>` or `?`
     expr_planners: Vec<Arc<dyn ExprPlanner>>,
-    /// Provides support for customising the SQL type planning
+    /// Provides support for customizing the SQL type planning
     type_planner: Option<Arc<dyn TypePlanner>>,
     /// Responsible for optimizing a logical plan
     optimizer: Optimizer,
@@ -296,7 +296,7 @@ impl SessionState {
     }
 
     /// Retrieve the [`SchemaProvider`] for a specific [`TableReference`], if it
-    /// esists.
+    /// exists.
     pub fn schema_for_ref(
         &self,
         table_ref: impl Into<TableReference>,

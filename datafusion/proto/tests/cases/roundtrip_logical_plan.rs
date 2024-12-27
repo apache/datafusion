@@ -67,7 +67,7 @@ use datafusion_common::{
 use datafusion_expr::dml::CopyTo;
 use datafusion_expr::expr::{
     self, Between, BinaryExpr, Case, Cast, GroupingSet, InList, Like, ScalarFunction,
-    Unnest, WildcardOptions,
+    Unnest,
 };
 use datafusion_expr::logical_plan::{Extension, UserDefinedLogicalNodeCore};
 use datafusion_expr::{
@@ -2061,10 +2061,7 @@ fn roundtrip_unnest() {
 
 #[test]
 fn roundtrip_wildcard() {
-    let test_expr = Expr::Wildcard {
-        qualifier: None,
-        options: WildcardOptions::default(),
-    };
+    let test_expr = wildcard();
 
     let ctx = SessionContext::new();
     roundtrip_expr_test(test_expr, ctx);
@@ -2072,10 +2069,7 @@ fn roundtrip_wildcard() {
 
 #[test]
 fn roundtrip_qualified_wildcard() {
-    let test_expr = Expr::Wildcard {
-        qualifier: Some("foo".into()),
-        options: WildcardOptions::default(),
-    };
+    let test_expr = qualified_wildcard("foo");
 
     let ctx = SessionContext::new();
     roundtrip_expr_test(test_expr, ctx);
@@ -2579,7 +2573,7 @@ async fn roundtrip_union_query() -> Result<()> {
     ctx.register_csv("t2", "tests/testdata/test.csv", CsvReadOptions::default())
         .await?;
     let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx)?;
-    // proto deserialisation only supports 2-way union, hence this plan has nested unions
+    // proto deserialization only supports 2-way union, hence this plan has nested unions
     // apply the flatten unions optimizer rule to be able to compare
     let optimizer = Optimizer::with_rules(vec![Arc::new(EliminateNestedUnion::new())]);
     let unnested = optimizer.optimize(logical_round_trip, &(ctx.state()), |_x, _y| {})?;

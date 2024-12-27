@@ -23,7 +23,7 @@
 //! [Facebook's Folly TDigest] implementation.
 //!
 //! Alterations include reduction of runtime heap allocations, broader type
-//! support, (de-)serialisation support, reduced type conversions and null value
+//! support, (de-)serialization support, reduced type conversions and null value
 //! tolerance.
 //!
 //! [TDigest sketch algorithm]: https://arxiv.org/abs/1902.04023
@@ -612,7 +612,7 @@ impl TDigest {
         ]
     }
 
-    /// Unpack the serialised state of a [`TDigest`] produced by
+    /// Unpack the serialized state of a [`TDigest`] produced by
     /// [`Self::to_scalar_state()`].
     ///
     /// # Correctness

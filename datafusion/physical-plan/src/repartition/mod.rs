@@ -170,7 +170,7 @@ impl RepartitionExecState {
 /// which is commonly set to the number of CPU cores and all call execute at the same time.
 ///
 /// Thus, use a **tokio** `OnceCell` for this initialization so as not to waste CPU cycles
-/// in a futex lock but instead allow other threads to do something useful.
+/// in a mutex lock but instead allow other threads to do something useful.
 ///
 /// Uses a parking_lot `Mutex` to control other accesses as they are very short duration
 ///  (e.g. removing channels on completion) where the overhead of `await` is not warranted.
@@ -343,7 +343,7 @@ impl BatchPartitioner {
 /// sufficient care in implementation.
 ///
 /// DataFusion's planner picks the target number of partitions and
-/// then `RepartionExec` redistributes [`RecordBatch`]es to that number
+/// then [`RepartitionExec`] redistributes [`RecordBatch`]es to that number
 /// of output partitions.
 ///
 /// For example, given `target_partitions=3` (trying to use 3 cores)
@@ -726,17 +726,15 @@ impl RepartitionExec {
         partitioning: Partitioning,
         preserve_order: bool,
     ) -> PlanProperties {
-        // Equivalence Properties
-        let eq_properties = Self::eq_properties_helper(input, preserve_order);
-
         PlanProperties::new(
-            eq_properties,          // Equivalence Properties
-            partitioning,           // Output Partitioning
-            input.execution_mode(), // Execution Mode
+            Self::eq_properties_helper(input, preserve_order),
+            partitioning,
+            input.pipeline_behavior(),
+            input.boundedness(),
         )
     }
 
-    /// Specify if this reparititoning operation should preserve the order of
+    /// Specify if this repartitioning operation should preserve the order of
     /// rows from its input when producing output. Preserving order is more
     /// expensive at runtime, so should only be set if the output of this
     /// operator can take advantage of it.
@@ -1412,7 +1410,7 @@ mod tests {
             .flat_map(|batch| {
                 assert_eq!(batch.columns().len(), 1);
                 let string_array = as_string_array(batch.column(0))
-                    .expect("Unexpected type for repartitoned batch");
+                    .expect("Unexpected type for repartitioned batch");
 
                 string_array
                     .iter()

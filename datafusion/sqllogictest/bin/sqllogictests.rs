@@ -21,7 +21,7 @@ use datafusion_sqllogictest::{DataFusion, TestContext};
 use futures::stream::StreamExt;
 use itertools::Itertools;
 use log::info;
-use sqllogictest::strict_column_validator;
+use sqllogictest::{strict_column_validator, Normalizer};
 use std::ffi::OsStr;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -40,19 +40,25 @@ pub fn main() -> Result<()> {
         .block_on(run_tests())
 }
 
-fn value_validator(actual: &[Vec<String>], expected: &[String]) -> bool {
-    let expected = expected
-        .iter()
-        // Trailing whitespace from lines in SLT will typically be removed, but do not fail if it is not
-        // If particular test wants to cover trailing whitespace on a value,
-        // it should project additional non-whitespace column on the right.
-        .map(|s| s.trim_end().to_owned())
-        .collect::<Vec<_>>();
+#[allow(clippy::ptr_arg)]
+fn normalizer(s: &String) -> String {
+    // Trailing whitespace from lines in SLT will typically be removed, but do not fail if it is not
+    // If particular test wants to cover trailing whitespace on a value,
+    // it should project additional non-whitespace column on the right.
+    s.trim_end().to_owned()
+}
+
+fn value_validator(
+    normalizer: Normalizer,
+    actual: &[Vec<String>],
+    expected: &[String],
+) -> bool {
+    let expected = expected.iter().map(normalizer).collect::<Vec<_>>();
     let actual = actual
         .iter()
         .map(|strs| strs.iter().join(" "))
         // Editors do not preserve trailing whitespace, so expected may or may not lack it included
-        .map(|s| s.trim_end().to_owned())
+        .map(|str| normalizer(&str))
         .collect::<Vec<_>>();
     actual == expected
 }
@@ -159,6 +165,7 @@ async fn run_test_file(test_file: TestFile) -> Result<()> {
         ))
     });
     runner.with_column_validator(strict_column_validator);
+    runner.with_normalizer(normalizer);
     runner.with_validator(value_validator);
     runner
         .run_file_async(path)
@@ -178,6 +185,7 @@ async fn run_test_file_with_postgres(test_file: TestFile) -> Result<()> {
     let mut runner =
         sqllogictest::Runner::new(|| Postgres::connect(relative_path.clone()));
     runner.with_column_validator(strict_column_validator);
+    runner.with_normalizer(normalizer);
     runner.with_validator(value_validator);
     runner
         .run_file_async(path)
@@ -217,6 +225,7 @@ async fn run_complete_file(test_file: TestFile) -> Result<()> {
             path,
             col_separator,
             value_validator,
+            normalizer,
             strict_column_validator,
         )
         .await
@@ -246,6 +255,7 @@ async fn run_complete_file_with_postgres(test_file: TestFile) -> Result<()> {
             path,
             col_separator,
             value_validator,
+            normalizer,
             strict_column_validator,
         )
         .await

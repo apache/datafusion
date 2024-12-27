@@ -44,7 +44,7 @@ use crate::PhysicalOptimizerRule;
 /// `new_add_mode` and `new_remove_mode`. With this rule, we can keep track of
 /// the global requirements (ordering and distribution) across rules.
 ///
-/// The primary usecase of this node and rule is to specify and preserve the desired output
+/// The primary use case of this node and rule is to specify and preserve the desired output
 /// ordering and distribution the entire plan. When sending to a single client, a single partition may
 /// be desirable, but when sending to a multi-partitioned writer, keeping multiple partitions may be
 /// better.
@@ -121,7 +121,8 @@ impl OutputRequirementExec {
         PlanProperties::new(
             input.equivalence_properties().clone(), // Equivalence Properties
             input.output_partitioning().clone(),    // Output Partitioning
-            input.execution_mode(),                 // Execution Mode
+            input.pipeline_behavior(),              // Pipeline Behavior
+            input.boundedness(),                    // Boundedness
         )
     }
 }

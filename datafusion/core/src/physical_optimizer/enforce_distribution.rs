@@ -52,12 +52,13 @@ use datafusion_physical_expr::utils::map_columns_before_projection;
 use datafusion_physical_expr::{
     physical_exprs_equal, EquivalenceProperties, PhysicalExpr, PhysicalExprRef,
 };
+use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use datafusion_physical_optimizer::output_requirements::OutputRequirementExec;
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
+use datafusion_physical_plan::execution_plan::EmissionType;
 use datafusion_physical_plan::windows::{get_best_fitting_window, BoundedWindowAggExec};
 use datafusion_physical_plan::ExecutionPlanProperties;
 
-use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use itertools::izip;
 
 /// The `EnforceDistribution` rule ensures that distribution requirements are
@@ -1161,12 +1162,17 @@ fn ensure_distribution(
     let should_use_estimates = config
         .execution
         .use_row_number_estimates_to_optimize_partitioning;
-    let is_unbounded = dist_context.plan.execution_mode().is_unbounded();
+    let unbounded_and_pipeline_friendly = dist_context.plan.boundedness().is_unbounded()
+        && matches!(
+            dist_context.plan.pipeline_behavior(),
+            EmissionType::Incremental | EmissionType::Both
+        );
     // Use order preserving variants either of the conditions true
     // - it is desired according to config
     // - when plan is unbounded
+    // - when it is pipeline friendly (can incrementally produce results)
     let order_preserving_variants_desirable =
-        is_unbounded || config.optimizer.prefer_existing_sort;
+        unbounded_and_pipeline_friendly || config.optimizer.prefer_existing_sort;
 
     // Remove unnecessary repartition from the physical plan if any
     let DistributionContext {
@@ -1246,7 +1252,7 @@ fn ensure_distribution(
                         // to increase parallelism.
                         child = add_roundrobin_on_top(child, target_partitions)?;
                     }
-                    // When inserting hash is necessary to satisy hash requirement, insert hash repartition.
+                    // When inserting hash is necessary to satisfy hash requirement, insert hash repartition.
                     if hash_necessary {
                         child =
                             add_hash_on_top(child, exprs.to_vec(), target_partitions)?;
@@ -1459,7 +1465,8 @@ pub(crate) mod tests {
             PlanProperties::new(
                 input.equivalence_properties().clone(), // Equivalence Properties
                 input.output_partitioning().clone(),    // Output Partitioning
-                input.execution_mode(),                 // Execution Mode
+                input.pipeline_behavior(),              // Pipeline Behavior
+                input.boundedness(),                    // Boundedness
             )
         }
     }
@@ -2826,11 +2833,11 @@ pub(crate) mod tests {
                     ],
                 // Should include 7 RepartitionExecs (4 hash, 3 round-robin), 4 SortExecs
                 // Since ordering of the left child is not preserved after SortMergeJoin
-                // when mode is Right, RgihtSemi, RightAnti, Full
+                // when mode is Right, RightSemi, RightAnti, Full
                 // - We need to add one additional SortExec after SortMergeJoin in contrast the test cases
                 //   when mode is Inner, Left, LeftSemi, LeftAnti
                 // Similarly, since partitioning of the left side is not preserved
-                // when mode is Right, RgihtSemi, RightAnti, Full
+                // when mode is Right, RightSemi, RightAnti, Full
                 // - We need to add one additional Hash Repartition after SortMergeJoin in contrast the test
                 //   cases when mode is Inner, Left, LeftSemi, LeftAnti
                 _ => vec![
@@ -2878,11 +2885,11 @@ pub(crate) mod tests {
                     ],
                 // Should include 8 RepartitionExecs (4 hash, 8 round-robin), 4 SortExecs
                 // Since ordering of the left child is not preserved after SortMergeJoin
-                // when mode is Right, RgihtSemi, RightAnti, Full
+                // when mode is Right, RightSemi, RightAnti, Full
                 // - We need to add one additional SortExec after SortMergeJoin in contrast the test cases
                 //   when mode is Inner, Left, LeftSemi, LeftAnti
                 // Similarly, since partitioning of the left side is not preserved
-                // when mode is Right, RgihtSemi, RightAnti, Full
+                // when mode is Right, RightSemi, RightAnti, Full
                 // - We need to add one additional Hash Repartition and Roundrobin repartition after
                 //   SortMergeJoin in contrast the test cases when mode is Inner, Left, LeftSemi, LeftAnti
                 _ => vec![

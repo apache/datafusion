@@ -24,10 +24,12 @@ use std::sync::Arc;
 use std::task::Poll;
 
 use super::utils::{
-    asymmetric_join_output_partitioning, need_produce_result_in_final, BatchSplitter,
-    BatchTransformer, NoopBatchTransformer, StatefulStreamResult,
+    asymmetric_join_output_partitioning, need_produce_result_in_final,
+    reorder_output_after_swap, BatchSplitter, BatchTransformer, NoopBatchTransformer,
+    StatefulStreamResult,
 };
 use crate::coalesce_partitions::CoalescePartitionsExec;
+use crate::execution_plan::{boundedness_from_children, EmissionType};
 use crate::joins::utils::{
     adjust_indices_by_join_type, apply_join_filter_to_indices, build_batch_from_indices,
     build_join_schema, check_join_is_valid, estimate_join_statistics,
@@ -36,9 +38,9 @@ use crate::joins::utils::{
 };
 use crate::metrics::{ExecutionPlanMetricsSet, MetricsSet};
 use crate::{
-    execution_mode_from_children, handle_state, DisplayAs, DisplayFormatType,
-    Distribution, ExecutionMode, ExecutionPlan, ExecutionPlanProperties, PlanProperties,
-    RecordBatchStream, SendableRecordBatchStream,
+    handle_state, DisplayAs, DisplayFormatType, Distribution, ExecutionPlan,
+    ExecutionPlanProperties, PlanProperties, RecordBatchStream,
+    SendableRecordBatchStream,
 };
 
 use arrow::array::{BooleanBufferBuilder, UInt32Array, UInt64Array};
@@ -241,14 +243,34 @@ impl NestedLoopJoinExec {
         let output_partitioning =
             asymmetric_join_output_partitioning(left, right, &join_type);
 
-        // Determine execution mode:
-        let mode = if left.execution_mode().is_unbounded() {
-            ExecutionMode::PipelineBreaking
+        let emission_type = if left.boundedness().is_unbounded() {
+            EmissionType::Final
+        } else if right.pipeline_behavior() == EmissionType::Incremental {
+            match join_type {
+                // If we only need to generate matched rows from the probe side,
+                // we can emit rows incrementally.
+                JoinType::Inner
+                | JoinType::LeftSemi
+                | JoinType::RightSemi
+                | JoinType::Right
+                | JoinType::RightAnti => EmissionType::Incremental,
+                // If we need to generate unmatched rows from the *build side*,
+                // we need to emit them at the end.
+                JoinType::Left
+                | JoinType::LeftAnti
+                | JoinType::LeftMark
+                | JoinType::Full => EmissionType::Both,
+            }
         } else {
-            execution_mode_from_children([left, right])
+            right.pipeline_behavior()
         };
 
-        PlanProperties::new(eq_properties, output_partitioning, mode)
+        PlanProperties::new(
+            eq_properties,
+            output_partitioning,
+            emission_type,
+            boundedness_from_children([left, right]),
+        )
     }
 
     /// Returns a vector indicating whether the left and right inputs maintain their order.
@@ -274,6 +296,40 @@ impl NestedLoopJoinExec {
                     | JoinType::RightSemi
             ),
         ]
+    }
+
+    /// Returns a new `ExecutionPlan` that runs NestedLoopsJoins with the left
+    /// and right inputs swapped.
+    pub fn swap_inputs(&self) -> Result<Arc<dyn ExecutionPlan>> {
+        let new_filter = self.filter().map(JoinFilter::swap);
+        let new_join_type = &self.join_type().swap();
+
+        let new_join = NestedLoopJoinExec::try_new(
+            Arc::clone(self.right()),
+            Arc::clone(self.left()),
+            new_filter,
+            new_join_type,
+        )?;
+
+        // For Semi/Anti joins, swap result will produce same output schema,
+        // no need to wrap them into additional projection
+        let plan: Arc<dyn ExecutionPlan> = if matches!(
+            self.join_type(),
+            JoinType::LeftSemi
+                | JoinType::RightSemi
+                | JoinType::LeftAnti
+                | JoinType::RightAnti
+        ) {
+            Arc::new(new_join)
+        } else {
+            reorder_output_after_swap(
+                Arc::new(new_join),
+                &self.left().schema(),
+                &self.right().schema(),
+            )?
+        };
+
+        Ok(plan)
     }
 }
 

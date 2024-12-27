@@ -30,7 +30,6 @@ pub mod concat;
 pub mod concat_ws;
 pub mod contains;
 pub mod ends_with;
-pub mod initcap;
 pub mod levenshtein;
 pub mod lower;
 pub mod ltrim;
@@ -52,7 +51,6 @@ make_udf_function!(chr::ChrFunc, chr);
 make_udf_function!(concat::ConcatFunc, concat);
 make_udf_function!(concat_ws::ConcatWsFunc, concat_ws);
 make_udf_function!(ends_with::EndsWithFunc, ends_with);
-make_udf_function!(initcap::InitcapFunc, initcap);
 make_udf_function!(levenshtein::LevenshteinFunc, levenshtein);
 make_udf_function!(ltrim::LtrimFunc, ltrim);
 make_udf_function!(lower::LowerFunc, lower);
@@ -94,10 +92,6 @@ pub mod expr_fn {
         ends_with,
         "Returns true if the `string` ends with the `suffix`, false otherwise.",
         string suffix
-    ),(
-        initcap,
-        "Converts the first letter of each word in `string` in uppercase and the remaining characters in lowercase",
-        string
     ),(
         levenshtein,
         "Returns the Levenshtein distance between the two given strings",
@@ -151,7 +145,7 @@ pub mod expr_fn {
         "returns uuid v4 as a string value",
     ), (
         contains,
-        "Return true if search_string is found within string. treated it like a reglike",
+        "Return true if search_string is found within string.",
     ));
 
     #[doc = "Removes all characters, spaces by default, from both sides of a string"]
@@ -177,7 +171,6 @@ pub fn functions() -> Vec<Arc<ScalarUDF>> {
         concat(),
         concat_ws(),
         ends_with(),
-        initcap(),
         levenshtein(),
         lower(),
         ltrim(),

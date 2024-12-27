@@ -45,7 +45,8 @@ use datafusion_physical_expr::expressions::BinaryExpr;
 use datafusion_physical_expr::intervals::utils::check_support;
 use datafusion_physical_expr::utils::collect_columns;
 use datafusion_physical_expr::{
-    analyze, split_conjunction, AnalysisContext, ConstExpr, ExprBoundaries, PhysicalExpr,
+    analyze, split_conjunction, AcrossPartitions, AnalysisContext, ConstExpr,
+    ExprBoundaries, PhysicalExpr,
 };
 
 use crate::execution_plan::CardinalityEffect;
@@ -218,13 +219,23 @@ impl FilterExec {
                 if binary.op() == &Operator::Eq {
                     // Filter evaluates to single value for all partitions
                     if input_eqs.is_expr_constant(binary.left()) {
+                        let (expr, across_parts) = (
+                            binary.right(),
+                            input_eqs.get_expr_constant_value(binary.right()),
+                        );
                         res_constants.push(
-                            ConstExpr::from(binary.right()).with_across_partitions(true),
-                        )
+                            ConstExpr::new(Arc::clone(expr))
+                                .with_across_partitions(across_parts),
+                        );
                     } else if input_eqs.is_expr_constant(binary.right()) {
+                        let (expr, across_parts) = (
+                            binary.left(),
+                            input_eqs.get_expr_constant_value(binary.left()),
+                        );
                         res_constants.push(
-                            ConstExpr::from(binary.left()).with_across_partitions(true),
-                        )
+                            ConstExpr::new(Arc::clone(expr))
+                                .with_across_partitions(across_parts),
+                        );
                     }
                 }
             }
@@ -252,8 +263,12 @@ impl FilterExec {
             .into_iter()
             .filter(|column| stats.column_statistics[column.index()].is_singleton())
             .map(|column| {
+                let value = stats.column_statistics[column.index()]
+                    .min_value
+                    .get_value();
                 let expr = Arc::new(column) as _;
-                ConstExpr::new(expr).with_across_partitions(true)
+                ConstExpr::new(expr)
+                    .with_across_partitions(AcrossPartitions::Uniform(value.cloned()))
             });
         // This is for statistics
         eq_properties = eq_properties.with_constants(constants);
@@ -272,10 +287,12 @@ impl FilterExec {
                 output_partitioning.project(&projection_mapping, &eq_properties);
             eq_properties = eq_properties.project(&projection_mapping, out_schema);
         }
+
         Ok(PlanProperties::new(
             eq_properties,
             output_partitioning,
-            input.execution_mode(),
+            input.pipeline_behavior(),
+            input.boundedness(),
         ))
     }
 }

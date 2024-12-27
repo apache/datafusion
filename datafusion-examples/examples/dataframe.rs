@@ -17,8 +17,12 @@
 
 use arrow::array::{ArrayRef, Int32Array, RecordBatch, StringArray};
 use datafusion::arrow::datatypes::{DataType, Field, Schema};
+use datafusion::dataframe::DataFrameWriteOptions;
 use datafusion::error::Result;
 use datafusion::prelude::*;
+use datafusion_common::config::CsvOptions;
+use datafusion_common::parsers::CompressionTypeVariant;
+use datafusion_common::DataFusionError;
 use std::fs::File;
 use std::io::Write;
 use std::sync::Arc;
@@ -29,6 +33,11 @@ use tempfile::tempdir;
 /// * [read_parquet]: execute queries against parquet files
 /// * [read_csv]: execute queries against csv files
 /// * [read_memory]: execute queries against in-memory arrow data
+///
+/// This example demonstrates the various methods to write out a DataFrame to local storage.
+/// See datafusion-examples/examples/external_dependency/dataframe-to-s3.rs for an example
+/// using a remote object store.
+/// * [write_out]: write out a DataFrame to a table, parquet file, csv file, or json file
 #[tokio::main]
 async fn main() -> Result<()> {
     // The SessionContext is the main high level API for interacting with DataFusion
@@ -36,6 +45,7 @@ async fn main() -> Result<()> {
     read_parquet(&ctx).await?;
     read_csv(&ctx).await?;
     read_memory(&ctx).await?;
+    write_out(&ctx).await?;
     Ok(())
 }
 
@@ -136,6 +146,63 @@ async fn read_memory(ctx: &SessionContext) -> Result<()> {
 
     // print the results
     df.show().await?;
+
+    Ok(())
+}
+
+/// Use the DataFrame API to:
+/// 1. Write out a DataFrame to a table
+/// 2. Write out a DataFrame to a parquet file
+/// 3. Write out a DataFrame to a csv file
+/// 4. Write out a DataFrame to a json file
+async fn write_out(ctx: &SessionContext) -> std::result::Result<(), DataFusionError> {
+    let mut df = ctx.sql("values ('a'), ('b'), ('c')").await.unwrap();
+
+    // Ensure the column names and types match the target table
+    df = df.with_column_renamed("column1", "tablecol1").unwrap();
+
+    ctx.sql(
+        "create external table
+    test(tablecol1 varchar)
+    stored as parquet
+    location './datafusion-examples/test_table/'",
+    )
+    .await?
+    .collect()
+    .await?;
+
+    // This is equivalent to INSERT INTO test VALUES ('a'), ('b'), ('c').
+    // The behavior of write_table depends on the TableProvider's implementation
+    // of the insert_into method.
+    df.clone()
+        .write_table("test", DataFrameWriteOptions::new())
+        .await?;
+
+    df.clone()
+        .write_parquet(
+            "./datafusion-examples/test_parquet/",
+            DataFrameWriteOptions::new(),
+            None,
+        )
+        .await?;
+
+    df.clone()
+        .write_csv(
+            "./datafusion-examples/test_csv/",
+            // DataFrameWriteOptions contains options which control how data is written
+            // such as compression codec
+            DataFrameWriteOptions::new(),
+            Some(CsvOptions::default().with_compression(CompressionTypeVariant::GZIP)),
+        )
+        .await?;
+
+    df.clone()
+        .write_json(
+            "./datafusion-examples/test_json/",
+            DataFrameWriteOptions::new(),
+            None,
+        )
+        .await?;
 
     Ok(())
 }

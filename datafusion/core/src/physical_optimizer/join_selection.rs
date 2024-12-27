@@ -32,17 +32,15 @@ use crate::physical_plan::joins::{
     CrossJoinExec, HashJoinExec, NestedLoopJoinExec, PartitionMode,
     StreamJoinPartitionMode, SymmetricHashJoinExec,
 };
-use crate::physical_plan::projection::ProjectionExec;
 use crate::physical_plan::{ExecutionPlan, ExecutionPlanProperties};
 
-use arrow_schema::Schema;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::{internal_err, JoinSide, JoinType};
 use datafusion_expr::sort_properties::SortProperties;
 use datafusion_physical_expr::expressions::Column;
-use datafusion_physical_expr::PhysicalExpr;
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
+use datafusion_physical_plan::execution_plan::EmissionType;
 
 /// The [`JoinSelection`] rule tries to modify a given plan so that it can
 /// accommodate infinite sources and optimize joins in the plan according to
@@ -60,7 +58,7 @@ impl JoinSelection {
 // TODO: We need some performance test for Right Semi/Right Join swap to Left Semi/Left Join in case that the right side is smaller but not much smaller.
 // TODO: In PrestoSQL, the optimizer flips join sides only if one side is much smaller than the other by more than SIZE_DIFFERENCE_THRESHOLD times, by default is 8 times.
 /// Checks statistics for join swap.
-fn should_swap_join_order(
+pub(crate) fn should_swap_join_order(
     left: &dyn ExecutionPlan,
     right: &dyn ExecutionPlan,
 ) -> Result<bool> {
@@ -107,197 +105,49 @@ fn supports_collect_by_thresholds(
 }
 
 /// Predicate that checks whether the given join type supports input swapping.
-fn supports_swap(join_type: JoinType) -> bool {
-    matches!(
-        join_type,
-        JoinType::Inner
-            | JoinType::Left
-            | JoinType::Right
-            | JoinType::Full
-            | JoinType::LeftSemi
-            | JoinType::RightSemi
-            | JoinType::LeftAnti
-            | JoinType::RightAnti
-    )
+#[deprecated(since = "45.0.0", note = "use JoinType::supports_swap instead")]
+#[allow(dead_code)]
+pub(crate) fn supports_swap(join_type: JoinType) -> bool {
+    join_type.supports_swap()
 }
 
 /// This function returns the new join type we get after swapping the given
 /// join's inputs.
+#[deprecated(since = "45.0.0", note = "use datafusion-functions-nested instead")]
+#[allow(dead_code)]
 pub(crate) fn swap_join_type(join_type: JoinType) -> JoinType {
-    match join_type {
-        JoinType::Inner => JoinType::Inner,
-        JoinType::Full => JoinType::Full,
-        JoinType::Left => JoinType::Right,
-        JoinType::Right => JoinType::Left,
-        JoinType::LeftSemi => JoinType::RightSemi,
-        JoinType::RightSemi => JoinType::LeftSemi,
-        JoinType::LeftAnti => JoinType::RightAnti,
-        JoinType::RightAnti => JoinType::LeftAnti,
-        JoinType::LeftMark => {
-            unreachable!("LeftMark join type does not support swapping")
-        }
-    }
-}
-
-/// This function swaps the given join's projection.
-fn swap_join_projection(
-    left_schema_len: usize,
-    right_schema_len: usize,
-    projection: Option<&Vec<usize>>,
-    join_type: &JoinType,
-) -> Option<Vec<usize>> {
-    match join_type {
-        // For Anti/Semi join types, projection should remain unmodified,
-        // since these joins output schema remains the same after swap
-        JoinType::LeftAnti
-        | JoinType::LeftSemi
-        | JoinType::RightAnti
-        | JoinType::RightSemi => projection.cloned(),
-
-        _ => projection.map(|p| {
-            p.iter()
-                .map(|i| {
-                    // If the index is less than the left schema length, it is from
-                    // the left schema, so we add the right schema length to it.
-                    // Otherwise, it is from the right schema, so we subtract the left
-                    // schema length from it.
-                    if *i < left_schema_len {
-                        *i + right_schema_len
-                    } else {
-                        *i - left_schema_len
-                    }
-                })
-                .collect()
-        }),
-    }
+    join_type.swap()
 }
 
 /// This function swaps the inputs of the given join operator.
 /// This function is public so other downstream projects can use it
 /// to construct `HashJoinExec` with right side as the build side.
+#[deprecated(since = "45.0.0", note = "use HashJoinExec::swap_inputs instead")]
 pub fn swap_hash_join(
     hash_join: &HashJoinExec,
     partition_mode: PartitionMode,
 ) -> Result<Arc<dyn ExecutionPlan>> {
-    let left = hash_join.left();
-    let right = hash_join.right();
-    let new_join = HashJoinExec::try_new(
-        Arc::clone(right),
-        Arc::clone(left),
-        hash_join
-            .on()
-            .iter()
-            .map(|(l, r)| (Arc::clone(r), Arc::clone(l)))
-            .collect(),
-        swap_join_filter(hash_join.filter()),
-        &swap_join_type(*hash_join.join_type()),
-        swap_join_projection(
-            left.schema().fields().len(),
-            right.schema().fields().len(),
-            hash_join.projection.as_ref(),
-            hash_join.join_type(),
-        ),
-        partition_mode,
-        hash_join.null_equals_null(),
-    )?;
-    // In case of anti / semi joins or if there is embedded projection in HashJoinExec, output column order is preserved, no need to add projection again
-    if matches!(
-        hash_join.join_type(),
-        JoinType::LeftSemi
-            | JoinType::RightSemi
-            | JoinType::LeftAnti
-            | JoinType::RightAnti
-    ) || hash_join.projection.is_some()
-    {
-        Ok(Arc::new(new_join))
-    } else {
-        // TODO avoid adding ProjectionExec again and again, only adding Final Projection
-        let proj = ProjectionExec::try_new(
-            swap_reverting_projection(&left.schema(), &right.schema()),
-            Arc::new(new_join),
-        )?;
-        Ok(Arc::new(proj))
-    }
+    hash_join.swap_inputs(partition_mode)
 }
 
 /// Swaps inputs of `NestedLoopJoinExec` and wraps it into `ProjectionExec` is required
-fn swap_nl_join(join: &NestedLoopJoinExec) -> Result<Arc<dyn ExecutionPlan>> {
-    let new_filter = swap_join_filter(join.filter());
-    let new_join_type = &swap_join_type(*join.join_type());
-
-    let new_join = NestedLoopJoinExec::try_new(
-        Arc::clone(join.right()),
-        Arc::clone(join.left()),
-        new_filter,
-        new_join_type,
-    )?;
-
-    // For Semi/Anti joins, swap result will produce same output schema,
-    // no need to wrap them into additional projection
-    let plan: Arc<dyn ExecutionPlan> = if matches!(
-        join.join_type(),
-        JoinType::LeftSemi
-            | JoinType::RightSemi
-            | JoinType::LeftAnti
-            | JoinType::RightAnti
-    ) {
-        Arc::new(new_join)
-    } else {
-        let projection =
-            swap_reverting_projection(&join.left().schema(), &join.right().schema());
-
-        Arc::new(ProjectionExec::try_new(projection, Arc::new(new_join))?)
-    };
-
-    Ok(plan)
-}
-
-/// When the order of the join is changed by the optimizer, the columns in
-/// the output should not be impacted. This function creates the expressions
-/// that will allow to swap back the values from the original left as the first
-/// columns and those on the right next.
-pub(crate) fn swap_reverting_projection(
-    left_schema: &Schema,
-    right_schema: &Schema,
-) -> Vec<(Arc<dyn PhysicalExpr>, String)> {
-    let right_cols = right_schema.fields().iter().enumerate().map(|(i, f)| {
-        (
-            Arc::new(Column::new(f.name(), i)) as Arc<dyn PhysicalExpr>,
-            f.name().to_owned(),
-        )
-    });
-    let right_len = right_cols.len();
-    let left_cols = left_schema.fields().iter().enumerate().map(|(i, f)| {
-        (
-            Arc::new(Column::new(f.name(), right_len + i)) as Arc<dyn PhysicalExpr>,
-            f.name().to_owned(),
-        )
-    });
-
-    left_cols.chain(right_cols).collect()
-}
-
-/// Swaps join sides for filter column indices and produces new JoinFilter
-pub(crate) fn swap_filter(filter: &JoinFilter) -> JoinFilter {
-    let column_indices = filter
-        .column_indices()
-        .iter()
-        .map(|idx| ColumnIndex {
-            index: idx.index,
-            side: idx.side.negate(),
-        })
-        .collect();
-
-    JoinFilter::new(
-        Arc::clone(filter.expression()),
-        column_indices,
-        filter.schema().clone(),
-    )
+#[deprecated(since = "45.0.0", note = "use NestedLoopJoinExec::swap_inputs")]
+#[allow(dead_code)]
+pub(crate) fn swap_nl_join(join: &NestedLoopJoinExec) -> Result<Arc<dyn ExecutionPlan>> {
+    join.swap_inputs()
 }
 
 /// Swaps join sides for filter column indices and produces new `JoinFilter` (if exists).
+#[deprecated(since = "45.0.0", note = "use filter.map(JoinFilter::swap) instead")]
+#[allow(dead_code)]
 fn swap_join_filter(filter: Option<&JoinFilter>) -> Option<JoinFilter> {
-    filter.map(swap_filter)
+    filter.map(JoinFilter::swap)
+}
+
+#[deprecated(since = "45.0.0", note = "use JoinFilter::swap instead")]
+#[allow(dead_code)]
+pub(crate) fn swap_filter(filter: &JoinFilter) -> JoinFilter {
+    filter.swap()
 }
 
 impl PhysicalOptimizerRule for JoinSelection {
@@ -358,7 +208,7 @@ impl PhysicalOptimizerRule for JoinSelection {
 /// `CollectLeft` mode is applicable. Otherwise, it will try to swap the join sides.
 /// When the `ignore_threshold` is false, this function will also check left
 /// and right sizes in bytes or rows.
-fn try_collect_left(
+pub(crate) fn try_collect_left(
     hash_join: &HashJoinExec,
     ignore_threshold: bool,
     threshold_byte_size: usize,
@@ -382,10 +232,10 @@ fn try_collect_left(
 
     match (left_can_collect, right_can_collect) {
         (true, true) => {
-            if supports_swap(*hash_join.join_type())
+            if hash_join.join_type().supports_swap()
                 && should_swap_join_order(&**left, &**right)?
             {
-                Ok(Some(swap_hash_join(hash_join, PartitionMode::CollectLeft)?))
+                Ok(Some(hash_join.swap_inputs(PartitionMode::CollectLeft)?))
             } else {
                 Ok(Some(Arc::new(HashJoinExec::try_new(
                     Arc::clone(left),
@@ -410,8 +260,8 @@ fn try_collect_left(
             hash_join.null_equals_null(),
         )?))),
         (false, true) => {
-            if supports_swap(*hash_join.join_type()) {
-                swap_hash_join(hash_join, PartitionMode::CollectLeft).map(Some)
+            if hash_join.join_type().supports_swap() {
+                hash_join.swap_inputs(PartitionMode::CollectLeft).map(Some)
             } else {
                 Ok(None)
             }
@@ -420,12 +270,19 @@ fn try_collect_left(
     }
 }
 
-fn partitioned_hash_join(hash_join: &HashJoinExec) -> Result<Arc<dyn ExecutionPlan>> {
+/// Creates a partitioned hash join execution plan, swapping inputs if beneficial.
+///
+/// Checks if the join order should be swapped based on the join type and input statistics.
+/// If swapping is optimal and supported, creates a swapped partitioned hash join; otherwise,
+/// creates a standard partitioned hash join.
+pub(crate) fn partitioned_hash_join(
+    hash_join: &HashJoinExec,
+) -> Result<Arc<dyn ExecutionPlan>> {
     let left = hash_join.left();
     let right = hash_join.right();
-    if supports_swap(*hash_join.join_type()) && should_swap_join_order(&**left, &**right)?
+    if hash_join.join_type().supports_swap() && should_swap_join_order(&**left, &**right)?
     {
-        swap_hash_join(hash_join, PartitionMode::Partitioned)
+        hash_join.swap_inputs(PartitionMode::Partitioned)
     } else {
         Ok(Arc::new(HashJoinExec::try_new(
             Arc::clone(left),
@@ -468,10 +325,12 @@ fn statistical_join_selection_subrule(
                 PartitionMode::Partitioned => {
                     let left = hash_join.left();
                     let right = hash_join.right();
-                    if supports_swap(*hash_join.join_type())
+                    if hash_join.join_type().supports_swap()
                         && should_swap_join_order(&**left, &**right)?
                     {
-                        swap_hash_join(hash_join, PartitionMode::Partitioned).map(Some)?
+                        hash_join
+                            .swap_inputs(PartitionMode::Partitioned)
+                            .map(Some)?
                     } else {
                         None
                     }
@@ -481,23 +340,17 @@ fn statistical_join_selection_subrule(
             let left = cross_join.left();
             let right = cross_join.right();
             if should_swap_join_order(&**left, &**right)? {
-                let new_join = CrossJoinExec::new(Arc::clone(right), Arc::clone(left));
-                // TODO avoid adding ProjectionExec again and again, only adding Final Projection
-                let proj: Arc<dyn ExecutionPlan> = Arc::new(ProjectionExec::try_new(
-                    swap_reverting_projection(&left.schema(), &right.schema()),
-                    Arc::new(new_join),
-                )?);
-                Some(proj)
+                cross_join.swap_inputs().map(Some)?
             } else {
                 None
             }
         } else if let Some(nl_join) = plan.as_any().downcast_ref::<NestedLoopJoinExec>() {
             let left = nl_join.left();
             let right = nl_join.right();
-            if supports_swap(*nl_join.join_type())
+            if nl_join.join_type().supports_swap()
                 && should_swap_join_order(&**left, &**right)?
             {
-                swap_nl_join(nl_join).map(Some)?
+                nl_join.swap_inputs().map(Some)?
             } else {
                 None
             }
@@ -516,7 +369,8 @@ fn statistical_join_selection_subrule(
 pub type PipelineFixerSubrule =
     dyn Fn(Arc<dyn ExecutionPlan>, &ConfigOptions) -> Result<Arc<dyn ExecutionPlan>>;
 
-/// Converts a hash join to a symmetric hash join in the case of infinite inputs on both sides.
+/// Converts a hash join to a symmetric hash join if both its inputs are
+/// unbounded and incremental.
 ///
 /// This subrule checks if a hash join can be replaced with a symmetric hash join when dealing
 /// with unbounded (infinite) inputs on both sides. This replacement avoids pipeline breaking and
@@ -537,10 +391,18 @@ fn hash_join_convert_symmetric_subrule(
 ) -> Result<Arc<dyn ExecutionPlan>> {
     // Check if the current plan node is a HashJoinExec.
     if let Some(hash_join) = input.as_any().downcast_ref::<HashJoinExec>() {
-        let left_unbounded = hash_join.left.execution_mode().is_unbounded();
-        let right_unbounded = hash_join.right.execution_mode().is_unbounded();
-        // Process only if both left and right sides are unbounded.
-        if left_unbounded && right_unbounded {
+        let left_unbounded = hash_join.left.boundedness().is_unbounded();
+        let left_incremental = matches!(
+            hash_join.left.pipeline_behavior(),
+            EmissionType::Incremental | EmissionType::Both
+        );
+        let right_unbounded = hash_join.right.boundedness().is_unbounded();
+        let right_incremental = matches!(
+            hash_join.right.pipeline_behavior(),
+            EmissionType::Incremental | EmissionType::Both
+        );
+        // Process only if both left and right sides are unbounded and incrementally emit.
+        if left_unbounded && right_unbounded & left_incremental & right_incremental {
             // Determine the partition mode based on configuration.
             let mode = if config_options.optimizer.repartition_joins {
                 StreamJoinPartitionMode::Partitioned
@@ -669,8 +531,8 @@ fn hash_join_swap_subrule(
     _config_options: &ConfigOptions,
 ) -> Result<Arc<dyn ExecutionPlan>> {
     if let Some(hash_join) = input.as_any().downcast_ref::<HashJoinExec>() {
-        if hash_join.left.execution_mode().is_unbounded()
-            && !hash_join.right.execution_mode().is_unbounded()
+        if hash_join.left.boundedness().is_unbounded()
+            && !hash_join.right.boundedness().is_unbounded()
             && matches!(
                 *hash_join.join_type(),
                 JoinType::Inner
@@ -701,10 +563,10 @@ fn swap_join_according_to_unboundedness(
             JoinType::Right | JoinType::RightSemi | JoinType::RightAnti | JoinType::Full,
         ) => internal_err!("{join_type} join cannot be swapped for unbounded input."),
         (PartitionMode::Partitioned, _) => {
-            swap_hash_join(hash_join, PartitionMode::Partitioned)
+            hash_join.swap_inputs(PartitionMode::Partitioned)
         }
         (PartitionMode::CollectLeft, _) => {
-            swap_hash_join(hash_join, PartitionMode::CollectLeft)
+            hash_join.swap_inputs(PartitionMode::CollectLeft)
         }
         (PartitionMode::Auto, _) => {
             internal_err!("Auto is not acceptable for unbounded input here.")
@@ -734,12 +596,15 @@ mod tests_statistical {
     };
 
     use arrow::datatypes::{DataType, Field};
+    use arrow_schema::Schema;
     use datafusion_common::{stats::Precision, JoinType, ScalarValue};
     use datafusion_expr::Operator;
     use datafusion_physical_expr::expressions::col;
     use datafusion_physical_expr::expressions::BinaryExpr;
     use datafusion_physical_expr::PhysicalExprRef;
 
+    use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
+    use datafusion_physical_plan::projection::ProjectionExec;
     use rstest::rstest;
 
     /// Return statistics for empty table
@@ -1355,7 +1220,8 @@ mod tests_statistical {
             false,
         )?);
 
-        let swapped = swap_hash_join(&join.clone(), PartitionMode::Partitioned)
+        let swapped = join
+            .swap_inputs(PartitionMode::Partitioned)
             .expect("swap_hash_join must support joins with projections");
         let swapped_join = swapped.as_any().downcast_ref::<HashJoinExec>().expect(
             "ProjectionExec won't be added above if HashJoinExec contains embedded projection",
@@ -1365,32 +1231,6 @@ mod tests_statistical {
         assert_eq!(swapped.schema().fields.len(), 1);
         assert_eq!(swapped.schema().fields[0].name(), "small_col");
         Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_swap_reverting_projection() {
-        let left_schema = Schema::new(vec![
-            Field::new("a", DataType::Int32, false),
-            Field::new("b", DataType::Int32, false),
-        ]);
-
-        let right_schema = Schema::new(vec![Field::new("c", DataType::Int32, false)]);
-
-        let proj = swap_reverting_projection(&left_schema, &right_schema);
-
-        assert_eq!(proj.len(), 3);
-
-        let (col, name) = &proj[0];
-        assert_eq!(name, "a");
-        assert_col_expr(col, "a", 1);
-
-        let (col, name) = &proj[1];
-        assert_eq!(name, "b");
-        assert_col_expr(col, "b", 2);
-
-        let (col, name) = &proj[2];
-        assert_eq!(name, "c");
-        assert_col_expr(col, "c", 0);
     }
 
     fn assert_col_expr(expr: &Arc<dyn PhysicalExpr>, name: &str, index: usize) {
@@ -1626,7 +1466,9 @@ mod hash_join_tests {
 
     use arrow::datatypes::{DataType, Field};
     use arrow::record_batch::RecordBatch;
+    use arrow_schema::Schema;
     use datafusion_physical_expr::expressions::col;
+    use datafusion_physical_plan::projection::ProjectionExec;
 
     struct TestCase {
         case: String,
@@ -1706,7 +1548,7 @@ mod hash_join_tests {
                 initial_join_type: join_type,
                 initial_mode: PartitionMode::CollectLeft,
                 expected_sources_unbounded: (SourceType::Bounded, SourceType::Unbounded),
-                expected_join_type: swap_join_type(join_type),
+                expected_join_type: join_type.swap(),
                 expected_mode: PartitionMode::CollectLeft,
                 expecting_swap: true,
             });
@@ -1749,7 +1591,7 @@ mod hash_join_tests {
                 initial_join_type: join_type,
                 initial_mode: PartitionMode::Partitioned,
                 expected_sources_unbounded: (SourceType::Bounded, SourceType::Unbounded),
-                expected_join_type: swap_join_type(join_type),
+                expected_join_type: join_type.swap(),
                 expected_mode: PartitionMode::Partitioned,
                 expecting_swap: true,
             });
@@ -1807,7 +1649,7 @@ mod hash_join_tests {
                 initial_join_type: join_type,
                 initial_mode: PartitionMode::Partitioned,
                 expected_sources_unbounded: (SourceType::Bounded, SourceType::Unbounded),
-                expected_join_type: swap_join_type(join_type),
+                expected_join_type: join_type.swap(),
                 expected_mode: PartitionMode::Partitioned,
                 expecting_swap: true,
             });
@@ -2025,12 +1867,12 @@ mod hash_join_tests {
             assert_eq!(
                 (
                     t.case.as_str(),
-                    if left.execution_mode().is_unbounded() {
+                    if left.boundedness().is_unbounded() {
                         SourceType::Unbounded
                     } else {
                         SourceType::Bounded
                     },
-                    if right.execution_mode().is_unbounded() {
+                    if right.boundedness().is_unbounded() {
                         SourceType::Unbounded
                     } else {
                         SourceType::Bounded

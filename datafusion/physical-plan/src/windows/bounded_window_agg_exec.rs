@@ -202,9 +202,11 @@ impl BoundedWindowAggExec {
 
         // Construct properties cache
         PlanProperties::new(
-            eq_properties,          // Equivalence Properties
-            output_partitioning,    // Output Partitioning
-            input.execution_mode(), // Execution Mode
+            eq_properties,
+            output_partitioning,
+            // TODO: Emission type and boundedness information can be enhanced here
+            input.pipeline_behavior(),
+            input.boundedness(),
         )
     }
 }
@@ -457,7 +459,7 @@ pub struct LinearSearch {
 
 impl PartitionSearcher for LinearSearch {
     /// This method constructs output columns using the result of each window expression.
-    // Assume input buffer is         |      Partition Buffers would be (Where each partition and its data is seperated)
+    // Assume input buffer is         |      Partition Buffers would be (Where each partition and its data is separated)
     // a, 2                           |      a, 2
     // b, 2                           |      a, 2
     // a, 2                           |      a, 2
@@ -937,7 +939,7 @@ impl BoundedWindowAggStream {
         })
     }
 
-    fn compute_aggregates(&mut self) -> Result<RecordBatch> {
+    fn compute_aggregates(&mut self) -> Result<Option<RecordBatch>> {
         // calculate window cols
         for (cur_window_expr, state) in
             self.window_expr.iter().zip(&mut self.window_agg_states)
@@ -964,9 +966,9 @@ impl BoundedWindowAggStream {
                 .collect::<Vec<_>>();
             let n_generated = columns_to_show[0].len();
             self.prune_state(n_generated)?;
-            Ok(RecordBatch::try_new(schema, columns_to_show)?)
+            Ok(Some(RecordBatch::try_new(schema, columns_to_show)?))
         } else {
-            Ok(RecordBatch::new_empty(schema))
+            Ok(None)
         }
     }
 
@@ -979,7 +981,7 @@ impl BoundedWindowAggStream {
             return Poll::Ready(None);
         }
 
-        let result = match ready!(self.input.poll_next_unpin(cx)) {
+        match ready!(self.input.poll_next_unpin(cx)) {
             Some(Ok(batch)) => {
                 self.search_mode.update_partition_batch(
                     &mut self.input_buffer,
@@ -987,18 +989,23 @@ impl BoundedWindowAggStream {
                     &self.window_expr,
                     &mut self.partition_buffers,
                 )?;
-                self.compute_aggregates()
+                if let Some(batch) = self.compute_aggregates()? {
+                    return Poll::Ready(Some(Ok(batch)));
+                }
+                self.poll_next_inner(cx)
             }
-            Some(Err(e)) => Err(e),
+            Some(Err(e)) => Poll::Ready(Some(Err(e))),
             None => {
                 self.finished = true;
                 for (_, partition_batch_state) in self.partition_buffers.iter_mut() {
                     partition_batch_state.is_end = true;
                 }
-                self.compute_aggregates()
+                if let Some(batch) = self.compute_aggregates()? {
+                    return Poll::Ready(Some(Ok(batch)));
+                }
+                Poll::Ready(None)
             }
-        };
-        Poll::Ready(Some(result))
+        }
     }
 
     /// Prunes the sections of the record batch (for each partition)

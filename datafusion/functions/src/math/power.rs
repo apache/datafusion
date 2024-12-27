@@ -24,8 +24,8 @@ use super::log::LogFunc;
 use arrow::array::{ArrayRef, AsArray, Int64Array};
 use arrow::datatypes::{ArrowNativeTypeOp, DataType, Float64Type};
 use datafusion_common::{
-    arrow_datafusion_err, exec_datafusion_err, exec_err, plan_datafusion_err,
-    DataFusionError, Result, ScalarValue,
+    arrow_datafusion_err, exec_datafusion_err, exec_err, internal_datafusion_err,
+    plan_datafusion_err, DataFusionError, Result, ScalarValue,
 };
 use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::scalar_doc_sections::DOC_SECTION_MATH;
@@ -103,8 +103,8 @@ impl ScalarUDFImpl for PowerFunc {
                 Arc::new(result) as _
             }
             DataType::Int64 => {
-                let bases = downcast_arg!(&args[0], "base", Int64Array);
-                let exponents = downcast_arg!(&args[1], "exponent", Int64Array);
+                let bases = downcast_named_arg!(&args[0], "base", Int64Array);
+                let exponents = downcast_named_arg!(&args[1], "exponent", Int64Array);
                 bases
                     .iter()
                     .zip(exponents.iter())

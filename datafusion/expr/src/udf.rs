@@ -17,7 +17,7 @@
 
 //! [`ScalarUDF`]: Scalar User Defined Functions
 
-use crate::expr::schema_name_from_exprs_comma_seperated_without_space;
+use crate::expr::schema_name_from_exprs_comma_separated_without_space;
 use crate::simplify::{ExprSimplifyResult, SimplifyInfo};
 use crate::sort_properties::{ExprProperties, SortProperties};
 use crate::{
@@ -303,6 +303,10 @@ impl ScalarUDF {
         self.inner.output_ordering(inputs)
     }
 
+    pub fn preserves_lex_ordering(&self, inputs: &[ExprProperties]) -> Result<bool> {
+        self.inner.preserves_lex_ordering(inputs)
+    }
+
     /// See [`ScalarUDFImpl::coerce_types`] for more details.
     pub fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
         self.inner.coerce_types(arg_types)
@@ -432,7 +436,7 @@ pub trait ScalarUDFImpl: Debug + Send + Sync {
         Ok(format!(
             "{}({})",
             self.name(),
-            schema_name_from_exprs_comma_seperated_without_space(args)?
+            schema_name_from_exprs_comma_separated_without_space(args)?
         ))
     }
 
@@ -650,10 +654,30 @@ pub trait ScalarUDFImpl: Debug + Send + Sync {
         Ok(Some(vec![]))
     }
 
-    /// Calculates the [`SortProperties`] of this function based on its
-    /// children's properties.
-    fn output_ordering(&self, _inputs: &[ExprProperties]) -> Result<SortProperties> {
-        Ok(SortProperties::Unordered)
+    /// Calculates the [`SortProperties`] of this function based on its children's properties.
+    fn output_ordering(&self, inputs: &[ExprProperties]) -> Result<SortProperties> {
+        if !self.preserves_lex_ordering(inputs)? {
+            return Ok(SortProperties::Unordered);
+        }
+
+        let Some(first_order) = inputs.first().map(|p| &p.sort_properties) else {
+            return Ok(SortProperties::Singleton);
+        };
+
+        if inputs
+            .iter()
+            .skip(1)
+            .all(|input| &input.sort_properties == first_order)
+        {
+            Ok(*first_order)
+        } else {
+            Ok(SortProperties::Unordered)
+        }
+    }
+
+    /// Whether the function preserves lexicographical ordering based on the input ordering
+    fn preserves_lex_ordering(&self, _inputs: &[ExprProperties]) -> Result<bool> {
+        Ok(false)
     }
 
     /// Coerce arguments of a function call to types that the function can evaluate.
@@ -807,6 +831,10 @@ impl ScalarUDFImpl for AliasedScalarUDFImpl {
 
     fn output_ordering(&self, inputs: &[ExprProperties]) -> Result<SortProperties> {
         self.inner.output_ordering(inputs)
+    }
+
+    fn preserves_lex_ordering(&self, inputs: &[ExprProperties]) -> Result<bool> {
+        self.inner.preserves_lex_ordering(inputs)
     }
 
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {

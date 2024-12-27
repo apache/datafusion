@@ -24,6 +24,8 @@ use arrow::{
 use std::mem::size_of;
 use std::{cmp::Ordering, collections::BinaryHeap, sync::Arc};
 
+use super::metrics::{BaselineMetrics, Count, ExecutionPlanMetricsSet, MetricBuilder};
+use crate::spill::get_record_batch_memory_size;
 use crate::{stream::RecordBatchStreamAdapter, SendableRecordBatchStream};
 use arrow_array::{Array, ArrayRef, RecordBatch};
 use arrow_schema::SchemaRef;
@@ -35,8 +37,6 @@ use datafusion_execution::{
 };
 use datafusion_physical_expr::PhysicalSortExpr;
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
-
-use super::metrics::{BaselineMetrics, Count, ExecutionPlanMetricsSet, MetricBuilder};
 
 /// Global TopK
 ///
@@ -125,7 +125,7 @@ impl TopK {
         let row_converter = RowConverter::new(sort_fields)?;
         let scratch_rows = row_converter.empty_rows(
             batch_size,
-            20 * batch_size, // guestimate 20 bytes per row
+            20 * batch_size, // guesstimate 20 bytes per row
         );
 
         Ok(Self {
@@ -200,21 +200,22 @@ impl TopK {
         } = self;
         let _timer = metrics.baseline.elapsed_compute().timer(); // time updated on drop
 
-        let mut batch = heap.emit()?;
-        metrics.baseline.output_rows().add(batch.num_rows());
-
         // break into record batches as needed
         let mut batches = vec![];
-        loop {
-            if batch.num_rows() <= batch_size {
-                batches.push(Ok(batch));
-                break;
-            } else {
-                batches.push(Ok(batch.slice(0, batch_size)));
-                let remaining_length = batch.num_rows() - batch_size;
-                batch = batch.slice(batch_size, remaining_length);
+        if let Some(mut batch) = heap.emit()? {
+            metrics.baseline.output_rows().add(batch.num_rows());
+
+            loop {
+                if batch.num_rows() <= batch_size {
+                    batches.push(Ok(batch));
+                    break;
+                } else {
+                    batches.push(Ok(batch.slice(0, batch_size)));
+                    let remaining_length = batch.num_rows() - batch_size;
+                    batch = batch.slice(batch_size, remaining_length);
+                }
             }
-        }
+        };
         Ok(Box::pin(RecordBatchStreamAdapter::new(
             schema,
             futures::stream::iter(batches),
@@ -260,7 +261,7 @@ struct TopKHeap {
     k: usize,
     /// The target number of rows for output batches
     batch_size: usize,
-    /// Storage for up at most `k` items using a BinaryHeap. Reverserd
+    /// Storage for up at most `k` items using a BinaryHeap. Reversed
     /// so that the smallest k so far is on the top
     inner: BinaryHeap<TopKRow>,
     /// Storage the original row values (TopKRow only has the sort key)
@@ -345,21 +346,21 @@ impl TopKHeap {
 
     /// Returns the values stored in this heap, from values low to
     /// high, as a single [`RecordBatch`], resetting the inner heap
-    pub fn emit(&mut self) -> Result<RecordBatch> {
+    pub fn emit(&mut self) -> Result<Option<RecordBatch>> {
         Ok(self.emit_with_state()?.0)
     }
 
     /// Returns the values stored in this heap, from values low to
     /// high, as a single [`RecordBatch`], and a sorted vec of the
     /// current heap's contents
-    pub fn emit_with_state(&mut self) -> Result<(RecordBatch, Vec<TopKRow>)> {
+    pub fn emit_with_state(&mut self) -> Result<(Option<RecordBatch>, Vec<TopKRow>)> {
         let schema = Arc::clone(self.store.schema());
 
         // generate sorted rows
         let topk_rows = std::mem::take(&mut self.inner).into_sorted_vec();
 
         if self.store.is_empty() {
-            return Ok((RecordBatch::new_empty(schema), topk_rows));
+            return Ok((None, topk_rows));
         }
 
         // Indices for each row within its respective RecordBatch
@@ -393,7 +394,7 @@ impl TopKHeap {
             .collect::<Result<_>>()?;
 
         let new_batch = RecordBatch::try_new(schema, output_columns)?;
-        Ok((new_batch, topk_rows))
+        Ok((Some(new_batch), topk_rows))
     }
 
     /// Compact this heap, rewriting all stored batches into a single
@@ -418,6 +419,9 @@ impl TopKHeap {
         // Note: new batch is in the same order as inner
         let num_rows = self.inner.len();
         let (new_batch, mut topk_rows) = self.emit_with_state()?;
+        let Some(new_batch) = new_batch else {
+            return Ok(());
+        };
 
         // clear all old entries in store (this invalidates all
         // store_ids in `inner`)
@@ -571,7 +575,7 @@ impl RecordBatchStore {
     pub fn insert(&mut self, entry: RecordBatchEntry) {
         // uses of 0 means that none of the rows in the batch were stored in the topk
         if entry.uses > 0 {
-            self.batches_size += entry.batch.get_array_memory_size();
+            self.batches_size += get_record_batch_memory_size(&entry.batch);
             self.batches.insert(entry.id, entry);
         }
     }
@@ -626,7 +630,7 @@ impl RecordBatchStore {
             let old_entry = self.batches.remove(&id).unwrap();
             self.batches_size = self
                 .batches_size
-                .checked_sub(old_entry.batch.get_array_memory_size())
+                .checked_sub(get_record_batch_memory_size(&old_entry.batch))
                 .unwrap();
         }
     }
@@ -637,5 +641,46 @@ impl RecordBatchStore {
         size_of::<Self>()
             + self.batches.capacity() * (size_of::<u32>() + size_of::<RecordBatchEntry>())
             + self.batches_size
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use arrow::array::Int32Array;
+    use arrow::datatypes::{DataType, Field, Schema};
+    use arrow::record_batch::RecordBatch;
+    use arrow_array::Float64Array;
+
+    /// This test ensures the size calculation is correct for RecordBatches with multiple columns.
+    #[test]
+    fn test_record_batch_store_size() {
+        // given
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("ints", DataType::Int32, true),
+            Field::new("float64", DataType::Float64, false),
+        ]));
+        let mut record_batch_store = RecordBatchStore::new(Arc::clone(&schema));
+        let int_array =
+            Int32Array::from(vec![Some(1), Some(2), Some(3), Some(4), Some(5)]); // 5 * 4 = 20
+        let float64_array = Float64Array::from(vec![1.0, 2.0, 3.0, 4.0, 5.0]); // 5 * 8 = 40
+
+        let record_batch_entry = RecordBatchEntry {
+            id: 0,
+            batch: RecordBatch::try_new(
+                schema,
+                vec![Arc::new(int_array), Arc::new(float64_array)],
+            )
+            .unwrap(),
+            uses: 1,
+        };
+
+        // when insert record batch entry
+        record_batch_store.insert(record_batch_entry);
+        assert_eq!(record_batch_store.batches_size, 60);
+
+        // when unuse record batch entry
+        record_batch_store.unuse(0);
+        assert_eq!(record_batch_store.batches_size, 0);
     }
 }

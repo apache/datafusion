@@ -26,6 +26,8 @@ pub mod coalesce;
 pub mod expr_ext;
 pub mod getfield;
 pub mod greatest;
+mod greatest_least_utils;
+pub mod least;
 pub mod named_struct;
 pub mod nullif;
 pub mod nvl;
@@ -45,6 +47,7 @@ make_udf_function!(named_struct::NamedStructFunc, named_struct);
 make_udf_function!(getfield::GetFieldFunc, get_field);
 make_udf_function!(coalesce::CoalesceFunc, coalesce);
 make_udf_function!(greatest::GreatestFunc, greatest);
+make_udf_function!(least::LeastFunc, least);
 make_udf_function!(version::VersionFunc, version);
 
 pub mod expr_fn {
@@ -86,6 +89,10 @@ pub mod expr_fn {
         greatest,
         "Returns `greatest(args...)`, which evaluates to the greatest value in the list of expressions or NULL if all the expressions are NULL",
         args,
+    ),(
+        least,
+        "Returns `least(args...)`, which evaluates to the smallest value in the list of expressions or NULL if all the expressions are NULL",
+        args,
     ));
 
     #[doc = "Returns the value of the field with the given name from the struct"]
@@ -108,11 +115,12 @@ pub fn functions() -> Vec<Arc<ScalarUDF>> {
         // `get_field(my_struct_col, "field_name")`.
         //
         // However, it is also exposed directly for use cases such as
-        // serializing / deserializing plans with the field access  desugared to
-        // calls to `get_field`
+        // serializing / deserializing plans with the field access desugared to
+        // calls to [`get_field`]
         get_field(),
         coalesce(),
         greatest(),
+        least(),
         version(),
         r#struct(),
     ]

@@ -202,6 +202,7 @@ impl PhysicalExpr for ScalarFunctionExpr {
 
     fn get_properties(&self, children: &[ExprProperties]) -> Result<ExprProperties> {
         let sort_properties = self.fun.output_ordering(children)?;
+        let preserves_lex_ordering = self.fun.preserves_lex_ordering(children)?;
         let children_range = children
             .iter()
             .map(|props| &props.range)
@@ -211,6 +212,7 @@ impl PhysicalExpr for ScalarFunctionExpr {
         Ok(ExprProperties {
             sort_properties,
             range,
+            preserves_lex_ordering,
         })
     }
 }
@@ -231,7 +233,7 @@ pub fn create_physical_expr(
     // verify that input data types is consistent with function's `TypeSignature`
     data_types_with_scalar_udf(&input_expr_types, fun)?;
 
-    // Since we have arg_types, we dont need args and schema.
+    // Since we have arg_types, we don't need args and schema.
     let return_type =
         fun.return_type_from_exprs(args, input_dfschema, &input_expr_types)?;
 

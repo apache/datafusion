@@ -30,6 +30,7 @@ use datafusion::common::{not_impl_err, plan_err, DFSchema, DFSchemaRef};
 use datafusion::error::Result;
 use datafusion::execution::registry::SerializerRegistry;
 use datafusion::execution::runtime_env::RuntimeEnv;
+use datafusion::execution::session_state::SessionStateBuilder;
 use datafusion::logical_expr::{
     Extension, LogicalPlan, PartitionEvaluator, Repartition, UserDefinedLogicalNode,
     Values, Volatility,
@@ -38,8 +39,6 @@ use datafusion::optimizer::simplify_expressions::expr_simplifier::THRESHOLD_INLI
 use datafusion::prelude::*;
 use std::hash::Hash;
 use std::sync::Arc;
-
-use datafusion::execution::session_state::SessionStateBuilder;
 use substrait::proto::extensions::simple_extension_declaration::MappingType;
 use substrait::proto::rel::RelType;
 use substrait::proto::{plan_rel, Plan, Rel};
@@ -201,6 +200,16 @@ async fn select_with_filter() -> Result<()> {
 }
 
 #[tokio::test]
+async fn select_with_filter_sort_limit() -> Result<()> {
+    roundtrip("SELECT * FROM data WHERE a > 1 ORDER BY b ASC LIMIT 2").await
+}
+
+#[tokio::test]
+async fn select_with_filter_sort_limit_offset() -> Result<()> {
+    roundtrip("SELECT * FROM data WHERE a > 1 ORDER BY b ASC LIMIT 2 OFFSET 1").await
+}
+
+#[tokio::test]
 async fn select_with_reused_functions() -> Result<()> {
     let ctx = create_context().await?;
     let sql = "SELECT * FROM data WHERE a > 1 AND a < 10 AND b > 0";
@@ -240,17 +249,20 @@ async fn select_with_filter_bool_expr() -> Result<()> {
 
 #[tokio::test]
 async fn select_with_limit() -> Result<()> {
-    roundtrip_fill_na("SELECT * FROM data LIMIT 100").await
+    roundtrip_fill_na("SELECT * FROM data LIMIT 100").await?;
+    roundtrip_fill_na("SELECT * FROM data LIMIT 98+100/50").await
 }
 
 #[tokio::test]
 async fn select_without_limit() -> Result<()> {
-    roundtrip_fill_na("SELECT * FROM data OFFSET 10").await
+    roundtrip_fill_na("SELECT * FROM data OFFSET 10").await?;
+    roundtrip_fill_na("SELECT * FROM data OFFSET 5+7-2").await
 }
 
 #[tokio::test]
 async fn select_with_limit_offset() -> Result<()> {
-    roundtrip("SELECT * FROM data LIMIT 200 OFFSET 10").await
+    roundtrip("SELECT * FROM data LIMIT 200 OFFSET 10").await?;
+    roundtrip("SELECT * FROM data LIMIT 100+100 OFFSET 20/2").await
 }
 
 #[tokio::test]
@@ -1123,7 +1135,7 @@ fn check_post_join_filters(rel: &Rel) -> Result<()> {
             // check if join filter is None
             if join.post_join_filter.is_some() {
                 plan_err!(
-                    "DataFusion generated Susbtrait plan cannot have post_join_filter in JoinRel"
+                    "DataFusion generated Substrait plan cannot have post_join_filter in JoinRel"
                 )
             } else {
                 // recursively check JoinRels

@@ -17,6 +17,10 @@
 
 use std::{cmp::Ordering, sync::Arc, vec};
 
+use super::{
+    dialect::CharacterLengthStyle, dialect::DateFieldExtractStyle,
+    rewrite::TableAliasRewriter, Unparser,
+};
 use datafusion_common::{
     internal_err,
     tree_node::{Transformed, TransformedResult, TreeNode},
@@ -29,11 +33,7 @@ use datafusion_expr::{
 
 use indexmap::IndexSet;
 use sqlparser::ast;
-
-use super::{
-    dialect::CharacterLengthStyle, dialect::DateFieldExtractStyle,
-    rewrite::TableAliasRewriter, Unparser,
-};
+use sqlparser::tokenizer::Span;
 
 /// Recursively searches children of [LogicalPlan] to find an Aggregate node if exists
 /// prior to encountering a Join, TableScan, or a nested subquery (derived table factor).
@@ -83,6 +83,31 @@ pub(crate) fn find_unnest_node_within_select(plan: &LogicalPlan) -> Option<&Unne
     } else if let LogicalPlan::TableScan(_) = input {
         None
     } else if let LogicalPlan::Projection(_) = input {
+        None
+    } else {
+        find_unnest_node_within_select(input)
+    }
+}
+
+/// Recursively searches children of [LogicalPlan] to find Unnest node if exist
+/// until encountering a Relation node with single input
+pub(crate) fn find_unnest_node_until_relation(plan: &LogicalPlan) -> Option<&Unnest> {
+    // Note that none of the nodes that have a corresponding node can have more
+    // than 1 input node. E.g. Projection / Filter always have 1 input node.
+    let input = plan.inputs();
+    let input = if input.len() > 1 {
+        return None;
+    } else {
+        input.first()?
+    };
+
+    if let LogicalPlan::Unnest(unnest) = input {
+        Some(unnest)
+    } else if let LogicalPlan::TableScan(_) = input {
+        None
+    } else if let LogicalPlan::Subquery(_) = input {
+        None
+    } else if let LogicalPlan::SubqueryAlias(_) = input {
         None
     } else {
         find_unnest_node_within_select(input)
@@ -426,6 +451,7 @@ pub(crate) fn date_part_to_sql(
                     name: ast::ObjectName(vec![ast::Ident {
                         value: "strftime".to_string(),
                         quote_style: None,
+                        span: Span::empty(),
                     }]),
                     args: ast::FunctionArguments::List(ast::FunctionArgumentList {
                         duplicate_treatment: None,
@@ -444,6 +470,7 @@ pub(crate) fn date_part_to_sql(
                     over: None,
                     within_group: vec![],
                     parameters: ast::FunctionArguments::None,
+                    uses_odbc_syntax: false,
                 })));
             }
         }

@@ -15,18 +15,13 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! This file contains builders to create SQL ASTs. They are purposefully
-//! not exported as they will eventually be move to the SQLparser package.
-//!
-//!
-//! See <https://github.com/apache/datafusion/issues/8661>
-
 use core::fmt;
 
 use sqlparser::ast;
+use sqlparser::ast::helpers::attached_token::AttachedToken;
 
 #[derive(Clone)]
-pub(super) struct QueryBuilder {
+pub struct QueryBuilder {
     with: Option<ast::With>,
     body: Option<Box<ast::SetExpr>>,
     order_by: Vec<ast::OrderByExpr>,
@@ -127,7 +122,7 @@ impl Default for QueryBuilder {
 }
 
 #[derive(Clone)]
-pub(super) struct SelectBuilder {
+pub struct SelectBuilder {
     distinct: Option<ast::Distinct>,
     top: Option<ast::Top>,
     projection: Vec<ast::SelectItem>,
@@ -268,6 +263,7 @@ impl SelectBuilder {
             connect_by: None,
             window_before_qualify: false,
             prewhere: None,
+            select_token: AttachedToken::empty(),
         })
     }
     fn create_empty() -> Self {
@@ -297,7 +293,7 @@ impl Default for SelectBuilder {
 }
 
 #[derive(Clone)]
-pub(super) struct TableWithJoinsBuilder {
+pub struct TableWithJoinsBuilder {
     relation: Option<RelationBuilder>,
     joins: Vec<ast::Join>,
 }
@@ -344,7 +340,7 @@ impl Default for TableWithJoinsBuilder {
 }
 
 #[derive(Clone)]
-pub(super) struct RelationBuilder {
+pub struct RelationBuilder {
     relation: Option<TableFactorBuilder>,
 }
 
@@ -419,7 +415,7 @@ impl Default for RelationBuilder {
 }
 
 #[derive(Clone)]
-pub(super) struct TableRelationBuilder {
+pub struct TableRelationBuilder {
     name: Option<ast::ObjectName>,
     alias: Option<ast::TableAlias>,
     args: Option<Vec<ast::FunctionArg>>,
@@ -469,6 +465,7 @@ impl TableRelationBuilder {
             version: self.version.clone(),
             partitions: self.partitions.clone(),
             with_ordinality: false,
+            json_path: None,
         })
     }
     fn create_empty() -> Self {
@@ -488,7 +485,7 @@ impl Default for TableRelationBuilder {
     }
 }
 #[derive(Clone)]
-pub(super) struct DerivedRelationBuilder {
+pub struct DerivedRelationBuilder {
     lateral: Option<bool>,
     subquery: Option<Box<ast::Query>>,
     alias: Option<ast::TableAlias>,
@@ -538,7 +535,7 @@ impl Default for DerivedRelationBuilder {
 }
 
 #[derive(Clone)]
-pub(super) struct UnnestRelationBuilder {
+pub struct UnnestRelationBuilder {
     pub alias: Option<ast::TableAlias>,
     pub array_exprs: Vec<ast::Expr>,
     with_offset: bool,
@@ -602,7 +599,7 @@ impl Default for UnnestRelationBuilder {
 /// Runtime error when a `build()` method is called and one or more required fields
 /// do not have a value.
 #[derive(Debug, Clone)]
-pub(super) struct UninitializedFieldError(&'static str);
+pub struct UninitializedFieldError(&'static str);
 
 impl UninitializedFieldError {
     /// Create a new `UninitializedFieldError` for the specified field name.

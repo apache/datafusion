@@ -1150,6 +1150,12 @@ impl ScalarValue {
             DataType::Float16 => ScalarValue::Float16(Some(f16::from_f32(0.0))),
             DataType::Float32 => ScalarValue::Float32(Some(0.0)),
             DataType::Float64 => ScalarValue::Float64(Some(0.0)),
+            DataType::Decimal128(precision, scale) => {
+                ScalarValue::Decimal128(Some(0), *precision, *scale)
+            }
+            DataType::Decimal256(precision, scale) => {
+                ScalarValue::Decimal256(Some(i256::ZERO), *precision, *scale)
+            }
             DataType::Timestamp(TimeUnit::Second, tz) => {
                 ScalarValue::TimestampSecond(Some(0), tz.clone())
             }
@@ -1161,6 +1167,16 @@ impl ScalarValue {
             }
             DataType::Timestamp(TimeUnit::Nanosecond, tz) => {
                 ScalarValue::TimestampNanosecond(Some(0), tz.clone())
+            }
+            DataType::Time32(TimeUnit::Second) => ScalarValue::Time32Second(Some(0)),
+            DataType::Time32(TimeUnit::Millisecond) => {
+                ScalarValue::Time32Millisecond(Some(0))
+            }
+            DataType::Time64(TimeUnit::Microsecond) => {
+                ScalarValue::Time64Microsecond(Some(0))
+            }
+            DataType::Time64(TimeUnit::Nanosecond) => {
+                ScalarValue::Time64Nanosecond(Some(0))
             }
             DataType::Interval(IntervalUnit::YearMonth) => {
                 ScalarValue::IntervalYearMonth(Some(0))
@@ -1181,6 +1197,8 @@ impl ScalarValue {
             DataType::Duration(TimeUnit::Nanosecond) => {
                 ScalarValue::DurationNanosecond(Some(0))
             }
+            DataType::Date32 => ScalarValue::Date32(Some(0)),
+            DataType::Date64 => ScalarValue::Date64(Some(0)),
             _ => {
                 return _not_impl_err!(
                     "Can't create a zero scalar from data_type \"{datatype:?}\""
@@ -2198,7 +2216,7 @@ impl ScalarValue {
     ///
     /// Errors if `self` is
     /// - a decimal that fails be converted to a decimal array of size
-    /// - a `Fixedsizelist` that fails to be concatenated into an array of size
+    /// - a `FixedsizeList` that fails to be concatenated into an array of size
     /// - a `List` that fails to be concatenated into an array of size
     /// - a `Dictionary` that fails be converted to a dictionary array of size
     pub fn to_array_of_size(&self, size: usize) -> Result<ArrayRef> {
@@ -2444,7 +2462,7 @@ impl ScalarValue {
                 e,
                 size
             ),
-            ScalarValue::Union(value, fields, _mode) => match value {
+            ScalarValue::Union(value, fields, mode) => match value {
                 Some((v_id, value)) => {
                     let mut new_fields = Vec::with_capacity(fields.len());
                     let mut child_arrays = Vec::<ArrayRef>::with_capacity(fields.len());
@@ -2453,7 +2471,12 @@ impl ScalarValue {
                             value.to_array_of_size(size)?
                         } else {
                             let dt = field.data_type();
-                            new_null_array(dt, size)
+                            match mode {
+                                UnionMode::Sparse => new_null_array(dt, size),
+                                // In a dense union, only the child with values needs to be
+                                // allocated
+                                UnionMode::Dense => new_null_array(dt, 0),
+                            }
                         };
                         let field = (**field).clone();
                         child_arrays.push(ar);
@@ -2461,7 +2484,10 @@ impl ScalarValue {
                     }
                     let type_ids = repeat(*v_id).take(size);
                     let type_ids = ScalarBuffer::<i8>::from_iter(type_ids);
-                    let value_offsets: Option<ScalarBuffer<i32>> = None;
+                    let value_offsets = match mode {
+                        UnionMode::Sparse => None,
+                        UnionMode::Dense => Some(ScalarBuffer::from_iter(0..size as i32)),
+                    };
                     let ar = UnionArray::try_new(
                         fields.clone(),
                         type_ids,
@@ -2899,7 +2925,7 @@ impl ScalarValue {
     /// preferred over this function if at all possible as they can be
     /// vectorized and are generally much faster.
     ///
-    /// This function has a few narrow usescases such as hash table key
+    /// This function has a few narrow use cases such as hash table key
     /// comparisons where comparing a single row at a time is necessary.
     ///
     /// # Errors
@@ -4439,7 +4465,7 @@ mod tests {
         Ok(())
     }
 
-    // Verifies that ScalarValue has the same behavior with compute kernal when it overflows.
+    // Verifies that ScalarValue has the same behavior with compute kernel when it overflows.
     fn check_scalar_add_overflow<T>(left: ScalarValue, right: ScalarValue)
     where
         T: ArrowNumericType,
@@ -5642,14 +5668,12 @@ mod tests {
             // null array
             Arc::new(NullArray::new(3)),
             // dense union
-            /* Dense union fails due to https://github.com/apache/datafusion/issues/13762
             {
                 let mut builder = UnionBuilder::new_dense();
                 builder.append::<Int32Type>("a", 1).unwrap();
                 builder.append::<Float64Type>("b", 3.4).unwrap();
                 Arc::new(builder.build().unwrap())
-            }
-             */
+            },
             // sparse union
             {
                 let mut builder = UnionBuilder::new_sparse();
@@ -6126,9 +6150,9 @@ mod tests {
             &DataType::Timestamp(TimeUnit::Nanosecond, Some("UTC".into()))
         );
 
-        let newscalar = ScalarValue::try_from_array(&array, 0).unwrap();
+        let new_scalar = ScalarValue::try_from_array(&array, 0).unwrap();
         assert_eq!(
-            newscalar.data_type(),
+            new_scalar.data_type(),
             DataType::Timestamp(TimeUnit::Nanosecond, Some("UTC".into()))
         );
     }
