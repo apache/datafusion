@@ -274,7 +274,7 @@ pub trait SubstraitProducer: Send + Sync + Sized {
         column: &Column,
         schema: &DFSchemaRef,
     ) -> Result<Expression> {
-        from_column(self, column, schema)
+        from_column(column, schema)
     }
 
     fn consume_literal(&mut self, value: &ScalarValue) -> Result<Expression> {
@@ -1304,7 +1304,7 @@ pub fn make_binary_op_scalar_func(
 /// Convert DataFusion Expr to Substrait Rex
 ///
 /// # Arguments
-///
+/// * `producer` - SubstraitProducer implementation which the handles the actual conversion
 /// * `expr` - DataFusion expression to convert into a Substrait expression
 /// * `schema` - DataFusion input schema for looking up columns
 pub fn to_substrait_rex(
@@ -1478,7 +1478,6 @@ pub fn from_between(
     }
 }
 pub fn from_column(
-    _producer: &impl SubstraitProducer,
     col: &Column,
     schema: &DFSchemaRef,
 ) -> Result<Expression> {
@@ -2015,7 +2014,6 @@ fn make_substrait_like_expr(
     escape_char: Option<char>,
     schema: &DFSchemaRef,
 ) -> Result<Expression> {
-    // let mut extensions = producer.get_extensions();
     let function_anchor = if ignore_case {
         producer.register_function("ilike".to_string())
     } else {
