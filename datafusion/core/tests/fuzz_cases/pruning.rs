@@ -101,7 +101,7 @@ async fn test_fuzz_utf8() {
     values.truncate(100);
 
     let mut row_groups = vec![];
-    // generate all combinations of values for row groups (1 or 2 values per rg, more is unessecarry since we only get min/max stats out)
+    // generate all combinations of values for row groups (1 or 2 values per rg, more is unnecessary since we only get min/max stats out)
     for rg_length in [1, 2] {
         row_groups.extend(values.iter().cloned().combinations(rg_length));
     }
