@@ -73,7 +73,7 @@ use parquet::arrow::{
     arrow_to_parquet_schema, parquet_to_arrow_schema, AsyncArrowWriter,
 };
 use parquet::file::metadata::{ParquetMetaData, ParquetMetaDataReader, RowGroupMetaData};
-use parquet::file::properties::WriterProperties;
+use parquet::file::properties::{WriterProperties, WriterPropertiesBuilder};
 use parquet::file::writer::SerializedFileWriter;
 use parquet::format::FileMetaData;
 use tokio::io::{AsyncWrite, AsyncWriteExt};
@@ -752,24 +752,23 @@ impl ParquetSink {
     /// Create writer properties based upon configuration settings,
     /// including partitioning and the inclusion of arrow schema metadata.
     fn create_writer_props(&self) -> Result<WriterProperties> {
-        let props = if !self.parquet_options.global.skip_arrow_metadata {
-            let schema = if self.parquet_options.global.allow_single_file_parallelism {
-                // If parallelizing writes, we may be also be doing hive style partitioning
-                // into multiple files which impacts the schema per file.
-                // Refer to `self.get_writer_schema()`
-                &self.get_writer_schema()
-            } else {
-                self.config.output_schema()
-            };
-            self.parquet_options
-                .into_writer_properties_builder_with_arrow_schema(Some(schema))?
-                .build()
+        let schema = if self.parquet_options.global.allow_single_file_parallelism {
+            // If parallelizing writes, we may be also be doing hive style partitioning
+            // into multiple files which impacts the schema per file.
+            // Refer to `self.get_writer_schema()`
+            &self.get_writer_schema()
         } else {
-            self.parquet_options
-                .into_writer_properties_builder()?
-                .build()
+            self.config.output_schema()
         };
-        Ok(props)
+
+        // TODO: avoid this clone in follow up PR, where the writer properties & schema
+        // are calculated once on `ParquetSink::new`
+        let mut parquet_opts = self.parquet_options.clone();
+        if !self.parquet_options.global.skip_arrow_metadata {
+            parquet_opts.arrow_schema(schema);
+        }
+
+        Ok(WriterPropertiesBuilder::try_from(&parquet_opts)?.build())
     }
 
     /// Creates an AsyncArrowWriter which serializes a parquet file to an ObjectStore

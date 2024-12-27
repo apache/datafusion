@@ -1502,6 +1502,20 @@ impl TableParquetOptions {
     pub fn new() -> Self {
         Self::default()
     }
+
+    /// Set whether the encoding of the arrow metadata should occur
+    /// during the writing of parquet.
+    ///
+    /// Default is to encode the arrow schema in the file kv_metadata.
+    pub fn with_skip_arrow_metadata(self, skip: bool) -> Self {
+        Self {
+            global: ParquetOptions {
+                skip_arrow_metadata: skip,
+                ..self.global
+            },
+            ..self
+        }
+    }
 }
 
 impl ConfigField for TableParquetOptions {

@@ -39,7 +39,7 @@ mod tests {
 
     use parquet::{
         basic::{Compression, Encoding, ZstdLevel},
-        file::properties::{EnabledStatistics, WriterVersion},
+        file::properties::{EnabledStatistics, WriterPropertiesBuilder, WriterVersion},
         schema::types::ColumnPath,
     };
 
@@ -78,10 +78,8 @@ mod tests {
         table_config.set_config_format(ConfigFileType::PARQUET);
         table_config.alter_with_string_hash_map(&option_map)?;
 
-        let properties = table_config
-            .parquet
-            .into_writer_properties_builder()?
-            .build();
+        let properties =
+            WriterPropertiesBuilder::try_from(&table_config.parquet)?.build();
 
         // Verify the expected options propagated down to parquet crate WriterProperties struct
         assert_eq!(properties.max_row_group_size(), 123);
@@ -185,10 +183,8 @@ mod tests {
         table_config.set_config_format(ConfigFileType::PARQUET);
         table_config.alter_with_string_hash_map(&option_map)?;
 
-        let properties = table_config
-            .parquet
-            .into_writer_properties_builder()?
-            .build();
+        let properties =
+            WriterPropertiesBuilder::try_from(&table_config.parquet)?.build();
 
         let col1 = ColumnPath::from(vec!["col1".to_owned()]);
         let col2_nested = ColumnPath::from(vec!["col2".to_owned(), "nested".to_owned()]);

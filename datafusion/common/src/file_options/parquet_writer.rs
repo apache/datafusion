@@ -59,52 +59,49 @@ impl ParquetWriterOptions {
 }
 
 impl TableParquetOptions {
-    #[deprecated(
-        since = "44.0.0",
-        note = "Please use `TableParquetOptions::into_writer_properties_builder` and `TableParquetOptions::into_writer_properties_builder_with_arrow_schema`"
-    )]
-    pub fn try_from(table_opts: &TableParquetOptions) -> Result<ParquetWriterOptions> {
+    /// Add the arrow schema to the parquet kv_metadata.
+    /// If already exists, then overwrites.
+    pub fn arrow_schema(&mut self, schema: &Arc<Schema>) {
+        self.key_value_metadata.insert(
+            ARROW_SCHEMA_META_KEY.into(),
+            Some(encode_arrow_schema(schema)),
+        );
+    }
+}
+
+impl TryFrom<&TableParquetOptions> for ParquetWriterOptions {
+    type Error = DataFusionError;
+
+    fn try_from(parquet_table_options: &TableParquetOptions) -> Result<Self> {
         // ParquetWriterOptions will have defaults for the remaining fields (e.g. sorting_columns)
         Ok(ParquetWriterOptions {
-            writer_options: table_opts.into_writer_properties_builder()?.build(),
+            writer_options: WriterPropertiesBuilder::try_from(parquet_table_options)?
+                .build(),
         })
     }
+}
+
+impl TryFrom<&TableParquetOptions> for WriterPropertiesBuilder {
+    type Error = DataFusionError;
 
     /// Convert the session's [`TableParquetOptions`] into a single write action's [`WriterPropertiesBuilder`].
     ///
     /// The returned [`WriterPropertiesBuilder`] includes customizations applicable per column.
-    pub fn into_writer_properties_builder(&self) -> Result<WriterPropertiesBuilder> {
-        self.into_writer_properties_builder_with_arrow_schema(None)
-    }
-
-    /// Convert the session's [`TableParquetOptions`] into a single write action's [`WriterPropertiesBuilder`].
-    ///
-    /// The returned [`WriterPropertiesBuilder`] includes customizations applicable per column,
-    /// as well as the arrow schema encoded into the kv_meta at [`ARROW_SCHEMA_META_KEY`].
-    pub fn into_writer_properties_builder_with_arrow_schema(
-        &self,
-        to_encode: Option<&Arc<Schema>>,
-    ) -> Result<WriterPropertiesBuilder> {
+    fn try_from(table_parquet_options: &TableParquetOptions) -> Result<Self> {
         // Table options include kv_metadata and col-specific options
         let TableParquetOptions {
             global,
             column_specific_options,
             key_value_metadata,
-        } = self;
+        } = table_parquet_options;
 
         let mut builder = global.into_writer_properties_builder()?;
 
         // add kv_meta, if any
-        let mut kv_meta = key_value_metadata.to_owned();
-        if let Some(schema) = to_encode {
-            kv_meta.insert(
-                ARROW_SCHEMA_META_KEY.into(),
-                Some(encode_arrow_schema(schema)),
-            );
-        }
-        if !kv_meta.is_empty() {
+        if !key_value_metadata.is_empty() {
             builder = builder.set_key_value_metadata(Some(
-                kv_meta
+                key_value_metadata
+                    .to_owned()
                     .drain()
                     .map(|(key, value)| KeyValue { key, value })
                     .collect(),
@@ -621,8 +618,7 @@ mod tests {
             key_value_metadata: [(key, value)].into(),
         };
 
-        let writer_props = table_parquet_opts
-            .into_writer_properties_builder()
+        let writer_props = WriterPropertiesBuilder::try_from(&table_parquet_opts)
             .unwrap()
             .build();
         assert_eq!(
@@ -649,10 +645,10 @@ mod tests {
         let default_writer_props = WriterProperties::new();
 
         // WriterProperties::try_from(TableParquetOptions::default), a.k.a. using datafusion's defaults
-        let from_datafusion_defaults = default_table_writer_opts
-            .into_writer_properties_builder()
-            .unwrap()
-            .build();
+        let from_datafusion_defaults =
+            WriterPropertiesBuilder::try_from(&default_table_writer_opts)
+                .unwrap()
+                .build();
 
         // Expected: how the defaults should not match
         assert_ne!(
@@ -705,10 +701,10 @@ mod tests {
         // the TableParquetOptions::default, with only the bloom filter turned on
         let mut default_table_writer_opts = TableParquetOptions::default();
         default_table_writer_opts.global.bloom_filter_on_write = true;
-        let from_datafusion_defaults = default_table_writer_opts
-            .into_writer_properties_builder()
-            .unwrap()
-            .build();
+        let from_datafusion_defaults =
+            WriterPropertiesBuilder::try_from(&default_table_writer_opts)
+                .unwrap()
+                .build();
 
         // the WriterProperties::default, with only the bloom filter turned on
         let default_writer_props = WriterProperties::builder()
@@ -733,10 +729,10 @@ mod tests {
         let mut default_table_writer_opts = TableParquetOptions::default();
         default_table_writer_opts.global.bloom_filter_on_write = true;
         default_table_writer_opts.global.bloom_filter_fpp = Some(0.42);
-        let from_datafusion_defaults = default_table_writer_opts
-            .into_writer_properties_builder()
-            .unwrap()
-            .build();
+        let from_datafusion_defaults =
+            WriterPropertiesBuilder::try_from(&default_table_writer_opts)
+                .unwrap()
+                .build();
 
         // the WriterProperties::default, with only fpp set
         let default_writer_props = WriterProperties::builder()
@@ -765,10 +761,10 @@ mod tests {
         let mut default_table_writer_opts = TableParquetOptions::default();
         default_table_writer_opts.global.bloom_filter_on_write = true;
         default_table_writer_opts.global.bloom_filter_ndv = Some(42);
-        let from_datafusion_defaults = default_table_writer_opts
-            .into_writer_properties_builder()
-            .unwrap()
-            .build();
+        let from_datafusion_defaults =
+            WriterPropertiesBuilder::try_from(&default_table_writer_opts)
+                .unwrap()
+                .build();
 
         // the WriterProperties::default, with only ndv set
         let default_writer_props = WriterProperties::builder()
