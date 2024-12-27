@@ -110,6 +110,53 @@ pub trait SubstraitProducer: Send + Sync + Sized {
 
     fn register_function(&mut self, signature: String) -> u32;
 
+    /// Offset for calculating Substrait field reference indices.
+    ///
+    /// See [SubstraitProducer::set_col_offset] for more details.
+    fn get_col_offset(&self) -> usize;
+
+    /// Sets the offset for calculating Substrait field reference indices.
+    ///
+    /// This is only needed when handling relations with more than 1 input relation, and only when
+    /// converting column references contained in fields of the relation, which are indexed relative
+    /// to the *output schema* of the relation.
+    ///
+    /// An example of this is the [JoinRel] which takes 2 inputs and has 2 fields:
+    /// * [expression](JoinRel:: expression)
+    /// * [post_join_filter](JoinRel:: post_join_filter)
+    ///
+    /// These two fields may contain column references. DataFusion references these columns by name,
+    /// whereas Substrait uses indices.
+    ///
+    /// The output schema of the JoinRel consists of all columns of the left input, followed by all
+    /// columns of the right input. If `JoinRel::left` has `m` columns, and `JoinRel::right` has `n`
+    /// columns, then
+    /// * The `left` input will have column indices from `0` to `m-1`
+    /// * The `right` input will have column indices from `0` to `n-1`
+    /// * The [JoinRel] output has column indices from `0` to `m + n - 1`
+    ///
+    /// Putting it all together. Given a query
+    /// ```sql
+    /// SELECT *
+    /// FROM t1
+    /// JOIN t2
+    ///     ON t1.l1 = t2.r1;
+    /// ```
+    /// with the following tables:
+    /// * t1: (l0, l1, l2)
+    /// * t2: (r0, r1)
+    ///
+    /// the output schema is
+    /// ```text
+    ///   0,  1,  2,  3,  4  : Output Schema Index
+    /// (l0, l1, l2, r0, r1)
+    /// ```
+    /// and as such the join condition becomes
+    /// ```col_ref(1) = col_ref(3 + 1)```
+    ///
+    /// This function can be used to set the offset used when computing the ...
+    fn set_col_offset(&mut self, offset: usize);
+
     // Logical Plans
     fn consume_plan(&mut self, plan: &LogicalPlan) -> Result<Box<Rel>> {
         to_substrait_rel(self, plan)
@@ -176,31 +223,24 @@ pub trait SubstraitProducer: Send + Sync + Sized {
     }
 
     // Expressions
-    fn consume_expr(
-        &mut self,
-        expr: &Expr,
-        schema: &DFSchemaRef,
-        col_ref_offset: usize,
-    ) -> Result<Expression> {
-        to_substrait_rex(self, expr, schema, col_ref_offset)
+    fn consume_expr(&mut self, expr: &Expr, schema: &DFSchemaRef) -> Result<Expression> {
+        to_substrait_rex(self, expr, schema)
     }
 
     fn consume_alias(
         &mut self,
         alias: &Alias,
         schema: &DFSchemaRef,
-        col_ref_offset: usize,
     ) -> Result<Expression> {
-        from_alias(self, alias, schema, col_ref_offset)
+        from_alias(self, alias, schema)
     }
 
     fn consume_column(
         &mut self,
         column: &Column,
         schema: &DFSchemaRef,
-        col_ref_offset: usize,
     ) -> Result<Expression> {
-        from_column(column, schema, col_ref_offset)
+        from_column(self, column, schema)
     }
 
     fn consume_literal(&mut self, value: &ScalarValue) -> Result<Expression> {
@@ -211,18 +251,12 @@ pub trait SubstraitProducer: Send + Sync + Sized {
         &mut self,
         expr: &BinaryExpr,
         schema: &DFSchemaRef,
-        col_ref_offset: usize,
     ) -> Result<Expression> {
-        from_binary_expr(self, expr, schema, col_ref_offset)
+        from_binary_expr(self, expr, schema)
     }
 
-    fn consume_like(
-        &mut self,
-        like: &Like,
-        schema: &DFSchemaRef,
-        col_ref_offset: usize,
-    ) -> Result<Expression> {
-        from_like(self, like, schema, col_ref_offset)
+    fn consume_like(&mut self, like: &Like, schema: &DFSchemaRef) -> Result<Expression> {
+        from_like(self, like, schema)
     }
 
     /// Handles: Not, IsNotNull, IsNull, IsTrue, IsFalse, IsUnknown, IsNotTrue, IsNotFalse, IsNotUnknown, Negative
@@ -230,54 +264,40 @@ pub trait SubstraitProducer: Send + Sync + Sized {
         &mut self,
         expr: &Expr,
         schema: &DFSchemaRef,
-        col_ref_offset: usize,
     ) -> Result<Expression> {
-        from_unary_expr(self, expr, schema, col_ref_offset)
+        from_unary_expr(self, expr, schema)
     }
 
     fn consume_between(
         &mut self,
         between: &Between,
         schema: &DFSchemaRef,
-        col_ref_offset: usize,
     ) -> Result<Expression> {
-        from_between(self, between, schema, col_ref_offset)
+        from_between(self, between, schema)
     }
 
-    fn consume_case(
-        &mut self,
-        case: &Case,
-        schema: &DFSchemaRef,
-        col_ref_offset: usize,
-    ) -> Result<Expression> {
-        from_case(self, case, schema, col_ref_offset)
+    fn consume_case(&mut self, case: &Case, schema: &DFSchemaRef) -> Result<Expression> {
+        from_case(self, case, schema)
     }
 
-    fn consume_cast(
-        &mut self,
-        cast: &Cast,
-        schema: &DFSchemaRef,
-        col_ref_offset: usize,
-    ) -> Result<Expression> {
-        from_cast(self, cast, schema, col_ref_offset)
+    fn consume_cast(&mut self, cast: &Cast, schema: &DFSchemaRef) -> Result<Expression> {
+        from_cast(self, cast, schema)
     }
 
     fn consume_try_cast(
         &mut self,
         cast: &TryCast,
         schema: &DFSchemaRef,
-        col_ref_offset: usize,
     ) -> Result<Expression> {
-        from_try_cast(self, cast, schema, col_ref_offset)
+        from_try_cast(self, cast, schema)
     }
 
     fn consume_scalar_function(
         &mut self,
         scalar_fn: &expr::ScalarFunction,
         schema: &DFSchemaRef,
-        col_ref_offset: usize,
     ) -> Result<Expression> {
-        from_scalar_function(self, scalar_fn, schema, col_ref_offset)
+        from_scalar_function(self, scalar_fn, schema)
     }
 
     fn consume_agg_function(
@@ -292,33 +312,31 @@ pub trait SubstraitProducer: Send + Sync + Sized {
         &mut self,
         window_fn: &WindowFunction,
         schema: &DFSchemaRef,
-        col_ref_offset: usize,
     ) -> Result<Expression> {
-        from_window_function(self, window_fn, schema, col_ref_offset)
+        from_window_function(self, window_fn, schema)
     }
 
     fn consume_in_list(
         &mut self,
         in_list: &InList,
         schema: &DFSchemaRef,
-        col_ref_offset: usize,
     ) -> Result<Expression> {
-        from_in_list(self, in_list, schema, col_ref_offset)
+        from_in_list(self, in_list, schema)
     }
 
     fn consume_in_subquery(
         &mut self,
         in_subquery: &InSubquery,
         schema: &DFSchemaRef,
-        col_ref_offset: usize,
     ) -> Result<Expression> {
-        from_in_subquery(self, in_subquery, schema, col_ref_offset)
+        from_in_subquery(self, in_subquery, schema)
     }
 }
 
 struct DefaultSubstraitProducer<'a> {
     extensions: Extensions,
     state: &'a SessionState,
+    col_offset: usize,
 }
 
 impl<'a> DefaultSubstraitProducer<'a> {
@@ -326,6 +344,7 @@ impl<'a> DefaultSubstraitProducer<'a> {
         DefaultSubstraitProducer {
             extensions: Extensions::default(),
             state,
+            col_offset: 0,
         }
     }
 }
@@ -337,6 +356,14 @@ impl SubstraitProducer for DefaultSubstraitProducer<'_> {
 
     fn register_function(&mut self, fn_name: String) -> u32 {
         self.extensions.register_function(fn_name)
+    }
+
+    fn get_col_offset(&self) -> usize {
+        self.col_offset
+    }
+
+    fn set_col_offset(&mut self, offset: usize) {
+        self.col_offset = offset
     }
 
     fn consume_extension(&mut self, plan: &Extension) -> Result<Box<Rel>> {
@@ -427,8 +454,7 @@ pub fn to_substrait_extended_expr(
     let substrait_exprs = exprs
         .iter()
         .map(|(expr, field)| {
-            let substrait_expr =
-                producer.consume_expr(expr, schema, /*col_ref_offset=*/ 0)?;
+            let substrait_expr = producer.consume_expr(expr, schema)?;
             let mut output_names = Vec::new();
             flatten_names(field, false, &mut output_names)?;
             Ok(ExpressionReference {
@@ -584,7 +610,7 @@ pub fn from_projection(
     let expressions = p
         .expr
         .iter()
-        .map(|e| producer.consume_expr(e, p.input.schema(), 0))
+        .map(|e| producer.consume_expr(e, p.input.schema()))
         .collect::<Result<Vec<_>>>()?;
 
     let emit_kind = create_project_remapping(
@@ -612,8 +638,7 @@ pub fn from_filter(
     filter: &Filter,
 ) -> Result<Box<Rel>> {
     let input = producer.consume_plan(filter.input.as_ref())?;
-    let filter_expr =
-        producer.consume_expr(&filter.predicate, filter.input.schema(), 0)?;
+    let filter_expr = producer.consume_expr(&filter.predicate, filter.input.schema())?;
     Ok(Box::new(Rel {
         rel_type: Some(RelType::Filter(Box::new(FilterRel {
             common: None,
@@ -633,14 +658,14 @@ pub fn from_limit(
     let offset_mode = limit
         .skip
         .as_ref()
-        .map(|expr| producer.consume_expr(expr.as_ref(), &empty_schema, 0))
+        .map(|expr| producer.consume_expr(expr.as_ref(), &empty_schema))
         .transpose()?
         .map(Box::new)
         .map(fetch_rel::OffsetMode::OffsetExpr);
     let count_mode = limit
         .fetch
         .as_ref()
-        .map(|expr| producer.consume_expr(expr.as_ref(), &empty_schema, 0))
+        .map(|expr| producer.consume_expr(expr.as_ref(), &empty_schema))
         .transpose()?
         .map(Box::new)
         .map(fetch_rel::CountMode::CountExpr);
@@ -770,7 +795,6 @@ pub fn from_join(producer: &mut impl SubstraitProducer, join: &Join) -> Result<B
             producer,
             filter,
             &Arc::new(in_join_schema),
-            0,
         )?),
         None => None,
     };
@@ -865,7 +889,7 @@ pub fn from_window(
 
     // process and add each window function expression
     for expr in &window.window_expr {
-        expressions.push(producer.consume_expr(expr, window.input.schema(), 0)?);
+        expressions.push(producer.consume_expr(expr, window.input.schema())?);
     }
 
     let emit_kind =
@@ -1004,19 +1028,22 @@ fn to_substrait_join_expr(
 ) -> Result<Option<Expression>> {
     // Only support AND conjunction for each binary expression in join conditions
     let mut exprs: Vec<Expression> = vec![];
+
+    // store current column offset
+    let current_offset = producer.get_col_offset();
     for (left, right) in join_conditions {
-        // Parse left
-        let l = producer.consume_expr(left, left_schema, 0)?;
-        // Parse right
-        let r = to_substrait_rex(
-            producer,
-            right,
-            right_schema,
-            left_schema.fields().len(), // offset to return the correct index
-        )?;
+        // column references to the left input start at 0 in the JoinRel schema
+        producer.set_col_offset(0);
+        let l = producer.consume_expr(left, left_schema)?;
+        // column references to the right input start after all fields in the left schema
+        producer.set_col_offset(left_schema.fields().len());
+        let r = to_substrait_rex(producer, right, right_schema)?;
         // AND with existing expression
         exprs.push(make_binary_op_scalar_func(producer, &l, &r, eq_op));
     }
+    // restore column offset
+    producer.set_col_offset(current_offset);
+
     let join_expr: Option<Expression> =
         exprs.into_iter().reduce(|acc: Expression, e: Expression| {
             make_binary_op_scalar_func(producer, &acc, &e, Operator::And)
@@ -1085,7 +1112,7 @@ pub fn parse_flat_grouping_exprs(
     let mut grouping_expressions = vec![];
 
     for e in exprs {
-        let rex = producer.consume_expr(e, schema, 0)?;
+        let rex = producer.consume_expr(e, schema)?;
         grouping_expressions.push(rex.clone());
         ref_group_exprs.push(rex);
         expression_references.push((ref_group_exprs.len() - 1) as u32);
@@ -1180,7 +1207,7 @@ pub fn from_aggregate_function(
     let mut arguments: Vec<FunctionArgument> = vec![];
     for arg in args {
         arguments.push(FunctionArgument {
-            arg_type: Some(ArgType::Value(producer.consume_expr(arg, schema, 0)?)),
+            arg_type: Some(ArgType::Value(producer.consume_expr(arg, schema)?)),
         });
     }
     let function_anchor = producer.register_function(func.name().to_string());
@@ -1200,7 +1227,7 @@ pub fn from_aggregate_function(
             options: vec![],
         }),
         filter: match filter {
-            Some(f) => Some(producer.consume_expr(f, schema, 0)?),
+            Some(f) => Some(producer.consume_expr(f, schema)?),
             None => None,
         },
     })
@@ -1237,7 +1264,7 @@ fn to_substrait_sort_field(
         (false, false) => SortDirection::DescNullsLast,
     };
     Ok(SortField {
-        expr: Some(producer.consume_expr(&sort.expr, schema, 0)?),
+        expr: Some(producer.consume_expr(&sort.expr, schema)?),
         sort_kind: Some(SortKind::Direction(sort_kind.into())),
     })
 }
@@ -1273,71 +1300,43 @@ pub fn make_binary_op_scalar_func(
 ///
 /// # Arguments
 ///
-/// * `expr` - DataFusion expression to be parse into a Substrait expression
-/// * `schema` - DataFusion input schema for looking up field qualifiers
-/// * `col_ref_offset` - Offset for calculating Substrait field reference indices.
-///                     This should only be set by caller with more than one input relations i.e. Join.
-///                     Substrait expects one set of indices when joining two relations.
-///                     Let's say `left` and `right` have `m` and `n` columns, respectively. The `right`
-///                     relation will have column indices from `0` to `n-1`, however, Substrait will expect
-///                     the `right` indices to be offset by the `left`. This means Substrait will expect to
-///                     evaluate the join condition expression on indices [0 .. n-1, n .. n+m-1]. For example:
-///                     ```SELECT *
-///                        FROM t1
-///                        JOIN t2
-///                        ON t1.c1 = t2.c0;```
-///                     where t1 consists of columns [c0, c1, c2], and t2 = columns [c0, c1]
-///                     the join condition should become
-///                     `col_ref(1) = col_ref(3 + 0)`
-///                     , where `3` is the number of `left` columns (`col_ref_offset`) and `0` is the index
-///                     of the join key column from `right`
-/// * `extensions` - Substrait extension info. Contains registered function information
+/// * `expr` - DataFusion expression to convert into a Substrait expression
+/// * `schema` - DataFusion input schema for looking up columns
 pub fn to_substrait_rex(
     producer: &mut impl SubstraitProducer,
     expr: &Expr,
     schema: &DFSchemaRef,
-    col_ref_offset: usize,
 ) -> Result<Expression> {
     match expr {
-        Expr::Alias(expr) => producer.consume_alias(expr, schema, col_ref_offset),
-        Expr::Column(expr) => producer.consume_column(expr, schema, col_ref_offset),
+        Expr::Alias(expr) => producer.consume_alias(expr, schema),
+        Expr::Column(expr) => producer.consume_column(expr, schema),
         Expr::Literal(expr) => producer.consume_literal(expr),
-        Expr::BinaryExpr(expr) => {
-            producer.consume_binary_expr(expr, schema, col_ref_offset)
-        }
-        Expr::Like(expr) => producer.consume_like(expr, schema, col_ref_offset),
+        Expr::BinaryExpr(expr) => producer.consume_binary_expr(expr, schema),
+        Expr::Like(expr) => producer.consume_like(expr, schema),
         Expr::SimilarTo(_) => not_impl_err!("SimilarTo is not supported"),
-        Expr::Not(_) => producer.consume_unary_expr(expr, schema, col_ref_offset),
-        Expr::IsNotNull(_) => producer.consume_unary_expr(expr, schema, col_ref_offset),
-        Expr::IsNull(_) => producer.consume_unary_expr(expr, schema, col_ref_offset),
-        Expr::IsTrue(_) => producer.consume_unary_expr(expr, schema, col_ref_offset),
-        Expr::IsFalse(_) => producer.consume_unary_expr(expr, schema, col_ref_offset),
-        Expr::IsUnknown(_) => producer.consume_unary_expr(expr, schema, col_ref_offset),
-        Expr::IsNotTrue(_) => producer.consume_unary_expr(expr, schema, col_ref_offset),
-        Expr::IsNotFalse(_) => producer.consume_unary_expr(expr, schema, col_ref_offset),
-        Expr::IsNotUnknown(_) => {
-            producer.consume_unary_expr(expr, schema, col_ref_offset)
-        }
-        Expr::Negative(_) => producer.consume_unary_expr(expr, schema, col_ref_offset),
-        Expr::Between(expr) => producer.consume_between(expr, schema, col_ref_offset),
-        Expr::Case(expr) => producer.consume_case(expr, schema, col_ref_offset),
-        Expr::Cast(expr) => producer.consume_cast(expr, schema, col_ref_offset),
-        Expr::TryCast(expr) => producer.consume_try_cast(expr, schema, col_ref_offset),
-        Expr::ScalarFunction(expr) => {
-            producer.consume_scalar_function(expr, schema, col_ref_offset)
-        }
+        Expr::Not(_) => producer.consume_unary_expr(expr, schema),
+        Expr::IsNotNull(_) => producer.consume_unary_expr(expr, schema),
+        Expr::IsNull(_) => producer.consume_unary_expr(expr, schema),
+        Expr::IsTrue(_) => producer.consume_unary_expr(expr, schema),
+        Expr::IsFalse(_) => producer.consume_unary_expr(expr, schema),
+        Expr::IsUnknown(_) => producer.consume_unary_expr(expr, schema),
+        Expr::IsNotTrue(_) => producer.consume_unary_expr(expr, schema),
+        Expr::IsNotFalse(_) => producer.consume_unary_expr(expr, schema),
+        Expr::IsNotUnknown(_) => producer.consume_unary_expr(expr, schema),
+        Expr::Negative(_) => producer.consume_unary_expr(expr, schema),
+        Expr::Between(expr) => producer.consume_between(expr, schema),
+        Expr::Case(expr) => producer.consume_case(expr, schema),
+        Expr::Cast(expr) => producer.consume_cast(expr, schema),
+        Expr::TryCast(expr) => producer.consume_try_cast(expr, schema),
+        Expr::ScalarFunction(expr) => producer.consume_scalar_function(expr, schema),
         Expr::AggregateFunction(_) => {
             internal_err!(
                 "AggregateFunction should only be encountered as part of a LogicalPlan::Aggregate"
             )
         }
-        Expr::WindowFunction(expr) => {
-            producer.consume_window_function(expr, schema, col_ref_offset)
-        }
-        Expr::InList(expr) => producer.consume_in_list(expr, schema, col_ref_offset),
-        Expr::InSubquery(expr) => {
-            producer.consume_in_subquery(expr, schema, col_ref_offset)
-        }
+        Expr::WindowFunction(expr) => producer.consume_window_function(expr, schema),
+        Expr::InList(expr) => producer.consume_in_list(expr, schema),
+        Expr::InSubquery(expr) => producer.consume_in_subquery(expr, schema),
         _ => not_impl_err!("Cannot convert {expr:?} to Substrait"),
     }
 }
@@ -1346,7 +1345,6 @@ pub fn from_in_list(
     producer: &mut impl SubstraitProducer,
     in_list: &InList,
     schema: &DFSchemaRef,
-    col_ref_offset: usize,
 ) -> Result<Expression> {
     let InList {
         expr,
@@ -1355,9 +1353,9 @@ pub fn from_in_list(
     } = in_list;
     let substrait_list = list
         .iter()
-        .map(|x| producer.consume_expr(x, schema, col_ref_offset))
+        .map(|x| producer.consume_expr(x, schema))
         .collect::<Result<Vec<Expression>>>()?;
-    let substrait_expr = producer.consume_expr(expr, schema, col_ref_offset)?;
+    let substrait_expr = producer.consume_expr(expr, schema)?;
 
     let substrait_or_list = Expression {
         rex_type: Some(RexType::SingularOrList(Box::new(SingularOrList {
@@ -1390,17 +1388,11 @@ pub fn from_scalar_function(
     producer: &mut impl SubstraitProducer,
     fun: &expr::ScalarFunction,
     schema: &DFSchemaRef,
-    col_ref_offset: usize,
 ) -> Result<Expression> {
     let mut arguments: Vec<FunctionArgument> = vec![];
     for arg in &fun.args {
         arguments.push(FunctionArgument {
-            arg_type: Some(ArgType::Value(to_substrait_rex(
-                producer,
-                arg,
-                schema,
-                col_ref_offset,
-            )?)),
+            arg_type: Some(ArgType::Value(to_substrait_rex(producer, arg, schema)?)),
         });
     }
 
@@ -1421,7 +1413,6 @@ pub fn from_between(
     producer: &mut impl SubstraitProducer,
     between: &Between,
     schema: &DFSchemaRef,
-    col_ref_offset: usize,
 ) -> Result<Expression> {
     let Between {
         expr,
@@ -1431,12 +1422,9 @@ pub fn from_between(
     } = between;
     if *negated {
         // `expr NOT BETWEEN low AND high` can be translated into (expr < low OR high < expr)
-        let substrait_expr =
-            producer.consume_expr(expr.as_ref(), schema, col_ref_offset)?;
-        let substrait_low =
-            producer.consume_expr(low.as_ref(), schema, col_ref_offset)?;
-        let substrait_high =
-            producer.consume_expr(high.as_ref(), schema, col_ref_offset)?;
+        let substrait_expr = producer.consume_expr(expr.as_ref(), schema)?;
+        let substrait_low = producer.consume_expr(low.as_ref(), schema)?;
+        let substrait_high = producer.consume_expr(high.as_ref(), schema)?;
 
         let l_expr = make_binary_op_scalar_func(
             producer,
@@ -1459,12 +1447,9 @@ pub fn from_between(
         ))
     } else {
         // `expr BETWEEN low AND high` can be translated into (low <= expr AND expr <= high)
-        let substrait_expr =
-            producer.consume_expr(expr.as_ref(), schema, col_ref_offset)?;
-        let substrait_low =
-            producer.consume_expr(low.as_ref(), schema, col_ref_offset)?;
-        let substrait_high =
-            producer.consume_expr(high.as_ref(), schema, col_ref_offset)?;
+        let substrait_expr = producer.consume_expr(expr.as_ref(), schema)?;
+        let substrait_low = producer.consume_expr(low.as_ref(), schema)?;
+        let substrait_high = producer.consume_expr(high.as_ref(), schema)?;
 
         let l_expr = make_binary_op_scalar_func(
             producer,
@@ -1488,30 +1473,29 @@ pub fn from_between(
     }
 }
 pub fn from_column(
+    producer: &impl SubstraitProducer,
     col: &Column,
     schema: &DFSchemaRef,
-    col_ref_offset: usize,
 ) -> Result<Expression> {
     let index = schema.index_of_column(col)?;
-    substrait_field_ref(index + col_ref_offset)
+    let col_offset = producer.get_col_offset();
+    substrait_field_ref(index + col_offset)
 }
 
 pub fn from_binary_expr(
     producer: &mut impl SubstraitProducer,
     expr: &BinaryExpr,
     schema: &DFSchemaRef,
-    col_ref_offset: usize,
 ) -> Result<Expression> {
     let BinaryExpr { left, op, right } = expr;
-    let l = producer.consume_expr(left, schema, col_ref_offset)?;
-    let r = producer.consume_expr(right, schema, col_ref_offset)?;
+    let l = producer.consume_expr(left, schema)?;
+    let r = producer.consume_expr(right, schema)?;
     Ok(make_binary_op_scalar_func(producer, &l, &r, *op))
 }
 pub fn from_case(
     producer: &mut impl SubstraitProducer,
     case: &Case,
     schema: &DFSchemaRef,
-    col_ref_offset: usize,
 ) -> Result<Expression> {
     let Case {
         expr,
@@ -1523,26 +1507,21 @@ pub fn from_case(
     if let Some(e) = expr {
         // Base expression exists
         ifs.push(IfClause {
-            r#if: Some(producer.consume_expr(e, schema, col_ref_offset)?),
+            r#if: Some(producer.consume_expr(e, schema)?),
             then: None,
         });
     }
     // Parse `when`s
     for (r#if, then) in when_then_expr {
         ifs.push(IfClause {
-            r#if: Some(producer.consume_expr(r#if, schema, col_ref_offset)?),
-            then: Some(producer.consume_expr(then, schema, col_ref_offset)?),
+            r#if: Some(producer.consume_expr(r#if, schema)?),
+            then: Some(producer.consume_expr(then, schema)?),
         });
     }
 
     // Parse outer `else`
     let r#else: Option<Box<Expression>> = match else_expr {
-        Some(e) => Some(Box::new(to_substrait_rex(
-            producer,
-            e,
-            schema,
-            col_ref_offset,
-        )?)),
+        Some(e) => Some(Box::new(to_substrait_rex(producer, e, schema)?)),
         None => None,
     };
 
@@ -1555,19 +1534,13 @@ pub fn from_cast(
     producer: &mut impl SubstraitProducer,
     cast: &Cast,
     schema: &DFSchemaRef,
-    col_ref_offset: usize,
 ) -> Result<Expression> {
     let Cast { expr, data_type } = cast;
     Ok(Expression {
         rex_type: Some(RexType::Cast(Box::new(
             substrait::proto::expression::Cast {
                 r#type: Some(to_substrait_type(data_type, true)?),
-                input: Some(Box::new(to_substrait_rex(
-                    producer,
-                    expr,
-                    schema,
-                    col_ref_offset,
-                )?)),
+                input: Some(Box::new(to_substrait_rex(producer, expr, schema)?)),
                 failure_behavior: FailureBehavior::ThrowException.into(),
             },
         ))),
@@ -1578,19 +1551,13 @@ pub fn from_try_cast(
     producer: &mut impl SubstraitProducer,
     cast: &TryCast,
     schema: &DFSchemaRef,
-    col_ref_offset: usize,
 ) -> Result<Expression> {
     let TryCast { expr, data_type } = cast;
     Ok(Expression {
         rex_type: Some(RexType::Cast(Box::new(
             substrait::proto::expression::Cast {
                 r#type: Some(to_substrait_type(data_type, true)?),
-                input: Some(Box::new(to_substrait_rex(
-                    producer,
-                    expr,
-                    schema,
-                    col_ref_offset,
-                )?)),
+                input: Some(Box::new(to_substrait_rex(producer, expr, schema)?)),
                 failure_behavior: FailureBehavior::ReturnNull.into(),
             },
         ))),
@@ -1608,16 +1575,14 @@ pub fn from_alias(
     producer: &mut impl SubstraitProducer,
     alias: &Alias,
     schema: &DFSchemaRef,
-    col_ref_offset: usize,
 ) -> Result<Expression> {
-    producer.consume_expr(alias.expr.as_ref(), schema, col_ref_offset)
+    producer.consume_expr(alias.expr.as_ref(), schema)
 }
 
 pub fn from_window_function(
     producer: &mut impl SubstraitProducer,
     window_fn: &WindowFunction,
     schema: &DFSchemaRef,
-    col_ref_offset: usize,
 ) -> Result<Expression> {
     let WindowFunction {
         fun,
@@ -1633,18 +1598,13 @@ pub fn from_window_function(
     let mut arguments: Vec<FunctionArgument> = vec![];
     for arg in args {
         arguments.push(FunctionArgument {
-            arg_type: Some(ArgType::Value(to_substrait_rex(
-                producer,
-                arg,
-                schema,
-                col_ref_offset,
-            )?)),
+            arg_type: Some(ArgType::Value(to_substrait_rex(producer, arg, schema)?)),
         });
     }
     // partition by expressions
     let partition_by = partition_by
         .iter()
-        .map(|e| producer.consume_expr(e, schema, col_ref_offset))
+        .map(|e| producer.consume_expr(e, schema))
         .collect::<Result<Vec<_>>>()?;
     // order by expressions
     let order_by = order_by
@@ -1668,7 +1628,6 @@ pub fn from_like(
     producer: &mut impl SubstraitProducer,
     like: &Like,
     schema: &DFSchemaRef,
-    col_ref_offset: usize,
 ) -> Result<Expression> {
     let Like {
         negated,
@@ -1685,7 +1644,6 @@ pub fn from_like(
         pattern,
         *escape_char,
         schema,
-        col_ref_offset,
     )
 }
 
@@ -1693,14 +1651,13 @@ pub fn from_in_subquery(
     producer: &mut impl SubstraitProducer,
     subquery: &InSubquery,
     schema: &DFSchemaRef,
-    col_ref_offset: usize,
 ) -> Result<Expression> {
     let InSubquery {
         expr,
         subquery,
         negated,
     } = subquery;
-    let substrait_expr = producer.consume_expr(expr, schema, col_ref_offset)?;
+    let substrait_expr = producer.consume_expr(expr, schema)?;
 
     let subquery_plan = producer.consume_plan(subquery.subquery.as_ref())?;
 
@@ -1742,7 +1699,6 @@ pub fn from_unary_expr(
     producer: &mut impl SubstraitProducer,
     expr: &Expr,
     schema: &DFSchemaRef,
-    col_ref_offset: usize,
 ) -> Result<Expression> {
     let (fn_name, arg) = match expr {
         Expr::Not(arg) => ("not", arg),
@@ -1757,7 +1713,7 @@ pub fn from_unary_expr(
         Expr::Negative(arg) => ("negate", arg),
         expr => not_impl_err!("Unsupported expression: {expr:?}")?,
     };
-    to_substrait_unary_scalar_fn(producer, fn_name, arg, schema, col_ref_offset)
+    to_substrait_unary_scalar_fn(producer, fn_name, arg, schema)
 }
 
 fn to_substrait_type(dt: &DataType, nullable: bool) -> Result<substrait::proto::Type> {
@@ -2054,7 +2010,6 @@ fn make_substrait_like_expr(
     pattern: &Expr,
     escape_char: Option<char>,
     schema: &DFSchemaRef,
-    col_ref_offset: usize,
 ) -> Result<Expression> {
     // let mut extensions = producer.get_extensions();
     let function_anchor = if ignore_case {
@@ -2062,8 +2017,8 @@ fn make_substrait_like_expr(
     } else {
         producer.register_function("like".to_string())
     };
-    let expr = producer.consume_expr(expr, schema, col_ref_offset)?;
-    let pattern = producer.consume_expr(pattern, schema, col_ref_offset)?;
+    let expr = producer.consume_expr(expr, schema)?;
+    let pattern = producer.consume_expr(pattern, schema)?;
     let escape_char = to_substrait_literal_expr(
         producer,
         &ScalarValue::Utf8(escape_char.map(|c| c.to_string())),
@@ -2467,10 +2422,9 @@ fn to_substrait_unary_scalar_fn(
     fn_name: &str,
     arg: &Expr,
     schema: &DFSchemaRef,
-    col_ref_offset: usize,
 ) -> Result<Expression> {
     let function_anchor = producer.register_function(fn_name.to_string());
-    let substrait_expr = producer.consume_expr(arg, schema, col_ref_offset)?;
+    let substrait_expr = producer.consume_expr(arg, schema)?;
 
     Ok(Expression {
         rex_type: Some(RexType::ScalarFunction(ScalarFunction {
@@ -2520,7 +2474,7 @@ fn substrait_sort_field(
         asc,
         nulls_first,
     } = sort;
-    let e = producer.consume_expr(expr, schema, 0)?;
+    let e = producer.consume_expr(expr, schema)?;
     let d = match (asc, nulls_first) {
         (true, true) => SortDirection::AscNullsFirst,
         (true, false) => SortDirection::AscNullsLast,
