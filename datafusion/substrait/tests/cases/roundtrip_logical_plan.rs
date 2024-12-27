@@ -583,7 +583,7 @@ async fn self_join_introduces_aliases() -> Result<()> {
         \n      TableScan: data projection=[b, c]",
         false,
     )
-        .await
+    .await
 }
 
 #[tokio::test]
