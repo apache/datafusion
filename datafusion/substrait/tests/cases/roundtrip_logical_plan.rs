@@ -572,6 +572,21 @@ async fn roundtrip_self_implicit_cross_join() -> Result<()> {
 }
 
 #[tokio::test]
+async fn self_join_introduces_aliases() -> Result<()> {
+    assert_expected_plan(
+        "SELECT d1.b, d2.c FROM data d1 JOIN data d2 ON d1.b = d2.b",
+        "Projection: left.b, right.c\
+        \n  Inner Join: left.b = right.b\
+        \n    SubqueryAlias: left\
+        \n      TableScan: data projection=[b]\
+        \n    SubqueryAlias: right\
+        \n      TableScan: data projection=[b, c]",
+        false,
+    )
+        .await
+}
+
+#[tokio::test]
 async fn roundtrip_arithmetic_ops() -> Result<()> {
     roundtrip("SELECT a - a FROM data").await?;
     roundtrip("SELECT a + a FROM data").await?;

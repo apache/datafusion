@@ -110,53 +110,6 @@ pub trait SubstraitProducer: Send + Sync + Sized {
 
     fn register_function(&mut self, signature: String) -> u32;
 
-    /// Offset for calculating Substrait field reference indices.
-    ///
-    /// See [SubstraitProducer::set_col_offset] for more details.
-    fn get_col_offset(&self) -> usize;
-
-    /// Sets the offset for calculating Substrait field reference indices.
-    ///
-    /// This is only needed when handling relations with more than 1 input relation, and only when
-    /// converting column references contained in fields of the relation, which are indexed relative
-    /// to the *output schema* of the relation.
-    ///
-    /// An example of this is the [JoinRel] which takes 2 inputs and has 2 fields:
-    /// * [expression](JoinRel:: expression)
-    /// * [post_join_filter](JoinRel:: post_join_filter)
-    ///
-    /// These two fields may contain column references. DataFusion references these columns by name,
-    /// whereas Substrait uses indices.
-    ///
-    /// The output schema of the JoinRel consists of all columns of the left input, followed by all
-    /// columns of the right input. If `JoinRel::left` has `m` columns, and `JoinRel::right` has `n`
-    /// columns, then
-    /// * The `left` input will have column indices from `0` to `m-1`
-    /// * The `right` input will have column indices from `0` to `n-1`
-    /// * The [JoinRel] output has column indices from `0` to `m + n - 1`
-    ///
-    /// Putting it all together. Given a query
-    /// ```sql
-    /// SELECT *
-    /// FROM t1
-    /// JOIN t2
-    ///     ON t1.l1 = t2.r1;
-    /// ```
-    /// with the following tables:
-    /// * t1: (l0, l1, l2)
-    /// * t2: (r0, r1)
-    ///
-    /// the output schema is
-    /// ```text
-    ///   0,  1,  2,  3,  4  : Output Schema Index
-    /// (l0, l1, l2, r0, r1)
-    /// ```
-    /// and as such the join condition becomes
-    /// ```col_ref(1) = col_ref(3 + 1)```
-    ///
-    /// This function can be used to set the offset used when computing the ...
-    fn set_col_offset(&mut self, offset: usize);
-
     // Logical Plans
     fn consume_plan(&mut self, plan: &LogicalPlan) -> Result<Box<Rel>> {
         to_substrait_rel(self, plan)
@@ -336,7 +289,6 @@ pub trait SubstraitProducer: Send + Sync + Sized {
 struct DefaultSubstraitProducer<'a> {
     extensions: Extensions,
     state: &'a SessionState,
-    col_offset: usize,
 }
 
 impl<'a> DefaultSubstraitProducer<'a> {
@@ -344,7 +296,6 @@ impl<'a> DefaultSubstraitProducer<'a> {
         DefaultSubstraitProducer {
             extensions: Extensions::default(),
             state,
-            col_offset: 0,
         }
     }
 }
@@ -356,14 +307,6 @@ impl SubstraitProducer for DefaultSubstraitProducer<'_> {
 
     fn register_function(&mut self, fn_name: String) -> u32 {
         self.extensions.register_function(fn_name)
-    }
-
-    fn get_col_offset(&self) -> usize {
-        self.col_offset
-    }
-
-    fn set_col_offset(&mut self, offset: usize) {
-        self.col_offset = offset
     }
 
     fn consume_extension(&mut self, plan: &Extension) -> Result<Box<Rel>> {
@@ -788,14 +731,11 @@ pub fn from_join(producer: &mut impl SubstraitProducer, join: &Join) -> Result<B
         JoinConstraint::On => {}
         JoinConstraint::Using => return not_impl_err!("join constraint: `using`"),
     }
-    // parse filter if exists
-    let in_join_schema = join.left.schema().join(join.right.schema())?;
+    let in_join_schema = Arc::new(join.left.schema().join(join.right.schema())?);
+
+    // convert filter if present
     let join_filter = match &join.filter {
-        Some(filter) => Some(to_substrait_rex(
-            producer,
-            filter,
-            &Arc::new(in_join_schema),
-        )?),
+        Some(filter) => Some(to_substrait_rex(producer, filter, &in_join_schema)?),
         None => None,
     };
 
@@ -806,13 +746,7 @@ pub fn from_join(producer: &mut impl SubstraitProducer, join: &Join) -> Result<B
     } else {
         Operator::Eq
     };
-    let join_on = to_substrait_join_expr(
-        producer,
-        &join.on,
-        eq_op,
-        join.left.schema(),
-        join.right.schema(),
-    )?;
+    let join_on = to_substrait_join_expr(producer, &join.on, eq_op, &in_join_schema)?;
 
     // create conjunction between `join_on` and `join_filter` to embed all join conditions,
     // whether equal or non-equal in a single expression
@@ -1023,26 +957,16 @@ fn to_substrait_join_expr(
     producer: &mut impl SubstraitProducer,
     join_conditions: &Vec<(Expr, Expr)>,
     eq_op: Operator,
-    left_schema: &DFSchemaRef,
-    right_schema: &DFSchemaRef,
+    join_schema: &DFSchemaRef,
 ) -> Result<Option<Expression>> {
     // Only support AND conjunction for each binary expression in join conditions
     let mut exprs: Vec<Expression> = vec![];
-
-    // store current column offset
-    let current_offset = producer.get_col_offset();
     for (left, right) in join_conditions {
-        // column references to the left input start at 0 in the JoinRel schema
-        producer.set_col_offset(0);
-        let l = producer.consume_expr(left, left_schema)?;
-        // column references to the right input start after all fields in the left schema
-        producer.set_col_offset(left_schema.fields().len());
-        let r = to_substrait_rex(producer, right, right_schema)?;
+        let l = producer.consume_expr(left, join_schema)?;
+        let r = producer.consume_expr(right, join_schema)?;
         // AND with existing expression
         exprs.push(make_binary_op_scalar_func(producer, &l, &r, eq_op));
     }
-    // restore column offset
-    producer.set_col_offset(current_offset);
 
     let join_expr: Option<Expression> =
         exprs.into_iter().reduce(|acc: Expression, e: Expression| {
@@ -1473,13 +1397,12 @@ pub fn from_between(
     }
 }
 pub fn from_column(
-    producer: &impl SubstraitProducer,
+    _producer: &impl SubstraitProducer,
     col: &Column,
     schema: &DFSchemaRef,
 ) -> Result<Expression> {
     let index = schema.index_of_column(col)?;
-    let col_offset = producer.get_col_offset();
-    substrait_field_ref(index + col_offset)
+    substrait_field_ref(index)
 }
 
 pub fn from_binary_expr(
