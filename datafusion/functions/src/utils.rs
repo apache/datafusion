@@ -154,6 +154,7 @@ pub mod test {
 
                     let result = result.unwrap().to_array(cardinality).expect("Failed to convert to array");
                     let result = result.as_any().downcast_ref::<$ARRAY_TYPE>().expect("Failed to convert to type");
+                    assert_eq!(result.data_type(), &$EXPECTED_DATA_TYPE);
 
                     // value is correct
                     match expected {
