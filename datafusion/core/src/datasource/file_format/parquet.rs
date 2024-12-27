@@ -754,6 +754,9 @@ impl ParquetSink {
     fn create_writer_props(&self) -> Result<WriterProperties> {
         let props = if !self.parquet_options.global.skip_arrow_metadata {
             let schema = if self.parquet_options.global.allow_single_file_parallelism {
+                // If parallelizing writes, we may be also be doing hive style partitioning
+                // into multiple files which impacts the schema per file.
+                // Refer to `self.get_writer_schema()`
                 &self.get_writer_schema()
             } else {
                 self.config.output_schema()
@@ -2379,7 +2382,7 @@ mod tests {
                 value: None,
             },
         ];
-        assert_file_metadata(file_metadata, expected_kv_meta);
+        assert_file_metadata(file_metadata, &expected_kv_meta);
 
         Ok(())
     }
@@ -2417,7 +2420,7 @@ mod tests {
                 value: None,
             },
         ];
-        assert_file_metadata(file_metadata, expected_kv_meta);
+        assert_file_metadata(file_metadata, &expected_kv_meta);
 
         Ok(())
     }
@@ -2454,7 +2457,7 @@ mod tests {
         let parquet_sink =
             create_written_parquet_sink_using_config("file:///", opts).await?;
         let (_, file_metadata) = get_written(parquet_sink)?;
-        assert_file_metadata(file_metadata, expected_without.clone());
+        assert_file_metadata(file_metadata, &expected_without);
 
         // single threaded write, do not skip insert
         let opts = ParquetOptions {
@@ -2465,7 +2468,7 @@ mod tests {
         let parquet_sink =
             create_written_parquet_sink_using_config("file:///", opts).await?;
         let (_, file_metadata) = get_written(parquet_sink)?;
-        assert_file_metadata(file_metadata, expected_with.clone());
+        assert_file_metadata(file_metadata, &expected_with);
 
         // multithreaded write, skip insert
         let opts = ParquetOptions {
@@ -2478,7 +2481,7 @@ mod tests {
         let parquet_sink =
             create_written_parquet_sink_using_config("file:///", opts).await?;
         let (_, file_metadata) = get_written(parquet_sink)?;
-        assert_file_metadata(file_metadata, expected_without);
+        assert_file_metadata(file_metadata, &expected_without);
 
         // multithreaded write, do not skip insert
         let opts = ParquetOptions {
@@ -2491,7 +2494,7 @@ mod tests {
         let parquet_sink =
             create_written_parquet_sink_using_config("file:///", opts).await?;
         let (_, file_metadata) = get_written(parquet_sink)?;
-        assert_file_metadata(file_metadata, expected_with);
+        assert_file_metadata(file_metadata, &expected_with);
 
         Ok(())
     }
@@ -2626,7 +2629,7 @@ mod tests {
         Ok((path, file_metadata))
     }
 
-    fn assert_file_metadata(file_metadata: FileMetaData, expected_kv: Vec<KeyValue>) {
+    fn assert_file_metadata(file_metadata: FileMetaData, expected_kv: &Vec<KeyValue>) {
         let FileMetaData {
             num_rows,
             schema,
@@ -2645,7 +2648,7 @@ mod tests {
 
         let mut key_value_metadata = key_value_metadata.unwrap();
         key_value_metadata.sort_by(|a, b| a.key.cmp(&b.key));
-        assert_eq!(key_value_metadata, expected_kv);
+        assert_eq!(&key_value_metadata, expected_kv);
     }
 
     #[tokio::test]
