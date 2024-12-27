@@ -173,9 +173,9 @@ use substrait::proto::{
 ///
 ///     // You can implement a fully custom consumer method if you need special handling
 ///     async fn consume_filter(&self, rel: &FilterRel) -> Result<LogicalPlan> {
-///         let input = from_substrait_rel(self, rel.input.as_ref().unwrap()).await?;
+///         let input = self.consume_rel(rel.input.as_ref().unwrap()).await?;
 ///         let expression =
-///             from_substrait_rex(self, rel.condition.as_ref().unwrap(), input.schema())
+///             self.consume_expression(rel.condition.as_ref().unwrap(), input.schema())
 ///                 .await?;
 ///         // though this one is quite boring
 ///         LogicalPlanBuilder::from(input).filter(expression)?.build()
@@ -233,6 +233,10 @@ pub trait SubstraitConsumer: Send + Sync + Sized {
     // These methods have default implementations calling the common handler code, to allow for users
     // to re-use common handling logic.
 
+    async fn consume_rel(&self, rel: &Rel) -> Result<LogicalPlan> {
+        from_substrait_rel(self, rel).await
+    }
+
     async fn consume_read(&self, rel: &ReadRel) -> Result<LogicalPlan> {
         from_read_rel(self, rel).await
     }
@@ -284,6 +288,14 @@ pub trait SubstraitConsumer: Send + Sync + Sized {
     // There is one method per Substrait expression to allow for easy overriding of consumer behaviour
     // These methods have default implementations calling the common handler code, to allow for users
     // to re-use common handling logic.
+
+    async fn consume_expression(
+        &self,
+        expr: &Expression,
+        input_schema: &DFSchema,
+    ) -> Result<Expr> {
+        from_substrait_rex(self, expr, input_schema).await
+    }
 
     async fn consume_literal(&self, expr: &Literal) -> Result<Expr> {
         from_literal(self, expr).await
@@ -535,7 +547,7 @@ impl SubstraitConsumer for DefaultSubstraitConsumer<'_> {
                     "ExtensionSingleRel missing input rel, try using ExtensionLeafRel instead"
                 );
         };
-        let input_plan = from_substrait_rel(self, input_rel).await?;
+        let input_plan = self.consume_rel(input_rel).await?;
         let plan = plan.with_exprs_and_inputs(plan.expressions(), vec![input_plan])?;
         Ok(LogicalPlan::Extension(Extension { node: plan }))
     }
@@ -553,7 +565,7 @@ impl SubstraitConsumer for DefaultSubstraitConsumer<'_> {
             .deserialize_logical_plan(&ext_detail.type_url, &ext_detail.value)?;
         let mut inputs = Vec::with_capacity(rel.inputs.len());
         for input in &rel.inputs {
-            let input_plan = from_substrait_rel(self, input).await?;
+            let input_plan = self.consume_rel(input).await?;
             inputs.push(input_plan);
         }
         let plan = plan.with_exprs_and_inputs(plan.expressions(), inputs)?;
@@ -666,10 +678,10 @@ async fn union_rels(
     is_all: bool,
 ) -> Result<LogicalPlan> {
     let mut union_builder = Ok(LogicalPlanBuilder::from(
-        from_substrait_rel(consumer, &rels[0]).await?,
+        consumer.consume_rel(&rels[0]).await?,
     ));
     for input in &rels[1..] {
-        let rel_plan = from_substrait_rel(consumer, input).await?;
+        let rel_plan = consumer.consume_rel(input).await?;
 
         union_builder = if is_all {
             union_builder?.union(rel_plan)
@@ -685,12 +697,12 @@ async fn intersect_rels(
     rels: &[Rel],
     is_all: bool,
 ) -> Result<LogicalPlan> {
-    let mut rel = from_substrait_rel(consumer, &rels[0]).await?;
+    let mut rel = consumer.consume_rel(&rels[0]).await?;
 
     for input in &rels[1..] {
         rel = LogicalPlanBuilder::intersect(
             rel,
-            from_substrait_rel(consumer, input).await?,
+            consumer.consume_rel(input).await?,
             is_all,
         )?
     }
@@ -703,14 +715,10 @@ async fn except_rels(
     rels: &[Rel],
     is_all: bool,
 ) -> Result<LogicalPlan> {
-    let mut rel = from_substrait_rel(consumer, &rels[0]).await?;
+    let mut rel = consumer.consume_rel(&rels[0]).await?;
 
     for input in &rels[1..] {
-        rel = LogicalPlanBuilder::except(
-            rel,
-            from_substrait_rel(consumer, input).await?,
-            is_all,
-        )?
+        rel = LogicalPlanBuilder::except(rel, consumer.consume_rel(input).await?, is_all)?
     }
 
     Ok(rel)
@@ -744,10 +752,10 @@ pub async fn from_substrait_plan_with_consumer(
             match plan.relations[0].rel_type.as_ref() {
                 Some(rt) => match rt {
                     plan_rel::RelType::Rel(rel) => {
-                        Ok(from_substrait_rel(consumer, rel).await?)
+                        Ok(consumer.consume_rel( rel).await?)
                     },
                     plan_rel::RelType::Root(root) => {
-                        let plan = from_substrait_rel(consumer, root.input.as_ref().unwrap()).await?;
+                        let plan = consumer.consume_rel( root.input.as_ref().unwrap()).await?;
                         if root.names.is_empty() {
                             // Backwards compatibility for plans missing names
                             return Ok(plan);
@@ -841,7 +849,9 @@ pub async fn from_substrait_extended_expr(
                 plan_err!("required property `expr_type` missing from Substrait ExpressionReference message")
             }
         }?;
-        let expr = from_substrait_rex(&consumer, scalar_expr, &input_schema).await?;
+        let expr = consumer
+            .consume_expression(scalar_expr, &input_schema)
+            .await?;
         let (output_type, expected_nullability) =
             expr.data_type_and_nullable(&input_schema)?;
         let output_field = Field::new("", output_type, expected_nullability);
@@ -1034,8 +1044,7 @@ pub async fn from_project_rel(
     p: &ProjectRel,
 ) -> Result<LogicalPlan> {
     if let Some(input) = p.input.as_ref() {
-        let mut input =
-            LogicalPlanBuilder::from(from_substrait_rel(consumer, input).await?);
+        let mut input = LogicalPlanBuilder::from(consumer.consume_rel(input).await?);
         let original_schema = input.schema().clone();
 
         // Ensure that all expressions have a unique display name, so that
@@ -1052,7 +1061,9 @@ pub async fn from_project_rel(
 
         let mut explicit_exprs: Vec<Expr> = vec![];
         for expr in &p.expressions {
-            let e = from_substrait_rex(consumer, expr, input.clone().schema()).await?;
+            let e = consumer
+                .consume_expression(expr, input.clone().schema())
+                .await?;
             // if the expression is WindowFunction, wrap in a Window relation
             if let Expr::WindowFunction(_) = &e {
                 // Adding the same expression here and in the project below
@@ -1081,9 +1092,11 @@ pub async fn from_filter_rel(
     filter: &FilterRel,
 ) -> Result<LogicalPlan> {
     if let Some(input) = filter.input.as_ref() {
-        let input = LogicalPlanBuilder::from(from_substrait_rel(consumer, input).await?);
+        let input = LogicalPlanBuilder::from(consumer.consume_rel(input).await?);
         if let Some(condition) = filter.condition.as_ref() {
-            let expr = from_substrait_rex(consumer, condition, input.schema()).await?;
+            let expr = consumer
+                .consume_expression(condition, input.schema())
+                .await?;
             input.filter(expr)?.build()
         } else {
             not_impl_err!("Filter without an condition is not valid")
@@ -1099,12 +1112,12 @@ pub async fn from_fetch_rel(
     fetch: &FetchRel,
 ) -> Result<LogicalPlan> {
     if let Some(input) = fetch.input.as_ref() {
-        let input = LogicalPlanBuilder::from(from_substrait_rel(consumer, input).await?);
+        let input = LogicalPlanBuilder::from(consumer.consume_rel(input).await?);
         let empty_schema = DFSchemaRef::new(DFSchema::empty());
         let offset = match &fetch.offset_mode {
             Some(fetch_rel::OffsetMode::Offset(offset)) => Some(lit(*offset)),
             Some(fetch_rel::OffsetMode::OffsetExpr(expr)) => {
-                Some(from_substrait_rex(consumer, expr, &empty_schema).await?)
+                Some(consumer.consume_expression(expr, &empty_schema).await?)
             }
             None => None,
         };
@@ -1114,7 +1127,7 @@ pub async fn from_fetch_rel(
                 (*count != -1).then(|| lit(*count))
             }
             Some(fetch_rel::CountMode::CountExpr(expr)) => {
-                Some(from_substrait_rex(consumer, expr, &empty_schema).await?)
+                Some(consumer.consume_expression(expr, &empty_schema).await?)
             }
             None => None,
         };
@@ -1129,7 +1142,7 @@ pub async fn from_sort_rel(
     sort: &SortRel,
 ) -> Result<LogicalPlan> {
     if let Some(input) = sort.input.as_ref() {
-        let input = LogicalPlanBuilder::from(from_substrait_rel(consumer, input).await?);
+        let input = LogicalPlanBuilder::from(consumer.consume_rel(input).await?);
         let sorts = from_substrait_sorts(consumer, &sort.sorts, input.schema()).await?;
         input.sort(sorts)?.build()
     } else {
@@ -1142,11 +1155,11 @@ pub async fn from_aggregate_rel(
     agg: &AggregateRel,
 ) -> Result<LogicalPlan> {
     if let Some(input) = agg.input.as_ref() {
-        let input = LogicalPlanBuilder::from(from_substrait_rel(consumer, input).await?);
+        let input = LogicalPlanBuilder::from(consumer.consume_rel(input).await?);
         let mut ref_group_exprs = vec![];
 
         for e in &agg.grouping_expressions {
-            let x = from_substrait_rex(consumer, e, input.schema()).await?;
+            let x = consumer.consume_expression(e, input.schema()).await?;
             ref_group_exprs.push(x);
         }
 
@@ -1189,7 +1202,7 @@ pub async fn from_aggregate_rel(
         for m in &agg.measures {
             let filter = match &m.filter {
                 Some(fil) => Some(Box::new(
-                    from_substrait_rex(consumer, fil, input.schema()).await?,
+                    consumer.consume_expression(fil, input.schema()).await?,
                 )),
                 None => None,
             };
@@ -1242,10 +1255,10 @@ pub async fn from_join_rel(
     }
 
     let left: LogicalPlanBuilder = LogicalPlanBuilder::from(
-        from_substrait_rel(consumer, join.left.as_ref().unwrap()).await?,
+        consumer.consume_rel(join.left.as_ref().unwrap()).await?,
     );
     let right = LogicalPlanBuilder::from(
-        from_substrait_rel(consumer, join.right.as_ref().unwrap()).await?,
+        consumer.consume_rel(join.right.as_ref().unwrap()).await?,
     );
     let (left, right) = requalify_sides_if_needed(left, right)?;
 
@@ -1258,7 +1271,7 @@ pub async fn from_join_rel(
     // Otherwise, build join with only the filter, without join keys
     match &join.expression.as_ref() {
         Some(expr) => {
-            let on = from_substrait_rex(consumer, expr, &in_join_schema).await?;
+            let on = consumer.consume_expression(expr, &in_join_schema).await?;
             // The join expression can contain both equal and non-equal ops.
             // As of datafusion 31.0.0, the equal and non equal join conditions are in separate fields.
             // So we extract each part as follows:
@@ -1290,10 +1303,10 @@ pub async fn from_cross_rel(
     cross: &CrossRel,
 ) -> Result<LogicalPlan> {
     let left = LogicalPlanBuilder::from(
-        from_substrait_rel(consumer, cross.left.as_ref().unwrap()).await?,
+        consumer.consume_rel(cross.left.as_ref().unwrap()).await?,
     );
     let right = LogicalPlanBuilder::from(
-        from_substrait_rel(consumer, cross.right.as_ref().unwrap()).await?,
+        consumer.consume_rel(cross.right.as_ref().unwrap()).await?,
     );
     let (left, right) = requalify_sides_if_needed(left, right)?;
     left.cross_join(right.build()?)?.build()
@@ -1466,7 +1479,7 @@ pub async fn from_set_rel(
             SetOp::UnionAll => union_rels(consumer, &set.inputs, true).await,
             SetOp::UnionDistinct => union_rels(consumer, &set.inputs, false).await,
             SetOp::IntersectionPrimary => LogicalPlanBuilder::intersect(
-                from_substrait_rel(consumer, &set.inputs[0]).await?,
+                consumer.consume_rel(&set.inputs[0]).await?,
                 union_rels(consumer, &set.inputs[1..], true).await?,
                 false,
             ),
@@ -1490,7 +1503,7 @@ pub async fn from_exchange_rel(
     let Some(input) = exchange.input.as_ref() else {
         return substrait_err!("Unexpected empty input in ExchangeRel");
     };
-    let input = Arc::new(from_substrait_rel(consumer, input).await?);
+    let input = Arc::new(consumer.consume_rel(input).await?);
 
     let Some(exchange_kind) = &exchange.exchange_kind else {
         return substrait_err!("Unexpected empty input in ExchangeRel");
@@ -1822,8 +1835,9 @@ pub async fn from_substrait_sorts(
 ) -> Result<Vec<Sort>> {
     let mut sorts: Vec<Sort> = vec![];
     for s in substrait_sorts {
-        let expr =
-            from_substrait_rex(consumer, s.expr.as_ref().unwrap(), input_schema).await?;
+        let expr = consumer
+            .consume_expression(s.expr.as_ref().unwrap(), input_schema)
+            .await?;
         let asc_nullfirst = match &s.sort_kind {
             Some(k) => match k {
                 Direction(d) => {
@@ -1870,7 +1884,7 @@ pub async fn from_substrait_rex_vec(
 ) -> Result<Vec<Expr>> {
     let mut expressions: Vec<Expr> = vec![];
     for expr in exprs {
-        let expression = from_substrait_rex(consumer, expr, input_schema).await?;
+        let expression = consumer.consume_expression(expr, input_schema).await?;
         expressions.push(expression);
     }
     Ok(expressions)
@@ -1885,9 +1899,7 @@ pub async fn from_substrait_func_args(
     let mut args: Vec<Expr> = vec![];
     for arg in arguments {
         let arg_expr = match &arg.arg_type {
-            Some(ArgType::Value(e)) => {
-                from_substrait_rex(consumer, e, input_schema).await
-            }
+            Some(ArgType::Value(e)) => consumer.consume_expression(e, input_schema).await,
             _ => not_impl_err!("Function argument non-Value type not supported"),
         };
         args.push(arg_expr?);
@@ -1991,7 +2003,11 @@ pub async fn from_singular_or_list(
     let substrait_expr = expr.value.as_ref().unwrap();
     let substrait_list = expr.options.as_ref();
     Ok(Expr::InList(InList {
-        expr: Box::new(from_substrait_rex(consumer, substrait_expr, input_schema).await?),
+        expr: Box::new(
+            consumer
+                .consume_expression(substrait_expr, input_schema)
+                .await?,
+        ),
         list: from_substrait_rex_vec(consumer, substrait_list, input_schema).await?,
         negated: false,
     }))
@@ -2019,39 +2035,30 @@ pub async fn from_if_then(
             // Check if the first element is type base expression
             if if_expr.then.is_none() {
                 expr = Some(Box::new(
-                    from_substrait_rex(
-                        consumer,
-                        if_expr.r#if.as_ref().unwrap(),
-                        input_schema,
-                    )
-                    .await?,
+                    consumer
+                        .consume_expression(if_expr.r#if.as_ref().unwrap(), input_schema)
+                        .await?,
                 ));
                 continue;
             }
         }
         when_then_expr.push((
             Box::new(
-                from_substrait_rex(
-                    consumer,
-                    if_expr.r#if.as_ref().unwrap(),
-                    input_schema,
-                )
-                .await?,
+                consumer
+                    .consume_expression(if_expr.r#if.as_ref().unwrap(), input_schema)
+                    .await?,
             ),
             Box::new(
-                from_substrait_rex(
-                    consumer,
-                    if_expr.then.as_ref().unwrap(),
-                    input_schema,
-                )
-                .await?,
+                consumer
+                    .consume_expression(if_expr.then.as_ref().unwrap(), input_schema)
+                    .await?,
             ),
         ));
     }
     // Parse `else`
     let else_expr = match &if_then.r#else {
         Some(e) => Some(Box::new(
-            from_substrait_rex(consumer, e, input_schema).await?,
+            consumer.consume_expression(e, input_schema).await?,
         )),
         None => None,
     };
@@ -2134,12 +2141,12 @@ pub async fn from_cast(
     match cast.r#type.as_ref() {
         Some(output_type) => {
             let input_expr = Box::new(
-                from_substrait_rex(
-                    consumer,
-                    cast.input.as_ref().unwrap().as_ref(),
-                    input_schema,
-                )
-                .await?,
+                consumer
+                    .consume_expression(
+                        cast.input.as_ref().unwrap().as_ref(),
+                        input_schema,
+                    )
+                    .await?,
             );
             let data_type = from_substrait_type_without_names(consumer, output_type)?;
             if cast.failure_behavior() == ReturnNull {
@@ -2229,12 +2236,12 @@ pub async fn from_subquery(
                     let needle_expr = &in_predicate.needles[0];
                     let haystack_expr = &in_predicate.haystack;
                     if let Some(haystack_expr) = haystack_expr {
-                        let haystack_expr =
-                            from_substrait_rel(consumer, haystack_expr).await?;
+                        let haystack_expr = consumer.consume_rel(haystack_expr).await?;
                         let outer_refs = haystack_expr.all_out_ref_exprs();
                         Ok(Expr::InSubquery(InSubquery {
                             expr: Box::new(
-                                from_substrait_rex(consumer, needle_expr, input_schema)
+                                consumer
+                                    .consume_expression(needle_expr, input_schema)
                                     .await?,
                             ),
                             subquery: Subquery {
@@ -2251,11 +2258,9 @@ pub async fn from_subquery(
                 }
             }
             SubqueryType::Scalar(query) => {
-                let plan = from_substrait_rel(
-                    consumer,
-                    &(query.input.clone()).unwrap_or_default(),
-                )
-                .await?;
+                let plan = consumer
+                    .consume_rel(&(query.input.clone()).unwrap_or_default())
+                    .await?;
                 let outer_ref_columns = plan.all_out_ref_exprs();
                 Ok(Expr::ScalarSubquery(Subquery {
                     subquery: Arc::new(plan),
@@ -2267,11 +2272,9 @@ pub async fn from_subquery(
                     // exist
                     PredicateOp::Exists => {
                         let relation = &predicate.tuples;
-                        let plan = from_substrait_rel(
-                            consumer,
-                            &relation.clone().unwrap_or_default(),
-                        )
-                        .await?;
+                        let plan = consumer
+                            .consume_rel(&relation.clone().unwrap_or_default())
+                            .await?;
                         let outer_ref_columns = plan.all_out_ref_exprs();
                         Ok(Expr::Exists(Exists::new(
                             Subquery {
@@ -3266,7 +3269,7 @@ async fn from_substrait_grouping(
     let mut group_exprs = vec![];
     if !grouping.grouping_expressions.is_empty() {
         for e in &grouping.grouping_expressions {
-            let expr = from_substrait_rex(consumer, e, input_schema).await?;
+            let expr = consumer.consume_expression(e, input_schema).await?;
             group_exprs.push(expr);
         }
         return Ok(group_exprs);
@@ -3349,7 +3352,9 @@ impl BuiltinExprBuilder {
         let Some(ArgType::Value(expr_substrait)) = &f.arguments[0].arg_type else {
             return substrait_err!("Invalid arguments type for {fn_name} expr");
         };
-        let arg = from_substrait_rex(consumer, expr_substrait, input_schema).await?;
+        let arg = consumer
+            .consume_expression(expr_substrait, input_schema)
+            .await?;
         let arg = Box::new(arg);
 
         let expr = match fn_name {
@@ -3383,12 +3388,15 @@ impl BuiltinExprBuilder {
         let Some(ArgType::Value(expr_substrait)) = &f.arguments[0].arg_type else {
             return substrait_err!("Invalid arguments type for `{fn_name}` expr");
         };
-        let expr = from_substrait_rex(consumer, expr_substrait, input_schema).await?;
+        let expr = consumer
+            .consume_expression(expr_substrait, input_schema)
+            .await?;
         let Some(ArgType::Value(pattern_substrait)) = &f.arguments[1].arg_type else {
             return substrait_err!("Invalid arguments type for `{fn_name}` expr");
         };
-        let pattern =
-            from_substrait_rex(consumer, pattern_substrait, input_schema).await?;
+        let pattern = consumer
+            .consume_expression(pattern_substrait, input_schema)
+            .await?;
 
         // Default case: escape character is Literal(Utf8(None))
         let escape_char = if f.arguments.len() == 3 {
@@ -3397,8 +3405,9 @@ impl BuiltinExprBuilder {
                 return substrait_err!("Invalid arguments type for `{fn_name}` expr");
             };
 
-            let escape_char_expr =
-                from_substrait_rex(consumer, escape_char_substrait, input_schema).await?;
+            let escape_char_expr = consumer
+                .consume_expression(escape_char_substrait, input_schema)
+                .await?;
 
             match escape_char_expr {
                 Expr::Literal(ScalarValue::Utf8(escape_char_string)) => {
