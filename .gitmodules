@@ -6,4 +6,5 @@
 	url = https://github.com/apache/arrow-testing
 [submodule "datafusion-testing"]
 	path = datafusion-testing
-	url = https://github.com/apache/datafusion-testing
+	url = https://github.com/apache/datafusion-testing.git
+	branch = main

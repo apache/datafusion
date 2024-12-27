@@ -170,32 +170,30 @@ async fn run_tests() -> Result<()> {
     options.warn_on_ignored();
 
     #[cfg(feature = "postgres")]
-    {
-        let start_pg_database = options.postgres_runner && !is_pg_uri_set();
-        if start_pg_database {
-            info!("Starting postgres db ...");
+    let start_pg_database = options.postgres_runner && !is_pg_uri_set();
+    #[cfg(feature = "postgres")]
+    if start_pg_database {
+        info!("Starting postgres db ...");
 
-            thread::spawn(|| {
-                execute_blocking(start_postgres(
-                    &POSTGRES_IN,
-                    &POSTGRES_HOST,
-                    &POSTGRES_PORT,
-                    &POSTGRES_STOPPED,
-                ))
-            });
+        thread::spawn(|| {
+            execute_blocking(start_postgres(
+                &POSTGRES_IN,
+                &POSTGRES_HOST,
+                &POSTGRES_PORT,
+                &POSTGRES_STOPPED,
+            ))
+        });
 
-            POSTGRES_IN.tx.send(FetchHost).unwrap();
-            let db_host = POSTGRES_HOST.rx.lock().await.recv().await.unwrap();
+        POSTGRES_IN.tx.send(FetchHost).unwrap();
+        let db_host = POSTGRES_HOST.rx.lock().await.recv().await.unwrap();
 
-            POSTGRES_IN.tx.send(FetchPort).unwrap();
-            let db_port = POSTGRES_PORT.rx.lock().await.recv().await.unwrap();
+        POSTGRES_IN.tx.send(FetchPort).unwrap();
+        let db_port = POSTGRES_PORT.rx.lock().await.recv().await.unwrap();
 
-            let pg_uri =
-                format!("postgresql://postgres:postgres@{db_host}:{db_port}/test");
-            info!("Postgres uri is {pg_uri}");
+        let pg_uri = format!("postgresql://postgres:postgres@{db_host}:{db_port}/test");
+        info!("Postgres uri is {pg_uri}");
 
-            set_var("PG_URI", pg_uri);
-        }
+        set_var("PG_URI", pg_uri);
     }
 
     // Run all tests in parallel, reporting failures at the end
