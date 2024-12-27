@@ -24,12 +24,12 @@ use arrow_array::{Array, ArrayRef, GenericListArray, OffsetSizeTrait};
 use arrow_buffer::OffsetBuffer;
 use arrow_schema::{DataType, FieldRef};
 use datafusion_common::{exec_err, internal_err, HashSet, Result};
-use datafusion_expr::scalar_doc_sections::DOC_SECTION_ARRAY;
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
 };
+use datafusion_macros::user_doc;
 use std::any::Any;
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
 make_udf_expr_and_func!(
     ArrayExcept,
@@ -39,6 +39,33 @@ make_udf_expr_and_func!(
     array_except_udf
 );
 
+#[user_doc(
+    doc_section(label = "Array Functions"),
+    description = "Returns an array of the elements that appear in the first array but not in the second.",
+    syntax_example = "array_except(array1, array2)",
+    sql_example = r#"```sql
+> select array_except([1, 2, 3, 4], [5, 6, 3, 4]);
++----------------------------------------------------+
+| array_except([1, 2, 3, 4], [5, 6, 3, 4]);           |
++----------------------------------------------------+
+| [1, 2]                                              |
++----------------------------------------------------+
+> select array_except([1, 2, 3, 4], [3, 4, 5, 6]);
++----------------------------------------------------+
+| array_except([1, 2, 3, 4], [3, 4, 5, 6]);           |
++----------------------------------------------------+
+| [1, 2]                                              |
++----------------------------------------------------+
+```"#,
+    argument(
+        name = "array1",
+        description = "Array expression. Can be a constant, column, or function, and any combination of array operators."
+    ),
+    argument(
+        name = "array2",
+        description = "Array expression. Can be a constant, column, or function, and any combination of array operators."
+    )
+)]
 #[derive(Debug)]
 pub(super) struct ArrayExcept {
     signature: Signature,
@@ -86,45 +113,8 @@ impl ScalarUDFImpl for ArrayExcept {
     }
 
     fn documentation(&self) -> Option<&Documentation> {
-        Some(get_array_except_doc())
+        self.doc()
     }
-}
-
-static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
-
-fn get_array_except_doc() -> &'static Documentation {
-    DOCUMENTATION.get_or_init(|| {
-        Documentation::builder(
-            DOC_SECTION_ARRAY,
-                "Returns an array of the elements that appear in the first array but not in the second.",
-
-            "array_except(array1, array2)")
-            .with_sql_example(
-                r#"```sql
-> select array_except([1, 2, 3, 4], [5, 6, 3, 4]);
-+----------------------------------------------------+
-| array_except([1, 2, 3, 4], [5, 6, 3, 4]);           |
-+----------------------------------------------------+
-| [1, 2]                                              |
-+----------------------------------------------------+
-> select array_except([1, 2, 3, 4], [3, 4, 5, 6]);
-+----------------------------------------------------+
-| array_except([1, 2, 3, 4], [3, 4, 5, 6]);           |
-+----------------------------------------------------+
-| [1, 2]                                              |
-+----------------------------------------------------+
-```"#,
-            )
-            .with_argument(
-                "array1",
-                "Array expression. Can be a constant, column, or function, and any combination of array operators.",
-            )
-            .with_argument(
-                "array2",
-                "Array expression. Can be a constant, column, or function, and any combination of array operators.",
-            )
-            .build()
-    })
 }
 
 /// Array_except SQL function
