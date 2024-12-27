@@ -22,7 +22,7 @@ use std::sync::Arc;
 
 use crate::{
     config::{ParquetOptions, TableParquetOptions},
-    DataFusionError, Result,
+    DataFusionError, Result, _internal_datafusion_err,
 };
 
 use arrow_schema::Schema;
@@ -96,6 +96,13 @@ impl TryFrom<&TableParquetOptions> for WriterPropertiesBuilder {
         } = table_parquet_options;
 
         let mut builder = global.into_writer_properties_builder()?;
+
+        // check that the arrow schema is present in the kv_metadata, if configured to do so
+        if !global.skip_arrow_metadata
+            && !key_value_metadata.contains_key(ARROW_SCHEMA_META_KEY)
+        {
+            return Err(_internal_datafusion_err!("arrow schema was not added to the kv_metadata, even though it is required by configuration settings"));
+        }
 
         // add kv_meta, if any
         if !key_value_metadata.is_empty() {
@@ -190,6 +197,8 @@ impl ParquetOptions {
     ///
     /// The returned [`WriterPropertiesBuilder`] can then be further modified with additional options
     /// applied per column; a customization which is not applicable for [`ParquetOptions`].
+    ///
+    /// Note that this method does not include the key_value_metadata from [`TableParquetOptions`].
     pub fn into_writer_properties_builder(&self) -> Result<WriterPropertiesBuilder> {
         let ParquetOptions {
             data_pagesize_limit,
