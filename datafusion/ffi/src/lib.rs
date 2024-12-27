@@ -29,11 +29,7 @@ pub mod table_source;
 /// Returns the major version of the FFI implementation. If the API evolves,
 /// we use the major version to identify compatibility over the unsafe
 /// boundary.
-///
-/// # Safety
-///
-/// In general this function should always be safe to call from external libraries.
-pub unsafe extern "C" fn version() -> u64 {
+pub extern "C" fn version() -> u64 {
     let version_str = env!("CARGO_PKG_VERSION");
     let version = semver::Version::parse(version_str).expect("Invalid version string");
     version.major
