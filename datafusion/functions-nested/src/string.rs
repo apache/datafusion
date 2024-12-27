@@ -42,13 +42,13 @@ use arrow_schema::DataType::{
 };
 use datafusion_common::cast::{as_large_list_array, as_list_array};
 use datafusion_common::exec_err;
-use datafusion_expr::scalar_doc_sections::DOC_SECTION_ARRAY;
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
 };
 use datafusion_functions::strings::StringArrayType;
 use datafusion_functions::{downcast_arg, downcast_named_arg};
-use std::sync::{Arc, OnceLock};
+use datafusion_macros::user_doc;
+use std::sync::Arc;
 
 macro_rules! call_array_function {
     ($DATATYPE:expr, false) => {
@@ -121,6 +121,29 @@ make_udf_expr_and_func!(
     "converts each element to its text representation.", // doc
     array_to_string_udf // internal function name
 );
+
+#[user_doc(
+    doc_section(label = "Array Functions"),
+    description = "Converts each element to its text representation.",
+    syntax_example = "array_to_string(array, delimiter[, null_string])",
+    sql_example = r#"```sql
+> select array_to_string([[1, 2, 3, 4], [5, 6, 7, 8]], ',');
++----------------------------------------------------+
+| array_to_string(List([1,2,3,4,5,6,7,8]),Utf8(",")) |
++----------------------------------------------------+
+| 1,2,3,4,5,6,7,8                                    |
++----------------------------------------------------+
+```"#,
+    argument(
+        name = "array",
+        description = "Array expression. Can be a constant, column, or function, and any combination of array operators."
+    ),
+    argument(name = "delimiter", description = "Array element separator."),
+    argument(
+        name = "null_string",
+        description = "Optional. String to replace null values in the array. If not provided, nulls will be handled by default behavior."
+    )
+)]
 #[derive(Debug)]
 pub(super) struct ArrayToString {
     signature: Signature,
@@ -175,43 +198,8 @@ impl ScalarUDFImpl for ArrayToString {
     }
 
     fn documentation(&self) -> Option<&Documentation> {
-        Some(get_array_to_string_doc())
+        self.doc()
     }
-}
-
-static DOCUMENTATION_ARRAY_TO_STRING: OnceLock<Documentation> = OnceLock::new();
-
-fn get_array_to_string_doc() -> &'static Documentation {
-    DOCUMENTATION_ARRAY_TO_STRING.get_or_init(|| {
-        Documentation::builder(
-            DOC_SECTION_ARRAY,
-                "Converts each element to its text representation.",
-
-            "array_to_string(array, delimiter[, null_string])")
-            .with_sql_example(
-                r#"```sql
-> select array_to_string([[1, 2, 3, 4], [5, 6, 7, 8]], ',');
-+----------------------------------------------------+
-| array_to_string(List([1,2,3,4,5,6,7,8]),Utf8(",")) |
-+----------------------------------------------------+
-| 1,2,3,4,5,6,7,8                                    |
-+----------------------------------------------------+
-```"#,
-            )
-            .with_argument(
-                "array",
-                "Array expression. Can be a constant, column, or function, and any combination of array operators.",
-            )
-            .with_argument(
-                "delimiter",
-                "Array element separator.",
-            )
-            .with_argument(
-                "null_string",
-                "Optional. String to replace null values in the array. If not provided, nulls will be handled by default behavior.",
-            )
-            .build()
-    })
 }
 
 make_udf_expr_and_func!(
@@ -221,6 +209,32 @@ make_udf_expr_and_func!(
     "splits a `string` based on a `delimiter` and returns an array of parts. Any parts matching the optional `null_string` will be replaced with `NULL`", // doc
     string_to_array_udf // internal function name
 );
+
+#[user_doc(
+    doc_section(label = "Array Functions"),
+    description = "Splits a string into an array of substrings based on a delimiter. Any substrings matching the optional `null_str` argument are replaced with NULL.",
+    syntax_example = "string_to_array(str, delimiter[, null_str])",
+    sql_example = r#"```sql
+> select string_to_array('abc##def', '##');
++-----------------------------------+
+| string_to_array(Utf8('abc##def'))  |
++-----------------------------------+
+| ['abc', 'def']                    |
++-----------------------------------+
+> select string_to_array('abc def', ' ', 'def');
++---------------------------------------------+
+| string_to_array(Utf8('abc def'), Utf8(' '), Utf8('def')) |
++---------------------------------------------+
+| ['abc', NULL]                               |
++---------------------------------------------+
+```"#,
+    argument(name = "string", description = "String expression to split."),
+    argument(name = "delimiter", description = "Array element separator."),
+    argument(
+        name = "null_string",
+        description = "Substring values to be replaced with `NULL`."
+    )
+)]
 #[derive(Debug)]
 pub(super) struct StringToArray {
     signature: Signature,
@@ -284,49 +298,8 @@ impl ScalarUDFImpl for StringToArray {
     }
 
     fn documentation(&self) -> Option<&Documentation> {
-        Some(get_string_to_array_doc())
+        self.doc()
     }
-}
-
-static DOCUMENTATION_STRING_TO_ARRAY: OnceLock<Documentation> = OnceLock::new();
-
-fn get_string_to_array_doc() -> &'static Documentation {
-    DOCUMENTATION_STRING_TO_ARRAY.get_or_init(|| {
-        Documentation::builder(
-            DOC_SECTION_ARRAY,
-                "Splits a string into an array of substrings based on a delimiter. Any substrings matching the optional `null_str` argument are replaced with NULL.",
-
-            "string_to_array(str, delimiter[, null_str])")
-            .with_sql_example(
-                r#"```sql
-> select string_to_array('abc##def', '##');
-+-----------------------------------+
-| string_to_array(Utf8('abc##def'))  |
-+-----------------------------------+
-| ['abc', 'def']                    |
-+-----------------------------------+
-> select string_to_array('abc def', ' ', 'def');
-+---------------------------------------------+
-| string_to_array(Utf8('abc def'), Utf8(' '), Utf8('def')) |
-+---------------------------------------------+
-| ['abc', NULL]                               |
-+---------------------------------------------+
-```"#,
-            )
-            .with_argument(
-                "str",
-                "String expression to split.",
-            )
-            .with_argument(
-                "delimiter",
-                "Delimiter string to split on.",
-            )
-            .with_argument(
-                "null_str",
-                "Substring values to be replaced with `NULL`.",
-            )
-            .build()
-    })
 }
 
 /// Array_to_string SQL function
