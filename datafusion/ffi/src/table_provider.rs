@@ -140,6 +140,9 @@ pub struct FFI_TableProvider {
     /// Release the memory of the private data when it is no longer being used.
     pub release: unsafe extern "C" fn(arg: &mut Self),
 
+    /// Return the major DataFusion version number of this provider.
+    pub version: unsafe extern "C" fn() -> u64,
+
     /// Internal data. This is only to be accessed by the provider of the plan.
     /// A [`ForeignExecutionPlan`] should never attempt to access this data.
     pub private_data: *mut c_void,
@@ -294,6 +297,7 @@ unsafe extern "C" fn clone_fn_wrapper(provider: &FFI_TableProvider) -> FFI_Table
         supports_filters_pushdown: provider.supports_filters_pushdown,
         clone: clone_fn_wrapper,
         release: release_fn_wrapper,
+        version: super::version,
         private_data,
     }
 }
@@ -323,6 +327,7 @@ impl FFI_TableProvider {
             },
             clone: clone_fn_wrapper,
             release: release_fn_wrapper,
+            version: super::version,
             private_data: Box::into_raw(private_data) as *mut c_void,
         }
     }
