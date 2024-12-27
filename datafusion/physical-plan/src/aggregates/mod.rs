@@ -792,16 +792,15 @@ impl ExecutionPlan for AggregateExec {
         vec![self.required_input_ordering.clone()]
     }
 
-    /// The output ordering of [`AggregateExec`] is determined by its `group_by` columns.
-    /// Although this method is not explicitly used by any optimizer rules, overriding
-    /// the default implementation ensures it accurately reflects the actual behavior.
+    /// The output ordering of [`AggregateExec`] is determined by its `group_by`
+    /// columns. Although this method is not explicitly used by any optimizer
+    /// rules yet, overriding the default implementation ensures that it
+    /// accurately reflects the actual behavior.
     ///
-    /// If the [`InputOrderMode`] is `Linear`, the `group_by` columns are unordered,
-    /// which means the results are also unordered. However, in the `Ordered` and
-    /// `PartiallyOrdered` cases, the `group_by` columns are ordered, and their
-    /// order is preserved in the output results.
-    ///
-    /// See: InputOrderMode documentation for aggregations
+    /// If the [`InputOrderMode`] is `Linear`, the `group_by` columns don't have
+    /// an ordering, which means the results do not either. However, in the
+    /// `Ordered` and `PartiallyOrdered` cases, the `group_by` columns do have
+    /// an ordering, which is preserved in the output.
     fn maintains_input_order(&self) -> Vec<bool> {
         vec![self.input_order_mode != InputOrderMode::Linear]
     }
