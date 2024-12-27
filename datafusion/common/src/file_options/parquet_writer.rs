@@ -610,12 +610,47 @@ mod tests {
     }
 
     #[test]
+    fn table_parquet_opts_to_writer_props_skip_arrow_metadata() {
+        // TableParquetOptions, all props set to default
+        let mut table_parquet_opts = TableParquetOptions::default();
+        assert!(
+            !table_parquet_opts.global.skip_arrow_metadata,
+            "default false, to not skip the arrow schema requirement"
+        );
+
+        // see errors without the schema added, using default settings
+        let should_error = WriterPropertiesBuilder::try_from(&table_parquet_opts);
+        assert!(
+            should_error.is_err(),
+            "should error without the required arrow schema in kv_metadata",
+        );
+
+        // succeeds if we permit skipping the arrow schema
+        table_parquet_opts = table_parquet_opts.with_skip_arrow_metadata(true);
+        let should_succeed = WriterPropertiesBuilder::try_from(&table_parquet_opts);
+        assert!(
+            should_succeed.is_ok(),
+            "should work with the arrow schema skipped by config",
+        );
+
+        // Set the arrow schema back to required
+        table_parquet_opts = table_parquet_opts.with_skip_arrow_metadata(false);
+        // add the arrow schema to the kv_meta
+        table_parquet_opts.arrow_schema(&Arc::new(Schema::empty()));
+        let should_succeed = WriterPropertiesBuilder::try_from(&table_parquet_opts);
+        assert!(
+            should_succeed.is_ok(),
+            "should work with the arrow schema included in TableParquetOptions",
+        );
+    }
+
+    #[test]
     fn table_parquet_opts_to_writer_props() {
         // ParquetOptions, all props set to non-default
         let parquet_options = parquet_options_with_non_defaults();
 
         // TableParquetOptions, using ParquetOptions for global settings
-        let key = "foo".to_string();
+        let key = ARROW_SCHEMA_META_KEY.to_string();
         let value = Some("bar".into());
         let table_parquet_opts = TableParquetOptions {
             global: parquet_options.clone(),
@@ -642,13 +677,17 @@ mod tests {
     #[test]
     fn test_defaults_match() {
         // ensure the global settings are the same
-        let default_table_writer_opts = TableParquetOptions::default();
+        let mut default_table_writer_opts = TableParquetOptions::default();
         let default_parquet_opts = ParquetOptions::default();
         assert_eq!(
             default_table_writer_opts.global,
             default_parquet_opts,
             "should have matching defaults for TableParquetOptions.global and ParquetOptions",
         );
+
+        // selectively skip the arrow_schema metadata, since the WriterProperties default has an empty kv_meta (no arrow schema)
+        default_table_writer_opts =
+            default_table_writer_opts.with_skip_arrow_metadata(true);
 
         // WriterProperties::default, a.k.a. using extern parquet's defaults
         let default_writer_props = WriterProperties::new();
@@ -697,6 +736,7 @@ mod tests {
             session_config_from_writer_props(&default_writer_props);
         from_extern_parquet.global.created_by = same_created_by;
         from_extern_parquet.global.compression = Some("zstd(3)".into());
+        from_extern_parquet.global.skip_arrow_metadata = true;
 
         assert_eq!(
             default_table_writer_opts,
@@ -710,6 +750,7 @@ mod tests {
         // the TableParquetOptions::default, with only the bloom filter turned on
         let mut default_table_writer_opts = TableParquetOptions::default();
         default_table_writer_opts.global.bloom_filter_on_write = true;
+        default_table_writer_opts.arrow_schema(&Arc::new(Schema::empty())); // add the required arrow schema
         let from_datafusion_defaults =
             WriterPropertiesBuilder::try_from(&default_table_writer_opts)
                 .unwrap()
@@ -738,6 +779,7 @@ mod tests {
         let mut default_table_writer_opts = TableParquetOptions::default();
         default_table_writer_opts.global.bloom_filter_on_write = true;
         default_table_writer_opts.global.bloom_filter_fpp = Some(0.42);
+        default_table_writer_opts.arrow_schema(&Arc::new(Schema::empty())); // add the required arrow schema
         let from_datafusion_defaults =
             WriterPropertiesBuilder::try_from(&default_table_writer_opts)
                 .unwrap()
@@ -770,6 +812,7 @@ mod tests {
         let mut default_table_writer_opts = TableParquetOptions::default();
         default_table_writer_opts.global.bloom_filter_on_write = true;
         default_table_writer_opts.global.bloom_filter_ndv = Some(42);
+        default_table_writer_opts.arrow_schema(&Arc::new(Schema::empty())); // add the required arrow schema
         let from_datafusion_defaults =
             WriterPropertiesBuilder::try_from(&default_table_writer_opts)
                 .unwrap()
