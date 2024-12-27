@@ -19,13 +19,26 @@
 use crate::crypto::basic::md5;
 use arrow::datatypes::DataType;
 use datafusion_common::{plan_err, Result};
-use datafusion_expr::scalar_doc_sections::DOC_SECTION_HASHING;
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
 };
+use datafusion_macros::user_doc;
 use std::any::Any;
-use std::sync::OnceLock;
 
+#[user_doc(
+    doc_section(label = "Hashing Functions"),
+    description = "Computes an MD5 128-bit checksum for a string expression",
+    syntax_example = "md5(expression)",
+    sql_example = r#"```sql
+> select md5('foo');
++-------------------------------------+
+| md5(Utf8("foo"))                    |
++-------------------------------------+
+| <md5_checksum_result>               |
++-------------------------------------+
+```"#,
+    standard_argument(name = "expression", prefix = "String")
+)]
 #[derive(Debug)]
 pub struct Md5Func {
     signature: Signature,
@@ -94,30 +107,6 @@ impl ScalarUDFImpl for Md5Func {
     }
 
     fn documentation(&self) -> Option<&Documentation> {
-        Some(get_md5_doc())
+        self.doc()
     }
-}
-
-static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
-
-fn get_md5_doc() -> &'static Documentation {
-    DOCUMENTATION.get_or_init(|| {
-        Documentation::builder(
-            DOC_SECTION_HASHING,
-            "Computes an MD5 128-bit checksum for a string expression.",
-            "md5(expression)",
-        )
-        .with_sql_example(
-            r#"```sql
-> select md5('foo');
-+-------------------------------------+
-| md5(Utf8("foo"))                    |
-+-------------------------------------+
-| <md5_checksum_result>               |
-+-------------------------------------+
-```"#,
-        )
-        .with_standard_argument("expression", Some("String"))
-        .build()
-    })
 }
