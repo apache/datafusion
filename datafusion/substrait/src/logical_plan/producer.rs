@@ -1477,10 +1477,7 @@ pub fn from_between(
         ))
     }
 }
-pub fn from_column(
-    col: &Column,
-    schema: &DFSchemaRef,
-) -> Result<Expression> {
+pub fn from_column(col: &Column, schema: &DFSchemaRef) -> Result<Expression> {
     let index = schema.index_of_column(col)?;
     substrait_field_ref(index)
 }
@@ -2710,7 +2707,7 @@ mod test {
                 ],
                 false,
             )
-                .into(),
+            .into(),
             false,
         ))?;
 
@@ -2719,7 +2716,7 @@ mod test {
                 Field::new("c0", DataType::Int32, true),
                 Field::new("c1", DataType::Utf8, true),
             ]
-                .into(),
+            .into(),
         ))?;
 
         round_trip_type(DataType::Interval(IntervalUnit::YearMonth))?;
