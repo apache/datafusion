@@ -405,7 +405,7 @@ async fn run_test_file_with_postgres(
     let mut runner = sqllogictest::Runner::new(|| {
         Postgres::connect(relative_path.clone(), pb.clone())
     });
-    runner.add_label("postgresql");
+    runner.add_label("postgres");
     runner.with_column_validator(strict_column_validator);
     runner.with_normalizer(value_normalizer);
     runner.with_validator(validator);
@@ -510,7 +510,7 @@ async fn run_complete_file_with_postgres(
     let mut runner = sqllogictest::Runner::new(|| {
         Postgres::connect(relative_path.clone(), pb.clone())
     });
-    runner.add_label("postgresql");
+    runner.add_label("postgres");
     runner.with_column_validator(strict_column_validator);
     runner.with_normalizer(value_normalizer);
     runner.with_validator(validator);
