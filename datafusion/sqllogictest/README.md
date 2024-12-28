@@ -28,7 +28,8 @@ This crate is a submodule of DataFusion that contains an implementation of [sqll
 ## Overview
 
 This crate uses [sqllogictest-rs](https://github.com/risinglightdb/sqllogictest-rs) to parse and run `.slt` files in the
-[`test_files`](test_files) directory of this crate.
+[`test_files`](test_files) directory of this crate or the [`data/sqlite`](sqlite)
+directory of the datafusion-testing crate.
 
 ## Testing setup
 
@@ -160,7 +161,7 @@ cargo test --test sqllogictests -- information
 Test files that start with prefix `pg_compat_` verify compatibility
 with Postgres by running the same script files both with DataFusion and with Postgres
 
-In order to run the sqllogictests running against a previously running Postgres instance, do:
+In order to have the sqllogictest run against an existing running Postgres instance, do:
 
 ```shell
 PG_COMPAT=true PG_URI="postgresql://postgres@127.0.0.1/postgres" cargo test --features=postgres --test sqllogictests
@@ -172,7 +173,7 @@ The environment variables:
 2. `PG_URI` contains a `libpq` style connection string, whose format is described in
    [the docs](https://docs.rs/tokio-postgres/latest/tokio_postgres/config/struct.Config.html#url)
 
-One way to create a suitable a posgres container in docker is to use
+One way to create a suitable a postgres container in docker is to use
 the [Official Image](https://hub.docker.com/_/postgres) with a command
 such as the following. Note the collation **must** be set to `C` otherwise
 `ORDER BY` will not match DataFusion and the tests will diff.
@@ -183,6 +184,15 @@ docker run \
   -e POSTGRES_INITDB_ARGS="--encoding=UTF-8 --lc-collate=C --lc-ctype=C" \
   -e POSTGRES_HOST_AUTH_METHOD=trust \
   postgres
+```
+
+If you do not want to create a new postgres database and you have docker
+installed you can skip providing a PG_URI env variable and the sqllogictest
+runner will automatically create a temporary postgres docker container.
+For example:
+
+```shell
+PG_COMPAT=true cargo test --features=postgres --test sqllogictests
 ```
 
 ## Running Tests: `tpch`
@@ -203,6 +213,34 @@ Then you need to add `INCLUDE_TPCH=true` to run tpch tests:
 
 ```shell
 INCLUDE_TPCH=true cargo test --test sqllogictests
+```
+
+## Running Tests: `sqlite`
+
+Test files in `data/sqlite` directory of the datafusion-testing crate were
+sourced from the sqlite test suite and have been cleansed and updated to
+run within DataFusion's sqllogictest runner.
+
+To run the sqlite tests you need to increase the rust stack size and add
+`INCLUDE_SQLITE=true` to run the sqlite tests:
+
+```shell
+export RUST_MIN_STACK=30485760;
+INCLUDE_SQLITE=true cargo test --test sqllogictests
+```
+
+Note that there are well over 5 million queries in these tests and running the
+sqlite tests will take a long time. You may wish to run them in release-nonlto mode:
+
+```shell
+INCLUDE_SQLITE=true cargo test --profile release-nonlto --test sqllogictests
+```
+
+The sqlite tests can also be run with the postgres runner to verify compatibility:
+
+```shell
+export RUST_MIN_STACK=30485760;
+PG_COMPAT=true INCLUDE_SQLITE=true cargo test --features=postgres --test sqllogictests
 ```
 
 ## Updating tests: Completion Mode
