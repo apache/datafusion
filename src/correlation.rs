@@ -26,13 +26,12 @@ use arrow::{
     datatypes::{DataType, Field},
 };
 use datafusion::logical_expr::Accumulator;
-use datafusion::physical_expr_common::physical_expr::down_cast_any_ref;
 use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::type_coercion::aggregates::NUMERICS;
 use datafusion_expr::{AggregateUDFImpl, Signature, Volatility};
+use datafusion_physical_expr::expressions::format_state_name;
 use datafusion_physical_expr::expressions::StatsType;
-use datafusion_physical_expr::{expressions::format_state_name, PhysicalExpr};
 
 /// CORR aggregate expression
 /// The implementation mostly is the same as the DataFusion's implementation. The reason
@@ -43,26 +42,16 @@ use datafusion_physical_expr::{expressions::format_state_name, PhysicalExpr};
 pub struct Correlation {
     name: String,
     signature: Signature,
-    expr1: Arc<dyn PhysicalExpr>,
-    expr2: Arc<dyn PhysicalExpr>,
     null_on_divide_by_zero: bool,
 }
 
 impl Correlation {
-    pub fn new(
-        expr1: Arc<dyn PhysicalExpr>,
-        expr2: Arc<dyn PhysicalExpr>,
-        name: impl Into<String>,
-        data_type: DataType,
-        null_on_divide_by_zero: bool,
-    ) -> Self {
+    pub fn new(name: impl Into<String>, data_type: DataType, null_on_divide_by_zero: bool) -> Self {
         // the result of correlation just support FLOAT64 data type.
         assert!(matches!(data_type, DataType::Float64));
         Self {
             name: name.into(),
             signature: Signature::uniform(2, NUMERICS.to_vec(), Volatility::Immutable),
-            expr1,
-            expr2,
             null_on_divide_by_zero,
         }
     }
@@ -128,20 +117,6 @@ impl AggregateUDFImpl for Correlation {
                 true,
             ),
         ])
-    }
-}
-
-impl PartialEq<dyn Any> for Correlation {
-    fn eq(&self, other: &dyn Any) -> bool {
-        down_cast_any_ref(other)
-            .downcast_ref::<Self>()
-            .map(|x| {
-                self.name == x.name
-                    && self.expr1.eq(&x.expr1)
-                    && self.expr2.eq(&x.expr2)
-                    && self.null_on_divide_by_zero == x.null_on_divide_by_zero
-            })
-            .unwrap_or(false)
     }
 }
 

@@ -15,13 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::{
-    any::Any,
-    fmt::{Display, Formatter},
-    hash::{Hash, Hasher},
-    sync::Arc,
-};
-
 use arrow::{
     array::{as_primitive_array, Array, ArrayRef, Decimal128Array},
     datatypes::{Decimal128Type, DecimalType},
@@ -29,19 +22,40 @@ use arrow::{
 };
 use arrow_schema::{DataType, Schema};
 use datafusion::logical_expr::ColumnarValue;
-use datafusion::physical_expr_common::physical_expr::down_cast_any_ref;
 use datafusion_common::{DataFusionError, ScalarValue};
 use datafusion_physical_expr::PhysicalExpr;
+use std::hash::Hash;
+use std::{
+    any::Any,
+    fmt::{Display, Formatter},
+    sync::Arc,
+};
 
 /// This is from Spark `CheckOverflow` expression. Spark `CheckOverflow` expression rounds decimals
 /// to given scale and check if the decimals can fit in given precision. As `cast` kernel rounds
 /// decimals already, Comet `CheckOverflow` expression only checks if the decimals can fit in the
 /// precision.
-#[derive(Debug, Hash)]
+#[derive(Debug, Eq)]
 pub struct CheckOverflow {
     pub child: Arc<dyn PhysicalExpr>,
     pub data_type: DataType,
     pub fail_on_error: bool,
+}
+
+impl Hash for CheckOverflow {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.child.hash(state);
+        self.data_type.hash(state);
+        self.fail_on_error.hash(state);
+    }
+}
+
+impl PartialEq for CheckOverflow {
+    fn eq(&self, other: &Self) -> bool {
+        self.child.eq(&other.child)
+            && self.data_type.eq(&other.data_type)
+            && self.fail_on_error.eq(&other.fail_on_error)
+    }
 }
 
 impl CheckOverflow {
@@ -61,19 +75,6 @@ impl Display for CheckOverflow {
             "CheckOverflow [datatype: {}, fail_on_error: {}, child: {}]",
             self.data_type, self.fail_on_error, self.child
         )
-    }
-}
-
-impl PartialEq<dyn Any> for CheckOverflow {
-    fn eq(&self, other: &dyn Any) -> bool {
-        down_cast_any_ref(other)
-            .downcast_ref::<Self>()
-            .map(|x| {
-                self.child.eq(&x.child)
-                    && self.data_type.eq(&x.data_type)
-                    && self.fail_on_error.eq(&x.fail_on_error)
-            })
-            .unwrap_or(false)
     }
 }
 
@@ -161,13 +162,5 @@ impl PhysicalExpr for CheckOverflow {
             self.data_type.clone(),
             self.fail_on_error,
         )))
-    }
-
-    fn dyn_hash(&self, state: &mut dyn Hasher) {
-        let mut s = state;
-        self.child.hash(&mut s);
-        self.data_type.hash(&mut s);
-        self.fail_on_error.hash(&mut s);
-        self.hash(&mut s);
     }
 }

@@ -15,30 +15,42 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::{
-    any::Any,
-    hash::{Hash, Hasher},
-    sync::Arc,
-};
-
 use arrow::{
     datatypes::{DataType, Schema},
     record_batch::RecordBatch,
 };
 use datafusion::logical_expr::ColumnarValue;
-use datafusion::physical_expr_common::physical_expr::down_cast_any_ref;
 use datafusion_common::Result;
 use datafusion_physical_expr::{expressions::CaseExpr, PhysicalExpr};
+use std::hash::Hash;
+use std::{any::Any, sync::Arc};
 
 /// IfExpr is a wrapper around CaseExpr, because `IF(a, b, c)` is semantically equivalent to
 /// `CASE WHEN a THEN b ELSE c END`.
-#[derive(Debug, Hash)]
+#[derive(Debug, Eq)]
 pub struct IfExpr {
     if_expr: Arc<dyn PhysicalExpr>,
     true_expr: Arc<dyn PhysicalExpr>,
     false_expr: Arc<dyn PhysicalExpr>,
     // we delegate to case_expr for evaluation
     case_expr: Arc<CaseExpr>,
+}
+
+impl Hash for IfExpr {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.if_expr.hash(state);
+        self.true_expr.hash(state);
+        self.false_expr.hash(state);
+        self.case_expr.hash(state);
+    }
+}
+impl PartialEq for IfExpr {
+    fn eq(&self, other: &Self) -> bool {
+        self.if_expr.eq(&other.if_expr)
+            && self.true_expr.eq(&other.true_expr)
+            && self.false_expr.eq(&other.false_expr)
+            && self.case_expr.eq(&other.case_expr)
+    }
 }
 
 impl std::fmt::Display for IfExpr {
@@ -105,27 +117,6 @@ impl PhysicalExpr for IfExpr {
             Arc::clone(&children[1]),
             Arc::clone(&children[2]),
         )))
-    }
-
-    fn dyn_hash(&self, state: &mut dyn Hasher) {
-        let mut s = state;
-        self.if_expr.hash(&mut s);
-        self.true_expr.hash(&mut s);
-        self.false_expr.hash(&mut s);
-        self.hash(&mut s);
-    }
-}
-
-impl PartialEq<dyn Any> for IfExpr {
-    fn eq(&self, other: &dyn Any) -> bool {
-        down_cast_any_ref(other)
-            .downcast_ref::<Self>()
-            .map(|x| {
-                self.if_expr.eq(&x.if_expr)
-                    && self.true_expr.eq(&x.true_expr)
-                    && self.false_expr.eq(&x.false_expr)
-            })
-            .unwrap_or(false)
     }
 }
 

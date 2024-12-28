@@ -21,18 +21,14 @@ use arrow::{compute::kernels::numeric::neg_wrapping, datatypes::IntervalDayTimeT
 use arrow_array::RecordBatch;
 use arrow_buffer::IntervalDayTime;
 use arrow_schema::{DataType, Schema};
-use datafusion::physical_expr_common::physical_expr::down_cast_any_ref;
 use datafusion::{
     logical_expr::{interval_arithmetic::Interval, ColumnarValue},
     physical_expr::PhysicalExpr,
 };
 use datafusion_common::{DataFusionError, Result, ScalarValue};
 use datafusion_expr::sort_properties::ExprProperties;
-use std::{
-    any::Any,
-    hash::{Hash, Hasher},
-    sync::Arc,
-};
+use std::hash::Hash;
+use std::{any::Any, sync::Arc};
 
 pub fn create_negate_expr(
     expr: Arc<dyn PhysicalExpr>,
@@ -42,11 +38,24 @@ pub fn create_negate_expr(
 }
 
 /// Negative expression
-#[derive(Debug, Hash)]
+#[derive(Debug, Eq)]
 pub struct NegativeExpr {
     /// Input expression
     arg: Arc<dyn PhysicalExpr>,
     fail_on_error: bool,
+}
+
+impl Hash for NegativeExpr {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.arg.hash(state);
+        self.fail_on_error.hash(state);
+    }
+}
+
+impl PartialEq for NegativeExpr {
+    fn eq(&self, other: &Self) -> bool {
+        self.arg.eq(&other.arg) && self.fail_on_error.eq(&other.fail_on_error)
+    }
 }
 
 macro_rules! check_overflow {
@@ -204,11 +213,6 @@ impl PhysicalExpr for NegativeExpr {
         )))
     }
 
-    fn dyn_hash(&self, state: &mut dyn Hasher) {
-        let mut s = state;
-        self.hash(&mut s);
-    }
-
     /// Given the child interval of a NegativeExpr, it calculates the NegativeExpr's interval.
     /// It replaces the upper and lower bounds after multiplying them with -1.
     /// Ex: `(a, b]` => `[-b, -a)`
@@ -253,14 +257,5 @@ impl PhysicalExpr for NegativeExpr {
     fn get_properties(&self, children: &[ExprProperties]) -> Result<ExprProperties> {
         let properties = children[0].clone().with_order(children[0].sort_properties);
         Ok(properties)
-    }
-}
-
-impl PartialEq<dyn Any> for NegativeExpr {
-    fn eq(&self, other: &dyn Any) -> bool {
-        down_cast_any_ref(other)
-            .downcast_ref::<Self>()
-            .map(|x| self.arg.eq(&x.arg))
-            .unwrap_or(false)
     }
 }

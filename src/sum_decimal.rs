@@ -25,20 +25,16 @@ use arrow_array::{
 };
 use arrow_schema::{DataType, Field};
 use datafusion::logical_expr::{Accumulator, EmitTo, GroupsAccumulator};
-use datafusion::physical_expr_common::physical_expr::down_cast_any_ref;
 use datafusion_common::{DataFusionError, Result as DFResult, ScalarValue};
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::Volatility::Immutable;
 use datafusion_expr::{AggregateUDFImpl, ReversedUDAF, Signature};
-use datafusion_physical_expr::PhysicalExpr;
 use std::{any::Any, ops::BitAnd, sync::Arc};
 
 #[derive(Debug)]
 pub struct SumDecimal {
     /// Aggregate function signature
     signature: Signature,
-    /// The expression that provides the input decimal values to be summed
-    expr: Arc<dyn PhysicalExpr>,
     /// The data type of the SUM result. This will always be a decimal type
     /// with the same precision and scale as specified in this struct
     result_type: DataType,
@@ -49,7 +45,7 @@ pub struct SumDecimal {
 }
 
 impl SumDecimal {
-    pub fn try_new(expr: Arc<dyn PhysicalExpr>, data_type: DataType) -> DFResult<Self> {
+    pub fn try_new(data_type: DataType) -> DFResult<Self> {
         // The `data_type` is the SUM result type passed from Spark side
         let (precision, scale) = match data_type {
             DataType::Decimal128(p, s) => (p, s),
@@ -61,7 +57,6 @@ impl SumDecimal {
         };
         Ok(Self {
             signature: Signature::user_defined(Immutable),
-            expr,
             result_type: data_type,
             precision,
             scale,
@@ -129,20 +124,6 @@ impl AggregateUDFImpl for SumDecimal {
     fn is_nullable(&self) -> bool {
         // SumDecimal is always nullable because overflows can cause null values
         true
-    }
-}
-
-impl PartialEq<dyn Any> for SumDecimal {
-    fn eq(&self, other: &dyn Any) -> bool {
-        down_cast_any_ref(other)
-            .downcast_ref::<Self>()
-            .map(|x| {
-                // note that we do not compare result_type because this
-                // is guaranteed to match if the precision and scale
-                // match
-                self.precision == x.precision && self.scale == x.scale && self.expr.eq(&x.expr)
-            })
-            .unwrap_or(false)
     }
 }
 
@@ -491,13 +472,13 @@ mod tests {
     use datafusion_common::Result;
     use datafusion_expr::AggregateUDF;
     use datafusion_physical_expr::aggregate::AggregateExprBuilder;
-    use datafusion_physical_expr::expressions::{Column, Literal};
+    use datafusion_physical_expr::expressions::Column;
+    use datafusion_physical_expr::PhysicalExpr;
     use futures::StreamExt;
 
     #[test]
     fn invalid_data_type() {
-        let expr = Arc::new(Literal::new(ScalarValue::Int32(Some(1))));
-        assert!(SumDecimal::try_new(expr, DataType::Int32).is_err());
+        assert!(SumDecimal::try_new(DataType::Int32).is_err());
     }
 
     #[tokio::test]
@@ -518,7 +499,6 @@ mod tests {
             Arc::new(MemoryExec::try_new(partitions, Arc::clone(&schema), None).unwrap());
 
         let aggregate_udf = Arc::new(AggregateUDF::new_from_impl(SumDecimal::try_new(
-            Arc::clone(&c1),
             data_type.clone(),
         )?));
 

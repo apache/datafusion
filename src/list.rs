@@ -26,16 +26,15 @@ use arrow_array::{
 };
 use arrow_schema::{DataType, Field, FieldRef, Schema};
 use datafusion::logical_expr::ColumnarValue;
-use datafusion::physical_expr_common::physical_expr::down_cast_any_ref;
 use datafusion_common::{
     cast::{as_int32_array, as_large_list_array, as_list_array},
     internal_err, DataFusionError, Result as DataFusionResult, ScalarValue,
 };
 use datafusion_physical_expr::PhysicalExpr;
+use std::hash::Hash;
 use std::{
     any::Any,
     fmt::{Debug, Display, Formatter},
-    hash::{Hash, Hasher},
     sync::Arc,
 };
 
@@ -44,13 +43,32 @@ use std::{
 // https://github.com/apache/spark/blob/master/common/utils/src/main/java/org/apache/spark/unsafe/array/ByteArrayUtils.java
 const MAX_ROUNDED_ARRAY_LENGTH: usize = 2147483632;
 
-#[derive(Debug, Hash)]
+#[derive(Debug, Eq)]
 pub struct ListExtract {
     child: Arc<dyn PhysicalExpr>,
     ordinal: Arc<dyn PhysicalExpr>,
     default_value: Option<Arc<dyn PhysicalExpr>>,
     one_based: bool,
     fail_on_error: bool,
+}
+
+impl Hash for ListExtract {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.child.hash(state);
+        self.ordinal.hash(state);
+        self.default_value.hash(state);
+        self.one_based.hash(state);
+        self.fail_on_error.hash(state);
+    }
+}
+impl PartialEq for ListExtract {
+    fn eq(&self, other: &Self) -> bool {
+        self.child.eq(&other.child)
+            && self.ordinal.eq(&other.ordinal)
+            && self.default_value.eq(&other.default_value)
+            && self.one_based.eq(&other.one_based)
+            && self.fail_on_error.eq(&other.fail_on_error)
+    }
 }
 
 impl ListExtract {
@@ -176,16 +194,6 @@ impl PhysicalExpr for ListExtract {
             _ => internal_err!("ListExtract should have exactly two children"),
         }
     }
-
-    fn dyn_hash(&self, state: &mut dyn Hasher) {
-        let mut s = state;
-        self.child.hash(&mut s);
-        self.ordinal.hash(&mut s);
-        self.default_value.hash(&mut s);
-        self.one_based.hash(&mut s);
-        self.fail_on_error.hash(&mut s);
-        self.hash(&mut s);
-    }
 }
 
 fn one_based_index(index: i32, len: usize) -> DataFusionResult<Option<usize>> {
@@ -267,31 +275,22 @@ impl Display for ListExtract {
     }
 }
 
-impl PartialEq<dyn Any> for ListExtract {
-    fn eq(&self, other: &dyn Any) -> bool {
-        down_cast_any_ref(other)
-            .downcast_ref::<Self>()
-            .map(|x| {
-                self.child.eq(&x.child)
-                    && self.ordinal.eq(&x.ordinal)
-                    && (self.default_value.is_none() == x.default_value.is_none())
-                    && self
-                        .default_value
-                        .as_ref()
-                        .zip(x.default_value.as_ref())
-                        .map(|(s, x)| s.eq(x))
-                        .unwrap_or(true)
-                    && self.one_based.eq(&x.one_based)
-                    && self.fail_on_error.eq(&x.fail_on_error)
-            })
-            .unwrap_or(false)
-    }
-}
-
-#[derive(Debug, Hash)]
+#[derive(Debug, Eq)]
 pub struct GetArrayStructFields {
     child: Arc<dyn PhysicalExpr>,
     ordinal: usize,
+}
+
+impl Hash for GetArrayStructFields {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.child.hash(state);
+        self.ordinal.hash(state);
+    }
+}
+impl PartialEq for GetArrayStructFields {
+    fn eq(&self, other: &Self) -> bool {
+        self.child.eq(&other.child) && self.ordinal.eq(&other.ordinal)
+    }
 }
 
 impl GetArrayStructFields {
@@ -379,13 +378,6 @@ impl PhysicalExpr for GetArrayStructFields {
             _ => internal_err!("GetArrayStructFields should have exactly one child"),
         }
     }
-
-    fn dyn_hash(&self, state: &mut dyn Hasher) {
-        let mut s = state;
-        self.child.hash(&mut s);
-        self.ordinal.hash(&mut s);
-        self.hash(&mut s);
-    }
 }
 
 fn get_array_struct_fields<O: OffsetSizeTrait>(
@@ -417,21 +409,29 @@ impl Display for GetArrayStructFields {
     }
 }
 
-impl PartialEq<dyn Any> for GetArrayStructFields {
-    fn eq(&self, other: &dyn Any) -> bool {
-        down_cast_any_ref(other)
-            .downcast_ref::<Self>()
-            .map(|x| self.child.eq(&x.child) && self.ordinal.eq(&x.ordinal))
-            .unwrap_or(false)
-    }
-}
-
-#[derive(Debug, Hash)]
+#[derive(Debug, Eq)]
 pub struct ArrayInsert {
     src_array_expr: Arc<dyn PhysicalExpr>,
     pos_expr: Arc<dyn PhysicalExpr>,
     item_expr: Arc<dyn PhysicalExpr>,
     legacy_negative_index: bool,
+}
+
+impl Hash for ArrayInsert {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.src_array_expr.hash(state);
+        self.pos_expr.hash(state);
+        self.item_expr.hash(state);
+        self.legacy_negative_index.hash(state);
+    }
+}
+impl PartialEq for ArrayInsert {
+    fn eq(&self, other: &Self) -> bool {
+        self.src_array_expr.eq(&other.src_array_expr)
+            && self.pos_expr.eq(&other.pos_expr)
+            && self.item_expr.eq(&other.item_expr)
+            && self.legacy_negative_index.eq(&other.legacy_negative_index)
+    }
 }
 
 impl ArrayInsert {
@@ -554,15 +554,6 @@ impl PhysicalExpr for ArrayInsert {
             ))),
             _ => internal_err!("ArrayInsert should have exactly three childrens"),
         }
-    }
-
-    fn dyn_hash(&self, _state: &mut dyn Hasher) {
-        let mut s = _state;
-        self.src_array_expr.hash(&mut s);
-        self.pos_expr.hash(&mut s);
-        self.item_expr.hash(&mut s);
-        self.legacy_negative_index.hash(&mut s);
-        self.hash(&mut s);
     }
 }
 
@@ -691,20 +682,6 @@ impl Display for ArrayInsert {
             "ArrayInsert [array: {:?}, pos: {:?}, item: {:?}]",
             self.src_array_expr, self.pos_expr, self.item_expr
         )
-    }
-}
-
-impl PartialEq<dyn Any> for ArrayInsert {
-    fn eq(&self, other: &dyn Any) -> bool {
-        down_cast_any_ref(other)
-            .downcast_ref::<Self>()
-            .map(|x| {
-                self.src_array_expr.eq(&x.src_array_expr)
-                    && self.pos_expr.eq(&x.pos_expr)
-                    && self.item_expr.eq(&x.item_expr)
-                    && self.legacy_negative_index.eq(&x.legacy_negative_index)
-            })
-            .unwrap_or(false)
     }
 }
 

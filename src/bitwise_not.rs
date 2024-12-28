@@ -15,21 +15,16 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::{
-    any::Any,
-    hash::{Hash, Hasher},
-    sync::Arc,
-};
-
 use arrow::{
     array::*,
     datatypes::{DataType, Schema},
     record_batch::RecordBatch,
 };
-use datafusion::physical_expr_common::physical_expr::down_cast_any_ref;
 use datafusion::{error::DataFusionError, logical_expr::ColumnarValue};
 use datafusion_common::Result;
 use datafusion_physical_expr::PhysicalExpr;
+use std::hash::Hash;
+use std::{any::Any, sync::Arc};
 
 macro_rules! compute_op {
     ($OPERAND:expr, $DT:ident) => {{
@@ -43,10 +38,22 @@ macro_rules! compute_op {
 }
 
 /// BitwiseNot expression
-#[derive(Debug, Hash)]
+#[derive(Debug, Eq)]
 pub struct BitwiseNotExpr {
     /// Input expression
     arg: Arc<dyn PhysicalExpr>,
+}
+
+impl Hash for BitwiseNotExpr {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.arg.hash(state);
+    }
+}
+
+impl PartialEq for BitwiseNotExpr {
+    fn eq(&self, other: &Self) -> bool {
+        self.arg.eq(&other.arg)
+    }
 }
 
 impl BitwiseNotExpr {
@@ -113,21 +120,6 @@ impl PhysicalExpr for BitwiseNotExpr {
         children: Vec<Arc<dyn PhysicalExpr>>,
     ) -> Result<Arc<dyn PhysicalExpr>> {
         Ok(Arc::new(BitwiseNotExpr::new(Arc::clone(&children[0]))))
-    }
-
-    fn dyn_hash(&self, state: &mut dyn Hasher) {
-        let mut s = state;
-        self.arg.hash(&mut s);
-        self.hash(&mut s);
-    }
-}
-
-impl PartialEq<dyn Any> for BitwiseNotExpr {
-    fn eq(&self, other: &dyn Any) -> bool {
-        down_cast_any_ref(other)
-            .downcast_ref::<Self>()
-            .map(|x| self.arg.eq(&x.arg))
-            .unwrap_or(false)
     }
 }
 

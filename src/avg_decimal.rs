@@ -25,14 +25,13 @@ use arrow_array::{
 use arrow_schema::{DataType, Field};
 use datafusion::logical_expr::{Accumulator, EmitTo, GroupsAccumulator, Signature};
 use datafusion_common::{not_impl_err, Result, ScalarValue};
-use datafusion_physical_expr::{expressions::format_state_name, PhysicalExpr};
+use datafusion_physical_expr::expressions::format_state_name;
 use std::{any::Any, sync::Arc};
 
 use crate::utils::is_valid_decimal_precision;
 use arrow_array::ArrowNativeTypeOp;
 use arrow_data::decimal::{MAX_DECIMAL_FOR_EACH_PRECISION, MIN_DECIMAL_FOR_EACH_PRECISION};
 use datafusion::logical_expr::Volatility::Immutable;
-use datafusion::physical_expr_common::physical_expr::down_cast_any_ref;
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::type_coercion::aggregates::avg_return_type;
 use datafusion_expr::{AggregateUDFImpl, ReversedUDAF};
@@ -43,17 +42,15 @@ use DataType::*;
 #[derive(Debug, Clone)]
 pub struct AvgDecimal {
     signature: Signature,
-    expr: Arc<dyn PhysicalExpr>,
     sum_data_type: DataType,
     result_data_type: DataType,
 }
 
 impl AvgDecimal {
     /// Create a new AVG aggregate function
-    pub fn new(expr: Arc<dyn PhysicalExpr>, result_type: DataType, sum_type: DataType) -> Self {
+    pub fn new(result_type: DataType, sum_type: DataType) -> Self {
         Self {
             signature: Signature::user_defined(Immutable),
-            expr,
             result_data_type: result_type,
             sum_data_type: sum_type,
         }
@@ -153,19 +150,6 @@ impl AggregateUDFImpl for AvgDecimal {
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
         avg_return_type(self.name(), &arg_types[0])
-    }
-}
-
-impl PartialEq<dyn Any> for AvgDecimal {
-    fn eq(&self, other: &dyn Any) -> bool {
-        down_cast_any_ref(other)
-            .downcast_ref::<Self>()
-            .map(|x| {
-                self.sum_data_type == x.sum_data_type
-                    && self.result_data_type == x.result_data_type
-                    && self.expr.eq(&x.expr)
-            })
-            .unwrap_or(false)
     }
 }
 

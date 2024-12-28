@@ -27,19 +27,18 @@ use arrow::{
 };
 use arrow_schema::{DataType, Schema};
 use datafusion::logical_expr::ColumnarValue;
-use datafusion::physical_expr_common::physical_expr::down_cast_any_ref;
 use datafusion_common::{DataFusionError, ScalarValue::Utf8};
 use datafusion_physical_expr::PhysicalExpr;
 use std::{
     any::Any,
     fmt::{Display, Formatter},
-    hash::{Hash, Hasher},
+    hash::Hash,
     sync::Arc,
 };
 
 macro_rules! make_predicate_function {
     ($name: ident, $kernel: ident, $str_scalar_kernel: ident) => {
-        #[derive(Debug, Hash)]
+        #[derive(Debug, Eq)]
         pub struct $name {
             left: Arc<dyn PhysicalExpr>,
             right: Arc<dyn PhysicalExpr>,
@@ -57,12 +56,16 @@ macro_rules! make_predicate_function {
             }
         }
 
-        impl PartialEq<dyn Any> for $name {
-            fn eq(&self, other: &dyn Any) -> bool {
-                down_cast_any_ref(other)
-                    .downcast_ref::<Self>()
-                    .map(|x| self.left.eq(&x.left) && self.right.eq(&x.right))
-                    .unwrap_or(false)
+        impl Hash for $name {
+            fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+                self.left.hash(state);
+                self.right.hash(state);
+            }
+        }
+
+        impl PartialEq for $name {
+            fn eq(&self, other: &Self) -> bool {
+                self.left.eq(&other.left) && self.right.eq(&other.right)
             }
         }
 
@@ -122,13 +125,6 @@ macro_rules! make_predicate_function {
                     children[1].clone(),
                 )))
             }
-
-            fn dyn_hash(&self, state: &mut dyn Hasher) {
-                let mut s = state;
-                self.left.hash(&mut s);
-                self.right.hash(&mut s);
-                self.hash(&mut s);
-            }
         }
     };
 }
@@ -141,16 +137,41 @@ make_predicate_function!(EndsWith, ends_with_dyn, ends_with_utf8_scalar_dyn);
 
 make_predicate_function!(Contains, contains_dyn, contains_utf8_scalar_dyn);
 
-#[derive(Debug, Hash)]
+#[derive(Debug, Eq)]
 pub struct SubstringExpr {
     pub child: Arc<dyn PhysicalExpr>,
     pub start: i64,
     pub len: u64,
 }
 
-#[derive(Debug, Hash)]
+impl Hash for SubstringExpr {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.child.hash(state);
+        self.start.hash(state);
+        self.len.hash(state);
+    }
+}
+
+impl PartialEq for SubstringExpr {
+    fn eq(&self, other: &Self) -> bool {
+        self.child.eq(&other.child) && self.start.eq(&other.start) && self.len.eq(&other.len)
+    }
+}
+#[derive(Debug, Eq)]
 pub struct StringSpaceExpr {
     pub child: Arc<dyn PhysicalExpr>,
+}
+
+impl Hash for StringSpaceExpr {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.child.hash(state);
+    }
+}
+
+impl PartialEq for StringSpaceExpr {
+    fn eq(&self, other: &Self) -> bool {
+        self.child.eq(&other.child)
+    }
 }
 
 impl SubstringExpr {
@@ -178,15 +199,6 @@ impl Display for SubstringExpr {
 impl Display for StringSpaceExpr {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "StringSpace [child: {}] ", self.child)
-    }
-}
-
-impl PartialEq<dyn Any> for SubstringExpr {
-    fn eq(&self, other: &dyn Any) -> bool {
-        down_cast_any_ref(other)
-            .downcast_ref::<Self>()
-            .map(|x| self.child.eq(&x.child) && self.start.eq(&x.start) && self.len.eq(&x.len))
-            .unwrap_or(false)
     }
 }
 
@@ -231,23 +243,6 @@ impl PhysicalExpr for SubstringExpr {
             self.len,
         )))
     }
-
-    fn dyn_hash(&self, state: &mut dyn Hasher) {
-        let mut s = state;
-        self.child.hash(&mut s);
-        self.start.hash(&mut s);
-        self.len.hash(&mut s);
-        self.hash(&mut s);
-    }
-}
-
-impl PartialEq<dyn Any> for StringSpaceExpr {
-    fn eq(&self, other: &dyn Any) -> bool {
-        down_cast_any_ref(other)
-            .downcast_ref::<Self>()
-            .map(|x| self.child.eq(&x.child))
-            .unwrap_or(false)
-    }
 }
 
 impl PhysicalExpr for StringSpaceExpr {
@@ -291,11 +286,5 @@ impl PhysicalExpr for StringSpaceExpr {
         children: Vec<Arc<dyn PhysicalExpr>>,
     ) -> datafusion_common::Result<Arc<dyn PhysicalExpr>> {
         Ok(Arc::new(StringSpaceExpr::new(Arc::clone(&children[0]))))
-    }
-
-    fn dyn_hash(&self, state: &mut dyn Hasher) {
-        let mut s = state;
-        self.child.hash(&mut s);
-        self.hash(&mut s);
     }
 }

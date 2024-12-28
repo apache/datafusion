@@ -23,12 +23,12 @@ use arrow::{
     datatypes::{DataType, Field},
 };
 use datafusion::logical_expr::Accumulator;
-use datafusion::physical_expr_common::physical_expr::down_cast_any_ref;
+use datafusion_common::types::NativeType;
 use datafusion_common::{internal_err, Result, ScalarValue};
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::{AggregateUDFImpl, Signature, Volatility};
+use datafusion_physical_expr::expressions::format_state_name;
 use datafusion_physical_expr::expressions::StatsType;
-use datafusion_physical_expr::{expressions::format_state_name, PhysicalExpr};
 
 /// STDDEV and STDDEV_SAMP (standard deviation) aggregate expression
 /// The implementation mostly is the same as the DataFusion's implementation. The reason
@@ -39,7 +39,6 @@ use datafusion_physical_expr::{expressions::format_state_name, PhysicalExpr};
 pub struct Stddev {
     name: String,
     signature: Signature,
-    expr: Arc<dyn PhysicalExpr>,
     stats_type: StatsType,
     null_on_divide_by_zero: bool,
 }
@@ -47,7 +46,6 @@ pub struct Stddev {
 impl Stddev {
     /// Create a new STDDEV aggregate function
     pub fn new(
-        expr: Arc<dyn PhysicalExpr>,
         name: impl Into<String>,
         data_type: DataType,
         stats_type: StatsType,
@@ -57,8 +55,14 @@ impl Stddev {
         assert!(matches!(data_type, DataType::Float64));
         Self {
             name: name.into(),
-            signature: Signature::coercible(vec![DataType::Float64], Volatility::Immutable),
-            expr,
+            signature: Signature::coercible(
+                vec![
+                    datafusion_expr_common::signature::TypeSignatureClass::Native(Arc::new(
+                        NativeType::Float64,
+                    )),
+                ],
+                Volatility::Immutable,
+            ),
             stats_type,
             null_on_divide_by_zero,
         }
@@ -118,20 +122,6 @@ impl AggregateUDFImpl for Stddev {
 
     fn default_value(&self, _data_type: &DataType) -> Result<ScalarValue> {
         Ok(ScalarValue::Float64(None))
-    }
-}
-
-impl PartialEq<dyn Any> for Stddev {
-    fn eq(&self, other: &dyn Any) -> bool {
-        down_cast_any_ref(other)
-            .downcast_ref::<Self>()
-            .map(|x| {
-                self.name == x.name
-                    && self.expr.eq(&x.expr)
-                    && self.null_on_divide_by_zero == x.null_on_divide_by_zero
-                    && self.stats_type == x.stats_type
-            })
-            .unwrap_or(false)
     }
 }
 

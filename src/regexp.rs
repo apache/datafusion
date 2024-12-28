@@ -21,7 +21,7 @@ use arrow_array::builder::BooleanBuilder;
 use arrow_array::types::Int32Type;
 use arrow_array::{Array, BooleanArray, DictionaryArray, RecordBatch, StringArray};
 use arrow_schema::{DataType, Schema};
-use datafusion::physical_expr_common::physical_expr::down_cast_any_ref;
+use datafusion::physical_expr_common::physical_expr::DynEq;
 use datafusion_common::{internal_err, Result};
 use datafusion_expr::ColumnarValue;
 use datafusion_physical_expr::PhysicalExpr;
@@ -50,6 +50,16 @@ pub struct RLike {
 impl Hash for RLike {
     fn hash<H: Hasher>(&self, state: &mut H) {
         state.write(self.pattern_str.as_bytes());
+    }
+}
+
+impl DynEq for RLike {
+    fn dyn_eq(&self, other: &dyn Any) -> bool {
+        if let Some(other) = other.downcast_ref::<Self>() {
+            self.pattern_str == other.pattern_str
+        } else {
+            false
+        }
     }
 }
 
@@ -90,15 +100,6 @@ impl Display for RLike {
             "RLike [child: {}, pattern: {}] ",
             self.child, self.pattern_str
         )
-    }
-}
-
-impl PartialEq<dyn Any> for RLike {
-    fn eq(&self, other: &dyn Any) -> bool {
-        down_cast_any_ref(other)
-            .downcast_ref::<Self>()
-            .map(|x| self.child.eq(&x.child) && self.pattern_str.eq(&x.pattern_str))
-            .unwrap_or(false)
     }
 }
 
@@ -160,11 +161,5 @@ impl PhysicalExpr for RLike {
             Arc::clone(&children[0]),
             &self.pattern_str,
         )?))
-    }
-
-    fn dyn_hash(&self, state: &mut dyn Hasher) {
-        use std::hash::Hash;
-        let mut s = state;
-        self.hash(&mut s);
     }
 }

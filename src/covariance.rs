@@ -17,7 +17,7 @@
  * under the License.
  */
 
-use std::{any::Any, sync::Arc};
+use std::any::Any;
 
 use arrow::{
     array::{ArrayRef, Float64Array},
@@ -25,15 +25,14 @@ use arrow::{
     datatypes::{DataType, Field},
 };
 use datafusion::logical_expr::Accumulator;
-use datafusion::physical_expr_common::physical_expr::down_cast_any_ref;
 use datafusion_common::{
     downcast_value, unwrap_or_internal_err, DataFusionError, Result, ScalarValue,
 };
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::type_coercion::aggregates::NUMERICS;
 use datafusion_expr::{AggregateUDFImpl, Signature, Volatility};
+use datafusion_physical_expr::expressions::format_state_name;
 use datafusion_physical_expr::expressions::StatsType;
-use datafusion_physical_expr::{expressions::format_state_name, PhysicalExpr};
 
 /// COVAR_SAMP and COVAR_POP aggregate expression
 /// The implementation mostly is the same as the DataFusion's implementation. The reason
@@ -43,8 +42,6 @@ use datafusion_physical_expr::{expressions::format_state_name, PhysicalExpr};
 pub struct Covariance {
     name: String,
     signature: Signature,
-    expr1: Arc<dyn PhysicalExpr>,
-    expr2: Arc<dyn PhysicalExpr>,
     stats_type: StatsType,
     null_on_divide_by_zero: bool,
 }
@@ -52,8 +49,6 @@ pub struct Covariance {
 impl Covariance {
     /// Create a new COVAR aggregate function
     pub fn new(
-        expr1: Arc<dyn PhysicalExpr>,
-        expr2: Arc<dyn PhysicalExpr>,
         name: impl Into<String>,
         data_type: DataType,
         stats_type: StatsType,
@@ -64,8 +59,6 @@ impl Covariance {
         Self {
             name: name.into(),
             signature: Signature::uniform(2, NUMERICS.to_vec(), Volatility::Immutable),
-            expr1,
-            expr2,
             stats_type,
             null_on_divide_by_zero,
         }
@@ -123,21 +116,6 @@ impl AggregateUDFImpl for Covariance {
                 true,
             ),
         ])
-    }
-}
-
-impl PartialEq<dyn Any> for Covariance {
-    fn eq(&self, other: &dyn Any) -> bool {
-        down_cast_any_ref(other)
-            .downcast_ref::<Self>()
-            .map(|x| {
-                self.name == x.name
-                    && self.expr1.eq(&x.expr1)
-                    && self.expr2.eq(&x.expr2)
-                    && self.stats_type == x.stats_type
-                    && self.null_on_divide_by_zero == x.null_on_divide_by_zero
-            })
-            .unwrap_or(false)
     }
 }
 

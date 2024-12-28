@@ -29,16 +29,28 @@ use datafusion_expr::ColumnarValue;
 use datafusion_physical_expr::PhysicalExpr;
 use std::any::Any;
 use std::fmt::{Debug, Display, Formatter};
-use std::hash::{Hash, Hasher};
+use std::hash::Hash;
 use std::sync::Arc;
 
 /// to_json function
-#[derive(Debug, Hash)]
+#[derive(Debug, Eq)]
 pub struct ToJson {
     /// The input to convert to JSON
     expr: Arc<dyn PhysicalExpr>,
     /// Timezone to use when converting timestamps to JSON
     timezone: String,
+}
+
+impl Hash for ToJson {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.expr.hash(state);
+        self.timezone.hash(state);
+    }
+}
+impl PartialEq for ToJson {
+    fn eq(&self, other: &Self) -> bool {
+        self.expr.eq(&other.expr) && self.timezone.eq(&other.timezone)
+    }
 }
 
 impl ToJson {
@@ -100,13 +112,6 @@ impl PhysicalExpr for ToJson {
             Arc::clone(&children[0]),
             &self.timezone,
         )))
-    }
-
-    fn dyn_hash(&self, state: &mut dyn Hasher) {
-        let mut s = state;
-        self.expr.hash(&mut s);
-        self.timezone.hash(&mut s);
-        self.hash(&mut s);
     }
 }
 

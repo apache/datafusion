@@ -15,13 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::{
-    any::Any,
-    fmt::{Display, Formatter},
-    hash::{Hash, Hasher},
-    sync::Arc,
-};
-
 use arrow::{
     array::{as_primitive_array, ArrayAccessor, ArrayIter, Float32Array, Float64Array},
     datatypes::{ArrowNativeType, Float32Type, Float64Type},
@@ -29,13 +22,31 @@ use arrow::{
 };
 use arrow_schema::{DataType, Schema};
 use datafusion::logical_expr::ColumnarValue;
-use datafusion::physical_expr_common::physical_expr::down_cast_any_ref;
 use datafusion_physical_expr::PhysicalExpr;
+use std::hash::Hash;
+use std::{
+    any::Any,
+    fmt::{Display, Formatter},
+    sync::Arc,
+};
 
-#[derive(Debug, Hash)]
+#[derive(Debug, Eq)]
 pub struct NormalizeNaNAndZero {
     pub data_type: DataType,
     pub child: Arc<dyn PhysicalExpr>,
+}
+
+impl PartialEq for NormalizeNaNAndZero {
+    fn eq(&self, other: &Self) -> bool {
+        self.child.eq(&other.child) && self.data_type.eq(&other.data_type)
+    }
+}
+
+impl Hash for NormalizeNaNAndZero {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.child.hash(state);
+        self.data_type.hash(state);
+    }
 }
 
 impl NormalizeNaNAndZero {
@@ -89,13 +100,6 @@ impl PhysicalExpr for NormalizeNaNAndZero {
             Arc::clone(&children[0]),
         )))
     }
-
-    fn dyn_hash(&self, state: &mut dyn Hasher) {
-        let mut s = state;
-        self.child.hash(&mut s);
-        self.data_type.hash(&mut s);
-        self.hash(&mut s);
-    }
 }
 
 fn eval_typed<V: FloatDouble, T: ArrayAccessor<Item = V>>(input: T) -> Vec<Option<V>> {
@@ -117,15 +121,6 @@ fn eval_typed<V: FloatDouble, T: ArrayAccessor<Item = V>>(input: T) -> Vec<Optio
 impl Display for NormalizeNaNAndZero {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "FloatNormalize [child: {}]", self.child)
-    }
-}
-
-impl PartialEq<dyn Any> for NormalizeNaNAndZero {
-    fn eq(&self, other: &dyn Any) -> bool {
-        down_cast_any_ref(other)
-            .downcast_ref::<Self>()
-            .map(|x| self.child.eq(&x.child) && self.data_type.eq(&x.data_type))
-            .unwrap_or(false)
     }
 }
 

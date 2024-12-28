@@ -15,34 +15,43 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::{
-    any::Any,
-    fmt::{Debug, Display, Formatter},
-    hash::{Hash, Hasher},
-    sync::Arc,
-};
-
+use crate::utils::array_with_timezone;
 use arrow::{
     compute::{date_part, DatePart},
     record_batch::RecordBatch,
 };
 use arrow_schema::{DataType, Schema, TimeUnit::Microsecond};
 use datafusion::logical_expr::ColumnarValue;
-use datafusion::physical_expr_common::physical_expr::down_cast_any_ref;
 use datafusion_common::{DataFusionError, ScalarValue::Utf8};
 use datafusion_physical_expr::PhysicalExpr;
-
-use crate::utils::array_with_timezone;
+use std::hash::Hash;
+use std::{
+    any::Any,
+    fmt::{Debug, Display, Formatter},
+    sync::Arc,
+};
 
 use crate::kernels::temporal::{
     date_trunc_array_fmt_dyn, date_trunc_dyn, timestamp_trunc_array_fmt_dyn, timestamp_trunc_dyn,
 };
 
-#[derive(Debug, Hash)]
+#[derive(Debug, Eq)]
 pub struct HourExpr {
     /// An array with DataType::Timestamp(TimeUnit::Microsecond, None)
     child: Arc<dyn PhysicalExpr>,
     timezone: String,
+}
+
+impl Hash for HourExpr {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.child.hash(state);
+        self.timezone.hash(state);
+    }
+}
+impl PartialEq for HourExpr {
+    fn eq(&self, other: &Self) -> bool {
+        self.child.eq(&other.child) && self.timezone.eq(&other.timezone)
+    }
 }
 
 impl HourExpr {
@@ -58,15 +67,6 @@ impl Display for HourExpr {
             "Hour [timezone:{}, child: {}]",
             self.timezone, self.child
         )
-    }
-}
-
-impl PartialEq<dyn Any> for HourExpr {
-    fn eq(&self, other: &dyn Any) -> bool {
-        down_cast_any_ref(other)
-            .downcast_ref::<Self>()
-            .map(|x| self.child.eq(&x.child) && self.timezone.eq(&x.timezone))
-            .unwrap_or(false)
     }
 }
 
@@ -123,20 +123,25 @@ impl PhysicalExpr for HourExpr {
             self.timezone.clone(),
         )))
     }
-
-    fn dyn_hash(&self, state: &mut dyn Hasher) {
-        let mut s = state;
-        self.child.hash(&mut s);
-        self.timezone.hash(&mut s);
-        self.hash(&mut s);
-    }
 }
 
-#[derive(Debug, Hash)]
+#[derive(Debug, Eq)]
 pub struct MinuteExpr {
     /// An array with DataType::Timestamp(TimeUnit::Microsecond, None)
     child: Arc<dyn PhysicalExpr>,
     timezone: String,
+}
+
+impl Hash for MinuteExpr {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.child.hash(state);
+        self.timezone.hash(state);
+    }
+}
+impl PartialEq for MinuteExpr {
+    fn eq(&self, other: &Self) -> bool {
+        self.child.eq(&other.child) && self.timezone.eq(&other.timezone)
+    }
 }
 
 impl MinuteExpr {
@@ -152,15 +157,6 @@ impl Display for MinuteExpr {
             "Minute [timezone:{}, child: {}]",
             self.timezone, self.child
         )
-    }
-}
-
-impl PartialEq<dyn Any> for MinuteExpr {
-    fn eq(&self, other: &dyn Any) -> bool {
-        down_cast_any_ref(other)
-            .downcast_ref::<Self>()
-            .map(|x| self.child.eq(&x.child) && self.timezone.eq(&x.timezone))
-            .unwrap_or(false)
     }
 }
 
@@ -217,20 +213,25 @@ impl PhysicalExpr for MinuteExpr {
             self.timezone.clone(),
         )))
     }
-
-    fn dyn_hash(&self, state: &mut dyn Hasher) {
-        let mut s = state;
-        self.child.hash(&mut s);
-        self.timezone.hash(&mut s);
-        self.hash(&mut s);
-    }
 }
 
-#[derive(Debug, Hash)]
+#[derive(Debug, Eq)]
 pub struct SecondExpr {
     /// An array with DataType::Timestamp(TimeUnit::Microsecond, None)
     child: Arc<dyn PhysicalExpr>,
     timezone: String,
+}
+
+impl Hash for SecondExpr {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.child.hash(state);
+        self.timezone.hash(state);
+    }
+}
+impl PartialEq for SecondExpr {
+    fn eq(&self, other: &Self) -> bool {
+        self.child.eq(&other.child) && self.timezone.eq(&other.timezone)
+    }
 }
 
 impl SecondExpr {
@@ -246,15 +247,6 @@ impl Display for SecondExpr {
             "Second (timezone:{}, child: {}]",
             self.timezone, self.child
         )
-    }
-}
-
-impl PartialEq<dyn Any> for SecondExpr {
-    fn eq(&self, other: &dyn Any) -> bool {
-        down_cast_any_ref(other)
-            .downcast_ref::<Self>()
-            .map(|x| self.child.eq(&x.child) && self.timezone.eq(&x.timezone))
-            .unwrap_or(false)
     }
 }
 
@@ -311,21 +303,26 @@ impl PhysicalExpr for SecondExpr {
             self.timezone.clone(),
         )))
     }
-
-    fn dyn_hash(&self, state: &mut dyn Hasher) {
-        let mut s = state;
-        self.child.hash(&mut s);
-        self.timezone.hash(&mut s);
-        self.hash(&mut s);
-    }
 }
 
-#[derive(Debug, Hash)]
+#[derive(Debug, Eq)]
 pub struct DateTruncExpr {
     /// An array with DataType::Date32
     child: Arc<dyn PhysicalExpr>,
     /// Scalar UTF8 string matching the valid values in Spark SQL: https://spark.apache.org/docs/latest/api/sql/index.html#trunc
     format: Arc<dyn PhysicalExpr>,
+}
+
+impl Hash for DateTruncExpr {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.child.hash(state);
+        self.format.hash(state);
+    }
+}
+impl PartialEq for DateTruncExpr {
+    fn eq(&self, other: &Self) -> bool {
+        self.child.eq(&other.child) && self.format.eq(&other.format)
+    }
 }
 
 impl DateTruncExpr {
@@ -341,15 +338,6 @@ impl Display for DateTruncExpr {
             "DateTrunc [child:{}, format: {}]",
             self.child, self.format
         )
-    }
-}
-
-impl PartialEq<dyn Any> for DateTruncExpr {
-    fn eq(&self, other: &dyn Any) -> bool {
-        down_cast_any_ref(other)
-            .downcast_ref::<Self>()
-            .map(|x| self.child.eq(&x.child) && self.format.eq(&x.format))
-            .unwrap_or(false)
     }
 }
 
@@ -398,16 +386,9 @@ impl PhysicalExpr for DateTruncExpr {
             Arc::clone(&self.format),
         )))
     }
-
-    fn dyn_hash(&self, state: &mut dyn Hasher) {
-        let mut s = state;
-        self.child.hash(&mut s);
-        self.format.hash(&mut s);
-        self.hash(&mut s);
-    }
 }
 
-#[derive(Debug, Hash)]
+#[derive(Debug, Eq)]
 pub struct TimestampTruncExpr {
     /// An array with DataType::Timestamp(TimeUnit::Microsecond, None)
     child: Arc<dyn PhysicalExpr>,
@@ -420,6 +401,21 @@ pub struct TimestampTruncExpr {
     /// along with a single value for the associated TimeZone. The timezone offset is applied
     /// just before any operations on the timestamp
     timezone: String,
+}
+
+impl Hash for TimestampTruncExpr {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.child.hash(state);
+        self.format.hash(state);
+        self.timezone.hash(state);
+    }
+}
+impl PartialEq for TimestampTruncExpr {
+    fn eq(&self, other: &Self) -> bool {
+        self.child.eq(&other.child)
+            && self.format.eq(&other.format)
+            && self.timezone.eq(&other.timezone)
+    }
 }
 
 impl TimestampTruncExpr {
@@ -443,19 +439,6 @@ impl Display for TimestampTruncExpr {
             "TimestampTrunc [child:{}, format:{}, timezone: {}]",
             self.child, self.format, self.timezone
         )
-    }
-}
-
-impl PartialEq<dyn Any> for TimestampTruncExpr {
-    fn eq(&self, other: &dyn Any) -> bool {
-        down_cast_any_ref(other)
-            .downcast_ref::<Self>()
-            .map(|x| {
-                self.child.eq(&x.child)
-                    && self.format.eq(&x.format)
-                    && self.timezone.eq(&x.timezone)
-            })
-            .unwrap_or(false)
     }
 }
 
@@ -523,13 +506,5 @@ impl PhysicalExpr for TimestampTruncExpr {
             Arc::clone(&self.format),
             self.timezone.clone(),
         )))
-    }
-
-    fn dyn_hash(&self, state: &mut dyn Hasher) {
-        let mut s = state;
-        self.child.hash(&mut s);
-        self.format.hash(&mut s);
-        self.timezone.hash(&mut s);
-        self.hash(&mut s);
     }
 }

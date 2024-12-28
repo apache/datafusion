@@ -19,17 +19,16 @@ use arrow::record_batch::RecordBatch;
 use arrow_array::{Array, StructArray};
 use arrow_schema::{DataType, Field, Schema};
 use datafusion::logical_expr::ColumnarValue;
-use datafusion::physical_expr_common::physical_expr::down_cast_any_ref;
 use datafusion_common::{DataFusionError, Result as DataFusionResult, ScalarValue};
 use datafusion_physical_expr::PhysicalExpr;
 use std::{
     any::Any,
     fmt::{Display, Formatter},
-    hash::{Hash, Hasher},
+    hash::Hash,
     sync::Arc,
 };
 
-#[derive(Debug, Hash)]
+#[derive(Debug, Hash, PartialEq, Eq)]
 pub struct CreateNamedStruct {
     values: Vec<Arc<dyn PhysicalExpr>>,
     names: Vec<String>,
@@ -95,13 +94,6 @@ impl PhysicalExpr for CreateNamedStruct {
             self.names.clone(),
         )))
     }
-
-    fn dyn_hash(&self, state: &mut dyn Hasher) {
-        let mut s = state;
-        self.values.hash(&mut s);
-        self.names.hash(&mut s);
-        self.hash(&mut s);
-    }
 }
 
 impl Display for CreateNamedStruct {
@@ -114,27 +106,22 @@ impl Display for CreateNamedStruct {
     }
 }
 
-impl PartialEq<dyn Any> for CreateNamedStruct {
-    fn eq(&self, other: &dyn Any) -> bool {
-        down_cast_any_ref(other)
-            .downcast_ref::<Self>()
-            .map(|x| {
-                self.values
-                    .iter()
-                    .zip(x.values.iter())
-                    .all(|(a, b)| a.eq(b))
-                    && self.values.len() == x.values.len()
-                    && self.names.iter().zip(x.names.iter()).all(|(a, b)| a.eq(b))
-                    && self.names.len() == x.names.len()
-            })
-            .unwrap_or(false)
-    }
-}
-
-#[derive(Debug, Hash)]
+#[derive(Debug, Eq)]
 pub struct GetStructField {
     child: Arc<dyn PhysicalExpr>,
     ordinal: usize,
+}
+
+impl Hash for GetStructField {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.child.hash(state);
+        self.ordinal.hash(state);
+    }
+}
+impl PartialEq for GetStructField {
+    fn eq(&self, other: &Self) -> bool {
+        self.child.eq(&other.child) && self.ordinal.eq(&other.ordinal)
+    }
 }
 
 impl GetStructField {
@@ -203,13 +190,6 @@ impl PhysicalExpr for GetStructField {
             self.ordinal,
         )))
     }
-
-    fn dyn_hash(&self, state: &mut dyn Hasher) {
-        let mut s = state;
-        self.child.hash(&mut s);
-        self.ordinal.hash(&mut s);
-        self.hash(&mut s);
-    }
 }
 
 impl Display for GetStructField {
@@ -219,15 +199,6 @@ impl Display for GetStructField {
             "GetStructField [child: {:?}, ordinal: {:?}]",
             self.child, self.ordinal
         )
-    }
-}
-
-impl PartialEq<dyn Any> for GetStructField {
-    fn eq(&self, other: &dyn Any) -> bool {
-        down_cast_any_ref(other)
-            .downcast_ref::<Self>()
-            .map(|x| self.child.eq(&x.child) && self.ordinal.eq(&x.ordinal))
-            .unwrap_or(false)
     }
 }
 

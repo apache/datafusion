@@ -15,20 +15,19 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::{any::Any, sync::Arc};
+use std::any::Any;
 
 use arrow::{
     array::{ArrayRef, Float64Array},
     datatypes::{DataType, Field},
 };
 use datafusion::logical_expr::Accumulator;
-use datafusion::physical_expr_common::physical_expr::down_cast_any_ref;
 use datafusion_common::{downcast_value, DataFusionError, Result, ScalarValue};
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::Volatility::Immutable;
 use datafusion_expr::{AggregateUDFImpl, Signature};
+use datafusion_physical_expr::expressions::format_state_name;
 use datafusion_physical_expr::expressions::StatsType;
-use datafusion_physical_expr::{expressions::format_state_name, PhysicalExpr};
 
 /// VAR_SAMP and VAR_POP aggregate expression
 /// The implementation mostly is the same as the DataFusion's implementation. The reason
@@ -39,7 +38,6 @@ use datafusion_physical_expr::{expressions::format_state_name, PhysicalExpr};
 pub struct Variance {
     name: String,
     signature: Signature,
-    expr: Arc<dyn PhysicalExpr>,
     stats_type: StatsType,
     null_on_divide_by_zero: bool,
 }
@@ -47,7 +45,6 @@ pub struct Variance {
 impl Variance {
     /// Create a new VARIANCE aggregate function
     pub fn new(
-        expr: Arc<dyn PhysicalExpr>,
         name: impl Into<String>,
         data_type: DataType,
         stats_type: StatsType,
@@ -58,7 +55,6 @@ impl Variance {
         Self {
             name: name.into(),
             signature: Signature::numeric(1, Immutable),
-            expr,
             stats_type,
             null_on_divide_by_zero,
         }
@@ -115,17 +111,6 @@ impl AggregateUDFImpl for Variance {
 
     fn default_value(&self, _data_type: &DataType) -> Result<ScalarValue> {
         Ok(ScalarValue::Float64(None))
-    }
-}
-
-impl PartialEq<dyn Any> for Variance {
-    fn eq(&self, other: &dyn Any) -> bool {
-        down_cast_any_ref(other)
-            .downcast_ref::<Self>()
-            .map(|x| {
-                self.name == x.name && self.expr.eq(&x.expr) && self.stats_type == x.stats_type
-            })
-            .unwrap_or(false)
     }
 }
 

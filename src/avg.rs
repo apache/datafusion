@@ -27,11 +27,10 @@ use datafusion::logical_expr::{
     type_coercion::aggregates::avg_return_type, Accumulator, EmitTo, GroupsAccumulator, Signature,
 };
 use datafusion_common::{not_impl_err, Result, ScalarValue};
-use datafusion_physical_expr::{expressions::format_state_name, PhysicalExpr};
+use datafusion_physical_expr::expressions::format_state_name;
 use std::{any::Any, sync::Arc};
 
 use arrow_array::ArrowNativeTypeOp;
-use datafusion::physical_expr_common::physical_expr::down_cast_any_ref;
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::Volatility::Immutable;
 use datafusion_expr::{AggregateUDFImpl, ReversedUDAF};
@@ -42,20 +41,19 @@ use DataType::*;
 pub struct Avg {
     name: String,
     signature: Signature,
-    expr: Arc<dyn PhysicalExpr>,
+    // expr: Arc<dyn PhysicalExpr>,
     input_data_type: DataType,
     result_data_type: DataType,
 }
 
 impl Avg {
     /// Create a new AVG aggregate function
-    pub fn new(expr: Arc<dyn PhysicalExpr>, name: impl Into<String>, data_type: DataType) -> Self {
+    pub fn new(name: impl Into<String>, data_type: DataType) -> Self {
         let result_data_type = avg_return_type("avg", &data_type).unwrap();
 
         Self {
             name: name.into(),
             signature: Signature::user_defined(Immutable),
-            expr,
             input_data_type: data_type,
             result_data_type,
         }
@@ -136,20 +134,6 @@ impl AggregateUDFImpl for Avg {
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
         avg_return_type(self.name(), &arg_types[0])
-    }
-}
-
-impl PartialEq<dyn Any> for Avg {
-    fn eq(&self, other: &dyn Any) -> bool {
-        down_cast_any_ref(other)
-            .downcast_ref::<Self>()
-            .map(|x| {
-                self.name == x.name
-                    && self.input_data_type == x.input_data_type
-                    && self.result_data_type == x.result_data_type
-                    && self.expr.eq(&x.expr)
-            })
-            .unwrap_or(false)
     }
 }
 

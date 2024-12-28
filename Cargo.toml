@@ -36,6 +36,7 @@ chrono = { workspace = true }
 datafusion = { workspace = true, features = ["parquet"] }
 datafusion-common = { workspace = true }
 datafusion-expr = { workspace = true }
+datafusion-expr-common = { workspace = true }
 datafusion-physical-expr = { workspace = true }
 chrono-tz = { workspace = true }
 num = { workspace = true }
