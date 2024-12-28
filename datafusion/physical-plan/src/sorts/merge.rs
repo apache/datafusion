@@ -114,7 +114,7 @@ pub(crate) struct SortPreservingMergeStream<C: CursorValues> {
     /// causing upstream operator buffers for the other partitions to grow
     /// excessively, as they continued receiving data without consuming it.
     ///
-    /// For example, an upstream operator like `RepartitonExec` execution would
+    /// For example, an upstream operator like `RepartitionExec` execution would
     /// keep sending data to certain partitions, but those partitions wouldn't
     /// consume the data if they weren't selected as winners. This resulted in
     /// inefficient buffer usage.

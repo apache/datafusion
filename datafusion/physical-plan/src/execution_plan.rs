@@ -521,7 +521,7 @@ impl ExecutionPlanProperties for &dyn ExecutionPlan {
 /// For unbounded streams, it also tracks whether the operator requires finite memory
 /// to process the stream or if memory usage could grow unbounded.
 ///
-/// Bounedness of the output stream is based on the the boundedness of the input stream and the nature of
+/// Boundedness of the output stream is based on the the boundedness of the input stream and the nature of
 /// the operator. For example, limit or topk with fetch operator can convert an unbounded stream to a bounded stream.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Boundedness {
@@ -903,7 +903,7 @@ pub fn execute_stream_partitioned(
 /// and context. It then checks if there are any columns in the input that might
 /// violate the `not null` constraints specified in the `sink_schema`. If there are
 /// such columns, it wraps the resulting stream to enforce the `not null` constraints
-/// by invoking the `check_not_null_contraits` function on each batch of the stream.
+/// by invoking the [`check_not_null_constraints`] function on each batch of the stream.
 pub fn execute_input_stream(
     input: Arc<dyn ExecutionPlan>,
     sink_schema: SchemaRef,

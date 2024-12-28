@@ -161,7 +161,7 @@ async fn plan_and_filter() {
         RowGroupAccess::Scan,
     ]));
 
-    // initia
+    // initial
     let parquet_metrics = TestFull {
         access_plan,
         expected_rows: 0,
@@ -274,7 +274,7 @@ struct Test {
 impl Test {
     /// Runs the test case, panic'ing on error.
     ///
-    /// Returns the `MetricsSet` from the ParqeutExec
+    /// Returns the [`MetricsSet`] from the [`ParquetExec`]
     async fn run_success(self) -> MetricsSet {
         let Self {
             access_plan,

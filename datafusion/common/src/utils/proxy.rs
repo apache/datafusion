@@ -92,12 +92,12 @@ impl<T> VecAllocExt for Vec<T> {
     type T = T;
 
     fn push_accounted(&mut self, x: Self::T, accounting: &mut usize) {
-        let prev_capacty = self.capacity();
+        let prev_capacity = self.capacity();
         self.push(x);
         let new_capacity = self.capacity();
-        if new_capacity > prev_capacty {
+        if new_capacity > prev_capacity {
             // capacity changed, so we allocated more
-            let bump_size = (new_capacity - prev_capacty) * size_of::<T>();
+            let bump_size = (new_capacity - prev_capacity) * size_of::<T>();
             // Note multiplication should never overflow because `push` would
             // have panic'd first, but the checked_add could potentially
             // overflow since accounting could be tracking additional values, and

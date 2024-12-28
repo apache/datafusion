@@ -97,7 +97,7 @@ use std::sync::Arc;
 /// # Additional Examples
 ///
 /// A simple `FileScanExec` might produce one output stream (partition) for each
-/// file (note the actual DataFusion file scaners can read individual files in
+/// file (note the actual DataFusion file scanners can read individual files in
 /// parallel, potentially producing multiple partitions per file)
 ///
 /// Plans such as `SortPreservingMerge` produce a single output stream

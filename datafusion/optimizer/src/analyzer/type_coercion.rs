@@ -943,7 +943,7 @@ pub fn coerce_union_schema(inputs: &[Arc<LogicalPlan>]) -> Result<DFSchema> {
             );
         }
 
-        // coerce data type and nullablity for each field
+        // coerce data type and nullability for each field
         for (union_datatype, union_nullable, union_field_map, plan_field) in izip!(
             union_datatypes.iter_mut(),
             union_nullabilities.iter_mut(),

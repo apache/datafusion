@@ -60,7 +60,7 @@ pub trait Normalizeable {
 }
 
 /// The `NormalizeEq` trait extends `Eq` and `Normalizeable` to provide a method for comparing
-/// normlized nodes in optimizations like Common Subexpression Elimination (CSE).
+/// normalized nodes in optimizations like Common Subexpression Elimination (CSE).
 ///
 /// The `normalize_eq` method ensures that two nodes that are semantically equivalent (after normalization)
 /// are considered equal in CSE optimization, even if their original forms differ.

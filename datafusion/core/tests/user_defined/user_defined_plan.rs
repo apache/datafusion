@@ -482,7 +482,7 @@ impl ExtensionPlanner for TopKPlanner {
 /// code is not general and is meant as an illustration only
 struct TopKExec {
     input: Arc<dyn ExecutionPlan>,
-    /// The maxium number of values
+    /// The maximum number of values
     k: usize,
     cache: PlanProperties,
 }

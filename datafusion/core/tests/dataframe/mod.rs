@@ -1140,7 +1140,7 @@ async fn unnest_fixed_list_drop_nulls() -> Result<()> {
 }
 
 #[tokio::test]
-async fn unnest_fixed_list_nonull() -> Result<()> {
+async fn unnest_fixed_list_non_null() -> Result<()> {
     let mut shape_id_builder = UInt32Builder::new();
     let mut tags_builder = FixedSizeListBuilder::new(StringBuilder::new(), 2);
 
@@ -2053,9 +2053,9 @@ async fn test_dataframe_placeholder_missing_param_values() -> Result<()> {
     // Executing LogicalPlans with placeholders that don't have bound values
     // should fail.
     let results = df.collect().await;
-    let err_mesg = results.unwrap_err().strip_backtrace();
+    let err_msg = results.unwrap_err().strip_backtrace();
     assert_eq!(
-        err_mesg,
+        err_msg,
         "Execution error: Placeholder '$0' was not provided a value for execution."
     );
 
@@ -2119,9 +2119,9 @@ async fn test_dataframe_placeholder_column_parameter() -> Result<()> {
     // Executing LogicalPlans with placeholders that don't have bound values
     // should fail.
     let results = df.collect().await;
-    let err_mesg = results.unwrap_err().strip_backtrace();
+    let err_msg = results.unwrap_err().strip_backtrace();
     assert_eq!(
-        err_mesg,
+        err_msg,
         "Execution error: Placeholder '$1' was not provided a value for execution."
     );
 
@@ -2189,9 +2189,9 @@ async fn test_dataframe_placeholder_like_expression() -> Result<()> {
     // Executing LogicalPlans with placeholders that don't have bound values
     // should fail.
     let results = df.collect().await;
-    let err_mesg = results.unwrap_err().strip_backtrace();
+    let err_msg = results.unwrap_err().strip_backtrace();
     assert_eq!(
-        err_mesg,
+        err_msg,
         "Execution error: Placeholder '$1' was not provided a value for execution."
     );
 
@@ -2277,12 +2277,12 @@ async fn write_partitioned_parquet_results() -> Result<()> {
 
     // Explicitly read the parquet file at c2=123 to verify the physical files are partitioned
     let partitioned_file = format!("{out_dir}/c2=123", out_dir = out_dir);
-    let filted_df = ctx
+    let filter_df = ctx
         .read_parquet(&partitioned_file, ParquetReadOptions::default())
         .await?;
 
     // Check that the c2 column is gone and that c1 is abc.
-    let results = filted_df.collect().await?;
+    let results = filter_df.collect().await?;
     let expected = ["+-----+", "| c1  |", "+-----+", "| abc |", "+-----+"];
 
     assert_batches_eq!(expected, &results);

@@ -137,7 +137,7 @@ struct SkipAggregationProbe {
     // ========================================================================
     // STATES:
     // Fields changes during execution. Can be buffer, or state flags that
-    // influence the exeuction in parent `GroupedHashAggregateStream`
+    // influence the execution in parent `GroupedHashAggregateStream`
     // ========================================================================
     /// Number of processed input rows (updated during probing)
     input_rows: usize,

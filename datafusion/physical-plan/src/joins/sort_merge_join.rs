@@ -86,7 +86,7 @@ use futures::{Stream, StreamExt};
 /// # Sorting
 ///
 /// Assumes that both the left and right input to the join are pre-sorted. It is not the
-/// responisibility of this execution plan to sort the inputs.
+/// responsibility of this execution plan to sort the inputs.
 ///
 /// # "Streamed" vs "Buffered"
 ///
@@ -101,7 +101,7 @@ use futures::{Stream, StreamExt};
 /// If the memory limit increases beyond the specified value and spilling is enabled,
 /// buffered batches could be spilled to disk. If spilling is disabled, the execution
 /// will fail under the same conditions. Multiple record batches of buffered could currently reside
-/// in memory/disk during the exectution. The number of buffered batches residing in
+/// in memory/disk during the execution. The number of buffered batches residing in
 /// memory/disk depends on the number of rows of buffered input having the same value
 /// of join key as that of streamed input rows currently present in memory. Due to pre-sorted inputs,
 /// the algorithm understands when it is not needed anymore, and releases the buffered batches
@@ -304,11 +304,10 @@ impl SortMergeJoinExec {
         let output_partitioning =
             symmetric_join_output_partitioning(left, right, &join_type);
 
-        // TODO: Emission type may be incremental if the input is sorted
         PlanProperties::new(
             eq_properties,
             output_partitioning,
-            EmissionType::Final,
+            EmissionType::Incremental,
             boundedness_from_children([left, right]),
         )
     }

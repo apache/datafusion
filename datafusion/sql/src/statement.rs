@@ -683,7 +683,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 parameters,
                 using,
                 // has_parentheses specifies the syntax, but the plan is the
-                // same no matter the synax used, so ignore it
+                // same no matter the syntax used, so ignore it
                 has_parentheses: _,
             } => {
                 // `USING` is a MySQL-specific syntax and currently not supported.

@@ -42,7 +42,7 @@ use datafusion_expr::ColumnarValue;
 ///
 /// # Example:
 ///  If the schema is `a`, `b`, `c` the `Column` for `b` would be represented by
-///  index 1, since `b` is the second colum in the schema.
+///  index 1, since `b` is the second column in the schema.
 ///
 /// ```
 /// # use datafusion_physical_expr::expressions::Column;

@@ -146,7 +146,7 @@ impl MyOptimizerRule {
             // Closure called for each sub tree
             match expr {
                 Expr::BinaryExpr(binary_expr) if is_binary_eq(&binary_expr) => {
-                    // destruture the expression
+                    // destructure the expression
                     let BinaryExpr { left, op: _, right } = binary_expr;
                     // rewrite to `my_eq(left, right)`
                     let udf = ScalarUDF::new_from_impl(MyEq::new());

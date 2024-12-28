@@ -16,7 +16,7 @@
 // under the License.
 
 //! Special channel construction to distribute data from various inputs into N outputs
-//! minimizing buffering but preventing deadlocks when repartitoning
+//! minimizing buffering but preventing deadlocks when repartitioning
 //!
 //! # Design
 //!
@@ -167,11 +167,11 @@ impl<T> Drop for DistributionSender<T> {
             //
             // If the last sender is dropped first, `state.data` will still exists and the sender side decrements the
             // signal. The receiver side then MUST check the `n_senders` counter during the section and if it is zero,
-            // it inferres that it is dropped afterwards and MUST NOT decrement the counter.
+            // it infers that it is dropped afterwards and MUST NOT decrement the counter.
             //
-            // If the receiver end is dropped first, it will inferr -- based on `n_senders` -- that there are still
+            // If the receiver end is dropped first, it will infer -- based on `n_senders` -- that there are still
             // senders and it will decrement the `empty_channels` counter. It will also set `data` to `None`. The sender
-            // side will then see that `data` is `None` and can therefore inferr that the receiver end was dropped, and
+            // side will then see that `data` is `None` and can therefore infer that the receiver end was dropped, and
             // hence it MUST NOT decrement the `empty_channels` counter.
             if state
                 .data

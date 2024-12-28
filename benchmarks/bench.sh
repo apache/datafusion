@@ -456,11 +456,11 @@ run_clickbench_extended() {
 }
 
 # Downloads the csv.gz files IMDB datasets from Peter Boncz's homepage(one of the JOB paper authors)
-# http://homepages.cwi.nl/~boncz/job/imdb.tgz
+# https://event.cwi.nl/da/job/imdb.tgz
 data_imdb() {
     local imdb_dir="${DATA_DIR}/imdb"
     local imdb_temp_gz="${imdb_dir}/imdb.tgz"
-    local imdb_url="https://homepages.cwi.nl/~boncz/job/imdb.tgz"
+    local imdb_url="https://event.cwi.nl/da/job/imdb.tgz"
 
    # imdb has 21 files, we just separate them into 3 groups for better readability 
     local first_required_files=(

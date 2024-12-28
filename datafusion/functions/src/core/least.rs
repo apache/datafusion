@@ -98,7 +98,7 @@ impl GreatestLeastOperator for LeastFunc {
     /// Nulls are always considered larger than any other value
     fn get_indexes_to_keep(lhs: &dyn Array, rhs: &dyn Array) -> Result<BooleanArray> {
         // Fast path:
-        // If both arrays are not nested, have the same length and no nulls, we can use the faster vectorised kernel
+        // If both arrays are not nested, have the same length and no nulls, we can use the faster vectorized kernel
         // - If both arrays are not nested: Nested types, such as lists, are not supported as the null semantics are not well-defined.
         // - both array does not have any nulls: cmp::lt_eq will return null if any of the input is null while we want to return false in that case
         if !lhs.data_type().is_nested()

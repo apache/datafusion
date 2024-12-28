@@ -720,7 +720,7 @@ mod tests {
             let state = session_ctx.state();
 
             // This file has 4 rules that use tree node, apply these rules as in the
-            // EnforSorting::optimize implementation
+            // EnforceSorting::optimize implementation
             // After these operations tree nodes should be in a consistent state.
             // This code block makes sure that these rules doesn't violate tree node integrity.
             {

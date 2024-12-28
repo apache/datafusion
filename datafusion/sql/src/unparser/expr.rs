@@ -747,7 +747,7 @@ impl Unparser<'_> {
     }
 
     /// Given an expression of the form `((a + b) * (c * d))`,
-    /// the parenthesing is redundant if the precedence of the nested expression is already higher
+    /// the parenthesis is redundant if the precedence of the nested expression is already higher
     /// than the surrounding operators' precedence. The above expression would become
     /// `(a + b) * c * d`.
     ///
@@ -1246,7 +1246,7 @@ impl Unparser<'_> {
     /// MySQL requires INTERVAL sql to be in the format: INTERVAL 1 YEAR + INTERVAL 1 MONTH + INTERVAL 1 DAY etc
     /// `<https://dev.mysql.com/doc/refman/8.4/en/expressions.html#temporal-intervals>`
     /// Interval sequence can't be wrapped in brackets - (INTERVAL 1 YEAR + INTERVAL 1 MONTH ...) so we need to generate
-    /// a single INTERVAL expression so it works correct for interval substraction cases
+    /// a single INTERVAL expression so it works correct for interval subtraction cases
     /// MySQL supports the DAY_MICROSECOND unit type (format is DAYS HOURS:MINUTES:SECONDS.MICROSECONDS), but it is not supported by sqlparser
     /// so we calculate the best single interval to represent the provided duration
     fn interval_to_mysql_expr(

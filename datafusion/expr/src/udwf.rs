@@ -344,7 +344,7 @@ pub trait WindowUDFImpl: Debug + Send + Sync {
     /// optimizations manually for specific UDFs.
     ///
     /// Example:
-    /// [`simplify_udwf_expression.rs`]: <https://github.com/apache/arrow-datafusion/blob/main/datafusion-examples/examples/simplify_udwf_expression.rs>
+    /// [`advanced_udwf.rs`]: <https://github.com/apache/arrow-datafusion/blob/main/datafusion-examples/examples/advanced_udwf.rs>
     ///
     /// # Returns
     /// [None] if simplify is not defined or,

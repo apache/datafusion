@@ -215,7 +215,7 @@ mod tests {
 
     #[test]
     // Ensure that arrays with no nulls can also invoke NULLIF() correctly
-    fn nullif_int32_nonulls() -> Result<()> {
+    fn nullif_int32_non_nulls() -> Result<()> {
         let a = Int32Array::from(vec![1, 3, 10, 7, 8, 1, 2, 4, 5]);
         let a = ColumnarValue::Array(Arc::new(a));
 

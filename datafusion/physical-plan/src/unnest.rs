@@ -456,7 +456,7 @@ fn list_unnest_at_level(
         unnest_list_arrays(arrs_to_unnest.as_ref(), unnested_length, total_length)?;
 
     // Create the take indices array for other columns
-    let take_indices = create_take_indicies(unnested_length, total_length);
+    let take_indices = create_take_indices(unnested_length, total_length);
     unnested_temp_arrays
         .into_iter()
         .zip(list_unnest_specs.iter())
@@ -823,14 +823,14 @@ fn unnest_list_array(
     capacity: usize,
 ) -> Result<ArrayRef> {
     let values = list_array.values();
-    let mut take_indicies_builder = PrimitiveArray::<Int64Type>::builder(capacity);
+    let mut take_indices_builder = PrimitiveArray::<Int64Type>::builder(capacity);
     for row in 0..list_array.len() {
         let mut value_length = 0;
         if !list_array.is_null(row) {
             let (start, end) = list_array.value_offsets(row);
             value_length = end - start;
             for i in start..end {
-                take_indicies_builder.append_value(i)
+                take_indices_builder.append_value(i)
             }
         }
         let target_length = length_array.value(row);
@@ -840,17 +840,17 @@ fn unnest_list_array(
         );
         // Pad with NULL values
         for _ in value_length..target_length {
-            take_indicies_builder.append_null();
+            take_indices_builder.append_null();
         }
     }
     Ok(kernels::take::take(
         &values,
-        &take_indicies_builder.finish(),
+        &take_indices_builder.finish(),
         None,
     )?)
 }
 
-/// Creates take indicies that will be used to expand all columns except for the list type
+/// Creates take indices that will be used to expand all columns except for the list type
 /// [`columns`](UnnestExec::list_column_indices) that is being unnested.
 /// Every column value needs to be repeated multiple times according to the length array.
 ///
@@ -859,13 +859,13 @@ fn unnest_list_array(
 /// ```ignore
 /// [2, 3, 1]
 /// ```
-/// Then `create_take_indicies` will return an array like this
+/// Then [`create_take_indices`] will return an array like this
 ///
 /// ```ignore
 /// [0, 0, 1, 1, 1, 2]
 /// ```
 ///
-fn create_take_indicies(
+fn create_take_indices(
     length_array: &PrimitiveArray<Int64Type>,
     capacity: usize,
 ) -> PrimitiveArray<Int64Type> {
@@ -1270,11 +1270,11 @@ mod tests {
     }
 
     #[test]
-    fn test_create_take_indicies() -> Result<()> {
+    fn test_create_take_indices() -> Result<()> {
         let length_array = Int64Array::from(vec![2, 3, 1]);
-        let take_indicies = create_take_indicies(&length_array, 6);
+        let take_indices = create_take_indices(&length_array, 6);
         let expected = Int64Array::from(vec![0, 0, 1, 1, 1, 2]);
-        assert_eq!(take_indicies, expected);
+        assert_eq!(take_indices, expected);
         Ok(())
     }
 }

@@ -35,6 +35,9 @@ workspace = true
 name = "datafusion_optimizer"
 path = "src/lib.rs"
 
+[features]
+recursive_protection = ["dep:recursive"]
+
 [dependencies]
 arrow = { workspace = true }
 chrono = { workspace = true }
@@ -44,7 +47,7 @@ datafusion-physical-expr = { workspace = true }
 indexmap = { workspace = true }
 itertools = { workspace = true }
 log = { workspace = true }
-recursive = { workspace = true }
+recursive = { workspace = true, optional = true }
 regex = { workspace = true }
 regex-syntax = "0.8.0"
 

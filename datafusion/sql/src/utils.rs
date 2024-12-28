@@ -434,7 +434,7 @@ impl TreeNodeRewriter for RecursiveUnnestRewriter<'_> {
             // if expr inside unnest is a struct, do not consider
             // the next unnest as consecutive unnest (if any)
             // meaning unnest(unnest(struct_arr_col)) can't
-            // be interpreted as unest(struct_arr_col, depth:=2)
+            // be interpreted as unnest(struct_arr_col, depth:=2)
             // but has to be split into multiple unnest logical plan instead
             // a.k.a:
             // - unnest(struct_col)
@@ -488,7 +488,7 @@ impl TreeNodeRewriter for RecursiveUnnestRewriter<'_> {
             if traversing_unnest == self.top_most_unnest.as_ref().unwrap() {
                 self.top_most_unnest = None;
             }
-            // Find inside consecutive_unnest, the sequence of continous unnest exprs
+            // Find inside consecutive_unnest, the sequence of continuous unnest exprs
 
             // Get the latest consecutive unnest exprs
             // and check if current upward traversal is the returning to the root expr

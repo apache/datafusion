@@ -138,7 +138,7 @@ impl AnalyzerRule for RowLevelAccessControl {
     fn analyze(&self, plan: LogicalPlan, _config: &ConfigOptions) -> Result<LogicalPlan> {
         // use the TreeNode API to recursively walk the LogicalPlan tree
         // and all of its children (inputs)
-        let transfomed_plan = plan.transform(|plan| {
+        let transformed_plan = plan.transform(|plan| {
             // This closure is called for each LogicalPlan node
             // if it is a Scan node, add a filter to remove all managers
             if is_employee_table_scan(&plan) {
@@ -166,7 +166,7 @@ impl AnalyzerRule for RowLevelAccessControl {
         //
         // This example does not need the value of either flag, so simply
         // extract the LogicalPlan "data"
-        Ok(transfomed_plan.data)
+        Ok(transformed_plan.data)
     }
 
     fn name(&self) -> &str {

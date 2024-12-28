@@ -36,7 +36,7 @@ use datafusion_expr::{
 ///
 /// Apart from [FunctionFactory], this example covers
 /// [ScalarUDFImpl::simplify()] which is often used at the same time, to replace
-/// a function call with another expression at rutime.
+/// a function call with another expression at runtime.
 ///
 /// This example is rather simple and does not cover all cases required for a
 /// real implementation.

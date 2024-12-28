@@ -346,7 +346,10 @@ impl CaseExpr {
                 .downcast_ref::<BooleanArray>()
                 .expect("predicate should evaluate to a boolean array");
             // invert the bitmask
-            let bit_mask = not(bit_mask)?;
+            let bit_mask = match bit_mask.null_count() {
+                0 => not(bit_mask)?,
+                _ => not(&prep_null_mask_filter(bit_mask))?,
+            };
             match then_expr.evaluate(batch)? {
                 ColumnarValue::Array(array) => {
                     Ok(ColumnarValue::Array(nullif(&array, &bit_mask)?))
@@ -882,6 +885,32 @@ mod tests {
 
         assert_eq!(expected, result);
 
+        Ok(())
+    }
+
+    #[test]
+    fn test_when_null_and_some_cond_else_null() -> Result<()> {
+        let batch = case_test_batch()?;
+        let schema = batch.schema();
+
+        let when = binary(
+            Arc::new(Literal::new(ScalarValue::Boolean(None))),
+            Operator::And,
+            binary(col("a", &schema)?, Operator::Eq, lit("foo"), &schema)?,
+            &schema,
+        )?;
+        let then = col("a", &schema)?;
+
+        // SELECT CASE WHEN (NULL AND a = 'foo') THEN a ELSE NULL END
+        let expr = Arc::new(CaseExpr::try_new(None, vec![(when, then)], None)?);
+        let result = expr
+            .evaluate(&batch)?
+            .into_array(batch.num_rows())
+            .expect("Failed to convert to array");
+        let result = as_string_array(&result);
+
+        // all result values should be null
+        assert_eq!(result.logical_null_count(), batch.num_rows());
         Ok(())
     }
 

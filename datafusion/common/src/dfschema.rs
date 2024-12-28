@@ -955,7 +955,7 @@ pub trait ExprSchema: std::fmt::Debug {
     /// Returns the column's optional metadata.
     fn metadata(&self, col: &Column) -> Result<&HashMap<String, String>>;
 
-    /// Return the coulmn's datatype and nullability
+    /// Return the column's datatype and nullability
     fn data_type_and_nullable(&self, col: &Column) -> Result<(&DataType, bool)>;
 }
 

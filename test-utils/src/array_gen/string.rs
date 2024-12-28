@@ -45,7 +45,7 @@ impl StringArrayGenerator {
             .collect();
 
         // pick num_strings randomly from the distinct string table
-        let indicies: UInt32Array = (0..self.num_strings)
+        let indices: UInt32Array = (0..self.num_strings)
             .map(|_| {
                 if self.rng.gen::<f64>() < self.null_pct {
                     None
@@ -59,7 +59,7 @@ impl StringArrayGenerator {
             .collect();
 
         let options = None;
-        arrow::compute::take(&distinct_strings, &indicies, options).unwrap()
+        arrow::compute::take(&distinct_strings, &indices, options).unwrap()
     }
 
     /// Creates a StringViewArray with random strings.
@@ -69,7 +69,7 @@ impl StringArrayGenerator {
             .collect();
 
         // pick num_strings randomly from the distinct string table
-        let indicies: UInt32Array = (0..self.num_strings)
+        let indices: UInt32Array = (0..self.num_strings)
             .map(|_| {
                 if self.rng.gen::<f64>() < self.null_pct {
                     None
@@ -83,7 +83,7 @@ impl StringArrayGenerator {
             .collect();
 
         let options = None;
-        arrow::compute::take(&distinct_string_views, &indicies, options).unwrap()
+        arrow::compute::take(&distinct_string_views, &indices, options).unwrap()
     }
 }
 

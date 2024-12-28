@@ -16,7 +16,7 @@
 // under the License.
 
 use std::any::Any;
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
 use arrow::array::{
     ArrayAccessor, ArrayIter, ArrayRef, ArrowPrimitiveType, AsArray, OffsetSizeTrait,
@@ -26,12 +26,30 @@ use arrow::datatypes::{ArrowNativeType, DataType, Int32Type, Int64Type};
 
 use crate::utils::{make_scalar_function, utf8_to_int_type};
 use datafusion_common::{exec_err, Result};
-use datafusion_expr::scalar_doc_sections::DOC_SECTION_STRING;
 use datafusion_expr::TypeSignature::Exact;
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
 };
+use datafusion_macros::user_doc;
 
+#[user_doc(
+    doc_section(label = "String Functions"),
+    description = "Returns a value in the range of 1 to N if the string str is in the string list strlist consisting of N substrings.",
+    syntax_example = "find_in_set(str, strlist)",
+    sql_example = r#"```sql
+> select find_in_set('b', 'a,b,c,d');
++----------------------------------------+
+| find_in_set(Utf8("b"),Utf8("a,b,c,d")) |
++----------------------------------------+
+| 2                                      |
++----------------------------------------+ 
+```"#,
+    argument(name = "str", description = "String expression to find in strlist."),
+    argument(
+        name = "strlist",
+        description = "A string list is a string composed of substrings separated by , characters."
+    )
+)]
 #[derive(Debug)]
 pub struct FindInSetFunc {
     signature: Signature,
@@ -85,30 +103,8 @@ impl ScalarUDFImpl for FindInSetFunc {
     }
 
     fn documentation(&self) -> Option<&Documentation> {
-        Some(get_find_in_set_doc())
+        self.doc()
     }
-}
-
-static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
-
-fn get_find_in_set_doc() -> &'static Documentation {
-    DOCUMENTATION.get_or_init(|| {
-        Documentation::builder(
-            DOC_SECTION_STRING,
-            "Returns a value in the range of 1 to N if the string str is in the string list strlist consisting of N substrings.",
-            "find_in_set(str, strlist)")
-            .with_sql_example(r#"```sql
-> select find_in_set('b', 'a,b,c,d');
-+----------------------------------------+
-| find_in_set(Utf8("b"),Utf8("a,b,c,d")) |
-+----------------------------------------+
-| 2                                      |
-+----------------------------------------+ 
-```"#)
-            .with_argument("str", "String expression to find in strlist.")
-            .with_argument("strlist", "A string list is a string composed of substrings separated by , characters.")
-            .build()
-    })
 }
 
 ///Returns a value in the range of 1 to N if the string str is in the string list strlist consisting of N substrings

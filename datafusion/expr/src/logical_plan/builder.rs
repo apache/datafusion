@@ -155,11 +155,11 @@ impl LogicalPlanBuilder {
         }
         // Ensure that the static term and the recursive term have the same number of fields
         let static_fields_len = self.plan.schema().fields().len();
-        let recurive_fields_len = recursive_term.schema().fields().len();
-        if static_fields_len != recurive_fields_len {
+        let recursive_fields_len = recursive_term.schema().fields().len();
+        if static_fields_len != recursive_fields_len {
             return plan_err!(
                 "Non-recursive term and recursive term must have the same number of columns ({} != {})",
-                static_fields_len, recurive_fields_len
+                static_fields_len, recursive_fields_len
             );
         }
         // Ensure that the recursive term has the same field types as the static term
@@ -254,7 +254,7 @@ impl LogicalPlanBuilder {
                     if can_cast_types(&data_type, field_type) {
                     } else {
                         return exec_err!(
-                            "type mistmatch and can't cast to got {} and {}",
+                            "type mismatch and can't cast to got {} and {}",
                             data_type,
                             field_type
                         );
@@ -1635,7 +1635,7 @@ pub fn wrap_projection_for_join_if_necessary(
         .iter()
         .map(|key| {
             // The display_name() of cast expression will ignore the cast info, and show the inner expression name.
-            // If we do not add alais, it will throw same field name error in the schema when adding projection.
+            // If we do not add alias, it will throw same field name error in the schema when adding projection.
             // For example:
             //    input scan : [a, b, c],
             //    join keys: [cast(a as int)]
@@ -1776,7 +1776,7 @@ pub fn get_unnested_columns(
             let new_field = Arc::new(Field::new(
                 col_name, data_type,
                 // Unnesting may produce NULLs even if the list is not null.
-                // For example: unnset([1], []) -> 1, null
+                // For example: unnest([1], []) -> 1, null
                 true,
             ));
             let column = Column::from_name(col_name);

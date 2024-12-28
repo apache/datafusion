@@ -152,7 +152,7 @@ pub trait Dialect: Send + Sync {
 
     /// Allow to unparse a qualified column with a full qualified name
     /// (e.g. catalog_name.schema_name.table_name.column_name)
-    /// Otherwise, the column will be unparsed with only the table name and colum name
+    /// Otherwise, the column will be unparsed with only the table name and column name
     /// (e.g. table_name.column_name)
     fn full_qualified_col(&self) -> bool {
         false

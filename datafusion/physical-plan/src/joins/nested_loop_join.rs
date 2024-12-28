@@ -24,8 +24,9 @@ use std::sync::Arc;
 use std::task::Poll;
 
 use super::utils::{
-    asymmetric_join_output_partitioning, need_produce_result_in_final, BatchSplitter,
-    BatchTransformer, NoopBatchTransformer, StatefulStreamResult,
+    asymmetric_join_output_partitioning, need_produce_result_in_final,
+    reorder_output_after_swap, BatchSplitter, BatchTransformer, NoopBatchTransformer,
+    StatefulStreamResult,
 };
 use crate::coalesce_partitions::CoalescePartitionsExec;
 use crate::execution_plan::{boundedness_from_children, EmissionType};
@@ -295,6 +296,40 @@ impl NestedLoopJoinExec {
                     | JoinType::RightSemi
             ),
         ]
+    }
+
+    /// Returns a new `ExecutionPlan` that runs NestedLoopsJoins with the left
+    /// and right inputs swapped.
+    pub fn swap_inputs(&self) -> Result<Arc<dyn ExecutionPlan>> {
+        let new_filter = self.filter().map(JoinFilter::swap);
+        let new_join_type = &self.join_type().swap();
+
+        let new_join = NestedLoopJoinExec::try_new(
+            Arc::clone(self.right()),
+            Arc::clone(self.left()),
+            new_filter,
+            new_join_type,
+        )?;
+
+        // For Semi/Anti joins, swap result will produce same output schema,
+        // no need to wrap them into additional projection
+        let plan: Arc<dyn ExecutionPlan> = if matches!(
+            self.join_type(),
+            JoinType::LeftSemi
+                | JoinType::RightSemi
+                | JoinType::LeftAnti
+                | JoinType::RightAnti
+        ) {
+            Arc::new(new_join)
+        } else {
+            reorder_output_after_swap(
+                Arc::new(new_join),
+                &self.left().schema(),
+                &self.right().schema(),
+            )?
+        };
+
+        Ok(plan)
     }
 }
 

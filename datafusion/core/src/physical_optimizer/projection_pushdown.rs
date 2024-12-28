@@ -615,15 +615,15 @@ fn try_embed_projection<Exec: EmbeddedProjection + 'static>(
 /// Collect all column indices from the given projection expressions.
 fn collect_column_indices(exprs: &[(Arc<dyn PhysicalExpr>, String)]) -> Vec<usize> {
     // Collect indices and remove duplicates.
-    let mut indexs = exprs
+    let mut indices = exprs
         .iter()
         .flat_map(|(expr, _)| collect_columns(expr))
         .map(|x| x.index())
         .collect::<std::collections::HashSet<_>>()
         .into_iter()
         .collect::<Vec<_>>();
-    indexs.sort();
-    indexs
+    indices.sort();
+    indices
 }
 
 /// Tries to push `projection` down through `hash_join`. If possible, performs the

@@ -49,7 +49,7 @@ pub trait PartitionedStream: std::fmt::Debug + Send {
     ) -> Poll<Option<Self::Output>>;
 }
 
-/// A newtype wrapper around a set of fused [`SendableRecordBatchStream`]
+/// A new type wrapper around a set of fused [`SendableRecordBatchStream`]
 /// that implements debug, and skips over empty [`RecordBatch`]
 struct FusedStreams(Vec<Fuse<SendableRecordBatchStream>>);
 

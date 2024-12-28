@@ -286,7 +286,7 @@ impl DisplayAs for UnboundedExec {
             DisplayFormatType::Default | DisplayFormatType::Verbose => {
                 write!(
                     f,
-                    "UnboundableExec: unbounded={}",
+                    "UnboundedExec: unbounded={}",
                     self.batch_produce.is_none(),
                 )
             }

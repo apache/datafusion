@@ -38,7 +38,7 @@ use datafusion::physical_plan::{
 use datafusion::prelude::SessionContext;
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
 
-// Initialise the operator using the provided record batches and the sort key
+// Initialize the operator using the provided record batches and the sort key
 // as inputs. All record batches must have the same schema.
 fn sort_preserving_merge_operator(
     session_ctx: Arc<SessionContext>,

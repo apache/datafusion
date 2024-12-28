@@ -449,7 +449,7 @@ impl MinMaxBytesState {
         self.min_max.resize(total_num_groups, None);
         // Minimize value copies by calculating the new min/maxes for each group
         // in this batch (either the existing min/max or the new input value)
-        // and updating the owne values in `self.min_maxes` at most once
+        // and updating the owned values in `self.min_maxes` at most once
         let mut locations = vec![MinMaxLocation::ExistingMinMax; total_num_groups];
 
         // Figure out the new min value for each group
@@ -463,12 +463,12 @@ impl MinMaxBytesState {
                 // previous input value was the min/max, so compare it
                 MinMaxLocation::Input(existing_val) => existing_val,
                 MinMaxLocation::ExistingMinMax => {
-                    let Some(exising_val) = self.min_max[group_index].as_ref() else {
+                    let Some(existing_val) = self.min_max[group_index].as_ref() else {
                         // no existing min/max, so this is the new min/max
                         locations[group_index] = MinMaxLocation::Input(new_val);
                         continue;
                     };
-                    exising_val.as_ref()
+                    existing_val.as_ref()
                 }
             };
 

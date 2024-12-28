@@ -79,7 +79,7 @@ use datafusion_expr_common::groups_accumulator::{EmitTo, GroupsAccumulator};
 ///
 ///  Logical group         Current Min/Max value for that group stored
 ///     number             as a ScalarValue which points to an
-///                        indivdually allocated String
+///                        individually allocated String
 ///
 ///```
 ///
@@ -281,7 +281,7 @@ impl GroupsAccumulatorAdapter {
     /// See [`Self::allocation_bytes`] for rationale.
     fn free_allocation(&mut self, size: usize) {
         // use saturating sub to avoid errors if the accumulators
-        // report erronious sizes
+        // report erroneous sizes
         self.allocation_bytes = self.allocation_bytes.saturating_sub(size)
     }
 

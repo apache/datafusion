@@ -189,7 +189,7 @@ impl StringArrayBuilder {
         self.offsets_buffer.push(next_offset);
     }
 
-    /// Finalise the builder into a concrete [`StringArray`].
+    /// Finalize the builder into a concrete [`StringArray`].
     ///
     /// # Panics
     ///
@@ -358,7 +358,7 @@ impl LargeStringArrayBuilder {
         self.offsets_buffer.push(next_offset);
     }
 
-    /// Finalise the builder into a concrete [`LargeStringArray`].
+    /// Finalize the builder into a concrete [`LargeStringArray`].
     ///
     /// # Panics
     ///

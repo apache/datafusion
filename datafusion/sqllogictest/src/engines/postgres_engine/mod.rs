@@ -75,14 +75,14 @@ impl Postgres {
         let uri =
             std::env::var("PG_URI").map_or(PG_URI.to_string(), std::convert::identity);
 
-        debug!("Using posgres connection string: {uri}");
+        debug!("Using postgres connection string: {uri}");
 
         let config = tokio_postgres::Config::from_str(&uri)?;
 
         // hint to user what the connection string was
         let res = config.connect(tokio_postgres::NoTls).await;
         if res.is_err() {
-            eprintln!("Error connecting to posgres using PG_URI={uri}");
+            eprintln!("Error connecting to postgres using PG_URI={uri}");
         };
 
         let (client, connection) = res?;

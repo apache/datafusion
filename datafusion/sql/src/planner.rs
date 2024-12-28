@@ -463,7 +463,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 {
                     Ok(DataType::Time64(TimeUnit::Nanosecond))
                 } else {
-                    // We dont support TIMETZ and TIME WITH TIME ZONE for now
+                    // We don't support TIMETZ and TIME WITH TIME ZONE for now
                     not_impl_err!(
                         "Unsupported SQL type {sql_type:?}"
                     )

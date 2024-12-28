@@ -22,7 +22,6 @@ use std::fmt::Debug;
 use std::sync::Arc;
 
 use crate::{OptimizerConfig, OptimizerRule};
-use recursive::recursive;
 
 use crate::optimizer::ApplyOrder;
 use crate::utils::NamePreserver;
@@ -383,10 +382,10 @@ impl CommonSubexprEliminate {
                         //  keep column names and get rid of additional name
                         //  preserving logic here.
                         if let Some(aggr_expr) = aggr_expr {
-                            let name_perserver = NamePreserver::new_for_projection();
+                            let name_preserver = NamePreserver::new_for_projection();
                             let saved_names = aggr_expr
                                 .iter()
-                                .map(|expr| name_perserver.save(expr))
+                                .map(|expr| name_preserver.save(expr))
                                 .collect::<Vec<_>>();
                             let new_aggr_expr = rewritten_aggr_expr
                                 .into_iter()
@@ -532,7 +531,7 @@ impl OptimizerRule for CommonSubexprEliminate {
         None
     }
 
-    #[recursive]
+    #[cfg_attr(feature = "recursive_protection", recursive::recursive)]
     fn rewrite(
         &self,
         plan: LogicalPlan,
@@ -952,7 +951,7 @@ mod test {
             )?
             .build()?;
 
-        let expected ="Aggregate: groupBy=[[]], aggr=[[avg(__common_expr_1) AS col1, my_agg(__common_expr_1) AS col2]]\
+        let expected = "Aggregate: groupBy=[[]], aggr=[[avg(__common_expr_1) AS col1, my_agg(__common_expr_1) AS col2]]\
         \n  Projection: UInt32(1) + test.a AS __common_expr_1, test.a, test.b, test.c\
         \n    TableScan: test";
 

@@ -237,7 +237,7 @@ fn generate_sorted_strings(
 
 /// Iterator that generates sorted, [`RecordBatch`]es with randomly generated data with
 /// an access log style schema for tracing or monitoring type
-/// usecases.
+/// use cases.
 ///
 /// This is useful for writing tests queries on such data
 ///

@@ -60,7 +60,7 @@ impl DecimalArrayGenerator {
         };
 
         // pick num_decimals randomly from the distinct decimal table
-        let indicies: UInt32Array = (0..self.num_decimals)
+        let indices: UInt32Array = (0..self.num_decimals)
             .map(|_| {
                 if self.rng.gen::<f64>() < self.null_pct {
                     None
@@ -74,6 +74,6 @@ impl DecimalArrayGenerator {
             .collect();
 
         let options = None;
-        arrow::compute::take(&distinct_decimals, &indicies, options).unwrap()
+        arrow::compute::take(&distinct_decimals, &indices, options).unwrap()
     }
 }

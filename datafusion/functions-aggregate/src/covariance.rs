@@ -246,7 +246,7 @@ impl AggregateUDFImpl for CovariancePopulation {
 /// Journal of the American Statistical Association. 69 (348): 859–866. doi:10.2307/2286154. JSTOR 2286154.
 ///
 /// Though it is not covered in the original paper but is based on the same idea, as a result the algorithm is online,
-/// parallelizable and numerically stable.
+/// parallelize and numerically stable.
 
 #[derive(Debug)]
 pub struct CovarianceAccumulator {

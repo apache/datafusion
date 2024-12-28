@@ -93,7 +93,7 @@ impl SortTest {
         self
     }
 
-    /// specify that this test should use a memory pool of the specifeid size
+    /// specify that this test should use a memory pool of the specified size
     fn with_pool_size(mut self, pool_size: usize) -> Self {
         self.pool_size = Some(pool_size);
         self

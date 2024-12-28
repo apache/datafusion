@@ -1903,7 +1903,7 @@ mod tests {
     #[tokio::test]
     async fn send_context_to_threads() -> Result<()> {
         // ensure SessionContexts can be used in a multi-threaded
-        // environment. Usecase is for concurrent planing.
+        // environment. Use case is for concurrent planing.
         let tmp_dir = TempDir::new()?;
         let partition_count = 4;
         let ctx = Arc::new(create_ctx(&tmp_dir, partition_count).await?);

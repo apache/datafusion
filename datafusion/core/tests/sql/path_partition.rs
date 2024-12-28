@@ -183,7 +183,7 @@ async fn parquet_distinct_partition_col() -> Result<()> {
     max_limit += 1;
     let last_batch = results
         .last()
-        .expect("There shouled be at least one record batch returned");
+        .expect("There should be at least one record batch returned");
     let last_row_idx = last_batch.num_rows() - 1;
     let mut min_limit =
         match ScalarValue::try_from_array(last_batch.column(0), last_row_idx)? {
@@ -568,7 +568,7 @@ async fn parquet_overlapping_columns() -> Result<()> {
 
     assert!(
         result.is_err(),
-        "Dupplicate qualified name should raise error"
+        "Duplicate qualified name should raise error"
     );
     Ok(())
 }

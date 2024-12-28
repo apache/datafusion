@@ -297,7 +297,7 @@ pub mod test {
                 RelType::Exchange(e) => {
                     self.apply(e.input.as_ref().map(|b| b.as_ref()))?;
                     let exchange_kind = e.exchange_kind.as_ref().ok_or(
-                        substrait_datafusion_err!("Exhange must set exchange_kind"),
+                        substrait_datafusion_err!("Exchange must set exchange_kind"),
                     )?;
                     match exchange_kind {
                         ExchangeKind::ScatterByFields(_) => {}

@@ -78,8 +78,8 @@ impl PrimitiveArrayGenerator {
             }
         };
 
-        // pick num_primitves randomly from the distinct string table
-        let indicies: UInt32Array = (0..self.num_primitives)
+        // pick num_primitives randomly from the distinct string table
+        let indices: UInt32Array = (0..self.num_primitives)
             .map(|_| {
                 if self.rng.gen::<f64>() < self.null_pct {
                     None
@@ -93,7 +93,7 @@ impl PrimitiveArrayGenerator {
             .collect();
 
         let options = None;
-        arrow::compute::take(&distinct_primitives, &indicies, options).unwrap()
+        arrow::compute::take(&distinct_primitives, &indices, options).unwrap()
     }
 
     // Generates a random timezone or returns `None`.

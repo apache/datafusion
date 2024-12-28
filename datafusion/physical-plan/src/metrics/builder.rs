@@ -50,7 +50,7 @@ pub struct MetricBuilder<'a> {
     /// optional partition number
     partition: Option<usize>,
 
-    /// arbitrary name=value pairs identifiying this metric
+    /// arbitrary name=value pairs identifying this metric
     labels: Vec<Label>,
 }
 

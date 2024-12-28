@@ -115,7 +115,7 @@ pub enum DataFusionError {
     Execution(String),
     /// [`JoinError`] during execution of the query.
     ///
-    /// This error can unoccur for unjoined tasks, such as execution shutdown.
+    /// This error can't occur for unjoined tasks, such as execution shutdown.
     ExecutionJoin(JoinError),
     /// Error when resources (such as memory of scratch disk space) are exhausted.
     ///

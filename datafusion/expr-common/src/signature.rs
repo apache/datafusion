@@ -351,6 +351,15 @@ impl TypeSignature {
         }
     }
 
+    /// Returns true if the signature currently supports or used to supported 0
+    /// input arguments in a previous version of DataFusion.
+    pub fn used_to_support_zero_arguments(&self) -> bool {
+        match &self {
+            TypeSignature::Any(num) => *num == 0,
+            _ => self.supports_zero_argument(),
+        }
+    }
+
     /// get all possible types for the given `TypeSignature`
     pub fn get_possible_types(&self) -> Vec<Vec<DataType>> {
         match self {
