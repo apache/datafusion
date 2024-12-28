@@ -2271,8 +2271,8 @@ mod tests {
 
     use arrow::datatypes::{DataType, Field, Schema};
     use arrow_schema::{Fields, TimeUnit};
-    use datafusion_common::ScalarValue;
     use datafusion_common::config::ConfigOptions;
+    use datafusion_common::ScalarValue;
     use datafusion_expr::Operator;
 
     use datafusion_functions::string::concat;
