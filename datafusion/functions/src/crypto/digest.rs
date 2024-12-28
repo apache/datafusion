@@ -41,14 +41,14 @@ use std::any::Any;
     argument(
         name = "algorithm",
         description = "String expression specifying algorithm to use. Must be one of:       
-- md5
-- sha224
-- sha256
-- sha384
-- sha512
-- blake2s
-- blake2b
-- blake3"
+    - md5
+    - sha224
+    - sha256
+    - sha384
+    - sha512
+    - blake2s
+    - blake2b
+    - blake3"
     )
 )]
 #[derive(Debug)]

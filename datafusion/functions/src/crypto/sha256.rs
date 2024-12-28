@@ -28,7 +28,7 @@ use std::any::Any;
 #[user_doc(
     doc_section(label = "Hashing Functions"),
     description = "Computes the SHA-256 hash of a binary string.",
-    syntax_example = "sha256(expression",
+    syntax_example = "sha256(expression)",
     sql_example = r#"```sql
 > select sha256('foo');
 +--------------------------------------+

@@ -28,14 +28,14 @@ use std::any::Any;
 #[user_doc(
     doc_section(label = "Hashing Functions"),
     description = "Computes the SHA-512 hash of a binary string.",
-    syntax_example = "sha512(expression",
+    syntax_example = "sha512(expression)",
     sql_example = r#"```sql
 > select sha512('foo');
-+--------------------------------------+
-| sha512(Utf8("foo"))                  |
-+--------------------------------------+
-| <sha512_hash_result>                 |
-+--------------------------------------+
++-------------------------------------------+
+| sha512(Utf8("foo"))                       |
++-------------------------------------------+
+| <sha512_hash_result>                      |
++-------------------------------------------+
 ```"#,
     standard_argument(name = "expression", prefix = "String")
 )]

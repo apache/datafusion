@@ -28,14 +28,14 @@ use std::any::Any;
 #[user_doc(
     doc_section(label = "Hashing Functions"),
     description = "Computes the SHA-384 hash of a binary string.",
-    syntax_example = "sha384(expression",
+    syntax_example = "sha384(expression)",
     sql_example = r#"```sql
 > select sha384('foo');
-+--------------------------------------+
-| sha384(Utf8("foo"))                  |
-+--------------------------------------+
-| <sha384_hash_result>                 |
-+--------------------------------------+
++-----------------------------------------+
+| sha384(Utf8("foo"))                     |
++-----------------------------------------+
+| <sha384_hash_result>                    |
++-----------------------------------------+
 ```"#,
     standard_argument(name = "expression", prefix = "String")
 )]

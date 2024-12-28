@@ -27,7 +27,7 @@ use std::any::Any;
 
 #[user_doc(
     doc_section(label = "Hashing Functions"),
-    description = "Computes an MD5 128-bit checksum for a string expression",
+    description = "Computes an MD5 128-bit checksum for a string expression.",
     syntax_example = "md5(expression)",
     sql_example = r#"```sql
 > select md5('foo');
