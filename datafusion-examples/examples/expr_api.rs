@@ -53,7 +53,7 @@ use datafusion_optimizer::analyzer::type_coercion::TypeCoercionRewriter;
 /// 4. Simplify expressions: [`simplify_demo`]
 /// 5. Analyze predicates for boundary ranges: [`range_analysis_demo`]
 /// 6. Get the types of the expressions: [`expression_type_demo`]
-/// 7. Apply type cocercion to expressions: [`type_coercion_demo`]
+/// 7. Apply type coercion to expressions: [`type_coercion_demo`]
 #[tokio::main]
 async fn main() -> Result<()> {
     // The easiest way to do create expressions is to use the
@@ -392,7 +392,7 @@ fn type_coercion_demo() -> Result<()> {
     )?;
     assert!(physical_expr.evaluate(&batch).is_ok());
 
-    // 4. Apply explict type coercion by manually rewriting the expression
+    // 4. Apply explicit type coercion by manually rewriting the expression
     let coerced_expr = expr
         .transform(|e| {
             // Only type coerces binary expressions.

@@ -173,7 +173,7 @@ impl ExecutionPlan for AnalyzeExec {
             );
         }
 
-        // Create future that computes thefinal output
+        // Create future that computes the final output
         let start = Instant::now();
         let captured_input = Arc::clone(&self.input);
         let captured_schema = Arc::clone(&self.schema);

@@ -318,7 +318,7 @@ fn to_utc_date_time(nanos: i64) -> DateTime<Utc> {
 // Supported intervals:
 //  1. IntervalDayTime: this means that the stride is in days, hours, minutes, seconds and milliseconds
 //     We will assume month interval won't be converted into this type
-//     TODO (my next PR): without `INTERVAL` keyword, the stride was converted into ScalarValue::IntervalDayTime somwhere
+//     TODO (my next PR): without `INTERVAL` keyword, the stride was converted into ScalarValue::IntervalDayTime somewhere
 //             for month interval. I need to find that and make it ScalarValue::IntervalMonthDayNano instead
 // 2. IntervalMonthDayNano
 fn date_bin_impl(

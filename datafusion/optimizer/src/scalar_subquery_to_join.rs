@@ -134,7 +134,7 @@ impl OptimizerRule for ScalarSubqueryToJoin {
                     return Ok(Transformed::no(LogicalPlan::Projection(projection)));
                 }
 
-                let mut all_subqueryies = vec![];
+                let mut all_subqueries = vec![];
                 let mut expr_to_rewrite_expr_map = HashMap::new();
                 let mut subquery_to_expr_map = HashMap::new();
                 for expr in projection.expr.iter() {
@@ -143,15 +143,15 @@ impl OptimizerRule for ScalarSubqueryToJoin {
                     for (subquery, _) in &subqueries {
                         subquery_to_expr_map.insert(subquery.clone(), expr.clone());
                     }
-                    all_subqueryies.extend(subqueries);
+                    all_subqueries.extend(subqueries);
                     expr_to_rewrite_expr_map.insert(expr, rewrite_exprs);
                 }
-                if all_subqueryies.is_empty() {
+                if all_subqueries.is_empty() {
                     return internal_err!("Expected subqueries not found in projection");
                 }
                 // iterate through all subqueries in predicate, turning each into a left join
                 let mut cur_input = projection.input.as_ref().clone();
-                for (subquery, alias) in all_subqueryies {
+                for (subquery, alias) in all_subqueries {
                     if let Some((optimized_subquery, expr_check_map)) =
                         build_join(&subquery, &cur_input, &alias)?
                     {
@@ -731,7 +731,7 @@ mod tests {
             .project(vec![col("customer.c_custkey")])?
             .build()?;
 
-        let expected = "check_analyzed_plan\
+        let expected = "Invalid (non-executable) plan after Analyzer\
         \ncaused by\
         \nError during planning: Scalar subquery should only return one column";
         assert_analyzer_check_err(vec![], plan, expected);
@@ -793,7 +793,7 @@ mod tests {
             .project(vec![col("customer.c_custkey")])?
             .build()?;
 
-        let expected = "check_analyzed_plan\
+        let expected = "Invalid (non-executable) plan after Analyzer\
         \ncaused by\
         \nError during planning: Scalar subquery should only return one column";
         assert_analyzer_check_err(vec![], plan, expected);
@@ -879,7 +879,7 @@ mod tests {
         Ok(())
     }
 
-    /// Test for correlated scalar subquery filter with disjustions
+    /// Test for correlated scalar subquery filter with disjunctions
     #[test]
     fn scalar_subquery_disjunction() -> Result<()> {
         let sq = Arc::new(

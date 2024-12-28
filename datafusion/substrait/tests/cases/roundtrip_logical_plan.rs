@@ -1135,7 +1135,7 @@ fn check_post_join_filters(rel: &Rel) -> Result<()> {
             // check if join filter is None
             if join.post_join_filter.is_some() {
                 plan_err!(
-                    "DataFusion generated Susbtrait plan cannot have post_join_filter in JoinRel"
+                    "DataFusion generated Substrait plan cannot have post_join_filter in JoinRel"
                 )
             } else {
                 // recursively check JoinRels
