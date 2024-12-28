@@ -168,9 +168,8 @@ impl TryFrom<&TableParquetOptions> for WriterPropertiesBuilder {
 
 /// Encodes the Arrow schema into the IPC format, and base64 encodes it
 ///
-/// TODO: make arrow schema encoding available in a public API.
-/// Refer to currently private `add_encoded_arrow_schema_to_metadata` and `encode_arrow_schema` public.
-/// <https://github.com/apache/arrow-rs/blob/2908a80d9ca3e3fb0414e35b67856f1fb761304c/parquet/src/arrow/schema/mod.rs#L172-L221>
+/// TODO: use extern parquet's private method, once publicly available.
+/// Refer to <https://github.com/apache/arrow-rs/pull/6916>
 fn encode_arrow_schema(schema: &Arc<Schema>) -> String {
     let options = arrow_ipc::writer::IpcWriteOptions::default();
     let mut dictionary_tracker = arrow_ipc::writer::DictionaryTracker::new(true);
