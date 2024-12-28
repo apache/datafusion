@@ -239,6 +239,10 @@ pub fn cell_to_string(col: &ArrayRef, row: usize) -> Result<String> {
                 let key = dict.normalized_keys()[row];
                 Ok(cell_to_string(dict.values(), key)?)
             }
+            // only added because of a bug in v 1.0.4 (is) of lexical-write-integer
+            DataType::Int64 => {
+                Ok(format!("{}", get_row_value!(array::Int64Array, col, row)))
+            }
             _ => {
                 let f = ArrayFormatter::try_new(col.as_ref(), &DEFAULT_FORMAT_OPTIONS);
                 Ok(f.unwrap().value(row).to_string())
