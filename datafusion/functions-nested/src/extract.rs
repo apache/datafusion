@@ -98,7 +98,7 @@ make_udf_expr_and_func!(
     ),
     argument(
         name = "index",
-        description = "Index to extract the element from the array"
+        description = "Index to extract the element from the array."
     )
 )]
 #[derive(Debug)]
