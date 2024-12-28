@@ -54,22 +54,23 @@ use datafusion_macros::user_doc;
     alternative_syntax = "extract(field FROM source)",
     argument(
         name = "part",
-        description = "Optional. Starting point used to determine bin boundaries. If not specified defaults 1970-01-01T00:00:00Z (the UNIX epoch in UTC).
-
-The following intervals are supported:
-
-- nanoseconds
-- microseconds
-- milliseconds
-- seconds
-- minutes
-- hours
-- days
-- weeks
-- months
-- years
-- century
-"
+        description = r#"Part of the date to return. The following date parts are supported:
+        
+    - year
+    - quarter (emits value in inclusive range [1, 4] based on which quartile of the year the date is in)
+    - month
+    - week (week of the year)
+    - day (day of the month)
+    - hour
+    - minute
+    - second
+    - millisecond
+    - microsecond
+    - nanosecond
+    - dow (day of the week)
+    - doy (day of the year)
+    - epoch (seconds since Unix epoch)
+"#
     ),
     argument(
         name = "expression",

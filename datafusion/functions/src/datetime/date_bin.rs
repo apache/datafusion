@@ -72,29 +72,27 @@ FROM VALUES ('2023-01-01T18:18:18Z'), ('2023-01-03T19:00:03Z')  t(time);
 +---------------------+
 2 row(s) fetched.
 ```"#,
-    argument(name = "interval", description = "Bin interval"),
+    argument(name = "interval", description = "Bin interval."),
     argument(
         name = "expression",
         description = "Time expression to operate on. Can be a constant, column, or function."
     ),
     argument(
         name = "origin-timestamp",
-        description = "Optional. Starting point used to determine bin boundaries. If not specified defaults 1970-01-01T00:00:00Z (the UNIX epoch in UTC).
+        description = r#"Optional. Starting point used to determine bin boundaries. If not specified defaults 1970-01-01T00:00:00Z (the UNIX epoch in UTC). The following intervals are supported:
 
-The following intervals are supported:
-
-- nanoseconds
-- microseconds
-- milliseconds
-- seconds
-- minutes
-- hours
-- days
-- weeks
-- months
-- years
-- century
-"
+    - nanoseconds
+    - microseconds
+    - milliseconds
+    - seconds
+    - minutes
+    - hours
+    - days
+    - weeks
+    - months
+    - years
+    - century
+"#
     )
 )]
 #[derive(Debug)]
