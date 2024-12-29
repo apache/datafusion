@@ -125,9 +125,9 @@ pub(crate) fn swap_join_type(join_type: JoinType) -> JoinType {
 #[deprecated(since = "45.0.0", note = "use HashJoinExec::swap_inputs instead")]
 pub fn swap_hash_join(
     hash_join: &HashJoinExec,
-    partition_mode: PartitionMode,
+    _partition_mode: PartitionMode,
 ) -> Result<Arc<dyn ExecutionPlan>> {
-    hash_join.swap_inputs(partition_mode)
+    hash_join.swap_inputs()
 }
 
 /// Swaps inputs of `NestedLoopJoinExec` and wraps it into `ProjectionExec` is required
@@ -235,7 +235,7 @@ pub(crate) fn try_collect_left(
             if hash_join.join_type().supports_swap()
                 && should_swap_join_order(&**left, &**right)?
             {
-                Ok(Some(hash_join.swap_inputs(PartitionMode::CollectLeft)?))
+                Ok(Some(hash_join.swap_inputs()?))
             } else {
                 Ok(Some(Arc::new(HashJoinExec::try_new(
                     Arc::clone(left),
@@ -261,7 +261,7 @@ pub(crate) fn try_collect_left(
         )?))),
         (false, true) => {
             if hash_join.join_type().supports_swap() {
-                hash_join.swap_inputs(PartitionMode::CollectLeft).map(Some)
+                hash_join.swap_inputs().map(Some)
             } else {
                 Ok(None)
             }
@@ -282,7 +282,7 @@ pub(crate) fn partitioned_hash_join(
     let right = hash_join.right();
     if hash_join.join_type().supports_swap() && should_swap_join_order(&**left, &**right)?
     {
-        hash_join.swap_inputs(PartitionMode::Partitioned)
+        hash_join.swap_inputs()
     } else {
         Ok(Arc::new(HashJoinExec::try_new(
             Arc::clone(left),
@@ -329,7 +329,7 @@ fn statistical_join_selection_subrule(
                         && should_swap_join_order(&**left, &**right)?
                     {
                         hash_join
-                            .swap_inputs(PartitionMode::Partitioned)
+                            .swap_inputs()
                             .map(Some)?
                     } else {
                         None
@@ -563,10 +563,10 @@ fn swap_join_according_to_unboundedness(
             JoinType::Right | JoinType::RightSemi | JoinType::RightAnti | JoinType::Full,
         ) => internal_err!("{join_type} join cannot be swapped for unbounded input."),
         (PartitionMode::Partitioned, _) => {
-            hash_join.swap_inputs(PartitionMode::Partitioned)
+            hash_join.swap_inputs()
         }
         (PartitionMode::CollectLeft, _) => {
-            hash_join.swap_inputs(PartitionMode::CollectLeft)
+            hash_join.swap_inputs()
         }
         (PartitionMode::Auto, _) => {
             internal_err!("Auto is not acceptable for unbounded input here.")
@@ -1221,7 +1221,7 @@ mod tests_statistical {
         )?);
 
         let swapped = join
-            .swap_inputs(PartitionMode::Partitioned)
+            .swap_inputs()
             .expect("swap_hash_join must support joins with projections");
         let swapped_join = swapped.as_any().downcast_ref::<HashJoinExec>().expect(
             "ProjectionExec won't be added above if HashJoinExec contains embedded projection",

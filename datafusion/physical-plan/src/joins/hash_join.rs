@@ -576,10 +576,7 @@ impl HashJoinExec {
     ///
     /// This function is public so other downstream projects can use it to
     /// construct `HashJoinExec` with right side as the build side.
-    pub fn swap_inputs(
-        &self,
-        partition_mode: PartitionMode,
-    ) -> Result<Arc<dyn ExecutionPlan>> {
+    pub fn swap_inputs(&self) -> Result<Arc<dyn ExecutionPlan>> {
         let left = self.left();
         let right = self.right();
         let new_join = HashJoinExec::try_new(
@@ -597,7 +594,7 @@ impl HashJoinExec {
                 self.projection.as_ref(),
                 self.join_type(),
             ),
-            partition_mode,
+            *self.partition_mode(),
             self.null_equals_null(),
         )?;
         // In case of anti / semi joins or if there is embedded projection in HashJoinExec, output column order is preserved, no need to add projection again
