@@ -35,7 +35,7 @@ directory of the datafusion-testing crate.
 
 1. `rustup update stable` DataFusion uses the latest stable release of rust
 2. `git submodule init`
-3. `git submodule update`
+3. `git submodule update --init --remote --recursive`
 
 ## Running tests: TLDR Examples
 
@@ -218,7 +218,7 @@ INCLUDE_TPCH=true cargo test --test sqllogictests
 ## Running Tests: `sqlite`
 
 Test files in `data/sqlite` directory of the datafusion-testing crate were
-sourced from the sqlite test suite and have been cleansed and updated to
+sourced from the [sqlite test suite](https://www.sqlite.org/sqllogictest/dir?ci=tip) and have been cleansed and updated to
 run within DataFusion's sqllogictest runner.
 
 To run the sqlite tests you need to increase the rust stack size and add
