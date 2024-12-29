@@ -49,6 +49,8 @@ mod sync_provider;
 pub struct TableProviderModule {
     /// Constructs the table provider
     pub create_table: extern "C" fn(synchronous: bool) -> FFI_TableProvider,
+
+    pub version: extern "C" fn() -> u64,
 }
 
 impl RootModule for TableProviderModuleRef {
@@ -91,6 +93,7 @@ extern "C" fn construct_table_provider(synchronous: bool) -> FFI_TableProvider {
 pub fn get_simple_memory_table() -> TableProviderModuleRef {
     TableProviderModule {
         create_table: construct_table_provider,
+        version: datafusion_ffi::version,
     }
     .leak_into_prefix()
 }
