@@ -3122,34 +3122,26 @@ array_position(array, element, index)
 
 ### `array_positions`
 
-Returns the position of the first occurrence of the specified element in the array.
+Searches for an element in the array, returns all occurrences.
 
 ```
-array_position(array, element)
-array_position(array, element, index)
+array_positions(array, element)
 ```
 
 #### Arguments
 
 - **array**: Array expression. Can be a constant, column, or function, and any combination of array operators.
 - **element**: Element to search for position in the array.
-- **index**: Index at which to start searching.
 
 #### Example
 
 ```sql
-> select array_position([1, 2, 2, 3, 1, 4], 2);
-+----------------------------------------------+
-| array_position(List([1,2,2,3,1,4]),Int64(2)) |
-+----------------------------------------------+
-| 2                                            |
-+----------------------------------------------+
-> select array_position([1, 2, 2, 3, 1, 4], 2, 3);
-+----------------------------------------------------+
-| array_position(List([1,2,2,3,1,4]),Int64(2), Int64(3)) |
-+----------------------------------------------------+
-| 3                                                  |
-+----------------------------------------------------+
+> select array_positions([1, 2, 2, 3, 1, 4], 2);
++-----------------------------------------------+
+| array_positions(List([1,2,2,3,1,4]),Int64(2)) |
++-----------------------------------------------+
+| [2, 3]                                        |
++-----------------------------------------------+
 ```
 
 #### Aliases

@@ -19,12 +19,13 @@
 
 use arrow_schema::DataType::{LargeList, List, UInt64};
 use arrow_schema::{DataType, Field};
-use datafusion_expr::scalar_doc_sections::DOC_SECTION_ARRAY;
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
 };
+use datafusion_macros::user_doc;
+
 use std::any::Any;
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
 use arrow_array::types::UInt64Type;
 use arrow_array::{
@@ -46,6 +47,34 @@ make_udf_expr_and_func!(
     array_position_udf
 );
 
+#[user_doc(
+    doc_section(label = "Array Functions"),
+    description = "Returns the position of the first occurrence of the specified element in the array.",
+    syntax_example = "array_position(array, element)\narray_position(array, element, index)",
+    sql_example = r#"```sql
+> select array_position([1, 2, 2, 3, 1, 4], 2);
++----------------------------------------------+
+| array_position(List([1,2,2,3,1,4]),Int64(2)) |
++----------------------------------------------+
+| 2                                            |
++----------------------------------------------+
+> select array_position([1, 2, 2, 3, 1, 4], 2, 3);
++----------------------------------------------------+
+| array_position(List([1,2,2,3,1,4]),Int64(2), Int64(3)) |
++----------------------------------------------------+
+| 3                                                  |
++----------------------------------------------------+
+```"#,
+    argument(
+        name = "array",
+        description = "Array expression. Can be a constant, column, or function, and any combination of array operators."
+    ),
+    argument(
+        name = "element",
+        description = "Element to search for position in the array."
+    ),
+    argument(name = "index", description = "Index at which to start searching.")
+)]
 #[derive(Debug)]
 pub(super) struct ArrayPosition {
     signature: Signature,
@@ -95,49 +124,8 @@ impl ScalarUDFImpl for ArrayPosition {
     }
 
     fn documentation(&self) -> Option<&Documentation> {
-        Some(get_array_position_doc())
+        self.doc()
     }
-}
-
-static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
-
-fn get_array_position_doc() -> &'static Documentation {
-    DOCUMENTATION.get_or_init(|| {
-        Documentation::builder(
-            DOC_SECTION_ARRAY,
-                "Returns the position of the first occurrence of the specified element in the array.",
-
-            "array_position(array, element)\narray_position(array, element, index)")
-            .with_sql_example(
-                r#"```sql
-> select array_position([1, 2, 2, 3, 1, 4], 2);
-+----------------------------------------------+
-| array_position(List([1,2,2,3,1,4]),Int64(2)) |
-+----------------------------------------------+
-| 2                                            |
-+----------------------------------------------+
-> select array_position([1, 2, 2, 3, 1, 4], 2, 3);
-+----------------------------------------------------+
-| array_position(List([1,2,2,3,1,4]),Int64(2), Int64(3)) |
-+----------------------------------------------------+
-| 3                                                  |
-+----------------------------------------------------+
-```"#,
-            )
-            .with_argument(
-                "array",
-                "Array expression. Can be a constant, column, or function, and any combination of array operators.",
-            )
-            .with_argument(
-                "element",
-                "Element to search for position in the array.",
-            )
-            .with_argument(
-                "index",
-                "Index at which to start searching.",
-            )
-            .build()
-    })
 }
 
 /// Array_position SQL function
@@ -224,6 +212,28 @@ make_udf_expr_and_func!(
     "searches for an element in the array, returns all occurrences.", // doc
     array_positions_udf // internal function name
 );
+
+#[user_doc(
+    doc_section(label = "Array Functions"),
+    description = "Searches for an element in the array, returns all occurrences.",
+    syntax_example = "array_positions(array, element)",
+    sql_example = r#"```sql
+> select array_positions([1, 2, 2, 3, 1, 4], 2);
++-----------------------------------------------+
+| array_positions(List([1,2,2,3,1,4]),Int64(2)) |
++-----------------------------------------------+
+| [2, 3]                                        |
++-----------------------------------------------+
+```"#,
+    argument(
+        name = "array",
+        description = "Array expression. Can be a constant, column, or function, and any combination of array operators."
+    ),
+    argument(
+        name = "element",
+        description = "Element to search for position in the array."
+    )
+)]
 #[derive(Debug)]
 pub(super) struct ArrayPositions {
     signature: Signature,
@@ -268,37 +278,8 @@ impl ScalarUDFImpl for ArrayPositions {
     }
 
     fn documentation(&self) -> Option<&Documentation> {
-        Some(get_array_positions_doc())
+        self.doc()
     }
-}
-
-fn get_array_positions_doc() -> &'static Documentation {
-    DOCUMENTATION.get_or_init(|| {
-        Documentation::builder(
-            DOC_SECTION_ARRAY,
-                "Searches for an element in the array, returns all occurrences.",
-
-            "array_positions(array, element)")
-            .with_sql_example(
-                r#"```sql
-> select array_positions([1, 2, 2, 3, 1, 4], 2);
-+-----------------------------------------------+
-| array_positions(List([1,2,2,3,1,4]),Int64(2)) |
-+-----------------------------------------------+
-| [2, 3]                                        |
-+-----------------------------------------------+
-```"#,
-            )
-            .with_argument(
-                "array",
-                "Array expression. Can be a constant, column, or function, and any combination of array operators.",
-            )
-            .with_argument(
-                "element",
-                "Element to search for positions in the array.",
-            )
-            .build()
-    })
 }
 
 /// Array_positions SQL function
