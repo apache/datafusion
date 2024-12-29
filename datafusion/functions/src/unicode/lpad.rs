@@ -50,7 +50,7 @@ use datafusion_macros::user_doc;
 +---------------------------------------------+
 ```"#,
     standard_argument(name = "str", prefix = "String"),
-    argument(name = "n", description = "String length to pad to"),
+    argument(name = "n", description = "String length to pad to."),
     argument(
         name = "padding_str",
         description = "Optional string expression to pad with. Can be a constant, column, or function, and any combination of string operators. _Default is a space._"

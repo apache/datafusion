@@ -37,7 +37,7 @@ use datafusion_macros::user_doc;
     description = r#"Returns the substring from str before count occurrences of the delimiter delim.
 If count is positive, everything to the left of the final delimiter (counting from the left) is returned.
 If count is negative, everything to the right of the final delimiter (counting from the right) is returned."#,
-    syntax_example = "substr(str, start_pos[, length])",
+    syntax_example = "substr_index(str, delim, count)",
     sql_example = r#"```sql
 > select substr_index('www.apache.org', '.', 1);
 +---------------------------------------------------------+
