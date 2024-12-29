@@ -35,7 +35,7 @@ use datafusion_macros::user_doc;
 #[user_doc(
     doc_section(label = "Time and Date Functions"),
     description = "Make a date from year/month/day component parts.",
-    syntax_example = "from_unixtime(expression[, timezone])",
+    syntax_example = "make_date(year, month, day)",
     sql_example = r#"```sql
 > select make_date(2023, 1, 31);
 +-------------------------------------------+
