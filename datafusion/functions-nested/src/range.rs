@@ -200,15 +200,15 @@ make_udf_expr_and_func!(
 ```"#,
     argument(
         name = "start",
-        description = "Start of the range. Ints, timestamps, dates or string types that can be coerced to Date32 are supported."
+        description = "Start of the series. Ints, timestamps, dates or string types that can be coerced to Date32 are supported."
     ),
     argument(
         name = "end",
-        description = "End of the range (not included). Type must be the same as start."
+        description = "End of the series (included). Type must be the same as start."
     ),
     argument(
         name = "step",
-        description = "Increase by step (cannot be 0). Steps less than a day are supported only for timestamp ranges."
+        description = "Increase by step (can not be 0). Steps less than a day are supported only for timestamp ranges."
     )
 )]
 #[derive(Debug)]

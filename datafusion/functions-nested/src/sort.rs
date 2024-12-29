@@ -58,10 +58,10 @@ make_udf_expr_and_func!(
     ),
     argument(
         name = "desc",
-        description = "Whether to sort in descending order(`ASC` or `DESC"
+        description = "Whether to sort in descending order(`ASC` or `DESC`)."
     ),
     argument(
-        name = "null_first",
+        name = "nulls_first",
         description = "Whether to sort nulls first(`NULLS FIRST` or `NULLS LAST`)."
     )
 )]

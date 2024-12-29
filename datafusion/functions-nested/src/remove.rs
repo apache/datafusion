@@ -201,7 +201,7 @@ make_udf_expr_and_func!(
 
 #[user_doc(
     doc_section(label = "Array Functions"),
-    description = "Removes the first `max` elements from the array equal to the given value.",
+    description = "Removes all elements from the array equal to the given value.",
     syntax_example = "array_remove_all(array, element)",
     sql_example = r#"```sql
 > select array_remove_all([1, 2, 2, 3, 2, 1, 4], 2);
@@ -213,7 +213,7 @@ make_udf_expr_and_func!(
 ```"#,
     argument(
         name = "array",
-        description = "Removes all elements from the array equal to the given value."
+        description = "Array expression. Can be a constant, column, or function, and any combination of array operators."
     ),
     argument(
         name = "element",

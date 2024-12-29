@@ -2939,25 +2939,32 @@ _Alias of [array_position](#array_position)._
 
 ### `array_intersect`
 
-Returns distinct values from the array after removing duplicates.
+Returns an array of elements in the intersection of array1 and array2.
 
 ```
-array_distinct(array)
+array_intersect(array1, array2)
 ```
 
 #### Arguments
 
-- **array**: Array expression. Can be a constant, column, or function, and any combination of array operators.
+- **array1**: Array expression. Can be a constant, column, or function, and any combination of array operators.
+- **array2**: Array expression. Can be a constant, column, or function, and any combination of array operators.
 
 #### Example
 
 ```sql
-> select array_distinct([1, 3, 2, 3, 1, 2, 4]);
-+---------------------------------+
-| array_distinct(List([1,2,3,4])) |
-+---------------------------------+
-| [1, 2, 3, 4]                    |
-+---------------------------------+
+> select array_intersect([1, 2, 3, 4], [5, 6, 3, 4]);
++----------------------------------------------------+
+| array_intersect([1, 2, 3, 4], [5, 6, 3, 4]);       |
++----------------------------------------------------+
+| [3, 4]                                             |
++----------------------------------------------------+
+> select array_intersect([1, 2, 3, 4], [5, 6, 7, 8]);
++----------------------------------------------------+
+| array_intersect([1, 2, 3, 4], [5, 6, 7, 8]);       |
++----------------------------------------------------+
+| []                                                 |
++----------------------------------------------------+
 ```
 
 #### Aliases
@@ -3221,10 +3228,10 @@ array_remove(array, element)
 
 ### `array_remove_all`
 
-Removes the first element from the array equal to the given value.
+Removes all elements from the array equal to the given value.
 
 ```
-array_remove(array, element)
+array_remove_all(array, element)
 ```
 
 #### Arguments
@@ -3235,12 +3242,12 @@ array_remove(array, element)
 #### Example
 
 ```sql
-> select array_remove([1, 2, 2, 3, 2, 1, 4], 2);
-+----------------------------------------------+
-| array_remove(List([1,2,2,3,2,1,4]),Int64(2)) |
-+----------------------------------------------+
-| [1, 2, 3, 2, 1, 4]                           |
-+----------------------------------------------+
+> select array_remove_all([1, 2, 2, 3, 2, 1, 4], 2);
++--------------------------------------------------+
+| array_remove_all(List([1,2,2,3,2,1,4]),Int64(2)) |
++--------------------------------------------------+
+| [1, 3, 1, 4]                                     |
++--------------------------------------------------+
 ```
 
 #### Aliases
@@ -3249,26 +3256,27 @@ array_remove(array, element)
 
 ### `array_remove_n`
 
-Removes the first element from the array equal to the given value.
+Removes the first `max` elements from the array equal to the given value.
 
 ```
-array_remove(array, element)
+array_remove_n(array, element, max))
 ```
 
 #### Arguments
 
 - **array**: Array expression. Can be a constant, column, or function, and any combination of array operators.
 - **element**: Element to be removed from the array.
+- **max**: Number of first occurrences to remove.
 
 #### Example
 
 ```sql
-> select array_remove([1, 2, 2, 3, 2, 1, 4], 2);
-+----------------------------------------------+
-| array_remove(List([1,2,2,3,2,1,4]),Int64(2)) |
-+----------------------------------------------+
-| [1, 2, 3, 2, 1, 4]                           |
-+----------------------------------------------+
+> select array_remove_n([1, 2, 2, 3, 2, 1, 4], 2, 2);
++---------------------------------------------------------+
+| array_remove_n(List([1,2,2,3,2,1,4]),Int64(2),Int64(2)) |
++---------------------------------------------------------+
+| [1, 3, 2, 1, 4]                                         |
++---------------------------------------------------------+
 ```
 
 #### Aliases
@@ -3311,10 +3319,10 @@ array_repeat(element, count)
 
 ### `array_replace`
 
-Replaces the first `max` occurrences of the specified element with another specified element.
+Replaces the first occurrence of the specified element with another specified element.
 
 ```
-array_replace_n(array, from, to, max)
+array_replace(array, from, to)
 ```
 
 #### Arguments
@@ -3322,17 +3330,16 @@ array_replace_n(array, from, to, max)
 - **array**: Array expression. Can be a constant, column, or function, and any combination of array operators.
 - **from**: Initial element.
 - **to**: Final element.
-- **max**: Number of first occurrences to replace.
 
 #### Example
 
 ```sql
-> select array_replace_n([1, 2, 2, 3, 2, 1, 4], 2, 5, 2);
-+-------------------------------------------------------------------+
-| array_replace_n(List([1,2,2,3,2,1,4]),Int64(2),Int64(5),Int64(2)) |
-+-------------------------------------------------------------------+
-| [1, 5, 5, 3, 2, 1, 4]                                             |
-+-------------------------------------------------------------------+
+> select array_replace([1, 2, 2, 3, 2, 1, 4], 2, 5);
++--------------------------------------------------------+
+| array_replace(List([1,2,2,3,2,1,4]),Int64(2),Int64(5)) |
++--------------------------------------------------------+
+| [1, 5, 2, 3, 2, 1, 4]                                  |
++--------------------------------------------------------+
 ```
 
 #### Aliases
@@ -3341,10 +3348,10 @@ array_replace_n(array, from, to, max)
 
 ### `array_replace_all`
 
-Replaces the first `max` occurrences of the specified element with another specified element.
+Replaces all occurrences of the specified element with another specified element.
 
 ```
-array_replace_n(array, from, to, max)
+array_replace_all(array, from, to)
 ```
 
 #### Arguments
@@ -3352,17 +3359,16 @@ array_replace_n(array, from, to, max)
 - **array**: Array expression. Can be a constant, column, or function, and any combination of array operators.
 - **from**: Initial element.
 - **to**: Final element.
-- **max**: Number of first occurrences to replace.
 
 #### Example
 
 ```sql
-> select array_replace_n([1, 2, 2, 3, 2, 1, 4], 2, 5, 2);
-+-------------------------------------------------------------------+
-| array_replace_n(List([1,2,2,3,2,1,4]),Int64(2),Int64(5),Int64(2)) |
-+-------------------------------------------------------------------+
-| [1, 5, 5, 3, 2, 1, 4]                                             |
-+-------------------------------------------------------------------+
+> select array_replace_all([1, 2, 2, 3, 2, 1, 4], 2, 5);
++------------------------------------------------------------+
+| array_replace_all(List([1,2,2,3,2,1,4]),Int64(2),Int64(5)) |
++------------------------------------------------------------+
+| [1, 5, 5, 3, 5, 1, 4]                                      |
++------------------------------------------------------------+
 ```
 
 #### Aliases
@@ -3545,25 +3551,32 @@ array_to_string(array, delimiter[, null_string])
 
 ### `array_union`
 
-Returns distinct values from the array after removing duplicates.
+Returns an array of elements that are present in both arrays (all elements from both arrays) with out duplicates.
 
 ```
-array_distinct(array)
+array_union(array1, array2)
 ```
 
 #### Arguments
 
-- **array**: Array expression. Can be a constant, column, or function, and any combination of array operators.
+- **array1**: Array expression. Can be a constant, column, or function, and any combination of array operators.
+- **array2**: Array expression. Can be a constant, column, or function, and any combination of array operators.
 
 #### Example
 
 ```sql
-> select array_distinct([1, 3, 2, 3, 1, 2, 4]);
-+---------------------------------+
-| array_distinct(List([1,2,3,4])) |
-+---------------------------------+
-| [1, 2, 3, 4]                    |
-+---------------------------------+
+> select array_union([1, 2, 3, 4], [5, 6, 3, 4]);
++----------------------------------------------------+
+| array_union([1, 2, 3, 4], [5, 6, 3, 4]);           |
++----------------------------------------------------+
+| [1, 2, 3, 4, 5, 6]                                 |
++----------------------------------------------------+
+> select array_union([1, 2, 3, 4], [5, 6, 7, 8]);
++----------------------------------------------------+
+| array_union([1, 2, 3, 4], [5, 6, 7, 8]);           |
++----------------------------------------------------+
+| [1, 2, 3, 4, 5, 6, 7, 8]                           |
++----------------------------------------------------+
 ```
 
 #### Aliases
@@ -3659,9 +3672,9 @@ generate_series(start, stop, step)
 
 #### Arguments
 
-- **start**: start of the series. Ints, timestamps, dates or string types that can be coerced to Date32 are supported.
-- **end**: end of the series (included). Type must be the same as start.
-- **step**: increase by step (can not be 0). Steps less than a day are supported only for timestamp ranges.
+- **start**: Start of the series. Ints, timestamps, dates or string types that can be coerced to Date32 are supported.
+- **end**: End of the series (included). Type must be the same as start.
+- **step**: Increase by step (can not be 0). Steps less than a day are supported only for timestamp ranges.
 
 #### Example
 

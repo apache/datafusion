@@ -228,10 +228,10 @@ make_udf_expr_and_func!(
 | ['abc', NULL]                               |
 +---------------------------------------------+
 ```"#,
-    argument(name = "string", description = "String expression to split."),
-    argument(name = "delimiter", description = "Array element separator."),
+    argument(name = "str", description = "String expression to split."),
+    argument(name = "delimiter", description = "Delimiter string to split on."),
     argument(
-        name = "null_string",
+        name = "null_str",
         description = "Substring values to be replaced with `NULL`."
     )
 )]
