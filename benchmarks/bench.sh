@@ -418,6 +418,10 @@ run_sort() {
 #
 # Creates data in $DATA_DIR/hits.parquet
 data_clickbench_1() {
+    local output_file="${DATA_DIR}/hits.parquet"
+
+    trap 'cleanup_download "${output_file}"' INT TERM
+
     pushd "${DATA_DIR}" > /dev/null
 
     # Avoid downloading if it already exists and is the right size
@@ -428,9 +432,14 @@ data_clickbench_1() {
     else
         URL="https://datasets.clickhouse.com/hits_compatible/hits.parquet"
         echo -n "... downloading ${URL} (14GB) ... "
-        wget --continue ${URL}
-    fi
-    echo " Done"
+        if ! wget --continue ${URL}; then
+            cleanup_download "${output_file}"
+        fi
+
+        trap - INT TERM
+        
+        echo " Done"
+        fi
     popd > /dev/null
 }
 
@@ -482,12 +491,26 @@ run_clickbench_extended() {
     $CARGO_COMMAND --bin dfbench -- clickbench  --iterations 5 --path "${DATA_DIR}/hits.parquet" --queries-path "${SCRIPT_DIR}/queries/clickbench/extended.sql" -o "${RESULTS_FILE}"
 }
 
+# Add cleanup function at the start of script
+cleanup_download() {
+    local file_to_clean="$1"
+    echo -e "\nCleaning up downloaded files..."
+    rm -f "${file_to_clean}"
+    exit 1
+}
+
+# Add trap before download starts
+trap cleanup_download INT TERM
+
 # Downloads the csv.gz files IMDB datasets from Peter Boncz's homepage(one of the JOB paper authors)
 # https://event.cwi.nl/da/job/imdb.tgz
 data_imdb() {
     local imdb_dir="${DATA_DIR}/imdb"
     local imdb_temp_gz="${imdb_dir}/imdb.tgz"
     local imdb_url="https://event.cwi.nl/da/job/imdb.tgz"
+
+    # Set trap with parameter
+    trap 'cleanup_download "${imdb_temp_gz}"' INT TERM
 
    # imdb has 21 files, we just separate them into 3 groups for better readability 
     local first_required_files=(
@@ -540,11 +563,19 @@ data_imdb() {
             echo "Downloading IMDB dataset..."
             
             # Download the dataset
-            curl -o "${imdb_temp_gz}" "${imdb_url}"
+            if ! curl -o "${imdb_temp_gz}" "${imdb_url}"; then
+                echo "Error downloading IMDB dataset. Deleting partial file."
+                cleanup_download "${imdb_temp_gz}"
+            fi
             
-            # Extract the dataset
-            tar -xzvf "${imdb_temp_gz}" -C "${imdb_dir}"
-            $CARGO_COMMAND --bin imdb -- convert --input ${imdb_dir} --output ${imdb_dir} --format parquet
+            if ! tar xf "${imdb_temp_gz}" -C "${imdb_dir}"; then
+                echo "Extraction failed"
+                cleanup_download "${imdb_temp_gz}"
+            fi
+
+            #Remove trap after successful operations
+            trap - INT TERM
+
         else 
             echo "IMDB.tgz already exists."
 
