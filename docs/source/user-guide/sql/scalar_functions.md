@@ -4195,14 +4195,14 @@ digest(expression, algorithm)
 
 - **expression**: String expression to operate on. Can be a constant, column, or function, and any combination of operators.
 - **algorithm**: String expression specifying algorithm to use. Must be one of:
-- md5
-- sha224
-- sha256
-- sha384
-- sha512
-- blake2s
-- blake2b
-- blake3
+  - md5
+  - sha224
+  - sha256
+  - sha384
+  - sha512
+  - blake2s
+  - blake2b
+  - blake3
 
 #### Example
 
@@ -4317,7 +4317,7 @@ sha512(expression)
 
 #### Arguments
 
-- **expression**: String
+- **expression**: String expression to operate on. Can be a constant, column, or function, and any combination of operators.
 
 #### Example
 
