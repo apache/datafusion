@@ -971,8 +971,8 @@ concat_ws(separator, str[, ..., str_n])
 
 #### Arguments
 
-- **separator**: Separator to insert between concatenated strings.
 - **str**: String expression to operate on. Can be a constant, column, or function, and any combination of operators.
+- **separator**: Separator to insert between concatenated strings.
 - **str_n**: Subsequent string expressions to concatenate.
 
 #### Example
@@ -1697,8 +1697,8 @@ upper(str)
 
 **Related functions**:
 
-- [initcap](#initcap)
 - [lower](#lower)
+- [initcap](#initcap)
 
 ### `uuid`
 
