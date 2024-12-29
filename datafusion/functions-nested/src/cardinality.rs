@@ -26,13 +26,13 @@ use arrow_schema::DataType::{FixedSizeList, LargeList, List, Map, UInt64};
 use datafusion_common::cast::{as_large_list_array, as_list_array, as_map_array};
 use datafusion_common::Result;
 use datafusion_common::{exec_err, plan_err};
-use datafusion_expr::scalar_doc_sections::DOC_SECTION_ARRAY;
 use datafusion_expr::{
     ArrayFunctionSignature, ColumnarValue, Documentation, ScalarUDFImpl, Signature,
     TypeSignature, Volatility,
 };
+use datafusion_macros::user_doc;
 use std::any::Any;
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
 make_udf_expr_and_func!(
     Cardinality,
@@ -57,6 +57,23 @@ impl Cardinality {
     }
 }
 
+#[user_doc(
+    doc_section(label = "Array Functions"),
+    description = "Returns the total number of elements in the array.",
+    syntax_example = "cardinality(array)",
+    sql_example = r#"```sql
+> select cardinality([[1, 2, 3, 4], [5, 6, 7, 8]]);
++--------------------------------------+
+| cardinality(List([1,2,3,4,5,6,7,8])) |
++--------------------------------------+
+| 8                                    |
++--------------------------------------+
+```"#,
+    argument(
+        name = "array",
+        description = "Array expression. Can be a constant, column, or function, and any combination of array operators."
+    )
+)]
 #[derive(Debug)]
 pub(super) struct Cardinality {
     signature: Signature,
@@ -96,35 +113,8 @@ impl ScalarUDFImpl for Cardinality {
     }
 
     fn documentation(&self) -> Option<&Documentation> {
-        Some(get_cardinality_doc())
+        self.doc()
     }
-}
-
-static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
-
-fn get_cardinality_doc() -> &'static Documentation {
-    DOCUMENTATION.get_or_init(|| {
-        Documentation::builder(
-            DOC_SECTION_ARRAY,
-                "Returns the total number of elements in the array.",
-
-            "cardinality(array)")
-            .with_sql_example(
-                r#"```sql
-> select cardinality([[1, 2, 3, 4], [5, 6, 7, 8]]);
-+--------------------------------------+
-| cardinality(List([1,2,3,4,5,6,7,8])) |
-+--------------------------------------+
-| 8                                    |
-+--------------------------------------+
-```"#,
-            )
-            .with_argument(
-                "array",
-                "Array expression. Can be a constant, column, or function, and any combination of array operators.",
-            )
-            .build()
-    })
 }
 
 /// Cardinality SQL function
