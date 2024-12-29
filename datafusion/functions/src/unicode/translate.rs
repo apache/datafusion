@@ -16,7 +16,7 @@
 // under the License.
 
 use std::any::Any;
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
 use arrow::array::{
     ArrayAccessor, ArrayIter, ArrayRef, AsArray, GenericStringArray, OffsetSizeTrait,
@@ -27,12 +27,31 @@ use unicode_segmentation::UnicodeSegmentation;
 
 use crate::utils::{make_scalar_function, utf8_to_str_type};
 use datafusion_common::{exec_err, Result};
-use datafusion_expr::scalar_doc_sections::DOC_SECTION_STRING;
 use datafusion_expr::TypeSignature::Exact;
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
 };
+use datafusion_macros::user_doc;
 
+#[user_doc(
+    doc_section(label = "String Functions"),
+    description = "Translates characters in a string to specified translation characters.",
+    syntax_example = "translate(str, chars, translation)",
+    sql_example = r#"```sql
+> select translate('twice', 'wic', 'her');
++--------------------------------------------------+
+| translate(Utf8("twice"),Utf8("wic"),Utf8("her")) |
++--------------------------------------------------+
+| there                                            |
++--------------------------------------------------+
+```"#,
+    standard_argument(name = "str", prefix = "String"),
+    argument(name = "chars", description = "Characters to translate."),
+    argument(
+        name = "translation",
+        description = "Translation characters. Translation characters replace only characters at the same position in the **chars** string."
+    )
+)]
 #[derive(Debug)]
 pub struct TranslateFunc {
     signature: Signature,
@@ -85,28 +104,8 @@ impl ScalarUDFImpl for TranslateFunc {
     }
 
     fn documentation(&self) -> Option<&Documentation> {
-        Some(get_translate_doc())
+        self.doc()
     }
-}
-
-static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
-
-fn get_translate_doc() -> &'static Documentation {
-    DOCUMENTATION.get_or_init(|| {
-        Documentation::builder(DOC_SECTION_STRING,"Translates characters in a string to specified translation characters.","translate(str, chars, translation)")
-            .with_sql_example(r#"```sql
-> select translate('twice', 'wic', 'her');
-+--------------------------------------------------+
-| translate(Utf8("twice"),Utf8("wic"),Utf8("her")) |
-+--------------------------------------------------+
-| there                                            |
-+--------------------------------------------------+
-```"#)
-            .with_standard_argument("str", Some("String"))
-            .with_argument("chars", "Characters to translate.")
-            .with_argument("translation", "Translation characters. Translation characters replace only characters at the same position in the **chars** string.")
-            .build()
-    })
 }
 
 fn invoke_translate(args: &[ArrayRef]) -> Result<ArrayRef> {
