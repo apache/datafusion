@@ -11,6 +11,8 @@ use std::sync::Arc;
 /// library directory so we can verify we are building a dynamic library and
 /// testing it via a different executable.
 async fn test_table_provider(synchronous: bool) -> Result<()> {
+    let expected_version = datafusion_ffi::version();
+
     let crate_root = Path::new(env!("CARGO_MANIFEST_DIR"));
     let target_dir = crate_root
         .parent()
@@ -31,6 +33,13 @@ async fn test_table_provider(synchronous: bool) -> Result<()> {
     let table_provider_module =
         TableProviderModuleRef::load_from_directory(&library_path)
             .map_err(|e| DataFusionError::External(Box::new(e)))?;
+
+    assert_eq!(
+        table_provider_module
+            .version()
+            .expect("Unable to call version on FFI module")(),
+        expected_version
+    );
 
     // By calling the code below, the table provided will be created within
     // the module's code.
