@@ -7532,24 +7532,31 @@ an error will be returned.</p></li>
 </section>
 <section id="array-intersect">
 <h3><code class="docutils literal notranslate"><span class="pre">array_intersect</span></code><a class="headerlink" href="#array-intersect" title="Link to this heading">¶</a></h3>
-<p>Returns distinct values from the array after removing duplicates.</p>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">array_distinct</span><span class="p">(</span><span class="n">array</span><span class="p">)</span>
+<p>Returns an array of elements in the intersection of array1 and array2.</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">array_intersect</span><span class="p">(</span><span class="n">array1</span><span class="p">,</span> <span class="n">array2</span><span class="p">)</span>
 </pre></div>
 </div>
 <section id="id195">
 <h4>Arguments<a class="headerlink" href="#id195" title="Link to this heading">¶</a></h4>
 <ul class="simple">
-<li><p><strong>array</strong>: Array expression. Can be a constant, column, or function, and any combination of array operators.</p></li>
+<li><p><strong>array1</strong>: Array expression. Can be a constant, column, or function, and any combination of array operators.</p></li>
+<li><p><strong>array2</strong>: Array expression. Can be a constant, column, or function, and any combination of array operators.</p></li>
 </ul>
 </section>
 <section id="id196">
 <h4>Example<a class="headerlink" href="#id196" title="Link to this heading">¶</a></h4>
-<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span><span class="w"> </span><span class="k">select</span><span class="w"> </span><span class="n">array_distinct</span><span class="p">([</span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="mi">3</span><span class="p">,</span><span class="w"> </span><span class="mi">2</span><span class="p">,</span><span class="w"> </span><span class="mi">3</span><span class="p">,</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="mi">2</span><span class="p">,</span><span class="w"> </span><span class="mi">4</span><span class="p">]);</span>
-<span class="o">+</span><span class="c1">---------------------------------+</span>
-<span class="o">|</span><span class="w"> </span><span class="n">array_distinct</span><span class="p">(</span><span class="n">List</span><span class="p">([</span><span class="mi">1</span><span class="p">,</span><span class="mi">2</span><span class="p">,</span><span class="mi">3</span><span class="p">,</span><span class="mi">4</span><span class="p">]))</span><span class="w"> </span><span class="o">|</span>
-<span class="o">+</span><span class="c1">---------------------------------+</span>
-<span class="o">|</span><span class="w"> </span><span class="p">[</span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="mi">2</span><span class="p">,</span><span class="w"> </span><span class="mi">3</span><span class="p">,</span><span class="w"> </span><span class="mi">4</span><span class="p">]</span><span class="w">                    </span><span class="o">|</span>
-<span class="o">+</span><span class="c1">---------------------------------+</span>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span><span class="w"> </span><span class="k">select</span><span class="w"> </span><span class="n">array_intersect</span><span class="p">([</span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="mi">2</span><span class="p">,</span><span class="w"> </span><span class="mi">3</span><span class="p">,</span><span class="w"> </span><span class="mi">4</span><span class="p">],</span><span class="w"> </span><span class="p">[</span><span class="mi">5</span><span class="p">,</span><span class="w"> </span><span class="mi">6</span><span class="p">,</span><span class="w"> </span><span class="mi">3</span><span class="p">,</span><span class="w"> </span><span class="mi">4</span><span class="p">]);</span>
+<span class="o">+</span><span class="c1">----------------------------------------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="n">array_intersect</span><span class="p">([</span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="mi">2</span><span class="p">,</span><span class="w"> </span><span class="mi">3</span><span class="p">,</span><span class="w"> </span><span class="mi">4</span><span class="p">],</span><span class="w"> </span><span class="p">[</span><span class="mi">5</span><span class="p">,</span><span class="w"> </span><span class="mi">6</span><span class="p">,</span><span class="w"> </span><span class="mi">3</span><span class="p">,</span><span class="w"> </span><span class="mi">4</span><span class="p">]);</span><span class="w">       </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">----------------------------------------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="p">[</span><span class="mi">3</span><span class="p">,</span><span class="w"> </span><span class="mi">4</span><span class="p">]</span><span class="w">                                             </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">----------------------------------------------------+</span>
+<span class="o">&gt;</span><span class="w"> </span><span class="k">select</span><span class="w"> </span><span class="n">array_intersect</span><span class="p">([</span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="mi">2</span><span class="p">,</span><span class="w"> </span><span class="mi">3</span><span class="p">,</span><span class="w"> </span><span class="mi">4</span><span class="p">],</span><span class="w"> </span><span class="p">[</span><span class="mi">5</span><span class="p">,</span><span class="w"> </span><span class="mi">6</span><span class="p">,</span><span class="w"> </span><span class="mi">7</span><span class="p">,</span><span class="w"> </span><span class="mi">8</span><span class="p">]);</span>
+<span class="o">+</span><span class="c1">----------------------------------------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="n">array_intersect</span><span class="p">([</span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="mi">2</span><span class="p">,</span><span class="w"> </span><span class="mi">3</span><span class="p">,</span><span class="w"> </span><span class="mi">4</span><span class="p">],</span><span class="w"> </span><span class="p">[</span><span class="mi">5</span><span class="p">,</span><span class="w"> </span><span class="mi">6</span><span class="p">,</span><span class="w"> </span><span class="mi">7</span><span class="p">,</span><span class="w"> </span><span class="mi">8</span><span class="p">]);</span><span class="w">       </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">----------------------------------------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="p">[]</span><span class="w">                                                 </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">----------------------------------------------------+</span>
 </pre></div>
 </div>
 </section>
@@ -7840,8 +7847,8 @@ an error will be returned.</p></li>
 </section>
 <section id="array-remove-all">
 <h3><code class="docutils literal notranslate"><span class="pre">array_remove_all</span></code><a class="headerlink" href="#array-remove-all" title="Link to this heading">¶</a></h3>
-<p>Removes the first element from the array equal to the given value.</p>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">array_remove</span><span class="p">(</span><span class="n">array</span><span class="p">,</span> <span class="n">element</span><span class="p">)</span>
+<p>Removes all elements from the array equal to the given value.</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">array_remove_all</span><span class="p">(</span><span class="n">array</span><span class="p">,</span> <span class="n">element</span><span class="p">)</span>
 </pre></div>
 </div>
 <section id="id222">
@@ -7853,12 +7860,12 @@ an error will be returned.</p></li>
 </section>
 <section id="id223">
 <h4>Example<a class="headerlink" href="#id223" title="Link to this heading">¶</a></h4>
-<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span><span class="w"> </span><span class="k">select</span><span class="w"> </span><span class="n">array_remove</span><span class="p">([</span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="mi">2</span><span class="p">,</span><span class="w"> </span><span class="mi">2</span><span class="p">,</span><span class="w"> </span><span class="mi">3</span><span class="p">,</span><span class="w"> </span><span class="mi">2</span><span class="p">,</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="mi">4</span><span class="p">],</span><span class="w"> </span><span class="mi">2</span><span class="p">);</span>
-<span class="o">+</span><span class="c1">----------------------------------------------+</span>
-<span class="o">|</span><span class="w"> </span><span class="n">array_remove</span><span class="p">(</span><span class="n">List</span><span class="p">([</span><span class="mi">1</span><span class="p">,</span><span class="mi">2</span><span class="p">,</span><span class="mi">2</span><span class="p">,</span><span class="mi">3</span><span class="p">,</span><span class="mi">2</span><span class="p">,</span><span class="mi">1</span><span class="p">,</span><span class="mi">4</span><span class="p">]),</span><span class="n">Int64</span><span class="p">(</span><span class="mi">2</span><span class="p">))</span><span class="w"> </span><span class="o">|</span>
-<span class="o">+</span><span class="c1">----------------------------------------------+</span>
-<span class="o">|</span><span class="w"> </span><span class="p">[</span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="mi">2</span><span class="p">,</span><span class="w"> </span><span class="mi">3</span><span class="p">,</span><span class="w"> </span><span class="mi">2</span><span class="p">,</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="mi">4</span><span class="p">]</span><span class="w">                           </span><span class="o">|</span>
-<span class="o">+</span><span class="c1">----------------------------------------------+</span>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span><span class="w"> </span><span class="k">select</span><span class="w"> </span><span class="n">array_remove_all</span><span class="p">([</span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="mi">2</span><span class="p">,</span><span class="w"> </span><span class="mi">2</span><span class="p">,</span><span class="w"> </span><span class="mi">3</span><span class="p">,</span><span class="w"> </span><span class="mi">2</span><span class="p">,</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="mi">4</span><span class="p">],</span><span class="w"> </span><span class="mi">2</span><span class="p">);</span>
+<span class="o">+</span><span class="c1">--------------------------------------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="n">array_remove_all</span><span class="p">(</span><span class="n">List</span><span class="p">([</span><span class="mi">1</span><span class="p">,</span><span class="mi">2</span><span class="p">,</span><span class="mi">2</span><span class="p">,</span><span class="mi">3</span><span class="p">,</span><span class="mi">2</span><span class="p">,</span><span class="mi">1</span><span class="p">,</span><span class="mi">4</span><span class="p">]),</span><span class="n">Int64</span><span class="p">(</span><span class="mi">2</span><span class="p">))</span><span class="w"> </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">--------------------------------------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="p">[</span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="mi">3</span><span class="p">,</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="mi">4</span><span class="p">]</span><span class="w">                                     </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">--------------------------------------------------+</span>
 </pre></div>
 </div>
 </section>
@@ -7871,8 +7878,8 @@ an error will be returned.</p></li>
 </section>
 <section id="array-remove-n">
 <h3><code class="docutils literal notranslate"><span class="pre">array_remove_n</span></code><a class="headerlink" href="#array-remove-n" title="Link to this heading">¶</a></h3>
-<p>Removes the first element from the array equal to the given value.</p>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">array_remove</span><span class="p">(</span><span class="n">array</span><span class="p">,</span> <span class="n">element</span><span class="p">)</span>
+<p>Removes the first <code class="docutils literal notranslate"><span class="pre">max</span></code> elements from the array equal to the given value.</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">array_remove_n</span><span class="p">(</span><span class="n">array</span><span class="p">,</span> <span class="n">element</span><span class="p">,</span> <span class="nb">max</span><span class="p">))</span>
 </pre></div>
 </div>
 <section id="id225">
@@ -7880,16 +7887,17 @@ an error will be returned.</p></li>
 <ul class="simple">
 <li><p><strong>array</strong>: Array expression. Can be a constant, column, or function, and any combination of array operators.</p></li>
 <li><p><strong>element</strong>: Element to be removed from the array.</p></li>
+<li><p><strong>max</strong>: Number of first occurrences to remove.</p></li>
 </ul>
 </section>
 <section id="id226">
 <h4>Example<a class="headerlink" href="#id226" title="Link to this heading">¶</a></h4>
-<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span><span class="w"> </span><span class="k">select</span><span class="w"> </span><span class="n">array_remove</span><span class="p">([</span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="mi">2</span><span class="p">,</span><span class="w"> </span><span class="mi">2</span><span class="p">,</span><span class="w"> </span><span class="mi">3</span><span class="p">,</span><span class="w"> </span><span class="mi">2</span><span class="p">,</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="mi">4</span><span class="p">],</span><span class="w"> </span><span class="mi">2</span><span class="p">);</span>
-<span class="o">+</span><span class="c1">----------------------------------------------+</span>
-<span class="o">|</span><span class="w"> </span><span class="n">array_remove</span><span class="p">(</span><span class="n">List</span><span class="p">([</span><span class="mi">1</span><span class="p">,</span><span class="mi">2</span><span class="p">,</span><span class="mi">2</span><span class="p">,</span><span class="mi">3</span><span class="p">,</span><span class="mi">2</span><span class="p">,</span><span class="mi">1</span><span class="p">,</span><span class="mi">4</span><span class="p">]),</span><span class="n">Int64</span><span class="p">(</span><span class="mi">2</span><span class="p">))</span><span class="w"> </span><span class="o">|</span>
-<span class="o">+</span><span class="c1">----------------------------------------------+</span>
-<span class="o">|</span><span class="w"> </span><span class="p">[</span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="mi">2</span><span class="p">,</span><span class="w"> </span><span class="mi">3</span><span class="p">,</span><span class="w"> </span><span class="mi">2</span><span class="p">,</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="mi">4</span><span class="p">]</span><span class="w">                           </span><span class="o">|</span>
-<span class="o">+</span><span class="c1">----------------------------------------------+</span>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span><span class="w"> </span><span class="k">select</span><span class="w"> </span><span class="n">array_remove_n</span><span class="p">([</span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="mi">2</span><span class="p">,</span><span class="w"> </span><span class="mi">2</span><span class="p">,</span><span class="w"> </span><span class="mi">3</span><span class="p">,</span><span class="w"> </span><span class="mi">2</span><span class="p">,</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="mi">4</span><span class="p">],</span><span class="w"> </span><span class="mi">2</span><span class="p">,</span><span class="w"> </span><span class="mi">2</span><span class="p">);</span>
+<span class="o">+</span><span class="c1">---------------------------------------------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="n">array_remove_n</span><span class="p">(</span><span class="n">List</span><span class="p">([</span><span class="mi">1</span><span class="p">,</span><span class="mi">2</span><span class="p">,</span><span class="mi">2</span><span class="p">,</span><span class="mi">3</span><span class="p">,</span><span class="mi">2</span><span class="p">,</span><span class="mi">1</span><span class="p">,</span><span class="mi">4</span><span class="p">]),</span><span class="n">Int64</span><span class="p">(</span><span class="mi">2</span><span class="p">),</span><span class="n">Int64</span><span class="p">(</span><span class="mi">2</span><span class="p">))</span><span class="w"> </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">---------------------------------------------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="p">[</span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="mi">3</span><span class="p">,</span><span class="w"> </span><span class="mi">2</span><span class="p">,</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="mi">4</span><span class="p">]</span><span class="w">                                         </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">---------------------------------------------------------+</span>
 </pre></div>
 </div>
 </section>
@@ -7939,8 +7947,8 @@ an error will be returned.</p></li>
 </section>
 <section id="array-replace">
 <h3><code class="docutils literal notranslate"><span class="pre">array_replace</span></code><a class="headerlink" href="#array-replace" title="Link to this heading">¶</a></h3>
-<p>Replaces the first <code class="docutils literal notranslate"><span class="pre">max</span></code> occurrences of the specified element with another specified element.</p>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">array_replace_n</span><span class="p">(</span><span class="n">array</span><span class="p">,</span> <span class="n">from</span><span class="p">,</span> <span class="n">to</span><span class="p">,</span> <span class="nb">max</span><span class="p">)</span>
+<p>Replaces the first occurrence of the specified element with another specified element.</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">array_replace</span><span class="p">(</span><span class="n">array</span><span class="p">,</span> <span class="n">from</span><span class="p">,</span> <span class="n">to</span><span class="p">)</span>
 </pre></div>
 </div>
 <section id="id231">
@@ -7949,17 +7957,16 @@ an error will be returned.</p></li>
 <li><p><strong>array</strong>: Array expression. Can be a constant, column, or function, and any combination of array operators.</p></li>
 <li><p><strong>from</strong>: Initial element.</p></li>
 <li><p><strong>to</strong>: Final element.</p></li>
-<li><p><strong>max</strong>: Number of first occurrences to replace.</p></li>
 </ul>
 </section>
 <section id="id232">
 <h4>Example<a class="headerlink" href="#id232" title="Link to this heading">¶</a></h4>
-<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span><span class="w"> </span><span class="k">select</span><span class="w"> </span><span class="n">array_replace_n</span><span class="p">([</span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="mi">2</span><span class="p">,</span><span class="w"> </span><span class="mi">2</span><span class="p">,</span><span class="w"> </span><span class="mi">3</span><span class="p">,</span><span class="w"> </span><span class="mi">2</span><span class="p">,</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="mi">4</span><span class="p">],</span><span class="w"> </span><span class="mi">2</span><span class="p">,</span><span class="w"> </span><span class="mi">5</span><span class="p">,</span><span class="w"> </span><span class="mi">2</span><span class="p">);</span>
-<span class="o">+</span><span class="c1">-------------------------------------------------------------------+</span>
-<span class="o">|</span><span class="w"> </span><span class="n">array_replace_n</span><span class="p">(</span><span class="n">List</span><span class="p">([</span><span class="mi">1</span><span class="p">,</span><span class="mi">2</span><span class="p">,</span><span class="mi">2</span><span class="p">,</span><span class="mi">3</span><span class="p">,</span><span class="mi">2</span><span class="p">,</span><span class="mi">1</span><span class="p">,</span><span class="mi">4</span><span class="p">]),</span><span class="n">Int64</span><span class="p">(</span><span class="mi">2</span><span class="p">),</span><span class="n">Int64</span><span class="p">(</span><span class="mi">5</span><span class="p">),</span><span class="n">Int64</span><span class="p">(</span><span class="mi">2</span><span class="p">))</span><span class="w"> </span><span class="o">|</span>
-<span class="o">+</span><span class="c1">-------------------------------------------------------------------+</span>
-<span class="o">|</span><span class="w"> </span><span class="p">[</span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="mi">5</span><span class="p">,</span><span class="w"> </span><span class="mi">5</span><span class="p">,</span><span class="w"> </span><span class="mi">3</span><span class="p">,</span><span class="w"> </span><span class="mi">2</span><span class="p">,</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="mi">4</span><span class="p">]</span><span class="w">                                             </span><span class="o">|</span>
-<span class="o">+</span><span class="c1">-------------------------------------------------------------------+</span>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span><span class="w"> </span><span class="k">select</span><span class="w"> </span><span class="n">array_replace</span><span class="p">([</span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="mi">2</span><span class="p">,</span><span class="w"> </span><span class="mi">2</span><span class="p">,</span><span class="w"> </span><span class="mi">3</span><span class="p">,</span><span class="w"> </span><span class="mi">2</span><span class="p">,</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="mi">4</span><span class="p">],</span><span class="w"> </span><span class="mi">2</span><span class="p">,</span><span class="w"> </span><span class="mi">5</span><span class="p">);</span>
+<span class="o">+</span><span class="c1">--------------------------------------------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="n">array_replace</span><span class="p">(</span><span class="n">List</span><span class="p">([</span><span class="mi">1</span><span class="p">,</span><span class="mi">2</span><span class="p">,</span><span class="mi">2</span><span class="p">,</span><span class="mi">3</span><span class="p">,</span><span class="mi">2</span><span class="p">,</span><span class="mi">1</span><span class="p">,</span><span class="mi">4</span><span class="p">]),</span><span class="n">Int64</span><span class="p">(</span><span class="mi">2</span><span class="p">),</span><span class="n">Int64</span><span class="p">(</span><span class="mi">5</span><span class="p">))</span><span class="w"> </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">--------------------------------------------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="p">[</span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="mi">5</span><span class="p">,</span><span class="w"> </span><span class="mi">2</span><span class="p">,</span><span class="w"> </span><span class="mi">3</span><span class="p">,</span><span class="w"> </span><span class="mi">2</span><span class="p">,</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="mi">4</span><span class="p">]</span><span class="w">                                  </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">--------------------------------------------------------+</span>
 </pre></div>
 </div>
 </section>
@@ -7972,8 +7979,8 @@ an error will be returned.</p></li>
 </section>
 <section id="array-replace-all">
 <h3><code class="docutils literal notranslate"><span class="pre">array_replace_all</span></code><a class="headerlink" href="#array-replace-all" title="Link to this heading">¶</a></h3>
-<p>Replaces the first <code class="docutils literal notranslate"><span class="pre">max</span></code> occurrences of the specified element with another specified element.</p>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">array_replace_n</span><span class="p">(</span><span class="n">array</span><span class="p">,</span> <span class="n">from</span><span class="p">,</span> <span class="n">to</span><span class="p">,</span> <span class="nb">max</span><span class="p">)</span>
+<p>Replaces all occurrences of the specified element with another specified element.</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">array_replace_all</span><span class="p">(</span><span class="n">array</span><span class="p">,</span> <span class="n">from</span><span class="p">,</span> <span class="n">to</span><span class="p">)</span>
 </pre></div>
 </div>
 <section id="id234">
@@ -7982,17 +7989,16 @@ an error will be returned.</p></li>
 <li><p><strong>array</strong>: Array expression. Can be a constant, column, or function, and any combination of array operators.</p></li>
 <li><p><strong>from</strong>: Initial element.</p></li>
 <li><p><strong>to</strong>: Final element.</p></li>
-<li><p><strong>max</strong>: Number of first occurrences to replace.</p></li>
 </ul>
 </section>
 <section id="id235">
 <h4>Example<a class="headerlink" href="#id235" title="Link to this heading">¶</a></h4>
-<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span><span class="w"> </span><span class="k">select</span><span class="w"> </span><span class="n">array_replace_n</span><span class="p">([</span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="mi">2</span><span class="p">,</span><span class="w"> </span><span class="mi">2</span><span class="p">,</span><span class="w"> </span><span class="mi">3</span><span class="p">,</span><span class="w"> </span><span class="mi">2</span><span class="p">,</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="mi">4</span><span class="p">],</span><span class="w"> </span><span class="mi">2</span><span class="p">,</span><span class="w"> </span><span class="mi">5</span><span class="p">,</span><span class="w"> </span><span class="mi">2</span><span class="p">);</span>
-<span class="o">+</span><span class="c1">-------------------------------------------------------------------+</span>
-<span class="o">|</span><span class="w"> </span><span class="n">array_replace_n</span><span class="p">(</span><span class="n">List</span><span class="p">([</span><span class="mi">1</span><span class="p">,</span><span class="mi">2</span><span class="p">,</span><span class="mi">2</span><span class="p">,</span><span class="mi">3</span><span class="p">,</span><span class="mi">2</span><span class="p">,</span><span class="mi">1</span><span class="p">,</span><span class="mi">4</span><span class="p">]),</span><span class="n">Int64</span><span class="p">(</span><span class="mi">2</span><span class="p">),</span><span class="n">Int64</span><span class="p">(</span><span class="mi">5</span><span class="p">),</span><span class="n">Int64</span><span class="p">(</span><span class="mi">2</span><span class="p">))</span><span class="w"> </span><span class="o">|</span>
-<span class="o">+</span><span class="c1">-------------------------------------------------------------------+</span>
-<span class="o">|</span><span class="w"> </span><span class="p">[</span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="mi">5</span><span class="p">,</span><span class="w"> </span><span class="mi">5</span><span class="p">,</span><span class="w"> </span><span class="mi">3</span><span class="p">,</span><span class="w"> </span><span class="mi">2</span><span class="p">,</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="mi">4</span><span class="p">]</span><span class="w">                                             </span><span class="o">|</span>
-<span class="o">+</span><span class="c1">-------------------------------------------------------------------+</span>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span><span class="w"> </span><span class="k">select</span><span class="w"> </span><span class="n">array_replace_all</span><span class="p">([</span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="mi">2</span><span class="p">,</span><span class="w"> </span><span class="mi">2</span><span class="p">,</span><span class="w"> </span><span class="mi">3</span><span class="p">,</span><span class="w"> </span><span class="mi">2</span><span class="p">,</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="mi">4</span><span class="p">],</span><span class="w"> </span><span class="mi">2</span><span class="p">,</span><span class="w"> </span><span class="mi">5</span><span class="p">);</span>
+<span class="o">+</span><span class="c1">------------------------------------------------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="n">array_replace_all</span><span class="p">(</span><span class="n">List</span><span class="p">([</span><span class="mi">1</span><span class="p">,</span><span class="mi">2</span><span class="p">,</span><span class="mi">2</span><span class="p">,</span><span class="mi">3</span><span class="p">,</span><span class="mi">2</span><span class="p">,</span><span class="mi">1</span><span class="p">,</span><span class="mi">4</span><span class="p">]),</span><span class="n">Int64</span><span class="p">(</span><span class="mi">2</span><span class="p">),</span><span class="n">Int64</span><span class="p">(</span><span class="mi">5</span><span class="p">))</span><span class="w"> </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">------------------------------------------------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="p">[</span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="mi">5</span><span class="p">,</span><span class="w"> </span><span class="mi">5</span><span class="p">,</span><span class="w"> </span><span class="mi">3</span><span class="p">,</span><span class="w"> </span><span class="mi">5</span><span class="p">,</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="mi">4</span><span class="p">]</span><span class="w">                                      </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">------------------------------------------------------------+</span>
 </pre></div>
 </div>
 </section>
@@ -8199,24 +8205,31 @@ an error will be returned.</p></li>
 </section>
 <section id="array-union">
 <h3><code class="docutils literal notranslate"><span class="pre">array_union</span></code><a class="headerlink" href="#array-union" title="Link to this heading">¶</a></h3>
-<p>Returns distinct values from the array after removing duplicates.</p>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">array_distinct</span><span class="p">(</span><span class="n">array</span><span class="p">)</span>
+<p>Returns an array of elements that are present in both arrays (all elements from both arrays) with out duplicates.</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">array_union</span><span class="p">(</span><span class="n">array1</span><span class="p">,</span> <span class="n">array2</span><span class="p">)</span>
 </pre></div>
 </div>
 <section id="id255">
 <h4>Arguments<a class="headerlink" href="#id255" title="Link to this heading">¶</a></h4>
 <ul class="simple">
-<li><p><strong>array</strong>: Array expression. Can be a constant, column, or function, and any combination of array operators.</p></li>
+<li><p><strong>array1</strong>: Array expression. Can be a constant, column, or function, and any combination of array operators.</p></li>
+<li><p><strong>array2</strong>: Array expression. Can be a constant, column, or function, and any combination of array operators.</p></li>
 </ul>
 </section>
 <section id="id256">
 <h4>Example<a class="headerlink" href="#id256" title="Link to this heading">¶</a></h4>
-<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span><span class="w"> </span><span class="k">select</span><span class="w"> </span><span class="n">array_distinct</span><span class="p">([</span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="mi">3</span><span class="p">,</span><span class="w"> </span><span class="mi">2</span><span class="p">,</span><span class="w"> </span><span class="mi">3</span><span class="p">,</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="mi">2</span><span class="p">,</span><span class="w"> </span><span class="mi">4</span><span class="p">]);</span>
-<span class="o">+</span><span class="c1">---------------------------------+</span>
-<span class="o">|</span><span class="w"> </span><span class="n">array_distinct</span><span class="p">(</span><span class="n">List</span><span class="p">([</span><span class="mi">1</span><span class="p">,</span><span class="mi">2</span><span class="p">,</span><span class="mi">3</span><span class="p">,</span><span class="mi">4</span><span class="p">]))</span><span class="w"> </span><span class="o">|</span>
-<span class="o">+</span><span class="c1">---------------------------------+</span>
-<span class="o">|</span><span class="w"> </span><span class="p">[</span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="mi">2</span><span class="p">,</span><span class="w"> </span><span class="mi">3</span><span class="p">,</span><span class="w"> </span><span class="mi">4</span><span class="p">]</span><span class="w">                    </span><span class="o">|</span>
-<span class="o">+</span><span class="c1">---------------------------------+</span>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span><span class="w"> </span><span class="k">select</span><span class="w"> </span><span class="n">array_union</span><span class="p">([</span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="mi">2</span><span class="p">,</span><span class="w"> </span><span class="mi">3</span><span class="p">,</span><span class="w"> </span><span class="mi">4</span><span class="p">],</span><span class="w"> </span><span class="p">[</span><span class="mi">5</span><span class="p">,</span><span class="w"> </span><span class="mi">6</span><span class="p">,</span><span class="w"> </span><span class="mi">3</span><span class="p">,</span><span class="w"> </span><span class="mi">4</span><span class="p">]);</span>
+<span class="o">+</span><span class="c1">----------------------------------------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="n">array_union</span><span class="p">([</span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="mi">2</span><span class="p">,</span><span class="w"> </span><span class="mi">3</span><span class="p">,</span><span class="w"> </span><span class="mi">4</span><span class="p">],</span><span class="w"> </span><span class="p">[</span><span class="mi">5</span><span class="p">,</span><span class="w"> </span><span class="mi">6</span><span class="p">,</span><span class="w"> </span><span class="mi">3</span><span class="p">,</span><span class="w"> </span><span class="mi">4</span><span class="p">]);</span><span class="w">           </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">----------------------------------------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="p">[</span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="mi">2</span><span class="p">,</span><span class="w"> </span><span class="mi">3</span><span class="p">,</span><span class="w"> </span><span class="mi">4</span><span class="p">,</span><span class="w"> </span><span class="mi">5</span><span class="p">,</span><span class="w"> </span><span class="mi">6</span><span class="p">]</span><span class="w">                                 </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">----------------------------------------------------+</span>
+<span class="o">&gt;</span><span class="w"> </span><span class="k">select</span><span class="w"> </span><span class="n">array_union</span><span class="p">([</span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="mi">2</span><span class="p">,</span><span class="w"> </span><span class="mi">3</span><span class="p">,</span><span class="w"> </span><span class="mi">4</span><span class="p">],</span><span class="w"> </span><span class="p">[</span><span class="mi">5</span><span class="p">,</span><span class="w"> </span><span class="mi">6</span><span class="p">,</span><span class="w"> </span><span class="mi">7</span><span class="p">,</span><span class="w"> </span><span class="mi">8</span><span class="p">]);</span>
+<span class="o">+</span><span class="c1">----------------------------------------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="n">array_union</span><span class="p">([</span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="mi">2</span><span class="p">,</span><span class="w"> </span><span class="mi">3</span><span class="p">,</span><span class="w"> </span><span class="mi">4</span><span class="p">],</span><span class="w"> </span><span class="p">[</span><span class="mi">5</span><span class="p">,</span><span class="w"> </span><span class="mi">6</span><span class="p">,</span><span class="w"> </span><span class="mi">7</span><span class="p">,</span><span class="w"> </span><span class="mi">8</span><span class="p">]);</span><span class="w">           </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">----------------------------------------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="p">[</span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="mi">2</span><span class="p">,</span><span class="w"> </span><span class="mi">3</span><span class="p">,</span><span class="w"> </span><span class="mi">4</span><span class="p">,</span><span class="w"> </span><span class="mi">5</span><span class="p">,</span><span class="w"> </span><span class="mi">6</span><span class="p">,</span><span class="w"> </span><span class="mi">7</span><span class="p">,</span><span class="w"> </span><span class="mi">8</span><span class="p">]</span><span class="w">                           </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">----------------------------------------------------+</span>
 </pre></div>
 </div>
 </section>
@@ -8320,9 +8333,9 @@ an error will be returned.</p></li>
 <section id="id265">
 <h4>Arguments<a class="headerlink" href="#id265" title="Link to this heading">¶</a></h4>
 <ul class="simple">
-<li><p><strong>start</strong>: start of the series. Ints, timestamps, dates or string types that can be coerced to Date32 are supported.</p></li>
-<li><p><strong>end</strong>: end of the series (included). Type must be the same as start.</p></li>
-<li><p><strong>step</strong>: increase by step (can not be 0). Steps less than a day are supported only for timestamp ranges.</p></li>
+<li><p><strong>start</strong>: Start of the series. Ints, timestamps, dates or string types that can be coerced to Date32 are supported.</p></li>
+<li><p><strong>end</strong>: End of the series (included). Type must be the same as start.</p></li>
+<li><p><strong>step</strong>: Increase by step (can not be 0). Steps less than a day are supported only for timestamp ranges.</p></li>
 </ul>
 </section>
 <section id="id266">
