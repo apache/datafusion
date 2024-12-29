@@ -1369,7 +1369,7 @@ right(str, n)
 #### Arguments
 
 - **str**: String expression to operate on. Can be a constant, column, or function, and any combination of operators.
-- **n**: Number of characters to return
+- **n**: Number of characters to return.
 
 #### Example
 
