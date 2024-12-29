@@ -7160,25 +7160,24 @@ an error will be returned.</p></li>
 </ul>
 <section id="array-any-value">
 <h3><code class="docutils literal notranslate"><span class="pre">array_any_value</span></code><a class="headerlink" href="#array-any-value" title="Link to this heading">¶</a></h3>
-<p>Extracts the element with the index n from the array.</p>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">array_element</span><span class="p">(</span><span class="n">array</span><span class="p">,</span> <span class="n">index</span><span class="p">)</span>
+<p>Returns the first non-null element in the array.</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">array_any_value</span><span class="p">(</span><span class="n">array</span><span class="p">)</span>
 </pre></div>
 </div>
 <section id="id162">
 <h4>Arguments<a class="headerlink" href="#id162" title="Link to this heading">¶</a></h4>
 <ul class="simple">
 <li><p><strong>array</strong>: Array expression. Can be a constant, column, or function, and any combination of array operators.</p></li>
-<li><p><strong>index</strong>: Index to extract the element from the array.</p></li>
 </ul>
 </section>
 <section id="id163">
 <h4>Example<a class="headerlink" href="#id163" title="Link to this heading">¶</a></h4>
-<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span><span class="w"> </span><span class="k">select</span><span class="w"> </span><span class="n">array_element</span><span class="p">([</span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="mi">2</span><span class="p">,</span><span class="w"> </span><span class="mi">3</span><span class="p">,</span><span class="w"> </span><span class="mi">4</span><span class="p">],</span><span class="w"> </span><span class="mi">3</span><span class="p">);</span>
-<span class="o">+</span><span class="c1">-----------------------------------------+</span>
-<span class="o">|</span><span class="w"> </span><span class="n">array_element</span><span class="p">(</span><span class="n">List</span><span class="p">([</span><span class="mi">1</span><span class="p">,</span><span class="mi">2</span><span class="p">,</span><span class="mi">3</span><span class="p">,</span><span class="mi">4</span><span class="p">]),</span><span class="n">Int64</span><span class="p">(</span><span class="mi">3</span><span class="p">))</span><span class="w"> </span><span class="o">|</span>
-<span class="o">+</span><span class="c1">-----------------------------------------+</span>
-<span class="o">|</span><span class="w"> </span><span class="mi">3</span><span class="w">                                       </span><span class="o">|</span>
-<span class="o">+</span><span class="c1">-----------------------------------------+</span>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span><span class="w"> </span><span class="k">select</span><span class="w"> </span><span class="n">array_any_value</span><span class="p">([</span><span class="k">NULL</span><span class="p">,</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="mi">2</span><span class="p">,</span><span class="w"> </span><span class="mi">3</span><span class="p">]);</span>
+<span class="o">+</span><span class="c1">-------------------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="n">array_any_value</span><span class="p">(</span><span class="n">List</span><span class="p">([</span><span class="k">NULL</span><span class="p">,</span><span class="mi">1</span><span class="p">,</span><span class="mi">2</span><span class="p">,</span><span class="mi">3</span><span class="p">]))</span><span class="w"> </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">-------------------------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="mi">1</span><span class="w">                                   </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">-------------------------------------+</span>
 </pre></div>
 </div>
 </section>
@@ -7228,25 +7227,25 @@ an error will be returned.</p></li>
 </section>
 <section id="array-concat">
 <h3><code class="docutils literal notranslate"><span class="pre">array_concat</span></code><a class="headerlink" href="#array-concat" title="Link to this heading">¶</a></h3>
-<p>Appends an element to the end of an array.</p>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">array_append</span><span class="p">(</span><span class="n">array</span><span class="p">,</span> <span class="n">element</span><span class="p">)</span>
+<p>Concatenates arrays.</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">array_concat</span><span class="p">(</span><span class="n">array</span><span class="p">[,</span> <span class="o">...</span><span class="p">,</span> <span class="n">array_n</span><span class="p">])</span>
 </pre></div>
 </div>
 <section id="id168">
 <h4>Arguments<a class="headerlink" href="#id168" title="Link to this heading">¶</a></h4>
 <ul class="simple">
 <li><p><strong>array</strong>: Array expression. Can be a constant, column, or function, and any combination of array operators.</p></li>
-<li><p><strong>element</strong>: Element to append to the array.</p></li>
+<li><p><strong>array_n</strong>: Subsequent array column or literal array to concatenate.</p></li>
 </ul>
 </section>
 <section id="id169">
 <h4>Example<a class="headerlink" href="#id169" title="Link to this heading">¶</a></h4>
-<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span><span class="w"> </span><span class="k">select</span><span class="w"> </span><span class="n">array_append</span><span class="p">([</span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="mi">2</span><span class="p">,</span><span class="w"> </span><span class="mi">3</span><span class="p">],</span><span class="w"> </span><span class="mi">4</span><span class="p">);</span>
-<span class="o">+</span><span class="c1">--------------------------------------+</span>
-<span class="o">|</span><span class="w"> </span><span class="n">array_append</span><span class="p">(</span><span class="n">List</span><span class="p">([</span><span class="mi">1</span><span class="p">,</span><span class="mi">2</span><span class="p">,</span><span class="mi">3</span><span class="p">]),</span><span class="n">Int64</span><span class="p">(</span><span class="mi">4</span><span class="p">))</span><span class="w"> </span><span class="o">|</span>
-<span class="o">+</span><span class="c1">--------------------------------------+</span>
-<span class="o">|</span><span class="w"> </span><span class="p">[</span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="mi">2</span><span class="p">,</span><span class="w"> </span><span class="mi">3</span><span class="p">,</span><span class="w"> </span><span class="mi">4</span><span class="p">]</span><span class="w">                         </span><span class="o">|</span>
-<span class="o">+</span><span class="c1">--------------------------------------+</span>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span><span class="w"> </span><span class="k">select</span><span class="w"> </span><span class="n">array_concat</span><span class="p">([</span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="mi">2</span><span class="p">],</span><span class="w"> </span><span class="p">[</span><span class="mi">3</span><span class="p">,</span><span class="w"> </span><span class="mi">4</span><span class="p">],</span><span class="w"> </span><span class="p">[</span><span class="mi">5</span><span class="p">,</span><span class="w"> </span><span class="mi">6</span><span class="p">]);</span>
+<span class="o">+</span><span class="c1">---------------------------------------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="n">array_concat</span><span class="p">(</span><span class="n">List</span><span class="p">([</span><span class="mi">1</span><span class="p">,</span><span class="mi">2</span><span class="p">]),</span><span class="n">List</span><span class="p">([</span><span class="mi">3</span><span class="p">,</span><span class="mi">4</span><span class="p">]),</span><span class="n">List</span><span class="p">([</span><span class="mi">5</span><span class="p">,</span><span class="mi">6</span><span class="p">]))</span><span class="w"> </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">---------------------------------------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="p">[</span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="mi">2</span><span class="p">,</span><span class="w"> </span><span class="mi">3</span><span class="p">,</span><span class="w"> </span><span class="mi">4</span><span class="p">,</span><span class="w"> </span><span class="mi">5</span><span class="p">,</span><span class="w"> </span><span class="mi">6</span><span class="p">]</span><span class="w">                                </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">---------------------------------------------------+</span>
 </pre></div>
 </div>
 </section>
@@ -7467,25 +7466,25 @@ an error will be returned.</p></li>
 </section>
 <section id="array-has-all">
 <h3><code class="docutils literal notranslate"><span class="pre">array_has_all</span></code><a class="headerlink" href="#array-has-all" title="Link to this heading">¶</a></h3>
-<p>Returns true if the array contains the element.</p>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">array_has</span><span class="p">(</span><span class="n">array</span><span class="p">,</span> <span class="n">element</span><span class="p">)</span>
+<p>Returns true if all elements of sub-array exist in array.</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">array_has_all</span><span class="p">(</span><span class="n">array</span><span class="p">,</span> <span class="n">sub</span><span class="o">-</span><span class="n">array</span><span class="p">)</span>
 </pre></div>
 </div>
 <section id="id189">
 <h4>Arguments<a class="headerlink" href="#id189" title="Link to this heading">¶</a></h4>
 <ul class="simple">
 <li><p><strong>array</strong>: Array expression. Can be a constant, column, or function, and any combination of array operators.</p></li>
-<li><p><strong>element</strong>: Scalar or Array expression. Can be a constant, column, or function, and any combination of array operators.</p></li>
+<li><p><strong>sub-array</strong>: Array expression. Can be a constant, column, or function, and any combination of array operators.</p></li>
 </ul>
 </section>
 <section id="id190">
 <h4>Example<a class="headerlink" href="#id190" title="Link to this heading">¶</a></h4>
-<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span><span class="w"> </span><span class="k">select</span><span class="w"> </span><span class="n">array_has</span><span class="p">([</span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="mi">2</span><span class="p">,</span><span class="w"> </span><span class="mi">3</span><span class="p">],</span><span class="w"> </span><span class="mi">2</span><span class="p">);</span>
-<span class="o">+</span><span class="c1">-----------------------------+</span>
-<span class="o">|</span><span class="w"> </span><span class="n">array_has</span><span class="p">(</span><span class="n">List</span><span class="p">([</span><span class="mi">1</span><span class="p">,</span><span class="mi">2</span><span class="p">,</span><span class="mi">3</span><span class="p">]),</span><span class="w"> </span><span class="mi">2</span><span class="p">)</span><span class="w"> </span><span class="o">|</span>
-<span class="o">+</span><span class="c1">-----------------------------+</span>
-<span class="o">|</span><span class="w"> </span><span class="k">true</span><span class="w">                        </span><span class="o">|</span>
-<span class="o">+</span><span class="c1">-----------------------------+</span>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span><span class="w"> </span><span class="k">select</span><span class="w"> </span><span class="n">array_has_all</span><span class="p">([</span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="mi">2</span><span class="p">,</span><span class="w"> </span><span class="mi">3</span><span class="p">,</span><span class="w"> </span><span class="mi">4</span><span class="p">],</span><span class="w"> </span><span class="p">[</span><span class="mi">2</span><span class="p">,</span><span class="w"> </span><span class="mi">3</span><span class="p">]);</span>
+<span class="o">+</span><span class="c1">--------------------------------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="n">array_has_all</span><span class="p">(</span><span class="n">List</span><span class="p">([</span><span class="mi">1</span><span class="p">,</span><span class="mi">2</span><span class="p">,</span><span class="mi">3</span><span class="p">,</span><span class="mi">4</span><span class="p">]),</span><span class="w"> </span><span class="n">List</span><span class="p">([</span><span class="mi">2</span><span class="p">,</span><span class="mi">3</span><span class="p">]))</span><span class="w"> </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">--------------------------------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="k">true</span><span class="w">                                       </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">--------------------------------------------+</span>
 </pre></div>
 </div>
 </section>
@@ -7498,25 +7497,25 @@ an error will be returned.</p></li>
 </section>
 <section id="array-has-any">
 <h3><code class="docutils literal notranslate"><span class="pre">array_has_any</span></code><a class="headerlink" href="#array-has-any" title="Link to this heading">¶</a></h3>
-<p>Returns true if the array contains the element.</p>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">array_has</span><span class="p">(</span><span class="n">array</span><span class="p">,</span> <span class="n">element</span><span class="p">)</span>
+<p>Returns true if any elements exist in both arrays.</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">array_has_any</span><span class="p">(</span><span class="n">array</span><span class="p">,</span> <span class="n">sub</span><span class="o">-</span><span class="n">array</span><span class="p">)</span>
 </pre></div>
 </div>
 <section id="id192">
 <h4>Arguments<a class="headerlink" href="#id192" title="Link to this heading">¶</a></h4>
 <ul class="simple">
 <li><p><strong>array</strong>: Array expression. Can be a constant, column, or function, and any combination of array operators.</p></li>
-<li><p><strong>element</strong>: Scalar or Array expression. Can be a constant, column, or function, and any combination of array operators.</p></li>
+<li><p><strong>sub-array</strong>: Array expression. Can be a constant, column, or function, and any combination of array operators.</p></li>
 </ul>
 </section>
 <section id="id193">
 <h4>Example<a class="headerlink" href="#id193" title="Link to this heading">¶</a></h4>
-<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span><span class="w"> </span><span class="k">select</span><span class="w"> </span><span class="n">array_has</span><span class="p">([</span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="mi">2</span><span class="p">,</span><span class="w"> </span><span class="mi">3</span><span class="p">],</span><span class="w"> </span><span class="mi">2</span><span class="p">);</span>
-<span class="o">+</span><span class="c1">-----------------------------+</span>
-<span class="o">|</span><span class="w"> </span><span class="n">array_has</span><span class="p">(</span><span class="n">List</span><span class="p">([</span><span class="mi">1</span><span class="p">,</span><span class="mi">2</span><span class="p">,</span><span class="mi">3</span><span class="p">]),</span><span class="w"> </span><span class="mi">2</span><span class="p">)</span><span class="w"> </span><span class="o">|</span>
-<span class="o">+</span><span class="c1">-----------------------------+</span>
-<span class="o">|</span><span class="w"> </span><span class="k">true</span><span class="w">                        </span><span class="o">|</span>
-<span class="o">+</span><span class="c1">-----------------------------+</span>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span><span class="w"> </span><span class="k">select</span><span class="w"> </span><span class="n">array_has_any</span><span class="p">([</span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="mi">2</span><span class="p">,</span><span class="w"> </span><span class="mi">3</span><span class="p">],</span><span class="w"> </span><span class="p">[</span><span class="mi">3</span><span class="p">,</span><span class="w"> </span><span class="mi">4</span><span class="p">]);</span>
+<span class="o">+</span><span class="c1">------------------------------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="n">array_has_any</span><span class="p">(</span><span class="n">List</span><span class="p">([</span><span class="mi">1</span><span class="p">,</span><span class="mi">2</span><span class="p">,</span><span class="mi">3</span><span class="p">]),</span><span class="w"> </span><span class="n">List</span><span class="p">([</span><span class="mi">3</span><span class="p">,</span><span class="mi">4</span><span class="p">]))</span><span class="w"> </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">------------------------------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="k">true</span><span class="w">                                     </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">------------------------------------------+</span>
 </pre></div>
 </div>
 </section>
@@ -7598,24 +7597,25 @@ an error will be returned.</p></li>
 </section>
 <section id="array-ndims">
 <h3><code class="docutils literal notranslate"><span class="pre">array_ndims</span></code><a class="headerlink" href="#array-ndims" title="Link to this heading">¶</a></h3>
-<p>Returns an array of the array’s dimensions.</p>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">array_dims</span><span class="p">(</span><span class="n">array</span><span class="p">)</span>
+<p>Returns the number of dimensions of the array.</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">array_ndims</span><span class="p">(</span><span class="n">array</span><span class="p">,</span> <span class="n">element</span><span class="p">)</span>
 </pre></div>
 </div>
 <section id="id201">
 <h4>Arguments<a class="headerlink" href="#id201" title="Link to this heading">¶</a></h4>
 <ul class="simple">
 <li><p><strong>array</strong>: Array expression. Can be a constant, column, or function, and any combination of array operators.</p></li>
+<li><p><strong>element</strong>: Array element.</p></li>
 </ul>
 </section>
 <section id="id202">
 <h4>Example<a class="headerlink" href="#id202" title="Link to this heading">¶</a></h4>
-<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span><span class="w"> </span><span class="k">select</span><span class="w"> </span><span class="n">array_dims</span><span class="p">([[</span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="mi">2</span><span class="p">,</span><span class="w"> </span><span class="mi">3</span><span class="p">],</span><span class="w"> </span><span class="p">[</span><span class="mi">4</span><span class="p">,</span><span class="w"> </span><span class="mi">5</span><span class="p">,</span><span class="w"> </span><span class="mi">6</span><span class="p">]]);</span>
-<span class="o">+</span><span class="c1">---------------------------------+</span>
-<span class="o">|</span><span class="w"> </span><span class="n">array_dims</span><span class="p">(</span><span class="n">List</span><span class="p">([</span><span class="mi">1</span><span class="p">,</span><span class="mi">2</span><span class="p">,</span><span class="mi">3</span><span class="p">,</span><span class="mi">4</span><span class="p">,</span><span class="mi">5</span><span class="p">,</span><span class="mi">6</span><span class="p">]))</span><span class="w"> </span><span class="o">|</span>
-<span class="o">+</span><span class="c1">---------------------------------+</span>
-<span class="o">|</span><span class="w"> </span><span class="p">[</span><span class="mi">2</span><span class="p">,</span><span class="w"> </span><span class="mi">3</span><span class="p">]</span><span class="w">                          </span><span class="o">|</span>
-<span class="o">+</span><span class="c1">---------------------------------+</span>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span><span class="w"> </span><span class="k">select</span><span class="w"> </span><span class="n">array_ndims</span><span class="p">([[</span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="mi">2</span><span class="p">,</span><span class="w"> </span><span class="mi">3</span><span class="p">],</span><span class="w"> </span><span class="p">[</span><span class="mi">4</span><span class="p">,</span><span class="w"> </span><span class="mi">5</span><span class="p">,</span><span class="w"> </span><span class="mi">6</span><span class="p">]]);</span>
+<span class="o">+</span><span class="c1">----------------------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="n">array_ndims</span><span class="p">(</span><span class="n">List</span><span class="p">([</span><span class="mi">1</span><span class="p">,</span><span class="mi">2</span><span class="p">,</span><span class="mi">3</span><span class="p">,</span><span class="mi">4</span><span class="p">,</span><span class="mi">5</span><span class="p">,</span><span class="mi">6</span><span class="p">]))</span><span class="w"> </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">----------------------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="mi">2</span><span class="w">                                </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">----------------------------------+</span>
 </pre></div>
 </div>
 </section>
@@ -7628,25 +7628,24 @@ an error will be returned.</p></li>
 </section>
 <section id="array-pop-back">
 <h3><code class="docutils literal notranslate"><span class="pre">array_pop_back</span></code><a class="headerlink" href="#array-pop-back" title="Link to this heading">¶</a></h3>
-<p>Extracts the element with the index n from the array.</p>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">array_element</span><span class="p">(</span><span class="n">array</span><span class="p">,</span> <span class="n">index</span><span class="p">)</span>
+<p>Returns the array without the last element.</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">array_pop_back</span><span class="p">(</span><span class="n">array</span><span class="p">)</span>
 </pre></div>
 </div>
 <section id="id204">
 <h4>Arguments<a class="headerlink" href="#id204" title="Link to this heading">¶</a></h4>
 <ul class="simple">
 <li><p><strong>array</strong>: Array expression. Can be a constant, column, or function, and any combination of array operators.</p></li>
-<li><p><strong>index</strong>: Index to extract the element from the array.</p></li>
 </ul>
 </section>
 <section id="id205">
 <h4>Example<a class="headerlink" href="#id205" title="Link to this heading">¶</a></h4>
-<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span><span class="w"> </span><span class="k">select</span><span class="w"> </span><span class="n">array_element</span><span class="p">([</span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="mi">2</span><span class="p">,</span><span class="w"> </span><span class="mi">3</span><span class="p">,</span><span class="w"> </span><span class="mi">4</span><span class="p">],</span><span class="w"> </span><span class="mi">3</span><span class="p">);</span>
-<span class="o">+</span><span class="c1">-----------------------------------------+</span>
-<span class="o">|</span><span class="w"> </span><span class="n">array_element</span><span class="p">(</span><span class="n">List</span><span class="p">([</span><span class="mi">1</span><span class="p">,</span><span class="mi">2</span><span class="p">,</span><span class="mi">3</span><span class="p">,</span><span class="mi">4</span><span class="p">]),</span><span class="n">Int64</span><span class="p">(</span><span class="mi">3</span><span class="p">))</span><span class="w"> </span><span class="o">|</span>
-<span class="o">+</span><span class="c1">-----------------------------------------+</span>
-<span class="o">|</span><span class="w"> </span><span class="mi">3</span><span class="w">                                       </span><span class="o">|</span>
-<span class="o">+</span><span class="c1">-----------------------------------------+</span>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span><span class="w"> </span><span class="k">select</span><span class="w"> </span><span class="n">array_pop_back</span><span class="p">([</span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="mi">2</span><span class="p">,</span><span class="w"> </span><span class="mi">3</span><span class="p">]);</span>
+<span class="o">+</span><span class="c1">-------------------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="n">array_pop_back</span><span class="p">(</span><span class="n">List</span><span class="p">([</span><span class="mi">1</span><span class="p">,</span><span class="mi">2</span><span class="p">,</span><span class="mi">3</span><span class="p">]))</span><span class="w"> </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">-------------------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="p">[</span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="mi">2</span><span class="p">]</span><span class="w">                        </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">-------------------------------+</span>
 </pre></div>
 </div>
 </section>
@@ -7659,25 +7658,24 @@ an error will be returned.</p></li>
 </section>
 <section id="array-pop-front">
 <h3><code class="docutils literal notranslate"><span class="pre">array_pop_front</span></code><a class="headerlink" href="#array-pop-front" title="Link to this heading">¶</a></h3>
-<p>Extracts the element with the index n from the array.</p>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">array_element</span><span class="p">(</span><span class="n">array</span><span class="p">,</span> <span class="n">index</span><span class="p">)</span>
+<p>Returns the array without the first element.</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">array_pop_front</span><span class="p">(</span><span class="n">array</span><span class="p">)</span>
 </pre></div>
 </div>
 <section id="id207">
 <h4>Arguments<a class="headerlink" href="#id207" title="Link to this heading">¶</a></h4>
 <ul class="simple">
 <li><p><strong>array</strong>: Array expression. Can be a constant, column, or function, and any combination of array operators.</p></li>
-<li><p><strong>index</strong>: Index to extract the element from the array.</p></li>
 </ul>
 </section>
 <section id="id208">
 <h4>Example<a class="headerlink" href="#id208" title="Link to this heading">¶</a></h4>
-<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span><span class="w"> </span><span class="k">select</span><span class="w"> </span><span class="n">array_element</span><span class="p">([</span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="mi">2</span><span class="p">,</span><span class="w"> </span><span class="mi">3</span><span class="p">,</span><span class="w"> </span><span class="mi">4</span><span class="p">],</span><span class="w"> </span><span class="mi">3</span><span class="p">);</span>
-<span class="o">+</span><span class="c1">-----------------------------------------+</span>
-<span class="o">|</span><span class="w"> </span><span class="n">array_element</span><span class="p">(</span><span class="n">List</span><span class="p">([</span><span class="mi">1</span><span class="p">,</span><span class="mi">2</span><span class="p">,</span><span class="mi">3</span><span class="p">,</span><span class="mi">4</span><span class="p">]),</span><span class="n">Int64</span><span class="p">(</span><span class="mi">3</span><span class="p">))</span><span class="w"> </span><span class="o">|</span>
-<span class="o">+</span><span class="c1">-----------------------------------------+</span>
-<span class="o">|</span><span class="w"> </span><span class="mi">3</span><span class="w">                                       </span><span class="o">|</span>
-<span class="o">+</span><span class="c1">-----------------------------------------+</span>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span><span class="w"> </span><span class="k">select</span><span class="w"> </span><span class="n">array_pop_front</span><span class="p">([</span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="mi">2</span><span class="p">,</span><span class="w"> </span><span class="mi">3</span><span class="p">]);</span>
+<span class="o">+</span><span class="c1">-------------------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="n">array_pop_front</span><span class="p">(</span><span class="n">List</span><span class="p">([</span><span class="mi">1</span><span class="p">,</span><span class="mi">2</span><span class="p">,</span><span class="mi">3</span><span class="p">]))</span><span class="w"> </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">-------------------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="p">[</span><span class="mi">2</span><span class="p">,</span><span class="w"> </span><span class="mi">3</span><span class="p">]</span><span class="w">                        </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">-------------------------------+</span>
 </pre></div>
 </div>
 </section>
@@ -7777,8 +7775,8 @@ an error will be returned.</p></li>
 <section id="id216">
 <h4>Arguments<a class="headerlink" href="#id216" title="Link to this heading">¶</a></h4>
 <ul class="simple">
-<li><p><strong>element</strong>: Element to prepend to the array.</p></li>
 <li><p><strong>array</strong>: Array expression. Can be a constant, column, or function, and any combination of array operators.</p></li>
+<li><p><strong>element</strong>: Element to prepend to the array.</p></li>
 </ul>
 </section>
 <section id="id217">
@@ -8102,25 +8100,27 @@ an error will be returned.</p></li>
 </section>
 <section id="array-slice">
 <h3><code class="docutils literal notranslate"><span class="pre">array_slice</span></code><a class="headerlink" href="#array-slice" title="Link to this heading">¶</a></h3>
-<p>Extracts the element with the index n from the array.</p>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">array_element</span><span class="p">(</span><span class="n">array</span><span class="p">,</span> <span class="n">index</span><span class="p">)</span>
+<p>Returns a slice of the array based on 1-indexed start and end positions.</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">array_slice</span><span class="p">(</span><span class="n">array</span><span class="p">,</span> <span class="n">begin</span><span class="p">,</span> <span class="n">end</span><span class="p">)</span>
 </pre></div>
 </div>
 <section id="id246">
 <h4>Arguments<a class="headerlink" href="#id246" title="Link to this heading">¶</a></h4>
 <ul class="simple">
 <li><p><strong>array</strong>: Array expression. Can be a constant, column, or function, and any combination of array operators.</p></li>
-<li><p><strong>index</strong>: Index to extract the element from the array.</p></li>
+<li><p><strong>begin</strong>: Index of the first element. If negative, it counts backward from the end of the array.</p></li>
+<li><p><strong>end</strong>: Index of the last element. If negative, it counts backward from the end of the array.</p></li>
+<li><p><strong>stride</strong>: Stride of the array slice. The default is 1.</p></li>
 </ul>
 </section>
 <section id="id247">
 <h4>Example<a class="headerlink" href="#id247" title="Link to this heading">¶</a></h4>
-<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span><span class="w"> </span><span class="k">select</span><span class="w"> </span><span class="n">array_element</span><span class="p">([</span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="mi">2</span><span class="p">,</span><span class="w"> </span><span class="mi">3</span><span class="p">,</span><span class="w"> </span><span class="mi">4</span><span class="p">],</span><span class="w"> </span><span class="mi">3</span><span class="p">);</span>
-<span class="o">+</span><span class="c1">-----------------------------------------+</span>
-<span class="o">|</span><span class="w"> </span><span class="n">array_element</span><span class="p">(</span><span class="n">List</span><span class="p">([</span><span class="mi">1</span><span class="p">,</span><span class="mi">2</span><span class="p">,</span><span class="mi">3</span><span class="p">,</span><span class="mi">4</span><span class="p">]),</span><span class="n">Int64</span><span class="p">(</span><span class="mi">3</span><span class="p">))</span><span class="w"> </span><span class="o">|</span>
-<span class="o">+</span><span class="c1">-----------------------------------------+</span>
-<span class="o">|</span><span class="w"> </span><span class="mi">3</span><span class="w">                                       </span><span class="o">|</span>
-<span class="o">+</span><span class="c1">-----------------------------------------+</span>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span><span class="w"> </span><span class="k">select</span><span class="w"> </span><span class="n">array_slice</span><span class="p">([</span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="mi">2</span><span class="p">,</span><span class="w"> </span><span class="mi">3</span><span class="p">,</span><span class="w"> </span><span class="mi">4</span><span class="p">,</span><span class="w"> </span><span class="mi">5</span><span class="p">,</span><span class="w"> </span><span class="mi">6</span><span class="p">,</span><span class="w"> </span><span class="mi">7</span><span class="p">,</span><span class="w"> </span><span class="mi">8</span><span class="p">],</span><span class="w"> </span><span class="mi">3</span><span class="p">,</span><span class="w"> </span><span class="mi">6</span><span class="p">);</span>
+<span class="o">+</span><span class="c1">--------------------------------------------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="n">array_slice</span><span class="p">(</span><span class="n">List</span><span class="p">([</span><span class="mi">1</span><span class="p">,</span><span class="mi">2</span><span class="p">,</span><span class="mi">3</span><span class="p">,</span><span class="mi">4</span><span class="p">,</span><span class="mi">5</span><span class="p">,</span><span class="mi">6</span><span class="p">,</span><span class="mi">7</span><span class="p">,</span><span class="mi">8</span><span class="p">]),</span><span class="n">Int64</span><span class="p">(</span><span class="mi">3</span><span class="p">),</span><span class="n">Int64</span><span class="p">(</span><span class="mi">6</span><span class="p">))</span><span class="w"> </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">--------------------------------------------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="p">[</span><span class="mi">3</span><span class="p">,</span><span class="w"> </span><span class="mi">4</span><span class="p">,</span><span class="w"> </span><span class="mi">5</span><span class="p">,</span><span class="w"> </span><span class="mi">6</span><span class="p">]</span><span class="w">                                           </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">--------------------------------------------------------+</span>
 </pre></div>
 </div>
 </section>
