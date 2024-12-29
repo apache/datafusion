@@ -57,7 +57,7 @@ make_udf_expr_and_func!(
         name = "array",
         description = "Array expression. Can be a constant, column, or function, and any combination of array operators."
     ),
-    argument(name = "dimension", description = "Array dimension")
+    argument(name = "dimension", description = "Array dimension.")
 )]
 #[derive(Debug)]
 pub struct ArrayLength {
