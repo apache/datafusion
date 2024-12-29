@@ -574,6 +574,8 @@ config_namespace! {
         /// repartitioning to increase parallelism to leverage more CPU cores
         pub enable_round_robin_repartition: bool, default = true
 
+        pub enable_on_demand_repartition: bool, default = true
+
         /// When set to true, the optimizer will attempt to perform limit operations
         /// during aggregations, if possible
         pub enable_topk_aggregation: bool, default = true
