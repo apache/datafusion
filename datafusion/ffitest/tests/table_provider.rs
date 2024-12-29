@@ -3,6 +3,8 @@ use abi_stable::library::RootModule;
 use datafusion::error::{DataFusionError, Result};
 use datafusion::prelude::SessionContext;
 use datafusion_ffi::table_provider::ForeignTableProvider;
+#[allow(clippy::single_component_path_imports)]
+use datafusion_ffi_test;
 use datafusion_ffi_test::TableProviderModuleRef;
 use std::path::Path;
 use std::sync::Arc;
