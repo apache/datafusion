@@ -7736,9 +7736,8 @@ an error will be returned.</p></li>
 </section>
 <section id="array-positions">
 <h3><code class="docutils literal notranslate"><span class="pre">array_positions</span></code><a class="headerlink" href="#array-positions" title="Link to this heading">¶</a></h3>
-<p>Returns the position of the first occurrence of the specified element in the array.</p>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">array_position</span><span class="p">(</span><span class="n">array</span><span class="p">,</span> <span class="n">element</span><span class="p">)</span>
-<span class="n">array_position</span><span class="p">(</span><span class="n">array</span><span class="p">,</span> <span class="n">element</span><span class="p">,</span> <span class="n">index</span><span class="p">)</span>
+<p>Searches for an element in the array, returns all occurrences.</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">array_positions</span><span class="p">(</span><span class="n">array</span><span class="p">,</span> <span class="n">element</span><span class="p">)</span>
 </pre></div>
 </div>
 <section id="id213">
@@ -7746,23 +7745,16 @@ an error will be returned.</p></li>
 <ul class="simple">
 <li><p><strong>array</strong>: Array expression. Can be a constant, column, or function, and any combination of array operators.</p></li>
 <li><p><strong>element</strong>: Element to search for position in the array.</p></li>
-<li><p><strong>index</strong>: Index at which to start searching.</p></li>
 </ul>
 </section>
 <section id="id214">
 <h4>Example<a class="headerlink" href="#id214" title="Link to this heading">¶</a></h4>
-<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span><span class="w"> </span><span class="k">select</span><span class="w"> </span><span class="n">array_position</span><span class="p">([</span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="mi">2</span><span class="p">,</span><span class="w"> </span><span class="mi">2</span><span class="p">,</span><span class="w"> </span><span class="mi">3</span><span class="p">,</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="mi">4</span><span class="p">],</span><span class="w"> </span><span class="mi">2</span><span class="p">);</span>
-<span class="o">+</span><span class="c1">----------------------------------------------+</span>
-<span class="o">|</span><span class="w"> </span><span class="n">array_position</span><span class="p">(</span><span class="n">List</span><span class="p">([</span><span class="mi">1</span><span class="p">,</span><span class="mi">2</span><span class="p">,</span><span class="mi">2</span><span class="p">,</span><span class="mi">3</span><span class="p">,</span><span class="mi">1</span><span class="p">,</span><span class="mi">4</span><span class="p">]),</span><span class="n">Int64</span><span class="p">(</span><span class="mi">2</span><span class="p">))</span><span class="w"> </span><span class="o">|</span>
-<span class="o">+</span><span class="c1">----------------------------------------------+</span>
-<span class="o">|</span><span class="w"> </span><span class="mi">2</span><span class="w">                                            </span><span class="o">|</span>
-<span class="o">+</span><span class="c1">----------------------------------------------+</span>
-<span class="o">&gt;</span><span class="w"> </span><span class="k">select</span><span class="w"> </span><span class="n">array_position</span><span class="p">([</span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="mi">2</span><span class="p">,</span><span class="w"> </span><span class="mi">2</span><span class="p">,</span><span class="w"> </span><span class="mi">3</span><span class="p">,</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="mi">4</span><span class="p">],</span><span class="w"> </span><span class="mi">2</span><span class="p">,</span><span class="w"> </span><span class="mi">3</span><span class="p">);</span>
-<span class="o">+</span><span class="c1">----------------------------------------------------+</span>
-<span class="o">|</span><span class="w"> </span><span class="n">array_position</span><span class="p">(</span><span class="n">List</span><span class="p">([</span><span class="mi">1</span><span class="p">,</span><span class="mi">2</span><span class="p">,</span><span class="mi">2</span><span class="p">,</span><span class="mi">3</span><span class="p">,</span><span class="mi">1</span><span class="p">,</span><span class="mi">4</span><span class="p">]),</span><span class="n">Int64</span><span class="p">(</span><span class="mi">2</span><span class="p">),</span><span class="w"> </span><span class="n">Int64</span><span class="p">(</span><span class="mi">3</span><span class="p">))</span><span class="w"> </span><span class="o">|</span>
-<span class="o">+</span><span class="c1">----------------------------------------------------+</span>
-<span class="o">|</span><span class="w"> </span><span class="mi">3</span><span class="w">                                                  </span><span class="o">|</span>
-<span class="o">+</span><span class="c1">----------------------------------------------------+</span>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span><span class="w"> </span><span class="k">select</span><span class="w"> </span><span class="n">array_positions</span><span class="p">([</span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="mi">2</span><span class="p">,</span><span class="w"> </span><span class="mi">2</span><span class="p">,</span><span class="w"> </span><span class="mi">3</span><span class="p">,</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="mi">4</span><span class="p">],</span><span class="w"> </span><span class="mi">2</span><span class="p">);</span>
+<span class="o">+</span><span class="c1">-----------------------------------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="n">array_positions</span><span class="p">(</span><span class="n">List</span><span class="p">([</span><span class="mi">1</span><span class="p">,</span><span class="mi">2</span><span class="p">,</span><span class="mi">2</span><span class="p">,</span><span class="mi">3</span><span class="p">,</span><span class="mi">1</span><span class="p">,</span><span class="mi">4</span><span class="p">]),</span><span class="n">Int64</span><span class="p">(</span><span class="mi">2</span><span class="p">))</span><span class="w"> </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">-----------------------------------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="p">[</span><span class="mi">2</span><span class="p">,</span><span class="w"> </span><span class="mi">3</span><span class="p">]</span><span class="w">                                        </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">-----------------------------------------------+</span>
 </pre></div>
 </div>
 </section>
