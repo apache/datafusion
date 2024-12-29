@@ -34,7 +34,7 @@ use datafusion_macros::user_doc;
 
 #[user_doc(
     doc_section(label = "Math Functions"),
-    description = "Truncates a number to a whole number or truncated to the specified decimal places",
+    description = "Truncates a number to a whole number or truncated to the specified decimal places.",
     syntax_example = "trunc(numeric_expression[, decimal_places])",
     standard_argument(name = "numeric_expression", prefix = "Numeric"),
     argument(
