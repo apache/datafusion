@@ -26,16 +26,16 @@ use std::{any::Any, vec};
 
 use super::metrics::{ExecutionPlanMetricsSet, MetricsSet};
 use super::{
-    BatchPartitioner, DisplayAs, ExecutionPlanProperties,
-    InputPartitionsToCurrentPartitionReceiver, InputPartitionsToCurrentPartitionSender,
-    MaybeBatch, RecordBatchStream, RepartitionMetrics, SendableRecordBatchStream,
+    BatchPartitioner, DisplayAs, ExecutionPlanProperties, MaybeBatch, RecordBatchStream,
+    RepartitionExecBase, RepartitionMetrics, SendableRecordBatchStream,
 };
 use crate::common::SharedMemoryReservation;
 use crate::execution_plan::CardinalityEffect;
 use crate::metrics::BaselineMetrics;
 use crate::repartition::distributor_channels::{
-    channels, partition_aware_channels, DistributionReceiver, DistributionSender,
+    DistributionReceiver, DistributionSender,
 };
+use crate::repartition::RepartitionExecStateBuilder;
 use crate::sorts::streaming_merge::StreamingMergeBuilder;
 use crate::stream::RecordBatchStreamAdapter;
 use crate::{DisplayFormatType, ExecutionPlan, Partitioning, PlanProperties, Statistics};
@@ -43,13 +43,11 @@ use crate::{DisplayFormatType, ExecutionPlan, Partitioning, PlanProperties, Stat
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use async_channel::{Receiver, Sender};
-use datafusion_common::utils::transpose;
+
 use datafusion_common::{internal_datafusion_err, DataFusionError, Result};
 use datafusion_common_runtime::SpawnedTask;
 use datafusion_execution::memory_pool::MemoryConsumer;
 use datafusion_execution::TaskContext;
-use datafusion_physical_expr::EquivalenceProperties;
-use datafusion_physical_expr_common::sort_expr::LexOrdering;
 
 use datafusion_common::HashMap;
 use futures::stream::Stream;
@@ -57,153 +55,38 @@ use futures::{FutureExt, StreamExt, TryStreamExt};
 use log::trace;
 use parking_lot::Mutex;
 
-/// Inner state of [`RepartitionExec`].
-#[derive(Debug)]
-struct OnDemandRepartitionExecState {
-    /// Channels for sending batches from input partitions to output partitions.
-    /// Key is the partition number.
-    channels: HashMap<
-        usize,
-        (
-            InputPartitionsToCurrentPartitionSender,
-            InputPartitionsToCurrentPartitionReceiver,
-            SharedMemoryReservation,
-        ),
-    >,
-
-    /// Helper that ensures that that background job is killed once it is no longer needed.
-    abort_helper: Arc<Vec<SpawnedTask<()>>>,
-}
-
-impl OnDemandRepartitionExecState {
-    fn new(
-        input: Arc<dyn ExecutionPlan>,
-        partitioning: Partitioning,
-        metrics: ExecutionPlanMetricsSet,
-        preserve_order: bool,
-        name: String,
-        context: Arc<TaskContext>,
-        partition_receiver: Receiver<usize>,
-    ) -> Self {
-        let num_input_partitions = input.output_partitioning().partition_count();
-        let num_output_partitions = partitioning.partition_count();
-
-        let (txs, rxs) = if preserve_order {
-            let (txs, rxs) =
-                partition_aware_channels(num_input_partitions, num_output_partitions);
-            // Take transpose of senders and receivers. `state.channels` keeps track of entries per output partition
-            let txs = transpose(txs);
-            let rxs = transpose(rxs);
-            (txs, rxs)
-        } else {
-            // create one channel per *output* partition
-            // note we use a custom channel that ensures there is always data for each receiver
-            // but limits the amount of buffering if required.
-            let (txs, rxs) = channels(num_output_partitions);
-            // Clone sender for each input partitions
-            let txs = txs
-                .into_iter()
-                .map(|item| vec![item; num_input_partitions])
-                .collect::<Vec<_>>();
-            let rxs = rxs.into_iter().map(|item| vec![item]).collect::<Vec<_>>();
-            (txs, rxs)
-        };
-
-        let mut channels = HashMap::with_capacity(txs.len());
-        for (partition, (tx, rx)) in txs.into_iter().zip(rxs).enumerate() {
-            let reservation = Arc::new(Mutex::new(
-                MemoryConsumer::new(format!("{}[{partition}]", name))
-                    .register(context.memory_pool()),
-            ));
-            channels.insert(partition, (tx, rx, reservation));
-        }
-
-        // launch one async task per *input* partition
-        let mut spawned_tasks = Vec::with_capacity(num_input_partitions);
-        for i in 0..num_input_partitions {
-            let txs: HashMap<_, _> = channels
-                .iter()
-                .map(|(partition, (tx, _rx, reservation))| {
-                    (*partition, (tx[i].clone(), Arc::clone(reservation)))
-                })
-                .collect();
-
-            let r_metrics = RepartitionMetrics::new(i, num_output_partitions, &metrics);
-
-            let input_task =
-                SpawnedTask::spawn(OnDemandRepartitionExec::pull_from_input(
-                    Arc::clone(&input),
-                    i,
-                    txs.clone(),
-                    partitioning.clone(),
-                    partition_receiver.clone(),
-                    r_metrics,
-                    Arc::clone(&context),
-                ));
-
-            // In a separate task, wait for each input to be done
-            // (and pass along any errors, including panic!s)
-            let wait_for_task =
-                SpawnedTask::spawn(OnDemandRepartitionExec::wait_for_task(
-                    input_task,
-                    txs.into_iter()
-                        .map(|(partition, (tx, _reservation))| (partition, tx))
-                        .collect(),
-                ));
-            spawned_tasks.push(wait_for_task);
-        }
-
-        Self {
-            channels,
-            abort_helper: Arc::new(spawned_tasks),
-        }
-    }
-}
-
-/// Lazily initialized state
-///
-/// Note that the state is initialized ONCE for all partitions by a single task(thread).
-/// This may take a short while.  It is also like that multiple threads
-/// call execute at the same time, because we have just started "target partitions" tasks
-/// which is commonly set to the number of CPU cores and all call execute at the same time.
-///
-/// Thus, use a **tokio** `OnceCell` for this initialization so as not to waste CPU cycles
-/// in a futex lock but instead allow other threads to do something useful.
-///
-/// Uses a parking_lot `Mutex` to control other accesses as they are very short duration
-///  (e.g. removing channels on completion) where the overhead of `await` is not warranted.
-type LazyState = Arc<tokio::sync::OnceCell<Mutex<OnDemandRepartitionExecState>>>;
-
 #[derive(Debug, Clone)]
 pub struct OnDemandRepartitionExec {
-    /// Input execution plan
-    input: Arc<dyn ExecutionPlan>,
-    /// Inner state that is initialized when the first output stream is created.
-    state: LazyState,
-    /// Execution metrics
-    metrics: ExecutionPlanMetricsSet,
-    /// Boolean flag to decide whether to preserve ordering. If true means
-    /// `SortPreservingRepartitionExec`, false means `RepartitionExec`.
-    preserve_order: bool,
-    /// Cache holding plan properties like equivalences, output partitioning etc.
-    cache: PlanProperties,
+    base: RepartitionExecBase,
 }
 
 impl OnDemandRepartitionExec {
     /// Input execution plan
     pub fn input(&self) -> &Arc<dyn ExecutionPlan> {
-        &self.input
+        &self.base.input
     }
 
     /// Partitioning scheme to use
     pub fn partitioning(&self) -> &Partitioning {
-        &self.cache.partitioning
+        &self.base.cache.partitioning
     }
 
     /// Get preserve_order flag of the RepartitionExecutor
     /// `true` means `SortPreservingRepartitionExec`, `false` means `RepartitionExec`
     pub fn preserve_order(&self) -> bool {
-        self.preserve_order
+        self.base.preserve_order
+    }
+
+    /// Specify if this reparititoning operation should preserve the order of
+    /// rows from its input when producing output. Preserving order is more
+    /// expensive at runtime, so should only be set if the output of this
+    /// operator can take advantage of it.
+    ///
+    /// If the input is not ordered, or has only one partition, this is a no op,
+    /// and the node remains a `RepartitionExec`.
+    pub fn with_preserve_order(mut self) -> Self {
+        self.base = self.base.with_preserve_order();
+        self
     }
 
     /// Get name used to display this Exec
@@ -225,14 +108,14 @@ impl DisplayAs for OnDemandRepartitionExec {
                     "{}: partitioning={}, input_partitions={}",
                     self.name(),
                     self.partitioning(),
-                    self.input.output_partitioning().partition_count()
+                    self.base.input.output_partitioning().partition_count()
                 )?;
 
-                if self.preserve_order {
+                if self.base.preserve_order {
                     write!(f, ", preserve_order=true")?;
                 }
 
-                if let Some(sort_exprs) = self.sort_exprs() {
+                if let Some(sort_exprs) = self.base.sort_exprs() {
                     write!(f, ", sort_exprs={}", sort_exprs.clone())?;
                 }
                 Ok(())
@@ -252,11 +135,11 @@ impl ExecutionPlan for OnDemandRepartitionExec {
     }
 
     fn properties(&self) -> &PlanProperties {
-        &self.cache
+        &self.base.cache
     }
 
     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
-        vec![&self.input]
+        vec![&self.base.input]
     }
 
     fn with_new_children(
@@ -267,7 +150,7 @@ impl ExecutionPlan for OnDemandRepartitionExec {
             children.swap_remove(0),
             self.partitioning().clone(),
         )?;
-        if self.preserve_order {
+        if self.base.preserve_order {
             repartition = repartition.with_preserve_order();
         }
         Ok(Arc::new(repartition))
@@ -278,7 +161,10 @@ impl ExecutionPlan for OnDemandRepartitionExec {
     }
 
     fn maintains_input_order(&self) -> Vec<bool> {
-        Self::maintains_input_order_helper(self.input(), self.preserve_order)
+        RepartitionExecBase::maintains_input_order_helper(
+            self.input(),
+            self.base.preserve_order,
+        )
     }
 
     fn execute(
@@ -292,17 +178,17 @@ impl ExecutionPlan for OnDemandRepartitionExec {
             partition
         );
 
-        let lazy_state = Arc::clone(&self.state);
-        let input = Arc::clone(&self.input);
+        let lazy_state = Arc::clone(&self.base.state);
+        let input = Arc::clone(&self.base.input);
         let partitioning = self.partitioning().clone();
-        let metrics = self.metrics.clone();
-        let preserve_order = self.preserve_order;
+        let metrics = self.base.metrics.clone();
+        let preserve_order = self.base.preserve_order;
         let name = self.name().to_owned();
         let schema = self.schema();
         let schema_captured = Arc::clone(&schema);
 
         // Get existing ordering to use for merging
-        let sort_exprs = self.sort_exprs().cloned().unwrap_or_default();
+        let sort_exprs = self.base.sort_exprs().cloned().unwrap_or_default();
 
         let stream = futures::stream::once(async move {
             let num_input_partitions = input.output_partitioning().partition_count();
@@ -311,18 +197,22 @@ impl ExecutionPlan for OnDemandRepartitionExec {
             let metrics_captured = metrics.clone();
             let name_captured = name.clone();
             let context_captured = Arc::clone(&context);
-            let (partition_tx, patition_rx) = async_channel::unbounded();
+            let (partition_tx, partition_rx) = async_channel::unbounded();
             let state = lazy_state
                 .get_or_init(|| async move {
-                    Mutex::new(OnDemandRepartitionExecState::new(
-                        input_captured,
-                        partitioning,
-                        metrics_captured,
-                        preserve_order,
-                        name_captured,
-                        context_captured,
-                        patition_rx.clone(),
-                    ))
+                    Mutex::new(
+                        RepartitionExecStateBuilder::new()
+                            .enable_pull_based(true)
+                            .partition_receiver(partition_rx.clone())
+                            .build(
+                                input_captured,
+                                partitioning.clone(),
+                                metrics_captured,
+                                preserve_order,
+                                name_captured,
+                                context_captured,
+                            ),
+                    )
                 })
                 .await;
 
@@ -398,11 +288,11 @@ impl ExecutionPlan for OnDemandRepartitionExec {
     }
 
     fn metrics(&self) -> Option<MetricsSet> {
-        Some(self.metrics.clone_inner())
+        Some(self.base.metrics.clone_inner())
     }
 
     fn statistics(&self) -> Result<Statistics> {
-        self.input.statistics()
+        self.base.input.statistics()
     }
 
     fn cardinality_effect(&self) -> CardinalityEffect {
@@ -419,92 +309,27 @@ impl OnDemandRepartitionExec {
         partitioning: Partitioning,
     ) -> Result<Self> {
         let preserve_order = false;
-        let cache =
-            Self::compute_properties(&input, partitioning.clone(), preserve_order);
-        Ok(OnDemandRepartitionExec {
-            input,
-            state: Default::default(),
-            metrics: ExecutionPlanMetricsSet::new(),
+        let cache = RepartitionExecBase::compute_properties(
+            &input,
+            partitioning.clone(),
             preserve_order,
-            cache,
+        );
+        Ok(OnDemandRepartitionExec {
+            base: RepartitionExecBase {
+                input,
+                state: Default::default(),
+                metrics: ExecutionPlanMetricsSet::new(),
+                preserve_order,
+                cache,
+            },
         })
-    }
-
-    fn maintains_input_order_helper(
-        input: &Arc<dyn ExecutionPlan>,
-        preserve_order: bool,
-    ) -> Vec<bool> {
-        // We preserve ordering when repartition is order preserving variant or input partitioning is 1
-        vec![preserve_order || input.output_partitioning().partition_count() <= 1]
-    }
-
-    fn eq_properties_helper(
-        input: &Arc<dyn ExecutionPlan>,
-        preserve_order: bool,
-    ) -> EquivalenceProperties {
-        // Equivalence Properties
-        let mut eq_properties = input.equivalence_properties().clone();
-        // If the ordering is lost, reset the ordering equivalence class:
-        if !Self::maintains_input_order_helper(input, preserve_order)[0] {
-            eq_properties.clear_orderings();
-        }
-        // When there are more than one input partitions, they will be fused at the output.
-        // Therefore, remove per partition constants.
-        if input.output_partitioning().partition_count() > 1 {
-            eq_properties.clear_per_partition_constants();
-        }
-        eq_properties
-    }
-
-    /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
-    fn compute_properties(
-        input: &Arc<dyn ExecutionPlan>,
-        partitioning: Partitioning,
-        preserve_order: bool,
-    ) -> PlanProperties {
-        // Equivalence Properties
-        let eq_properties = Self::eq_properties_helper(input, preserve_order);
-
-        PlanProperties::new(
-            eq_properties,          // Equivalence Properties
-            partitioning,           // Output Partitioning
-            input.execution_mode(), // Execution Mode
-        )
-    }
-
-    /// Specify if this reparititoning operation should preserve the order of
-    /// rows from its input when producing output. Preserving order is more
-    /// expensive at runtime, so should only be set if the output of this
-    /// operator can take advantage of it.
-    ///
-    /// If the input is not ordered, or has only one partition, this is a no op,
-    /// and the node remains a `RepartitionExec`.
-    pub fn with_preserve_order(mut self) -> Self {
-        self.preserve_order =
-                // If the input isn't ordered, there is no ordering to preserve
-                self.input.output_ordering().is_some() &&
-                // if there is only one input partition, merging is not required
-                // to maintain order
-                self.input.output_partitioning().partition_count() > 1;
-        let eq_properties = Self::eq_properties_helper(&self.input, self.preserve_order);
-        self.cache = self.cache.with_eq_properties(eq_properties);
-        self
-    }
-
-    /// Return the sort expressions that are used to merge
-    fn sort_exprs(&self) -> Option<&LexOrdering> {
-        if self.preserve_order {
-            self.input.output_ordering()
-        } else {
-            None
-        }
     }
 
     /// Pulls data from the specified input plan, feeding it to the
     /// output partitions based on the desired partitioning
     ///
     /// txs hold the output sending channels for each output partition
-    async fn pull_from_input(
+    pub(crate) async fn pull_from_input(
         input: Arc<dyn ExecutionPlan>,
         partition: usize,
         mut output_channels: HashMap<
@@ -527,6 +352,13 @@ impl OnDemandRepartitionExec {
         // While there are still outputs to send to, keep pulling inputs
         let mut batches_until_yield = partitioner.num_partitions();
         while !output_channels.is_empty() {
+            let partition = output_partition_rx.recv().await.map_err(|e| {
+                internal_datafusion_err!(
+                    "Error receiving partition number from output partition: {}",
+                    e
+                )
+            })?;
+
             // fetch the next batch
             let timer = metrics.fetch_time.timer();
             let result = stream.next().await;
@@ -541,13 +373,6 @@ impl OnDemandRepartitionExec {
             for res in partitioner.partition_iter(batch)? {
                 let (_, batch) = res?;
                 let size = batch.get_array_memory_size();
-
-                let partition = output_partition_rx.recv().await.map_err(|e| {
-                    internal_datafusion_err!(
-                        "Error receiving partition number from output partition: {}",
-                        e
-                    )
-                })?;
 
                 let timer = metrics.send_time[partition].timer();
                 // if there is still a receiver, send to it
@@ -595,7 +420,7 @@ impl OnDemandRepartitionExec {
     /// each of the output tx channels to signal one of the inputs is
     /// complete. Upon error, propagates the errors to all output tx
     /// channels.
-    async fn wait_for_task(
+    pub(crate) async fn wait_for_task(
         input_task: SpawnedTask<Result<()>>,
         txs: HashMap<usize, DistributionSender<MaybeBatch>>,
     ) {
