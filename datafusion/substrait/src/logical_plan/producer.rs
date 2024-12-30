@@ -104,6 +104,7 @@ use substrait::{
     },
     version,
 };
+use datafusion::execution::registry::SerializerRegistry;
 
 /// This trait is used to produce Substrait plans, converting them from DataFusion Logical Plans.
 /// It can be implemented by users to allow for custom handling of relations, expressions, etc.
@@ -369,14 +370,14 @@ pub trait SubstraitProducer: Send + Sync + Sized {
 
 struct DefaultSubstraitProducer<'a> {
     extensions: Extensions,
-    state: &'a SessionState,
+    serializer_registry: &'a dyn SerializerRegistry,
 }
 
 impl<'a> DefaultSubstraitProducer<'a> {
     pub fn new(state: &'a SessionState) -> Self {
         DefaultSubstraitProducer {
             extensions: Extensions::default(),
-            state,
+            serializer_registry: state.serializer_registry().as_ref(),
         }
     }
 }
@@ -392,8 +393,7 @@ impl SubstraitProducer for DefaultSubstraitProducer<'_> {
 
     fn handle_extension(&mut self, plan: &Extension) -> Result<Box<Rel>> {
         let extension_bytes = self
-            .state
-            .serializer_registry()
+            .serializer_registry
             .serialize_logical_plan(plan.node.as_ref())?;
         let detail = ProtoAny {
             type_url: plan.node.name().to_string(),
