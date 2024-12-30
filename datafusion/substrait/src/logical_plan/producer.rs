@@ -2017,7 +2017,6 @@ fn make_substrait_window_function(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 fn make_substrait_like_expr(
     producer: &mut impl SubstraitProducer,
     ignore_case: bool,
