@@ -49,6 +49,7 @@ use datafusion::common::{
     exec_err, internal_err, not_impl_err, plan_err, substrait_datafusion_err,
     substrait_err, Column, DFSchema, DFSchemaRef, ToDFSchema,
 };
+use datafusion::execution::registry::SerializerRegistry;
 use datafusion::execution::SessionState;
 use datafusion::logical_expr::expr::{
     Alias, BinaryExpr, Case, Cast, GroupingSet, InList, InSubquery, WindowFunction,
@@ -104,7 +105,6 @@ use substrait::{
     },
     version,
 };
-use datafusion::execution::registry::SerializerRegistry;
 
 /// This trait is used to produce Substrait plans, converting them from DataFusion Logical Plans.
 /// It can be implemented by users to allow for custom handling of relations, expressions, etc.
@@ -528,9 +528,13 @@ pub fn to_substrait_rel(
         LogicalPlan::Dml(plan) => not_impl_err!("Unsupported plan type: {plan:?}")?,
         LogicalPlan::Ddl(plan) => not_impl_err!("Unsupported plan type: {plan:?}")?,
         LogicalPlan::Copy(plan) => not_impl_err!("Unsupported plan type: {plan:?}")?,
-        LogicalPlan::DescribeTable(plan) => not_impl_err!("Unsupported plan type: {plan:?}")?,
+        LogicalPlan::DescribeTable(plan) => {
+            not_impl_err!("Unsupported plan type: {plan:?}")?
+        }
         LogicalPlan::Unnest(plan) => not_impl_err!("Unsupported plan type: {plan:?}")?,
-        LogicalPlan::RecursiveQuery(plan) => not_impl_err!("Unsupported plan type: {plan:?}")?,
+        LogicalPlan::RecursiveQuery(plan) => {
+            not_impl_err!("Unsupported plan type: {plan:?}")?
+        }
     }
 }
 
@@ -1324,7 +1328,9 @@ pub fn to_substrait_rex(
     match expr {
         Expr::Alias(expr) => producer.handle_alias(expr, schema),
         Expr::Column(expr) => producer.handle_column(expr, schema),
-        Expr::ScalarVariable(_, _) => not_impl_err!("Cannot convert {expr:?} to Substrait"),
+        Expr::ScalarVariable(_, _) => {
+            not_impl_err!("Cannot convert {expr:?} to Substrait")
+        }
         Expr::Literal(expr) => producer.handle_literal(expr),
         Expr::BinaryExpr(expr) => producer.handle_binary_expr(expr, schema),
         Expr::Like(expr) => producer.handle_like(expr, schema),
@@ -1353,11 +1359,15 @@ pub fn to_substrait_rex(
         Expr::InList(expr) => producer.handle_in_list(expr, schema),
         Expr::Exists(expr) => not_impl_err!("Cannot convert {expr:?} to Substrait"),
         Expr::InSubquery(expr) => producer.handle_in_subquery(expr, schema),
-        Expr::ScalarSubquery(expr) => not_impl_err!("Cannot convert {expr:?} to Substrait"),
+        Expr::ScalarSubquery(expr) => {
+            not_impl_err!("Cannot convert {expr:?} to Substrait")
+        }
         Expr::Wildcard { .. } => not_impl_err!("Cannot convert {expr:?} to Substrait"),
         Expr::GroupingSet(expr) => not_impl_err!("Cannot convert {expr:?} to Substrait"),
         Expr::Placeholder(expr) => not_impl_err!("Cannot convert {expr:?} to Substrait"),
-        Expr::OuterReferenceColumn(_, _) => not_impl_err!("Cannot convert {expr:?} to Substrait"),
+        Expr::OuterReferenceColumn(_, _) => {
+            not_impl_err!("Cannot convert {expr:?} to Substrait")
+        }
         Expr::Unnest(expr) => not_impl_err!("Cannot convert {expr:?} to Substrait"),
     }
 }
