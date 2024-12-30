@@ -16,7 +16,7 @@
 // under the License.
 
 use std::any::Any;
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
 use crate::strings::{make_and_append_view, StringArrayType};
 use crate::utils::{make_scalar_function, utf8_to_str_type};
@@ -28,11 +28,34 @@ use arrow::datatypes::DataType;
 use arrow_buffer::{NullBufferBuilder, ScalarBuffer};
 use datafusion_common::cast::as_int64_array;
 use datafusion_common::{exec_err, plan_err, Result};
-use datafusion_expr::scalar_doc_sections::DOC_SECTION_STRING;
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
 };
+use datafusion_macros::user_doc;
 
+#[user_doc(
+    doc_section(label = "String Functions"),
+    description = "Extracts a substring of a specified number of characters from a specific starting position in a string.",
+    syntax_example = "substr(str, start_pos[, length])",
+    alternative_syntax = "substring(str from start_pos for length)",
+    sql_example = r#"```sql
+> select substr('datafusion', 5, 3);
++----------------------------------------------+
+| substr(Utf8("datafusion"),Int64(5),Int64(3)) |
++----------------------------------------------+
+| fus                                          |
++----------------------------------------------+ 
+```"#,
+    standard_argument(name = "str", prefix = "String"),
+    argument(
+        name = "start_pos",
+        description = "Character position to start the substring at. The first character in the string has a position of 1."
+    ),
+    argument(
+        name = "length",
+        description = "Number of characters to extract. If not specified, returns the rest of the string after the start position."
+    )
+)]
 #[derive(Debug)]
 pub struct SubstrFunc {
     signature: Signature,
@@ -154,32 +177,8 @@ impl ScalarUDFImpl for SubstrFunc {
     }
 
     fn documentation(&self) -> Option<&Documentation> {
-        Some(get_substr_doc())
+        self.doc()
     }
-}
-
-static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
-
-fn get_substr_doc() -> &'static Documentation {
-    DOCUMENTATION.get_or_init(|| {
-        Documentation::builder(
-            DOC_SECTION_STRING,
-            "Extracts a substring of a specified number of characters from a specific starting position in a string.",
-            "substr(str, start_pos[, length])")
-            .with_sql_example(r#"```sql
-> select substr('datafusion', 5, 3);
-+----------------------------------------------+
-| substr(Utf8("datafusion"),Int64(5),Int64(3)) |
-+----------------------------------------------+
-| fus                                          |
-+----------------------------------------------+ 
-```"#)
-            .with_standard_argument("str", Some("String"))
-            .with_argument("start_pos", "Character position to start the substring at. The first character in the string has a position of 1.")
-            .with_argument("length", "Number of characters to extract. If not specified, returns the rest of the string after the start position.")
-            .with_alternative_syntax("substring(str from start_pos for length)")
-            .build()
-    })
 }
 
 /// Extracts the substring of string starting at the start'th character, and extending for count characters if that is specified. (Same as substring(string from start for count).)
