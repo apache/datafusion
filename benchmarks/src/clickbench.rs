@@ -68,14 +68,6 @@ pub struct RunOpt {
     /// If present, write results json here
     #[structopt(parse(from_os_str), short = "o", long = "output")]
     output_path: Option<PathBuf>,
-
-    // Explain the query plan
-    #[structopt(
-        short = "e",
-        long = "explain",
-        help = "Print the query plan for each query"
-    )]
-    explain: bool,
 }
 
 struct AllQueries {
@@ -153,7 +145,7 @@ impl RunOpt {
                 );
                 benchmark_run.write_iter(elapsed, row_count);
             }
-            if self.explain {
+            if self.common.debug {
                 ctx.sql(sql).await?.explain(false, false)?.show().await?;
             }
         }
