@@ -55,6 +55,7 @@ use datafusion_physical_expr::{
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use datafusion_physical_optimizer::output_requirements::OutputRequirementExec;
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
+use datafusion_physical_plan::limit::GlobalLimitExec;
 use datafusion_physical_plan::windows::{get_best_fitting_window, BoundedWindowAggExec};
 use datafusion_physical_plan::ExecutionPlanProperties;
 
@@ -1169,6 +1170,8 @@ fn ensure_distribution(
         children,
     } = remove_dist_changing_operators(dist_context)?;
 
+    let fetch = plan.fetch();
+
     if let Some(exec) = plan.as_any().downcast_ref::<WindowAggExec>() {
         if let Some(updated_window) = get_best_fitting_window(
             exec.window_expr(),
@@ -1335,6 +1338,14 @@ fn ensure_distribution(
     } else {
         plan.with_new_children(children_plans)?
     };
+
+    // NOTE: Workaround for limits getting lost
+    //
+    // Add a GlobalLimitExec if the plan had a fetch orignally.
+    // This makes sure `LimitPushdown` pushes down the limit.
+    if fetch.is_some() {
+        plan = Arc::new(GlobalLimitExec::new(plan, 0, fetch));
+    }
 
     Ok(Transformed::yes(DistributionContext::new(
         plan, data, children,
