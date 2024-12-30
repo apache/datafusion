@@ -516,12 +516,21 @@ pub fn to_substrait_rel(
         LogicalPlan::Union(plan) => producer.handle_union(plan),
         LogicalPlan::TableScan(plan) => producer.handle_table_scan(plan),
         LogicalPlan::EmptyRelation(plan) => producer.handle_empty_relation(plan),
+        LogicalPlan::Subquery(plan) => not_impl_err!("Unsupported plan type: {plan:?}")?,
         LogicalPlan::SubqueryAlias(plan) => producer.handle_subquery_alias(plan),
         LogicalPlan::Limit(plan) => producer.handle_limit(plan),
+        LogicalPlan::Statement(plan) => not_impl_err!("Unsupported plan type: {plan:?}")?,
         LogicalPlan::Values(plan) => producer.handle_values(plan),
-        LogicalPlan::Distinct(plan) => producer.handle_distinct(plan),
+        LogicalPlan::Explain(plan) => not_impl_err!("Unsupported plan type: {plan:?}")?,
+        LogicalPlan::Analyze(plan) => not_impl_err!("Unsupported plan type: {plan:?}")?,
         LogicalPlan::Extension(plan) => producer.handle_extension(plan),
-        _ => not_impl_err!("Unsupported plan type: {plan:?}")?,
+        LogicalPlan::Distinct(plan) => producer.handle_distinct(plan),
+        LogicalPlan::Dml(plan) => not_impl_err!("Unsupported plan type: {plan:?}")?,
+        LogicalPlan::Ddl(plan) => not_impl_err!("Unsupported plan type: {plan:?}")?,
+        LogicalPlan::Copy(plan) => not_impl_err!("Unsupported plan type: {plan:?}")?,
+        LogicalPlan::DescribeTable(plan) => not_impl_err!("Unsupported plan type: {plan:?}")?,
+        LogicalPlan::Unnest(plan) => not_impl_err!("Unsupported plan type: {plan:?}")?,
+        LogicalPlan::RecursiveQuery(plan) => not_impl_err!("Unsupported plan type: {plan:?}")?,
     }
 }
 
@@ -1315,10 +1324,11 @@ pub fn to_substrait_rex(
     match expr {
         Expr::Alias(expr) => producer.handle_alias(expr, schema),
         Expr::Column(expr) => producer.handle_column(expr, schema),
+        Expr::ScalarVariable(_, _) => not_impl_err!("Cannot convert {expr:?} to Substrait"),
         Expr::Literal(expr) => producer.handle_literal(expr),
         Expr::BinaryExpr(expr) => producer.handle_binary_expr(expr, schema),
         Expr::Like(expr) => producer.handle_like(expr, schema),
-        Expr::SimilarTo(_) => not_impl_err!("SimilarTo is not supported"),
+        Expr::SimilarTo(_) => not_impl_err!("Cannot convert {expr:?} to Substrait"),
         Expr::Not(_) => producer.handle_unary_expr(expr, schema),
         Expr::IsNotNull(_) => producer.handle_unary_expr(expr, schema),
         Expr::IsNull(_) => producer.handle_unary_expr(expr, schema),
@@ -1341,8 +1351,14 @@ pub fn to_substrait_rex(
         }
         Expr::WindowFunction(expr) => producer.handle_window_function(expr, schema),
         Expr::InList(expr) => producer.handle_in_list(expr, schema),
+        Expr::Exists(expr) => not_impl_err!("Cannot convert {expr:?} to Substrait"),
         Expr::InSubquery(expr) => producer.handle_in_subquery(expr, schema),
-        _ => not_impl_err!("Cannot convert {expr:?} to Substrait"),
+        Expr::ScalarSubquery(expr) => not_impl_err!("Cannot convert {expr:?} to Substrait"),
+        Expr::Wildcard { .. } => not_impl_err!("Cannot convert {expr:?} to Substrait"),
+        Expr::GroupingSet(expr) => not_impl_err!("Cannot convert {expr:?} to Substrait"),
+        Expr::Placeholder(expr) => not_impl_err!("Cannot convert {expr:?} to Substrait"),
+        Expr::OuterReferenceColumn(_, _) => not_impl_err!("Cannot convert {expr:?} to Substrait"),
+        Expr::Unnest(expr) => not_impl_err!("Cannot convert {expr:?} to Substrait"),
     }
 }
 
