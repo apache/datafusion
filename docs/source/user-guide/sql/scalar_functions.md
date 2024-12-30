@@ -1697,8 +1697,8 @@ upper(str)
 
 **Related functions**:
 
-- [lower](#lower)
 - [initcap](#initcap)
+- [lower](#lower)
 
 ### `uuid`
 

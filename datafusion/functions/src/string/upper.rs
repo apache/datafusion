@@ -37,8 +37,8 @@ use std::any::Any;
 +---------------------------+
 ```"#,
     standard_argument(name = "str", prefix = "String"),
-    related_udf(name = "lower"),
-    related_udf(name = "initcap")
+    related_udf(name = "initcap"),
+    related_udf(name = "lower")
 )]
 #[derive(Debug)]
 pub struct UpperFunc {
