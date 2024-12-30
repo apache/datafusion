@@ -68,6 +68,14 @@ pub struct RunOpt {
     /// If present, write results json here
     #[structopt(parse(from_os_str), short = "o", long = "output")]
     output_path: Option<PathBuf>,
+
+    // Explain the query plan
+    #[structopt(
+        short = "e",
+        long = "explain",
+        help = "Print the query plan for each query"
+    )]
+    explain: bool,
 }
 
 struct AllQueries {
@@ -144,6 +152,9 @@ impl RunOpt {
                     "Query {query_id} iteration {i} took {ms:.1} ms and returned {row_count} rows"
                 );
                 benchmark_run.write_iter(elapsed, row_count);
+            }
+            if self.explain {
+                ctx.sql(sql).await?.explain(false, false)?.show().await?;
             }
         }
         benchmark_run.maybe_write_json(self.output_path.as_ref())?;
