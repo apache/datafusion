@@ -2135,7 +2135,7 @@ from_unixtime(expression[, timezone])
 Make a date from year/month/day component parts.
 
 ```
-from_unixtime(expression[, timezone])
+make_date(year, month, day)
 ```
 
 #### Arguments
