@@ -1887,6 +1887,14 @@ impl SortMergeJoinStream {
             &out_mask
         };
 
+        self.filter_record_batch_by_join_type(record_batch, corrected_mask)
+    }
+
+    fn filter_record_batch_by_join_type(
+        &mut self,
+        record_batch: RecordBatch,
+        corrected_mask: &BooleanArray,
+    ) -> Result<RecordBatch> {
         let mut filtered_record_batch =
             filter_record_batch(&record_batch, corrected_mask)?;
         let left_columns_length = self.streamed_schema.fields.len();
@@ -2985,7 +2993,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn join_right_anti_one() -> Result<()> {
+    async fn join_right_anti_one_one() -> Result<()> {
         let left = build_table(
             ("a1", &vec![1, 2, 2]),
             ("b1", &vec![4, 5, 5]),
@@ -3040,7 +3048,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn join_right_anti_two() -> Result<()> {
+    async fn join_right_anti_two_two() -> Result<()> {
         let left = build_table(
             ("a1", &vec![1, 2, 2]),
             ("b1", &vec![4, 5, 5]),
