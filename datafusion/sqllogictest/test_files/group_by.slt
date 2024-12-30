@@ -80,7 +80,7 @@ SELECT col1 * cor0.col1 * 56 AS col1 FROM tab2 AS cor0 GROUP BY cor0.col1
 208376
 94136
 
-query I rowsort
+query I rowsort label-4
 SELECT ALL + tab2.col1 / tab2.col1 FROM tab2 GROUP BY col1
 ----
 1
@@ -442,7 +442,7 @@ SELECT DISTINCT * FROM tab2 AS cor0 GROUP BY cor0.col0, col1, cor0.col2
 91 59 79
 92 41 58
 
-query I rowsort
+query I rowsort label-58
 SELECT 9 / + cor0.col0 AS col1 FROM tab0 AS cor0 GROUP BY cor0.col0, cor0.col2
 ----
 0
@@ -470,7 +470,7 @@ SELECT ( col0 ) FROM tab1 AS cor0 GROUP BY cor0.col0
 28
 82
 
-query I rowsort
+query I rowsort label-62
 SELECT ALL 59 / 26 FROM tab2 AS cor0 GROUP BY cor0.col0
 ----
 2
@@ -558,7 +558,7 @@ SELECT DISTINCT ( - 31 ) col1 FROM tab1 GROUP BY tab1.col0
 ----
 -31
 
-query I rowsort
+query I rowsort label-75
 SELECT + + cor0.col0 / - cor0.col0 FROM tab1, tab0 AS cor0 GROUP BY cor0.col0
 ----
 -1
@@ -767,7 +767,7 @@ SELECT cor0.col2 AS col2 FROM tab0 AS cor0 GROUP BY cor0.col2
 38
 79
 
-query I rowsort
+query I rowsort label-106
 SELECT - 53 / cor0.col0 col0 FROM tab1 cor0 GROUP BY cor0.col0
 ----
 -1
@@ -1326,7 +1326,7 @@ SELECT + ( col0 ) * col0 AS col2 FROM tab2 AS cor0 GROUP BY cor0.col0
 8281
 8464
 
-query I rowsort
+query I rowsort label-188
 SELECT - 21 - + 57 / cor0.col0 FROM tab0 AS cor0 GROUP BY cor0.col0
 ----
 -21
@@ -1429,7 +1429,7 @@ SELECT cor0.col2 FROM tab2 AS cor0 GROUP BY cor0.col2
 79
 87
 
-query I rowsort
+query I rowsort label-203
 SELECT - cor0.col2 + CAST ( 80 AS INTEGER ) FROM tab1 AS cor0 GROUP BY col2
 ----
 35
@@ -1482,7 +1482,7 @@ SELECT DISTINCT + 45 col0 FROM tab1 AS cor0 GROUP BY col0
 ----
 45
 
-query I rowsort
+query I rowsort label-211
 SELECT ALL CAST ( NULL AS INTEGER ) FROM tab2 AS cor0 GROUP BY col1
 ----
 NULL

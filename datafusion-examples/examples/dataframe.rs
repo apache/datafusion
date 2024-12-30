@@ -28,16 +28,24 @@ use std::io::Write;
 use std::sync::Arc;
 use tempfile::tempdir;
 
-/// This example demonstrates using DataFusion's DataFrame API to
+/// This example demonstrates using DataFusion's DataFrame API
+///
+/// # Reading from different formats
 ///
 /// * [read_parquet]: execute queries against parquet files
 /// * [read_csv]: execute queries against csv files
 /// * [read_memory]: execute queries against in-memory arrow data
 ///
-/// This example demonstrates the various methods to write out a DataFrame to local storage.
-/// See datafusion-examples/examples/external_dependency/dataframe-to-s3.rs for an example
-/// using a remote object store.
+/// # Writing out to local storage
+///
+/// The following examples demonstrate how to write a DataFrame to local
+/// storage. See `external_dependency/dataframe-to-s3.rs` for an example writing
+/// to a remote object store.
+///
 /// * [write_out]: write out a DataFrame to a table, parquet file, csv file, or json file
+///
+/// # Querying data
+/// * [query_to_date]: execute queries against parquet files
 #[tokio::main]
 async fn main() -> Result<()> {
     // The SessionContext is the main high level API for interacting with DataFusion
@@ -46,6 +54,7 @@ async fn main() -> Result<()> {
     read_csv(&ctx).await?;
     read_memory(&ctx).await?;
     write_out(&ctx).await?;
+    query_to_date().await?;
     Ok(())
 }
 
@@ -203,6 +212,41 @@ async fn write_out(ctx: &SessionContext) -> std::result::Result<(), DataFusionEr
             None,
         )
         .await?;
+
+    Ok(())
+}
+
+/// This example demonstrates how to use the to_date series
+/// of functions in the DataFrame API as well as via sql.
+async fn query_to_date() -> Result<()> {
+    // define a schema.
+    let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Utf8, false)]));
+
+    // define data.
+    let batch = RecordBatch::try_new(
+        schema,
+        vec![Arc::new(StringArray::from(vec![
+            "2020-09-08T13:42:29Z",
+            "2020-09-08T13:42:29.190855-05:00",
+            "2020-08-09 12:13:29",
+            "2020-01-02",
+        ]))],
+    )?;
+
+    // declare a new context. In spark API, this corresponds to a new spark SQLsession
+    let ctx = SessionContext::new();
+
+    // declare a table in memory. In spark API, this corresponds to createDataFrame(...).
+    ctx.register_batch("t", batch)?;
+    let df = ctx.table("t").await?;
+
+    // use to_date function to convert col 'a' to timestamp type using the default parsing
+    let df = df.with_column("a", to_date(vec![col("a")]))?;
+
+    let df = df.select_columns(&["a"])?;
+
+    // print the results
+    df.show().await?;
 
     Ok(())
 }
