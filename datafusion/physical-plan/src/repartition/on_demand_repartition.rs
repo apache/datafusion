@@ -51,7 +51,7 @@ use datafusion_execution::TaskContext;
 
 use datafusion_common::HashMap;
 use futures::stream::Stream;
-use futures::{FutureExt, StreamExt, TryStreamExt};
+use futures::{ready, FutureExt, StreamExt, TryStreamExt};
 use log::trace;
 use parking_lot::Mutex;
 
@@ -499,21 +499,21 @@ impl Stream for OnDemandPerPartitionStream {
             })?;
         }
 
-        match self.receiver.recv().poll_unpin(cx) {
-            Poll::Ready(Some(Some(v))) => {
+        match ready!(self.receiver.recv().poll_unpin(cx)) {
+            Some(Some(v)) => {
                 if let Ok(batch) = &v {
                     self.reservation
                         .lock()
                         .shrink(batch.get_array_memory_size());
                 }
+
                 Poll::Ready(Some(v))
             }
-            Poll::Ready(Some(None)) => {
+            Some(None) => {
                 // Input partition has finished sending batches
                 Poll::Ready(None)
             }
-            Poll::Ready(None) => Poll::Ready(None),
-            Poll::Pending => Poll::Pending,
+            None => Poll::Ready(None),
         }
     }
 }
@@ -569,8 +569,8 @@ impl Stream for OnDemandRepartitionStream {
                 })?;
             }
 
-            match self.input.recv().poll_unpin(cx) {
-                Poll::Ready(Some(Some(v))) => {
+            match ready!(self.input.recv().poll_unpin(cx)) {
+                Some(Some(v)) => {
                     if let Ok(batch) = &v {
                         self.reservation
                             .lock()
@@ -579,7 +579,7 @@ impl Stream for OnDemandRepartitionStream {
 
                     return Poll::Ready(Some(v));
                 }
-                Poll::Ready(Some(None)) => {
+                Some(None) => {
                     self.num_input_partitions_processed += 1;
 
                     if self.num_input_partitions == self.num_input_partitions_processed {
@@ -590,11 +590,8 @@ impl Stream for OnDemandRepartitionStream {
                         continue;
                     }
                 }
-                Poll::Ready(None) => {
+                None => {
                     return Poll::Ready(None);
-                }
-                Poll::Pending => {
-                    return Poll::Pending;
                 }
             }
         }
