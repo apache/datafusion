@@ -23,12 +23,10 @@ use datafusion::datasource::listing::ListingOptions;
 use datafusion::datasource::MemTable;
 use datafusion::error::{DataFusionError, Result};
 use datafusion::prelude::SessionContext;
-use datafusion_common::exec_datafusion_err;
+use datafusion_common::{assert_batches_eq, exec_datafusion_err};
 use object_store::local::LocalFileSystem;
 use std::path::Path;
 use std::sync::Arc;
-use std::time::Duration;
-use tokio::time::timeout;
 
 /// Examples of various ways to execute queries using SQL
 ///
@@ -52,17 +50,30 @@ pub async fn query_memtable() -> Result<()> {
     // Register the in-memory table containing the data
     ctx.register_table("users", Arc::new(mem_table))?;
 
+    // running a SQL query results in a "DataFrame", which can be used
+    // to execute the query and collect the results
     let dataframe = ctx.sql("SELECT * FROM users;").await?;
 
-    timeout(Duration::from_secs(10), async move {
-        let result = dataframe.collect().await.unwrap();
-        let record_batch = result.first().unwrap();
+    // Calling 'show' on the dataframe will execute the query and
+    // print the results
+    dataframe.clone().show().await?;
 
-        assert_eq!(1, record_batch.column(0).len());
-        dbg!(record_batch.columns());
-    })
-    .await
-    .unwrap();
+    // calling 'collect' on the dataframe will execute the query and
+    // buffer the results into a vector of RecordBatch. There are other
+    // APIs on DataFrame for incrementally generating results (e.g. streaming)
+    let result = dataframe.collect().await?;
+
+    // Use the assert_batches_eq macro to compare the results
+    assert_batches_eq!(
+        vec![
+            "+----+--------------+",
+            "| id | bank_account |",
+            "+----+--------------+",
+            "| 1  | 9000         |",
+            "+----+--------------+",
+        ],
+        &result
+    );
 
     Ok(())
 }
@@ -133,7 +144,17 @@ async fn query_parquet() -> Result<()> {
         .await?;
 
     // print the results
-    df.show().await?;
+    let results = df.collect().await?;
+    assert_batches_eq!(
+        vec!
+[
+    "+----+----------+-------------+--------------+---------+------------+-----------+------------+------------------+------------+---------------------+",
+    "| id | bool_col | tinyint_col | smallint_col | int_col | bigint_col | float_col | double_col | date_string_col  | string_col | timestamp_col       |",
+    "+----+----------+-------------+--------------+---------+------------+-----------+------------+------------------+------------+---------------------+",
+    "| 4  | true     | 0           | 0            | 0       | 0          | 0.0       | 0.0        | 30332f30312f3039 | 30         | 2009-03-01T00:00:00 |",
+    "+----+----------+-------------+--------------+---------+------------+-----------+------------+------------------+------------+---------------------+",
+],
+        &results);
 
     // Second example were we temporarily move into the test data's parent directory and
     // simulate a relative path, this requires registering an ObjectStore.
@@ -173,7 +194,17 @@ async fn query_parquet() -> Result<()> {
         .await?;
 
     // print the results
-    df.show().await?;
+    let results = df.collect().await?;
+    assert_batches_eq!(
+        vec!
+[
+    "+----+----------+-------------+--------------+---------+------------+-----------+------------+------------------+------------+---------------------+",
+    "| id | bool_col | tinyint_col | smallint_col | int_col | bigint_col | float_col | double_col | date_string_col  | string_col | timestamp_col       |",
+    "+----+----------+-------------+--------------+---------+------------+-----------+------------+------------------+------------+---------------------+",
+    "| 4  | true     | 0           | 0            | 0       | 0          | 0.0       | 0.0        | 30332f30312f3039 | 30         | 2009-03-01T00:00:00 |",
+    "+----+----------+-------------+--------------+---------+------------+-----------+------------+------------------+------------+---------------------+",
+],
+        &results);
 
     // Reset the current directory
     std::env::set_current_dir(cur_dir)?;
