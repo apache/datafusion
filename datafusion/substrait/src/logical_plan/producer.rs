@@ -140,7 +140,7 @@ use substrait::{
 ///     }
 ///
 ///     // You can set additional metadata on the Rels you produce
-///     fn consume_projection(&mut self, plan: &Projection) -> Result<Box<Rel>> {
+///     fn handle_projection(&mut self, plan: &Projection) -> Result<Box<Rel>> {
 ///         let mut rel = from_projection(self, plan)?;
 ///         match rel.rel_type {
 ///             Some(RelType::Project(mut project)) => {
@@ -157,13 +157,13 @@ use substrait::{
 ///     }
 ///
 ///     // You can tweak how you convert expressions for your target system
-///     fn consume_between(&mut self, between: &Between, schema: &DFSchemaRef) -> Result<Expression> {
+///     fn handle_between(&mut self, between: &Between, schema: &DFSchemaRef) -> Result<Expression> {
 ///        // add your own encoding for Between
 ///        todo!()
 ///    }
 ///
 ///     // You can fully control how you convert UserDefinedLogicalNodes into Substrait
-///     fn consume_extension(&mut self, _plan: &Extension) -> Result<Box<Rel>> {
+///     fn handle_extension(&mut self, _plan: &Extension) -> Result<Box<Rel>> {
 ///         // implement your own serializer into Substrait
 ///        todo!()
 ///    }
@@ -188,67 +188,67 @@ pub trait SubstraitProducer: Send + Sync + Sized {
     // These methods have default implementations calling the common handler code, to allow for users
     // to re-use common handling logic.
 
-    fn consume_plan(&mut self, plan: &LogicalPlan) -> Result<Box<Rel>> {
+    fn handle_plan(&mut self, plan: &LogicalPlan) -> Result<Box<Rel>> {
         to_substrait_rel(self, plan)
     }
 
-    fn consume_projection(&mut self, plan: &Projection) -> Result<Box<Rel>> {
+    fn handle_projection(&mut self, plan: &Projection) -> Result<Box<Rel>> {
         from_projection(self, plan)
     }
 
-    fn consume_filter(&mut self, plan: &Filter) -> Result<Box<Rel>> {
+    fn handle_filter(&mut self, plan: &Filter) -> Result<Box<Rel>> {
         from_filter(self, plan)
     }
 
-    fn consume_window(&mut self, plan: &Window) -> Result<Box<Rel>> {
+    fn handle_window(&mut self, plan: &Window) -> Result<Box<Rel>> {
         from_window(self, plan)
     }
 
-    fn consume_aggregate(&mut self, plan: &Aggregate) -> Result<Box<Rel>> {
+    fn handle_aggregate(&mut self, plan: &Aggregate) -> Result<Box<Rel>> {
         from_aggregate(self, plan)
     }
 
-    fn consume_sort(&mut self, plan: &Sort) -> Result<Box<Rel>> {
+    fn handle_sort(&mut self, plan: &Sort) -> Result<Box<Rel>> {
         from_sort(self, plan)
     }
 
-    fn consume_join(&mut self, plan: &Join) -> Result<Box<Rel>> {
+    fn handle_join(&mut self, plan: &Join) -> Result<Box<Rel>> {
         from_join(self, plan)
     }
 
-    fn consume_repartition(&mut self, plan: &Repartition) -> Result<Box<Rel>> {
+    fn handle_repartition(&mut self, plan: &Repartition) -> Result<Box<Rel>> {
         from_repartition(self, plan)
     }
 
-    fn consume_union(&mut self, plan: &Union) -> Result<Box<Rel>> {
+    fn handle_union(&mut self, plan: &Union) -> Result<Box<Rel>> {
         from_union(self, plan)
     }
 
-    fn consume_table_scan(&mut self, plan: &TableScan) -> Result<Box<Rel>> {
+    fn handle_table_scan(&mut self, plan: &TableScan) -> Result<Box<Rel>> {
         from_table_scan(self, plan)
     }
 
-    fn consume_empty_relation(&mut self, plan: &EmptyRelation) -> Result<Box<Rel>> {
+    fn handle_empty_relation(&mut self, plan: &EmptyRelation) -> Result<Box<Rel>> {
         from_empty_relation(plan)
     }
 
-    fn consume_subquery_alias(&mut self, plan: &SubqueryAlias) -> Result<Box<Rel>> {
+    fn handle_subquery_alias(&mut self, plan: &SubqueryAlias) -> Result<Box<Rel>> {
         from_subquery_alias(self, plan)
     }
 
-    fn consume_limit(&mut self, plan: &Limit) -> Result<Box<Rel>> {
+    fn handle_limit(&mut self, plan: &Limit) -> Result<Box<Rel>> {
         from_limit(self, plan)
     }
 
-    fn consume_values(&mut self, plan: &Values) -> Result<Box<Rel>> {
+    fn handle_values(&mut self, plan: &Values) -> Result<Box<Rel>> {
         from_values(self, plan)
     }
 
-    fn consume_distinct(&mut self, plan: &Distinct) -> Result<Box<Rel>> {
+    fn handle_distinct(&mut self, plan: &Distinct) -> Result<Box<Rel>> {
         from_distinct(self, plan)
     }
 
-    fn consume_extension(&mut self, _plan: &Extension) -> Result<Box<Rel>> {
+    fn handle_extension(&mut self, _plan: &Extension) -> Result<Box<Rel>> {
         substrait_err!("Specify handling for LogicalPlan::Extension by implementing the SubstraitProducer trait")
     }
 
@@ -257,11 +257,11 @@ pub trait SubstraitProducer: Send + Sync + Sized {
     // These methods have default implementations calling the common handler code, to allow for users
     // to re-use common handling logic.
 
-    fn consume_expr(&mut self, expr: &Expr, schema: &DFSchemaRef) -> Result<Expression> {
+    fn handle_expr(&mut self, expr: &Expr, schema: &DFSchemaRef) -> Result<Expression> {
         to_substrait_rex(self, expr, schema)
     }
 
-    fn consume_alias(
+    fn handle_alias(
         &mut self,
         alias: &Alias,
         schema: &DFSchemaRef,
@@ -269,7 +269,7 @@ pub trait SubstraitProducer: Send + Sync + Sized {
         from_alias(self, alias, schema)
     }
 
-    fn consume_column(
+    fn handle_column(
         &mut self,
         column: &Column,
         schema: &DFSchemaRef,
@@ -277,11 +277,11 @@ pub trait SubstraitProducer: Send + Sync + Sized {
         from_column(column, schema)
     }
 
-    fn consume_literal(&mut self, value: &ScalarValue) -> Result<Expression> {
+    fn handle_literal(&mut self, value: &ScalarValue) -> Result<Expression> {
         from_literal(self, value)
     }
 
-    fn consume_binary_expr(
+    fn handle_binary_expr(
         &mut self,
         expr: &BinaryExpr,
         schema: &DFSchemaRef,
@@ -289,12 +289,12 @@ pub trait SubstraitProducer: Send + Sync + Sized {
         from_binary_expr(self, expr, schema)
     }
 
-    fn consume_like(&mut self, like: &Like, schema: &DFSchemaRef) -> Result<Expression> {
+    fn handle_like(&mut self, like: &Like, schema: &DFSchemaRef) -> Result<Expression> {
         from_like(self, like, schema)
     }
 
     /// For handling Not, IsNotNull, IsNull, IsTrue, IsFalse, IsUnknown, IsNotTrue, IsNotFalse, IsNotUnknown, Negative
-    fn consume_unary_expr(
+    fn handle_unary_expr(
         &mut self,
         expr: &Expr,
         schema: &DFSchemaRef,
@@ -302,7 +302,7 @@ pub trait SubstraitProducer: Send + Sync + Sized {
         from_unary_expr(self, expr, schema)
     }
 
-    fn consume_between(
+    fn handle_between(
         &mut self,
         between: &Between,
         schema: &DFSchemaRef,
@@ -310,15 +310,15 @@ pub trait SubstraitProducer: Send + Sync + Sized {
         from_between(self, between, schema)
     }
 
-    fn consume_case(&mut self, case: &Case, schema: &DFSchemaRef) -> Result<Expression> {
+    fn handle_case(&mut self, case: &Case, schema: &DFSchemaRef) -> Result<Expression> {
         from_case(self, case, schema)
     }
 
-    fn consume_cast(&mut self, cast: &Cast, schema: &DFSchemaRef) -> Result<Expression> {
+    fn handle_cast(&mut self, cast: &Cast, schema: &DFSchemaRef) -> Result<Expression> {
         from_cast(self, cast, schema)
     }
 
-    fn consume_try_cast(
+    fn handle_try_cast(
         &mut self,
         cast: &TryCast,
         schema: &DFSchemaRef,
@@ -326,7 +326,7 @@ pub trait SubstraitProducer: Send + Sync + Sized {
         from_try_cast(self, cast, schema)
     }
 
-    fn consume_scalar_function(
+    fn handle_scalar_function(
         &mut self,
         scalar_fn: &expr::ScalarFunction,
         schema: &DFSchemaRef,
@@ -334,7 +334,7 @@ pub trait SubstraitProducer: Send + Sync + Sized {
         from_scalar_function(self, scalar_fn, schema)
     }
 
-    fn consume_aggregate_function(
+    fn handle_aggregate_function(
         &mut self,
         agg_fn: &expr::AggregateFunction,
         schema: &DFSchemaRef,
@@ -342,7 +342,7 @@ pub trait SubstraitProducer: Send + Sync + Sized {
         from_aggregate_function(self, agg_fn, schema)
     }
 
-    fn consume_window_function(
+    fn handle_window_function(
         &mut self,
         window_fn: &WindowFunction,
         schema: &DFSchemaRef,
@@ -350,7 +350,7 @@ pub trait SubstraitProducer: Send + Sync + Sized {
         from_window_function(self, window_fn, schema)
     }
 
-    fn consume_in_list(
+    fn handle_in_list(
         &mut self,
         in_list: &InList,
         schema: &DFSchemaRef,
@@ -358,7 +358,7 @@ pub trait SubstraitProducer: Send + Sync + Sized {
         from_in_list(self, in_list, schema)
     }
 
-    fn consume_in_subquery(
+    fn handle_in_subquery(
         &mut self,
         in_subquery: &InSubquery,
         schema: &DFSchemaRef,
@@ -390,7 +390,7 @@ impl SubstraitProducer for DefaultSubstraitProducer<'_> {
         self.extensions
     }
 
-    fn consume_extension(&mut self, plan: &Extension) -> Result<Box<Rel>> {
+    fn handle_extension(&mut self, plan: &Extension) -> Result<Box<Rel>> {
         let extension_bytes = self
             .state
             .serializer_registry()
@@ -403,7 +403,7 @@ impl SubstraitProducer for DefaultSubstraitProducer<'_> {
             .node
             .inputs()
             .into_iter()
-            .map(|plan| self.consume_plan(plan))
+            .map(|plan| self.handle_plan(plan))
             .collect::<Result<Vec<_>>>()?;
         let rel_type = match inputs_rel.len() {
             0 => RelType::ExtensionLeaf(ExtensionLeafRel {
@@ -440,7 +440,7 @@ pub fn to_substrait_plan(plan: &LogicalPlan, state: &SessionState) -> Result<Box
     let mut producer: DefaultSubstraitProducer = DefaultSubstraitProducer::new(state);
     let plan_rels = vec![PlanRel {
         rel_type: Some(plan_rel::RelType::Root(RelRoot {
-            input: Some(*producer.consume_plan(&plan)?),
+            input: Some(*producer.handle_plan(&plan)?),
             names: to_substrait_named_struct(plan.schema())?.names,
         })),
     }];
@@ -478,7 +478,7 @@ pub fn to_substrait_extended_expr(
     let substrait_exprs = exprs
         .iter()
         .map(|(expr, field)| {
-            let substrait_expr = producer.consume_expr(expr, schema)?;
+            let substrait_expr = producer.handle_expr(expr, schema)?;
             let mut output_names = Vec::new();
             flatten_names(field, false, &mut output_names)?;
             Ok(ExpressionReference {
@@ -506,21 +506,21 @@ pub fn to_substrait_rel(
     plan: &LogicalPlan,
 ) -> Result<Box<Rel>> {
     match plan {
-        LogicalPlan::Projection(plan) => producer.consume_projection(plan),
-        LogicalPlan::Filter(plan) => producer.consume_filter(plan),
-        LogicalPlan::Window(plan) => producer.consume_window(plan),
-        LogicalPlan::Aggregate(plan) => producer.consume_aggregate(plan),
-        LogicalPlan::Sort(plan) => producer.consume_sort(plan),
-        LogicalPlan::Join(plan) => producer.consume_join(plan),
-        LogicalPlan::Repartition(plan) => producer.consume_repartition(plan),
-        LogicalPlan::Union(plan) => producer.consume_union(plan),
-        LogicalPlan::TableScan(plan) => producer.consume_table_scan(plan),
-        LogicalPlan::EmptyRelation(plan) => producer.consume_empty_relation(plan),
-        LogicalPlan::SubqueryAlias(plan) => producer.consume_subquery_alias(plan),
-        LogicalPlan::Limit(plan) => producer.consume_limit(plan),
-        LogicalPlan::Values(plan) => producer.consume_values(plan),
-        LogicalPlan::Distinct(plan) => producer.consume_distinct(plan),
-        LogicalPlan::Extension(plan) => producer.consume_extension(plan),
+        LogicalPlan::Projection(plan) => producer.handle_projection(plan),
+        LogicalPlan::Filter(plan) => producer.handle_filter(plan),
+        LogicalPlan::Window(plan) => producer.handle_window(plan),
+        LogicalPlan::Aggregate(plan) => producer.handle_aggregate(plan),
+        LogicalPlan::Sort(plan) => producer.handle_sort(plan),
+        LogicalPlan::Join(plan) => producer.handle_join(plan),
+        LogicalPlan::Repartition(plan) => producer.handle_repartition(plan),
+        LogicalPlan::Union(plan) => producer.handle_union(plan),
+        LogicalPlan::TableScan(plan) => producer.handle_table_scan(plan),
+        LogicalPlan::EmptyRelation(plan) => producer.handle_empty_relation(plan),
+        LogicalPlan::SubqueryAlias(plan) => producer.handle_subquery_alias(plan),
+        LogicalPlan::Limit(plan) => producer.handle_limit(plan),
+        LogicalPlan::Values(plan) => producer.handle_values(plan),
+        LogicalPlan::Distinct(plan) => producer.handle_distinct(plan),
+        LogicalPlan::Extension(plan) => producer.handle_extension(plan),
         _ => not_impl_err!("Unsupported plan type: {plan:?}")?,
     }
 }
@@ -634,7 +634,7 @@ pub fn from_projection(
     let expressions = p
         .expr
         .iter()
-        .map(|e| producer.consume_expr(e, p.input.schema()))
+        .map(|e| producer.handle_expr(e, p.input.schema()))
         .collect::<Result<Vec<_>>>()?;
 
     let emit_kind = create_project_remapping(
@@ -650,7 +650,7 @@ pub fn from_projection(
     Ok(Box::new(Rel {
         rel_type: Some(RelType::Project(Box::new(ProjectRel {
             common: Some(common),
-            input: Some(producer.consume_plan(p.input.as_ref())?),
+            input: Some(producer.handle_plan(p.input.as_ref())?),
             expressions,
             advanced_extension: None,
         }))),
@@ -661,8 +661,8 @@ pub fn from_filter(
     producer: &mut impl SubstraitProducer,
     filter: &Filter,
 ) -> Result<Box<Rel>> {
-    let input = producer.consume_plan(filter.input.as_ref())?;
-    let filter_expr = producer.consume_expr(&filter.predicate, filter.input.schema())?;
+    let input = producer.handle_plan(filter.input.as_ref())?;
+    let filter_expr = producer.handle_expr(&filter.predicate, filter.input.schema())?;
     Ok(Box::new(Rel {
         rel_type: Some(RelType::Filter(Box::new(FilterRel {
             common: None,
@@ -677,19 +677,19 @@ pub fn from_limit(
     producer: &mut impl SubstraitProducer,
     limit: &Limit,
 ) -> Result<Box<Rel>> {
-    let input = producer.consume_plan(limit.input.as_ref())?;
+    let input = producer.handle_plan(limit.input.as_ref())?;
     let empty_schema = Arc::new(DFSchema::empty());
     let offset_mode = limit
         .skip
         .as_ref()
-        .map(|expr| producer.consume_expr(expr.as_ref(), &empty_schema))
+        .map(|expr| producer.handle_expr(expr.as_ref(), &empty_schema))
         .transpose()?
         .map(Box::new)
         .map(fetch_rel::OffsetMode::OffsetExpr);
     let count_mode = limit
         .fetch
         .as_ref()
-        .map(|expr| producer.consume_expr(expr.as_ref(), &empty_schema))
+        .map(|expr| producer.handle_expr(expr.as_ref(), &empty_schema))
         .transpose()?
         .map(Box::new)
         .map(fetch_rel::CountMode::CountExpr);
@@ -711,7 +711,7 @@ pub fn from_sort(producer: &mut impl SubstraitProducer, sort: &Sort) -> Result<B
         .map(|e| substrait_sort_field(producer, e, input.schema()))
         .collect::<Result<Vec<_>>>()?;
 
-    let input = producer.consume_plan(input.as_ref())?;
+    let input = producer.handle_plan(input.as_ref())?;
 
     let sort_rel = Box::new(Rel {
         rel_type: Some(RelType::Sort(Box::new(SortRel {
@@ -750,7 +750,7 @@ pub fn from_aggregate(
     producer: &mut impl SubstraitProducer,
     agg: &Aggregate,
 ) -> Result<Box<Rel>> {
-    let input = producer.consume_plan(agg.input.as_ref())?;
+    let input = producer.handle_plan(agg.input.as_ref())?;
     let (grouping_expressions, groupings) =
         to_substrait_groupings(producer, &agg.group_expr, agg.input.schema())?;
     let measures = agg
@@ -778,7 +778,7 @@ pub fn from_distinct(
     match distinct {
         Distinct::All(plan) => {
             // Use Substrait's AggregateRel with empty measures to represent `select distinct`
-            let input = producer.consume_plan(plan.as_ref())?;
+            let input = producer.handle_plan(plan.as_ref())?;
             // Get grouping keys from the input relation's number of output fields
             let grouping = (0..plan.schema().fields().len())
                 .map(substrait_field_ref)
@@ -804,8 +804,8 @@ pub fn from_distinct(
 }
 
 pub fn from_join(producer: &mut impl SubstraitProducer, join: &Join) -> Result<Box<Rel>> {
-    let left = producer.consume_plan(join.left.as_ref())?;
-    let right = producer.consume_plan(join.right.as_ref())?;
+    let left = producer.handle_plan(join.left.as_ref())?;
+    let right = producer.handle_plan(join.right.as_ref())?;
     let join_type = to_substrait_jointype(join.join_type);
     // we only support basic joins so return an error for anything not yet supported
     match join.join_constraint {
@@ -866,7 +866,7 @@ pub fn from_subquery_alias(
 ) -> Result<Box<Rel>> {
     // Do nothing if encounters SubqueryAlias
     // since there is no corresponding relation type in Substrait
-    producer.consume_plan(alias.input.as_ref())
+    producer.handle_plan(alias.input.as_ref())
 }
 
 pub fn from_union(
@@ -876,7 +876,7 @@ pub fn from_union(
     let input_rels = union
         .inputs
         .iter()
-        .map(|input| producer.consume_plan(input.as_ref()))
+        .map(|input| producer.handle_plan(input.as_ref()))
         .collect::<Result<Vec<_>>>()?
         .into_iter()
         .map(|ptr| *ptr)
@@ -895,7 +895,7 @@ pub fn from_window(
     producer: &mut impl SubstraitProducer,
     window: &Window,
 ) -> Result<Box<Rel>> {
-    let input = producer.consume_plan(window.input.as_ref())?;
+    let input = producer.handle_plan(window.input.as_ref())?;
 
     // create a field reference for each input field
     let mut expressions = (0..window.input.schema().fields().len())
@@ -904,7 +904,7 @@ pub fn from_window(
 
     // process and add each window function expression
     for expr in &window.window_expr {
-        expressions.push(producer.consume_expr(expr, window.input.schema())?);
+        expressions.push(producer.handle_expr(expr, window.input.schema())?);
     }
 
     let emit_kind =
@@ -930,7 +930,7 @@ pub fn from_repartition(
     producer: &mut impl SubstraitProducer,
     repartition: &Repartition,
 ) -> Result<Box<Rel>> {
-    let input = producer.consume_plan(repartition.input.as_ref())?;
+    let input = producer.handle_plan(repartition.input.as_ref())?;
     let partition_count = match repartition.partitioning_scheme {
         Partitioning::RoundRobinBatch(num) => num,
         Partitioning::Hash(_, num) => num,
@@ -1043,8 +1043,8 @@ fn to_substrait_join_expr(
     // Only support AND conjunction for each binary expression in join conditions
     let mut exprs: Vec<Expression> = vec![];
     for (left, right) in join_conditions {
-        let l = producer.consume_expr(left, join_schema)?;
-        let r = producer.consume_expr(right, join_schema)?;
+        let l = producer.handle_expr(left, join_schema)?;
+        let r = producer.handle_expr(right, join_schema)?;
         // AND with existing expression
         exprs.push(make_binary_op_scalar_func(producer, &l, &r, eq_op));
     }
@@ -1117,7 +1117,7 @@ pub fn parse_flat_grouping_exprs(
     let mut grouping_expressions = vec![];
 
     for e in exprs {
-        let rex = producer.consume_expr(e, schema)?;
+        let rex = producer.handle_expr(e, schema)?;
         grouping_expressions.push(rex.clone());
         ref_group_exprs.push(rex);
         expression_references.push((ref_group_exprs.len() - 1) as u32);
@@ -1212,7 +1212,7 @@ pub fn from_aggregate_function(
     let mut arguments: Vec<FunctionArgument> = vec![];
     for arg in args {
         arguments.push(FunctionArgument {
-            arg_type: Some(ArgType::Value(producer.consume_expr(arg, schema)?)),
+            arg_type: Some(ArgType::Value(producer.handle_expr(arg, schema)?)),
         });
     }
     let function_anchor = producer.register_function(func.name().to_string());
@@ -1232,7 +1232,7 @@ pub fn from_aggregate_function(
             options: vec![],
         }),
         filter: match filter {
-            Some(f) => Some(producer.consume_expr(f, schema)?),
+            Some(f) => Some(producer.handle_expr(f, schema)?),
             None => None,
         },
     })
@@ -1269,7 +1269,7 @@ fn to_substrait_sort_field(
         (false, false) => SortDirection::DescNullsLast,
     };
     Ok(SortField {
-        expr: Some(producer.consume_expr(&sort.expr, schema)?),
+        expr: Some(producer.handle_expr(&sort.expr, schema)?),
         sort_kind: Some(SortKind::Direction(sort_kind.into())),
     })
 }
@@ -1313,35 +1313,35 @@ pub fn to_substrait_rex(
     schema: &DFSchemaRef,
 ) -> Result<Expression> {
     match expr {
-        Expr::Alias(expr) => producer.consume_alias(expr, schema),
-        Expr::Column(expr) => producer.consume_column(expr, schema),
-        Expr::Literal(expr) => producer.consume_literal(expr),
-        Expr::BinaryExpr(expr) => producer.consume_binary_expr(expr, schema),
-        Expr::Like(expr) => producer.consume_like(expr, schema),
+        Expr::Alias(expr) => producer.handle_alias(expr, schema),
+        Expr::Column(expr) => producer.handle_column(expr, schema),
+        Expr::Literal(expr) => producer.handle_literal(expr),
+        Expr::BinaryExpr(expr) => producer.handle_binary_expr(expr, schema),
+        Expr::Like(expr) => producer.handle_like(expr, schema),
         Expr::SimilarTo(_) => not_impl_err!("SimilarTo is not supported"),
-        Expr::Not(_) => producer.consume_unary_expr(expr, schema),
-        Expr::IsNotNull(_) => producer.consume_unary_expr(expr, schema),
-        Expr::IsNull(_) => producer.consume_unary_expr(expr, schema),
-        Expr::IsTrue(_) => producer.consume_unary_expr(expr, schema),
-        Expr::IsFalse(_) => producer.consume_unary_expr(expr, schema),
-        Expr::IsUnknown(_) => producer.consume_unary_expr(expr, schema),
-        Expr::IsNotTrue(_) => producer.consume_unary_expr(expr, schema),
-        Expr::IsNotFalse(_) => producer.consume_unary_expr(expr, schema),
-        Expr::IsNotUnknown(_) => producer.consume_unary_expr(expr, schema),
-        Expr::Negative(_) => producer.consume_unary_expr(expr, schema),
-        Expr::Between(expr) => producer.consume_between(expr, schema),
-        Expr::Case(expr) => producer.consume_case(expr, schema),
-        Expr::Cast(expr) => producer.consume_cast(expr, schema),
-        Expr::TryCast(expr) => producer.consume_try_cast(expr, schema),
-        Expr::ScalarFunction(expr) => producer.consume_scalar_function(expr, schema),
+        Expr::Not(_) => producer.handle_unary_expr(expr, schema),
+        Expr::IsNotNull(_) => producer.handle_unary_expr(expr, schema),
+        Expr::IsNull(_) => producer.handle_unary_expr(expr, schema),
+        Expr::IsTrue(_) => producer.handle_unary_expr(expr, schema),
+        Expr::IsFalse(_) => producer.handle_unary_expr(expr, schema),
+        Expr::IsUnknown(_) => producer.handle_unary_expr(expr, schema),
+        Expr::IsNotTrue(_) => producer.handle_unary_expr(expr, schema),
+        Expr::IsNotFalse(_) => producer.handle_unary_expr(expr, schema),
+        Expr::IsNotUnknown(_) => producer.handle_unary_expr(expr, schema),
+        Expr::Negative(_) => producer.handle_unary_expr(expr, schema),
+        Expr::Between(expr) => producer.handle_between(expr, schema),
+        Expr::Case(expr) => producer.handle_case(expr, schema),
+        Expr::Cast(expr) => producer.handle_cast(expr, schema),
+        Expr::TryCast(expr) => producer.handle_try_cast(expr, schema),
+        Expr::ScalarFunction(expr) => producer.handle_scalar_function(expr, schema),
         Expr::AggregateFunction(_) => {
             internal_err!(
                 "AggregateFunction should only be encountered as part of a LogicalPlan::Aggregate"
             )
         }
-        Expr::WindowFunction(expr) => producer.consume_window_function(expr, schema),
-        Expr::InList(expr) => producer.consume_in_list(expr, schema),
-        Expr::InSubquery(expr) => producer.consume_in_subquery(expr, schema),
+        Expr::WindowFunction(expr) => producer.handle_window_function(expr, schema),
+        Expr::InList(expr) => producer.handle_in_list(expr, schema),
+        Expr::InSubquery(expr) => producer.handle_in_subquery(expr, schema),
         _ => not_impl_err!("Cannot convert {expr:?} to Substrait"),
     }
 }
@@ -1358,9 +1358,9 @@ pub fn from_in_list(
     } = in_list;
     let substrait_list = list
         .iter()
-        .map(|x| producer.consume_expr(x, schema))
+        .map(|x| producer.handle_expr(x, schema))
         .collect::<Result<Vec<Expression>>>()?;
-    let substrait_expr = producer.consume_expr(expr, schema)?;
+    let substrait_expr = producer.handle_expr(expr, schema)?;
 
     let substrait_or_list = Expression {
         rex_type: Some(RexType::SingularOrList(Box::new(SingularOrList {
@@ -1427,9 +1427,9 @@ pub fn from_between(
     } = between;
     if *negated {
         // `expr NOT BETWEEN low AND high` can be translated into (expr < low OR high < expr)
-        let substrait_expr = producer.consume_expr(expr.as_ref(), schema)?;
-        let substrait_low = producer.consume_expr(low.as_ref(), schema)?;
-        let substrait_high = producer.consume_expr(high.as_ref(), schema)?;
+        let substrait_expr = producer.handle_expr(expr.as_ref(), schema)?;
+        let substrait_low = producer.handle_expr(low.as_ref(), schema)?;
+        let substrait_high = producer.handle_expr(high.as_ref(), schema)?;
 
         let l_expr = make_binary_op_scalar_func(
             producer,
@@ -1452,9 +1452,9 @@ pub fn from_between(
         ))
     } else {
         // `expr BETWEEN low AND high` can be translated into (low <= expr AND expr <= high)
-        let substrait_expr = producer.consume_expr(expr.as_ref(), schema)?;
-        let substrait_low = producer.consume_expr(low.as_ref(), schema)?;
-        let substrait_high = producer.consume_expr(high.as_ref(), schema)?;
+        let substrait_expr = producer.handle_expr(expr.as_ref(), schema)?;
+        let substrait_low = producer.handle_expr(low.as_ref(), schema)?;
+        let substrait_high = producer.handle_expr(high.as_ref(), schema)?;
 
         let l_expr = make_binary_op_scalar_func(
             producer,
@@ -1488,8 +1488,8 @@ pub fn from_binary_expr(
     schema: &DFSchemaRef,
 ) -> Result<Expression> {
     let BinaryExpr { left, op, right } = expr;
-    let l = producer.consume_expr(left, schema)?;
-    let r = producer.consume_expr(right, schema)?;
+    let l = producer.handle_expr(left, schema)?;
+    let r = producer.handle_expr(right, schema)?;
     Ok(make_binary_op_scalar_func(producer, &l, &r, *op))
 }
 pub fn from_case(
@@ -1507,15 +1507,15 @@ pub fn from_case(
     if let Some(e) = expr {
         // Base expression exists
         ifs.push(IfClause {
-            r#if: Some(producer.consume_expr(e, schema)?),
+            r#if: Some(producer.handle_expr(e, schema)?),
             then: None,
         });
     }
     // Parse `when`s
     for (r#if, then) in when_then_expr {
         ifs.push(IfClause {
-            r#if: Some(producer.consume_expr(r#if, schema)?),
-            then: Some(producer.consume_expr(then, schema)?),
+            r#if: Some(producer.handle_expr(r#if, schema)?),
+            then: Some(producer.handle_expr(then, schema)?),
         });
     }
 
@@ -1576,7 +1576,7 @@ pub fn from_alias(
     alias: &Alias,
     schema: &DFSchemaRef,
 ) -> Result<Expression> {
-    producer.consume_expr(alias.expr.as_ref(), schema)
+    producer.handle_expr(alias.expr.as_ref(), schema)
 }
 
 pub fn from_window_function(
@@ -1604,7 +1604,7 @@ pub fn from_window_function(
     // partition by expressions
     let partition_by = partition_by
         .iter()
-        .map(|e| producer.consume_expr(e, schema))
+        .map(|e| producer.handle_expr(e, schema))
         .collect::<Result<Vec<_>>>()?;
     // order by expressions
     let order_by = order_by
@@ -1657,9 +1657,9 @@ pub fn from_in_subquery(
         subquery,
         negated,
     } = subquery;
-    let substrait_expr = producer.consume_expr(expr, schema)?;
+    let substrait_expr = producer.handle_expr(expr, schema)?;
 
-    let subquery_plan = producer.consume_plan(subquery.subquery.as_ref())?;
+    let subquery_plan = producer.handle_plan(subquery.subquery.as_ref())?;
 
     let substrait_subquery = Expression {
         rex_type: Some(RexType::Subquery(Box::new(
@@ -2016,8 +2016,8 @@ fn make_substrait_like_expr(
     } else {
         producer.register_function("like".to_string())
     };
-    let expr = producer.consume_expr(expr, schema)?;
-    let pattern = producer.consume_expr(pattern, schema)?;
+    let expr = producer.handle_expr(expr, schema)?;
+    let pattern = producer.handle_expr(pattern, schema)?;
     let escape_char = to_substrait_literal_expr(
         producer,
         &ScalarValue::Utf8(escape_char.map(|c| c.to_string())),
@@ -2423,7 +2423,7 @@ fn to_substrait_unary_scalar_fn(
     schema: &DFSchemaRef,
 ) -> Result<Expression> {
     let function_anchor = producer.register_function(fn_name.to_string());
-    let substrait_expr = producer.consume_expr(arg, schema)?;
+    let substrait_expr = producer.handle_expr(arg, schema)?;
 
     Ok(Expression {
         rex_type: Some(RexType::ScalarFunction(ScalarFunction {
@@ -2473,7 +2473,7 @@ fn substrait_sort_field(
         asc,
         nulls_first,
     } = sort;
-    let e = producer.consume_expr(expr, schema)?;
+    let e = producer.handle_expr(expr, schema)?;
     let d = match (asc, nulls_first) {
         (true, true) => SortDirection::AscNullsFirst,
         (true, false) => SortDirection::AscNullsLast,
