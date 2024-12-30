@@ -18,14 +18,29 @@
 use arrow::compute::kernels::length::bit_length;
 use arrow::datatypes::DataType;
 use std::any::Any;
-use std::sync::OnceLock;
 
 use crate::utils::utf8_to_int_type;
 use datafusion_common::{exec_err, Result, ScalarValue};
-use datafusion_expr::scalar_doc_sections::DOC_SECTION_STRING;
 use datafusion_expr::{ColumnarValue, Documentation, Volatility};
 use datafusion_expr::{ScalarUDFImpl, Signature};
+use datafusion_macros::user_doc;
 
+#[user_doc(
+    doc_section(label = "String Functions"),
+    description = "Returns the bit length of a string.",
+    syntax_example = "bit_length(str)",
+    sql_example = r#"```sql
+> select bit_length('datafusion');
++--------------------------------+
+| bit_length(Utf8("datafusion")) |
++--------------------------------+
+| 80                             |
++--------------------------------+
+```"#,
+    standard_argument(name = "str", prefix = "String"),
+    related_udf(name = "length"),
+    related_udf(name = "octet_length")
+)]
 #[derive(Debug)]
 pub struct BitLengthFunc {
     signature: Signature,
@@ -92,32 +107,6 @@ impl ScalarUDFImpl for BitLengthFunc {
     }
 
     fn documentation(&self) -> Option<&Documentation> {
-        Some(get_bit_length_doc())
+        self.doc()
     }
-}
-
-static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
-
-fn get_bit_length_doc() -> &'static Documentation {
-    DOCUMENTATION.get_or_init(|| {
-        Documentation::builder(
-            DOC_SECTION_STRING,
-            "Returns the bit length of a string.",
-            "bit_length(str)",
-        )
-        .with_sql_example(
-            r#"```sql
-> select bit_length('datafusion');
-+--------------------------------+
-| bit_length(Utf8("datafusion")) |
-+--------------------------------+
-| 80                             |
-+--------------------------------+
-```"#,
-        )
-        .with_standard_argument("str", Some("String"))
-        .with_related_udf("length")
-        .with_related_udf("octet_length")
-        .build()
-    })
 }
