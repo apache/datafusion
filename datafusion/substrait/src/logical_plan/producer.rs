@@ -825,7 +825,7 @@ pub fn from_join(producer: &mut impl SubstraitProducer, join: &Join) -> Result<B
 
     // convert filter if present
     let join_filter = match &join.filter {
-        Some(filter) => Some(to_substrait_rex(producer, filter, &in_join_schema)?),
+        Some(filter) => Some(producer.handle_expr(filter, &in_join_schema)?),
         None => None,
     };
 
@@ -1413,7 +1413,7 @@ pub fn from_scalar_function(
     let mut arguments: Vec<FunctionArgument> = vec![];
     for arg in &fun.args {
         arguments.push(FunctionArgument {
-            arg_type: Some(ArgType::Value(to_substrait_rex(producer, arg, schema)?)),
+            arg_type: Some(ArgType::Value(producer.handle_expr(arg, schema)?)),
         });
     }
 
@@ -1537,7 +1537,7 @@ pub fn from_case(
 
     // Parse outer `else`
     let r#else: Option<Box<Expression>> = match else_expr {
-        Some(e) => Some(Box::new(to_substrait_rex(producer, e, schema)?)),
+        Some(e) => Some(Box::new(producer.handle_expr(e, schema)?)),
         None => None,
     };
 
@@ -1556,7 +1556,7 @@ pub fn from_cast(
         rex_type: Some(RexType::Cast(Box::new(
             substrait::proto::expression::Cast {
                 r#type: Some(to_substrait_type(data_type, true)?),
-                input: Some(Box::new(to_substrait_rex(producer, expr, schema)?)),
+                input: Some(Box::new(producer.handle_expr(expr, schema)?)),
                 failure_behavior: FailureBehavior::ThrowException.into(),
             },
         ))),
@@ -1573,7 +1573,7 @@ pub fn from_try_cast(
         rex_type: Some(RexType::Cast(Box::new(
             substrait::proto::expression::Cast {
                 r#type: Some(to_substrait_type(data_type, true)?),
-                input: Some(Box::new(to_substrait_rex(producer, expr, schema)?)),
+                input: Some(Box::new(producer.handle_expr(expr, schema)?)),
                 failure_behavior: FailureBehavior::ReturnNull.into(),
             },
         ))),
@@ -1614,7 +1614,7 @@ pub fn from_window_function(
     let mut arguments: Vec<FunctionArgument> = vec![];
     for arg in args {
         arguments.push(FunctionArgument {
-            arg_type: Some(ArgType::Value(to_substrait_rex(producer, arg, schema)?)),
+            arg_type: Some(ArgType::Value(producer.handle_expr(arg, schema)?)),
         });
     }
     // partition by expressions
