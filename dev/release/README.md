@@ -283,6 +283,7 @@ Verify that the Cargo.toml in the tarball contains the correct version
 (cd datafusion/functions-aggregate && cargo publish)
 (cd datafusion/functions-window && cargo publish)
 (cd datafusion/functions-nested && cargo publish)
+(cd datafusion/functions-table && cargo publish)
 (cd datafusion/sql && cargo publish)
 (cd datafusion/optimizer && cargo publish)
 (cd datafusion/common-runtime && cargo publish)
