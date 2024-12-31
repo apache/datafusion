@@ -17,7 +17,9 @@
 
 use std::sync::Arc;
 
-use crate::datasource::file_format::{format_as_file_type, parquet::ParquetFormatFactory, DefaultFileType};
+use crate::datasource::file_format::{
+    format_as_file_type, parquet::ParquetFormatFactory, DefaultFileType,
+};
 
 use super::{
     DataFrame, DataFrameWriteOptions, DataFusionError, LogicalPlanBuilder, RecordBatch,
