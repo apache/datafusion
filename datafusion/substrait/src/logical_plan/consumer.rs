@@ -17,7 +17,7 @@
 
 use arrow_buffer::{IntervalDayTime, IntervalMonthDayNano, OffsetBuffer};
 use async_recursion::async_recursion;
-use datafusion::arrow::array::{GenericListArray, MapArray};
+use datafusion::arrow::array::MapArray;
 use datafusion::arrow::datatypes::{
     DataType, Field, FieldRef, Fields, IntervalUnit, Schema, TimeUnit,
 };
@@ -2912,8 +2912,10 @@ fn from_substrait_literal(
             }
             builder.build()?
         }
-        Some(LiteralType::Null(ntype)) => {
-            from_substrait_null(consumer, ntype, dfs_names, name_idx)?
+        Some(LiteralType::Null(null_type)) => {
+            let data_type =
+                from_substrait_type(consumer, null_type, dfs_names, name_idx)?;
+            ScalarValue::try_from(&data_type)?
         }
         Some(LiteralType::IntervalDayToSecond(IntervalDayToSecond {
             days,
@@ -3083,180 +3085,6 @@ fn from_substrait_literal(
     };
 
     Ok(scalar_value)
-}
-
-fn from_substrait_null(
-    consumer: &impl SubstraitConsumer,
-    null_type: &Type,
-    dfs_names: &[String],
-    name_idx: &mut usize,
-) -> Result<ScalarValue> {
-    if let Some(kind) = &null_type.kind {
-        match kind {
-            r#type::Kind::Bool(_) => Ok(ScalarValue::Boolean(None)),
-            r#type::Kind::I8(integer) => match integer.type_variation_reference {
-                DEFAULT_TYPE_VARIATION_REF => Ok(ScalarValue::Int8(None)),
-                UNSIGNED_INTEGER_TYPE_VARIATION_REF => Ok(ScalarValue::UInt8(None)),
-                v => not_impl_err!(
-                    "Unsupported Substrait type variation {v} of type {kind:?}"
-                ),
-            },
-            r#type::Kind::I16(integer) => match integer.type_variation_reference {
-                DEFAULT_TYPE_VARIATION_REF => Ok(ScalarValue::Int16(None)),
-                UNSIGNED_INTEGER_TYPE_VARIATION_REF => Ok(ScalarValue::UInt16(None)),
-                v => not_impl_err!(
-                    "Unsupported Substrait type variation {v} of type {kind:?}"
-                ),
-            },
-            r#type::Kind::I32(integer) => match integer.type_variation_reference {
-                DEFAULT_TYPE_VARIATION_REF => Ok(ScalarValue::Int32(None)),
-                UNSIGNED_INTEGER_TYPE_VARIATION_REF => Ok(ScalarValue::UInt32(None)),
-                v => not_impl_err!(
-                    "Unsupported Substrait type variation {v} of type {kind:?}"
-                ),
-            },
-            r#type::Kind::I64(integer) => match integer.type_variation_reference {
-                DEFAULT_TYPE_VARIATION_REF => Ok(ScalarValue::Int64(None)),
-                UNSIGNED_INTEGER_TYPE_VARIATION_REF => Ok(ScalarValue::UInt64(None)),
-                v => not_impl_err!(
-                    "Unsupported Substrait type variation {v} of type {kind:?}"
-                ),
-            },
-            r#type::Kind::Fp32(_) => Ok(ScalarValue::Float32(None)),
-            r#type::Kind::Fp64(_) => Ok(ScalarValue::Float64(None)),
-            r#type::Kind::Timestamp(ts) => {
-                // Kept for backwards compatibility, new plans should use PrecisionTimestamp(Tz) instead
-                #[allow(deprecated)]
-                match ts.type_variation_reference {
-                    TIMESTAMP_SECOND_TYPE_VARIATION_REF => {
-                        Ok(ScalarValue::TimestampSecond(None, None))
-                    }
-                    TIMESTAMP_MILLI_TYPE_VARIATION_REF => {
-                        Ok(ScalarValue::TimestampMillisecond(None, None))
-                    }
-                    TIMESTAMP_MICRO_TYPE_VARIATION_REF => {
-                        Ok(ScalarValue::TimestampMicrosecond(None, None))
-                    }
-                    TIMESTAMP_NANO_TYPE_VARIATION_REF => {
-                        Ok(ScalarValue::TimestampNanosecond(None, None))
-                    }
-                    v => not_impl_err!(
-                        "Unsupported Substrait type variation {v} of type {kind:?}"
-                    ),
-                }
-            }
-            r#type::Kind::PrecisionTimestamp(pts) => match pts.precision {
-                0 => Ok(ScalarValue::TimestampSecond(None, None)),
-                3 => Ok(ScalarValue::TimestampMillisecond(None, None)),
-                6 => Ok(ScalarValue::TimestampMicrosecond(None, None)),
-                9 => Ok(ScalarValue::TimestampNanosecond(None, None)),
-                p => not_impl_err!(
-                    "Unsupported Substrait precision {p} for PrecisionTimestamp"
-                ),
-            },
-            r#type::Kind::PrecisionTimestampTz(pts) => match pts.precision {
-                0 => Ok(ScalarValue::TimestampSecond(
-                    None,
-                    Some(DEFAULT_TIMEZONE.into()),
-                )),
-                3 => Ok(ScalarValue::TimestampMillisecond(
-                    None,
-                    Some(DEFAULT_TIMEZONE.into()),
-                )),
-                6 => Ok(ScalarValue::TimestampMicrosecond(
-                    None,
-                    Some(DEFAULT_TIMEZONE.into()),
-                )),
-                9 => Ok(ScalarValue::TimestampNanosecond(
-                    None,
-                    Some(DEFAULT_TIMEZONE.into()),
-                )),
-                p => not_impl_err!(
-                    "Unsupported Substrait precision {p} for PrecisionTimestamp"
-                ),
-            },
-            r#type::Kind::Date(date) => match date.type_variation_reference {
-                DATE_32_TYPE_VARIATION_REF => Ok(ScalarValue::Date32(None)),
-                DATE_64_TYPE_VARIATION_REF => Ok(ScalarValue::Date64(None)),
-                v => not_impl_err!(
-                    "Unsupported Substrait type variation {v} of type {kind:?}"
-                ),
-            },
-            r#type::Kind::Binary(binary) => match binary.type_variation_reference {
-                DEFAULT_CONTAINER_TYPE_VARIATION_REF => Ok(ScalarValue::Binary(None)),
-                LARGE_CONTAINER_TYPE_VARIATION_REF => Ok(ScalarValue::LargeBinary(None)),
-                v => not_impl_err!(
-                    "Unsupported Substrait type variation {v} of type {kind:?}"
-                ),
-            },
-            // FixedBinary is not supported because `None` doesn't have length
-            r#type::Kind::String(string) => match string.type_variation_reference {
-                DEFAULT_CONTAINER_TYPE_VARIATION_REF => Ok(ScalarValue::Utf8(None)),
-                LARGE_CONTAINER_TYPE_VARIATION_REF => Ok(ScalarValue::LargeUtf8(None)),
-                v => not_impl_err!(
-                    "Unsupported Substrait type variation {v} of type {kind:?}"
-                ),
-            },
-            r#type::Kind::Decimal(d) => Ok(ScalarValue::Decimal128(
-                None,
-                d.precision as u8,
-                d.scale as i8,
-            )),
-            r#type::Kind::List(l) => {
-                let field = Field::new_list_field(
-                    from_substrait_type(
-                        consumer,
-                        l.r#type.clone().unwrap().as_ref(),
-                        dfs_names,
-                        name_idx,
-                    )?,
-                    true,
-                );
-                match l.type_variation_reference {
-                    DEFAULT_CONTAINER_TYPE_VARIATION_REF => Ok(ScalarValue::List(
-                        Arc::new(GenericListArray::new_null(field.into(), 1)),
-                    )),
-                    LARGE_CONTAINER_TYPE_VARIATION_REF => Ok(ScalarValue::LargeList(
-                        Arc::new(GenericListArray::new_null(field.into(), 1)),
-                    )),
-                    v => not_impl_err!(
-                        "Unsupported Substrait type variation {v} of type {kind:?}"
-                    ),
-                }
-            }
-            r#type::Kind::Map(map) => {
-                let key_type = map.key.as_ref().ok_or_else(|| {
-                    substrait_datafusion_err!("Map type must have key type")
-                })?;
-                let value_type = map.value.as_ref().ok_or_else(|| {
-                    substrait_datafusion_err!("Map type must have value type")
-                })?;
-
-                let key_type =
-                    from_substrait_type(consumer, key_type, dfs_names, name_idx)?;
-                let value_type =
-                    from_substrait_type(consumer, value_type, dfs_names, name_idx)?;
-                let entries_field = Arc::new(Field::new_struct(
-                    "entries",
-                    vec![
-                        Field::new("key", key_type, false),
-                        Field::new("value", value_type, true),
-                    ],
-                    false,
-                ));
-
-                DataType::Map(entries_field, false /* keys sorted */).try_into()
-            }
-            r#type::Kind::Struct(s) => {
-                let fields =
-                    from_substrait_struct_type(consumer, s, dfs_names, name_idx)?;
-                Ok(ScalarStructBuilder::new_null(fields))
-            }
-            _ => not_impl_err!("Unsupported Substrait type for null: {kind:?}"),
-        }
-    } else {
-        not_impl_err!("Null type without kind is not supported")
-    }
 }
 
 #[allow(deprecated)]
