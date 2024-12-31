@@ -871,10 +871,7 @@ impl TableProvider for ListingTable {
         // We only need the first file to infer the ordering
         // todo this is a bit of a hack
         let object_meta = match partitioned_file_lists.first() {
-            Some(file_list) => match file_list.first() {
-                Some(file) => Some(&file.object_meta),
-                None => None,
-            },
+            Some(file_list) => file_list.first().map(|file| &file.object_meta),
             None => None,
         };
 
@@ -913,7 +910,7 @@ impl TableProvider for ListingTable {
                     sort_order.push(sort);
                 }
 
-                output_ordering = create_ordering(&self.table_schema, &vec![sort_order])?
+                output_ordering = create_ordering(&self.table_schema, &[sort_order])?
             }
         }
 

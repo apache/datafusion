@@ -73,9 +73,7 @@ use parquet::arrow::arrow_writer::{
 use parquet::arrow::{
     arrow_to_parquet_schema, parquet_to_arrow_schema, AsyncArrowWriter,
 };
-use parquet::file::metadata::{
-    ParquetMetaData, ParquetMetaDataReader, RowGroupMetaData,
-};
+use parquet::file::metadata::{ParquetMetaData, ParquetMetaDataReader, RowGroupMetaData};
 use parquet::file::properties::WriterProperties;
 use parquet::file::writer::SerializedFileWriter;
 use parquet::format::FileMetaData;
