@@ -901,8 +901,8 @@ impl ConfigOptions {
 ///     config::ConfigExtension, extensions_options,
 ///     config::ConfigOptions,
 /// };
-/// // Define a new configuration struct using the `extensions_options` macro
-/// extensions_options! {
+///  // Define a new configuration struct using the `extensions_options` macro
+///  extensions_options! {
 ///     /// My own config options.
 ///     pub struct MyConfig {
 ///         /// Should "foo" be replaced by "bar"?
@@ -911,25 +911,23 @@ impl ConfigOptions {
 ///         /// How many "baz" should be created?
 ///         pub baz_count: usize, default = 1337
 ///     }
-/// }
+///  }
 ///
-/// impl ConfigExtension for MyConfig {
+///  impl ConfigExtension for MyConfig {
 ///     const PREFIX: &'static str = "my_config";
-/// }
+///  }
 ///
-/// fn main() {
-///     // set up config struct and register extension
-///     let mut config = ConfigOptions::default();
-///     config.extensions.insert(MyConfig::default());
+///  // set up config struct and register extension
+///  let mut config = ConfigOptions::default();
+///  config.extensions.insert(MyConfig::default());
 ///
-///     // overwrite config default
-///     config.set("my_config.baz_count", "42").unwrap();
+///  // overwrite config default
+///  config.set("my_config.baz_count", "42").unwrap();
 ///
-///     // check config state
-///     let my_config = config.extensions.get::<MyConfig>().unwrap();
-///     assert!(my_config.foo_to_bar,);
-///     assert_eq!(my_config.baz_count, 42,);
-/// }
+///  // check config state
+///  let my_config = config.extensions.get::<MyConfig>().unwrap();
+///  assert!(my_config.foo_to_bar,);
+///  assert_eq!(my_config.baz_count, 42,);
 /// ```
 ///
 /// # Note:
