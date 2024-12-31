@@ -217,6 +217,21 @@ impl Unparser<'_> {
 
                 let start_bound = self.convert_bound(&window_frame.start_bound)?;
                 let end_bound = self.convert_bound(&window_frame.end_bound)?;
+
+                let window_frame = if self.dialect.window_func_support_window_frame(
+                    func_name,
+                    &start_bound,
+                    &end_bound,
+                ) {
+                    Some(ast::WindowFrame {
+                        units,
+                        start_bound,
+                        end_bound: Some(end_bound),
+                    })
+                } else {
+                    None
+                };
+
                 let over = Some(ast::WindowType::WindowSpec(ast::WindowSpec {
                     window_name: None,
                     partition_by: partition_by
@@ -224,11 +239,7 @@ impl Unparser<'_> {
                         .map(|e| self.expr_to_sql_inner(e))
                         .collect::<Result<Vec<_>>>()?,
                     order_by,
-                    window_frame: Some(ast::WindowFrame {
-                        units,
-                        start_bound,
-                        end_bound: Option::from(end_bound),
-                    }),
+                    window_frame,
                 }));
 
                 Ok(ast::Expr::Function(Function {
@@ -1632,6 +1643,7 @@ mod tests {
     use datafusion_functions_aggregate::expr_fn::sum;
     use datafusion_functions_nested::expr_fn::{array_element, make_array};
     use datafusion_functions_nested::map::map;
+    use datafusion_functions_window::rank::rank_udwf;
     use datafusion_functions_window::row_number::row_number_udwf;
 
     use crate::unparser::dialect::{
@@ -2671,6 +2683,39 @@ mod tests {
 
             let actual = format!("{}", ast);
             let expected = format!(r#"round(CAST("a" AS {identifier}), 2)"#);
+
+            assert_eq!(actual, expected);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_window_func_support_window_frame() -> Result<()> {
+        let default_dialect: Arc<dyn Dialect> =
+            Arc::new(CustomDialectBuilder::new().build());
+
+        let test_dialect: Arc<dyn Dialect> = Arc::new(
+            CustomDialectBuilder::new()
+                .with_window_func_support_window_frame(false)
+                .build(),
+        );
+
+        for (dialect, expected) in [
+            (
+                default_dialect,
+                "rank() OVER (ORDER BY a ASC NULLS FIRST ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING)",
+            ),
+            (test_dialect, "rank() OVER (ORDER BY a ASC NULLS FIRST)"),
+        ] {
+            let unparser = Unparser::new(dialect.as_ref());
+            let func = WindowFunctionDefinition::WindowUDF(rank_udwf());
+            let mut window_func = WindowFunction::new(func, vec![]);
+            window_func.order_by = vec![Sort::new(col("a"), true, true)];
+            let expr = Expr::WindowFunction(window_func);
+            let ast = unparser.expr_to_sql(&expr)?;
+
+            let actual = format!("{ast}");
+            let expected = format!("{expected}");
 
             assert_eq!(actual, expected);
         }
