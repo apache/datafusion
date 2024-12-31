@@ -6790,17 +6790,17 @@ an error will be returned.</p></li>
 <section id="id147">
 <h4>Example<a class="headerlink" href="#id147" title="Link to this heading">¶</a></h4>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span><span class="w"> </span><span class="k">select</span><span class="w"> </span><span class="n">to_date</span><span class="p">(</span><span class="s1">&#39;2023-01-31&#39;</span><span class="p">);</span>
-<span class="o">+</span><span class="c1">-----------------------------+</span>
+<span class="o">+</span><span class="c1">-------------------------------+</span>
 <span class="o">|</span><span class="w"> </span><span class="n">to_date</span><span class="p">(</span><span class="n">Utf8</span><span class="p">(</span><span class="ss">&quot;2023-01-31&quot;</span><span class="p">))</span><span class="w"> </span><span class="o">|</span>
-<span class="o">+</span><span class="c1">-----------------------------+</span>
-<span class="o">|</span><span class="w"> </span><span class="mi">2023</span><span class="o">-</span><span class="mi">01</span><span class="o">-</span><span class="mi">31</span><span class="w">                  </span><span class="o">|</span>
-<span class="o">+</span><span class="c1">-----------------------------+</span>
+<span class="o">+</span><span class="c1">-------------------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="mi">2023</span><span class="o">-</span><span class="mi">01</span><span class="o">-</span><span class="mi">31</span><span class="w">                    </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">-------------------------------+</span>
 <span class="o">&gt;</span><span class="w"> </span><span class="k">select</span><span class="w"> </span><span class="n">to_date</span><span class="p">(</span><span class="s1">&#39;2023/01/31&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;%Y-%m-%d&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;%Y/%m/%d&#39;</span><span class="p">);</span>
-<span class="o">+</span><span class="c1">---------------------------------------------------------------+</span>
+<span class="o">+</span><span class="c1">---------------------------------------------------------------------+</span>
 <span class="o">|</span><span class="w"> </span><span class="n">to_date</span><span class="p">(</span><span class="n">Utf8</span><span class="p">(</span><span class="ss">&quot;2023/01/31&quot;</span><span class="p">),</span><span class="n">Utf8</span><span class="p">(</span><span class="ss">&quot;%Y-%m-%d&quot;</span><span class="p">),</span><span class="n">Utf8</span><span class="p">(</span><span class="ss">&quot;%Y/%m/%d&quot;</span><span class="p">))</span><span class="w"> </span><span class="o">|</span>
-<span class="o">+</span><span class="c1">---------------------------------------------------------------+</span>
-<span class="o">|</span><span class="w"> </span><span class="mi">2023</span><span class="o">-</span><span class="mi">01</span><span class="o">-</span><span class="mi">31</span><span class="w">                                                    </span><span class="o">|</span>
-<span class="o">+</span><span class="c1">---------------------------------------------------------------+</span>
+<span class="o">+</span><span class="c1">---------------------------------------------------------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="mi">2023</span><span class="o">-</span><span class="mi">01</span><span class="o">-</span><span class="mi">31</span><span class="w">                                                          </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">---------------------------------------------------------------------+</span>
 </pre></div>
 </div>
 <p>Additional examples can be found <a class="reference external" href="https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/to_date.rs">here</a></p>
