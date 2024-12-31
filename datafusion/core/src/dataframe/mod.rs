@@ -1977,7 +1977,14 @@ mod tests {
 
     use crate::prelude::{CsvReadOptions, NdJsonReadOptions, ParquetReadOptions};
     use arrow::array::Int32Array;
-    use datafusion_common::{assert_batches_eq, Constraint, Constraints, ScalarValue};
+    use arrow::util::pretty::pretty_format_batches;
+    use arrow_array::TimestampNanosecondArray;
+    use arrow_schema::TimeUnit;
+    use datafusion_common::config::TableParquetOptions;
+    use datafusion_common::{
+        assert_batches_eq, assert_contains, assert_not_contains, Constraint, Constraints,
+        ScalarValue,
+    };
     use datafusion_common_runtime::SpawnedTask;
     use datafusion_expr::expr::WindowFunction;
     use datafusion_expr::{
@@ -1989,6 +1996,7 @@ mod tests {
     use datafusion_functions_window::nth_value::first_value_udwf;
     use datafusion_physical_expr::expressions::Column;
     use datafusion_physical_plan::{get_plan_string, ExecutionPlanProperties};
+    use rand::Rng;
     use sqlparser::ast::NullTreatment;
     use tempfile::TempDir;
 
@@ -4136,11 +4144,6 @@ mod tests {
         let df = ctx.sql("SELECT * FROM data").await?;
         let results = df.collect().await?;
 
-        let df_explain = ctx.sql("explain SELECT a FROM data").await?;
-        let explain_result = df_explain.collect().await?;
-
-        println!("explain_result {:?}", explain_result);
-
         assert_batches_eq!(
             &[
                 "+---+---+",
@@ -4325,6 +4328,180 @@ mod tests {
             ],
             &results
         );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn write_parquet_with_order_metadata() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int64, false),
+            Field::new(
+                "timestamp",
+                DataType::Timestamp(TimeUnit::Nanosecond, None),
+                false,
+            ),
+        ]));
+
+        let tmp_dir = TempDir::new()?;
+
+        // It should work only when we enable the collect_statistics
+        let ctx = SessionContext::new_with_config(
+            SessionConfig::default()
+                .set_bool("datafusion.execution.collect_statistics", true),
+        );
+
+        // random write data to parquet
+        let num_rows = 1000;
+        let mut rng = rand::thread_rng();
+        let ids: Vec<i64> = (0..num_rows).collect();
+        let timestamps: Vec<i64> = (0..num_rows)
+            .map(|_| rng.gen_range(1_700_000_000_000..1_800_000_000_000))
+            .collect();
+
+        let id_array = Arc::new(Int64Array::from(ids));
+        let timestamp_array = Arc::new(TimestampNanosecondArray::from(timestamps));
+
+        let batch =
+            RecordBatch::try_new(schema.clone(), vec![id_array, timestamp_array])?;
+
+        let file = tmp_dir.path().join("testSorted.parquet");
+        let write_df = ctx.read_batch(batch)?;
+
+        write_df
+            .clone()
+            .write_parquet(
+                file.to_str().unwrap(),
+                DataFrameWriteOptions::new()
+                    .with_sort_by(vec![col("timestamp").sort(true, false)]),
+                Some(TableParquetOptions::new()),
+            )
+            .await?;
+
+        // Create the table without with order
+        let sql_str =
+            "create external table sortData(id INT, timestamp TIMESTAMP) stored as parquet location'"
+                .to_owned()
+                + file.to_str().unwrap()
+                + "'";
+
+        ctx.sql(sql_str.as_str()).await?.collect().await?;
+
+        let sql_result = ctx
+            .sql("SELECT * FROM sortData order by timestamp")
+            .await?
+            .explain(false, false)?
+            .collect()
+            .await?;
+
+        let formatted = pretty_format_batches(&sql_result).unwrap().to_string();
+        // Assert we have the output_ordering in the explain plan
+        assert_contains!(
+            formatted.as_str(),
+            "output_ordering=[timestamp@1 ASC NULLS LAST]"
+        );
+
+        // Assert we don't contain SortExec in the plan, the optimizer can optimize to remove the sort
+        assert_not_contains!(formatted.as_str(), "SortExec");
+
+        // testing multi col sort case
+        write_df
+            .clone()
+            .write_parquet(
+                file.to_str().unwrap(),
+                DataFrameWriteOptions::new().with_sort_by(vec![
+                    col("timestamp").sort(true, false),
+                    col("id").sort(true, false),
+                ]),
+                Some(TableParquetOptions::new()),
+            )
+            .await?;
+
+        let sql_result = ctx
+            .sql("SELECT * FROM sortData")
+            .await?
+            .explain(false, false)?
+            .collect()
+            .await?;
+
+        let formatted = pretty_format_batches(&sql_result).unwrap().to_string();
+        // Assert we have the output_ordering in the explain plan
+        assert_contains!(
+            formatted.as_str(),
+            "output_ordering=[timestamp@1 ASC NULLS LAST, id@0 ASC NULLS LAST]"
+        );
+
+        // Assert we don't contain SortExec in the plan, the optimizer can optimize to remove the sort
+        assert_not_contains!(formatted.as_str(), "SortExec");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn write_parquet_without_order_metadata() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int64, false),
+            Field::new(
+                "timestamp",
+                DataType::Timestamp(TimeUnit::Nanosecond, None),
+                false,
+            ),
+        ]));
+
+        let tmp_dir = TempDir::new()?;
+
+        let ctx = SessionContext::new();
+
+        // random write data to parquet
+        let num_rows = 1000;
+        let mut rng = rand::thread_rng();
+        let ids: Vec<i64> = (0..num_rows).collect();
+        let timestamps: Vec<i64> = (0..num_rows)
+            .map(|_| rng.gen_range(1_700_000_000_000..1_800_000_000_000))
+            .collect();
+
+        let id_array = Arc::new(Int64Array::from(ids));
+        let timestamp_array = Arc::new(TimestampNanosecondArray::from(timestamps));
+
+        let batch =
+            RecordBatch::try_new(schema.clone(), vec![id_array, timestamp_array])?;
+
+        let file = tmp_dir.path().join("testSorted.parquet");
+        let write_df = ctx.read_batch(batch)?;
+
+        write_df
+            .clone()
+            .write_parquet(
+                file.to_str().unwrap(),
+                DataFrameWriteOptions::new(),
+                Some(TableParquetOptions::new()),
+            )
+            .await?;
+
+        // Create the table without with order
+        let sql_str =
+            "create external table sortData(id INT, timestamp TIMESTAMP) stored as parquet location'"
+                .to_owned()
+                + file.to_str().unwrap()
+                + "'";
+
+        ctx.sql(sql_str.as_str()).await?.collect().await?;
+
+        let sql_result = ctx
+            .sql("SELECT * FROM sortData order by timestamp")
+            .await?
+            .explain(false, false)?
+            .collect()
+            .await?;
+
+        let formatted = pretty_format_batches(&sql_result).unwrap().to_string();
+        // Assert we don't have the output_ordering in the explain plan because we don't disable the statistics
+        assert_not_contains!(
+            formatted.as_str(),
+            "output_ordering=[timestamp@1 ASC NULLS LAST]"
+        );
+
+        // Assert we contain SortExec in the plan
+        // the optimizer will not remove it without metadata sort information
+        assert_contains!(formatted.as_str(), "SortExec");
         Ok(())
     }
 }

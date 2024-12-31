@@ -17,11 +17,11 @@
 
 //! The table implementation.
 
-use std::collections::HashMap;
-use std::{any::Any, str::FromStr, sync::Arc};
-
 use super::helpers::{expr_applicable_for_cols, pruned_partition_list, split_files};
 use super::{ListingTableUrl, PartitionedFile};
+use std::collections::HashMap;
+use std::ops::Deref;
+use std::{any::Any, str::FromStr, sync::Arc};
 
 use crate::datasource::{
     create_ordering,
@@ -35,7 +35,7 @@ use crate::execution::context::SessionState;
 use datafusion_catalog::TableProvider;
 use datafusion_common::{config_err, DataFusionError, Result};
 use datafusion_expr::dml::InsertOp;
-use datafusion_expr::{utils::conjunction, Expr, TableProviderFilterPushDown};
+use datafusion_expr::{col, utils::conjunction, Expr, TableProviderFilterPushDown};
 use datafusion_expr::{SortExpr, TableType};
 use datafusion_physical_plan::{empty::EmptyExec, ExecutionPlan, Statistics};
 
@@ -52,8 +52,12 @@ use datafusion_physical_expr::{
     create_physical_expr, LexOrdering, PhysicalSortRequirement,
 };
 
+use crate::datasource::file_format::csv::CsvFormat;
+use crate::datasource::file_format::parquet::ParquetFormat;
 use async_trait::async_trait;
 use datafusion_catalog::Session;
+use datafusion_common::cse::FoundCommonNodes::No;
+use datafusion_expr::expr::Sort;
 use datafusion_physical_expr_common::sort_expr::LexRequirement;
 use futures::{future, stream, StreamExt, TryStreamExt};
 use itertools::Itertools;
@@ -860,7 +864,63 @@ impl TableProvider for ListingTable {
             return Ok(Arc::new(EmptyExec::new(projected_schema)));
         }
 
-        let output_ordering = self.try_create_output_ordering()?;
+        let mut output_ordering = self.try_create_output_ordering()?;
+
+        let store = if let Some(url) = self.table_paths.first() {
+            Some(session_state.runtime_env().object_store(url)?)
+        } else {
+            None
+        };
+
+        // We only need the first file to infer the ordering
+        // todo this is a bit of a hack
+        let object_meta = match partitioned_file_lists.first() {
+            Some(file_list) => match file_list.first() {
+                Some(file) => Some(&file.object_meta),
+                None => None,
+            },
+            None => None,
+        };
+
+        // If the output ordering is empty, try to infer it from the file
+        if output_ordering.is_empty() && store.is_some() && object_meta.is_some() {
+            let sort_by_value = self
+                .options()
+                .format
+                .infer_file_ordering(&store.unwrap(), object_meta.unwrap())
+                .await;
+
+            if let Some(sort_by_value) = sort_by_value {
+                // Split the input into individual sort expressions separated by commas
+                let sort_expressions: Vec<&str> =
+                    sort_by_value.split(',').map(str::trim).collect();
+
+                let mut sort_order = vec![];
+
+                for sort_expr in sort_expressions {
+                    // Split each expression into components (e.g., "timestamp ASC NULLS LAST")
+                    let tokens: Vec<&str> = sort_expr.split_whitespace().collect();
+                    if tokens.is_empty() {
+                        continue; // Skip empty tokens
+                    }
+                    // Parse the expression, direction, and nulls ordering
+                    let expr = tokens[0].to_string();
+                    let asc = tokens
+                        .get(1)
+                        .map_or(true, |&t| t.eq_ignore_ascii_case("ASC")); // Default to ASC
+                    let nulls_first = tokens
+                        .get(2)
+                        .map_or(false, |&t| t.eq_ignore_ascii_case("NULLS FIRST")); // Default to NULLS LAST
+
+                    // Create a Sort object
+                    let sort = Sort::new(col(expr), asc, nulls_first);
+                    sort_order.push(sort);
+                }
+
+                output_ordering = create_ordering(&self.table_schema, &vec![sort_order])?
+            }
+        }
+
         match state
             .config_options()
             .execution

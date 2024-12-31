@@ -73,7 +73,9 @@ use parquet::arrow::arrow_writer::{
 use parquet::arrow::{
     arrow_to_parquet_schema, parquet_to_arrow_schema, AsyncArrowWriter,
 };
-use parquet::file::metadata::{ParquetMetaData, ParquetMetaDataReader, RowGroupMetaData};
+use parquet::file::metadata::{
+    KeyValue, ParquetMetaData, ParquetMetaDataReader, RowGroupMetaData,
+};
 use parquet::file::properties::WriterProperties;
 use parquet::file::writer::SerializedFileWriter;
 use parquet::format::FileMetaData;
@@ -395,6 +397,37 @@ impl FileFormat for ParquetFormat {
         )
         .await?;
         Ok(stats)
+    }
+
+    async fn infer_file_ordering(
+        &self,
+        store: &Arc<dyn ObjectStore>,
+        object: &ObjectMeta,
+    ) -> Option<String> {
+        // Fetch metadata
+        let metadata =
+            fetch_parquet_metadata(store.as_ref(), object, self.metadata_size_hint())
+                .await
+                .map_err(|e| ParquetError::General(format!("Get_metadata error: {e}")))
+                .ok()?; // Propagate errors to avoid breaking execution
+
+        let file_metadata = metadata.file_metadata();
+
+        // Convert Parquet schema to Arrow schema
+        let file_schema = parquet_to_arrow_schema(
+            file_metadata.schema_descr(),
+            file_metadata.key_value_metadata(),
+        )
+        .map_err(|e| {
+            ParquetError::General(format!(
+                "Failed to convert Parquet schema to Arrow schema: {e}"
+            ))
+        })
+        .ok()?; // Propagate errors
+
+        // Get "DATAFUSION_ORDER_BY" from metadata
+        let order_by = file_schema.metadata().get("DATAFUSION_ORDER_BY").cloned();
+        order_by
     }
 
     async fn create_physical_plan(

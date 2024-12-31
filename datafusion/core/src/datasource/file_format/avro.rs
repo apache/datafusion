@@ -134,6 +134,15 @@ impl FileFormat for AvroFormat {
         Ok(Arc::new(merged_schema))
     }
 
+    async fn infer_file_ordering(
+        &self,
+        store: &Arc<dyn ObjectStore>,
+        object: &ObjectMeta,
+    ) -> Option<String> {
+        // todo Avro files sort order are not sorted
+        None
+    }
+
     async fn infer_stats(
         &self,
         _state: &SessionState,
