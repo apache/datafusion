@@ -1152,6 +1152,8 @@ pub trait Visit {
 /// - `<default_value>`: Default value matching the field type like `42`.
 ///
 /// # Example
+/// See also a full example on the [`ConfigExtension`] documentation
+///
 /// ```
 /// use datafusion_common::extensions_options;
 ///
