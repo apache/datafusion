@@ -20,7 +20,6 @@
 use super::helpers::{expr_applicable_for_cols, pruned_partition_list, split_files};
 use super::{ListingTableUrl, PartitionedFile};
 use std::collections::HashMap;
-use std::ops::Deref;
 use std::{any::Any, str::FromStr, sync::Arc};
 
 use crate::datasource::{
@@ -52,11 +51,8 @@ use datafusion_physical_expr::{
     create_physical_expr, LexOrdering, PhysicalSortRequirement,
 };
 
-use crate::datasource::file_format::csv::CsvFormat;
-use crate::datasource::file_format::parquet::ParquetFormat;
 use async_trait::async_trait;
 use datafusion_catalog::Session;
-use datafusion_common::cse::FoundCommonNodes::No;
 use datafusion_expr::expr::Sort;
 use datafusion_physical_expr_common::sort_expr::LexRequirement;
 use futures::{future, stream, StreamExt, TryStreamExt};

@@ -136,8 +136,8 @@ impl FileFormat for AvroFormat {
 
     async fn infer_file_ordering(
         &self,
-        store: &Arc<dyn ObjectStore>,
-        object: &ObjectMeta,
+        _store: &Arc<dyn ObjectStore>,
+        _object: &ObjectMeta,
     ) -> Option<String> {
         // todo Avro files sort order are not sorted
         None

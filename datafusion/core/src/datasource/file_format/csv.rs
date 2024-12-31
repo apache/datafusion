@@ -408,8 +408,8 @@ impl FileFormat for CsvFormat {
 
     async fn infer_file_ordering(
         &self,
-        store: &Arc<dyn ObjectStore>,
-        object: &ObjectMeta,
+        _store: &Arc<dyn ObjectStore>,
+        _object: &ObjectMeta,
     ) -> Option<String> {
         // CSV infer files order info is not supported
         None

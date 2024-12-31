@@ -167,8 +167,8 @@ impl FileFormat for ArrowFormat {
 
     async fn infer_file_ordering(
         &self,
-        store: &Arc<dyn ObjectStore>,
-        object: &ObjectMeta,
+        _store: &Arc<dyn ObjectStore>,
+        _object: &ObjectMeta,
     ) -> Option<String> {
         // todo for now we don't support infer ordering for Arrow files
         None

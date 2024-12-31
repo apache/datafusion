@@ -107,8 +107,8 @@ impl FileFormat for TSVFileFormat {
 
     async fn infer_file_ordering(
         &self,
-        store: &Arc<dyn ObjectStore>,
-        object: &ObjectMeta,
+        _store: &Arc<dyn ObjectStore>,
+        _object: &ObjectMeta,
     ) -> Option<&String> {
         None
     }

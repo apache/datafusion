@@ -36,7 +36,6 @@ use crate::datasource::physical_plan::{FileScanConfig, FileSinkConfig};
 use crate::error::Result;
 use crate::execution::context::SessionState;
 use crate::physical_plan::{ExecutionPlan, Statistics};
-use ::parquet::arrow::parquet_to_arrow_schema;
 use std::any::Any;
 use std::collections::{HashMap, VecDeque};
 use std::fmt::{self, Debug, Display};
@@ -50,7 +49,6 @@ use datafusion_common::{internal_err, not_impl_err, GetExt};
 use datafusion_expr::Expr;
 use datafusion_physical_expr::PhysicalExpr;
 
-use crate::datasource::file_format::parquet::fetch_parquet_metadata;
 use async_trait::async_trait;
 use bytes::{Buf, Bytes};
 use datafusion_physical_expr_common::sort_expr::LexRequirement;
@@ -124,6 +122,16 @@ pub trait FileFormat: Send + Sync + Debug {
         object: &ObjectMeta,
     ) -> Result<Statistics>;
 
+    /// Infers the file ordering for a given object store and object meta.
+    ///
+    /// # Arguments
+    ///
+    /// * `store` - A reference to the object store.
+    /// * `object` - A reference to the object meta.
+    ///
+    /// # Returns
+    ///
+    /// An optional string representing the file ordering.
     async fn infer_file_ordering(
         &self,
         store: &Arc<dyn ObjectStore>,

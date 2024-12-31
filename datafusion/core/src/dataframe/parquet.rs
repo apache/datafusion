@@ -18,7 +18,7 @@
 use std::sync::Arc;
 
 use crate::datasource::file_format::{
-    format_as_file_type, parquet::ParquetFormatFactory, DefaultFileType,
+    format_as_file_type, parquet::ParquetFormatFactory,
 };
 
 use super::{
