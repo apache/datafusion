@@ -109,7 +109,7 @@ impl FileFormat for TSVFileFormat {
         &self,
         _store: &Arc<dyn ObjectStore>,
         _object: &ObjectMeta,
-    ) -> Option<&String> {
+    ) -> Option<String> {
         None
     }
 
