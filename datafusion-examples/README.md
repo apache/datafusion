@@ -53,6 +53,7 @@ cargo run --example dataframe
 - [`analyzer_rule.rs`](examples/analyzer_rule.rs): Use a custom AnalyzerRule to change a query's semantics (row level access control)
 - [`catalog.rs`](examples/catalog.rs): Register the table into a custom catalog
 - [`composed_extension_codec`](examples/composed_extension_codec.rs): Example of using multiple extension codecs for serialization / deserialization
+- [`config_extensions`](examples/composed_extension_codec.rs): Pass custom options with `ConfigOptions`
 - [`csv_sql_streaming.rs`](examples/csv_sql_streaming.rs): Build and run a streaming query plan from a SQL statement against a local CSV file
 - [`custom_datasource.rs`](examples/custom_datasource.rs): Run queries against a custom datasource (TableProvider)
 - [`custom_file_format.rs`](examples/custom_file_format.rs): Write data to a custom file format
