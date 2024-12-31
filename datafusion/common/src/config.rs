@@ -889,8 +889,50 @@ impl ConfigOptions {
     }
 }
 
-/// [`ConfigExtension`] provides a mechanism to store third-party configuration within DataFusion
+/// [`ConfigExtension`] provides a mechanism to store third-party configuration
+/// within DataFusion [`ConfigOptions`]
 ///
+/// This mechanism can be used to pass configuration to user defined functions
+/// or optimizer passes
+///
+/// # Example
+/// ```
+/// use datafusion_common::{
+///     config::ConfigExtension, extensions_options,
+///     config::ConfigOptions,
+/// };
+/// // Define a new configuration struct using the `extensions_options` macro
+/// extensions_options! {
+///     /// My own config options.
+///     pub struct MyConfig {
+///         /// Should "foo" be replaced by "bar"?
+///         pub foo_to_bar: bool, default = true
+///
+///         /// How many "baz" should be created?
+///         pub baz_count: usize, default = 1337
+///     }
+/// }
+///
+/// impl ConfigExtension for MyConfig {
+///     const PREFIX: &'static str = "my_config";
+/// }
+///
+/// fn main() {
+///     // set up config struct and register extension
+///     let mut config = ConfigOptions::default();
+///     config.extensions.insert(MyConfig::default());
+///
+///     // overwrite config default
+///     config.set("my_config.baz_count", "42").unwrap();
+///
+///     // check config state
+///     let my_config = config.extensions.get::<MyConfig>().unwrap();
+///     assert!(my_config.foo_to_bar,);
+///     assert_eq!(my_config.baz_count, 42,);
+/// }
+/// ```
+///
+/// # Note:
 /// Unfortunately associated constants are not currently object-safe, and so this
 /// extends the object-safe [`ExtensionOptions`]
 pub trait ConfigExtension: ExtensionOptions {
@@ -901,6 +943,8 @@ pub trait ConfigExtension: ExtensionOptions {
 }
 
 /// An object-safe API for storing arbitrary configuration
+/// do
+/// See [`ConfigExtension`] for user defined configuration
 pub trait ExtensionOptions: Send + Sync + fmt::Debug + 'static {
     /// Return `self` as [`Any`]
     ///
