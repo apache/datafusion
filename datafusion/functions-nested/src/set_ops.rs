@@ -516,11 +516,18 @@ fn general_array_distinct<OffsetSize: OffsetSizeTrait>(
     let mut new_arrays = Vec::with_capacity(array.len());
     let converter = RowConverter::new(vec![SortField::new(dt)])?;
     // distinct for each list in ListArray
-    for arr in array.iter().flatten() {
+    for arr in array.iter() {
+        let last_offset: OffsetSize = offsets.last().copied().unwrap();
+        if arr.is_none() {
+            // Add same offset for null
+            offsets.push(last_offset);
+            continue;
+        }
+
+        let arr = arr.unwrap();
         let values = converter.convert_columns(&[arr])?;
         // sort elements in list and remove duplicates
         let rows = values.iter().sorted().dedup().collect::<Vec<_>>();
-        let last_offset: OffsetSize = offsets.last().copied().unwrap();
         offsets.push(last_offset + OffsetSize::usize_as(rows.len()));
         let arrays = converter.convert_rows(rows)?;
         let array = match arrays.first() {
@@ -538,6 +545,7 @@ fn general_array_distinct<OffsetSize: OffsetSizeTrait>(
         Arc::clone(field),
         offsets,
         values,
-        None,
+        // Keep the list nulls
+        array.nulls().cloned(),
     )?))
 }
