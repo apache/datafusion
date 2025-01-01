@@ -518,13 +518,11 @@ fn general_array_distinct<OffsetSize: OffsetSizeTrait>(
     // distinct for each list in ListArray
     for arr in array.iter() {
         let last_offset: OffsetSize = offsets.last().copied().unwrap();
-        if arr.is_none() {
+        let Some(arr) = arr else {
             // Add same offset for null
             offsets.push(last_offset);
             continue;
         }
-
-        let arr = arr.unwrap();
         let values = converter.convert_columns(&[arr])?;
         // sort elements in list and remove duplicates
         let rows = values.iter().sorted().dedup().collect::<Vec<_>>();
