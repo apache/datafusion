@@ -522,7 +522,7 @@ fn general_array_distinct<OffsetSize: OffsetSizeTrait>(
             // Add same offset for null
             offsets.push(last_offset);
             continue;
-        }
+        };
         let values = converter.convert_columns(&[arr])?;
         // sort elements in list and remove duplicates
         let rows = values.iter().sorted().dedup().collect::<Vec<_>>();
