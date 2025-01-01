@@ -946,8 +946,8 @@ pub trait ConfigExtension: ExtensionOptions {
     const PREFIX: &'static str;
 }
 
-/// An object-safe API for storing arbitrary configuration
-/// do
+/// An object-safe API for storing arbitrary configuration.
+///
 /// See [`ConfigExtension`] for user defined configuration
 pub trait ExtensionOptions: Send + Sync + fmt::Debug + 'static {
     /// Return `self` as [`Any`]
