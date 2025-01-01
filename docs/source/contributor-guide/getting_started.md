@@ -74,7 +74,7 @@ Testing setup:
 
 - `rustup update stable` DataFusion uses the latest stable release of rust
 - `git submodule init`
-- `git submodule update`
+- `git submodule update --init --remote --recursive`
 
 Formatting instructions:
 
