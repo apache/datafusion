@@ -23,13 +23,14 @@ concurrency:
 
 # https://docs.github.com/en/actions/writing-workflows/choosing-when-your-workflow-runs/events-that-trigger-workflows#running-your-pull_request-workflow-when-a-pull-request-merges
 #
-# this job is intended to only run on merge to main branch
+# this job is intended to only run only on the main branch as it is time consuming
+# and very rarely fails. However, it is important coverage to ensure correctness
+# in the (very rare) event of a hash failure.
 on:
-  pull_request:
+  # Run on all commits to main
+  push:
     branches:
       - main
-    types:
-      - closed
 
 jobs:
   # Check answers are correct when hash values collide
