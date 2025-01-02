@@ -37,7 +37,7 @@ use arrow::datatypes::{
     Int16Type, Int32Type, Int64Type, Int8Type, UInt16Type, UInt32Type, UInt64Type,
     UInt8Type,
 };
-use arrow_schema::{IntervalUnit, SortOptions};
+use arrow_schema::IntervalUnit;
 use datafusion_common::stats::Precision;
 use datafusion_common::{
     downcast_value, exec_err, internal_err, ColumnStatistics, DataFusionError, Result,
@@ -55,6 +55,10 @@ use arrow::datatypes::{
 };
 
 use crate::min_max::min_max_bytes::MinMaxBytesAccumulator;
+use crate::min_max::min_max_generic::{
+    GenericMaxAccumulator, GenericMinAccumulator, GenericSlidingMaxAccumulator,
+    GenericSlidingMinAccumulator,
+};
 use datafusion_common::ScalarValue;
 use datafusion_expr::{
     function::AccumulatorArgs, Accumulator, AggregateUDFImpl, Documentation, Signature,
@@ -65,8 +69,6 @@ use datafusion_macros::user_doc;
 use half::f16;
 use std::mem::size_of_val;
 use std::ops::Deref;
-use arrow::row::{OwnedRow, RowConverter, SortField};
-use crate::min_max::min_max_generic::{GenericMaxAccumulator, GenericMinAccumulator, GenericSlidingMaxAccumulator, GenericSlidingMinAccumulator};
 
 fn get_min_max_result_type(input_types: &[DataType]) -> Result<Vec<DataType>> {
     // make sure that the input types only has one element.
@@ -87,14 +89,6 @@ fn get_min_max_result_type(input_types: &[DataType]) -> Result<Vec<DataType>> {
         // For example, the `Struct` and `Map` type are not supported in the MIN and MAX function
         _ => Ok(input_types.to_vec()),
     }
-}
-
-fn convert_row_to_scalar(row_converter: &RowConverter, owned_row: &OwnedRow) -> Result<ScalarValue> {
-    // Convert the row back to array so we can return it
-    let converted = row_converter.convert_rows(vec![owned_row.row()])?;
-
-    // Get the first value from the array (as we only have one row)
-    ScalarValue::try_from_array(converted[0].deref(), 0)
 }
 
 #[user_doc(
@@ -242,7 +236,9 @@ impl AggregateUDFImpl for Max {
 
     fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
         if acc_args.return_type.is_nested() {
-            Ok(Box::new(GenericMaxAccumulator::try_new(acc_args.return_type)?))
+            Ok(Box::new(GenericMaxAccumulator::try_new(
+                acc_args.return_type,
+            )?))
         } else {
             Ok(Box::new(MaxAccumulator::try_new(acc_args.return_type)?))
         }
@@ -353,7 +349,9 @@ impl AggregateUDFImpl for Max {
         args: AccumulatorArgs,
     ) -> Result<Box<dyn Accumulator>> {
         if args.return_type.is_nested() {
-            Ok(Box::new(GenericSlidingMaxAccumulator::try_new(args.return_type)?))
+            Ok(Box::new(GenericSlidingMaxAccumulator::try_new(
+                args.return_type,
+            )?))
         } else {
             Ok(Box::new(SlidingMaxAccumulator::try_new(args.return_type)?))
         }
@@ -1071,7 +1069,9 @@ impl AggregateUDFImpl for Min {
 
     fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
         if acc_args.return_type.is_nested() {
-            Ok(Box::new(GenericMinAccumulator::try_new(acc_args.return_type)?))
+            Ok(Box::new(GenericMinAccumulator::try_new(
+                acc_args.return_type,
+            )?))
         } else {
             Ok(Box::new(MinAccumulator::try_new(acc_args.return_type)?))
         }
@@ -1182,7 +1182,9 @@ impl AggregateUDFImpl for Min {
         args: AccumulatorArgs,
     ) -> Result<Box<dyn Accumulator>> {
         if args.return_type.is_nested() {
-            Ok(Box::new(GenericSlidingMinAccumulator::try_new(args.return_type)?))
+            Ok(Box::new(GenericSlidingMinAccumulator::try_new(
+                args.return_type,
+            )?))
         } else {
             Ok(Box::new(SlidingMinAccumulator::try_new(args.return_type)?))
         }
