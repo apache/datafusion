@@ -145,7 +145,7 @@ prost-derive = "0.13.1"
 rand = "0.8"
 recursive = "0.1.1"
 regex = "1.8"
-rstest = "0.23.0"
+rstest = "0.24.0"
 serde_json = "1"
 sqlparser = { version = "0.53.0", features = ["visitor"] }
 tempfile = "3"
