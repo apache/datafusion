@@ -44,7 +44,7 @@ use datafusion_macros::user_doc;
 | data_fusion                                      |
 +--------------------------------------------------+
 ```"#,
-        argument(
+    argument(
         name = "separator",
         description = "Separator to insert between concatenated strings."
     ),
