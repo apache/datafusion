@@ -1325,7 +1325,6 @@ impl SessionContext {
             .build()?,
         ))
     }
-
     /// Create a [`DataFrame`] for reading a [`Vec[`RecordBatch`]`]
     pub fn read_batches(
         &self,

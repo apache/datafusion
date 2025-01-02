@@ -27,6 +27,7 @@ pub mod csv;
 pub mod file_compression_type;
 pub mod json;
 pub mod options;
+#[cfg(feature = "parquet")]
 pub mod parquet;
 pub mod write;
 
@@ -48,6 +49,7 @@ use datafusion_common::{internal_err, not_impl_err, GetExt};
 use datafusion_expr::Expr;
 use datafusion_physical_expr::PhysicalExpr;
 
+use crate::datasource::file_format::parquet::ParquetFormat;
 use async_trait::async_trait;
 use bytes::{Buf, Bytes};
 use datafusion_physical_expr_common::sort_expr::LexRequirement;
@@ -410,6 +412,11 @@ pub fn file_type_to_format(
         Some(source) => Ok(Arc::clone(&source.file_format_factory)),
         _ => internal_err!("FileType was not DefaultFileType"),
     }
+}
+
+/// Check if the file format is parquet
+pub fn is_file_parquet_format(file_format: &Arc<dyn FileType>) -> bool {
+    file_format.get_ext() == ParquetFormat::default().get_ext()
 }
 
 /// Create a new field with the specified data type, copying the other
