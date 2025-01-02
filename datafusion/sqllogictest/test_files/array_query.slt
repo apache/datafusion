@@ -108,11 +108,15 @@ SELECT * FROM data WHERE column2 is not distinct from null;
 # Aggregates
 ###########
 
-query error Internal error: Min/Max accumulator not implemented for type List
+query ?
 SELECT min(column1) FROM data;
+----
+[1, 2, 3]
 
-query error Internal error: Min/Max accumulator not implemented for type List
+query ?
 SELECT max(column1) FROM data;
+----
+[2, 3]
 
 query I
 SELECT count(column1) FROM data;
