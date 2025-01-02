@@ -15,28 +15,34 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::{sync::Arc, vec};
+use std::sync::Arc;
 
+use arrow_schema::{DataType, Field, Schema};
 use datafusion::{
     assert_batches_eq,
     datasource::{
         file_format::file_compression_type::FileCompressionType,
         listing::PartitionedFile,
         object_store::ObjectStoreUrl,
-        physical_plan::{CsvConfig, CsvOpener, FileScanConfig, FileStream},
+        physical_plan::{CsvConfig, CsvOpener, FileScanConfig, FileStream, JsonOpener},
     },
     error::Result,
     physical_plan::metrics::ExecutionPlanMetricsSet,
     test_util::aggr_test_schema,
 };
-
 use futures::StreamExt;
-use object_store::local::LocalFileSystem;
+use object_store::{local::LocalFileSystem, memory::InMemory, ObjectStore};
 
-/// This example demonstrates a scanning against an Arrow data source (CSV) and
+/// This example demonstrates a scanning against an Arrow data source (CSV/JSON) and
 /// fetching results
 #[tokio::main]
 async fn main() -> Result<()> {
+    csv_opener().await?;
+    json_opener().await?;
+    Ok(())
+}
+
+async fn csv_opener() -> Result<()> {
     let object_store = Arc::new(LocalFileSystem::new());
     let schema = aggr_test_schema();
 
@@ -59,18 +65,17 @@ async fn main() -> Result<()> {
 
     let path = std::path::Path::new(&path).canonicalize()?;
 
-    let scan_config =
-        FileScanConfig::new(ObjectStoreUrl::local_filesystem(), schema.clone())
-            .with_projection(Some(vec![12, 0]))
-            .with_limit(Some(5))
-            .with_file(PartitionedFile::new(path.display().to_string(), 10));
+    let scan_config = FileScanConfig::new(ObjectStoreUrl::local_filesystem(), schema)
+        .with_projection(Some(vec![12, 0]))
+        .with_limit(Some(5))
+        .with_file(PartitionedFile::new(path.display().to_string(), 10));
 
-    let result =
-        FileStream::new(&scan_config, 0, opener, &ExecutionPlanMetricsSet::new())
-            .unwrap()
-            .map(|b| b.unwrap())
-            .collect::<Vec<_>>()
-            .await;
+    let mut result = vec![];
+    let mut stream =
+        FileStream::new(&scan_config, 0, opener, &ExecutionPlanMetricsSet::new())?;
+    while let Some(batch) = stream.next().await.transpose()? {
+        result.push(batch);
+    }
     assert_batches_eq!(
         &[
             "+--------------------------------+----+",
@@ -82,6 +87,57 @@ async fn main() -> Result<()> {
             "| 0keZ5G8BffGwgF2RwQD59TFzMStxCB | a  |",
             "| Ig1QcuKsjHXkproePdERo2w0mYzIqd | b  |",
             "+--------------------------------+----+",
+        ],
+        &result
+    );
+    Ok(())
+}
+
+async fn json_opener() -> Result<()> {
+    let object_store = InMemory::new();
+    let path = object_store::path::Path::from("demo.json");
+    let data = bytes::Bytes::from(
+        r#"{"num":5,"str":"test"}
+        {"num":2,"str":"hello"}
+        {"num":4,"str":"foo"}"#,
+    );
+
+    object_store.put(&path, data.into()).await?;
+
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("num", DataType::Int64, false),
+        Field::new("str", DataType::Utf8, false),
+    ]));
+
+    let projected = Arc::new(schema.clone().project(&[1, 0])?);
+
+    let opener = JsonOpener::new(
+        8192,
+        projected,
+        FileCompressionType::UNCOMPRESSED,
+        Arc::new(object_store),
+    );
+
+    let scan_config = FileScanConfig::new(ObjectStoreUrl::local_filesystem(), schema)
+        .with_projection(Some(vec![1, 0]))
+        .with_limit(Some(5))
+        .with_file(PartitionedFile::new(path.to_string(), 10));
+
+    let mut stream =
+        FileStream::new(&scan_config, 0, opener, &ExecutionPlanMetricsSet::new())?;
+    let mut result = vec![];
+    while let Some(batch) = stream.next().await.transpose()? {
+        result.push(batch);
+    }
+    assert_batches_eq!(
+        &[
+            "+-------+-----+",
+            "| str   | num |",
+            "+-------+-----+",
+            "| test  | 5   |",
+            "| hello | 2   |",
+            "| foo   | 4   |",
+            "+-------+-----+",
         ],
         &result
     );
