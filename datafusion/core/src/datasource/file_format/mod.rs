@@ -49,7 +49,6 @@ use datafusion_common::{internal_err, not_impl_err, GetExt};
 use datafusion_expr::Expr;
 use datafusion_physical_expr::PhysicalExpr;
 
-use crate::datasource::file_format::parquet::ParquetFormat;
 use async_trait::async_trait;
 use bytes::{Buf, Bytes};
 use datafusion_physical_expr_common::sort_expr::LexRequirement;
@@ -416,7 +415,7 @@ pub fn file_type_to_format(
 
 /// Check if the file format is parquet
 pub fn is_file_parquet_format(file_format: &Arc<dyn FileType>) -> bool {
-    file_format.get_ext() == ParquetFormat::default().get_ext()
+    file_format.get_ext() == "parquet"
 }
 
 /// Create a new field with the specified data type, copying the other
