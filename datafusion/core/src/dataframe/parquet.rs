@@ -66,24 +66,10 @@ impl DataFrame {
             );
         }
 
-        let format = match writer_options {
-            Some(mut parquet_opts) => {
-                if !options.sort_by.clone().is_empty() {
-                    parquet_opts.key_value_metadata.insert(
-                        "DATAFUSION_ORDER_BY".to_string(),
-                        Some(
-                            options
-                                .sort_by
-                                .iter()
-                                .map(|sort| sort.to_string())
-                                .collect::<Vec<String>>()
-                                .join(", "),
-                        ),
-                    );
-                }
-                Arc::new(ParquetFormatFactory::new_with_options(parquet_opts))
-            }
-            None => Arc::new(ParquetFormatFactory::new()),
+        let format = if let Some(parquet_opts) = writer_options {
+            Arc::new(ParquetFormatFactory::new_with_options(parquet_opts))
+        } else {
+            Arc::new(ParquetFormatFactory::new())
         };
 
         let file_type = format_as_file_type(format);

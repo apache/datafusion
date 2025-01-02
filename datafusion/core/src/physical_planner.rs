@@ -87,11 +87,13 @@ use datafusion_physical_plan::placeholder_row::PlaceholderRowExec;
 use datafusion_physical_plan::unnest::ListUnnest;
 use datafusion_sql::utils::window_expr_common_partition_keys;
 
+use crate::datasource::file_format::parquet::ParquetFormatFactory;
 use async_trait::async_trait;
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use futures::{StreamExt, TryStreamExt};
 use itertools::{multiunzip, Itertools};
 use log::{debug, trace};
+use regex::Regex;
 use sqlparser::ast::NullTreatment;
 use tokio::sync::Mutex;
 
@@ -532,8 +534,38 @@ impl DefaultPhysicalPlanner {
                     keep_partition_by_columns,
                 };
 
-                let sink_format = file_type_to_format(file_type)?
-                    .create(session_state, source_option_tuples)?;
+                let mut source_option_tuples = source_option_tuples.clone();
+
+                let file_factory = file_type_to_format(file_type)?;
+
+                if file_factory
+                    .as_ref()
+                    .as_any()
+                    .downcast_ref::<ParquetFormatFactory>()
+                    .is_some()
+                {
+                    let sort = match input.as_ref() {
+                        LogicalPlan::Sort(Sort { expr, .. }) => Some(
+                            expr.iter()
+                                .map(|e| {
+                                    let re = Regex::new(r"^[^.]+\.(.*)$").unwrap();
+                                    re.replace(e.to_string().as_str(), "$1").to_string()
+                                })
+                                .collect::<Vec<String>>()
+                                .join(", "),
+                        ),
+                        _ => None,
+                    };
+                    if sort.is_some() {
+                        source_option_tuples.insert(
+                            "format.metadata::DATAFUSION_ORDER_BY".to_string(),
+                            sort.unwrap().to_string(),
+                        );
+                    }
+                }
+
+                let sink_format =
+                    file_factory.create(session_state, &source_option_tuples)?;
 
                 sink_format
                     .create_writer_physical_plan(input_exec, session_state, config, None)

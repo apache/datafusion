@@ -632,3 +632,46 @@ COPY source_table  to '/tmp/table.parquet' (row_group_size 55 + 102);
 # Copy using execution.keep_partition_by_columns with an invalid value
 query error DataFusion error: Invalid or Unsupported Configuration: provided value for 'execution.keep_partition_by_columns' was not recognized: "invalid_value"
 COPY source_table  to '/tmp/table.parquet' OPTIONS (execution.keep_partition_by_columns invalid_value);
+
+
+
+# Copy from table with orderer by clause
+
+statement ok
+create table unsorted_source_table(col1 integer, col2 varchar) as values (8, 'Done'), (1, 'Foo'), (8, 'Cat'), (2, 'Bar');
+
+query TT
+EXPLAIN COPY (select * from unsorted_source_table order by col1, col2) to 'test_files/scratch/copy/sortTable/' STORED AS PARQUET
+----
+logical_plan
+01)CopyTo: format=parquet output_url=test_files/scratch/copy/sortTable/ options: ()
+02)--Sort: unsorted_source_table.col1 ASC NULLS LAST, unsorted_source_table.col2 ASC NULLS LAST
+03)----TableScan: unsorted_source_table projection=[col1, col2]
+physical_plan
+01)DataSinkExec: sink=ParquetSink(file_groups=[])
+02)--SortExec: expr=[col1@0 ASC NULLS LAST, col2@1 ASC NULLS LAST], preserve_partitioning=[false]
+03)----MemoryExec: partitions=1, partition_sizes=[1]
+
+query I
+COPY (select * from unsorted_source_table order by col1, col2) to 'test_files/scratch/copy/sortTable/' STORED AS PARQUET
+----
+4
+
+statement ok
+CREATE EXTERNAL TABLE sortedParquetTable STORED AS PARQUET
+LOCATION 'test_files/scratch/copy/sortTable/'
+
+query TT
+explain select * from sortedParquetTable;
+----
+logical_plan TableScan: sortedparquettable projection=[col1, col2]
+physical_plan ParquetExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/copy/sortTable/uEHRseUMiFeVfsQk_0.parquet]]}, projection=[col1, col2], output_ordering=[col1@0 ASC NULLS LAST, col2@1 ASC NULLS LAST]
+
+
+query IT
+select * from sortedParquetTable;
+----
+1 Foo
+2 Bar
+8 Cat
+8 Done
