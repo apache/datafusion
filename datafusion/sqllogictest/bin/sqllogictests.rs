@@ -28,33 +28,21 @@ use indicatif::{
 use itertools::Itertools;
 use log::Level::{Info, Warn};
 use log::{info, log_enabled, warn};
-#[cfg(feature = "postgres")]
-use once_cell::sync::Lazy;
 use sqllogictest::{
     parse_file, strict_column_validator, AsyncDB, Condition, Normalizer, Record,
     Validator,
 };
+
 #[cfg(feature = "postgres")]
-use std::env::set_var;
+use crate::postgres_container::{
+    initialize_postgres_container, terminate_postgres_container,
+};
 use std::ffi::OsStr;
 use std::fs;
-#[cfg(feature = "postgres")]
-use std::future::Future;
 use std::path::{Path, PathBuf};
+
 #[cfg(feature = "postgres")]
-use std::{env, thread};
-#[cfg(feature = "postgres")]
-use testcontainers::core::IntoContainerPort;
-#[cfg(feature = "postgres")]
-use testcontainers::runners::AsyncRunner;
-#[cfg(feature = "postgres")]
-use testcontainers::ImageExt;
-#[cfg(feature = "postgres")]
-use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
-#[cfg(feature = "postgres")]
-use tokio::sync::{mpsc, Mutex};
-#[cfg(feature = "postgres")]
-use ContainerCommands::{FetchHost, FetchPort};
+mod postgres_container;
 
 const TEST_DIRECTORY: &str = "test_files/";
 const DATAFUSION_TESTING_TEST_DIRECTORY: &str = "../../datafusion-testing/data/";
@@ -170,31 +158,7 @@ async fn run_tests() -> Result<()> {
     options.warn_on_ignored();
 
     #[cfg(feature = "postgres")]
-    let start_pg_database = options.postgres_runner && !is_pg_uri_set();
-    #[cfg(feature = "postgres")]
-    if start_pg_database {
-        info!("Starting postgres db ...");
-
-        thread::spawn(|| {
-            execute_blocking(start_postgres(
-                &POSTGRES_IN,
-                &POSTGRES_HOST,
-                &POSTGRES_PORT,
-                &POSTGRES_STOPPED,
-            ))
-        });
-
-        POSTGRES_IN.tx.send(FetchHost).unwrap();
-        let db_host = POSTGRES_HOST.rx.lock().await.recv().await.unwrap();
-
-        POSTGRES_IN.tx.send(FetchPort).unwrap();
-        let db_port = POSTGRES_PORT.rx.lock().await.recv().await.unwrap();
-
-        let pg_uri = format!("postgresql://postgres:postgres@{db_host}:{db_port}/test");
-        info!("Postgres uri is {pg_uri}");
-
-        set_var("PG_URI", pg_uri);
-    }
+    initialize_postgres_container(&options).await?;
 
     // Run all tests in parallel, reporting failures at the end
     //
@@ -277,11 +241,7 @@ async fn run_tests() -> Result<()> {
     m.println(format!("Completed in {}", HumanDuration(start.elapsed())))?;
 
     #[cfg(feature = "postgres")]
-    if start_pg_database {
-        println!("Stopping postgres db ...");
-        POSTGRES_IN.tx.send(ContainerCommands::Stop).unwrap_or(());
-        POSTGRES_STOPPED.rx.lock().await.recv().await;
-    }
+    terminate_postgres_container().await?;
 
     // report on any errors
     if !errors.is_empty() {
@@ -291,14 +251,6 @@ async fn run_tests() -> Result<()> {
         exec_err!("{} failures", errors.len())
     } else {
         Ok(())
-    }
-}
-
-#[cfg(feature = "postgres")]
-fn is_pg_uri_set() -> bool {
-    match env::var("PG_URI") {
-        Ok(_) => true,
-        Err(_) => false,
     }
 }
 
@@ -758,87 +710,3 @@ impl Options {
         }
     }
 }
-
-#[cfg(feature = "postgres")]
-pub async fn start_postgres(
-    in_channel: &Channel<ContainerCommands>,
-    host_channel: &Channel<String>,
-    port_channel: &Channel<u16>,
-    stopped_channel: &Channel<()>,
-) {
-    info!("Starting postgres test container with user postgres/postgres and db test");
-
-    let container = testcontainers_modules::postgres::Postgres::default()
-        .with_user("postgres")
-        .with_password("postgres")
-        .with_db_name("test")
-        .with_mapped_port(16432, 5432.tcp())
-        .with_tag("17-alpine")
-        .start()
-        .await
-        .unwrap();
-    // uncomment this if you are running docker in docker
-    // let host = "host.docker.internal".to_string();
-    let host = container.get_host().await.unwrap().to_string();
-    let port = container.get_host_port_ipv4(5432).await.unwrap();
-
-    let mut rx = in_channel.rx.lock().await;
-    while let Some(command) = rx.recv().await {
-        match command {
-            FetchHost => host_channel.tx.send(host.clone()).unwrap(),
-            FetchPort => port_channel.tx.send(port).unwrap(),
-            ContainerCommands::Stop => {
-                container.stop().await.unwrap();
-                stopped_channel.tx.send(()).unwrap();
-                rx.close();
-            }
-        }
-    }
-}
-
-#[cfg(feature = "postgres")]
-#[derive(Debug)]
-pub enum ContainerCommands {
-    FetchHost,
-    FetchPort,
-    Stop,
-}
-
-#[cfg(feature = "postgres")]
-pub struct Channel<T> {
-    pub tx: UnboundedSender<T>,
-    pub rx: Mutex<UnboundedReceiver<T>>,
-}
-
-#[cfg(feature = "postgres")]
-pub fn channel<T>() -> Channel<T> {
-    let (tx, rx) = mpsc::unbounded_channel();
-    Channel {
-        tx,
-        rx: Mutex::new(rx),
-    }
-}
-
-#[cfg(feature = "postgres")]
-pub fn execute_blocking<F: Future>(f: F) {
-    tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .unwrap()
-        .block_on(f);
-}
-
-#[cfg(feature = "postgres")]
-pub struct HostPort {
-    pub host: String,
-    pub port: u16,
-}
-
-#[cfg(feature = "postgres")]
-static POSTGRES_IN: Lazy<Channel<ContainerCommands>> = Lazy::new(channel);
-#[cfg(feature = "postgres")]
-static POSTGRES_HOST: Lazy<Channel<String>> = Lazy::new(channel);
-#[cfg(feature = "postgres")]
-static POSTGRES_PORT: Lazy<Channel<u16>> = Lazy::new(channel);
-#[cfg(feature = "postgres")]
-static POSTGRES_STOPPED: Lazy<Channel<()>> = Lazy::new(channel);

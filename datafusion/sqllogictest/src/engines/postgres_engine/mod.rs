@@ -215,7 +215,6 @@ fn no_quotes(t: &str) -> &str {
 fn schema_name(relative_path: &Path) -> String {
     relative_path
         .to_string_lossy()
-        .to_string()
         .chars()
         .filter(|ch| ch.is_ascii_alphanumeric())
         .collect::<String>()
