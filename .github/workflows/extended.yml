@@ -39,7 +39,6 @@ jobs:
     runs-on: ubuntu-latest
     container:
       image: amd64/rust
-    if: github.event.pull_request.merged == true
     steps:
       - uses: actions/checkout@v4
         with:
