@@ -132,8 +132,8 @@ pub fn check_plan_sanity(
 
     for ((idx, child), sort_req, dist_req) in izip!(
         plan.children().into_iter().enumerate(),
-        plan.required_input_ordering().into_iter(),
-        plan.required_input_distribution().into_iter()
+        plan.required_input_ordering(),
+        plan.required_input_distribution(),
     ) {
         let child_eq_props = child.equivalence_properties();
         if let Some(sort_req) = sort_req {

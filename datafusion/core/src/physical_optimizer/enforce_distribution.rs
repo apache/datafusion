@@ -1208,7 +1208,7 @@ fn ensure_distribution(
     // We store the updated children in `new_children`.
     let children = izip!(
         children.into_iter(),
-        plan.required_input_ordering().into_iter(),
+        plan.required_input_ordering(),
         plan.maintains_input_order(),
         repartition_status_flags.into_iter()
     )
