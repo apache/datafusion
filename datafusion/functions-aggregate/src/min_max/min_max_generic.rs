@@ -171,6 +171,7 @@ where Helper: GenericMinMaxAccumulatorHelper
     }
 }
 
+/// Helper trait for sliding min/max accumulators to avoid code duplication
 trait GenericSlidingMinMaxAccumulatorHelper: Debug + Default {
     fn push(&mut self, row: OwnedRow);
 
