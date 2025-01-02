@@ -1980,7 +1980,6 @@ mod tests {
     use arrow::util::pretty::pretty_format_batches;
     use arrow_array::TimestampNanosecondArray;
     use arrow_schema::TimeUnit;
-    use datafusion_common::config::TableParquetOptions;
     use datafusion_common::{
         assert_batches_eq, assert_contains, assert_not_contains, Constraint, Constraints,
         ScalarValue,
@@ -4373,7 +4372,7 @@ mod tests {
                 file.to_str().unwrap(),
                 DataFrameWriteOptions::new()
                     .with_sort_by(vec![col("timestamp").sort(true, false)]),
-                Some(TableParquetOptions::new()),
+                None,
             )
             .await?;
 
@@ -4412,7 +4411,7 @@ mod tests {
                     col("timestamp").sort(true, false),
                     col("id").sort(true, false),
                 ]),
-                Some(TableParquetOptions::new()),
+                None,
             )
             .await?;
 
@@ -4469,11 +4468,7 @@ mod tests {
 
         write_df
             .clone()
-            .write_parquet(
-                file.to_str().unwrap(),
-                DataFrameWriteOptions::new(),
-                Some(TableParquetOptions::new()),
-            )
+            .write_parquet(file.to_str().unwrap(), DataFrameWriteOptions::new(), None)
             .await?;
 
         // Create the table without with order
