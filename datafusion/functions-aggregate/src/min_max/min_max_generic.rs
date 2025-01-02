@@ -1,3 +1,20 @@
+// Licensed to the Apache Software Foundation (ASF) under one
+// or more contributor license agreements.  See the NOTICE file
+// distributed with this work for additional information
+// regarding copyright ownership.  The ASF licenses this file
+// to you under the Apache License, Version 2.0 (the
+// "License"); you may not use this file except in compliance
+// with the License.  You may obtain a copy of the License at
+//
+//   http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing,
+// software distributed under the License is distributed on an
+// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+// KIND, either express or implied.  See the License for the
+// specific language governing permissions and limitations
+// under the License.
+
 use crate::min_max::{MovingMax, MovingMin};
 use arrow::array::ArrayRef;
 use arrow::datatypes::DataType;
@@ -331,5 +348,144 @@ impl<MovingWindowHelper: GenericSlidingMinMaxAccumulatorHelper> Accumulator
 
     fn size(&self) -> usize {
         size_of_val(self) - size_of_val(&self.row_converter) + self.row_converter.size()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::min_max::{GenericMaxAccumulator, GenericMinAccumulator};
+    use arrow::array::builder::{BooleanBuilder, GenericListBuilder};
+    use arrow::array::types::Int32Type;
+    use arrow::array::{ArrayRef, ListArray};
+    use arrow_schema::{DataType, Field};
+    use datafusion_common::ScalarValue;
+    use datafusion_expr::Accumulator;
+    use std::ops::Deref;
+    use std::sync::Arc;
+
+    trait CreateArrayAndScalar {
+        fn get_data_type() -> DataType;
+
+        fn create_array(&self) -> ArrayRef;
+        fn create_scalar(&self) -> ScalarValue;
+    }
+
+    impl CreateArrayAndScalar for Vec<Option<Vec<Option<i32>>>> {
+        fn get_data_type() -> DataType {
+            DataType::List(Arc::new(Field::new_list_field(DataType::Int32, true)))
+        }
+
+        fn create_array(&self) -> ArrayRef {
+            Arc::new(ListArray::from_iter_primitive::<Int32Type, _, _>(
+                self.iter().cloned(),
+            ))
+        }
+
+        fn create_scalar(&self) -> ScalarValue {
+            let array = self.create_array();
+            ScalarValue::try_from_array(array.deref(), 0).unwrap()
+        }
+    }
+
+    impl CreateArrayAndScalar for Vec<Option<Vec<Option<bool>>>> {
+        fn get_data_type() -> DataType {
+            DataType::List(Arc::new(Field::new_list_field(DataType::Boolean, true)))
+        }
+
+        fn create_array(&self) -> ArrayRef {
+            let mut builder = GenericListBuilder::<i32, _>::new(BooleanBuilder::new());
+
+            builder.extend(self.iter().cloned());
+
+            Arc::new(builder.finish())
+        }
+
+        fn create_scalar(&self) -> ScalarValue {
+            let array = self.create_array();
+            ScalarValue::try_from_array(array.deref(), 0).unwrap()
+        }
+    }
+
+    fn run_test<T: CreateArrayAndScalar>(
+        acc: &mut dyn Accumulator,
+        values: &[T],
+        expected: &T,
+    ) -> (ScalarValue, ScalarValue) {
+        for batch in values.iter() {
+            let batch = batch.create_array();
+            acc.update_batch(&[batch]).unwrap();
+        }
+        let result = acc.evaluate().unwrap();
+        let expected_scalar = expected.create_scalar();
+
+        (result, expected_scalar)
+    }
+
+    fn test_min_max<T: CreateArrayAndScalar + Clone>(
+        values: &[T],
+        expected_min: &T,
+        expected_max: &T,
+    ) {
+        {
+            let mut acc = GenericMinAccumulator::try_new(&T::get_data_type()).unwrap();
+            let (result, expected_scalar) = run_test(&mut acc, values, expected_min);
+            assert_eq!(
+                result, expected_scalar,
+                "min failed, expected: {expected_scalar}, got: {result}"
+            );
+        }
+        {
+            let mut acc = GenericMaxAccumulator::try_new(&T::get_data_type()).unwrap();
+            let (result, expected_scalar) = run_test(&mut acc, values, expected_max);
+            assert_eq!(
+                result, expected_scalar,
+                "max failed, expected: {expected_scalar}, got: {result}"
+            );
+        }
+    }
+
+    #[test]
+    fn basic_i32_list() {
+        let values = vec![
+            Some(vec![Some(107)]),
+            None,
+            Some(vec![None, None, Some(45), Some(71), None]),
+            Some(vec![None, None]),
+        ];
+        let expected_min = Some(vec![None, None]);
+        let expected_max = Some(vec![Some(107)]);
+
+        test_min_max(&[values], &vec![expected_min], &vec![expected_max]);
+    }
+
+    #[test]
+    fn basic_bool_list() {
+        let values = vec![
+            Some(vec![]),
+            Some(vec![Some(true)]),
+            Some(vec![]),
+            Some(vec![
+                Some(true),
+                Some(false),
+                Some(true),
+                Some(false),
+                Some(false),
+            ]),
+            Some(vec![Some(true), None]),
+            Some(vec![None, None, None]),
+            None,
+            Some(vec![Some(false), Some(true), None, None]),
+            Some(vec![None]),
+            Some(vec![Some(true)]),
+        ];
+        let expected_min = Some(vec![]);
+        let expected_max = Some(vec![
+            Some(true),
+            Some(false),
+            Some(true),
+            Some(false),
+            Some(false),
+        ]);
+        test_min_max(&[values], &vec![expected_min], &vec![expected_max]);
     }
 }
