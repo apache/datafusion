@@ -552,7 +552,9 @@ fn hash_join_swap_subrule(
 /// [`JoinType::Full`], [`JoinType::Right`], [`JoinType::RightAnti`] and
 /// [`JoinType::RightSemi`] can not run with an unbounded left side, even if
 /// we swap join sides. Therefore, we do not consider them here.
-fn swap_join_according_to_unboundedness(
+/// This function is crate public as it is useful for downstream projects
+/// to implement, or experiment with, their own join selection rules.
+pub(crate) fn swap_join_according_to_unboundedness(
     hash_join: &HashJoinExec,
 ) -> Result<Arc<dyn ExecutionPlan>> {
     let partition_mode = hash_join.partition_mode();
