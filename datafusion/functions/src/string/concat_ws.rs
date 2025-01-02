@@ -44,11 +44,13 @@ use datafusion_macros::user_doc;
 | data_fusion                                      |
 +--------------------------------------------------+
 ```"#,
-    standard_argument(name = "str", prefix = "String"),
     argument(
         name = "separator",
         description = "Separator to insert between concatenated strings."
     ),
+    argument(
+        name = "str", 
+        description = "String expression to operate on. Can be a constant, column, or function, and any combination of operators."),
     argument(
         name = "str_n",
         description = "Subsequent string expressions to concatenate."
