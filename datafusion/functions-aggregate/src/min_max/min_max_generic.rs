@@ -3,14 +3,22 @@ use arrow::datatypes::DataType;
 use arrow_schema::SortOptions;
 use datafusion_common::Result;
 use std::fmt::Debug;
-
-use arrow::row::{OwnedRow, RowConverter, SortField};
+use std::marker::PhantomData;
+use arrow::row::{OwnedRow, Row, RowConverter, SortField};
 use datafusion_common::ScalarValue;
 use datafusion_expr::Accumulator;
 use datafusion_expr::GroupsAccumulator;
 use std::mem::size_of_val;
 use std::ops::Deref;
 use crate::min_max::{MovingMax, MovingMin};
+
+
+
+pub(crate) type GenericMinAccumulator = GenericMinMaxAccumulator<MinAccumulatorHelper>;
+pub(crate) type GenericMaxAccumulator = GenericMinMaxAccumulator<MaxAccumulatorHelper>;
+
+pub(crate) type GenericSlidingMinAccumulator = GenericSlidingMinMaxAccumulator<GenericMovingMin>;
+pub(crate) type GenericSlidingMaxAccumulator = GenericSlidingMinMaxAccumulator<GenericMovingMax>;
 
 fn convert_row_to_scalar(row_converter: &RowConverter, owned_row: &OwnedRow) -> Result<ScalarValue> {
     // Convert the row back to array so we can return it
@@ -20,24 +28,74 @@ fn convert_row_to_scalar(row_converter: &RowConverter, owned_row: &OwnedRow) -> 
     ScalarValue::try_from_array(converted[0].deref(), 0)
 }
 
-/// Accumulator for min of lists
+/// Helper trait for min/max accumulators to avoid code duplication
+trait GenericMinMaxAccumulatorHelper: Debug {
+
+    /// Return true if the new value should replace the current value
+    /// for minimum the new value should be less than the current value
+    /// for maximum the new value should be greater than the current value
+    fn should_replace<'a>(current: &Row<'a>, possibly_new: &Row<'a>) -> bool;
+
+    /// Get the minimum/maximum value from an iterator
+    fn get_value_from_iter<Item: Ord + Sized, I: Iterator<Item = Item>>(iter: I) -> Option<Item>;
+}
+
+#[derive(Debug)]
+struct MinAccumulatorHelper;
+
+impl GenericMinMaxAccumulatorHelper for MinAccumulatorHelper {
+
+    /// Should replace the current value if the new value is less than the current value
+    #[inline]
+    fn should_replace<'a>(current: &Row<'a>, possibly_new: &Row<'a>) -> bool {
+        current > possibly_new
+    }
+
+    #[inline]
+    fn get_value_from_iter<Item: Ord + Sized, I: Iterator<Item=Item>>(iter: I) -> Option<Item> {
+        iter.min()
+    }
+}
+
+#[derive(Debug)]
+struct MaxAccumulatorHelper;
+
+impl GenericMinMaxAccumulatorHelper for MaxAccumulatorHelper {
+    /// Should replace the current value if the new value is greater than the current value
+    #[inline]
+    fn should_replace<'a>(current: &Row<'a>, possibly_new: &Row<'a>) -> bool {
+        current < possibly_new
+    }
+
+    #[inline]
+    fn get_value_from_iter<Item: Ord + Sized, I: Iterator<Item=Item>>(iter: I) -> Option<Item> {
+        iter.max()
+    }
+}
+
+/// Accumulator for min/max of lists
 /// this accumulator is using arrow-row as the internal representation and a way for comparing
 #[derive(Debug)]
-pub(crate) struct GenericMinAccumulator {
+pub(crate) struct GenericMinMaxAccumulator<Helper>
+where Helper: GenericMinMaxAccumulatorHelper
+{
     /// Convert the columns to row so we can compare them
     row_converter: RowConverter,
 
     /// The data type of the column
     data_type: DataType,
 
-    /// The current minimum value
-    min: Option<OwnedRow>,
+    /// The current minimum/maximum value
+    current_value: Option<OwnedRow>,
 
     /// Null row to use for fast filtering
     null_row: OwnedRow,
+
+    phantom_data: PhantomData<Helper>
 }
 
-impl GenericMinAccumulator {
+impl<Helper> GenericMinMaxAccumulator<Helper>
+where Helper: GenericMinMaxAccumulatorHelper {
     pub fn try_new(datatype: &DataType) -> Result<Self> {
         let converter = RowConverter::new(vec![(SortField::new_with_options(datatype.clone(), SortOptions {
             descending: false,
@@ -57,12 +115,15 @@ impl GenericMinAccumulator {
             row_converter: converter,
             null_row,
             data_type: datatype.clone(),
-            min: None,
+            current_value: None,
+            phantom_data: PhantomData
         })
     }
 }
 
-impl Accumulator for GenericMinAccumulator {
+impl<Helper> Accumulator for GenericMinMaxAccumulator<Helper>
+where Helper: GenericMinMaxAccumulatorHelper
+{
     fn state(&mut self) -> Result<Vec<ScalarValue>> {
         Ok(vec![self.evaluate()?])
     }
@@ -70,24 +131,24 @@ impl Accumulator for GenericMinAccumulator {
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
         let rows = self.row_converter.convert_columns(values)?;
 
-        let minimum_in_batch = rows
+        let wanted_value_in_batch = Helper::get_value_from_iter(rows
             .iter()
             // Filter out nulls
             .filter(|row| row != &self.null_row.row())
-            .min();
+        );
 
-        match (&self.min, minimum_in_batch) {
-            // Update the minimum if the current minium is greater than the batch minimum
-            (Some(current_val), Some(min_in_batch)) => {
-                if current_val.row() > min_in_batch {
-                    self.min = Some(min_in_batch.owned());
+        match (&self.current_value, wanted_value_in_batch) {
+            // Update the minimum/maximum based on the should replace logic
+            (Some(current_val), Some(current_val_in_batch)) => {
+                if Helper::should_replace(&current_val.row(), &current_val_in_batch) {
+                    self.current_value = Some(current_val_in_batch.owned());
                 }
             }
-            // First minimum for the accumulator
+            // First minimum/maximum for the accumulator
             (None, Some(new_value)) => {
-                self.min = Some(new_value.owned());
+                self.current_value = Some(new_value.owned());
             }
-            // If no minimum in batch (all nulls), do nothing
+            // If no minimum/maximum in batch (all nulls), do nothing
             (_, None) => {}
         }
 
@@ -100,9 +161,9 @@ impl Accumulator for GenericMinAccumulator {
 
     fn evaluate(&mut self) -> Result<ScalarValue> {
         // Get the current value or null if no value has been seen
-        let min = self.min.as_ref().unwrap_or(&self.null_row);
+        let current_value = self.current_value.as_ref().unwrap_or(&self.null_row);
 
-        convert_row_to_scalar(&self.row_converter, min)
+        convert_row_to_scalar(&self.row_converter, current_value)
     }
 
     fn size(&self) -> usize {
@@ -110,11 +171,62 @@ impl Accumulator for GenericMinAccumulator {
     }
 }
 
+trait GenericSlidingMinMaxAccumulatorHelper: Debug + Default {
+    fn push(&mut self, row: OwnedRow);
 
-/// Accumulator for max of lists
-/// this accumulator is using arrow-row as the internal representation and a way for comparing
+    fn pop(&mut self);
+
+    fn value(&self) -> Option<&OwnedRow>;
+}
+
 #[derive(Debug)]
-pub(crate) struct GenericMaxAccumulator {
+struct GenericMovingMin(MovingMin<OwnedRow>);
+
+impl Default for GenericMovingMin {
+    fn default() -> Self {
+        Self(MovingMin::default())
+    }
+}
+
+impl GenericSlidingMinMaxAccumulatorHelper for GenericMovingMin {
+    fn push(&mut self, row: OwnedRow) {
+        self.0.push(row);
+    }
+
+    fn pop(&mut self) {
+        self.0.pop();
+    }
+
+    fn value(&self) -> Option<&OwnedRow> {
+        self.0.min()
+    }
+}
+
+#[derive(Debug)]
+struct GenericMovingMax(MovingMax<OwnedRow>);
+
+impl Default for GenericMovingMax {
+    fn default() -> Self {
+        Self(MovingMax::default())
+    }
+}
+
+impl GenericSlidingMinMaxAccumulatorHelper for GenericMovingMax {
+    fn push(&mut self, row: OwnedRow) {
+        self.0.push(row);
+    }
+
+    fn pop(&mut self) {
+        self.0.pop();
+    }
+
+    fn value(&self) -> Option<&OwnedRow> {
+        self.0.max()
+    }
+}
+
+#[derive(Debug)]
+pub(crate) struct GenericSlidingMinMaxAccumulator<MovingWindowHelper: GenericSlidingMinMaxAccumulatorHelper> {
     /// Convert the columns to row so we can compare them
     row_converter: RowConverter,
 
@@ -122,13 +234,15 @@ pub(crate) struct GenericMaxAccumulator {
     data_type: DataType,
 
     /// The current minimum value
-    max: Option<OwnedRow>,
+    current_value: Option<OwnedRow>,
+
+    moving_helper: MovingWindowHelper,
 
     /// Null row to use for fast filtering
     null_row: OwnedRow,
 }
 
-impl GenericMaxAccumulator {
+impl<MovingWindowHelper: GenericSlidingMinMaxAccumulatorHelper> GenericSlidingMinMaxAccumulator<MovingWindowHelper> {
     pub fn try_new(datatype: &DataType) -> Result<Self> {
         let converter = RowConverter::new(vec![(SortField::new_with_options(datatype.clone(), SortOptions {
             descending: false,
@@ -148,107 +262,16 @@ impl GenericMaxAccumulator {
             row_converter: converter,
             null_row,
             data_type: datatype.clone(),
-            max: None,
+            current_value: None,
+            moving_helper: MovingWindowHelper::default(),
         })
     }
 }
 
-impl Accumulator for GenericMaxAccumulator {
-    fn state(&mut self) -> Result<Vec<ScalarValue>> {
-        Ok(vec![self.evaluate()?])
-    }
-
-    fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
-        let rows = self.row_converter.convert_columns(values)?;
-
-        let maximum_in_batch = rows
-            .iter()
-            // Filter out nulls
-            .filter(|row| row != &self.null_row.row())
-            .max();
-
-        match (&self.max, maximum_in_batch) {
-            // Update the maximum if the current max is less than the batch maximum
-            (Some(current_val), Some(max_in_batch)) => {
-                if current_val.row() < max_in_batch {
-                    self.max = Some(max_in_batch.owned());
-                }
-            }
-            // First maximum for the accumulator
-            (None, Some(new_value)) => {
-                self.max = Some(new_value.owned());
-            }
-            // If no maximum in batch (all nulls), do nothing
-            (_, None) => {}
-        }
-
-        Ok(())
-    }
-
-    fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
-        self.update_batch(states)
-    }
-
-    fn evaluate(&mut self) -> Result<ScalarValue> {
-        // Get the current value or null if no value has been seen
-        let max = self.max.as_ref().unwrap_or(&self.null_row);
-
-        convert_row_to_scalar(&self.row_converter, max)
-    }
-
-    fn size(&self) -> usize {
-        size_of_val(self) - size_of_val(&self.row_converter) + self.row_converter.size()
-    }
-}
-
-#[derive(Debug)]
-pub(crate) struct GenericSlidingMinAccumulator {
-
-    /// Convert the columns to row so we can compare them
-    row_converter: RowConverter,
-
-    /// The data type of the column
-    data_type: DataType,
-
-    /// The current minimum value
-    min: Option<OwnedRow>,
-
-    moving_min: MovingMin<OwnedRow>,
-
-    /// Null row to use for fast filtering
-    null_row: OwnedRow,
-}
-
-impl GenericSlidingMinAccumulator {
-    pub fn try_new(datatype: &DataType) -> Result<Self> {
-        let converter = RowConverter::new(vec![(SortField::new_with_options(datatype.clone(), SortOptions {
-            descending: false,
-            nulls_first: true,
-        }))])?;
-
-        // Create a null row to use for filtering out nulls from the input
-        let null_row = {
-            let null_array = ScalarValue::try_from(datatype)?.to_array_of_size(1)?;
-
-            let rows = converter.convert_columns(&[null_array])?;
-
-            rows.row(0).owned()
-        };
-
-        Ok(Self {
-            row_converter: converter,
-            null_row,
-            data_type: datatype.clone(),
-            min: None,
-            moving_min: MovingMin::new()
-        })
-    }
-}
-
-impl Accumulator for GenericSlidingMinAccumulator {
+impl<MovingWindowHelper: GenericSlidingMinMaxAccumulatorHelper> Accumulator for GenericSlidingMinMaxAccumulator<MovingWindowHelper> {
     fn state(&mut self) -> Result<Vec<ScalarValue>> {
         // Get the current value or null if no value has been seen
-        let min = self.min.as_ref().unwrap_or(&self.null_row);
+        let min = self.current_value.as_ref().unwrap_or(&self.null_row);
 
         Ok(vec![convert_row_to_scalar(&self.row_converter, min)?])
     }
@@ -261,9 +284,9 @@ impl Accumulator for GenericSlidingMinAccumulator {
             .iter()
             // Filter out nulls
             .filter(|row| row != &self.null_row.row())
-            .for_each(|row| self.moving_min.push(row.owned()));
+            .for_each(|row| self.moving_helper.push(row.owned()));
 
-        self.min = self.moving_min.min().cloned();
+        self.current_value = self.moving_helper.value().cloned();
         Ok(())
     }
 
@@ -276,10 +299,10 @@ impl Accumulator for GenericSlidingMinAccumulator {
             // Filter out nulls
             .filter(|row| row != &self.null_row.row())
             .for_each(|_| {
-                self.moving_min.pop();
+                self.moving_helper.pop();
             });
 
-        self.min = self.moving_min.min().cloned();
+        self.current_value = self.moving_helper.min().cloned();
 
         Ok(())
     }
@@ -290,9 +313,9 @@ impl Accumulator for GenericSlidingMinAccumulator {
 
     fn evaluate(&mut self) -> Result<ScalarValue> {
         // Get the current value or null if no value has been seen
-        let min = self.min.as_ref().unwrap_or(&self.null_row);
+        let current_value = self.current_value.as_ref().unwrap_or(&self.null_row);
 
-        convert_row_to_scalar(&self.row_converter, min)
+        convert_row_to_scalar(&self.row_converter, current_value)
     }
 
     fn supports_retract_batch(&self) -> bool {
@@ -304,106 +327,3 @@ impl Accumulator for GenericSlidingMinAccumulator {
     }
 }
 
-
-#[derive(Debug)]
-pub(crate) struct GenericSlidingMaxAccumulator {
-
-    /// Convert the columns to row so we can compare them
-    row_converter: RowConverter,
-
-    /// The data type of the column
-    data_type: DataType,
-
-    /// The current maximum value
-    max: Option<OwnedRow>,
-
-    moving_max: MovingMax<OwnedRow>,
-
-    /// Null row to use for fast filtering
-    null_row: OwnedRow,
-}
-
-impl GenericSlidingMaxAccumulator {
-    pub fn try_new(datatype: &DataType) -> Result<Self> {
-        let converter = RowConverter::new(vec![(SortField::new_with_options(datatype.clone(), SortOptions {
-            descending: false,
-            nulls_first: true,
-        }))])?;
-
-        // Create a null row to use for filtering out nulls from the input
-        let null_row = {
-            let null_array = ScalarValue::try_from(datatype)?.to_array_of_size(1)?;
-
-            let rows = converter.convert_columns(&[null_array])?;
-
-            rows.row(0).owned()
-        };
-
-        Ok(Self {
-            row_converter: converter,
-            null_row,
-            data_type: datatype.clone(),
-            max: None,
-            moving_max: MovingMax::new()
-        })
-    }
-}
-
-impl Accumulator for GenericSlidingMaxAccumulator {
-    fn state(&mut self) -> Result<Vec<ScalarValue>> {
-        // Get the current value or null if no value has been seen
-        let max = self.max.as_ref().unwrap_or(&self.null_row);
-
-        Ok(vec![convert_row_to_scalar(&self.row_converter, max)?])
-    }
-
-    fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
-        // TODO - should assert getting only one column?
-        let rows = self.row_converter.convert_columns(values)?;
-
-        rows
-            .iter()
-            // Filter out nulls
-            .filter(|row| row != &self.null_row.row())
-            .for_each(|row| self.moving_max.push(row.owned()));
-
-        self.max = self.moving_max.max().cloned();
-        Ok(())
-    }
-
-    fn retract_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
-        // TODO - should assert getting only one column?
-        let rows = self.row_converter.convert_columns(values)?;
-
-        rows
-            .iter()
-            // Filter out nulls
-            .filter(|row| row != &self.null_row.row())
-            .for_each(|_| {
-                self.moving_max.pop();
-            });
-
-        self.max = self.moving_max.max().cloned();
-
-        Ok(())
-    }
-
-    fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
-        self.update_batch(states)
-    }
-
-    fn evaluate(&mut self) -> Result<ScalarValue> {
-        // Get the current value or null if no value has been seen
-        let max = self.max.as_ref().unwrap_or(&self.null_row);
-
-        convert_row_to_scalar(&self.row_converter, max)
-    }
-
-    fn supports_retract_batch(&self) -> bool {
-        true
-    }
-
-    fn size(&self) -> usize {
-        size_of_val(self) - size_of_val(&self.row_converter) + self.row_converter.size()
-    }
-}
