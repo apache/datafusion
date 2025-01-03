@@ -20,7 +20,6 @@
 #[cfg(feature = "parquet")]
 mod parquet;
 
-use crate::arrow::array::{Float64Array, UInt32Array};
 use crate::arrow::record_batch::RecordBatch;
 use crate::arrow::util::pretty;
 use crate::datasource::file_format::csv::CsvFormatFactory;
@@ -29,22 +28,11 @@ use crate::datasource::file_format::json::JsonFormatFactory;
 use crate::datasource::{provider_as_source, MemTable, TableProvider};
 use crate::error::Result;
 use crate::execution::context::{SessionState, TaskContext};
-use crate::execution::memory_pool::FairSpillPool;
-use crate::execution::runtime_env::RuntimeEnvBuilder;
 use crate::execution::FunctionRegistry;
-use crate::functions_aggregate::min_max::{max_udaf, min_udaf};
 use crate::logical_expr::utils::find_window_exprs;
 use crate::logical_expr::{
     col, Expr, JoinType, LogicalPlan, LogicalPlanBuilder, Partitioning, TableType,
 };
-use crate::physical_expr::aggregate::AggregateExprBuilder;
-use crate::physical_expr::aggregate::AggregateFunctionExpr;
-use crate::physical_plan::aggregates::AggregateExec;
-use crate::physical_plan::aggregates::AggregateMode;
-use crate::physical_plan::aggregates::PhysicalGroupBy;
-use crate::physical_plan::common;
-use crate::physical_plan::expressions::col as physical_col;
-use crate::physical_plan::memory::MemoryExec;
 use crate::physical_plan::{
     collect, collect_partitioned, execute_stream, execute_stream_partitioned,
     ExecutionPlan, SendableRecordBatchStream,
@@ -1981,8 +1969,20 @@ mod tests {
     use std::vec;
 
     use super::*;
+    use crate::arrow::array::{Float64Array, UInt32Array};
     use crate::assert_batches_sorted_eq;
     use crate::execution::context::SessionConfig;
+    use crate::execution::memory_pool::FairSpillPool;
+    use crate::execution::runtime_env::RuntimeEnvBuilder;
+    use crate::functions_aggregate::min_max::{max_udaf, min_udaf};
+    use crate::physical_expr::aggregate::AggregateExprBuilder;
+    use crate::physical_expr::aggregate::AggregateFunctionExpr;
+    use crate::physical_plan::aggregates::AggregateExec;
+    use crate::physical_plan::aggregates::AggregateMode;
+    use crate::physical_plan::aggregates::PhysicalGroupBy;
+    use crate::physical_plan::common;
+    use crate::physical_plan::expressions::col as physical_col;
+    use crate::physical_plan::memory::MemoryExec;
     use crate::physical_plan::{ColumnarValue, Partitioning, PhysicalExpr};
     use crate::test_util::{register_aggregate_csv, test_table, test_table_with_name};
 
@@ -2828,7 +2828,7 @@ mod tests {
 
         #[rustfmt::skip]
     assert_batches_sorted_eq!(
-        vec![
+        [
             "+---+--------+--------+",
             "| a | MIN(b) | MAX(b) |",
             "+---+--------+--------+",
