@@ -1263,7 +1263,7 @@ dependencies = [
  "flate2",
  "futures",
  "glob",
- "itertools",
+ "itertools 0.14.0",
  "log",
  "num-traits",
  "object_store",
@@ -1335,7 +1335,9 @@ dependencies = [
  "arrow",
  "arrow-array",
  "arrow-buffer",
+ "arrow-ipc",
  "arrow-schema",
+ "base64 0.22.1",
  "half",
  "hashbrown 0.14.5",
  "indexmap",
@@ -1404,7 +1406,7 @@ version = "44.0.0"
 dependencies = [
  "arrow",
  "datafusion-common",
- "itertools",
+ "itertools 0.14.0",
 ]
 
 [[package]]
@@ -1425,7 +1427,7 @@ dependencies = [
  "datafusion-macros",
  "hashbrown 0.14.5",
  "hex",
- "itertools",
+ "itertools 0.14.0",
  "log",
  "md-5",
  "rand",
@@ -1483,7 +1485,7 @@ dependencies = [
  "datafusion-functions-aggregate",
  "datafusion-macros",
  "datafusion-physical-expr-common",
- "itertools",
+ "itertools 0.14.0",
  "log",
  "paste",
 ]
@@ -1543,7 +1545,7 @@ dependencies = [
  "datafusion-expr",
  "datafusion-physical-expr",
  "indexmap",
- "itertools",
+ "itertools 0.14.0",
  "log",
  "recursive",
  "regex",
@@ -1567,7 +1569,7 @@ dependencies = [
  "half",
  "hashbrown 0.14.5",
  "indexmap",
- "itertools",
+ "itertools 0.14.0",
  "log",
  "paste",
  "petgraph",
@@ -1582,7 +1584,7 @@ dependencies = [
  "datafusion-common",
  "datafusion-expr-common",
  "hashbrown 0.14.5",
- "itertools",
+ "itertools 0.14.0",
 ]
 
 [[package]]
@@ -1595,7 +1597,7 @@ dependencies = [
  "datafusion-expr-common",
  "datafusion-physical-expr",
  "datafusion-physical-plan",
- "itertools",
+ "itertools 0.14.0",
  "log",
  "recursive",
 ]
@@ -1623,7 +1625,7 @@ dependencies = [
  "half",
  "hashbrown 0.14.5",
  "indexmap",
- "itertools",
+ "itertools 0.14.0",
  "log",
  "parking_lot",
  "pin-project-lite",
@@ -2431,6 +2433,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "itertools"
+version = "0.14.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2b192c782037fadd9cfa75548310488aabdbf3d2da73885b31bd0abd03351285"
+dependencies = [
+ "either",
+]
+
+[[package]]
 name = "itoa"
 version = "1.0.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2810,7 +2821,7 @@ dependencies = [
  "futures",
  "humantime",
  "hyper 1.5.2",
- "itertools",
+ "itertools 0.13.0",
  "md-5",
  "parking_lot",
  "percent-encoding",
@@ -4391,7 +4402,7 @@ version = "0.1.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cf221c93e13a30d793f7645a0e7762c55d169dbb0a49671918a2319d289b10bb"
 dependencies = [
- "windows-sys 0.48.0",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]

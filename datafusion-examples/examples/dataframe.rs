@@ -19,10 +19,13 @@ use arrow::array::{ArrayRef, Int32Array, RecordBatch, StringArray};
 use datafusion::arrow::datatypes::{DataType, Field, Schema};
 use datafusion::dataframe::DataFrameWriteOptions;
 use datafusion::error::Result;
+use datafusion::functions_aggregate::average::avg;
+use datafusion::functions_aggregate::min_max::max;
 use datafusion::prelude::*;
 use datafusion_common::config::CsvOptions;
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::DataFusionError;
+use datafusion_common::ScalarValue;
 use std::fs::File;
 use std::io::Write;
 use std::sync::Arc;
@@ -44,7 +47,14 @@ use tempfile::tempdir;
 ///
 /// * [write_out]: write out a DataFrame to a table, parquet file, csv file, or json file
 ///
+/// # Executing subqueries
+///
+/// * [where_scalar_subquery]: execute a scalar subquery
+/// * [where_in_subquery]: execute a subquery with an IN clause
+/// * [where_exist_subquery]: execute a subquery with an EXISTS clause
+///
 /// # Querying data
+///
 /// * [query_to_date]: execute queries against parquet files
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -55,6 +65,11 @@ async fn main() -> Result<()> {
     read_memory(&ctx).await?;
     write_out(&ctx).await?;
     query_to_date().await?;
+    register_aggregate_test_data("t1", &ctx).await?;
+    register_aggregate_test_data("t2", &ctx).await?;
+    where_scalar_subquery(&ctx).await?;
+    where_in_subquery(&ctx).await?;
+    where_exist_subquery(&ctx).await?;
     Ok(())
 }
 
@@ -248,5 +263,81 @@ async fn query_to_date() -> Result<()> {
     // print the results
     df.show().await?;
 
+    Ok(())
+}
+
+/// Use the DataFrame API to execute the following subquery:
+/// select c1,c2 from t1 where (select avg(t2.c2) from t2 where t1.c1 = t2.c1)>0 limit 3;
+async fn where_scalar_subquery(ctx: &SessionContext) -> Result<()> {
+    ctx.table("t1")
+        .await?
+        .filter(
+            scalar_subquery(Arc::new(
+                ctx.table("t2")
+                    .await?
+                    .filter(out_ref_col(DataType::Utf8, "t1.c1").eq(col("t2.c1")))?
+                    .aggregate(vec![], vec![avg(col("t2.c2"))])?
+                    .select(vec![avg(col("t2.c2"))])?
+                    .into_unoptimized_plan(),
+            ))
+            .gt(lit(0u8)),
+        )?
+        .select(vec![col("t1.c1"), col("t1.c2")])?
+        .limit(0, Some(3))?
+        .show()
+        .await?;
+    Ok(())
+}
+
+/// Use the DataFrame API to execute the following subquery:
+/// select t1.c1, t1.c2 from t1 where t1.c2 in (select max(t2.c2) from t2 where t2.c1 > 0 ) limit 3;
+async fn where_in_subquery(ctx: &SessionContext) -> Result<()> {
+    ctx.table("t1")
+        .await?
+        .filter(in_subquery(
+            col("t1.c2"),
+            Arc::new(
+                ctx.table("t2")
+                    .await?
+                    .filter(col("t2.c1").gt(lit(ScalarValue::UInt8(Some(0)))))?
+                    .aggregate(vec![], vec![max(col("t2.c2"))])?
+                    .select(vec![max(col("t2.c2"))])?
+                    .into_unoptimized_plan(),
+            ),
+        ))?
+        .select(vec![col("t1.c1"), col("t1.c2")])?
+        .limit(0, Some(3))?
+        .show()
+        .await?;
+    Ok(())
+}
+
+/// Use the DataFrame API to execute the following subquery:
+/// select t1.c1, t1.c2 from t1 where exists (select t2.c2 from t2 where t1.c1 = t2.c1) limit 3;
+async fn where_exist_subquery(ctx: &SessionContext) -> Result<()> {
+    ctx.table("t1")
+        .await?
+        .filter(exists(Arc::new(
+            ctx.table("t2")
+                .await?
+                .filter(out_ref_col(DataType::Utf8, "t1.c1").eq(col("t2.c1")))?
+                .select(vec![col("t2.c2")])?
+                .into_unoptimized_plan(),
+        )))?
+        .select(vec![col("t1.c1"), col("t1.c2")])?
+        .limit(0, Some(3))?
+        .show()
+        .await?;
+    Ok(())
+}
+
+async fn register_aggregate_test_data(name: &str, ctx: &SessionContext) -> Result<()> {
+    let testdata = datafusion::test_util::arrow_test_data();
+    ctx.register_csv(
+        name,
+        &format!("{testdata}/csv/aggregate_test_100.csv"),
+        CsvReadOptions::default(),
+    )
+    .await?;
     Ok(())
 }

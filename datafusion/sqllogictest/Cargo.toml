@@ -45,6 +45,7 @@ datafusion-common = { workspace = true, default-features = true }
 datafusion-common-runtime = { workspace = true, default-features = true }
 futures = { workspace = true }
 half = { workspace = true, default-features = true }
+indicatif = "0.17"
 itertools = { workspace = true }
 log = { workspace = true }
 object_store = { workspace = true }
@@ -56,6 +57,8 @@ rust_decimal = { version = "1.36.0", features = ["tokio-pg"] }
 sqllogictest = "=0.24.0"
 sqlparser = { workspace = true }
 tempfile = { workspace = true }
+testcontainers = { version = "0.23", features = ["default"], optional = true }
+testcontainers-modules = { version = "0.11", features = ["postgres"], optional = true }
 thiserror = "2.0.0"
 tokio = { workspace = true }
 tokio-postgres = { version = "0.7.12", optional = true }
@@ -65,9 +68,11 @@ avro = ["datafusion/avro"]
 postgres = [
     "bytes",
     "chrono",
-    "tokio-postgres",
     "postgres-types",
     "postgres-protocol",
+    "testcontainers",
+    "testcontainers-modules",
+    "tokio-postgres",
 ]
 
 [dev-dependencies]

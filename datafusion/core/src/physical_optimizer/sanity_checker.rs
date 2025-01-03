@@ -131,18 +131,18 @@ pub fn check_plan_sanity(
     check_finiteness_requirements(Arc::clone(&plan), optimizer_options)?;
 
     for ((idx, child), sort_req, dist_req) in izip!(
-        plan.children().iter().enumerate(),
-        plan.required_input_ordering().iter(),
-        plan.required_input_distribution().iter()
+        plan.children().into_iter().enumerate(),
+        plan.required_input_ordering(),
+        plan.required_input_distribution(),
     ) {
         let child_eq_props = child.equivalence_properties();
         if let Some(sort_req) = sort_req {
-            if !child_eq_props.ordering_satisfy_requirement(sort_req) {
+            if !child_eq_props.ordering_satisfy_requirement(&sort_req) {
                 let plan_str = get_plan_string(&plan);
                 return plan_err!(
                     "Plan: {:?} does not satisfy order requirements: {}. Child-{} order: {}",
                     plan_str,
-                    format_physical_sort_requirement_list(sort_req),
+                    format_physical_sort_requirement_list(&sort_req),
                     idx,
                     child_eq_props.oeq_class
                 );
@@ -151,7 +151,7 @@ pub fn check_plan_sanity(
 
         if !child
             .output_partitioning()
-            .satisfy(dist_req, child_eq_props)
+            .satisfy(&dist_req, child_eq_props)
         {
             let plan_str = get_plan_string(&plan);
             return plan_err!(

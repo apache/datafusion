@@ -58,7 +58,8 @@ use crate::execution_plan::{boundedness_from_children, EmissionType};
 use crate::expressions::PhysicalSortExpr;
 use crate::joins::utils::{
     build_join_schema, check_join_is_valid, estimate_join_statistics,
-    symmetric_join_output_partitioning, JoinFilter, JoinOn, JoinOnRef,
+    reorder_output_after_swap, symmetric_join_output_partitioning, JoinFilter, JoinOn,
+    JoinOnRef,
 };
 use crate::metrics::{Count, ExecutionPlanMetricsSet, MetricBuilder, MetricsSet};
 use crate::spill::spill_record_batches;
@@ -73,7 +74,7 @@ use futures::{Stream, StreamExt};
 /// Join execution plan that executes equi-join predicates on multiple partitions using Sort-Merge
 /// join algorithm and applies an optional filter post join. Can be used to join arbitrarily large
 /// inputs where one or both of the inputs don't fit in the available memory.
-///  
+///
 /// # Join Expressions
 ///
 /// Equi-join predicate (e.g. `<col1> = <col2>`) expressions are represented by [`Self::on`].
@@ -310,6 +311,37 @@ impl SortMergeJoinExec {
             EmissionType::Incremental,
             boundedness_from_children([left, right]),
         )
+    }
+
+    pub fn swap_inputs(&self) -> Result<Arc<dyn ExecutionPlan>> {
+        let left = self.left();
+        let right = self.right();
+        let new_join = SortMergeJoinExec::try_new(
+            Arc::clone(right),
+            Arc::clone(left),
+            self.on()
+                .iter()
+                .map(|(l, r)| (Arc::clone(r), Arc::clone(l)))
+                .collect::<Vec<_>>(),
+            self.filter().as_ref().map(JoinFilter::swap),
+            self.join_type().swap(),
+            self.sort_options.clone(),
+            self.null_equals_null,
+        )?;
+
+        // TODO: OR this condition with having a built-in projection (like
+        //       ordinary hash join) when we support it.
+        if matches!(
+            self.join_type(),
+            JoinType::LeftSemi
+                | JoinType::RightSemi
+                | JoinType::LeftAnti
+                | JoinType::RightAnti
+        ) {
+            Ok(Arc::new(new_join))
+        } else {
+            reorder_output_after_swap(Arc::new(new_join), &left.schema(), &right.schema())
+        }
     }
 }
 
