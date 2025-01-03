@@ -192,16 +192,6 @@ impl CatalogProviderList for ResolvedCatalogProviderList {
 /// method can be slow and asynchronous as it is only called once, before planning.
 #[async_trait]
 pub trait AsyncSchemaProvider: Send + Sync {
-    /// Return the name of the schema provided by this provider
-    ///
-    /// If a table reference's schema name does not match this name then the reference will be ignored
-    /// when calculating the cached set of tables (this allows other providers to supply the table)
-    fn name(&self) -> &str;
-    /// Return the name of the catalog this provider belongs to
-    ///
-    /// If a table reference's catalog name does not match this name then the reference will be ignored
-    /// when calculating the cached set of tables (this allows other providers to supply the table)
-    fn catalog_name(&self) -> &str;
     /// Lookup a table in the schema provider
     async fn table(&self, name: &str) -> Result<Option<Arc<dyn TableProvider>>>;
     /// Creates a cached provider that can be used to execute a query containing given references
@@ -216,24 +206,26 @@ pub trait AsyncSchemaProvider: Send + Sync {
         &self,
         references: &[TableReference],
         config: &SessionConfig,
+        catalog_name: &str,
+        schema_name: &str,
     ) -> Result<Arc<dyn SchemaProvider>> {
         let mut cached_tables = HashMap::<String, Option<Arc<dyn TableProvider>>>::new();
 
         for reference in references {
-            let catalog_name = reference
+            let ref_catalog_name = reference
                 .catalog()
                 .unwrap_or(&config.options().catalog.default_catalog);
 
             // Maybe this is a reference to some other catalog provided in another way
-            if catalog_name != self.catalog_name() {
+            if ref_catalog_name != catalog_name {
                 continue;
             }
 
-            let schema_name = reference
+            let ref_schema_name = reference
                 .schema()
                 .unwrap_or(&config.options().catalog.default_schema);
 
-            if schema_name != self.name() {
+            if ref_schema_name != schema_name {
                 continue;
             }
 
@@ -250,7 +242,7 @@ pub trait AsyncSchemaProvider: Send + Sync {
 
         Ok(Arc::new(ResolvedSchemaProvider {
             cached_tables,
-            owner_name: Some(self.catalog_name().to_string()),
+            owner_name: Some(catalog_name.to_string()),
         }))
     }
 }
@@ -263,12 +255,6 @@ pub trait AsyncSchemaProvider: Send + Sync {
 
 #[async_trait]
 pub trait AsyncCatalogProvider: Send + Sync {
-    /// Returns the name of the catalog being provided
-    ///
-    /// If a reference's catalog name does not match this name then the reference will be ignored.
-    /// This allows other providers to potentially provide the reference.
-    fn name(&self) -> &str;
-
     /// Lookup a schema in the provider
     async fn schema(&self, name: &str) -> Result<Option<Arc<dyn AsyncSchemaProvider>>>;
 
@@ -285,17 +271,18 @@ pub trait AsyncCatalogProvider: Send + Sync {
         &self,
         references: &[TableReference],
         config: &SessionConfig,
+        catalog_name: &str,
     ) -> Result<Arc<dyn CatalogProvider>> {
         let mut cached_schemas =
             HashMap::<String, Option<ResolvedSchemaProviderBuilder>>::new();
 
         for reference in references {
-            let catalog_name = reference
+            let ref_catalog_name = reference
                 .catalog()
                 .unwrap_or(&config.options().catalog.default_catalog);
 
             // Maybe this is a reference to some other catalog provided in another way
-            if catalog_name != self.name() {
+            if ref_catalog_name != catalog_name {
                 continue;
             }
 
@@ -491,12 +478,6 @@ mod tests {
 
     #[async_trait]
     impl AsyncSchemaProvider for MockAsyncSchemaProvider {
-        fn name(&self) -> &str {
-            MOCK_SCHEMA
-        }
-        fn catalog_name(&self) -> &str {
-            MOCK_CATALOG
-        }
         async fn table(&self, name: &str) -> Result<Option<Arc<dyn TableProvider>>> {
             self.lookup_count.fetch_add(1, Ordering::Release);
             if name == MOCK_TABLE {
@@ -523,8 +504,10 @@ mod tests {
             not_found_tables: &[&str],
         ) {
             let async_provider = MockAsyncSchemaProvider::default();
-            let cached_provider =
-                async_provider.resolve(&refs, &test_config()).await.unwrap();
+            let cached_provider = async_provider
+                .resolve(&refs, &test_config(), MOCK_CATALOG, MOCK_SCHEMA)
+                .await
+                .unwrap();
 
             assert_eq!(
                 async_provider.lookup_count.load(Ordering::Acquire),
@@ -587,9 +570,6 @@ mod tests {
 
     #[async_trait]
     impl AsyncCatalogProvider for MockAsyncCatalogProvider {
-        fn name(&self) -> &str {
-            MOCK_CATALOG
-        }
         async fn schema(
             &self,
             name: &str,
@@ -612,8 +592,10 @@ mod tests {
             not_found_schemas: &[&str],
         ) {
             let async_provider = MockAsyncCatalogProvider::default();
-            let cached_provider =
-                async_provider.resolve(&refs, &test_config()).await.unwrap();
+            let cached_provider = async_provider
+                .resolve(&refs, &test_config(), MOCK_CATALOG)
+                .await
+                .unwrap();
 
             assert_eq!(
                 async_provider.lookup_count.load(Ordering::Acquire),

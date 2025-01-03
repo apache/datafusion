@@ -86,7 +86,7 @@ async fn main() -> Result<()> {
     // Now we can asynchronously resolve the table references to get a cached catalog
     // that we can use for our query
     let resolved_catalog = remote_catalog_adapter
-        .resolve(&references, state.config())
+        .resolve(&references, state.config(), "datafusion", "remote_schema")
         .await?;
 
     // This resolved catalog only makes sense for this query and so we create a clone
@@ -177,20 +177,12 @@ impl RemoteCatalogInterface {
     }
 }
 
-/// Implements the DataFusion SchemaProvider API for tables
+/// Implements an async version of the DataFusion SchemaProvider API for tables
 /// stored in a remote catalog.
 struct RemoteCatalogDatafusionAdapter(Arc<RemoteCatalogInterface>);
 
 #[async_trait]
 impl AsyncSchemaProvider for RemoteCatalogDatafusionAdapter {
-    fn name(&self) -> &str {
-        "remote_schema"
-    }
-
-    fn catalog_name(&self) -> &str {
-        "datafusion"
-    }
-
     async fn table(&self, name: &str) -> Result<Option<Arc<dyn TableProvider>>> {
         // Fetch information about the table from the remote catalog
         //
