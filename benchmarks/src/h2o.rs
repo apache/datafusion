@@ -15,12 +15,11 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::path::{Path, PathBuf};
 use crate::util::{BenchmarkRun, CommonOpt};
 use datafusion::{error::Result, prelude::SessionContext};
 use datafusion_common::{exec_datafusion_err, instant::Instant, DataFusionError};
+use std::path::{Path, PathBuf};
 use structopt::StructOpt;
-
 
 /// Run the H2O benchmark
 #[derive(Debug, StructOpt, Clone)]
@@ -105,21 +104,32 @@ impl RunOpt {
         let path = self.path.as_os_str().to_str().unwrap();
 
         if self.path.extension().map(|s| s == "csv").unwrap_or(false) {
-            ctx.register_csv("x", path, csv_options).await.map_err(|e| {
-                DataFusionError::Context(
-                    format!("Registering 'table' as {path}"),
-                    Box::new(e),
-                )
-            }).expect("error registering csv");
+            ctx.register_csv("x", path, csv_options)
+                .await
+                .map_err(|e| {
+                    DataFusionError::Context(
+                        format!("Registering 'table' as {path}"),
+                        Box::new(e),
+                    )
+                })
+                .expect("error registering csv");
         }
 
-        if self.path.extension().map(|s| s == "parquet").unwrap_or(false) {
-            ctx.register_parquet("x", path, parquet_options).await.map_err(|e| {
-                DataFusionError::Context(
-                    format!("Registering 'table' as {path}"),
-                    Box::new(e),
-                )
-            }).expect("error registering parquet");
+        if self
+            .path
+            .extension()
+            .map(|s| s == "parquet")
+            .unwrap_or(false)
+        {
+            ctx.register_parquet("x", path, parquet_options)
+                .await
+                .map_err(|e| {
+                    DataFusionError::Context(
+                        format!("Registering 'table' as {path}"),
+                        Box::new(e),
+                    )
+                })
+                .expect("error registering parquet");
         }
         Ok(())
     }
@@ -139,9 +149,10 @@ impl AllQueries {
         })
     }
 
+    /// Returns the text of query `query_id`
     fn get_query(&self, query_id: usize) -> Result<&str> {
         self.queries
-            .get(query_id + 1)
+            .get(query_id)
             .ok_or_else(|| {
                 let min_id = self.min_query_id();
                 let max_id = self.max_query_id();
@@ -153,11 +164,11 @@ impl AllQueries {
     }
 
     fn min_query_id(&self) -> usize {
-        1
+        0
     }
 
     fn max_query_id(&self) -> usize {
-        self.queries.len()
+        self.queries.len() - 1
     }
 }
 

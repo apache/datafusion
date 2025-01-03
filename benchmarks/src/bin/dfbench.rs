@@ -33,7 +33,9 @@ static ALLOC: snmalloc_rs::SnMalloc = snmalloc_rs::SnMalloc;
 #[global_allocator]
 static ALLOC: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
-use datafusion_benchmarks::{clickbench, imdb, parquet_filter, sort, sort_tpch, tpch, h2o};
+use datafusion_benchmarks::{
+    clickbench, h2o, imdb, parquet_filter, sort, sort_tpch, tpch,
+};
 
 #[derive(Debug, StructOpt)]
 #[structopt(about = "benchmark command")]
