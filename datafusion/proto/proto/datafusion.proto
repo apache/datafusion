@@ -976,6 +976,7 @@ message FileScanExecConf {
   repeated string table_partition_cols = 7;
   string object_store_url = 8;
   repeated PhysicalSortExprNodeCollection output_ordering = 9;
+  datafusion_common.Constraints constraints = 11;
 }
 
 message ParquetScanExecNode {

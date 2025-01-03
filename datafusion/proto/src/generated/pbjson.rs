@@ -5529,6 +5529,9 @@ impl serde::Serialize for FileScanExecConf {
         if !self.output_ordering.is_empty() {
             len += 1;
         }
+        if self.constraints.is_some() {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("datafusion.FileScanExecConf", len)?;
         if !self.file_groups.is_empty() {
             struct_ser.serialize_field("fileGroups", &self.file_groups)?;
@@ -5554,6 +5557,9 @@ impl serde::Serialize for FileScanExecConf {
         if !self.output_ordering.is_empty() {
             struct_ser.serialize_field("outputOrdering", &self.output_ordering)?;
         }
+        if let Some(v) = self.constraints.as_ref() {
+            struct_ser.serialize_field("constraints", v)?;
+        }
         struct_ser.end()
     }
 }
@@ -5576,6 +5582,7 @@ impl<'de> serde::Deserialize<'de> for FileScanExecConf {
             "objectStoreUrl",
             "output_ordering",
             "outputOrdering",
+            "constraints",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -5588,6 +5595,7 @@ impl<'de> serde::Deserialize<'de> for FileScanExecConf {
             TablePartitionCols,
             ObjectStoreUrl,
             OutputOrdering,
+            Constraints,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -5617,6 +5625,7 @@ impl<'de> serde::Deserialize<'de> for FileScanExecConf {
                             "tablePartitionCols" | "table_partition_cols" => Ok(GeneratedField::TablePartitionCols),
                             "objectStoreUrl" | "object_store_url" => Ok(GeneratedField::ObjectStoreUrl),
                             "outputOrdering" | "output_ordering" => Ok(GeneratedField::OutputOrdering),
+                            "constraints" => Ok(GeneratedField::Constraints),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -5644,6 +5653,7 @@ impl<'de> serde::Deserialize<'de> for FileScanExecConf {
                 let mut table_partition_cols__ = None;
                 let mut object_store_url__ = None;
                 let mut output_ordering__ = None;
+                let mut constraints__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::FileGroups => {
@@ -5697,6 +5707,12 @@ impl<'de> serde::Deserialize<'de> for FileScanExecConf {
                             }
                             output_ordering__ = Some(map_.next_value()?);
                         }
+                        GeneratedField::Constraints => {
+                            if constraints__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("constraints"));
+                            }
+                            constraints__ = map_.next_value()?;
+                        }
                     }
                 }
                 Ok(FileScanExecConf {
@@ -5708,6 +5724,7 @@ impl<'de> serde::Deserialize<'de> for FileScanExecConf {
                     table_partition_cols: table_partition_cols__.unwrap_or_default(),
                     object_store_url: object_store_url__.unwrap_or_default(),
                     output_ordering: output_ordering__.unwrap_or_default(),
+                    constraints: constraints__,
                 })
             }
         }

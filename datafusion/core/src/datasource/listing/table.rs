@@ -913,6 +913,7 @@ impl TableProvider for ListingTable {
                 session_state,
                 FileScanConfig::new(object_store_url, Arc::clone(&self.file_schema))
                     .with_file_groups(partitioned_file_lists)
+                    .with_constraints(self.constraints.clone())
                     .with_statistics(statistics)
                     .with_projection(projection.cloned())
                     .with_limit(limit)
