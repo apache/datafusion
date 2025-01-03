@@ -1974,7 +1974,6 @@ mod tests {
     use crate::execution::context::SessionConfig;
     use crate::execution::memory_pool::FairSpillPool;
     use crate::execution::runtime_env::RuntimeEnvBuilder;
-    use crate::functions_aggregate::min_max::{max_udaf, min_udaf};
     use crate::physical_expr::aggregate::AggregateExprBuilder;
     use crate::physical_expr::aggregate::AggregateFunctionExpr;
     use crate::physical_plan::aggregates::AggregateExec;
@@ -2789,16 +2788,22 @@ mod tests {
 
         let aggregates: Vec<Arc<AggregateFunctionExpr>> = vec![
             Arc::new(
-                AggregateExprBuilder::new(min_udaf(), vec![physical_col("b", &schema)?])
-                    .schema(schema.clone())
-                    .alias("MIN(b)")
-                    .build()?,
+                AggregateExprBuilder::new(
+                    datafusion_functions_aggregate::min_max::min_udaf(),
+                    vec![physical_col("b", &schema)?],
+                )
+                .schema(schema.clone())
+                .alias("MIN(b)")
+                .build()?,
             ),
             Arc::new(
-                AggregateExprBuilder::new(max_udaf(), vec![physical_col("b", &schema)?])
-                    .schema(schema.clone())
-                    .alias("MAX(b)")
-                    .build()?,
+                AggregateExprBuilder::new(
+                    datafusion_functions_aggregate::min_max::max_udaf(),
+                    vec![physical_col("b", &schema)?],
+                )
+                .schema(schema.clone())
+                .alias("MAX(b)")
+                .build()?,
             ),
         ];
 
@@ -2901,8 +2906,8 @@ mod tests {
                 datafusion_functions_aggregate::median::median_udaf(),
                 "median",
             ),
-            (max_udaf(), "max"),
-            (min_udaf(), "min"),
+            (datafusion_functions_aggregate::min_max::max_udaf(), "max"),
+            (datafusion_functions_aggregate::min_max::min_udaf(), "min"),
         ]
         .into_iter()
         .map(|(func, name)| {
