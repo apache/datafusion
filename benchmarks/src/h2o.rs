@@ -25,7 +25,6 @@ use structopt::StructOpt;
 #[derive(Debug, StructOpt, Clone)]
 #[structopt(verbatim_doc_comment)]
 pub struct RunOpt {
-    /// Query number (between 1 and 10). If not specified, runs all queries
     #[structopt(short, long)]
     query: Option<usize>,
 
@@ -34,6 +33,7 @@ pub struct RunOpt {
     common: CommonOpt,
 
     /// Path to queries.sql (single file)
+    /// default value is the groupby.sql file in the h2o benchmark
     #[structopt(
         parse(from_os_str),
         short = "r",
@@ -42,12 +42,12 @@ pub struct RunOpt {
     )]
     queries_path: PathBuf,
 
-    /// Path to group by parquet data
+    /// Path to data file (parquet or csv)
     #[structopt(
         parse(from_os_str),
         short = "p",
         long = "path",
-        default_value = "benchmarks/data/G1_1e7_1e7_100_0.parquet"
+        default_value = "benchmarks/data/h2o/G1_1e7_1e7_100_0.parquet"
     )]
     path: PathBuf,
 
@@ -170,23 +170,4 @@ impl AllQueries {
     fn max_query_id(&self) -> usize {
         self.queries.len() - 1
     }
-}
-
-#[derive(Debug, StructOpt)]
-struct GroupBy {
-    /// Query number
-    #[structopt(short, long)]
-    query: usize,
-    /// Path to data file
-    #[structopt(parse(from_os_str), required = true, short = "p", long = "path")]
-    path: PathBuf,
-    /// Activate debug mode to see query results
-    #[structopt(short, long)]
-    debug: bool,
-    /// Load the data into a MemTable before executing the query
-    #[structopt(short = "m", long = "mem-table")]
-    mem_table: bool,
-    /// Path to machine readable output file
-    #[structopt(parse(from_os_str), short = "o", long = "output")]
-    output_path: Option<PathBuf>,
 }
