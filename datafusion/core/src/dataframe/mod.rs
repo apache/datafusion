@@ -2754,6 +2754,7 @@ mod tests {
         Ok(())
     }
 
+    // test for https://github.com/apache/datafusion/issues/13949
     async fn run_test_with_spill_pool(pool_size: usize) -> Result<()> {
         fn create_record_batch(
             schema: &Arc<Schema>,
@@ -2844,9 +2845,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_aggregate_with_spill() -> Result<()> {
-        // Test with FairSpillPool size 1600
+        // test with spill
         run_test_with_spill_pool(1600).await?;
-        // Test with FairSpillPool size 16000
+        // test without spill
         run_test_with_spill_pool(16000).await?;
         Ok(())
     }
