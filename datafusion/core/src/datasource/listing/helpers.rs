@@ -241,6 +241,7 @@ async fn prune_partitions(
     partitions: Vec<Partition>,
     filters: &[Expr],
     partition_cols: &[(String, DataType)],
+    ctx: &SessionState,
 ) -> Result<Vec<Partition>> {
     if filters.is_empty() {
         return Ok(partitions);
@@ -286,13 +287,12 @@ async fn prune_partitions(
     )?;
 
     let batch = RecordBatch::try_new(schema, arrays)?;
-
-    // TODO: Plumb this down
     let props = ExecutionProps::new();
+    let config_options = ctx.config_options();
 
     // Applies `filter` to `batch` returning `None` on error
     let do_filter = |filter| -> Result<ArrayRef> {
-        let expr = create_physical_expr(filter, &df_schema, &props)?;
+        let expr = create_physical_expr(filter, &df_schema, &props, config_options)?;
         expr.evaluate(&batch)?.into_array(partitions.len())
     };
 
@@ -436,7 +436,7 @@ pub async fn pruned_partition_list<'a>(
     debug!("Listed {} partitions", partitions.len());
 
     let pruned =
-        prune_partitions(table_path, partitions, filters, partition_cols).await?;
+        prune_partitions(table_path, partitions, filters, partition_cols, ctx).await?;
 
     debug!("Pruning yielded {} partitions", pruned.len());
 

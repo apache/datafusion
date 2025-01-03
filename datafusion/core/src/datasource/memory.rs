@@ -238,6 +238,7 @@ impl TableProvider for MemTable {
                         sort_exprs,
                         &df_schema,
                         state.execution_props(),
+                        state.config_options(),
                     )
                 })
                 .collect::<Result<Vec<_>>>()?;
