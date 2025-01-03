@@ -114,6 +114,9 @@ use substrait::proto::{
 /// This trait is used to consume Substrait plans, converting them into DataFusion Logical Plans.
 /// It can be implemented by users to allow for custom handling of relations, expressions, etc.
 ///
+/// Combined with the [crate::logical_plan::producer::SubstraitProducer] this allows for fully
+/// customizable Substrait serde.
+///
 /// # Example Usage
 ///
 /// ```
