@@ -60,6 +60,35 @@ impl Constraints {
     pub fn is_empty(&self) -> bool {
         self.inner.is_empty()
     }
+
+    /// Projects constraints using the given projection indices.
+    /// Returns None if any of the constraint columns are not included in the projection.
+    pub fn project(&self, proj_indices: &[usize]) -> Option<Self> {
+        let projected = self
+            .inner
+            .iter()
+            .filter_map(|constraint| {
+                match constraint {
+                    Constraint::PrimaryKey(indices) => {
+                        let new_indices =
+                            update_elements_with_matching_indices(indices, proj_indices);
+                        // Only keep constraint if all columns are preserved
+                        (new_indices.len() == indices.len())
+                            .then_some(Constraint::PrimaryKey(new_indices))
+                    }
+                    Constraint::Unique(indices) => {
+                        let new_indices =
+                            update_elements_with_matching_indices(indices, proj_indices);
+                        // Only keep constraint if all columns are preserved
+                        (new_indices.len() == indices.len())
+                            .then_some(Constraint::Unique(new_indices))
+                    }
+                }
+            })
+            .collect::<Vec<_>>();
+
+        (!projected.is_empty()).then_some(Constraints::new_unverified(projected))
+    }
 }
 
 impl IntoIterator for Constraints {
@@ -597,6 +626,24 @@ mod tests {
         assert_eq!(iter.next(), Some(&Constraint::PrimaryKey(vec![10])));
         assert_eq!(iter.next(), Some(&Constraint::Unique(vec![20])));
         assert_eq!(iter.next(), None);
+    }
+
+    #[test]
+    fn test_project_constraints() {
+        let constraints = Constraints::new_unverified(vec![
+            Constraint::PrimaryKey(vec![1, 2]),
+            Constraint::Unique(vec![0, 3]),
+        ]);
+
+        // Project keeping columns 1,2,3
+        let projected = constraints.project(&[1, 2, 3]).unwrap();
+        assert_eq!(
+            projected,
+            Constraints::new_unverified(vec![Constraint::PrimaryKey(vec![0, 1]),])
+        );
+
+        // Project keeping only column 0 - should return None as no constraints are preserved
+        assert!(constraints.project(&[0]).is_none());
     }
 
     #[test]
