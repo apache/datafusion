@@ -110,6 +110,16 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
     /// trait, which is implemented for all `ExecutionPlan`s.
     fn properties(&self) -> &PlanProperties;
 
+    /// Returns an error if this individual node does not conform to its invariants.
+    /// These invariants are typically only checked in debug mode.
+    ///
+    /// A default set of invariants is provided in the default implementation.
+    /// Extension nodes can provide their own invariants.
+    fn check_node_invariants(&self) -> Result<()> {
+        // TODO
+        Ok(())
+    }
+
     /// Specifies the data distribution requirements for all the
     /// children for this `ExecutionPlan`, By default it's [[Distribution::UnspecifiedDistribution]] for each child,
     fn required_input_distribution(&self) -> Vec<Distribution> {
