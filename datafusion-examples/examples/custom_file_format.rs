@@ -105,6 +105,14 @@ impl FileFormat for TSVFileFormat {
             .await
     }
 
+    async fn infer_file_ordering(
+        &self,
+        _store: &Arc<dyn ObjectStore>,
+        _object: &ObjectMeta,
+    ) -> Option<String> {
+        None
+    }
+
     async fn create_physical_plan(
         &self,
         state: &SessionState,

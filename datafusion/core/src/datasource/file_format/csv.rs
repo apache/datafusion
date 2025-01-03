@@ -406,6 +406,15 @@ impl FileFormat for CsvFormat {
         Ok(Statistics::new_unknown(&table_schema))
     }
 
+    async fn infer_file_ordering(
+        &self,
+        _store: &Arc<dyn ObjectStore>,
+        _object: &ObjectMeta,
+    ) -> Option<String> {
+        // CSV infer files order info is not supported
+        None
+    }
+
     async fn create_physical_plan(
         &self,
         state: &SessionState,

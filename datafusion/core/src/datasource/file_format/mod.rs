@@ -31,17 +31,16 @@ pub mod options;
 pub mod parquet;
 pub mod write;
 
-use std::any::Any;
-use std::collections::{HashMap, VecDeque};
-use std::fmt::{self, Debug, Display};
-use std::sync::Arc;
-use std::task::Poll;
-
 use crate::arrow::datatypes::SchemaRef;
 use crate::datasource::physical_plan::{FileScanConfig, FileSinkConfig};
 use crate::error::Result;
 use crate::execution::context::SessionState;
 use crate::physical_plan::{ExecutionPlan, Statistics};
+use std::any::Any;
+use std::collections::{HashMap, VecDeque};
+use std::fmt::{self, Debug, Display};
+use std::sync::Arc;
+use std::task::Poll;
 
 use arrow_array::RecordBatch;
 use arrow_schema::{ArrowError, DataType, Field, FieldRef, Schema};
@@ -122,6 +121,22 @@ pub trait FileFormat: Send + Sync + Debug {
         table_schema: SchemaRef,
         object: &ObjectMeta,
     ) -> Result<Statistics>;
+
+    /// Infers the file ordering for a given object store and object meta.
+    ///
+    /// # Arguments
+    ///
+    /// * `store` - A reference to the object store.
+    /// * `object` - A reference to the object meta.
+    ///
+    /// # Returns
+    ///
+    /// An optional string representing the file ordering.
+    async fn infer_file_ordering(
+        &self,
+        store: &Arc<dyn ObjectStore>,
+        object: &ObjectMeta,
+    ) -> Option<String>;
 
     /// Take a list of files and convert it to the appropriate executor
     /// according to this file format.
@@ -396,6 +411,11 @@ pub fn file_type_to_format(
         Some(source) => Ok(Arc::clone(&source.file_format_factory)),
         _ => internal_err!("FileType was not DefaultFileType"),
     }
+}
+
+/// Check if the file format is parquet
+pub fn is_file_parquet_format(file_format: &Arc<dyn FileType>) -> bool {
+    file_format.get_ext() == "parquet"
 }
 
 /// Create a new field with the specified data type, copying the other

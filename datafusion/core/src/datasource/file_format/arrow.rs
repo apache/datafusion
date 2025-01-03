@@ -165,6 +165,15 @@ impl FileFormat for ArrowFormat {
         Ok(Statistics::new_unknown(&table_schema))
     }
 
+    async fn infer_file_ordering(
+        &self,
+        _store: &Arc<dyn ObjectStore>,
+        _object: &ObjectMeta,
+    ) -> Option<String> {
+        // todo for now we don't support infer ordering for Arrow files
+        None
+    }
+
     async fn create_physical_plan(
         &self,
         _state: &SessionState,
