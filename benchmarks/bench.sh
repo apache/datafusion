@@ -593,11 +593,8 @@ data_h2o() {
      # Set virtual environment directory
      VIRTUAL_ENV="${PWD}/venv"
 
-     # Check if the virtual environment already exists
-     if [ ! -d "$VIRTUAL_ENV" ]; then
-         # Create a virtual environment using Python 3.10
-         $REQUIRED_PYTHON -m venv "$VIRTUAL_ENV"
-     fi
+     # Create a virtual environment using Python 3.10
+     $REQUIRED_PYTHON -m venv "$VIRTUAL_ENV"
 
      # Activate the virtual environment and install dependencies
      source "$VIRTUAL_ENV/bin/activate"
