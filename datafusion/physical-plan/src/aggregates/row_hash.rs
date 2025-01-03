@@ -1008,8 +1008,6 @@ impl GroupedHashAggregateStream {
             && self.update_memory_reservation().is_err()
         {
             assert_ne!(self.mode, AggregateMode::Partial);
-            // Use input batch (Partial mode) schema for spilling because
-            // the spilled data will be merged and re-evaluated later.
             self.spill()?;
             self.clear_shrink(batch);
         }
