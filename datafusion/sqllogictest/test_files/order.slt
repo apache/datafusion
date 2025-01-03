@@ -1306,3 +1306,25 @@ ORDER BY a DESC;
 ----
 0.5
 0
+
+statement ok
+CREATE EXTERNAL TABLE abc (
+  c1 INT,
+  c2 INT,
+  c3 INT,
+  PRIMARY KEY (c1)
+)
+STORED AS CSV
+OPTIONS ('format.has_header' 'true')
+LOCATION '../core/tests/data/aggregate_agg_multi_order.csv';
+
+query TT
+EXPLAIN SELECT c1, c2 FROM abc ORDER BY c1, c2;
+----
+logical_plan
+01)Sort: abc.c1 ASC NULLS LAST, abc.c2 ASC NULLS LAST
+02)--TableScan: abc projection=[c1, c2]
+physical_plan CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/aggregate_agg_multi_order.csv]]}, projection=[c1, c2], has_header=true
+
+statement ok
+drop table abc;
