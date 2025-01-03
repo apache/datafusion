@@ -2755,7 +2755,7 @@ mod tests {
     }
 
     // test for https://github.com/apache/datafusion/issues/13949
-    async fn run_test_with_spill_pool(pool_size: usize) -> Result<()> {
+    async fn run_test_with_spill_pool_if_necessary(pool_size: usize) -> Result<()> {
         fn create_record_batch(
             schema: &Arc<Schema>,
             data: (Vec<u32>, Vec<f64>),
@@ -2844,11 +2844,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_aggregate_with_spill() -> Result<()> {
+    async fn test_aggregate_with_spill_if_necessary() -> Result<()> {
         // test with spill
-        run_test_with_spill_pool(1600).await?;
+        run_test_with_spill_pool_if_necessary(1600).await?;
         // test without spill
-        run_test_with_spill_pool(16000).await?;
+        run_test_with_spill_pool_if_necessary(16000).await?;
         Ok(())
     }
 
