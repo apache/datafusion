@@ -576,9 +576,12 @@ pub fn cast_subquery(subquery: Subquery, cast_to_type: &DataType) -> Result<Subq
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{col, lit};
+    use crate::{col, lit, ScalarUDF, ScalarUDFImpl, ScalarFunctionArgs};
 
     use datafusion_common::{internal_err, DFSchema, ScalarValue};
+    use datafusion_expr_common::{signature::{Signature, Volatility}, columnar_value::ColumnarValue};
+
+    use std::any::Any;
 
     macro_rules! test_is_expr_nullable {
         ($EXPR_TYPE:ident) => {{
@@ -710,6 +713,47 @@ mod tests {
 
         // verify to_field method populates metadata
         assert_eq!(&meta, expr.to_field(&schema).unwrap().1.metadata());
+    }
+
+    #[test]
+    fn test_error_formatting_during_planning_for_invalid_udf() {
+        #[derive(Debug)]
+        struct TestScalarUDF {
+            signature: Signature,
+        }
+        impl ScalarUDFImpl for TestScalarUDF {
+            fn as_any(&self) -> &dyn Any {
+                self
+            }
+            fn name(&self) -> &str {
+                "TestScalarUDF"
+            }
+
+            fn signature(&self) -> &Signature {
+                &self.signature
+            }
+
+            fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+                Ok(DataType::Utf8)
+            }
+
+            fn invoke_with_args(
+                &self,
+                _args: ScalarFunctionArgs,
+            ) -> Result<ColumnarValue> {
+                Ok(ColumnarValue::Scalar(ScalarValue::from("a")))
+            }
+        }
+        let udf = Arc::new(ScalarUDF::from(TestScalarUDF {
+            signature: Signature::exact(vec![], Volatility::Immutable),
+        }));
+        let sf = Expr::ScalarFunction(ScalarFunction::new_udf(udf, vec![lit(1)]));
+        let schema = MockExprSchema::new();
+        let res = sf.get_type(&schema);
+        assert!(matches!(res, Err(_)));
+        if let Err(e) = res {
+            assert_eq!(format!("{}", e).matches("Error during planning").count(), 1);
+        }
     }
 
     #[derive(Debug)]
