@@ -295,12 +295,7 @@ Verify that the Cargo.toml in the tarball contains the correct version
 (cd datafusion/proto && cargo publish)
 (cd datafusion/substrait && cargo publish)
 (cd datafusion/ffi && cargo publish)
-```
-
-The CLI needs a `--no-verify` argument because `build.rs` generates source into the `src` directory.
-
-```shell
-(cd datafusion-cli && cargo publish --no-verify)
+(cd datafusion-cli && cargo publish)
 ```
 
 ### Publish datafusion-cli on Homebrew
