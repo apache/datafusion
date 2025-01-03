@@ -44,7 +44,7 @@ async fn main() -> Result<()> {
         .sql("SELECT int_col, double_col FROM alltypes_plain")
         .await?;
 
-    // print out the resultsl showing we have an int32 and a float64 column
+    // print out the results showing we have an int32 and a float64 column
     let results = df.clone().collect().await?;
     assert_batches_eq!(
         [
@@ -78,7 +78,7 @@ async fn main() -> Result<()> {
         // the arrow crate.
 
         // In this case, we know that each batch has two columns of the  Arrow
-        // types Int32 and Float64, so first we cast the two columns the
+        // types Int32 and Float64, so first we cast the two columns to the
         // appropriate Arrow PrimitiveArray (this is a fast / zero-copy cast).:
         let int_col: &PrimitiveArray<Int32Type> = b.column(0).as_primitive();
         let float_col: &PrimitiveArray<Float64Type> = b.column(1).as_primitive();
@@ -142,7 +142,7 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-/// This is target struct where we want the results query result.
+/// This is target struct where we want the query results.
 #[derive(Debug)]
 struct Data {
     int_col: i32,
