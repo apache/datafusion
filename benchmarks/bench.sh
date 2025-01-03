@@ -591,7 +591,7 @@ data_h2o() {
      echo "Installing falsa..."
 
      # Set virtual environment directory
-     VIRTUAL_ENV="${PWD}/.venv"
+     VIRTUAL_ENV="${PWD}/venv"
 
      # Check if the virtual environment already exists
      if [ ! -d "$VIRTUAL_ENV" ]; then
