@@ -28,8 +28,8 @@ use crate::{utils, LogicalPlan, Projection, Subquery, WindowFunctionDefinition};
 use arrow::compute::can_cast_types;
 use arrow::datatypes::{DataType, Field};
 use datafusion_common::{
-    not_impl_err, plan_datafusion_err, plan_err, Column, ExprSchema, Result,
-    TableReference,
+    not_impl_err, plan_datafusion_err, plan_err, Column, DataFusionError, ExprSchema,
+    Result, TableReference,
 };
 use datafusion_functions_window_common::field::WindowUDFFieldArgs;
 use std::collections::HashMap;
@@ -156,7 +156,10 @@ impl ExprSchemable for Expr {
                     .map_err(|err| {
                         plan_datafusion_err!(
                             "{} {}",
-                            err,
+                            match err {
+                                DataFusionError::Plan(msg) => msg,
+                                err => err.to_string(),
+                            },
                             utils::generate_signature_error_msg(
                                 func.name(),
                                 func.signature().clone(),
@@ -181,7 +184,10 @@ impl ExprSchemable for Expr {
                     .map_err(|err| {
                         plan_datafusion_err!(
                             "{} {}",
-                            err,
+                            match err {
+                                DataFusionError::Plan(msg) => msg,
+                                err => err.to_string(),
+                            },
                             utils::generate_signature_error_msg(
                                 func.name(),
                                 func.signature().clone(),
@@ -485,7 +491,10 @@ impl Expr {
                     .map_err(|err| {
                         plan_datafusion_err!(
                             "{} {}",
-                            err,
+                            match err {
+                                DataFusionError::Plan(msg) => msg,
+                                err => err.to_string(),
+                            },
                             utils::generate_signature_error_msg(
                                 fun.name(),
                                 fun.signature(),
@@ -504,7 +513,10 @@ impl Expr {
                     data_types_with_window_udf(&data_types, udwf).map_err(|err| {
                         plan_datafusion_err!(
                             "{} {}",
-                            err,
+                            match err {
+                                DataFusionError::Plan(msg) => msg,
+                                err => err.to_string(),
+                            },
                             utils::generate_signature_error_msg(
                                 fun.name(),
                                 fun.signature(),
