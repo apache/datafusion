@@ -36,7 +36,9 @@ use crate::{
 
 use arrow_schema::{SchemaRef, SortOptions};
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
-use datafusion_common::{internal_err, plan_err, JoinSide, JoinType, Result};
+use datafusion_common::{
+    internal_err, plan_err, Constraint, Constraints, JoinSide, JoinType, Result,
+};
 use datafusion_expr::interval_arithmetic::Interval;
 use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
 use datafusion_physical_expr_common::utils::ExprPropertiesNode;
@@ -133,6 +135,8 @@ pub struct EquivalenceProperties {
     /// TODO: We do not need to track constants separately, they can be tracked
     ///       inside `eq_groups` as `Literal` expressions.
     pub constants: Vec<ConstExpr>,
+    // Table constraints
+    pub constraints: Constraints,
     /// Schema associated with this object.
     schema: SchemaRef,
 }
@@ -144,8 +148,15 @@ impl EquivalenceProperties {
             eq_group: EquivalenceGroup::empty(),
             oeq_class: OrderingEquivalenceClass::empty(),
             constants: vec![],
+            constraints: Constraints::empty(),
             schema,
         }
+    }
+
+    /// Adds constraints to the properties.
+    pub fn with_constraints(mut self, constraints: Constraints) -> Self {
+        self.constraints = constraints;
+        self
     }
 
     /// Creates a new `EquivalenceProperties` object with the given orderings.
@@ -154,6 +165,7 @@ impl EquivalenceProperties {
             eq_group: EquivalenceGroup::empty(),
             oeq_class: OrderingEquivalenceClass::new(orderings.to_vec()),
             constants: vec![],
+            constraints: Constraints::empty(),
             schema,
         }
     }
@@ -526,6 +538,12 @@ impl EquivalenceProperties {
         let mut eq_properties = self.clone();
         // First, standardize the given requirement:
         let normalized_reqs = eq_properties.normalize_sort_requirements(reqs);
+
+        // Check whether given ordering is satisfied by constraints first
+        if self.satisfies_by_constraints(&normalized_reqs) {
+            return true;
+        }
+
         for normalized_req in normalized_reqs {
             // Check whether given ordering is satisfied
             if !eq_properties.ordering_satisfy_single(&normalized_req) {
@@ -547,6 +565,37 @@ impl EquivalenceProperties {
                 .with_constants(std::iter::once(ConstExpr::from(normalized_req.expr)));
         }
         true
+    }
+
+    /// Checks if the sort requirements are satisfied by any of the table constraints (primary key or unique).
+    /// Returns true if any constraint fully satisfies the requirements.
+    fn satisfies_by_constraints(&self, reqs: &[PhysicalSortRequirement]) -> bool {
+        self.constraints.iter().any(|constraint| match constraint {
+            Constraint::PrimaryKey(indices) | Constraint::Unique(indices) => self
+                .matches_constraint_indices(
+                    reqs,
+                    indices,
+                    matches!(constraint, Constraint::Unique(_)),
+                ),
+        })
+    }
+
+    /// Checks if the given sort requirements match the column indices from a constraint.
+    /// For unique constraints, also verifies the columns are not nullable.
+    /// Returns true if all requirements match their corresponding constraint indices.
+    fn matches_constraint_indices(
+        &self,
+        reqs: &[PhysicalSortRequirement],
+        indices: &[usize],
+        check_null: bool,
+    ) -> bool {
+        reqs.iter().zip(indices).all(|(req, &idx)| {
+            if let Some(col) = req.expr.as_any().downcast_ref::<Column>() {
+                return col.index() == idx
+                    && (!check_null || !req.expr.nullable(&self.schema).unwrap_or(true));
+            }
+            false
+        })
     }
 
     /// Determines whether the ordering specified by the given sort requirement
@@ -967,21 +1016,48 @@ impl EquivalenceProperties {
         projected_constants
     }
 
-    /// Projects the equivalences within according to `projection_mapping`
-    /// and `output_schema`.
-    pub fn project(
+    /// Projects constraints according to the given projection mapping.
+    ///
+    /// This function takes a projection mapping and extracts the column indices of the target columns.
+    /// It then projects the constraints to only include relationships between
+    /// columns that exist in the projected output.
+    ///
+    /// # Arguments
+    ///
+    /// * `mapping` - A reference to `ProjectionMapping` that defines how expressions are mapped
+    ///               in the projection operation
+    ///
+    /// # Returns
+    ///
+    /// Returns a new `Constraints` object containing only the constraints
+    /// that are valid for the projected columns.
+    pub fn projected_constraints(
         &self,
-        projection_mapping: &ProjectionMapping,
-        output_schema: SchemaRef,
-    ) -> Self {
-        let projected_constants = self.projected_constants(projection_mapping);
-        let projected_eq_group = self.eq_group.project(projection_mapping);
-        let projected_orderings = self.projected_orderings(projection_mapping);
+        mapping: &ProjectionMapping,
+    ) -> Option<Constraints> {
+        let indices = mapping
+            .iter()
+            .filter_map(|(_, target)| target.as_any().downcast_ref::<Column>())
+            .map(|col| col.index())
+            .collect::<Vec<_>>();
+        self.constraints.project(&indices)
+    }
+
+    /// Projects the equivalences within according to `mapping`
+    /// and `output_schema`.
+    pub fn project(&self, mapping: &ProjectionMapping, output_schema: SchemaRef) -> Self {
+        let eq_group = self.eq_group.project(mapping);
+        let oeq_class = OrderingEquivalenceClass::new(self.projected_orderings(mapping));
+        let constants = self.projected_constants(mapping);
+        let constraints = self
+            .projected_constraints(mapping)
+            .unwrap_or_else(Constraints::empty);
         Self {
-            eq_group: projected_eq_group,
-            oeq_class: OrderingEquivalenceClass::new(projected_orderings),
-            constants: projected_constants,
             schema: output_schema,
+            eq_group,
+            oeq_class,
+            constants,
+            constraints,
         }
     }
 
@@ -2271,7 +2347,7 @@ mod tests {
 
     use arrow::datatypes::{DataType, Field, Schema};
     use arrow_schema::{Fields, TimeUnit};
-    use datafusion_common::ScalarValue;
+    use datafusion_common::{Constraint, ScalarValue};
     use datafusion_expr::Operator;
 
     use datafusion_functions::string::concat;
@@ -3602,6 +3678,125 @@ mod tests {
                 vec![],
             )
             .run()
+    }
+
+    #[test]
+    fn test_functional_dependencies_ordering() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Int32, true),
+            Field::new("c", DataType::Int32, true),
+        ]));
+
+        let mut eq_properties = EquivalenceProperties::new(Arc::clone(&schema));
+
+        // Add functional dependency indicating 'a' is unique
+        eq_properties =
+            eq_properties.with_constraints(Constraints::new_unverified(vec![
+                Constraint::Unique(vec![0]),
+            ]));
+
+        // Add an ordering [a ASC]
+        let col_a = col("a", &schema)?;
+        let sort_exprs = LexOrdering::new(vec![PhysicalSortExpr {
+            expr: Arc::clone(&col_a),
+            options: SortOptions::default(),
+        }]);
+        eq_properties.add_new_ordering(sort_exprs);
+
+        // Test that any ordering starting with 'a' is satisfied
+        let col_b = col("b", &schema)?;
+        let col_c = col("c", &schema)?;
+
+        // Test [a ASC, b ASC] is satisfied
+        let req1 = LexOrdering::new(vec![
+            PhysicalSortExpr {
+                expr: Arc::clone(&col_a),
+                options: SortOptions::default(),
+            },
+            PhysicalSortExpr {
+                expr: Arc::clone(&col_b),
+                options: SortOptions::default(),
+            },
+        ]);
+        assert!(eq_properties.ordering_satisfy(&req1));
+
+        // Test [a ASC, c ASC] is satisfied
+        let req2 = LexOrdering::new(vec![
+            PhysicalSortExpr {
+                expr: Arc::clone(&col_a),
+                options: SortOptions::default(),
+            },
+            PhysicalSortExpr {
+                expr: Arc::clone(&col_c),
+                options: SortOptions::default(),
+            },
+        ]);
+        assert!(eq_properties.ordering_satisfy(&req2));
+
+        // Test [a ASC, b ASC, c ASC] is satisfied
+        let req3 = LexOrdering::new(vec![
+            PhysicalSortExpr {
+                expr: Arc::clone(&col_a),
+                options: SortOptions::default(),
+            },
+            PhysicalSortExpr {
+                expr: Arc::clone(&col_b),
+                options: SortOptions::default(),
+            },
+            PhysicalSortExpr {
+                expr: Arc::clone(&col_c),
+                options: SortOptions::default(),
+            },
+        ]);
+        assert!(eq_properties.ordering_satisfy(&req3));
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_functional_dependencies_ordering_with_key() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Int32, true),
+        ]));
+
+        let mut eq_properties = EquivalenceProperties::new(Arc::clone(&schema));
+
+        // Add primary key constraint on column 'a'
+        eq_properties =
+            eq_properties.with_constraints(Constraints::new_unverified(vec![
+                Constraint::PrimaryKey(vec![0]),
+            ]));
+
+        // Add an ordering [a ASC]
+        let col_a = col("a", &schema)?;
+        let sort_exprs = LexOrdering::new(vec![PhysicalSortExpr {
+            expr: Arc::clone(&col_a),
+            options: SortOptions::default(),
+        }]);
+        eq_properties.add_new_ordering(sort_exprs);
+
+        let col_b = col("b", &schema)?;
+
+        // Test [a ASC, b ASC] is satisfied
+        let req = LexOrdering::new(vec![
+            PhysicalSortExpr {
+                expr: Arc::clone(&col_a),
+                options: SortOptions::default(),
+            },
+            PhysicalSortExpr {
+                expr: Arc::clone(&col_b),
+                options: SortOptions::default(),
+            },
+        ]);
+
+        assert!(
+            eq_properties.ordering_satisfy(&req),
+            "ordering [a ASC, b ASC] should be satisfied when 'a' is a primary key and is ordered ASC"
+        );
+
+        Ok(())
     }
 
     // TODO tests with multiple constants
