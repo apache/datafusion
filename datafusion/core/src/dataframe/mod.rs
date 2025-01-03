@@ -20,11 +20,6 @@
 #[cfg(feature = "parquet")]
 mod parquet;
 
-use std::any::Any;
-use std::borrow::Cow;
-use std::collections::HashMap;
-use std::sync::Arc;
-
 use crate::arrow::record_batch::RecordBatch;
 use crate::arrow::util::pretty;
 use crate::datasource::file_format::csv::CsvFormatFactory;
@@ -43,6 +38,10 @@ use crate::physical_plan::{
     ExecutionPlan, SendableRecordBatchStream,
 };
 use crate::prelude::SessionContext;
+use std::any::Any;
+use std::borrow::Cow;
+use std::collections::HashMap;
+use std::sync::Arc;
 
 use arrow::array::{Array, ArrayRef, Int64Array, StringArray};
 use arrow::compute::{cast, concat};
@@ -1970,8 +1969,19 @@ mod tests {
     use std::vec;
 
     use super::*;
+    use crate::arrow::array::{Float64Array, UInt32Array};
     use crate::assert_batches_sorted_eq;
     use crate::execution::context::SessionConfig;
+    use crate::execution::memory_pool::FairSpillPool;
+    use crate::execution::runtime_env::RuntimeEnvBuilder;
+    use crate::physical_expr::aggregate::AggregateExprBuilder;
+    use crate::physical_expr::aggregate::AggregateFunctionExpr;
+    use crate::physical_plan::aggregates::AggregateExec;
+    use crate::physical_plan::aggregates::AggregateMode;
+    use crate::physical_plan::aggregates::PhysicalGroupBy;
+    use crate::physical_plan::common;
+    use crate::physical_plan::expressions::col as physical_col;
+    use crate::physical_plan::memory::MemoryExec;
     use crate::physical_plan::{ColumnarValue, Partitioning, PhysicalExpr};
     use crate::test_util::{register_aggregate_csv, test_table, test_table_with_name};
 
@@ -2740,6 +2750,110 @@ mod tests {
             &df_results
         );
 
+        Ok(())
+    }
+
+    // test for https://github.com/apache/datafusion/issues/13949
+    async fn run_test_with_spill_pool_if_necessary(pool_size: usize) -> Result<()> {
+        fn create_record_batch(
+            schema: &Arc<Schema>,
+            data: (Vec<u32>, Vec<f64>),
+        ) -> Result<RecordBatch> {
+            Ok(RecordBatch::try_new(
+                Arc::clone(schema),
+                vec![
+                    Arc::new(UInt32Array::from(data.0)),
+                    Arc::new(Float64Array::from(data.1)),
+                ],
+            )?)
+        }
+
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::UInt32, false),
+            Field::new("b", DataType::Float64, false),
+        ]));
+
+        let batches = vec![
+            create_record_batch(&schema, (vec![2, 3, 4, 4], vec![1.0, 2.0, 3.0, 4.0]))?,
+            create_record_batch(&schema, (vec![2, 3, 4, 4], vec![1.0, 2.0, 3.0, 4.0]))?,
+        ];
+        let plan: Arc<dyn ExecutionPlan> =
+            Arc::new(MemoryExec::try_new(&[batches], schema.clone(), None)?);
+
+        let grouping_set = PhysicalGroupBy::new(
+            vec![(physical_col("a", &schema)?, "a".to_string())],
+            vec![],
+            vec![vec![false]],
+        );
+
+        let aggregates: Vec<Arc<AggregateFunctionExpr>> = vec![
+            Arc::new(
+                AggregateExprBuilder::new(
+                    datafusion_functions_aggregate::min_max::min_udaf(),
+                    vec![physical_col("b", &schema)?],
+                )
+                .schema(schema.clone())
+                .alias("MIN(b)")
+                .build()?,
+            ),
+            Arc::new(
+                AggregateExprBuilder::new(
+                    datafusion_functions_aggregate::min_max::max_udaf(),
+                    vec![physical_col("b", &schema)?],
+                )
+                .schema(schema.clone())
+                .alias("MAX(b)")
+                .build()?,
+            ),
+        ];
+
+        let single_aggregate = Arc::new(AggregateExec::try_new(
+            AggregateMode::Single,
+            grouping_set,
+            aggregates,
+            vec![None, None],
+            plan,
+            schema.clone(),
+        )?);
+
+        let batch_size = 2;
+        let memory_pool = Arc::new(FairSpillPool::new(pool_size));
+        let task_ctx = Arc::new(
+            TaskContext::default()
+                .with_session_config(SessionConfig::new().with_batch_size(batch_size))
+                .with_runtime(Arc::new(
+                    RuntimeEnvBuilder::new()
+                        .with_memory_pool(memory_pool)
+                        .build()?,
+                )),
+        );
+
+        let result =
+            common::collect(single_aggregate.execute(0, Arc::clone(&task_ctx))?).await?;
+
+        #[rustfmt::skip]
+    assert_batches_sorted_eq!(
+        [
+            "+---+--------+--------+",
+            "| a | MIN(b) | MAX(b) |",
+            "+---+--------+--------+",
+            "| 2 | 1.0    | 1.0    |",
+            "| 3 | 2.0    | 2.0    |",
+            "| 4 | 3.0    | 4.0    |",
+            "+---+--------+--------+",
+        ],
+        &result
+    );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_aggregate_with_spill_if_necessary() -> Result<()> {
+        // test with spill
+        run_test_with_spill_pool_if_necessary(1600).await?;
+        // test without spill
+        run_test_with_spill_pool_if_necessary(16000).await?;
         Ok(())
     }
 
