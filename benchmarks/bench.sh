@@ -80,6 +80,9 @@ clickbench_1:           ClickBench queries against a single parquet file
 clickbench_partitioned: ClickBench queries against a partitioned (100 files) parquet
 clickbench_extended:    ClickBench \"inspired\" queries against a single parquet (DataFusion specific)
 external_aggr:          External aggregation benchmark
+h2o_small:              h2oai with small dataset (1e7 rows), file format is parquet
+h2o_medium:             h2oai with medium dataset (1e8 rows), file format is parquet
+h2o_large:              h2oai with large dataset (1e9 rows),  file format is parquet
 
 **********
 * Supported Configuration (Environment Variables)
@@ -142,6 +145,9 @@ main() {
                 all)
                     data_tpch "1"
                     data_tpch "10"
+                    data_h2o "SMALL"
+                    data_h2o "MEDIUM"
+                    data_h2o "LARGE"
                     data_clickbench_1
                     data_clickbench_partitioned
                     data_imdb
@@ -171,6 +177,18 @@ main() {
                     ;;
                 imdb)
                     data_imdb
+                    ;;
+                h2o_small)
+                    data_h2o "SMALL"
+                    ;;
+                h2o_medium)
+                    data_h2o "MEDIUM"
+                    ;;
+                h2o_large)
+                    data_h2o "LARGE"
+                    ;;
+                h2o_small_csv)
+                    data_h2o "SMALL" "CSV"
                     ;;
                 external_aggr)
                     # same data as for tpch
@@ -221,6 +239,9 @@ main() {
                     run_clickbench_1
                     run_clickbench_partitioned
                     run_clickbench_extended
+                    run_h2o "SMALL" "PARQUET" "groupby"
+                    run_h2o "MEDIUM" "PARQUET" "groupby"
+                    run_h2o "LARGE" "PARQUET" "groupby"
                     run_imdb
                     run_external_aggr
                     ;;
@@ -253,6 +274,18 @@ main() {
                     ;;
                 imdb)
                     run_imdb
+                    ;;
+                h2o_small)
+                    run_h2o "SMALL" "PARQUET" "groupby"
+                    ;;
+                h2o_medium)
+                    run_h2o "MEDIUM" "PARQUET" "groupby"
+                    ;;
+                h2o_large)
+                    run_h2o "LARGE" "PARQUET" "groupby"
+                    ;;
+                h2o_small_csv)
+                    run_h2o "SMALL" "CSV" "groupby"
                     ;;
                 external_aggr)
                     run_external_aggr
@@ -539,6 +572,91 @@ run_imdb() {
     echo "RESULTS_FILE: ${RESULTS_FILE}"
     echo "Running imdb benchmark..."
     $CARGO_COMMAND --bin imdb -- benchmark datafusion --iterations 5 --path "${IMDB_DIR}" --prefer_hash_join "${PREFER_HASH_JOIN}" --format parquet -o "${RESULTS_FILE}"
+}
+
+data_h2o() {
+     # Default values for size and data format
+     SIZE=${1:-"SMALL"}
+     DATA_FORMAT=${2:-"PARQUET"}
+
+     # Ensure the Python version is 3.10 or higher
+     REQUIRED_PYTHON="python3.10"
+     if ! command -v $REQUIRED_PYTHON &> /dev/null
+     then
+         echo "$REQUIRED_PYTHON could not be found. Please install Python 3.10 or higher."
+         return 1
+     fi
+
+     # Install falsa and other dependencies
+     echo "Installing falsa..."
+
+     # Set virtual environment directory
+     VIRTUAL_ENV="${PWD}/.venv"
+
+     # Check if the virtual environment already exists
+     if [ ! -d "$VIRTUAL_ENV" ]; then
+         # Create a virtual environment using Python 3.10
+         $REQUIRED_PYTHON -m venv "$VIRTUAL_ENV"
+     fi
+
+     # Activate the virtual environment and install dependencies
+     source "$VIRTUAL_ENV/bin/activate"
+
+     # Ensure 'falsa' is installed (avoid unnecessary reinstall)
+     pip install --quiet --upgrade falsa
+
+     # Create directory if it doesn't exist
+     H2O_DIR="${DATA_DIR}/h2o"
+     mkdir -p "${H2O_DIR}"
+
+     # Generate h2o test data
+     echo "Generating h2o test data in ${H2O_DIR} with size=${SIZE} and format=${DATA_FORMAT}"
+     falsa groupby --path-prefix="${H2O_DIR}" --size "${SIZE}" --data-format "${DATA_FORMAT}"
+
+     # Deactivate virtual environment after completion
+     deactivate
+ }
+
+run_h2o() {
+    # Default values for size and data format
+    SIZE=${1:-"SMALL"}
+    DATA_FORMAT=${2:-"PARQUET"}
+    DATA_FORMAT=$(echo "$DATA_FORMAT" | tr '[:upper:]' '[:lower:]')
+    RUN_Type=${3:-"groupby"}
+
+    # Data directory and results file path
+    H2O_DIR="${DATA_DIR}/h2o"
+    RESULTS_FILE="${RESULTS_DIR}/h2o.json"
+
+    echo "RESULTS_FILE: ${RESULTS_FILE}"
+    echo "Running h2o benchmark..."
+
+    # Set the file name based on the size
+    case "$SIZE" in
+        "SMALL")
+            FILE_NAME="G1_1e7_1e7_100_0.${DATA_FORMAT}"  # For small dataset
+            ;;
+        "MEDIUM")
+            FILE_NAME="G1_1e8_1e8_100_0.${DATA_FORMAT}"  # For medium dataset
+            ;;
+        "BIG")
+            FILE_NAME="G1_1e9_1e9_100_0.${DATA_FORMAT}"  # For big dataset
+            ;;
+        *)
+            echo "Invalid size. Valid options are SMALL, MEDIUM, or BIG."
+            return 1
+            ;;
+    esac
+
+     # Set the query file name based on the RUN_Type
+    QUERY_FILE="${SCRIPT_DIR}/queries/h2o/${RUN_Type}.sql"
+
+    # Run the benchmark using the dynamically constructed file path and query file
+    $CARGO_COMMAND --bin dfbench -- h2o \
+        --iterations 5 \
+        --path "${H2O_DIR}/${FILE_NAME}" \
+        --queries-path "${QUERY_FILE}" \
+        -o "${RESULTS_FILE}"
 }
 
 # Runs the external aggregation benchmark

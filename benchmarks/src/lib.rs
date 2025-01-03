@@ -23,3 +23,4 @@ pub mod sort;
 pub mod sort_tpch;
 pub mod tpch;
 pub mod util;
+pub mod h2o;
