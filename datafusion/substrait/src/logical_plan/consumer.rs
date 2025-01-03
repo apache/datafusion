@@ -233,6 +233,8 @@ pub trait SubstraitConsumer: Send + Sync + Sized {
     // These methods have default implementations calling the common handler code, to allow for users
     // to re-use common handling logic.
 
+    /// All [Rel]s to be converted pass through this method.
+    /// You can provide your own implementation if you wish to customize the conversion behaviour.
     async fn consume_rel(&self, rel: &Rel) -> Result<LogicalPlan> {
         from_substrait_rel(self, rel).await
     }
@@ -289,6 +291,8 @@ pub trait SubstraitConsumer: Send + Sync + Sized {
     // These methods have default implementations calling the common handler code, to allow for users
     // to re-use common handling logic.
 
+    /// All [Expression]s to be converted pass through this method.
+    /// You can provide your own implementation if you wish to customize the conversion behaviour.
     async fn consume_expression(
         &self,
         expr: &Expression,
@@ -751,11 +755,9 @@ pub async fn from_substrait_plan_with_consumer(
         1 => {
             match plan.relations[0].rel_type.as_ref() {
                 Some(rt) => match rt {
-                    plan_rel::RelType::Rel(rel) => {
-                        Ok(consumer.consume_rel( rel).await?)
-                    },
+                    plan_rel::RelType::Rel(rel) => Ok(consumer.consume_rel(rel).await?),
                     plan_rel::RelType::Root(root) => {
-                        let plan = consumer.consume_rel( root.input.as_ref().unwrap()).await?;
+                        let plan = consumer.consume_rel(root.input.as_ref().unwrap()).await?;
                         if root.names.is_empty() {
                             // Backwards compatibility for plans missing names
                             return Ok(plan);
