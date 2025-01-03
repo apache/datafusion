@@ -17,31 +17,13 @@
 
 use std::sync::Arc;
 
-use abi_stable::{export_root_module, prefix_type::PrefixTypeTrait};
-use arrow_array::RecordBatch;
-use datafusion::{
-    arrow::datatypes::{DataType, Field, Schema},
-    common::record_batch,
-    datasource::MemTable,
-};
+use datafusion::datasource::MemTable;
 use datafusion_ffi::table_provider::FFI_TableProvider;
-use ffi_module_interface::{TableProviderModule, TableProviderModuleRef};
 
-fn create_record_batch(start_value: i32, num_values: usize) -> RecordBatch {
-    let end_value = start_value + num_values as i32;
-    let a_vals: Vec<i32> = (start_value..end_value).collect();
-    let b_vals: Vec<f64> = a_vals.iter().map(|v| *v as f64).collect();
+use crate::{create_record_batch, create_test_schema};
 
-    record_batch!(("a", Int32, a_vals), ("b", Float64, b_vals)).unwrap()
-}
-
-/// Here we only wish to create a simple table provider as an example.
-/// We create an in-memory table and convert it to it's FFI counterpart.
-extern "C" fn construct_simple_table_provider() -> FFI_TableProvider {
-    let schema = Arc::new(Schema::new(vec![
-        Field::new("a", DataType::Int32, true),
-        Field::new("b", DataType::Float64, true),
-    ]));
+pub(crate) fn create_sync_table_provider() -> FFI_TableProvider {
+    let schema = create_test_schema();
 
     // It is useful to create these as multiple record batches
     // so that we can demonstrate the FFI stream.
@@ -54,13 +36,4 @@ extern "C" fn construct_simple_table_provider() -> FFI_TableProvider {
     let table_provider = MemTable::try_new(schema, vec![batches]).unwrap();
 
     FFI_TableProvider::new(Arc::new(table_provider), true, None)
-}
-
-#[export_root_module]
-/// This defines the entry point for using the module.
-pub fn get_simple_memory_table() -> TableProviderModuleRef {
-    TableProviderModule {
-        create_table: construct_simple_table_provider,
-    }
-    .leak_into_prefix()
 }

@@ -16,15 +16,15 @@
 # under the License.
 
 [package]
-name = "datafusion-ffi"
-description = "Foreign Function Interface implementation for DataFusion"
-readme = "README.md"
+name = "datafusion-ffi-test"
+description = "Integration tests for DataFusion FFI"
 version = { workspace = true }
 edition = { workspace = true }
 homepage = { workspace = true }
 repository = { workspace = true }
 license = { workspace = true }
 authors = { workspace = true }
+publish = false
 # Specify MSRV here as `cargo msrv` doesn't support workspace version
 rust-version = "1.80.1"
 
@@ -32,21 +32,16 @@ rust-version = "1.80.1"
 workspace = true
 
 [lib]
-name = "datafusion_ffi"
-path = "src/lib.rs"
+name = "datafusion_ffi_test"
+crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 abi_stable = "0.11.3"
-arrow = { workspace = true, features = ["ffi"] }
-async-ffi = { version = "0.5.0", features = ["abi_stable"] }
+arrow = { workspace = true }
+arrow-array = { workspace = true }
+arrow-schema = { workspace = true }
 async-trait = { workspace = true }
 datafusion = { workspace = true, default-features = false }
-datafusion-proto = { workspace = true }
+datafusion-ffi = { workspace = true }
 futures = { workspace = true }
-log = { workspace = true }
-prost = { workspace = true }
-semver = "1.0.24"
 tokio = { workspace = true }
-
-[dev-dependencies]
-doc-comment = { workspace = true }
