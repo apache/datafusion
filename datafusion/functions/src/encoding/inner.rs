@@ -131,10 +131,10 @@ impl ScalarUDFImpl for EncodeFunc {
 #[user_doc(
     doc_section(label = "Binary String Functions"),
     description = "Decode binary data from textual representation in string.",
-    syntax_example = "decode(e xpression, format)",
+    syntax_example = "decode(expression, format)",
     argument(
         name = "expression",
-        description = "Expression containing string or binary data"
+        description = "Expression containing encoded string data"
     ),
     argument(name = "format", description = "Same arguments as [encode](#encode)"),
     related_udf(name = "encode")
