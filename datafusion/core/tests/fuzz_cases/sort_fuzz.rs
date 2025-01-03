@@ -123,7 +123,7 @@ impl SortTest {
             },
         }]);
 
-        let exec = MemoryExec::try_new(&input, schema, None).unwrap();
+        let exec = MemoryExec::try_new(&input, schema, None, None).unwrap();
         let sort = Arc::new(SortExec::new(sort, Arc::new(exec)));
 
         let session_config = SessionConfig::new();

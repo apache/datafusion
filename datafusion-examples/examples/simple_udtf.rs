@@ -123,6 +123,7 @@ impl TableProvider for LocalCsvTable {
         Ok(Arc::new(MemoryExec::try_new(
             &[batches],
             TableProvider::schema(self),
+            None,
             projection.cloned(),
         )?))
     }

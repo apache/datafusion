@@ -1535,6 +1535,7 @@ mod tests {
             &[vec![batch.clone(), batch.clone(), batch.clone()]],
             Arc::clone(&schema),
             None,
+            None,
         )
         .map(|e| Arc::new(e) as Arc<dyn ExecutionPlan>)?;
         let col_a = col("a", &schema)?;

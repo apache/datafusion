@@ -96,7 +96,7 @@ pub fn build_table_scan_i32(
 ) -> Arc<dyn ExecutionPlan> {
     let batch = build_table_i32(a, b, c);
     let schema = batch.schema();
-    Arc::new(MemoryExec::try_new(&[vec![batch]], schema, None).unwrap())
+    Arc::new(MemoryExec::try_new(&[vec![batch]], schema, None, None).unwrap())
 }
 
 /// Return a RecordBatch with a single Int32 array with values (0..sz) in a field named "i"
@@ -122,7 +122,7 @@ pub fn mem_exec(partitions: usize) -> MemoryExec {
 
     let schema = data[0][0].schema();
     let projection = None;
-    MemoryExec::try_new(&data, schema, projection).unwrap()
+    MemoryExec::try_new(&data, schema, None, projection).unwrap()
 }
 
 // Construct a stream partition for test purposes

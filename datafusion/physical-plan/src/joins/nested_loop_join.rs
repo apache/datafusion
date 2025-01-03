@@ -948,7 +948,7 @@ pub(crate) mod tests {
         };
 
         let mut exec =
-            MemoryExec::try_new(&[batches], Arc::clone(&schema), None).unwrap();
+            MemoryExec::try_new(&[batches], Arc::clone(&schema), None, None).unwrap();
         if !sorted_column_names.is_empty() {
             let mut sort_info = LexOrdering::default();
             for name in sorted_column_names {

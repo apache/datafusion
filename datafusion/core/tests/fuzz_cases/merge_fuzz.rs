@@ -116,7 +116,7 @@ async fn run_merge_test(input: Vec<Vec<RecordBatch>>) {
             },
         }]);
 
-        let exec = MemoryExec::try_new(&input, schema, None).unwrap();
+        let exec = MemoryExec::try_new(&input, schema, None, None).unwrap();
         let merge = Arc::new(SortPreservingMergeExec::new(sort, Arc::new(exec)));
 
         let session_config = SessionConfig::new().with_batch_size(batch_size);

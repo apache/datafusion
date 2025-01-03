@@ -132,6 +132,7 @@ impl MemTable {
         state: &SessionState,
     ) -> Result<Self> {
         let schema = t.schema();
+        let constraints = t.constraints();
         let exec = t.scan(state, None, &[], None).await?;
         let partition_count = exec.output_partitioning().partition_count();
 
@@ -162,7 +163,8 @@ impl MemTable {
             }
         }
 
-        let exec = MemoryExec::try_new(&data, Arc::clone(&schema), None)?;
+        let exec =
+            MemoryExec::try_new(&data, Arc::clone(&schema), constraints.cloned(), None)?;
 
         if let Some(num_partitions) = output_partitions {
             let exec = RepartitionExec::try_new(
@@ -220,8 +222,12 @@ impl TableProvider for MemTable {
             partitions.push(inner_vec.clone())
         }
 
-        let mut exec =
-            MemoryExec::try_new(&partitions, self.schema(), projection.cloned())?;
+        let mut exec = MemoryExec::try_new(
+            &partitions,
+            self.schema(),
+            self.constraints().cloned(),
+            projection.cloned(),
+        )?;
 
         let show_sizes = state.config_options().explain.show_sizes;
         exec = exec.with_show_sizes(show_sizes);

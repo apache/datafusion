@@ -339,6 +339,7 @@ impl TableProvider for RemoteTable {
         Ok(Arc::new(MemoryExec::try_new(
             &[batches],
             self.schema.clone(),
+            None,
             projection.cloned(),
         )?))
     }

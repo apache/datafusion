@@ -252,6 +252,7 @@ mod tests {
             &[vec![batch]],
             Arc::clone(&schema),
             None,
+            None,
         )?))
     }
 

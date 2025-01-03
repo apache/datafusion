@@ -357,7 +357,7 @@ mod sp_repartition_fuzz_tests {
         let concat_input_record = concat_batches(&schema, &input1).unwrap();
 
         let running_source = Arc::new(
-            MemoryExec::try_new(&[input1.clone()], schema.clone(), None)
+            MemoryExec::try_new(&[input1.clone()], schema.clone(), None, None)
                 .unwrap()
                 .try_with_sort_information(vec![sort_keys.clone()])
                 .unwrap(),

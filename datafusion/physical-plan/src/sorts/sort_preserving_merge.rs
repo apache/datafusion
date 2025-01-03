@@ -415,7 +415,7 @@ mod tests {
             },
         ]);
 
-        let exec = MemoryExec::try_new(&[rbs], schema, None).unwrap();
+        let exec = MemoryExec::try_new(&[rbs], schema, None, None).unwrap();
         let repartition_exec =
             RepartitionExec::try_new(Arc::new(exec), Partitioning::RoundRobinBatch(2))?;
         let coalesce_batches_exec =
@@ -507,8 +507,9 @@ mod tests {
 
         let schema = batch.schema();
         let sort = LexOrdering::default(); // no sort expressions
-        let exec = MemoryExec::try_new(&[vec![batch.clone()], vec![batch]], schema, None)
-            .unwrap();
+        let exec =
+            MemoryExec::try_new(&[vec![batch.clone()], vec![batch]], schema, None, None)
+                .unwrap();
         let merge = Arc::new(SortPreservingMergeExec::new(sort, Arc::new(exec)));
 
         let res = collect(merge, task_ctx).await.unwrap_err();
@@ -695,7 +696,7 @@ mod tests {
                 options: Default::default(),
             },
         ]);
-        let exec = MemoryExec::try_new(partitions, schema, None).unwrap();
+        let exec = MemoryExec::try_new(partitions, schema, None, None).unwrap();
         let merge = Arc::new(SortPreservingMergeExec::new(sort, Arc::new(exec)));
 
         let collected = collect(merge, context).await.unwrap();
@@ -804,7 +805,7 @@ mod tests {
         let split: Vec<_> = sizes.iter().map(|x| split_batch(&sorted, *x)).collect();
 
         Ok(Arc::new(
-            MemoryExec::try_new(&split, sorted.schema(), None).unwrap(),
+            MemoryExec::try_new(&split, sorted.schema(), None, None).unwrap(),
         ))
     }
 
@@ -933,7 +934,8 @@ mod tests {
                 },
             },
         ]);
-        let exec = MemoryExec::try_new(&[vec![b1], vec![b2]], schema, None).unwrap();
+        let exec =
+            MemoryExec::try_new(&[vec![b1], vec![b2]], schema, None, None).unwrap();
         let merge = Arc::new(SortPreservingMergeExec::new(sort, Arc::new(exec)));
 
         let collected = collect(merge, task_ctx).await.unwrap();
@@ -975,7 +977,7 @@ mod tests {
                 nulls_first: true,
             },
         }]);
-        let exec = MemoryExec::try_new(&[vec![batch]], schema, None).unwrap();
+        let exec = MemoryExec::try_new(&[vec![batch]], schema, None, None).unwrap();
         let merge = Arc::new(
             SortPreservingMergeExec::new(sort, Arc::new(exec)).with_fetch(Some(2)),
         );
@@ -1011,7 +1013,7 @@ mod tests {
                 nulls_first: true,
             },
         }]);
-        let exec = MemoryExec::try_new(&[vec![batch]], schema, None).unwrap();
+        let exec = MemoryExec::try_new(&[vec![batch]], schema, None, None).unwrap();
         let merge = Arc::new(SortPreservingMergeExec::new(sort, Arc::new(exec)));
 
         let collected = collect(merge, task_ctx).await.unwrap();
@@ -1120,7 +1122,8 @@ mod tests {
             expr: col("b", &schema).unwrap(),
             options: Default::default(),
         }]);
-        let exec = MemoryExec::try_new(&[vec![b1], vec![b2]], schema, None).unwrap();
+        let exec =
+            MemoryExec::try_new(&[vec![b1], vec![b2]], schema, None, None).unwrap();
         let merge = Arc::new(SortPreservingMergeExec::new(sort, Arc::new(exec)));
 
         let collected = collect(Arc::clone(&merge) as Arc<dyn ExecutionPlan>, task_ctx)
@@ -1231,7 +1234,7 @@ mod tests {
             },
         }]);
 
-        let exec = MemoryExec::try_new(&partitions, schema, None).unwrap();
+        let exec = MemoryExec::try_new(&partitions, schema, None, None).unwrap();
         let merge = Arc::new(SortPreservingMergeExec::new(sort, Arc::new(exec)));
 
         let collected = collect(merge, task_ctx).await.unwrap();

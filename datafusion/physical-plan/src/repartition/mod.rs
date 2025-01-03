@@ -1124,7 +1124,8 @@ mod tests {
     ) -> Result<Vec<Vec<RecordBatch>>> {
         let task_ctx = Arc::new(TaskContext::default());
         // create physical plan
-        let exec = MemoryExec::try_new(&input_partitions, Arc::clone(schema), None)?;
+        let exec =
+            MemoryExec::try_new(&input_partitions, Arc::clone(schema), None, None)?;
         let exec = RepartitionExec::try_new(Arc::new(exec), partitioning)?;
 
         // execute and collect results
@@ -1515,7 +1516,8 @@ mod tests {
         let task_ctx = Arc::new(task_ctx);
 
         // create physical plan
-        let exec = MemoryExec::try_new(&input_partitions, Arc::clone(&schema), None)?;
+        let exec =
+            MemoryExec::try_new(&input_partitions, Arc::clone(&schema), None, None)?;
         let exec = RepartitionExec::try_new(Arc::new(exec), partitioning)?;
 
         // pull partitions
@@ -1661,7 +1663,7 @@ mod test {
     }
 
     fn memory_exec(schema: &SchemaRef) -> Arc<dyn ExecutionPlan> {
-        Arc::new(MemoryExec::try_new(&[vec![]], Arc::clone(schema), None).unwrap())
+        Arc::new(MemoryExec::try_new(&[vec![]], Arc::clone(schema), None, None).unwrap())
     }
 
     fn sorted_memory_exec(
@@ -1669,7 +1671,7 @@ mod test {
         sort_exprs: LexOrdering,
     ) -> Arc<dyn ExecutionPlan> {
         Arc::new(
-            MemoryExec::try_new(&[vec![]], Arc::clone(schema), None)
+            MemoryExec::try_new(&[vec![]], Arc::clone(schema), None, None)
                 .unwrap()
                 .try_with_sort_information(vec![sort_exprs])
                 .unwrap(),

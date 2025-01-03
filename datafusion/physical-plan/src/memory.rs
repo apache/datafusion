@@ -31,7 +31,7 @@ use crate::execution_plan::{Boundedness, EmissionType};
 
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
-use datafusion_common::{internal_err, project_schema, Result};
+use datafusion_common::{internal_err, project_schema, Constraints, Result};
 use datafusion_execution::memory_pool::MemoryReservation;
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::equivalence::ProjectionMapping;
@@ -50,6 +50,8 @@ pub struct MemoryExec {
     schema: SchemaRef,
     /// Schema representing the data after the optional projection is applied
     projected_schema: SchemaRef,
+    /// Table constraints
+    constraints: Constraints,
     /// Optional projection
     projection: Option<Vec<usize>>,
     // Sort information: one or more equivalent orderings
@@ -158,15 +160,22 @@ impl MemoryExec {
     pub fn try_new(
         partitions: &[Vec<RecordBatch>],
         schema: SchemaRef,
+        constraints: Option<Constraints>,
         projection: Option<Vec<usize>>,
     ) -> Result<Self> {
         let projected_schema = project_schema(&schema, projection.as_ref())?;
-        let cache =
-            Self::compute_properties(Arc::clone(&projected_schema), &[], partitions);
+        let constraints = constraints.unwrap_or_else(Constraints::empty);
+        let cache = Self::compute_properties(
+            Arc::clone(&projected_schema),
+            &[],
+            &constraints,
+            partitions,
+        );
         Ok(Self {
             partitions: partitions.to_vec(),
             schema,
             projected_schema,
+            constraints,
             projection,
             sort_information: vec![],
             cache,
@@ -178,6 +187,11 @@ impl MemoryExec {
     pub fn with_show_sizes(mut self, show_sizes: bool) -> Self {
         self.show_sizes = show_sizes;
         self
+    }
+
+    /// Ref to constraints
+    pub fn constraints(&self) -> &Constraints {
+        &self.constraints
     }
 
     /// Ref to partitions
@@ -284,10 +298,12 @@ impl MemoryExec {
     fn compute_properties(
         schema: SchemaRef,
         orderings: &[LexOrdering],
+        constraints: &Constraints,
         partitions: &[Vec<RecordBatch>],
     ) -> PlanProperties {
         PlanProperties::new(
-            EquivalenceProperties::new_with_orderings(schema, orderings),
+            EquivalenceProperties::new_with_orderings(schema, orderings)
+                .with_constraints(constraints.clone()),
             Partitioning::UnknownPartitioning(partitions.len()),
             EmissionType::Incremental,
             Boundedness::Bounded,
@@ -563,7 +579,7 @@ mod memory_exec_tests {
         expected_output_order.extend(sort2.clone());
 
         let sort_information = vec![sort1.clone(), sort2.clone()];
-        let mem_exec = MemoryExec::try_new(&[vec![]], schema, None)?
+        let mem_exec = MemoryExec::try_new(&[vec![]], schema, None, None)?
             .try_with_sort_information(sort_information)?;
 
         assert_eq!(

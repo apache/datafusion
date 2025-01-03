@@ -244,6 +244,7 @@ impl TableProvider for ParquetMetadataTable {
         Ok(Arc::new(MemoryExec::try_new(
             &[vec![self.batch.clone()]],
             TableProvider::schema(self),
+            None,
             projection.cloned(),
         )?))
     }
