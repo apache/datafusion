@@ -353,6 +353,16 @@ AS VALUES
 ;
 
 statement ok
+CREATE TABLE array_has_table_null
+AS VALUES
+  (make_array(1, 2), 1),
+  (make_array(1, NULL), 1),
+  (make_array(3, 4, 5), 2),
+  (make_array(3, NULL, 5), 2),
+  (make_array(NULL, NULL, NULL), 2)
+;
+
+statement ok
 CREATE TABLE array_distinct_table_1D
 AS VALUES
   (make_array(1, 1, 2, 2, 3)),
@@ -5260,6 +5270,13 @@ select array_has([], null),
 ----
 NULL NULL NULL
 
+# Always return false if not contained even if list has null elements
+query BB
+select array_has([1, null, 2], 3),
+       array_has([null, null, null], 3);
+----
+false false
+
 #TODO: array_has_all and array_has_any cannot handle NULL
 #query BBBB
 #select array_has_any([], null),
@@ -5337,6 +5354,16 @@ from array_has_table_1D;
 ----
 true true true
 false false false
+
+query B
+select array_has(column1, column2)
+from array_has_table_null;
+----
+true
+true
+false
+false
+false
 
 query B
 select array_has(column1, column2)
@@ -5574,9 +5601,9 @@ false false false true
 true false true false
 true false false true
 false true false false
-NULL NULL false false
-false false NULL false
-false false false NULL
+false false false false
+false false false false
+false false false false
 
 query BBBBBBBBBBBBB
 select array_has_all(make_array(1,2,3), make_array(1,3)),
