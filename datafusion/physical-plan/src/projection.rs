@@ -32,7 +32,7 @@ use super::{
     DisplayAs, ExecutionPlanProperties, PlanProperties, RecordBatchStream,
     SendableRecordBatchStream, Statistics,
 };
-use crate::{ColumnStatistics, DisplayFormatType, ExecutionPlan, PhysicalExpr};
+use crate::{DisplayFormatType, ExecutionPlan, PhysicalExpr};
 
 use arrow::datatypes::{Field, Schema, SchemaRef};
 use arrow::record_batch::{RecordBatch, RecordBatchOptions};
@@ -225,11 +225,11 @@ impl ExecutionPlan for ProjectionExec {
     }
 
     fn statistics(&self) -> Result<Statistics> {
-        Ok(stats_projection(
+        stats_projection(
             self.input.statistics()?,
             self.expr.iter().map(|(e, _)| Arc::clone(e)),
             Arc::clone(&self.schema),
-        ))
+        )
     }
 
     fn supports_limit_pushdown(&self) -> bool {
@@ -263,18 +263,12 @@ fn stats_projection(
     mut stats: Statistics,
     exprs: impl Iterator<Item = Arc<dyn PhysicalExpr>>,
     schema: SchemaRef,
-) -> Statistics {
+) -> Result<Statistics> {
     let mut primitive_row_size = 0;
     let mut primitive_row_size_possible = true;
     let mut column_statistics = vec![];
     for expr in exprs {
-        let col_stats = if let Some(col) = expr.as_any().downcast_ref::<Column>() {
-            stats.column_statistics[col.index()].clone()
-        } else {
-            // TODO stats: estimate more statistics from expressions
-            // (expressions should compute their statistics themselves)
-            ColumnStatistics::new_unknown()
-        };
+        let col_stats = expr.column_statistics(&stats)?;
         column_statistics.push(col_stats);
         if let Ok(data_type) = expr.data_type(&schema) {
             if let Some(value) = data_type.primitive_width() {
@@ -290,7 +284,7 @@ fn stats_projection(
             Precision::Exact(primitive_row_size).multiply(&stats.num_rows);
     }
     stats.column_statistics = column_statistics;
-    stats
+    Ok(stats)
 }
 
 impl ProjectionStream {
@@ -360,7 +354,7 @@ mod tests {
     use crate::test;
 
     use arrow_schema::DataType;
-    use datafusion_common::ScalarValue;
+    use datafusion_common::{ColumnStatistics, ScalarValue};
 
     #[tokio::test]
     async fn project_no_column() -> Result<()> {
@@ -388,18 +382,21 @@ mod tests {
                     distinct_count: Precision::Exact(5),
                     max_value: Precision::Exact(ScalarValue::Int64(Some(21))),
                     min_value: Precision::Exact(ScalarValue::Int64(Some(-4))),
+                    sum_value: Precision::Exact(ScalarValue::Int64(Some(42))),
                     null_count: Precision::Exact(0),
                 },
                 ColumnStatistics {
                     distinct_count: Precision::Exact(1),
                     max_value: Precision::Exact(ScalarValue::from("x")),
                     min_value: Precision::Exact(ScalarValue::from("a")),
+                    sum_value: Precision::Absent,
                     null_count: Precision::Exact(3),
                 },
                 ColumnStatistics {
                     distinct_count: Precision::Absent,
                     max_value: Precision::Exact(ScalarValue::Float32(Some(1.1))),
                     min_value: Precision::Exact(ScalarValue::Float32(Some(0.1))),
+                    sum_value: Precision::Exact(ScalarValue::Float32(Some(5.5))),
                     null_count: Precision::Absent,
                 },
             ],
@@ -422,7 +419,8 @@ mod tests {
             Arc::new(Column::new("col0", 0)),
         ];
 
-        let result = stats_projection(source, exprs.into_iter(), Arc::new(schema));
+        let result =
+            stats_projection(source, exprs.into_iter(), Arc::new(schema)).unwrap();
 
         let expected = Statistics {
             num_rows: Precision::Exact(5),
@@ -432,12 +430,14 @@ mod tests {
                     distinct_count: Precision::Exact(1),
                     max_value: Precision::Exact(ScalarValue::from("x")),
                     min_value: Precision::Exact(ScalarValue::from("a")),
+                    sum_value: Precision::Absent,
                     null_count: Precision::Exact(3),
                 },
                 ColumnStatistics {
                     distinct_count: Precision::Exact(5),
                     max_value: Precision::Exact(ScalarValue::Int64(Some(21))),
                     min_value: Precision::Exact(ScalarValue::Int64(Some(-4))),
+                    sum_value: Precision::Exact(ScalarValue::Int64(Some(42))),
                     null_count: Precision::Exact(0),
                 },
             ],
@@ -456,7 +456,8 @@ mod tests {
             Arc::new(Column::new("col0", 0)),
         ];
 
-        let result = stats_projection(source, exprs.into_iter(), Arc::new(schema));
+        let result =
+            stats_projection(source, exprs.into_iter(), Arc::new(schema)).unwrap();
 
         let expected = Statistics {
             num_rows: Precision::Exact(5),
@@ -466,12 +467,14 @@ mod tests {
                     distinct_count: Precision::Absent,
                     max_value: Precision::Exact(ScalarValue::Float32(Some(1.1))),
                     min_value: Precision::Exact(ScalarValue::Float32(Some(0.1))),
+                    sum_value: Precision::Exact(ScalarValue::Float32(Some(5.5))),
                     null_count: Precision::Absent,
                 },
                 ColumnStatistics {
                     distinct_count: Precision::Exact(5),
                     max_value: Precision::Exact(ScalarValue::Int64(Some(21))),
                     min_value: Precision::Exact(ScalarValue::Int64(Some(-4))),
+                    sum_value: Precision::Exact(ScalarValue::Int64(Some(42))),
                     null_count: Precision::Exact(0),
                 },
             ],

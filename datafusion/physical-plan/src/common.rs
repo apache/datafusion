@@ -333,12 +333,14 @@ mod tests {
                     distinct_count: Precision::Absent,
                     max_value: Precision::Absent,
                     min_value: Precision::Absent,
+                    sum_value: Precision::Absent,
                     null_count: Precision::Exact(0),
                 },
                 ColumnStatistics {
                     distinct_count: Precision::Absent,
                     max_value: Precision::Absent,
                     min_value: Precision::Absent,
+                    sum_value: Precision::Absent,
                     null_count: Precision::Exact(0),
                 },
             ],
@@ -371,6 +373,7 @@ mod tests {
                 distinct_count: Precision::Absent,
                 max_value: Precision::Absent,
                 min_value: Precision::Absent,
+                sum_value: Precision::Absent,
                 null_count: Precision::Exact(3),
             }],
         };
