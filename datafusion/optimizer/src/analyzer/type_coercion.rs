@@ -1458,7 +1458,7 @@ mod test {
         let empty = empty_with_type(Utf8);
         let plan = LogicalPlan::Filter(Filter::try_new(expr, empty)?);
         let expected =
-            "Filter: a BETWEEN Utf8(\"2002-05-08\") AND CAST(CAST(Utf8(\"2002-05-08\") AS Date32) + IntervalYearMonth(\"1\") AS Utf8)\
+            "Filter: CAST(a AS Date32) BETWEEN CAST(Utf8(\"2002-05-08\") AS Date32) AND CAST(Utf8(\"2002-05-08\") AS Date32) + IntervalYearMonth(\"1\")\
             \n  EmptyRelation";
         assert_analyzed_plan_eq(Arc::new(TypeCoercion::new()), plan, expected)
     }
