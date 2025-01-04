@@ -66,7 +66,7 @@ make_udf_expr_and_func!(
     )
 )]
 #[derive(Debug)]
-pub(super) struct ArraySort {
+pub struct ArraySort {
     signature: Signature,
     aliases: Vec<String>,
 }
