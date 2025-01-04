@@ -87,5 +87,13 @@ The following DataFusion crates are verified to work in a wasm-pack environment 
 - `datafusion-physical-expr`
 - `datafusion-physical-plan`
 - `datafusion-sql`
+- `datafusion-expr-common`
+- `datafusion-physical-expr-common`
+- `datafusion-functions`
+- `datafusion-functions-aggregate`
+- `datafusion-functions-aggregate-common`
+- `datafusion-functions-table`
+- `datafusion-catalog`
+- `datafusion-common-runtime`
 
-The difficulty with getting the remaining DataFusion crates compiled to WASM is that they have non-optional dependencies on the [`parquet`](https://docs.rs/crate/parquet/) crate with its default features enabled. Several of the default parquet crate features require native dependencies that are not compatible with WASM, in particular the `lz4` and `zstd` features. If we can arrange our feature flags to make it possible to depend on parquet with these features disabled, then it should be possible to compile the core `datafusion` crate to WASM as well.
+The `datafusion-ffi` crate cannot compile for the wasm32-unknown-unknown target because it relies on lzma-sys, which depends on native C libraries (liblzma). The wasm32-unknown-unknown target lacks a standard C library (stdlib.h) and POSIX-like environment, preventing the native code from being compiled.
