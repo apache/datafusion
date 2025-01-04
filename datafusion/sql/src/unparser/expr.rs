@@ -1636,7 +1636,7 @@ mod tests {
 
     use crate::unparser::dialect::{
         CharacterLengthStyle, CustomDialect, CustomDialectBuilder, DateFieldExtractStyle,
-        Dialect, PostgreSqlDialect,
+        Dialect, DuckDBDialect, PostgreSqlDialect, ScalarFnToSqlHandler,
     };
 
     use super::*;
@@ -2719,6 +2719,30 @@ mod tests {
         let expected = r#"a IS NULL"#.to_string();
 
         assert_eq!(actual, expected);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_custom_scalar_overrides_duckdb() -> Result<()> {
+        let duckdb_default = DuckDBDialect::new();
+        let duckdb_extended = DuckDBDialect::new().with_custom_scalar_overrides(vec![(
+            "dummy_udf",
+            Box::new(|unparser: &Unparser, args: &[Expr]| {
+                unparser.scalar_function_to_sql("smart_udf", args).map(Some)
+            }) as ScalarFnToSqlHandler,
+        )]);
+
+        for (dialect, expected) in [
+            (duckdb_default, r#"dummy_udf("a", "b")"#),
+            (duckdb_extended, r#"smart_udf("a", "b")"#),
+        ] {
+            let unparser = Unparser::new(&dialect);
+            let expr =
+                ScalarUDF::new_from_impl(DummyUDF::new()).call(vec![col("a"), col("b")]);
+            let actual = format!("{}", unparser.expr_to_sql(&expr)?);
+            assert_eq!(actual, expected);
+        }
 
         Ok(())
     }
