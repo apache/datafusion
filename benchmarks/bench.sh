@@ -677,7 +677,7 @@ run_h2o() {
         --iterations 3 \
         --path "${H2O_DIR}/${FILE_NAME}" \
         --queries-path "${QUERY_FILE}" \
-        -o "${RESULTS_FILE}"\
+        -o "${RESULTS_FILE}"
 }
 
 # Runs the external aggregation benchmark
