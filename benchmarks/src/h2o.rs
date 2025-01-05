@@ -78,7 +78,7 @@ impl RunOpt {
             let sql = queries.get_query(query_id)?;
             println!("Q{query_id}: {sql}");
 
-            for i in 0..iterations {
+            for i in 1..=iterations {
                 let start = Instant::now();
                 let results = ctx.sql(sql).await?.collect().await?;
                 let elapsed = start.elapsed();
@@ -152,7 +152,7 @@ impl AllQueries {
     /// Returns the text of query `query_id`
     fn get_query(&self, query_id: usize) -> Result<&str> {
         self.queries
-            .get(query_id)
+            .get(query_id - 1)
             .ok_or_else(|| {
                 let min_id = self.min_query_id();
                 let max_id = self.max_query_id();
@@ -164,10 +164,10 @@ impl AllQueries {
     }
 
     fn min_query_id(&self) -> usize {
-        0
+        1
     }
 
     fn max_query_id(&self) -> usize {
-        self.queries.len() - 1
+        self.queries.len()
     }
 }

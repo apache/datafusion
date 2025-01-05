@@ -80,9 +80,9 @@ clickbench_1:           ClickBench queries against a single parquet file
 clickbench_partitioned: ClickBench queries against a partitioned (100 files) parquet
 clickbench_extended:    ClickBench \"inspired\" queries against a single parquet (DataFusion specific)
 external_aggr:          External aggregation benchmark
-h2o_small:              h2oai with small dataset (1e7 rows), file format is parquet
-h2o_medium:             h2oai with medium dataset (1e8 rows), file format is parquet
-h2o_large:              h2oai with large dataset (1e9 rows),  file format is parquet
+h2o_small:              h2oai benchmark with small dataset (1e7 rows),  default file format is parquet
+h2o_medium:             h2oai benchmark with medium dataset (1e8 rows), default file format is parquet
+h2o_big:                h2oai benchmark with large dataset (1e9 rows),  default file format is parquet
 
 **********
 * Supported Configuration (Environment Variables)
@@ -184,11 +184,8 @@ main() {
                 h2o_medium)
                     data_h2o "MEDIUM"
                     ;;
-                h2o_large)
-                    data_h2o "LARGE"
-                    ;;
-                h2o_small_csv)
-                    data_h2o "SMALL" "CSV"
+                h2o_big)
+                    data_h2o "BIG"
                     ;;
                 external_aggr)
                     # same data as for tpch
@@ -241,7 +238,7 @@ main() {
                     run_clickbench_extended
                     run_h2o "SMALL" "PARQUET" "groupby"
                     run_h2o "MEDIUM" "PARQUET" "groupby"
-                    run_h2o "LARGE" "PARQUET" "groupby"
+                    run_h2o "BIG" "PARQUET" "groupby"
                     run_imdb
                     run_external_aggr
                     ;;
@@ -281,11 +278,8 @@ main() {
                 h2o_medium)
                     run_h2o "MEDIUM" "PARQUET" "groupby"
                     ;;
-                h2o_large)
-                    run_h2o "LARGE" "PARQUET" "groupby"
-                    ;;
-                h2o_small_csv)
-                    run_h2o "SMALL" "CSV" "groupby"
+                h2o_big)
+                    run_h2o "BIG" "PARQUET" "groupby"
                     ;;
                 external_aggr)
                     run_external_aggr
@@ -575,45 +569,75 @@ run_imdb() {
 }
 
 data_h2o() {
-     # Default values for size and data format
-     SIZE=${1:-"SMALL"}
-     DATA_FORMAT=${2:-"PARQUET"}
+    # Default values for size and data format
+    SIZE=${1:-"SMALL"}
+    DATA_FORMAT=${2:-"PARQUET"}
 
-     # Ensure the Python version is 3.10 or higher
-     REQUIRED_PYTHON="python3.10"
-     if ! command -v $REQUIRED_PYTHON &> /dev/null
-     then
-         echo "$REQUIRED_PYTHON could not be found. Please install Python 3.10 or higher."
-         return 1
-     fi
+    # Function to compare Python versions
+    version_ge() {
+        [ "$(printf '%s\n' "$1" "$2" | sort -V | head -n1)" = "$2" ]
+    }
 
-     # Install falsa and other dependencies
-     echo "Installing falsa..."
+    # Find the highest available Python version (3.10 or higher)
+    REQUIRED_VERSION="3.10"
+    PYTHON_CMD=$(command -v python3 || true)
 
-     # Set virtual environment directory
-     VIRTUAL_ENV="${PWD}/venv"
+    if [ -n "$PYTHON_CMD" ]; then
+        PYTHON_VERSION=$($PYTHON_CMD -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")
+        if version_ge "$PYTHON_VERSION" "$REQUIRED_VERSION"; then
+            echo "Found Python version $PYTHON_VERSION, which is suitable."
+        else
+            echo "Python version $PYTHON_VERSION found, but version $REQUIRED_VERSION or higher is required."
+            PYTHON_CMD=""
+        fi
+    fi
 
-     # Create a virtual environment using Python 3.10
-     $REQUIRED_PYTHON -m venv "$VIRTUAL_ENV"
+    # Fall back to checking specific Python versions if no suitable one found
+    if [ -z "$PYTHON_CMD" ]; then
+        for CMD in python3.10 python3.11 python3.12; do
+            if command -v "$CMD" &> /dev/null; then
+                PYTHON_CMD="$CMD"
+                break
+            fi
+        done
+    fi
 
-     # Activate the virtual environment and install dependencies
-     source "$VIRTUAL_ENV/bin/activate"
+    # If no suitable Python version found, exit with an error
+    if [ -z "$PYTHON_CMD" ]; then
+        echo "Python 3.10 or higher is required. Please install it."
+        return 1
+    fi
 
-     # Ensure 'falsa' is installed (avoid unnecessary reinstall)
-     pip install --quiet --upgrade falsa
+    echo "Using Python command: $PYTHON_CMD"
 
-     # Create directory if it doesn't exist
-     H2O_DIR="${DATA_DIR}/h2o"
-     mkdir -p "${H2O_DIR}"
+    # Install falsa and other dependencies
+    echo "Installing falsa..."
 
-     # Generate h2o test data
-     echo "Generating h2o test data in ${H2O_DIR} with size=${SIZE} and format=${DATA_FORMAT}"
-     falsa groupby --path-prefix="${H2O_DIR}" --size "${SIZE}" --data-format "${DATA_FORMAT}"
+    # Set virtual environment directory
+    VIRTUAL_ENV="${PWD}/venv"
 
-     # Deactivate virtual environment after completion
-     deactivate
- }
+    # Create a virtual environment using the detected Python command
+    $PYTHON_CMD -m venv "$VIRTUAL_ENV"
 
+    # Activate the virtual environment and install dependencies
+    source "$VIRTUAL_ENV/bin/activate"
+
+    # Ensure 'falsa' is installed (avoid unnecessary reinstall)
+    pip install --quiet --upgrade falsa
+
+    # Create directory if it doesn't exist
+    H2O_DIR="${DATA_DIR}/h2o"
+    mkdir -p "${H2O_DIR}"
+
+    # Generate h2o test data
+    echo "Generating h2o test data in ${H2O_DIR} with size=${SIZE} and format=${DATA_FORMAT}"
+    falsa groupby --path-prefix="${H2O_DIR}" --size "${SIZE}" --data-format "${DATA_FORMAT}"
+
+    # Deactivate virtual environment after completion
+    deactivate
+}
+
+## todo now only support groupby, after https://github.com/mrpowers-io/falsa/issues/21 done, we can add support for join
 run_h2o() {
     # Default values for size and data format
     SIZE=${1:-"SMALL"}
@@ -650,10 +674,10 @@ run_h2o() {
 
     # Run the benchmark using the dynamically constructed file path and query file
     $CARGO_COMMAND --bin dfbench -- h2o \
-        --iterations 5 \
+        --iterations 3 \
         --path "${H2O_DIR}/${FILE_NAME}" \
         --queries-path "${QUERY_FILE}" \
-        -o "${RESULTS_FILE}"
+        -o "${RESULTS_FILE}"\
 }
 
 # Runs the external aggregation benchmark
