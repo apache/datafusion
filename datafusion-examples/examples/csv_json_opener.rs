@@ -34,10 +34,9 @@ use futures::StreamExt;
 use object_store::{local::LocalFileSystem, memory::InMemory, ObjectStore};
 
 /// This example demonstrates using the low level [`FileStream`] / [`FileOpener`] APIs to directly
-/// read data from (CSV/JSON) into Arrow RecordBatches. 
+/// read data from (CSV/JSON) into Arrow RecordBatches.
 ///
 /// If you want to query data in CSV or JSON files, see the [`dataframe.rs`] and [`sql_query.rs`] examples
-/// fetching results
 #[tokio::main]
 async fn main() -> Result<()> {
     csv_opener().await?;
