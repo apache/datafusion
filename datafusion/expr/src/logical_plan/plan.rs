@@ -1317,18 +1317,13 @@ impl LogicalPlan {
                 join_type,
                 ..
             }) => match join_type {
-                JoinType::Inner | JoinType::Left | JoinType::Right | JoinType::Full => {
-                    match (left.max_rows(), right.max_rows()) {
-                        (Some(left_max), Some(right_max)) => {
-                            let min_rows = match join_type {
-                                JoinType::Left => left_max,
-                                JoinType::Right => right_max,
-                                JoinType::Full => left_max + right_max,
-                                _ => 0,
-                            };
-                            Some((left_max * right_max).max(min_rows))
-                        }
-                        _ => None,
+                JoinType::Inner => Some(left.max_rows()? * right.max_rows()?),
+                JoinType::Left | JoinType::Right | JoinType::Full => {
+                    match (left.max_rows()?, right.max_rows()?, join_type) {
+                        (0, 0, _) => Some(0),
+                        (max_rows, 0, JoinType::Left | JoinType::Full) => Some(max_rows),
+                        (0, max_rows, JoinType::Right | JoinType::Full) => Some(max_rows),
+                        (left_max, right_max, _) => Some(left_max * right_max),
                     }
                 }
                 JoinType::LeftSemi | JoinType::LeftAnti | JoinType::LeftMark => {
@@ -3433,15 +3428,15 @@ pub enum Partitioning {
 ///   input             output_name
 ///  ┌─────────┐      ┌─────────┐
 ///  │{{1,2}}  │      │ 1       │
-///  ├─────────┼─────►├─────────┤           
-///  │{{3}}    │      │ 2       │           
-///  ├─────────┤      ├─────────┤           
-///  │{{4},{5}}│      │ 3       │           
-///  └─────────┘      ├─────────┤           
-///                   │ 4       │           
-///                   ├─────────┤           
-///                   │ 5       │           
-///                   └─────────┘           
+///  ├─────────┼─────►├─────────┤
+///  │{{3}}    │      │ 2       │
+///  ├─────────┤      ├─────────┤
+///  │{{4},{5}}│      │ 3       │
+///  └─────────┘      ├─────────┤
+///                   │ 4       │
+///                   ├─────────┤
+///                   │ 5       │
+///                   └─────────┘
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd)]
 pub struct ColumnUnnestList {
