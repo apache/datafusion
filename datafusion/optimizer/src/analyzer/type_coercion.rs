@@ -426,7 +426,7 @@ impl TreeNodeRewriter for TypeCoercionRewriter<'_> {
                         ))
                     })?;
                 let high_type = high.get_type(self.schema)?;
-                let high_coerced_type = comparison_coercion(&expr_type, &low_type)
+                let high_coerced_type = comparison_coercion(&expr_type, &high_type)
                     .ok_or_else(|| {
                         DataFusionError::Internal(format!(
                             "Failed to coerce types {expr_type} and {high_type} in BETWEEN expression"
@@ -1458,7 +1458,7 @@ mod test {
         let empty = empty_with_type(Utf8);
         let plan = LogicalPlan::Filter(Filter::try_new(expr, empty)?);
         let expected =
-            "Filter: a BETWEEN Utf8(\"2002-05-08\") AND CAST(CAST(Utf8(\"2002-05-08\") AS Date32) + IntervalYearMonth(\"1\") AS Utf8)\
+            "Filter: CAST(a AS Date32) BETWEEN CAST(Utf8(\"2002-05-08\") AS Date32) AND CAST(Utf8(\"2002-05-08\") AS Date32) + IntervalYearMonth(\"1\")\
             \n  EmptyRelation";
         assert_analyzed_plan_eq(Arc::new(TypeCoercion::new()), plan, expected)
     }
@@ -1476,6 +1476,17 @@ mod test {
         // TODO: we should cast col(a).
         let expected =
             "Filter: CAST(a AS Date32) BETWEEN CAST(Utf8(\"2002-05-08\") AS Date32) + IntervalYearMonth(\"1\") AND CAST(Utf8(\"2002-12-08\") AS Date32)\
+            \n  EmptyRelation";
+        assert_analyzed_plan_eq(Arc::new(TypeCoercion::new()), plan, expected)
+    }
+
+    #[test]
+    fn between_null() -> Result<()> {
+        let expr = lit(ScalarValue::Null).between(lit(ScalarValue::Null), lit(2i64));
+        let empty = empty();
+        let plan = LogicalPlan::Filter(Filter::try_new(expr, empty)?);
+        let expected =
+            "Filter: CAST(NULL AS Int64) BETWEEN CAST(NULL AS Int64) AND Int64(2)\
             \n  EmptyRelation";
         assert_analyzed_plan_eq(Arc::new(TypeCoercion::new()), plan, expected)
     }
