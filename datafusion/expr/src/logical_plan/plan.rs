@@ -1332,17 +1332,12 @@ impl LogicalPlan {
                 JoinType::RightSemi | JoinType::RightAnti => right.max_rows(),
             },
             LogicalPlan::Repartition(Repartition { input, .. }) => input.max_rows(),
-            LogicalPlan::Union(Union { inputs, .. }) => inputs
-                .iter()
-                .map(|plan| plan.max_rows())
-                .try_fold(0usize, |mut acc, input_max| {
-                    if let Some(i_max) = input_max {
-                        acc += i_max;
-                        Some(acc)
-                    } else {
-                        None
-                    }
-                }),
+            LogicalPlan::Union(Union { inputs, .. }) => {
+                inputs.iter().try_fold(0usize, |mut acc, plan| {
+                    acc += plan.max_rows()?;
+                    Some(acc)
+                })
+            }
             LogicalPlan::TableScan(TableScan { fetch, .. }) => *fetch,
             LogicalPlan::EmptyRelation(_) => Some(0),
             LogicalPlan::RecursiveQuery(_) => None,
