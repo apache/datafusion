@@ -25,8 +25,7 @@ homepage = { workspace = true }
 repository = { workspace = true }
 license = { workspace = true }
 authors = { workspace = true }
-# Specify MSRV here as `cargo msrv` doesn't support workspace version
-rust-version = "1.80.1"
+rust-version = { workspace = true }
 
 [lints]
 workspace = true
