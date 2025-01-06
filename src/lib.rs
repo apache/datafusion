@@ -42,7 +42,9 @@ mod list;
 mod regexp;
 pub mod scalar_funcs;
 mod schema_adapter;
+mod static_invoke;
 pub use schema_adapter::SparkSchemaAdapterFactory;
+pub use static_invoke::*;
 
 pub mod spark_hash;
 mod stddev;

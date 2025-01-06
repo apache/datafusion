@@ -20,25 +20,23 @@ use arrow::datatypes::IntervalDayTime;
 use arrow::{
     array::{
         ArrayRef, AsArray, Decimal128Builder, Float32Array, Float64Array, Int16Array, Int32Array,
-        Int64Array, Int64Builder, Int8Array, OffsetSizeTrait,
+        Int64Array, Int64Builder, Int8Array,
     },
     datatypes::{validate_decimal_precision, Decimal128Type, Int64Type},
 };
-use arrow_array::builder::{GenericStringBuilder, IntervalDayTimeBuilder};
+use arrow_array::builder::IntervalDayTimeBuilder;
 use arrow_array::types::{Int16Type, Int32Type, Int8Type};
 use arrow_array::{Array, ArrowNativeTypeOp, BooleanArray, Datum, Decimal128Array};
 use arrow_schema::{ArrowError, DataType, DECIMAL128_MAX_PRECISION};
 use datafusion::physical_expr_common::datum;
 use datafusion::{functions::math::round::round, physical_plan::ColumnarValue};
 use datafusion_common::{
-    cast::as_generic_string_array, exec_err, internal_err, DataFusionError,
-    Result as DataFusionResult, ScalarValue,
+    exec_err, internal_err, DataFusionError, Result as DataFusionResult, ScalarValue,
 };
 use num::{
     integer::{div_ceil, div_floor},
     BigInt, Signed, ToPrimitive,
 };
-use std::fmt::Write;
 use std::{cmp::min, sync::Arc};
 
 mod unhex;
@@ -388,57 +386,6 @@ pub fn spark_round(
             dt => exec_err!("Not supported datatype for ROUND: {dt}"),
         },
     }
-}
-
-/// Similar to DataFusion `rpad`, but not to truncate when the string is already longer than length
-pub fn spark_read_side_padding(args: &[ColumnarValue]) -> Result<ColumnarValue, DataFusionError> {
-    match args {
-        [ColumnarValue::Array(array), ColumnarValue::Scalar(ScalarValue::Int32(Some(length)))] => {
-            match array.data_type() {
-                DataType::Utf8 => spark_read_side_padding_internal::<i32>(array, *length),
-                DataType::LargeUtf8 => spark_read_side_padding_internal::<i64>(array, *length),
-                // TODO: handle Dictionary types
-                other => Err(DataFusionError::Internal(format!(
-                    "Unsupported data type {other:?} for function read_side_padding",
-                ))),
-            }
-        }
-        other => Err(DataFusionError::Internal(format!(
-            "Unsupported arguments {other:?} for function read_side_padding",
-        ))),
-    }
-}
-
-fn spark_read_side_padding_internal<T: OffsetSizeTrait>(
-    array: &ArrayRef,
-    length: i32,
-) -> Result<ColumnarValue, DataFusionError> {
-    let string_array = as_generic_string_array::<T>(array)?;
-    let length = 0.max(length) as usize;
-    let space_string = " ".repeat(length);
-
-    let mut builder =
-        GenericStringBuilder::<T>::with_capacity(string_array.len(), string_array.len() * length);
-
-    for string in string_array.iter() {
-        match string {
-            Some(string) => {
-                // It looks Spark's UTF8String is closer to chars rather than graphemes
-                // https://stackoverflow.com/a/46290728
-                let char_len = string.chars().count();
-                if length <= char_len {
-                    builder.append_value(string);
-                } else {
-                    // write_str updates only the value buffer, not null nor offset buffer
-                    // This is convenient for concatenating str(s)
-                    builder.write_str(string)?;
-                    builder.append_value(&space_string[char_len..]);
-                }
-            }
-            _ => builder.append_null(),
-        }
-    }
-    Ok(ColumnarValue::Array(Arc::new(builder.finish())))
 }
 
 // Let Decimal(p3, s3) as return type i.e. Decimal(p1, s1) / Decimal(p2, s2) = Decimal(p3, s3).
