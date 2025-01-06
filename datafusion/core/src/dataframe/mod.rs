@@ -2754,7 +2754,7 @@ mod tests {
     }
 
     // test for https://github.com/apache/datafusion/issues/13949
-    async fn run_test_with_spill_pool_if_necessary(pool_size: usize) -> Result<()> {
+    async fn run_test_with_spill_pool_if_necessary() -> Result<()> {
         fn create_record_batch(
             schema: &Arc<Schema>,
             data: (Vec<u32>, Vec<f64>),
@@ -2786,6 +2786,7 @@ mod tests {
             vec![vec![false]],
         );
 
+        // Using AVG in place of MAX for testing multiple intermediate states (partial sum, partial count).
         let aggregates: Vec<Arc<AggregateFunctionExpr>> = vec![
             Arc::new(
                 AggregateExprBuilder::new(
@@ -2798,11 +2799,11 @@ mod tests {
             ),
             Arc::new(
                 AggregateExprBuilder::new(
-                    datafusion_functions_aggregate::min_max::max_udaf(),
+                    datafusion_functions_aggregate::avg::avg_udaf(),
                     vec![physical_col("b", &schema)?],
                 )
                 .schema(schema.clone())
-                .alias("MAX(b)")
+                .alias("AVG(b)")
                 .build()?,
             ),
         ];
@@ -2817,7 +2818,7 @@ mod tests {
         )?);
 
         let batch_size = 2;
-        let memory_pool = Arc::new(FairSpillPool::new(pool_size));
+        let memory_pool = Arc::new(FairSpillPool::new(10_000_000));
         let task_ctx = Arc::new(
             TaskContext::default()
                 .with_session_config(SessionConfig::new().with_batch_size(batch_size))
@@ -2832,21 +2833,23 @@ mod tests {
             common::collect(single_aggregate.execute(0, Arc::clone(&task_ctx))?).await?;
 
         #[rustfmt::skip]
-    assert_batches_sorted_eq!(
-        [
-            "+---+--------+--------+",
-            "| a | MIN(b) | MAX(b) |",
-            "+---+--------+--------+",
-            "| 2 | 1.0    | 1.0    |",
-            "| 3 | 2.0    | 2.0    |",
-            "| 4 | 3.0    | 4.0    |",
-            "+---+--------+--------+",
-        ],
-        &result
-    );
+        assert_batches_sorted_eq!(
+            [
+                "+---+--------+--------+",
+                "| a | MIN(b) | AVG(b) |",
+                "+---+--------+--------+",
+                "| 2 | 1.0    | 1.0    |",
+                "| 3 | 2.0    | 2.0    |",
+                "| 4 | 3.0    | 3.5    |",
+                "+---+--------+--------+",
+            ],
+            &result
+        );
 
         Ok(())
     }
+
+    // ...existing code...
 
     #[tokio::test]
     async fn test_aggregate_with_spill_if_necessary() -> Result<()> {
