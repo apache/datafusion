@@ -338,7 +338,7 @@ impl MemSink {
     /// The caller is responsible for ensuring that there is at least one partition to insert into.
     fn try_new(batches: Vec<PartitionData>) -> Result<Self> {
         if batches.is_empty() {
-            return plan_err!("Cannot insert into MemTable with zero partitions.");
+            return plan_err!("Cannot insert into MemTable with zero partitions");
         }
         Ok(Self { batches })
     }
@@ -803,7 +803,7 @@ mod tests {
             .unwrap_err();
         // Ensure that there is a descriptive error message
         assert_eq!(
-            "Error during planning: Cannot insert into MemTable with zero partitions.",
+            "Error during planning: Cannot insert into MemTable with zero partitions",
             experiment_result.strip_backtrace()
         );
         Ok(())
