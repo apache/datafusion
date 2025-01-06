@@ -54,7 +54,7 @@ postgres-types = { version = "0.2.8", features = ["derive", "with-chrono-0_4"], 
 rust_decimal = { version = "1.36.0", features = ["tokio-pg"] }
 # Pin to 0.24 until labels are supported
 # See https://github.com/risinglightdb/sqllogictest-rs/issues/242
-sqllogictest = "=0.24.0"
+sqllogictest = "=0.26.0"
 sqlparser = { workspace = true }
 tempfile = { workspace = true }
 testcontainers = { version = "0.23", features = ["default"], optional = true }
