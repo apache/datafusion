@@ -47,7 +47,7 @@ pub use schema_adapter::SparkSchemaAdapterFactory;
 pub mod spark_hash;
 mod stddev;
 pub use stddev::Stddev;
-mod structs;
+mod struct_funcs;
 mod sum_decimal;
 pub use sum_decimal::SumDecimal;
 mod negative;
@@ -72,7 +72,8 @@ pub use error::{SparkError, SparkResult};
 pub use if_expr::IfExpr;
 pub use list::{ArrayInsert, GetArrayStructFields, ListExtract};
 pub use regexp::RLike;
-pub use structs::{CreateNamedStruct, GetStructField};
+pub use struct_funcs::*;
+
 pub use temporal::{DateTruncExpr, HourExpr, MinuteExpr, SecondExpr, TimestampTruncExpr};
 pub use to_json::ToJson;
 
