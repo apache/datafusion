@@ -76,9 +76,15 @@ make_udf_expr_and_func!(
     argument(name = "index", description = "Index at which to start searching.")
 )]
 #[derive(Debug)]
-pub(super) struct ArrayPosition {
+pub struct ArrayPosition {
     signature: Signature,
     aliases: Vec<String>,
+}
+
+impl Default for ArrayPosition {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 impl ArrayPosition {
     pub fn new() -> Self {

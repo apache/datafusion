@@ -145,9 +145,15 @@ make_udf_expr_and_func!(
     )
 )]
 #[derive(Debug)]
-pub(super) struct ArrayToString {
+pub struct ArrayToString {
     signature: Signature,
     aliases: Vec<String>,
+}
+
+impl Default for ArrayToString {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl ArrayToString {

@@ -60,6 +60,12 @@ pub(crate) struct MapValuesFunc {
     signature: Signature,
 }
 
+impl Default for MapValuesFunc {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl MapValuesFunc {
     pub fn new() -> Self {
         Self {
