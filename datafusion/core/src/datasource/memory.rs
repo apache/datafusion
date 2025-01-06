@@ -265,10 +265,6 @@ impl TableProvider for MemTable {
         input: Arc<dyn ExecutionPlan>,
         insert_op: InsertOp,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        if self.batches.is_empty() {
-            return plan_err!("Cannot insert into MemTable with zero partitions.");
-        }
-
         // If we are inserting into the table, any sort order may be messed up so reset it here
         *self.sort_order.lock() = vec![];
 
@@ -297,7 +293,7 @@ impl TableProvider for MemTable {
         if insert_op != InsertOp::Append {
             return not_impl_err!("{insert_op} not implemented for MemoryTable yet");
         }
-        let sink = Arc::new(MemSink::new(self.batches.clone()));
+        let sink = Arc::new(MemSink::try_new(self.batches.clone())?);
         Ok(Arc::new(DataSinkExec::new(
             input,
             sink,
@@ -340,9 +336,11 @@ impl MemSink {
     /// Creates a new [`MemSink`].
     ///
     /// The caller is responsible for ensuring that there is at least one partition to insert into.
-    fn new(batches: Vec<PartitionData>) -> Self {
-        assert!(!batches.is_empty());
-        Self { batches }
+    fn try_new(batches: Vec<PartitionData>) -> Result<Self> {
+        if batches.is_empty() {
+            return plan_err!("Cannot insert into MemTable with zero partitions.");
+        }
+        Ok(Self { batches })
     }
 }
 
