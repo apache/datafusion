@@ -72,9 +72,15 @@ SELECT map_extract(MAP {'x': 10, 'y': NULL, 'z': 30}, 'y');
     )
 )]
 #[derive(Debug)]
-pub(super) struct MapExtract {
+pub struct MapExtract {
     signature: Signature,
     aliases: Vec<String>,
+}
+
+impl Default for MapExtract {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl MapExtract {
