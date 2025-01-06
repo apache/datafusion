@@ -67,9 +67,15 @@ make_udf_expr_and_func!(
     )
 )]
 #[derive(Debug)]
-pub(super) struct ArrayExcept {
+pub struct ArrayExcept {
     signature: Signature,
     aliases: Vec<String>,
+}
+
+impl Default for ArrayExcept {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl ArrayExcept {

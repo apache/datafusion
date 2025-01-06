@@ -89,9 +89,15 @@ make_udf_expr_and_func!(
     )
 )]
 #[derive(Debug)]
-pub(super) struct Range {
+pub struct Range {
     signature: Signature,
     aliases: Vec<String>,
+}
+
+impl Default for Range {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 impl Range {
     pub fn new() -> Self {

@@ -75,9 +75,15 @@ impl Cardinality {
     )
 )]
 #[derive(Debug)]
-pub(super) struct Cardinality {
+pub struct Cardinality {
     signature: Signature,
     aliases: Vec<String>,
+}
+
+impl Default for Cardinality {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 impl ScalarUDFImpl for Cardinality {
     fn as_any(&self) -> &dyn Any {
