@@ -24,8 +24,8 @@ use std::vec;
 use crate::aggregates::group_values::{new_group_values, GroupValues};
 use crate::aggregates::order::GroupOrderingFull;
 use crate::aggregates::{
-    evaluate_group_by, evaluate_many, evaluate_optional, group_schema, AggregateMode,
-    PhysicalGroupBy,
+    create_schema, evaluate_group_by, evaluate_many, evaluate_optional, group_schema,
+    AggregateMode, PhysicalGroupBy,
 };
 use crate::metrics::{BaselineMetrics, MetricBuilder, RecordOutput};
 use crate::sorts::sort::sort_batch;
@@ -492,8 +492,20 @@ impl GroupedHashAggregateStream {
         let group_schema = group_schema(&agg.input().schema(), &agg_group_by)?;
 
         // Build partial aggregate schema for spills
-        let partial_agg_schema =
-            build_partial_agg_schema(&group_schema, &aggregate_exprs)?;
+        let partial_agg_schema = create_schema(
+            &agg.input().schema(),
+            &agg_group_by,
+            &aggregate_exprs,
+            agg.mode,
+        )?;
+
+        let partial_agg_schema2 =
+            build_partial_agg_schema(&group_schema, &aggregate_exprs);
+
+        let partial_agg_schema = Arc::new(partial_agg_schema);
+
+        println!("==> partial_agg_schema: {:?}", partial_agg_schema);
+        println!("==> partial_agg_schema2: {:?}", partial_agg_schema2);
 
         let spill_expr = group_schema
             .fields
