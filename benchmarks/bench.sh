@@ -150,7 +150,7 @@ main() {
                     data_tpch "10"
                     data_h2o "SMALL"
                     data_h2o "MEDIUM"
-                    data_h2o "LARGE"
+                    data_h2o "BIG"
                     data_clickbench_1
                     data_clickbench_partitioned
                     data_imdb
