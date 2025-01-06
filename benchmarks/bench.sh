@@ -613,15 +613,20 @@ data_h2o() {
         fi
     fi
 
-    # Fall back to checking specific Python versions if no suitable one found
-    if [ -z "$PYTHON_CMD" ]; then
-        for CMD in python3.10 python3.11 python3.12; do
-            if command -v "$CMD" &> /dev/null; then
-                PYTHON_CMD="$CMD"
-                break
-            fi
-        done
-    fi
+   # Search for suitable Python versions if the default is unsuitable
+   if [ -z "$PYTHON_CMD" ]; then
+       # Loop through all available Python3 commands on the system
+       for CMD in $(compgen -c | grep -E '^python3(\.[0-9]+)?$'); do
+           if command -v "$CMD" &> /dev/null; then
+               PYTHON_VERSION=$($CMD -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")
+               if version_ge "$PYTHON_VERSION" "$REQUIRED_VERSION"; then
+                   PYTHON_CMD="$CMD"
+                   echo "Found suitable Python version: $PYTHON_VERSION ($CMD)"
+                   break
+               fi
+           fi
+       done
+   fi
 
     # If no suitable Python version found, exit with an error
     if [ -z "$PYTHON_CMD" ]; then
