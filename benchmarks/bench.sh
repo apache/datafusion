@@ -83,6 +83,9 @@ external_aggr:          External aggregation benchmark
 h2o_small:              h2oai benchmark with small dataset (1e7 rows),  default file format is parquet
 h2o_medium:             h2oai benchmark with medium dataset (1e8 rows), default file format is parquet
 h2o_big:                h2oai benchmark with large dataset (1e9 rows),  default file format is parquet
+h2o_small_csv           h2oai benchmark with small dataset (1e7 rows),  file format is csv
+h2o_medium_csv          h2oai benchmark with medium dataset (1e8 rows), file format is csv
+h2o_big_csv             h2oai benchmark with large dataset (1e9 rows),  file format is csv
 
 **********
 * Supported Configuration (Environment Variables)
@@ -187,6 +190,15 @@ main() {
                 h2o_big)
                     data_h2o "BIG"
                     ;;
+                h2o_small_csv)
+                    data_h2o "SMALL" "CSV"
+                    ;;
+                h2o_medium_csv)
+                    data_h2o "MEDIUM" "CSV"
+                    ;;
+                h2o_big_csv)
+                    data_h2o "BIG" "CSV"
+                    ;;
                 external_aggr)
                     # same data as for tpch
                     data_tpch "1"
@@ -280,6 +292,15 @@ main() {
                     ;;
                 h2o_big)
                     run_h2o "BIG" "PARQUET" "groupby"
+                    ;;
+                h2o_small_csv)
+                    run_h2o "SMALL" "CSV" "groupby"
+                    ;;
+                h2o_medium_csv)
+                    run_h2o "MEDIUM" "CSV" "groupby"
+                    ;;
+                h2o_big_csv)
+                    run_h2o "BIG" "CSV" "groupby"
                     ;;
                 external_aggr)
                     run_external_aggr
