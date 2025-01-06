@@ -36,7 +36,7 @@ use crate::utils::make_scalar_function;
 use arrow::compute::cast;
 use arrow_array::builder::{ArrayBuilder, LargeStringBuilder, StringViewBuilder};
 use arrow_array::cast::AsArray;
-use arrow_array::{GenericStringArray, StringViewArray};
+use arrow_array::{GenericStringArray, StringArrayType, StringViewArray};
 use arrow_schema::DataType::{
     Dictionary, FixedSizeList, LargeList, LargeUtf8, List, Null, Utf8, Utf8View,
 };
@@ -45,7 +45,6 @@ use datafusion_common::exec_err;
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
 };
-use datafusion_functions::strings::StringArrayType;
 use datafusion_functions::{downcast_arg, downcast_named_arg};
 use datafusion_macros::user_doc;
 use std::sync::Arc;

@@ -15,10 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::strings::StringArrayType;
 use crate::utils::utf8_to_str_type;
 use arrow::array::{
-    ArrayRef, GenericStringArray, Int64Array, OffsetSizeTrait, StringViewArray,
+    ArrayRef, GenericStringArray, Int64Array, OffsetSizeTrait, StringArrayType,
+    StringViewArray,
 };
 use arrow::array::{AsArray, GenericStringBuilder};
 use arrow::datatypes::DataType;
