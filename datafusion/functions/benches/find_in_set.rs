@@ -71,7 +71,7 @@ fn gen_string_array(
             let mut generated_string = String::with_capacity(str_len_chars);
             for i in 0..num_elements {
                 for _ in 0..str_len_chars {
-                    let c = rng_ref.sample(&Alphanumeric);
+                    let c = rng_ref.sample(Alphanumeric);
                     generated_string.push(c as char);
                 }
                 if i < num_elements - 1 {
@@ -100,7 +100,7 @@ fn gen_string_array(
     }
 }
 
-fn random_element_in_set(string: &String) -> String {
+fn random_element_in_set(string: &str) -> String {
     let elements: Vec<&str> = string.split(',').collect();
 
     if elements.is_empty() || (elements.len() == 1 && elements[0].is_empty()) {
@@ -125,7 +125,7 @@ fn criterion_benchmark(c: &mut Criterion) {
         group.measurement_time(Duration::from_secs(10));
 
         let args = gen_string_array(n_rows, str_len, 0.1, 0.5, false);
-        group.bench_function(&format!("string_len_{}", str_len), |b| {
+        group.bench_function(format!("string_len_{}", str_len), |b| {
             b.iter(|| {
                 black_box(find_in_set.invoke_with_args(ScalarFunctionArgs {
                     args: args.clone(),
@@ -136,7 +136,7 @@ fn criterion_benchmark(c: &mut Criterion) {
         });
 
         let args = gen_string_array(n_rows, str_len, 0.1, 0.5, true);
-        group.bench_function(&format!("string_view_len_{}", str_len), |b| {
+        group.bench_function(format!("string_view_len_{}", str_len), |b| {
             b.iter(|| {
                 black_box(find_in_set.invoke_with_args(ScalarFunctionArgs {
                     args: args.clone(),
