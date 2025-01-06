@@ -391,8 +391,11 @@ impl SessionContext {
             current_catalog_list,
             Arc::clone(&factory) as Arc<dyn UrlTableFactory>,
         ));
+
+        let session_id = self.session_id.clone();
         let ctx: SessionContext = self
             .into_state_builder()
+            .with_session_id(session_id)
             .with_catalog_list(catalog_list)
             .build()
             .into();
@@ -2220,6 +2223,16 @@ mod tests {
             "+-----------------------------+",
         ];
         assert_batches_eq!(expected, &result);
+        Ok(())
+    }
+    #[test]
+    fn preserve_session_context_id() -> Result<()> {
+        let ctx = SessionContext::new();
+        // it does make sense to preserve session id in this case
+        // as  `enable_url_table()` can be seen as additional configuration
+        // option on ctx.
+        // some systems like datafusion ballista relies on stable session_id
+        assert_eq!(ctx.session_id(), ctx.enable_url_table().session_id());
         Ok(())
     }
 
