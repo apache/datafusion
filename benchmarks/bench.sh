@@ -599,6 +599,8 @@ data_h2o() {
         [ "$(printf '%s\n' "$1" "$2" | sort -V | head -n1)" = "$2" ]
     }
 
+    export PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1
+
     # Find the highest available Python version (3.10 or higher)
     REQUIRED_VERSION="3.10"
     PYTHON_CMD=$(command -v python3 || true)
