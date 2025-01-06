@@ -3696,8 +3696,24 @@ mod tests {
                 Constraint::Unique(vec![0]),
             ]));
 
-        // Add an ordering [a ASC]
+        // Test that any ordering starting with 'a' is not satisfied before adding order of the 'a'.
         let col_a = col("a", &schema)?;
+        let col_b = col("b", &schema)?;
+
+        // Test [a ASC, b ASC] is not satisfied yet
+        let req1 = LexOrdering::new(vec![
+            PhysicalSortExpr {
+                expr: Arc::clone(&col_a),
+                options: SortOptions::default(),
+            },
+            PhysicalSortExpr {
+                expr: Arc::clone(&col_b),
+                options: SortOptions::default(),
+            },
+        ]);
+        assert!(!eq_properties.ordering_satisfy(&req1));
+
+        // Add an ordering [a ASC]
         let sort_exprs = LexOrdering::new(vec![PhysicalSortExpr {
             expr: Arc::clone(&col_a),
             options: SortOptions::default(),
@@ -3705,7 +3721,6 @@ mod tests {
         eq_properties.add_new_ordering(sort_exprs);
 
         // Test that any ordering starting with 'a' is satisfied
-        let col_b = col("b", &schema)?;
         let col_c = col("c", &schema)?;
 
         // Test [a ASC, b ASC] is satisfied
@@ -3751,6 +3766,19 @@ mod tests {
         ]);
         assert!(eq_properties.ordering_satisfy(&req3));
 
+        // Test [b ASC, a ASC] is not satisfied
+        let req3 = LexOrdering::new(vec![
+            PhysicalSortExpr {
+                expr: Arc::clone(&col_b),
+                options: SortOptions::default(),
+            },
+            PhysicalSortExpr {
+                expr: Arc::clone(&col_a),
+                options: SortOptions::default(),
+            },
+        ]);
+        assert!(!eq_properties.ordering_satisfy(&req3));
+
         Ok(())
     }
 
@@ -3759,6 +3787,7 @@ mod tests {
         let schema = Arc::new(Schema::new(vec![
             Field::new("a", DataType::Int32, false),
             Field::new("b", DataType::Int32, true),
+            Field::new("c", DataType::Int32, true),
         ]));
 
         let mut eq_properties = EquivalenceProperties::new(Arc::clone(&schema));
@@ -3769,16 +3798,8 @@ mod tests {
                 Constraint::PrimaryKey(vec![0]),
             ]));
 
-        // Add an ordering [a ASC]
         let col_a = col("a", &schema)?;
-        let sort_exprs = LexOrdering::new(vec![PhysicalSortExpr {
-            expr: Arc::clone(&col_a),
-            options: SortOptions::default(),
-        }]);
-        eq_properties.add_new_ordering(sort_exprs);
-
         let col_b = col("b", &schema)?;
-
         // Test [a ASC, b ASC] is satisfied
         let req = LexOrdering::new(vec![
             PhysicalSortExpr {
@@ -3794,6 +3815,22 @@ mod tests {
         assert!(
             eq_properties.ordering_satisfy(&req),
             "ordering [a ASC, b ASC] should be satisfied when 'a' is a primary key and is ordered ASC"
+        );
+
+        let col_c = col("c", &schema)?;
+        let req = LexOrdering::new(vec![
+            PhysicalSortExpr {
+                expr: Arc::clone(&col_c),
+                options: SortOptions::default(),
+            },
+            PhysicalSortExpr {
+                expr: Arc::clone(&col_a),
+                options: SortOptions::default(),
+            },
+        ]);
+        assert!(
+            !eq_properties.ordering_satisfy(&req),
+            "ordering [c ASC, a ASC] should not be satisfied"
         );
 
         Ok(())
