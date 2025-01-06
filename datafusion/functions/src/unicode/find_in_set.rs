@@ -138,31 +138,144 @@ fn find_in_set(args: &[ArrayRef]) -> Result<ArrayRef> {
     }
 }
 
-pub fn find_in_set_general<'a, T: ArrowPrimitiveType, V: ArrayAccessor<Item = &'a str>>(
+pub fn find_in_set_general<'a, T, V>(
     string_array: V,
     str_list_array: V,
 ) -> Result<ArrayRef>
 where
+    T: ArrowPrimitiveType,
     T::Native: OffsetSizeTrait,
+    V: ArrayAccessor<Item = &'a str>,
 {
     let string_iter = ArrayIter::new(string_array);
     let str_list_iter = ArrayIter::new(str_list_array);
-    let result = string_iter
+
+    let mut builder = PrimitiveArray::<T>::builder(string_iter.len());
+
+    string_iter
         .zip(str_list_iter)
-        .map(|(string, str_list)| match (string, str_list) {
-            (Some(string), Some(str_list)) => {
-                let mut res = 0;
-                let str_set: Vec<&str> = str_list.split(',').collect();
-                for (idx, str) in str_set.iter().enumerate() {
-                    if str == &string {
-                        res = idx + 1;
-                        break;
-                    }
+        .for_each(
+            |(string_opt, str_list_opt)| match (string_opt, str_list_opt) {
+                (Some(string), Some(str_list)) => {
+                    let position = str_list
+                        .split(',')
+                        .position(|s| s == string)
+                        .map_or(0, |idx| idx + 1);
+                    builder.append_value(T::Native::from_usize(position).unwrap());
                 }
-                T::Native::from_usize(res)
-            }
-            _ => None,
-        })
-        .collect::<PrimitiveArray<T>>();
-    Ok(Arc::new(result) as ArrayRef)
+                _ => builder.append_null(),
+            },
+        );
+
+    Ok(Arc::new(builder.finish()) as ArrayRef)
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::unicode::find_in_set::FindInSetFunc;
+    use crate::utils::test::test_function;
+    use arrow::array::{Array, Int32Array};
+    use arrow::datatypes::DataType::Int32;
+    use datafusion_common::{Result, ScalarValue};
+    use datafusion_expr::{ColumnarValue, ScalarUDFImpl};
+
+    #[test]
+    fn test_functions() -> Result<()> {
+        test_function!(
+            FindInSetFunc::new(),
+            vec![
+                ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from("a")))),
+                ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from("a,b,c")))),
+            ],
+            Ok(Some(1)),
+            i32,
+            Int32,
+            Int32Array
+        );
+        test_function!(
+            FindInSetFunc::new(),
+            vec![
+                ColumnarValue::Scalar(ScalarValue::Utf8View(Some(String::from("🔥")))),
+                ColumnarValue::Scalar(ScalarValue::Utf8View(Some(String::from(
+                    "a,Д,🔥"
+                )))),
+            ],
+            Ok(Some(3)),
+            i32,
+            Int32,
+            Int32Array
+        );
+        test_function!(
+            FindInSetFunc::new(),
+            vec![
+                ColumnarValue::Scalar(ScalarValue::Utf8View(Some(String::from("d")))),
+                ColumnarValue::Scalar(ScalarValue::Utf8View(Some(String::from("a,b,c")))),
+            ],
+            Ok(Some(0)),
+            i32,
+            Int32,
+            Int32Array
+        );
+        test_function!(
+            FindInSetFunc::new(),
+            vec![
+                ColumnarValue::Scalar(ScalarValue::Utf8View(Some(String::from(
+                    "Apache Software Foundation"
+                )))),
+                ColumnarValue::Scalar(ScalarValue::Utf8View(Some(String::from(
+                    "Github,Apache Software Foundation,DataFusion"
+                )))),
+            ],
+            Ok(Some(2)),
+            i32,
+            Int32,
+            Int32Array
+        );
+        test_function!(
+            FindInSetFunc::new(),
+            vec![
+                ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from("")))),
+                ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from("a,b,c")))),
+            ],
+            Ok(Some(0)),
+            i32,
+            Int32,
+            Int32Array
+        );
+        test_function!(
+            FindInSetFunc::new(),
+            vec![
+                ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from("a")))),
+                ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from("")))),
+            ],
+            Ok(Some(0)),
+            i32,
+            Int32,
+            Int32Array
+        );
+        test_function!(
+            FindInSetFunc::new(),
+            vec![
+                ColumnarValue::Scalar(ScalarValue::Utf8View(Some(String::from("a")))),
+                ColumnarValue::Scalar(ScalarValue::Utf8View(None)),
+            ],
+            Ok(None),
+            i32,
+            Int32,
+            Int32Array
+        );
+        test_function!(
+            FindInSetFunc::new(),
+            vec![
+                ColumnarValue::Scalar(ScalarValue::Utf8View(None)),
+                ColumnarValue::Scalar(ScalarValue::Utf8View(Some(String::from("a,b,c")))),
+            ],
+            Ok(None),
+            i32,
+            Int32,
+            Int32Array
+        );
+
+        Ok(())
+    }
 }
