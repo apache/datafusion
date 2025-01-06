@@ -1982,6 +1982,7 @@ mod tests {
     use crate::physical_plan::common;
     use crate::physical_plan::expressions::col as physical_col;
     use crate::physical_plan::memory::MemoryExec;
+    use crate::physical_plan::metrics::MetricValue;
     use crate::physical_plan::{ColumnarValue, Partitioning, PhysicalExpr};
     use crate::test_util::{register_aggregate_csv, test_table, test_table_with_name};
 
@@ -2754,7 +2755,10 @@ mod tests {
     }
 
     // test for https://github.com/apache/datafusion/issues/13949
-    async fn run_test_with_spill_pool_if_necessary() -> Result<()> {
+    async fn run_test_with_spill_pool_if_necessary(
+        pool_size: usize,
+        expect_spill: bool,
+    ) -> Result<()> {
         fn create_record_batch(
             schema: &Arc<Schema>,
             data: (Vec<u32>, Vec<f64>),
@@ -2786,7 +2790,7 @@ mod tests {
             vec![vec![false]],
         );
 
-        // Using AVG in place of MAX for testing multiple intermediate states (partial sum, partial count).
+        // Test with MIN for simple intermediate state (min) and AVG for multiple intermediate states (partial sum, partial count).
         let aggregates: Vec<Arc<AggregateFunctionExpr>> = vec![
             Arc::new(
                 AggregateExprBuilder::new(
@@ -2799,7 +2803,7 @@ mod tests {
             ),
             Arc::new(
                 AggregateExprBuilder::new(
-                    datafusion_functions_aggregate::avg::avg_udaf(),
+                    datafusion_functions_aggregate::average::avg_udaf(),
                     vec![physical_col("b", &schema)?],
                 )
                 .schema(schema.clone())
@@ -2818,7 +2822,7 @@ mod tests {
         )?);
 
         let batch_size = 2;
-        let memory_pool = Arc::new(FairSpillPool::new(10_000_000));
+        let memory_pool = Arc::new(FairSpillPool::new(pool_size));
         let task_ctx = Arc::new(
             TaskContext::default()
                 .with_session_config(SessionConfig::new().with_batch_size(batch_size))
@@ -2831,6 +2835,8 @@ mod tests {
 
         let result =
             common::collect(single_aggregate.execute(0, Arc::clone(&task_ctx))?).await?;
+
+        assert_spill_count_metric(expect_spill, single_aggregate);
 
         #[rustfmt::skip]
         assert_batches_sorted_eq!(
@@ -2849,14 +2855,39 @@ mod tests {
         Ok(())
     }
 
-    // ...existing code...
+    fn assert_spill_count_metric(
+        expect_spill: bool,
+        single_aggregate: Arc<AggregateExec>,
+    ) {
+        if let Some(metrics_set) = single_aggregate.metrics() {
+            let mut spill_count = 0;
+
+            // Inspect metrics for SpillCount
+            for metric in metrics_set.iter() {
+                if let MetricValue::SpillCount(count) = metric.value() {
+                    spill_count = count.value();
+                    break;
+                }
+            }
+
+            if expect_spill && spill_count == 0 {
+                panic!(
+                    "Expected spill but SpillCount metric not found or SpillCount was 0."
+                );
+            } else if !expect_spill && spill_count > 0 {
+                panic!("Expected no spill but found SpillCount metric with value greater than 0.");
+            }
+        } else {
+            panic!("No metrics returned from the operator; cannot verify spilling.");
+        }
+    }
 
     #[tokio::test]
     async fn test_aggregate_with_spill_if_necessary() -> Result<()> {
         // test with spill
-        run_test_with_spill_pool_if_necessary(1600).await?;
+        run_test_with_spill_pool_if_necessary(2_000, true).await?;
         // test without spill
-        run_test_with_spill_pool_if_necessary(16000).await?;
+        run_test_with_spill_pool_if_necessary(20_000, false).await?;
         Ok(())
     }
 
