@@ -23,18 +23,10 @@ mod cast;
 mod error;
 mod if_expr;
 
-mod avg;
-pub use avg::Avg;
 mod bitwise_not;
 pub use bitwise_not::{bitwise_not, BitwiseNotExpr};
-mod avg_decimal;
-pub use avg_decimal::AvgDecimal;
 mod checkoverflow;
 pub use checkoverflow::CheckOverflow;
-mod correlation;
-pub use correlation::Correlation;
-mod covariance;
-pub use covariance::Covariance;
 mod strings;
 pub use strings::{Contains, EndsWith, Like, StartsWith, StringSpaceExpr, SubstringExpr};
 mod kernels;
@@ -46,13 +38,9 @@ mod static_invoke;
 pub use schema_adapter::SparkSchemaAdapterFactory;
 pub use static_invoke::*;
 
-pub mod spark_hash;
-mod stddev;
-pub use stddev::Stddev;
-mod struct_funcs;
-mod sum_decimal;
-pub use sum_decimal::SumDecimal;
 mod negative;
+pub mod spark_hash;
+mod struct_funcs;
 pub use negative::{create_negate_expr, NegativeExpr};
 mod normalize_nan;
 mod temporal;
@@ -65,9 +53,10 @@ pub use unbound::UnboundColumn;
 pub mod utils;
 pub use normalize_nan::NormalizeNaNAndZero;
 
-mod variance;
-pub use variance::Variance;
+mod agg_funcs;
 mod comet_scalar_funcs;
+pub use agg_funcs::*;
+
 pub use cast::{spark_cast, Cast, SparkCastOptions};
 pub use comet_scalar_funcs::create_comet_physical_fun;
 pub use error::{SparkError, SparkResult};

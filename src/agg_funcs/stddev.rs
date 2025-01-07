@@ -17,7 +17,7 @@
 
 use std::{any::Any, sync::Arc};
 
-use crate::variance::VarianceAccumulator;
+use crate::agg_funcs::variance::VarianceAccumulator;
 use arrow::{
     array::ArrayRef,
     datatypes::{DataType, Field},

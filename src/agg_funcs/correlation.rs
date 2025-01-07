@@ -19,8 +19,8 @@ use arrow::compute::{and, filter, is_not_null};
 
 use std::{any::Any, sync::Arc};
 
-use crate::covariance::CovarianceAccumulator;
-use crate::stddev::StddevAccumulator;
+use crate::agg_funcs::covariance::CovarianceAccumulator;
+use crate::agg_funcs::stddev::StddevAccumulator;
 use arrow::{
     array::ArrayRef,
     datatypes::{DataType, Field},
