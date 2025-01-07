@@ -716,8 +716,6 @@ impl Unparser<'_> {
                     );
                 }
 
-                println!("union: {union:#?}");
-
                 let input_exprs: Vec<SetExpr> = union
                     .inputs
                     .iter()
