@@ -317,7 +317,8 @@ impl ExecutionPlan for PartialSortExec {
             self.expr.clone(),
             self.input.clone(),
             self.common_prefix_length,
-        );
+        )
+        .with_fetch(self.fetch());
         let new_props = new_plan.cache.clone().with_node_id(_node_id);
         new_plan.cache = new_props;
         Ok(Some(Arc::new(new_plan)))
