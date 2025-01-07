@@ -338,7 +338,6 @@ impl EquivalenceProperties {
         let normalized_expr = self.eq_group().normalize_expr(Arc::clone(expr));
         let eq_class = self
             .eq_group
-            .classes
             .iter()
             .find_map(|class| {
                 class
@@ -1234,7 +1233,7 @@ impl EquivalenceProperties {
 
         // Rewrite equivalence classes according to the new schema:
         let mut eq_classes = vec![];
-        for eq_class in self.eq_group.classes {
+        for eq_class in self.eq_group {
             let new_eq_exprs = eq_class
                 .into_vec()
                 .into_iter()
@@ -2315,7 +2314,7 @@ mod tests {
 
         // At the output a1=a2=a3=a4
         assert_eq!(out_properties.eq_group().len(), 1);
-        let eq_class = &out_properties.eq_group().classes[0];
+        let eq_class = out_properties.eq_group().iter().next().unwrap();
         assert_eq!(eq_class.len(), 4);
         assert!(eq_class.contains(col_a1));
         assert!(eq_class.contains(col_a2));
