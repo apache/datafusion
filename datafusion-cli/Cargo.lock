@@ -1543,6 +1543,7 @@ dependencies = [
  "chrono",
  "datafusion-common",
  "datafusion-expr",
+ "datafusion-functions-window",
  "datafusion-physical-expr",
  "indexmap",
  "itertools 0.14.0",
