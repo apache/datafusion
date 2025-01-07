@@ -232,20 +232,19 @@ impl FileScanConfig {
             );
         }
 
-        let proj_iter: Box<dyn Iterator<Item = usize>> = match &self.projection {
-            Some(proj) => Box::new(proj.iter().copied()),
-            None => Box::new(
-                0..(self.file_schema.fields().len() + self.table_partition_cols.len()),
-            ),
-        };
+        // Get projection indices once, reuse for both schema and constraints
+        let proj_indices: Vec<usize> = self.projection.clone().unwrap_or_else(|| {
+            (0..(self.file_schema.fields().len() + self.table_partition_cols.len()))
+                .collect()
+        });
 
         let mut table_fields = vec![];
         let mut table_cols_stats = vec![];
-        for idx in proj_iter {
-            if idx < self.file_schema.fields().len() {
-                let field = self.file_schema.field(idx);
+        for idx in &proj_indices {
+            if *idx < self.file_schema.fields().len() {
+                let field = self.file_schema.field(*idx);
                 table_fields.push(field.clone());
-                table_cols_stats.push(self.statistics.column_statistics[idx].clone())
+                table_cols_stats.push(self.statistics.column_statistics[*idx].clone())
             } else {
                 let partition_idx = idx - self.file_schema.fields().len();
                 table_fields.push(self.table_partition_cols[partition_idx].to_owned());
@@ -265,13 +264,6 @@ impl FileScanConfig {
             table_fields,
             self.file_schema.metadata().clone(),
         ));
-
-        let proj_indices = match &self.projection {
-            Some(proj) => proj.to_vec(),
-            None => (0..(self.file_schema.fields().len()
-                + self.table_partition_cols.len()))
-                .collect(),
-        };
 
         let projected_constraints = self
             .constraints
