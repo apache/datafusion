@@ -684,8 +684,10 @@ fn string_numeric_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<D
     match (lhs_type, rhs_type) {
         (Utf8, _) if rhs_type.is_numeric() => Some(Utf8),
         (LargeUtf8, _) if rhs_type.is_numeric() => Some(LargeUtf8),
+        (Utf8View, _) if rhs_type.is_numeric() => Some(Utf8View),
         (_, Utf8) if lhs_type.is_numeric() => Some(Utf8),
         (_, LargeUtf8) if lhs_type.is_numeric() => Some(LargeUtf8),
+        (_, Utf8View) if lhs_type.is_numeric() => Some(Utf8View),
         _ => None,
     }
 }
@@ -1179,7 +1181,8 @@ fn regex_comparison_string_coercion(
 fn numeric_string_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
     use arrow::datatypes::DataType::*;
     match (lhs_type, rhs_type) {
-        (Utf8 | LargeUtf8, other_type) | (other_type, Utf8 | LargeUtf8)
+        (Utf8 | Utf8View | LargeUtf8, other_type)
+        | (other_type, Utf8 | Utf8View | LargeUtf8)
             if other_type.is_numeric() =>
         {
             Some(other_type.clone())
