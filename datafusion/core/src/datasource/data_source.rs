@@ -25,8 +25,10 @@ use std::sync::Arc;
 use crate::datasource::listing::PartitionedFile;
 use crate::datasource::physical_plan::{
     ArrowConfig, AvroConfig, CsvConfig, FileGroupPartitioner, FileOpener, FileScanConfig,
-    FileStream, JsonConfig, ParquetConfig,
+    FileStream, JsonConfig,
 };
+#[cfg(feature = "parquet")]
+use crate::datasource::physical_plan::ParquetConfig;
 
 use arrow_schema::SchemaRef;
 use datafusion_common::config::ConfigOptions;
@@ -114,40 +116,44 @@ impl DataSource for FileSourceConfig {
         self.fmt_source_config(f)?;
 
         if let Some(csv_conf) = self.source_config.as_any().downcast_ref::<CsvConfig>() {
-            write!(f, ", has_header={}", csv_conf.has_header)
-        } else if let Some(parquet_conf) =
-            self.source_config.as_any().downcast_ref::<ParquetConfig>()
-        {
-            match t {
-                DisplayFormatType::Default | DisplayFormatType::Verbose => {
-                    let predicate_string = parquet_conf
-                        .predicate()
-                        .map(|p| format!(", predicate={p}"))
-                        .unwrap_or_default();
+            return write!(f, ", has_header={}", csv_conf.has_header)
+        }
 
-                    let pruning_predicate_string = parquet_conf
-                        .pruning_predicate()
-                        .map(|pre| {
-                            let mut guarantees = pre
-                                .literal_guarantees()
-                                .iter()
-                                .map(|item| format!("{}", item))
-                                .collect_vec();
-                            guarantees.sort();
-                            format!(
-                                ", pruning_predicate={}, required_guarantees=[{}]",
-                                pre.predicate_expr(),
-                                guarantees.join(", ")
-                            )
-                        })
-                        .unwrap_or_default();
+        #[cfg(feature = "parquet")]
+        if cfg!(feature = "parquet") {
+            if let Some(parquet_conf) =
+                self.source_config.as_any().downcast_ref::<ParquetConfig>()
+            {
+                match t {
+                    DisplayFormatType::Default | DisplayFormatType::Verbose => {
+                        let predicate_string = parquet_conf
+                            .predicate()
+                            .map(|p| format!(", predicate={p}"))
+                            .unwrap_or_default();
 
-                    write!(f, "{}{}", predicate_string, pruning_predicate_string,)
+                        let pruning_predicate_string = parquet_conf
+                            .pruning_predicate()
+                            .map(|pre| {
+                                let mut guarantees = pre
+                                    .literal_guarantees()
+                                    .iter()
+                                    .map(|item| format!("{}", item))
+                                    .collect_vec();
+                                guarantees.sort();
+                                format!(
+                                    ", pruning_predicate={}, required_guarantees=[{}]",
+                                    pre.predicate_expr(),
+                                    guarantees.join(", ")
+                                )
+                            })
+                            .unwrap_or_default();
+
+                        return write!(f, "{}{}", predicate_string, pruning_predicate_string,)
+                    }
                 }
             }
-        } else {
-            Ok(())
         }
+        Ok(())
     }
 
     /// Redistribute files across partitions according to their size
@@ -179,24 +185,28 @@ impl DataSource for FileSourceConfig {
     }
 
     fn statistics(&self) -> datafusion_common::Result<Statistics> {
-        let stats = if let Some(parquet_config) =
-            self.source_config.as_any().downcast_ref::<ParquetConfig>()
-        {
-            // When filters are pushed down, we have no way of knowing the exact statistics.
-            // Note that pruning predicate is also a kind of filter pushdown.
-            // (bloom filters use `pruning_predicate` too)
-            if parquet_config.pruning_predicate().is_some()
-                || parquet_config.page_pruning_predicate().is_some()
-                || (parquet_config.predicate().is_some()
+
+        #[cfg(not(feature = "parquet"))]
+        let stats = self.projected_statistics.clone();
+
+        #[cfg(feature = "parquet")]
+        let stats =
+            if let Some(parquet_config) = self.source_config.as_any().downcast_ref::<ParquetConfig>() {
+                // When filters are pushed down, we have no way of knowing the exact statistics.
+                // Note that pruning predicate is also a kind of filter pushdown.
+                // (bloom filters use `pruning_predicate` too)
+                if parquet_config.pruning_predicate().is_some()
+                    || parquet_config.page_pruning_predicate().is_some()
+                    || (parquet_config.predicate().is_some()
                     && parquet_config.pushdown_filters())
-            {
-                self.projected_statistics.clone().to_inexact()
+                {
+                    self.projected_statistics.clone().to_inexact()
+                } else {
+                    self.projected_statistics.clone()
+                }
             } else {
                 self.projected_statistics.clone()
-            }
-        } else {
-            self.projected_statistics.clone()
-        };
+            };
 
         Ok(stats)
     }
@@ -250,6 +260,7 @@ impl FileSourceConfig {
         );
         let mut metrics = ExecutionPlanMetricsSet::new();
 
+        #[cfg(feature = "parquet")]
         if let Some(parquet_config) =
             source_config.as_any().downcast_ref::<ParquetConfig>()
         {
@@ -266,9 +277,10 @@ impl FileSourceConfig {
             cache,
         }
     }
+
     /// Write the data_type based on source_config
     fn fmt_source_config(&self, f: &mut Formatter) -> fmt::Result {
-        let data_type = if self
+        let mut data_type = if self
             .source_config
             .as_any()
             .downcast_ref::<AvroConfig>()
@@ -296,16 +308,13 @@ impl FileSourceConfig {
             .is_some()
         {
             "json"
-        } else if self
-            .source_config
-            .as_any()
-            .downcast_ref::<ParquetConfig>()
-            .is_some()
-        {
-            "parquet"
         } else {
             "unknown"
         };
+        #[cfg(feature = "parquet")]
+        if self.source_config.as_any().downcast_ref::<ParquetConfig>().is_some() {
+            data_type = "parquet";
+        }
         write!(f, ", file_type={}", data_type)
     }
 
