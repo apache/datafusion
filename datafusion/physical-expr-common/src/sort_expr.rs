@@ -556,6 +556,25 @@ impl LexRequirement {
                 .collect(),
         )
     }
+
+    /// Constructs a duplicate-free `LexOrderingReq` by filtering out
+    /// duplicate entries that have same physical expression inside.
+    ///
+    /// For example, `vec![a Some(ASC), a Some(DESC)]` collapses to `vec![a
+    /// Some(ASC)]`.
+    ///
+    /// It will also filter out entries that are ordered if the next entry is;
+    /// for instance, `vec![floor(a) Some(ASC), a Some(ASC)]` will be collapsed to
+    /// `vec![a Some(ASC)]`.
+    pub fn collapse(self) -> Self {
+        let mut output = Vec::<PhysicalSortRequirement>::new();
+        for item in self {
+            if !output.iter().any(|req| req.expr.eq(&item.expr)) {
+                output.push(item);
+            }
+        }
+        LexRequirement::new(output)
+    }
 }
 
 impl From<LexOrdering> for LexRequirement {

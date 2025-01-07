@@ -18,7 +18,7 @@
 use std::sync::Arc;
 
 use crate::expressions::Column;
-use crate::{LexRequirement, PhysicalExpr, PhysicalSortRequirement};
+use crate::{LexRequirement, PhysicalExpr};
 
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 
@@ -41,14 +41,9 @@ pub use properties::{
 /// It will also filter out entries that are ordered if the next entry is;
 /// for instance, `vec![floor(a) Some(ASC), a Some(ASC)]` will be collapsed to
 /// `vec![a Some(ASC)]`.
+#[deprecated(since = "45.0.0", note = "Use LexRequirement::collapse")]
 pub fn collapse_lex_req(input: LexRequirement) -> LexRequirement {
-    let mut output = Vec::<PhysicalSortRequirement>::new();
-    for item in input {
-        if !output.iter().any(|req| req.expr.eq(&item.expr)) {
-            output.push(item);
-        }
-    }
-    LexRequirement::new(output)
+    input.collapse()
 }
 
 /// Adds the `offset` value to `Column` indices inside `expr`. This function is
@@ -80,7 +75,9 @@ mod tests {
     use arrow::datatypes::{DataType, Field, Schema};
     use arrow_schema::{SchemaRef, SortOptions};
     use datafusion_common::{plan_datafusion_err, Result};
-    use datafusion_physical_expr_common::sort_expr::LexOrdering;
+    use datafusion_physical_expr_common::sort_expr::{
+        LexOrdering, PhysicalSortRequirement,
+    };
 
     pub fn output_schema(
         mapping: &ProjectionMapping,
