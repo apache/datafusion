@@ -55,7 +55,7 @@ impl OrderingEquivalenceClass {
 
     /// Creates new ordering equivalence class from the given orderings
     ///
-    /// Any redundant entries are removed, as described on [`Self::remove_redundant_entries`].
+    /// Any redundant entries are removed
     pub fn new(orderings: Vec<LexOrdering>) -> Self {
         let mut result = Self { orderings };
         result.remove_redundant_entries();
