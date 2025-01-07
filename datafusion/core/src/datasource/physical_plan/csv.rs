@@ -52,6 +52,7 @@ use tokio::task::JoinSet;
 /// #     physical_plan::FileScanConfig,
 /// #     listing::PartitionedFile,
 /// # };
+/// use datafusion::datasource::data_source::FileSourceConfig;
 /// # use datafusion::datasource::physical_plan::CsvConfig;
 /// # use datafusion_execution::object_store::ObjectStoreUrl;
 /// # use datafusion_physical_plan::source::DataSourceExec;
@@ -70,7 +71,7 @@ use tokio::task::JoinSet;
 ///     )
 ///     .with_terminator(Some(b'#')
 /// ));
-/// let exec = DataSourceExec::builder(file_scan_config, source_config);
+/// let exec = FileSourceConfig::new_exec(file_scan_config, source_config);
 /// ```
 #[derive(Debug, Clone)]
 pub struct CsvConfig {

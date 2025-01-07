@@ -183,18 +183,20 @@ pub use writer::plan_to_parquet;
 ///
 /// # fn parquet_exec() -> DataSourceExec { unimplemented!() }
 /// // Split a single DataSourceExec into multiple DataSourceExecs, one for each file
-/// let exec = parquet_exec();
-/// let data_source = exec.source();
-/// let existing_file_groups = &data_source.base_config().file_groups;
+/// let source = parquet_exec().source();
+/// let data_source = source.as_any().downcast_ref::<FileSourceConfig>().unwrap();
+/// let base_config = data_source.base_config();
+/// let source_config = data_source.source_config();
+/// let existing_file_groups = &base_config.file_groups;
 /// let new_execs = existing_file_groups
 ///   .iter()
 ///   .map(|file_group| {
 ///     // create a new exec by copying the existing exec's source config
-///     let new_config = data_source
-///        .base_config()
+///     let new_config = base_config
+///         .clone()
 ///        .with_file_groups(vec![file_group.clone()]);
 ///
-///     DataSourceExec::new(Arc::new(FileSourceConfig::new(new_config, data_source.source_config())))
+///     DataSourceExec::new(Arc::new(FileSourceConfig::new(new_config, source_config.clone())))
 ///   })
 ///   .collect::<Vec<_>>();
 /// ```
