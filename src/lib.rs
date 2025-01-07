@@ -43,7 +43,6 @@ pub mod spark_hash;
 mod struct_funcs;
 pub use negative::{create_negate_expr, NegativeExpr};
 mod normalize_nan;
-mod temporal;
 
 pub mod test_common;
 pub mod timezone;
@@ -55,17 +54,19 @@ pub use normalize_nan::NormalizeNaNAndZero;
 
 mod agg_funcs;
 mod comet_scalar_funcs;
+mod datetime_funcs;
 pub use agg_funcs::*;
 
+pub use crate::{CreateNamedStruct, GetStructField};
+pub use crate::{DateTruncExpr, HourExpr, MinuteExpr, SecondExpr, TimestampTruncExpr};
 pub use cast::{spark_cast, Cast, SparkCastOptions};
 pub use comet_scalar_funcs::create_comet_physical_fun;
+pub use datetime_funcs::*;
 pub use error::{SparkError, SparkResult};
 pub use if_expr::IfExpr;
 pub use list::{ArrayInsert, GetArrayStructFields, ListExtract};
 pub use regexp::RLike;
 pub use struct_funcs::*;
-
-pub use temporal::{DateTruncExpr, HourExpr, MinuteExpr, SecondExpr, TimestampTruncExpr};
 pub use to_json::ToJson;
 
 /// Spark supports three evaluation modes when evaluating expressions, which affect
