@@ -87,10 +87,16 @@ impl DisplayAs for MemoryExec {
                     })
                     .unwrap_or_default();
 
+                let constraints = if self.constraints.is_empty() {
+                    String::new()
+                } else {
+                    format!(",{}", self.constraints)
+                };
+
                 if self.show_sizes {
                     write!(
                         f,
-                        "MemoryExec: partitions={}, partition_sizes={partition_sizes:?}{output_ordering}",
+                        "MemoryExec: partitions={}, partition_sizes={partition_sizes:?}{output_ordering}{constraints}",
                         partition_sizes.len(),
                     )
                 } else {
