@@ -2813,7 +2813,7 @@ mod tests {
             create_record_batch(&schema, (vec![2, 3, 4, 4], vec![1.0, 2.0, 3.0, 4.0]))?,
         ];
         let plan: Arc<dyn ExecutionPlan> =
-            Arc::new(MemoryExec::try_new(&[batches], schema.clone(), None)?);
+            Arc::new(MemoryExec::try_new(&[batches], Arc::clone(&schema), None)?);
 
         let grouping_set = PhysicalGroupBy::new(
             vec![(col("a", &schema)?, "a".to_string())],
@@ -2828,13 +2828,13 @@ mod tests {
                     datafusion_functions_aggregate::min_max::min_udaf(),
                     vec![col("b", &schema)?],
                 )
-                .schema(schema.clone())
+                .schema(Arc::clone(&schema))
                 .alias("MIN(b)")
                 .build()?,
             ),
             Arc::new(
                 AggregateExprBuilder::new(avg_udaf(), vec![col("b", &schema)?])
-                    .schema(schema.clone())
+                    .schema(Arc::clone(&schema))
                     .alias("AVG(b)")
                     .build()?,
             ),
@@ -2846,7 +2846,7 @@ mod tests {
             aggregates,
             vec![None, None],
             plan,
-            schema.clone(),
+            Arc::clone(&schema),
         )?);
 
         let batch_size = 2;
