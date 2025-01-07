@@ -34,6 +34,7 @@ use datafusion_execution::TaskContext;
 use datafusion_physical_expr::EquivalenceProperties;
 
 /// Execution plan for values list based relation (produces constant rows)
+#[deprecated(since = "44.0.0", note = "Use `MemoryExec::try_new_as_values` instead")]
 #[derive(Debug, Clone)]
 pub struct ValuesExec {
     /// The schema
@@ -44,6 +45,7 @@ pub struct ValuesExec {
     cache: PlanProperties,
 }
 
+#[allow(deprecated)]
 impl ValuesExec {
     /// Create a new values exec from data as expr
     pub fn try_new(
@@ -117,6 +119,7 @@ impl ValuesExec {
         }
 
         let cache = Self::compute_properties(Arc::clone(&schema));
+        #[allow(deprecated)]
         Ok(ValuesExec {
             schema,
             data: batches,
@@ -126,6 +129,7 @@ impl ValuesExec {
 
     /// Provides the data
     pub fn data(&self) -> Vec<RecordBatch> {
+        #[allow(deprecated)]
         self.data.clone()
     }
 
@@ -140,6 +144,7 @@ impl ValuesExec {
     }
 }
 
+#[allow(deprecated)]
 impl DisplayAs for ValuesExec {
     fn fmt_as(
         &self,
@@ -154,6 +159,7 @@ impl DisplayAs for ValuesExec {
     }
 }
 
+#[allow(deprecated)]
 impl ExecutionPlan for ValuesExec {
     fn name(&self) -> &'static str {
         "ValuesExec"
@@ -165,6 +171,7 @@ impl ExecutionPlan for ValuesExec {
     }
 
     fn properties(&self) -> &PlanProperties {
+        #[allow(deprecated)]
         &self.cache
     }
 
@@ -176,6 +183,7 @@ impl ExecutionPlan for ValuesExec {
         self: Arc<Self>,
         _: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
+        #[allow(deprecated)]
         ValuesExec::try_new_from_batches(Arc::clone(&self.schema), self.data.clone())
             .map(|e| Arc::new(e) as _)
     }
@@ -194,6 +202,7 @@ impl ExecutionPlan for ValuesExec {
 
         Ok(Box::pin(MemoryStream::try_new(
             self.data(),
+            #[allow(deprecated)]
             Arc::clone(&self.schema),
             None,
         )?))
@@ -203,6 +212,7 @@ impl ExecutionPlan for ValuesExec {
         let batch = self.data();
         Ok(common::compute_record_batch_statistics(
             &[batch],
+            #[allow(deprecated)]
             &self.schema,
             None,
         ))
@@ -221,6 +231,7 @@ mod tests {
     #[tokio::test]
     async fn values_empty_case() -> Result<()> {
         let schema = test::aggr_test_schema();
+        #[allow(deprecated)]
         let empty = ValuesExec::try_new(schema, vec![]);
         assert!(empty.is_err());
         Ok(())
@@ -231,7 +242,7 @@ mod tests {
         let batch = make_partition(7);
         let schema = batch.schema();
         let batches = vec![batch.clone(), batch];
-
+        #[allow(deprecated)]
         let _exec = ValuesExec::try_new_from_batches(schema, batches).unwrap();
     }
 
@@ -239,6 +250,7 @@ mod tests {
     fn new_exec_with_batches_empty() {
         let batch = make_partition(7);
         let schema = batch.schema();
+        #[allow(deprecated)]
         let _ = ValuesExec::try_new_from_batches(schema, Vec::new()).unwrap_err();
     }
 
@@ -251,6 +263,7 @@ mod tests {
             Field::new("col0", DataType::UInt32, false),
             Field::new("col1", DataType::Utf8, false),
         ]));
+        #[allow(deprecated)]
         let _ = ValuesExec::try_new_from_batches(invalid_schema, batches).unwrap_err();
     }
 
@@ -262,8 +275,10 @@ mod tests {
             DataType::UInt32,
             false,
         )]));
+        #[allow(deprecated)]
         let _ = ValuesExec::try_new(Arc::clone(&schema), vec![vec![lit(1u32)]]).unwrap();
         // Test that a null value is rejected
+        #[allow(deprecated)]
         let _ = ValuesExec::try_new(schema, vec![vec![lit(ScalarValue::UInt32(None))]])
             .unwrap_err();
     }
@@ -276,6 +291,7 @@ mod tests {
             vec![lit(ScalarValue::Null)],
         ];
         let rows = data.len();
+        #[allow(deprecated)]
         let values = ValuesExec::try_new(
             Arc::new(Schema::new(vec![Field::new("col0", DataType::Null, true)])),
             data,
