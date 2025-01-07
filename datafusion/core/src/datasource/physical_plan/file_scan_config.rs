@@ -617,10 +617,10 @@ fn create_output_array(
 
 #[cfg(test)]
 mod tests {
-    use arrow_array::Int32Array;
-
     use super::*;
     use crate::{test::columns, test_util::aggr_test_schema};
+    use arrow_array::Int32Array;
+    use datafusion_common::config::ConfigOptions;
 
     #[test]
     fn physical_plan_config_no_projection() {
@@ -1121,6 +1121,7 @@ mod tests {
                             &expr,
                             &DFSchema::try_from(table_schema.as_ref().clone())?,
                             &ExecutionProps::default(),
+                            &ConfigOptions::default(),
                         )
                     })
                     .collect::<Result<Vec<_>>>()?,

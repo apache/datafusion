@@ -142,6 +142,7 @@ pub mod test {
                 })
                 .unwrap_or(1);
             let return_type = func.return_type(&type_array);
+            let cfg_options = std::sync::Arc::new(datafusion_common::config::ConfigOptions::default());
 
             match expected {
                 Ok(expected) => {
@@ -149,7 +150,7 @@ pub mod test {
                     let return_type = return_type.unwrap();
                     assert_eq!(return_type, $EXPECTED_DATA_TYPE);
 
-                    let result = func.invoke_with_args(datafusion_expr::ScalarFunctionArgs{args: $ARGS, number_rows: cardinality, return_type: &return_type});
+                    let result = func.invoke_with_args(datafusion_expr::ScalarFunctionArgs{args: $ARGS, number_rows: cardinality, return_type: &return_type, config_options: cfg_options});
                     assert_eq!(result.is_ok(), true, "function returned an error: {}", result.unwrap_err());
 
                     let result = result.unwrap().to_array(cardinality).expect("Failed to convert to array");
@@ -171,7 +172,7 @@ pub mod test {
                     }
                     else {
                         // invoke is expected error - cannot use .expect_err() due to Debug not being implemented
-                        match func.invoke_with_args(datafusion_expr::ScalarFunctionArgs{args: $ARGS, number_rows: cardinality, return_type: &return_type.unwrap()}) {
+                        match func.invoke_with_args(datafusion_expr::ScalarFunctionArgs{args: $ARGS, number_rows: cardinality, return_type: &return_type.unwrap(), config_options: cfg_options,}) {
                             Ok(_) => assert!(false, "expected error"),
                             Err(error) => {
                                 assert!(expected_error.strip_backtrace().starts_with(&error.strip_backtrace()));

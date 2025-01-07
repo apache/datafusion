@@ -23,6 +23,7 @@ use arrow_buffer::IntervalDayTime;
 use chrono::{DateTime, TimeZone, Utc};
 use datafusion::{error::Result, execution::context::ExecutionProps, prelude::*};
 use datafusion_common::cast::as_int32_array;
+use datafusion_common::config::ConfigOptions;
 use datafusion_common::ScalarValue;
 use datafusion_common::{DFSchemaRef, ToDFSchema};
 use datafusion_expr::expr::ScalarFunction;
@@ -50,6 +51,9 @@ struct MyInfo {
     /// Execution specific details needed for constant evaluation such
     /// as the current time for `now()` and [VariableProviders]
     execution_props: ExecutionProps,
+
+    /// config options needed for scalar function evaluation
+    config_options: ConfigOptions,
 }
 
 impl SimplifyInfo for MyInfo {
@@ -68,6 +72,10 @@ impl SimplifyInfo for MyInfo {
         &self.execution_props
     }
 
+    fn config_options(&self) -> &ConfigOptions {
+        &self.config_options
+    }
+
     fn get_data_type(&self, expr: &Expr) -> Result<DataType> {
         expr.get_type(self.schema.as_ref())
     }
@@ -78,6 +86,7 @@ impl From<DFSchemaRef> for MyInfo {
         Self {
             schema,
             execution_props: ExecutionProps::new(),
+            config_options: ConfigOptions::default(),
         }
     }
 }
@@ -132,10 +141,11 @@ fn test_evaluate_with_start_time(
 ) {
     let execution_props =
         ExecutionProps::new().with_query_execution_start_time(*date_time);
-
+    let config_options = ConfigOptions::default();
     let info: MyInfo = MyInfo {
         schema: schema(),
         execution_props,
+        config_options,
     };
     let simplifier = ExprSimplifier::new(info);
     let simplified_expr = simplifier
@@ -498,6 +508,7 @@ fn test_simplify(input_expr: Expr, expected_expr: Expr) {
     let info: MyInfo = MyInfo {
         schema: expr_test_schema(),
         execution_props: ExecutionProps::new(),
+        config_options: ConfigOptions::default(),
     };
     let simplifier = ExprSimplifier::new(info);
     let simplified_expr = simplifier
@@ -517,6 +528,7 @@ fn test_simplify_with_cycle_count(
     let info: MyInfo = MyInfo {
         schema: expr_test_schema(),
         execution_props: ExecutionProps::new(),
+        config_options: ConfigOptions::default(),
     };
     let simplifier = ExprSimplifier::new(info);
     let (simplified_expr, count) = simplifier

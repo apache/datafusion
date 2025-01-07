@@ -2271,6 +2271,7 @@ mod tests {
 
     use arrow::datatypes::{DataType, Field, Schema};
     use arrow_schema::{Fields, TimeUnit};
+    use datafusion_common::config::ConfigOptions;
     use datafusion_common::ScalarValue;
     use datafusion_expr::Operator;
 
@@ -3830,6 +3831,7 @@ mod tests {
             concat(),
             vec![Arc::clone(&col_a), Arc::clone(&col_b)],
             DataType::Utf8,
+            Arc::new(ConfigOptions::default()),
         ));
 
         // Assume existing ordering is [c ASC, a ASC, b ASC]
@@ -3921,6 +3923,7 @@ mod tests {
             concat(),
             vec![Arc::clone(&col_a), Arc::clone(&col_b)],
             DataType::Utf8,
+            Arc::new(ConfigOptions::default()),
         ));
 
         // Assume existing ordering is [concat(a, b) ASC, a ASC, b ASC]

@@ -28,6 +28,7 @@ use datafusion::functions_aggregate::first_last::first_value_udaf;
 use datafusion::optimizer::simplify_expressions::ExprSimplifier;
 use datafusion::physical_expr::{analyze, AnalysisContext, ExprBoundaries};
 use datafusion::prelude::*;
+use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::{ScalarValue, ToDFSchema};
 use datafusion_expr::execution_props::ExecutionProps;
@@ -169,7 +170,8 @@ fn simplify_demo() -> Result<()> {
     // expressions, such as the current time (to evaluate `now()`
     // correctly)
     let props = ExecutionProps::new();
-    let context = SimplifyContext::new(&props).with_schema(schema);
+    let config_options = ConfigOptions::default();
+    let context = SimplifyContext::new(&props, &config_options).with_schema(schema);
     let simplifier = ExprSimplifier::new(context);
 
     // And then call the simplify_expr function:
@@ -184,7 +186,8 @@ fn simplify_demo() -> Result<()> {
 
     // here are some other examples of what DataFusion is capable of
     let schema = Schema::new(vec![make_field("i", DataType::Int64)]).to_dfschema_ref()?;
-    let context = SimplifyContext::new(&props).with_schema(schema.clone());
+    let context =
+        SimplifyContext::new(&props, &config_options).with_schema(schema.clone());
     let simplifier = ExprSimplifier::new(context);
 
     // basic arithmetic simplification
@@ -356,8 +359,13 @@ fn type_coercion_demo() -> Result<()> {
 
     // Evaluation with an expression that has not been type coerced cannot succeed.
     let props = ExecutionProps::default();
-    let physical_expr =
-        datafusion_physical_expr::create_physical_expr(&expr, &df_schema, &props)?;
+    let config_options = ConfigOptions::default();
+    let physical_expr = datafusion_physical_expr::create_physical_expr(
+        &expr,
+        &df_schema,
+        &props,
+        &config_options,
+    )?;
     let e = physical_expr.evaluate(&batch).unwrap_err();
     assert!(e
         .find_root()
@@ -370,13 +378,15 @@ fn type_coercion_demo() -> Result<()> {
     assert!(physical_expr.evaluate(&batch).is_ok());
 
     // 2. Type coercion with `ExprSimplifier::coerce`.
-    let context = SimplifyContext::new(&props).with_schema(Arc::new(df_schema.clone()));
+    let context = SimplifyContext::new(&props, &config_options)
+        .with_schema(Arc::new(df_schema.clone()));
     let simplifier = ExprSimplifier::new(context);
     let coerced_expr = simplifier.coerce(expr.clone(), &df_schema)?;
     let physical_expr = datafusion_physical_expr::create_physical_expr(
         &coerced_expr,
         &df_schema,
         &props,
+        &config_options,
     )?;
     assert!(physical_expr.evaluate(&batch).is_ok());
 
@@ -389,6 +399,7 @@ fn type_coercion_demo() -> Result<()> {
         &coerced_expr,
         &df_schema,
         &props,
+        &config_options,
     )?;
     assert!(physical_expr.evaluate(&batch).is_ok());
 
@@ -417,6 +428,7 @@ fn type_coercion_demo() -> Result<()> {
         &coerced_expr,
         &df_schema,
         &props,
+        &config_options,
     )?;
     assert!(physical_expr.evaluate(&batch).is_ok());
 

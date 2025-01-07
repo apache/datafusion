@@ -648,7 +648,7 @@ impl SessionState {
             // analyze & capture output of each rule
             let analyzer_result = self.analyzer.execute_and_check(
                 e.plan.as_ref().clone(),
-                self.options(),
+                self.config_options(),
                 |analyzed_plan, analyzer| {
                     let analyzer_name = analyzer.name().to_string();
                     let plan_type = PlanType::AnalyzedLogicalPlan { analyzer_name };
@@ -708,7 +708,7 @@ impl SessionState {
         } else {
             let analyzed_plan = self.analyzer.execute_and_check(
                 plan.clone(),
-                self.options(),
+                self.config_options(),
                 |_, _| {},
             )?;
             self.optimizer.optimize(analyzed_plan, self, |_, _| {})
@@ -760,13 +760,19 @@ impl SessionState {
         let mut expr = simplifier.coerce(expr, df_schema)?;
 
         // rewrite Exprs to functions if necessary
-        let config_options = self.config_options();
         for rewrite in self.analyzer.function_rewrites() {
             expr = expr
-                .transform_up(|expr| rewrite.rewrite(expr, df_schema, config_options))?
+                .transform_up(|expr| {
+                    rewrite.rewrite(expr, df_schema, self.config_options())
+                })?
                 .data;
         }
-        create_physical_expr(&expr, df_schema, self.execution_props())
+        create_physical_expr(
+            &expr,
+            df_schema,
+            self.execution_props(),
+            self.config_options(),
+        )
     }
 
     /// Return the session ID
@@ -1966,6 +1972,10 @@ impl SimplifyInfo for SessionSimplifyProvider<'_> {
 
     fn execution_props(&self) -> &ExecutionProps {
         self.state.execution_props()
+    }
+
+    fn config_options(&self) -> &ConfigOptions {
+        self.state.config_options()
     }
 
     fn get_data_type(&self, expr: &Expr) -> datafusion_common::Result<DataType> {
