@@ -102,9 +102,15 @@ make_udf_expr_and_func!(
     )
 )]
 #[derive(Debug)]
-pub(super) struct ArrayElement {
+pub struct ArrayElement {
     signature: Signature,
     aliases: Vec<String>,
+}
+
+impl Default for ArrayElement {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl ArrayElement {

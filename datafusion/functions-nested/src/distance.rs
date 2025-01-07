@@ -67,9 +67,15 @@ make_udf_expr_and_func!(
     )
 )]
 #[derive(Debug)]
-pub(super) struct ArrayDistance {
+pub struct ArrayDistance {
     signature: Signature,
     aliases: Vec<String>,
+}
+
+impl Default for ArrayDistance {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl ArrayDistance {

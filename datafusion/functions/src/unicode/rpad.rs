@@ -15,11 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::strings::StringArrayType;
 use crate::utils::{make_scalar_function, utf8_to_str_type};
 use arrow::array::{
     ArrayRef, AsArray, GenericStringArray, GenericStringBuilder, Int64Array,
-    OffsetSizeTrait, StringViewArray,
+    OffsetSizeTrait, StringArrayType, StringViewArray,
 };
 use arrow::datatypes::DataType;
 use datafusion_common::cast::as_int64_array;

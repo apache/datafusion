@@ -58,9 +58,15 @@ make_udf_expr_and_func!(
     )
 )]
 #[derive(Debug)]
-pub(super) struct ArrayReverse {
+pub struct ArrayReverse {
     signature: Signature,
     aliases: Vec<String>,
+}
+
+impl Default for ArrayReverse {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl ArrayReverse {
