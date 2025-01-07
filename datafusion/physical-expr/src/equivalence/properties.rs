@@ -22,7 +22,6 @@ use std::slice::Iter;
 use std::sync::Arc;
 use std::{fmt, mem};
 
-use super::ordering::collapse_lex_ordering;
 use crate::equivalence::class::{const_exprs_contains, AcrossPartitions};
 use crate::equivalence::{
     collapse_lex_req, EquivalenceClass, EquivalenceGroup, OrderingEquivalenceClass,
@@ -911,7 +910,7 @@ impl EquivalenceProperties {
         // Simplify each ordering by removing redundant sections:
         orderings
             .chain(projected_orderings)
-            .map(collapse_lex_ordering)
+            .map(|lex_ordering| lex_ordering.collapse())
             .collect()
     }
 
