@@ -353,24 +353,6 @@ fn roundtrip_statement_with_dialect() -> Result<()> {
             parser_dialect: Box::new(GenericDialect {}),
             unparser_dialect: Box::new(UnparserDefaultDialect {}),
         },
-        TestStatementWithDialect {
-            sql: "SELECT 1 x, 'a' y UNION ALL
-                    SELECT 1 x, 'b' y UNION ALL
-                    SELECT 2 x, 'a' y UNION ALL
-                    SELECT 2 x, 'c' y",
-            expected: r#"SELECT 1 AS x, 'a' AS y UNION ALL SELECT 1 AS x, 'b' AS y UNION ALL SELECT 2 AS x, 'a' AS y UNION ALL SELECT 2 AS x, 'c' AS y"#,
-            parser_dialect: Box::new(GenericDialect {}),
-            unparser_dialect: Box::new(UnparserDefaultDialect {}),
-        },
-        TestStatementWithDialect {
-            sql: "SELECT 1 x, 'a' y UNION ALL
-                    SELECT 1 x, 'b' y UNION ALL
-                    SELECT 2 x, 'a' y UNION ALL
-                    SELECT 2 x, 'c' y",
-            expected: r#"SELECT 1 AS x, 'a' AS y UNION ALL SELECT 1 AS x, 'b' AS y UNION ALL SELECT 2 AS x, 'a' AS y UNION ALL SELECT 2 AS x, 'c' AS y"#,
-            parser_dialect: Box::new(GenericDialect {}),
-            unparser_dialect: Box::new(UnparserDefaultDialect {}),
-        },
         // Test query with derived tables that put distinct,sort,limit on the wrong level
         TestStatementWithDialect {
             sql: "SELECT j1_string from j1 order by j1_id",
