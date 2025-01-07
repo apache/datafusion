@@ -15,14 +15,14 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow_schema::*;
+use arrow_schema::{DataType, Field, Schema};
 use datafusion_common::{assert_contains, DFSchema, DFSchemaRef, Result, TableReference};
 use datafusion_expr::test::function_stub::{
     count_udaf, max_udaf, min_udaf, sum, sum_udaf,
 };
 use datafusion_expr::{
-    col, lit, table_scan, wildcard, Expr, Extension, LogicalPlan, LogicalPlanBuilder,
-    UserDefinedLogicalNode, UserDefinedLogicalNodeCore,
+    col, lit, table_scan, wildcard, EmptyRelation, Expr, Extension, LogicalPlan,
+    LogicalPlanBuilder, Union, UserDefinedLogicalNode, UserDefinedLogicalNodeCore,
 };
 use datafusion_functions::unicode;
 use datafusion_functions_aggregate::grouping::grouping_udaf;
@@ -42,7 +42,7 @@ use std::{fmt, vec};
 
 use crate::common::{MockContextProvider, MockSessionState};
 use datafusion_expr::builder::{
-    table_scan_with_filter_and_fetch, table_scan_with_filters,
+    project, table_scan_with_filter_and_fetch, table_scan_with_filters,
 };
 use datafusion_functions::core::planner::CoreFunctionPlanner;
 use datafusion_functions_nested::extract::array_element_udf;
@@ -1631,5 +1631,38 @@ fn test_unparse_extension_to_sql() -> Result<()> {
     } else {
         panic!("Expected error")
     }
+    Ok(())
+}
+
+#[test]
+fn test_unparse_optimized_multi_union() -> Result<()> {
+    let unparser = Unparser::default();
+
+    let schema = Schema::new(vec![
+        Field::new("x", DataType::Int32, false),
+        Field::new("y", DataType::Utf8, false),
+    ]);
+
+    let dfschema = Arc::new(DFSchema::try_from(schema)?);
+
+    let empty = LogicalPlan::EmptyRelation(EmptyRelation {
+        produce_one_row: true,
+        schema: dfschema.clone(),
+    });
+
+    let plan = LogicalPlan::Union(Union {
+        inputs: vec![
+            project(empty.clone(), vec![lit(1).alias("x"), lit("a").alias("y")])?.into(),
+            project(empty.clone(), vec![lit(1).alias("x"), lit("b").alias("y")])?.into(),
+            project(empty.clone(), vec![lit(2).alias("x"), lit("a").alias("y")])?.into(),
+            project(empty.clone(), vec![lit(2).alias("x"), lit("c").alias("y")])?.into(),
+        ],
+        schema: dfschema.clone(),
+    });
+
+    let sql = "SELECT 1 AS x, 'a' AS y UNION ALL SELECT 1 AS x, 'b' AS y UNION ALL SELECT 2 AS x, 'a' AS y UNION ALL SELECT 2 AS x, 'c' AS y";
+
+    assert_eq!(unparser.plan_to_sql(&plan)?.to_string(), sql);
+
     Ok(())
 }
