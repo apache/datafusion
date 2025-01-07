@@ -81,7 +81,6 @@ fn mock_data() -> Result<Arc<MemoryExec>> {
         &[vec![batch]],
         Arc::clone(&schema),
         None,
-        None,
     )?))
 }
 

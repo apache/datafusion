@@ -2185,7 +2185,6 @@ mod tests {
             ],
             Arc::clone(&schema),
             None,
-            None,
         )?);
         let aggregate_exec = Arc::new(AggregateExec::try_new(
             AggregateMode::Partial,
@@ -2416,7 +2415,6 @@ mod tests {
             &[input_batches],
             Arc::clone(&schema),
             None,
-            None,
         )?);
 
         let aggregate_exec = Arc::new(AggregateExec::try_new(
@@ -2540,7 +2538,6 @@ mod tests {
             &[vec![batch.clone()]],
             Arc::<Schema>::clone(&batch.schema()),
             None,
-            None,
         )?);
         let aggregate_exec = Arc::new(AggregateExec::try_new(
             AggregateMode::FinalPartitioned,
@@ -2609,7 +2606,6 @@ mod tests {
         let input = Arc::new(MemoryExec::try_new(
             &[input_data],
             Arc::clone(&schema),
-            None,
             None,
         )?);
         let aggregate_exec = Arc::new(AggregateExec::try_new(
@@ -2700,7 +2696,6 @@ mod tests {
         let input = Arc::new(MemoryExec::try_new(
             &[input_data],
             Arc::clone(&schema),
-            None,
             None,
         )?);
         let aggregate_exec = Arc::new(AggregateExec::try_new(

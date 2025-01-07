@@ -91,6 +91,12 @@ impl Constraints {
     }
 }
 
+impl Default for Constraints {
+    fn default() -> Self {
+        Constraints::empty()
+    }
+}
+
 impl IntoIterator for Constraints {
     type Item = Constraint;
     type IntoIter = IntoIter<Constraint>;

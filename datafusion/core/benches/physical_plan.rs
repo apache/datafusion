@@ -59,7 +59,6 @@ fn sort_preserving_merge_operator(
         &batches.into_iter().map(|rb| vec![rb]).collect::<Vec<_>>(),
         schema,
         None,
-        None,
     )
     .unwrap();
     let merge = Arc::new(SortPreservingMergeExec::new(sort, Arc::new(exec)));

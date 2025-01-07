@@ -216,7 +216,6 @@ fn try_swapping_with_memory(
             MemoryExec::try_new(
                 memory.partitions(),
                 memory.original_schema(),
-                Some(memory.constraints().to_owned()),
                 Some(new_projections),
             )
             .map(|e| Arc::new(e) as _)
@@ -1771,7 +1770,7 @@ mod tests {
             Field::new("e", DataType::Int32, true),
         ]));
 
-        Arc::new(MemoryExec::try_new(&[], schema, None, Some(vec![2, 0, 3, 4])).unwrap())
+        Arc::new(MemoryExec::try_new(&[], schema, Some(vec![2, 0, 3, 4])).unwrap())
     }
 
     #[test]

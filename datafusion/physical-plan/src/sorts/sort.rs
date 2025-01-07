@@ -1345,7 +1345,7 @@ mod tests {
 
         let batch = RecordBatch::try_new(Arc::clone(&schema), vec![data]).unwrap();
         let input = Arc::new(
-            MemoryExec::try_new(&[vec![batch]], Arc::clone(&schema), None, None).unwrap(),
+            MemoryExec::try_new(&[vec![batch]], Arc::clone(&schema), None).unwrap(),
         );
 
         let sort_exec = Arc::new(SortExec::new(
@@ -1419,7 +1419,6 @@ mod tests {
             Arc::new(MemoryExec::try_new(
                 &[vec![batch]],
                 Arc::clone(&schema),
-                None,
                 None,
             )?),
         ));
@@ -1507,7 +1506,7 @@ mod tests {
                     },
                 },
             ]),
-            Arc::new(MemoryExec::try_new(&[vec![batch]], schema, None, None)?),
+            Arc::new(MemoryExec::try_new(&[vec![batch]], schema, None)?),
         ));
 
         assert_eq!(DataType::Float32, *sort_exec.schema().field(0).data_type());

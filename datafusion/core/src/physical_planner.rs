@@ -1940,7 +1940,7 @@ impl DefaultPhysicalPlanner {
         let schema = record_batch.schema();
         let partitions = vec![vec![record_batch]];
         let projection = None;
-        let mem_exec = MemoryExec::try_new(&partitions, schema, None, projection)?;
+        let mem_exec = MemoryExec::try_new(&partitions, schema, projection)?;
         Ok(Arc::new(mem_exec))
     }
 

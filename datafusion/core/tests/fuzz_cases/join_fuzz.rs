@@ -404,12 +404,10 @@ impl JoinFuzzTestCase {
     fn left_right(&self) -> (Arc<MemoryExec>, Arc<MemoryExec>) {
         let schema1 = self.input1[0].schema();
         let schema2 = self.input2[0].schema();
-        let left = Arc::new(
-            MemoryExec::try_new(&[self.input1.clone()], schema1, None, None).unwrap(),
-        );
-        let right = Arc::new(
-            MemoryExec::try_new(&[self.input2.clone()], schema2, None, None).unwrap(),
-        );
+        let left =
+            Arc::new(MemoryExec::try_new(&[self.input1.clone()], schema1, None).unwrap());
+        let right =
+            Arc::new(MemoryExec::try_new(&[self.input2.clone()], schema2, None).unwrap());
         (left, right)
     }
 

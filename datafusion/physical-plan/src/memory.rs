@@ -160,11 +160,10 @@ impl MemoryExec {
     pub fn try_new(
         partitions: &[Vec<RecordBatch>],
         schema: SchemaRef,
-        constraints: Option<Constraints>,
         projection: Option<Vec<usize>>,
     ) -> Result<Self> {
         let projected_schema = project_schema(&schema, projection.as_ref())?;
-        let constraints = constraints.unwrap_or_else(Constraints::empty);
+        let constraints = Constraints::empty();
         let cache = Self::compute_properties(
             Arc::clone(&projected_schema),
             &[],
@@ -181,6 +180,12 @@ impl MemoryExec {
             cache,
             show_sizes: true,
         })
+    }
+
+    pub fn with_constraints(mut self, constraints: Constraints) -> Self {
+        self.cache = self.cache.with_constraints(constraints.clone());
+        self.constraints = constraints;
+        self
     }
 
     /// Set `show_sizes` to determine whether to display partition sizes
@@ -579,7 +584,7 @@ mod memory_exec_tests {
         expected_output_order.extend(sort2.clone());
 
         let sort_information = vec![sort1.clone(), sort2.clone()];
-        let mem_exec = MemoryExec::try_new(&[vec![]], schema, None, None)?
+        let mem_exec = MemoryExec::try_new(&[vec![]], schema, None)?
             .try_with_sort_information(sort_information)?;
 
         assert_eq!(

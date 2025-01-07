@@ -700,7 +700,6 @@ mod tests {
                 &[vec![batch1, batch2, batch3, batch4]],
                 Arc::clone(&schema),
                 None,
-                None,
             )
             .unwrap(),
         ) as Arc<dyn ExecutionPlan>
@@ -886,7 +885,6 @@ mod tests {
             &[vec![batch]],
             Arc::clone(&schema),
             None,
-            None,
         )?);
 
         let partial_sort_exec = Arc::new(PartialSortExec::new(
@@ -993,7 +991,7 @@ mod tests {
                     options: option_desc,
                 },
             ]),
-            Arc::new(MemoryExec::try_new(&[vec![batch]], schema, None, None)?),
+            Arc::new(MemoryExec::try_new(&[vec![batch]], schema, None)?),
             2,
         ));
 

@@ -82,7 +82,7 @@ fn generate_spm_for_round_robin_tie_breaker(
         },
     ]);
 
-    let exec = MemoryExec::try_new(&partitiones, schema, None, None).unwrap();
+    let exec = MemoryExec::try_new(&partitiones, schema, None).unwrap();
     SortPreservingMergeExec::new(sort, Arc::new(exec))
         .with_round_robin_repartition(enable_round_robin_repartition)
 }

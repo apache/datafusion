@@ -156,7 +156,6 @@ impl TableProvider for SimpleCsvTable {
         Ok(Arc::new(MemoryExec::try_new(
             &[batches],
             TableProvider::schema(self),
-            None,
             projection.cloned(),
         )?))
     }

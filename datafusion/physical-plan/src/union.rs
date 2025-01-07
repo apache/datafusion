@@ -814,11 +814,11 @@ mod tests {
                 .map(|ordering| convert_to_sort_exprs(ordering))
                 .collect::<Vec<_>>();
             let child1 = Arc::new(
-                MemoryExec::try_new(&[], Arc::clone(&schema), None, None)?
+                MemoryExec::try_new(&[], Arc::clone(&schema), None)?
                     .try_with_sort_information(first_orderings)?,
             );
             let child2 = Arc::new(
-                MemoryExec::try_new(&[], Arc::clone(&schema), None, None)?
+                MemoryExec::try_new(&[], Arc::clone(&schema), None)?
                     .try_with_sort_information(second_orderings)?,
             );
 

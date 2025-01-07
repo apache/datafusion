@@ -163,7 +163,6 @@ async fn bounded_window_causal_non_causal() -> Result<()> {
         &[batches.clone()],
         schema.clone(),
         None,
-        None,
     )?);
 
     // Different window functions to test causality
@@ -640,7 +639,7 @@ async fn run_window_test(
         },
     ]);
     let mut exec1 = Arc::new(
-        MemoryExec::try_new(&[vec![concat_input_record]], schema.clone(), None, None)?
+        MemoryExec::try_new(&[vec![concat_input_record]], schema.clone(), None)?
             .try_with_sort_information(vec![source_sort_keys.clone()])?,
     ) as _;
     // Table is ordered according to ORDER BY a, b, c In linear test we use PARTITION BY b, ORDER BY a
@@ -666,7 +665,7 @@ async fn run_window_test(
         vec![],
     )?) as _;
     let exec2 = Arc::new(
-        MemoryExec::try_new(&[input1.clone()], schema.clone(), None, None)?
+        MemoryExec::try_new(&[input1.clone()], schema.clone(), None)?
             .try_with_sort_information(vec![source_sort_keys.clone()])?,
     );
     let running_window_exec = Arc::new(BoundedWindowAggExec::try_new(
