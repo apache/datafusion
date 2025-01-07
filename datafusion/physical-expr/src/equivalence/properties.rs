@@ -540,7 +540,7 @@ impl EquivalenceProperties {
         let normalized_reqs = eq_properties.normalize_sort_requirements(reqs);
 
         // Check whether given ordering is satisfied by constraints first
-        if self.satisfies_by_constraints(&normalized_reqs) {
+        if self.satisfied_by_constraints(&normalized_reqs) {
             return true;
         }
 
@@ -569,7 +569,7 @@ impl EquivalenceProperties {
 
     /// Checks if the sort requirements are satisfied by any of the table constraints (primary key or unique).
     /// Returns true if any constraint fully satisfies the requirements.
-    fn satisfies_by_constraints(&self, reqs: &[PhysicalSortRequirement]) -> bool {
+    fn satisfied_by_constraints(&self, reqs: &[PhysicalSortRequirement]) -> bool {
         self.constraints.iter().any(|constraint| match constraint {
             Constraint::PrimaryKey(indices) | Constraint::Unique(indices) => self
                 .matches_constraint_indices(
