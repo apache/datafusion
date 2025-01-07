@@ -261,7 +261,7 @@ impl MemoryExec {
             sort_information = base_eqp
                 .project(&projection_mapping, self.schema())
                 .oeq_class
-                .orderings;
+                .into_inner();
         }
 
         self.sort_information = sort_information;
