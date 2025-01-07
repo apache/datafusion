@@ -1307,24 +1307,27 @@ ORDER BY a DESC;
 0.5
 0
 
+# Test that when a column has a unique non-null constraint (via PRIMARY KEY) and is ordered (via WITH ORDER),
+# we can eliminate sorts on derived lexicographical orderings that start with that column.
 statement ok
-CREATE EXTERNAL TABLE abc (
+CREATE EXTERNAL TABLE table_with_ordered_pk (
   c1 INT,
   c2 INT,
   c3 INT,
   PRIMARY KEY (c1)
 )
 STORED AS CSV
+WITH ORDER (c1 ASC)
 OPTIONS ('format.has_header' 'true')
 LOCATION '../core/tests/data/aggregate_agg_multi_order.csv';
 
 query TT
-EXPLAIN SELECT c1, c2 FROM abc ORDER BY c1, c2;
+EXPLAIN SELECT c1, c2 FROM table_with_ordered_pk ORDER BY c1, c2;
 ----
 logical_plan
-01)Sort: abc.c1 ASC NULLS LAST, abc.c2 ASC NULLS LAST
-02)--TableScan: abc projection=[c1, c2]
-physical_plan CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/aggregate_agg_multi_order.csv]]}, projection=[c1, c2], has_header=true
+01)Sort: table_with_ordered_pk.c1 ASC NULLS LAST, table_with_ordered_pk.c2 ASC NULLS LAST
+02)--TableScan: table_with_ordered_pk projection=[c1, c2]
+physical_plan CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/aggregate_agg_multi_order.csv]]}, projection=[c1, c2], output_ordering=[c1@0 ASC NULLS LAST], has_header=true
 
 statement ok
-drop table abc;
+drop table table_with_ordered_pk;

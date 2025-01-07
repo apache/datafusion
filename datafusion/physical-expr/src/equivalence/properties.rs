@@ -590,11 +590,27 @@ impl EquivalenceProperties {
         check_null: bool,
     ) -> bool {
         reqs.iter().zip(indices).all(|(req, &idx)| {
-            if let Some(col) = req.expr.as_any().downcast_ref::<Column>() {
-                return col.index() == idx
-                    && (!check_null || !req.expr.nullable(&self.schema).unwrap_or(true));
+            // Only handle Column expressions
+            let Some(col) = req.expr.as_any().downcast_ref::<Column>() else {
+                return false;
+            };
+
+            // Column index must match
+            if col.index() != idx {
+                return false;
             }
-            false
+
+            // For unique constraints, verify column is not nullable
+            if check_null && req.expr.nullable(&self.schema).unwrap_or(true) {
+                return false;
+            }
+
+            // If sort order is specified, it must match existing order
+            req.options.map_or(true, |req_options| {
+                self.oeq_class
+                    .get_options(&req.expr)
+                    .map_or(false, |existing_options| req_options == existing_options)
+            })
         })
     }
 
@@ -3680,6 +3696,8 @@ mod tests {
             .run()
     }
 
+    // TODO tests with multiple constants
+
     #[test]
     fn test_functional_dependencies_ordering() -> Result<()> {
         let schema = Arc::new(Schema::new(vec![
@@ -3781,62 +3799,6 @@ mod tests {
 
         Ok(())
     }
-
-    #[test]
-    fn test_functional_dependencies_ordering_with_key() -> Result<()> {
-        let schema = Arc::new(Schema::new(vec![
-            Field::new("a", DataType::Int32, false),
-            Field::new("b", DataType::Int32, true),
-            Field::new("c", DataType::Int32, true),
-        ]));
-
-        let mut eq_properties = EquivalenceProperties::new(Arc::clone(&schema));
-
-        // Add primary key constraint on column 'a'
-        eq_properties =
-            eq_properties.with_constraints(Constraints::new_unverified(vec![
-                Constraint::PrimaryKey(vec![0]),
-            ]));
-
-        let col_a = col("a", &schema)?;
-        let col_b = col("b", &schema)?;
-        // Test [a ASC, b ASC] is satisfied
-        let req = LexOrdering::new(vec![
-            PhysicalSortExpr {
-                expr: Arc::clone(&col_a),
-                options: SortOptions::default(),
-            },
-            PhysicalSortExpr {
-                expr: Arc::clone(&col_b),
-                options: SortOptions::default(),
-            },
-        ]);
-
-        assert!(
-            eq_properties.ordering_satisfy(&req),
-            "ordering [a ASC, b ASC] should be satisfied when 'a' is a primary key and is ordered ASC"
-        );
-
-        let col_c = col("c", &schema)?;
-        let req = LexOrdering::new(vec![
-            PhysicalSortExpr {
-                expr: Arc::clone(&col_c),
-                options: SortOptions::default(),
-            },
-            PhysicalSortExpr {
-                expr: Arc::clone(&col_a),
-                options: SortOptions::default(),
-            },
-        ]);
-        assert!(
-            !eq_properties.ordering_satisfy(&req),
-            "ordering [c ASC, a ASC] should not be satisfied"
-        );
-
-        Ok(())
-    }
-
-    // TODO tests with multiple constants
 
     #[derive(Debug)]
     struct UnionEquivalenceTest {
