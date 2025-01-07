@@ -124,15 +124,15 @@ use itertools::Itertools;
 /// ```
 #[derive(Debug, Clone)]
 pub struct EquivalenceProperties {
-    /// Collection of equivalence classes that store expressions with the same
-    /// value.
-    pub eq_group: EquivalenceGroup,
-    /// Equivalent sort expressions for this table.
-    pub oeq_class: OrderingEquivalenceClass,
-    /// Expressions whose values are constant throughout the table.
+    /// Distinct equivalence classes (exprs known to have the same expressions)
+    eq_group: EquivalenceGroup,
+    /// Equivalent sort expressions
+    oeq_class: OrderingEquivalenceClass,
+    /// Expressions whose values are constant
+    ///
     /// TODO: We do not need to track constants separately, they can be tracked
     ///       inside `eq_groups` as `Literal` expressions.
-    pub constants: Vec<ConstExpr>,
+    constants: Vec<ConstExpr>,
     /// Schema associated with this object.
     schema: SchemaRef,
 }

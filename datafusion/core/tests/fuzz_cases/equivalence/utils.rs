@@ -373,7 +373,7 @@ pub fn generate_table_for_eq_properties(
     };
 
     // Fill constant columns
-    for constant in &eq_properties.constants {
+    for constant in eq_properties.constants() {
         let col = constant.expr().as_any().downcast_ref::<Column>().unwrap();
         let (idx, _field) = schema.column_with_name(col.name()).unwrap();
         let arr =
@@ -382,7 +382,7 @@ pub fn generate_table_for_eq_properties(
     }
 
     // Fill columns based on ordering equivalences
-    for ordering in eq_properties.oeq_class.iter() {
+    for ordering in eq_properties.oeq_class().iter() {
         let (sort_columns, indices): (Vec<_>, Vec<_>) = ordering
             .iter()
             .map(|PhysicalSortExpr { expr, options }| {
@@ -406,7 +406,7 @@ pub fn generate_table_for_eq_properties(
     }
 
     // Fill columns based on equivalence groups
-    for eq_group in eq_properties.eq_group.iter() {
+    for eq_group in eq_properties.eq_group().iter() {
         let representative_array =
             get_representative_arr(eq_group, &schema_vec, Arc::clone(schema))
                 .unwrap_or_else(|| generate_random_array(n_elem, n_distinct));
