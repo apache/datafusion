@@ -191,7 +191,7 @@ impl MemoryExec {
 
         let placeholder_schema = Arc::new(Schema::empty());
         let placeholder_batch = RecordBatch::try_new_with_options(
-            placeholder_schema.clone(),
+            Arc::clone(&placeholder_schema),
             vec![],
             &RecordBatchOptions::new().with_row_count(Some(1)),
         )?;
