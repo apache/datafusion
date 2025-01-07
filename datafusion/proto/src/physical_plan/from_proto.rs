@@ -27,6 +27,7 @@ use object_store::ObjectMeta;
 
 use datafusion::arrow::datatypes::Schema;
 use datafusion::datasource::file_format::csv::CsvSink;
+use datafusion::datasource::file_format::file_compression_type::FileCompressionType;
 use datafusion::datasource::file_format::json::JsonSink;
 #[cfg(feature = "parquet")]
 use datafusion::datasource::file_format::parquet::ParquetSink;
@@ -537,6 +538,8 @@ pub fn parse_protobuf_file_scan_config(
         limit: proto.limit.as_ref().map(|sl| sl.limit as usize),
         table_partition_cols,
         output_ordering,
+        file_compression_type: FileCompressionType::UNCOMPRESSED,
+        new_lines_in_values: false,
     })
 }
 

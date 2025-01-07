@@ -24,7 +24,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use super::output_requirements::OutputRequirementExec;
-use crate::datasource::physical_plan::CsvExec;
+use crate::datasource::physical_plan::CsvConfig;
 use crate::error::Result;
 use crate::physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use crate::physical_plan::filter::FilterExec;
@@ -33,7 +33,6 @@ use crate::physical_plan::joins::{
     CrossJoinExec, HashJoinExec, NestedLoopJoinExec, SortMergeJoinExec,
     SymmetricHashJoinExec,
 };
-use crate::physical_plan::memory::MemoryExec;
 use crate::physical_plan::projection::ProjectionExec;
 use crate::physical_plan::repartition::RepartitionExec;
 use crate::physical_plan::sorts::sort::SortExec;
@@ -54,8 +53,11 @@ use datafusion_physical_expr::{
 use datafusion_physical_plan::streaming::StreamingTableExec;
 use datafusion_physical_plan::union::UnionExec;
 
+use crate::datasource::data_source::FileSourceConfig;
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, LexRequirement};
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
+use datafusion_physical_plan::memory::MemorySourceConfig;
+use datafusion_physical_plan::source::DataSourceExec;
 use itertools::Itertools;
 
 /// This rule inspects [`ProjectionExec`]'s in the given physical plan and tries to
@@ -105,10 +107,47 @@ pub fn remove_unnecessary_projections(
         }
         // If it does, check if we can push it under its child(ren):
         let input = projection.input().as_any();
-        if let Some(csv) = input.downcast_ref::<CsvExec>() {
-            try_swapping_with_csv(projection, csv)
-        } else if let Some(memory) = input.downcast_ref::<MemoryExec>() {
-            try_swapping_with_memory(projection, memory)?
+        let is_csv = input
+            .downcast_ref::<DataSourceExec>()
+            .and_then(|exec| {
+                exec.source()
+                    .as_any()
+                    .downcast_ref::<FileSourceConfig>()
+                    .and_then(|file_config| {
+                        file_config
+                            .source_config()
+                            .as_any()
+                            .downcast_ref::<CsvConfig>()
+                            .map(|_| true)
+                    })
+            })
+            .unwrap_or(false);
+
+        let is_memory = input
+            .downcast_ref::<DataSourceExec>()
+            .and_then(|exec| {
+                exec.source()
+                    .as_any()
+                    .downcast_ref::<MemorySourceConfig>()
+                    .map(|_| true)
+            })
+            .unwrap_or(false);
+
+        if is_csv {
+            try_swapping_with_csv(
+                projection,
+                input.downcast_ref::<DataSourceExec>().unwrap(),
+            )
+        } else if is_memory {
+            let data_source = input.downcast_ref::<DataSourceExec>().unwrap();
+            let memory = data_source.source();
+            try_swapping_with_memory(
+                projection,
+                memory
+                    .as_any()
+                    .downcast_ref::<MemorySourceConfig>()
+                    .unwrap(),
+            )?
         } else if let Some(child_projection) = input.downcast_ref::<ProjectionExec>() {
             let maybe_unified = try_unifying_projections(projection, child_projection)?;
             return if let Some(new_plan) = maybe_unified {
@@ -166,15 +205,17 @@ pub fn remove_unnecessary_projections(
 }
 
 /// Tries to embed `projection` to its input (`csv`). If possible, returns
-/// [`CsvExec`] as the top plan. Otherwise, returns `None`.
+/// [`DataSourceExec`] as the top plan. Otherwise, returns `None`.
 fn try_swapping_with_csv(
     projection: &ProjectionExec,
-    csv: &CsvExec,
+    csv: &DataSourceExec,
 ) -> Option<Arc<dyn ExecutionPlan>> {
     // If there is any non-column or alias-carrier expression, Projection should not be removed.
-    // This process can be moved into CsvExec, but it would be an overlap of their responsibility.
+    // This process can be moved into DataSourceExec, but it would be an overlap of their responsibility.
     all_alias_free_columns(projection.expr()).then(|| {
-        let mut file_scan = csv.base_config().clone();
+        let source = csv.source();
+        let csv_config = source.as_any().downcast_ref::<FileSourceConfig>().unwrap();
+        let mut file_scan = csv_config.base_config().clone();
         let new_projections = new_projections_for_columns(
             projection,
             &file_scan
@@ -182,43 +223,32 @@ fn try_swapping_with_csv(
                 .unwrap_or((0..csv.schema().fields().len()).collect()),
         );
         file_scan.projection = Some(new_projections);
-
-        Arc::new(
-            CsvExec::builder(file_scan)
-                .with_has_header(csv.has_header())
-                .with_delimeter(csv.delimiter())
-                .with_quote(csv.quote())
-                .with_escape(csv.escape())
-                .with_comment(csv.comment())
-                .with_newlines_in_values(csv.newlines_in_values())
-                .with_file_compression_type(csv.file_compression_type)
-                .build(),
-        ) as _
+        FileSourceConfig::new_exec(file_scan, Arc::clone(csv_config.source_config())) as _
     })
 }
 
 /// Tries to embed `projection` to its input (`memory`). If possible, returns
-/// [`MemoryExec`] as the top plan. Otherwise, returns `None`.
+/// [`DataSourceExec`] as the top plan. Otherwise, returns `None`.
 fn try_swapping_with_memory(
     projection: &ProjectionExec,
-    memory: &MemoryExec,
+    memory: &MemorySourceConfig,
 ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
     // If there is any non-column or alias-carrier expression, Projection should not be removed.
-    // This process can be moved into MemoryExec, but it would be an overlap of their responsibility.
+    // This process can be moved into DataSourceExec, but it would be an overlap of their responsibility.
     all_alias_free_columns(projection.expr())
         .then(|| {
-            let all_projections = (0..memory.schema().fields().len()).collect();
+            let all_projections = (0..memory.original_schema().fields().len()).collect();
             let new_projections = new_projections_for_columns(
                 projection,
                 memory.projection().as_ref().unwrap_or(&all_projections),
             );
 
-            MemoryExec::try_new(
+            let source = Arc::new(MemorySourceConfig::try_new(
                 memory.partitions(),
                 memory.original_schema(),
                 Some(new_projections),
-            )
-            .map(|e| Arc::new(e) as _)
+            )?);
+            Ok(Arc::new(DataSourceExec::new(source)) as _)
         })
         .transpose()
 }
@@ -292,7 +322,7 @@ fn try_unifying_projections(
         .unwrap();
     });
 
-    // Merging these projections is not beneficial, e.g
+    // Merging these projections is not beneficial, e.g.
     // If an expression is not trivial and it is referred more than 1, unifies projections will be
     // beneficial as caching mechanism for non-trivial computations.
     // See discussion in: https://github.com/apache/datafusion/issues/8296
@@ -1720,21 +1750,15 @@ mod tests {
             Field::new("d", DataType::Int32, true),
             Field::new("e", DataType::Int32, true),
         ]));
-        Arc::new(
-            CsvExec::builder(
-                FileScanConfig::new(ObjectStoreUrl::parse("test:///").unwrap(), schema)
-                    .with_file(PartitionedFile::new("x".to_string(), 100))
-                    .with_projection(Some(vec![0, 1, 2, 3, 4])),
-            )
-            .with_has_header(false)
-            .with_delimeter(0)
-            .with_quote(0)
-            .with_escape(None)
-            .with_comment(None)
-            .with_newlines_in_values(false)
-            .with_file_compression_type(FileCompressionType::UNCOMPRESSED)
-            .build(),
-        )
+        let conf =
+            FileScanConfig::new(ObjectStoreUrl::parse("test:///").unwrap(), schema)
+                .with_file(PartitionedFile::new("x".to_string(), 100))
+                .with_projection(Some(vec![0, 1, 2, 3, 4]))
+                .with_newlines_in_values(false)
+                .with_file_compression_type(FileCompressionType::UNCOMPRESSED);
+
+        let source_config = Arc::new(CsvConfig::new(false, 0, 0));
+        FileSourceConfig::new_exec(conf, source_config)
     }
 
     fn create_projecting_csv_exec() -> Arc<dyn ExecutionPlan> {
@@ -1744,21 +1768,15 @@ mod tests {
             Field::new("c", DataType::Int32, true),
             Field::new("d", DataType::Int32, true),
         ]));
-        Arc::new(
-            CsvExec::builder(
-                FileScanConfig::new(ObjectStoreUrl::parse("test:///").unwrap(), schema)
-                    .with_file(PartitionedFile::new("x".to_string(), 100))
-                    .with_projection(Some(vec![3, 2, 1])),
-            )
-            .with_has_header(false)
-            .with_delimeter(0)
-            .with_quote(0)
-            .with_escape(None)
-            .with_comment(None)
-            .with_newlines_in_values(false)
-            .with_file_compression_type(FileCompressionType::UNCOMPRESSED)
-            .build(),
-        )
+        let conf =
+            FileScanConfig::new(ObjectStoreUrl::parse("test:///").unwrap(), schema)
+                .with_file(PartitionedFile::new("x".to_string(), 100))
+                .with_projection(Some(vec![3, 2, 1]))
+                .with_newlines_in_values(false)
+                .with_file_compression_type(FileCompressionType::UNCOMPRESSED);
+
+        let source_config = Arc::new(CsvConfig::new(false, 0, 0));
+        FileSourceConfig::new_exec(conf, source_config)
     }
 
     fn create_projecting_memory_exec() -> Arc<dyn ExecutionPlan> {
@@ -1770,7 +1788,10 @@ mod tests {
             Field::new("e", DataType::Int32, true),
         ]));
 
-        Arc::new(MemoryExec::try_new(&[], schema, Some(vec![2, 0, 3, 4])).unwrap())
+        let source = Arc::new(
+            MemorySourceConfig::try_new(&[], schema, Some(vec![2, 0, 3, 4])).unwrap(),
+        );
+        Arc::new(DataSourceExec::new(source))
     }
 
     #[test]
@@ -1786,7 +1807,7 @@ mod tests {
         let initial = get_plan_string(&projection);
         let expected_initial = [
                 "ProjectionExec: expr=[b@2 as b, d@0 as d]",
-                "  CsvExec: file_groups={1 group: [[x]]}, projection=[d, c, b], has_header=false",
+                "  DataSourceExec: file_groups={1 group: [[x]]}, projection=[d, c, b], file_type=csv, has_header=false",
         ];
         assert_eq!(initial, expected_initial);
 
@@ -1794,7 +1815,7 @@ mod tests {
             ProjectionPushdown::new().optimize(projection, &ConfigOptions::new())?;
 
         let expected = [
-            "CsvExec: file_groups={1 group: [[x]]}, projection=[b, d], has_header=false",
+            "DataSourceExec: file_groups={1 group: [[x]]}, projection=[b, d], file_type=csv, has_header=false",
         ];
         assert_eq!(get_plan_string(&after_optimize), expected);
 
@@ -1815,20 +1836,24 @@ mod tests {
         let initial = get_plan_string(&projection);
         let expected_initial = [
             "ProjectionExec: expr=[d@2 as d, e@3 as e, a@1 as a]",
-            "  MemoryExec: partitions=0, partition_sizes=[]",
+            "  DataSourceExec: partitions=0, partition_sizes=[]",
         ];
         assert_eq!(initial, expected_initial);
 
         let after_optimize =
             ProjectionPushdown::new().optimize(projection, &ConfigOptions::new())?;
 
-        let expected = ["MemoryExec: partitions=0, partition_sizes=[]"];
+        let expected = ["DataSourceExec: partitions=0, partition_sizes=[]"];
         assert_eq!(get_plan_string(&after_optimize), expected);
         assert_eq!(
             after_optimize
                 .clone()
                 .as_any()
-                .downcast_ref::<MemoryExec>()
+                .downcast_ref::<DataSourceExec>()
+                .unwrap()
+                .source()
+                .as_any()
+                .downcast_ref::<MemorySourceConfig>()
                 .unwrap()
                 .projection()
                 .clone()
@@ -1986,7 +2011,7 @@ mod tests {
         let expected_initial = [
             "ProjectionExec: expr=[new_b@3 as new_b, c@0 + new_e@1 as binary, new_b@3 as newest_b]",
             "  ProjectionExec: expr=[c@2 as c, e@4 as new_e, a@0 as a, b@1 as new_b]",
-            "    CsvExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], has_header=false"
+            "    DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=csv, has_header=false"
             ];
         assert_eq!(initial, expected_initial);
 
@@ -1995,7 +2020,7 @@ mod tests {
 
         let expected = [
             "ProjectionExec: expr=[b@1 as new_b, c@2 + e@4 as binary, b@1 as newest_b]",
-            "  CsvExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], has_header=false"
+            "  DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=csv, has_header=false"
         ];
         assert_eq!(get_plan_string(&after_optimize), expected);
 
@@ -2039,7 +2064,7 @@ mod tests {
         let expected_initial = [
             "ProjectionExec: expr=[c@2 as c, a@0 as new_a, b@1 as b]",
             "  OutputRequirementExec",
-            "    CsvExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], has_header=false"
+            "    DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=csv, has_header=false"
             ];
         assert_eq!(initial, expected_initial);
 
@@ -2049,7 +2074,7 @@ mod tests {
         let expected: [&str; 3] = [
             "OutputRequirementExec",
             "  ProjectionExec: expr=[c@2 as c, a@0 as new_a, b@1 as b]",
-            "    CsvExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], has_header=false"
+            "    DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=csv, has_header=false"
         ];
 
         assert_eq!(get_plan_string(&after_optimize), expected);
@@ -2116,7 +2141,7 @@ mod tests {
         let expected_initial = [
                 "ProjectionExec: expr=[b@1 as b, a@0 as a_new, d@3 as d]",
                 "  CoalescePartitionsExec",
-                "    CsvExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], has_header=false",
+                "    DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=csv, has_header=false",
         ];
         assert_eq!(initial, expected_initial);
 
@@ -2126,7 +2151,7 @@ mod tests {
         let expected = [
                 "CoalescePartitionsExec",
                 "  ProjectionExec: expr=[b@1 as b, a@0 as a_new, d@3 as d]",
-                "    CsvExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], has_header=false",
+                "    DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=csv, has_header=false",
         ];
         assert_eq!(get_plan_string(&after_optimize), expected);
 
@@ -2164,7 +2189,7 @@ mod tests {
         let expected_initial = [
                 "ProjectionExec: expr=[a@0 as a_new, b@1 as b, d@3 as d]",
                 "  FilterExec: b@1 - a@0 > d@3 - a@0",
-                "    CsvExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], has_header=false",
+                "    DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=csv, has_header=false",
         ];
         assert_eq!(initial, expected_initial);
 
@@ -2174,7 +2199,7 @@ mod tests {
         let expected = [
                 "FilterExec: b@1 - a_new@0 > d@2 - a_new@0",
                 "  ProjectionExec: expr=[a@0 as a_new, b@1 as b, d@3 as d]",
-                "    CsvExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], has_header=false",
+                "    DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=csv, has_header=false",
         ];
         assert_eq!(get_plan_string(&after_optimize), expected);
 
@@ -2249,8 +2274,8 @@ mod tests {
         let expected_initial = [
             "ProjectionExec: expr=[c@2 as c_from_left, b@1 as b_from_left, a@0 as a_from_left, a@5 as a_from_right, c@7 as c_from_right]",
             "  SymmetricHashJoinExec: mode=SinglePartition, join_type=Inner, on=[(b@1, c@2)], filter=b_left_inter@0 - 1 + a_right_inter@1 <= a_right_inter@1 + c_left_inter@2",
-            "    CsvExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], has_header=false",
-            "    CsvExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], has_header=false"
+            "    DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=csv, has_header=false",
+            "    DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=csv, has_header=false"
             ];
         assert_eq!(initial, expected_initial);
 
@@ -2260,9 +2285,9 @@ mod tests {
         let expected = [
             "SymmetricHashJoinExec: mode=SinglePartition, join_type=Inner, on=[(b_from_left@1, c_from_right@1)], filter=b_left_inter@0 - 1 + a_right_inter@1 <= a_right_inter@1 + c_left_inter@2",
             "  ProjectionExec: expr=[c@2 as c_from_left, b@1 as b_from_left, a@0 as a_from_left]",
-            "    CsvExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], has_header=false",
+            "    DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=csv, has_header=false",
             "  ProjectionExec: expr=[a@0 as a_from_right, c@2 as c_from_right]",
-            "    CsvExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], has_header=false"
+            "    DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=csv, has_header=false"
             ];
         assert_eq!(get_plan_string(&after_optimize), expected);
 
@@ -2368,8 +2393,8 @@ mod tests {
         let expected_initial = [
             "ProjectionExec: expr=[a@5 as a, b@6 as b, c@7 as c, d@8 as d, e@9 as e, a@0 as a, b@1 as b, c@2 as c, d@3 as d, e@4 as e]",
             "  SymmetricHashJoinExec: mode=SinglePartition, join_type=Inner, on=[(b@1, c@2)], filter=b_left_inter@0 - 1 + a_right_inter@1 <= a_right_inter@1 + c_left_inter@2",
-            "    CsvExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], has_header=false",
-            "    CsvExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], has_header=false"
+            "    DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=csv, has_header=false",
+            "    DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=csv, has_header=false"
             ];
         assert_eq!(initial, expected_initial);
 
@@ -2379,8 +2404,8 @@ mod tests {
         let expected = [
             "ProjectionExec: expr=[a@5 as a, b@6 as b, c@7 as c, d@8 as d, e@9 as e, a@0 as a, b@1 as b, c@2 as c, d@3 as d, e@4 as e]",
             "  SymmetricHashJoinExec: mode=SinglePartition, join_type=Inner, on=[(b@1, c@2)], filter=b_left_inter@0 - 1 + a_right_inter@1 <= a_right_inter@1 + c_left_inter@2",
-            "    CsvExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], has_header=false",
-            "    CsvExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], has_header=false"
+            "    DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=csv, has_header=false",
+            "    DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=csv, has_header=false"
             ];
         assert_eq!(get_plan_string(&after_optimize), expected);
         Ok(())
@@ -2468,7 +2493,7 @@ mod tests {
         )?);
         let initial = get_plan_string(&projection);
         let expected_initial = [
-			"ProjectionExec: expr=[c@2 as c_from_left, b@1 as b_from_left, a@0 as a_from_left, c@7 as c_from_right]", "  HashJoinExec: mode=Auto, join_type=Inner, on=[(b@1, c@2)], filter=b_left_inter@0 - 1 + a_right_inter@1 <= a_right_inter@1 + c_left_inter@2", "    CsvExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], has_header=false", "    CsvExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], has_header=false"
+			"ProjectionExec: expr=[c@2 as c_from_left, b@1 as b_from_left, a@0 as a_from_left, c@7 as c_from_right]", "  HashJoinExec: mode=Auto, join_type=Inner, on=[(b@1, c@2)], filter=b_left_inter@0 - 1 + a_right_inter@1 <= a_right_inter@1 + c_left_inter@2", "    DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=csv, has_header=false", "    DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=csv, has_header=false"
             ];
         assert_eq!(initial, expected_initial);
 
@@ -2476,7 +2501,7 @@ mod tests {
             ProjectionPushdown::new().optimize(projection, &ConfigOptions::new())?;
 
         // HashJoinExec only returns result after projection. Because there are some alias columns in the projection, the ProjectionExec is not removed.
-        let expected = ["ProjectionExec: expr=[c@2 as c_from_left, b@1 as b_from_left, a@0 as a_from_left, c@3 as c_from_right]", "  HashJoinExec: mode=Auto, join_type=Inner, on=[(b@1, c@2)], filter=b_left_inter@0 - 1 + a_right_inter@1 <= a_right_inter@1 + c_left_inter@2, projection=[a@0, b@1, c@2, c@7]", "    CsvExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], has_header=false", "    CsvExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], has_header=false"];
+        let expected = ["ProjectionExec: expr=[c@2 as c_from_left, b@1 as b_from_left, a@0 as a_from_left, c@3 as c_from_right]", "  HashJoinExec: mode=Auto, join_type=Inner, on=[(b@1, c@2)], filter=b_left_inter@0 - 1 + a_right_inter@1 <= a_right_inter@1 + c_left_inter@2, projection=[a@0, b@1, c@2, c@7]", "    DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=csv, has_header=false", "    DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=csv, has_header=false"];
         assert_eq!(get_plan_string(&after_optimize), expected);
 
         let projection: Arc<dyn ExecutionPlan> = Arc::new(ProjectionExec::try_new(
@@ -2493,7 +2518,7 @@ mod tests {
             ProjectionPushdown::new().optimize(projection, &ConfigOptions::new())?;
 
         // Comparing to the previous result, this projection don't have alias columns either change the order of output fields. So the ProjectionExec is removed.
-        let expected = ["HashJoinExec: mode=Auto, join_type=Inner, on=[(b@1, c@2)], filter=b_left_inter@0 - 1 + a_right_inter@1 <= a_right_inter@1 + c_left_inter@2, projection=[a@0, b@1, c@2, c@7]", "  CsvExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], has_header=false", "  CsvExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], has_header=false"];
+        let expected = ["HashJoinExec: mode=Auto, join_type=Inner, on=[(b@1, c@2)], filter=b_left_inter@0 - 1 + a_right_inter@1 <= a_right_inter@1 + c_left_inter@2, projection=[a@0, b@1, c@2, c@7]", "  DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=csv, has_header=false", "  DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=csv, has_header=false"];
         assert_eq!(get_plan_string(&after_optimize), expected);
 
         Ok(())
@@ -2525,7 +2550,7 @@ mod tests {
         let expected_initial = [
                 "ProjectionExec: expr=[b@1 as b_new, a@0 as a, d@3 as d_new]",
                 "  RepartitionExec: partitioning=Hash([a@0, b@1, d@3], 6), input_partitions=1",
-                "    CsvExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], has_header=false",
+                "    DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=csv, has_header=false",
         ];
         assert_eq!(initial, expected_initial);
 
@@ -2535,7 +2560,7 @@ mod tests {
         let expected = [
                 "RepartitionExec: partitioning=Hash([a@1, b_new@0, d_new@2], 6), input_partitions=1",
                 "  ProjectionExec: expr=[b@1 as b_new, a@0 as a, d@3 as d_new]",
-                "    CsvExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], has_header=false",
+                "    DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=csv, has_header=false",
         ];
         assert_eq!(get_plan_string(&after_optimize), expected);
 
@@ -2592,7 +2617,7 @@ mod tests {
         let expected_initial = [
             "ProjectionExec: expr=[c@2 as c, a@0 as new_a, b@1 as b]",
             "  SortExec: expr=[b@1 ASC, c@2 + a@0 ASC], preserve_partitioning=[false]",
-            "    CsvExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], has_header=false"
+            "    DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=csv, has_header=false"
             ];
         assert_eq!(initial, expected_initial);
 
@@ -2602,7 +2627,7 @@ mod tests {
         let expected = [
             "SortExec: expr=[b@2 ASC, c@0 + new_a@1 ASC], preserve_partitioning=[false]",
             "  ProjectionExec: expr=[c@2 as c, a@0 as new_a, b@1 as b]",
-            "    CsvExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], has_header=false"
+            "    DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=csv, has_header=false"
         ];
         assert_eq!(get_plan_string(&after_optimize), expected);
 
@@ -2642,7 +2667,7 @@ mod tests {
         let expected_initial = [
             "ProjectionExec: expr=[c@2 as c, a@0 as new_a, b@1 as b]",
             "  SortPreservingMergeExec: [b@1 ASC, c@2 + a@0 ASC]",
-            "    CsvExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], has_header=false"
+            "    DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=csv, has_header=false"
             ];
         assert_eq!(initial, expected_initial);
 
@@ -2652,7 +2677,7 @@ mod tests {
         let expected = [
             "SortPreservingMergeExec: [b@2 ASC, c@0 + new_a@1 ASC]",
             "  ProjectionExec: expr=[c@2 as c, a@0 as new_a, b@1 as b]",
-            "    CsvExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], has_header=false"
+            "    DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=csv, has_header=false"
         ];
         assert_eq!(get_plan_string(&after_optimize), expected);
 
@@ -2677,9 +2702,9 @@ mod tests {
         let expected_initial = [
             "ProjectionExec: expr=[c@2 as c, a@0 as new_a, b@1 as b]",
             "  UnionExec",
-            "    CsvExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], has_header=false",
-            "    CsvExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], has_header=false",
-            "    CsvExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], has_header=false"
+            "    DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=csv, has_header=false",
+            "    DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=csv, has_header=false",
+            "    DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=csv, has_header=false"
             ];
         assert_eq!(initial, expected_initial);
 
@@ -2689,11 +2714,11 @@ mod tests {
         let expected = [
             "UnionExec",
             "  ProjectionExec: expr=[c@2 as c, a@0 as new_a, b@1 as b]",
-            "    CsvExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], has_header=false",
+            "    DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=csv, has_header=false",
             "  ProjectionExec: expr=[c@2 as c, a@0 as new_a, b@1 as b]",
-            "    CsvExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], has_header=false",
+            "    DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=csv, has_header=false",
             "  ProjectionExec: expr=[c@2 as c, a@0 as new_a, b@1 as b]",
-            "    CsvExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], has_header=false"
+            "    DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=csv, has_header=false"
         ];
         assert_eq!(get_plan_string(&after_optimize), expected);
 

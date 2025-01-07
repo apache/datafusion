@@ -20,9 +20,10 @@ use std::sync::Arc;
 
 use datafusion::arrow::datatypes::{DataType, Field, Schema};
 use datafusion::common::{not_impl_err, substrait_err};
+use datafusion::datasource::data_source::FileSourceConfig;
 use datafusion::datasource::listing::PartitionedFile;
 use datafusion::datasource::object_store::ObjectStoreUrl;
-use datafusion::datasource::physical_plan::{FileScanConfig, ParquetExec};
+use datafusion::datasource::physical_plan::{FileScanConfig, ParquetConfig};
 use datafusion::error::{DataFusionError, Result};
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::prelude::SessionContext;
@@ -150,7 +151,8 @@ pub async fn from_substrait_rel(
                         }
                     }
 
-                    Ok(ParquetExec::builder(base_config).build_arc()
+                    let source_config = Arc::new(ParquetConfig::default());
+                    Ok(FileSourceConfig::new_exec(base_config, source_config)
                         as Arc<dyn ExecutionPlan>)
                 }
                 _ => not_impl_err!(

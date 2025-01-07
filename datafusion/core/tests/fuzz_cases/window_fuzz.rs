@@ -22,7 +22,6 @@ use arrow::compute::{concat_batches, SortOptions};
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use arrow::util::pretty::pretty_format_batches;
-use datafusion::physical_plan::memory::MemoryExec;
 use datafusion::physical_plan::sorts::sort::SortExec;
 use datafusion::physical_plan::windows::{
     create_window_expr, schema_add_window_field, BoundedWindowAggExec, WindowAggExec,
@@ -51,6 +50,8 @@ use datafusion_functions_window::nth_value::{
 };
 use datafusion_functions_window::rank::{dense_rank_udwf, rank_udwf};
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
+use datafusion_physical_plan::memory::MemorySourceConfig;
+use datafusion_physical_plan::source::DataSourceExec;
 use rand::distributions::Alphanumeric;
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
@@ -64,23 +65,23 @@ async fn window_bounded_window_random_comparison() -> Result<()> {
     // In sorted mode physical plans are in the form for WindowAggExec
     //```
     // WindowAggExec
-    //   MemoryExec]
+    //   DataSourceExec]
     // ```
     // and in the form for BoundedWindowAggExec
     // ```
     // BoundedWindowAggExec
-    //   MemoryExec
+    //   DataSourceExec
     // ```
     // In Linear and PartiallySorted mode physical plans are in the form for WindowAggExec
     //```
     // WindowAggExec
     //   SortExec(required by window function)
-    //     MemoryExec]
+    //     DataSourceExec]
     // ```
     // and in the form for BoundedWindowAggExec
     // ```
     // BoundedWindowAggExec
-    //   MemoryExec
+    //   DataSourceExec
     // ```
     let test_cases = vec![
         (vec!["a"], vec!["a"], Sorted),
@@ -159,11 +160,12 @@ async fn bounded_window_causal_non_causal() -> Result<()> {
     // Remove empty batches:
     batches.retain(|batch| batch.num_rows() > 0);
     let schema = batches[0].schema();
-    let memory_exec = Arc::new(MemoryExec::try_new(
+    let memory_conf = Arc::new(MemorySourceConfig::try_new(
         &[batches.clone()],
         schema.clone(),
         None,
     )?);
+    let memory_exec = Arc::new(DataSourceExec::new(memory_conf));
 
     // Different window functions to test causality
     let window_functions = vec![
@@ -638,10 +640,10 @@ async fn run_window_test(
             options: Default::default(),
         },
     ]);
-    let mut exec1 = Arc::new(
-        MemoryExec::try_new(&[vec![concat_input_record]], schema.clone(), None)?
+    let mut exec1 = Arc::new(DataSourceExec::new(Arc::new(
+        MemorySourceConfig::try_new(&[vec![concat_input_record]], schema.clone(), None)?
             .try_with_sort_information(vec![source_sort_keys.clone()])?,
-    ) as _;
+    ))) as _;
     // Table is ordered according to ORDER BY a, b, c In linear test we use PARTITION BY b, ORDER BY a
     // For WindowAggExec  to produce correct result it need table to be ordered by b,a. Hence add a sort.
     if is_linear {
@@ -664,10 +666,10 @@ async fn run_window_test(
         exec1,
         vec![],
     )?) as _;
-    let exec2 = Arc::new(
-        MemoryExec::try_new(&[input1.clone()], schema.clone(), None)?
+    let exec2 = Arc::new(DataSourceExec::new(Arc::new(
+        MemorySourceConfig::try_new(&[input1.clone()], schema.clone(), None)?
             .try_with_sort_information(vec![source_sort_keys.clone()])?,
-    );
+    )));
     let running_window_exec = Arc::new(BoundedWindowAggExec::try_new(
         vec![create_window_expr(
             &window_fn,

@@ -1314,9 +1314,10 @@ mod tests {
     use crate::coalesce_batches::CoalesceBatchesExec;
     use crate::coalesce_partitions::CoalescePartitionsExec;
     use crate::common;
+    use crate::common::collect;
     use crate::execution_plan::Boundedness;
     use crate::expressions::col;
-    use crate::memory::MemoryExec;
+    use crate::memory::MemorySourceConfig;
     use crate::test::assert_is_pending;
     use crate::test::exec::{assert_strong_count_converges_to_zero, BlockingExec};
     use crate::RecordBatchStream;
@@ -1340,13 +1341,12 @@ mod tests {
     use datafusion_functions_aggregate::first_last::{first_value_udaf, last_value_udaf};
     use datafusion_functions_aggregate::median::median_udaf;
     use datafusion_functions_aggregate::sum::sum_udaf;
-    use datafusion_physical_expr::expressions::lit;
-    use datafusion_physical_expr::PhysicalSortExpr;
-
-    use crate::common::collect;
     use datafusion_physical_expr::aggregate::AggregateExprBuilder;
+    use datafusion_physical_expr::expressions::lit;
     use datafusion_physical_expr::expressions::Literal;
     use datafusion_physical_expr::Partitioning;
+    use datafusion_physical_expr::PhysicalSortExpr;
+
     use futures::{FutureExt, Stream};
 
     // Generate a schema which consists of 5 columns (a, b, c, d, e)
@@ -2134,14 +2134,14 @@ mod tests {
     // "  CoalesceBatchesExec: target_batch_size=1024",
     // "    CoalescePartitionsExec",
     // "      AggregateExec: mode=Partial, gby=[a@0 as a], aggr=[FIRST_VALUE(b)], ordering_mode=None",
-    // "        MemoryExec: partitions=4, partition_sizes=[1, 1, 1, 1]",
+    // "        DataSourceExec: partitions=4, partition_sizes=[1, 1, 1, 1]",
     //
     // or
     //
     // "AggregateExec: mode=Final, gby=[a@0 as a], aggr=[FIRST_VALUE(b)]",
     // "  CoalescePartitionsExec",
     // "    AggregateExec: mode=Partial, gby=[a@0 as a], aggr=[FIRST_VALUE(b)], ordering_mode=None",
-    // "      MemoryExec: partitions=4, partition_sizes=[1, 1, 1, 1]",
+    // "      DataSourceExec: partitions=4, partition_sizes=[1, 1, 1, 1]",
     //
     // and checks whether the function `merge_batch` works correctly for
     // FIRST_VALUE and LAST_VALUE functions.
@@ -2176,7 +2176,7 @@ mod tests {
             vec![test_last_value_agg_expr(&schema, sort_options)?]
         };
 
-        let memory_exec = Arc::new(MemoryExec::try_new(
+        let memory_exec = MemorySourceConfig::try_new_exec(
             &[
                 vec![partition1],
                 vec![partition2],
@@ -2185,7 +2185,7 @@ mod tests {
             ],
             Arc::clone(&schema),
             None,
-        )?);
+        )?;
         let aggregate_exec = Arc::new(AggregateExec::try_new(
             AggregateMode::Partial,
             groups.clone(),
@@ -2411,11 +2411,11 @@ mod tests {
             })
             .collect();
 
-        let input = Arc::new(MemoryExec::try_new(
+        let input = MemorySourceConfig::try_new_exec(
             &[input_batches],
             Arc::clone(&schema),
             None,
-        )?);
+        )?;
 
         let aggregate_exec = Arc::new(AggregateExec::try_new(
             AggregateMode::Single,
@@ -2534,11 +2534,11 @@ mod tests {
         .build()
         .map(Arc::new)?];
 
-        let input = Arc::new(MemoryExec::try_new(
+        let input = MemorySourceConfig::try_new_exec(
             &[vec![batch.clone()]],
             Arc::<Schema>::clone(&batch.schema()),
             None,
-        )?);
+        )?;
         let aggregate_exec = Arc::new(AggregateExec::try_new(
             AggregateMode::FinalPartitioned,
             group_by,
@@ -2603,11 +2603,8 @@ mod tests {
             .unwrap(),
         ];
 
-        let input = Arc::new(MemoryExec::try_new(
-            &[input_data],
-            Arc::clone(&schema),
-            None,
-        )?);
+        let input =
+            MemorySourceConfig::try_new_exec(&[input_data], Arc::clone(&schema), None)?;
         let aggregate_exec = Arc::new(AggregateExec::try_new(
             AggregateMode::Partial,
             group_by,
@@ -2693,11 +2690,8 @@ mod tests {
             .unwrap(),
         ];
 
-        let input = Arc::new(MemoryExec::try_new(
-            &[input_data],
-            Arc::clone(&schema),
-            None,
-        )?);
+        let input =
+            MemorySourceConfig::try_new_exec(&[input_data], Arc::clone(&schema), None)?;
         let aggregate_exec = Arc::new(AggregateExec::try_new(
             AggregateMode::Partial,
             group_by,

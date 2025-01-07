@@ -32,7 +32,7 @@ query TT
 EXPLAIN SELECT * FROM arrow_simple
 ----
 logical_plan TableScan: arrow_simple projection=[f0, f1, f2]
-physical_plan ArrowExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/example.arrow]]}, projection=[f0, f1, f2]
+physical_plan DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/example.arrow]]}, projection=[f0, f1, f2], file_type=arrow
 
 # correct content
 query ITB
@@ -117,7 +117,7 @@ query TT
 EXPLAIN SELECT f0 FROM arrow_partitioned WHERE part = 456
 ----
 logical_plan TableScan: arrow_partitioned projection=[f0], full_filters=[arrow_partitioned.part = Int32(456)]
-physical_plan ArrowExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/partitioned_table_arrow/part=456/data.arrow]]}, projection=[f0]
+physical_plan DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/partitioned_table_arrow/part=456/data.arrow]]}, projection=[f0], file_type=arrow
 
 
 # Errors in partition filters should be reported

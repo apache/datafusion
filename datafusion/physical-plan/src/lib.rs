@@ -86,5 +86,6 @@ pub mod udaf {
 }
 
 pub mod coalesce;
+pub mod source;
 #[cfg(test)]
 pub mod test;

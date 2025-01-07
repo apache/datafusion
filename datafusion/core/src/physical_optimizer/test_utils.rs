@@ -24,7 +24,7 @@ use std::fmt::Formatter;
 use std::sync::Arc;
 
 use crate::datasource::listing::PartitionedFile;
-use crate::datasource::physical_plan::{FileScanConfig, ParquetExec};
+use crate::datasource::physical_plan::{FileScanConfig, ParquetConfig};
 use crate::datasource::stream::{FileStreamProvider, StreamConfig, StreamTable};
 use crate::error::Result;
 use crate::physical_plan::aggregates::{AggregateExec, AggregateMode, PhysicalGroupBy};
@@ -34,7 +34,6 @@ use crate::physical_plan::filter::FilterExec;
 use crate::physical_plan::joins::utils::{JoinFilter, JoinOn};
 use crate::physical_plan::joins::{HashJoinExec, PartitionMode, SortMergeJoinExec};
 use crate::physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
-use crate::physical_plan::memory::MemoryExec;
 use crate::physical_plan::repartition::RepartitionExec;
 use crate::physical_plan::sorts::sort::SortExec;
 use crate::physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
@@ -56,9 +55,12 @@ use datafusion_physical_plan::{
     displayable, DisplayAs, DisplayFormatType, PlanProperties,
 };
 
+use crate::datasource::data_source::FileSourceConfig;
 use async_trait::async_trait;
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, LexRequirement};
+use datafusion_physical_plan::memory::MemorySourceConfig;
+use datafusion_physical_plan::source::DataSourceExec;
 
 async fn register_current_csv(
     ctx: &SessionContext,
@@ -216,7 +218,9 @@ pub fn coalesce_partitions_exec(input: Arc<dyn ExecutionPlan>) -> Arc<dyn Execut
 }
 
 pub(crate) fn memory_exec(schema: &SchemaRef) -> Arc<dyn ExecutionPlan> {
-    Arc::new(MemoryExec::try_new(&[vec![]], schema.clone(), None).unwrap())
+    let source =
+        Arc::new(MemorySourceConfig::try_new(&[vec![]], schema.clone(), None).unwrap());
+    Arc::new(DataSourceExec::new(source))
 }
 
 pub fn hash_join_exec(
@@ -283,12 +287,13 @@ pub fn sort_preserving_merge_exec(
 }
 
 /// Create a non sorted parquet exec
-pub fn parquet_exec(schema: &SchemaRef) -> Arc<ParquetExec> {
-    ParquetExec::builder(
+pub fn parquet_exec(schema: &SchemaRef) -> Arc<DataSourceExec> {
+    let base_config =
         FileScanConfig::new(ObjectStoreUrl::parse("test:///").unwrap(), schema.clone())
-            .with_file(PartitionedFile::new("x".to_string(), 100)),
-    )
-    .build_arc()
+            .with_file(PartitionedFile::new("x".to_string(), 100));
+    let source_config = Arc::new(ParquetConfig::default());
+
+    FileSourceConfig::new_exec(base_config, source_config)
 }
 
 // Created a sorted parquet exec
@@ -298,12 +303,13 @@ pub fn parquet_exec_sorted(
 ) -> Arc<dyn ExecutionPlan> {
     let sort_exprs = sort_exprs.into_iter().collect();
 
-    ParquetExec::builder(
+    let base_config =
         FileScanConfig::new(ObjectStoreUrl::parse("test:///").unwrap(), schema.clone())
             .with_file(PartitionedFile::new("x".to_string(), 100))
-            .with_output_ordering(vec![sort_exprs]),
-    )
-    .build_arc()
+            .with_output_ordering(vec![sort_exprs]);
+    let source_config = Arc::new(ParquetConfig::default());
+
+    FileSourceConfig::new_exec(base_config, source_config)
 }
 
 pub fn union_exec(input: Vec<Arc<dyn ExecutionPlan>>) -> Arc<dyn ExecutionPlan> {

@@ -15,17 +15,22 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::any::Any;
+use std::collections::{HashMap, HashSet};
+use std::fs::File;
+use std::ops::Range;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+
 use arrow::array::{ArrayRef, Int32Array, RecordBatch, StringArray};
 use arrow_schema::SchemaRef;
-use async_trait::async_trait;
-use bytes::Bytes;
 use datafusion::catalog::Session;
+use datafusion::datasource::data_source::FileSourceConfig;
 use datafusion::datasource::listing::PartitionedFile;
-use datafusion::datasource::physical_plan::parquet::{
-    ParquetAccessPlan, ParquetExecBuilder,
-};
+use datafusion::datasource::physical_plan::parquet::ParquetAccessPlan;
 use datafusion::datasource::physical_plan::{
-    parquet::ParquetFileReaderFactory, FileMeta, FileScanConfig,
+    parquet::ParquetFileReaderFactory, FileMeta, FileScanConfig, ParquetConfig,
 };
 use datafusion::datasource::TableProvider;
 use datafusion::execution::object_store::ObjectStoreUrl;
@@ -40,24 +45,22 @@ use datafusion::parquet::schema::types::ColumnPath;
 use datafusion::physical_expr::PhysicalExpr;
 use datafusion::physical_optimizer::pruning::PruningPredicate;
 use datafusion::physical_plan::metrics::ExecutionPlanMetricsSet;
+use datafusion::physical_plan::source::DataSourceExec;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::prelude::*;
+use datafusion_common::config::TableParquetOptions;
 use datafusion_common::{
     internal_datafusion_err, DFSchema, DataFusionError, Result, ScalarValue,
 };
 use datafusion_expr::utils::conjunction;
 use datafusion_expr::{TableProviderFilterPushDown, TableType};
 use datafusion_physical_expr::utils::{Guarantee, LiteralGuarantee};
+
+use async_trait::async_trait;
+use bytes::Bytes;
 use futures::future::BoxFuture;
 use futures::FutureExt;
 use object_store::ObjectStore;
-use std::any::Any;
-use std::collections::{HashMap, HashSet};
-use std::fs::File;
-use std::ops::Range;
-use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
 use tempfile::TempDir;
 use url::Url;
 
@@ -82,8 +85,8 @@ use url::Url;
 /// Specifically, this example illustrates how to:
 /// 1. Use [`ParquetFileReaderFactory`] to avoid re-reading parquet metadata on each query
 /// 2. Use [`PruningPredicate`] for predicate analysis
-/// 3. Pass a row group selection to [`ParquetExec`]
-/// 4. Pass a row selection (within a row group) to [`ParquetExec`]
+/// 3. Pass a row group selection to [`ParquetConfig`]
+/// 4. Pass a row selection (within a row group) to [`ParquetConfig`]
 ///
 /// Note this is a *VERY* low level example for people who want to build their
 /// own custom indexes (e.g. for low latency queries). Most users should use
@@ -110,7 +113,7 @@ use url::Url;
 ///         │ └───────────────────┘ │              ┌────────────────────┐
 ///         │ ┌───────────────────┐ │              │                    │
 ///         │ │                   │◀┼ ─ ─ ┐        │    ParquetExec     │
-///         │ └───────────────────┘ │              │  (Parquet Reader)  │
+///         │ └───────────────────┘ │     │        │  (Parquet Reader)  │
 ///         │          ...          │     └ ─ ─ ─ ─│                    │
 ///         │ ┌───────────────────┐ │              │ ╔═══════════════╗  │
 ///         │ │                   │ │              │ ║ParquetMetadata║  │
@@ -118,13 +121,13 @@ use url::Url;
 ///         │ ╔═══════════════════╗ │              └────────────────────┘
 ///         │ ║  Thrift metadata  ║ │
 ///         │ ╚═══════════════════╝ │      1. With cached ParquetMetadata, so
-///         └───────────────────────┘      the ParquetExec does not re-read /
+///         └───────────────────────┘      the ParquetConfig does not re-read /
 ///          Parquet File                  decode the thrift footer
 ///
 /// ```
 ///
 /// Within a Row Group, Column Chunks store data in DataPages. This example also
-/// shows how to configure the ParquetExec to read a `RowSelection` (row ranges)
+/// shows how to configure the ParquetConfig to read a `RowSelection` (row ranges)
 /// which will skip unneeded data pages. This requires that the Parquet file has
 /// a [Page Index].
 ///
@@ -210,7 +213,7 @@ async fn main() -> Result<()> {
     // pages that must be decoded
     //
     // Note: in order to prune pages, the Page Index must be loaded and the
-    // ParquetExec will load it on demand if not present. To avoid a second IO
+    // DataSourceExec will load it on demand if not present. To avoid a second IO
     // during query, this example loaded the Page Index preemptively by setting
     // `ArrowReader::with_page_index` in `IndexedFile::try_new`
     provider.set_use_row_selection(true);
@@ -477,7 +480,7 @@ impl TableProvider for IndexTableProvider {
 
         let partitioned_file = indexed_file
             .partitioned_file()
-            // provide the starting access plan to the ParquetExec by
+            // provide the starting access plan to the DataSourceExec by
             // storing it as  "extensions" on PartitionedFile
             .with_extensions(Arc::new(access_plan) as _);
 
@@ -494,14 +497,21 @@ impl TableProvider for IndexTableProvider {
             CachedParquetFileReaderFactory::new(Arc::clone(&self.object_store))
                 .with_file(indexed_file);
 
-        // Finally, put it all together into a ParquetExec
-        Ok(ParquetExecBuilder::new(file_scan_config)
-            // provide the predicate so the ParquetExec can try and prune
-            // row groups internally
-            .with_predicate(predicate)
+        let source_config = Arc::new(
+            ParquetConfig::new(
+                Arc::clone(&file_scan_config.file_schema),
+                // provide the predicate so the DataSourceExec can try and prune
+                // row groups internally
+                Some(predicate),
+                None,
+                TableParquetOptions::default(),
+            )
             // provide the factory to create parquet reader without re-reading metadata
-            .with_parquet_file_reader_factory(Arc::new(reader_factory))
-            .build_arc())
+            .with_parquet_file_reader_factory(Arc::new(reader_factory)),
+        );
+        let source = Arc::new(FileSourceConfig::new(file_scan_config, source_config));
+        // Finally, put it all together into a DataSourceExec
+        Ok(Arc::new(DataSourceExec::new(source)))
     }
 
     /// Tell DataFusion to push filters down to the scan method

@@ -170,7 +170,8 @@ mod tests {
     use datafusion_physical_plan::coalesce_partitions::CoalescePartitionsExec;
     use datafusion_physical_plan::common;
     use datafusion_physical_plan::filter::FilterExec;
-    use datafusion_physical_plan::memory::MemoryExec;
+    use datafusion_physical_plan::memory::MemorySourceConfig;
+    use datafusion_physical_plan::source::DataSourceExec;
 
     use arrow::array::Int32Array;
     use arrow::datatypes::{DataType, Field, Schema};
@@ -233,8 +234,8 @@ mod tests {
         }
     }
 
-    /// Mock data using a MemoryExec which has an exact count statistic
-    fn mock_data() -> Result<Arc<MemoryExec>> {
+    /// Mock data using a DataSourceExec which has an exact count statistic
+    fn mock_data() -> Result<Arc<DataSourceExec>> {
         let schema = Arc::new(Schema::new(vec![
             Field::new("a", DataType::Int32, true),
             Field::new("b", DataType::Int32, true),
@@ -248,11 +249,11 @@ mod tests {
             ],
         )?;
 
-        Ok(Arc::new(MemoryExec::try_new(
+        Ok(MemorySourceConfig::try_new_exec(
             &[vec![batch]],
             Arc::clone(&schema),
             None,
-        )?))
+        )?)
     }
 
     /// Checks that the count optimization was applied and we still get the right result

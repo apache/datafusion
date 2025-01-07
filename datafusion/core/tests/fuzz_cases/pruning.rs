@@ -20,16 +20,17 @@ use std::sync::{Arc, OnceLock};
 use arrow_array::{Array, RecordBatch, StringArray};
 use arrow_schema::{DataType, Field, Schema};
 use bytes::{BufMut, Bytes, BytesMut};
+use datafusion::datasource::data_source::FileSourceConfig;
+use datafusion::datasource::physical_plan::ParquetConfig;
 use datafusion::{
-    datasource::{
-        listing::PartitionedFile,
-        physical_plan::{parquet::ParquetExecBuilder, FileScanConfig},
-    },
+    datasource::{listing::PartitionedFile, physical_plan::FileScanConfig},
     prelude::*,
 };
+use datafusion_common::config::TableParquetOptions;
 use datafusion_common::DFSchema;
 use datafusion_execution::object_store::ObjectStoreUrl;
 use datafusion_physical_expr::PhysicalExpr;
+use datafusion_physical_plan::source::DataSourceExec;
 use datafusion_physical_plan::{collect, filter::FilterExec, ExecutionPlan};
 use itertools::Itertools;
 use object_store::{memory::InMemory, path::Path, ObjectStore, PutPayload};
@@ -316,11 +317,23 @@ async fn execute_with_predicate(
                     })
                     .collect(),
             );
-    let mut builder = ParquetExecBuilder::new(scan);
-    if prune_stats {
-        builder = builder.with_predicate(predicate.clone())
-    }
-    let exec = Arc::new(builder.build()) as Arc<dyn ExecutionPlan>;
+    let parquet_conf = if prune_stats {
+        ParquetConfig::new(
+            Arc::clone(&scan.file_schema),
+            Some(predicate.clone()),
+            None,
+            TableParquetOptions::default(),
+        )
+    } else {
+        ParquetConfig::new(
+            Arc::clone(&scan.file_schema),
+            None,
+            None,
+            TableParquetOptions::default(),
+        )
+    };
+    let source = Arc::new(FileSourceConfig::new(scan, Arc::new(parquet_conf)));
+    let exec = Arc::new(DataSourceExec::new(source)) as Arc<dyn ExecutionPlan>;
     let exec =
         Arc::new(FilterExec::try_new(predicate, exec).unwrap()) as Arc<dyn ExecutionPlan>;
 

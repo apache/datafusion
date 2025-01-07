@@ -112,7 +112,7 @@ logical_plan
 physical_plan
 01)CoalesceBatchesExec: target_batch_size=8192
 02)--FilterExec: int_field@0 > 0
-03)----MemoryExec: partitions=1, partition_sizes=[0]
+03)----DataSourceExec: partitions=1, partition_sizes=[0]
 
 statement ok
 drop table table_with_map;

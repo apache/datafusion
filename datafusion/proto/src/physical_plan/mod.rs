@@ -24,14 +24,15 @@ use prost::Message;
 
 use datafusion::arrow::compute::SortOptions;
 use datafusion::arrow::datatypes::SchemaRef;
+use datafusion::datasource::data_source::FileSourceConfig;
 use datafusion::datasource::file_format::csv::CsvSink;
 use datafusion::datasource::file_format::file_compression_type::FileCompressionType;
 use datafusion::datasource::file_format::json::JsonSink;
 #[cfg(feature = "parquet")]
 use datafusion::datasource::file_format::parquet::ParquetSink;
 #[cfg(feature = "parquet")]
-use datafusion::datasource::physical_plan::ParquetExec;
-use datafusion::datasource::physical_plan::{AvroExec, CsvExec};
+use datafusion::datasource::physical_plan::ParquetConfig;
+use datafusion::datasource::physical_plan::{AvroConfig, CsvConfig};
 use datafusion::execution::runtime_env::RuntimeEnv;
 use datafusion::execution::FunctionRegistry;
 use datafusion::physical_expr::aggregate::AggregateFunctionExpr;
@@ -57,12 +58,14 @@ use datafusion::physical_plan::projection::ProjectionExec;
 use datafusion::physical_plan::repartition::RepartitionExec;
 use datafusion::physical_plan::sorts::sort::SortExec;
 use datafusion::physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
+use datafusion::physical_plan::source::DataSourceExec;
 use datafusion::physical_plan::union::{InterleaveExec, UnionExec};
 use datafusion::physical_plan::unnest::{ListUnnest, UnnestExec};
 use datafusion::physical_plan::windows::{BoundedWindowAggExec, WindowAggExec};
 use datafusion::physical_plan::{
     ExecutionPlan, InputOrderMode, PhysicalExpr, WindowExpr,
 };
+use datafusion_common::config::TableParquetOptions;
 use datafusion_common::{internal_err, not_impl_err, DataFusionError, Result};
 use datafusion_expr::{AggregateUDF, ScalarUDF, WindowUDF};
 
@@ -203,39 +206,44 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                     )),
                 }
             }
-            PhysicalPlanType::CsvScan(scan) => Ok(Arc::new(
-                CsvExec::builder(parse_protobuf_file_scan_config(
+            PhysicalPlanType::CsvScan(scan) => {
+                let conf = parse_protobuf_file_scan_config(
                     scan.base_conf.as_ref().unwrap(),
                     registry,
                     extension_codec,
-                )?)
-                .with_has_header(scan.has_header)
-                .with_delimeter(str_to_byte(&scan.delimiter, "delimiter")?)
-                .with_quote(str_to_byte(&scan.quote, "quote")?)
-                .with_escape(
-                    if let Some(protobuf::csv_scan_exec_node::OptionalEscape::Escape(
-                        escape,
-                    )) = &scan.optional_escape
-                    {
-                        Some(str_to_byte(escape, "escape")?)
-                    } else {
-                        None
-                    },
-                )
-                .with_comment(
-                    if let Some(protobuf::csv_scan_exec_node::OptionalComment::Comment(
-                        comment,
-                    )) = &scan.optional_comment
-                    {
-                        Some(str_to_byte(comment, "comment")?)
-                    } else {
-                        None
-                    },
-                )
+                )?
                 .with_newlines_in_values(scan.newlines_in_values)
-                .with_file_compression_type(FileCompressionType::UNCOMPRESSED)
-                .build(),
-            )),
+                .with_file_compression_type(FileCompressionType::UNCOMPRESSED);
+
+                let escape = if let Some(
+                    protobuf::csv_scan_exec_node::OptionalEscape::Escape(escape),
+                ) = &scan.optional_escape
+                {
+                    Some(str_to_byte(escape, "escape")?)
+                } else {
+                    None
+                };
+
+                let comment = if let Some(
+                    protobuf::csv_scan_exec_node::OptionalComment::Comment(comment),
+                ) = &scan.optional_comment
+                {
+                    Some(str_to_byte(comment, "comment")?)
+                } else {
+                    None
+                };
+
+                let source_config = Arc::new(
+                    CsvConfig::new(
+                        scan.has_header,
+                        str_to_byte(&scan.delimiter, "delimiter")?,
+                        0,
+                    )
+                    .with_escape(escape)
+                    .with_comment(comment),
+                );
+                Ok(FileSourceConfig::new_exec(conf, source_config))
+            }
             #[cfg_attr(not(feature = "parquet"), allow(unused_variables))]
             PhysicalPlanType::ParquetScan(scan) => {
                 #[cfg(feature = "parquet")]
@@ -257,21 +265,25 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                             )
                         })
                         .transpose()?;
-                    let mut builder = ParquetExec::builder(base_config);
-                    if let Some(predicate) = predicate {
-                        builder = builder.with_predicate(predicate)
-                    }
-                    Ok(builder.build_arc())
+                    let source_config = Arc::new(ParquetConfig::new(
+                        Arc::clone(&base_config.file_schema),
+                        predicate,
+                        None,
+                        TableParquetOptions::default(),
+                    ));
+                    Ok(FileSourceConfig::new_exec(base_config, source_config))
                 }
                 #[cfg(not(feature = "parquet"))]
                 panic!("Unable to process a Parquet PhysicalPlan when `parquet` feature is not enabled")
             }
             PhysicalPlanType::AvroScan(scan) => {
-                Ok(Arc::new(AvroExec::new(parse_protobuf_file_scan_config(
+                let conf = parse_protobuf_file_scan_config(
                     scan.base_conf.as_ref().unwrap(),
                     registry,
                     extension_codec,
-                )?)))
+                )?;
+                let source_config = Arc::new(AvroConfig::new());
+                Ok(FileSourceConfig::new_exec(conf, source_config))
             }
             PhysicalPlanType::CoalesceBatches(coalesce_batches) => {
                 let input: Arc<dyn ExecutionPlan> = into_physical_plan(
@@ -1600,67 +1612,100 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
             });
         }
 
-        if let Some(exec) = plan.downcast_ref::<CsvExec>() {
-            return Ok(protobuf::PhysicalPlanNode {
-                physical_plan_type: Some(PhysicalPlanType::CsvScan(
-                    protobuf::CsvScanExecNode {
-                        base_conf: Some(serialize_file_scan_config(
-                            exec.base_config(),
-                            extension_codec,
-                        )?),
-                        has_header: exec.has_header(),
-                        delimiter: byte_to_string(exec.delimiter(), "delimiter")?,
-                        quote: byte_to_string(exec.quote(), "quote")?,
-                        optional_escape: if let Some(escape) = exec.escape() {
-                            Some(protobuf::csv_scan_exec_node::OptionalEscape::Escape(
-                                byte_to_string(escape, "escape")?,
-                            ))
-                        } else {
-                            None
-                        },
-                        optional_comment: if let Some(comment) = exec.comment() {
-                            Some(protobuf::csv_scan_exec_node::OptionalComment::Comment(
-                                byte_to_string(comment, "comment")?,
-                            ))
-                        } else {
-                            None
-                        },
-                        newlines_in_values: exec.newlines_in_values(),
-                    },
-                )),
-            });
+        if let Some(exec) = plan.downcast_ref::<DataSourceExec>() {
+            let source = exec.source();
+            println!("DataSourceExec!");
+            if let Some(maybe_csv) = source.as_any().downcast_ref::<FileSourceConfig>() {
+                let source = maybe_csv.source_config();
+                println!("Source!");
+                if let Some(csv_config) = source.as_any().downcast_ref::<CsvConfig>() {
+                    println!("CSV!");
+                    return Ok(protobuf::PhysicalPlanNode {
+                        physical_plan_type: Some(PhysicalPlanType::CsvScan(
+                            protobuf::CsvScanExecNode {
+                                base_conf: Some(serialize_file_scan_config(
+                                    maybe_csv.base_config(),
+                                    extension_codec,
+                                )?),
+                                has_header: csv_config.has_header(),
+                                delimiter: byte_to_string(
+                                    csv_config.delimiter(),
+                                    "delimiter",
+                                )?,
+                                quote: byte_to_string(csv_config.quote(), "quote")?,
+                                optional_escape: if let Some(escape) = csv_config.escape()
+                                {
+                                    Some(
+                                        protobuf::csv_scan_exec_node::OptionalEscape::Escape(
+                                            byte_to_string(escape, "escape")?,
+                                        ),
+                                    )
+                                } else {
+                                    None
+                                },
+                                optional_comment: if let Some(comment) =
+                                    csv_config.comment()
+                                {
+                                    Some(protobuf::csv_scan_exec_node::OptionalComment::Comment(
+                                        byte_to_string(comment, "comment")?,
+                                    ))
+                                } else {
+                                    None
+                                },
+                                newlines_in_values: maybe_csv
+                                    .base_config()
+                                    .newlines_in_values(),
+                            },
+                        )),
+                    });
+                }
+            }
         }
 
         #[cfg(feature = "parquet")]
-        if let Some(exec) = plan.downcast_ref::<ParquetExec>() {
-            let predicate = exec
-                .predicate()
-                .map(|pred| serialize_physical_expr(pred, extension_codec))
-                .transpose()?;
-            return Ok(protobuf::PhysicalPlanNode {
-                physical_plan_type: Some(PhysicalPlanType::ParquetScan(
-                    protobuf::ParquetScanExecNode {
-                        base_conf: Some(serialize_file_scan_config(
-                            exec.base_config(),
-                            extension_codec,
-                        )?),
-                        predicate,
-                    },
-                )),
-            });
+        if let Some(exec) = plan.downcast_ref::<DataSourceExec>() {
+            let source = exec.source();
+            if let Some(maybe_parquet) =
+                source.as_any().downcast_ref::<FileSourceConfig>()
+            {
+                let source = maybe_parquet.source_config();
+                if let Some(conf) = source.as_any().downcast_ref::<ParquetConfig>() {
+                    let predicate = conf
+                        .predicate()
+                        .map(|pred| serialize_physical_expr(pred, extension_codec))
+                        .transpose()?;
+                    return Ok(protobuf::PhysicalPlanNode {
+                        physical_plan_type: Some(PhysicalPlanType::ParquetScan(
+                            protobuf::ParquetScanExecNode {
+                                base_conf: Some(serialize_file_scan_config(
+                                    maybe_parquet.base_config(),
+                                    extension_codec,
+                                )?),
+                                predicate,
+                            },
+                        )),
+                    });
+                }
+            }
         }
 
-        if let Some(exec) = plan.downcast_ref::<AvroExec>() {
-            return Ok(protobuf::PhysicalPlanNode {
-                physical_plan_type: Some(PhysicalPlanType::AvroScan(
-                    protobuf::AvroScanExecNode {
-                        base_conf: Some(serialize_file_scan_config(
-                            exec.base_config(),
-                            extension_codec,
-                        )?),
-                    },
-                )),
-            });
+        if let Some(exec) = plan.downcast_ref::<DataSourceExec>() {
+            let source = exec.source();
+            if let Some(maybe_avro) = source.as_any().downcast_ref::<FileSourceConfig>() {
+                let source = maybe_avro.source_config();
+                if source.as_any().downcast_ref::<AvroConfig>().is_some() {
+                    return Ok(protobuf::PhysicalPlanNode {
+                        physical_plan_type: Some(PhysicalPlanType::AvroScan(
+                            protobuf::AvroScanExecNode {
+                                base_conf: Some(serialize_file_scan_config(
+                                    maybe_avro.base_config(),
+                                    extension_codec,
+                                )?),
+                            },
+                        )),
+                    });
+                }
+            }
         }
 
         if let Some(exec) = plan.downcast_ref::<CoalescePartitionsExec>() {

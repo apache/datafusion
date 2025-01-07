@@ -28,6 +28,8 @@ use super::{
     RecordBatchStream, SendableRecordBatchStream, Statistics,
 };
 use crate::execution_plan::{Boundedness, EmissionType};
+use crate::metrics::ExecutionPlanMetricsSet;
+use crate::source::{DataSource, DataSourceExec};
 
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
@@ -41,9 +43,8 @@ use datafusion_physical_expr::{EquivalenceProperties, LexOrdering};
 
 use futures::Stream;
 
-/// Execution plan for reading in-memory batches of data
-#[derive(Clone)]
-pub struct MemoryExec {
+/// Data source configuration for reading in-memory batches of data
+pub struct MemorySourceConfig {
     /// The partitions to query
     partitions: Vec<Vec<RecordBatch>>,
     /// Schema representing the data before projection
@@ -52,25 +53,31 @@ pub struct MemoryExec {
     projected_schema: SchemaRef,
     /// Optional projection
     projection: Option<Vec<usize>>,
-    // Sort information: one or more equivalent orderings
-    sort_information: Vec<LexOrdering>,
+    /// Plan Properties
     cache: PlanProperties,
+    /// Sort information: one or more equivalent orderings
+    sort_information: Vec<LexOrdering>,
     /// if partition sizes should be displayed
     show_sizes: bool,
 }
 
-impl fmt::Debug for MemoryExec {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.debug_struct("MemoryExec")
-            .field("partitions", &"[...]")
-            .field("schema", &self.schema)
-            .field("projection", &self.projection)
-            .field("sort_information", &self.sort_information)
-            .finish()
+impl DataSource for MemorySourceConfig {
+    fn open(
+        &self,
+        partition: usize,
+        _context: Arc<TaskContext>,
+    ) -> Result<SendableRecordBatchStream> {
+        Ok(Box::pin(MemoryStream::try_new(
+            self.partitions[partition].clone(),
+            Arc::clone(&self.projected_schema),
+            self.projection.clone(),
+        )?))
     }
-}
 
-impl DisplayAs for MemoryExec {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
     fn fmt_as(&self, t: DisplayFormatType, f: &mut fmt::Formatter) -> fmt::Result {
         match t {
             DisplayFormatType::Default | DisplayFormatType::Verbose => {
@@ -88,61 +95,16 @@ impl DisplayAs for MemoryExec {
                 if self.show_sizes {
                     write!(
                         f,
-                        "MemoryExec: partitions={}, partition_sizes={partition_sizes:?}{output_ordering}",
+                        "partitions={}, partition_sizes={partition_sizes:?}{output_ordering}",
                         partition_sizes.len(),
                     )
                 } else {
-                    write!(f, "MemoryExec: partitions={}", partition_sizes.len(),)
+                    write!(f, "partitions={}", partition_sizes.len(),)
                 }
             }
         }
     }
-}
 
-impl ExecutionPlan for MemoryExec {
-    fn name(&self) -> &'static str {
-        "MemoryExec"
-    }
-
-    /// Return a reference to Any that can be used for downcasting
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
-    fn properties(&self) -> &PlanProperties {
-        &self.cache
-    }
-
-    fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
-        // This is a leaf node and has no children
-        vec![]
-    }
-
-    fn with_new_children(
-        self: Arc<Self>,
-        children: Vec<Arc<dyn ExecutionPlan>>,
-    ) -> Result<Arc<dyn ExecutionPlan>> {
-        // MemoryExec has no children
-        if children.is_empty() {
-            Ok(self)
-        } else {
-            internal_err!("Children cannot be replaced in {self:?}")
-        }
-    }
-
-    fn execute(
-        &self,
-        partition: usize,
-        _context: Arc<TaskContext>,
-    ) -> Result<SendableRecordBatchStream> {
-        Ok(Box::pin(MemoryStream::try_new(
-            self.partitions[partition].clone(),
-            Arc::clone(&self.projected_schema),
-            self.projection.clone(),
-        )?))
-    }
-
-    /// We recompute the statistics dynamically from the arrow metadata as it is pretty cheap to do so
     fn statistics(&self) -> Result<Statistics> {
         Ok(common::compute_record_batch_statistics(
             &self.partitions,
@@ -150,10 +112,18 @@ impl ExecutionPlan for MemoryExec {
             self.projection.clone(),
         ))
     }
+
+    fn metrics(&self) -> ExecutionPlanMetricsSet {
+        ExecutionPlanMetricsSet::new()
+    }
+
+    fn properties(&self) -> PlanProperties {
+        self.cache.clone()
+    }
 }
 
-impl MemoryExec {
-    /// Create a new execution plan for reading in-memory record batches
+impl MemorySourceConfig {
+    /// Create a new `MemorySourceConfig` for reading in-memory record batches
     /// The provided `schema` should not have the projection applied.
     pub fn try_new(
         partitions: &[Vec<RecordBatch>],
@@ -172,6 +142,17 @@ impl MemoryExec {
             cache,
             show_sizes: true,
         })
+    }
+
+    /// Create a new `DataSourceExec` plan for reading in-memory record batches
+    /// The provided `schema` should not have the projection applied.
+    pub fn try_new_exec(
+        partitions: &[Vec<RecordBatch>],
+        schema: SchemaRef,
+        projection: Option<Vec<usize>>,
+    ) -> Result<Arc<DataSourceExec>> {
+        let source = Self::try_new(partitions, schema, projection)?;
+        Ok(Arc::new(DataSourceExec::new(Arc::new(source))))
     }
 
     /// Set `show_sizes` to determine whether to display partition sizes
@@ -237,7 +218,7 @@ impl MemoryExec {
             });
         if let Some(col) = ambiguous_column {
             return internal_err!(
-                "Column {:?} is not found in the original schema of the MemoryExec",
+                "Column {:?} is not found in the original schema of the MemorySourceConfig",
                 col
             );
         }
@@ -259,7 +240,7 @@ impl MemoryExec {
             let projection_mapping =
                 ProjectionMapping::try_new(&proj_exprs, &self.original_schema())?;
             sort_information = base_eqp
-                .project(&projection_mapping, self.schema())
+                .project(&projection_mapping, Arc::clone(self.properties().schema()))
                 .oeq_class
                 .orderings;
         }
@@ -267,7 +248,7 @@ impl MemoryExec {
         self.sort_information = sort_information;
         // We need to update equivalence properties when updating sort information.
         let eq_properties = EquivalenceProperties::new_with_orderings(
-            self.schema(),
+            Arc::clone(self.properties().schema()),
             &self.sort_information,
         );
         self.cache = self.cache.with_eq_properties(eq_properties);
@@ -375,7 +356,7 @@ pub trait LazyBatchGenerator: Send + Sync + fmt::Debug + fmt::Display {
 /// Execution plan for lazy in-memory batches of data
 ///
 /// This plan generates output batches lazily, it doesn't have to buffer all batches
-/// in memory up front (compared to `MemoryExec`), thus consuming constant memory.
+/// in memory up front (compared to `MemorySourceConfig`), thus consuming constant memory.
 pub struct LazyMemoryExec {
     /// Schema representing the data
     schema: SchemaRef,
@@ -529,7 +510,8 @@ impl RecordBatchStream for LazyMemoryStream {
 mod memory_exec_tests {
     use std::sync::Arc;
 
-    use crate::memory::MemoryExec;
+    use crate::memory::MemorySourceConfig;
+    use crate::source::DataSourceExec;
     use crate::ExecutionPlan;
 
     use arrow_schema::{DataType, Field, Schema, SortOptions};
@@ -563,8 +545,10 @@ mod memory_exec_tests {
         expected_output_order.extend(sort2.clone());
 
         let sort_information = vec![sort1.clone(), sort2.clone()];
-        let mem_exec = MemoryExec::try_new(&[vec![]], schema, None)?
-            .try_with_sort_information(sort_information)?;
+        let mem_exec = Arc::new(DataSourceExec::new(Arc::new(
+            MemorySourceConfig::try_new(&[vec![]], schema, None)?
+                .try_with_sort_information(sort_information)?,
+        )));
 
         assert_eq!(
             mem_exec.properties().output_ordering().unwrap().to_vec(),

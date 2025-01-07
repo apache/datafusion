@@ -50,7 +50,7 @@ physical_plan
 03)----RepartitionExec: partitioning=Hash([a@0], 4), input_partitions=4
 04)------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
 05)--------AggregateExec: mode=Partial, gby=[a@0 as a], aggr=[count()]
-06)----------MemoryExec: partitions=1, partition_sizes=[1]
+06)----------DataSourceExec: partitions=1, partition_sizes=[1]
 
 query TT
 EXPLAIN SELECT t1.a, COUNT() AS cnt FROM t1 GROUP BY t1.a HAVING COUNT() > 0;
@@ -69,7 +69,7 @@ physical_plan
 06)----------RepartitionExec: partitioning=Hash([a@0], 4), input_partitions=4
 07)------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
 08)--------------AggregateExec: mode=Partial, gby=[a@0 as a], aggr=[count()]
-09)----------------MemoryExec: partitions=1, partition_sizes=[1]
+09)----------------DataSourceExec: partitions=1, partition_sizes=[1]
 
 query II
 SELECT t1.a, COUNT() AS cnt FROM t1 GROUP BY t1.a HAVING COUNT() > 1;
@@ -87,7 +87,7 @@ physical_plan
 01)ProjectionExec: expr=[a@0 as a, count() PARTITION BY [t1.a] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@1 as count_a]
 02)--WindowAggExec: wdw=[count() PARTITION BY [t1.a] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING: Ok(Field { name: "count() PARTITION BY [t1.a] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(NULL)), end_bound: Following(UInt64(NULL)), is_causal: false }]
 03)----SortExec: expr=[a@0 ASC NULLS LAST], preserve_partitioning=[false]
-04)------MemoryExec: partitions=1, partition_sizes=[1]
+04)------DataSourceExec: partitions=1, partition_sizes=[1]
 
 query II
 SELECT a, COUNT() OVER (PARTITION BY a) AS count_a FROM t1 ORDER BY a;

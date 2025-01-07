@@ -201,7 +201,7 @@ async fn main() -> Result<(), DataFusionError> {
 This example produces the following physical plan:
 
 ```text
-MemoryExec: partitions=0, partition_sizes=[]
+DataSourceExec: partitions=0, partition_sizes=[]
 ```
 
 ## Table Sources

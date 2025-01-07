@@ -39,15 +39,17 @@ use crate::cases::{
 use datafusion::arrow::array::ArrayRef;
 use datafusion::arrow::compute::kernels::sort::SortOptions;
 use datafusion::arrow::datatypes::{DataType, Field, IntervalUnit, Schema};
+use datafusion::datasource::data_source::FileSourceConfig;
 use datafusion::datasource::empty::EmptyTable;
 use datafusion::datasource::file_format::csv::CsvSink;
+use datafusion::datasource::file_format::file_compression_type::FileCompressionType;
 use datafusion::datasource::file_format::json::JsonSink;
 use datafusion::datasource::file_format::parquet::ParquetSink;
 use datafusion::datasource::listing::{ListingTableUrl, PartitionedFile};
 use datafusion::datasource::object_store::ObjectStoreUrl;
 use datafusion::datasource::physical_plan::{
     wrap_partition_type_in_dict, wrap_partition_value_in_dict, FileScanConfig,
-    FileSinkConfig, ParquetExec,
+    FileSinkConfig, ParquetConfig,
 };
 use datafusion::execution::FunctionRegistry;
 use datafusion::functions_aggregate::sum::sum_udaf;
@@ -723,6 +725,8 @@ fn roundtrip_parquet_exec_with_pruning_predicate() -> Result<()> {
         limit: None,
         table_partition_cols: vec![],
         output_ordering: vec![],
+        file_compression_type: FileCompressionType::UNCOMPRESSED,
+        new_lines_in_values: false,
     };
 
     let predicate = Arc::new(BinaryExpr::new(
@@ -730,11 +734,13 @@ fn roundtrip_parquet_exec_with_pruning_predicate() -> Result<()> {
         Operator::Eq,
         lit("1"),
     ));
-    roundtrip_test(
-        ParquetExec::builder(scan_config)
-            .with_predicate(predicate)
-            .build_arc(),
-    )
+    let source_config = Arc::new(ParquetConfig::new(
+        Arc::clone(&scan_config.file_schema),
+        Some(predicate),
+        None,
+        TableParquetOptions::default(),
+    ));
+    roundtrip_test(FileSourceConfig::new_exec(scan_config, source_config))
 }
 
 #[tokio::test]
@@ -758,9 +764,12 @@ async fn roundtrip_parquet_exec_with_table_partition_cols() -> Result<()> {
             false,
         )],
         output_ordering: vec![],
+        file_compression_type: FileCompressionType::UNCOMPRESSED,
+        new_lines_in_values: false,
     };
+    let source_config = Arc::new(ParquetConfig::default());
 
-    roundtrip_test(ParquetExec::builder(scan_config).build_arc())
+    roundtrip_test(FileSourceConfig::new_exec(scan_config, source_config))
 }
 
 #[test]
@@ -787,6 +796,8 @@ fn roundtrip_parquet_exec_with_custom_predicate_expr() -> Result<()> {
         limit: None,
         table_partition_cols: vec![],
         output_ordering: vec![],
+        file_compression_type: FileCompressionType::UNCOMPRESSED,
+        new_lines_in_values: false,
     };
 
     #[derive(Debug, Clone, Eq)]
@@ -897,9 +908,14 @@ fn roundtrip_parquet_exec_with_custom_predicate_expr() -> Result<()> {
     let custom_predicate_expr = Arc::new(CustomPredicateExpr {
         inner: Arc::new(Column::new("col", 1)),
     });
-    let exec_plan = ParquetExec::builder(scan_config)
-        .with_predicate(custom_predicate_expr)
-        .build_arc();
+
+    let source_config = Arc::new(ParquetConfig::new(
+        Arc::clone(&scan_config.file_schema),
+        Some(custom_predicate_expr),
+        None,
+        TableParquetOptions::default(),
+    ));
+    let exec_plan = FileSourceConfig::new_exec(scan_config, source_config);
 
     let ctx = SessionContext::new();
     roundtrip_test_and_return(exec_plan, &ctx, &CustomPhysicalExtensionCodec {})?;

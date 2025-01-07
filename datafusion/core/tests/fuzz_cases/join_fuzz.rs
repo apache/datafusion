@@ -14,22 +14,16 @@
 // KIND, either express or implied.  See the License for the
 // specific language governing permissions and limitations
 // under the License.
+use std::sync::Arc;
+use std::time::SystemTime;
+
+use crate::fuzz_cases::join_fuzz::JoinTestType::{HjSmj, NljHj};
 
 use arrow::array::{ArrayRef, Int32Array};
 use arrow::compute::SortOptions;
 use arrow::record_batch::RecordBatch;
 use arrow::util::pretty::pretty_format_batches;
 use arrow_schema::Schema;
-use std::sync::Arc;
-use std::time::SystemTime;
-
-use datafusion_common::ScalarValue;
-use datafusion_physical_expr::expressions::Literal;
-use datafusion_physical_expr::PhysicalExprRef;
-
-use itertools::Itertools;
-use rand::Rng;
-
 use datafusion::common::JoinSide;
 use datafusion::logical_expr::{JoinType, Operator};
 use datafusion::physical_expr::expressions::BinaryExpr;
@@ -39,10 +33,15 @@ use datafusion::physical_plan::joins::utils::{ColumnIndex, JoinFilter};
 use datafusion::physical_plan::joins::{
     HashJoinExec, NestedLoopJoinExec, PartitionMode, SortMergeJoinExec,
 };
-use datafusion::physical_plan::memory::MemoryExec;
-
-use crate::fuzz_cases::join_fuzz::JoinTestType::{HjSmj, NljHj};
 use datafusion::prelude::{SessionConfig, SessionContext};
+use datafusion_common::ScalarValue;
+use datafusion_physical_expr::expressions::Literal;
+use datafusion_physical_expr::PhysicalExprRef;
+use datafusion_physical_plan::memory::MemorySourceConfig;
+use datafusion_physical_plan::source::DataSourceExec;
+
+use itertools::Itertools;
+use rand::Rng;
 use test_utils::stagger_batch_with_seed;
 
 // Determines what Fuzz tests needs to run
@@ -425,14 +424,19 @@ impl JoinFuzzTestCase {
         column_indices
     }
 
-    fn left_right(&self) -> (Arc<MemoryExec>, Arc<MemoryExec>) {
+    fn left_right(&self) -> (Arc<DataSourceExec>, Arc<DataSourceExec>) {
         let schema1 = self.input1[0].schema();
         let schema2 = self.input2[0].schema();
-        let left =
-            Arc::new(MemoryExec::try_new(&[self.input1.clone()], schema1, None).unwrap());
-        let right =
-            Arc::new(MemoryExec::try_new(&[self.input2.clone()], schema2, None).unwrap());
-        (left, right)
+        let left = Arc::new(
+            MemorySourceConfig::try_new(&[self.input1.clone()], schema1, None).unwrap(),
+        );
+        let right = Arc::new(
+            MemorySourceConfig::try_new(&[self.input2.clone()], schema2, None).unwrap(),
+        );
+        (
+            Arc::new(DataSourceExec::new(left)),
+            Arc::new(DataSourceExec::new(right)),
+        )
     }
 
     fn join_filter(&self) -> Option<JoinFilter> {

@@ -18,13 +18,14 @@
 use std::fs;
 use std::sync::Arc;
 
+use datafusion::datasource::data_source::FileSourceConfig;
 use datafusion::datasource::file_format::parquet::ParquetFormat;
 use datafusion::datasource::listing::{
     ListingOptions, ListingTable, ListingTableConfig, ListingTableUrl,
 };
-use datafusion::datasource::physical_plan::ParquetExec;
 use datafusion::datasource::TableProvider;
 use datafusion::execution::context::SessionState;
+use datafusion::execution::session_state::SessionStateBuilder;
 use datafusion::prelude::SessionContext;
 use datafusion_common::stats::Precision;
 use datafusion_execution::cache::cache_manager::CacheManagerConfig;
@@ -33,9 +34,9 @@ use datafusion_execution::cache::cache_unit::{
 };
 use datafusion_execution::config::SessionConfig;
 use datafusion_execution::runtime_env::RuntimeEnvBuilder;
-
-use datafusion::execution::session_state::SessionStateBuilder;
 use datafusion_expr::{col, lit, Expr};
+use datafusion_physical_plan::source::DataSourceExec;
+
 use tempfile::tempdir;
 
 #[tokio::test]
@@ -149,7 +150,9 @@ async fn list_files_with_session_level_cache() {
     //Session 1 first time list files
     assert_eq!(get_list_file_cache_size(&state1), 0);
     let exec1 = table1.scan(&state1, None, &[], None).await.unwrap();
-    let parquet1 = exec1.as_any().downcast_ref::<ParquetExec>().unwrap();
+    let data_source = exec1.as_any().downcast_ref::<DataSourceExec>().unwrap();
+    let source = data_source.source();
+    let parquet1 = source.as_any().downcast_ref::<FileSourceConfig>().unwrap();
 
     assert_eq!(get_list_file_cache_size(&state1), 1);
     let fg = &parquet1.base_config().file_groups;
@@ -160,7 +163,9 @@ async fn list_files_with_session_level_cache() {
     //check session 1 cache result not show in session 2
     assert_eq!(get_list_file_cache_size(&state2), 0);
     let exec2 = table2.scan(&state2, None, &[], None).await.unwrap();
-    let parquet2 = exec2.as_any().downcast_ref::<ParquetExec>().unwrap();
+    let data_source = exec2.as_any().downcast_ref::<DataSourceExec>().unwrap();
+    let source = data_source.source();
+    let parquet2 = source.as_any().downcast_ref::<FileSourceConfig>().unwrap();
 
     assert_eq!(get_list_file_cache_size(&state2), 1);
     let fg2 = &parquet2.base_config().file_groups;
@@ -171,7 +176,9 @@ async fn list_files_with_session_level_cache() {
     //check session 1 cache result not show in session 2
     assert_eq!(get_list_file_cache_size(&state1), 1);
     let exec3 = table1.scan(&state1, None, &[], None).await.unwrap();
-    let parquet3 = exec3.as_any().downcast_ref::<ParquetExec>().unwrap();
+    let data_source = exec3.as_any().downcast_ref::<DataSourceExec>().unwrap();
+    let source = data_source.source();
+    let parquet3 = source.as_any().downcast_ref::<FileSourceConfig>().unwrap();
 
     assert_eq!(get_list_file_cache_size(&state1), 1);
     let fg = &parquet3.base_config().file_groups;

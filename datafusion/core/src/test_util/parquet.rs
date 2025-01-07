@@ -26,7 +26,7 @@ use crate::common::ToDFSchema;
 use crate::config::ConfigOptions;
 use crate::datasource::listing::{ListingTableUrl, PartitionedFile};
 use crate::datasource::object_store::ObjectStoreUrl;
-use crate::datasource::physical_plan::{FileScanConfig, ParquetExec};
+use crate::datasource::physical_plan::{FileScanConfig, ParquetConfig};
 use crate::error::Result;
 use crate::logical_expr::execution_props::ExecutionProps;
 use crate::logical_expr::simplify::SimplifyContext;
@@ -37,7 +37,8 @@ use crate::physical_plan::metrics::MetricsSet;
 use crate::physical_plan::ExecutionPlan;
 use crate::prelude::{Expr, SessionConfig, SessionContext};
 
-use crate::datasource::physical_plan::parquet::ParquetExecBuilder;
+use crate::datasource::data_source::FileSourceConfig;
+use datafusion_physical_plan::source::DataSourceExec;
 use object_store::path::Path;
 use object_store::ObjectMeta;
 use parquet::arrow::ArrowWriter;
@@ -137,18 +138,18 @@ impl TestParquetFile {
 }
 
 impl TestParquetFile {
-    /// Return a `ParquetExec` with the specified options.
+    /// Return a `DataSourceExec` with the specified options.
     ///
-    /// If `maybe_filter` is non-None, the ParquetExec will be filtered using
+    /// If `maybe_filter` is non-None, the DataSourceExec will be filtered using
     /// the given expression, and this method will return the same plan that DataFusion
     /// will make with a pushed down predicate followed by a filter:
     ///
     /// ```text
     /// (FilterExec)
-    ///   (ParquetExec)
+    ///   (DataSourceExec)
     /// ```
     ///
-    /// Otherwise if `maybe_filter` is None, return just a `ParquetExec`
+    /// Otherwise if `maybe_filter` is None, return just a `DataSourceExec`
     pub async fn create_scan(
         &self,
         ctx: &SessionContext,
@@ -177,28 +178,42 @@ impl TestParquetFile {
             let physical_filter_expr =
                 create_physical_expr(&filter, &df_schema, &ExecutionProps::default())?;
 
-            let parquet_exec =
-                ParquetExecBuilder::new_with_options(scan_config, parquet_options)
-                    .with_predicate(Arc::clone(&physical_filter_expr))
-                    .build_arc();
+            let source_config = Arc::new(ParquetConfig::new(
+                Arc::clone(&scan_config.file_schema),
+                Some(Arc::clone(&physical_filter_expr)),
+                None,
+                parquet_options,
+            ));
+            let parquet_exec = FileSourceConfig::new_exec(scan_config, source_config);
 
             let exec = Arc::new(FilterExec::try_new(physical_filter_expr, parquet_exec)?);
             Ok(exec)
         } else {
-            Ok(
-                ParquetExecBuilder::new_with_options(scan_config, parquet_options)
-                    .build_arc(),
-            )
+            let source_config =
+                Arc::new(ParquetConfig::new_with_options(parquet_options));
+            Ok(FileSourceConfig::new_exec(scan_config, source_config))
         }
     }
 
     /// Retrieve metrics from the parquet exec returned from `create_scan`
     ///
-    /// Recursively searches for ParquetExec and returns the metrics
+    /// Recursively searches for DataSourceExec and returns the metrics
     /// on the first one it finds
     pub fn parquet_metrics(plan: &Arc<dyn ExecutionPlan>) -> Option<MetricsSet> {
-        if let Some(parquet) = plan.as_any().downcast_ref::<ParquetExec>() {
-            return parquet.metrics();
+        if let Some(maybe_file) = plan.as_any().downcast_ref::<DataSourceExec>() {
+            let source = maybe_file.source();
+            if let Some(maybe_parquet) =
+                source.as_any().downcast_ref::<FileSourceConfig>()
+            {
+                if maybe_parquet
+                    .source_config()
+                    .as_any()
+                    .downcast_ref::<ParquetConfig>()
+                    .is_some()
+                {
+                    return maybe_file.metrics();
+                }
+            }
         }
 
         for child in plan.children() {

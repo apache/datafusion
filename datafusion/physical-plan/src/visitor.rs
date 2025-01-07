@@ -47,15 +47,15 @@ pub fn accept<V: ExecutionPlanVisitor>(
 /// ```text
 /// ProjectionExec: id
 ///    FilterExec: state = CO
-///       CsvExec:
+///       DataSourceExec:
 /// ```
 ///
 /// The sequence of visit operations would be:
 /// ```text
 /// visitor.pre_visit(ProjectionExec)
 /// visitor.pre_visit(FilterExec)
-/// visitor.pre_visit(CsvExec)
-/// visitor.post_visit(CsvExec)
+/// visitor.pre_visit(DataSourceExec)
+/// visitor.post_visit(DataSourceExec)
 /// visitor.post_visit(FilterExec)
 /// visitor.post_visit(ProjectionExec)
 /// ```

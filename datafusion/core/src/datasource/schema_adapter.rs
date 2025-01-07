@@ -31,7 +31,7 @@ use std::sync::Arc;
 /// Factory for creating [`SchemaAdapter`]
 ///
 /// This interface provides a way to implement custom schema adaptation logic
-/// for ParquetExec (for example, to fill missing columns with default value
+/// for DataSourceExec (for example, to fill missing columns with default value
 /// other than null).
 ///
 /// Most users should use [`DefaultSchemaAdapterFactory`]. See that struct for
@@ -229,7 +229,7 @@ impl SchemaAdapterFactory for DefaultSchemaAdapterFactory {
 #[derive(Clone, Debug)]
 pub(crate) struct DefaultSchemaAdapter {
     /// The schema for the table, projected to include only the fields being output (projected) by the
-    /// associated ParquetExec
+    /// associated ParquetConfig
     projected_table_schema: SchemaRef,
     /// The entire table schema for the table we're using this to adapt.
     ///
@@ -315,7 +315,7 @@ impl SchemaAdapter for DefaultSchemaAdapter {
 /// can be used for Parquet predicate pushdown, meaning that it may contain
 /// fields which are not in the projected schema (as the fields that parquet
 /// pushdown filters operate can be completely distinct from the fields that are
-/// projected (output) out of the ParquetExec). `map_partial_batch` thus uses
+/// projected (output) out of the ParquetConfig). `map_partial_batch` thus uses
 /// `table_schema` to create the resulting RecordBatch (as it could be operating
 /// on any fields in the schema).
 ///
@@ -441,16 +441,18 @@ mod tests {
     use object_store::path::Path;
     use object_store::ObjectMeta;
 
-    use crate::datasource::object_store::ObjectStoreUrl;
-    use crate::datasource::physical_plan::{FileScanConfig, ParquetExec};
-    use crate::physical_plan::collect;
-    use crate::prelude::SessionContext;
-
+    use crate::datasource::data_source::FileSourceConfig;
     use crate::datasource::listing::PartitionedFile;
+    use crate::datasource::object_store::ObjectStoreUrl;
+    use crate::datasource::physical_plan::{FileScanConfig, ParquetConfig};
     use crate::datasource::schema_adapter::{
         DefaultSchemaAdapterFactory, SchemaAdapter, SchemaAdapterFactory, SchemaMapper,
     };
+    use crate::physical_plan::collect;
+    use crate::prelude::SessionContext;
+
     use datafusion_common::record_batch;
+    use datafusion_physical_plan::source::DataSourceExec;
     #[cfg(feature = "parquet")]
     use parquet::arrow::ArrowWriter;
     use tempfile::TempDir;
@@ -500,14 +502,16 @@ mod tests {
         let f2 = Field::new("extra_column", DataType::Utf8, true);
 
         let schema = Arc::new(Schema::new(vec![f1.clone(), f2.clone()]));
+        let base_conf = FileScanConfig::new(ObjectStoreUrl::local_filesystem(), schema)
+            .with_file(partitioned_file);
 
-        // prepare the scan
-        let parquet_exec = ParquetExec::builder(
-            FileScanConfig::new(ObjectStoreUrl::local_filesystem(), schema)
-                .with_file(partitioned_file),
-        )
-        .build()
-        .with_schema_adapter_factory(Arc::new(TestSchemaAdapterFactory {}));
+        let source_config = Arc::new(
+            ParquetConfig::default()
+                .with_schema_adapter_factory(Arc::new(TestSchemaAdapterFactory {})),
+        );
+
+        let source = Arc::new(FileSourceConfig::new(base_conf, source_config));
+        let parquet_exec = DataSourceExec::new(source);
 
         let session_ctx = SessionContext::new();
         let task_ctx = session_ctx.task_ctx();

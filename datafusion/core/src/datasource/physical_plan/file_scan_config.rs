@@ -24,6 +24,7 @@ use std::{
 };
 
 use super::{get_projected_output_ordering, statistics::MinMaxStatistics};
+use crate::datasource::file_format::file_compression_type::FileCompressionType;
 use crate::datasource::{listing::PartitionedFile, object_store::ObjectStoreUrl};
 use crate::{error::Result, scalar::ScalarValue};
 
@@ -127,6 +128,10 @@ pub struct FileScanConfig {
     pub table_partition_cols: Vec<Field>,
     /// All equivalent lexicographical orderings that describe the schema.
     pub output_ordering: Vec<LexOrdering>,
+    /// File compression type
+    pub file_compression_type: FileCompressionType,
+    /// New Lines in Values for CSVOptions
+    pub new_lines_in_values: bool,
 }
 
 impl FileScanConfig {
@@ -151,6 +156,8 @@ impl FileScanConfig {
             limit: None,
             table_partition_cols: vec![],
             output_ordering: vec![],
+            file_compression_type: FileCompressionType::UNCOMPRESSED,
+            new_lines_in_values: false,
         }
     }
 
@@ -208,6 +215,32 @@ impl FileScanConfig {
     pub fn with_output_ordering(mut self, output_ordering: Vec<LexOrdering>) -> Self {
         self.output_ordering = output_ordering;
         self
+    }
+
+    /// Set the file compression type
+    pub fn with_file_compression_type(
+        mut self,
+        file_compression_type: FileCompressionType,
+    ) -> Self {
+        self.file_compression_type = file_compression_type;
+        self
+    }
+
+    /// Set the new_lines_in_values property
+    pub fn with_newlines_in_values(mut self, new_lines_in_values: bool) -> Self {
+        self.new_lines_in_values = new_lines_in_values;
+        self
+    }
+
+    /// Specifies whether newlines in (quoted) values are supported.
+    ///
+    /// Parsing newlines in quoted values may be affected by execution behaviour such as
+    /// parallel file scanning. Setting this to `true` ensures that newlines in values are
+    /// parsed successfully, which may reduce performance.
+    ///
+    /// The default behaviour depends on the `datafusion.catalog.newlines_in_values` setting.
+    pub fn newlines_in_values(&self) -> bool {
+        self.new_lines_in_values
     }
 
     /// Project the schema and the statistics on the given column indices

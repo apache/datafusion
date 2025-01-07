@@ -17,11 +17,13 @@
 
 //! Utilities for parquet tests
 
-use datafusion::datasource::physical_plan::ParquetExec;
+use datafusion::datasource::data_source::FileSourceConfig;
+use datafusion::datasource::physical_plan::ParquetConfig;
 use datafusion_physical_plan::metrics::MetricsSet;
+use datafusion_physical_plan::source::DataSourceExec;
 use datafusion_physical_plan::{accept, ExecutionPlan, ExecutionPlanVisitor};
 
-/// Find the metrics from the first ParquetExec encountered in the plan
+/// Find the metrics from the first DataSourceExec encountered in the plan
 #[derive(Debug)]
 pub struct MetricsFinder {
     metrics: Option<MetricsSet>,
@@ -46,8 +48,19 @@ impl MetricsFinder {
 impl ExecutionPlanVisitor for MetricsFinder {
     type Error = std::convert::Infallible;
     fn pre_visit(&mut self, plan: &dyn ExecutionPlan) -> Result<bool, Self::Error> {
-        if plan.as_any().downcast_ref::<ParquetExec>().is_some() {
-            self.metrics = plan.metrics();
+        if let Some(exec) = plan.as_any().downcast_ref::<DataSourceExec>() {
+            let source = exec.source();
+            if let Some(file_config) = source.as_any().downcast_ref::<FileSourceConfig>()
+            {
+                if file_config
+                    .source_config()
+                    .as_any()
+                    .downcast_ref::<ParquetConfig>()
+                    .is_some()
+                {
+                    self.metrics = exec.metrics();
+                }
+            }
         }
         // stop searching once we have found the metrics
         Ok(self.metrics.is_none())

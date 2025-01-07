@@ -183,7 +183,7 @@ query TT
 explain select b from memory_table;
 ----
 logical_plan TableScan: memory_table projection=[b]
-physical_plan MemoryExec: partitions=1, partition_sizes=[1]
+physical_plan DataSourceExec: partitions=1, partition_sizes=[1]
 
 query I
 select b from memory_table;
@@ -248,7 +248,7 @@ logical_plan
 02)--TableScan: t projection=[column1]
 physical_plan
 01)ProjectionExec: expr=[get_field(column1@0, c0) as t.column1[c0]]
-02)--MemoryExec: partitions=1, partition_sizes=[1]
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
 
 statement ok
 drop table t;

@@ -18,33 +18,25 @@
 //! [`ParquetExec`] Execution plan for reading Parquet files
 
 use std::any::Any;
-use std::fmt::Debug;
 use std::sync::Arc;
 
-use crate::datasource::listing::PartitionedFile;
-use crate::datasource::physical_plan::file_stream::FileStream;
+use crate::datasource::data_source::DataSourceFileConfig;
 use crate::datasource::physical_plan::{
-    parquet::page_filter::PagePruningAccessPlanFilter, DisplayAs, FileGroupPartitioner,
-    FileScanConfig,
+    parquet::page_filter::PagePruningAccessPlanFilter, FileOpener, FileScanConfig,
 };
 use crate::{
-    config::{ConfigOptions, TableParquetOptions},
+    config::TableParquetOptions,
     error::Result,
-    execution::context::TaskContext,
     physical_optimizer::pruning::PruningPredicate,
-    physical_plan::{
-        metrics::{ExecutionPlanMetricsSet, MetricBuilder, MetricsSet},
-        DisplayFormatType, ExecutionPlan, Partitioning, PlanProperties,
-        SendableRecordBatchStream, Statistics,
-    },
+    physical_plan::metrics::{ExecutionPlanMetricsSet, MetricBuilder},
 };
 
 use arrow::datatypes::SchemaRef;
-use datafusion_physical_expr::{EquivalenceProperties, LexOrdering, PhysicalExpr};
-use datafusion_physical_plan::execution_plan::{Boundedness, EmissionType};
+use arrow_schema::Schema;
+use datafusion_physical_expr::PhysicalExpr;
 
-use itertools::Itertools;
 use log::debug;
+use object_store::ObjectStore;
 
 mod access_plan;
 mod metrics;
@@ -75,7 +67,7 @@ pub use writer::plan_to_parquet;
 ///             │
 /// ┌───────────────────────┐
 /// │                       │
-/// │      ParquetExec      │
+/// │     DataSourceExec    │
 /// │                       │
 /// └───────────────────────┘
 ///             ▲
@@ -94,24 +86,33 @@ pub use writer::plan_to_parquet;
 ///
 /// ```
 ///
-/// # Example: Create a `ParquetExec`
+/// # Example: Create a `DataSourceExec`
 /// ```
 /// # use std::sync::Arc;
 /// # use arrow::datatypes::Schema;
-/// # use datafusion::datasource::physical_plan::{FileScanConfig, ParquetExec};
+/// # use datafusion::datasource::data_source::FileSourceConfig;
+/// # use datafusion::datasource::physical_plan::{FileScanConfig, ParquetConfig};
 /// # use datafusion::datasource::listing::PartitionedFile;
-/// # let file_schema = Arc::new(Schema::empty());
-/// # let object_store_url = ObjectStoreUrl::local_filesystem();
 /// # use datafusion_execution::object_store::ObjectStoreUrl;
 /// # use datafusion_physical_expr::expressions::lit;
+/// # use datafusion_physical_plan::source::DataSourceExec;
+/// # use datafusion_common::config::TableParquetOptions;
+///
+/// # let file_schema = Arc::new(Schema::empty());
+/// # let object_store_url = ObjectStoreUrl::local_filesystem();
 /// # let predicate = lit(true);
-/// // Create a ParquetExec for reading `file1.parquet` with a file size of 100MB
+/// // Create a DataSourceExec for reading `file1.parquet` with a file size of 100MB
 /// let file_scan_config = FileScanConfig::new(object_store_url, file_schema)
 ///    .with_file(PartitionedFile::new("file1.parquet", 100*1024*1024));
-/// let exec = ParquetExec::builder(file_scan_config)
-///   // Provide a predicate for filtering row groups/pages
-///   .with_predicate(predicate)
-///   .build();
+/// let source_config = Arc::new(
+///     ParquetConfig::new(
+///         Arc::clone(&file_scan_config.file_schema),
+///         Some(predicate),
+///         None,
+///         TableParquetOptions::default()
+///     )
+/// );
+/// let exec = DataSourceExec::new(Arc::new(FileSourceConfig::new(file_scan_config, source_config)));
 /// ```
 ///
 /// # Features
@@ -139,14 +140,14 @@ pub use writer::plan_to_parquet;
 /// * metadata_size_hint: controls the number of bytes read from the end of the
 ///   file in the initial I/O when the default [`ParquetFileReaderFactory`]. If a
 ///   custom reader is used, it supplies the metadata directly and this parameter
-///   is ignored. [`ParquetExecBuilder::with_metadata_size_hint`] for more details.
+///   is ignored. [`ParquetConfig::with_metadata_size_hint`] for more details.
 ///
 /// * User provided  [`ParquetAccessPlan`]s to skip row groups and/or pages
 ///   based on external information. See "Implementing External Indexes" below
 ///
 /// # Predicate Pushdown
 ///
-/// `ParquetExec` uses the provided [`PhysicalExpr`] predicate as a filter to
+/// `DataSourceExec` uses the provided [`PhysicalExpr`] predicate as a filter to
 /// skip reading unnecessary data and improve query performance using several techniques:
 ///
 /// * Row group pruning: skips entire row groups based on min/max statistics
@@ -167,29 +168,33 @@ pub use writer::plan_to_parquet;
 /// [`RowFilter`]: parquet::arrow::arrow_reader::RowFilter
 /// [Parquet PageIndex]: https://github.com/apache/parquet-format/blob/master/PageIndex.md
 ///
-/// # Example: rewriting `ParquetExec`
+/// # Example: rewriting `DataSourceExec`
 ///
-/// You can modify a `ParquetExec` using [`ParquetExecBuilder`], for example
+/// You can modify a `DataSourceExec` using [`ParquetConfig`], for example
 /// to change files or add a predicate.
 ///
 /// ```no_run
 /// # use std::sync::Arc;
 /// # use arrow::datatypes::Schema;
-/// # use datafusion::datasource::physical_plan::{FileScanConfig, ParquetExec};
+/// # use datafusion::datasource::data_source::FileSourceConfig;
+/// # use datafusion::datasource::physical_plan::{FileScanConfig};
 /// # use datafusion::datasource::listing::PartitionedFile;
-/// # fn parquet_exec() -> ParquetExec { unimplemented!() }
-/// // Split a single ParquetExec into multiple ParquetExecs, one for each file
+/// # use datafusion_physical_plan::source::DataSourceExec;
+///
+/// # fn parquet_exec() -> DataSourceExec { unimplemented!() }
+/// // Split a single DataSourceExec into multiple DataSourceExecs, one for each file
 /// let exec = parquet_exec();
-/// let existing_file_groups = &exec.base_config().file_groups;
+/// let data_source = exec.source();
+/// let existing_file_groups = &data_source.base_config().file_groups;
 /// let new_execs = existing_file_groups
 ///   .iter()
 ///   .map(|file_group| {
-///     // create a new exec by copying the existing exec into a builder
-///     let new_exec = exec.clone()
-///        .into_builder()
-///        .with_file_groups(vec![file_group.clone()])
-///       .build();
-///     new_exec
+///     // create a new exec by copying the existing exec's source config
+///     let new_config = data_source
+///        .base_config()
+///        .with_file_groups(vec![file_group.clone()]);
+///
+///     DataSourceExec::new(Arc::new(FileSourceConfig::new(new_config, data_source.source_config())))
 ///   })
 ///   .collect::<Vec<_>>();
 /// ```
@@ -211,9 +216,12 @@ pub use writer::plan_to_parquet;
 /// # use std::sync::Arc;
 /// # use arrow_schema::{Schema, SchemaRef};
 /// # use datafusion::datasource::listing::PartitionedFile;
+/// # use datafusion::datasource::data_source::FileSourceConfig;
 /// # use datafusion::datasource::physical_plan::parquet::ParquetAccessPlan;
-/// # use datafusion::datasource::physical_plan::{FileScanConfig, ParquetExec};
+/// # use datafusion::datasource::physical_plan::{FileScanConfig, ParquetConfig};
 /// # use datafusion_execution::object_store::ObjectStoreUrl;
+/// # use datafusion_physical_plan::source::DataSourceExec;
+///
 /// # fn schema() -> SchemaRef {
 /// #   Arc::new(Schema::empty())
 /// # }
@@ -227,9 +235,11 @@ pub use writer::plan_to_parquet;
 /// // create a ParquetExec to scan this file
 /// let file_scan_config = FileScanConfig::new(ObjectStoreUrl::local_filesystem(), schema())
 ///     .with_file(partitioned_file);
+/// // create a ParguetConfig for file opener configurations
+/// let source_config = Arc::new(ParquetConfig::default());
 /// // this parquet exec will not even try to read row groups 2 and 4. Additional
 /// // pruning based on predicates may also happen
-/// let exec = ParquetExec::builder(file_scan_config).build();
+/// let exec = DataSourceExec::new(Arc::new(FileSourceConfig::new(file_scan_config, source_config)));
 /// ```
 ///
 /// For a complete example, see the [`advanced_parquet_index` example]).
@@ -238,7 +248,7 @@ pub use writer::plan_to_parquet;
 ///
 /// # Execution Overview
 ///
-/// * Step 1: [`ParquetExec::execute`] is called, returning a [`FileStream`]
+/// * Step 1: [`DataSourceExec::execute`] is called, returning a [`FileStream`]
 ///   configured to open parquet files with a `ParquetOpener`.
 ///
 /// * Step 2: When the stream is polled, the `ParquetOpener` is called to open
@@ -260,12 +270,11 @@ pub use writer::plan_to_parquet;
 /// [`RecordBatch`]: arrow::record_batch::RecordBatch
 /// [`SchemaAdapter`]: crate::datasource::schema_adapter::SchemaAdapter
 /// [`ParquetMetadata`]: parquet::file::metadata::ParquetMetaData
-#[derive(Debug, Clone)]
-pub struct ParquetExec {
-    /// Base configuration for this scan
-    base_config: FileScanConfig,
-    projected_statistics: Statistics,
-    /// Execution metrics
+#[derive(Clone, Default, Debug)]
+pub struct ParquetConfig {
+    /// Options for reading Parquet files
+    table_parquet_options: TableParquetOptions,
+    /// Optional metrics
     metrics: ExecutionPlanMetricsSet,
     /// Optional predicate for row filtering during parquet scan
     predicate: Option<Arc<dyn PhysicalExpr>>,
@@ -273,71 +282,79 @@ pub struct ParquetExec {
     pruning_predicate: Option<Arc<PruningPredicate>>,
     /// Optional predicate for pruning pages (derived from `predicate`)
     page_pruning_predicate: Option<Arc<PagePruningAccessPlanFilter>>,
-    /// Optional hint for the size of the parquet metadata
-    metadata_size_hint: Option<usize>,
     /// Optional user defined parquet file reader factory
     parquet_file_reader_factory: Option<Arc<dyn ParquetFileReaderFactory>>,
-    /// Cached plan properties such as equivalence properties, ordering, partitioning, etc.
-    cache: PlanProperties,
-    /// Options for reading Parquet files
-    table_parquet_options: TableParquetOptions,
     /// Optional user defined schema adapter
     schema_adapter_factory: Option<Arc<dyn SchemaAdapterFactory>>,
-}
-
-impl From<ParquetExec> for ParquetExecBuilder {
-    fn from(exec: ParquetExec) -> Self {
-        exec.into_builder()
-    }
-}
-
-/// [`ParquetExecBuilder`], builder for [`ParquetExec`].
-///
-/// See example on [`ParquetExec`].
-pub struct ParquetExecBuilder {
-    file_scan_config: FileScanConfig,
-    predicate: Option<Arc<dyn PhysicalExpr>>,
+    /// Batch size configuration
+    batch_size: Option<usize>,
+    /// Optional hint for the size of the parquet metadata
     metadata_size_hint: Option<usize>,
-    table_parquet_options: TableParquetOptions,
-    parquet_file_reader_factory: Option<Arc<dyn ParquetFileReaderFactory>>,
-    schema_adapter_factory: Option<Arc<dyn SchemaAdapterFactory>>,
 }
 
-impl ParquetExecBuilder {
-    /// Create a new builder to read the provided file scan configuration
-    pub fn new(file_scan_config: FileScanConfig) -> Self {
-        Self::new_with_options(file_scan_config, TableParquetOptions::default())
+impl ParquetConfig {
+    /// Initialize a ParquetConfig, if default values are going to be used,
+    /// use `ParguetConfig::default()` instead
+    pub fn new(
+        file_schema: Arc<Schema>,
+        predicate: Option<Arc<dyn PhysicalExpr>>,
+        metadata_size_hint: Option<usize>,
+        table_parquet_options: TableParquetOptions,
+    ) -> Self {
+        debug!("Creating ParquetConfig, schema: {:?}, predicate: {:?}, metadata_size_hint: {:?}", file_schema, predicate, metadata_size_hint);
+
+        let metrics = ExecutionPlanMetricsSet::new();
+        let predicate_creation_errors =
+            MetricBuilder::new(&metrics).global_counter("num_predicate_creation_errors");
+
+        let mut conf = ParquetConfig::new_with_options(table_parquet_options);
+        conf.with_metrics(metrics);
+        if let Some(predicate) = predicate.clone() {
+            conf = conf.with_predicate(predicate);
+        }
+
+        if let Some(metadata_size_hint) = metadata_size_hint {
+            conf = conf.with_metadata_size_hint(metadata_size_hint);
+        }
+
+        let pruning_predicate = predicate
+            .clone()
+            .and_then(|predicate_expr| {
+                match PruningPredicate::try_new(predicate_expr, Arc::clone(&file_schema))
+                {
+                    Ok(pruning_predicate) => Some(Arc::new(pruning_predicate)),
+                    Err(e) => {
+                        debug!("Could not create pruning predicate for: {e}");
+                        predicate_creation_errors.add(1);
+                        None
+                    }
+                }
+            })
+            .filter(|p| !p.always_true());
+        if let Some(pruning_predicate) = pruning_predicate {
+            conf = conf.with_pruning_predicate(pruning_predicate);
+        }
+
+        let page_pruning_predicate = predicate
+            .as_ref()
+            .map(|predicate_expr| {
+                PagePruningAccessPlanFilter::new(predicate_expr, Arc::clone(&file_schema))
+            })
+            .map(Arc::new);
+        if let Some(page_pruning_predicate) = page_pruning_predicate {
+            conf = conf.with_page_pruning_predicate(page_pruning_predicate);
+        }
+
+        conf
     }
 
     /// Create a new builder to read the data specified in the file scan
     /// configuration with the provided `TableParquetOptions`.
-    pub fn new_with_options(
-        file_scan_config: FileScanConfig,
-        table_parquet_options: TableParquetOptions,
-    ) -> Self {
+    pub fn new_with_options(table_parquet_options: TableParquetOptions) -> Self {
         Self {
-            file_scan_config,
-            predicate: None,
-            metadata_size_hint: None,
             table_parquet_options,
-            parquet_file_reader_factory: None,
-            schema_adapter_factory: None,
+            ..Self::default()
         }
-    }
-
-    /// Update the list of files groups to read
-    pub fn with_file_groups(mut self, file_groups: Vec<Vec<PartitionedFile>>) -> Self {
-        self.file_scan_config.file_groups = file_groups;
-        self
-    }
-
-    /// Set the filter predicate when reading.
-    ///
-    /// See the "Predicate Pushdown" section of the [`ParquetExec`] documentation
-    /// for more details.
-    pub fn with_predicate(mut self, predicate: Arc<dyn PhysicalExpr>) -> Self {
-        self.predicate = Some(predicate);
-        self
     }
 
     /// Set the metadata size hint
@@ -351,185 +368,31 @@ impl ParquetExecBuilder {
         self
     }
 
-    /// Set the options for controlling how the ParquetExec reads parquet files.
-    ///
-    /// See also [`Self::new_with_options`]
-    pub fn with_table_parquet_options(
-        mut self,
-        table_parquet_options: TableParquetOptions,
+    fn with_metrics(&self, metrics: ExecutionPlanMetricsSet) -> Self {
+        let mut conf = self.clone();
+        conf.metrics = metrics;
+        conf
+    }
+
+    fn with_predicate(&self, predicate: Arc<dyn PhysicalExpr>) -> Self {
+        let mut conf = self.clone();
+        conf.predicate = Some(predicate);
+        conf
+    }
+
+    fn with_pruning_predicate(&self, pruning_predicate: Arc<PruningPredicate>) -> Self {
+        let mut conf = self.clone();
+        conf.pruning_predicate = Some(pruning_predicate);
+        conf
+    }
+
+    fn with_page_pruning_predicate(
+        &self,
+        page_pruning_predicate: Arc<PagePruningAccessPlanFilter>,
     ) -> Self {
-        self.table_parquet_options = table_parquet_options;
-        self
-    }
-
-    /// Set optional user defined parquet file reader factory.
-    ///
-    /// You can use [`ParquetFileReaderFactory`] to more precisely control how
-    /// data is read from parquet files (e.g. skip re-reading metadata, coalesce
-    /// I/O operations, etc).
-    ///
-    /// The default reader factory reads directly from an [`ObjectStore`]
-    /// instance using individual I/O operations for the footer and each page.
-    ///
-    /// If a custom `ParquetFileReaderFactory` is provided, then data access
-    /// operations will be routed to this factory instead of [`ObjectStore`].
-    ///
-    /// [`ObjectStore`]: object_store::ObjectStore
-    pub fn with_parquet_file_reader_factory(
-        mut self,
-        parquet_file_reader_factory: Arc<dyn ParquetFileReaderFactory>,
-    ) -> Self {
-        self.parquet_file_reader_factory = Some(parquet_file_reader_factory);
-        self
-    }
-
-    /// Set optional schema adapter factory.
-    ///
-    /// [`SchemaAdapterFactory`] allows user to specify how fields from the
-    /// parquet file get mapped to that of the table schema.  The default schema
-    /// adapter uses arrow's cast library to map the parquet fields to the table
-    /// schema.
-    pub fn with_schema_adapter_factory(
-        mut self,
-        schema_adapter_factory: Arc<dyn SchemaAdapterFactory>,
-    ) -> Self {
-        self.schema_adapter_factory = Some(schema_adapter_factory);
-        self
-    }
-
-    /// Convenience: build an `Arc`d `ParquetExec` from this builder
-    pub fn build_arc(self) -> Arc<ParquetExec> {
-        Arc::new(self.build())
-    }
-
-    /// Build a [`ParquetExec`]
-    #[must_use]
-    pub fn build(self) -> ParquetExec {
-        let Self {
-            file_scan_config,
-            predicate,
-            metadata_size_hint,
-            table_parquet_options,
-            parquet_file_reader_factory,
-            schema_adapter_factory,
-        } = self;
-
-        let base_config = file_scan_config;
-        debug!("Creating ParquetExec, files: {:?}, projection {:?}, predicate: {:?}, limit: {:?}",
-        base_config.file_groups, base_config.projection, predicate, base_config.limit);
-
-        let metrics = ExecutionPlanMetricsSet::new();
-        let predicate_creation_errors =
-            MetricBuilder::new(&metrics).global_counter("num_predicate_creation_errors");
-
-        let file_schema = &base_config.file_schema;
-        let pruning_predicate = predicate
-            .clone()
-            .and_then(|predicate_expr| {
-                match PruningPredicate::try_new(predicate_expr, Arc::clone(file_schema)) {
-                    Ok(pruning_predicate) => Some(Arc::new(pruning_predicate)),
-                    Err(e) => {
-                        debug!("Could not create pruning predicate for: {e}");
-                        predicate_creation_errors.add(1);
-                        None
-                    }
-                }
-            })
-            .filter(|p| !p.always_true());
-
-        let page_pruning_predicate = predicate
-            .as_ref()
-            .map(|predicate_expr| {
-                PagePruningAccessPlanFilter::new(predicate_expr, Arc::clone(file_schema))
-            })
-            .map(Arc::new);
-
-        let (projected_schema, projected_statistics, projected_output_ordering) =
-            base_config.project();
-
-        let cache = ParquetExec::compute_properties(
-            projected_schema,
-            &projected_output_ordering,
-            &base_config,
-        );
-        ParquetExec {
-            base_config,
-            projected_statistics,
-            metrics,
-            predicate,
-            pruning_predicate,
-            page_pruning_predicate,
-            metadata_size_hint,
-            parquet_file_reader_factory,
-            cache,
-            table_parquet_options,
-            schema_adapter_factory,
-        }
-    }
-}
-
-impl ParquetExec {
-    /// Create a new Parquet reader execution plan provided file list and schema.
-    #[deprecated(
-        since = "39.0.0",
-        note = "use `ParquetExec::builder` or `ParquetExecBuilder`"
-    )]
-    pub fn new(
-        base_config: FileScanConfig,
-        predicate: Option<Arc<dyn PhysicalExpr>>,
-        metadata_size_hint: Option<usize>,
-        table_parquet_options: TableParquetOptions,
-    ) -> Self {
-        let mut builder =
-            ParquetExecBuilder::new_with_options(base_config, table_parquet_options);
-        if let Some(predicate) = predicate {
-            builder = builder.with_predicate(predicate);
-        }
-        if let Some(metadata_size_hint) = metadata_size_hint {
-            builder = builder.with_metadata_size_hint(metadata_size_hint);
-        }
-        builder.build()
-    }
-
-    /// Return a [`ParquetExecBuilder`].
-    ///
-    /// See example on [`ParquetExec`] and [`ParquetExecBuilder`] for specifying
-    /// parquet table options.
-    pub fn builder(file_scan_config: FileScanConfig) -> ParquetExecBuilder {
-        ParquetExecBuilder::new(file_scan_config)
-    }
-
-    /// Convert this `ParquetExec` into a builder for modification
-    pub fn into_builder(self) -> ParquetExecBuilder {
-        // list out fields so it is clear what is being dropped
-        // (note the fields which are dropped are re-created as part of calling
-        // `build` on the builder)
-        let Self {
-            base_config,
-            projected_statistics: _,
-            metrics: _,
-            predicate,
-            pruning_predicate: _,
-            page_pruning_predicate: _,
-            metadata_size_hint,
-            parquet_file_reader_factory,
-            cache: _,
-            table_parquet_options,
-            schema_adapter_factory,
-        } = self;
-        ParquetExecBuilder {
-            file_scan_config: base_config,
-            predicate,
-            metadata_size_hint,
-            table_parquet_options,
-            parquet_file_reader_factory,
-            schema_adapter_factory,
-        }
-    }
-
-    /// [`FileScanConfig`] that controls this scan (such as which files to read)
-    pub fn base_config(&self) -> &FileScanConfig {
-        &self.base_config
+        let mut conf = self.clone();
+        conf.page_pruning_predicate = Some(page_pruning_predicate);
+        conf
     }
 
     /// Options passed to the parquet reader for this scan
@@ -545,6 +408,11 @@ impl ParquetExec {
     /// Optional reference to this parquet scan's pruning predicate
     pub fn pruning_predicate(&self) -> Option<&Arc<PruningPredicate>> {
         self.pruning_predicate.as_ref()
+    }
+
+    /// Optional reference to this parquet scan's page pruning predicate
+    pub fn page_pruning_predicate(&self) -> Option<&Arc<PagePruningAccessPlanFilter>> {
+        self.page_pruning_predicate.as_ref()
     }
 
     /// return the optional file reader factory
@@ -569,9 +437,12 @@ impl ParquetExec {
         self.schema_adapter_factory.as_ref()
     }
 
-    /// Optional schema adapter factory.
+    /// Set optional schema adapter factory.
     ///
-    /// See documentation on [`ParquetExecBuilder::with_schema_adapter_factory`]
+    /// [`SchemaAdapterFactory`] allows user to specify how fields from the
+    /// parquet file get mapped to that of the table schema.  The default schema
+    /// adapter uses arrow's cast library to map the parquet fields to the table
+    /// schema.
     pub fn with_schema_adapter_factory(
         mut self,
         schema_adapter_factory: Arc<dyn SchemaAdapterFactory>,
@@ -590,8 +461,13 @@ impl ParquetExec {
     }
 
     /// Return the value described in [`Self::with_pushdown_filters`]
-    fn pushdown_filters(&self) -> bool {
+    pub(crate) fn pushdown_filters(&self) -> bool {
         self.table_parquet_options.global.pushdown_filters
+    }
+
+    /// Return metrics
+    pub(crate) fn metrics(&self) -> ExecutionPlanMetricsSet {
+        self.metrics.clone()
     }
 
     /// If true, the `RowFilter` made by `pushdown_filters` may try to
@@ -644,224 +520,71 @@ impl ParquetExec {
     fn bloom_filter_on_read(&self) -> bool {
         self.table_parquet_options.global.bloom_filter_on_read
     }
-
-    fn output_partitioning_helper(file_config: &FileScanConfig) -> Partitioning {
-        Partitioning::UnknownPartitioning(file_config.file_groups.len())
-    }
-
-    /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
-    fn compute_properties(
-        schema: SchemaRef,
-        orderings: &[LexOrdering],
-        file_config: &FileScanConfig,
-    ) -> PlanProperties {
-        PlanProperties::new(
-            EquivalenceProperties::new_with_orderings(schema, orderings),
-            Self::output_partitioning_helper(file_config), // Output Partitioning
-            EmissionType::Incremental,
-            Boundedness::Bounded,
-        )
-    }
-
-    /// Updates the file groups to read and recalculates the output partitioning
-    ///
-    /// Note this function does not update statistics or other properties
-    /// that depend on the file groups.
-    fn with_file_groups_and_update_partitioning(
-        mut self,
-        file_groups: Vec<Vec<PartitionedFile>>,
-    ) -> Self {
-        self.base_config.file_groups = file_groups;
-        // Changing file groups may invalidate output partitioning. Update it also
-        let output_partitioning = Self::output_partitioning_helper(&self.base_config);
-        self.cache = self.cache.with_partitioning(output_partitioning);
-        self
-    }
 }
 
-impl DisplayAs for ParquetExec {
-    fn fmt_as(
+impl DataSourceFileConfig for ParquetConfig {
+    fn create_file_opener(
         &self,
-        t: DisplayFormatType,
-        f: &mut std::fmt::Formatter,
-    ) -> std::fmt::Result {
-        match t {
-            DisplayFormatType::Default | DisplayFormatType::Verbose => {
-                let predicate_string = self
-                    .predicate
-                    .as_ref()
-                    .map(|p| format!(", predicate={p}"))
-                    .unwrap_or_default();
-
-                let pruning_predicate_string = self
-                    .pruning_predicate
-                    .as_ref()
-                    .map(|pre| {
-                        let mut guarantees = pre
-                            .literal_guarantees()
-                            .iter()
-                            .map(|item| format!("{}", item))
-                            .collect_vec();
-                        guarantees.sort();
-                        format!(
-                            ", pruning_predicate={}, required_guarantees=[{}]",
-                            pre.predicate_expr(),
-                            guarantees.join(", ")
-                        )
-                    })
-                    .unwrap_or_default();
-
-                write!(f, "ParquetExec: ")?;
-                self.base_config.fmt_as(t, f)?;
-                write!(f, "{}{}", predicate_string, pruning_predicate_string,)
-            }
-        }
-    }
-}
-
-impl ExecutionPlan for ParquetExec {
-    fn name(&self) -> &'static str {
-        "ParquetExec"
-    }
-
-    /// Return a reference to Any that can be used for downcasting
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
-    fn properties(&self) -> &PlanProperties {
-        &self.cache
-    }
-
-    fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
-        // this is a leaf node and has no children
-        vec![]
-    }
-
-    fn with_new_children(
-        self: Arc<Self>,
-        _: Vec<Arc<dyn ExecutionPlan>>,
-    ) -> Result<Arc<dyn ExecutionPlan>> {
-        Ok(self)
-    }
-
-    /// Redistribute files across partitions according to their size
-    /// See comments on [`FileGroupPartitioner`] for more detail.
-    fn repartitioned(
-        &self,
-        target_partitions: usize,
-        config: &ConfigOptions,
-    ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
-        let repartition_file_min_size = config.optimizer.repartition_file_min_size;
-        let repartitioned_file_groups_option = FileGroupPartitioner::new()
-            .with_target_partitions(target_partitions)
-            .with_repartition_file_min_size(repartition_file_min_size)
-            .with_preserve_order_within_groups(
-                self.properties().output_ordering().is_some(),
-            )
-            .repartition_file_groups(&self.base_config.file_groups);
-
-        let mut new_plan = self.clone();
-        if let Some(repartitioned_file_groups) = repartitioned_file_groups_option {
-            new_plan = new_plan
-                .with_file_groups_and_update_partitioning(repartitioned_file_groups);
-        }
-        Ok(Some(Arc::new(new_plan)))
-    }
-
-    fn execute(
-        &self,
-        partition_index: usize,
-        ctx: Arc<TaskContext>,
-    ) -> Result<SendableRecordBatchStream> {
-        let projection = self
-            .base_config
+        object_store: Result<Arc<dyn ObjectStore>>,
+        base_config: &FileScanConfig,
+        partition: usize,
+    ) -> Result<Arc<dyn FileOpener>> {
+        let projection = base_config
             .file_column_projection_indices()
-            .unwrap_or_else(|| {
-                (0..self.base_config.file_schema.fields().len()).collect()
-            });
+            .unwrap_or_else(|| (0..base_config.file_schema.fields().len()).collect());
+        let schema_adapter_factory = self
+            .schema_adapter_factory
+            .clone()
+            .unwrap_or_else(|| Arc::new(DefaultSchemaAdapterFactory));
 
         let parquet_file_reader_factory = self
             .parquet_file_reader_factory
             .as_ref()
             .map(|f| Ok(Arc::clone(f)))
             .unwrap_or_else(|| {
-                ctx.runtime_env()
-                    .object_store(&self.base_config.object_store_url)
-                    .map(|store| {
-                        Arc::new(DefaultParquetFileReaderFactory::new(store)) as _
-                    })
+                object_store.map(|store| {
+                    Arc::new(DefaultParquetFileReaderFactory::new(store)) as _
+                })
             })?;
 
-        let schema_adapter_factory = self
-            .schema_adapter_factory
-            .clone()
-            .unwrap_or_else(|| Arc::new(DefaultSchemaAdapterFactory));
-
-        let opener = ParquetOpener {
-            partition_index,
+        Ok(Arc::new(ParquetOpener {
+            partition_index: partition,
             projection: Arc::from(projection),
-            batch_size: ctx.session_config().batch_size(),
-            limit: self.base_config.limit,
+            batch_size: self
+                .batch_size
+                .expect("Batch size must set before creating ParquetOpener"),
+            limit: base_config.limit,
             predicate: self.predicate.clone(),
             pruning_predicate: self.pruning_predicate.clone(),
             page_pruning_predicate: self.page_pruning_predicate.clone(),
-            table_schema: Arc::clone(&self.base_config.file_schema),
+            table_schema: Arc::clone(&base_config.file_schema),
             metadata_size_hint: self.metadata_size_hint,
-            metrics: self.metrics.clone(),
+            metrics: self.metrics(),
             parquet_file_reader_factory,
             pushdown_filters: self.pushdown_filters(),
             reorder_filters: self.reorder_filters(),
             enable_page_index: self.enable_page_index(),
             enable_bloom_filter: self.bloom_filter_on_read(),
             schema_adapter_factory,
-        };
-
-        let stream =
-            FileStream::new(&self.base_config, partition_index, opener, &self.metrics)?;
-
-        Ok(Box::pin(stream))
-    }
-
-    fn metrics(&self) -> Option<MetricsSet> {
-        Some(self.metrics.clone_inner())
-    }
-
-    fn statistics(&self) -> Result<Statistics> {
-        // When filters are pushed down, we have no way of knowing the exact statistics.
-        // Note that pruning predicate is also a kind of filter pushdown.
-        // (bloom filters use `pruning_predicate` too)
-        let stats = if self.pruning_predicate.is_some()
-            || self.page_pruning_predicate.is_some()
-            || (self.predicate.is_some() && self.pushdown_filters())
-        {
-            self.projected_statistics.clone().to_inexact()
-        } else {
-            self.projected_statistics.clone()
-        };
-        Ok(stats)
-    }
-
-    fn fetch(&self) -> Option<usize> {
-        self.base_config.limit
-    }
-
-    fn with_fetch(&self, limit: Option<usize>) -> Option<Arc<dyn ExecutionPlan>> {
-        let new_config = self.base_config.clone().with_limit(limit);
-
-        Some(Arc::new(Self {
-            base_config: new_config,
-            projected_statistics: self.projected_statistics.clone(),
-            metrics: self.metrics.clone(),
-            predicate: self.predicate.clone(),
-            pruning_predicate: self.pruning_predicate.clone(),
-            page_pruning_predicate: self.page_pruning_predicate.clone(),
-            metadata_size_hint: self.metadata_size_hint,
-            parquet_file_reader_factory: self.parquet_file_reader_factory.clone(),
-            cache: self.cache.clone(),
-            table_parquet_options: self.table_parquet_options.clone(),
-            schema_adapter_factory: self.schema_adapter_factory.clone(),
         }))
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn with_batch_size(&self, batch_size: usize) -> Arc<dyn DataSourceFileConfig> {
+        let mut conf = self.clone();
+        conf.batch_size = Some(batch_size);
+        Arc::new(conf)
+    }
+
+    fn with_schema(&self, _schema: SchemaRef) -> Arc<dyn DataSourceFileConfig> {
+        Arc::new(Self { ..self.clone() })
+    }
+
+    fn with_projection(&self, _config: &FileScanConfig) -> Arc<dyn DataSourceFileConfig> {
+        Arc::new(Self { ..self.clone() })
     }
 }
 
@@ -886,10 +609,11 @@ mod tests {
 
     use super::*;
     use crate::dataframe::DataFrameWriteOptions;
+    use crate::datasource::data_source::FileSourceConfig;
     use crate::datasource::file_format::options::CsvReadOptions;
     use crate::datasource::file_format::parquet::test_util::store_parquet;
     use crate::datasource::file_format::test_util::scan_format;
-    use crate::datasource::listing::{FileRange, ListingOptions};
+    use crate::datasource::listing::{FileRange, ListingOptions, PartitionedFile};
     use crate::datasource::object_store::ObjectStoreUrl;
     use crate::execution::context::SessionState;
     use crate::physical_plan::displayable;
@@ -912,7 +636,9 @@ mod tests {
     use datafusion_common::{assert_contains, ScalarValue};
     use datafusion_expr::{col, lit, when, Expr};
     use datafusion_physical_expr::planner::logical2physical;
-    use datafusion_physical_plan::ExecutionPlanProperties;
+    use datafusion_physical_plan::metrics::MetricsSet;
+    use datafusion_physical_plan::source::DataSourceExec;
+    use datafusion_physical_plan::{ExecutionPlan, ExecutionPlanProperties};
 
     use chrono::{TimeZone, Utc};
     use futures::StreamExt;
@@ -928,7 +654,9 @@ mod tests {
         /// Data that was read back from ParquetFiles
         batches: Result<Vec<RecordBatch>>,
         /// The physical plan that was created (that has statistics, etc)
-        parquet_exec: Arc<ParquetExec>,
+        parquet_exec: Arc<DataSourceExec>,
+        /// The configuration that is used in plan
+        parquet_config: ParquetConfig,
     }
 
     /// round-trip record batches by writing each individual RecordBatch to
@@ -1009,34 +737,39 @@ mod tests {
             // set up predicate (this is normally done by a layer higher up)
             let predicate = predicate.map(|p| logical2physical(&p, &file_schema));
 
-            // prepare the scan
-            let mut builder = ParquetExec::builder(
+            let base_config =
                 FileScanConfig::new(ObjectStoreUrl::local_filesystem(), file_schema)
                     .with_file_group(file_group)
-                    .with_projection(projection),
+                    .with_projection(projection);
+
+            let mut source_config = ParquetConfig::new(
+                Arc::clone(&base_config.file_schema),
+                predicate,
+                None,
+                TableParquetOptions::default(),
             );
 
-            if let Some(predicate) = predicate {
-                builder = builder.with_predicate(predicate);
-            }
-            let mut parquet_exec = builder.build();
-
             if pushdown_predicate {
-                parquet_exec = parquet_exec
+                source_config = source_config
                     .with_pushdown_filters(true)
                     .with_reorder_filters(true);
             }
 
             if page_index_predicate {
-                parquet_exec = parquet_exec.with_enable_page_index(true);
+                source_config = source_config.with_enable_page_index(true);
             }
 
             let session_ctx = SessionContext::new();
             let task_ctx = session_ctx.task_ctx();
-            let parquet_exec = Arc::new(parquet_exec);
+            let source = Arc::new(FileSourceConfig::new(
+                base_config,
+                Arc::new(source_config.clone()),
+            ));
+            let parquet_exec = Arc::new(DataSourceExec::new(source));
             RoundTripResult {
                 batches: collect(parquet_exec.clone(), task_ctx).await,
                 parquet_exec,
+                parquet_config: source_config,
             }
         }
     }
@@ -1667,11 +1400,12 @@ mod tests {
             expected_row_num: Option<usize>,
             file_schema: SchemaRef,
         ) -> Result<()> {
-            let parquet_exec = ParquetExec::builder(
+            let source = Arc::new(FileSourceConfig::new(
                 FileScanConfig::new(ObjectStoreUrl::local_filesystem(), file_schema)
                     .with_file_groups(file_groups),
-            )
-            .build();
+                Arc::new(ParquetConfig::default()),
+            ));
+            let parquet_exec = DataSourceExec::new(source);
             assert_eq!(
                 parquet_exec
                     .properties()
@@ -1768,7 +1502,8 @@ mod tests {
             ),
         ]);
 
-        let parquet_exec = ParquetExec::builder(
+        let source_config = Arc::new(ParquetConfig::default());
+        let parquet_exec = DataSourceExec::new(Arc::new(FileSourceConfig::new(
             FileScanConfig::new(object_store_url, schema.clone())
                 .with_file(partitioned_file)
                 // file has 10 cols so index 12 should be month and 13 should be day
@@ -1785,12 +1520,14 @@ mod tests {
                         false,
                     ),
                 ]),
-        )
-        .build();
-        assert_eq!(
-            parquet_exec.cache.output_partitioning().partition_count(),
-            1
-        );
+            source_config,
+        )));
+        let partition_count = parquet_exec
+            .source()
+            .properties()
+            .output_partitioning()
+            .partition_count();
+        assert_eq!(partition_count, 1);
         assert_eq!(parquet_exec.schema().as_ref(), &expected_schema);
 
         let mut results = parquet_exec.execute(0, task_ctx)?;
@@ -1842,11 +1579,11 @@ mod tests {
         };
 
         let file_schema = Arc::new(Schema::empty());
-        let parquet_exec = ParquetExec::builder(
+        let parquet_exec = DataSourceExec::new(Arc::new(FileSourceConfig::new(
             FileScanConfig::new(ObjectStoreUrl::local_filesystem(), file_schema)
                 .with_file(partitioned_file),
-        )
-        .build();
+            Arc::new(ParquetConfig::default()),
+        )));
 
         let mut results = parquet_exec.execute(0, state.task_ctx())?;
         let batch = results.next().await.unwrap();
@@ -1991,7 +1728,7 @@ mod tests {
             .await;
 
         // should have a pruning predicate
-        let pruning_predicate = &rt.parquet_exec.pruning_predicate;
+        let pruning_predicate = &rt.parquet_config.pruning_predicate;
         assert!(pruning_predicate.is_some());
 
         // convert to explain plan form
@@ -2032,7 +1769,7 @@ mod tests {
                 .round_trip(vec![batches.clone()])
                 .await;
 
-            let pruning_predicate = &rt0.parquet_exec.pruning_predicate;
+            let pruning_predicate = &rt0.parquet_config.pruning_predicate;
             assert!(pruning_predicate.is_some());
 
             let display0 = displayable(rt0.parquet_exec.as_ref())
@@ -2074,9 +1811,9 @@ mod tests {
             .await;
 
         // should have a pruning predicate
-        let pruning_predicate = &rt1.parquet_exec.pruning_predicate;
+        let pruning_predicate = &rt1.parquet_config.pruning_predicate;
         assert!(pruning_predicate.is_some());
-        let pruning_predicate = &rt2.parquet_exec.pruning_predicate;
+        let pruning_predicate = &rt2.parquet_config.predicate;
         assert!(pruning_predicate.is_some());
 
         // convert to explain plan form
@@ -2117,14 +1854,14 @@ mod tests {
             .await;
 
         // Should not contain a pruning predicate (since nothing can be pruned)
-        let pruning_predicate = &rt.parquet_exec.pruning_predicate;
+        let pruning_predicate = &rt.parquet_config.pruning_predicate;
         assert!(
             pruning_predicate.is_none(),
             "Still had pruning predicate: {pruning_predicate:?}"
         );
 
         // but does still has a pushdown down predicate
-        let predicate = rt.parquet_exec.predicate.as_ref();
+        let predicate = rt.parquet_config.predicate.as_ref();
         let filter_phys = logical2physical(&filter, rt.parquet_exec.schema().as_ref());
         assert_eq!(predicate.unwrap().to_string(), filter_phys.to_string());
     }
@@ -2152,11 +1889,11 @@ mod tests {
             .await;
 
         // Should have a pruning predicate
-        let pruning_predicate = &rt.parquet_exec.pruning_predicate;
+        let pruning_predicate = &rt.parquet_config.pruning_predicate;
         assert!(pruning_predicate.is_some());
     }
 
-    /// returns the sum of all the metrics with the specified name
+    /// Returns the sum of all the metrics with the specified name
     /// the returned set.
     ///
     /// Count: returns value
@@ -2466,7 +2203,12 @@ mod tests {
 
         let size_hint_calls = reader_factory.metadata_size_hint_calls.clone();
 
-        let exec = ParquetExec::builder(
+        let source_config = Arc::new(
+            ParquetConfig::default()
+                .with_parquet_file_reader_factory(reader_factory)
+                .with_metadata_size_hint(456),
+        );
+        let exec = DataSourceExec::new(Arc::new(FileSourceConfig::new(
             FileScanConfig::new(store_url, schema)
                 .with_file(
                     PartitionedFile {
@@ -2499,10 +2241,8 @@ mod tests {
                     extensions: None,
                     metadata_size_hint: None,
                 }),
-        )
-        .with_parquet_file_reader_factory(reader_factory)
-        .with_metadata_size_hint(456)
-        .build();
+            source_config,
+        )));
 
         let exec = Arc::new(exec);
         let res = collect(exec, ctx.task_ctx()).await.unwrap();

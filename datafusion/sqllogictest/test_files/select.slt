@@ -558,15 +558,15 @@ EXPLAIN SELECT * FROM ((SELECT column1 FROM foo) "T1" CROSS JOIN (SELECT column2
 ----
 logical_plan
 01)SubqueryAlias: F
-02)--Cross Join:
+02)--Cross Join: 
 03)----SubqueryAlias: T1
 04)------TableScan: foo projection=[column1]
 05)----SubqueryAlias: T2
 06)------TableScan: foo projection=[column2]
 physical_plan
 01)CrossJoinExec
-02)--MemoryExec: partitions=1, partition_sizes=[1]
-03)--MemoryExec: partitions=1, partition_sizes=[1]
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+03)--DataSourceExec: partitions=1, partition_sizes=[1]
 
 # select NaNs
 query BBBB
@@ -933,7 +933,7 @@ logical_plan
 02)--TableScan: select_between_data projection=[c1]
 physical_plan
 01)ProjectionExec: expr=[c1@0 >= 2 AND c1@0 <= 3 as select_between_data.c1 BETWEEN Int64(2) AND Int64(3)]
-02)--MemoryExec: partitions=1, partition_sizes=[1]
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
 
 
 # TODO: query_get_indexed_field
@@ -1168,7 +1168,7 @@ select "INT32" from case_sensitive_table;
 4
 5
 
-# Columns in the table are a,b,c,d. Source is CsvExec which is ordered by
+# Columns in the table are a,b,c,d. Source is DataSourceExec which is ordered by
 # a,b,c column. Column a has cardinality 2, column b has cardinality 4.
 # Column c has cardinality 100 (unique entries). Column d has cardinality 5.
 statement ok
@@ -1196,7 +1196,7 @@ EXPLAIN SELECT a FROM annotated_data_finite2
 logical_plan
 01)Sort: annotated_data_finite2.a ASC NULLS LAST, fetch=5
 02)--TableScan: annotated_data_finite2 projection=[a]
-physical_plan CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a], limit=5, output_ordering=[a@0 ASC NULLS LAST], has_header=true
+physical_plan DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a], limit=5, output_ordering=[a@0 ASC NULLS LAST], file_type=csv, has_header=true
 
 query I
 SELECT a FROM annotated_data_finite2
@@ -1379,7 +1379,7 @@ logical_plan
 02)--TableScan: table1 projection=[a]
 physical_plan
 01)SortExec: expr=[a@0 ASC NULLS LAST], preserve_partitioning=[false]
-02)--MemoryExec: partitions=1, partition_sizes=[1]
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
 
 # ambiguous column references in on join
 query error DataFusion error: Schema error: Ambiguous reference to unqualified field a
@@ -1405,7 +1405,7 @@ physical_plan
 01)SortPreservingMergeExec: [a@0 ASC NULLS LAST]
 02)--ProjectionExec: expr=[a@0 as a, a@0 + b@1 as annotated_data_finite2.a + annotated_data_finite2.b]
 03)----RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
-04)------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a, b], output_ordering=[a@0 ASC NULLS LAST, b@1 ASC NULLS LAST], has_header=true
+04)------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a, b], output_ordering=[a@0 ASC NULLS LAST, b@1 ASC NULLS LAST], file_type=csv, has_header=true
 
 # since query below doesn't computation
 # inside projection expr, increasing partitions
@@ -1422,7 +1422,7 @@ logical_plan
 03)----TableScan: annotated_data_finite2 projection=[a, b]
 physical_plan
 01)ProjectionExec: expr=[a@0 as a, b@1 as b, 2 as Int64(2)]
-02)--CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a, b], output_ordering=[a@0 ASC NULLS LAST, b@1 ASC NULLS LAST], has_header=true
+02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a, b], output_ordering=[a@0 ASC NULLS LAST, b@1 ASC NULLS LAST], file_type=csv, has_header=true
 
 # source is ordered by a,b,c
 # when filter result is constant for column a
@@ -1443,7 +1443,7 @@ physical_plan
 02)--CoalesceBatchesExec: target_batch_size=8192
 03)----FilterExec: a@1 = 0
 04)------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
-05)--------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a0, a, b, c, d], output_ordering=[a@1 ASC NULLS LAST, b@2 ASC NULLS LAST, c@3 ASC NULLS LAST], has_header=true
+05)--------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a0, a, b, c, d], output_ordering=[a@1 ASC NULLS LAST, b@2 ASC NULLS LAST, c@3 ASC NULLS LAST], file_type=csv, has_header=true
 
 # source is ordered by a,b,c
 # when filter result is constant for column a and b
@@ -1464,7 +1464,7 @@ physical_plan
 02)--CoalesceBatchesExec: target_batch_size=8192
 03)----FilterExec: a@1 = 0 AND b@2 = 0
 04)------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
-05)--------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a0, a, b, c, d], output_ordering=[a@1 ASC NULLS LAST, b@2 ASC NULLS LAST, c@3 ASC NULLS LAST], has_header=true
+05)--------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a0, a, b, c, d], output_ordering=[a@1 ASC NULLS LAST, b@2 ASC NULLS LAST, c@3 ASC NULLS LAST], file_type=csv, has_header=true
 
 # source is ordered by a,b,c
 # when filter result is constant for column a and b
@@ -1485,7 +1485,7 @@ physical_plan
 02)--CoalesceBatchesExec: target_batch_size=8192
 03)----FilterExec: a@1 = 0 AND b@2 = 0
 04)------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
-05)--------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a0, a, b, c, d], output_ordering=[a@1 ASC NULLS LAST, b@2 ASC NULLS LAST, c@3 ASC NULLS LAST], has_header=true
+05)--------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a0, a, b, c, d], output_ordering=[a@1 ASC NULLS LAST, b@2 ASC NULLS LAST, c@3 ASC NULLS LAST], file_type=csv, has_header=true
 
 # source is ordered by a,b,c
 # when filter result is constant for column a and b
@@ -1506,7 +1506,7 @@ physical_plan
 02)--CoalesceBatchesExec: target_batch_size=8192
 03)----FilterExec: a@1 = 0 AND b@2 = 0
 04)------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
-05)--------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a0, a, b, c, d], output_ordering=[a@1 ASC NULLS LAST, b@2 ASC NULLS LAST, c@3 ASC NULLS LAST], has_header=true
+05)--------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a0, a, b, c, d], output_ordering=[a@1 ASC NULLS LAST, b@2 ASC NULLS LAST, c@3 ASC NULLS LAST], file_type=csv, has_header=true
 
 # source is ordered by a,b,c
 # when filter result is when filter contains or
@@ -1528,7 +1528,7 @@ physical_plan
 03)----CoalesceBatchesExec: target_batch_size=8192
 04)------FilterExec: a@1 = 0 OR b@2 = 0
 05)--------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
-06)----------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a0, a, b, c, d], output_ordering=[a@1 ASC NULLS LAST, b@2 ASC NULLS LAST, c@3 ASC NULLS LAST], has_header=true
+06)----------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a0, a, b, c, d], output_ordering=[a@1 ASC NULLS LAST, b@2 ASC NULLS LAST, c@3 ASC NULLS LAST], file_type=csv, has_header=true
 
 # When ordering lost during projection, we shouldn't keep the SortExec.
 # in the final physical plan.
@@ -1554,7 +1554,7 @@ physical_plan
 05)--------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
 06)----------ProjectionExec: expr=[c2@0 as c2]
 07)------------SortExec: TopK(fetch=4), expr=[c1@1 ASC NULLS LAST, c2@0 ASC NULLS LAST], preserve_partitioning=[false]
-08)--------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c2, c1], has_header=true
+08)--------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c2, c1], file_type=csv, has_header=true
 
 # FilterExec can track equality of non-column expressions.
 # plan below shouldn't have a SortExec because given column 'a' is ordered.
@@ -1574,7 +1574,7 @@ physical_plan
 02)--CoalesceBatchesExec: target_batch_size=8192
 03)----FilterExec: CAST(round(CAST(b@2 AS Float64)) AS Int32) = a@1
 04)------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
-05)--------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a0, a, b, c, d], output_ordering=[a@1 ASC NULLS LAST, b@2 ASC NULLS LAST, c@3 ASC NULLS LAST], has_header=true
+05)--------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a0, a, b, c, d], output_ordering=[a@1 ASC NULLS LAST, b@2 ASC NULLS LAST, c@3 ASC NULLS LAST], file_type=csv, has_header=true
 
 
 statement ok
@@ -1602,7 +1602,7 @@ logical_plan
 physical_plan
 01)ProjectionExec: expr=[__common_expr_1@0 as t.x / Int64(2), __common_expr_1@0 + 1 as t.x / Int64(2) + Int64(1)]
 02)--ProjectionExec: expr=[x@0 / 2 as __common_expr_1]
-03)----MemoryExec: partitions=1, partition_sizes=[1]
+03)----DataSourceExec: partitions=1, partition_sizes=[1]
 
 query II
 SELECT x/2, x/2+1 FROM t;
@@ -1620,7 +1620,7 @@ logical_plan
 physical_plan
 01)ProjectionExec: expr=[__common_expr_1@0 as abs(t.x), __common_expr_1@0 + abs(y@1) as abs(t.x) + abs(t.y)]
 02)--ProjectionExec: expr=[abs(x@0) as __common_expr_1, y@1 as y]
-03)----MemoryExec: partitions=1, partition_sizes=[1]
+03)----DataSourceExec: partitions=1, partition_sizes=[1]
 
 query II
 SELECT abs(x), abs(x) + abs(y) FROM t;
@@ -1658,7 +1658,7 @@ logical_plan
 02)--TableScan: t projection=[x, y]
 physical_plan
 01)ProjectionExec: expr=[coalesce(1, CAST(y@1 / x@0 AS Int64)) as coalesce(Int64(1),t.y / t.x), coalesce(2, CAST(y@1 / x@0 AS Int64)) as coalesce(Int64(2),t.y / t.x)]
-02)--MemoryExec: partitions=1, partition_sizes=[1]
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
 
 query TT
 EXPLAIN SELECT y > 0 and 1 / y < 1, x > 0 and y > 0 and 1 / y < 1 / x from t;
@@ -1670,7 +1670,7 @@ logical_plan
 physical_plan
 01)ProjectionExec: expr=[__common_expr_1@0 AND 1 / CAST(y@2 AS Int64) < 1 as t.y > Int64(0) AND Int64(1) / t.y < Int64(1), x@1 > 0 AND __common_expr_1@0 AND 1 / CAST(y@2 AS Int64) < 1 / CAST(x@1 AS Int64) as t.x > Int64(0) AND t.y > Int64(0) AND Int64(1) / t.y < Int64(1) / t.x]
 02)--ProjectionExec: expr=[y@1 > 0 as __common_expr_1, x@0 as x, y@1 as y]
-03)----MemoryExec: partitions=1, partition_sizes=[1]
+03)----DataSourceExec: partitions=1, partition_sizes=[1]
 
 query TT
 EXPLAIN SELECT y = 0 or 1 / y < 1, x = 0 or y = 0 or 1 / y < 1 / x from t;
@@ -1682,7 +1682,7 @@ logical_plan
 physical_plan
 01)ProjectionExec: expr=[__common_expr_1@0 OR 1 / CAST(y@2 AS Int64) < 1 as t.y = Int64(0) OR Int64(1) / t.y < Int64(1), x@1 = 0 OR __common_expr_1@0 OR 1 / CAST(y@2 AS Int64) < 1 / CAST(x@1 AS Int64) as t.x = Int64(0) OR t.y = Int64(0) OR Int64(1) / t.y < Int64(1) / t.x]
 02)--ProjectionExec: expr=[y@1 = 0 as __common_expr_1, x@0 as x, y@1 as y]
-03)----MemoryExec: partitions=1, partition_sizes=[1]
+03)----DataSourceExec: partitions=1, partition_sizes=[1]
 
 # due to the reason describe in https://github.com/apache/datafusion/issues/8927,
 # the following queries will fail

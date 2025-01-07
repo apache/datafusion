@@ -15,7 +15,12 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::str;
 use std::sync::Arc;
+
+use crate::fuzz_cases::aggregation_fuzzer::{
+    AggregationFuzzerBuilder, ColumnDescr, DatasetGeneratorConfig, QueryBuilder,
+};
 
 use arrow::array::{Array, ArrayRef, AsArray, Int64Array};
 use arrow::compute::{concat_batches, SortOptions};
@@ -33,24 +38,21 @@ use datafusion::physical_expr::aggregate::AggregateExprBuilder;
 use datafusion::physical_plan::aggregates::{
     AggregateExec, AggregateMode, PhysicalGroupBy,
 };
-use datafusion::physical_plan::memory::MemoryExec;
 use datafusion::physical_plan::{collect, displayable, ExecutionPlan};
 use datafusion::prelude::{DataFrame, SessionConfig, SessionContext};
 use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion, TreeNodeVisitor};
+use datafusion_common::HashMap;
 use datafusion_functions_aggregate::sum::sum_udaf;
 use datafusion_physical_expr::expressions::col;
 use datafusion_physical_expr::PhysicalSortExpr;
+use datafusion_physical_expr_common::sort_expr::LexOrdering;
+use datafusion_physical_plan::memory::MemorySourceConfig;
+use datafusion_physical_plan::source::DataSourceExec;
 use datafusion_physical_plan::InputOrderMode;
 use test_utils::{add_empty_batches, StringBatchGenerator};
 
-use crate::fuzz_cases::aggregation_fuzzer::{
-    AggregationFuzzerBuilder, ColumnDescr, DatasetGeneratorConfig, QueryBuilder,
-};
-use datafusion_common::HashMap;
-use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use rand::rngs::StdRng;
 use rand::{thread_rng, Rng, SeedableRng};
-use std::str;
 use tokio::task::JoinSet;
 
 // ========================================================================
@@ -301,16 +303,19 @@ async fn run_aggregate_test(input1: Vec<RecordBatch>, group_by_columns: Vec<&str
     }
 
     let concat_input_record = concat_batches(&schema, &input1).unwrap();
-    let usual_source = Arc::new(
-        MemoryExec::try_new(&[vec![concat_input_record]], schema.clone(), None).unwrap(),
-    );
 
-    let running_source = Arc::new(
-        MemoryExec::try_new(&[input1.clone()], schema.clone(), None)
+    let source = Arc::new(
+        MemorySourceConfig::try_new(&[vec![concat_input_record]], schema.clone(), None)
+            .unwrap(),
+    );
+    let usual_source = Arc::new(DataSourceExec::new(source));
+
+    let running_source = Arc::new(DataSourceExec::new(Arc::new(
+        MemorySourceConfig::try_new(&[input1.clone()], schema.clone(), None)
             .unwrap()
             .try_with_sort_information(vec![sort_keys])
             .unwrap(),
-    );
+    )));
 
     let aggregate_expr =
         vec![

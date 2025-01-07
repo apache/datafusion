@@ -24,13 +24,14 @@ use arrow::{
 };
 use datafusion::execution::runtime_env::RuntimeEnvBuilder;
 use datafusion::physical_plan::expressions::PhysicalSortExpr;
-use datafusion::physical_plan::memory::MemoryExec;
 use datafusion::physical_plan::sorts::sort::SortExec;
 use datafusion::physical_plan::{collect, ExecutionPlan};
 use datafusion::prelude::{SessionConfig, SessionContext};
 use datafusion_execution::memory_pool::GreedyMemoryPool;
 use datafusion_physical_expr::expressions::col;
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
+use datafusion_physical_plan::memory::MemorySourceConfig;
+use datafusion_physical_plan::source::DataSourceExec;
 use rand::Rng;
 use std::sync::Arc;
 use test_utils::{batches_to_vec, partitions_to_sorted_vec};
@@ -123,7 +124,8 @@ impl SortTest {
             },
         }]);
 
-        let exec = MemoryExec::try_new(&input, schema, None).unwrap();
+        let config = MemorySourceConfig::try_new(&input, schema, None).unwrap();
+        let exec = DataSourceExec::new(Arc::new(config));
         let sort = Arc::new(SortExec::new(sort, Arc::new(exec)));
 
         let session_config = SessionConfig::new();

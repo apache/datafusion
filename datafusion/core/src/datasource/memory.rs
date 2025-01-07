@@ -27,7 +27,6 @@ use crate::error::Result;
 use crate::execution::context::SessionState;
 use crate::logical_expr::Expr;
 use crate::physical_plan::insert::{DataSink, DataSinkExec};
-use crate::physical_plan::memory::MemoryExec;
 use crate::physical_plan::repartition::RepartitionExec;
 use crate::physical_plan::{
     common, DisplayAs, DisplayFormatType, ExecutionPlan, ExecutionPlanProperties,
@@ -42,7 +41,9 @@ use datafusion_common::{not_impl_err, plan_err, Constraints, DFSchema, SchemaExt
 use datafusion_execution::TaskContext;
 use datafusion_expr::dml::InsertOp;
 use datafusion_expr::SortExpr;
+use datafusion_physical_plan::memory::MemorySourceConfig;
 use datafusion_physical_plan::metrics::MetricsSet;
+use datafusion_physical_plan::source::DataSourceExec;
 
 use async_trait::async_trait;
 use futures::StreamExt;
@@ -162,7 +163,12 @@ impl MemTable {
             }
         }
 
-        let exec = MemoryExec::try_new(&data, Arc::clone(&schema), None)?;
+        let source = Arc::new(MemorySourceConfig::try_new(
+            &data,
+            Arc::clone(&schema),
+            None,
+        )?);
+        let exec = DataSourceExec::new(source);
 
         if let Some(num_partitions) = output_partitions {
             let exec = RepartitionExec::try_new(
@@ -220,11 +226,11 @@ impl TableProvider for MemTable {
             partitions.push(inner_vec.clone())
         }
 
-        let mut exec =
-            MemoryExec::try_new(&partitions, self.schema(), projection.cloned())?;
+        let mut source =
+            MemorySourceConfig::try_new(&partitions, self.schema(), projection.cloned())?;
 
         let show_sizes = state.config_options().explain.show_sizes;
-        exec = exec.with_show_sizes(show_sizes);
+        source = source.with_show_sizes(show_sizes);
 
         // add sort information if present
         let sort_order = self.sort_order.lock();
@@ -241,10 +247,10 @@ impl TableProvider for MemTable {
                     )
                 })
                 .collect::<Result<Vec<_>>>()?;
-            exec = exec.try_with_sort_information(file_sort_order)?;
+            source = source.try_with_sort_information(file_sort_order)?;
         }
 
-        Ok(Arc::new(exec))
+        Ok(Arc::new(DataSourceExec::new(Arc::new(source))))
     }
 
     /// Returns an ExecutionPlan that inserts the execution results of a given [`ExecutionPlan`] into this [`MemTable`].

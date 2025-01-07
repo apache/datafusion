@@ -24,16 +24,18 @@ use arrow::array::{ArrayRef, Int64Array, Int8Array, StringArray};
 use arrow::datatypes::{Field, Schema, SchemaBuilder};
 use arrow::record_batch::RecordBatch;
 use datafusion::assert_batches_sorted_eq;
+use datafusion::datasource::data_source::FileSourceConfig;
 use datafusion::datasource::file_format::parquet::fetch_parquet_metadata;
 use datafusion::datasource::listing::PartitionedFile;
 use datafusion::datasource::object_store::ObjectStoreUrl;
 use datafusion::datasource::physical_plan::{
-    FileMeta, FileScanConfig, ParquetExec, ParquetFileMetrics, ParquetFileReaderFactory,
+    FileMeta, FileScanConfig, ParquetConfig, ParquetFileMetrics, ParquetFileReaderFactory,
 };
 use datafusion::physical_plan::collect;
 use datafusion::physical_plan::metrics::ExecutionPlanMetricsSet;
 use datafusion::prelude::SessionContext;
 use datafusion_common::Result;
+use datafusion_physical_plan::source::DataSourceExec;
 
 use bytes::Bytes;
 use futures::future::BoxFuture;
@@ -75,19 +77,22 @@ async fn route_data_access_ops_to_parquet_file_reader_factory() {
         })
         .collect();
 
-    // prepare the scan
-    let parquet_exec = ParquetExec::builder(
-        FileScanConfig::new(
-            // just any url that doesn't point to in memory object store
-            ObjectStoreUrl::local_filesystem(),
-            file_schema,
-        )
-        .with_file_group(file_group),
+    let base_config = FileScanConfig::new(
+        // just any url that doesn't point to in memory object store
+        ObjectStoreUrl::local_filesystem(),
+        file_schema,
     )
-    .build()
-    .with_parquet_file_reader_factory(Arc::new(InMemoryParquetFileReaderFactory(
-        Arc::clone(&in_memory_object_store),
-    )));
+    .with_file_group(file_group);
+    let source_config = Arc::new(
+        ParquetConfig::default()
+            // prepare the scan
+            .with_parquet_file_reader_factory(Arc::new(
+                InMemoryParquetFileReaderFactory(Arc::clone(&in_memory_object_store)),
+            )),
+    );
+
+    let parquet_exec =
+        DataSourceExec::new(Arc::new(FileSourceConfig::new(base_config, source_config)));
 
     let session_ctx = SessionContext::new();
     let task_ctx = session_ctx.task_ctx();

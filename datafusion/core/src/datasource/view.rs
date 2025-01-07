@@ -503,11 +503,12 @@ mod tests {
             .select_columns(&["bool_col", "int_col"])?;
 
         let plan = df.explain(false, false)?.collect().await?;
-        // Limit is included in ParquetExec
+        // Limit is included in DataSourceExec
         let formatted = arrow::util::pretty::pretty_format_batches(&plan)
             .unwrap()
             .to_string();
-        assert!(formatted.contains("ParquetExec: "));
+        assert!(formatted.contains("DataSourceExec: "));
+        assert!(formatted.contains("file_type=parquet"));
         assert!(formatted.contains("projection=[bool_col, int_col], limit=10"));
         Ok(())
     }

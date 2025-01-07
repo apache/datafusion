@@ -26,12 +26,13 @@ use std::io::{BufReader, BufWriter};
 use std::path::Path;
 use std::sync::Arc;
 
+use crate::datasource::data_source::FileSourceConfig;
 use crate::datasource::file_format::csv::CsvFormat;
 use crate::datasource::file_format::file_compression_type::FileCompressionType;
 use crate::datasource::file_format::FileFormat;
 use crate::datasource::listing::PartitionedFile;
 use crate::datasource::object_store::ObjectStoreUrl;
-use crate::datasource::physical_plan::{CsvExec, FileScanConfig};
+use crate::datasource::physical_plan::{CsvConfig, FileScanConfig};
 use crate::datasource::{MemTable, TableProvider};
 use crate::error::Result;
 use crate::logical_expr::LogicalPlan;
@@ -46,6 +47,7 @@ use datafusion_common::{DataFusionError, Statistics};
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_physical_expr::{EquivalenceProperties, Partitioning, PhysicalSortExpr};
 use datafusion_physical_plan::execution_plan::{Boundedness, EmissionType};
+use datafusion_physical_plan::source::DataSourceExec;
 use datafusion_physical_plan::streaming::{PartitionStream, StreamingTableExec};
 use datafusion_physical_plan::{DisplayAs, DisplayFormatType, PlanProperties};
 
@@ -79,8 +81,11 @@ pub fn create_table_dual() -> Arc<dyn TableProvider> {
     Arc::new(provider)
 }
 
-/// Returns a [`CsvExec`] that scans "aggregate_test_100.csv" with `partitions` partitions
-pub fn scan_partitioned_csv(partitions: usize, work_dir: &Path) -> Result<Arc<CsvExec>> {
+/// Returns a [`DataSourceExec`] that scans "aggregate_test_100.csv" with `partitions` partitions
+pub fn scan_partitioned_csv(
+    partitions: usize,
+    work_dir: &Path,
+) -> Result<Arc<DataSourceExec>> {
     let schema = aggr_test_schema();
     let filename = "aggregate_test_100.csv";
     let path = format!("{}/csv", arrow_test_data());
@@ -92,18 +97,10 @@ pub fn scan_partitioned_csv(partitions: usize, work_dir: &Path) -> Result<Arc<Cs
         FileCompressionType::UNCOMPRESSED,
         work_dir,
     )?;
-    let config = partitioned_csv_config(schema, file_groups);
-    Ok(Arc::new(
-        CsvExec::builder(config)
-            .with_has_header(true)
-            .with_delimeter(b',')
-            .with_quote(b'"')
-            .with_escape(None)
-            .with_comment(None)
-            .with_newlines_in_values(false)
-            .with_file_compression_type(FileCompressionType::UNCOMPRESSED)
-            .build(),
-    ))
+    let config = partitioned_csv_config(schema, file_groups)
+        .with_file_compression_type(FileCompressionType::UNCOMPRESSED);
+    let source_config = Arc::new(CsvConfig::new(true, b'"', b'"'));
+    Ok(FileSourceConfig::new_exec(config, source_config))
 }
 
 /// Auto finish the wrapped BzEncoder on drop
@@ -294,30 +291,19 @@ fn make_decimal() -> RecordBatch {
 }
 
 /// Created a sorted Csv exec
-pub fn csv_exec_sorted(
+pub fn data_source_exec_csv_sorted(
     schema: &SchemaRef,
     sort_exprs: impl IntoIterator<Item = PhysicalSortExpr>,
 ) -> Arc<dyn ExecutionPlan> {
     let sort_exprs = sort_exprs.into_iter().collect();
-
-    Arc::new(
-        CsvExec::builder(
-            FileScanConfig::new(
-                ObjectStoreUrl::parse("test:///").unwrap(),
-                schema.clone(),
-            )
+    let config =
+        FileScanConfig::new(ObjectStoreUrl::parse("test:///").unwrap(), schema.clone())
             .with_file(PartitionedFile::new("x".to_string(), 100))
-            .with_output_ordering(vec![sort_exprs]),
-        )
-        .with_has_header(false)
-        .with_delimeter(0)
-        .with_quote(0)
-        .with_escape(None)
-        .with_comment(None)
-        .with_newlines_in_values(false)
-        .with_file_compression_type(FileCompressionType::UNCOMPRESSED)
-        .build(),
-    )
+            .with_output_ordering(vec![sort_exprs])
+            .with_file_compression_type(FileCompressionType::UNCOMPRESSED)
+            .with_newlines_in_values(false);
+    let source_config = Arc::new(CsvConfig::new(false, 0, 0));
+    FileSourceConfig::new_exec(config, source_config)
 }
 
 // construct a stream partition for test purposes
@@ -358,30 +344,18 @@ pub fn stream_exec_ordered(
 }
 
 /// Create a csv exec for tests
-pub fn csv_exec_ordered(
+pub fn data_source_exec_csv_ordered(
     schema: &SchemaRef,
     sort_exprs: impl IntoIterator<Item = PhysicalSortExpr>,
 ) -> Arc<dyn ExecutionPlan> {
     let sort_exprs = sort_exprs.into_iter().collect();
 
-    Arc::new(
-        CsvExec::builder(
-            FileScanConfig::new(
-                ObjectStoreUrl::parse("test:///").unwrap(),
-                schema.clone(),
-            )
+    let config =
+        FileScanConfig::new(ObjectStoreUrl::parse("test:///").unwrap(), schema.clone())
             .with_file(PartitionedFile::new("file_path".to_string(), 100))
-            .with_output_ordering(vec![sort_exprs]),
-        )
-        .with_has_header(true)
-        .with_delimeter(0)
-        .with_quote(b'"')
-        .with_escape(None)
-        .with_comment(None)
-        .with_newlines_in_values(false)
-        .with_file_compression_type(FileCompressionType::UNCOMPRESSED)
-        .build(),
-    )
+            .with_output_ordering(vec![sort_exprs]);
+    let source_config = Arc::new(CsvConfig::new(true, 0, b'"'));
+    FileSourceConfig::new_exec(config, source_config)
 }
 
 /// A mock execution plan that simply returns the provided statistics

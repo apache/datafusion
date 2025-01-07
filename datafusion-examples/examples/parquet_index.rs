@@ -24,8 +24,9 @@ use arrow::util::pretty::pretty_format_batches;
 use arrow_schema::SchemaRef;
 use async_trait::async_trait;
 use datafusion::catalog::Session;
+use datafusion::datasource::data_source::FileSourceConfig;
 use datafusion::datasource::listing::PartitionedFile;
-use datafusion::datasource::physical_plan::{FileScanConfig, ParquetExec};
+use datafusion::datasource::physical_plan::{FileScanConfig, ParquetConfig};
 use datafusion::datasource::TableProvider;
 use datafusion::execution::object_store::ObjectStoreUrl;
 use datafusion::parquet::arrow::arrow_reader::statistics::StatisticsConverter;
@@ -33,8 +34,10 @@ use datafusion::parquet::arrow::{
     arrow_reader::ParquetRecordBatchReaderBuilder, ArrowWriter,
 };
 use datafusion::physical_optimizer::pruning::{PruningPredicate, PruningStatistics};
+use datafusion::physical_plan::source::DataSourceExec;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::prelude::*;
+use datafusion_common::config::TableParquetOptions;
 use datafusion_common::{
     internal_datafusion_err, DFSchema, DataFusionError, Result, ScalarValue,
 };
@@ -245,7 +248,7 @@ impl TableProvider for IndexTableProvider {
             .with_projection(projection.cloned())
             .with_limit(limit);
 
-        // Transform to the format needed to pass to ParquetExec
+        // Transform to the format needed to pass to DataSourceExec
         // Create one file group per file (default to scanning them all in parallel)
         for (file_name, file_size) in files {
             let path = self.dir.join(file_name);
@@ -255,11 +258,14 @@ impl TableProvider for IndexTableProvider {
                 file_size,
             ));
         }
-        let exec = ParquetExec::builder(file_scan_config)
-            .with_predicate(predicate)
-            .build_arc();
-
-        Ok(exec)
+        let source_config = Arc::new(ParquetConfig::new(
+            Arc::clone(&file_scan_config.file_schema),
+            Some(predicate),
+            None,
+            TableParquetOptions::default(),
+        ));
+        let source = Arc::new(FileSourceConfig::new(file_scan_config, source_config));
+        Ok(Arc::new(DataSourceExec::new(source)))
     }
 
     /// Tell DataFusion to push filters down to the scan method

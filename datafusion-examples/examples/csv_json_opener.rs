@@ -48,19 +48,13 @@ async fn csv_opener() -> Result<()> {
     let object_store = Arc::new(LocalFileSystem::new());
     let schema = aggr_test_schema();
 
-    let config = CsvConfig::new(
-        8192,
-        schema.clone(),
-        Some(vec![12, 0]),
-        true,
-        b',',
-        b'"',
-        None,
-        object_store,
-        Some(b'#'),
-    );
+    let config = CsvConfig::new(true, b',', b'"').with_terminator(Some(b'#'));
 
-    let opener = CsvOpener::new(Arc::new(config), FileCompressionType::UNCOMPRESSED);
+    let opener = Arc::new(CsvOpener::new(
+        Arc::new(config),
+        FileCompressionType::UNCOMPRESSED,
+        object_store,
+    ));
 
     let testdata = datafusion::test_util::arrow_test_data();
     let path = format!("{testdata}/csv/aggregate_test_100.csv");
@@ -125,8 +119,12 @@ async fn json_opener() -> Result<()> {
         .with_limit(Some(5))
         .with_file(PartitionedFile::new(path.to_string(), 10));
 
-    let mut stream =
-        FileStream::new(&scan_config, 0, opener, &ExecutionPlanMetricsSet::new())?;
+    let mut stream = FileStream::new(
+        &scan_config,
+        0,
+        Arc::new(opener),
+        &ExecutionPlanMetricsSet::new(),
+    )?;
     let mut result = vec![];
     while let Some(batch) = stream.next().await.transpose()? {
         result.push(batch);

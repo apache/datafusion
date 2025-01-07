@@ -17,12 +17,13 @@
 
 use crate::parquet::Unit::Page;
 use crate::parquet::{ContextWithParquet, Scenario};
+use std::sync::Arc;
 
 use datafusion::datasource::file_format::parquet::ParquetFormat;
 use datafusion::datasource::file_format::FileFormat;
 use datafusion::datasource::listing::PartitionedFile;
 use datafusion::datasource::object_store::ObjectStoreUrl;
-use datafusion::datasource::physical_plan::{FileScanConfig, ParquetExec};
+use datafusion::datasource::physical_plan::{FileScanConfig, ParquetConfig};
 use datafusion::execution::context::SessionState;
 use datafusion::physical_plan::metrics::MetricValue;
 use datafusion::physical_plan::ExecutionPlan;
@@ -32,11 +33,14 @@ use datafusion_expr::execution_props::ExecutionProps;
 use datafusion_expr::{col, lit, Expr};
 use datafusion_physical_expr::create_physical_expr;
 
+use datafusion::datasource::data_source::FileSourceConfig;
+use datafusion_common::config::TableParquetOptions;
+use datafusion_physical_plan::source::DataSourceExec;
 use futures::StreamExt;
 use object_store::path::Path;
 use object_store::ObjectMeta;
 
-async fn get_parquet_exec(state: &SessionState, filter: Expr) -> ParquetExec {
+async fn get_parquet_exec(state: &SessionState, filter: Expr) -> DataSourceExec {
     let object_store_url = ObjectStoreUrl::local_filesystem();
     let store = state.runtime_env().object_store(&object_store_url).unwrap();
 
@@ -71,12 +75,19 @@ async fn get_parquet_exec(state: &SessionState, filter: Expr) -> ParquetExec {
     let execution_props = ExecutionProps::new();
     let predicate = create_physical_expr(&filter, &df_schema, &execution_props).unwrap();
 
-    ParquetExec::builder(
-        FileScanConfig::new(object_store_url, schema).with_file(partitioned_file),
-    )
-    .with_predicate(predicate)
-    .build()
-    .with_enable_page_index(true)
+    let base_config =
+        FileScanConfig::new(object_store_url, schema).with_file(partitioned_file);
+    let source_config = Arc::new(
+        ParquetConfig::new(
+            Arc::clone(&base_config.file_schema),
+            Some(predicate),
+            None,
+            TableParquetOptions::default(),
+        )
+        .with_enable_page_index(true),
+    );
+
+    DataSourceExec::new(Arc::new(FileSourceConfig::new(base_config, source_config)))
 }
 
 #[tokio::test]

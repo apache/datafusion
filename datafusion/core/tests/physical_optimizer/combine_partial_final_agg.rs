@@ -18,8 +18,9 @@
 use std::sync::Arc;
 
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+use datafusion::datasource::data_source::FileSourceConfig;
 use datafusion::datasource::listing::PartitionedFile;
-use datafusion::datasource::physical_plan::{FileScanConfig, ParquetExec};
+use datafusion::datasource::physical_plan::{FileScanConfig, ParquetConfig};
 use datafusion::physical_optimizer::combine_partial_final_agg::CombinePartialFinalAggregate;
 use datafusion_common::config::ConfigOptions;
 use datafusion_execution::object_store::ObjectStoreUrl;
@@ -35,6 +36,7 @@ use datafusion_physical_plan::aggregates::{
 };
 use datafusion_physical_plan::displayable;
 use datafusion_physical_plan::repartition::RepartitionExec;
+use datafusion_physical_plan::source::DataSourceExec;
 use datafusion_physical_plan::ExecutionPlan;
 
 /// Runs the CombinePartialFinalAggregate optimizer and asserts the plan against the expected
@@ -73,12 +75,13 @@ fn schema() -> SchemaRef {
     ]))
 }
 
-fn parquet_exec(schema: &SchemaRef) -> Arc<ParquetExec> {
-    ParquetExec::builder(
+fn parquet_exec(schema: &SchemaRef) -> Arc<DataSourceExec> {
+    let base_config =
         FileScanConfig::new(ObjectStoreUrl::parse("test:///").unwrap(), schema.clone())
-            .with_file(PartitionedFile::new("x".to_string(), 100)),
-    )
-    .build_arc()
+            .with_file(PartitionedFile::new("x".to_string(), 100));
+    let source_config = Arc::new(ParquetConfig::default());
+
+    FileSourceConfig::new_exec(base_config, source_config)
 }
 
 fn partial_aggregate_exec(
@@ -159,7 +162,7 @@ fn aggregations_not_combined() -> datafusion_common::Result<()> {
         "AggregateExec: mode=Final, gby=[], aggr=[COUNT(1)]",
         "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
         "AggregateExec: mode=Partial, gby=[], aggr=[COUNT(1)]",
-        "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c]",
+        "DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c], file_type=parquet",
     ];
     assert_optimized!(expected, plan);
 
@@ -179,7 +182,7 @@ fn aggregations_not_combined() -> datafusion_common::Result<()> {
     let expected = &[
         "AggregateExec: mode=Final, gby=[], aggr=[COUNT(2)]",
         "AggregateExec: mode=Partial, gby=[], aggr=[COUNT(1)]",
-        "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c]",
+        "DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c], file_type=parquet",
     ];
 
     assert_optimized!(expected, plan);
@@ -204,7 +207,7 @@ fn aggregations_combined() -> datafusion_common::Result<()> {
     // should combine the Partial/Final AggregateExecs to the Single AggregateExec
     let expected = &[
         "AggregateExec: mode=Single, gby=[], aggr=[COUNT(1)]",
-        "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c]",
+        "DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c], file_type=parquet",
     ];
 
     assert_optimized!(expected, plan);
@@ -240,7 +243,7 @@ fn aggregations_with_group_combined() -> datafusion_common::Result<()> {
     // should combine the Partial/Final AggregateExecs to the Single AggregateExec
     let expected = &[
         "AggregateExec: mode=Single, gby=[c@2 as c], aggr=[Sum(b)]",
-        "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c]",
+        "DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c], file_type=parquet",
     ];
 
     assert_optimized!(expected, plan);
@@ -284,7 +287,7 @@ fn aggregations_with_limit_combined() -> datafusion_common::Result<()> {
     // with the final limit preserved
     let expected = &[
         "AggregateExec: mode=Single, gby=[c@2 as c], aggr=[], lim=[5]",
-        "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c]",
+        "DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c], file_type=parquet",
     ];
 
     assert_optimized!(expected, plan);

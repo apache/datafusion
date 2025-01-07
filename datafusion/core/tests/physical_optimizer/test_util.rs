@@ -20,23 +20,23 @@
 use std::sync::Arc;
 
 use arrow_schema::{DataType, Field, Schema, SchemaRef};
-use datafusion::datasource::{
-    listing::PartitionedFile,
-    physical_plan::{FileScanConfig, ParquetExec},
-};
+use datafusion::datasource::data_source::FileSourceConfig;
+use datafusion::datasource::physical_plan::ParquetConfig;
+use datafusion::datasource::{listing::PartitionedFile, physical_plan::FileScanConfig};
 use datafusion_execution::object_store::ObjectStoreUrl;
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
+use datafusion_physical_plan::source::DataSourceExec;
 
 /// create a single parquet file that is sorted
 pub(crate) fn parquet_exec_with_sort(
     output_ordering: Vec<LexOrdering>,
-) -> Arc<ParquetExec> {
-    ParquetExec::builder(
+) -> Arc<DataSourceExec> {
+    let base_config =
         FileScanConfig::new(ObjectStoreUrl::parse("test:///").unwrap(), schema())
             .with_file(PartitionedFile::new("x".to_string(), 100))
-            .with_output_ordering(output_ordering),
-    )
-    .build_arc()
+            .with_output_ordering(output_ordering);
+    let source_config = Arc::new(ParquetConfig::default());
+    FileSourceConfig::new_exec(base_config, source_config)
 }
 
 pub(crate) fn schema() -> SchemaRef {

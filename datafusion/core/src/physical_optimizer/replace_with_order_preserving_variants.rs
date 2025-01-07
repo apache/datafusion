@@ -285,9 +285,10 @@ pub(crate) fn replace_with_order_preserving_variants(
 mod tests {
     use super::*;
 
+    use crate::datasource::data_source::FileSourceConfig;
     use crate::datasource::file_format::file_compression_type::FileCompressionType;
     use crate::datasource::listing::PartitionedFile;
-    use crate::datasource::physical_plan::{CsvExec, FileScanConfig};
+    use crate::datasource::physical_plan::{CsvConfig, FileScanConfig};
     use crate::physical_optimizer::test_utils::check_integrity;
     use crate::physical_plan::coalesce_batches::CoalesceBatchesExec;
     use crate::physical_plan::filter::FilterExec;
@@ -426,7 +427,7 @@ mod tests {
         let source = if source_unbounded {
             stream_exec_ordered(&schema, sort_exprs)
         } else {
-            csv_exec_sorted(&schema, sort_exprs)
+            data_source_exec_csv_sorted(&schema, sort_exprs)
         };
         let repartition = repartition_exec_hash(repartition_exec_round_robin(source));
         let sort = sort_exec(vec![sort_expr("a", &schema)], repartition, true);
@@ -447,7 +448,7 @@ mod tests {
             "  SortExec: expr=[a@0 ASC NULLS LAST], preserve_partitioning=[true]",
             "    RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8",
             "      RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
-            "        CsvExec: file_groups={1 group: [[file_path]]}, projection=[a, c, d], output_ordering=[a@0 ASC NULLS LAST], has_header=true",
+            "        DataSourceExec: file_groups={1 group: [[file_path]]}, projection=[a, c, d], output_ordering=[a@0 ASC NULLS LAST], file_type=csv, has_header=true",
         ];
 
         // Expected unbounded result (same for with and without flag)
@@ -464,13 +465,13 @@ mod tests {
             "  SortExec: expr=[a@0 ASC NULLS LAST], preserve_partitioning=[true]",
             "    RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8",
             "      RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
-            "        CsvExec: file_groups={1 group: [[file_path]]}, projection=[a, c, d], output_ordering=[a@0 ASC NULLS LAST], has_header=true",
+            "        DataSourceExec: file_groups={1 group: [[file_path]]}, projection=[a, c, d], output_ordering=[a@0 ASC NULLS LAST], file_type=csv, has_header=true",
         ];
         let expected_optimized_bounded_sort_preserve = [
             "SortPreservingMergeExec: [a@0 ASC NULLS LAST]",
             "  RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8, preserve_order=true, sort_exprs=a@0 ASC NULLS LAST",
             "    RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
-            "      CsvExec: file_groups={1 group: [[file_path]]}, projection=[a, c, d], output_ordering=[a@0 ASC NULLS LAST], has_header=true",
+            "      DataSourceExec: file_groups={1 group: [[file_path]]}, projection=[a, c, d], output_ordering=[a@0 ASC NULLS LAST], file_type=csv, has_header=true",
         ];
         assert_optimized_in_all_boundedness_situations!(
             expected_input_unbounded,
@@ -494,7 +495,7 @@ mod tests {
         let source = if source_unbounded {
             stream_exec_ordered(&schema, sort_exprs)
         } else {
-            csv_exec_sorted(&schema, sort_exprs)
+            data_source_exec_csv_sorted(&schema, sort_exprs)
         };
         let repartition_rr = repartition_exec_round_robin(source);
         let repartition_hash = repartition_exec_hash(repartition_rr);
@@ -538,7 +539,7 @@ mod tests {
             "            CoalescePartitionsExec",
             "              RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8",
             "                RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
-            "                  CsvExec: file_groups={1 group: [[file_path]]}, projection=[a, c, d], output_ordering=[a@0 ASC], has_header=true",
+            "                  DataSourceExec: file_groups={1 group: [[file_path]]}, projection=[a, c, d], output_ordering=[a@0 ASC], file_type=csv, has_header=true",
         ];
 
         // Expected unbounded result (same for with and without flag)
@@ -564,7 +565,7 @@ mod tests {
             "            CoalescePartitionsExec",
             "              RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8",
             "                RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
-            "                  CsvExec: file_groups={1 group: [[file_path]]}, projection=[a, c, d], output_ordering=[a@0 ASC], has_header=true",
+            "                  DataSourceExec: file_groups={1 group: [[file_path]]}, projection=[a, c, d], output_ordering=[a@0 ASC], file_type=csv, has_header=true",
         ];
         let expected_optimized_bounded_sort_preserve = [
             "SortPreservingMergeExec: [a@0 ASC]",
@@ -574,7 +575,7 @@ mod tests {
             "        SortPreservingMergeExec: [a@0 ASC]",
             "          RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8, preserve_order=true, sort_exprs=a@0 ASC",
             "            RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
-            "              CsvExec: file_groups={1 group: [[file_path]]}, projection=[a, c, d], output_ordering=[a@0 ASC], has_header=true",
+            "              DataSourceExec: file_groups={1 group: [[file_path]]}, projection=[a, c, d], output_ordering=[a@0 ASC], file_type=csv, has_header=true",
         ];
         assert_optimized_in_all_boundedness_situations!(
             expected_input_unbounded,
@@ -598,7 +599,7 @@ mod tests {
         let source = if source_unbounded {
             stream_exec_ordered(&schema, sort_exprs)
         } else {
-            csv_exec_sorted(&schema, sort_exprs)
+            data_source_exec_csv_sorted(&schema, sort_exprs)
         };
         let repartition_rr = repartition_exec_round_robin(source);
         let filter = filter_exec(repartition_rr);
@@ -623,7 +624,7 @@ mod tests {
             "    RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8",
             "      FilterExec: c@1 > 3",
             "        RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
-            "          CsvExec: file_groups={1 group: [[file_path]]}, projection=[a, c, d], output_ordering=[a@0 ASC NULLS LAST], has_header=true",
+            "          DataSourceExec: file_groups={1 group: [[file_path]]}, projection=[a, c, d], output_ordering=[a@0 ASC NULLS LAST], file_type=csv, has_header=true",
         ];
 
         // Expected unbounded result (same for with and without flag)
@@ -642,14 +643,14 @@ mod tests {
             "    RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8",
             "      FilterExec: c@1 > 3",
             "        RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
-            "          CsvExec: file_groups={1 group: [[file_path]]}, projection=[a, c, d], output_ordering=[a@0 ASC NULLS LAST], has_header=true",
+            "          DataSourceExec: file_groups={1 group: [[file_path]]}, projection=[a, c, d], output_ordering=[a@0 ASC NULLS LAST], file_type=csv, has_header=true",
         ];
         let expected_optimized_bounded_sort_preserve = [
             "SortPreservingMergeExec: [a@0 ASC NULLS LAST]",
             "  RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8, preserve_order=true, sort_exprs=a@0 ASC NULLS LAST",
             "    FilterExec: c@1 > 3",
             "      RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
-            "        CsvExec: file_groups={1 group: [[file_path]]}, projection=[a, c, d], output_ordering=[a@0 ASC NULLS LAST], has_header=true",
+            "        DataSourceExec: file_groups={1 group: [[file_path]]}, projection=[a, c, d], output_ordering=[a@0 ASC NULLS LAST], file_type=csv, has_header=true",
         ];
         assert_optimized_in_all_boundedness_situations!(
             expected_input_unbounded,
@@ -673,7 +674,7 @@ mod tests {
         let source = if source_unbounded {
             stream_exec_ordered(&schema, sort_exprs)
         } else {
-            csv_exec_sorted(&schema, sort_exprs)
+            data_source_exec_csv_sorted(&schema, sort_exprs)
         };
         let repartition_rr = repartition_exec_round_robin(source);
         let repartition_hash = repartition_exec_hash(repartition_rr);
@@ -701,7 +702,7 @@ mod tests {
             "      FilterExec: c@1 > 3",
             "        RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8",
             "          RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
-            "            CsvExec: file_groups={1 group: [[file_path]]}, projection=[a, c, d], output_ordering=[a@0 ASC NULLS LAST], has_header=true",
+            "            DataSourceExec: file_groups={1 group: [[file_path]]}, projection=[a, c, d], output_ordering=[a@0 ASC NULLS LAST], file_type=csv, has_header=true",
         ];
 
         // Expected unbounded result (same for with and without flag)
@@ -722,7 +723,7 @@ mod tests {
             "      FilterExec: c@1 > 3",
             "        RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8",
             "          RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
-            "            CsvExec: file_groups={1 group: [[file_path]]}, projection=[a, c, d], output_ordering=[a@0 ASC NULLS LAST], has_header=true",
+            "            DataSourceExec: file_groups={1 group: [[file_path]]}, projection=[a, c, d], output_ordering=[a@0 ASC NULLS LAST], file_type=csv, has_header=true",
         ];
         let expected_optimized_bounded_sort_preserve = [
             "SortPreservingMergeExec: [a@0 ASC NULLS LAST]",
@@ -730,7 +731,7 @@ mod tests {
             "    FilterExec: c@1 > 3",
             "      RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8, preserve_order=true, sort_exprs=a@0 ASC NULLS LAST",
             "        RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
-            "          CsvExec: file_groups={1 group: [[file_path]]}, projection=[a, c, d], output_ordering=[a@0 ASC NULLS LAST], has_header=true",
+            "          DataSourceExec: file_groups={1 group: [[file_path]]}, projection=[a, c, d], output_ordering=[a@0 ASC NULLS LAST], file_type=csv, has_header=true",
         ];
         assert_optimized_in_all_boundedness_situations!(
             expected_input_unbounded,
@@ -754,7 +755,7 @@ mod tests {
         let source = if source_unbounded {
             stream_exec_ordered(&schema, sort_exprs)
         } else {
-            csv_exec_sorted(&schema, sort_exprs)
+            data_source_exec_csv_sorted(&schema, sort_exprs)
         };
         let repartition_rr = repartition_exec_round_robin(source);
         let coalesce_batches_exec_1 = coalesce_batches_exec(repartition_rr);
@@ -786,7 +787,7 @@ mod tests {
             "        RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8",
             "          CoalesceBatchesExec: target_batch_size=8192",
             "            RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
-            "              CsvExec: file_groups={1 group: [[file_path]]}, projection=[a, c, d], output_ordering=[a@0 ASC NULLS LAST], has_header=true",
+            "              DataSourceExec: file_groups={1 group: [[file_path]]}, projection=[a, c, d], output_ordering=[a@0 ASC NULLS LAST], file_type=csv, has_header=true",
         ];
 
         // Expected unbounded result (same for with and without flag)
@@ -809,7 +810,7 @@ mod tests {
             "        RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8",
             "          CoalesceBatchesExec: target_batch_size=8192",
             "            RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
-            "              CsvExec: file_groups={1 group: [[file_path]]}, projection=[a, c, d], output_ordering=[a@0 ASC NULLS LAST], has_header=true",
+            "              DataSourceExec: file_groups={1 group: [[file_path]]}, projection=[a, c, d], output_ordering=[a@0 ASC NULLS LAST], file_type=csv, has_header=true",
         ];
         let expected_optimized_bounded_sort_preserve = [
             "SortPreservingMergeExec: [a@0 ASC NULLS LAST]",
@@ -818,7 +819,7 @@ mod tests {
             "      RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8, preserve_order=true, sort_exprs=a@0 ASC NULLS LAST",
             "        CoalesceBatchesExec: target_batch_size=8192",
             "          RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
-            "            CsvExec: file_groups={1 group: [[file_path]]}, projection=[a, c, d], output_ordering=[a@0 ASC NULLS LAST], has_header=true",
+            "            DataSourceExec: file_groups={1 group: [[file_path]]}, projection=[a, c, d], output_ordering=[a@0 ASC NULLS LAST], file_type=csv, has_header=true",
         ];
         assert_optimized_in_all_boundedness_situations!(
             expected_input_unbounded,
@@ -842,7 +843,7 @@ mod tests {
         let source = if source_unbounded {
             stream_exec_ordered(&schema, sort_exprs)
         } else {
-            csv_exec_sorted(&schema, sort_exprs)
+            data_source_exec_csv_sorted(&schema, sort_exprs)
         };
         let repartition_rr = repartition_exec_round_robin(source);
         let repartition_hash = repartition_exec_hash(repartition_rr);
@@ -867,7 +868,7 @@ mod tests {
             "    FilterExec: c@1 > 3",
             "      RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8",
             "        RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
-            "          CsvExec: file_groups={1 group: [[file_path]]}, projection=[a, c, d], output_ordering=[a@0 ASC NULLS LAST], has_header=true",
+            "          DataSourceExec: file_groups={1 group: [[file_path]]}, projection=[a, c, d], output_ordering=[a@0 ASC NULLS LAST], file_type=csv, has_header=true",
         ];
 
         // Expected unbounded result (same for with and without flag)
@@ -887,7 +888,7 @@ mod tests {
             "    FilterExec: c@1 > 3",
             "      RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8",
             "        RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
-            "          CsvExec: file_groups={1 group: [[file_path]]}, projection=[a, c, d], output_ordering=[a@0 ASC NULLS LAST], has_header=true",
+            "          DataSourceExec: file_groups={1 group: [[file_path]]}, projection=[a, c, d], output_ordering=[a@0 ASC NULLS LAST], file_type=csv, has_header=true",
         ];
         let expected_optimized_bounded_sort_preserve = expected_optimized_bounded;
 
@@ -913,7 +914,7 @@ mod tests {
         let source = if source_unbounded {
             stream_exec_ordered(&schema, sort_exprs)
         } else {
-            csv_exec_sorted(&schema, sort_exprs)
+            data_source_exec_csv_sorted(&schema, sort_exprs)
         };
         let repartition_rr = repartition_exec_round_robin(source);
         let repartition_hash = repartition_exec_hash(repartition_rr);
@@ -944,7 +945,7 @@ mod tests {
             "        FilterExec: c@1 > 3",
             "          RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8",
             "            RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
-            "              CsvExec: file_groups={1 group: [[file_path]]}, projection=[a, c, d], output_ordering=[a@0 ASC NULLS LAST], has_header=true",
+            "              DataSourceExec: file_groups={1 group: [[file_path]]}, projection=[a, c, d], output_ordering=[a@0 ASC NULLS LAST], file_type=csv, has_header=true",
         ];
 
         // Expected unbounded result (same for with and without flag)
@@ -967,7 +968,7 @@ mod tests {
             "        FilterExec: c@1 > 3",
             "          RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8",
             "            RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
-            "              CsvExec: file_groups={1 group: [[file_path]]}, projection=[a, c, d], output_ordering=[a@0 ASC NULLS LAST], has_header=true",
+            "              DataSourceExec: file_groups={1 group: [[file_path]]}, projection=[a, c, d], output_ordering=[a@0 ASC NULLS LAST], file_type=csv, has_header=true",
         ];
         let expected_optimized_bounded_sort_preserve = [
             "SortPreservingMergeExec: [a@0 ASC NULLS LAST]",
@@ -976,7 +977,7 @@ mod tests {
             "      FilterExec: c@1 > 3",
             "        RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8, preserve_order=true, sort_exprs=a@0 ASC NULLS LAST",
             "          RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
-            "            CsvExec: file_groups={1 group: [[file_path]]}, projection=[a, c, d], output_ordering=[a@0 ASC NULLS LAST], has_header=true",
+            "            DataSourceExec: file_groups={1 group: [[file_path]]}, projection=[a, c, d], output_ordering=[a@0 ASC NULLS LAST], file_type=csv, has_header=true",
         ];
         assert_optimized_in_all_boundedness_situations!(
             expected_input_unbounded,
@@ -1000,7 +1001,7 @@ mod tests {
         let source = if source_unbounded {
             stream_exec_ordered(&schema, sort_exprs)
         } else {
-            csv_exec_sorted(&schema, sort_exprs)
+            data_source_exec_csv_sorted(&schema, sort_exprs)
         };
         let repartition_rr = repartition_exec_round_robin(source);
         let repartition_hash = repartition_exec_hash(repartition_rr);
@@ -1028,7 +1029,7 @@ mod tests {
             "  SortExec: expr=[c@1 ASC], preserve_partitioning=[true]",
             "    RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8",
             "      RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
-            "        CsvExec: file_groups={1 group: [[file_path]]}, projection=[a, c, d], output_ordering=[a@0 ASC NULLS LAST], has_header=true",
+            "        DataSourceExec: file_groups={1 group: [[file_path]]}, projection=[a, c, d], output_ordering=[a@0 ASC NULLS LAST], file_type=csv, has_header=true",
         ];
 
         // Expected unbounded result (same for with and without flag)
@@ -1046,7 +1047,7 @@ mod tests {
             "  SortExec: expr=[c@1 ASC], preserve_partitioning=[true]",
             "    RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8",
             "      RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
-            "        CsvExec: file_groups={1 group: [[file_path]]}, projection=[a, c, d], output_ordering=[a@0 ASC NULLS LAST], has_header=true",
+            "        DataSourceExec: file_groups={1 group: [[file_path]]}, projection=[a, c, d], output_ordering=[a@0 ASC NULLS LAST], file_type=csv, has_header=true",
         ];
         let expected_optimized_bounded_sort_preserve = expected_optimized_bounded;
 
@@ -1072,7 +1073,7 @@ mod tests {
         let source = if source_unbounded {
             stream_exec_ordered(&schema, sort_exprs)
         } else {
-            csv_exec_sorted(&schema, sort_exprs)
+            data_source_exec_csv_sorted(&schema, sort_exprs)
         };
         let repartition_rr = repartition_exec_round_robin(source);
         let repartition_hash = repartition_exec_hash(repartition_rr);
@@ -1093,7 +1094,7 @@ mod tests {
             "  CoalescePartitionsExec",
             "    RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8",
             "      RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
-            "        CsvExec: file_groups={1 group: [[file_path]]}, projection=[a, c, d], output_ordering=[a@0 ASC NULLS LAST], has_header=true",
+            "        DataSourceExec: file_groups={1 group: [[file_path]]}, projection=[a, c, d], output_ordering=[a@0 ASC NULLS LAST], file_type=csv, has_header=true",
         ];
 
         // Expected unbounded result (same for with and without flag)
@@ -1110,13 +1111,13 @@ mod tests {
             "  CoalescePartitionsExec",
             "    RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8",
             "      RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
-            "        CsvExec: file_groups={1 group: [[file_path]]}, projection=[a, c, d], output_ordering=[a@0 ASC NULLS LAST], has_header=true",
+            "        DataSourceExec: file_groups={1 group: [[file_path]]}, projection=[a, c, d], output_ordering=[a@0 ASC NULLS LAST], file_type=csv, has_header=true",
         ];
         let expected_optimized_bounded_sort_preserve = [
             "SortPreservingMergeExec: [a@0 ASC NULLS LAST]",
             "  RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8, preserve_order=true, sort_exprs=a@0 ASC NULLS LAST",
             "    RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
-            "      CsvExec: file_groups={1 group: [[file_path]]}, projection=[a, c, d], output_ordering=[a@0 ASC NULLS LAST], has_header=true",
+            "      DataSourceExec: file_groups={1 group: [[file_path]]}, projection=[a, c, d], output_ordering=[a@0 ASC NULLS LAST], file_type=csv, has_header=true",
         ];
         assert_optimized_in_all_boundedness_situations!(
             expected_input_unbounded,
@@ -1140,7 +1141,7 @@ mod tests {
         let source = if source_unbounded {
             stream_exec_ordered(&schema, sort_exprs)
         } else {
-            csv_exec_sorted(&schema, sort_exprs)
+            data_source_exec_csv_sorted(&schema, sort_exprs)
         };
         let repartition_rr = repartition_exec_round_robin(source);
         let repartition_hash = repartition_exec_hash(repartition_rr);
@@ -1184,7 +1185,7 @@ mod tests {
             "            CoalescePartitionsExec",
             "              RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8",
             "                RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
-            "                  CsvExec: file_groups={1 group: [[file_path]]}, projection=[a, c, d], output_ordering=[a@0 ASC NULLS LAST], has_header=true",
+            "                  DataSourceExec: file_groups={1 group: [[file_path]]}, projection=[a, c, d], output_ordering=[a@0 ASC NULLS LAST], file_type=csv, has_header=true",
         ];
 
         // Expected unbounded result (same for with and without flag)
@@ -1211,7 +1212,7 @@ mod tests {
             "            CoalescePartitionsExec",
             "              RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8",
             "                RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
-            "                  CsvExec: file_groups={1 group: [[file_path]]}, projection=[a, c, d], output_ordering=[a@0 ASC NULLS LAST], has_header=true",
+            "                  DataSourceExec: file_groups={1 group: [[file_path]]}, projection=[a, c, d], output_ordering=[a@0 ASC NULLS LAST], file_type=csv, has_header=true",
         ];
         let expected_optimized_bounded_sort_preserve = [
             "SortPreservingMergeExec: [c@1 ASC]",
@@ -1222,7 +1223,7 @@ mod tests {
             "          CoalescePartitionsExec",
             "            RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8",
             "              RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
-            "                CsvExec: file_groups={1 group: [[file_path]]}, projection=[a, c, d], output_ordering=[a@0 ASC NULLS LAST], has_header=true",
+            "                DataSourceExec: file_groups={1 group: [[file_path]]}, projection=[a, c, d], output_ordering=[a@0 ASC NULLS LAST], file_type=csv, has_header=true",
         ];
         assert_optimized_in_all_boundedness_situations!(
             expected_input_unbounded,
@@ -1247,7 +1248,7 @@ mod tests {
         let left_source = if source_unbounded {
             stream_exec_ordered(&schema, left_sort_exprs)
         } else {
-            csv_exec_sorted(&schema, left_sort_exprs)
+            data_source_exec_csv_sorted(&schema, left_sort_exprs)
         };
         let left_repartition_rr = repartition_exec_round_robin(left_source);
         let left_repartition_hash = repartition_exec_hash(left_repartition_rr);
@@ -1258,7 +1259,7 @@ mod tests {
         let right_source = if source_unbounded {
             stream_exec_ordered(&schema, right_sort_exprs)
         } else {
-            csv_exec_sorted(&schema, right_sort_exprs)
+            data_source_exec_csv_sorted(&schema, right_sort_exprs)
         };
         let right_repartition_rr = repartition_exec_round_robin(right_source);
         let right_repartition_hash = repartition_exec_hash(right_repartition_rr);
@@ -1299,11 +1300,11 @@ mod tests {
             "      CoalesceBatchesExec: target_batch_size=4096",
             "        RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8",
             "          RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
-            "            CsvExec: file_groups={1 group: [[file_path]]}, projection=[a, c, d], output_ordering=[a@0 ASC NULLS LAST], has_header=true",
+            "            DataSourceExec: file_groups={1 group: [[file_path]]}, projection=[a, c, d], output_ordering=[a@0 ASC NULLS LAST], file_type=csv, has_header=true",
             "      CoalesceBatchesExec: target_batch_size=4096",
             "        RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8",
             "          RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
-            "            CsvExec: file_groups={1 group: [[file_path]]}, projection=[a, c, d], output_ordering=[a@0 ASC NULLS LAST], has_header=true",
+            "            DataSourceExec: file_groups={1 group: [[file_path]]}, projection=[a, c, d], output_ordering=[a@0 ASC NULLS LAST], file_type=csv, has_header=true",
         ];
 
         // Expected unbounded result (same for with and without flag)
@@ -1330,11 +1331,11 @@ mod tests {
             "      CoalesceBatchesExec: target_batch_size=4096",
             "        RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8",
             "          RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
-            "            CsvExec: file_groups={1 group: [[file_path]]}, projection=[a, c, d], output_ordering=[a@0 ASC NULLS LAST], has_header=true",
+            "            DataSourceExec: file_groups={1 group: [[file_path]]}, projection=[a, c, d], output_ordering=[a@0 ASC NULLS LAST], file_type=csv, has_header=true",
             "      CoalesceBatchesExec: target_batch_size=4096",
             "        RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8",
             "          RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
-            "            CsvExec: file_groups={1 group: [[file_path]]}, projection=[a, c, d], output_ordering=[a@0 ASC NULLS LAST], has_header=true",
+            "            DataSourceExec: file_groups={1 group: [[file_path]]}, projection=[a, c, d], output_ordering=[a@0 ASC NULLS LAST], file_type=csv, has_header=true",
         ];
         let expected_optimized_bounded_sort_preserve = expected_optimized_bounded;
 
@@ -1494,31 +1495,24 @@ mod tests {
 
     // creates a csv exec source for the test purposes
     // projection and has_header parameters are given static due to testing needs
-    fn csv_exec_sorted(
+    fn data_source_exec_csv_sorted(
         schema: &SchemaRef,
         sort_exprs: impl IntoIterator<Item = PhysicalSortExpr>,
     ) -> Arc<dyn ExecutionPlan> {
         let sort_exprs = sort_exprs.into_iter().collect();
         let projection: Vec<usize> = vec![0, 2, 3];
 
-        Arc::new(
-            CsvExec::builder(
-                FileScanConfig::new(
-                    ObjectStoreUrl::parse("test:///").unwrap(),
-                    schema.clone(),
-                )
-                .with_file(PartitionedFile::new("file_path".to_string(), 100))
-                .with_projection(Some(projection))
-                .with_output_ordering(vec![sort_exprs]),
-            )
-            .with_has_header(true)
-            .with_delimeter(0)
-            .with_quote(b'"')
-            .with_escape(None)
-            .with_comment(None)
-            .with_newlines_in_values(false)
-            .with_file_compression_type(FileCompressionType::UNCOMPRESSED)
-            .build(),
+        let conf = FileScanConfig::new(
+            ObjectStoreUrl::parse("test:///").unwrap(),
+            schema.clone(),
         )
+        .with_file(PartitionedFile::new("file_path".to_string(), 100))
+        .with_projection(Some(projection))
+        .with_output_ordering(vec![sort_exprs])
+        .with_newlines_in_values(false)
+        .with_file_compression_type(FileCompressionType::UNCOMPRESSED);
+
+        let source_config = Arc::new(CsvConfig::new(true, 0, b'"'));
+        FileSourceConfig::new_exec(conf, source_config)
     }
 }

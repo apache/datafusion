@@ -80,10 +80,12 @@ use tokio::io::{AsyncWrite, AsyncWriteExt};
 use tokio::sync::mpsc::{self, Receiver, Sender};
 use tokio::task::JoinSet;
 
+use crate::datasource::data_source::FileSourceConfig;
 use crate::datasource::physical_plan::parquet::{
-    can_expr_be_pushed_down_with_schemas, ParquetExecBuilder,
+    can_expr_be_pushed_down_with_schemas, ParquetConfig,
 };
 use datafusion_physical_expr_common::sort_expr::LexRequirement;
+use datafusion_physical_plan::source::DataSourceExec;
 use futures::future::BoxFuture;
 use futures::{FutureExt, StreamExt, TryStreamExt};
 use object_store::path::Path;
@@ -402,22 +404,30 @@ impl FileFormat for ParquetFormat {
         conf: FileScanConfig,
         filters: Option<&Arc<dyn PhysicalExpr>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let mut builder =
-            ParquetExecBuilder::new_with_options(conf, self.options.clone());
+        let mut predicate = None;
+        let mut metadata_size_hint = None;
 
         // If enable pruning then combine the filters to build the predicate.
         // If disable pruning then set the predicate to None, thus readers
         // will not prune data based on the statistics.
         if self.enable_pruning() {
-            if let Some(predicate) = filters.cloned() {
-                builder = builder.with_predicate(predicate);
+            if let Some(pred) = filters.cloned() {
+                predicate = Some(pred);
             }
         }
-        if let Some(metadata_size_hint) = self.metadata_size_hint() {
-            builder = builder.with_metadata_size_hint(metadata_size_hint);
+        if let Some(metadata) = self.metadata_size_hint() {
+            metadata_size_hint = Some(metadata);
         }
 
-        Ok(builder.build_arc())
+        let source_config = Arc::new(ParquetConfig::new(
+            Arc::clone(&conf.file_schema),
+            predicate,
+            metadata_size_hint,
+            self.options.clone(),
+        ));
+        let source = Arc::new(FileSourceConfig::new(conf, source_config));
+
+        Ok(Arc::new(DataSourceExec::new(source)))
     }
 
     async fn create_writer_physical_plan(

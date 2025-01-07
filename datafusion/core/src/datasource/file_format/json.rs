@@ -29,10 +29,10 @@ use super::{
     Decoder, DecoderDeserializer, FileFormat, FileFormatFactory, FileScanConfig,
     DEFAULT_SCHEMA_INFER_MAX_RECORD,
 };
+use crate::datasource::data_source::FileSourceConfig;
 use crate::datasource::file_format::file_compression_type::FileCompressionType;
 use crate::datasource::file_format::write::BatchSerializer;
-use crate::datasource::physical_plan::FileGroupDisplay;
-use crate::datasource::physical_plan::{FileSinkConfig, NdJsonExec};
+use crate::datasource::physical_plan::{FileGroupDisplay, FileSinkConfig, JsonConfig};
 use crate::error::Result;
 use crate::execution::context::SessionState;
 use crate::physical_plan::insert::{DataSink, DataSinkExec};
@@ -53,6 +53,7 @@ use datafusion_execution::TaskContext;
 use datafusion_expr::dml::InsertOp;
 use datafusion_physical_expr::PhysicalExpr;
 use datafusion_physical_plan::metrics::MetricsSet;
+use datafusion_physical_plan::source::DataSourceExec;
 use datafusion_physical_plan::ExecutionPlan;
 
 use async_trait::async_trait;
@@ -245,11 +246,14 @@ impl FileFormat for JsonFormat {
     async fn create_physical_plan(
         &self,
         _state: &SessionState,
-        conf: FileScanConfig,
+        mut conf: FileScanConfig,
         _filters: Option<&Arc<dyn PhysicalExpr>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let exec =
-            NdJsonExec::new(conf, FileCompressionType::from(self.options.compression));
+        let source_config = Arc::new(JsonConfig::new());
+        conf.file_compression_type = FileCompressionType::from(self.options.compression);
+
+        let source = Arc::new(FileSourceConfig::new(conf, source_config));
+        let exec = DataSourceExec::new(source);
         Ok(Arc::new(exec))
     }
 

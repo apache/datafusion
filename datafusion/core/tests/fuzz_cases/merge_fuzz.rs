@@ -27,11 +27,12 @@ use arrow::{
 use datafusion::physical_plan::{
     collect,
     expressions::{col, PhysicalSortExpr},
-    memory::MemoryExec,
     sorts::sort_preserving_merge::SortPreservingMergeExec,
 };
 use datafusion::prelude::{SessionConfig, SessionContext};
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
+use datafusion_physical_plan::memory::MemorySourceConfig;
+use datafusion_physical_plan::source::DataSourceExec;
 use test_utils::{batches_to_vec, partitions_to_sorted_vec, stagger_batch_with_seed};
 
 #[tokio::test]
@@ -116,7 +117,8 @@ async fn run_merge_test(input: Vec<Vec<RecordBatch>>) {
             },
         }]);
 
-        let exec = MemoryExec::try_new(&input, schema, None).unwrap();
+        let config = MemorySourceConfig::try_new(&input, schema, None).unwrap();
+        let exec = DataSourceExec::new(Arc::new(config));
         let merge = Arc::new(SortPreservingMergeExec::new(sort, Arc::new(exec)));
 
         let session_config = SessionConfig::new().with_batch_size(batch_size);

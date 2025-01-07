@@ -79,17 +79,19 @@ use datafusion::physical_plan::sorts::sort::SortExec;
 use datafusion::{
     execution::context::TaskContext,
     physical_plan::{
-        coalesce_partitions::CoalescePartitionsExec, memory::MemoryExec,
+        coalesce_partitions::CoalescePartitionsExec,
         sorts::sort_preserving_merge::SortPreservingMergeExec, ExecutionPlan,
         ExecutionPlanProperties,
     },
     prelude::SessionContext,
 };
 use datafusion_physical_expr::{expressions::col, PhysicalSortExpr};
+use datafusion_physical_expr_common::sort_expr::LexOrdering;
+use datafusion_physical_plan::memory::MemorySourceConfig;
+use datafusion_physical_plan::source::DataSourceExec;
 
 /// Benchmarks for SortPreservingMerge stream
 use criterion::{criterion_group, criterion_main, Criterion};
-use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use futures::StreamExt;
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
@@ -167,7 +169,9 @@ impl BenchCase {
         let schema = partitions[0][0].schema();
         let sort = make_sort_exprs(schema.as_ref());
 
-        let exec = MemoryExec::try_new(partitions, schema, None).unwrap();
+        let source =
+            Arc::new(MemorySourceConfig::try_new(partitions, schema, None).unwrap());
+        let exec = DataSourceExec::new(source);
         let plan = Arc::new(SortPreservingMergeExec::new(sort, Arc::new(exec)));
 
         Self {
@@ -186,7 +190,9 @@ impl BenchCase {
         let schema = partitions[0][0].schema();
         let sort = make_sort_exprs(schema.as_ref());
 
-        let exec = MemoryExec::try_new(partitions, schema, None).unwrap();
+        let source =
+            Arc::new(MemorySourceConfig::try_new(partitions, schema, None).unwrap());
+        let exec = DataSourceExec::new(source);
         let exec =
             SortExec::new(sort.clone(), Arc::new(exec)).with_preserve_partitioning(true);
         let plan = Arc::new(SortPreservingMergeExec::new(sort, Arc::new(exec)));
@@ -208,7 +214,9 @@ impl BenchCase {
         let schema = partitions[0][0].schema();
         let sort = make_sort_exprs(schema.as_ref());
 
-        let exec = MemoryExec::try_new(partitions, schema, None).unwrap();
+        let source =
+            Arc::new(MemorySourceConfig::try_new(partitions, schema, None).unwrap());
+        let exec = DataSourceExec::new(source);
         let exec = Arc::new(CoalescePartitionsExec::new(Arc::new(exec)));
         let plan = Arc::new(SortExec::new(sort, exec));
 
@@ -229,7 +237,9 @@ impl BenchCase {
         let schema = partitions[0][0].schema();
         let sort = make_sort_exprs(schema.as_ref());
 
-        let exec = MemoryExec::try_new(partitions, schema, None).unwrap();
+        let source =
+            Arc::new(MemorySourceConfig::try_new(partitions, schema, None).unwrap());
+        let exec = DataSourceExec::new(source);
         let exec = SortExec::new(sort, Arc::new(exec)).with_preserve_partitioning(true);
         let plan = Arc::new(CoalescePartitionsExec::new(Arc::new(exec)));
 

@@ -1019,7 +1019,7 @@ mod tests {
                 ErrorExec, MockExec,
             },
         },
-        {collect, expressions::col, memory::MemoryExec},
+        {collect, expressions::col, memory::MemorySourceConfig, source::DataSourceExec},
     };
 
     use arrow::array::{ArrayRef, StringArray, UInt32Array};
@@ -1124,7 +1124,11 @@ mod tests {
     ) -> Result<Vec<Vec<RecordBatch>>> {
         let task_ctx = Arc::new(TaskContext::default());
         // create physical plan
-        let exec = MemoryExec::try_new(&input_partitions, Arc::clone(schema), None)?;
+        let exec = DataSourceExec::new(Arc::new(MemorySourceConfig::try_new(
+            &input_partitions,
+            Arc::clone(schema),
+            None,
+        )?));
         let exec = RepartitionExec::try_new(Arc::new(exec), partitioning)?;
 
         // execute and collect results
@@ -1515,7 +1519,11 @@ mod tests {
         let task_ctx = Arc::new(task_ctx);
 
         // create physical plan
-        let exec = MemoryExec::try_new(&input_partitions, Arc::clone(&schema), None)?;
+        let exec = DataSourceExec::new(Arc::new(MemorySourceConfig::try_new(
+            &input_partitions,
+            Arc::clone(&schema),
+            None,
+        )?));
         let exec = RepartitionExec::try_new(Arc::new(exec), partitioning)?;
 
         // pull partitions
@@ -1554,12 +1562,13 @@ mod tests {
 mod test {
     use arrow_schema::{DataType, Field, Schema, SortOptions};
 
-    use crate::memory::MemoryExec;
+    use super::*;
+    use crate::memory::MemorySourceConfig;
+    use crate::source::DataSourceExec;
     use crate::union::UnionExec;
+
     use datafusion_physical_expr::expressions::col;
     use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
-
-    use super::*;
 
     /// Asserts that the plan is as expected
     ///
@@ -1599,8 +1608,8 @@ mod test {
         let expected_plan = [
             "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=2, preserve_order=true, sort_exprs=c0@0 ASC",
             "  UnionExec",
-            "    MemoryExec: partitions=1, partition_sizes=[0], output_ordering=c0@0 ASC",
-            "    MemoryExec: partitions=1, partition_sizes=[0], output_ordering=c0@0 ASC",
+            "    DataSourceExec: partitions=1, partition_sizes=[0], output_ordering=c0@0 ASC",
+            "    DataSourceExec: partitions=1, partition_sizes=[0], output_ordering=c0@0 ASC",
         ];
         assert_plan!(expected_plan, exec);
         Ok(())
@@ -1619,7 +1628,7 @@ mod test {
         // Repartition should not preserve order
         let expected_plan = [
             "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
-            "  MemoryExec: partitions=1, partition_sizes=[0], output_ordering=c0@0 ASC",
+            "  DataSourceExec: partitions=1, partition_sizes=[0], output_ordering=c0@0 ASC",
         ];
         assert_plan!(expected_plan, exec);
         Ok(())
@@ -1641,8 +1650,8 @@ mod test {
         let expected_plan = [
             "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=2",
             "  UnionExec",
-            "    MemoryExec: partitions=1, partition_sizes=[0]",
-            "    MemoryExec: partitions=1, partition_sizes=[0]",
+            "    DataSourceExec: partitions=1, partition_sizes=[0]",
+            "    DataSourceExec: partitions=1, partition_sizes=[0]",
         ];
         assert_plan!(expected_plan, exec);
         Ok(())
@@ -1661,18 +1670,18 @@ mod test {
     }
 
     fn memory_exec(schema: &SchemaRef) -> Arc<dyn ExecutionPlan> {
-        Arc::new(MemoryExec::try_new(&[vec![]], Arc::clone(schema), None).unwrap())
+        MemorySourceConfig::try_new_exec(&[vec![]], Arc::clone(schema), None).unwrap()
     }
 
     fn sorted_memory_exec(
         schema: &SchemaRef,
         sort_exprs: LexOrdering,
     ) -> Arc<dyn ExecutionPlan> {
-        Arc::new(
-            MemoryExec::try_new(&[vec![]], Arc::clone(schema), None)
+        Arc::new(DataSourceExec::new(Arc::new(
+            MemorySourceConfig::try_new(&[vec![]], Arc::clone(schema), None)
                 .unwrap()
                 .try_with_sort_information(vec![sort_exprs])
                 .unwrap(),
-        )
+        )))
     }
 }
