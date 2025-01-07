@@ -418,9 +418,9 @@ impl LexOrdering {
     /// `vec![a ASC, a DESC]` collapses to `vec![a ASC]`.
     pub fn collapse(self) -> Self {
         let mut output = LexOrdering::default();
-        for item in self.iter() {
+        for item in self {
             if !output.iter().any(|req| req.expr.eq(&item.expr)) {
-                output.push(item.clone());
+                output.push(item);
             }
         }
         output
