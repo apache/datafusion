@@ -118,14 +118,14 @@ pub fn reverse<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
 fn reverse_impl<'a, T: OffsetSizeTrait, V: StringArrayType<'a>>(
     string_array: V,
 ) -> Result<ArrayRef> {
-    let mut builder: GenericStringBuilder<T> =
-        GenericStringBuilder::with_capacity(string_array.len(), 1024);
+    let mut builder = GenericStringBuilder::<T>::with_capacity(string_array.len(), 1024);
 
+    let mut reversed = String::new();
     for string in string_array.iter() {
         if let Some(s) = string {
-            let mut reversed = String::with_capacity(s.len());
             reversed.extend(s.chars().rev());
-            builder.append_value(reversed);
+            builder.append_value(&reversed);
+            reversed.clear();
         } else {
             builder.append_null();
         }
