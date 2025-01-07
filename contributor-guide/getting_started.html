@@ -22,7 +22,7 @@
       
   
     
-    <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=a746c00c" />
+    <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=8f2a1f02" />
     <link rel="stylesheet" type="text/css" href="../_static/styles/pydata-sphinx-theme.css?v=1140d252" />
     <link rel="stylesheet" type="text/css" href="../_static/theme_overrides.css?v=c6d785ac" />
     
@@ -509,6 +509,11 @@
   </a>
  </li>
  <li class="toc-h2 nav-item toc-entry">
+  <a class="reference internal nav-link" href="#dev-container-setup">
+   Dev Container setup
+  </a>
+ </li>
+ <li class="toc-h2 nav-item toc-entry">
   <a class="reference internal nav-link" href="#protoc-installation">
    Protoc Installation
   </a>
@@ -575,6 +580,17 @@ git-bash.exe
 cargo<span class="w"> </span>build
 </pre></div>
 </div>
+</section>
+<section id="dev-container-setup">
+<h2>Dev Container setup<a class="headerlink" href="#dev-container-setup" title="Link to this heading">¶</a></h2>
+<p>DataFusion has support for <a class="reference external" href="https://containers.dev/">dev containers</a> which may be used for
+developing DataFusion in an isolated environment either locally or remote if desired. Using dev containers for developing
+DataFusion is not a requirement by any means but is available for those where doing local development could be tricky
+such as with Windows and WSL2, those with older hardware, etc.</p>
+<p>For specific details on IDE support for dev containers see the documentation for <a class="reference external" href="https://code.visualstudio.com/docs/devcontainers/containers">Visual Studio Code</a>,
+<a class="reference external" href="https://www.jetbrains.com/help/idea/connect-to-devcontainer.html">IntelliJ IDEA</a>,
+<a class="reference external" href="https://www.jetbrains.com/help/rust/connect-to-devcontainer.html">Rust Rover</a>, and
+<a class="reference external" href="https://docs.github.com/en/codespaces/setting-up-your-project-for-codespaces/adding-a-dev-container-configuration/introduction-to-dev-containers">GitHub Codespaces</a>.</p>
 </section>
 <section id="protoc-installation">
 <h2>Protoc Installation<a class="headerlink" href="#protoc-installation" title="Link to this heading">¶</a></h2>
