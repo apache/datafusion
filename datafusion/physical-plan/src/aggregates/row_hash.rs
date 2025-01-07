@@ -491,21 +491,29 @@ impl GroupedHashAggregateStream {
 
         let group_schema = group_schema(&agg.input().schema(), &agg_group_by)?;
 
-        // Build partial aggregate schema for spills
+        // fix https://github.com/apache/datafusion/issues/13949
+        // Builds a **partial aggregation** schema by combining the group columns and
+        // the accumulator state columns produced by each aggregate expression.
+        //
+        // # Why Partial Aggregation Schema Is Needed
+        //
+        // In a multi-stage (partial/final) aggregation strategy, each partial-aggregate
+        // operator produces *intermediate* states (e.g., partial sums, counts) rather
+        // than final scalar values. These extra columns do **not** exist in the original
+        // input schema (which may be something like `[colA, colB, ...]`). Instead,
+        // each aggregator adds its own internal state columns (e.g., `[acc_state_1, acc_state_2, ...]`).
+        //
+        // Therefore, when we spill these intermediate states or pass them to another
+        // aggregation operator, we must use a schema that includes both the group
+        // columns **and** the partial-state columns.
         let partial_agg_schema = create_schema(
             &agg.input().schema(),
             &agg_group_by,
             &aggregate_exprs,
-            agg.mode,
+            AggregateMode::Partial,
         )?;
 
-        let partial_agg_schema2 =
-            build_partial_agg_schema(&group_schema, &aggregate_exprs);
-
         let partial_agg_schema = Arc::new(partial_agg_schema);
-
-        println!("==> partial_agg_schema: {:?}", partial_agg_schema);
-        println!("==> partial_agg_schema2: {:?}", partial_agg_schema2);
 
         let spill_expr = group_schema
             .fields
@@ -817,45 +825,6 @@ impl RecordBatchStream for GroupedHashAggregateStream {
     fn schema(&self) -> SchemaRef {
         Arc::clone(&self.schema)
     }
-}
-
-// fix https://github.com/apache/datafusion/issues/13949
-/// Builds a **partial aggregation** schema by combining the group columns and
-/// the accumulator state columns produced by each aggregate expression.
-///
-/// # Why Partial Aggregation Schema Is Needed
-///
-/// In a multi-stage (partial/final) aggregation strategy, each partial-aggregate
-/// operator produces *intermediate* states (e.g., partial sums, counts) rather
-/// than final scalar values. These extra columns do **not** exist in the original
-/// input schema (which may be something like `[colA, colB, ...]`). Instead,
-/// each aggregator adds its own internal state columns (e.g., `[acc_state_1, acc_state_2, ...]`).
-///
-/// Therefore, when we spill these intermediate states or pass them to another
-/// aggregation operator, we must use a schema that includes both the group
-/// columns **and** the partial-state columns. Otherwise, using the original input
-/// schema to read partial states will result in a column-count mismatch error.
-///
-/// This helper function constructs such a schema:
-/// `[group_col_1, group_col_2, ..., state_col_1, state_col_2, ...]`
-/// so that partial aggregation data can be handled consistently.
-fn build_partial_agg_schema(
-    group_schema: &SchemaRef,
-    aggregate_exprs: &[Arc<AggregateFunctionExpr>],
-) -> Result<SchemaRef> {
-    let fields = group_schema.fields().clone();
-    // convert fields to Vec<Arc<Field>>
-    let mut fields = fields.iter().cloned().collect::<Vec<_>>();
-    for expr in aggregate_exprs {
-        let state_fields = expr.state_fields();
-        fields.extend(
-            state_fields
-                .into_iter()
-                .flat_map(|inner_vec| inner_vec.into_iter()) // Flatten the Vec<Vec<Field>> to Vec<Field>
-                .map(Arc::new), // Wrap each Field in Arc
-        );
-    }
-    Ok(Arc::new(Schema::new(fields)))
 }
 
 impl GroupedHashAggregateStream {
