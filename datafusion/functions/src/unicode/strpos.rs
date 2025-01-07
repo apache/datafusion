@@ -18,9 +18,10 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use crate::strings::StringArrayType;
 use crate::utils::{make_scalar_function, utf8_to_int_type};
-use arrow::array::{ArrayRef, ArrowPrimitiveType, AsArray, PrimitiveArray};
+use arrow::array::{
+    ArrayRef, ArrowPrimitiveType, AsArray, PrimitiveArray, StringArrayType,
+};
 use arrow::datatypes::{ArrowNativeType, DataType, Int32Type, Int64Type};
 use datafusion_common::{exec_err, Result};
 use datafusion_expr::{
