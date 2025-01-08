@@ -153,6 +153,18 @@ pub trait Dialect: Send + Sync {
         Ok(None)
     }
 
+    /// Extends the dialect's default rules for unparsing scalar functions.
+    /// This is useful for supporting application-specific UDFs or custom engine extensions.
+    fn with_custom_scalar_overrides(
+        self,
+        _handlers: Vec<(&str, ScalarFnToSqlHandler)>,
+    ) -> Self
+    where
+        Self: Sized,
+    {
+        unimplemented!("Custom scalar overrides are not supported by this dialect yet");
+    }
+
     /// Allow to unparse a qualified column with a full qualified name
     /// (e.g. catalog_name.schema_name.table_name.column_name)
     /// Otherwise, the column will be unparsed with only the table name and column name
@@ -320,17 +332,6 @@ impl DuckDBDialect {
             custom_scalar_fn_overrides: HashMap::new(),
         }
     }
-
-    pub fn with_custom_scalar_overrides(
-        mut self,
-        handlers: Vec<(&str, ScalarFnToSqlHandler)>,
-    ) -> Self {
-        for (func_name, handler) in handlers {
-            self.custom_scalar_fn_overrides
-                .insert(func_name.to_string(), handler);
-        }
-        self
-    }
 }
 
 impl Dialect for DuckDBDialect {
@@ -344,6 +345,17 @@ impl Dialect for DuckDBDialect {
 
     fn division_operator(&self) -> BinaryOperator {
         BinaryOperator::DuckIntegerDivide
+    }
+
+    fn with_custom_scalar_overrides(
+        mut self,
+        handlers: Vec<(&str, ScalarFnToSqlHandler)>,
+    ) -> Self {
+        for (func_name, handler) in handlers {
+            self.custom_scalar_fn_overrides
+                .insert(func_name.to_string(), handler);
+        }
+        self
     }
 
     fn scalar_function_to_sql_overrides(
