@@ -28,7 +28,7 @@ use arrow::compute::{and, and_not, is_null, not, nullif, or, prep_null_mask_filt
 use arrow::datatypes::{DataType, Schema};
 use datafusion_common::cast::as_boolean_array;
 use datafusion_common::{
-    exec_err, internal_datafusion_err, internal_err, Result, ScalarValue,
+    exec_err, internal_datafusion_err, internal_err, DataFusionError, Result, ScalarValue,
 };
 use datafusion_expr::ColumnarValue;
 
