@@ -722,16 +722,21 @@ impl Unparser<'_> {
                     .map(|input| self.select_to_sql_expr(input, query))
                     .collect::<Result<Vec<_>>>()?;
 
-                let union_expr = input_exprs
-                    .into_iter()
-                    .rev()
-                    .reduce(|a, b| SetExpr::SetOperation {
-                        op: ast::SetOperator::Union,
-                        set_quantifier: ast::SetQuantifier::All,
-                        left: Box::new(b),
-                        right: Box::new(a),
-                    })
-                    .unwrap();
+                // Build the union expression tree bottom-up by reversing the order
+                // note that we are also swapping left and right inputs because of the rev
+                let Some(union_expr) =
+                    input_exprs
+                        .into_iter()
+                        .rev()
+                        .reduce(|a, b| SetExpr::SetOperation {
+                            op: ast::SetOperator::Union,
+                            set_quantifier: ast::SetQuantifier::All,
+                            left: Box::new(b),
+                            right: Box::new(a),
+                        })
+                else {
+                    return internal_err!("UNION operator requires at least 2 inputs");
+                };
 
                 let Some(query) = query.as_mut() else {
                     return internal_err!(
