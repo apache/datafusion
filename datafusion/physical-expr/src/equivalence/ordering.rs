@@ -291,15 +291,17 @@ mod tests {
             },
         ]);
         // finer ordering satisfies, crude ordering should return true
-        let mut eq_properties_finer =
-            EquivalenceProperties::new(Arc::clone(&input_schema));
-        eq_properties_finer.oeq_class.push(finer.clone());
+        let eq_properties_finer = EquivalenceProperties::new_with_orderings(
+            Arc::clone(&input_schema),
+            &[finer.clone()],
+        );
         assert!(eq_properties_finer.ordering_satisfy(crude.as_ref()));
 
         // Crude ordering doesn't satisfy finer ordering. should return false
-        let mut eq_properties_crude =
-            EquivalenceProperties::new(Arc::clone(&input_schema));
-        eq_properties_crude.oeq_class.push(crude);
+        let eq_properties_crude = EquivalenceProperties::new_with_orderings(
+            Arc::clone(&input_schema),
+            &[crude.clone()],
+        );
         assert!(!eq_properties_crude.ordering_satisfy(finer.as_ref()));
         Ok(())
     }
