@@ -19,7 +19,7 @@
 // of the Spark-specific compatibility features that we need (including
 // being able to specify Spark-compatible cast from all types to string)
 
-use crate::cast::SparkCastOptions;
+use crate::SparkCastOptions;
 use crate::{spark_cast, EvalMode};
 use arrow_array::builder::StringBuilder;
 use arrow_array::{Array, ArrayRef, RecordBatch, StringArray, StructArray};
@@ -250,7 +250,7 @@ fn struct_to_json(array: &StructArray, timezone: &str) -> Result<ArrayRef> {
 
 #[cfg(test)]
 mod test {
-    use crate::to_json::struct_to_json;
+    use crate::json_funcs::to_json::struct_to_json;
     use arrow_array::types::Int32Type;
     use arrow_array::{Array, PrimitiveArray, StringArray};
     use arrow_array::{ArrayRef, BooleanArray, Int32Array, StructArray};
