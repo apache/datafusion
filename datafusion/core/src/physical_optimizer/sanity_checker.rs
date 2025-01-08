@@ -144,7 +144,7 @@ pub fn check_plan_sanity(
                     plan_str,
                     format_physical_sort_requirement_list(&sort_req),
                     idx,
-                    child_eq_props.oeq_class
+                    child_eq_props.oeq_class()
                 );
             }
         }
