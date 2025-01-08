@@ -104,8 +104,7 @@ impl ScalarUDFImpl for ReverseFunc {
     }
 }
 
-/// Reverses the order of the characters in the string.
-/// reverse('abcde') = 'edcba'
+/// Reverses the order of the characters in the string `reverse('abcde') = 'edcba'`.
 /// The implementation uses UTF-8 code points as characters
 pub fn reverse<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
     if args[0].data_type() == &Utf8View {
