@@ -30,7 +30,6 @@ pub use checkoverflow::CheckOverflow;
 
 mod kernels;
 mod list;
-mod regexp;
 pub mod scalar_funcs;
 mod schema_adapter;
 mod static_invoke;
@@ -50,6 +49,8 @@ mod unbound;
 pub use unbound::UnboundColumn;
 pub mod utils;
 pub use normalize_nan::NormalizeNaNAndZero;
+mod predicate_funcs;
+pub use predicate_funcs::{spark_isnan, RLike};
 
 mod agg_funcs;
 mod comet_scalar_funcs;
@@ -66,7 +67,6 @@ pub use datetime_funcs::*;
 pub use error::{SparkError, SparkResult};
 pub use if_expr::IfExpr;
 pub use list::{ArrayInsert, GetArrayStructFields, ListExtract};
-pub use regexp::RLike;
 pub use string_funcs::*;
 pub use struct_funcs::*;
 pub use to_json::ToJson;
