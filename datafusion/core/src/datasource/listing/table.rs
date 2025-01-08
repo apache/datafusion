@@ -114,6 +114,10 @@ impl ListingTableConfig {
         }
     }
 
+    ///Returns a tupe of (file_extension, optional compression_extension)
+    ///
+    /// For example a path ending with blah.test.csv.gz returns `("csv", Some("gz"))`
+    /// For example a path ending with blah.test.csv returns `("csv", None)`
     fn infer_file_extension_and_compression_type(
         path: &str,
     ) -> Result<(String, Option<String>)> {
