@@ -1767,7 +1767,7 @@ logical_plan
 01)Projection: count(*) AS global_count
 02)--Aggregate: groupBy=[[]], aggr=[[count(Int64(1)) AS count(*)]]
 03)----SubqueryAlias: a
-04)------Projection: 
+04)------Projection:
 05)--------Aggregate: groupBy=[[aggregate_test_100.c1]], aggr=[[]]
 06)----------Projection: aggregate_test_100.c1
 07)------------Filter: aggregate_test_100.c13 != Utf8("C2GT5KVyOPZpgKVl110TyZO0NcJ434")
@@ -4625,6 +4625,38 @@ NULL 1
 statement ok
 DROP TABLE t;
 
+
+# Test for ignore nulls in nth_VALUE without null values
+statement ok
+CREATE TABLE t AS VALUES  (3, 3), (4, 4), (5, 5), (6, 6);
+
+query I
+SELECT column1 FROM t ORDER BY column2;
+----
+3
+4
+5
+6
+
+query I
+SELECT nth_VALUE(column1, 1) OVER(ORDER BY column2) FROM t;
+----
+3
+3
+3
+3
+
+query I
+SELECT nth_VALUE(column1, 1) IGNORE NULLS OVER(ORDER BY column2) FROM t;
+----
+3
+3
+3
+3
+
+statement ok
+DROP TABLE t;
+
 # Test for ignore nulls with ORDER BY in nth_VALUE
 statement ok
 CREATE TABLE t AS VALUES  (3, 3), (4, 4), (null::bigint, 1), (null::bigint, 2), (5, 5), (6, 6);
@@ -5055,7 +5087,7 @@ select b, row_number() over (order by a) from (select TRUE as a, 1 as b);
 
 # test window functions on boolean columns
 statement count 0
-create table t1 (id int, bool_col boolean) as values 
+create table t1 (id int, bool_col boolean) as values
     (1, true),
     (2, false),
     (3, true),
@@ -5110,7 +5142,7 @@ select ntile(2) over (order by bool_col) from t1;
 2
 
 query IIIRRI
-select 
+select
     row_number() over (order by bool_col) as row_num,
     rank() over (order by bool_col) as rank,
     dense_rank() over (order by bool_col) as dense_rank,
