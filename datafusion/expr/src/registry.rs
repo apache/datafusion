@@ -132,7 +132,7 @@ pub trait SerializerRegistry: Debug + Send + Sync {
     fn serialize_logical_plan(
         &self,
         node: &dyn UserDefinedLogicalNode,
-    ) -> Result<Vec<u8>> {
+    ) -> Result<NamedBytes> {
         not_impl_err!(
             "Serializing user defined logical plan node `{}` is not supported",
             node.name()
@@ -151,17 +151,16 @@ pub trait SerializerRegistry: Debug + Send + Sync {
         )
     }
 
-    /// Serialized table definition for UDTFs or manually registered table providers that can't be
-    /// marshaled by reference. Should return some benign error for regular tables that can be
-    /// found/restored by name in the destination execution context.
-    fn serialize_custom_table(&self, _table: &dyn TableSource) -> Result<Vec<u8>> {
-        not_impl_err!("No custom table support")
+    /// Serialized table definition for UDTFs or some other table provider implementation that
+    /// can't be marshaled by reference.
+    fn serialize_custom_table(
+        &self,
+        _table: &dyn TableSource,
+    ) -> Result<Option<NamedBytes>> {
+        Ok(None)
     }
 
-    /// Deserialize the custom table with the given name.
-    /// Note: more often than not, the name can't be used as a discriminator if multiple different
-    /// `TableSource` and/or `TableProvider` implementations are expected (this is particularly true
-    /// for UDTFs in DataFusion, which are always registered under the same name: `tmp_table`).
+    /// Deserialize a custom table.
     fn deserialize_custom_table(
         &self,
         name: &str,
@@ -170,6 +169,11 @@ pub trait SerializerRegistry: Debug + Send + Sync {
         not_impl_err!("Deserializing custom table `{name}` is not supported")
     }
 }
+
+/// A sequence of bytes with a string qualifier. Meant to encapsulate serialized extensions
+/// that need to carry their type, e.g. the `type_url` for protobuf messages.
+#[derive(Debug, Clone)]
+pub struct NamedBytes(pub String, pub Vec<u8>);
 
 /// A  [`FunctionRegistry`] that uses in memory [`HashMap`]s
 #[derive(Default, Debug)]

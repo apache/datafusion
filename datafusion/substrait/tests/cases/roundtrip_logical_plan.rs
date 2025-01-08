@@ -31,6 +31,7 @@ use datafusion::error::Result;
 use datafusion::execution::registry::SerializerRegistry;
 use datafusion::execution::runtime_env::RuntimeEnv;
 use datafusion::execution::session_state::SessionStateBuilder;
+use datafusion::logical_expr::registry::NamedBytes;
 use datafusion::logical_expr::{
     Extension, LogicalPlan, PartitionEvaluator, Repartition, UserDefinedLogicalNode,
     Values, Volatility,
@@ -50,13 +51,13 @@ impl SerializerRegistry for MockSerializerRegistry {
     fn serialize_logical_plan(
         &self,
         node: &dyn UserDefinedLogicalNode,
-    ) -> Result<Vec<u8>> {
+    ) -> Result<NamedBytes> {
         if node.name() == "MockUserDefinedLogicalPlan" {
             let node = node
                 .as_any()
                 .downcast_ref::<MockUserDefinedLogicalPlan>()
                 .unwrap();
-            node.serialize()
+            Ok(NamedBytes(node.name().to_string(), node.serialize()?))
         } else {
             unreachable!()
         }

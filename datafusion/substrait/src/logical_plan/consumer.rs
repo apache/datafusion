@@ -30,7 +30,7 @@ use datafusion::logical_expr::expr::{Exists, InSubquery, Sort};
 
 use datafusion::logical_expr::{
     Aggregate, BinaryExpr, Case, Cast, EmptyRelation, Expr, ExprSchemable, Extension,
-    LogicalPlan, Operator, Projection, SortExpr, Subquery, TableScan, TryCast, Values,
+    LogicalPlan, Operator, Projection, SortExpr, Subquery, TableSource, TryCast, Values,
 };
 use substrait::proto::aggregate_rel::Grouping;
 use substrait::proto::expression as substrait_expression;
@@ -462,9 +462,7 @@ pub trait SubstraitConsumer: Send + Sync + Sized {
     fn consume_extension_table(
         &self,
         extension_table: &ExtensionTable,
-        _schema: &DFSchema,
-        _projection: &Option<MaskExpression>,
-    ) -> Result<LogicalPlan> {
+    ) -> Result<Arc<dyn TableSource>> {
         if let Some(ext_detail) = extension_table.detail.as_ref() {
             substrait_err!(
                 "Missing handler for extension table: {}",
@@ -599,24 +597,11 @@ impl SubstraitConsumer for DefaultSubstraitConsumer<'_> {
     fn consume_extension_table(
         &self,
         extension_table: &ExtensionTable,
-        schema: &DFSchema,
-        projection: &Option<MaskExpression>,
-    ) -> Result<LogicalPlan> {
+    ) -> Result<Arc<dyn TableSource>> {
         if let Some(ext_detail) = &extension_table.detail {
-            let source = self
-                .state
+            self.state
                 .serializer_registry()
-                .deserialize_custom_table(&ext_detail.type_url, &ext_detail.value)?;
-            let table_name = ext_detail
-                .type_url
-                .rsplit_once('/')
-                .map(|(_, name)| name)
-                .unwrap_or(&ext_detail.type_url);
-            let table_scan = TableScan::try_new(table_name, source, None, vec![], None)?;
-            let plan = LogicalPlan::TableScan(table_scan);
-            ensure_schema_compatibility(plan.schema(), schema.clone())?;
-            let schema = apply_masking(schema.clone(), projection)?;
-            apply_projection(plan, schema)
+                .deserialize_custom_table(&ext_detail.type_url, &ext_detail.value)
         } else {
             substrait_err!("Unexpected empty detail in ExtensionTable")
         }
@@ -1366,32 +1351,31 @@ pub async fn from_read_rel(
     read: &ReadRel,
 ) -> Result<LogicalPlan> {
     async fn read_with_schema(
-        consumer: &impl SubstraitConsumer,
         table_ref: TableReference,
+        table_source: Arc<dyn TableSource>,
         schema: DFSchema,
         projection: &Option<MaskExpression>,
     ) -> Result<LogicalPlan> {
         let schema = schema.replace_qualifier(table_ref.clone());
 
-        let plan = {
-            let provider = match consumer.resolve_table_ref(&table_ref).await? {
-                Some(ref provider) => Arc::clone(provider),
-                _ => return plan_err!("No table named '{table_ref}'"),
-            };
-
-            LogicalPlanBuilder::scan(
-                table_ref,
-                provider_as_source(Arc::clone(&provider)),
-                None,
-            )?
-            .build()?
-        };
+        let plan = { LogicalPlanBuilder::scan(table_ref, table_source, None)?.build()? };
 
         ensure_schema_compatibility(plan.schema(), schema.clone())?;
 
         let schema = apply_masking(schema, projection)?;
 
         apply_projection(plan, schema)
+    }
+
+    async fn table_source(
+        consumer: &impl SubstraitConsumer,
+        table_ref: &TableReference,
+    ) -> Result<Arc<dyn TableSource>> {
+        if let Some(provider) = consumer.resolve_table_ref(table_ref).await? {
+            Ok(provider_as_source(provider))
+        } else {
+            plan_err!("No table named '{table_ref}'")
+        }
     }
 
     let named_struct = read.base_schema.as_ref().ok_or_else(|| {
@@ -1419,10 +1403,10 @@ pub async fn from_read_rel(
                     table: nt.names[2].clone().into(),
                 },
             };
-
+            let table_source = table_source(consumer, &table_reference).await?;
             read_with_schema(
-                consumer,
                 table_reference,
+                table_source,
                 substrait_schema,
                 &read.projection,
             )
@@ -1501,17 +1485,35 @@ pub async fn from_read_rel(
             let name = filename.unwrap();
             // directly use unwrap here since we could determine it is a valid one
             let table_reference = TableReference::Bare { table: name.into() };
+            let table_source = table_source(consumer, &table_reference).await?;
 
             read_with_schema(
-                consumer,
                 table_reference,
+                table_source,
                 substrait_schema,
                 &read.projection,
             )
             .await
         }
         Some(ReadType::ExtensionTable(ext)) => {
-            consumer.consume_extension_table(ext, &substrait_schema, &read.projection)
+            // look for the original table name under `rel.common.hint.alias`
+            // in case the producer was kind enough to put it there.
+            let name_hint = read
+                .common
+                .as_ref()
+                .and_then(|rel_common| rel_common.hint.as_ref())
+                .map(|hint| hint.alias.as_str().trim())
+                .filter(|alias| !alias.is_empty());
+            // if no name hint was provided, use the name that datafusion
+            // sets for UDTFs
+            let table_name = name_hint.unwrap_or("tmp_table");
+            read_with_schema(
+                TableReference::from(table_name),
+                consumer.consume_extension_table(ext)?,
+                substrait_schema,
+                &read.projection,
+            )
+            .await
         }
         None => {
             substrait_err!("Unexpected empty read_type")
@@ -1917,7 +1919,7 @@ pub async fn from_substrait_sorts(
             },
             None => not_impl_err!("Sort without sort kind is invalid"),
         };
-        let (asc, nulls_first) = asc_nullfirst.unwrap();
+        let (asc, nulls_first) = asc_nullfirst?;
         sorts.push(Sort {
             expr,
             asc,

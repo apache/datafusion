@@ -22,7 +22,11 @@ use std::sync::Arc;
 use substrait::proto::expression_reference::ExprType;
 
 use datafusion::arrow::datatypes::{Field, IntervalUnit};
-use datafusion::logical_expr::{Aggregate, Distinct, EmptyRelation, Extension, Filter, Join, Like, Limit, Partitioning, Projection, Repartition, Sort, SortExpr, SubqueryAlias, TableScan, TableSource, TryCast, Union, Values, Window, WindowFrameUnits};
+use datafusion::logical_expr::{
+    Aggregate, Distinct, EmptyRelation, Extension, Filter, Join, Like, Limit,
+    Partitioning, Projection, Repartition, Sort, SortExpr, SubqueryAlias, TableScan,
+    TableSource, TryCast, Union, Values, Window, WindowFrameUnits,
+};
 use datafusion::{
     arrow::datatypes::{DataType, TimeUnit},
     error::{DataFusionError, Result},
@@ -50,9 +54,10 @@ use datafusion::execution::SessionState;
 use datafusion::logical_expr::expr::{
     Alias, BinaryExpr, Case, Cast, GroupingSet, InList, InSubquery, WindowFunction,
 };
+use datafusion::logical_expr::registry::NamedBytes;
 use datafusion::logical_expr::{expr, Between, JoinConstraint, LogicalPlan, Operator};
 use datafusion::prelude::Expr;
-use pbjson_types::{Any as ProtoAny, Any};
+use pbjson_types::Any as ProtoAny;
 use substrait::proto::exchange_rel::{ExchangeKind, RoundRobin, ScatterFields};
 use substrait::proto::expression::cast::FailureBehavior;
 use substrait::proto::expression::field_reference::{RootReference, RootType};
@@ -66,8 +71,8 @@ use substrait::proto::expression::subquery::InPredicate;
 use substrait::proto::expression::window_function::BoundsType;
 use substrait::proto::expression::ScalarFunction;
 use substrait::proto::read_rel::{ExtensionTable, VirtualTable};
-use substrait::proto::rel_common::EmitKind;
 use substrait::proto::rel_common::EmitKind::Emit;
+use substrait::proto::rel_common::{EmitKind, Hint};
 use substrait::proto::{
     fetch_rel, rel_common, ExchangeRel, ExpressionReference, ExtendedExpression,
     RelCommon,
@@ -363,10 +368,10 @@ pub trait SubstraitProducer: Send + Sync + Sized {
         from_in_subquery(self, in_subquery, schema)
     }
 
-    fn handle_extension_table(
+    fn handle_custom_table(
         &mut self,
         _table: &dyn TableSource,
-    ) -> Result<ExtensionTable> {
+    ) -> Result<Option<ExtensionTable>> {
         not_impl_err!("Not implemented")
     }
 }
@@ -395,12 +400,12 @@ impl SubstraitProducer for DefaultSubstraitProducer<'_> {
     }
 
     fn handle_extension(&mut self, plan: &Extension) -> Result<Box<Rel>> {
-        let extension_bytes = self
+        let NamedBytes(type_url, bytes) = self
             .serializer_registry
             .serialize_logical_plan(plan.node.as_ref())?;
         let detail = ProtoAny {
-            type_url: plan.node.name().to_string(),
-            value: extension_bytes.into(),
+            type_url,
+            value: bytes.into(),
         };
         let mut inputs_rel = plan
             .node
@@ -429,14 +434,22 @@ impl SubstraitProducer for DefaultSubstraitProducer<'_> {
         }))
     }
 
-    fn handle_extension_table(&mut self, table: &dyn TableSource) -> Result<ExtensionTable> {
-        let bytes = self.serializer_registry.serialize_custom_table(table)?;
-        Ok(ExtensionTable {
-            detail: Some(Any {
-                type_url: "/substrait.ExtensionTable".into(),
-                value: bytes.into(),
-            })
-        })
+    fn handle_custom_table(
+        &mut self,
+        table: &dyn TableSource,
+    ) -> Result<Option<ExtensionTable>> {
+        if let Some(NamedBytes(type_url, bytes)) =
+            self.serializer_registry.serialize_custom_table(table)?
+        {
+            Ok(Some(ExtensionTable {
+                detail: Some(ProtoAny {
+                    type_url,
+                    value: bytes.into(),
+                }),
+            }))
+        } else {
+            Ok(None)
+        }
     }
 }
 
@@ -572,21 +585,32 @@ pub fn from_table_scan(
     let table_schema = scan.source.schema().to_dfschema_ref()?;
     let base_schema = to_substrait_named_struct(&table_schema)?;
 
-    let table = if let Ok(ext_table) = producer
-        .handle_extension_table(scan.source.as_ref())
-    {
-        ReadType::ExtensionTable(ext_table)
-    } else {
-        ReadType::NamedTable(NamedTable {
-            names: scan.table_name.to_vec(),
-            advanced_extension: None,
-        })
-    };
-
+    let (table, common) =
+        if let Ok(Some(ext_table)) = producer.handle_custom_table(scan.source.as_ref()) {
+            (
+                ReadType::ExtensionTable(ext_table),
+                Some(RelCommon {
+                    hint: Some(Hint {
+                        // store the original table name as rel.common.hint.alias
+                        alias: scan.table_name.to_string(),
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                }),
+            )
+        } else {
+            (
+                ReadType::NamedTable(NamedTable {
+                    names: scan.table_name.to_vec(),
+                    advanced_extension: None,
+                }),
+                None,
+            )
+        };
 
     Ok(Box::new(Rel {
         rel_type: Some(RelType::Read(Box::new(ReadRel {
-            common: None,
+            common,
             base_schema: Some(base_schema),
             filter: None,
             best_effort_filter: None,
@@ -1715,7 +1739,7 @@ pub fn from_in_subquery(
                 subquery_type: Some(
                     substrait::proto::expression::subquery::SubqueryType::InPredicate(
                         Box::new(InPredicate {
-                            needles: (vec![substrait_expr]),
+                            needles: vec![substrait_expr],
                             haystack: Some(subquery_plan),
                         }),
                     ),
@@ -2909,6 +2933,7 @@ mod test {
     #[tokio::test]
     async fn round_trip_extension_table() {
         const TABLE_NAME: &str = "custom_table";
+        const TYPE_URL: &str = "/substrait.test.CustomTable";
         const SERIALIZED: &[u8] = "table definition".as_bytes();
 
         fn custom_table() -> Arc<dyn TableProvider> {
@@ -2921,9 +2946,12 @@ mod test {
         #[derive(Debug)]
         struct Registry;
         impl SerializerRegistry for Registry {
-            fn serialize_custom_table(&self, table: &dyn TableSource) -> Result<Vec<u8>> {
+            fn serialize_custom_table(
+                &self,
+                table: &dyn TableSource,
+            ) -> Result<Option<NamedBytes>> {
                 if table.schema() == custom_table().schema() {
-                    Ok(SERIALIZED.to_vec())
+                    Ok(Some(NamedBytes(TYPE_URL.to_string(), SERIALIZED.to_vec())))
                 } else {
                     Err(DataFusionError::Internal("Not our table".into()))
                 }
@@ -2933,7 +2961,7 @@ mod test {
                 name: &str,
                 bytes: &[u8],
             ) -> Result<Arc<dyn TableSource>> {
-                if name == TABLE_NAME && bytes == SERIALIZED {
+                if name == TYPE_URL && bytes == SERIALIZED {
                     Ok(Arc::new(DefaultTableSource::new(custom_table())))
                 } else {
                     panic!("Unexpected extension table: {name}");
@@ -2965,7 +2993,7 @@ mod test {
             assert_contains!(
                 // confirm that the Substrait plan contains our custom_table as an ExtensionTable
                 serde_json::to_string(substrait.as_ref()).unwrap(),
-                format!(r#""extensionTable":{{"detail":{{"typeUrl":"{TABLE_NAME}","#)
+                format!(r#""extensionTable":{{"detail":{{"typeUrl":"{TYPE_URL}","#)
             );
             remote // make sure the restored plan is fully working in the remote context
                 .execute_logical_plan(restored.clone())
