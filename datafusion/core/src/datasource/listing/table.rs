@@ -160,6 +160,10 @@ impl ListingTableConfig {
             )?;
 
         let mut format_options = HashMap::new();
+        if let Some(ref compression_type) = maybe_compression_type {
+            format_options
+                .insert("format.compression".to_string(), compression_type.clone());
+        }
 
         let file_format = state
             .get_file_format_factory(&file_extension)
@@ -170,9 +174,7 @@ impl ListingTableConfig {
 
         let listing_file_extension =
             if let Some(compression_type) = maybe_compression_type {
-                let file_extension = format!("{}.{}", &file_extension, &compression_type);
-                format_options.insert("format.compression".to_string(), compression_type);
-                file_extension
+                format!("{}.{}", &file_extension, &compression_type)
             } else {
                 file_extension
             };
