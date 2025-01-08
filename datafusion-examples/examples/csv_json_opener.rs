@@ -61,6 +61,7 @@ async fn csv_opener() -> Result<()> {
             .with_file(PartitionedFile::new(path.display().to_string(), 10));
 
     let config = CsvConfig::new(true, b',', b'"')
+        .with_comment(Some(b'#'))
         .with_schema(schema)
         .with_batch_size(8192)
         .with_projection(&scan_config);
