@@ -30,7 +30,7 @@ use arrow::datatypes::SchemaRef;
 
 use object_store::ObjectStore;
 
-/// AvroConfig holds the extra configuration that is necessary for [`AvroOpener`]
+/// AvroConfig holds the extra configuration that is necessary for opening avro files
 #[derive(Clone, Default)]
 pub struct AvroConfig {
     schema: Option<SchemaRef>,

@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! [`ParquetExec`] Execution plan for reading Parquet files
+//! [`ParquetConfig`] FileSourceConfig for reading Parquet files
 
 use std::any::Any;
 use std::sync::Arc;
@@ -205,7 +205,7 @@ pub use writer::plan_to_parquet;
 ///
 /// It is possible to restrict the row groups and selections within those row
 /// groups that the ParquetExec will consider by providing an initial
-/// [`ParquetAccessPlan`] as `extensions` on [`PartitionedFile`]. This can be
+/// [`ParquetAccessPlan`] as `extensions` on `PartitionedFile`. This can be
 /// used to implement external indexes on top of parquet files and select only
 /// portions of the files.
 ///
@@ -250,7 +250,7 @@ pub use writer::plan_to_parquet;
 ///
 /// # Execution Overview
 ///
-/// * Step 1: [`DataSourceExec::execute`] is called, returning a [`FileStream`]
+/// * Step 1: `DataSourceExec::execute` is called, returning a `FileStream`
 ///   configured to open parquet files with a `ParquetOpener`.
 ///
 /// * Step 2: When the stream is polled, the `ParquetOpener` is called to open

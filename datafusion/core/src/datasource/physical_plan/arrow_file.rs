@@ -33,7 +33,7 @@ use futures::StreamExt;
 use itertools::Itertools;
 use object_store::{GetOptions, GetRange, GetResultPayload, ObjectStore};
 
-/// Arrow configuration struct that is given to [`DataSourceExec`]
+/// Arrow configuration struct that is given to DataSourceExec
 /// Does not hold anything special, since [`FileScanConfig`] is sufficient for arrow
 #[derive(Clone, Default)]
 pub struct ArrowConfig {}
