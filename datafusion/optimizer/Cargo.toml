@@ -43,7 +43,6 @@ arrow = { workspace = true }
 chrono = { workspace = true }
 datafusion-common = { workspace = true, default-features = true }
 datafusion-expr = { workspace = true }
-datafusion-functions-window = { workspace = true }
 datafusion-physical-expr = { workspace = true }
 indexmap = { workspace = true }
 itertools = { workspace = true }
@@ -56,6 +55,7 @@ regex-syntax = "0.8.0"
 async-trait = { workspace = true }
 ctor = { workspace = true }
 datafusion-functions-aggregate = { workspace = true }
+datafusion-functions-window = { workspace = true }
 datafusion-functions-window-common = { workspace = true }
 datafusion-sql = { workspace = true }
 env_logger = { workspace = true }
