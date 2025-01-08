@@ -2807,7 +2807,7 @@ mod tests {
             create_record_batch(&schema, (vec![2, 3, 4, 4], vec![1.0, 2.0, 3.0, 4.0]))?,
         ];
         let plan: Arc<dyn ExecutionPlan> =
-            Arc::new(MemoryExec::try_new(&[batches], Arc::clone(&schema), None)?);
+            MemorySourceConfig::try_new_exec(&[batches], Arc::clone(&schema), None)?;
 
         let grouping_set = PhysicalGroupBy::new(
             vec![(col("a", &schema)?, "a".to_string())],
