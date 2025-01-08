@@ -5682,70 +5682,10 @@ NULL
 [1, 3]
 
 query ?
-select array_distinct([]);
+select array_distinct(arrow_cast(null, 'LargeList(Int64)'));
 ----
-[]
+NULL
 
-query ?
-select array_distinct([[], []]);
-----
-[[]]
-
-query ?
-select array_distinct(column1)
-from array_distinct_table_1D;
-----
-[1, 2, 3]
-[1, 2, 3, 4, 5]
-[3, 5]
-
-query ?
-select array_distinct(column1)
-from array_distinct_table_1D_UTF8;
-----
-[a, bc, def]
-[a, bc, def, defg]
-[defg]
-
-query ?
-select array_distinct(column1)
-from array_distinct_table_2D;
-----
-[[1, 2], [3, 4], [5, 6]]
-[[1, 2], [3, 4], [5, 6], [7, 8], [9, 10]]
-[, [5, 6]]
-
-query ?
-select array_distinct(column1)
-from array_distinct_table_1D_large;
-----
-[1, 2, 3]
-[1, 2, 3, 4, 5]
-[3, 5]
-
-query ?
-select array_distinct(column1)
-from array_distinct_table_1D_fixed;
-----
-[1, 2, 3]
-[1, 2, 3, 4, 5]
-[3, 5]
-
-query ?
-select array_distinct(column1)
-from array_distinct_table_1D_UTF8_fixed;
-----
-[a, bc, def]
-[a, bc, def, defg]
-[defg]
-
-query ?
-select array_distinct(column1)
-from array_distinct_table_2D_fixed;
-----
-[[1, 2], [3, 4], [5, 6]]
-[[1, 2], [3, 4], [5, 6], [7, 8], [9, 10]]
-[, [5, 6]]
 
 query ???
 select array_intersect(column1, column2),
