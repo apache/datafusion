@@ -985,6 +985,16 @@ impl OptimizerRule for PushDownFilter {
                         }
                     })
             }
+            // Tries to push filters based on the partition key(s) of the window function(s) used.
+            // Example:
+            //   Before:
+            //     Filter: (a > 1) and (b > 1) and (c > 1)
+            //      Window: func() PARTITION BY [a] ...
+            //   ---
+            //   After:
+            //     Filter: (b > 1) and (c > 1)
+            //      Window: func() PARTITION BY [a] ...
+            //        Filter: (a > 1)
             LogicalPlan::Window(window) => {
                 // Retrieve the set of potential partition keys where we can push filters by.
                 // Unlike aggregations, where there is only one statement per SELECT, there can be
