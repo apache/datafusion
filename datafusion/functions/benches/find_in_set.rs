@@ -19,7 +19,11 @@ extern crate criterion;
 
 use arrow::array::{StringArray, StringViewArray};
 use arrow::datatypes::DataType;
+use arrow::util::bench_util::{
+    create_string_array_with_len, create_string_view_array_with_len,
+};
 use criterion::{black_box, criterion_group, criterion_main, Criterion, SamplingMode};
+use datafusion_common::ScalarValue;
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs};
 use rand::distributions::Alphanumeric;
 use rand::prelude::StdRng;
@@ -30,7 +34,7 @@ use std::time::Duration;
 /// gen_arr(4096, 128, 0.1, 0.1, true) will generate a StringViewArray with
 /// 4096 rows, each row containing a string with 128 random characters.
 /// around 10% of the rows are null, around 10% of the rows are non-ASCII.
-fn gen_string_array(
+fn gen_args_array(
     n_rows: usize,
     str_len_chars: usize,
     null_density: f32,
@@ -113,6 +117,30 @@ fn random_element_in_set(string: &str) -> String {
     elements[random_index].to_string()
 }
 
+fn gen_args_scalar(
+    n_rows: usize,
+    str_len_chars: usize,
+    null_density: f32,
+    is_string_view: bool, // false -> StringArray, true -> StringViewArray
+) -> Vec<ColumnarValue> {
+    let str_list = "Apache,DataFusion,SQL,Query,Engine".to_string();
+    if is_string_view {
+        let string =
+            create_string_view_array_with_len(n_rows, null_density, str_len_chars, false);
+        vec![
+            ColumnarValue::Array(Arc::new(string)),
+            ColumnarValue::Scalar(ScalarValue::Utf8(Some(str_list))),
+        ]
+    } else {
+        let string =
+            create_string_array_with_len::<i32>(n_rows, null_density, str_len_chars);
+        vec![
+            ColumnarValue::Array(Arc::new(string)),
+            ColumnarValue::Scalar(ScalarValue::Utf8(Some(str_list))),
+        ]
+    }
+}
+
 fn criterion_benchmark(c: &mut Criterion) {
     // All benches are single batch run with 8192 rows
     let find_in_set = datafusion_functions::unicode::find_in_set();
@@ -124,7 +152,7 @@ fn criterion_benchmark(c: &mut Criterion) {
         group.sample_size(50);
         group.measurement_time(Duration::from_secs(10));
 
-        let args = gen_string_array(n_rows, str_len, 0.1, 0.5, false);
+        let args = gen_args_array(n_rows, str_len, 0.1, 0.5, false);
         group.bench_function(format!("string_len_{}", str_len), |b| {
             b.iter(|| {
                 black_box(find_in_set.invoke_with_args(ScalarFunctionArgs {
@@ -135,7 +163,33 @@ fn criterion_benchmark(c: &mut Criterion) {
             })
         });
 
-        let args = gen_string_array(n_rows, str_len, 0.1, 0.5, true);
+        let args = gen_args_array(n_rows, str_len, 0.1, 0.5, true);
+        group.bench_function(format!("string_view_len_{}", str_len), |b| {
+            b.iter(|| {
+                black_box(find_in_set.invoke_with_args(ScalarFunctionArgs {
+                    args: args.clone(),
+                    number_rows: n_rows,
+                    return_type: &DataType::Int32,
+                }))
+            })
+        });
+
+        group.finish();
+
+        let mut group = c.benchmark_group("find_in_set_scalar");
+
+        let args = gen_args_scalar(n_rows, str_len, 0.1, false);
+        group.bench_function(format!("string_len_{}", str_len), |b| {
+            b.iter(|| {
+                black_box(find_in_set.invoke_with_args(ScalarFunctionArgs {
+                    args: args.clone(),
+                    number_rows: n_rows,
+                    return_type: &DataType::Int32,
+                }))
+            })
+        });
+
+        let args = gen_args_scalar(n_rows, str_len, 0.1, true);
         group.bench_function(format!("string_view_len_{}", str_len), |b| {
             b.iter(|| {
                 black_box(find_in_set.invoke_with_args(ScalarFunctionArgs {
