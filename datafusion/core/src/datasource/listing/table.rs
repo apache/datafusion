@@ -161,21 +161,21 @@ impl ListingTableConfig {
 
         let mut format_options = HashMap::new();
 
-        let listing_file_extension =
-            if let Some(compression_type) = maybe_compression_type {
-                format_options
-                    .insert("format.compression".to_string(), compression_type.clone());
-                format!("{}.{}", &file_extension, &compression_type)
-            } else {
-                file_extension.clone()
-            };
-
         let file_format = state
             .get_file_format_factory(&file_extension)
             .ok_or(config_datafusion_err!(
                 "No file_format found with extension {file_extension}"
             ))?
             .create(state, &format_options)?;
+
+        let listing_file_extension =
+            if let Some(compression_type) = maybe_compression_type {
+                let file_extension = format!("{}.{}", &file_extension, &compression_type);
+                format_options.insert("format.compression".to_string(), compression_type);
+                file_extension
+            } else {
+                file_extension
+            };
 
         let listing_options = ListingOptions::new(file_format)
             .with_file_extension(listing_file_extension)
