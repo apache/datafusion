@@ -1646,5 +1646,20 @@ fn test_unparse_optimized_multi_union() -> Result<()> {
 
     assert_eq!(unparser.plan_to_sql(&plan)?.to_string(), sql);
 
+    let plan = LogicalPlan::Union(Union {
+        inputs: vec![project(
+            empty.clone(),
+            vec![lit(1).alias("x"), lit("a").alias("y")],
+        )?
+        .into()],
+        schema: dfschema.clone(),
+    });
+
+    if let Some(err) = plan_to_sql(&plan).err() {
+        assert_contains!(err.to_string(), "UNION operator requires at least 2 inputs");
+    } else {
+        panic!("Expected error")
+    }
+
     Ok(())
 }
