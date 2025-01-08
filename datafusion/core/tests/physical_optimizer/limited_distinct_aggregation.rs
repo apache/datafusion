@@ -78,11 +78,7 @@ fn mock_data() -> Result<Arc<DataSourceExec>> {
         ],
     )?;
 
-    Ok(MemorySourceConfig::try_new_exec(
-        &[vec![batch]],
-        Arc::clone(&schema),
-        None,
-    )?)
+    MemorySourceConfig::try_new_exec(&[vec![batch]], Arc::clone(&schema), None)
 }
 
 fn assert_plan_matches_expected(

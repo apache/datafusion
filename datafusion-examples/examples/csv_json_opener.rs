@@ -18,13 +18,14 @@
 use std::sync::Arc;
 
 use arrow_schema::{DataType, Field, Schema};
+use datafusion::datasource::data_source::DataSourceFileConfig;
 use datafusion::{
     assert_batches_eq,
     datasource::{
         file_format::file_compression_type::FileCompressionType,
         listing::PartitionedFile,
         object_store::ObjectStoreUrl,
-        physical_plan::{CsvConfig, CsvOpener, FileScanConfig, FileStream, JsonOpener},
+        physical_plan::{CsvConfig, FileScanConfig, FileStream, JsonOpener},
     },
     error::Result,
     physical_plan::metrics::ExecutionPlanMetricsSet,
@@ -48,23 +49,23 @@ async fn csv_opener() -> Result<()> {
     let object_store = Arc::new(LocalFileSystem::new());
     let schema = aggr_test_schema();
 
-    let config = CsvConfig::new(true, b',', b'"').with_terminator(Some(b'#'));
-
-    let opener = Arc::new(CsvOpener::new(
-        Arc::new(config),
-        FileCompressionType::UNCOMPRESSED,
-        object_store,
-    ));
-
     let testdata = datafusion::test_util::arrow_test_data();
     let path = format!("{testdata}/csv/aggregate_test_100.csv");
 
     let path = std::path::Path::new(&path).canonicalize()?;
 
-    let scan_config = FileScanConfig::new(ObjectStoreUrl::local_filesystem(), schema)
-        .with_projection(Some(vec![12, 0]))
-        .with_limit(Some(5))
-        .with_file(PartitionedFile::new(path.display().to_string(), 10));
+    let scan_config =
+        FileScanConfig::new(ObjectStoreUrl::local_filesystem(), Arc::clone(&schema))
+            .with_projection(Some(vec![12, 0]))
+            .with_limit(Some(5))
+            .with_file(PartitionedFile::new(path.display().to_string(), 10));
+
+    let config = CsvConfig::new(true, b',', b'"')
+        .with_schema(schema)
+        .with_batch_size(8192)
+        .with_projection(&scan_config);
+
+    let opener = config.create_file_opener(Ok(object_store), &scan_config, 0)?;
 
     let mut result = vec![];
     let mut stream =

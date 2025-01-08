@@ -249,11 +249,7 @@ mod tests {
             ],
         )?;
 
-        Ok(MemorySourceConfig::try_new_exec(
-            &[vec![batch]],
-            Arc::clone(&schema),
-            None,
-        )?)
+        MemorySourceConfig::try_new_exec(&[vec![batch]], Arc::clone(&schema), None)
     }
 
     /// Checks that the count optimization was applied and we still get the right result

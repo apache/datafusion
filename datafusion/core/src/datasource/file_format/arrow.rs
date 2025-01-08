@@ -53,7 +53,6 @@ use datafusion_physical_expr::PhysicalExpr;
 use datafusion_physical_expr_common::sort_expr::LexRequirement;
 use datafusion_physical_plan::insert::{DataSink, DataSinkExec};
 use datafusion_physical_plan::metrics::MetricsSet;
-use datafusion_physical_plan::source::DataSourceExec;
 
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -174,9 +173,8 @@ impl FileFormat for ArrowFormat {
         _filters: Option<&Arc<dyn PhysicalExpr>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let source_config = Arc::new(ArrowConfig {});
-        let source = Arc::new(FileSourceConfig::new(conf, source_config));
-        let exec = DataSourceExec::new(source);
-        Ok(Arc::new(exec))
+        let exec = FileSourceConfig::new_exec(conf, source_config);
+        Ok(exec)
     }
 
     async fn create_writer_physical_plan(
