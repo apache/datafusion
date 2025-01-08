@@ -54,8 +54,6 @@ use crate::physical_plan::repartition::RepartitionExec;
 use crate::physical_plan::sorts::sort::SortExec;
 use crate::physical_plan::union::UnionExec;
 use crate::physical_plan::unnest::UnnestExec;
-#[allow(deprecated)] // TODO: Remove in favour of MemoryExec
-use crate::physical_plan::values::ValuesExec;
 use crate::physical_plan::windows::{BoundedWindowAggExec, WindowAggExec};
 use crate::physical_plan::{
     displayable, windows, ExecutionPlan, ExecutionPlanProperties, InputOrderMode,
@@ -467,8 +465,8 @@ impl DefaultPhysicalPlanner {
                             .collect::<Result<Vec<Arc<dyn PhysicalExpr>>>>()
                     })
                     .collect::<Result<Vec<_>>>()?;
-                #[allow(deprecated)] // TODO: Remove in favour of MemoryExec
-                let value_exec = ValuesExec::try_new(SchemaRef::new(exec_schema), exprs)?;
+                let value_exec =
+                    MemoryExec::try_new_as_values(SchemaRef::new(exec_schema), exprs)?;
                 Arc::new(value_exec)
             }
             LogicalPlan::EmptyRelation(EmptyRelation {
