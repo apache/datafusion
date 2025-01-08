@@ -124,15 +124,15 @@ use itertools::Itertools;
 /// ```
 #[derive(Debug, Clone)]
 pub struct EquivalenceProperties {
-    /// Collection of equivalence classes that store expressions with the same
-    /// value.
-    pub eq_group: EquivalenceGroup,
-    /// Equivalent sort expressions for this table.
-    pub oeq_class: OrderingEquivalenceClass,
-    /// Expressions whose values are constant throughout the table.
+    /// Distinct equivalence classes (exprs known to have the same expressions)
+    eq_group: EquivalenceGroup,
+    /// Equivalent sort expressions
+    oeq_class: OrderingEquivalenceClass,
+    /// Expressions whose values are constant
+    ///
     /// TODO: We do not need to track constants separately, they can be tracked
-    ///       inside `eq_groups` as `Literal` expressions.
-    pub constants: Vec<ConstExpr>,
+    ///       inside `eq_group` as `Literal` expressions.
+    constants: Vec<ConstExpr>,
     /// Schema associated with this object.
     schema: SchemaRef,
 }
@@ -166,6 +166,11 @@ impl EquivalenceProperties {
     /// Returns a reference to the ordering equivalence class within.
     pub fn oeq_class(&self) -> &OrderingEquivalenceClass {
         &self.oeq_class
+    }
+
+    /// Return the inner OrderingEquivalenceClass, consuming self
+    pub fn into_oeq_class(self) -> OrderingEquivalenceClass {
+        self.oeq_class
     }
 
     /// Returns a reference to the equivalence group within.
@@ -338,7 +343,6 @@ impl EquivalenceProperties {
         let normalized_expr = self.eq_group().normalize_expr(Arc::clone(expr));
         let eq_class = self
             .eq_group
-            .classes
             .iter()
             .find_map(|class| {
                 class
@@ -1234,7 +1238,7 @@ impl EquivalenceProperties {
 
         // Rewrite equivalence classes according to the new schema:
         let mut eq_classes = vec![];
-        for eq_class in self.eq_group.classes {
+        for eq_class in self.eq_group {
             let new_eq_exprs = eq_class
                 .into_vec()
                 .into_iter()
@@ -2307,7 +2311,7 @@ mod tests {
 
         // At the output a1=a2=a3=a4
         assert_eq!(out_properties.eq_group().len(), 1);
-        let eq_class = &out_properties.eq_group().classes[0];
+        let eq_class = out_properties.eq_group().iter().next().unwrap();
         assert_eq!(eq_class.len(), 4);
         assert!(eq_class.contains(col_a1));
         assert!(eq_class.contains(col_a2));

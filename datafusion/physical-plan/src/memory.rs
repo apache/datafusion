@@ -260,7 +260,7 @@ impl MemoryExec {
                 ProjectionMapping::try_new(&proj_exprs, &self.original_schema())?;
             sort_information = base_eqp
                 .project(&projection_mapping, self.schema())
-                .oeq_class
+                .into_oeq_class()
                 .into_inner();
         }
 

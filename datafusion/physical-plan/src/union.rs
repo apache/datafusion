@@ -843,7 +843,7 @@ mod tests {
     ) {
         // Check whether orderings are same.
         let lhs_orderings = lhs.oeq_class();
-        let rhs_orderings = &rhs.oeq_class;
+        let rhs_orderings = rhs.oeq_class();
         assert_eq!(lhs_orderings.len(), rhs_orderings.len(), "{}", err_msg);
         for rhs_ordering in rhs_orderings.iter() {
             assert!(lhs_orderings.contains(rhs_ordering), "{}", err_msg);
