@@ -16,29 +16,33 @@
 // under the License.
 
 //! Functions that are query-able and searchable via the `\h` command
+
+use std::fmt;
+use std::fs::File;
+use std::str::FromStr;
+use std::sync::Arc;
+
 use arrow::array::{Int64Array, StringArray};
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use arrow::util::pretty::pretty_format_batches;
-use async_trait::async_trait;
-
 use datafusion::catalog::Session;
 use datafusion::common::{plan_err, Column};
 use datafusion::datasource::TableProvider;
 use datafusion::error::Result;
 use datafusion::logical_expr::Expr;
+use datafusion::physical_plan::memory::MemorySourceConfig;
+use datafusion::physical_plan::source::DataSourceExec;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::scalar::ScalarValue;
 use datafusion_catalog::TableFunctionImpl;
+
+use async_trait::async_trait;
 use parquet::basic::ConvertedType;
 use parquet::data_type::{ByteArray, FixedLenByteArray};
 use parquet::file::reader::FileReader;
 use parquet::file::serialized_reader::SerializedFileReader;
 use parquet::file::statistics::Statistics;
-use std::fmt;
-use std::fs::File;
-use std::str::FromStr;
-use std::sync::Arc;
 
 #[derive(Debug)]
 pub enum Function {
