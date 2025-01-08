@@ -33,4 +33,6 @@ pub mod interval_arithmetic;
 pub mod operator;
 pub mod signature;
 pub mod sort_properties;
+#[cfg(feature = "stats_v2")]
+pub mod stats;
 pub mod type_coercion;
