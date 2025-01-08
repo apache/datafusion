@@ -24,7 +24,7 @@ use arrow_array::{
     new_null_array, Array, ArrayRef, GenericListArray, Int64Array, ListArray,
     OffsetSizeTrait,
 };
-use arrow_buffer::OffsetBuffer;
+use arrow_buffer::{BooleanBufferBuilder, OffsetBuffer};
 use arrow_schema::DataType::{LargeList, List};
 use arrow_schema::{DataType, Field};
 use datafusion_common::cast::{as_int64_array, as_large_list_array, as_list_array};
@@ -169,6 +169,7 @@ fn general_repeat<O: OffsetSizeTrait>(
 ) -> Result<ArrayRef> {
     let data_type = array.data_type();
     let mut new_values = vec![];
+    let mut null_bits = BooleanBufferBuilder::new(array.len());
 
     let count_vec = count_array
         .values()
@@ -178,6 +179,13 @@ fn general_repeat<O: OffsetSizeTrait>(
         .collect::<Vec<_>>();
 
     for (row_index, &count) in count_vec.iter().enumerate() {
+        if count == 0 {
+            null_bits.append(false);
+            new_values.push(new_null_array(data_type, 0));
+            continue;
+        }
+
+        null_bits.append(true);
         let repeated_array = if array.is_null(row_index) {
             new_null_array(data_type, count)
         } else {
@@ -203,7 +211,7 @@ fn general_repeat<O: OffsetSizeTrait>(
         Arc::new(Field::new_list_field(data_type.to_owned(), true)),
         OffsetBuffer::from_lengths(count_vec),
         values,
-        None,
+        Some(null_bits.finish().into()),
     )?))
 }
 
@@ -224,6 +232,7 @@ fn general_list_repeat<O: OffsetSizeTrait>(
     let data_type = list_array.data_type();
     let value_type = list_array.value_type();
     let mut new_values = vec![];
+    let mut null_bits = BooleanBufferBuilder::new(list_array.len());
 
     let count_vec = count_array
         .values()
@@ -233,6 +242,13 @@ fn general_list_repeat<O: OffsetSizeTrait>(
         .collect::<Vec<_>>();
 
     for (list_array_row, &count) in list_array.iter().zip(count_vec.iter()) {
+        if count == 0 {
+            null_bits.append(false);
+            new_values.push(new_null_array(data_type, 0));
+            continue;
+        }
+
+        null_bits.append(true);
         let list_arr = match list_array_row {
             Some(list_array_row) => {
                 let original_data = list_array_row.to_data();
@@ -271,6 +287,6 @@ fn general_list_repeat<O: OffsetSizeTrait>(
         Arc::new(Field::new_list_field(data_type.to_owned(), true)),
         OffsetBuffer::<i32>::from_lengths(lengths),
         values,
-        None,
+        Some(null_bits.finish().into()),
     )?))
 }
