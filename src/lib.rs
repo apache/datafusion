@@ -27,8 +27,7 @@ mod bitwise_not;
 pub use bitwise_not::{bitwise_not, BitwiseNotExpr};
 mod checkoverflow;
 pub use checkoverflow::CheckOverflow;
-mod strings;
-pub use strings::{Contains, EndsWith, Like, StartsWith, StringSpaceExpr, SubstringExpr};
+
 mod kernels;
 mod list;
 mod regexp;
@@ -54,6 +53,8 @@ pub use normalize_nan::NormalizeNaNAndZero;
 
 mod agg_funcs;
 mod comet_scalar_funcs;
+mod string_funcs;
+
 mod datetime_funcs;
 pub use agg_funcs::*;
 
@@ -66,6 +67,7 @@ pub use error::{SparkError, SparkResult};
 pub use if_expr::IfExpr;
 pub use list::{ArrayInsert, GetArrayStructFields, ListExtract};
 pub use regexp::RLike;
+pub use string_funcs::*;
 pub use struct_funcs::*;
 pub use to_json::ToJson;
 
