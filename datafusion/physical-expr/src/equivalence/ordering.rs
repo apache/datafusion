@@ -101,6 +101,8 @@ impl OrderingEquivalenceClass {
     }
 
     /// Extend this ordering equivalence class with the `other` class.
+    #[deprecated(since = "45.0.0", note = "Use add_new_orderings instead")]
+
     pub fn extend(&mut self, other: Self) {
         self.orderings.extend(other.orderings);
         // Make sure that there are no redundant orderings:

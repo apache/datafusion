@@ -209,14 +209,16 @@ impl EquivalenceProperties {
     /// Extends this `EquivalenceProperties` with the `other` object.
     pub fn extend(mut self, other: Self) -> Self {
         self.eq_group.extend(other.eq_group);
-        self.oeq_class.extend(other.oeq_class);
+        self.add_new_orderings(other.oeq_class);
         self.with_constants(other.constants)
     }
 
-    /// Clears (empties) the ordering equivalence class within this object.
+    /// Clears (empties) the ordering equivalence class within this object,
+    /// returning the previous one.
+    ///
     /// Call this method when existing orderings are invalidated.
-    pub fn clear_orderings(&mut self) {
-        self.oeq_class.clear();
+    pub fn clear_orderings(&mut self) -> OrderingEquivalenceClass {
+        mem::take(&mut self.oeq_class) // reset to default
     }
 
     /// Removes constant expressions that may change across partitions.
@@ -230,7 +232,7 @@ impl EquivalenceProperties {
     /// Extends this `EquivalenceProperties` by adding the orderings inside the
     /// ordering equivalence class `other`.
     pub fn add_ordering_equivalence_class(&mut self, other: OrderingEquivalenceClass) {
-        self.oeq_class.extend(other);
+        self.add_new_orderings(other);
     }
 
     /// Adds new orderings into the existing ordering equivalence class.
@@ -238,6 +240,7 @@ impl EquivalenceProperties {
         &mut self,
         orderings: impl IntoIterator<Item = LexOrdering>,
     ) {
+        // single location oeq_class is updated
         self.oeq_class.add_new_orderings(orderings);
     }
 
@@ -411,7 +414,7 @@ impl EquivalenceProperties {
             }
         }
 
-        self.oeq_class.add_new_orderings(new_orderings);
+        self.add_new_orderings(new_orderings);
         Ok(())
     }
 
@@ -435,7 +438,7 @@ impl EquivalenceProperties {
         let mut new_orderings = vec![filtered_exprs.clone()];
 
         // Preserve valid suffixes from existing orderings
-        let oeq_class = mem::take(&mut self.oeq_class);
+        let oeq_class = self.clear_orderings();
         for existing in oeq_class {
             if self.is_prefix_of(&filtered_exprs, &existing) {
                 let mut extended = filtered_exprs.clone();
@@ -444,7 +447,7 @@ impl EquivalenceProperties {
             }
         }
 
-        self.oeq_class = OrderingEquivalenceClass::new(new_orderings);
+        self.add_new_orderings(new_orderings);
         self
     }
 
@@ -716,12 +719,12 @@ impl EquivalenceProperties {
     /// dependency map, happen in issue 8838: <https://github.com/apache/datafusion/issues/8838>
     pub fn substitute_oeq_class(&mut self, mapping: &ProjectionMapping) -> Result<()> {
         let new_order = self
-            .oeq_class
+            .clear_orderings()
             .iter()
             .map(|order| self.substitute_ordering_component(mapping, order))
             .collect::<Result<Vec<_>>>()?;
-        let new_order = new_order.into_iter().flatten().collect();
-        self.oeq_class = OrderingEquivalenceClass::new(new_order);
+        let new_order: Vec<_> = new_order.into_iter().flatten().collect();
+        self.add_new_orderings(new_order);
         Ok(())
     }
     /// Projects argument `expr` according to `projection_mapping`, taking
