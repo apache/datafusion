@@ -23,12 +23,12 @@ use std::fmt::Formatter;
 use std::sync::Arc;
 
 use crate::datasource::listing::PartitionedFile;
+#[cfg(feature = "parquet")]
+use crate::datasource::physical_plan::ParquetConfig;
 use crate::datasource::physical_plan::{
     ArrowConfig, AvroConfig, CsvConfig, FileGroupPartitioner, FileOpener, FileScanConfig,
     FileStream, JsonConfig,
 };
-#[cfg(feature = "parquet")]
-use crate::datasource::physical_plan::ParquetConfig;
 
 use arrow_schema::SchemaRef;
 use datafusion_common::config::ConfigOptions;
@@ -116,7 +116,7 @@ impl DataSource for FileSourceConfig {
         self.fmt_source_config(f)?;
 
         if let Some(csv_conf) = self.source_config.as_any().downcast_ref::<CsvConfig>() {
-            return write!(f, ", has_header={}", csv_conf.has_header)
+            return write!(f, ", has_header={}", csv_conf.has_header);
         }
 
         #[cfg(feature = "parquet")]
@@ -148,7 +148,11 @@ impl DataSource for FileSourceConfig {
                             })
                             .unwrap_or_default();
 
-                        return write!(f, "{}{}", predicate_string, pruning_predicate_string,)
+                        return write!(
+                            f,
+                            "{}{}",
+                            predicate_string, pruning_predicate_string,
+                        );
                     }
                 }
             }
@@ -185,28 +189,28 @@ impl DataSource for FileSourceConfig {
     }
 
     fn statistics(&self) -> datafusion_common::Result<Statistics> {
-
         #[cfg(not(feature = "parquet"))]
         let stats = self.projected_statistics.clone();
 
         #[cfg(feature = "parquet")]
-        let stats =
-            if let Some(parquet_config) = self.source_config.as_any().downcast_ref::<ParquetConfig>() {
-                // When filters are pushed down, we have no way of knowing the exact statistics.
-                // Note that pruning predicate is also a kind of filter pushdown.
-                // (bloom filters use `pruning_predicate` too)
-                if parquet_config.pruning_predicate().is_some()
-                    || parquet_config.page_pruning_predicate().is_some()
-                    || (parquet_config.predicate().is_some()
+        let stats = if let Some(parquet_config) =
+            self.source_config.as_any().downcast_ref::<ParquetConfig>()
+        {
+            // When filters are pushed down, we have no way of knowing the exact statistics.
+            // Note that pruning predicate is also a kind of filter pushdown.
+            // (bloom filters use `pruning_predicate` too)
+            if parquet_config.pruning_predicate().is_some()
+                || parquet_config.page_pruning_predicate().is_some()
+                || (parquet_config.predicate().is_some()
                     && parquet_config.pushdown_filters())
-                {
-                    self.projected_statistics.clone().to_inexact()
-                } else {
-                    self.projected_statistics.clone()
-                }
+            {
+                self.projected_statistics.clone().to_inexact()
             } else {
                 self.projected_statistics.clone()
-            };
+            }
+        } else {
+            self.projected_statistics.clone()
+        };
 
         Ok(stats)
     }
@@ -312,7 +316,12 @@ impl FileSourceConfig {
             "unknown"
         };
         #[cfg(feature = "parquet")]
-        if self.source_config.as_any().downcast_ref::<ParquetConfig>().is_some() {
+        if self
+            .source_config
+            .as_any()
+            .downcast_ref::<ParquetConfig>()
+            .is_some()
+        {
             data_type = "parquet";
         }
         write!(f, ", file_type={}", data_type)
