@@ -189,6 +189,8 @@ impl MemoryExec {
         let n_row = data.len();
         let n_col = schema.fields().len();
 
+        // We have this single row batch as a placeholder to satisfy evaluation argument
+        // and generate a single output row
         let placeholder_schema = Arc::new(Schema::empty());
         let placeholder_batch = RecordBatch::try_new_with_options(
             Arc::clone(&placeholder_schema),
