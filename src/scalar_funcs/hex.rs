@@ -52,7 +52,7 @@ fn hex_encode<T: AsRef<[u8]>>(data: T, lower_case: bool) -> String {
 }
 
 #[inline(always)]
-pub(super) fn hex_strings<T: AsRef<[u8]>>(data: T) -> String {
+pub(crate) fn hex_strings<T: AsRef<[u8]>>(data: T) -> String {
     hex_encode(data, true)
 }
 

@@ -42,14 +42,11 @@ mod unhex;
 pub use unhex::spark_unhex;
 
 mod hex;
+pub(crate) use hex::hex_strings;
 pub use hex::spark_hex;
 
 mod chr;
 pub use chr::SparkChrFunc;
-
-pub mod hash_expressions;
-// exposed for benchmark only
-pub use hash_expressions::{spark_murmur3_hash, spark_xxhash64};
 
 #[inline]
 fn get_precision_scale(data_type: &DataType) -> (u8, i8) {

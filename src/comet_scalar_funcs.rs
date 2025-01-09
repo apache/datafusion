@@ -15,13 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::scalar_funcs::hash_expressions::{
-    spark_sha224, spark_sha256, spark_sha384, spark_sha512,
-};
+use crate::hash_funcs::*;
 use crate::scalar_funcs::{
     spark_ceil, spark_decimal_div, spark_floor, spark_hex, spark_isnan, spark_make_decimal,
-    spark_murmur3_hash, spark_round, spark_unhex, spark_unscaled_value, spark_xxhash64,
-    SparkChrFunc,
+    spark_round, spark_unhex, spark_unscaled_value, SparkChrFunc,
 };
 use crate::{spark_date_add, spark_date_sub, spark_read_side_padding};
 use arrow_schema::DataType;

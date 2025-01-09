@@ -37,7 +37,6 @@ pub use schema_adapter::SparkSchemaAdapterFactory;
 pub use static_invoke::*;
 
 mod negative;
-pub mod spark_hash;
 mod struct_funcs;
 pub use negative::{create_negate_expr, NegativeExpr};
 mod normalize_nan;
@@ -54,6 +53,8 @@ pub use predicate_funcs::{spark_isnan, RLike};
 
 mod agg_funcs;
 mod comet_scalar_funcs;
+pub mod hash_funcs;
+
 mod string_funcs;
 
 mod datetime_funcs;
@@ -65,6 +66,7 @@ pub use cast::{spark_cast, Cast, SparkCastOptions};
 pub use comet_scalar_funcs::create_comet_physical_fun;
 pub use datetime_funcs::*;
 pub use error::{SparkError, SparkResult};
+pub use hash_funcs::*;
 pub use if_expr::IfExpr;
 pub use json_funcs::ToJson;
 pub use list::{ArrayInsert, GetArrayStructFields, ListExtract};
