@@ -32,7 +32,7 @@ DataFusion is included in the benchmark setups for several popular
 benchmarks that compare performance with other engines. For example:
 
 * [ClickBench] scripts are in the [ClickBench repo](https://github.com/ClickHouse/ClickBench/tree/main/datafusion)
-* [H2o.ai `db-benchmark`] scripts are in [db-benchmark](db-benchmark) directory
+* [H2o.ai `db-benchmark`] scripts are in [db-benchmark](https://github.com/apache/datafusion/tree/main/benchmarks/src/h2o.rs)
 
 [ClickBench]: https://github.com/ClickHouse/ClickBench/tree/main
 [H2o.ai `db-benchmark`]: https://github.com/h2oai/db-benchmark
@@ -405,31 +405,43 @@ cargo run --release --bin external_aggr -- benchmark -n 4 --iterations 3 -p '...
 ```
 
 
-# Older Benchmarks
+## h2o benchmarks for groupby
 
-## h2o benchmarks
+### Generate data for h2o benchmarks
+There are three options for generating data for h2o benchmarks: `small`, `medium`, and `big`. The data is generated in the `data` directory.
 
+1. Generate small data (1e7 rows)
 ```bash
-cargo run --release --bin h2o group-by --query 1 --path /mnt/bigdata/h2oai/N_1e7_K_1e2_single.csv --mem-table --debug
+./bench.sh data h2o_small
 ```
 
-Example run:
 
+2. Generate medium data (1e8 rows)
+```bash
+./bench.sh data h2o_medium
 ```
-Running benchmarks with the following options: GroupBy(GroupBy { query: 1, path: "/mnt/bigdata/h2oai/N_1e7_K_1e2_single.csv", debug: false })
-Executing select id1, sum(v1) as v1 from x group by id1
-+-------+--------+
-| id1   | v1     |
-+-------+--------+
-| id063 | 199420 |
-| id094 | 200127 |
-| id044 | 198886 |
-...
-| id093 | 200132 |
-| id003 | 199047 |
-+-------+--------+
 
-h2o groupby query 1 took 1669 ms
+
+3. Generate large data (1e9 rows)
+```bash
+./bench.sh data h2o_big
+```
+
+### Run h2o benchmarks
+There are three options for running h2o benchmarks: `small`, `medium`, and `big`.
+1. Run small data benchmark
+```bash
+./bench.sh run h2o_small
+```
+
+2. Run medium data benchmark
+```bash
+./bench.sh run h2o_medium
+```
+
+3. Run large data benchmark
+```bash
+./bench.sh run h2o_big
 ```
 
 [1]: http://www.tpc.org/tpch/

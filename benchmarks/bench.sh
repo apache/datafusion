@@ -80,12 +80,9 @@ clickbench_1:           ClickBench queries against a single parquet file
 clickbench_partitioned: ClickBench queries against a partitioned (100 files) parquet
 clickbench_extended:    ClickBench \"inspired\" queries against a single parquet (DataFusion specific)
 external_aggr:          External aggregation benchmark
-h2o_small:              h2oai benchmark with small dataset (1e7 rows),  default file format is parquet
-h2o_medium:             h2oai benchmark with medium dataset (1e8 rows), default file format is parquet
-h2o_big:                h2oai benchmark with large dataset (1e9 rows),  default file format is parquet
-h2o_small_csv           h2oai benchmark with small dataset (1e7 rows),  file format is csv
-h2o_medium_csv          h2oai benchmark with medium dataset (1e8 rows), file format is csv
-h2o_big_csv             h2oai benchmark with large dataset (1e9 rows),  file format is csv
+h2o_small:              h2oai benchmark with small dataset (1e7 rows),  default file format is csv
+h2o_medium:             h2oai benchmark with medium dataset (1e8 rows), default file format is csv
+h2o_big:                h2oai benchmark with large dataset (1e9 rows),  default file format is csv
 
 **********
 * Supported Configuration (Environment Variables)
@@ -182,21 +179,12 @@ main() {
                     data_imdb
                     ;;
                 h2o_small)
-                    data_h2o "SMALL"
-                    ;;
-                h2o_medium)
-                    data_h2o "MEDIUM"
-                    ;;
-                h2o_big)
-                    data_h2o "BIG"
-                    ;;
-                h2o_small_csv)
                     data_h2o "SMALL" "CSV"
                     ;;
-                h2o_medium_csv)
+                h2o_medium)
                     data_h2o "MEDIUM" "CSV"
                     ;;
-                h2o_big_csv)
+                h2o_big)
                     data_h2o "BIG" "CSV"
                     ;;
                 external_aggr)
@@ -285,21 +273,12 @@ main() {
                     run_imdb
                     ;;
                 h2o_small)
-                    run_h2o "SMALL" "PARQUET" "groupby"
-                    ;;
-                h2o_medium)
-                    run_h2o "MEDIUM" "PARQUET" "groupby"
-                    ;;
-                h2o_big)
-                    run_h2o "BIG" "PARQUET" "groupby"
-                    ;;
-                h2o_small_csv)
                     run_h2o "SMALL" "CSV" "groupby"
                     ;;
-                h2o_medium_csv)
+                h2o_medium)
                     run_h2o "MEDIUM" "CSV" "groupby"
                     ;;
-                h2o_big_csv)
+                h2o_big)
                     run_h2o "BIG" "CSV" "groupby"
                     ;;
                 external_aggr)
@@ -592,7 +571,7 @@ run_imdb() {
 data_h2o() {
     # Default values for size and data format
     SIZE=${1:-"SMALL"}
-    DATA_FORMAT=${2:-"PARQUET"}
+    DATA_FORMAT=${2:-"CSV"}
 
     # Function to compare Python versions
     version_ge() {
@@ -669,7 +648,7 @@ data_h2o() {
 run_h2o() {
     # Default values for size and data format
     SIZE=${1:-"SMALL"}
-    DATA_FORMAT=${2:-"PARQUET"}
+    DATA_FORMAT=${2:-"CSV"}
     DATA_FORMAT=$(echo "$DATA_FORMAT" | tr '[:upper:]' '[:lower:]')
     RUN_Type=${3:-"groupby"}
 

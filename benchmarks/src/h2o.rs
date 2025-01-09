@@ -43,11 +43,13 @@ pub struct RunOpt {
     queries_path: PathBuf,
 
     /// Path to data file (parquet or csv)
+    /// Default value is the G1_1e7_1e7_100_0.csv file in the h2o benchmark
+    /// This is the small csv file with 10^7 rows
     #[structopt(
         parse(from_os_str),
         short = "p",
         long = "path",
-        default_value = "benchmarks/data/h2o/G1_1e7_1e7_100_0.parquet"
+        default_value = "benchmarks/data/h2o/G1_1e7_1e7_100_0.csv"
     )]
     path: PathBuf,
 
