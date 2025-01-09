@@ -440,13 +440,13 @@ fn get_valid_types(
     fn function_length_check(length: usize, expected_length: usize) -> Result<()> {
         if length < 1 {
             return plan_err!(
-                "The signature expected at least one argument but received {expected_length}"
+                "The signature expected at least one argument but received {length}"
             );
         }
 
         if length != expected_length {
             return plan_err!(
-                "The signature expected {length} arguments but received {expected_length}"
+                "The signature expected {expected_length} arguments but received {length}"
             );
         }
 
