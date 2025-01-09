@@ -562,10 +562,6 @@ impl LexRequirement {
     ///
     /// For example, `vec![a Some(ASC), a Some(DESC)]` collapses to `vec![a
     /// Some(ASC)]`.
-    ///
-    /// It will also filter out entries that are ordered if the next entry is;
-    /// for instance, `vec![floor(a) Some(ASC), a Some(ASC)]` will be collapsed to
-    /// `vec![a Some(ASC)]`.
     pub fn collapse(self) -> Self {
         let mut output = Vec::<PhysicalSortRequirement>::new();
         for item in self {
