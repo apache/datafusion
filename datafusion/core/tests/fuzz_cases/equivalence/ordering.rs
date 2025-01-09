@@ -68,8 +68,8 @@ fn test_ordering_satisfy_with_equivalence_random() -> Result<()> {
                     table_data_with_properties.clone(),
                 )?;
                 let err_msg = format!(
-                    "Error in test case requirement:{:?}, expected: {:?}, eq_properties.oeq_class: {:?}, eq_properties.eq_group: {:?}, eq_properties.constants: {:?}",
-                    requirement, expected, eq_properties.oeq_class, eq_properties.eq_group, eq_properties.constants
+                    "Error in test case requirement:{:?}, expected: {:?}, eq_properties {}",
+                    requirement, expected, eq_properties
                 );
                 // Check whether ordering_satisfy API result and
                 // experimental result matches.
@@ -141,8 +141,8 @@ fn test_ordering_satisfy_with_equivalence_complex_random() -> Result<()> {
                     table_data_with_properties.clone(),
                 )?;
                 let err_msg = format!(
-                    "Error in test case requirement:{:?}, expected: {:?}, eq_properties.oeq_class: {:?}, eq_properties.eq_group: {:?}, eq_properties.constants: {:?}",
-                    requirement, expected, eq_properties.oeq_class, eq_properties.eq_group, eq_properties.constants
+                    "Error in test case requirement:{:?}, expected: {:?}, eq_properties: {}",
+                    requirement, expected, eq_properties,
                 );
                 // Check whether ordering_satisfy API result and
                 // experimental result matches.

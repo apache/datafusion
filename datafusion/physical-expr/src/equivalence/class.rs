@@ -20,12 +20,12 @@ use crate::{
     expressions::Column, LexOrdering, LexRequirement, PhysicalExpr, PhysicalExprRef,
     PhysicalSortExpr, PhysicalSortRequirement,
 };
-use std::fmt::Display;
-use std::sync::Arc;
-
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::{JoinType, ScalarValue};
 use datafusion_physical_expr_common::physical_expr::format_physical_expr_list;
+use std::fmt::Display;
+use std::sync::Arc;
+use std::vec::IntoIter;
 
 use indexmap::{IndexMap, IndexSet};
 
@@ -323,11 +323,10 @@ impl Display for EquivalenceClass {
     }
 }
 
-/// An `EquivalenceGroup` is a collection of `EquivalenceClass`es where each
-/// class represents a distinct equivalence class in a relation.
+/// A collection of distinct `EquivalenceClass`es
 #[derive(Debug, Clone)]
 pub struct EquivalenceGroup {
-    pub classes: Vec<EquivalenceClass>,
+    classes: Vec<EquivalenceClass>,
 }
 
 impl EquivalenceGroup {
@@ -717,6 +716,20 @@ impl EquivalenceGroup {
             .into_iter()
             .zip(right_children)
             .all(|(left_child, right_child)| self.exprs_equal(left_child, right_child))
+    }
+
+    /// Return the inner classes of this equivalence group.
+    pub fn into_inner(self) -> Vec<EquivalenceClass> {
+        self.classes
+    }
+}
+
+impl IntoIterator for EquivalenceGroup {
+    type Item = EquivalenceClass;
+    type IntoIter = IntoIter<EquivalenceClass>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.classes.into_iter()
     }
 }
 

@@ -20,8 +20,7 @@ use std::sync::Arc;
 
 use crate::utils::{make_scalar_function, utf8_to_str_type};
 use arrow::array::{
-    Array, ArrayAccessor, ArrayIter, ArrayRef, AsArray, GenericStringArray,
-    OffsetSizeTrait,
+    Array, ArrayRef, AsArray, GenericStringBuilder, OffsetSizeTrait, StringArrayType,
 };
 use arrow::datatypes::DataType;
 use datafusion_common::{exec_err, Result};
@@ -105,8 +104,7 @@ impl ScalarUDFImpl for ReverseFunc {
     }
 }
 
-/// Reverses the order of the characters in the string.
-/// reverse('abcde') = 'edcba'
+/// Reverses the order of the characters in the string `reverse('abcde') = 'edcba'`.
 /// The implementation uses UTF-8 code points as characters
 pub fn reverse<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
     if args[0].data_type() == &Utf8View {
@@ -116,14 +114,23 @@ pub fn reverse<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
     }
 }
 
-fn reverse_impl<'a, T: OffsetSizeTrait, V: ArrayAccessor<Item = &'a str>>(
+fn reverse_impl<'a, T: OffsetSizeTrait, V: StringArrayType<'a>>(
     string_array: V,
 ) -> Result<ArrayRef> {
-    let result = ArrayIter::new(string_array)
-        .map(|string| string.map(|string: &str| string.chars().rev().collect::<String>()))
-        .collect::<GenericStringArray<T>>();
+    let mut builder = GenericStringBuilder::<T>::with_capacity(string_array.len(), 1024);
 
-    Ok(Arc::new(result) as ArrayRef)
+    let mut reversed = String::new();
+    for string in string_array.iter() {
+        if let Some(s) = string {
+            reversed.extend(s.chars().rev());
+            builder.append_value(&reversed);
+            reversed.clear();
+        } else {
+            builder.append_null();
+        }
+    }
+
+    Ok(Arc::new(builder.finish()) as ArrayRef)
 }
 
 #[cfg(test)]

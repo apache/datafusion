@@ -122,15 +122,15 @@ use itertools::Itertools;
 /// ```
 #[derive(Debug, Clone)]
 pub struct EquivalenceProperties {
-    /// Collection of equivalence classes that store expressions with the same
-    /// value.
-    pub eq_group: EquivalenceGroup,
-    /// Equivalent sort expressions for this table.
-    pub oeq_class: OrderingEquivalenceClass,
-    /// Expressions whose values are constant throughout the table.
+    /// Distinct equivalence classes (exprs known to have the same expressions)
+    eq_group: EquivalenceGroup,
+    /// Equivalent sort expressions
+    oeq_class: OrderingEquivalenceClass,
+    /// Expressions whose values are constant
+    ///
     /// TODO: We do not need to track constants separately, they can be tracked
-    ///       inside `eq_groups` as `Literal` expressions.
-    pub constants: Vec<ConstExpr>,
+    ///       inside `eq_group` as `Literal` expressions.
+    constants: Vec<ConstExpr>,
     /// Schema associated with this object.
     schema: SchemaRef,
 }
@@ -164,6 +164,11 @@ impl EquivalenceProperties {
     /// Returns a reference to the ordering equivalence class within.
     pub fn oeq_class(&self) -> &OrderingEquivalenceClass {
         &self.oeq_class
+    }
+
+    /// Return the inner OrderingEquivalenceClass, consuming self
+    pub fn into_oeq_class(self) -> OrderingEquivalenceClass {
+        self.oeq_class
     }
 
     /// Returns a reference to the equivalence group within.
@@ -336,7 +341,6 @@ impl EquivalenceProperties {
         let normalized_expr = self.eq_group().normalize_expr(Arc::clone(expr));
         let eq_class = self
             .eq_group
-            .classes
             .iter()
             .find_map(|class| {
                 class
@@ -429,8 +433,8 @@ impl EquivalenceProperties {
         let mut new_orderings = vec![filtered_exprs.clone()];
 
         // Preserve valid suffixes from existing orderings
-        let orderings = mem::take(&mut self.oeq_class.orderings);
-        for existing in orderings {
+        let oeq_class = mem::take(&mut self.oeq_class);
+        for existing in oeq_class {
             if self.is_prefix_of(&filtered_exprs, &existing) {
                 let mut extended = filtered_exprs.clone();
                 extended.extend(existing.into_iter().skip(filtered_exprs.len()));
@@ -706,8 +710,8 @@ impl EquivalenceProperties {
     /// Since it would cause bug in dependency constructions, we should substitute the input order in order to get correct
     /// dependency map, happen in issue 8838: <https://github.com/apache/datafusion/issues/8838>
     pub fn substitute_oeq_class(&mut self, mapping: &ProjectionMapping) -> Result<()> {
-        let orderings = &self.oeq_class.orderings;
-        let new_order = orderings
+        let new_order = self
+            .oeq_class
             .iter()
             .map(|order| self.substitute_ordering_component(mapping, order))
             .collect::<Result<Vec<_>>>()?;
@@ -1215,7 +1219,7 @@ impl EquivalenceProperties {
 
         // Rewrite orderings according to new schema:
         let mut new_orderings = vec![];
-        for ordering in self.oeq_class.orderings {
+        for ordering in self.oeq_class {
             let new_ordering = ordering
                 .inner
                 .into_iter()
@@ -1229,7 +1233,7 @@ impl EquivalenceProperties {
 
         // Rewrite equivalence classes according to the new schema:
         let mut eq_classes = vec![];
-        for eq_class in self.eq_group.classes {
+        for eq_class in self.eq_group {
             let new_eq_exprs = eq_class
                 .into_vec()
                 .into_iter()
@@ -2004,16 +2008,8 @@ fn calculate_union_binary(
     // Next, calculate valid orderings for the union by searching for prefixes
     // in both sides.
     let mut orderings = UnionEquivalentOrderingBuilder::new();
-    orderings.add_satisfied_orderings(
-        lhs.normalized_oeq_class().orderings,
-        lhs.constants(),
-        &rhs,
-    );
-    orderings.add_satisfied_orderings(
-        rhs.normalized_oeq_class().orderings,
-        rhs.constants(),
-        &lhs,
-    );
+    orderings.add_satisfied_orderings(lhs.normalized_oeq_class(), lhs.constants(), &rhs);
+    orderings.add_satisfied_orderings(rhs.normalized_oeq_class(), rhs.constants(), &lhs);
     let orderings = orderings.build();
 
     let mut eq_properties =
@@ -2152,7 +2148,7 @@ impl UnionEquivalentOrderingBuilder {
 
         // for each equivalent ordering in properties, try and augment
         // `ordering` it with the constants to match
-        for existing_ordering in &properties.oeq_class.orderings {
+        for existing_ordering in properties.oeq_class.iter() {
             if let Some(augmented_ordering) = self.augment_ordering(
                 ordering,
                 constants,
@@ -2310,7 +2306,7 @@ mod tests {
 
         // At the output a1=a2=a3=a4
         assert_eq!(out_properties.eq_group().len(), 1);
-        let eq_class = &out_properties.eq_group().classes[0];
+        let eq_class = out_properties.eq_group().iter().next().unwrap();
         assert_eq!(eq_class.len(), 4);
         assert!(eq_class.contains(col_a1));
         assert!(eq_class.contains(col_a2));
@@ -2433,17 +2429,12 @@ mod tests {
                 Some(JoinSide::Left),
                 &[],
             );
-            let orderings = &join_eq.oeq_class.orderings;
-            let err_msg = format!("expected: {:?}, actual:{:?}", expected, orderings);
-            assert_eq!(
-                join_eq.oeq_class.orderings.len(),
-                expected.len(),
-                "{}",
-                err_msg
-            );
-            for ordering in orderings {
+            let err_msg =
+                format!("expected: {:?}, actual:{:?}", expected, &join_eq.oeq_class);
+            assert_eq!(join_eq.oeq_class.len(), expected.len(), "{}", err_msg);
+            for ordering in join_eq.oeq_class {
                 assert!(
-                    expected.contains(ordering),
+                    expected.contains(&ordering),
                     "{}, ordering: {:?}",
                     err_msg,
                     ordering
@@ -3762,8 +3753,8 @@ mod tests {
 
         // Check whether orderings are same.
         let lhs_orderings = lhs.oeq_class();
-        let rhs_orderings = &rhs.oeq_class.orderings;
-        for rhs_ordering in rhs_orderings {
+        let rhs_orderings = rhs.oeq_class();
+        for rhs_ordering in rhs_orderings.iter() {
             assert!(
                 lhs_orderings.contains(rhs_ordering),
                 "{err_msg}\nlhs: {lhs}\nrhs: {rhs}"
@@ -3839,7 +3830,7 @@ mod tests {
         // Add equality condition c = concat(a, b)
         eq_properties.add_equal_conditions(&col_c, &a_concat_b)?;
 
-        let orderings = eq_properties.oeq_class().orderings.clone();
+        let orderings = eq_properties.oeq_class();
 
         let expected_ordering1 =
             LexOrdering::from(vec![
@@ -3890,7 +3881,7 @@ mod tests {
         // Add equality condition c = a * b
         eq_properties.add_equal_conditions(&col_c, &a_times_b)?;
 
-        let orderings = eq_properties.oeq_class().orderings.clone();
+        let orderings = eq_properties.oeq_class();
 
         // The ordering should remain unchanged since multiplication is not lex-monotonic
         assert_eq!(orderings.len(), 1);
@@ -3930,7 +3921,7 @@ mod tests {
         // Add equality condition c = concat(a, b)
         eq_properties.add_equal_conditions(&col_c, &a_concat_b)?;
 
-        let orderings = eq_properties.oeq_class().orderings.clone();
+        let orderings = eq_properties.oeq_class();
 
         let expected_ordering1 = LexOrdering::from(vec![PhysicalSortExpr::new_default(
             Arc::clone(&a_concat_b),
@@ -3974,8 +3965,9 @@ mod tests {
 
         // Should only contain b since a is constant
         assert_eq!(result.oeq_class().len(), 1);
-        assert_eq!(result.oeq_class().orderings[0].len(), 1);
-        assert!(result.oeq_class().orderings[0][0].expr.eq(&col_b));
+        let ordering = result.oeq_class().iter().next().unwrap();
+        assert_eq!(ordering.len(), 1);
+        assert!(ordering[0].expr.eq(&col_b));
 
         Ok(())
     }
@@ -4021,13 +4013,14 @@ mod tests {
 
         // Should only contain [a ASC, b DESC, c ASC]
         assert_eq!(result.oeq_class().len(), 1);
-        assert_eq!(result.oeq_class().orderings[0].len(), 3);
-        assert!(result.oeq_class().orderings[0][0].expr.eq(&col_a));
-        assert!(result.oeq_class().orderings[0][0].options.eq(&asc));
-        assert!(result.oeq_class().orderings[0][1].expr.eq(&col_b));
-        assert!(result.oeq_class().orderings[0][1].options.eq(&desc));
-        assert!(result.oeq_class().orderings[0][2].expr.eq(&col_c));
-        assert!(result.oeq_class().orderings[0][2].options.eq(&asc));
+        let ordering = result.oeq_class().iter().next().unwrap();
+        assert_eq!(ordering.len(), 3);
+        assert!(ordering[0].expr.eq(&col_a));
+        assert!(ordering[0].options.eq(&asc));
+        assert!(ordering[1].expr.eq(&col_b));
+        assert!(ordering[1].options.eq(&desc));
+        assert!(ordering[2].expr.eq(&col_c));
+        assert!(ordering[2].options.eq(&asc));
 
         Ok(())
     }
@@ -4070,11 +4063,12 @@ mod tests {
         assert_eq!(result.oeq_class().len(), 1);
 
         // Verify orderings
-        assert_eq!(result.oeq_class().orderings[0].len(), 2);
-        assert!(result.oeq_class().orderings[0][0].expr.eq(&col_b));
-        assert!(result.oeq_class().orderings[0][0].options.eq(&asc));
-        assert!(result.oeq_class().orderings[0][1].expr.eq(&col_c));
-        assert!(result.oeq_class().orderings[0][1].options.eq(&asc));
+        let ordering = result.oeq_class().iter().next().unwrap();
+        assert_eq!(ordering.len(), 2);
+        assert!(ordering[0].expr.eq(&col_b));
+        assert!(ordering[0].options.eq(&asc));
+        assert!(ordering[1].expr.eq(&col_c));
+        assert!(ordering[1].options.eq(&asc));
 
         Ok(())
     }
@@ -4115,7 +4109,8 @@ mod tests {
 
         // Should only contain the new ordering since options don't match
         assert_eq!(result.oeq_class().len(), 1);
-        assert_eq!(result.oeq_class().orderings[0], new_order);
+        let ordering = result.oeq_class().iter().next().unwrap();
+        assert_eq!(ordering, &new_order);
 
         Ok(())
     }
@@ -4173,7 +4168,7 @@ mod tests {
 
         // Should preserve the original [d ASC, a ASC] ordering
         assert_eq!(result.oeq_class().len(), 1);
-        let ordering = &result.oeq_class().orderings[0];
+        let ordering = result.oeq_class().iter().next().unwrap();
         assert_eq!(ordering.len(), 2);
 
         // First expression should be either b or d (they're equivalent)
