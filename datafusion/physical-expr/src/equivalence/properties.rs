@@ -1066,10 +1066,7 @@ impl EquivalenceProperties {
     ///
     /// Returns a new `Constraints` object containing only the constraints
     /// that are valid for the projected columns.
-    pub fn projected_constraints(
-        &self,
-        mapping: &ProjectionMapping,
-    ) -> Option<Constraints> {
+    fn projected_constraints(&self, mapping: &ProjectionMapping) -> Option<Constraints> {
         let indices = mapping
             .iter()
             .filter_map(|(_, target)| target.as_any().downcast_ref::<Column>())
@@ -4412,7 +4409,7 @@ mod tests {
                 base_order
                     .iter()
                     .map(|col_name| PhysicalSortExpr {
-                        expr: col(col_name, &schema).unwrap(),
+                        expr: col(col_name, schema).unwrap(),
                         options: SortOptions::default(),
                     })
                     .collect(),
@@ -4425,7 +4422,7 @@ mod tests {
                     LexOrdering::new(
                         cols.iter()
                             .map(|col_name| PhysicalSortExpr {
-                                expr: col(col_name, &schema).unwrap(),
+                                expr: col(col_name, schema).unwrap(),
                                 options: SortOptions::default(),
                             })
                             .collect(),
@@ -4439,7 +4436,7 @@ mod tests {
                     LexOrdering::new(
                         cols.iter()
                             .map(|col_name| PhysicalSortExpr {
-                                expr: col(col_name, &schema).unwrap(),
+                                expr: col(col_name, schema).unwrap(),
                                 options: SortOptions::default(),
                             })
                             .collect(),
