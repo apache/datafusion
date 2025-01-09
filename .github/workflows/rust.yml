@@ -211,8 +211,17 @@ jobs:
           rustup default stable
       - name: Setup Minio - S3-compatible storage
         working-directory: datafusion-cli
-        run:
-          echo "MINIO_CONTAINER=$(docker run -d -p 9000:9000 -e MINIO_ROOT_USER=TEST-DataFusionLogin -e MINIO_ROOT_PASSWORD=TEST-DataFusionPassword quay.io/minio/minio server /data)" >> $GITHUB_ENV
+        run: |
+          docker run -d --name minio-container \
+            -p 9000:9000 \
+            -e MINIO_ROOT_USER=TEST-DataFusionLogin -e MINIO_ROOT_PASSWORD=TEST-DataFusionPassword \
+            -v $(pwd)/../datafusion/core/tests/data:/source quay.io/minio/minio \
+            server /data
+          docker exec minio-container /bin/sh -c "\
+            mc ready local
+            mc alias set localminio http://localhost:9000 TEST-DataFusionLogin TEST-DataFusionPassword && \
+            mc mb localminio/data && \
+            mc cp -r /source/* localminio/data"
       - name: Run tests (excluding doctests, but with integration tests)
         working-directory: datafusion-cli
         run: cargo test --profile ci --lib --tests --bins --all-features
@@ -220,7 +229,7 @@ jobs:
         run: git diff --exit-code
       - name: Minio Output
         if: ${{ !cancelled() }}
-        run: docker logs $MINIO_CONTAINER
+        run: docker logs minio-container
 
   linux-test-example:
     name: cargo examples (amd64)

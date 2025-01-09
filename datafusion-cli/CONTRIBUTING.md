@@ -47,15 +47,26 @@ then provide the necessary configuration for that object store.
 
 To test the S3 integration against [Minio](https://github.com/minio/minio)
 
-First start up a container with Minio
+First start up a container with Minio and load test files.
 
-```
-$ docker run -d -p 9000:9000 -e MINIO_ROOT_USER=TEST-DataFusionLogin -e MINIO_ROOT_PASSWORD=TEST-DataFusionPassword quay.io/minio/minio server /data
+```shell
+docker run -d \
+  --name datafusion-test-minio \
+  -p 9000:9000 \
+  -e MINIO_ROOT_USER=TEST-DataFusionLogin \
+  -e MINIO_ROOT_PASSWORD=TEST-DataFusionPassword \
+  -v $(pwd)/../datafusion/core/tests/data:/source \
+  quay.io/minio/minio server /data
+
+docker exec datafusion-test-minio /bin/sh -c "\
+  mc alias set localminio http://localhost:9000 TEST-DataFusionLogin TEST-DataFusionPassword && \
+  mc mb localminio/data && \
+  mc cp -r /source/* localminio/data"
 ```
 
 Setup environment
 
-```
+```shell
 export TEST_STORAGE_INTEGRATION=1
 export AWS_ACCESS_KEY_ID=TEST-DataFusionLogin
 export AWS_SECRET_ACCESS_KEY=TEST-DataFusionPassword
@@ -67,6 +78,6 @@ Note that `AWS_ENDPOINT` is set without slash at the end.
 
 Run tests
 
-```
-$ cargo test
+```shell
+cargo test
 ```

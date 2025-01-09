@@ -1,5 +1,5 @@
 CREATE EXTERNAL TABLE CARS
 STORED AS CSV
-LOCATION 's3://cli/cars.csv';
+LOCATION 's3://data/cars.csv';
 
 SELECT * FROM CARS limit 1;
