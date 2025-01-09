@@ -27,3 +27,6 @@ pub const DEFAULT_CAST_OPTIONS: CastOptions<'static> = CastOptions {
     safe: false,
     format_options: DEFAULT_FORMAT_OPTIONS,
 };
+
+pub const DEFAULT_CLI_FORMAT_OPTIONS: FormatOptions<'static> =
+    FormatOptions::new().with_duration_format(DurationFormat::Pretty).with_null("NULL");
