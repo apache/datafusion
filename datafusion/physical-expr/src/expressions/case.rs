@@ -380,14 +380,13 @@ impl CaseExpr {
         let then_value = self.when_then_expr[0].1.evaluate(batch)?;
         let then_value = Scalar::new(then_value.into_array(1)?);
 
-        if let Some(e) = self.else_expr() {
-            // keep `else_expr`'s data type and return type consistent
-            let expr = try_cast(Arc::clone(e), &batch.schema(), return_type)?;
-            let else_ = Scalar::new(expr.evaluate(batch)?.into_array(1)?);
-            Ok(ColumnarValue::Array(zip(&when_value, &then_value, &else_)?))
-        } else {
-            internal_err!("expression did not evaluate to an array")
-        }
+        let Some(e) = self.else_expr() else {
+            return internal_err!("expression did not evaluate to an array");
+        };
+        // keep `else_expr`'s data type and return type consistent
+        let expr = try_cast(Arc::clone(e), &batch.schema(), return_type)?;
+        let else_ = Scalar::new(expr.evaluate(batch)?.into_array(1)?);
+        Ok(ColumnarValue::Array(zip(&when_value, &then_value, &else_)?))
     }
 }
 
