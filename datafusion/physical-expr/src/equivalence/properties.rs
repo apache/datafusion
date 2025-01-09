@@ -569,27 +569,35 @@ impl EquivalenceProperties {
 
     /// Checks if the sort requirements are satisfied by any of the table constraints (primary key or unique).
     /// Returns true if any constraint fully satisfies the requirements.
-    fn satisfied_by_constraints(&self, reqs: &[PhysicalSortRequirement]) -> bool {
+    fn satisfied_by_constraints(
+        &self,
+        normalized_reqs: &[PhysicalSortRequirement],
+    ) -> bool {
         self.constraints.iter().any(|constraint| match constraint {
             Constraint::PrimaryKey(indices) | Constraint::Unique(indices) => self
-                .matches_constraint_indices(
-                    reqs,
+                .constraint_indices_match_sort_prefix(
+                    normalized_reqs,
                     indices,
                     matches!(constraint, Constraint::Unique(_)),
                 ),
         })
     }
 
-    /// Checks if the given sort requirements match the column indices from a constraint.
-    /// For unique constraints, also verifies the columns are not nullable.
-    /// Returns true if all requirements match their corresponding constraint indices.
-    fn matches_constraint_indices(
+    /// Checks if the constraint indices match the prefix of the sort requirements
+    /// and if the sort options match the existing ordering
+    fn constraint_indices_match_sort_prefix(
         &self,
-        reqs: &[PhysicalSortRequirement],
+        normalized_reqs: &[PhysicalSortRequirement],
         indices: &[usize],
         check_null: bool,
     ) -> bool {
-        reqs.iter().zip(indices).all(|(req, &idx)| {
+        // Indices must be a prefix of requirements
+        if indices.len() > normalized_reqs.len() {
+            return false;
+        }
+
+        // Check that indices match the prefix of requirements
+        indices.iter().zip(normalized_reqs).all(|(&idx, req)| {
             // Only handle Column expressions
             let Some(col) = req.expr.as_any().downcast_ref::<Column>() else {
                 return false;
@@ -605,13 +613,24 @@ impl EquivalenceProperties {
                 return false;
             }
 
-            // If sort order is specified, it must match existing order
-            req.options.map_or(true, |req_options| {
-                self.oeq_class
-                    .get_options(&req.expr)
-                    .map_or(false, |existing_options| req_options == existing_options)
-            })
-        })
+            true
+        }) && {
+            // If sort options are specified, verify the entire prefix matches an existing ordering
+            let prefix_len = indices.len();
+            prefix_len == 0
+                || self.oeq_class.orderings.iter().any(|ordering| {
+                    ordering.len() >= prefix_len
+                        && normalized_reqs[..prefix_len].iter().zip(ordering).all(
+                            |(req, existing)| {
+                                // Check if expressions are the same and sort options match
+                                req.expr.eq(&existing.expr)
+                                    && req.options.map_or(true, |req_options| {
+                                        req_options == existing.options
+                                    })
+                            },
+                        )
+                })
+        }
     }
 
     /// Determines whether the ordering specified by the given sort requirement
@@ -3698,108 +3717,6 @@ mod tests {
 
     // TODO tests with multiple constants
 
-    #[test]
-    fn test_functional_dependencies_ordering() -> Result<()> {
-        let schema = Arc::new(Schema::new(vec![
-            Field::new("a", DataType::Int32, false),
-            Field::new("b", DataType::Int32, true),
-            Field::new("c", DataType::Int32, true),
-        ]));
-
-        let mut eq_properties = EquivalenceProperties::new(Arc::clone(&schema));
-
-        // Add functional dependency indicating 'a' is unique
-        eq_properties =
-            eq_properties.with_constraints(Constraints::new_unverified(vec![
-                Constraint::Unique(vec![0]),
-            ]));
-
-        // Test that any ordering starting with 'a' is not satisfied before adding order of the 'a'.
-        let col_a = col("a", &schema)?;
-        let col_b = col("b", &schema)?;
-
-        // Test [a ASC, b ASC] is not satisfied yet
-        let req1 = LexOrdering::new(vec![
-            PhysicalSortExpr {
-                expr: Arc::clone(&col_a),
-                options: SortOptions::default(),
-            },
-            PhysicalSortExpr {
-                expr: Arc::clone(&col_b),
-                options: SortOptions::default(),
-            },
-        ]);
-        assert!(!eq_properties.ordering_satisfy(&req1));
-
-        // Add an ordering [a ASC]
-        let sort_exprs = LexOrdering::new(vec![PhysicalSortExpr {
-            expr: Arc::clone(&col_a),
-            options: SortOptions::default(),
-        }]);
-        eq_properties.add_new_ordering(sort_exprs);
-
-        // Test that any ordering starting with 'a' is satisfied
-        let col_c = col("c", &schema)?;
-
-        // Test [a ASC, b ASC] is satisfied
-        let req1 = LexOrdering::new(vec![
-            PhysicalSortExpr {
-                expr: Arc::clone(&col_a),
-                options: SortOptions::default(),
-            },
-            PhysicalSortExpr {
-                expr: Arc::clone(&col_b),
-                options: SortOptions::default(),
-            },
-        ]);
-        assert!(eq_properties.ordering_satisfy(&req1));
-
-        // Test [a ASC, c ASC] is satisfied
-        let req2 = LexOrdering::new(vec![
-            PhysicalSortExpr {
-                expr: Arc::clone(&col_a),
-                options: SortOptions::default(),
-            },
-            PhysicalSortExpr {
-                expr: Arc::clone(&col_c),
-                options: SortOptions::default(),
-            },
-        ]);
-        assert!(eq_properties.ordering_satisfy(&req2));
-
-        // Test [a ASC, b ASC, c ASC] is satisfied
-        let req3 = LexOrdering::new(vec![
-            PhysicalSortExpr {
-                expr: Arc::clone(&col_a),
-                options: SortOptions::default(),
-            },
-            PhysicalSortExpr {
-                expr: Arc::clone(&col_b),
-                options: SortOptions::default(),
-            },
-            PhysicalSortExpr {
-                expr: Arc::clone(&col_c),
-                options: SortOptions::default(),
-            },
-        ]);
-        assert!(eq_properties.ordering_satisfy(&req3));
-
-        // Test [b ASC, a ASC] is not satisfied
-        let req3 = LexOrdering::new(vec![
-            PhysicalSortExpr {
-                expr: Arc::clone(&col_b),
-                options: SortOptions::default(),
-            },
-            PhysicalSortExpr {
-                expr: Arc::clone(&col_a),
-                options: SortOptions::default(),
-            },
-        ]);
-        assert!(!eq_properties.ordering_satisfy(&req3));
-
-        Ok(())
-    }
-
     #[derive(Debug)]
     struct UnionEquivalenceTest {
         /// The schema of the output of the Union
@@ -4422,6 +4339,134 @@ mod tests {
             const_a.across_partitions(),
             AcrossPartitions::Uniform(Some(literal_10))
         );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_ordering_satisfaction_with_key_constraints() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Int32, false),
+            Field::new("c", DataType::Int32, true),
+            Field::new("d", DataType::Int32, true),
+        ]));
+
+        // Test cases to run
+        let test_cases = vec![
+            // (name, constraint, base_ordering, satisfied_orderings, unsatisfied_orderings)
+            (
+                "single column primary key",
+                vec![Constraint::PrimaryKey(vec![0])],
+                vec!["a"], // base ordering
+                vec![vec!["a", "b"], vec!["a", "c", "d"]],
+                vec![vec!["b", "a"], vec!["c", "a"]],
+            ),
+            (
+                "multi-column primary key",
+                vec![Constraint::PrimaryKey(vec![0, 1])],
+                vec!["a", "b"], // base ordering
+                vec![vec!["a", "b", "c"], vec!["a", "b", "d"]],
+                vec![vec!["b", "a"], vec!["c", "a", "b"]],
+            ),
+            (
+                "single column unique",
+                vec![Constraint::Unique(vec![0])],
+                vec!["a"], // base ordering
+                vec![vec!["a", "b"], vec!["a", "c", "d"]],
+                vec![vec!["b", "a"], vec!["c", "a"]],
+            ),
+            (
+                "multi-column unique",
+                vec![Constraint::Unique(vec![0, 1])],
+                vec!["a", "b"], // base ordering
+                vec![vec!["a", "b", "c"], vec!["a", "b", "d"]],
+                vec![vec!["b", "a"], vec!["c", "a", "b"]],
+            ),
+        ];
+
+        for (name, constraints, base_order, satisfied_orders, unsatisfied_orders) in
+            test_cases
+        {
+            let mut eq_properties = EquivalenceProperties::new(Arc::clone(&schema));
+
+            // Convert base ordering
+            let base_ordering = LexOrdering::new(
+                base_order
+                    .iter()
+                    .map(|col_name| PhysicalSortExpr {
+                        expr: col(col_name, &schema).unwrap(),
+                        options: SortOptions::default(),
+                    })
+                    .collect(),
+            );
+
+            // Convert string column names to orderings
+            let satisfied_orderings: Vec<LexOrdering> = satisfied_orders
+                .iter()
+                .map(|cols| {
+                    LexOrdering::new(
+                        cols.iter()
+                            .map(|col_name| PhysicalSortExpr {
+                                expr: col(col_name, &schema).unwrap(),
+                                options: SortOptions::default(),
+                            })
+                            .collect(),
+                    )
+                })
+                .collect();
+
+            let unsatisfied_orderings: Vec<LexOrdering> = unsatisfied_orders
+                .iter()
+                .map(|cols| {
+                    LexOrdering::new(
+                        cols.iter()
+                            .map(|col_name| PhysicalSortExpr {
+                                expr: col(col_name, &schema).unwrap(),
+                                options: SortOptions::default(),
+                            })
+                            .collect(),
+                    )
+                })
+                .collect();
+
+            // Test that orderings are not satisfied before adding constraints
+            for ordering in &satisfied_orderings {
+                assert!(
+                    !eq_properties.ordering_satisfy(ordering),
+                    "{}: ordering {:?} should not be satisfied before adding constraints",
+                    name,
+                    ordering
+                );
+            }
+
+            // Add base ordering
+            eq_properties.add_new_ordering(base_ordering);
+
+            // Add constraints
+            eq_properties =
+                eq_properties.with_constraints(Constraints::new_unverified(constraints));
+
+            // Test that expected orderings are now satisfied
+            for ordering in &satisfied_orderings {
+                assert!(
+                    eq_properties.ordering_satisfy(ordering),
+                    "{}: ordering {:?} should be satisfied after adding constraints",
+                    name,
+                    ordering
+                );
+            }
+
+            // Test that unsatisfied orderings remain unsatisfied
+            for ordering in &unsatisfied_orderings {
+                assert!(
+                    !eq_properties.ordering_satisfy(ordering),
+                    "{}: ordering {:?} should not be satisfied after adding constraints",
+                    name,
+                    ordering
+                );
+            }
+        }
 
         Ok(())
     }
