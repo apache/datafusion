@@ -4345,7 +4345,14 @@ mod tests {
 
     #[test]
     fn test_ordering_satisfaction_with_key_constraints() -> Result<()> {
-        let schema = Arc::new(Schema::new(vec![
+        let pk_schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, true),
+            Field::new("b", DataType::Int32, true),
+            Field::new("c", DataType::Int32, true),
+            Field::new("d", DataType::Int32, true),
+        ]));
+
+        let unique_schema = Arc::new(Schema::new(vec![
             Field::new("a", DataType::Int32, false),
             Field::new("b", DataType::Int32, false),
             Field::new("c", DataType::Int32, true),
@@ -4354,9 +4361,10 @@ mod tests {
 
         // Test cases to run
         let test_cases = vec![
-            // (name, constraint, base_ordering, satisfied_orderings, unsatisfied_orderings)
+            // (name, schema, constraint, base_ordering, satisfied_orderings, unsatisfied_orderings)
             (
                 "single column primary key",
+                &pk_schema,
                 vec![Constraint::PrimaryKey(vec![0])],
                 vec!["a"], // base ordering
                 vec![vec!["a", "b"], vec!["a", "c", "d"]],
@@ -4364,6 +4372,7 @@ mod tests {
             ),
             (
                 "multi-column primary key",
+                &pk_schema,
                 vec![Constraint::PrimaryKey(vec![0, 1])],
                 vec!["a", "b"], // base ordering
                 vec![vec!["a", "b", "c"], vec!["a", "b", "d"]],
@@ -4371,6 +4380,7 @@ mod tests {
             ),
             (
                 "single column unique",
+                &unique_schema,
                 vec![Constraint::Unique(vec![0])],
                 vec!["a"], // base ordering
                 vec![vec!["a", "b"], vec!["a", "c", "d"]],
@@ -4378,6 +4388,7 @@ mod tests {
             ),
             (
                 "multi-column unique",
+                &unique_schema,
                 vec![Constraint::Unique(vec![0, 1])],
                 vec!["a", "b"], // base ordering
                 vec![vec!["a", "b", "c"], vec!["a", "b", "d"]],
@@ -4385,10 +4396,16 @@ mod tests {
             ),
         ];
 
-        for (name, constraints, base_order, satisfied_orders, unsatisfied_orders) in
-            test_cases
+        for (
+            name,
+            schema,
+            constraints,
+            base_order,
+            satisfied_orders,
+            unsatisfied_orders,
+        ) in test_cases
         {
-            let mut eq_properties = EquivalenceProperties::new(Arc::clone(&schema));
+            let mut eq_properties = EquivalenceProperties::new(Arc::clone(schema));
 
             // Convert base ordering
             let base_ordering = LexOrdering::new(
