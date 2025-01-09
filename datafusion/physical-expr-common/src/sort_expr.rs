@@ -30,8 +30,7 @@ use arrow::datatypes::Schema;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::Result;
 use datafusion_expr_common::columnar_value::ColumnarValue;
-use indexmap::IndexSet;
-use itertools::{izip, Itertools};
+use itertools::Itertools;
 
 /// Represents Sort operation for a column in a RecordBatch
 ///
@@ -569,18 +568,10 @@ impl LexRequirement {
     /// `vec![a Some(ASC)]`.
     pub fn collapse(self) -> Self {
         let mut output = Vec::<PhysicalSortRequirement>::new();
-        let mut exprs = IndexSet::new();
-        let mut reqs = vec![];
         for item in self {
-            let PhysicalSortRequirement { expr, options: req } = item;
-            // new insertion
-            if exprs.insert(expr) {
-                reqs.push(req);
+            if !output.iter().any(|req| req.expr.eq(&item.expr)) {
+                output.push(item);
             }
-        }
-        debug_assert_eq!(reqs.len(), exprs.len());
-        for (expr, req) in izip!(exprs, reqs) {
-            output.push(PhysicalSortRequirement::new(expr, req));
         }
         LexRequirement::new(output)
     }

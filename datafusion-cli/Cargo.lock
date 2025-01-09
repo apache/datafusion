@@ -1584,7 +1584,6 @@ dependencies = [
  "datafusion-common",
  "datafusion-expr-common",
  "hashbrown 0.14.5",
- "indexmap",
  "itertools 0.14.0",
 ]
 
