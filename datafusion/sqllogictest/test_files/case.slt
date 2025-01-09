@@ -50,7 +50,7 @@ NULL
 6
 NULL
 NULL
-7
+NULL
 
 # column or implicit null
 query I
@@ -61,7 +61,29 @@ NULL
 6
 NULL
 NULL
+NULL
+
+# column or implicit null (no nulls)
+query I
+SELECT CASE WHEN NULLIF(NVL(a, 0) >= 0, FALSE) THEN b END FROM foo
+----
+2
+4
+6
+NULL
+NULL
 7
+
+# column or implicit null (all nulls)
+query I
+SELECT CASE WHEN NULLIF(NVL(a, 0) >= 0, TRUE) THEN b END FROM foo
+----
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
 
 # scalar or scalar (string)
 query T
@@ -202,3 +224,14 @@ query I
 SELECT CASE arrow_cast([1,2,3], 'FixedSizeList(3, Int64)') WHEN arrow_cast([1,2,3], 'FixedSizeList(3, Int64)') THEN 1 ELSE 0 END;
 ----
 1
+
+# CASE WHEN with single predicate and two non-trivial branches (expr or expr usage)
+query I
+SELECT CASE WHEN a < 5 THEN a + b ELSE b - NVL(a, 0) END FROM foo
+----
+3
+7
+1
+NULL
+NULL
+7

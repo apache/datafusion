@@ -422,7 +422,7 @@ fn would_column_prevent_pushdown(
     checker.prevents_pushdown()
 }
 
-/// Recurses through expr as a trea, finds all `column`s, and checks if any of them would prevent
+/// Recurses through expr as a tree, finds all `column`s, and checks if any of them would prevent
 /// this expression from being predicate pushed down. If any of them would, this returns false.
 /// Otherwise, true.
 pub fn can_expr_be_pushed_down_with_schemas(
@@ -692,7 +692,7 @@ mod test {
 
         let mut parquet_reader = parquet_reader_builder.build().expect("building reader");
 
-        // Parquet file is small, we only need 1 recordbatch
+        // Parquet file is small, we only need 1 record batch
         let first_rb = parquet_reader
             .next()
             .expect("expected record batch")

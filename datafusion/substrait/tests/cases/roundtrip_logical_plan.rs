@@ -30,6 +30,7 @@ use datafusion::common::{not_impl_err, plan_err, DFSchema, DFSchemaRef};
 use datafusion::error::Result;
 use datafusion::execution::registry::SerializerRegistry;
 use datafusion::execution::runtime_env::RuntimeEnv;
+use datafusion::execution::session_state::SessionStateBuilder;
 use datafusion::logical_expr::{
     Extension, LogicalPlan, PartitionEvaluator, Repartition, UserDefinedLogicalNode,
     Values, Volatility,
@@ -38,8 +39,6 @@ use datafusion::optimizer::simplify_expressions::expr_simplifier::THRESHOLD_INLI
 use datafusion::prelude::*;
 use std::hash::Hash;
 use std::sync::Arc;
-
-use datafusion::execution::session_state::SessionStateBuilder;
 use substrait::proto::extensions::simple_extension_declaration::MappingType;
 use substrait::proto::rel::RelType;
 use substrait::proto::{plan_rel, Plan, Rel};
@@ -198,6 +197,16 @@ async fn select_with_alias() -> Result<()> {
 #[tokio::test]
 async fn select_with_filter() -> Result<()> {
     roundtrip("SELECT * FROM data WHERE a > 1").await
+}
+
+#[tokio::test]
+async fn select_with_filter_sort_limit() -> Result<()> {
+    roundtrip("SELECT * FROM data WHERE a > 1 ORDER BY b ASC LIMIT 2").await
+}
+
+#[tokio::test]
+async fn select_with_filter_sort_limit_offset() -> Result<()> {
+    roundtrip("SELECT * FROM data WHERE a > 1 ORDER BY b ASC LIMIT 2 OFFSET 1").await
 }
 
 #[tokio::test]
@@ -560,6 +569,21 @@ async fn roundtrip_self_implicit_cross_join() -> Result<()> {
     // Instead, when we consume Substrait, we add aliases before a join that'd otherwise collide.
     // This roundtrip works because we set aliases to what the Substrait consumer will generate.
     roundtrip("SELECT left.a left_a, left.b, right.a right_a, right.c FROM data AS left, data AS right").await
+}
+
+#[tokio::test]
+async fn self_join_introduces_aliases() -> Result<()> {
+    assert_expected_plan(
+        "SELECT d1.b, d2.c FROM data d1 JOIN data d2 ON d1.b = d2.b",
+        "Projection: left.b, right.c\
+        \n  Inner Join: left.b = right.b\
+        \n    SubqueryAlias: left\
+        \n      TableScan: data projection=[b]\
+        \n    SubqueryAlias: right\
+        \n      TableScan: data projection=[b, c]",
+        false,
+    )
+    .await
 }
 
 #[tokio::test]
@@ -1126,7 +1150,7 @@ fn check_post_join_filters(rel: &Rel) -> Result<()> {
             // check if join filter is None
             if join.post_join_filter.is_some() {
                 plan_err!(
-                    "DataFusion generated Susbtrait plan cannot have post_join_filter in JoinRel"
+                    "DataFusion generated Substrait plan cannot have post_join_filter in JoinRel"
                 )
             } else {
                 // recursively check JoinRels

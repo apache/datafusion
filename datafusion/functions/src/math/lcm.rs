@@ -16,22 +16,31 @@
 // under the License.
 
 use std::any::Any;
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
 use arrow::array::{ArrayRef, Int64Array};
 use arrow::datatypes::DataType;
 use arrow::datatypes::DataType::Int64;
 
 use arrow::error::ArrowError;
-use datafusion_common::{arrow_datafusion_err, exec_err, DataFusionError, Result};
-use datafusion_expr::scalar_doc_sections::DOC_SECTION_MATH;
+use datafusion_common::{
+    arrow_datafusion_err, exec_err, internal_datafusion_err, DataFusionError, Result,
+};
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
 };
+use datafusion_macros::user_doc;
 
 use super::gcd::unsigned_gcd;
 use crate::utils::make_scalar_function;
 
+#[user_doc(
+    doc_section(label = "Math Functions"),
+    description = "Returns the least common multiple of `expression_x` and `expression_y`. Returns 0 if either input is zero.",
+    syntax_example = "lcm(expression_x, expression_y)",
+    standard_argument(name = "expression_x", prefix = "First numeric"),
+    standard_argument(name = "expression_y", prefix = "Second numeric")
+)]
 #[derive(Debug)]
 pub struct LcmFunc {
     signature: Signature,
@@ -78,23 +87,8 @@ impl ScalarUDFImpl for LcmFunc {
     }
 
     fn documentation(&self) -> Option<&Documentation> {
-        Some(get_lcm_doc())
+        self.doc()
     }
-}
-
-static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
-
-fn get_lcm_doc() -> &'static Documentation {
-    DOCUMENTATION.get_or_init(|| {
-        Documentation::builder(
-            DOC_SECTION_MATH,
-                "Returns the least common multiple of `expression_x` and `expression_y`. Returns 0 if either input is zero.",
-
-            "lcm(expression_x, expression_y)")
-            .with_standard_argument("expression_x", Some("First numeric"))
-            .with_standard_argument("expression_y", Some("Second numeric"))
-            .build()
-    })
 }
 
 /// Lcm SQL function
@@ -121,8 +115,8 @@ fn lcm(args: &[ArrayRef]) -> Result<ArrayRef> {
 
     match args[0].data_type() {
         Int64 => {
-            let arg1 = downcast_arg!(&args[0], "x", Int64Array);
-            let arg2 = downcast_arg!(&args[1], "y", Int64Array);
+            let arg1 = downcast_named_arg!(&args[0], "x", Int64Array);
+            let arg2 = downcast_named_arg!(&args[1], "y", Int64Array);
 
             Ok(arg1
                 .iter()

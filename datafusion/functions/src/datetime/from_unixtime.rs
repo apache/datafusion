@@ -16,18 +16,36 @@
 // under the License.
 
 use std::any::Any;
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
 use arrow::datatypes::DataType;
 use arrow::datatypes::DataType::{Int64, Timestamp, Utf8};
 use arrow::datatypes::TimeUnit::Second;
 use datafusion_common::{exec_err, internal_err, ExprSchema, Result, ScalarValue};
-use datafusion_expr::scalar_doc_sections::DOC_SECTION_DATETIME;
 use datafusion_expr::TypeSignature::Exact;
 use datafusion_expr::{
     ColumnarValue, Documentation, Expr, ScalarUDFImpl, Signature, Volatility,
 };
+use datafusion_macros::user_doc;
 
+#[user_doc(
+    doc_section(label = "Time and Date Functions"),
+    description = "Converts an integer to RFC3339 timestamp format (`YYYY-MM-DDT00:00:00.000000000Z`). Integers and unsigned integers are interpreted as nanoseconds since the unix epoch (`1970-01-01T00:00:00Z`) return the corresponding timestamp.",
+    syntax_example = "from_unixtime(expression[, timezone])",
+    sql_example = r#"```sql
+> select from_unixtime(1599572549, 'America/New_York');
++-----------------------------------------------------------+
+| from_unixtime(Int64(1599572549),Utf8("America/New_York")) |
++-----------------------------------------------------------+
+| 2020-09-08T09:42:29-04:00                                 |
++-----------------------------------------------------------+
+```"#,
+    standard_argument(name = "expression",),
+    argument(
+        name = "timezone",
+        description = "Optional timezone to use when converting the integer to a timestamp. If not provided, the default timezone is UTC."
+    )
+)]
 #[derive(Debug)]
 pub struct FromUnixtimeFunc {
     signature: Signature,
@@ -125,33 +143,8 @@ impl ScalarUDFImpl for FromUnixtimeFunc {
     }
 
     fn documentation(&self) -> Option<&Documentation> {
-        Some(get_from_unixtime_doc())
+        self.doc()
     }
-}
-
-static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
-
-fn get_from_unixtime_doc() -> &'static Documentation {
-    DOCUMENTATION.get_or_init(|| {
-        Documentation::builder(
-            DOC_SECTION_DATETIME,
-            "Converts an integer to RFC3339 timestamp format (`YYYY-MM-DDT00:00:00.000000000Z`). Integers and unsigned integers are interpreted as nanoseconds since the unix epoch (`1970-01-01T00:00:00Z`) return the corresponding timestamp.",
-            "from_unixtime(expression[, timezone])")
-            .with_standard_argument("expression", None)
-            .with_argument(
-                "timezone",
-                "Optional timezone to use when converting the integer to a timestamp. If not provided, the default timezone is UTC.",
-            )
-            .with_sql_example(r#"```sql
-> select from_unixtime(1599572549, 'America/New_York');
-+-----------------------------------------------------------+
-| from_unixtime(Int64(1599572549),Utf8("America/New_York")) |
-+-----------------------------------------------------------+
-| 2020-09-08T09:42:29-04:00                                 |
-+-----------------------------------------------------------+
-```"#)
-            .build()
-    })
 }
 
 #[cfg(test)]

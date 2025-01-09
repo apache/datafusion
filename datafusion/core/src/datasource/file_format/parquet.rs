@@ -45,7 +45,6 @@ use crate::physical_plan::{
 
 use arrow::compute::sum;
 use datafusion_common::config::{ConfigField, ConfigFileType, TableParquetOptions};
-use datafusion_common::file_options::parquet_writer::ParquetWriterOptions;
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::stats::Precision;
 use datafusion_common::{
@@ -68,13 +67,13 @@ use log::debug;
 use object_store::buffered::BufWriter;
 use parquet::arrow::arrow_writer::{
     compute_leaves, get_column_writers, ArrowColumnChunk, ArrowColumnWriter,
-    ArrowLeafColumn,
+    ArrowLeafColumn, ArrowWriterOptions,
 };
 use parquet::arrow::{
     arrow_to_parquet_schema, parquet_to_arrow_schema, AsyncArrowWriter,
 };
 use parquet::file::metadata::{ParquetMetaData, ParquetMetaDataReader, RowGroupMetaData};
-use parquet::file::properties::WriterProperties;
+use parquet::file::properties::{WriterProperties, WriterPropertiesBuilder};
 use parquet::file::writer::SerializedFileWriter;
 use parquet::format::FileMetaData;
 use tokio::io::{AsyncWrite, AsyncWriteExt};
@@ -750,6 +749,28 @@ impl ParquetSink {
         }
     }
 
+    /// Create writer properties based upon configuration settings,
+    /// including partitioning and the inclusion of arrow schema metadata.
+    fn create_writer_props(&self) -> Result<WriterProperties> {
+        let schema = if self.parquet_options.global.allow_single_file_parallelism {
+            // If parallelizing writes, we may be also be doing hive style partitioning
+            // into multiple files which impacts the schema per file.
+            // Refer to `self.get_writer_schema()`
+            &self.get_writer_schema()
+        } else {
+            self.config.output_schema()
+        };
+
+        // TODO: avoid this clone in follow up PR, where the writer properties & schema
+        // are calculated once on `ParquetSink::new`
+        let mut parquet_opts = self.parquet_options.clone();
+        if !self.parquet_options.global.skip_arrow_metadata {
+            parquet_opts.arrow_schema(schema);
+        }
+
+        Ok(WriterPropertiesBuilder::try_from(&parquet_opts)?.build())
+    }
+
     /// Creates an AsyncArrowWriter which serializes a parquet file to an ObjectStore
     /// AsyncArrowWriters are used when individual parquet file serialization is not parallelized
     async fn create_async_arrow_writer(
@@ -759,10 +780,14 @@ impl ParquetSink {
         parquet_props: WriterProperties,
     ) -> Result<AsyncArrowWriter<BufWriter>> {
         let buf_writer = BufWriter::new(object_store, location.clone());
-        let writer = AsyncArrowWriter::try_new(
+        let options = ArrowWriterOptions::new()
+            .with_properties(parquet_props)
+            .with_skip_arrow_metadata(self.parquet_options.global.skip_arrow_metadata);
+
+        let writer = AsyncArrowWriter::try_new_with_options(
             buf_writer,
             self.get_writer_schema(),
-            Some(parquet_props),
+            options,
         )?;
         Ok(writer)
     }
@@ -788,7 +813,7 @@ impl DataSink for ParquetSink {
         data: SendableRecordBatchStream,
         context: &Arc<TaskContext>,
     ) -> Result<u64> {
-        let parquet_props = ParquetWriterOptions::try_from(&self.parquet_options)?;
+        let parquet_props = self.create_writer_props()?;
 
         let object_store = context
             .runtime_env()
@@ -832,7 +857,7 @@ impl DataSink for ParquetSink {
                     .create_async_arrow_writer(
                         &path,
                         Arc::clone(&object_store),
-                        parquet_props.writer_options().clone(),
+                        parquet_props.clone(),
                     )
                     .await?;
                 let mut reservation =
@@ -867,7 +892,7 @@ impl DataSink for ParquetSink {
                         writer,
                         rx,
                         schema,
-                        props.writer_options(),
+                        &props,
                         parallel_options_clone,
                         pool,
                     )
@@ -2335,42 +2360,18 @@ mod tests {
     async fn parquet_sink_write() -> Result<()> {
         let parquet_sink = create_written_parquet_sink("file:///").await?;
 
-        // assert written
-        let mut written = parquet_sink.written();
-        let written = written.drain();
-        assert_eq!(
-            written.len(),
-            1,
-            "expected a single parquet files to be written, instead found {}",
-            written.len()
-        );
-
-        // check the file metadata
-        let (
-            path,
-            FileMetaData {
-                num_rows,
-                schema,
-                key_value_metadata,
-                ..
-            },
-        ) = written.take(1).next().unwrap();
+        // assert written to proper path
+        let (path, file_metadata) = get_written(parquet_sink)?;
         let path_parts = path.parts().collect::<Vec<_>>();
         assert_eq!(path_parts.len(), 1, "should not have path prefix");
 
-        assert_eq!(num_rows, 2, "file metadata to have 2 rows");
-        assert!(
-            schema.iter().any(|col_schema| col_schema.name == "a"),
-            "output file metadata should contain col a"
-        );
-        assert!(
-            schema.iter().any(|col_schema| col_schema.name == "b"),
-            "output file metadata should contain col b"
-        );
-
-        let mut key_value_metadata = key_value_metadata.unwrap();
-        key_value_metadata.sort_by(|a, b| a.key.cmp(&b.key));
-        let expected_metadata = vec![
+        // check the file metadata
+        let expected_kv_meta = vec![
+            // default is to include arrow schema
+            KeyValue {
+                key: "ARROW:schema".to_string(),
+                value: Some(ENCODED_ARROW_SCHEMA.to_string()),
+            },
             KeyValue {
                 key: "my-data".to_string(),
                 value: Some("stuff".to_string()),
@@ -2380,7 +2381,119 @@ mod tests {
                 value: None,
             },
         ];
-        assert_eq!(key_value_metadata, expected_metadata);
+        assert_file_metadata(file_metadata, &expected_kv_meta);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn parquet_sink_parallel_write() -> Result<()> {
+        let opts = ParquetOptions {
+            allow_single_file_parallelism: true,
+            maximum_parallel_row_group_writers: 2,
+            maximum_buffered_record_batches_per_stream: 2,
+            ..Default::default()
+        };
+
+        let parquet_sink =
+            create_written_parquet_sink_using_config("file:///", opts).await?;
+
+        // assert written to proper path
+        let (path, file_metadata) = get_written(parquet_sink)?;
+        let path_parts = path.parts().collect::<Vec<_>>();
+        assert_eq!(path_parts.len(), 1, "should not have path prefix");
+
+        // check the file metadata
+        let expected_kv_meta = vec![
+            // default is to include arrow schema
+            KeyValue {
+                key: "ARROW:schema".to_string(),
+                value: Some(ENCODED_ARROW_SCHEMA.to_string()),
+            },
+            KeyValue {
+                key: "my-data".to_string(),
+                value: Some("stuff".to_string()),
+            },
+            KeyValue {
+                key: "my-data-bool-key".to_string(),
+                value: None,
+            },
+        ];
+        assert_file_metadata(file_metadata, &expected_kv_meta);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn parquet_sink_write_insert_schema_into_metadata() -> Result<()> {
+        // expected kv metadata without schema
+        let expected_without = vec![
+            KeyValue {
+                key: "my-data".to_string(),
+                value: Some("stuff".to_string()),
+            },
+            KeyValue {
+                key: "my-data-bool-key".to_string(),
+                value: None,
+            },
+        ];
+        // expected kv metadata with schema
+        let expected_with = [
+            vec![KeyValue {
+                key: "ARROW:schema".to_string(),
+                value: Some(ENCODED_ARROW_SCHEMA.to_string()),
+            }],
+            expected_without.clone(),
+        ]
+        .concat();
+
+        // single threaded write, skip insert
+        let opts = ParquetOptions {
+            allow_single_file_parallelism: false,
+            skip_arrow_metadata: true,
+            ..Default::default()
+        };
+        let parquet_sink =
+            create_written_parquet_sink_using_config("file:///", opts).await?;
+        let (_, file_metadata) = get_written(parquet_sink)?;
+        assert_file_metadata(file_metadata, &expected_without);
+
+        // single threaded write, do not skip insert
+        let opts = ParquetOptions {
+            allow_single_file_parallelism: false,
+            skip_arrow_metadata: false,
+            ..Default::default()
+        };
+        let parquet_sink =
+            create_written_parquet_sink_using_config("file:///", opts).await?;
+        let (_, file_metadata) = get_written(parquet_sink)?;
+        assert_file_metadata(file_metadata, &expected_with);
+
+        // multithreaded write, skip insert
+        let opts = ParquetOptions {
+            allow_single_file_parallelism: true,
+            maximum_parallel_row_group_writers: 2,
+            maximum_buffered_record_batches_per_stream: 2,
+            skip_arrow_metadata: true,
+            ..Default::default()
+        };
+        let parquet_sink =
+            create_written_parquet_sink_using_config("file:///", opts).await?;
+        let (_, file_metadata) = get_written(parquet_sink)?;
+        assert_file_metadata(file_metadata, &expected_without);
+
+        // multithreaded write, do not skip insert
+        let opts = ParquetOptions {
+            allow_single_file_parallelism: true,
+            maximum_parallel_row_group_writers: 2,
+            maximum_buffered_record_batches_per_stream: 2,
+            skip_arrow_metadata: false,
+            ..Default::default()
+        };
+        let parquet_sink =
+            create_written_parquet_sink_using_config("file:///", opts).await?;
+        let (_, file_metadata) = get_written(parquet_sink)?;
+        assert_file_metadata(file_metadata, &expected_with);
 
         Ok(())
     }
@@ -2391,18 +2504,8 @@ mod tests {
         let file_path = format!("file:///path/to/{}", filename);
         let parquet_sink = create_written_parquet_sink(file_path.as_str()).await?;
 
-        // assert written
-        let mut written = parquet_sink.written();
-        let written = written.drain();
-        assert_eq!(
-            written.len(),
-            1,
-            "expected a single parquet file to be written, instead found {}",
-            written.len()
-        );
-
-        let (path, ..) = written.take(1).next().unwrap();
-
+        // assert written to proper path
+        let (path, _) = get_written(parquet_sink)?;
         let path_parts = path.parts().collect::<Vec<_>>();
         assert_eq!(
             path_parts.len(),
@@ -2420,18 +2523,8 @@ mod tests {
         let file_path = "file:///path/to";
         let parquet_sink = create_written_parquet_sink(file_path).await?;
 
-        // assert written
-        let mut written = parquet_sink.written();
-        let written = written.drain();
-        assert_eq!(
-            written.len(),
-            1,
-            "expected a single parquet file to be written, instead found {}",
-            written.len()
-        );
-
-        let (path, ..) = written.take(1).next().unwrap();
-
+        // assert written to proper path
+        let (path, _) = get_written(parquet_sink)?;
         let path_parts = path.parts().collect::<Vec<_>>();
         assert_eq!(
             path_parts.len(),
@@ -2449,18 +2542,8 @@ mod tests {
         let file_path = "file:///path/to/";
         let parquet_sink = create_written_parquet_sink(file_path).await?;
 
-        // assert written
-        let mut written = parquet_sink.written();
-        let written = written.drain();
-        assert_eq!(
-            written.len(),
-            1,
-            "expected a single parquet file to be written, instead found {}",
-            written.len()
-        );
-
-        let (path, ..) = written.take(1).next().unwrap();
-
+        // assert written to proper path
+        let (path, _) = get_written(parquet_sink)?;
         let path_parts = path.parts().collect::<Vec<_>>();
         assert_eq!(
             path_parts.len(),
@@ -2474,6 +2557,17 @@ mod tests {
     }
 
     async fn create_written_parquet_sink(table_path: &str) -> Result<Arc<ParquetSink>> {
+        create_written_parquet_sink_using_config(table_path, ParquetOptions::default())
+            .await
+    }
+
+    static ENCODED_ARROW_SCHEMA: &str = "/////5QAAAAQAAAAAAAKAAwACgAJAAQACgAAABAAAAAAAQQACAAIAAAABAAIAAAABAAAAAIAAAA8AAAABAAAANz///8UAAAADAAAAAAAAAUMAAAAAAAAAMz///8BAAAAYgAAABAAFAAQAAAADwAEAAAACAAQAAAAGAAAAAwAAAAAAAAFEAAAAAAAAAAEAAQABAAAAAEAAABhAAAA";
+
+    async fn create_written_parquet_sink_using_config(
+        table_path: &str,
+        global: ParquetOptions,
+    ) -> Result<Arc<ParquetSink>> {
+        // schema should match the ENCODED_ARROW_SCHEMA bove
         let field_a = Field::new("a", DataType::Utf8, false);
         let field_b = Field::new("b", DataType::Utf8, false);
         let schema = Arc::new(Schema::new(vec![field_a, field_b]));
@@ -2495,6 +2589,7 @@ mod tests {
                     ("my-data".to_string(), Some("stuff".to_string())),
                     ("my-data-bool-key".to_string(), None),
                 ]),
+                global,
                 ..Default::default()
             },
         ));
@@ -2517,6 +2612,42 @@ mod tests {
             .unwrap();
 
         Ok(parquet_sink)
+    }
+
+    fn get_written(parquet_sink: Arc<ParquetSink>) -> Result<(Path, FileMetaData)> {
+        let mut written = parquet_sink.written();
+        let written = written.drain();
+        assert_eq!(
+            written.len(),
+            1,
+            "expected a single parquet files to be written, instead found {}",
+            written.len()
+        );
+
+        let (path, file_metadata) = written.take(1).next().unwrap();
+        Ok((path, file_metadata))
+    }
+
+    fn assert_file_metadata(file_metadata: FileMetaData, expected_kv: &Vec<KeyValue>) {
+        let FileMetaData {
+            num_rows,
+            schema,
+            key_value_metadata,
+            ..
+        } = file_metadata;
+        assert_eq!(num_rows, 2, "file metadata to have 2 rows");
+        assert!(
+            schema.iter().any(|col_schema| col_schema.name == "a"),
+            "output file metadata should contain col a"
+        );
+        assert!(
+            schema.iter().any(|col_schema| col_schema.name == "b"),
+            "output file metadata should contain col b"
+        );
+
+        let mut key_value_metadata = key_value_metadata.unwrap();
+        key_value_metadata.sort_by(|a, b| a.key.cmp(&b.key));
+        assert_eq!(&key_value_metadata, expected_kv);
     }
 
     #[tokio::test]

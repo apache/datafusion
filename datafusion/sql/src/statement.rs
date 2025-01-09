@@ -62,8 +62,8 @@ use sqlparser::ast::{
     Assignment, AssignmentTarget, ColumnDef, CreateIndex, CreateTable,
     CreateTableOptions, Delete, DescribeAlias, Expr as SQLExpr, FromTable, Ident, Insert,
     ObjectName, ObjectType, OneOrManyWithParens, Query, SchemaName, SetExpr,
-    ShowCreateObject, Statement, TableConstraint, TableFactor, TableWithJoins,
-    TransactionMode, UnaryOperator, Value,
+    ShowCreateObject, ShowStatementFilter, Statement, TableConstraint, TableFactor,
+    TableWithJoins, TransactionMode, UnaryOperator, Value,
 };
 use sqlparser::parser::ParserError::ParserError;
 
@@ -683,7 +683,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 parameters,
                 using,
                 // has_parentheses specifies the syntax, but the plan is the
-                // same no matter the synax used, so ignore it
+                // same no matter the syntax used, so ignore it
                 has_parentheses: _,
             } => {
                 // `USING` is a MySQL-specific syntax and currently not supported.
@@ -809,6 +809,10 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 };
 
                 self.show_columns_to_plan(extended, full, table_name)
+            }
+
+            Statement::ShowFunctions { filter, .. } => {
+                self.show_functions_to_plan(filter)
             }
 
             Statement::Insert(Insert {
@@ -1975,6 +1979,90 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             "SELECT {select_list} FROM information_schema.columns WHERE {where_clause}"
         );
 
+        let mut rewrite = DFParser::parse_sql(&query)?;
+        assert_eq!(rewrite.len(), 1);
+        self.statement_to_plan(rewrite.pop_front().unwrap()) // length of rewrite is 1
+    }
+
+    /// Rewrite `SHOW FUNCTIONS` to another SQL query
+    /// The query is based on the `information_schema.routines` and `information_schema.parameters` tables
+    ///
+    /// The output columns:
+    /// - function_name: The name of function
+    /// - return_type: The return type of the function
+    /// - parameters: The name of parameters (ordered by the ordinal position)
+    /// - parameter_types: The type of parameters (ordered by the ordinal position)
+    /// - description: The description of the function (the description defined in the document)
+    /// - syntax_example: The syntax_example of the function (the syntax_example defined in the document)
+    fn show_functions_to_plan(
+        &self,
+        filter: Option<ShowStatementFilter>,
+    ) -> Result<LogicalPlan> {
+        let where_clause = if let Some(filter) = filter {
+            match filter {
+                ShowStatementFilter::Like(like) => {
+                    format!("WHERE p.function_name like '{like}'")
+                }
+                _ => return plan_err!("Unsupported SHOW FUNCTIONS filter"),
+            }
+        } else {
+            "".to_string()
+        };
+
+        let query = format!(
+            r#"
+SELECT DISTINCT
+    p.*,
+    r.function_type function_type,
+    r.description description,
+    r.syntax_example syntax_example
+FROM
+    (
+        SELECT
+            i.specific_name function_name,
+            o.data_type return_type,
+            array_agg(i.parameter_name ORDER BY i.ordinal_position ASC) parameters,
+            array_agg(i.data_type ORDER BY i.ordinal_position ASC) parameter_types
+        FROM (
+                 SELECT
+                     specific_catalog,
+                     specific_schema,
+                     specific_name,
+                     ordinal_position,
+                     parameter_name,
+                     data_type,
+                     rid
+                 FROM
+                     information_schema.parameters
+                 WHERE
+                     parameter_mode = 'IN'
+             ) i
+                 JOIN
+             (
+                 SELECT
+                     specific_catalog,
+                     specific_schema,
+                     specific_name,
+                     ordinal_position,
+                     parameter_name,
+                     data_type,
+                     rid
+                 FROM
+                     information_schema.parameters
+                 WHERE
+                     parameter_mode = 'OUT'
+             ) o
+             ON i.specific_catalog = o.specific_catalog
+                 AND i.specific_schema = o.specific_schema
+                 AND i.specific_name = o.specific_name
+                 AND i.rid = o.rid
+        GROUP BY 1, 2, i.rid
+    ) as p
+JOIN information_schema.routines r
+ON p.function_name = r.routine_name
+{where_clause}
+            "#
+        );
         let mut rewrite = DFParser::parse_sql(&query)?;
         assert_eq!(rewrite.len(), 1);
         self.statement_to_plan(rewrite.pop_front().unwrap()) // length of rewrite is 1

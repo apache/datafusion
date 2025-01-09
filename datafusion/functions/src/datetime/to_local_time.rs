@@ -17,7 +17,7 @@
 
 use std::any::Any;
 use std::ops::Add;
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
 use arrow::array::timezone::Tz;
 use arrow::array::{Array, ArrayRef, PrimitiveBuilder};
@@ -31,14 +31,69 @@ use arrow::datatypes::{
 use chrono::{DateTime, MappedLocalTime, Offset, TimeDelta, TimeZone, Utc};
 use datafusion_common::cast::as_primitive_array;
 use datafusion_common::{exec_err, plan_err, DataFusionError, Result, ScalarValue};
-use datafusion_expr::scalar_doc_sections::DOC_SECTION_DATETIME;
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
 };
+use datafusion_macros::user_doc;
 
 /// A UDF function that converts a timezone-aware timestamp to local time (with no offset or
 /// timezone information). In other words, this function strips off the timezone from the timestamp,
 /// while keep the display value of the timestamp the same.
+#[user_doc(
+    doc_section(label = "Time and Date Functions"),
+    description = "Converts a timestamp with a timezone to a timestamp without a timezone (with no offset or timezone information). This function handles daylight saving time changes.",
+    syntax_example = "to_local_time(expression)",
+    sql_example = r#"```sql
+> SELECT to_local_time('2024-04-01T00:00:20Z'::timestamp);
++---------------------------------------------+
+| to_local_time(Utf8("2024-04-01T00:00:20Z")) |
++---------------------------------------------+
+| 2024-04-01T00:00:20                         |
++---------------------------------------------+
+
+> SELECT to_local_time('2024-04-01T00:00:20Z'::timestamp AT TIME ZONE 'Europe/Brussels');
++---------------------------------------------+
+| to_local_time(Utf8("2024-04-01T00:00:20Z")) |
++---------------------------------------------+
+| 2024-04-01T00:00:20                         |
++---------------------------------------------+
+
+> SELECT
+  time,
+  arrow_typeof(time) as type,
+  to_local_time(time) as to_local_time,
+  arrow_typeof(to_local_time(time)) as to_local_time_type
+FROM (
+  SELECT '2024-04-01T00:00:20Z'::timestamp AT TIME ZONE 'Europe/Brussels' AS time
+);
++---------------------------+------------------------------------------------+---------------------+-----------------------------+
+| time                      | type                                           | to_local_time       | to_local_time_type          |
++---------------------------+------------------------------------------------+---------------------+-----------------------------+
+| 2024-04-01T00:00:20+02:00 | Timestamp(Nanosecond, Some("Europe/Brussels")) | 2024-04-01T00:00:20 | Timestamp(Nanosecond, None) |
++---------------------------+------------------------------------------------+---------------------+-----------------------------+
+
+# combine `to_local_time()` with `date_bin()` to bin on boundaries in the timezone rather
+# than UTC boundaries
+
+> SELECT date_bin(interval '1 day', to_local_time('2024-04-01T00:00:20Z'::timestamp AT TIME ZONE 'Europe/Brussels')) AS date_bin;
++---------------------+
+| date_bin            |
++---------------------+
+| 2024-04-01T00:00:00 |
++---------------------+
+
+> SELECT date_bin(interval '1 day', to_local_time('2024-04-01T00:00:20Z'::timestamp AT TIME ZONE 'Europe/Brussels')) AT TIME ZONE 'Europe/Brussels' AS date_bin_with_timezone;
++---------------------------+
+| date_bin_with_timezone    |
++---------------------------+
+| 2024-04-01T00:00:00+02:00 |
++---------------------------+
+```"#,
+    argument(
+        name = "expression",
+        description = "Time expression to operate on. Can be a constant, column, or function."
+    )
+)]
 #[derive(Debug)]
 pub struct ToLocalTimeFunc {
     signature: Signature,
@@ -359,70 +414,8 @@ impl ScalarUDFImpl for ToLocalTimeFunc {
         }
     }
     fn documentation(&self) -> Option<&Documentation> {
-        Some(get_to_local_time_doc())
+        self.doc()
     }
-}
-
-static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
-
-fn get_to_local_time_doc() -> &'static Documentation {
-    DOCUMENTATION.get_or_init(|| {
-        Documentation::builder(
-            DOC_SECTION_DATETIME,
-            "Converts a timestamp with a timezone to a timestamp without a timezone (with no offset or timezone information). This function handles daylight saving time changes.",
-            "to_local_time(expression)")
-            .with_argument(
-                "expression",
-                "Time expression to operate on. Can be a constant, column, or function."
-            )
-            .with_sql_example(r#"```sql
-> SELECT to_local_time('2024-04-01T00:00:20Z'::timestamp);
-+---------------------------------------------+
-| to_local_time(Utf8("2024-04-01T00:00:20Z")) |
-+---------------------------------------------+
-| 2024-04-01T00:00:20                         |
-+---------------------------------------------+
-
-> SELECT to_local_time('2024-04-01T00:00:20Z'::timestamp AT TIME ZONE 'Europe/Brussels');
-+---------------------------------------------+
-| to_local_time(Utf8("2024-04-01T00:00:20Z")) |
-+---------------------------------------------+
-| 2024-04-01T00:00:20                         |
-+---------------------------------------------+
-
-> SELECT
-  time,
-  arrow_typeof(time) as type,
-  to_local_time(time) as to_local_time,
-  arrow_typeof(to_local_time(time)) as to_local_time_type
-FROM (
-  SELECT '2024-04-01T00:00:20Z'::timestamp AT TIME ZONE 'Europe/Brussels' AS time
-);
-+---------------------------+------------------------------------------------+---------------------+-----------------------------+
-| time                      | type                                           | to_local_time       | to_local_time_type          |
-+---------------------------+------------------------------------------------+---------------------+-----------------------------+
-| 2024-04-01T00:00:20+02:00 | Timestamp(Nanosecond, Some("Europe/Brussels")) | 2024-04-01T00:00:20 | Timestamp(Nanosecond, None) |
-+---------------------------+------------------------------------------------+---------------------+-----------------------------+
-
-# combine `to_local_time()` with `date_bin()` to bin on boundaries in the timezone rather
-# than UTC boundaries
-
-> SELECT date_bin(interval '1 day', to_local_time('2024-04-01T00:00:20Z'::timestamp AT TIME ZONE 'Europe/Brussels')) AS date_bin;
-+---------------------+
-| date_bin            |
-+---------------------+
-| 2024-04-01T00:00:00 |
-+---------------------+
-
-> SELECT date_bin(interval '1 day', to_local_time('2024-04-01T00:00:20Z'::timestamp AT TIME ZONE 'Europe/Brussels')) AT TIME ZONE 'Europe/Brussels' AS date_bin_with_timezone;
-+---------------------------+
-| date_bin_with_timezone    |
-+---------------------------+
-| 2024-04-01T00:00:00+02:00 |
-+---------------------------+
-```"#)
-            .build()
-    })
 }
 
 #[cfg(test)]

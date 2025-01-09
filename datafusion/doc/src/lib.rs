@@ -17,9 +17,11 @@
 
 #[allow(rustdoc::broken_intra_doc_links)]
 /// Documentation for use by [`ScalarUDFImpl`](ScalarUDFImpl),
-/// [`AggregateUDFImpl`](AggregateUDFImpl) and [`WindowUDFImpl`](WindowUDFImpl) functions
-/// that will be used to generate public documentation.
+/// [`AggregateUDFImpl`](AggregateUDFImpl) and [`WindowUDFImpl`](WindowUDFImpl) functions.
 ///
+/// See the [`DocumentationBuilder`] to create a new [`Documentation`] struct.
+///
+/// The DataFusion [SQL function documentation] is automatically  generated from these structs.
 /// The name of the udf will be pulled from the [`ScalarUDFImpl::name`](ScalarUDFImpl::name),
 /// [`AggregateUDFImpl::name`](AggregateUDFImpl::name) or [`WindowUDFImpl::name`](WindowUDFImpl::name)
 /// function as appropriate.
@@ -29,6 +31,8 @@
 ///
 /// Currently, documentation only supports a single language
 /// thus all text should be in English.
+///
+/// [SQL function documentation]: https://datafusion.apache.org/user-guide/sql/index.html
 #[derive(Debug, Clone)]
 pub struct Documentation {
     /// The section in the documentation where the UDF will be documented
@@ -61,7 +65,7 @@ impl Documentation {
         description: impl Into<String>,
         syntax_example: impl Into<String>,
     ) -> DocumentationBuilder {
-        DocumentationBuilder::new(doc_section, description, syntax_example)
+        DocumentationBuilder::new_with_details(doc_section, description, syntax_example)
     }
 
     /// Output the `Documentation` struct in form of custom Rust documentation attributes
@@ -160,7 +164,21 @@ pub struct DocSection {
     pub description: Option<&'static str>,
 }
 
-/// A builder to be used for building [`Documentation`]'s.
+impl Default for DocSection {
+    /// Returns a "default" Doc section.
+    ///
+    /// This is suitable for user defined functions that do not appear in the
+    /// DataFusion documentation.
+    fn default() -> Self {
+        Self {
+            include: true,
+            label: "Default",
+            description: None,
+        }
+    }
+}
+
+/// A builder for [`Documentation`]'s.
 ///
 /// Example:
 ///
@@ -189,7 +207,17 @@ pub struct DocumentationBuilder {
 }
 
 impl DocumentationBuilder {
-    pub fn new(
+    #[allow(clippy::new_without_default)]
+    #[deprecated(
+        since = "44.0.0",
+        note = "please use `DocumentationBuilder::new_with_details` instead"
+    )]
+    pub fn new() -> Self {
+        Self::new_with_details(DocSection::default(), "<no description>", "<no example>")
+    }
+
+    /// Creates a new [`DocumentationBuilder`] with all required fields
+    pub fn new_with_details(
         doc_section: DocSection,
         description: impl Into<String>,
         syntax_example: impl Into<String>,

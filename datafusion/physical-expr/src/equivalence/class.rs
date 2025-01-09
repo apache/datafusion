@@ -20,12 +20,12 @@ use crate::{
     expressions::Column, LexOrdering, LexRequirement, PhysicalExpr, PhysicalExprRef,
     PhysicalSortExpr, PhysicalSortRequirement,
 };
+use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
+use datafusion_common::{JoinType, ScalarValue};
+use datafusion_physical_expr_common::physical_expr::format_physical_expr_list;
 use std::fmt::Display;
 use std::sync::Arc;
-
-use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
-use datafusion_common::JoinType;
-use datafusion_physical_expr_common::physical_expr::format_physical_expr_list;
+use std::vec::IntoIter;
 
 use indexmap::{IndexMap, IndexSet};
 
@@ -55,13 +55,45 @@ use indexmap::{IndexMap, IndexSet};
 /// // create a constant expression from a physical expression
 /// let const_expr = ConstExpr::from(col);
 /// ```
+// TODO: Consider refactoring the `across_partitions` and `value` fields into an enum:
+//
+// ```
+// enum PartitionValues {
+//     Uniform(Option<ScalarValue>),           // Same value across all partitions
+//     Heterogeneous(Vec<Option<ScalarValue>>) // Different values per partition
+// }
+// ```
+//
+// This would provide more flexible representation of partition values.
+// Note: This is a breaking change for the equivalence API and should be
+// addressed in a separate issue/PR.
 #[derive(Debug, Clone)]
 pub struct ConstExpr {
     /// The  expression that is known to be constant (e.g. a `Column`)
     expr: Arc<dyn PhysicalExpr>,
     /// Does the constant have the same value across all partitions? See
     /// struct docs for more details
-    across_partitions: bool,
+    across_partitions: AcrossPartitions,
+}
+
+#[derive(PartialEq, Clone, Debug)]
+/// Represents whether a constant expression's value is uniform or varies across partitions.
+///
+/// The `AcrossPartitions` enum is used to describe the nature of a constant expression
+/// in a physical execution plan:
+///
+/// - `Heterogeneous`: The constant expression may have different values for different partitions.
+/// - `Uniform(Option<ScalarValue>)`: The constant expression has the same value across all partitions,
+///   or is `None` if the value is not specified.
+pub enum AcrossPartitions {
+    Heterogeneous,
+    Uniform(Option<ScalarValue>),
+}
+
+impl Default for AcrossPartitions {
+    fn default() -> Self {
+        Self::Heterogeneous
+    }
 }
 
 impl PartialEq for ConstExpr {
@@ -79,14 +111,14 @@ impl ConstExpr {
         Self {
             expr,
             // By default, assume constant expressions are not same across partitions.
-            across_partitions: false,
+            across_partitions: Default::default(),
         }
     }
 
     /// Set the `across_partitions` flag
     ///
     /// See struct docs for more details
-    pub fn with_across_partitions(mut self, across_partitions: bool) -> Self {
+    pub fn with_across_partitions(mut self, across_partitions: AcrossPartitions) -> Self {
         self.across_partitions = across_partitions;
         self
     }
@@ -94,8 +126,8 @@ impl ConstExpr {
     /// Is the  expression the same across all partitions?
     ///
     /// See struct docs for more details
-    pub fn across_partitions(&self) -> bool {
-        self.across_partitions
+    pub fn across_partitions(&self) -> AcrossPartitions {
+        self.across_partitions.clone()
     }
 
     pub fn expr(&self) -> &Arc<dyn PhysicalExpr> {
@@ -113,7 +145,7 @@ impl ConstExpr {
         let maybe_expr = f(&self.expr);
         maybe_expr.map(|expr| Self {
             expr,
-            across_partitions: self.across_partitions,
+            across_partitions: self.across_partitions.clone(),
         })
     }
 
@@ -143,14 +175,20 @@ impl ConstExpr {
     }
 }
 
-/// Display implementation for `ConstExpr`
-///
-/// Example `c` or `c(across_partitions)`
 impl Display for ConstExpr {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.expr)?;
-        if self.across_partitions {
-            write!(f, "(across_partitions)")?;
+        match &self.across_partitions {
+            AcrossPartitions::Heterogeneous => {
+                write!(f, "(heterogeneous)")?;
+            }
+            AcrossPartitions::Uniform(value) => {
+                if let Some(val) = value {
+                    write!(f, "(uniform: {})", val)?;
+                } else {
+                    write!(f, "(uniform: unknown)")?;
+                }
+            }
         }
         Ok(())
     }
@@ -285,11 +323,10 @@ impl Display for EquivalenceClass {
     }
 }
 
-/// An `EquivalenceGroup` is a collection of `EquivalenceClass`es where each
-/// class represents a distinct equivalence class in a relation.
+/// A collection of distinct `EquivalenceClass`es
 #[derive(Debug, Clone)]
 pub struct EquivalenceGroup {
-    pub classes: Vec<EquivalenceClass>,
+    classes: Vec<EquivalenceClass>,
 }
 
 impl EquivalenceGroup {
@@ -678,6 +715,20 @@ impl EquivalenceGroup {
             .into_iter()
             .zip(right_children)
             .all(|(left_child, right_child)| self.exprs_equal(left_child, right_child))
+    }
+
+    /// Return the inner classes of this equivalence group.
+    pub fn into_inner(self) -> Vec<EquivalenceClass> {
+        self.classes
+    }
+}
+
+impl IntoIterator for EquivalenceGroup {
+    type Item = EquivalenceClass;
+    type IntoIter = IntoIter<EquivalenceClass>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.classes.into_iter()
     }
 }
 

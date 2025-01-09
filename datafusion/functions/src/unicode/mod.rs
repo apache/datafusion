@@ -23,6 +23,7 @@ use datafusion_expr::ScalarUDF;
 
 pub mod character_length;
 pub mod find_in_set;
+pub mod initcap;
 pub mod left;
 pub mod lpad;
 pub mod reverse;
@@ -36,6 +37,7 @@ pub mod translate;
 // create UDFs
 make_udf_function!(character_length::CharacterLengthFunc, character_length);
 make_udf_function!(find_in_set::FindInSetFunc, find_in_set);
+make_udf_function!(initcap::InitcapFunc, initcap);
 make_udf_function!(left::LeftFunc, left);
 make_udf_function!(lpad::LPadFunc, lpad);
 make_udf_function!(right::RightFunc, right);
@@ -95,6 +97,10 @@ pub mod expr_fn {
         "returns the first `n` characters in the `string`",
         string n
     ),(
+        initcap,
+        "converts the first letter of each word in `string` in uppercase and the remaining characters in lowercase",
+        string
+    ),(
         find_in_set,
         "Returns a value in the range of 1 to N if the string str is in the string list strlist consisting of N substrings",
         string strlist
@@ -126,6 +132,7 @@ pub fn functions() -> Vec<Arc<ScalarUDF>> {
     vec![
         character_length(),
         find_in_set(),
+        initcap(),
         left(),
         lpad(),
         reverse(),

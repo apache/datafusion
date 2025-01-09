@@ -27,7 +27,7 @@ mod ordering;
 mod projection;
 mod properties;
 
-pub use class::{ConstExpr, EquivalenceClass, EquivalenceGroup};
+pub use class::{AcrossPartitions, ConstExpr, EquivalenceClass, EquivalenceGroup};
 pub use ordering::OrderingEquivalenceClass;
 pub use projection::ProjectionMapping;
 pub use properties::{
@@ -254,16 +254,16 @@ mod tests {
         // This new entry is redundant, size shouldn't increase
         eq_properties.add_equal_conditions(&col_b_expr, &col_a_expr)?;
         assert_eq!(eq_properties.eq_group().len(), 1);
-        let eq_groups = &eq_properties.eq_group().classes[0];
+        let eq_groups = eq_properties.eq_group().iter().next().unwrap();
         assert_eq!(eq_groups.len(), 2);
         assert!(eq_groups.contains(&col_a_expr));
         assert!(eq_groups.contains(&col_b_expr));
 
-        // b and c are aliases. Exising equivalence class should expand,
+        // b and c are aliases. Existing equivalence class should expand,
         // however there shouldn't be any new equivalence class
         eq_properties.add_equal_conditions(&col_b_expr, &col_c_expr)?;
         assert_eq!(eq_properties.eq_group().len(), 1);
-        let eq_groups = &eq_properties.eq_group().classes[0];
+        let eq_groups = eq_properties.eq_group().iter().next().unwrap();
         assert_eq!(eq_groups.len(), 3);
         assert!(eq_groups.contains(&col_a_expr));
         assert!(eq_groups.contains(&col_b_expr));
@@ -277,7 +277,7 @@ mod tests {
         // Hence equivalent class count should decrease from 2 to 1.
         eq_properties.add_equal_conditions(&col_x_expr, &col_a_expr)?;
         assert_eq!(eq_properties.eq_group().len(), 1);
-        let eq_groups = &eq_properties.eq_group().classes[0];
+        let eq_groups = eq_properties.eq_group().iter().next().unwrap();
         assert_eq!(eq_groups.len(), 5);
         assert!(eq_groups.contains(&col_a_expr));
         assert!(eq_groups.contains(&col_b_expr));

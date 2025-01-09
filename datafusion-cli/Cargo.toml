@@ -18,14 +18,13 @@
 [package]
 name = "datafusion-cli"
 description = "Command Line Client for DataFusion query engine."
-version = "43.0.0"
+version = "44.0.0"
 authors = ["Apache DataFusion <dev@datafusion.apache.org>"]
 edition = "2021"
 keywords = ["arrow", "datafusion", "query", "sql"]
 license = "Apache-2.0"
 homepage = "https://datafusion.apache.org"
 repository = "https://github.com/apache/datafusion"
-# Specify MSRV here as `cargo msrv` doesn't support workspace version
 rust-version = "1.80.1"
 readme = "README.md"
 
@@ -39,17 +38,18 @@ aws-sdk-sts = "1.43.0"
 # end pin aws-sdk crates
 aws-credential-types = "1.2.0"
 clap = { version = "4.5.16", features = ["derive", "cargo"] }
-datafusion = { path = "../datafusion/core", version = "43.0.0", features = [
+datafusion = { path = "../datafusion/core", version = "44.0.0", features = [
     "avro",
     "crypto_expressions",
     "datetime_expressions",
     "encoding_expressions",
     "parquet",
+    "recursive_protection",
     "regex_expressions",
     "unicode_expressions",
     "compression",
 ] }
-datafusion-catalog = { path = "../datafusion/catalog", version = "43.0.0" }
+datafusion-catalog = { path = "../datafusion/catalog", version = "44.0.0" }
 dirs = "5.0.1"
 env_logger = "0.11"
 futures = "0.3"
@@ -62,7 +62,7 @@ parquet = { version = "53.0.0", default-features = false }
 regex = "1.8"
 rustyline = "14.0"
 tokio = { version = "1.24", features = ["macros", "rt", "rt-multi-thread", "sync", "parking_lot", "signal"] }
-url = "2.2"
+url = "2.5.4"
 
 [dev-dependencies]
 assert_cmd = "2.0"
@@ -72,3 +72,14 @@ insta = { version = "1.41.1", features = ["glob", "filters"] }
 insta-cmd = "0.6.0"
 predicates = "3.0"
 rstest = "0.22"
+
+[profile.ci]
+inherits = "dev"
+incremental = false
+
+# ci turns off debug info, etc for dependencies to allow for smaller binaries making caching more effective
+[profile.ci.package."*"]
+debug = false
+debug-assertions = false
+strip = "debuginfo"
+incremental = false

@@ -19,7 +19,7 @@
 name = "datafusion"
 description = "DataFusion is an in-memory query engine that uses Apache Arrow as the memory model"
 keywords = ["arrow", "query", "sql"]
-include = ["benches/*.rs", "src/**/*.rs", "Cargo.toml"]
+include = ["benches/*.rs", "src/**/*.rs", "Cargo.toml", "LICENSE.txt", "NOTICE.txt"]
 readme = "../../README.md"
 version = { workspace = true }
 edition = { workspace = true }
@@ -27,10 +27,7 @@ homepage = { workspace = true }
 repository = { workspace = true }
 license = { workspace = true }
 authors = { workspace = true }
-# Specify MSRV here as `cargo msrv` doesn't support workspace version and fails with
-# "Unable to find key 'package.rust-version' (or 'package.metadata.msrv') in 'arrow-datafusion/Cargo.toml'"
-# https://github.com/foresterre/cargo-msrv/issues/590
-rust-version = "1.80.1"
+rust-version = { workspace = true }
 
 [lints]
 workspace = true
@@ -59,6 +56,7 @@ default = [
     "unicode_expressions",
     "compression",
     "parquet",
+    "recursive_protection",
 ]
 encoding_expressions = ["datafusion-functions/encoding_expressions"]
 # Used for testing ONLY: causes all values to hash to the same value (test for collisions)
@@ -68,6 +66,13 @@ parquet = ["datafusion-common/parquet", "dep:parquet"]
 pyarrow = ["datafusion-common/pyarrow", "parquet"]
 regex_expressions = [
     "datafusion-functions/regex_expressions",
+]
+recursive_protection = [
+    "datafusion-common/recursive_protection",
+    "datafusion-expr/recursive_protection",
+    "datafusion-optimizer/recursive_protection",
+    "datafusion-physical-optimizer/recursive_protection",
+    "datafusion-sql/recursive_protection",
 ]
 serde = ["arrow-schema/serde"]
 string_expressions = ["datafusion-functions/string_expressions"]
@@ -87,12 +92,11 @@ async-compression = { version = "0.4.0", features = [
     "gzip",
     "xz",
     "zstd",
-    "futures-io",
     "tokio",
 ], optional = true }
 async-trait = { workspace = true }
 bytes = { workspace = true }
-bzip2 = { version = "0.4.3", optional = true }
+bzip2 = { version = "0.5.0", optional = true }
 chrono = { workspace = true }
 dashmap = { workspace = true }
 datafusion-catalog = { workspace = true }

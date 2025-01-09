@@ -17,18 +17,45 @@
 
 use arrow::array::{ArrayRef, Int32Array, RecordBatch, StringArray};
 use datafusion::arrow::datatypes::{DataType, Field, Schema};
+use datafusion::dataframe::DataFrameWriteOptions;
 use datafusion::error::Result;
+use datafusion::functions_aggregate::average::avg;
+use datafusion::functions_aggregate::min_max::max;
 use datafusion::prelude::*;
+use datafusion_common::config::CsvOptions;
+use datafusion_common::parsers::CompressionTypeVariant;
+use datafusion_common::DataFusionError;
+use datafusion_common::ScalarValue;
 use std::fs::File;
 use std::io::Write;
 use std::sync::Arc;
 use tempfile::tempdir;
 
-/// This example demonstrates using DataFusion's DataFrame API to
+/// This example demonstrates using DataFusion's DataFrame API
+///
+/// # Reading from different formats
 ///
 /// * [read_parquet]: execute queries against parquet files
 /// * [read_csv]: execute queries against csv files
 /// * [read_memory]: execute queries against in-memory arrow data
+///
+/// # Writing out to local storage
+///
+/// The following examples demonstrate how to write a DataFrame to local
+/// storage. See `external_dependency/dataframe-to-s3.rs` for an example writing
+/// to a remote object store.
+///
+/// * [write_out]: write out a DataFrame to a table, parquet file, csv file, or json file
+///
+/// # Executing subqueries
+///
+/// * [where_scalar_subquery]: execute a scalar subquery
+/// * [where_in_subquery]: execute a subquery with an IN clause
+/// * [where_exist_subquery]: execute a subquery with an EXISTS clause
+///
+/// # Querying data
+///
+/// * [query_to_date]: execute queries against parquet files
 #[tokio::main]
 async fn main() -> Result<()> {
     // The SessionContext is the main high level API for interacting with DataFusion
@@ -36,6 +63,13 @@ async fn main() -> Result<()> {
     read_parquet(&ctx).await?;
     read_csv(&ctx).await?;
     read_memory(&ctx).await?;
+    write_out(&ctx).await?;
+    query_to_date().await?;
+    register_aggregate_test_data("t1", &ctx).await?;
+    register_aggregate_test_data("t2", &ctx).await?;
+    where_scalar_subquery(&ctx).await?;
+    where_in_subquery(&ctx).await?;
+    where_exist_subquery(&ctx).await?;
     Ok(())
 }
 
@@ -137,5 +171,173 @@ async fn read_memory(ctx: &SessionContext) -> Result<()> {
     // print the results
     df.show().await?;
 
+    Ok(())
+}
+
+/// Use the DataFrame API to:
+/// 1. Write out a DataFrame to a table
+/// 2. Write out a DataFrame to a parquet file
+/// 3. Write out a DataFrame to a csv file
+/// 4. Write out a DataFrame to a json file
+async fn write_out(ctx: &SessionContext) -> std::result::Result<(), DataFusionError> {
+    let mut df = ctx.sql("values ('a'), ('b'), ('c')").await.unwrap();
+
+    // Ensure the column names and types match the target table
+    df = df.with_column_renamed("column1", "tablecol1").unwrap();
+
+    ctx.sql(
+        "create external table
+    test(tablecol1 varchar)
+    stored as parquet
+    location './datafusion-examples/test_table/'",
+    )
+    .await?
+    .collect()
+    .await?;
+
+    // This is equivalent to INSERT INTO test VALUES ('a'), ('b'), ('c').
+    // The behavior of write_table depends on the TableProvider's implementation
+    // of the insert_into method.
+    df.clone()
+        .write_table("test", DataFrameWriteOptions::new())
+        .await?;
+
+    df.clone()
+        .write_parquet(
+            "./datafusion-examples/test_parquet/",
+            DataFrameWriteOptions::new(),
+            None,
+        )
+        .await?;
+
+    df.clone()
+        .write_csv(
+            "./datafusion-examples/test_csv/",
+            // DataFrameWriteOptions contains options which control how data is written
+            // such as compression codec
+            DataFrameWriteOptions::new(),
+            Some(CsvOptions::default().with_compression(CompressionTypeVariant::GZIP)),
+        )
+        .await?;
+
+    df.clone()
+        .write_json(
+            "./datafusion-examples/test_json/",
+            DataFrameWriteOptions::new(),
+            None,
+        )
+        .await?;
+
+    Ok(())
+}
+
+/// This example demonstrates how to use the to_date series
+/// of functions in the DataFrame API as well as via sql.
+async fn query_to_date() -> Result<()> {
+    // define a schema.
+    let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Utf8, false)]));
+
+    // define data.
+    let batch = RecordBatch::try_new(
+        schema,
+        vec![Arc::new(StringArray::from(vec![
+            "2020-09-08T13:42:29Z",
+            "2020-09-08T13:42:29.190855-05:00",
+            "2020-08-09 12:13:29",
+            "2020-01-02",
+        ]))],
+    )?;
+
+    // declare a new context. In spark API, this corresponds to a new spark SQLsession
+    let ctx = SessionContext::new();
+
+    // declare a table in memory. In spark API, this corresponds to createDataFrame(...).
+    ctx.register_batch("t", batch)?;
+    let df = ctx.table("t").await?;
+
+    // use to_date function to convert col 'a' to timestamp type using the default parsing
+    let df = df.with_column("a", to_date(vec![col("a")]))?;
+
+    let df = df.select_columns(&["a"])?;
+
+    // print the results
+    df.show().await?;
+
+    Ok(())
+}
+
+/// Use the DataFrame API to execute the following subquery:
+/// select c1,c2 from t1 where (select avg(t2.c2) from t2 where t1.c1 = t2.c1)>0 limit 3;
+async fn where_scalar_subquery(ctx: &SessionContext) -> Result<()> {
+    ctx.table("t1")
+        .await?
+        .filter(
+            scalar_subquery(Arc::new(
+                ctx.table("t2")
+                    .await?
+                    .filter(out_ref_col(DataType::Utf8, "t1.c1").eq(col("t2.c1")))?
+                    .aggregate(vec![], vec![avg(col("t2.c2"))])?
+                    .select(vec![avg(col("t2.c2"))])?
+                    .into_unoptimized_plan(),
+            ))
+            .gt(lit(0u8)),
+        )?
+        .select(vec![col("t1.c1"), col("t1.c2")])?
+        .limit(0, Some(3))?
+        .show()
+        .await?;
+    Ok(())
+}
+
+/// Use the DataFrame API to execute the following subquery:
+/// select t1.c1, t1.c2 from t1 where t1.c2 in (select max(t2.c2) from t2 where t2.c1 > 0 ) limit 3;
+async fn where_in_subquery(ctx: &SessionContext) -> Result<()> {
+    ctx.table("t1")
+        .await?
+        .filter(in_subquery(
+            col("t1.c2"),
+            Arc::new(
+                ctx.table("t2")
+                    .await?
+                    .filter(col("t2.c1").gt(lit(ScalarValue::UInt8(Some(0)))))?
+                    .aggregate(vec![], vec![max(col("t2.c2"))])?
+                    .select(vec![max(col("t2.c2"))])?
+                    .into_unoptimized_plan(),
+            ),
+        ))?
+        .select(vec![col("t1.c1"), col("t1.c2")])?
+        .limit(0, Some(3))?
+        .show()
+        .await?;
+    Ok(())
+}
+
+/// Use the DataFrame API to execute the following subquery:
+/// select t1.c1, t1.c2 from t1 where exists (select t2.c2 from t2 where t1.c1 = t2.c1) limit 3;
+async fn where_exist_subquery(ctx: &SessionContext) -> Result<()> {
+    ctx.table("t1")
+        .await?
+        .filter(exists(Arc::new(
+            ctx.table("t2")
+                .await?
+                .filter(out_ref_col(DataType::Utf8, "t1.c1").eq(col("t2.c1")))?
+                .select(vec![col("t2.c2")])?
+                .into_unoptimized_plan(),
+        )))?
+        .select(vec![col("t1.c1"), col("t1.c2")])?
+        .limit(0, Some(3))?
+        .show()
+        .await?;
+    Ok(())
+}
+
+async fn register_aggregate_test_data(name: &str, ctx: &SessionContext) -> Result<()> {
+    let testdata = datafusion::test_util::arrow_test_data();
+    ctx.register_csv(
+        name,
+        &format!("{testdata}/csv/aggregate_test_100.csv"),
+        CsvReadOptions::default(),
+    )
+    .await?;
     Ok(())
 }

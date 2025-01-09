@@ -1208,7 +1208,7 @@ fn ensure_distribution(
     // We store the updated children in `new_children`.
     let children = izip!(
         children.into_iter(),
-        plan.required_input_ordering().iter(),
+        plan.required_input_ordering(),
         plan.maintains_input_order(),
         repartition_status_flags.into_iter()
     )
@@ -1252,7 +1252,7 @@ fn ensure_distribution(
                         // to increase parallelism.
                         child = add_roundrobin_on_top(child, target_partitions)?;
                     }
-                    // When inserting hash is necessary to satisy hash requirement, insert hash repartition.
+                    // When inserting hash is necessary to satisfy hash requirement, insert hash repartition.
                     if hash_necessary {
                         child =
                             add_hash_on_top(child, exprs.to_vec(), target_partitions)?;
@@ -1275,7 +1275,7 @@ fn ensure_distribution(
                 let ordering_satisfied = child
                     .plan
                     .equivalence_properties()
-                    .ordering_satisfy_requirement(required_input_ordering);
+                    .ordering_satisfy_requirement(&required_input_ordering);
                 if (!ordering_satisfied || !order_preserving_variants_desirable)
                     && child.data
                 {
@@ -2833,11 +2833,11 @@ pub(crate) mod tests {
                     ],
                 // Should include 7 RepartitionExecs (4 hash, 3 round-robin), 4 SortExecs
                 // Since ordering of the left child is not preserved after SortMergeJoin
-                // when mode is Right, RgihtSemi, RightAnti, Full
+                // when mode is Right, RightSemi, RightAnti, Full
                 // - We need to add one additional SortExec after SortMergeJoin in contrast the test cases
                 //   when mode is Inner, Left, LeftSemi, LeftAnti
                 // Similarly, since partitioning of the left side is not preserved
-                // when mode is Right, RgihtSemi, RightAnti, Full
+                // when mode is Right, RightSemi, RightAnti, Full
                 // - We need to add one additional Hash Repartition after SortMergeJoin in contrast the test
                 //   cases when mode is Inner, Left, LeftSemi, LeftAnti
                 _ => vec![
@@ -2885,11 +2885,11 @@ pub(crate) mod tests {
                     ],
                 // Should include 8 RepartitionExecs (4 hash, 8 round-robin), 4 SortExecs
                 // Since ordering of the left child is not preserved after SortMergeJoin
-                // when mode is Right, RgihtSemi, RightAnti, Full
+                // when mode is Right, RightSemi, RightAnti, Full
                 // - We need to add one additional SortExec after SortMergeJoin in contrast the test cases
                 //   when mode is Inner, Left, LeftSemi, LeftAnti
                 // Similarly, since partitioning of the left side is not preserved
-                // when mode is Right, RgihtSemi, RightAnti, Full
+                // when mode is Right, RightSemi, RightAnti, Full
                 // - We need to add one additional Hash Repartition and Roundrobin repartition after
                 //   SortMergeJoin in contrast the test cases when mode is Inner, Left, LeftSemi, LeftAnti
                 _ => vec![

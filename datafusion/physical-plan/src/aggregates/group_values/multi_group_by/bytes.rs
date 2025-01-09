@@ -352,7 +352,7 @@ where
         let null_buffer = self.nulls.take_n(n);
         let first_remaining_offset = O::as_usize(self.offsets[n]);
 
-        // Given offests like [0, 2, 4, 5] and n = 1, we expect to get
+        // Given offsets like [0, 2, 4, 5] and n = 1, we expect to get
         // offsets [0, 2, 3]. We first create two offsets for first_n as [0, 2] and the remaining as [2, 4, 5].
         // And we shift the offset starting from 0 for the remaining one, [2, 4, 5] -> [0, 2, 3].
         let mut first_n_offsets = self.offsets.drain(0..n).collect::<Vec<_>>();

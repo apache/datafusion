@@ -228,8 +228,8 @@ fn read_csv_batches(csv_path: impl AsRef<Path>) -> Result<(SchemaRef, Vec<Record
         .with_header(true)
         .build(file)?;
     let mut batches = vec![];
-    for bacth in reader {
-        batches.push(bacth?);
+    for batch in reader {
+        batches.push(batch?);
     }
     let schema = Arc::new(schema);
     Ok((schema, batches))

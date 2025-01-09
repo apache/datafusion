@@ -1940,7 +1940,7 @@ select position('' in '')
 ----
 1
 
-query error DataFusion error: Error during planning: Error during planning: The signature expected NativeType::String but received NativeType::Int64
+query error DataFusion error: Error during planning: The signature expected NativeType::String but received NativeType::Int64
 select position(1 in 1)
 
 query I

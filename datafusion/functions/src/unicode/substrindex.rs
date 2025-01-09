@@ -16,7 +16,7 @@
 // under the License.
 
 use std::any::Any;
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
 use arrow::array::{
     ArrayAccessor, ArrayIter, ArrayRef, ArrowPrimitiveType, AsArray, OffsetSizeTrait,
@@ -26,12 +26,42 @@ use arrow::datatypes::{DataType, Int32Type, Int64Type};
 
 use crate::utils::{make_scalar_function, utf8_to_str_type};
 use datafusion_common::{exec_err, Result};
-use datafusion_expr::scalar_doc_sections::DOC_SECTION_STRING;
 use datafusion_expr::TypeSignature::Exact;
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
 };
+use datafusion_macros::user_doc;
 
+#[user_doc(
+    doc_section(label = "String Functions"),
+    description = r#"Returns the substring from str before count occurrences of the delimiter delim.
+If count is positive, everything to the left of the final delimiter (counting from the left) is returned.
+If count is negative, everything to the right of the final delimiter (counting from the right) is returned."#,
+    syntax_example = "substr_index(str, delim, count)",
+    sql_example = r#"```sql
+> select substr_index('www.apache.org', '.', 1);
++---------------------------------------------------------+
+| substr_index(Utf8("www.apache.org"),Utf8("."),Int64(1)) |
++---------------------------------------------------------+
+| www                                                     |
++---------------------------------------------------------+
+> select substr_index('www.apache.org', '.', -1);
++----------------------------------------------------------+
+| substr_index(Utf8("www.apache.org"),Utf8("."),Int64(-1)) |
++----------------------------------------------------------+
+| org                                                      |
++----------------------------------------------------------+
+```"#,
+    standard_argument(name = "str", prefix = "String"),
+    argument(
+        name = "delim",
+        description = "The string to find in str to split str."
+    ),
+    argument(
+        name = "count",
+        description = "The number of times to search for the delimiter. Can be either a positive or negative number."
+    )
+)]
 #[derive(Debug)]
 pub struct SubstrIndexFunc {
     signature: Signature,
@@ -91,39 +121,8 @@ impl ScalarUDFImpl for SubstrIndexFunc {
     }
 
     fn documentation(&self) -> Option<&Documentation> {
-        Some(get_substr_index_doc())
+        self.doc()
     }
-}
-
-static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
-
-fn get_substr_index_doc() -> &'static Documentation {
-    DOCUMENTATION.get_or_init(|| {
-        Documentation::builder(
-            DOC_SECTION_STRING,
-            r#"Returns the substring from str before count occurrences of the delimiter delim.
-If count is positive, everything to the left of the final delimiter (counting from the left) is returned.
-If count is negative, everything to the right of the final delimiter (counting from the right) is returned."#,
-            "substr_index(str, delim, count)")
-            .with_sql_example(r#"```sql
-> select substr_index('www.apache.org', '.', 1);
-+---------------------------------------------------------+
-| substr_index(Utf8("www.apache.org"),Utf8("."),Int64(1)) |
-+---------------------------------------------------------+
-| www                                                     |
-+---------------------------------------------------------+
-> select substr_index('www.apache.org', '.', -1);
-+----------------------------------------------------------+
-| substr_index(Utf8("www.apache.org"),Utf8("."),Int64(-1)) |
-+----------------------------------------------------------+
-| org                                                      |
-+----------------------------------------------------------+
-```"#)
-            .with_standard_argument("str", Some("String"))
-            .with_argument("delim", "The string to find in str to split str.")
-            .with_argument("count", "The number of times to search for the delimiter. Can be either a positive or negative number.")
-            .build()
-    })
 }
 
 /// Returns the substring from str before count occurrences of the delimiter delim. If count is positive, everything to the left of the final delimiter (counting from the left) is returned. If count is negative, everything to the right of the final delimiter (counting from the right) is returned.

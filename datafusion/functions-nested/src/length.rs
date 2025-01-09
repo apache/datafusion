@@ -17,22 +17,21 @@
 
 //! [`ScalarUDFImpl`] definitions for array_length function.
 
-use crate::utils::{downcast_arg, make_scalar_function};
+use crate::utils::make_scalar_function;
 use arrow_array::{
     Array, ArrayRef, Int64Array, LargeListArray, ListArray, OffsetSizeTrait, UInt64Array,
 };
 use arrow_schema::DataType;
 use arrow_schema::DataType::{FixedSizeList, LargeList, List, UInt64};
-use core::any::type_name;
 use datafusion_common::cast::{as_generic_list_array, as_int64_array};
-use datafusion_common::DataFusionError;
-use datafusion_common::{exec_err, plan_err, Result};
-use datafusion_expr::scalar_doc_sections::DOC_SECTION_ARRAY;
+use datafusion_common::{exec_err, internal_datafusion_err, plan_err, Result};
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
 };
+use datafusion_functions::{downcast_arg, downcast_named_arg};
+use datafusion_macros::user_doc;
 use std::any::Any;
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
 make_udf_expr_and_func!(
     ArrayLength,
@@ -42,6 +41,24 @@ make_udf_expr_and_func!(
     array_length_udf
 );
 
+#[user_doc(
+    doc_section(label = "Array Functions"),
+    description = "Returns the length of the array dimension.",
+    syntax_example = "array_length(array, dimension)",
+    sql_example = r#"```sql
+> select array_length([1, 2, 3, 4, 5], 1);
++-------------------------------------------+
+| array_length(List([1,2,3,4,5]), 1)        |
++-------------------------------------------+
+| 5                                         |
++-------------------------------------------+
+```"#,
+    argument(
+        name = "array",
+        description = "Array expression. Can be a constant, column, or function, and any combination of array operators."
+    ),
+    argument(name = "dimension", description = "Array dimension.")
+)]
 #[derive(Debug)]
 pub struct ArrayLength {
     signature: Signature,
@@ -97,39 +114,8 @@ impl ScalarUDFImpl for ArrayLength {
     }
 
     fn documentation(&self) -> Option<&Documentation> {
-        Some(get_array_length_doc())
+        self.doc()
     }
-}
-
-static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
-
-fn get_array_length_doc() -> &'static Documentation {
-    DOCUMENTATION.get_or_init(|| {
-        Documentation::builder(
-            DOC_SECTION_ARRAY,
-                "Returns the length of the array dimension.",
-
-            "array_length(array, dimension)")
-            .with_sql_example(
-                r#"```sql
-> select array_length([1, 2, 3, 4, 5], 1);
-+-------------------------------------------+
-| array_length(List([1,2,3,4,5]), 1)        |
-+-------------------------------------------+
-| 5                                         |
-+-------------------------------------------+
-```"#,
-            )
-            .with_argument(
-                "array",
-                "Array expression. Can be a constant, column, or function, and any combination of array operators.",
-            )
-            .with_argument(
-                "dimension",
-                "Array dimension.",
-            )
-            .build()
-    })
 }
 
 /// Array_length SQL function

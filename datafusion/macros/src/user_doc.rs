@@ -103,7 +103,7 @@ pub fn user_doc(args: TokenStream, input: TokenStream) -> TokenStream {
 
     let mut description: Option<LitStr> = None;
     let mut syntax_example: Option<LitStr> = None;
-    let mut alt_syntax_example: Option<LitStr> = None;
+    let mut alt_syntax_example: Vec<Option<LitStr>> = vec![];
     let mut sql_example: Option<LitStr> = None;
     let mut standard_args: Vec<(Option<LitStr>, Option<LitStr>)> = vec![];
     let mut udf_args: Vec<(Option<LitStr>, Option<LitStr>)> = vec![];
@@ -131,7 +131,7 @@ pub fn user_doc(args: TokenStream, input: TokenStream) -> TokenStream {
             syntax_example = Some(meta.value()?.parse()?);
             Ok(())
         } else if meta.path.is_ident("alternative_syntax") {
-            alt_syntax_example = Some(meta.value()?.parse()?);
+            alt_syntax_example.push(Some(meta.value()?.parse()?));
             Ok(())
         } else if meta.path.is_ident("sql_example") {
             sql_example = Some(meta.value()?.parse()?);
@@ -242,7 +242,7 @@ pub fn user_doc(args: TokenStream, input: TokenStream) -> TokenStream {
         })
         .collect::<Vec<_>>();
 
-    let alt_syntax_example = alt_syntax_example.map(|syn| {
+    let alt_syntax_example = alt_syntax_example.iter().map(|syn| {
         quote! {
             .with_alternative_syntax(#syn)
         }
@@ -258,7 +258,7 @@ pub fn user_doc(args: TokenStream, input: TokenStream) -> TokenStream {
                         datafusion_doc::Documentation::builder(datafusion_doc::DocSection { include: #doc_section_include, label: #doc_section_lbl, description: #doc_section_description },
                     #description.to_string(), #syntax_example.to_string())
                         #sql_example
-                        #alt_syntax_example
+                        #(#alt_syntax_example)*
                         #(#standard_args)*
                         #(#udf_args)*
                         #(#related_udfs)*
