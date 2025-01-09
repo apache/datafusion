@@ -146,6 +146,10 @@ impl QualifiedSchema {
         Self::new(schema, field_qualifiers)
     }
 
+    pub fn is_empty(&self) -> bool {
+        self.schema.fields.is_empty()
+    }
+
     pub fn len(&self) -> usize {
         self.schema.fields.len()
     }
@@ -253,7 +257,7 @@ impl DFSchema {
     ///
     /// Note this does not have the qualifier information
     pub fn as_arrow(&self) -> &Schema {
-        &self.inner.schema.as_ref()
+        self.inner.schema.as_ref()
     }
 
     /// Return a reference to the inner Arrow [`SchemaRef`]
@@ -268,7 +272,7 @@ impl DFSchema {
         metadata_schema: Option<QualifiedSchema>,
     ) -> Self {
         self.metadata = metadata_schema;
-        return self;
+        self
     }
 
     /// Create a `DFSchema` from an Arrow schema where all the fields have a given qualifier
