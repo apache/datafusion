@@ -444,5 +444,12 @@ There are three options for running h2o benchmarks: `small`, `medium`, and `big`
 ./bench.sh run h2o_big
 ```
 
+4. Run a specific query with a specific data path
+
+For example, to run query 1 with the small data generated above:
+```bash
+cargo run --release --bin dfbench -- h2o --path ./benchmarks/data/h2o/G1_1e7_1e7_100_0.csv  --query 1
+```
+
 [1]: http://www.tpc.org/tpch/
 [2]: https://www1.nyc.gov/site/tlc/about/tlc-trip-record-data.page
