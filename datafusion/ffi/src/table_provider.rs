@@ -98,6 +98,7 @@ use datafusion::error::Result;
 pub struct FFI_TableProvider {
     /// Return the table schema
     pub schema: unsafe extern "C" fn(provider: &Self) -> WrappedSchema,
+    pub metadata_columns: unsafe extern "C" fn(provider: &Self) -> ROption<WrappedSchema>,
 
     /// Perform a scan on the table. See [`TableProvider`] for detailed usage information.
     ///
@@ -156,6 +157,15 @@ unsafe extern "C" fn schema_fn_wrapper(provider: &FFI_TableProvider) -> WrappedS
     let provider = &(*private_data).provider;
 
     provider.schema().into()
+}
+
+unsafe extern "C" fn metadata_columns_fn_wrapper(
+    provider: &FFI_TableProvider,
+) -> ROption<WrappedSchema> {
+    let private_data = provider.private_data as *const ProviderPrivateData;
+    let provider = &(*private_data).provider;
+
+    provider.metadata_columns().map(|s| s.into()).into()
 }
 
 unsafe extern "C" fn table_type_fn_wrapper(
@@ -280,6 +290,7 @@ unsafe extern "C" fn clone_fn_wrapper(provider: &FFI_TableProvider) -> FFI_Table
 
     FFI_TableProvider {
         schema: schema_fn_wrapper,
+        metadata_columns: metadata_columns_fn_wrapper,
         scan: scan_fn_wrapper,
         table_type: table_type_fn_wrapper,
         supports_filters_pushdown: provider.supports_filters_pushdown,
@@ -305,6 +316,7 @@ impl FFI_TableProvider {
 
         Self {
             schema: schema_fn_wrapper,
+            metadata_columns: metadata_columns_fn_wrapper,
             scan: scan_fn_wrapper,
             table_type: table_type_fn_wrapper,
             supports_filters_pushdown: match can_support_pushdown_filters {

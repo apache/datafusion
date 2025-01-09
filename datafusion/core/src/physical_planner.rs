@@ -2271,14 +2271,15 @@ mod tests {
         let expected_error: &str = "Error during planning: \
             Extension planner for NoOp created an ExecutionPlan with mismatched schema. \
             LogicalPlan schema: \
-            DFSchema { inner: Schema { fields: \
+            DFSchema { inner: QualifiedSchema { schema: Schema { fields: \
                 [Field { name: \"a\", \
                 data_type: Int32, \
                 nullable: false, \
                 dict_id: 0, \
                 dict_is_ordered: false, metadata: {} }], \
-                metadata: {} }, field_qualifiers: [None], \
-                functional_dependencies: FunctionalDependencies { deps: [] } }, \
+                metadata: {} }, \
+                field_qualifiers: [None] }, \
+                functional_dependencies: FunctionalDependencies { deps: [] }, metadata: None }, \
             ExecutionPlan schema: Schema { fields: \
                 [Field { name: \"b\", \
                 data_type: Int32, \

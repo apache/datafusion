@@ -55,8 +55,8 @@ use datafusion_common::tree_node::{
 use datafusion_common::{
     aggregate_functional_dependencies, internal_err, plan_err, Column, Constraints,
     DFSchema, DFSchemaRef, DataFusionError, Dependency, FunctionalDependence,
-    FunctionalDependencies, ParamValues, Result, ScalarValue, TableReference,
-    UnnestOptions,
+    FunctionalDependencies, ParamValues, QualifiedSchema, Result, ScalarValue,
+    TableReference, UnnestOptions,
 };
 use indexmap::IndexSet;
 
@@ -367,6 +367,22 @@ impl LogicalPlan {
                 .map(|input| input.schema().as_ref())
                 .collect(),
             _ => vec![],
+        }
+    }
+
+    pub fn metadata_schema(&self) -> &Option<QualifiedSchema> {
+        match self {
+            LogicalPlan::TableScan(TableScan {
+                projected_schema, ..
+            }) => projected_schema.metadata_schema(),
+            LogicalPlan::Join(Join { schema, .. }) => schema.metadata_schema(),
+            LogicalPlan::Projection(Projection { schema, .. }) => {
+                schema.metadata_schema()
+            }
+            LogicalPlan::SubqueryAlias(SubqueryAlias { schema, .. }) => {
+                schema.metadata_schema()
+            }
+            _ => &None,
         }
     }
 
@@ -2206,9 +2222,11 @@ impl SubqueryAlias {
         // Since schema is the same, other than qualifier, we can use existing
         // functional dependencies:
         let func_dependencies = plan.schema().functional_dependencies().clone();
+
         let schema = DFSchemaRef::new(
             DFSchema::try_from_qualified_schema(alias.clone(), &schema)?
-                .with_functional_dependencies(func_dependencies)?,
+                .with_functional_dependencies(func_dependencies)?
+                .with_metadata_schema(plan.metadata_schema().clone()),
         );
         Ok(SubqueryAlias {
             input: plan,
@@ -2591,7 +2609,8 @@ impl TableScan {
             table_source.constraints(),
             schema.fields.len(),
         );
-        let projected_schema = projection
+        let metadata = table_source.metadata_columns();
+        let mut projected_schema = projection
             .as_ref()
             .map(|p| {
                 let projected_func_dependencies =
@@ -2600,6 +2619,18 @@ impl TableScan {
                 let df_schema = DFSchema::new_with_metadata(
                     p.iter()
                         .map(|i| {
+                            if *i >= schema.fields.len() {
+                                if let Some(metadata) = &metadata {
+                                    return (
+                                        Some(table_name.clone()),
+                                        Arc::new(
+                                            metadata
+                                                .field(*i - schema.fields.len())
+                                                .clone(),
+                                        ),
+                                    );
+                                }
+                            }
                             (Some(table_name.clone()), Arc::new(schema.field(*i).clone()))
                         })
                         .collect(),
@@ -2612,6 +2643,11 @@ impl TableScan {
                     DFSchema::try_from_qualified_schema(table_name.clone(), &schema)?;
                 df_schema.with_functional_dependencies(func_dependencies)
             })?;
+        if let Some(metadata) = metadata {
+            projected_schema = projected_schema.with_metadata_schema(Some(
+                QualifiedSchema::new_with_table(metadata, &table_name),
+            ));
+        }
         let projected_schema = Arc::new(projected_schema);
 
         Ok(Self {

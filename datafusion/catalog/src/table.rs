@@ -55,6 +55,11 @@ pub trait TableProvider: Debug + Sync + Send {
     /// Get a reference to the schema for this table
     fn schema(&self) -> SchemaRef;
 
+    /// Get metadata columns of this table.
+    fn metadata_columns(&self) -> Option<SchemaRef> {
+        None
+    }
+
     /// Get a reference to the constraints of the table.
     /// Returns:
     /// - `None` for tables that do not support constraints.

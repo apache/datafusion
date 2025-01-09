@@ -56,6 +56,10 @@ impl TableSource for DefaultTableSource {
         self.table_provider.schema()
     }
 
+    fn metadata_columns(&self) -> Option<SchemaRef> {
+        self.table_provider.metadata_columns()
+    }
+
     /// Get a reference to applicable constraints, if any exists.
     fn constraints(&self) -> Option<&Constraints> {
         self.table_provider.constraints()
