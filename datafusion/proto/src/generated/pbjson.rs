@@ -4747,6 +4747,235 @@ impl<'de> serde::Deserialize<'de> for DistinctOnNode {
         deserializer.deserialize_struct("datafusion.DistinctOnNode", FIELDS, GeneratedVisitor)
     }
 }
+impl serde::Serialize for DmlNode {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if self.dml_type != 0 {
+            len += 1;
+        }
+        if self.input.is_some() {
+            len += 1;
+        }
+        if self.table_name.is_some() {
+            len += 1;
+        }
+        if self.schema.is_some() {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("datafusion.DmlNode", len)?;
+        if self.dml_type != 0 {
+            let v = dml_node::Type::try_from(self.dml_type)
+                .map_err(|_| serde::ser::Error::custom(format!("Invalid variant {}", self.dml_type)))?;
+            struct_ser.serialize_field("dmlType", &v)?;
+        }
+        if let Some(v) = self.input.as_ref() {
+            struct_ser.serialize_field("input", v)?;
+        }
+        if let Some(v) = self.table_name.as_ref() {
+            struct_ser.serialize_field("tableName", v)?;
+        }
+        if let Some(v) = self.schema.as_ref() {
+            struct_ser.serialize_field("schema", v)?;
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for DmlNode {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "dml_type",
+            "dmlType",
+            "input",
+            "table_name",
+            "tableName",
+            "schema",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            DmlType,
+            Input,
+            TableName,
+            Schema,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "dmlType" | "dml_type" => Ok(GeneratedField::DmlType),
+                            "input" => Ok(GeneratedField::Input),
+                            "tableName" | "table_name" => Ok(GeneratedField::TableName),
+                            "schema" => Ok(GeneratedField::Schema),
+                            _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = DmlNode;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct datafusion.DmlNode")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<DmlNode, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut dml_type__ = None;
+                let mut input__ = None;
+                let mut table_name__ = None;
+                let mut schema__ = None;
+                while let Some(k) = map_.next_key()? {
+                    match k {
+                        GeneratedField::DmlType => {
+                            if dml_type__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("dmlType"));
+                            }
+                            dml_type__ = Some(map_.next_value::<dml_node::Type>()? as i32);
+                        }
+                        GeneratedField::Input => {
+                            if input__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("input"));
+                            }
+                            input__ = map_.next_value()?;
+                        }
+                        GeneratedField::TableName => {
+                            if table_name__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("tableName"));
+                            }
+                            table_name__ = map_.next_value()?;
+                        }
+                        GeneratedField::Schema => {
+                            if schema__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("schema"));
+                            }
+                            schema__ = map_.next_value()?;
+                        }
+                    }
+                }
+                Ok(DmlNode {
+                    dml_type: dml_type__.unwrap_or_default(),
+                    input: input__,
+                    table_name: table_name__,
+                    schema: schema__,
+                })
+            }
+        }
+        deserializer.deserialize_struct("datafusion.DmlNode", FIELDS, GeneratedVisitor)
+    }
+}
+impl serde::Serialize for dml_node::Type {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        let variant = match self {
+            Self::Update => "UPDATE",
+            Self::Delete => "DELETE",
+            Self::InsertAppend => "INSERT_APPEND",
+            Self::InsertOverwrite => "INSERT_OVERWRITE",
+            Self::InsertReplace => "INSERT_REPLACE",
+            Self::Ctas => "CTAS",
+        };
+        serializer.serialize_str(variant)
+    }
+}
+impl<'de> serde::Deserialize<'de> for dml_node::Type {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "UPDATE",
+            "DELETE",
+            "INSERT_APPEND",
+            "INSERT_OVERWRITE",
+            "INSERT_REPLACE",
+            "CTAS",
+        ];
+
+        struct GeneratedVisitor;
+
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = dml_node::Type;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                write!(formatter, "expected one of: {:?}", &FIELDS)
+            }
+
+            fn visit_i64<E>(self, v: i64) -> std::result::Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                i32::try_from(v)
+                    .ok()
+                    .and_then(|x| x.try_into().ok())
+                    .ok_or_else(|| {
+                        serde::de::Error::invalid_value(serde::de::Unexpected::Signed(v), &self)
+                    })
+            }
+
+            fn visit_u64<E>(self, v: u64) -> std::result::Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                i32::try_from(v)
+                    .ok()
+                    .and_then(|x| x.try_into().ok())
+                    .ok_or_else(|| {
+                        serde::de::Error::invalid_value(serde::de::Unexpected::Unsigned(v), &self)
+                    })
+            }
+
+            fn visit_str<E>(self, value: &str) -> std::result::Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                match value {
+                    "UPDATE" => Ok(dml_node::Type::Update),
+                    "DELETE" => Ok(dml_node::Type::Delete),
+                    "INSERT_APPEND" => Ok(dml_node::Type::InsertAppend),
+                    "INSERT_OVERWRITE" => Ok(dml_node::Type::InsertOverwrite),
+                    "INSERT_REPLACE" => Ok(dml_node::Type::InsertReplace),
+                    "CTAS" => Ok(dml_node::Type::Ctas),
+                    _ => Err(serde::de::Error::unknown_variant(value, FIELDS)),
+                }
+            }
+        }
+        deserializer.deserialize_any(GeneratedVisitor)
+    }
+}
 impl serde::Serialize for DropViewNode {
     #[allow(deprecated)]
     fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
@@ -10639,6 +10868,9 @@ impl serde::Serialize for LogicalPlanNode {
                 logical_plan_node::LogicalPlanType::CteWorkTableScan(v) => {
                     struct_ser.serialize_field("cteWorkTableScan", v)?;
                 }
+                logical_plan_node::LogicalPlanType::Dml(v) => {
+                    struct_ser.serialize_field("dml", v)?;
+                }
             }
         }
         struct_ser.end()
@@ -10697,6 +10929,7 @@ impl<'de> serde::Deserialize<'de> for LogicalPlanNode {
             "recursiveQuery",
             "cte_work_table_scan",
             "cteWorkTableScan",
+            "dml",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -10732,6 +10965,7 @@ impl<'de> serde::Deserialize<'de> for LogicalPlanNode {
             Unnest,
             RecursiveQuery,
             CteWorkTableScan,
+            Dml,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -10784,6 +11018,7 @@ impl<'de> serde::Deserialize<'de> for LogicalPlanNode {
                             "unnest" => Ok(GeneratedField::Unnest),
                             "recursiveQuery" | "recursive_query" => Ok(GeneratedField::RecursiveQuery),
                             "cteWorkTableScan" | "cte_work_table_scan" => Ok(GeneratedField::CteWorkTableScan),
+                            "dml" => Ok(GeneratedField::Dml),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -11021,6 +11256,13 @@ impl<'de> serde::Deserialize<'de> for LogicalPlanNode {
                                 return Err(serde::de::Error::duplicate_field("cteWorkTableScan"));
                             }
                             logical_plan_type__ = map_.next_value::<::std::option::Option<_>>()?.map(logical_plan_node::LogicalPlanType::CteWorkTableScan)
+;
+                        }
+                        GeneratedField::Dml => {
+                            if logical_plan_type__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("dml"));
+                            }
+                            logical_plan_type__ = map_.next_value::<::std::option::Option<_>>()?.map(logical_plan_node::LogicalPlanType::Dml)
 ;
                         }
                     }
