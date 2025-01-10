@@ -27,12 +27,12 @@ use std::task::{Context, Poll};
 use std::{any::Any, sync::Arc};
 
 use super::{
+    execution_mode_from_children,
     metrics::{ExecutionPlanMetricsSet, MetricsSet},
     ColumnStatistics, DisplayAs, DisplayFormatType, ExecutionPlan,
     ExecutionPlanProperties, Partitioning, PlanProperties, RecordBatchStream,
     SendableRecordBatchStream, Statistics,
 };
-use crate::execution_plan::{boundedness_from_children, emission_type_from_children};
 use crate::metrics::BaselineMetrics;
 use crate::stream::ObservedStream;
 
@@ -135,11 +135,14 @@ impl UnionExec {
             .map(|plan| plan.output_partitioning().partition_count())
             .sum();
         let output_partitioning = Partitioning::UnknownPartitioning(num_partitions);
+
+        // Determine execution mode:
+        let mode = execution_mode_from_children(inputs.iter());
+
         Ok(PlanProperties::new(
             eq_properties,
             output_partitioning,
-            emission_type_from_children(inputs),
-            boundedness_from_children(inputs),
+            mode,
         ))
     }
 }
@@ -332,12 +335,10 @@ impl InterleaveExec {
         let eq_properties = EquivalenceProperties::new(schema);
         // Get output partitioning:
         let output_partitioning = inputs[0].output_partitioning().clone();
-        PlanProperties::new(
-            eq_properties,
-            output_partitioning,
-            emission_type_from_children(inputs),
-            boundedness_from_children(inputs),
-        )
+        // Determine execution mode:
+        let mode = execution_mode_from_children(inputs.iter());
+
+        PlanProperties::new(eq_properties, output_partitioning, mode)
     }
 }
 
@@ -571,16 +572,14 @@ impl Stream for CombinedRecordBatchStream {
     }
 }
 
-fn col_stats_union(
-    mut left: ColumnStatistics,
-    right: ColumnStatistics,
-) -> ColumnStatistics {
-    left.distinct_count = Precision::Absent;
-    left.min_value = left.min_value.min(&right.min_value);
-    left.max_value = left.max_value.max(&right.max_value);
-    left.null_count = left.null_count.add(&right.null_count);
-
-    left
+fn col_stats_union(left: ColumnStatistics, right: ColumnStatistics) -> ColumnStatistics {
+    ColumnStatistics {
+        null_count: left.null_count.add(&right.null_count),
+        max_value: left.max_value.max(&right.max_value),
+        min_value: left.min_value.min(&right.min_value),
+        sum_value: left.sum_value.add(&right.sum_value),
+        distinct_count: Precision::Absent,
+    }
 }
 
 fn stats_union(mut left: Statistics, right: Statistics) -> Statistics {
@@ -670,18 +669,21 @@ mod tests {
                     distinct_count: Precision::Exact(5),
                     max_value: Precision::Exact(ScalarValue::Int64(Some(21))),
                     min_value: Precision::Exact(ScalarValue::Int64(Some(-4))),
+                    sum_value: Precision::Exact(ScalarValue::Int64(Some(42))),
                     null_count: Precision::Exact(0),
                 },
                 ColumnStatistics {
                     distinct_count: Precision::Exact(1),
                     max_value: Precision::Exact(ScalarValue::from("x")),
                     min_value: Precision::Exact(ScalarValue::from("a")),
+                    sum_value: Precision::Absent,
                     null_count: Precision::Exact(3),
                 },
                 ColumnStatistics {
                     distinct_count: Precision::Absent,
                     max_value: Precision::Exact(ScalarValue::Float32(Some(1.1))),
                     min_value: Precision::Exact(ScalarValue::Float32(Some(0.1))),
+                    sum_value: Precision::Exact(ScalarValue::Float32(Some(42.0))),
                     null_count: Precision::Absent,
                 },
             ],
@@ -695,18 +697,21 @@ mod tests {
                     distinct_count: Precision::Exact(3),
                     max_value: Precision::Exact(ScalarValue::Int64(Some(34))),
                     min_value: Precision::Exact(ScalarValue::Int64(Some(1))),
+                    sum_value: Precision::Exact(ScalarValue::Int64(Some(42))),
                     null_count: Precision::Exact(1),
                 },
                 ColumnStatistics {
                     distinct_count: Precision::Absent,
                     max_value: Precision::Exact(ScalarValue::from("c")),
                     min_value: Precision::Exact(ScalarValue::from("b")),
+                    sum_value: Precision::Absent,
                     null_count: Precision::Absent,
                 },
                 ColumnStatistics {
                     distinct_count: Precision::Absent,
                     max_value: Precision::Absent,
                     min_value: Precision::Absent,
+                    sum_value: Precision::Absent,
                     null_count: Precision::Absent,
                 },
             ],
@@ -721,18 +726,21 @@ mod tests {
                     distinct_count: Precision::Absent,
                     max_value: Precision::Exact(ScalarValue::Int64(Some(34))),
                     min_value: Precision::Exact(ScalarValue::Int64(Some(-4))),
+                    sum_value: Precision::Exact(ScalarValue::Int64(Some(84))),
                     null_count: Precision::Exact(1),
                 },
                 ColumnStatistics {
                     distinct_count: Precision::Absent,
                     max_value: Precision::Exact(ScalarValue::from("x")),
                     min_value: Precision::Exact(ScalarValue::from("a")),
+                    sum_value: Precision::Absent,
                     null_count: Precision::Absent,
                 },
                 ColumnStatistics {
                     distinct_count: Precision::Absent,
                     max_value: Precision::Absent,
                     min_value: Precision::Absent,
+                    sum_value: Precision::Absent,
                     null_count: Precision::Absent,
                 },
             ],
@@ -843,9 +851,9 @@ mod tests {
     ) {
         // Check whether orderings are same.
         let lhs_orderings = lhs.oeq_class();
-        let rhs_orderings = rhs.oeq_class();
+        let rhs_orderings = &rhs.oeq_class.orderings;
         assert_eq!(lhs_orderings.len(), rhs_orderings.len(), "{}", err_msg);
-        for rhs_ordering in rhs_orderings.iter() {
+        for rhs_ordering in rhs_orderings {
             assert!(lhs_orderings.contains(rhs_ordering), "{}", err_msg);
         }
     }

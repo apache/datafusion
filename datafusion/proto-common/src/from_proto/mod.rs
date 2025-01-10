@@ -694,6 +694,11 @@ impl From<&protobuf::ColumnStats> for ColumnStatistics {
             } else {
                 Precision::Absent
             },
+            sum_value: if let Some(sum) = &cs.sum_value {
+                sum.clone().into()
+            } else {
+                Precision::Absent
+            },
             distinct_count: if let Some(dc) = &cs.distinct_count {
                 dc.clone().into()
             } else {
@@ -882,8 +887,6 @@ impl TryFrom<&protobuf::CsvOptions> for CsvOptions {
                 .then(|| proto_opts.time_format.clone()),
             null_value: (!proto_opts.null_value.is_empty())
                 .then(|| proto_opts.null_value.clone()),
-            null_regex: (!proto_opts.null_regex.is_empty())
-                .then(|| proto_opts.null_regex.clone()),
             comment: proto_opts.comment.first().copied(),
         })
     }
@@ -962,7 +965,6 @@ impl TryFrom<&protobuf::ParquetOptions> for ParquetOptions {
             maximum_buffered_record_batches_per_stream: value.maximum_buffered_record_batches_per_stream as usize,
             schema_force_view_types: value.schema_force_view_types,
             binary_as_string: value.binary_as_string,
-            skip_arrow_metadata: value.skip_arrow_metadata,
         })
     }
 }

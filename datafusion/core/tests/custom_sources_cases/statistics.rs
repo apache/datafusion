@@ -26,18 +26,17 @@ use datafusion::{
     error::Result,
     logical_expr::Expr,
     physical_plan::{
-        ColumnStatistics, DisplayAs, DisplayFormatType, ExecutionPlan, Partitioning,
-        PlanProperties, SendableRecordBatchStream, Statistics,
+        ColumnStatistics, DisplayAs, DisplayFormatType, ExecutionMode, ExecutionPlan,
+        Partitioning, PlanProperties, SendableRecordBatchStream, Statistics,
     },
     prelude::SessionContext,
     scalar::ScalarValue,
 };
-use datafusion_catalog::Session;
 use datafusion_common::{project_schema, stats::Precision};
 use datafusion_physical_expr::EquivalenceProperties;
-use datafusion_physical_plan::execution_plan::{Boundedness, EmissionType};
 
 use async_trait::async_trait;
+use datafusion_catalog::Session;
 
 /// This is a testing structure for statistics
 /// It will act both as a table provider and execution plan
@@ -65,11 +64,12 @@ impl StatisticsValidation {
 
     /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
     fn compute_properties(schema: SchemaRef) -> PlanProperties {
+        let eq_properties = EquivalenceProperties::new(schema);
+
         PlanProperties::new(
-            EquivalenceProperties::new(schema),
+            eq_properties,
             Partitioning::UnknownPartitioning(2),
-            EmissionType::Incremental,
-            Boundedness::Bounded,
+            ExecutionMode::Bounded,
         )
     }
 }
@@ -200,12 +200,14 @@ fn fully_defined() -> (Statistics, Schema) {
                     distinct_count: Precision::Exact(2),
                     max_value: Precision::Exact(ScalarValue::Int32(Some(1023))),
                     min_value: Precision::Exact(ScalarValue::Int32(Some(-24))),
+                    sum_value: Precision::Exact(ScalarValue::Int64(Some(10))),
                     null_count: Precision::Exact(0),
                 },
                 ColumnStatistics {
                     distinct_count: Precision::Exact(13),
                     max_value: Precision::Exact(ScalarValue::Int64(Some(5486))),
                     min_value: Precision::Exact(ScalarValue::Int64(Some(-6783))),
+                    sum_value: Precision::Exact(ScalarValue::Int64(Some(10))),
                     null_count: Precision::Exact(5),
                 },
             ],
