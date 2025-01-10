@@ -5209,7 +5209,7 @@ physical_plan
 07)------------CoalesceBatchesExec: target_batch_size=1
 08)--------------FilterExec: c1@0 = 2 OR c1@0 = 3
 09)----------------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
-10)------------------MemoryExec: partitions=1, partition_sizes=[1]
+10)------------------DataSourceExec: partitions=1, partition_sizes=[1]
 
 query III
 select c1, c2, rank
@@ -5251,7 +5251,7 @@ physical_plan
 07)------------CoalesceBatchesExec: target_batch_size=1
 08)--------------RepartitionExec: partitioning=Hash([c1@0], 2), input_partitions=2
 09)----------------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
-10)------------------MemoryExec: partitions=1, partition_sizes=[1]
+10)------------------DataSourceExec: partitions=1, partition_sizes=[1]
 
 query III
 select c1, c2, rank
@@ -5295,7 +5295,7 @@ physical_plan
 09)----------------CoalesceBatchesExec: target_batch_size=1
 10)------------------FilterExec: c1@0 = 1
 11)--------------------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
-12)----------------------MemoryExec: partitions=1, partition_sizes=[1]
+12)----------------------DataSourceExec: partitions=1, partition_sizes=[1]
 
 query III
 select c1, c2, rank
@@ -5334,7 +5334,7 @@ physical_plan
 07)------------CoalesceBatchesExec: target_batch_size=1
 08)--------------RepartitionExec: partitioning=Hash([c1@0], 2), input_partitions=2
 09)----------------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
-10)------------------MemoryExec: partitions=1, partition_sizes=[1]
+10)------------------DataSourceExec: partitions=1, partition_sizes=[1]
 
 query III
 select c1, c2, rank
@@ -5383,7 +5383,7 @@ physical_plan
 12)----------------------CoalesceBatchesExec: target_batch_size=1
 13)------------------------FilterExec: c1@0 > 1
 14)--------------------------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
-15)----------------------------MemoryExec: partitions=1, partition_sizes=[1]
+15)----------------------------DataSourceExec: partitions=1, partition_sizes=[1]
 
 query IIII
 select c1, c2, rank1, rank2
@@ -5434,7 +5434,7 @@ physical_plan
 12)----------------------CoalesceBatchesExec: target_batch_size=1
 13)------------------------RepartitionExec: partitioning=Hash([c1@0], 2), input_partitions=2
 14)--------------------------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
-15)----------------------------MemoryExec: partitions=1, partition_sizes=[1]
+15)----------------------------DataSourceExec: partitions=1, partition_sizes=[1]
 
 query IIII
 select c1, c2, rank1, rank2
