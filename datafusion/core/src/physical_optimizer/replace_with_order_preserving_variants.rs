@@ -285,10 +285,6 @@ pub(crate) fn replace_with_order_preserving_variants(
 mod tests {
     use super::*;
 
-    use crate::datasource::data_source::FileSourceConfig;
-    use crate::datasource::file_format::file_compression_type::FileCompressionType;
-    use crate::datasource::listing::PartitionedFile;
-    use crate::datasource::physical_plan::{CsvConfig, FileScanConfig};
     use crate::execution::TaskContext;
     use crate::physical_optimizer::test_utils::check_integrity;
     use crate::physical_plan::coalesce_batches::CoalesceBatchesExec;
@@ -311,12 +307,14 @@ mod tests {
     use datafusion_physical_expr::expressions::{self, col, Column};
     use datafusion_physical_expr::PhysicalSortExpr;
     use datafusion_physical_plan::collect;
+    use datafusion_physical_plan::memory::MemorySourceConfig;
+    use datafusion_physical_plan::source::DataSourceExec;
     use datafusion_physical_plan::streaming::StreamingTableExec;
+
     use object_store::memory::InMemory;
     use object_store::ObjectStore;
-    use url::Url;
-
     use rstest::rstest;
+    use url::Url;
 
     /// Runs the `replace_with_order_preserving_variants` sub-rule and asserts
     /// the plan against the original and expected plans for both bounded and
@@ -1569,10 +1567,13 @@ mod tests {
                 .map(|_| vec![make_partition(schema, rows)])
                 .collect();
             let projection: Vec<usize> = vec![0, 2, 3];
-            DataSourceExec::try_new(&data, schema.clone(), Some(projection))
-                .unwrap()
-                .try_with_sort_information(vec![sort_exprs])
-                .unwrap()
+            let source = Arc::new(
+                MemorySourceConfig::try_new(&data, schema.clone(), Some(projection))
+                    .unwrap()
+                    .try_with_sort_information(vec![sort_exprs])
+                    .unwrap(),
+            );
+            DataSourceExec::new(source)
         })
     }
 }
