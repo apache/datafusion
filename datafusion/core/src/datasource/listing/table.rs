@@ -1149,8 +1149,8 @@ impl ListingTable {
     /// This method first checks if the statistics for the given file are already cached.
     /// If they are, it returns the cached statistics.
     /// If they are not, it infers the statistics from the file and stores them in the cache.
-    async fn do_collect_statistics<'a>(
-        &'a self,
+    async fn do_collect_statistics(
+        &self,
         ctx: &SessionState,
         store: &Arc<dyn ObjectStore>,
         part_file: &PartitionedFile,
