@@ -435,7 +435,7 @@ mod test {
     fn transforms_coalesce_batches_exec_into_fetching_version_and_removes_local_limit(
     ) -> datafusion_common::Result<()> {
         let schema = create_schema();
-        let streaming_table = streaming_table_exec(schema.clone())?;
+        let streaming_table = streaming_table_exec(Arc::clone(&schema))?;
         let repartition = repartition_exec(streaming_table)?;
         let filter = filter_exec(schema, repartition)?;
         let coalesce_batches = coalesce_batches_exec(filter);
@@ -475,8 +475,8 @@ mod test {
     fn pushes_global_limit_exec_through_projection_exec() -> datafusion_common::Result<()>
     {
         let schema = create_schema();
-        let streaming_table = streaming_table_exec(schema.clone())?;
-        let filter = filter_exec(schema.clone(), streaming_table)?;
+        let streaming_table = streaming_table_exec(Arc::clone(&schema))?;
+        let filter = filter_exec(Arc::clone(&schema), streaming_table)?;
         let projection = projection_exec(schema, filter)?;
         let global_limit = global_limit_exec(projection, 0, Some(5));
 
@@ -507,7 +507,7 @@ mod test {
     fn pushes_global_limit_exec_through_projection_exec_and_transforms_coalesce_batches_exec_into_fetching_version(
     ) -> datafusion_common::Result<()> {
         let schema = create_schema();
-        let streaming_table = streaming_table_exec(schema.clone()).unwrap();
+        let streaming_table = streaming_table_exec(Arc::clone(&schema)).unwrap();
         let coalesce_batches = coalesce_batches_exec(streaming_table);
         let projection = projection_exec(schema, coalesce_batches)?;
         let global_limit = global_limit_exec(projection, 0, Some(5));
@@ -538,9 +538,9 @@ mod test {
     #[test]
     fn pushes_global_limit_into_multiple_fetch_plans() -> datafusion_common::Result<()> {
         let schema = create_schema();
-        let streaming_table = streaming_table_exec(schema.clone()).unwrap();
+        let streaming_table = streaming_table_exec(Arc::clone(&schema)).unwrap();
         let coalesce_batches = coalesce_batches_exec(streaming_table);
-        let projection = projection_exec(schema.clone(), coalesce_batches)?;
+        let projection = projection_exec(Arc::clone(&schema), coalesce_batches)?;
         let repartition = repartition_exec(projection)?;
         let sort = sort_exec(
             vec![PhysicalSortExpr {
@@ -586,7 +586,7 @@ mod test {
     fn keeps_pushed_local_limit_exec_when_there_are_multiple_input_partitions(
     ) -> datafusion_common::Result<()> {
         let schema = create_schema();
-        let streaming_table = streaming_table_exec(schema.clone())?;
+        let streaming_table = streaming_table_exec(Arc::clone(&schema))?;
         let repartition = repartition_exec(streaming_table)?;
         let filter = filter_exec(schema, repartition)?;
         let coalesce_partitions = coalesce_partitions_exec(filter);
@@ -729,7 +729,7 @@ mod test {
         schema: SchemaRef,
     ) -> datafusion_common::Result<Arc<dyn ExecutionPlan>> {
         Ok(Arc::new(StreamingTableExec::try_new(
-            schema.clone(),
+            Arc::clone(&schema),
             vec![Arc::new(DummyStreamPartition { schema }) as _],
             None,
             None,
