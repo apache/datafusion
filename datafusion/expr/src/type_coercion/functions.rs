@@ -438,18 +438,11 @@ fn get_valid_types(
     }
 
     fn function_length_check(length: usize, expected_length: usize) -> Result<()> {
-        if length < 1 {
-            return plan_err!(
-                "The signature expected at least one argument but received {length}"
-            );
-        }
-
         if length != expected_length {
             return plan_err!(
                 "The signature expected {expected_length} arguments but received {length}"
             );
         }
-
         Ok(())
     }
 
@@ -1035,7 +1028,7 @@ mod tests {
         let err = get_valid_types(&signature, &[]).unwrap_err();
         assert_contains!(
             err.to_string(),
-            "The signature expected at least one argument but received 0"
+            "The signature expected 1 arguments but received 0"
         );
 
         let err = get_valid_types(
