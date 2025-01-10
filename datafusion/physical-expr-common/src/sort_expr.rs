@@ -292,7 +292,7 @@ impl PhysicalSortRequirement {
     pub fn compatible(&self, other: &PhysicalSortRequirement) -> bool {
         self.expr.eq(&other.expr)
             && other.options.map_or(true, |other_opts| {
-                self.options.map_or(false, |opts| opts == other_opts)
+                self.options.as_ref() == Some(&other_opts)
             })
     }
 
