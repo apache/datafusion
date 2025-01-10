@@ -34,9 +34,6 @@ workspace = true
 name = "datafusion_expr_common"
 path = "src/lib.rs"
 
-[features]
-stats_v2 = []
-
 [dependencies]
 arrow = { workspace = true }
 datafusion-common = { workspace = true }

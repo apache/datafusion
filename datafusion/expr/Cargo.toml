@@ -35,8 +35,6 @@ workspace = true
 name = "datafusion_expr"
 path = "src/lib.rs"
 
-[features]
-
 [dependencies]
 arrow = { workspace = true }
 chrono = { workspace = true }

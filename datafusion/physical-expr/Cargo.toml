@@ -31,6 +31,9 @@ rust-version = { workspace = true }
 [lints]
 workspace = true
 
+[features]
+stats_v2 = []
+
 [lib]
 name = "datafusion_physical_expr"
 path = "src/lib.rs"

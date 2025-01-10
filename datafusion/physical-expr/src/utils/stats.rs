@@ -1,9 +1,14 @@
-use crate::interval_arithmetic::Interval;
-use crate::stats::StatisticsV2::{Exponential, Gaussian, Uniform, Unknown};
-use arrow::datatypes::DataType;
+use std::sync::Arc;
+use arrow::datatypes::{DataType, Schema};
+use petgraph::stable_graph::{NodeIndex, StableGraph};
+use datafusion_expr_common::interval_arithmetic::Interval;
+use crate::utils::stats::StatisticsV2::{Exponential, Gaussian, Uniform, Unknown};
 use datafusion_common::ScalarValue;
+use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
+use datafusion_expr::Literal;
 
 /// New, enhanced `Statistics` definition, represents three core definitions
+#[derive(Clone, Debug)]
 pub enum StatisticsV2 {
     Uniform {
         interval: Interval,
@@ -26,12 +31,21 @@ pub enum StatisticsV2 {
 }
 
 impl StatisticsV2 {
-    //! Validates accumulated statistic for selected distribution methods:
-    //! - For [`Exponential`], `rate` must be positive;
-    //! - For [`Gaussian`], `variant` must be non-negative
-    //! - For [`Unknown`],
-    //!   - if `mean`, `median` are defined, the `range` must contain their values
-    //!   - if `std_dev` is defined, it must be non-negative
+    pub fn new_unknown(&self) -> Self {
+        Unknown {
+            mean: None,
+            median: None,
+            std_dev: None,
+            range: Interval::make_zero(&DataType::Null).unwrap()
+        }
+    }
+
+    /// Validates accumulated statistic for selected distribution methods:
+    /// - For [`Exponential`], `rate` must be positive;
+    /// - For [`Gaussian`], `variant` must be non-negative
+    /// - For [`Unknown`],
+    ///   - if `mean`, `median` are defined, the `range` must contain their values
+    ///   - if `std_dev` is defined, it must be non-negative
     pub fn is_valid(&self) -> bool {
         match &self {
             Exponential { rate, .. } => {
@@ -167,11 +181,34 @@ impl StatisticsV2 {
     }
 }
 
+#[derive(Clone, Debug)]
+pub struct ExprStatisticGraphNode {
+    expr: Arc<dyn PhysicalExpr>,
+    statistics_v2: StatisticsV2
+}
+
+impl ExprStatisticGraphNode {
+}
+
+#[derive(Clone, Debug)]
+pub struct ExprStatisticGraph {
+    graph: StableGraph<ExprStatisticGraphNode, usize>,
+    root: NodeIndex,
+}
+
+impl ExprStatisticGraph {
+    pub fn try_new(expr: Arc<dyn PhysicalExpr>, schema: &Schema) /*-> Result<Self>*/ {}
+
+    pub fn propagate_constraints(&mut self) {}
+
+    pub fn evaluate(&mut self) {}
+}
+
 // #[cfg(test)]
 #[cfg(all(test, feature = "stats_v2"))]
 mod tests {
-    use crate::interval_arithmetic::Interval;
-    use crate::stats::StatisticsV2;
+    use datafusion_expr_common::interval_arithmetic::Interval;
+    use crate::utils::stats::StatisticsV2;
     use arrow::datatypes::DataType;
     use datafusion_common::ScalarValue;
 
