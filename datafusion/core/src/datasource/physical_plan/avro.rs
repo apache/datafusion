@@ -38,8 +38,8 @@ use datafusion_physical_plan::execution_plan::{Boundedness, EmissionType};
 #[derive(Debug, Clone)]
 pub struct AvroExec {
     base_config: FileScanConfig,
-    projected_schema: SchemaRef,
     projected_statistics: Statistics,
+    projected_schema: SchemaRef,
     projected_output_ordering: Vec<LexOrdering>,
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,

@@ -136,7 +136,7 @@ impl DdlStatement {
                         if constraints.is_empty() {
                             write!(f, "CreateExternalTable: {name:?}")
                         } else {
-                            write!(f, "CreateExternalTable: {name:?}{constraints}")
+                            write!(f, "CreateExternalTable: {name:?} {constraints}")
                         }
                     }
                     DdlStatement::CreateMemoryTable(CreateMemoryTable {
@@ -147,7 +147,7 @@ impl DdlStatement {
                         if constraints.is_empty() {
                             write!(f, "CreateMemoryTable: {name:?}")
                         } else {
-                            write!(f, "CreateMemoryTable: {name:?}{constraints}")
+                            write!(f, "CreateMemoryTable: {name:?} {constraints}")
                         }
                     }
                     DdlStatement::CreateView(CreateView { name, .. }) => {
