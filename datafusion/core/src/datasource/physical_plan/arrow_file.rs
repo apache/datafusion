@@ -51,7 +51,6 @@ pub struct ArrowExec {
     base_config: FileScanConfig,
     projected_statistics: Statistics,
     projected_schema: SchemaRef,
-    projected_constraints: Constraints,
     projected_output_ordering: Vec<LexOrdering>,
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
@@ -70,13 +69,12 @@ impl ArrowExec {
         let cache = Self::compute_properties(
             Arc::clone(&projected_schema),
             &projected_output_ordering,
-            &projected_constraints,
+            projected_constraints,
             &base_config,
         );
         Self {
             base_config,
             projected_schema,
-            projected_constraints,
             projected_statistics,
             projected_output_ordering,
             metrics: ExecutionPlanMetricsSet::new(),
@@ -96,13 +94,13 @@ impl ArrowExec {
     fn compute_properties(
         schema: SchemaRef,
         output_ordering: &[LexOrdering],
-        constraints: &Constraints,
+        constraints: Constraints,
         file_scan_config: &FileScanConfig,
     ) -> PlanProperties {
         // Equivalence Properties
         let eq_properties =
             EquivalenceProperties::new_with_orderings(schema, output_ordering)
-                .with_constraints(constraints.clone());
+                .with_constraints(constraints);
 
         PlanProperties::new(
             eq_properties,
@@ -218,7 +216,6 @@ impl ExecutionPlan for ArrowExec {
             base_config: new_config,
             projected_statistics: self.projected_statistics.clone(),
             projected_schema: Arc::clone(&self.projected_schema),
-            projected_constraints: self.projected_constraints.clone(),
             projected_output_ordering: self.projected_output_ordering.clone(),
             metrics: self.metrics.clone(),
             cache: self.cache.clone(),

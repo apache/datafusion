@@ -50,8 +50,6 @@ pub struct MemoryExec {
     schema: SchemaRef,
     /// Schema representing the data after the optional projection is applied
     projected_schema: SchemaRef,
-    /// Table constraints
-    constraints: Constraints,
     /// Optional projection
     projection: Option<Vec<usize>>,
     // Sort information: one or more equivalent orderings
@@ -87,11 +85,12 @@ impl DisplayAs for MemoryExec {
                     })
                     .unwrap_or_default();
 
-                let constraints = if self.constraints.is_empty() {
-                    String::new()
-                } else {
-                    format!(",{}", self.constraints)
-                };
+                let constraints =
+                    if self.cache.equivalence_properties().constraints().is_empty() {
+                        String::new()
+                    } else {
+                        format!(", {}", self.cache.equivalence_properties().constraints())
+                    };
 
                 if self.show_sizes {
                     write!(
@@ -100,7 +99,11 @@ impl DisplayAs for MemoryExec {
                         partition_sizes.len(),
                     )
                 } else {
-                    write!(f, "MemoryExec: partitions={}", partition_sizes.len(),)
+                    write!(
+                        f,
+                        "MemoryExec: partitions={}{output_ordering}{constraints}",
+                        partition_sizes.len(),
+                    )
                 }
             }
         }
@@ -173,14 +176,13 @@ impl MemoryExec {
         let cache = Self::compute_properties(
             Arc::clone(&projected_schema),
             &[],
-            &constraints,
+            constraints,
             partitions,
         );
         Ok(Self {
             partitions: partitions.to_vec(),
             schema,
             projected_schema,
-            constraints,
             projection,
             sort_information: vec![],
             cache,
@@ -189,8 +191,7 @@ impl MemoryExec {
     }
 
     pub fn with_constraints(mut self, constraints: Constraints) -> Self {
-        self.cache = self.cache.with_constraints(constraints.clone());
-        self.constraints = constraints;
+        self.cache = self.cache.with_constraints(constraints);
         self
     }
 
@@ -202,7 +203,7 @@ impl MemoryExec {
 
     /// Ref to constraints
     pub fn constraints(&self) -> &Constraints {
-        &self.constraints
+        &self.cache.equivalence_properties().constraints()
     }
 
     /// Ref to partitions
@@ -309,12 +310,12 @@ impl MemoryExec {
     fn compute_properties(
         schema: SchemaRef,
         orderings: &[LexOrdering],
-        constraints: &Constraints,
+        constraints: Constraints,
         partitions: &[Vec<RecordBatch>],
     ) -> PlanProperties {
         PlanProperties::new(
             EquivalenceProperties::new_with_orderings(schema, orderings)
-                .with_constraints(constraints.clone()),
+                .with_constraints(constraints),
             Partitioning::UnknownPartitioning(partitions.len()),
             EmissionType::Incremental,
             Boundedness::Bounded,

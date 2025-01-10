@@ -455,7 +455,7 @@ impl ParquetExecBuilder {
         let cache = ParquetExec::compute_properties(
             projected_schema,
             &projected_output_ordering,
-            &projected_constraints,
+            projected_constraints,
             &base_config,
         );
         ParquetExec {
@@ -659,12 +659,12 @@ impl ParquetExec {
     fn compute_properties(
         schema: SchemaRef,
         orderings: &[LexOrdering],
-        constraints: &Constraints,
+        constraints: Constraints,
         file_config: &FileScanConfig,
     ) -> PlanProperties {
         PlanProperties::new(
             EquivalenceProperties::new_with_orderings(schema, orderings)
-                .with_constraints(constraints.clone()),
+                .with_constraints(constraints),
             Self::output_partitioning_helper(file_config), // Output Partitioning
             EmissionType::Incremental,
             Boundedness::Bounded,

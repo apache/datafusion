@@ -219,7 +219,7 @@ impl CsvExecBuilder {
         let cache = CsvExec::compute_properties(
             projected_schema,
             &projected_output_ordering,
-            &projected_constraints,
+            projected_constraints,
             &base_config,
         );
 
@@ -326,12 +326,12 @@ impl CsvExec {
     fn compute_properties(
         schema: SchemaRef,
         orderings: &[LexOrdering],
-        constraints: &Constraints,
+        constraints: Constraints,
         file_scan_config: &FileScanConfig,
     ) -> PlanProperties {
         // Equivalence Properties
         let eq_properties = EquivalenceProperties::new_with_orderings(schema, orderings)
-            .with_constraints(constraints.clone());
+            .with_constraints(constraints);
 
         PlanProperties::new(
             eq_properties,

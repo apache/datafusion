@@ -108,13 +108,13 @@ impl IntoIterator for Constraints {
 
 impl Display for Constraints {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        let pk: Vec<String> = self.inner.iter().map(|c| format!("{:?}", c)).collect();
+        let pk = self
+            .inner
+            .iter()
+            .map(|c| format!("{:?}", c))
+            .collect::<Vec<_>>();
         let pk = pk.join(", ");
-        if !pk.is_empty() {
-            write!(f, " constraints=[{pk}]")
-        } else {
-            write!(f, "")
-        }
+        write!(f, "constraints=[{pk}]")
     }
 }
 
@@ -645,7 +645,7 @@ mod tests {
         let projected = constraints.project(&[1, 2, 3]).unwrap();
         assert_eq!(
             projected,
-            Constraints::new_unverified(vec![Constraint::PrimaryKey(vec![0, 1]),])
+            Constraints::new_unverified(vec![Constraint::PrimaryKey(vec![0, 1])])
         );
 
         // Project keeping only column 0 - should return None as no constraints are preserved

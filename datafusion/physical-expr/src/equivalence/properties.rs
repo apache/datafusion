@@ -195,6 +195,10 @@ impl EquivalenceProperties {
         &self.constants
     }
 
+    pub fn constraints(&self) -> &Constraints {
+        &self.constraints
+    }
+
     /// Returns the output ordering of the properties.
     pub fn output_ordering(&self) -> Option<LexOrdering> {
         let constants = self.constants();

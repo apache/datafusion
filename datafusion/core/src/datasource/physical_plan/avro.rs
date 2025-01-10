@@ -39,7 +39,6 @@ use datafusion_physical_plan::execution_plan::{Boundedness, EmissionType};
 pub struct AvroExec {
     base_config: FileScanConfig,
     projected_schema: SchemaRef,
-    projected_constraints: Constraints,
     projected_statistics: Statistics,
     projected_output_ordering: Vec<LexOrdering>,
     /// Execution metrics
@@ -59,13 +58,12 @@ impl AvroExec {
         let cache = Self::compute_properties(
             Arc::clone(&projected_schema),
             &projected_output_ordering,
-            &projected_constraints,
+            projected_constraints,
             &base_config,
         );
         Self {
             base_config,
             projected_schema,
-            projected_constraints,
             projected_statistics,
             projected_output_ordering,
             metrics: ExecutionPlanMetricsSet::new(),
@@ -81,12 +79,12 @@ impl AvroExec {
     fn compute_properties(
         schema: SchemaRef,
         orderings: &[LexOrdering],
-        constraints: &Constraints,
+        constraints: Constraints,
         file_scan_config: &FileScanConfig,
     ) -> PlanProperties {
         // Equivalence Properties
         let eq_properties = EquivalenceProperties::new_with_orderings(schema, orderings)
-            .with_constraints(constraints.clone());
+            .with_constraints(constraints);
         let n_partitions = file_scan_config.file_groups.len();
 
         PlanProperties::new(
@@ -187,7 +185,6 @@ impl ExecutionPlan for AvroExec {
             base_config: new_config,
             projected_statistics: self.projected_statistics.clone(),
             projected_schema: Arc::clone(&self.projected_schema),
-            projected_constraints: self.projected_constraints.clone(),
             projected_output_ordering: self.projected_output_ordering.clone(),
             metrics: self.metrics.clone(),
             cache: self.cache.clone(),

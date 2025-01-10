@@ -233,9 +233,9 @@ impl FileScanConfig {
         }
 
         // Get projection indices once, reuse for both schema and constraints
-        let proj_indices: Vec<usize> = self.projection.clone().unwrap_or_else(|| {
+        let proj_indices = self.projection.clone().unwrap_or_else(|| {
             (0..(self.file_schema.fields().len() + self.table_partition_cols.len()))
-                .collect()
+                .collect::<Vec<_>>()
         });
 
         let mut table_fields = vec![];
