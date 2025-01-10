@@ -23,7 +23,7 @@ use std::fmt::Debug;
 use std::ops::Range;
 use std::sync::Arc;
 
-use super::write::demux::start_demuxer_task;
+use super::write::demux::DemuxedStreamReceiver;
 use super::write::{create_writer, SharedBuffer};
 use super::{
     coerce_file_schema_to_string_type, coerce_file_schema_to_view_type,
@@ -33,7 +33,7 @@ use super::{
 use crate::arrow::array::RecordBatch;
 use crate::arrow::datatypes::{Fields, Schema, SchemaRef};
 use crate::datasource::file_format::file_compression_type::FileCompressionType;
-use crate::datasource::physical_plan::{FileGroupDisplay, FileSinkConfig};
+use crate::datasource::physical_plan::{FileGroupDisplay, FileSink, FileSinkConfig};
 use crate::datasource::statistics::{create_max_min_accs, get_col_stats};
 use crate::error::Result;
 use crate::execution::context::SessionState;
@@ -529,7 +529,7 @@ async fn fetch_schema(
 
 /// Read and parse the statistics of the Parquet file at location `path`
 ///
-/// See [`statistics_from_parquet_meta`] for more details
+/// See [`statistics_from_parquet_meta_calc`] for more details
 async fn fetch_statistics(
     store: &dyn ObjectStore,
     table_schema: SchemaRef,
@@ -799,36 +799,23 @@ impl ParquetSink {
 }
 
 #[async_trait]
-impl DataSink for ParquetSink {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
-    fn metrics(&self) -> Option<MetricsSet> {
-        None
-    }
-
-    async fn write_all(
+impl FileSink for ParquetSink {
+    async fn spawn_writer_tasks_and_join(
         &self,
-        data: SendableRecordBatchStream,
         context: &Arc<TaskContext>,
+        demux_task: SpawnedTask<Result<()>>,
+        mut file_stream_rx: DemuxedStreamReceiver,
+        object_store: Arc<dyn ObjectStore>,
     ) -> Result<u64> {
-        let parquet_props = self.create_writer_props()?;
-
-        let object_store = context
-            .runtime_env()
-            .object_store(&self.config.object_store_url)?;
-
         let parquet_opts = &self.parquet_options;
         let allow_single_file_parallelism =
             parquet_opts.global.allow_single_file_parallelism;
 
-        let part_col = if !self.config.table_partition_cols.is_empty() {
-            Some(self.config.table_partition_cols.clone())
-        } else {
-            None
-        };
+        let mut file_write_tasks: JoinSet<
+            std::result::Result<(Path, FileMetaData), DataFusionError>,
+        > = JoinSet::new();
 
+        let parquet_props = self.create_writer_props()?;
         let parallel_options = ParallelParquetWriterOptions {
             max_parallel_row_groups: parquet_opts
                 .global
@@ -837,19 +824,6 @@ impl DataSink for ParquetSink {
                 .global
                 .maximum_buffered_record_batches_per_stream,
         };
-
-        let (demux_task, mut file_stream_rx) = start_demuxer_task(
-            data,
-            context,
-            part_col,
-            self.config.table_paths[0].clone(),
-            "parquet".into(),
-            self.config.keep_partition_by_columns,
-        );
-
-        let mut file_write_tasks: JoinSet<
-            std::result::Result<(Path, FileMetaData), DataFusionError>,
-        > = JoinSet::new();
 
         while let Some((path, mut rx)) = file_stream_rx.recv().await {
             if !allow_single_file_parallelism {
@@ -930,6 +904,35 @@ impl DataSink for ParquetSink {
             .map_err(DataFusionError::ExecutionJoin)??;
 
         Ok(row_count as u64)
+    }
+}
+
+#[async_trait]
+impl DataSink for ParquetSink {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn metrics(&self) -> Option<MetricsSet> {
+        None
+    }
+
+    async fn write_all(
+        &self,
+        data: SendableRecordBatchStream,
+        context: &Arc<TaskContext>,
+    ) -> Result<u64> {
+        let object_store = self.config.get_object_store(context)?;
+        let (demux_task, file_stream_rx) =
+            self.config
+                .start_demuxer_task(data, context, "parquet".into());
+        self.spawn_writer_tasks_and_join(
+            context,
+            demux_task,
+            file_stream_rx,
+            object_store,
+        )
+        .await
     }
 }
 

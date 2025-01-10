@@ -21,12 +21,10 @@
 
 use std::sync::Arc;
 
-use super::demux::start_demuxer_task;
+use super::demux::DemuxedStreamReceiver;
 use super::{create_writer, BatchSerializer};
 use crate::datasource::file_format::file_compression_type::FileCompressionType;
-use crate::datasource::physical_plan::FileSinkConfig;
 use crate::error::Result;
-use crate::physical_plan::SendableRecordBatchStream;
 
 use arrow_array::RecordBatch;
 use datafusion_common::{internal_datafusion_err, internal_err, DataFusionError};
@@ -35,6 +33,7 @@ use datafusion_execution::TaskContext;
 
 use bytes::Bytes;
 use futures::join;
+use object_store::ObjectStore;
 use tokio::io::{AsyncWrite, AsyncWriteExt};
 use tokio::sync::mpsc::{self, Receiver};
 use tokio::task::JoinSet;
@@ -53,11 +52,11 @@ pub(crate) enum SerializedRecordBatchResult {
     },
     Failure {
         /// As explained in [`serialize_rb_stream_to_object_store`]:
-        /// - If an IO error occured that involved the ObjectStore writer, then the writer will not be returned to the caller
+        /// - If an IO error occurred that involved the ObjectStore writer, then the writer will not be returned to the caller
         /// - Otherwise, the writer is returned to the caller
         writer: Option<WriterType>,
 
-        /// the actual error that occured
+        /// the actual error that occurred
         err: DataFusionError,
     },
 }
@@ -236,36 +235,16 @@ pub(crate) async fn stateless_serialize_and_write_files(
 }
 
 /// Orchestrates multipart put of a dynamic number of output files from a single input stream
-/// for any statelessly serialized file type. That is, any file type for which each [RecordBatch]
+/// for any stateless serialized file type. That is, any file type for which each [RecordBatch]
 /// can be serialized independently of all other [RecordBatch]s.
-pub(crate) async fn stateless_multipart_put(
-    data: SendableRecordBatchStream,
+pub(crate) async fn spawn_writer_tasks_and_join(
     context: &Arc<TaskContext>,
-    file_extension: String,
-    get_serializer: Box<dyn Fn() -> Arc<dyn BatchSerializer> + Send>,
-    config: &FileSinkConfig,
+    serializer: Arc<dyn BatchSerializer>,
     compression: FileCompressionType,
+    object_store: Arc<dyn ObjectStore>,
+    demux_task: SpawnedTask<Result<()>>,
+    mut file_stream_rx: DemuxedStreamReceiver,
 ) -> Result<u64> {
-    let object_store = context
-        .runtime_env()
-        .object_store(&config.object_store_url)?;
-
-    let base_output_path = &config.table_paths[0];
-    let part_cols = if !config.table_partition_cols.is_empty() {
-        Some(config.table_partition_cols.clone())
-    } else {
-        None
-    };
-
-    let (demux_task, mut file_stream_rx) = start_demuxer_task(
-        data,
-        context,
-        part_cols,
-        base_output_path.clone(),
-        file_extension,
-        config.keep_partition_by_columns,
-    );
-
     let rb_buffer_size = &context
         .session_config()
         .options()
@@ -278,12 +257,11 @@ pub(crate) async fn stateless_multipart_put(
         stateless_serialize_and_write_files(rx_file_bundle, tx_row_cnt).await
     });
     while let Some((location, rb_stream)) = file_stream_rx.recv().await {
-        let serializer = get_serializer();
         let writer =
             create_writer(compression, &location, Arc::clone(&object_store)).await?;
 
         tx_file_bundle
-            .send((rb_stream, serializer, writer))
+            .send((rb_stream, Arc::clone(&serializer), writer))
             .await
             .map_err(|_| {
                 internal_datafusion_err!(

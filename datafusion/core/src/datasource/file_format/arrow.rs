@@ -26,12 +26,12 @@ use std::fmt::{self, Debug};
 use std::sync::Arc;
 
 use super::file_compression_type::FileCompressionType;
-use super::write::demux::start_demuxer_task;
+use super::write::demux::DemuxedStreamReceiver;
 use super::write::{create_writer, SharedBuffer};
 use super::FileFormatFactory;
 use crate::datasource::file_format::FileFormat;
 use crate::datasource::physical_plan::{
-    ArrowExec, FileGroupDisplay, FileScanConfig, FileSinkConfig,
+    ArrowExec, FileGroupDisplay, FileScanConfig, FileSink, FileSinkConfig,
 };
 use crate::error::Result;
 use crate::execution::context::SessionState;
@@ -46,6 +46,7 @@ use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::{
     not_impl_err, DataFusionError, GetExt, Statistics, DEFAULT_ARROW_EXTENSION,
 };
+use datafusion_common_runtime::SpawnedTask;
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_expr::dml::InsertOp;
 use datafusion_physical_expr::PhysicalExpr;
@@ -234,58 +235,15 @@ impl ArrowFileSink {
     }
 }
 
-impl Debug for ArrowFileSink {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("ArrowFileSink").finish()
-    }
-}
-
-impl DisplayAs for ArrowFileSink {
-    fn fmt_as(&self, t: DisplayFormatType, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match t {
-            DisplayFormatType::Default | DisplayFormatType::Verbose => {
-                write!(f, "ArrowFileSink(file_groups=",)?;
-                FileGroupDisplay(&self.config.file_groups).fmt_as(t, f)?;
-                write!(f, ")")
-            }
-        }
-    }
-}
-
 #[async_trait]
-impl DataSink for ArrowFileSink {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
-    fn metrics(&self) -> Option<MetricsSet> {
-        None
-    }
-
-    async fn write_all(
+impl FileSink for ArrowFileSink {
+    async fn spawn_writer_tasks_and_join(
         &self,
-        data: SendableRecordBatchStream,
-        context: &Arc<TaskContext>,
+        _context: &Arc<TaskContext>,
+        demux_task: SpawnedTask<Result<()>>,
+        mut file_stream_rx: DemuxedStreamReceiver,
+        object_store: Arc<dyn ObjectStore>,
     ) -> Result<u64> {
-        let object_store = context
-            .runtime_env()
-            .object_store(&self.config.object_store_url)?;
-
-        let part_col = if !self.config.table_partition_cols.is_empty() {
-            Some(self.config.table_partition_cols.clone())
-        } else {
-            None
-        };
-
-        let (demux_task, mut file_stream_rx) = start_demuxer_task(
-            data,
-            context,
-            part_col,
-            self.config.table_paths[0].clone(),
-            "arrow".into(),
-            self.config.keep_partition_by_columns,
-        );
-
         let mut file_write_tasks: JoinSet<std::result::Result<usize, DataFusionError>> =
             JoinSet::new();
 
@@ -348,6 +306,53 @@ impl DataSink for ArrowFileSink {
             .await
             .map_err(DataFusionError::ExecutionJoin)??;
         Ok(row_count as u64)
+    }
+}
+
+impl Debug for ArrowFileSink {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ArrowFileSink").finish()
+    }
+}
+
+impl DisplayAs for ArrowFileSink {
+    fn fmt_as(&self, t: DisplayFormatType, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match t {
+            DisplayFormatType::Default | DisplayFormatType::Verbose => {
+                write!(f, "ArrowFileSink(file_groups=",)?;
+                FileGroupDisplay(&self.config.file_groups).fmt_as(t, f)?;
+                write!(f, ")")
+            }
+        }
+    }
+}
+
+#[async_trait]
+impl DataSink for ArrowFileSink {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn metrics(&self) -> Option<MetricsSet> {
+        None
+    }
+
+    async fn write_all(
+        &self,
+        data: SendableRecordBatchStream,
+        context: &Arc<TaskContext>,
+    ) -> Result<u64> {
+        let object_store = self.config.get_object_store(context)?;
+        let (demux_task, file_stream_rx) =
+            self.config
+                .start_demuxer_task(data, context, "arrow".into());
+        self.spawn_writer_tasks_and_join(
+            context,
+            demux_task,
+            file_stream_rx,
+            object_store,
+        )
+        .await
     }
 }
 

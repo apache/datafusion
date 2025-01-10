@@ -24,14 +24,15 @@ use std::fmt::Debug;
 use std::io::BufReader;
 use std::sync::Arc;
 
-use super::write::orchestration::stateless_multipart_put;
+use super::write::orchestration::spawn_writer_tasks_and_join;
 use super::{
     Decoder, DecoderDeserializer, FileFormat, FileFormatFactory, FileScanConfig,
     DEFAULT_SCHEMA_INFER_MAX_RECORD,
 };
 use crate::datasource::file_format::file_compression_type::FileCompressionType;
+use crate::datasource::file_format::write::demux::DemuxedStreamReceiver;
 use crate::datasource::file_format::write::BatchSerializer;
-use crate::datasource::physical_plan::FileGroupDisplay;
+use crate::datasource::physical_plan::{FileGroupDisplay, FileSink};
 use crate::datasource::physical_plan::{FileSinkConfig, NdJsonExec};
 use crate::error::Result;
 use crate::execution::context::SessionState;
@@ -49,6 +50,7 @@ use arrow_schema::ArrowError;
 use datafusion_common::config::{ConfigField, ConfigFileType, JsonOptions};
 use datafusion_common::file_options::json_writer::JsonWriterOptions;
 use datafusion_common::{not_impl_err, GetExt, DEFAULT_JSON_EXTENSION};
+use datafusion_common_runtime::SpawnedTask;
 use datafusion_execution::TaskContext;
 use datafusion_expr::dml::InsertOp;
 use datafusion_physical_expr::PhysicalExpr;
@@ -343,26 +345,31 @@ impl JsonSink {
         &self.config
     }
 
-    async fn multipartput_all(
-        &self,
-        data: SendableRecordBatchStream,
-        context: &Arc<TaskContext>,
-    ) -> Result<u64> {
-        let get_serializer = move || Arc::new(JsonSerializer::new()) as _;
-
-        stateless_multipart_put(
-            data,
-            context,
-            "json".into(),
-            Box::new(get_serializer),
-            &self.config,
-            self.writer_options.compression.into(),
-        )
-        .await
-    }
     /// Retrieve the writer options
     pub fn writer_options(&self) -> &JsonWriterOptions {
         &self.writer_options
+    }
+}
+
+#[async_trait]
+impl FileSink for JsonSink {
+    async fn spawn_writer_tasks_and_join(
+        &self,
+        context: &Arc<TaskContext>,
+        demux_task: SpawnedTask<Result<()>>,
+        file_stream_rx: DemuxedStreamReceiver,
+        object_store: Arc<dyn ObjectStore>,
+    ) -> Result<u64> {
+        let serializer = Arc::new(JsonSerializer::new()) as _;
+        spawn_writer_tasks_and_join(
+            context,
+            serializer,
+            self.writer_options.compression.into(),
+            object_store,
+            demux_task,
+            file_stream_rx,
+        )
+        .await
     }
 }
 
@@ -381,8 +388,16 @@ impl DataSink for JsonSink {
         data: SendableRecordBatchStream,
         context: &Arc<TaskContext>,
     ) -> Result<u64> {
-        let total_count = self.multipartput_all(data, context).await?;
-        Ok(total_count)
+        let object_store = self.config.get_object_store(context)?;
+        let (demux_task, file_stream_rx) =
+            self.config.start_demuxer_task(data, context, "json".into());
+        self.spawn_writer_tasks_and_join(
+            context,
+            demux_task,
+            file_stream_rx,
+            object_store,
+        )
+        .await
     }
 }
 
