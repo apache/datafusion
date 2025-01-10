@@ -287,7 +287,7 @@ async fn select_metadata_column() {
     assert_eq!(bytes, "id,UInt8\nbank_account,UInt64\n");
     let select0 = "SELECT * FROM test order by id";
     let df0 = ctx.sql_with_options(select0, options).await.unwrap();
-    assert!(!df0.schema().has_column_with_unqualified_name(&"_rowid"));
+    assert!(!df0.schema().has_column_with_unqualified_name("_rowid"));
 
     let all_batchs = df0.collect().await.unwrap();
     let batch = concat_batches(&all_batchs[0].schema(), &all_batchs).unwrap();
