@@ -20,10 +20,8 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use super::{
-    common, DisplayAs, ExecutionMode, PlanProperties, SendableRecordBatchStream,
-    Statistics,
-};
+use super::{common, DisplayAs, PlanProperties, SendableRecordBatchStream, Statistics};
+use crate::execution_plan::{Boundedness, EmissionType};
 use crate::{
     memory::MemoryStream, ColumnarValue, DisplayFormatType, ExecutionPlan, Partitioning,
     PhysicalExpr,
@@ -34,7 +32,6 @@ use arrow::record_batch::{RecordBatch, RecordBatchOptions};
 use datafusion_common::{internal_err, plan_err, Result, ScalarValue};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::EquivalenceProperties;
-use crate::execution_plan::{Boundedness, EmissionType};
 
 /// Execution plan for values list based relation (produces constant rows)
 #[derive(Debug, Clone)]
