@@ -2980,6 +2980,7 @@ fn from_substrait_literal(
                     *seconds as i64 * NANOSECONDS + nanos,
                 )
             }
+            (None, None) => ScalarValue::IntervalMonthDayNano(None),
             _ => return plan_err!("Substrait compound interval missing components"),
         },
         Some(LiteralType::FixedChar(c)) => ScalarValue::Utf8(Some(c.clone())),
