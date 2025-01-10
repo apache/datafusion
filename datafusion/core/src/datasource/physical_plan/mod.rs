@@ -127,7 +127,7 @@ impl DisplayAs for FileScanConfig {
         display_orderings(f, &orderings)?;
 
         if !self.constraints.is_empty() {
-            write!(f, ",{}", self.constraints)?;
+            write!(f, ", {}", self.constraints)?;
         }
 
         Ok(())

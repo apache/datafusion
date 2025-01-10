@@ -203,7 +203,7 @@ impl MemoryExec {
 
     /// Ref to constraints
     pub fn constraints(&self) -> &Constraints {
-        &self.cache.equivalence_properties().constraints()
+        self.cache.equivalence_properties().constraints()
     }
 
     /// Ref to partitions
