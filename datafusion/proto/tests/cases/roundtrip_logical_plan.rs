@@ -376,6 +376,32 @@ async fn roundtrip_logical_plan_sort() -> Result<()> {
 }
 
 #[tokio::test]
+async fn roundtrip_logical_plan_dml() -> Result<()> {
+    let ctx = SessionContext::new();
+
+    let schema = Schema::new(vec![
+        Field::new("a", DataType::Int64, true),
+        Field::new("b", DataType::Decimal128(15, 2), true),
+    ]);
+
+    ctx.register_csv(
+        "t1",
+        "tests/testdata/test.csv",
+        CsvReadOptions::default().schema(&schema),
+    )
+    .await?;
+
+    let query = "INSERT INTO T1 VALUES (1, null)";
+    let plan = ctx.sql(query).await?.into_optimized_plan()?;
+
+    let bytes = logical_plan_to_bytes(&plan)?;
+    let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx)?;
+    assert_eq!(format!("{plan}"), format!("{logical_round_trip}"));
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn roundtrip_logical_plan_copy_to_sql_options() -> Result<()> {
     let ctx = SessionContext::new();
 
