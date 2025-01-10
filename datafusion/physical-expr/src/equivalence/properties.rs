@@ -22,11 +22,9 @@ use std::slice::Iter;
 use std::sync::Arc;
 use std::{fmt, mem};
 
-use super::ordering::collapse_lex_ordering;
 use crate::equivalence::class::{const_exprs_contains, AcrossPartitions};
 use crate::equivalence::{
-    collapse_lex_req, EquivalenceClass, EquivalenceGroup, OrderingEquivalenceClass,
-    ProjectionMapping,
+    EquivalenceClass, EquivalenceGroup, OrderingEquivalenceClass, ProjectionMapping,
 };
 use crate::expressions::{with_new_schema, CastExpr, Column, Literal};
 use crate::{
@@ -505,15 +503,12 @@ impl EquivalenceProperties {
         );
         let constants_normalized = self.eq_group.normalize_exprs(constant_exprs);
         // Prune redundant sections in the requirement:
-        collapse_lex_req(
-            normalized_sort_reqs
-                .iter()
-                .filter(|&order| {
-                    !physical_exprs_contains(&constants_normalized, &order.expr)
-                })
-                .cloned()
-                .collect(),
-        )
+        normalized_sort_reqs
+            .iter()
+            .filter(|&order| !physical_exprs_contains(&constants_normalized, &order.expr))
+            .cloned()
+            .collect::<LexRequirement>()
+            .collapse()
     }
 
     /// Checks whether the given ordering is satisfied by any of the existing
@@ -915,7 +910,7 @@ impl EquivalenceProperties {
         // Simplify each ordering by removing redundant sections:
         orderings
             .chain(projected_orderings)
-            .map(collapse_lex_ordering)
+            .map(|lex_ordering| lex_ordering.collapse())
             .collect()
     }
 
