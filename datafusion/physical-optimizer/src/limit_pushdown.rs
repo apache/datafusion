@@ -471,8 +471,7 @@ mod test {
     }
 
     #[test]
-    fn pushes_global_limit_exec_through_projection_exec() -> Result<()>
-    {
+    fn pushes_global_limit_exec_through_projection_exec() -> Result<()> {
         let schema = create_schema();
         let streaming_table = streaming_table_exec(Arc::clone(&schema))?;
         let filter = filter_exec(Arc::clone(&schema), streaming_table)?;
@@ -724,9 +723,7 @@ mod test {
         ]))
     }
 
-    fn streaming_table_exec(
-        schema: SchemaRef,
-    ) -> Result<Arc<dyn ExecutionPlan>> {
+    fn streaming_table_exec(schema: SchemaRef) -> Result<Arc<dyn ExecutionPlan>> {
         Ok(Arc::new(StreamingTableExec::try_new(
             Arc::clone(&schema),
             vec![Arc::new(DummyStreamPartition { schema }) as _],
