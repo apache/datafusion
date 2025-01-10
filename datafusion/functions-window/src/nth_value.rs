@@ -360,9 +360,10 @@ impl PartitionEvaluator for NthValueEvaluator {
                     })
                     .unwrap_or_default();
                 if valid_indices.is_empty() {
-                    return ScalarValue::try_from(arr.data_type());
+                    None
+                } else {
+                    Some(valid_indices)
                 }
-                Some(valid_indices)
             } else {
                 None
             };

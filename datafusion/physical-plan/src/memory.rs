@@ -241,8 +241,8 @@ impl MemorySourceConfig {
                 ProjectionMapping::try_new(&proj_exprs, &self.original_schema())?;
             sort_information = base_eqp
                 .project(&projection_mapping, Arc::clone(self.properties().schema()))
-                .oeq_class
-                .orderings;
+                .into_oeq_class
+                .into_inner;
         }
 
         self.sort_information = sort_information;

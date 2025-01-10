@@ -39,7 +39,7 @@ use arrow_schema::SortOptions;
 /// ordering. In this case, we say that these orderings are equivalent.
 #[derive(Debug, Clone, Eq, PartialEq, Hash, Default)]
 pub struct OrderingEquivalenceClass {
-    pub orderings: Vec<LexOrdering>,
+    orderings: Vec<LexOrdering>,
 }
 
 impl OrderingEquivalenceClass {
@@ -53,11 +53,18 @@ impl OrderingEquivalenceClass {
         self.orderings.clear();
     }
 
-    /// Creates new ordering equivalence class from the given orderings.
+    /// Creates new ordering equivalence class from the given orderings
+    ///
+    /// Any redundant entries are removed
     pub fn new(orderings: Vec<LexOrdering>) -> Self {
         let mut result = Self { orderings };
         result.remove_redundant_entries();
         result
+    }
+
+    /// Converts this OrderingEquivalenceClass to a vector of orderings.
+    pub fn into_inner(self) -> Vec<LexOrdering> {
+        self.orderings
     }
 
     /// Checks whether `ordering` is a member of this equivalence class.
@@ -67,10 +74,12 @@ impl OrderingEquivalenceClass {
 
     /// Adds `ordering` to this equivalence class.
     #[allow(dead_code)]
+    #[deprecated(
+        since = "45.0.0",
+        note = "use OrderingEquivalenceClass::add_new_ordering instead"
+    )]
     fn push(&mut self, ordering: LexOrdering) {
-        self.orderings.push(ordering);
-        // Make sure that there are no redundant orderings:
-        self.remove_redundant_entries();
+        self.add_new_ordering(ordering)
     }
 
     /// Checks whether this ordering equivalence class is empty.
@@ -79,6 +88,9 @@ impl OrderingEquivalenceClass {
     }
 
     /// Returns an iterator over the equivalent orderings in this class.
+    ///
+    /// Note this class also implements [`IntoIterator`] to return an iterator
+    /// over owned [`LexOrdering`]s.
     pub fn iter(&self) -> impl Iterator<Item = &LexOrdering> {
         self.orderings.iter()
     }
@@ -95,7 +107,7 @@ impl OrderingEquivalenceClass {
         self.remove_redundant_entries();
     }
 
-    /// Adds new orderings into this ordering equivalence class.
+    /// Adds new orderings into this ordering equivalence class
     pub fn add_new_orderings(
         &mut self,
         orderings: impl IntoIterator<Item = LexOrdering>,
@@ -110,9 +122,10 @@ impl OrderingEquivalenceClass {
         self.add_new_orderings([ordering]);
     }
 
-    /// Removes redundant orderings from this equivalence class. For instance,
-    /// if we already have the ordering `[a ASC, b ASC, c DESC]`, then there is
-    /// no need to keep ordering `[a ASC, b ASC]` in the state.
+    /// Removes redundant orderings from this equivalence class.
+    ///
+    /// For instance, if we already have the ordering `[a ASC, b ASC, c DESC]`,
+    /// then there is no need to keep ordering `[a ASC, b ASC]` in the state.
     fn remove_redundant_entries(&mut self) {
         let mut work = true;
         while work {
@@ -198,6 +211,7 @@ impl OrderingEquivalenceClass {
     }
 }
 
+/// Convert the `OrderingEquivalenceClass` into an iterator of LexOrderings
 impl IntoIterator for OrderingEquivalenceClass {
     type Item = LexOrdering;
     type IntoIter = IntoIter<LexOrdering>;
@@ -291,15 +305,17 @@ mod tests {
             },
         ]);
         // finer ordering satisfies, crude ordering should return true
-        let mut eq_properties_finer =
-            EquivalenceProperties::new(Arc::clone(&input_schema));
-        eq_properties_finer.oeq_class.push(finer.clone());
+        let eq_properties_finer = EquivalenceProperties::new_with_orderings(
+            Arc::clone(&input_schema),
+            &[finer.clone()],
+        );
         assert!(eq_properties_finer.ordering_satisfy(crude.as_ref()));
 
         // Crude ordering doesn't satisfy finer ordering. should return false
-        let mut eq_properties_crude =
-            EquivalenceProperties::new(Arc::clone(&input_schema));
-        eq_properties_crude.oeq_class.push(crude);
+        let eq_properties_crude = EquivalenceProperties::new_with_orderings(
+            Arc::clone(&input_schema),
+            &[crude.clone()],
+        );
         assert!(!eq_properties_crude.ordering_satisfy(finer.as_ref()));
         Ok(())
     }

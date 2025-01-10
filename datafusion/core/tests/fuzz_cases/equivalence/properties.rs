@@ -83,8 +83,8 @@ fn test_find_longest_permutation_random() -> Result<()> {
                 );
 
                 let err_msg = format!(
-                    "Error in test case ordering:{:?}, eq_properties.oeq_class: {:?}, eq_properties.eq_group: {:?}, eq_properties.constants: {:?}",
-                    ordering, eq_properties.oeq_class, eq_properties.eq_group, eq_properties.constants
+                    "Error in test case ordering:{:?}, eq_properties: {}",
+                    ordering, eq_properties
                 );
                 assert_eq!(ordering.len(), indices.len(), "{}", err_msg);
                 // Since ordered section satisfies schema, we expect
