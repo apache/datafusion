@@ -136,7 +136,7 @@ pub struct EquivalenceProperties {
     ///       inside `eq_group` as `Literal` expressions.
     constants: Vec<ConstExpr>,
     /// Table constraints
-    pub constraints: Constraints,
+    constraints: Constraints,
     /// Schema associated with this object.
     schema: SchemaRef,
 }
@@ -622,7 +622,7 @@ impl EquivalenceProperties {
             // If sort options are specified, verify the entire prefix matches an existing ordering
             let prefix_len = indices.len();
             prefix_len == 0
-                || self.oeq_class.orderings.iter().any(|ordering| {
+                || self.oeq_class.iter().any(|ordering| {
                     ordering.len() >= prefix_len
                         && normalized_reqs[..prefix_len].iter().zip(ordering).all(
                             |(req, existing)| {
