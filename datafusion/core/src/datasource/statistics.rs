@@ -73,7 +73,10 @@ pub async fn get_statistics_with_limit(
         for (index, file_column) in
             file_stats.column_statistics.clone().into_iter().enumerate()
         {
-            col_stats_set[index] = file_column;
+            col_stats_set[index].null_count = file_column.null_count;
+            col_stats_set[index].max_value = file_column.max_value;
+            col_stats_set[index].min_value = file_column.min_value;
+            col_stats_set[index].sum_value = file_column.sum_value;
         }
 
         // If the number of rows exceeds the limit, we can stop processing
