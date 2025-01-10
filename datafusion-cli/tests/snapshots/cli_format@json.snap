@@ -1,0 +1,17 @@
+---
+source: tests/cli_integration.rs
+info:
+  program: datafusion-cli
+  args:
+    - "--command"
+    - select 1
+    - "-q"
+    - "--format"
+    - json
+---
+success: true
+exit_code: 0
+----- stdout -----
+[{"Int64(1)":1}]
+
+----- stderr -----
