@@ -114,19 +114,26 @@ impl ListingTableConfig {
         }
     }
 
-    fn infer_file_extension(path: &str) -> Result<String> {
+    ///Returns a tupe of (file_extension, optional compression_extension)
+    ///
+    /// For example a path ending with blah.test.csv.gz returns `("csv", Some("gz"))`
+    /// For example a path ending with blah.test.csv returns `("csv", None)`
+    fn infer_file_extension_and_compression_type(
+        path: &str,
+    ) -> Result<(String, Option<String>)> {
         let mut exts = path.rsplit('.');
 
-        let mut splitted = exts.next().unwrap_or("");
+        let splitted = exts.next().unwrap_or("");
 
         let file_compression_type = FileCompressionType::from_str(splitted)
             .unwrap_or(FileCompressionType::UNCOMPRESSED);
 
         if file_compression_type.is_compressed() {
-            splitted = exts.next().unwrap_or("");
+            let splitted2 = exts.next().unwrap_or("");
+            Ok((splitted2.to_string(), Some(splitted.to_string())))
+        } else {
+            Ok((splitted.to_string(), None))
         }
-
-        Ok(splitted.to_string())
     }
 
     /// Infer `ListingOptions` based on `table_path` suffix.
@@ -147,18 +154,33 @@ impl ListingTableConfig {
             .await
             .ok_or_else(|| DataFusionError::Internal("No files for table".into()))??;
 
-        let file_extension =
-            ListingTableConfig::infer_file_extension(file.location.as_ref())?;
+        let (file_extension, maybe_compression_type) =
+            ListingTableConfig::infer_file_extension_and_compression_type(
+                file.location.as_ref(),
+            )?;
+
+        let mut format_options = HashMap::new();
+        if let Some(ref compression_type) = maybe_compression_type {
+            format_options
+                .insert("format.compression".to_string(), compression_type.clone());
+        }
 
         let file_format = state
             .get_file_format_factory(&file_extension)
             .ok_or(config_datafusion_err!(
                 "No file_format found with extension {file_extension}"
             ))?
-            .create(state, &HashMap::new())?;
+            .create(state, &format_options)?;
+
+        let listing_file_extension =
+            if let Some(compression_type) = maybe_compression_type {
+                format!("{}.{}", &file_extension, &compression_type)
+            } else {
+                file_extension
+            };
 
         let listing_options = ListingOptions::new(file_format)
-            .with_file_extension(file_extension)
+            .with_file_extension(listing_file_extension)
             .with_target_partitions(state.config().target_partitions());
 
         Ok(Self {
@@ -2192,6 +2214,25 @@ mod tests {
             "+-----+-----+---+",
         ];
         assert_batches_eq!(expected, &batches);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_infer_options_compressed_csv() -> Result<()> {
+        let testdata = crate::test_util::arrow_test_data();
+        let filename = format!("{}/csv/aggregate_test_100.csv.gz", testdata);
+        let table_path = ListingTableUrl::parse(filename).unwrap();
+
+        let ctx = SessionContext::new();
+
+        let config = ListingTableConfig::new(table_path);
+        let config_with_opts = config.infer_options(&ctx.state()).await?;
+        let config_with_schema = config_with_opts.infer_schema(&ctx.state()).await?;
+
+        let schema = config_with_schema.file_schema.unwrap();
+
+        assert_eq!(schema.fields.len(), 13);
 
         Ok(())
     }

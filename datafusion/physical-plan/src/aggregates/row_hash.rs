@@ -24,8 +24,8 @@ use std::vec;
 use crate::aggregates::group_values::{new_group_values, GroupValues};
 use crate::aggregates::order::GroupOrderingFull;
 use crate::aggregates::{
-    evaluate_group_by, evaluate_many, evaluate_optional, group_schema, AggregateMode,
-    PhysicalGroupBy,
+    create_schema, evaluate_group_by, evaluate_many, evaluate_optional, group_schema,
+    AggregateMode, PhysicalGroupBy,
 };
 use crate::metrics::{BaselineMetrics, MetricBuilder, RecordOutput};
 use crate::sorts::sort::sort_batch;
@@ -490,6 +490,31 @@ impl GroupedHashAggregateStream {
             .collect::<Result<_>>()?;
 
         let group_schema = group_schema(&agg.input().schema(), &agg_group_by)?;
+
+        // fix https://github.com/apache/datafusion/issues/13949
+        // Builds a **partial aggregation** schema by combining the group columns and
+        // the accumulator state columns produced by each aggregate expression.
+        //
+        // # Why Partial Aggregation Schema Is Needed
+        //
+        // In a multi-stage (partial/final) aggregation strategy, each partial-aggregate
+        // operator produces *intermediate* states (e.g., partial sums, counts) rather
+        // than final scalar values. These extra columns do **not** exist in the original
+        // input schema (which may be something like `[colA, colB, ...]`). Instead,
+        // each aggregator adds its own internal state columns (e.g., `[acc_state_1, acc_state_2, ...]`).
+        //
+        // Therefore, when we spill these intermediate states or pass them to another
+        // aggregation operator, we must use a schema that includes both the group
+        // columns **and** the partial-state columns.
+        let partial_agg_schema = create_schema(
+            &agg.input().schema(),
+            &agg_group_by,
+            &aggregate_exprs,
+            AggregateMode::Partial,
+        )?;
+
+        let partial_agg_schema = Arc::new(partial_agg_schema);
+
         let spill_expr = group_schema
             .fields
             .into_iter()
@@ -522,7 +547,7 @@ impl GroupedHashAggregateStream {
         let spill_state = SpillState {
             spills: vec![],
             spill_expr,
-            spill_schema: Arc::clone(&agg_schema),
+            spill_schema: partial_agg_schema,
             is_stream_merging: false,
             merging_aggregate_arguments,
             merging_group_by: PhysicalGroupBy::new_single(agg_group_by.expr.clone()),
@@ -964,9 +989,6 @@ impl GroupedHashAggregateStream {
             && self.update_memory_reservation().is_err()
         {
             assert_ne!(self.mode, AggregateMode::Partial);
-            // Use input batch (Partial mode) schema for spilling because
-            // the spilled data will be merged and re-evaluated later.
-            self.spill_state.spill_schema = batch.schema();
             self.spill()?;
             self.clear_shrink(batch);
         }

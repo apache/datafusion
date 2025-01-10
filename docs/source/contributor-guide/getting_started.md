@@ -30,6 +30,18 @@ git-bash.exe
 cargo build
 ```
 
+## Dev Container setup
+
+DataFusion has support for [dev containers](https://containers.dev/) which may be used for
+developing DataFusion in an isolated environment either locally or remote if desired. Using dev containers for developing
+DataFusion is not a requirement by any means but is available for those where doing local development could be tricky
+such as with Windows and WSL2, those with older hardware, etc.
+
+For specific details on IDE support for dev containers see the documentation for [Visual Studio Code](https://code.visualstudio.com/docs/devcontainers/containers),
+[IntelliJ IDEA](https://www.jetbrains.com/help/idea/connect-to-devcontainer.html),
+[Rust Rover](https://www.jetbrains.com/help/rust/connect-to-devcontainer.html), and
+[GitHub Codespaces](https://docs.github.com/en/codespaces/setting-up-your-project-for-codespaces/adding-a-dev-container-configuration/introduction-to-dev-containers).
+
 ## Protoc Installation
 
 Compiling DataFusion from sources requires an installed version of the protobuf compiler, `protoc`.
@@ -74,7 +86,7 @@ Testing setup:
 
 - `rustup update stable` DataFusion uses the latest stable release of rust
 - `git submodule init`
-- `git submodule update`
+- `git submodule update --init --remote --recursive`
 
 Formatting instructions:
 
