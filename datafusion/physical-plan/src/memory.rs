@@ -254,9 +254,10 @@ impl MemoryExec {
             }
         }
 
-        let cache = Self::compute_properties_as_value(Arc::clone(&schema));
+        let partitions = vec![batches];
+        let cache = Self::compute_properties(Arc::clone(&schema), &[], &partitions);
         Ok(Self {
-            partitions: vec![batches],
+            partitions,
             schema: Arc::clone(&schema),
             projected_schema: Arc::clone(&schema),
             projection: None,
@@ -381,15 +382,6 @@ impl MemoryExec {
         PlanProperties::new(
             EquivalenceProperties::new_with_orderings(schema, orderings),
             Partitioning::UnknownPartitioning(partitions.len()),
-            EmissionType::Incremental,
-            Boundedness::Bounded,
-        )
-    }
-
-    fn compute_properties_as_value(schema: SchemaRef) -> PlanProperties {
-        PlanProperties::new(
-            EquivalenceProperties::new(schema),
-            Partitioning::UnknownPartitioning(1),
             EmissionType::Incremental,
             Boundedness::Bounded,
         )
