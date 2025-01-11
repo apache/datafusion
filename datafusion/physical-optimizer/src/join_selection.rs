@@ -1133,7 +1133,10 @@ mod tests_statistical {
         );
 
         let optimized_join = JoinSelection::new()
-            .optimize(Arc::<NestedLoopJoinExec>::clone(&join), &ConfigOptions::new())
+            .optimize(
+                Arc::<NestedLoopJoinExec>::clone(&join),
+                &ConfigOptions::new(),
+            )
             .unwrap();
 
         let swapped_join = optimized_join
@@ -2089,7 +2092,7 @@ mod hash_join_tests {
                 .expect(
                     "A proj is required to swap columns back to their original order",
                 );
-                Arc::<dyn ExecutionPlan>::clone(&proj.input())
+            Arc::<dyn ExecutionPlan>::clone(proj.input())
         } else {
             optimized_join_plan
         };
