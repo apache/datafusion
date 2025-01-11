@@ -438,18 +438,11 @@ fn get_valid_types(
     }
 
     fn function_length_check(length: usize, expected_length: usize) -> Result<()> {
-        if length < 1 {
-            return plan_err!(
-                "The signature expected at least one argument but received {expected_length}"
-            );
-        }
-
         if length != expected_length {
             return plan_err!(
-                "The signature expected {length} arguments but received {expected_length}"
+                "The signature expected {expected_length} arguments but received {length}"
             );
         }
-
         Ok(())
     }
 
@@ -939,6 +932,7 @@ mod tests {
 
     use super::*;
     use arrow::datatypes::Field;
+    use datafusion_common::assert_contains;
 
     #[test]
     fn test_string_conversion() {
@@ -1023,6 +1017,29 @@ mod tests {
         let valid_types = get_valid_types(&signature, &args)?;
         assert_eq!(valid_types.len(), 1);
         assert_eq!(valid_types[0], args);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_get_valid_types_length_check() -> Result<()> {
+        let signature = TypeSignature::Numeric(1);
+
+        let err = get_valid_types(&signature, &[]).unwrap_err();
+        assert_contains!(
+            err.to_string(),
+            "The signature expected 1 arguments but received 0"
+        );
+
+        let err = get_valid_types(
+            &signature,
+            &[DataType::Int32, DataType::Int32, DataType::Int32],
+        )
+        .unwrap_err();
+        assert_contains!(
+            err.to_string(),
+            "The signature expected 1 arguments but received 3"
+        );
 
         Ok(())
     }

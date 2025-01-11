@@ -159,9 +159,7 @@ pub trait DynEq {
 
 impl<T: Eq + Any> DynEq for T {
     fn dyn_eq(&self, other: &dyn Any) -> bool {
-        other
-            .downcast_ref::<Self>()
-            .map_or(false, |other| other == self)
+        other.downcast_ref::<Self>() == Some(self)
     }
 }
 

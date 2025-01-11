@@ -62,9 +62,9 @@ datafusion-sql = { workspace = true }
 getrandom = { version = "0.2.8", features = ["js"] }
 
 parquet = { workspace = true }
-wasm-bindgen = "0.2.87"
-wasm-bindgen-futures = "0.4.40"
+wasm-bindgen = "0.2.99"
+wasm-bindgen-futures = "0.4.49"
 
 [dev-dependencies]
 tokio = { workspace = true }
-wasm-bindgen-test = "0.3.44"
+wasm-bindgen-test = "0.3.49"
