@@ -605,7 +605,7 @@ impl DFSchema {
     pub fn fields_with_unqualified_name(&self, name: &str) -> Vec<&Field> {
         let mut fields: Vec<&Field> = self.inner.fields_with_unqualified_name(name);
         if let Some(schema) = self.metadata_schema() {
-            fields.append(&mut schema.fields_with_unqualified_name(name));
+            fields.extend(schema.fields_with_unqualified_name(name));
         }
         fields
     }
@@ -618,7 +618,7 @@ impl DFSchema {
         let mut fields: Vec<(Option<&TableReference>, &Field)> =
             self.inner.qualified_fields_with_unqualified_name(name);
         if let Some(schema) = self.metadata_schema() {
-            fields.append(&mut schema.qualified_fields_with_unqualified_name(name));
+            fields.extend(schema.qualified_fields_with_unqualified_name(name));
         }
         fields
     }

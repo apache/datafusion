@@ -2615,23 +2615,31 @@ impl TableScan {
             .map(|p| {
                 let projected_func_dependencies =
                     func_dependencies.project_functional_dependencies(p, p.len());
-
-                let df_schema = DFSchema::new_with_metadata(
+                let qualified_fields: Result<Vec<_>, _> =
                     p.iter()
                         .map(|i| {
-                            if *i >= schema.fields.len() {
+                            if *i >= METADATA_OFFSET {
                                 if let Some(metadata) = &metadata {
-                                    return (
+                                    return Ok((
                                         Some(table_name.clone()),
                                         Arc::new(
                                             metadata.field(*i - METADATA_OFFSET).clone(),
                                         ),
+                                    ));
+                                } else {
+                                    return plan_err!(
+                                        "table doesn't support metadata column"
                                     );
                                 }
                             }
-                            (Some(table_name.clone()), Arc::new(schema.field(*i).clone()))
+                            Ok((
+                                Some(table_name.clone()),
+                                Arc::new(schema.field(*i).clone()),
+                            ))
                         })
-                        .collect(),
+                        .collect();
+                let df_schema = DFSchema::new_with_metadata(
+                    qualified_fields?,
                     schema.metadata.clone(),
                 )?;
                 df_schema.with_functional_dependencies(projected_func_dependencies)
