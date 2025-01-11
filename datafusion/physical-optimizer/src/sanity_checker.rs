@@ -23,8 +23,8 @@
 
 use std::sync::Arc;
 
-use crate::error::Result;
-use crate::physical_plan::ExecutionPlan;
+use datafusion_common::Result;
+use datafusion_physical_plan::ExecutionPlan;
 
 use datafusion_common::config::{ConfigOptions, OptimizerOptions};
 use datafusion_common::plan_err;
@@ -34,8 +34,8 @@ use datafusion_physical_plan::execution_plan::{Boundedness, EmissionType};
 use datafusion_physical_plan::joins::SymmetricHashJoinExec;
 use datafusion_physical_plan::{get_plan_string, ExecutionPlanProperties};
 
+use crate::PhysicalOptimizerRule;
 use datafusion_physical_expr_common::sort_expr::format_physical_sort_requirement_list;
-use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use itertools::izip;
 
 /// The SanityCheckPlan rule rejects the following query plans:
@@ -109,7 +109,7 @@ pub fn check_finiteness_requirements(
 /// all involved [`PhysicalExpr`]s, [`Operator`]s and data types support
 /// interval calculations.
 ///
-/// [`PhysicalExpr`]: crate::physical_plan::PhysicalExpr
+/// [`PhysicalExpr`]: datafusion_physical_plan::PhysicalExpr
 /// [`Operator`]: datafusion_expr::Operator
 fn is_prunable(join: &SymmetricHashJoinExec) -> bool {
     join.filter().is_some_and(|filter| {
@@ -171,7 +171,7 @@ pub fn check_plan_sanity(
 mod tests {
     use super::*;
 
-    use crate::physical_optimizer::test_utils::{
+    use datafusion::physical_optimizer::test_utils::{
         bounded_window_exec, global_limit_exec, local_limit_exec, memory_exec,
         repartition_exec, sort_exec, sort_expr_options, sort_merge_join_exec,
         BinaryTestCase, QueryCase, SourceType, UnaryTestCase,

@@ -26,6 +26,7 @@ pub mod limited_distinct_aggregation;
 mod optimizer;
 pub mod output_requirements;
 pub mod pruning;
+pub mod sanity_checker;
 pub mod topk_aggregation;
 pub mod update_aggr_exprs;
 
