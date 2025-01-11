@@ -113,6 +113,8 @@ pub struct DFSchema {
     metadata: Option<QualifiedSchema>,
 }
 
+pub const METADATA_OFFSET: usize = usize::MAX >> 1;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct QualifiedSchema {
     /// Inner Arrow schema reference.
@@ -482,9 +484,9 @@ impl DFSchema {
     /// Returns an immutable reference of a specific `Field` instance selected using an
     /// offset within the internal `fields` vector
     pub fn field(&self, i: usize) -> &Field {
-        if i >= self.inner.len() {
+        if i >= METADATA_OFFSET {
             if let Some(metadata) = &self.metadata {
-                return metadata.field(i - self.inner.len());
+                return metadata.field(i - METADATA_OFFSET);
             }
         }
         self.inner.field(i)
@@ -493,9 +495,9 @@ impl DFSchema {
     /// Returns an immutable reference of a specific `Field` instance selected using an
     /// offset within the internal `fields` vector and its qualifier
     pub fn qualified_field(&self, i: usize) -> (Option<&TableReference>, &Field) {
-        if i >= self.inner.len() {
+        if i >= METADATA_OFFSET {
             if let Some(metadata) = &self.metadata {
-                return metadata.qualified_field(i - self.inner.len());
+                return metadata.qualified_field(i - METADATA_OFFSET);
             }
         }
         self.inner.qualified_field(i)
@@ -512,7 +514,7 @@ impl DFSchema {
         if let Some(metadata) = &self.metadata {
             return metadata
                 .index_of_column_by_name(qualifier, name)
-                .map(|idx| idx + self.inner.len());
+                .map(|idx| idx + METADATA_OFFSET);
         }
         None
     }
@@ -556,9 +558,9 @@ impl DFSchema {
     }
 
     pub fn field_qualifier(&self, i: usize) -> Option<&TableReference> {
-        if i >= self.inner.len() {
+        if i >= METADATA_OFFSET {
             if let Some(metadata) = &self.metadata {
-                return metadata.field_qualifier(i - self.inner.len());
+                return metadata.field_qualifier(i - METADATA_OFFSET);
             }
         }
         self.inner.field_qualifier(i)

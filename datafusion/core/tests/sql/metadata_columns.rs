@@ -41,6 +41,8 @@ use datafusion::physical_plan::{
 use datafusion::prelude::*;
 
 use datafusion::catalog::Session;
+use datafusion_common::METADATA_OFFSET;
+use itertools::Itertools;
 
 /// A User, with an id and a bank account
 #[derive(Clone, Debug)]
@@ -141,6 +143,7 @@ impl TableProvider for CustomDataSource {
         _limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let mut schema = self.schema();
+        let size = schema.fields.len();
         if let Some(metadata) = self.metadata_columns() {
             let mut builder = SchemaBuilder::from(schema.as_ref());
             for f in metadata.fields.iter() {
@@ -148,7 +151,24 @@ impl TableProvider for CustomDataSource {
             }
             schema = Arc::new(builder.finish());
         }
-        return self.create_physical_plan(projection, schema).await;
+
+        let projection = match projection {
+            Some(projection) => {
+                let projection = projection
+                    .iter()
+                    .map(|idx| {
+                        if *idx >= METADATA_OFFSET {
+                            *idx - METADATA_OFFSET + size
+                        } else {
+                            *idx
+                        }
+                    })
+                    .collect_vec();
+                Some(projection)
+            }
+            None => None,
+        };
+        return self.create_physical_plan(projection.as_ref(), schema).await;
     }
 }
 

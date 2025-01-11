@@ -56,7 +56,7 @@ use datafusion_common::{
     aggregate_functional_dependencies, internal_err, plan_err, Column, Constraints,
     DFSchema, DFSchemaRef, DataFusionError, Dependency, FunctionalDependence,
     FunctionalDependencies, ParamValues, QualifiedSchema, Result, ScalarValue,
-    TableReference, UnnestOptions,
+    TableReference, UnnestOptions, METADATA_OFFSET,
 };
 use indexmap::IndexSet;
 
@@ -2624,9 +2624,7 @@ impl TableScan {
                                     return (
                                         Some(table_name.clone()),
                                         Arc::new(
-                                            metadata
-                                                .field(*i - schema.fields.len())
-                                                .clone(),
+                                            metadata.field(*i - METADATA_OFFSET).clone(),
                                         ),
                                     );
                                 }

@@ -53,7 +53,7 @@ pub use arrow;
 pub use column::Column;
 pub use dfschema::{
     qualified_name, DFSchema, DFSchemaRef, ExprSchema, QualifiedSchema, SchemaExt,
-    ToDFSchema,
+    ToDFSchema, METADATA_OFFSET,
 };
 pub use error::{
     field_not_found, unqualified_field_not_found, DataFusionError, Result, SchemaError,
