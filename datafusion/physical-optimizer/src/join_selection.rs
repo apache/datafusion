@@ -900,7 +900,7 @@ mod tests_statistical {
             let original_schema = join.schema();
 
             let optimized_join = JoinSelection::new()
-                .optimize(join.clone(), &ConfigOptions::new())
+                .optimize(Arc::<HashJoinExec>::clone(&join), &ConfigOptions::new())
                 .unwrap();
 
             let swapped_join = optimized_join
@@ -1133,7 +1133,7 @@ mod tests_statistical {
         );
 
         let optimized_join = JoinSelection::new()
-            .optimize(join.clone(), &ConfigOptions::new())
+            .optimize(Arc::<NestedLoopJoinExec>::clone(&join), &ConfigOptions::new())
             .unwrap();
 
         let swapped_join = optimized_join
@@ -1263,8 +1263,8 @@ mod tests_statistical {
             col("big_col", &big.schema()).unwrap(),
         )];
         check_join_partition_mode(
-            small.clone(),
-            big.clone(),
+            Arc::<StatisticsExec>::clone(&small),
+            Arc::<StatisticsExec>::clone(&big),
             join_on,
             false,
             PartitionMode::CollectLeft,
@@ -1276,7 +1276,7 @@ mod tests_statistical {
         )];
         check_join_partition_mode(
             big,
-            small.clone(),
+            Arc::<StatisticsExec>::clone(&small),
             join_on,
             true,
             PartitionMode::CollectLeft,
@@ -1287,8 +1287,8 @@ mod tests_statistical {
             col("empty_col", &empty.schema()).unwrap(),
         )];
         check_join_partition_mode(
-            small.clone(),
-            empty.clone(),
+            Arc::<StatisticsExec>::clone(&small),
+            Arc::<StatisticsExec>::clone(&empty),
             join_on,
             false,
             PartitionMode::CollectLeft,
@@ -1330,8 +1330,8 @@ mod tests_statistical {
                 as _,
         )];
         check_join_partition_mode(
-            big.clone(),
-            bigger.clone(),
+            Arc::<StatisticsExec>::clone(&big),
+            Arc::<StatisticsExec>::clone(&bigger),
             join_on,
             false,
             PartitionMode::Partitioned,
@@ -1344,7 +1344,7 @@ mod tests_statistical {
         )];
         check_join_partition_mode(
             bigger,
-            big.clone(),
+            Arc::<StatisticsExec>::clone(&big),
             join_on,
             true,
             PartitionMode::Partitioned,
@@ -1355,8 +1355,8 @@ mod tests_statistical {
             Arc::new(Column::new_with_schema("big_col", &big.schema()).unwrap()) as _,
         )];
         check_join_partition_mode(
-            empty.clone(),
-            big.clone(),
+            Arc::<StatisticsExec>::clone(&empty),
+            Arc::<StatisticsExec>::clone(&big),
             join_on,
             false,
             PartitionMode::Partitioned,
@@ -2089,7 +2089,7 @@ mod hash_join_tests {
                 .expect(
                     "A proj is required to swap columns back to their original order",
                 );
-            proj.input().clone()
+                Arc::<dyn ExecutionPlan>::clone(&proj.input())
         } else {
             optimized_join_plan
         };
