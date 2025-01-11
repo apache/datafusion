@@ -250,6 +250,10 @@ impl PhysicalGroupBy {
         }
     }
 
+    pub fn group_schema(&self, schema: &Schema) -> Result<SchemaRef> {
+        Ok(Arc::new(Schema::new(self.group_fields(schema)?)))
+    }
+
     /// Returns the fields that are used as the grouping keys.
     fn group_fields(&self, input_schema: &Schema) -> Result<Vec<Field>> {
         let mut fields = Vec::with_capacity(self.num_group_exprs());
@@ -922,10 +926,6 @@ fn create_schema(
         fields,
         input_schema.metadata().clone(),
     ))
-}
-
-fn group_schema(input_schema: &Schema, group_by: &PhysicalGroupBy) -> Result<SchemaRef> {
-    Ok(Arc::new(Schema::new(group_by.group_fields(input_schema)?)))
 }
 
 /// Determines the lexical ordering requirement for an aggregate expression.
