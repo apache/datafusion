@@ -44,10 +44,9 @@ use datafusion_execution::TaskContext;
 use datafusion_expr::{Accumulator, Aggregate};
 use datafusion_physical_expr::aggregate::AggregateFunctionExpr;
 use datafusion_physical_expr::{
-    equivalence::{collapse_lex_req, ProjectionMapping},
-    expressions::Column,
-    physical_exprs_contains, EquivalenceProperties, LexOrdering, LexRequirement,
-    PhysicalExpr, PhysicalSortRequirement,
+    equivalence::ProjectionMapping, expressions::Column, physical_exprs_contains,
+    EquivalenceProperties, LexOrdering, LexRequirement, PhysicalExpr,
+    PhysicalSortRequirement,
 };
 
 use itertools::Itertools;
@@ -477,7 +476,7 @@ impl AggregateExec {
             &mode,
         )?;
         new_requirement.inner.extend(req);
-        new_requirement = collapse_lex_req(new_requirement);
+        new_requirement = new_requirement.collapse();
 
         // If our aggregation has grouping sets then our base grouping exprs will
         // be expanded based on the flags in `group_by.groups` where for each
