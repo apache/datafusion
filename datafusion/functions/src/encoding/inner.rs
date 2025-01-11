@@ -87,7 +87,20 @@ impl ScalarUDFImpl for EncodeFunc {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        Ok(arg_types[0].to_owned())
+        use DataType::*;
+
+        Ok(match arg_types[0] {
+            Utf8 => Utf8,
+            LargeUtf8 => LargeUtf8,
+            Binary => Utf8,
+            LargeBinary => LargeUtf8,
+            Null => Null,
+            _ => {
+                return plan_err!(
+                    "The encode function can only accept Utf8 or Binary or Null."
+                );
+            }
+        })
     }
 
     fn invoke_batch(
@@ -112,12 +125,12 @@ impl ScalarUDFImpl for EncodeFunc {
         }
 
         match arg_types[0] {
-            DataType::Utf8 | DataType::Utf8View | DataType::Binary | DataType::Null => {
+            DataType::Utf8 | DataType::Utf8View | DataType::Null => {
                 Ok(vec![DataType::Utf8; 2])
             }
-            DataType::LargeUtf8 | DataType::LargeBinary => {
-                Ok(vec![DataType::LargeUtf8, DataType::Utf8])
-            }
+            DataType::LargeUtf8 => Ok(vec![DataType::LargeUtf8, DataType::Utf8]),
+            DataType::Binary => Ok(vec![DataType::Binary, DataType::Utf8]),
+            DataType::LargeBinary => Ok(vec![DataType::LargeBinary, DataType::Utf8]),
             _ => plan_err!(
                 "1st argument should be Utf8 or Binary or Null, got {:?}",
                 arg_types[0]
