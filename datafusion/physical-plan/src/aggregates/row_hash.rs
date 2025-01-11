@@ -24,8 +24,8 @@ use std::vec;
 use crate::aggregates::group_values::{new_group_values, GroupValues};
 use crate::aggregates::order::GroupOrderingFull;
 use crate::aggregates::{
-    create_schema, evaluate_group_by, evaluate_many, evaluate_optional,
-    AggregateMode, PhysicalGroupBy,
+    create_schema, evaluate_group_by, evaluate_many, evaluate_optional, AggregateMode,
+    PhysicalGroupBy,
 };
 use crate::metrics::{BaselineMetrics, MetricBuilder, RecordOutput};
 use crate::sorts::sort::sort_batch;
