@@ -1,11 +1,12 @@
-use std::sync::Arc;
-use arrow::datatypes::{DataType, Schema};
-use petgraph::stable_graph::{NodeIndex, StableGraph};
-use datafusion_expr_common::interval_arithmetic::Interval;
+use crate::expressions::Literal;
 use crate::utils::stats::StatisticsV2::{Exponential, Gaussian, Uniform, Unknown};
+use crate::utils::{build_dag, ExprTreeNode};
+use arrow::datatypes::{DataType, Schema};
 use datafusion_common::ScalarValue;
+use datafusion_expr_common::interval_arithmetic::Interval;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
-use datafusion_expr::Literal;
+use petgraph::stable_graph::{NodeIndex, StableGraph};
+use std::sync::Arc;
 
 /// New, enhanced `Statistics` definition, represents three core definitions
 #[derive(Clone, Debug)]
@@ -36,7 +37,7 @@ impl StatisticsV2 {
             mean: None,
             median: None,
             std_dev: None,
-            range: Interval::make_zero(&DataType::Null).unwrap()
+            range: Interval::make_zero(&DataType::Null).unwrap(),
         }
     }
 
@@ -184,11 +185,63 @@ impl StatisticsV2 {
 #[derive(Clone, Debug)]
 pub struct ExprStatisticGraphNode {
     expr: Arc<dyn PhysicalExpr>,
-    statistics_v2: StatisticsV2
+    statistics: StatisticsV2,
 }
 
 impl ExprStatisticGraphNode {
+    /// Creates a DAEG node from DataFusion's [`ExprTreeNode`] object. Literals are creating
+    /// [`Uniform`] distribution kind of statistic with definite, singleton intervals.
+    /// Otherwise, create [`Unknown`] statistic with unbounded interval.
+    pub fn make_node(
+        node: &ExprTreeNode<NodeIndex>,
+        schema: &Schema,
+    ) -> datafusion_common::Result<Self> {
+        let expr = Arc::clone(&node.expr);
+        if let Some(literal) = expr.as_any().downcast_ref::<Literal>() {
+            let value = literal.value();
+            Interval::try_new(value.clone(), value.clone())
+                .map(|interval| Self::new_uniform(expr, interval))
+        } else {
+            expr.data_type(schema)
+                .and_then(|dt| Self::new_unknown(expr, &dt))
+        }
+    }
+        
+    /// Creates a DAEG node from DataFusion's [`ExprTreeNode`] object. Literals are creating
+    /// [`Uniform`] distribution kind of statistic with definite, singleton intervals.
+    /// Otherwise, create [`Unknown`] statistic with unbounded interval.
+    pub fn make_node_with_stats(node: &ExprTreeNode<NodeIndex>, stats: StatisticsV2) -> Self {
+        Self::new(Arc::clone(&node.expr), stats)
+    }
+    
+    /// Creates a new graph node with prepared statistics
+    fn new(expr: Arc<dyn PhysicalExpr>, stats: StatisticsV2) -> Self {
+        ExprStatisticGraphNode { expr, statistics: stats }
+    }
+
+    /// Creates a new graph node with statistic based on given interval as [`Uniform`] distribution
+    fn new_uniform(expr: Arc<dyn PhysicalExpr>, interval: Interval) -> Self {
+        ExprStatisticGraphNode {
+            expr,
+            statistics: Uniform { interval },
+        }
+    }
+
+    /// Creates a new graph node with unknown statistic
+    fn new_unknown(expr: Arc<dyn PhysicalExpr>, dt: &DataType) -> datafusion_common::Result<Self> {
+        Ok(ExprStatisticGraphNode {
+            expr,
+            statistics: Unknown {
+                mean: None,
+                median: None,
+                std_dev: None,
+                range: Interval::make_unbounded(dt)?,
+            },
+        })
+    }
 }
+
+impl ExprStatisticGraphNode {}
 
 #[derive(Clone, Debug)]
 pub struct ExprStatisticGraph {
@@ -197,7 +250,16 @@ pub struct ExprStatisticGraph {
 }
 
 impl ExprStatisticGraph {
-    pub fn try_new(expr: Arc<dyn PhysicalExpr>, schema: &Schema) /*-> Result<Self>*/ {}
+    pub fn try_new(
+        expr: Arc<dyn PhysicalExpr>,
+        schema: &Schema,
+    ) -> datafusion_common::Result<Self> {
+        // Build the full graph:
+        let (root, graph) = build_dag(expr, &|node| {
+            ExprStatisticGraphNode::make_node(node, schema)
+        })?;
+        Ok(Self { graph, root })
+    }
 
     pub fn propagate_constraints(&mut self) {}
 
@@ -207,10 +269,10 @@ impl ExprStatisticGraph {
 // #[cfg(test)]
 #[cfg(all(test, feature = "stats_v2"))]
 mod tests {
-    use datafusion_expr_common::interval_arithmetic::Interval;
     use crate::utils::stats::StatisticsV2;
     use arrow::datatypes::DataType;
     use datafusion_common::ScalarValue;
+    use datafusion_expr::interval_arithmetic::Interval;
 
     //region is_valid tests
     // The test data in the following tests are placed as follows : (stat -> expected answer)
@@ -639,3 +701,4 @@ mod tests {
         }
     }
 }
+
