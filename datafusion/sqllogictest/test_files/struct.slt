@@ -170,47 +170,47 @@ select named_struct(values.c, 'c') from values;
 query ?
 select named_struct('scalar', 27, 'array', values.a, 'null', NULL) from values;
 ----
-{scalar: 27, array: 1, null: }
-{scalar: 27, array: 2, null: }
-{scalar: 27, array: 3, null: }
+{scalar: 27, array: 1, null: NULL}
+{scalar: 27, array: 2, null: NULL}
+{scalar: 27, array: 3, null: NULL}
 
 query ?
 select {'scalar': 27, 'array': values.a, 'null': NULL} from values;
 ----
-{scalar: 27, array: 1, null: }
-{scalar: 27, array: 2, null: }
-{scalar: 27, array: 3, null: }
+{scalar: 27, array: 1, null: NULL}
+{scalar: 27, array: 2, null: NULL}
+{scalar: 27, array: 3, null: NULL}
 
 # named_struct with mixed scalar and array values #2
 query ?
 select named_struct('array', values.a, 'scalar', 27, 'null', NULL) from values;
 ----
-{array: 1, scalar: 27, null: }
-{array: 2, scalar: 27, null: }
-{array: 3, scalar: 27, null: }
+{array: 1, scalar: 27, null: NULL}
+{array: 2, scalar: 27, null: NULL}
+{array: 3, scalar: 27, null: NULL}
 
 query ?
 select {'array': values.a, 'scalar': 27, 'null': NULL} from values;
 ----
-{array: 1, scalar: 27, null: }
-{array: 2, scalar: 27, null: }
-{array: 3, scalar: 27, null: }
+{array: 1, scalar: 27, null: NULL}
+{array: 2, scalar: 27, null: NULL}
+{array: 3, scalar: 27, null: NULL}
 
 # named_struct with mixed scalar and array values #3
 query ?
 select named_struct('null', NULL, 'array', values.a, 'scalar', 27) from values;
 ----
-{null: , array: 1, scalar: 27}
-{null: , array: 2, scalar: 27}
-{null: , array: 3, scalar: 27}
+{null: NULL, array: 1, scalar: 27}
+{null: NULL, array: 2, scalar: 27}
+{null: NULL, array: 3, scalar: 27}
 
 # named_struct with mixed scalar and array values #4
 query ?
 select named_struct('null_array', values.n, 'array', values.a, 'scalar', 27, 'null', NULL) from values;
 ----
-{null_array: , array: 1, scalar: 27, null: }
-{null_array: , array: 2, scalar: 27, null: }
-{null_array: , array: 3, scalar: 27, null: }
+{null_array: NULL, array: 1, scalar: 27, null: NULL}
+{null_array: NULL, array: 2, scalar: 27, null: NULL}
+{null_array: NULL, array: 3, scalar: 27, null: NULL}
 
 # named_struct arrays only
 query ?
