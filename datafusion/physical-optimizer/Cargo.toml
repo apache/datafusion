@@ -50,5 +50,5 @@ recursive = { workspace = true, optional = true }
 datafusion-expr = { workspace = true }
 datafusion-functions-aggregate = { workspace = true }
 datafusion-functions-nested = { workspace = true }
-tokio = { workspace = true }
 rstest = { workspace = true }
+tokio = { workspace = true }
