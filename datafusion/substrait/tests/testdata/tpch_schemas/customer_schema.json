@@ -1,0 +1,63 @@
+{
+  "columns": [
+    {
+      "name": "c_custkey",
+      "arrowType": {
+        "INT64": {}
+      },
+      "nullable": true
+    },
+    {
+      "name": "c_name",
+      "arrowType": {
+        "UTF8VIEW": {}
+      },
+      "nullable": true
+    },
+    {
+      "name": "c_address",
+      "arrowType": {
+        "UTF8VIEW": {}
+      },
+      "nullable": true
+    },
+    {
+      "name": "c_nationkey",
+      "arrowType": {
+        "INT32": {}
+      },
+      "nullable": true
+    },
+    {
+      "name": "c_phone",
+      "arrowType": {
+        "UTF8VIEW": {}
+      },
+      "nullable": true
+    },
+    {
+      "name": "c_acctbal",
+      "arrowType": {
+        "DECIMAL": {
+          "precision": 15,
+          "scale": 2
+        }
+      },
+      "nullable": true
+    },
+    {
+      "name": "c_mktsegment",
+      "arrowType": {
+        "UTF8VIEW": {}
+      },
+      "nullable": true
+    },
+    {
+      "name": "c_comment",
+      "arrowType": {
+        "UTF8VIEW": {}
+      },
+      "nullable": true
+    }
+  ]
+}
