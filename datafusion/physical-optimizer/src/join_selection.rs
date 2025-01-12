@@ -900,7 +900,7 @@ mod tests_statistical {
             let original_schema = join.schema();
 
             let optimized_join = JoinSelection::new()
-                .optimize(Arc::<HashJoinExec>::clone(&join), &ConfigOptions::new())
+                .optimize(Arc::clone(&join), &ConfigOptions::new())
                 .unwrap();
 
             let swapped_join = optimized_join

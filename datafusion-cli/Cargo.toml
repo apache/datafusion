@@ -31,13 +31,13 @@ readme = "README.md"
 [dependencies]
 arrow = { version = "53.0.0" }
 async-trait = "0.1.73"
-## 1.5.13 requires a hiher MSRV 1.81 so lock to 1.5.10 until DataFusion MSRV catches up
+## 1.5.13 requires a hiher MSRV 1.81 so lock until DataFusion MSRV catches up
 aws-config = "=1.5.10"
-## 1.53.0 requires a higher MSRV 1.81 so lock to 1.43.0 until DataFusion MSRV catches up
+## 1.53.0 requires a higher MSRV 1.81 so lock until DataFusion MSRV catches up
 aws-sdk-sso = "=1.50.0"
-## 1.54.0 requires a higher MSRV 1.81 so lock to 1.43.0 until DataFusion MSRV catches up
+## 1.54.0 requires a higher MSRV 1.81 so lock until DataFusion MSRV catches up
 aws-sdk-ssooidc = "=1.51.0"
-## 1.54.1 requires a higher MSRV 1.81 so lock to 1.43.0 until DataFusion MSRV catches up
+## 1.54.1 requires a higher MSRV 1.81 so lock until DataFusion MSRV catches up
 aws-sdk-sts = "=1.51.0"
 # end pin aws-sdk crates
 aws-credential-types = "1.2.0"
