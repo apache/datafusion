@@ -85,9 +85,7 @@ impl ScalarUDFImpl for ArrowCastFunc {
     }
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        // should be using return_type_from_exprs and not calling the default
-        // implementation
-        internal_err!("arrow_cast should return type from exprs")
+        internal_err!("return_type_from_args should be called instead")
     }
 
     fn is_nullable(&self, args: &[Expr], schema: &dyn ExprSchema) -> bool {

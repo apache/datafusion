@@ -140,24 +140,12 @@ impl ScalarUDFImpl for NamedStructFunc {
             );
         }
 
-        println!("args: {:?}", args);
-
-        // let return_fields = args.arg_types.iter().step_by(2).zip(args.arguments.iter().skip(1).step_by(2)).map(|(data_type, name)| {
-        //     Ok(Field::new(name, data_type.clone(), true))
-        // }).collect::<Result<Vec<Field>>>()?;
-
         let names = args.arguments.iter().step_by(2).collect::<Vec<_>>();
         let types = args.arg_types.iter().skip(1).step_by(2).collect::<Vec<_>>();
-
-        println!("names: {:?}", names);
-        println!("types: {:?}", types);
-
 
         let return_fields = names.into_iter().zip(types.into_iter()).map(|(name, data_type)| {
             Ok(Field::new(name, data_type.to_owned(), true))
         }).collect::<Result<Vec<Field>>>()?;
-
-        println!("return_fields: {:?}", return_fields);
 
         Ok(DataType::Struct(Fields::from(return_fields)))
     }

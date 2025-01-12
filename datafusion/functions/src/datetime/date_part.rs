@@ -38,10 +38,10 @@ use datafusion_common::{
     },
     exec_err, internal_err,
     types::logical_string,
-    ExprSchema, Result, ScalarValue,
+    Result, ScalarValue,
 };
 use datafusion_expr::{
-    ColumnarValue, Documentation, Expr, ReturnTypeArgs, ScalarUDFImpl, Signature, TypeSignature, Volatility
+    ColumnarValue, Documentation, ReturnTypeArgs, ScalarUDFImpl, Signature, TypeSignature, Volatility
 };
 use datafusion_expr_common::signature::TypeSignatureClass;
 use datafusion_macros::user_doc;
