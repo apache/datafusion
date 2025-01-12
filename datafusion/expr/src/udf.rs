@@ -349,7 +349,7 @@ pub struct ScalarFunctionArgs<'a> {
     pub return_type: &'a DataType,
 }
 
-
+#[derive(Debug)]
 pub struct ReturnTypeArgs<'a> {
     pub arg_types: &'a [DataType],
     pub arguments: &'a [String],

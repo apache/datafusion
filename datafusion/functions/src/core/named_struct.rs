@@ -19,7 +19,7 @@ use arrow::array::StructArray;
 use arrow::datatypes::{DataType, Field, Fields};
 use datafusion_common::{exec_err, internal_err, HashSet, Result, ScalarValue};
 use datafusion_expr::scalar_doc_sections::DOC_SECTION_STRUCT;
-use datafusion_expr::{ColumnarValue, Documentation, Expr, ExprSchemable, ReturnTypeArgs};
+use datafusion_expr::{ColumnarValue, Documentation, ReturnTypeArgs};
 use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
 use std::any::Any;
 use std::sync::{Arc, OnceLock};
@@ -48,7 +48,8 @@ fn named_struct_expr(args: &[ColumnarValue]) -> Result<ColumnarValue> {
             let name_column = &chunk[0];
             let name = match name_column {
                 ColumnarValue::Scalar(ScalarValue::Utf8(Some(name_scalar))) => name_scalar,
-                _ => return exec_err!("named_struct even arguments must be string literals, got {name_column:?} instead at position {}", i * 2)
+                // TODO: Implement Display for ColumnarValue
+                _ => return exec_err!("named_struct even arguments must be string literals at position {}", i * 2)
             };
 
             Ok((name, chunk[1].clone()))
@@ -139,9 +140,24 @@ impl ScalarUDFImpl for NamedStructFunc {
             );
         }
 
-        let return_fields = args.arguments.iter().step_by(2).zip(args.arg_types.iter().skip(1).step_by(2)).map(|(name, data_type)| {
-            Ok(Field::new(name, data_type.clone(), true))
+        println!("args: {:?}", args);
+
+        // let return_fields = args.arg_types.iter().step_by(2).zip(args.arguments.iter().skip(1).step_by(2)).map(|(data_type, name)| {
+        //     Ok(Field::new(name, data_type.clone(), true))
+        // }).collect::<Result<Vec<Field>>>()?;
+
+        let names = args.arguments.iter().step_by(2).collect::<Vec<_>>();
+        let types = args.arg_types.iter().skip(1).step_by(2).collect::<Vec<_>>();
+
+        println!("names: {:?}", names);
+        println!("types: {:?}", types);
+
+
+        let return_fields = names.into_iter().zip(types.into_iter()).map(|(name, data_type)| {
+            Ok(Field::new(name, data_type.to_owned(), true))
         }).collect::<Result<Vec<Field>>>()?;
+
+        println!("return_fields: {:?}", return_fields);
 
         Ok(DataType::Struct(Fields::from(return_fields)))
     }
