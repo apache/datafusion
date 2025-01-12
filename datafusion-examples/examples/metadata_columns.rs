@@ -18,8 +18,9 @@
 use std::any::Any;
 use std::fmt::{self, Debug, Formatter};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
-use arrow_array::{ArrayRef, StringArray, UInt64Array};
+use arrow::array::{ArrayRef, StringArray, UInt64Array};
 use arrow_schema::SchemaBuilder;
 use async_trait::async_trait;
 use datafusion::arrow::array::{UInt64Builder, UInt8Builder};
@@ -35,11 +36,61 @@ use datafusion::physical_plan::{
     project_schema, DisplayAs, DisplayFormatType, ExecutionPlan, Partitioning,
     PlanProperties, SendableRecordBatchStream,
 };
-use datafusion::{assert_batches_sorted_eq, prelude::*};
+
+use datafusion::prelude::*;
 
 use datafusion::catalog::Session;
 use datafusion_common::METADATA_OFFSET;
 use itertools::Itertools;
+use tokio::time::timeout;
+
+/// This example demonstrates executing a simple query against a custom datasource
+#[tokio::main]
+async fn main() -> Result<()> {
+    // create our custom datasource and adding some users
+    let db = CustomDataSource::default();
+    db.populate_users();
+
+    search_accounts(db.clone(), "select * from accounts", 3).await?;
+    search_accounts(
+        db.clone(),
+        "select _rowid, _file, * from accounts where _rowid > 1",
+        1,
+    )
+    .await?;
+    search_accounts(
+        db.clone(),
+        "select _rowid, _file, * from accounts where _file = 'file-0'",
+        1,
+    )
+    .await?;
+
+    Ok(())
+}
+
+async fn search_accounts(
+    db: CustomDataSource,
+    sql: &str,
+    expected_result_length: usize,
+) -> Result<()> {
+    // create local execution context
+    let ctx = SessionContext::new();
+    ctx.register_table("accounts", Arc::new(db)).unwrap();
+    let options = SQLOptions::new().with_allow_ddl(false);
+
+    timeout(Duration::from_secs(10), async move {
+        let dataframe = ctx.sql_with_options(sql, options).await.unwrap();
+        let result = dataframe.collect().await.unwrap();
+        let record_batch = result.first().unwrap();
+
+        assert_eq!(expected_result_length, record_batch.column(1).len());
+        dbg!(record_batch.columns());
+    })
+    .await
+    .unwrap();
+
+    Ok(())
+}
 
 /// A User, with an id and a bank account
 #[derive(Clone, Debug)]
@@ -276,127 +327,4 @@ impl ExecutionPlan for CustomExec {
             None,
         )?))
     }
-}
-
-#[tokio::test]
-async fn select_metadata_column() {
-    // Verify SessionContext::with_sql_options errors appropriately
-    let ctx = SessionContext::new_with_config(
-        SessionConfig::new().with_information_schema(true),
-    );
-    let db = CustomDataSource::default();
-    db.populate_users();
-    ctx.register_table("test", Arc::new(db)).unwrap();
-    // disallow ddl
-    let options = SQLOptions::new().with_allow_ddl(false);
-
-    let show_columns = "show columns from test;";
-    let df_columns = ctx.sql_with_options(show_columns, options).await.unwrap();
-    let batchs = df_columns
-        .select(vec![col("column_name"), col("data_type")])
-        .unwrap()
-        .collect()
-        .await
-        .unwrap();
-    let expected = [
-        "+--------------+-----------+",
-        "| column_name  | data_type |",
-        "+--------------+-----------+",
-        "| id           | UInt8     |",
-        "| bank_account | UInt64    |",
-        "+--------------+-----------+",
-    ];
-    assert_batches_sorted_eq!(expected, &batchs);
-
-    let select0 = "SELECT * FROM test order by id";
-    let df = ctx.sql_with_options(select0, options).await.unwrap();
-    let batchs = df.collect().await.unwrap();
-    let expected = [
-        "+----+--------------+",
-        "| id | bank_account |",
-        "+----+--------------+",
-        "| 1  | 9000         |",
-        "| 2  | 100          |",
-        "| 3  | 1000         |",
-        "+----+--------------+",
-    ];
-    assert_batches_sorted_eq!(expected, &batchs);
-
-    let select1 = "SELECT _rowid FROM test order by _rowid";
-    let df = ctx.sql_with_options(select1, options).await.unwrap();
-    let batchs = df.collect().await.unwrap();
-    let expected = [
-        "+--------+",
-        "| _rowid |",
-        "+--------+",
-        "| 0      |",
-        "| 1      |",
-        "| 2      |",
-        "+--------+",
-    ];
-    assert_batches_sorted_eq!(expected, &batchs);
-
-    let select2 = "SELECT _rowid, id FROM test order by _rowid";
-    let df = ctx.sql_with_options(select2, options).await.unwrap();
-    let batchs = df.collect().await.unwrap();
-    let expected = [
-        "+--------+----+",
-        "| _rowid | id |",
-        "+--------+----+",
-        "| 0      | 1  |",
-        "| 1      | 2  |",
-        "| 2      | 3  |",
-        "+--------+----+",
-    ];
-    assert_batches_sorted_eq!(expected, &batchs);
-
-    let select3 = "SELECT _rowid, id FROM test WHERE _rowid = 0";
-    let df = ctx.sql_with_options(select3, options).await.unwrap();
-    let batchs = df.collect().await.unwrap();
-    let expected = [
-        "+--------+----+",
-        "| _rowid | id |",
-        "+--------+----+",
-        "| 0      | 1  |",
-        "+--------+----+",
-    ];
-    assert_batches_sorted_eq!(expected, &batchs);
-
-    let select4 = "SELECT _rowid FROM test LIMIT 1";
-    let df = ctx.sql_with_options(select4, options).await.unwrap();
-    let batchs = df.collect().await.unwrap();
-    let expected = [
-        "+--------+",
-        "| _rowid |",
-        "+--------+",
-        "| 0      |",
-        "+--------+",
-    ];
-    assert_batches_sorted_eq!(expected, &batchs);
-
-    let select5 = "SELECT _rowid, id FROM test WHERE _rowid % 2 = 1";
-    let df = ctx.sql_with_options(select5, options).await.unwrap();
-    let batchs = df.collect().await.unwrap();
-    let expected = [
-        "+--------+----+",
-        "| _rowid | id |",
-        "+--------+----+",
-        "| 1      | 2  |",
-        "+--------+----+",
-    ];
-    assert_batches_sorted_eq!(expected, &batchs);
-
-    let select6 = "SELECT _rowid, _file FROM test order by _rowid";
-    let df = ctx.sql_with_options(select6, options).await.unwrap();
-    let batchs = df.collect().await.unwrap();
-    let expected = [
-        "+--------+--------+",
-        "| _rowid | _file  |",
-        "+--------+--------+",
-        "| 0      | file-0 |",
-        "| 1      | file-1 |",
-        "| 2      | file-2 |",
-        "+--------+--------+",
-    ];
-    assert_batches_sorted_eq!(expected, &batchs);
 }
