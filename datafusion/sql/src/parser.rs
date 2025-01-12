@@ -257,6 +257,9 @@ fn ensure_not_set<T>(field: &Option<T>, name: &str) -> Result<(), ParserError> {
     Ok(())
 }
 
+// By default, allow expressions up to this deep before error
+const DEFAULT_REMAINING_DEPTH: usize = 100;
+
 /// DataFusion SQL Parser based on [`sqlparser`]
 ///
 /// Parses DataFusion's SQL dialect, often delegating to [`sqlparser`]'s [`Parser`].
@@ -287,7 +290,9 @@ impl<'a> DFParser<'a> {
         let tokens = tokenizer.tokenize()?;
 
         Ok(DFParser {
-            parser: Parser::new(dialect).with_tokens(tokens),
+            parser: Parser::new(dialect)
+                .with_recursion_limit(DEFAULT_REMAINING_DEPTH)
+                .with_tokens(tokens),
         })
     }
 
@@ -299,7 +304,7 @@ impl<'a> DFParser<'a> {
     }
 
     /// Parse a SQL string and produce one or more [`Statement`]s with
-    /// with the specified dialect.
+    /// the specified dialect.
     pub fn parse_sql_with_dialect(
         sql: &str,
         dialect: &dyn Dialect,
