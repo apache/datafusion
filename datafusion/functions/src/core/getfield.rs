@@ -21,13 +21,10 @@ use arrow::array::{
 use arrow::datatypes::DataType;
 use datafusion_common::cast::{as_map_array, as_struct_array};
 use datafusion_common::{
-    exec_err, internal_err, plan_datafusion_err, plan_err, ExprSchema, Result,
-    ScalarValue,
+    exec_err, internal_err, plan_datafusion_err, plan_err, Result, ScalarValue,
 };
 use datafusion_expr::scalar_doc_sections::DOC_SECTION_OTHER;
-use datafusion_expr::{
-    ColumnarValue, Documentation, Expr, ExprSchemable, ReturnTypeArgs,
-};
+use datafusion_expr::{ColumnarValue, Documentation, Expr, ReturnTypeArgs};
 use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
 use std::any::Any;
 use std::sync::{Arc, OnceLock};

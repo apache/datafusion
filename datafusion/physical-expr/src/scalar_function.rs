@@ -71,7 +71,6 @@ impl Debug for ScalarFunctionExpr {
 
 impl ScalarFunctionExpr {
     /// Create a new Scalar function
-    #[deprecated(since = "44.0.0", note = "Use `try_new` instead")]
     pub fn new(
         name: &str,
         fun: Arc<ScalarUDF>,
@@ -106,20 +105,19 @@ impl ScalarFunctionExpr {
             .iter()
             .map(|e| e.nullable(schema))
             .collect::<Result<Vec<_>>>()?;
-        let arguments = args
+
+        let arguments: Vec<String> = args
             .iter()
             .map(|e| {
-                if let Some(literal) = e.as_any().downcast_ref::<Literal>() {
-                    if let ScalarValue::Utf8(s) = literal.value() {
-                        s.clone().unwrap_or_default()
-                    } else {
-                        "".to_string()
-                    }
-                } else {
-                    "".to_string()
-                }
+                e.as_any()
+                    .downcast_ref::<Literal>()
+                    .map(|literal| match literal.value() {
+                        ScalarValue::Utf8(Some(s)) => s.clone(),
+                        _ => String::new(),
+                    })
+                    .unwrap_or_else(String::new)
             })
-            .collect::<Vec<_>>();
+            .collect();
         let ret_args = ReturnTypeArgs {
             arg_types: &arg_types,
             arguments: &arguments,

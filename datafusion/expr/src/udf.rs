@@ -512,6 +512,8 @@ pub trait ScalarUDFImpl: Debug + Send + Sync {
         true
     }
 
+    /// `is_nullable` from pre-computed nullable flags.
+    /// It has less dependencies on the input arguments.
     fn is_nullable_from_args_nullable(&self, _args_nullables: &[bool]) -> bool {
         true
     }
