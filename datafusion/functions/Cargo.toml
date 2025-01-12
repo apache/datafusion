@@ -218,3 +218,8 @@ required-features = ["math_expressions"]
 harness = false
 name = "initcap"
 required-features = ["unicode_expressions"]
+
+[[bench]]
+harness = false
+name = "find_in_set"
+required-features = ["unicode_expressions"]
