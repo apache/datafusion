@@ -6092,6 +6092,21 @@ select range(NULL, DATE '1993-03-01', INTERVAL '1' YEAR);
 NULL
 
 query ?
+select generate_series(NULL::Date, DATE '1993-03-01', INTERVAL '1' YEAR);
+----
+NULL
+
+query ?
+select generate_series(DATE '1993-03-01', NULL::Date, INTERVAL '1' YEAR);
+----
+NULL
+
+query ?
+select generate_series(DATE '1993-02-01', DATE '1993-03-01', NULL::Interval);
+----
+NULL
+
+query ?
 select range(NULL, TIMESTAMP '1993-03-01', INTERVAL '1' YEAR);
 ----
 NULL
