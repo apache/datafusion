@@ -125,18 +125,6 @@ pub struct ExprIntervalGraph {
     root: NodeIndex,
 }
 
-impl ExprIntervalGraph {
-    /// Estimate size of bytes including `Self`.
-    pub fn size(&self) -> usize {
-        let node_memory_usage = self.graph.node_count()
-            * (size_of::<ExprIntervalGraphNode>() + size_of::<NodeIndex>());
-        let edge_memory_usage =
-            self.graph.edge_count() * (size_of::<usize>() + size_of::<NodeIndex>() * 2);
-
-        size_of_val(self) + node_memory_usage + edge_memory_usage
-    }
-}
-
 /// This object encapsulates all possible constraint propagation results.
 #[derive(PartialEq, Debug)]
 pub enum PropagationResult {
@@ -359,6 +347,16 @@ impl ExprIntervalGraph {
 
     pub fn node_count(&self) -> usize {
         self.graph.node_count()
+    }
+
+    /// Estimate size of bytes including `Self`.
+    pub fn size(&self) -> usize {
+        let node_memory_usage = self.graph.node_count()
+            * (size_of::<ExprIntervalGraphNode>() + size_of::<NodeIndex>());
+        let edge_memory_usage =
+            self.graph.edge_count() * (size_of::<usize>() + size_of::<NodeIndex>() * 2);
+
+        size_of_val(self) + node_memory_usage + edge_memory_usage
     }
 
     // Sometimes, we do not want to calculate and/or propagate intervals all

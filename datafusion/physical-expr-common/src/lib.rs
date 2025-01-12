@@ -28,5 +28,7 @@ pub mod binary_view_map;
 pub mod datum;
 pub mod physical_expr;
 pub mod sort_expr;
+// #[cfg(feature = "stats_v2")]
+pub mod stats;
 pub mod tree_node;
 pub mod utils;

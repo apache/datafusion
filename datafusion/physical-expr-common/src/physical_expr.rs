@@ -30,6 +30,7 @@ use datafusion_common::{internal_err, not_impl_err, Result};
 use datafusion_expr_common::columnar_value::ColumnarValue;
 use datafusion_expr_common::interval_arithmetic::Interval;
 use datafusion_expr_common::sort_properties::ExprProperties;
+use crate::stats::StatisticsV2;
 
 /// [`PhysicalExpr`]s represent expressions such as `A + 1` or `CAST(c1 AS int)`.
 ///
@@ -138,6 +139,26 @@ pub trait PhysicalExpr: Send + Sync + Display + Debug + DynEq + DynHash {
         _interval: &Interval,
         _children: &[&Interval],
     ) -> Result<Option<Vec<Interval>>> {
+        Ok(Some(vec![]))
+    }
+
+    /// Finds the final statistic of the expression by combining the inputs statistics
+    /// in post-order bottom-up manner (post-order DFS in statistics graph).
+    /// 
+    /// The part of [`StatisticsV2`] framework, work in progress.
+    fn evaluate_statistics(&self, _stats: &[&StatisticsV2]) -> Result<StatisticsV2> {
+        not_impl_err!("Not implemented for {self}")
+    }
+
+    /// Updates children statistic, having a known parent statistic for this expression.
+    /// This is used to propagate constraints down through an expression tree.
+    /// 
+    /// The part of [`StatisticsV2`] framework, work in progress.
+    fn propagate_statistics(
+        &self,
+        _parent_stat: &StatisticsV2,
+        _children_stat: &[&StatisticsV2],
+    ) -> Result<Option<Vec<StatisticsV2>>> {
         Ok(Some(vec![]))
     }
 
