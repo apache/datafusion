@@ -19,7 +19,7 @@ use arrow::array::StructArray;
 use arrow::datatypes::{DataType, Field, Fields};
 use datafusion_common::{exec_err, internal_err, HashSet, Result, ScalarValue};
 use datafusion_expr::scalar_doc_sections::DOC_SECTION_STRUCT;
-use datafusion_expr::{ColumnarValue, Documentation, Expr, ExprSchemable};
+use datafusion_expr::{ColumnarValue, Documentation, Expr, ExprSchemable, ReturnTypeArgs};
 use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
 use std::any::Any;
 use std::sync::{Arc, OnceLock};
@@ -117,44 +117,32 @@ impl ScalarUDFImpl for NamedStructFunc {
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
         internal_err!(
-            "named_struct: return_type called instead of return_type_from_exprs"
+            "named_struct: return_type called instead of return_type_from_args"
         )
     }
 
-    fn return_type_from_exprs(
+    fn return_type_from_args(
         &self,
-        args: &[Expr],
-        schema: &dyn datafusion_common::ExprSchema,
-        _arg_types: &[DataType],
+        args: ReturnTypeArgs,
     ) -> Result<DataType> {
         // do not accept 0 arguments.
-        if args.is_empty() {
+        if args.arguments.is_empty() {
             return exec_err!(
                 "named_struct requires at least one pair of arguments, got 0 instead"
             );
         }
 
-        if args.len() % 2 != 0 {
+        if args.arguments.len() % 2 != 0 {
             return exec_err!(
                 "named_struct requires an even number of arguments, got {} instead",
-                args.len()
+                args.arguments.len()
             );
         }
 
-        let return_fields = args
-            .chunks_exact(2)
-            .enumerate()
-            .map(|(i, chunk)| {
-                let name = &chunk[0];
-                let value = &chunk[1];
+        let return_fields = args.arguments.iter().step_by(2).zip(args.arg_types.iter().skip(1).step_by(2)).map(|(name, data_type)| {
+            Ok(Field::new(name, data_type.clone(), true))
+        }).collect::<Result<Vec<Field>>>()?;
 
-                if let Expr::Literal(ScalarValue::Utf8(Some(name))) = name {
-                    Ok(Field::new(name, value.get_type(schema)?, true))
-                } else {
-                    exec_err!("named_struct even arguments must be string literals, got {name} instead at position {}", i * 2)
-                }
-            })
-            .collect::<Result<Vec<Field>>>()?;
         Ok(DataType::Struct(Fields::from(return_fields)))
     }
 

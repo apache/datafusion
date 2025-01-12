@@ -24,7 +24,7 @@ use arrow::datatypes::TimeUnit::Second;
 use datafusion_common::{exec_err, internal_err, ExprSchema, Result, ScalarValue};
 use datafusion_expr::TypeSignature::Exact;
 use datafusion_expr::{
-    ColumnarValue, Documentation, Expr, ScalarUDFImpl, Signature, Volatility,
+    ColumnarValue, Documentation, Expr, ReturnTypeArgs, ScalarUDFImpl, Signature, Volatility
 };
 use datafusion_macros::user_doc;
 
@@ -81,29 +81,20 @@ impl ScalarUDFImpl for FromUnixtimeFunc {
         &self.signature
     }
 
-    fn return_type_from_exprs(
+
+    fn return_type_from_args(
         &self,
-        args: &[Expr],
-        _schema: &dyn ExprSchema,
-        arg_types: &[DataType],
+        args: ReturnTypeArgs,
     ) -> Result<DataType> {
-        match arg_types.len() {
-            1 => Ok(Timestamp(Second, None)),
-            2 => match &args[1] {
-                    Expr::Literal(ScalarValue::Utf8(Some(tz))) => Ok(Timestamp(Second, Some(Arc::from(tz.to_string())))),
-                    _ => exec_err!(
-                        "Second argument for `from_unixtime` must be non-null utf8, received {:?}",
-                        arg_types[1]),
-            },
-            _ => exec_err!(
-                "from_unixtime function requires 1 or 2 arguments, got {}",
-                arg_types.len()
-            ),
+        if args.arguments.len() == 1 {
+            Ok(Timestamp(Second, None))
+        } else {
+            Ok(Timestamp(Second, Some(Arc::from(args.arguments[1].to_string()))))
         }
     }
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        internal_err!("call return_type_from_exprs instead")
+        internal_err!("call return_type_from_args instead")
     }
 
     fn invoke_batch(

@@ -28,8 +28,7 @@ use std::sync::OnceLock;
 use datafusion_expr::scalar_doc_sections::DOC_SECTION_OTHER;
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyInfo};
 use datafusion_expr::{
-    ColumnarValue, Documentation, Expr, ExprSchemable, ScalarUDFImpl, Signature,
-    Volatility,
+    ColumnarValue, Documentation, Expr, ExprSchemable, ReturnTypeArgs, ScalarUDFImpl, Signature, Volatility
 };
 
 /// Implements casting to arbitrary arrow types (rather than SQL types)
@@ -95,13 +94,28 @@ impl ScalarUDFImpl for ArrowCastFunc {
         args.iter().any(|e| e.nullable(schema).ok().unwrap_or(true))
     }
 
-    fn return_type_from_exprs(
+    fn return_type_from_args(
         &self,
-        args: &[Expr],
-        _schema: &dyn ExprSchema,
-        _arg_types: &[DataType],
+        args: ReturnTypeArgs,
     ) -> Result<DataType> {
-        data_type_from_args(args)
+        if args.arguments.len() != 2 {
+            return plan_err!("{} needs 2 arguments, {} provided", self.name(), args.arguments.len());
+        }
+
+        let val = &args.arguments[1];
+        if val.is_empty() {
+            return plan_err!(
+                "{} requires its second argument to be a constant string",
+                self.name()
+            );
+        };
+
+        val.parse().map_err(|e| match e {
+            // If the data type cannot be parsed, return a Plan error to signal an
+            // error in the input rather than a more general ArrowError
+            arrow::error::ArrowError::ParseError(e) => plan_datafusion_err!("{e}"),
+            e => arrow_datafusion_err!(e),
+        })
     }
 
     fn invoke_batch(

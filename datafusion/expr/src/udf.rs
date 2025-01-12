@@ -192,6 +192,13 @@ impl ScalarUDF {
         self.inner.return_type_from_exprs(args, schema, arg_types)
     }
 
+    pub fn return_type_from_args(
+        &self,
+        args: ReturnTypeArgs,
+    ) -> Result<DataType> {
+        self.inner.return_type_from_args(args)
+    }
+
     /// Do the function rewrite
     ///
     /// See [`ScalarUDFImpl::simplify`] for more details.
@@ -342,6 +349,12 @@ pub struct ScalarFunctionArgs<'a> {
     pub return_type: &'a DataType,
 }
 
+
+pub struct ReturnTypeArgs<'a> {
+    pub arg_types: &'a [DataType],
+    pub arguments: &'a [String],
+}
+
 /// Trait for implementing user defined scalar functions.
 ///
 /// This trait exposes the full API for implementing user defined functions and
@@ -488,6 +501,13 @@ pub trait ScalarUDFImpl: Debug + Send + Sync {
         arg_types: &[DataType],
     ) -> Result<DataType> {
         self.return_type(arg_types)
+    }
+
+    fn return_type_from_args(
+        &self,
+        args: ReturnTypeArgs,
+    ) -> Result<DataType> {
+        self.return_type(args.arg_types)
     }
 
     fn is_nullable(&self, _args: &[Expr], _schema: &dyn ExprSchema) -> bool {
@@ -739,6 +759,7 @@ pub trait ScalarUDFImpl: Debug + Send + Sync {
     }
 }
 
+
 /// ScalarUDF that adds an alias to the underlying function. It is better to
 /// implement [`ScalarUDFImpl`], which supports aliases, directly if possible.
 #[derive(Debug)]
@@ -794,6 +815,13 @@ impl ScalarUDFImpl for AliasedScalarUDFImpl {
         arg_types: &[DataType],
     ) -> Result<DataType> {
         self.inner.return_type_from_exprs(args, schema, arg_types)
+    }
+
+    fn return_type_from_args(
+        &self,
+        args: ReturnTypeArgs,
+    ) -> Result<DataType> {
+        self.inner.return_type_from_args(args)
     }
 
     fn invoke_batch(

@@ -24,12 +24,12 @@ use crate::type_coercion::binary::get_result_type;
 use crate::type_coercion::functions::{
     data_types_with_aggregate_udf, data_types_with_scalar_udf, data_types_with_window_udf,
 };
+use crate::udf::ReturnTypeArgs;
 use crate::{utils, LogicalPlan, Projection, Subquery, WindowFunctionDefinition};
 use arrow::compute::can_cast_types;
 use arrow::datatypes::{DataType, Field};
 use datafusion_common::{
-    not_impl_err, plan_datafusion_err, plan_err, Column, DataFusionError, ExprSchema,
-    Result, TableReference,
+    not_impl_err, plan_datafusion_err, plan_err, Column, DataFusionError, ExprSchema, Result, ScalarValue, TableReference
 };
 use datafusion_functions_window_common::field::WindowUDFFieldArgs;
 use std::collections::HashMap;
@@ -168,9 +168,20 @@ impl ExprSchemable for Expr {
                         )
                     })?;
 
+
+                let arguments = args.iter().map(|e| match e {
+                    Expr::Literal(ScalarValue::Utf8(s)) => s.clone().unwrap_or_default(),
+                    _ => "".to_string(),
+                }).collect::<Vec<_>>();
+                let args = ReturnTypeArgs {
+                    arg_types: &new_data_types,
+                    arguments: &arguments,
+                };
+
+
                 // Perform additional function arguments validation (due to limited
                 // expressiveness of `TypeSignature`), then infer return type
-                Ok(func.return_type_from_exprs(args, schema, &new_data_types)?)
+                Ok(func.return_type_from_args(args)?)
             }
             Expr::WindowFunction(window_function) => self
                 .data_type_and_nullable_with_window_function(schema, window_function)
