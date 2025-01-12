@@ -217,6 +217,10 @@ impl ScalarUDF {
         self.inner.is_nullable(args, schema)
     }
 
+    pub fn is_nullable_from_args_nullable(&self, args_nullables: &[bool]) -> bool {
+        self.inner.is_nullable_from_args_nullable(args_nullables)
+    }
+
     pub fn invoke_batch(
         &self,
         args: &[ColumnarValue],
@@ -505,6 +509,10 @@ pub trait ScalarUDFImpl: Debug + Send + Sync {
     }
 
     fn is_nullable(&self, _args: &[Expr], _schema: &dyn ExprSchema) -> bool {
+        true
+    }
+
+    fn is_nullable_from_args_nullable(&self, _args_nullables: &[bool]) -> bool {
         true
     }
 

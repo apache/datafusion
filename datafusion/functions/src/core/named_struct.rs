@@ -50,10 +50,12 @@ fn named_struct_expr(args: &[ColumnarValue]) -> Result<ColumnarValue> {
                     name_scalar
                 }
                 // TODO: Implement Display for ColumnarValue
-                _ => return exec_err!(
+                _ => {
+                    return exec_err!(
                     "named_struct even arguments must be string literals at position {}",
                     i * 2
-                ),
+                )
+                }
             };
 
             Ok((name, chunk[1].clone()))

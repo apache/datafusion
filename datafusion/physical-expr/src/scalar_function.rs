@@ -34,6 +34,7 @@ use std::fmt::{self, Debug, Formatter};
 use std::hash::Hash;
 use std::sync::Arc;
 
+use crate::expressions::Literal;
 use crate::PhysicalExpr;
 
 use arrow::datatypes::{DataType, Schema};
@@ -43,7 +44,9 @@ use datafusion_common::{internal_err, DFSchema, Result, ScalarValue};
 use datafusion_expr::interval_arithmetic::Interval;
 use datafusion_expr::sort_properties::ExprProperties;
 use datafusion_expr::type_coercion::functions::data_types_with_scalar_udf;
-use datafusion_expr::{expr_vec_fmt, ColumnarValue, Expr, ScalarFunctionArgs, ScalarUDF};
+use datafusion_expr::{
+    expr_vec_fmt, ColumnarValue, Expr, ReturnTypeArgs, ScalarFunctionArgs, ScalarUDF,
+};
 
 /// Physical expression of a scalar function
 #[derive(Eq, PartialEq, Hash)]
@@ -81,6 +84,53 @@ impl ScalarFunctionExpr {
             return_type,
             nullable: true,
         }
+    }
+
+    pub fn try_new(
+        fun: Arc<ScalarUDF>,
+        args: Vec<Arc<dyn PhysicalExpr>>,
+        schema: &Schema,
+    ) -> Result<Self> {
+        let name = fun.name().to_string();
+        let arg_types = args
+            .iter()
+            .map(|e| e.data_type(schema))
+            .collect::<Result<Vec<_>>>()?;
+
+        // verify that input data types is consistent with function's `TypeSignature`
+        data_types_with_scalar_udf(&arg_types, &fun)?;
+
+        let arg_nullables = args
+            .iter()
+            .map(|e| e.nullable(schema))
+            .collect::<Result<Vec<_>>>()?;
+        let arguments = args
+            .iter()
+            .map(|e| {
+                if let Some(literal) = e.as_any().downcast_ref::<Literal>() {
+                    if let ScalarValue::Utf8(s) = literal.value() {
+                        s.clone().unwrap_or_default()
+                    } else {
+                        "".to_string()
+                    }
+                } else {
+                    "".to_string()
+                }
+            })
+            .collect::<Vec<_>>();
+        let ret_args = ReturnTypeArgs {
+            arg_types: &arg_types,
+            arguments: &arguments,
+        };
+        let return_type = fun.return_type_from_args(ret_args)?;
+        let nullable = fun.is_nullable_from_args_nullable(&arg_nullables);
+        Ok(Self {
+            fun,
+            name,
+            args,
+            return_type,
+            nullable,
+        })
     }
 
     /// Get the scalar function implementation

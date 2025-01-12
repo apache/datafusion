@@ -17,11 +17,11 @@
 
 use std::sync::Arc;
 
+use crate::ScalarFunctionExpr;
 use crate::{
     expressions::{self, binary, like, similar_to, Column, Literal},
     PhysicalExpr,
 };
-use crate::{scalar_function, ScalarFunctionExpr};
 
 use arrow::datatypes::Schema;
 use datafusion_common::{
@@ -29,12 +29,10 @@ use datafusion_common::{
 };
 use datafusion_expr::execution_props::ExecutionProps;
 use datafusion_expr::expr::{Alias, Cast, InList, Placeholder, ScalarFunction};
-use datafusion_expr::type_coercion::functions::data_types_with_scalar_udf;
 use datafusion_expr::var_provider::is_system_variables;
 use datafusion_expr::var_provider::VarType;
 use datafusion_expr::{
-    binary_expr, lit, Between, BinaryExpr, Expr, ExprSchemable, Like, Operator,
-    ReturnTypeArgs, TryCast,
+    binary_expr, lit, Between, BinaryExpr, Expr, Like, Operator, TryCast,
 };
 
 /// [PhysicalExpr] evaluate DataFusion expressions such as `A + 1`, or `CAST(c1
@@ -306,36 +304,11 @@ pub fn create_physical_expr(
             let physical_args =
                 create_physical_exprs(args, input_dfschema, execution_props)?;
 
-            let args_types = args
-                .iter()
-                .map(|e| e.get_type(input_dfschema))
-                .collect::<Result<Vec<_>>>()?;
-            let arguments = args
-                .iter()
-                .map(|e| match e {
-                    Expr::Literal(ScalarValue::Utf8(s)) => s.clone().unwrap_or_default(),
-                    _ => "".to_string(),
-                })
-                .collect::<Vec<_>>();
-
-            let return_type = func.return_type_from_args(ReturnTypeArgs {
-                arg_types: &args_types,
-                arguments: &arguments,
-            })?;
-            let nullable = func.is_nullable(args, input_dfschema);
-
-            // verify that input data types is consistent with function's `TypeSignature`
-            data_types_with_scalar_udf(&args_types, func)?;
-
-            Ok(Arc::new(
-                ScalarFunctionExpr::new(
-                    func.name(),
-                    Arc::clone(func),
-                    physical_args,
-                    return_type,
-                )
-                .with_nullable(nullable),
-            ))
+            Ok(Arc::new(ScalarFunctionExpr::try_new(
+                Arc::clone(func),
+                physical_args,
+                input_schema,
+            )?))
         }
         Expr::Between(Between {
             expr,
