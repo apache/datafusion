@@ -71,6 +71,7 @@ impl Debug for ScalarFunctionExpr {
 
 impl ScalarFunctionExpr {
     /// Create a new Scalar function
+    #[deprecated(since = "44.0.0", note = "Use `try_new` instead")]
     pub fn new(
         name: &str,
         fun: Arc<ScalarUDF>,
@@ -86,6 +87,7 @@ impl ScalarFunctionExpr {
         }
     }
 
+    /// Create a new Scalar function
     pub fn try_new(
         fun: Arc<ScalarUDF>,
         args: Vec<Arc<dyn PhysicalExpr>>,
