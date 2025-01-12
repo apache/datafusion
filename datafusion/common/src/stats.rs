@@ -188,12 +188,12 @@ impl Precision<ScalarValue> {
     pub fn sub(&self, other: &Precision<ScalarValue>) -> Precision<ScalarValue> {
         match (self, other) {
             (Precision::Exact(a), Precision::Exact(b)) => {
-                a.add(b).map(Precision::Exact).unwrap_or(Precision::Absent)
+                a.sub(b).map(Precision::Exact).unwrap_or(Precision::Absent)
             }
             (Precision::Inexact(a), Precision::Exact(b))
             | (Precision::Exact(a), Precision::Inexact(b))
             | (Precision::Inexact(a), Precision::Inexact(b)) => a
-                .add(b)
+                .sub(b)
                 .map(Precision::Inexact)
                 .unwrap_or(Precision::Absent),
             (_, _) => Precision::Absent,
@@ -624,6 +624,26 @@ mod tests {
     }
 
     #[test]
+    fn test_add_scalar() {
+        let precision = Precision::Exact(ScalarValue::Int32(Some(42)));
+
+        assert_eq!(
+            precision.add(&Precision::Exact(ScalarValue::Int32(Some(23)))),
+            Precision::Exact(ScalarValue::Int32(Some(65))),
+        );
+        assert_eq!(
+            precision.add(&Precision::Inexact(ScalarValue::Int32(Some(23)))),
+            Precision::Inexact(ScalarValue::Int32(Some(65))),
+        );
+        assert_eq!(
+            precision.add(&Precision::Exact(ScalarValue::Int32(None))),
+            // As per behavior of ScalarValue::add
+            Precision::Exact(ScalarValue::Int32(None)),
+        );
+        assert_eq!(precision.add(&Precision::Absent), Precision::Absent);
+    }
+
+    #[test]
     fn test_sub() {
         let precision1 = Precision::Exact(42);
         let precision2 = Precision::Inexact(23);
@@ -633,6 +653,26 @@ mod tests {
         assert_eq!(precision1.sub(&precision2), Precision::Inexact(19));
         assert_eq!(precision1.sub(&precision3), Precision::Exact(12));
         assert_eq!(precision1.sub(&absent_precision), Precision::Absent);
+    }
+
+    #[test]
+    fn test_sub_scalar() {
+        let precision = Precision::Exact(ScalarValue::Int32(Some(42)));
+
+        assert_eq!(
+            precision.sub(&Precision::Exact(ScalarValue::Int32(Some(23)))),
+            Precision::Exact(ScalarValue::Int32(Some(19))),
+        );
+        assert_eq!(
+            precision.sub(&Precision::Inexact(ScalarValue::Int32(Some(23)))),
+            Precision::Inexact(ScalarValue::Int32(Some(19))),
+        );
+        assert_eq!(
+            precision.sub(&Precision::Exact(ScalarValue::Int32(None))),
+            // As per behavior of ScalarValue::sub
+            Precision::Exact(ScalarValue::Int32(None)),
+        );
+        assert_eq!(precision.sub(&Precision::Absent), Precision::Absent);
     }
 
     #[test]
@@ -646,6 +686,54 @@ mod tests {
         assert_eq!(precision1.multiply(&precision3), Precision::Exact(30));
         assert_eq!(precision2.multiply(&precision3), Precision::Inexact(15));
         assert_eq!(precision1.multiply(&absent_precision), Precision::Absent);
+    }
+
+    #[test]
+    fn test_multiply_scalar() {
+        let precision = Precision::Exact(ScalarValue::Int32(Some(6)));
+
+        assert_eq!(
+            precision.multiply(&Precision::Exact(ScalarValue::Int32(Some(5)))),
+            Precision::Exact(ScalarValue::Int32(Some(30))),
+        );
+        assert_eq!(
+            precision.multiply(&Precision::Inexact(ScalarValue::Int32(Some(5)))),
+            Precision::Inexact(ScalarValue::Int32(Some(30))),
+        );
+        assert_eq!(
+            precision.multiply(&Precision::Exact(ScalarValue::Int32(None))),
+            // As per behavior of ScalarValue::mul_checked
+            Precision::Exact(ScalarValue::Int32(None)),
+        );
+        assert_eq!(precision.multiply(&Precision::Absent), Precision::Absent);
+    }
+
+    #[test]
+    fn test_cast_to() {
+        // Valid
+        assert_eq!(
+            Precision::Exact(ScalarValue::Int32(Some(42)))
+                .cast_to(&DataType::Int64)
+                .unwrap(),
+            Precision::Exact(ScalarValue::Int64(Some(42))),
+        );
+        assert_eq!(
+            Precision::Inexact(ScalarValue::Int32(Some(42)))
+                .cast_to(&DataType::Int64)
+                .unwrap(),
+            Precision::Inexact(ScalarValue::Int64(Some(42))),
+        );
+        // Null
+        assert_eq!(
+            Precision::Exact(ScalarValue::Int32(None))
+                .cast_to(&DataType::Int64)
+                .unwrap(),
+            Precision::Exact(ScalarValue::Int64(None)),
+        );
+        // Overflow returns error
+        assert!(Precision::Exact(ScalarValue::Int32(Some(256)))
+            .cast_to(&DataType::Int8)
+            .is_err());
     }
 
     #[test]

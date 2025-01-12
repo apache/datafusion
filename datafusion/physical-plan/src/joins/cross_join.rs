@@ -377,22 +377,24 @@ fn stats_cartesian_product(
                 .map(|row_count| s.sum_value.multiply(&row_count))
                 .unwrap_or(Precision::Absent),
         })
-        .chain(right_col_stats.into_iter().map(|s| ColumnStatistics {
-            null_count: s.null_count.multiply(&left_row_count),
-            distinct_count: s.distinct_count,
-            min_value: s.min_value,
-            max_value: s.max_value,
-            sum_value: s
-                .sum_value
-                .get_value()
-                // Cast the row count into the same type as any existing sum value
-                .and_then(|v| {
-                    Precision::<ScalarValue>::from(left_row_count)
-                        .cast_to(&v.data_type())
-                        .ok()
-                })
-                .map(|row_count| s.sum_value.multiply(&row_count))
-                .unwrap_or(Precision::Absent),
+        .chain(right_col_stats.into_iter().map(|s| {
+            ColumnStatistics {
+                null_count: s.null_count.multiply(&left_row_count),
+                distinct_count: s.distinct_count,
+                min_value: s.min_value,
+                max_value: s.max_value,
+                sum_value: s
+                    .sum_value
+                    .get_value()
+                    // Cast the row count into the same type as any existing sum value
+                    .and_then(|v| {
+                        Precision::<ScalarValue>::from(left_row_count)
+                            .cast_to(&v.data_type())
+                            .ok()
+                    })
+                    .map(|row_count| s.sum_value.multiply(&row_count))
+                    .unwrap_or(Precision::Absent),
+            }
         }))
         .collect();
 
