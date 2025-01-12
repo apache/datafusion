@@ -61,9 +61,15 @@ make_udf_expr_and_func!(
     )
 )]
 #[derive(Debug)]
-pub(super) struct ArrayDims {
+pub struct ArrayDims {
     signature: Signature,
     aliases: Vec<String>,
+}
+
+impl Default for ArrayDims {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl ArrayDims {

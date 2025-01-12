@@ -82,8 +82,8 @@ fn project_orderings_random() -> Result<()> {
                 // Make sure each ordering after projection is valid.
                 for ordering in projected_eq.oeq_class().iter() {
                     let err_msg = format!(
-                        "Error in test case ordering:{:?}, eq_properties.oeq_class: {:?}, eq_properties.eq_group: {:?}, eq_properties.constants: {:?}, proj_exprs: {:?}",
-                        ordering, eq_properties.oeq_class, eq_properties.eq_group, eq_properties.constants, proj_exprs
+                        "Error in test case ordering:{:?}, eq_properties {}, proj_exprs: {:?}",
+                        ordering, eq_properties, proj_exprs,
                     );
                     // Since ordered section satisfies schema, we expect
                     // that result will be same after sort (e.g sort was unnecessary).
@@ -179,8 +179,8 @@ fn ordering_satisfy_after_projection_random() -> Result<()> {
                             projected_batch.clone(),
                         )?;
                         let err_msg = format!(
-                            "Error in test case requirement:{:?}, expected: {:?}, eq_properties.oeq_class: {:?}, eq_properties.eq_group: {:?}, eq_properties.constants: {:?}, projected_eq.oeq_class: {:?}, projected_eq.eq_group: {:?}, projected_eq.constants: {:?}, projection_mapping: {:?}",
-                            requirement, expected, eq_properties.oeq_class, eq_properties.eq_group, eq_properties.constants, projected_eq.oeq_class, projected_eq.eq_group, projected_eq.constants, projection_mapping
+                            "Error in test case requirement:{:?}, expected: {:?}, eq_properties: {}, projected_eq: {}, projection_mapping: {:?}",
+                            requirement, expected, eq_properties, projected_eq, projection_mapping
                         );
                         // Check whether ordering_satisfy API result and
                         // experimental result matches.
