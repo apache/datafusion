@@ -192,10 +192,7 @@ impl ScalarUDF {
         self.inner.return_type_from_exprs(args, schema, arg_types)
     }
 
-    pub fn return_type_from_args(
-        &self,
-        args: ReturnTypeArgs,
-    ) -> Result<DataType> {
+    pub fn return_type_from_args(&self, args: ReturnTypeArgs) -> Result<DataType> {
         self.inner.return_type_from_args(args)
     }
 
@@ -503,10 +500,7 @@ pub trait ScalarUDFImpl: Debug + Send + Sync {
         self.return_type(arg_types)
     }
 
-    fn return_type_from_args(
-        &self,
-        args: ReturnTypeArgs,
-    ) -> Result<DataType> {
+    fn return_type_from_args(&self, args: ReturnTypeArgs) -> Result<DataType> {
         self.return_type(args.arg_types)
     }
 
@@ -759,7 +753,6 @@ pub trait ScalarUDFImpl: Debug + Send + Sync {
     }
 }
 
-
 /// ScalarUDF that adds an alias to the underlying function. It is better to
 /// implement [`ScalarUDFImpl`], which supports aliases, directly if possible.
 #[derive(Debug)]
@@ -817,10 +810,7 @@ impl ScalarUDFImpl for AliasedScalarUDFImpl {
         self.inner.return_type_from_exprs(args, schema, arg_types)
     }
 
-    fn return_type_from_args(
-        &self,
-        args: ReturnTypeArgs,
-    ) -> Result<DataType> {
+    fn return_type_from_args(&self, args: ReturnTypeArgs) -> Result<DataType> {
         self.inner.return_type_from_args(args)
     }
 

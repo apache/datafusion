@@ -218,6 +218,7 @@ impl PhysicalExpr for ScalarFunctionExpr {
 }
 
 /// Create a physical expression for the UDF.
+#[deprecated(since = "44.0.0", note = "use ScalarFunctionExpr::new() instead")]
 pub fn create_physical_expr(
     fun: &ScalarUDF,
     input_phy_exprs: &[Arc<dyn PhysicalExpr>],

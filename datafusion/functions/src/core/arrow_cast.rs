@@ -28,7 +28,8 @@ use std::sync::OnceLock;
 use datafusion_expr::scalar_doc_sections::DOC_SECTION_OTHER;
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyInfo};
 use datafusion_expr::{
-    ColumnarValue, Documentation, Expr, ExprSchemable, ReturnTypeArgs, ScalarUDFImpl, Signature, Volatility
+    ColumnarValue, Documentation, Expr, ExprSchemable, ReturnTypeArgs, ScalarUDFImpl,
+    Signature, Volatility,
 };
 
 /// Implements casting to arbitrary arrow types (rather than SQL types)
@@ -92,12 +93,13 @@ impl ScalarUDFImpl for ArrowCastFunc {
         args.iter().any(|e| e.nullable(schema).ok().unwrap_or(true))
     }
 
-    fn return_type_from_args(
-        &self,
-        args: ReturnTypeArgs,
-    ) -> Result<DataType> {
+    fn return_type_from_args(&self, args: ReturnTypeArgs) -> Result<DataType> {
         if args.arguments.len() != 2 {
-            return plan_err!("{} needs 2 arguments, {} provided", self.name(), args.arguments.len());
+            return plan_err!(
+                "{} needs 2 arguments, {} provided",
+                self.name(),
+                args.arguments.len()
+            );
         }
 
         let val = &args.arguments[1];

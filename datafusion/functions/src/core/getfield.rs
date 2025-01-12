@@ -21,10 +21,13 @@ use arrow::array::{
 use arrow::datatypes::DataType;
 use datafusion_common::cast::{as_map_array, as_struct_array};
 use datafusion_common::{
-    exec_err, internal_err, plan_datafusion_err, plan_err, ExprSchema, Result, ScalarValue
+    exec_err, internal_err, plan_datafusion_err, plan_err, ExprSchema, Result,
+    ScalarValue,
 };
 use datafusion_expr::scalar_doc_sections::DOC_SECTION_OTHER;
-use datafusion_expr::{ColumnarValue, Documentation, Expr, ExprSchemable, ReturnTypeArgs};
+use datafusion_expr::{
+    ColumnarValue, Documentation, Expr, ExprSchemable, ReturnTypeArgs,
+};
 use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
 use std::any::Any;
 use std::sync::{Arc, OnceLock};
@@ -106,10 +109,7 @@ impl ScalarUDFImpl for GetFieldFunc {
         internal_err!("return_type_from_args should be called instead")
     }
 
-    fn return_type_from_args(
-        &self,
-        args: ReturnTypeArgs,
-    ) -> Result<DataType> {
+    fn return_type_from_args(&self, args: ReturnTypeArgs) -> Result<DataType> {
         if args.arguments.len() != 2 {
             return exec_err!(
                 "get_field function requires 2 arguments, got {}",
@@ -149,60 +149,6 @@ impl ScalarUDFImpl for GetFieldFunc {
                     field.ok_or(plan_datafusion_err!("Field {s} not found in struct")).map(|f| f.data_type().clone())
                 }
             }
-            (DataType::Null, _) => Ok(DataType::Null),
-            (other, _) => plan_err!("The expression to get an indexed field is only valid for `Struct`, `Map` or `Null` types, got {other}"),
-        }
-    }
-
-    fn return_type_from_exprs(
-        &self,
-        args: &[Expr],
-        schema: &dyn ExprSchema,
-        _arg_types: &[DataType],
-    ) -> Result<DataType> {
-        if args.len() != 2 {
-            return exec_err!(
-                "get_field function requires 2 arguments, got {}",
-                args.len()
-            );
-        }
-
-        let name = match &args[1] {
-            Expr::Literal(name) => name,
-            _ => {
-                return exec_err!(
-                    "get_field function requires the argument field_name to be a string"
-                );
-            }
-        };
-        let data_type = args[0].get_type(schema)?;
-        match (data_type, name) {
-            (DataType::Map(fields, _), _) => {
-                match fields.data_type() {
-                    DataType::Struct(fields) if fields.len() == 2 => {
-                        // Arrow's MapArray is essentially a ListArray of structs with two columns. They are
-                        // often named "key", and "value", but we don't require any specific naming here;
-                        // instead, we assume that the second column is the "value" column both here and in
-                        // execution.
-                        let value_field = fields.get(1).expect("fields should have exactly two members");
-                        Ok(value_field.data_type().clone())
-                    },
-                    _ => plan_err!("Map fields must contain a Struct with exactly 2 fields"),
-                }
-            }
-            (DataType::Struct(fields), ScalarValue::Utf8(Some(s))) => {
-                if s.is_empty() {
-                    plan_err!(
-                        "Struct based indexed access requires a non empty string"
-                    )
-                } else {
-                    let field = fields.iter().find(|f| f.name() == s);
-                    field.ok_or(plan_datafusion_err!("Field {s} not found in struct")).map(|f| f.data_type().clone())
-                }
-            }
-            (DataType::Struct(_), _) => plan_err!(
-                "Only UTF8 strings are valid as an indexed field in a struct"
-            ),
             (DataType::Null, _) => Ok(DataType::Null),
             (other, _) => plan_err!("The expression to get an indexed field is only valid for `Struct`, `Map` or `Null` types, got {other}"),
         }
