@@ -109,8 +109,6 @@ pub fn create_physical_expr(
     execution_props: &ExecutionProps,
 ) -> Result<Arc<dyn PhysicalExpr>> {
     let input_schema: &Schema = &input_dfschema.into();
-    // println!("input_dfschema: {:?}", input_dfschema);
-    // println!("input_schema: {:?}", input_schema);
 
     match e {
         Expr::Alias(Alias { expr, .. }) => {

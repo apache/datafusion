@@ -182,6 +182,7 @@ impl ScalarUDF {
     ///
     ///
     /// See [`ScalarUDFImpl::return_type_from_exprs`] for more details.
+    #[allow(deprecated)]
     pub fn return_type_from_exprs(
         &self,
         args: &[Expr],
@@ -213,6 +214,7 @@ impl ScalarUDF {
         self.inner.invoke(args)
     }
 
+    #[allow(deprecated)]
     pub fn is_nullable(&self, args: &[Expr], schema: &dyn ExprSchema) -> bool {
         self.inner.is_nullable(args, schema)
     }
@@ -352,7 +354,9 @@ pub struct ScalarFunctionArgs<'a> {
 
 #[derive(Debug)]
 pub struct ReturnTypeArgs<'a> {
+    /// The data types of the arguments to the function
     pub arg_types: &'a [DataType],
+    /// The Utf8 arguments to the function, if the expression is not Utf8, it will be empty string
     pub arguments: &'a [String],
 }
 
@@ -495,6 +499,7 @@ pub trait ScalarUDFImpl: Debug + Send + Sync {
     /// This function must consistently return the same type for the same
     /// logical input even if the input is simplified (e.g. it must return the same
     /// value for `('foo' | 'bar')` as it does for ('foobar').
+    #[deprecated(since = "45.0.0", note = "Use `return_type_from_args` instead")]
     fn return_type_from_exprs(
         &self,
         _args: &[Expr],
@@ -504,10 +509,39 @@ pub trait ScalarUDFImpl: Debug + Send + Sync {
         self.return_type(arg_types)
     }
 
+    /// What [`DataType`] will be returned by this function, given the
+    /// arguments?
+    ///
+    /// Note most UDFs should implement [`Self::return_type`] and not this
+    /// function. The output type for most functions only depends on the types
+    /// of their inputs (e.g. `sqrt(f32)` is always `f32`).
+    ///
+    /// By default, this function calls [`Self::return_type`] with the
+    /// types of each argument.
+    ///
+    /// This method can be overridden for functions that return different
+    /// *types* based on the *values* of their arguments.
+    ///
+    /// For example, the following two function calls get the same argument
+    /// types (something and a `Utf8` string) but return different types based
+    /// on the value of the second argument:
+    ///
+    /// * `arrow_cast(x, 'Int16')` --> `Int16`
+    /// * `arrow_cast(x, 'Float32')` --> `Float32`
+    ///
+    /// # Notes:
+    ///
+    /// This function must consistently return the same type for the same
+    /// logical input even if the input is simplified (e.g. it must return the same
+    /// value for `('foo' | 'bar')` as it does for ('foobar').
     fn return_type_from_args(&self, args: ReturnTypeArgs) -> Result<DataType> {
         self.return_type(args.arg_types)
     }
 
+    #[deprecated(
+        since = "45.0.0",
+        note = "Use `is_nullable_from_args_nullable` instead"
+    )]
     fn is_nullable(&self, _args: &[Expr], _schema: &dyn ExprSchema) -> bool {
         true
     }
@@ -811,6 +845,7 @@ impl ScalarUDFImpl for AliasedScalarUDFImpl {
         &self.aliases
     }
 
+    #[allow(deprecated)]
     fn return_type_from_exprs(
         &self,
         args: &[Expr],

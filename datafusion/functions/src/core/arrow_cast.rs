@@ -18,9 +18,10 @@
 //! [`ArrowCastFunc`]: Implementation of the `arrow_cast`
 
 use arrow::datatypes::DataType;
+use datafusion_common::DataFusionError;
 use datafusion_common::{
-    arrow_datafusion_err, internal_err, plan_datafusion_err, plan_err, DataFusionError,
-    ExprSchema, Result, ScalarValue,
+    arrow_datafusion_err, internal_err, plan_datafusion_err, plan_err, Result,
+    ScalarValue,
 };
 use std::any::Any;
 use std::sync::OnceLock;
@@ -28,8 +29,8 @@ use std::sync::OnceLock;
 use datafusion_expr::scalar_doc_sections::DOC_SECTION_OTHER;
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyInfo};
 use datafusion_expr::{
-    ColumnarValue, Documentation, Expr, ExprSchemable, ReturnTypeArgs, ScalarUDFImpl,
-    Signature, Volatility,
+    ColumnarValue, Documentation, Expr, ReturnTypeArgs, ScalarUDFImpl, Signature,
+    Volatility,
 };
 
 /// Implements casting to arbitrary arrow types (rather than SQL types)
@@ -89,8 +90,8 @@ impl ScalarUDFImpl for ArrowCastFunc {
         internal_err!("return_type_from_args should be called instead")
     }
 
-    fn is_nullable(&self, args: &[Expr], schema: &dyn ExprSchema) -> bool {
-        args.iter().any(|e| e.nullable(schema).ok().unwrap_or(true))
+    fn is_nullable_from_args_nullable(&self, args_nullables: &[bool]) -> bool {
+        args_nullables.iter().any(|&nullable| nullable)
     }
 
     fn return_type_from_args(&self, args: ReturnTypeArgs) -> Result<DataType> {
