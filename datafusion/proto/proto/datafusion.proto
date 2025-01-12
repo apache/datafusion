@@ -269,10 +269,11 @@ message DmlNode{
    enum Type {
     UPDATE = 0;
     DELETE = 1;
-    INSERT_APPEND = 2;
-    INSERT_OVERWRITE = 3;
-    INSERT_REPLACE = 4;
-    CTAS = 5;
+    CTAS = 2;
+    INSERT_APPEND = 3;
+    INSERT_OVERWRITE = 4;
+    INSERT_REPLACE = 5;
+    
   }
   Type dml_type = 1;
   LogicalPlanNode input = 2;

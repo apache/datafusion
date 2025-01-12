@@ -4902,10 +4902,10 @@ impl serde::Serialize for dml_node::Type {
         let variant = match self {
             Self::Update => "UPDATE",
             Self::Delete => "DELETE",
+            Self::Ctas => "CTAS",
             Self::InsertAppend => "INSERT_APPEND",
             Self::InsertOverwrite => "INSERT_OVERWRITE",
             Self::InsertReplace => "INSERT_REPLACE",
-            Self::Ctas => "CTAS",
         };
         serializer.serialize_str(variant)
     }
@@ -4919,10 +4919,10 @@ impl<'de> serde::Deserialize<'de> for dml_node::Type {
         const FIELDS: &[&str] = &[
             "UPDATE",
             "DELETE",
+            "CTAS",
             "INSERT_APPEND",
             "INSERT_OVERWRITE",
             "INSERT_REPLACE",
-            "CTAS",
         ];
 
         struct GeneratedVisitor;
@@ -4965,10 +4965,10 @@ impl<'de> serde::Deserialize<'de> for dml_node::Type {
                 match value {
                     "UPDATE" => Ok(dml_node::Type::Update),
                     "DELETE" => Ok(dml_node::Type::Delete),
+                    "CTAS" => Ok(dml_node::Type::Ctas),
                     "INSERT_APPEND" => Ok(dml_node::Type::InsertAppend),
                     "INSERT_OVERWRITE" => Ok(dml_node::Type::InsertOverwrite),
                     "INSERT_REPLACE" => Ok(dml_node::Type::InsertReplace),
-                    "CTAS" => Ok(dml_node::Type::Ctas),
                     _ => Err(serde::de::Error::unknown_variant(value, FIELDS)),
                 }
             }

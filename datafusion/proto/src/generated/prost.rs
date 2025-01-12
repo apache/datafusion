@@ -429,10 +429,10 @@ pub mod dml_node {
     pub enum Type {
         Update = 0,
         Delete = 1,
-        InsertAppend = 2,
-        InsertOverwrite = 3,
-        InsertReplace = 4,
-        Ctas = 5,
+        Ctas = 2,
+        InsertAppend = 3,
+        InsertOverwrite = 4,
+        InsertReplace = 5,
     }
     impl Type {
         /// String value of the enum field names used in the ProtoBuf definition.
@@ -443,10 +443,10 @@ pub mod dml_node {
             match self {
                 Self::Update => "UPDATE",
                 Self::Delete => "DELETE",
+                Self::Ctas => "CTAS",
                 Self::InsertAppend => "INSERT_APPEND",
                 Self::InsertOverwrite => "INSERT_OVERWRITE",
                 Self::InsertReplace => "INSERT_REPLACE",
-                Self::Ctas => "CTAS",
             }
         }
         /// Creates an enum from field names used in the ProtoBuf definition.
@@ -454,10 +454,10 @@ pub mod dml_node {
             match value {
                 "UPDATE" => Some(Self::Update),
                 "DELETE" => Some(Self::Delete),
+                "CTAS" => Some(Self::Ctas),
                 "INSERT_APPEND" => Some(Self::InsertAppend),
                 "INSERT_OVERWRITE" => Some(Self::InsertOverwrite),
                 "INSERT_REPLACE" => Some(Self::InsertReplace),
-                "CTAS" => Some(Self::Ctas),
                 _ => None,
             }
         }
