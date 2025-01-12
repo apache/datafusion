@@ -109,12 +109,20 @@ pub struct DFSchema {
     inner: QualifiedSchema,
     /// Stores functional dependencies in the schema.
     functional_dependencies: FunctionalDependencies,
-    /// metadata columns
+    /// metadata columns are data columns for a table that are not in the table schema.
+    /// For example, a file source could expose a "file" column that contains the path of the file that contained each row.
+    /// See Also: [Spark SupportsMetadataColumns]: <https://github.com/apache/spark/blob/master/sql/catalyst/src/main/java/org/apache/spark/sql/connector/catalog/SupportsMetadataColumns.java>
     metadata: Option<QualifiedSchema>,
 }
 
+/// The starting point of the metadata column index.
+/// If an index is less than this value, then this index is for an ordinary column.
+/// If it is greater than this value, then this index is for a metadata column.
 pub const METADATA_OFFSET: usize = usize::MAX >> 1;
 
+/// QualifiedSchema wraps an Arrow schema and field qualifiers.
+/// Some fields may be qualified and some unqualified. A qualified field is a field that has a
+/// relation name associated with it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct QualifiedSchema {
     /// Inner Arrow schema reference.
@@ -251,6 +259,11 @@ impl DFSchema {
         }
     }
 
+    /// Return a reference to the qualified metadata schema
+    ///
+    /// Returns:
+    /// - `&None` for tables that do not have metadata columns.
+    /// - `&Some(QualifiedSchema)` for tables having metadata columns.
     pub fn metadata_schema(&self) -> &Option<QualifiedSchema> {
         &self.metadata
     }
@@ -269,6 +282,7 @@ impl DFSchema {
         &self.inner.schema
     }
 
+    /// Set metadata schema to provided value
     pub fn with_metadata_schema(
         mut self,
         metadata_schema: Option<QualifiedSchema>,
