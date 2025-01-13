@@ -25,9 +25,7 @@ use crate::type_coercion::functions::{
     data_types_with_aggregate_udf, data_types_with_scalar_udf, data_types_with_window_udf,
 };
 use crate::udf::ReturnTypeArgs;
-use crate::{
-    utils, LogicalPlan, Projection, ScalarUDF, Subquery, WindowFunctionDefinition,
-};
+use crate::{utils, LogicalPlan, Projection, Subquery, WindowFunctionDefinition};
 use arrow::compute::can_cast_types;
 use arrow::datatypes::{DataType, Field};
 use datafusion_common::{
@@ -397,7 +395,12 @@ impl ExprSchemable for Expr {
                 self.data_type_and_nullable_with_window_function(schema, window_function)
             }
             Expr::ScalarFunction(ScalarFunction { func, args }) => {
-                let (arg_types, nullables)  : (Vec<DataType>, Vec<bool>) = args.iter().map(|e| e.data_type_and_nullable(schema)).collect::<Result<Vec<_>>>()?.into_iter().unzip();
+                let (arg_types, nullables): (Vec<DataType>, Vec<bool>) = args
+                    .iter()
+                    .map(|e| e.data_type_and_nullable(schema))
+                    .collect::<Result<Vec<_>>>()?
+                    .into_iter()
+                    .unzip();
                 // Verify that function is invoked with correct number and type of arguments as defined in `TypeSignature`
                 let new_data_types = data_types_with_scalar_udf(&arg_types, func)
                     .map_err(|err| {

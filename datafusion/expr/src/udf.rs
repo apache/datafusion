@@ -20,15 +20,11 @@
 use crate::expr::schema_name_from_exprs_comma_separated_without_space;
 use crate::simplify::{ExprSimplifyResult, SimplifyInfo};
 use crate::sort_properties::{ExprProperties, SortProperties};
-use crate::type_coercion::functions::data_types_with_scalar_udf;
 use crate::{
-    utils, ColumnarValue, Documentation, Expr, ExprSchemable,
-    ScalarFunctionImplementation, Signature,
+    ColumnarValue, Documentation, Expr, ScalarFunctionImplementation, Signature,
 };
 use arrow::datatypes::DataType;
-use datafusion_common::{
-    not_impl_err, plan_datafusion_err, DataFusionError, ExprSchema, Result, ScalarValue,
-};
+use datafusion_common::{not_impl_err, ExprSchema, Result};
 use datafusion_expr_common::interval_arithmetic::Interval;
 use std::any::Any;
 use std::cmp::Ordering;
