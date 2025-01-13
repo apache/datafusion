@@ -448,10 +448,18 @@ fn gen_range_date(args: &[ArrayRef], include_upper_bound: bool) -> Result<ArrayR
     let values_builder = Date32Builder::new();
     let mut list_builder = ListBuilder::new(values_builder);
 
-    for (idx, stop) in stop_array.iter().enumerate() {
-        let mut stop = stop.unwrap_or(0);
+    for idx in 0..stop_array.len() {
+        if stop_array.is_null(idx) {
+            list_builder.append_null();
+            continue;
+        }
+        let mut stop = stop_array.value(idx);
 
         let start = if let Some(start_array_values) = start_array {
+            if start_array_values.is_null(idx) {
+                list_builder.append_null();
+                continue;
+            }
             start_array_values.value(idx)
         } else {
             list_builder.append_null();
@@ -459,6 +467,10 @@ fn gen_range_date(args: &[ArrayRef], include_upper_bound: bool) -> Result<ArrayR
         };
 
         let step = if let Some(step) = step_array {
+            if step.is_null(idx) {
+                list_builder.append_null();
+                continue;
+            }
             step.value(idx)
         } else {
             list_builder.append_null();
