@@ -235,7 +235,7 @@ pub(crate) async fn stateless_serialize_and_write_files(
 }
 
 /// Orchestrates multipart put of a dynamic number of output files from a single input stream
-/// for any stateless serialized file type. That is, any file type for which each [RecordBatch]
+/// for any statelessly serialized file type. That is, any file type for which each [RecordBatch]
 /// can be serialized independently of all other [RecordBatch]s.
 pub(crate) async fn spawn_writer_tasks_and_join(
     context: &Arc<TaskContext>,
