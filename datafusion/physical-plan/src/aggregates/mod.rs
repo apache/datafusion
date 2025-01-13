@@ -39,7 +39,7 @@ use arrow::datatypes::{Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use arrow_array::{UInt16Array, UInt32Array, UInt64Array, UInt8Array};
 use datafusion_common::stats::Precision;
-use datafusion_common::{internal_err, not_impl_err, Result};
+use datafusion_common::{internal_err, not_impl_err, Constraint, Constraints, Result};
 use datafusion_execution::TaskContext;
 use datafusion_expr::{Accumulator, Aggregate};
 use datafusion_physical_expr::aggregate::AggregateFunctionExpr;
@@ -497,7 +497,7 @@ impl AggregateExec {
         };
 
         // construct a map from the input expression to the output expression of the Aggregation group by
-        let projection_mapping =
+        let group_expr_mapping =
             ProjectionMapping::try_new(&group_by.expr, &input.schema())?;
 
         let required_input_ordering =
@@ -506,7 +506,7 @@ impl AggregateExec {
         let cache = Self::compute_properties(
             &input,
             Arc::clone(&schema),
-            &projection_mapping,
+            &group_expr_mapping,
             &mode,
             &input_order_mode,
         );
@@ -642,14 +642,30 @@ impl AggregateExec {
     pub fn compute_properties(
         input: &Arc<dyn ExecutionPlan>,
         schema: SchemaRef,
-        projection_mapping: &ProjectionMapping,
+        group_expr_mapping: &ProjectionMapping,
         mode: &AggregateMode,
         input_order_mode: &InputOrderMode,
     ) -> PlanProperties {
         // Construct equivalence properties:
-        let eq_properties = input
+        let mut eq_properties = input
             .equivalence_properties()
-            .project(projection_mapping, schema);
+            .project(group_expr_mapping, schema);
+
+        let target_columns = group_expr_mapping
+            .map
+            .iter()
+            .filter_map(|(_, target_col)| target_col.as_any().downcast_ref::<Column>())
+            .collect::<Vec<_>>();
+        assert_eq!(target_columns.len(), group_expr_mapping.map.len());
+        eq_properties =
+            eq_properties.with_constraints(Constraints::new_unverified(vec![
+                Constraint::Unique(
+                    target_columns
+                        .iter()
+                        .map(|col| col.index())
+                        .collect::<Vec<_>>(),
+                ),
+            ]));
 
         // Get output partitioning:
         let input_partitioning = input.output_partitioning().clone();
@@ -658,7 +674,7 @@ impl AggregateExec {
             // but needs to respect aliases (e.g. mapping in the GROUP BY
             // expression).
             let input_eq_properties = input.equivalence_properties();
-            input_partitioning.project(projection_mapping, input_eq_properties)
+            input_partitioning.project(group_expr_mapping, input_eq_properties)
         } else {
             input_partitioning.clone()
         };

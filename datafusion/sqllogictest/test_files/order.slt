@@ -1331,3 +1331,32 @@ physical_plan CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/te
 
 statement ok
 drop table table_with_ordered_pk;
+
+statement ok
+set datafusion.execution.target_partitions = 1;
+
+statement ok
+set datafusion.explain.physical_plan_only = true;
+
+# Aggregation operation also can introduce unique values
+statement ok
+CREATE EXTERNAL TABLE table_with_ordered_pk (
+  c1 INT NOT NULL,
+  c2 INT,
+  c3 INT,
+)
+STORED AS CSV
+WITH ORDER (c1)
+OPTIONS ('format.has_header' 'true')
+LOCATION '../core/tests/data/aggregate_agg_multi_order.csv';
+
+query TT
+EXPLAIN SELECT c1, SUM(c2) as sum_c2 FROM table_with_ordered_pk GROUP BY c1 ORDER BY c1, sum_c2;
+----
+physical_plan
+01)ProjectionExec: expr=[c1@0 as c1, sum(table_with_ordered_pk.c2)@1 as sum_c2]
+02)--AggregateExec: mode=Single, gby=[c1@0 as c1], aggr=[sum(table_with_ordered_pk.c2)], ordering_mode=Sorted
+03)----CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/aggregate_agg_multi_order.csv]]}, projection=[c1, c2], output_ordering=[c1@0 ASC NULLS LAST], has_header=true
+
+statement ok
+drop table table_with_ordered_pk;
