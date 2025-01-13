@@ -4373,7 +4373,7 @@ mod tests {
                 vec![Constraint::PrimaryKey(vec![0, 1])],
                 vec!["a", "b"], // base ordering
                 vec![vec!["a", "b", "c"], vec!["a", "b", "d"]],
-                vec![vec!["b", "a"], vec!["c", "a", "b"]],
+                vec![vec!["b", "a"], vec!["a", "c", "b"]],
             ),
             (
                 "single column unique",
@@ -4390,6 +4390,14 @@ mod tests {
                 vec!["a", "b"], // base ordering
                 vec![vec!["a", "b", "c"], vec!["a", "b", "d"]],
                 vec![vec!["b", "a"], vec!["c", "a", "b"]],
+            ),
+            (
+                "nullable unique",
+                &unique_schema,
+                vec![Constraint::Unique(vec![2, 3])],
+                vec!["c", "d"], // base ordering
+                vec![],
+                vec![vec!["c", "d", "a"]],
             ),
         ];
 
