@@ -167,6 +167,12 @@ impl Display for SchemaError {
                 valid_fields,
             } => {
                 write!(f, "No field named {}", field.quoted_flat_name())?;
+                write!(
+                    f,
+                    ". You can use double quotes to refer to the \"{}\" column",
+                    field.quoted_flat_name()
+                )?;
+                write!(f, " or set the datafusion.sql_parser.enable_ident_normalization configuration option")?;
                 if !valid_fields.is_empty() {
                     write!(
                         f,

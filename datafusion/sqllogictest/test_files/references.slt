@@ -66,7 +66,7 @@ CREATE TABLE test("f.c1" TEXT, "test.c2" INT, "...." INT) AS VALUES
 ('foobar', 2, 20),
 ('foobaz', 3, 30);
 
-query error DataFusion error: Schema error: No field named f1\.c1\. Valid fields are test\."f\.c1", test\."test\.c2", test\."\.\.\.\."\.
+query error DataFusion error: Schema error: No field named f1\.c1\. You can use double quotes to refer to the "f1.c1" column or set the datafusion.sql_parser.enable_ident_normalization configuration option. Valid fields are test\."f\.c1", test\."test\.c2", test\."\.\.\.\."\.
 SELECT f1.c1 FROM test;
 
 query T

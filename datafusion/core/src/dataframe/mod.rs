@@ -2760,6 +2760,8 @@ mod tests {
             // but since they are different expressions, it should fail.
             .expect_err("Expected error");
         let expected = "Schema error: No field named aggregate_test_100.c2. \
+            You can use double quotes to refer to the \"aggregate_test_100.c2\" column \
+            or set the datafusion.sql_parser.enable_ident_normalization configuration option. \
             Valid fields are \"aggregate_test_100.c2 + aggregate_test_100.c3\".";
         assert_eq!(df.strip_backtrace(), expected);
 

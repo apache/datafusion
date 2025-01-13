@@ -1068,10 +1068,11 @@ mod tests {
         let schema = DFSchema::try_from_qualified_schema("t1", &test_schema_1())?;
         // lookup with unqualified name "t1.c0"
         let err = schema.index_of_column(&col).unwrap_err();
-        assert_eq!(
-            err.strip_backtrace(),
-            "Schema error: No field named \"t1.c0\". Valid fields are t1.c0, t1.c1."
-        );
+        let expected = "Schema error: No field named \"t1.c0\". \
+            You can use double quotes to refer to the \"\"t1.c0\"\" column \
+            or set the datafusion.sql_parser.enable_ident_normalization configuration option. \
+            Valid fields are t1.c0, t1.c1.";
+        assert_eq!(err.strip_backtrace(), expected);
         Ok(())
     }
 
@@ -1088,10 +1089,11 @@ mod tests {
 
         // lookup with unqualified name "t1.c0"
         let err = schema.index_of_column(&col).unwrap_err();
-        assert_eq!(
-            err.strip_backtrace(),
-            "Schema error: No field named \"t1.c0\". Valid fields are t1.\"CapitalColumn\", t1.\"field.with.period\"."
-        );
+        let expected = "Schema error: No field named \"t1.c0\". \
+            You can use double quotes to refer to the \"\"t1.c0\"\" column \
+            or set the datafusion.sql_parser.enable_ident_normalization configuration option. \
+            Valid fields are t1.\"CapitalColumn\", t1.\"field.with.period\".";
+        assert_eq!(err.strip_backtrace(), expected);
         Ok(())
     }
 
@@ -1261,12 +1263,18 @@ mod tests {
 
         let col = Column::from_qualified_name("t1.c0");
         let err = schema.index_of_column(&col).unwrap_err();
-        assert_eq!(err.strip_backtrace(), "Schema error: No field named t1.c0.");
+        let expected = "Schema error: No field named t1.c0. \
+            You can use double quotes to refer to the \"t1.c0\" column \
+            or set the datafusion.sql_parser.enable_ident_normalization configuration option.";
+        assert_eq!(err.strip_backtrace(), expected);
 
         // the same check without qualifier
         let col = Column::from_name("c0");
         let err = schema.index_of_column(&col).err().unwrap();
-        assert_eq!(err.strip_backtrace(), "Schema error: No field named c0.");
+        let expected = "Schema error: No field named c0. \
+            You can use double quotes to refer to the \"c0\" column \
+            or set the datafusion.sql_parser.enable_ident_normalization configuration option.";
+        assert_eq!(err.strip_backtrace(), expected);
     }
 
     #[test]
