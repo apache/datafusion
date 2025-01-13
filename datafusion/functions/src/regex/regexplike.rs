@@ -35,6 +35,7 @@ use std::sync::{Arc, OnceLock};
 #[derive(Debug)]
 pub struct RegexpLikeFunc {
     signature: Signature,
+    aliases: Vec<String>,
 }
 
 impl Default for RegexpLikeFunc {
@@ -84,6 +85,7 @@ impl RegexpLikeFunc {
                 vec![TypeSignature::String(2), TypeSignature::String(3)],
                 Volatility::Immutable,
             ),
+            aliases: vec![String::from("rlike")],
         }
     }
 }
@@ -110,6 +112,10 @@ impl ScalarUDFImpl for RegexpLikeFunc {
             // get here, the first argument is always a string
             _ => Boolean,
         })
+    }
+
+    fn aliases(&self) -> &[String] {
+        &self.aliases
     }
 
     fn invoke_batch(
