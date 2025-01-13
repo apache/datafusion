@@ -1417,6 +1417,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                     Partitioning::RoundRobinBatch(partition_count) => {
                         PartitionMethod::RoundRobin(*partition_count as u64)
                     }
+
                     Partitioning::DistributeBy(_) => {
                         return not_impl_err!("DistributeBy")
                     }

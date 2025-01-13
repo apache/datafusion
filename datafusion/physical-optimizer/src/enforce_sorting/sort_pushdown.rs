@@ -38,6 +38,7 @@ use datafusion_physical_plan::joins::utils::{
 };
 use datafusion_physical_plan::joins::{HashJoinExec, SortMergeJoinExec};
 use datafusion_physical_plan::projection::ProjectionExec;
+use datafusion_physical_plan::repartition::on_demand_repartition::OnDemandRepartitionExec;
 use datafusion_physical_plan::repartition::RepartitionExec;
 use datafusion_physical_plan::sorts::sort::SortExec;
 use datafusion_physical_plan::tree_node::PlanContext;
@@ -282,6 +283,7 @@ fn pushdown_requirement_to_children(
     } else if maintains_input_order.is_empty()
         || !maintains_input_order.iter().any(|o| *o)
         || plan.as_any().is::<RepartitionExec>()
+        || plan.as_any().is::<OnDemandRepartitionExec>()
         || plan.as_any().is::<FilterExec>()
         // TODO: Add support for Projection push down
         || plan.as_any().is::<ProjectionExec>()

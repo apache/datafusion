@@ -38,7 +38,8 @@ macro_rules! primitive_merge_helper {
 
 macro_rules! merge_helper {
     ($t:ty, $sort:ident, $streams:ident, $schema:ident, $tracking_metrics:ident, $batch_size:ident, $fetch:ident, $reservation:ident, $enable_round_robin_tie_breaker:ident) => {{
-        FieldCursorStream::<$t>::new($sort, $streams, $reservation.new_empty());
+        let streams =
+            FieldCursorStream::<$t>::new($sort, $streams, $reservation.new_empty());
         return Ok(Box::pin(SortPreservingMergeStream::new(
             Box::new(streams),
             $schema,

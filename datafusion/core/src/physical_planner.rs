@@ -787,7 +787,10 @@ impl DefaultPhysicalPlanner {
                 let input_dfschema = input.as_ref().schema();
                 let physical_partitioning = match partitioning_scheme {
                     LogicalPartitioning::RoundRobinBatch(n) => {
-                        Partitioning::RoundRobinBatch(*n)
+                        return Ok(Arc::new(RepartitionExec::try_new(
+                            physical_input,
+                            Partitioning::RoundRobinBatch(*n),
+                        )?));
                     }
                     LogicalPartitioning::Hash(expr, n) => {
                         let runtime_expr = expr

@@ -60,6 +60,7 @@ use datafusion_physical_expr::{Distribution, Partitioning};
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, LexRequirement};
 use datafusion_physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion_physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
+use datafusion_physical_plan::repartition::on_demand_repartition::OnDemandRepartitionExec;
 use datafusion_physical_plan::repartition::RepartitionExec;
 use datafusion_physical_plan::sorts::partial_sort::PartialSortExec;
 use datafusion_physical_plan::sorts::sort::SortExec;
@@ -621,7 +622,23 @@ fn remove_bottleneck_in_subplan(
         if can_remove {
             new_reqs = new_reqs.children.swap_remove(0)
         }
+    } else if let Some(repartition) = new_reqs
+        .plan
+        .as_any()
+        .downcast_ref::<OnDemandRepartitionExec>()
+    {
+        let input_partitioning = repartition.input().output_partitioning();
+        // We can remove this repartitioning operator if it is now a no-op:
+        let mut can_remove = input_partitioning.eq(repartition.partitioning());
+        // We can also remove it if we ended up with an ineffective RR:
+        if let Partitioning::OnDemand(n_out) = repartition.partitioning() {
+            can_remove |= *n_out == input_partitioning.partition_count();
+        }
+        if can_remove {
+            new_reqs = new_reqs.children.swap_remove(0)
+        }
     }
+
     Ok(new_reqs)
 }
 
