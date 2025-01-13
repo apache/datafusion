@@ -397,13 +397,9 @@ impl ExprSchemable for Expr {
                 self.data_type_and_nullable_with_window_function(schema, window_function)
             }
             Expr::ScalarFunction(ScalarFunction { func, args }) => {
-                let arg_data_types = args
-                    .iter()
-                    .map(|e| e.get_type(schema))
-                    .collect::<Result<Vec<_>>>()?;
-
+                let (arg_types, nullables)  : (Vec<DataType>, Vec<bool>) = args.iter().map(|e| e.data_type_and_nullable(schema)).collect::<Result<Vec<_>>>()?.into_iter().unzip();
                 // Verify that function is invoked with correct number and type of arguments as defined in `TypeSignature`
-                let new_data_types = data_types_with_scalar_udf(&arg_data_types, func)
+                let new_data_types = data_types_with_scalar_udf(&arg_types, func)
                     .map_err(|err| {
                         plan_datafusion_err!(
                             "{} {}",
@@ -414,7 +410,7 @@ impl ExprSchemable for Expr {
                             utils::generate_signature_error_msg(
                                 func.name(),
                                 func.signature().clone(),
-                                &arg_data_types,
+                                &arg_types,
                             )
                         )
                     })?;
@@ -428,10 +424,6 @@ impl ExprSchemable for Expr {
                         _ => "".to_string(),
                     })
                     .collect::<Vec<_>>();
-                let nullables = args
-                    .iter()
-                    .map(|e| e.nullable(schema))
-                    .collect::<Result<Vec<_>>>()?;
                 let args = ReturnTypeArgs {
                     arg_types: &new_data_types,
                     arguments: &arguments,
