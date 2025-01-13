@@ -704,13 +704,13 @@ List(Field { name: "item", data_type: List(Field { name: "item", data_type: Int6
 query ???
 select column1, column2, column3 from arrays;
 ----
-[[, 2], [3, ]] [1.1, 2.2, 3.3] [L, o, r, e, m]
-[[3, 4], [5, 6]] [, 5.5, 6.6] [i, p, , u, m]
-[[5, 6], [7, 8]] [7.7, 8.8, 9.9] [d, , l, o, r]
-[[7, ], [9, 10]] [10.1, , 12.2] [s, i, t]
+[[NULL, 2], [3, NULL]] [1.1, 2.2, 3.3] [L, o, r, e, m]
+[[3, 4], [5, 6]] [NULL, 5.5, 6.6] [i, p, NULL, u, m]
+[[5, 6], [7, 8]] [7.7, 8.8, 9.9] [d, NULL, l, o, r]
+[[7, NULL], [9, 10]] [10.1, NULL, 12.2] [s, i, t]
 NULL [13.3, 14.4, 15.5] [a, m, e, t]
 [[11, 12], [13, 14]] NULL [,]
-[[15, 16], [, 18]] [16.6, 17.7, 18.8] NULL
+[[15, 16], [NULL, 18]] [16.6, 17.7, 18.8] NULL
 
 # nested_arrays table
 query ??I??
@@ -737,34 +737,34 @@ NULL 9 10 5.5 amet
 query ?IIT
 select column1, column2, column3, column4 from arrays_values;
 ----
-[, 2, 3, 4, 5, 6, 7, 8, 9, 10] 1 1 ,
-[11, 12, 13, 14, 15, 16, 17, 18, , 20] 12 2 .
-[21, 22, 23, , 25, 26, 27, 28, 29, 30] 23 3 -
-[31, 32, 33, 34, 35, , 37, 38, 39, 40] 34 4 ok
+[NULL, 2, 3, 4, 5, 6, 7, 8, 9, 10] 1 1 ,
+[11, 12, 13, 14, 15, 16, 17, 18, NULL, 20] 12 2 .
+[21, 22, 23, NULL, 25, 26, 27, 28, 29, 30] 23 3 -
+[31, 32, 33, 34, 35, NULL, 37, 38, 39, 40] 34 4 ok
 NULL 44 5 @
 [41, 42, 43, 44, 45, 46, 47, 48, 49, 50] NULL 6 $
-[51, 52, , 54, 55, 56, 57, 58, 59, 60] 55 NULL ^
+[51, 52, NULL, 54, 55, 56, 57, 58, 59, 60] 55 NULL ^
 [61, 62, 63, 64, 65, 66, 67, 68, 69, 70] 66 7 NULL
 
 # slices table
 query ?II
 select column1, column2, column3 from slices;
 ----
-[, 2, 3, 4, 5, 6, 7, 8, 9, 10] 1 1
-[11, 12, 13, 14, 15, 16, 17, 18, , 20] 2 -4
-[21, 22, 23, , 25, 26, 27, 28, 29, 30] 0 0
-[31, 32, 33, 34, 35, , 37, 38, 39, 40] -4 -7
+[NULL, 2, 3, 4, 5, 6, 7, 8, 9, 10] 1 1
+[11, 12, 13, 14, 15, 16, 17, 18, NULL, 20] 2 -4
+[21, 22, 23, NULL, 25, 26, 27, 28, 29, 30] 0 0
+[31, 32, 33, 34, 35, NULL, 37, 38, 39, 40] -4 -7
 NULL 4 5
 [41, 42, 43, 44, 45, 46, 47, 48, 49, 50] NULL 6
-[51, 52, , 54, 55, 56, 57, 58, 59, 60] 5 NULL
+[51, 52, NULL, 54, 55, 56, 57, 58, 59, 60] 5 NULL
 
 query ??I?
 select column1, column2, column3, column4 from arrays_values_v2;
 ----
-[, 2, 3] [4, 5, ] 12 [[30, 40, 50]]
-NULL [7, , 8] 13 [[, , 60]]
-[9, , 10] NULL 14 [[70, , ]]
-[, 1] [, 21] NULL NULL
+[NULL, 2, 3] [4, 5, NULL] 12 [[30, 40, 50]]
+NULL [7, NULL, 8] 13 [[NULL, NULL, 60]]
+[9, NULL, 10] NULL 14 [[70, NULL, NULL]]
+[NULL, 1] [NULL, 21] NULL NULL
 [11, 12] NULL NULL NULL
 NULL NULL NULL NULL
 
@@ -829,13 +829,13 @@ select make_array(1, 2, 3)[1 + 2 - 1], make_array(1.0, 2.0, 3.0)[2 * 1 * 0 - 2],
 query ?RT
 select column1[2], column2[3], column3[1] from arrays;
 ----
-[3, ] 3.3 L
+[3, NULL] 3.3 L
 [5, 6] 6.6 i
 [7, 8] 9.9 d
 [9, 10] 12.2 s
 NULL 15.5 a
 [13, 14] NULL ,
-[, 18] 18.8 NULL
+[NULL, 18] 18.8 NULL
 
 # single index with columns #2 (zero index)
 query ?RT
@@ -853,10 +853,10 @@ NULL NULL NULL
 query ?RT
 select column1[-2], column2[-3], column3[-1] from arrays;
 ----
-[, 2] 1.1 m
+[NULL, 2] 1.1 m
 [3, 4] NULL m
 [5, 6] 7.7 r
-[7, ] 10.1 t
+[7, NULL] 10.1 t
 NULL 13.3 t
 [11, 12] NULL ,
 [15, 16] 16.6 NULL
@@ -865,13 +865,13 @@ NULL 13.3 t
 query ?RT
 select column1[9 - 7], column2[2 * 0], column3[1 - 3] from arrays;
 ----
-[3, ] NULL e
+[3, NULL] NULL e
 [5, 6] NULL u
 [7, 8] NULL o
 [9, 10] NULL i
 NULL NULL e
 [13, 14] NULL NULL
-[, 18] NULL NULL
+[NULL, 18] NULL NULL
 
 # TODO: support index as column
 # single index with columns #5 (index as column)
@@ -936,32 +936,32 @@ select arrow_cast([1, 2, 3], 'LargeList(Int64)')[1];
 query ???
 select column1[2:4], column2[1:4], column3[3:4] from arrays;
 ----
-[[3, ]] [1.1, 2.2, 3.3] [r, e]
-[[5, 6]] [, 5.5, 6.6] [, u]
+[[3, NULL]] [1.1, 2.2, 3.3] [r, e]
+[[5, 6]] [NULL, 5.5, 6.6] [NULL, u]
 [[7, 8]] [7.7, 8.8, 9.9] [l, o]
-[[9, 10]] [10.1, , 12.2] [t]
+[[9, 10]] [10.1, NULL, 12.2] [t]
 [] [13.3, 14.4, 15.5] [e, t]
 [[13, 14]] [] []
-[[, 18]] [16.6, 17.7, 18.8] []
+[[NULL, 18]] [16.6, 17.7, 18.8] []
 
 # multiple index with columns #2 (zero index)
 query ???
 select column1[0:5], column2[0:3], column3[0:9] from arrays;
 ----
-[[, 2], [3, ]] [1.1, 2.2, 3.3] [L, o, r, e, m]
-[[3, 4], [5, 6]] [, 5.5, 6.6] [i, p, , u, m]
-[[5, 6], [7, 8]] [7.7, 8.8, 9.9] [d, , l, o, r]
-[[7, ], [9, 10]] [10.1, , 12.2] [s, i, t]
+[[NULL, 2], [3, NULL]] [1.1, 2.2, 3.3] [L, o, r, e, m]
+[[3, 4], [5, 6]] [NULL, 5.5, 6.6] [i, p, NULL, u, m]
+[[5, 6], [7, 8]] [7.7, 8.8, 9.9] [d, NULL, l, o, r]
+[[7, NULL], [9, 10]] [10.1, NULL, 12.2] [s, i, t]
 [] [13.3, 14.4, 15.5] [a, m, e, t]
 [[11, 12], [13, 14]] [] [,]
-[[15, 16], [, 18]] [16.6, 17.7, 18.8] []
+[[15, 16], [NULL, 18]] [16.6, 17.7, 18.8] []
 
 # TODO: support negative index
 # multiple index with columns #3 (negative index)
 # query ?RT
 # select column1[-2:-4], column2[-3:-5], column3[-1:-4] from arrays;
 # ----
-# [, 2] 1.1 m
+# [NULL, 2] 1.1 m
 
 # TODO: support complex index
 # multiple index with columns #4 (complex index)
@@ -1012,22 +1012,22 @@ select make_array(1, 2, 3)[0:0:2], make_array(1.0, 2.0, 3.0)[0:2:2], make_array(
 query ???
 select column1[2:4:2], column2[1:4:2], column3[3:4:2] from arrays;
 ----
-[[3, ]] [1.1, 3.3] [r]
-[[5, 6]] [, 6.6] []
+[[3, NULL]] [1.1, 3.3] [r]
+[[5, 6]] [NULL, 6.6] [NULL]
 [[7, 8]] [7.7, 9.9] [l]
 [[9, 10]] [10.1, 12.2] [t]
 [] [13.3, 15.5] [e]
 [[13, 14]] [] []
-[[, 18]] [16.6, 18.8] []
+[[NULL, 18]] [16.6, 18.8] []
 
 # multiple index with columns #2 (zero index)
 query ???
 select column1[0:5:2], column2[0:3:2], column3[0:9:2] from arrays;
 ----
-[[, 2]] [1.1, 3.3] [L, r, m]
-[[3, 4]] [, 6.6] [i, , m]
+[[NULL, 2]] [1.1, 3.3] [L, r, m]
+[[3, 4]] [NULL, 6.6] [i, NULL, m]
 [[5, 6]] [7.7, 9.9] [d, l, r]
-[[7, ]] [10.1, 12.2] [s, t]
+[[7, NULL]] [10.1, 12.2] [s, t]
 [] [13.3, 15.5] [a, e]
 [[11, 12]] [] [,]
 [[15, 16]] [16.6, 18.8] []
@@ -1090,19 +1090,19 @@ select make_list(1, 2, 3), make_list(1.0, 2.0, 3.0), make_list('h', 'e', 'l', 'l
 query ???
 select make_array(1, NULL, 3), make_array(NULL, 2.0, NULL), make_array('h', NULL, 'l', NULL, 'o');
 ----
-[1, , 3] [, 2.0, ] [h, , l, , o]
+[1, NULL, 3] [NULL, 2.0, NULL] [h, NULL, l, NULL, o]
 
 # make_array scalar function with nulls #2
 query ??
 select make_array(1, 2, NULL), make_array(make_array(NULL, 2), make_array(NULL, 3));
 ----
-[1, 2, ] [[, 2], [, 3]]
+[1, 2, NULL] [[NULL, 2], [NULL, 3]]
 
 # make_array scalar function with nulls #3
 query ???
 select make_array(NULL), make_array(NULL, NULL, NULL), make_array(make_array(NULL, NULL), make_array(NULL, NULL));
 ----
-[] [, , ] [[, ], [, ]]
+[NULL] [NULL, NULL, NULL] [[NULL, NULL], [NULL, NULL]]
 
 # make_array with 1 columns
 query ???
@@ -1112,11 +1112,11 @@ select make_array(a), make_array(d), make_array(e) from values;
 [2] [2.2] [ipsum]
 [3] [3.3] [dolor]
 [4] [4.4] [sit]
-[] [5.5] [amet]
+[NULL] [5.5] [amet]
 [5] [6.6] [,]
 [6] [7.7] [consectetur]
-[7] [] [adipiscing]
-[8] [8.8] []
+[7] [NULL] [adipiscing]
+[8] [8.8] [NULL]
 
 # make_array with 2 columns #1
 query ??
@@ -1125,12 +1125,12 @@ select make_array(b, c), make_array(e, f) from values;
 [1, 2] [Lorem, A]
 [3, 4] [ipsum, ]
 [5, 6] [dolor, BB]
-[7, 8] [sit, ]
+[7, 8] [sit, NULL]
 [9, 10] [amet, CCC]
-[, 12] [,, DD]
-[11, ] [consectetur, E]
+[NULL, 12] [,, DD]
+[11, NULL] [consectetur, E]
 [13, 14] [adipiscing, F]
-[15, 16] [, ]
+[15, 16] [NULL, ]
 
 # make_array with 4 columns
 query ?
@@ -1140,10 +1140,10 @@ select make_array(a, b, c, d) from values;
 [2.0, 3.0, 4.0, 2.2]
 [3.0, 5.0, 6.0, 3.3]
 [4.0, 7.0, 8.0, 4.4]
-[, 9.0, 10.0, 5.5]
-[5.0, , 12.0, 6.6]
-[6.0, 11.0, , 7.7]
-[7.0, 13.0, 14.0, ]
+[NULL, 9.0, 10.0, 5.5]
+[5.0, NULL, 12.0, 6.6]
+[6.0, 11.0, NULL, 7.7]
+[7.0, 13.0, 14.0, NULL]
 [8.0, 15.0, 16.0, 8.8]
 
 # make_array with column of list
@@ -1485,17 +1485,17 @@ select array_pop_back(array_pop_back(arrow_cast(make_array(1), 'FixedSizeList(1,
 query ??
 select array_pop_back(make_array(1, 2, 3, 4, NULL)), array_pop_back(make_array(NULL, 'e', 'l', NULL, 'o'));
 ----
-[1, 2, 3, 4] [, e, l, ]
+[1, 2, 3, 4] [NULL, e, l, NULL]
 
 query ??
 select array_pop_back(arrow_cast(make_array(1, 2, 3, 4, NULL), 'LargeList(Int64)')), array_pop_back(arrow_cast(make_array(NULL, 'e', 'l', NULL, 'o'), 'LargeList(Utf8)'));
 ----
-[1, 2, 3, 4] [, e, l, ]
+[1, 2, 3, 4] [NULL, e, l, NULL]
 
 query ??
 select array_pop_back(arrow_cast(make_array(1, 2, 3, 4, NULL), 'FixedSizeList(5, Int64)')), array_pop_back(arrow_cast(make_array(NULL, 'e', 'l', NULL, 'o'), 'FixedSizeList(5, Utf8)'));
 ----
-[1, 2, 3, 4] [, e, l, ]
+[1, 2, 3, 4] [NULL, e, l, NULL]
 
 # array_pop_back scalar function #5 (array_pop_back the nested arrays)
 query ?
@@ -1533,17 +1533,17 @@ select array_pop_back(arrow_cast(make_array(make_array(1, 2, 3), make_array(2, 9
 query ?
 select array_pop_back(make_array(make_array(1, 2, 3), make_array(2, 9, 1), make_array(7, 8, 9), NULL, make_array(1, 7, 4)));
 ----
-[[1, 2, 3], [2, 9, 1], [7, 8, 9], ]
+[[1, 2, 3], [2, 9, 1], [7, 8, 9], NULL]
 
 query ?
 select array_pop_back(arrow_cast(make_array(make_array(1, 2, 3), make_array(2, 9, 1), make_array(7, 8, 9), NULL, make_array(1, 7, 4)), 'LargeList(List(Int64))'));
 ----
-[[1, 2, 3], [2, 9, 1], [7, 8, 9], ]
+[[1, 2, 3], [2, 9, 1], [7, 8, 9], NULL]
 
 query ?
 select array_pop_back(arrow_cast(make_array(make_array(1, 2, 3), make_array(2, 9, 1), make_array(7, 8, 9), NULL, make_array(1, 7, 4)), 'FixedSizeList(5, List(Int64))'));
 ----
-[[1, 2, 3], [2, 9, 1], [7, 8, 9], ]
+[[1, 2, 3], [2, 9, 1], [7, 8, 9], NULL]
 
 # array_pop_back scalar function #8 (after array_pop_back, nested array is empty)
 query ?
@@ -1567,40 +1567,40 @@ select array_pop_back(column1) from arrayspop;
 ----
 [1, 2]
 [3, 4, 5]
-[6, 7, 8, ]
-[, ]
+[6, 7, 8, NULL]
+[NULL, NULL]
 []
-[, 10, 11]
+[NULL, 10, 11]
 
 query ?
 select array_pop_back(arrow_cast(column1, 'LargeList(Int64)')) from arrayspop;
 ----
 [1, 2]
 [3, 4, 5]
-[6, 7, 8, ]
-[, ]
+[6, 7, 8, NULL]
+[NULL, NULL]
 []
-[, 10, 11]
+[NULL, 10, 11]
 
 query ?
 select array_pop_back(column1) from large_arrayspop;
 ----
 [1, 2]
 [3, 4, 5]
-[6, 7, 8, ]
-[, ]
+[6, 7, 8, NULL]
+[NULL, NULL]
 []
-[, 10, 11]
+[NULL, 10, 11]
 
 query ?
 select array_pop_back(arrow_cast(column1, 'LargeList(Int64)')) from large_arrayspop;
 ----
 [1, 2]
 [3, 4, 5]
-[6, 7, 8, ]
-[, ]
+[6, 7, 8, NULL]
+[NULL, NULL]
 []
-[, 10, 11]
+[NULL, 10, 11]
 
 ## array_pop_front (aliases: `list_pop_front`)
 
@@ -1968,7 +1968,7 @@ select array_slice(arrow_cast(make_array(1, 2, 3, 4, 5), 'LargeList(Int64)'), 2,
 query ?
 select array_slice(column1, column2, column3) from slices;
 ----
-[]
+[NULL]
 [12, 13, 14, 15, 16, 17]
 []
 []
@@ -1979,7 +1979,7 @@ select array_slice(column1, column2, column3) from slices;
 query ?
 select array_slice(arrow_cast(column1, 'LargeList(Int64)'), column2, column3) from slices;
 ----
-[]
+[NULL]
 [12, 13, 14, 15, 16, 17]
 []
 []
@@ -1992,24 +1992,24 @@ select array_slice(arrow_cast(column1, 'LargeList(Int64)'), column2, column3) fr
 query ???
 select array_slice(make_array(1, 2, 3, 4, 5), column2, column3), array_slice(column1, 3, column3), array_slice(column1, column2, 5) from slices;
 ----
-[1] [] [, 2, 3, 4, 5]
+[1] [] [NULL, 2, 3, 4, 5]
 [2] [13, 14, 15, 16, 17] [12, 13, 14, 15]
-[] [] [21, 22, 23, , 25]
+[] [] [21, 22, 23, NULL, 25]
 [] [33, 34] []
 [4, 5] [] []
 [1, 2, 3, 4, 5] [43, 44, 45, 46] [41, 42, 43, 44, 45]
-[5] [, 54, 55, 56, 57, 58, 59, 60] [55]
+[5] [NULL, 54, 55, 56, 57, 58, 59, 60] [55]
 
 query ???
 select array_slice(arrow_cast(make_array(1, 2, 3, 4, 5), 'LargeList(Int64)'), column2, column3), array_slice(arrow_cast(column1, 'LargeList(Int64)'), 3, column3), array_slice(arrow_cast(column1, 'LargeList(Int64)'), column2, 5) from slices;
 ----
-[1] [] [, 2, 3, 4, 5]
+[1] [] [NULL, 2, 3, 4, 5]
 [2] [13, 14, 15, 16, 17] [12, 13, 14, 15]
-[] [] [21, 22, 23, , 25]
+[] [] [21, 22, 23, NULL, 25]
 [] [33, 34] []
 [4, 5] [] []
 [1, 2, 3, 4, 5] [43, 44, 45, 46] [41, 42, 43, 44, 45]
-[5] [, 54, 55, 56, 57, 58, 59, 60] [55]
+[5] [NULL, 54, 55, 56, 57, 58, 59, 60] [55]
 
 # Test issue: https://github.com/apache/datafusion/issues/10425
 # `from` may be larger than `to` and `stride` is positive
@@ -2058,17 +2058,17 @@ select array_any_value(arrow_cast(make_array(NULL, 1, 2, 3, 4, 5), 'FixedSizeLis
 query ?
 select array_any_value(make_array(NULL, make_array(NULL, 1, 2, 3, 4, 5), make_array(NULL, 6, 7, 8, 9, 10)));
 ----
-[, 1, 2, 3, 4, 5]
+[NULL, 1, 2, 3, 4, 5]
 
 query ?
 select array_any_value(arrow_cast(make_array(NULL, make_array(NULL, 1, 2, 3, 4, 5), make_array(NULL, 6, 7, 8, 9, 10)), 'LargeList(List(Int64))'));
 ----
-[, 1, 2, 3, 4, 5]
+[NULL, 1, 2, 3, 4, 5]
 
 query ?
 select array_any_value(arrow_cast(make_array(NULL, make_array(NULL, 1, 2, 3, 4, 5), make_array(NULL, 6, 7, 8, 9, 10)), 'FixedSizeList(3, List(Int64))'));
 ----
-[, 1, 2, 3, 4, 5]
+[NULL, 1, 2, 3, 4, 5]
 
 # array_any_value scalar function #3 (using function alias `list_any_value`)
 query IT
@@ -2164,49 +2164,49 @@ select make_array(make_array('a','b'), null),
        make_array([1,2,3], null, make_array(4,5,6,7)),
        make_array(null, 1, null, 2, null, 3, null, null, 4, 5);
 ----
-[[a, b], ] [[a, b], , [c, d]] [, [a, b], ] [, [a, b], , , [c, d]] [[a, bc, def], , [rust]] [[1, 2, 3], , [4, 5, 6, 7]] [, 1, , 2, , 3, , , 4, 5]
+[[a, b], NULL] [[a, b], NULL, [c, d]] [NULL, [a, b], NULL] [NULL, [a, b], NULL, NULL, [c, d]] [[a, bc, def], NULL, [rust]] [[1, 2, 3], NULL, [4, 5, 6, 7]] [NULL, 1, NULL, 2, NULL, 3, NULL, NULL, 4, 5]
 
 query ?
 select make_array(column5, null, column5) from arrays_values_without_nulls;
 ----
-[[2, 3], , [2, 3]]
-[[4, 5], , [4, 5]]
-[[6, 7], , [6, 7]]
-[[8, 9], , [8, 9]]
+[[2, 3], NULL, [2, 3]]
+[[4, 5], NULL, [4, 5]]
+[[6, 7], NULL, [6, 7]]
+[[8, 9], NULL, [8, 9]]
 
 query ?
 select make_array(['a','b'], null);
 ----
-[[a, b], ]
+[[a, b], NULL]
 
 ## array_sort (aliases: `list_sort`)
 query ???
 select array_sort(make_array(1, 3, null, 5, NULL, -5)), array_sort(make_array(1, 3, null, 2), 'ASC'), array_sort(make_array(1, 3, null, 2), 'desc', 'NULLS FIRST');
 ----
-[, , -5, 1, 3, 5] [, 1, 2, 3] [, 3, 2, 1]
+[NULL, NULL, -5, 1, 3, 5] [NULL, 1, 2, 3] [NULL, 3, 2, 1]
 
 query ?
 select array_sort(column1, 'DESC', 'NULLS LAST') from arrays_values;
 ----
-[10, 9, 8, 7, 6, 5, 4, 3, 2, ]
-[20, 18, 17, 16, 15, 14, 13, 12, 11, ]
-[30, 29, 28, 27, 26, 25, 23, 22, 21, ]
-[40, 39, 38, 37, 35, 34, 33, 32, 31, ]
+[10, 9, 8, 7, 6, 5, 4, 3, 2, NULL]
+[20, 18, 17, 16, 15, 14, 13, 12, 11, NULL]
+[30, 29, 28, 27, 26, 25, 23, 22, 21, NULL]
+[40, 39, 38, 37, 35, 34, 33, 32, 31, NULL]
 NULL
 [50, 49, 48, 47, 46, 45, 44, 43, 42, 41]
-[60, 59, 58, 57, 56, 55, 54, 52, 51, ]
+[60, 59, 58, 57, 56, 55, 54, 52, 51, NULL]
 [70, 69, 68, 67, 66, 65, 64, 63, 62, 61]
 
 query ?
 select array_sort(column1, 'ASC', 'NULLS FIRST') from arrays_values;
 ----
-[, 2, 3, 4, 5, 6, 7, 8, 9, 10]
-[, 11, 12, 13, 14, 15, 16, 17, 18, 20]
-[, 21, 22, 23, 25, 26, 27, 28, 29, 30]
-[, 31, 32, 33, 34, 35, 37, 38, 39, 40]
+[NULL, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+[NULL, 11, 12, 13, 14, 15, 16, 17, 18, 20]
+[NULL, 21, 22, 23, 25, 26, 27, 28, 29, 30]
+[NULL, 31, 32, 33, 34, 35, 37, 38, 39, 40]
 NULL
 [41, 42, 43, 44, 45, 46, 47, 48, 49, 50]
-[, 51, 52, 54, 55, 56, 57, 58, 59, 60]
+[NULL, 51, 52, 54, 55, 56, 57, 58, 59, 60]
 [61, 62, 63, 64, 65, 66, 67, 68, 69, 70]
 
 # test with empty array
@@ -2233,7 +2233,7 @@ drop table t1;
 query ???
 select list_sort(make_array(1, 3, null, 5, NULL, -5)), list_sort(make_array(1, 3, null, 2), 'ASC'), list_sort(make_array(1, 3, null, 2), 'desc', 'NULLS FIRST');
 ----
-[, , -5, 1, 3, 5] [, 1, 2, 3] [, 3, 2, 1]
+[NULL, NULL, -5, 1, 3, 5] [NULL, 1, 2, 3] [NULL, 3, 2, 1]
 
 
 ## array_append (aliases: `list_append`, `array_push_back`, `list_push_back`)
@@ -2257,7 +2257,7 @@ select
   array_append(make_array(null, null), 1)
 ;
 ----
-[4] [] [1, , 3, 4] [, , 1]
+[4] [NULL] [1, NULL, 3, 4] [NULL, NULL, 1]
 
 query ????
 select
@@ -2267,7 +2267,7 @@ select
   array_append(arrow_cast(make_array(null, null), 'LargeList(Int64)'), 1)
 ;
 ----
-[4] [] [1, , 3, 4] [, , 1]
+[4] [NULL] [1, NULL, 3, 4] [NULL, NULL, 1]
 
 query ??
 select
@@ -2275,7 +2275,7 @@ select
   array_append(arrow_cast(make_array(null, null), 'FixedSizeList(2, Int64)'), 1)
 ;
 ----
-[1, , 3, 4] [, , 1]
+[1, NULL, 3, 4] [NULL, NULL, 1]
 
 # test invalid (non-null)
 query error
@@ -2292,21 +2292,21 @@ select
   array_append(make_array(make_array(1, null, 3)), make_array(null)),
   array_append(make_array(make_array(1, null, 3)), null);
 ----
-[[1, , 3], []] [[1, , 3], ]
+[[1, NULL, 3], [NULL]] [[1, NULL, 3], NULL]
 
 query ??
 select
   array_append(arrow_cast(make_array(make_array(1, null, 3)), 'LargeList(LargeList(Int64))'), arrow_cast(make_array(null), 'LargeList(Int64)')),
   array_append(arrow_cast(make_array(make_array(1, null, 3)), 'LargeList(LargeList(Int64))'), null);
 ----
-[[1, , 3], []] [[1, , 3], ]
+[[1, NULL, 3], [NULL]] [[1, NULL, 3], NULL]
 
 query ??
 select
   array_append(arrow_cast(make_array(make_array(1, null, 3)), 'FixedSizeList(1, List(Int64))'), [null]),
   array_append(arrow_cast(make_array(make_array(1, null, 3)), 'FixedSizeList(1, List(Int64))'), null);
 ----
-[[1, , 3], []] [[1, , 3], ]
+[[1, NULL, 3], [NULL]] [[1, NULL, 3], NULL]
 
 # array_append scalar function #3
 query ???
@@ -2377,37 +2377,37 @@ select list_push_back(arrow_cast(make_array(1, 2, 3), 'LargeList(Int64)'), 4), l
 query ?
 select array_append(column1, column2) from arrays_values;
 ----
-[, 2, 3, 4, 5, 6, 7, 8, 9, 10, 1]
-[11, 12, 13, 14, 15, 16, 17, 18, , 20, 12]
-[21, 22, 23, , 25, 26, 27, 28, 29, 30, 23]
-[31, 32, 33, 34, 35, , 37, 38, 39, 40, 34]
+[NULL, 2, 3, 4, 5, 6, 7, 8, 9, 10, 1]
+[11, 12, 13, 14, 15, 16, 17, 18, NULL, 20, 12]
+[21, 22, 23, NULL, 25, 26, 27, 28, 29, 30, 23]
+[31, 32, 33, 34, 35, NULL, 37, 38, 39, 40, 34]
 [44]
-[41, 42, 43, 44, 45, 46, 47, 48, 49, 50, ]
-[51, 52, , 54, 55, 56, 57, 58, 59, 60, 55]
+[41, 42, 43, 44, 45, 46, 47, 48, 49, 50, NULL]
+[51, 52, NULL, 54, 55, 56, 57, 58, 59, 60, 55]
 [61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 66]
 
 query ?
 select array_append(column1, column2) from large_arrays_values;
 ----
-[, 2, 3, 4, 5, 6, 7, 8, 9, 10, 1]
-[11, 12, 13, 14, 15, 16, 17, 18, , 20, 12]
-[21, 22, 23, , 25, 26, 27, 28, 29, 30, 23]
-[31, 32, 33, 34, 35, , 37, 38, 39, 40, 34]
+[NULL, 2, 3, 4, 5, 6, 7, 8, 9, 10, 1]
+[11, 12, 13, 14, 15, 16, 17, 18, NULL, 20, 12]
+[21, 22, 23, NULL, 25, 26, 27, 28, 29, 30, 23]
+[31, 32, 33, 34, 35, NULL, 37, 38, 39, 40, 34]
 [44]
-[41, 42, 43, 44, 45, 46, 47, 48, 49, 50, ]
-[51, 52, , 54, 55, 56, 57, 58, 59, 60, 55]
+[41, 42, 43, 44, 45, 46, 47, 48, 49, 50, NULL]
+[51, 52, NULL, 54, 55, 56, 57, 58, 59, 60, 55]
 [61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 66]
 
 query ?
 select array_append(column1, column2) from fixed_arrays_values;
 ----
-[, 2, 3, 4, 5, 6, 7, 8, 9, 10, 1]
-[11, 12, 13, 14, 15, 16, 17, 18, , 20, 12]
-[21, 22, 23, , 25, 26, 27, 28, 29, 30, 23]
-[31, 32, 33, 34, 35, , 37, 38, 39, 40, 34]
-[, , , , , , , , , , 44]
-[41, 42, 43, 44, 45, 46, 47, 48, 49, 50, ]
-[51, 52, , 54, 55, 56, 57, 58, 59, 60, 55]
+[NULL, 2, 3, 4, 5, 6, 7, 8, 9, 10, 1]
+[11, 12, 13, 14, 15, 16, 17, 18, NULL, 20, 12]
+[21, 22, 23, NULL, 25, 26, 27, 28, 29, 30, 23]
+[31, 32, 33, 34, 35, NULL, 37, 38, 39, 40, 34]
+[NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, 44]
+[41, 42, 43, 44, 45, 46, 47, 48, 49, 50, NULL]
+[51, 52, NULL, 54, 55, 56, 57, 58, 59, 60, 55]
 [61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 66]
 
 # array_append with columns #2 (element is list)
@@ -2434,9 +2434,9 @@ query ??
 select array_append(column2, 100.1), array_append(column3, '.') from arrays;
 ----
 [1.1, 2.2, 3.3, 100.1] [L, o, r, e, m, .]
-[, 5.5, 6.6, 100.1] [i, p, , u, m, .]
-[7.7, 8.8, 9.9, 100.1] [d, , l, o, r, .]
-[10.1, , 12.2, 100.1] [s, i, t, .]
+[NULL, 5.5, 6.6, 100.1] [i, p, NULL, u, m, .]
+[7.7, 8.8, 9.9, 100.1] [d, NULL, l, o, r, .]
+[10.1, NULL, 12.2, 100.1] [s, i, t, .]
 [13.3, 14.4, 15.5, 100.1] [a, m, e, t, .]
 [100.1] [,, .]
 [16.6, 17.7, 18.8, 100.1] [.]
@@ -2445,9 +2445,9 @@ query ??
 select array_append(column2, 100.1), array_append(column3, '.') from large_arrays;
 ----
 [1.1, 2.2, 3.3, 100.1] [L, o, r, e, m, .]
-[, 5.5, 6.6, 100.1] [i, p, , u, m, .]
-[7.7, 8.8, 9.9, 100.1] [d, , l, o, r, .]
-[10.1, , 12.2, 100.1] [s, i, t, .]
+[NULL, 5.5, 6.6, 100.1] [i, p, NULL, u, m, .]
+[7.7, 8.8, 9.9, 100.1] [d, NULL, l, o, r, .]
+[10.1, NULL, 12.2, 100.1] [s, i, t, .]
 [13.3, 14.4, 15.5, 100.1] [a, m, e, t, .]
 [100.1] [,, .]
 [16.6, 17.7, 18.8, 100.1] [.]
@@ -2456,12 +2456,12 @@ query ??
 select array_append(column2, 100.1), array_append(column3, '.') from fixed_size_arrays;
 ----
 [1.1, 2.2, 3.3, 100.1] [L, o, r, e, m, .]
-[, 5.5, 6.6, 100.1] [i, p, , u, m, .]
-[7.7, 8.8, 9.9, 100.1] [d, , l, o, r, .]
-[10.1, , 12.2, 100.1] [s, i, t, a, b, .]
+[NULL, 5.5, 6.6, 100.1] [i, p, NULL, u, m, .]
+[7.7, 8.8, 9.9, 100.1] [d, NULL, l, o, r, .]
+[10.1, NULL, 12.2, 100.1] [s, i, t, a, b, .]
 [13.3, 14.4, 15.5, 100.1] [a, m, e, t, x, .]
-[, , , 100.1] [,, a, b, c, d, .]
-[16.6, 17.7, 18.8, 100.1] [, , , , , .]
+[NULL, NULL, NULL, 100.1] [,, a, b, c, d, .]
+[16.6, 17.7, 18.8, 100.1] [NULL, NULL, NULL, NULL, NULL, .]
 
 # array_append with columns and scalars #2
 query ??
@@ -2500,24 +2500,24 @@ select array_prepend(4, []);
 query ?
 select array_prepend(4, [null]);
 ----
-[4, ]
+[4, NULL]
 
 # DuckDB: [null]
 # ClickHouse: [null]
 query ?
 select array_prepend(null, []);
 ----
-[]
+[NULL]
 
 query ?
 select array_prepend(null, [1]);
 ----
-[, 1]
+[NULL, 1]
 
 query ?
 select array_prepend(null, [[1,2,3]]);
 ----
-[, [1, 2, 3]]
+[NULL, [1, 2, 3]]
 
 # DuckDB: [[]]
 # ClickHouse: [[]]
@@ -2534,7 +2534,7 @@ select array_prepend(null, null);
 query ?
 select array_append([], null);
 ----
-[]
+[NULL]
 
 
 # array_prepend scalar function #3
@@ -2610,37 +2610,37 @@ select list_push_front(1, arrow_cast(make_array(2, 3, 4), 'LargeList(Int64)')), 
 query ?
 select array_prepend(column2, column1) from arrays_values;
 ----
-[1, , 2, 3, 4, 5, 6, 7, 8, 9, 10]
-[12, 11, 12, 13, 14, 15, 16, 17, 18, , 20]
-[23, 21, 22, 23, , 25, 26, 27, 28, 29, 30]
-[34, 31, 32, 33, 34, 35, , 37, 38, 39, 40]
+[1, NULL, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+[12, 11, 12, 13, 14, 15, 16, 17, 18, NULL, 20]
+[23, 21, 22, 23, NULL, 25, 26, 27, 28, 29, 30]
+[34, 31, 32, 33, 34, 35, NULL, 37, 38, 39, 40]
 [44]
-[, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50]
-[55, 51, 52, , 54, 55, 56, 57, 58, 59, 60]
+[NULL, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50]
+[55, 51, 52, NULL, 54, 55, 56, 57, 58, 59, 60]
 [66, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70]
 
 query ?
 select array_prepend(column2, column1) from large_arrays_values;
 ----
-[1, , 2, 3, 4, 5, 6, 7, 8, 9, 10]
-[12, 11, 12, 13, 14, 15, 16, 17, 18, , 20]
-[23, 21, 22, 23, , 25, 26, 27, 28, 29, 30]
-[34, 31, 32, 33, 34, 35, , 37, 38, 39, 40]
+[1, NULL, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+[12, 11, 12, 13, 14, 15, 16, 17, 18, NULL, 20]
+[23, 21, 22, 23, NULL, 25, 26, 27, 28, 29, 30]
+[34, 31, 32, 33, 34, 35, NULL, 37, 38, 39, 40]
 [44]
-[, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50]
-[55, 51, 52, , 54, 55, 56, 57, 58, 59, 60]
+[NULL, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50]
+[55, 51, 52, NULL, 54, 55, 56, 57, 58, 59, 60]
 [66, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70]
 
 query ?
 select array_prepend(column2, column1) from fixed_arrays_values;
 ----
-[1, , 2, 3, 4, 5, 6, 7, 8, 9, 10]
-[12, 11, 12, 13, 14, 15, 16, 17, 18, , 20]
-[23, 21, 22, 23, , 25, 26, 27, 28, 29, 30]
-[34, 31, 32, 33, 34, 35, , 37, 38, 39, 40]
-[44, , , , , , , , , , ]
-[, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50]
-[55, 51, 52, , 54, 55, 56, 57, 58, 59, 60]
+[1, NULL, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+[12, 11, 12, 13, 14, 15, 16, 17, 18, NULL, 20]
+[23, 21, 22, 23, NULL, 25, 26, 27, 28, 29, 30]
+[34, 31, 32, 33, 34, 35, NULL, 37, 38, 39, 40]
+[44, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL]
+[NULL, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50]
+[55, 51, 52, NULL, 54, 55, 56, 57, 58, 59, 60]
 [66, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70]
 
 # array_prepend with columns #2 (element is list)
@@ -2667,9 +2667,9 @@ query ??
 select array_prepend(100.1, column2), array_prepend('.', column3) from arrays;
 ----
 [100.1, 1.1, 2.2, 3.3] [., L, o, r, e, m]
-[100.1, , 5.5, 6.6] [., i, p, , u, m]
-[100.1, 7.7, 8.8, 9.9] [., d, , l, o, r]
-[100.1, 10.1, , 12.2] [., s, i, t]
+[100.1, NULL, 5.5, 6.6] [., i, p, NULL, u, m]
+[100.1, 7.7, 8.8, 9.9] [., d, NULL, l, o, r]
+[100.1, 10.1, NULL, 12.2] [., s, i, t]
 [100.1, 13.3, 14.4, 15.5] [., a, m, e, t]
 [100.1] [., ,]
 [100.1, 16.6, 17.7, 18.8] [.]
@@ -2678,9 +2678,9 @@ query ??
 select array_prepend(100.1, column2), array_prepend('.', column3) from large_arrays;
 ----
 [100.1, 1.1, 2.2, 3.3] [., L, o, r, e, m]
-[100.1, , 5.5, 6.6] [., i, p, , u, m]
-[100.1, 7.7, 8.8, 9.9] [., d, , l, o, r]
-[100.1, 10.1, , 12.2] [., s, i, t]
+[100.1, NULL, 5.5, 6.6] [., i, p, NULL, u, m]
+[100.1, 7.7, 8.8, 9.9] [., d, NULL, l, o, r]
+[100.1, 10.1, NULL, 12.2] [., s, i, t]
 [100.1, 13.3, 14.4, 15.5] [., a, m, e, t]
 [100.1] [., ,]
 [100.1, 16.6, 17.7, 18.8] [.]
@@ -2689,12 +2689,12 @@ query ??
 select array_prepend(100.1, column2), array_prepend('.', column3) from fixed_size_arrays;
 ----
 [100.1, 1.1, 2.2, 3.3] [., L, o, r, e, m]
-[100.1, , 5.5, 6.6] [., i, p, , u, m]
-[100.1, 7.7, 8.8, 9.9] [., d, , l, o, r]
-[100.1, 10.1, , 12.2] [., s, i, t, a, b]
+[100.1, NULL, 5.5, 6.6] [., i, p, NULL, u, m]
+[100.1, 7.7, 8.8, 9.9] [., d, NULL, l, o, r]
+[100.1, 10.1, NULL, 12.2] [., s, i, t, a, b]
 [100.1, 13.3, 14.4, 15.5] [., a, m, e, t, x]
-[100.1, , , ] [., ,, a, b, c, d]
-[100.1, 16.6, 17.7, 18.8] [., , , , , ]
+[100.1, NULL, NULL, NULL] [., ,, a, b, c, d]
+[100.1, 16.6, 17.7, 18.8] [., NULL, NULL, NULL, NULL, NULL]
 
 # array_prepend with columns and scalars #2 (element is list)
 query ??
@@ -2729,7 +2729,7 @@ select
   list_repeat('rust', 4),
   list_repeat(null, 0);
 ----
-[1, 1, 1, 1, 1] [3.14, 3.14, 3.14] [l, l, l, l] [, ] [-1, -1, -1, -1, -1] [] [rust, rust, rust, rust] []
+[1, 1, 1, 1, 1] [3.14, 3.14, 3.14] [l, l, l, l] [NULL, NULL] [-1, -1, -1, -1, -1] [] [rust, rust, rust, rust] []
 
 # array_repeat scalar function #2 (element as list)
 query ????
@@ -2739,7 +2739,7 @@ select
   array_repeat([null, null], 3),
   array_repeat([[1, 2], [3, 4]], 2);
 ----
-[[1], [1], [1], [1], [1]] [[1.1, 2.2, 3.3], [1.1, 2.2, 3.3], [1.1, 2.2, 3.3]] [[, ], [, ], [, ]] [[[1, 2], [3, 4]], [[1, 2], [3, 4]]]
+[[1], [1], [1], [1], [1]] [[1.1, 2.2, 3.3], [1.1, 2.2, 3.3], [1.1, 2.2, 3.3]] [[NULL, NULL], [NULL, NULL], [NULL, NULL]] [[[1, 2], [3, 4]], [[1, 2], [3, 4]]]
 
 query ????
 select
@@ -2748,7 +2748,7 @@ select
   array_repeat(arrow_cast([null, null], 'LargeList(Int64)'), 3),
   array_repeat(arrow_cast([[1, 2], [3, 4]], 'LargeList(List(Int64))'), 2);
 ----
-[[1], [1], [1], [1], [1]] [[1.1, 2.2, 3.3], [1.1, 2.2, 3.3], [1.1, 2.2, 3.3]] [[, ], [, ], [, ]] [[[1, 2], [3, 4]], [[1, 2], [3, 4]]]
+[[1], [1], [1], [1], [1]] [[1.1, 2.2, 3.3], [1.1, 2.2, 3.3], [1.1, 2.2, 3.3]] [[NULL, NULL], [NULL, NULL], [NULL, NULL]] [[[1, 2], [3, 4]], [[1, 2], [3, 4]]]
 
 # array_repeat with columns #1
 
@@ -2781,7 +2781,7 @@ select
 from array_repeat_table;
 ----
 [1] [1.1] [a] [[4, 5, 6]] [1, 1, 1] [[1]]
-[, ] [, ] [, ] [, ] [, , ] [[1], [1]]
+[NULL, NULL] [NULL, NULL] [NULL, NULL] [NULL, NULL] [NULL, NULL, NULL] [[1], [1]]
 [2, 2, 2] [2.2, 2.2, 2.2] [rust, rust, rust] [[7], [7], [7]] [2, 2, 2] [[1], [1], [1]]
 [] [] [] [] [3, 3, 3] []
 
@@ -2796,7 +2796,7 @@ select
 from large_array_repeat_table;
 ----
 [1] [1.1] [a] [[4, 5, 6]] [1, 1, 1] [[1]]
-[, ] [, ] [, ] [, ] [, , ] [[1], [1]]
+[NULL, NULL] [NULL, NULL] [NULL, NULL] [NULL, NULL] [NULL, NULL, NULL] [[1], [1]]
 [2, 2, 2] [2.2, 2.2, 2.2] [rust, rust, rust] [[7], [7], [7]] [2, 2, 2] [[1], [1], [1]]
 [] [] [] [] [3, 3, 3] []
 
@@ -2962,7 +2962,7 @@ select array_concat(make_array(column2), make_array(0)) from arrays_values;
 [23, 0]
 [34, 0]
 [44, 0]
-[, 0]
+[NULL, 0]
 [55, 0]
 [66, 0]
 
@@ -2970,33 +2970,33 @@ select array_concat(make_array(column2), make_array(0)) from arrays_values;
 query ???
 select array_concat(column1, column1), array_concat(column2, column2), array_concat(column3, column3) from arrays;
 ----
-[[, 2], [3, ], [, 2], [3, ]] [1.1, 2.2, 3.3, 1.1, 2.2, 3.3] [L, o, r, e, m, L, o, r, e, m]
-[[3, 4], [5, 6], [3, 4], [5, 6]] [, 5.5, 6.6, , 5.5, 6.6] [i, p, , u, m, i, p, , u, m]
-[[5, 6], [7, 8], [5, 6], [7, 8]] [7.7, 8.8, 9.9, 7.7, 8.8, 9.9] [d, , l, o, r, d, , l, o, r]
-[[7, ], [9, 10], [7, ], [9, 10]] [10.1, , 12.2, 10.1, , 12.2] [s, i, t, s, i, t]
+[[NULL, 2], [3, NULL], [NULL, 2], [3, NULL]] [1.1, 2.2, 3.3, 1.1, 2.2, 3.3] [L, o, r, e, m, L, o, r, e, m]
+[[3, 4], [5, 6], [3, 4], [5, 6]] [NULL, 5.5, 6.6, NULL, 5.5, 6.6] [i, p, NULL, u, m, i, p, NULL, u, m]
+[[5, 6], [7, 8], [5, 6], [7, 8]] [7.7, 8.8, 9.9, 7.7, 8.8, 9.9] [d, NULL, l, o, r, d, NULL, l, o, r]
+[[7, NULL], [9, 10], [7, NULL], [9, 10]] [10.1, NULL, 12.2, 10.1, NULL, 12.2] [s, i, t, s, i, t]
 NULL [13.3, 14.4, 15.5, 13.3, 14.4, 15.5] [a, m, e, t, a, m, e, t]
 [[11, 12], [13, 14], [11, 12], [13, 14]] NULL [,, ,]
-[[15, 16], [, 18], [15, 16], [, 18]] [16.6, 17.7, 18.8, 16.6, 17.7, 18.8] NULL
+[[15, 16], [NULL, 18], [15, 16], [NULL, 18]] [16.6, 17.7, 18.8, 16.6, 17.7, 18.8] NULL
 
 # array_concat column-wise #6
 query ??
 select array_concat(column1, make_array(make_array(1, 2), make_array(3, 4))), array_concat(column2, make_array(1.1, 2.2, 3.3)) from arrays;
 ----
-[[, 2], [3, ], [1, 2], [3, 4]] [1.1, 2.2, 3.3, 1.1, 2.2, 3.3]
-[[3, 4], [5, 6], [1, 2], [3, 4]] [, 5.5, 6.6, 1.1, 2.2, 3.3]
+[[NULL, 2], [3, NULL], [1, 2], [3, 4]] [1.1, 2.2, 3.3, 1.1, 2.2, 3.3]
+[[3, 4], [5, 6], [1, 2], [3, 4]] [NULL, 5.5, 6.6, 1.1, 2.2, 3.3]
 [[5, 6], [7, 8], [1, 2], [3, 4]] [7.7, 8.8, 9.9, 1.1, 2.2, 3.3]
-[[7, ], [9, 10], [1, 2], [3, 4]] [10.1, , 12.2, 1.1, 2.2, 3.3]
+[[7, NULL], [9, 10], [1, 2], [3, 4]] [10.1, NULL, 12.2, 1.1, 2.2, 3.3]
 [[1, 2], [3, 4]] [13.3, 14.4, 15.5, 1.1, 2.2, 3.3]
 [[11, 12], [13, 14], [1, 2], [3, 4]] [1.1, 2.2, 3.3]
-[[15, 16], [, 18], [1, 2], [3, 4]] [16.6, 17.7, 18.8, 1.1, 2.2, 3.3]
+[[15, 16], [NULL, 18], [1, 2], [3, 4]] [16.6, 17.7, 18.8, 1.1, 2.2, 3.3]
 
 # array_concat column-wise #7
 query ?
 select array_concat(column3, make_array('.', '.', '.')) from arrays;
 ----
 [L, o, r, e, m, ., ., .]
-[i, p, , u, m, ., ., .]
-[d, , l, o, r, ., ., .]
+[i, p, NULL, u, m, ., ., .]
+[d, NULL, l, o, r, ., ., .]
 [s, i, t, ., ., .]
 [a, m, e, t, ., ., .]
 [,, ., ., .]
@@ -3005,10 +3005,10 @@ select array_concat(column3, make_array('.', '.', '.')) from arrays;
 # query ??I?
 # select column1, column2, column3, column4 from arrays_values_v2;
 # ----
-# [, 2, 3] [4, 5, ] 12 [[30, 40, 50]]
-# NULL [7, , 8] 13 [[, , 60]]
-# [9, , 10] NULL 14 [[70, , ]]
-# [, 1] [, 21] NULL NULL
+# [NULL, 2, 3] [4, 5, NULL] 12 [[30, 40, 50]]
+# NULL [7, NULL, 8] 13 [[NULL, NULL, 60]]
+# [9, NULL, 10] NULL 14 [[70, NULL, NULL]]
+# [NULL, 1] [NULL, 21] NULL NULL
 # [11, 12] NULL NULL NULL
 # NULL NULL NULL NULL
 
@@ -3017,10 +3017,10 @@ select array_concat(column3, make_array('.', '.', '.')) from arrays;
 query ?
 select array_concat(column1, column2) from arrays_values_v2;
 ----
-[, 2, 3, 4, 5, ]
-[7, , 8]
-[9, , 10]
-[, 1, , 21]
+[NULL, 2, 3, 4, 5, NULL]
+[7, NULL, 8]
+[9, NULL, 10]
+[NULL, 1, NULL, 21]
 [11, 12]
 NULL
 
@@ -3029,11 +3029,11 @@ query ?
 select array_concat(column4, make_array(column3)) from arrays_values_v2;
 ----
 [[30, 40, 50], [12]]
-[[, , 60], [13]]
-[[70, , ], [14]]
-[[]]
-[[]]
-[[]]
+[[NULL, NULL, 60], [13]]
+[[70, NULL, NULL], [14]]
+[[NULL]]
+[[NULL]]
+[[NULL]]
 
 # array_concat column-wise #10 (3D + 2D + 1D)
 query ?
@@ -3046,23 +3046,23 @@ select array_concat(column4, column1, column2) from nested_arrays;
 query ?
 select array_concat(column4, column1) from arrays_values_v2;
 ----
-[[30, 40, 50], [, 2, 3]]
-[[, , 60], ]
-[[70, , ], [9, , 10]]
-[[, 1]]
+[[30, 40, 50], [NULL, 2, 3]]
+[[NULL, NULL, 60], NULL]
+[[70, NULL, NULL], [9, NULL, 10]]
+[[NULL, 1]]
 [[11, 12]]
-[]
+[NULL]
 
 # array_concat column-wise #12 (1D + 1D + 1D)
 query ?
 select array_concat(make_array(column3), column1, column2) from arrays_values_v2;
 ----
-[12, , 2, 3, 4, 5, ]
-[13, 7, , 8]
-[14, 9, , 10]
-[, , 1, , 21]
-[, 11, 12]
-[]
+[12, NULL, 2, 3, 4, 5, NULL]
+[13, 7, NULL, 8]
+[14, 9, NULL, 10]
+[NULL, NULL, 1, NULL, 21]
+[NULL, 11, 12]
+[NULL]
 
 ## array_position (aliases: `list_position`, `array_indexof`, `list_indexof`)
 
@@ -3908,10 +3908,10 @@ create table t as values
 query ?III?
 select column1, column2, column3, column4, array_replace_n(column1, column2, column3, column4) from t;
 ----
-[3, 1, , 3] 3 4 2 [4, 1, , 4]
-[3, 1, , 3] NULL 5 2 [3, 1, 5, 3]
+[3, 1, NULL, 3] 3 4 2 [4, 1, NULL, 4]
+[3, 1, NULL, 3] NULL 5 2 [3, 1, 5, 3]
 NULL 3 2 1 NULL
-[3, 1, 3] 3 NULL 1 [, 1, 3]
+[3, 1, 3] 3 NULL 1 [NULL, 1, 3]
 
 
 
@@ -3981,7 +3981,7 @@ GROUP BY column1
 ORDER BY column1;
 ----
 1 [foo, foo] foo,foo
-2 [] (empty)
+2 [NULL] (empty)
 3 [bar] bar
 NULL [baz] baz
 
@@ -4100,23 +4100,23 @@ select array_union(arrow_cast([], 'LargeList(Int64)'), arrow_cast([], 'LargeList
 query ?
 select array_union([[null]], []);
 ----
-[[]]
+[[NULL]]
 
 query ?
 select array_union(arrow_cast([[null]], 'LargeList(List(Int64))'), arrow_cast([], 'LargeList(Int64)'));
 ----
-[[]]
+[[NULL]]
 
 # array_union scalar function #8
 query ?
 select array_union([null], [null]);
 ----
-[]
+[NULL]
 
 query ?
 select array_union(arrow_cast([[null]], 'LargeList(List(Int64))'), arrow_cast([[null]], 'LargeList(List(Int64))'));
 ----
-[[]]
+[[NULL]]
 
 # array_union scalar function #9
 query ?
@@ -4240,13 +4240,13 @@ h,-,-,-,o nil-2-nil-4-5 1|0|3
 # For reference
 # select column1, column4 from arrays_values;
 # ----
-# [, 2, 3, 4, 5, 6, 7, 8, 9, 10] ,
-# [11, 12, 13, 14, 15, 16, 17, 18, , 20] .
-# [21, 22, 23, , 25, 26, 27, 28, 29, 30] -
-# [31, 32, 33, 34, 35, , 37, 38, 39, 40] ok
+# [NULL, 2, 3, 4, 5, 6, 7, 8, 9, 10] ,
+# [11, 12, 13, 14, 15, 16, 17, 18, NULL, 20] .
+# [21, 22, 23, NULL, 25, 26, 27, 28, 29, 30] -
+# [31, 32, 33, 34, 35, NULL, 37, 38, 39, 40] ok
 # NULL @
 # [41, 42, 43, 44, 45, 46, 47, 48, 49, 50] $
-# [51, 52, , 54, 55, 56, 57, 58, 59, 60] ^
+# [51, 52, NULL, 54, 55, 56, 57, 58, 59, 60] ^
 # [61, 62, 63, 64, 65, 66, 67, 68, 69, 70] NULL
 
 query T
@@ -4435,7 +4435,7 @@ select
   array_remove(make_array(1.1, null, 2.2, 3.3), 1.1),
   array_remove(make_array('a', null, 'bc'), 'a');
 ----
-[1, , 3] [, 2.2, 3.3] [, bc]
+[1, NULL, 3] [NULL, 2.2, 3.3] [NULL, bc]
 
 query ???
 select
@@ -4443,7 +4443,7 @@ select
   array_remove(arrow_cast(make_array(1.1, null, 2.2, 3.3), 'LargeList(Float64)'), 1.1),
   array_remove(arrow_cast(make_array('a', null, 'bc'), 'LargeList(Utf8)'), 'a');
 ----
-[1, , 3] [, 2.2, 3.3] [, bc]
+[1, NULL, 3] [NULL, 2.2, 3.3] [NULL, bc]
 
 query ???
 select
@@ -4451,7 +4451,7 @@ select
   array_remove(arrow_cast(make_array(1.1, null, 2.2, 3.3), 'FixedSizeList(4, Float64)'), 1.1),
   array_remove(arrow_cast(make_array('a', null, 'bc'), 'FixedSizeList(3, Utf8)'), 'a');
 ----
-[1, , 3] [, 2.2, 3.3] [, bc]
+[1, NULL, 3] [NULL, 2.2, 3.3] [NULL, bc]
 
 #TODO: https://github.com/apache/datafusion/issues/7142
 # follow PostgreSQL behavior
@@ -4466,21 +4466,21 @@ select
  array_remove(make_array(1, null, 2), null),
  array_remove(make_array(1, null, 2, null), null);
 ----
-[1, 2] [1, 2, ]
+[1, 2] [1, 2, NULL]
 
 query ??
 select
  array_remove(arrow_cast(make_array(1, null, 2), 'LargeList(Int64)'), null),
  array_remove(arrow_cast(make_array(1, null, 2, null), 'LargeList(Int64)'), null);
 ----
-[1, 2] [1, 2, ]
+[1, 2] [1, 2, NULL]
 
 query ??
 select
  array_remove(arrow_cast(make_array(1, null, 2), 'FixedSizeList(3, Int64)'), null),
  array_remove(arrow_cast(make_array(1, null, 2, null), 'FixedSizeList(4, Int64)'), null);
 ----
-[1, 2] [1, 2, ]
+[1, 2] [1, 2, NULL]
 
 # array_remove scalar function #2 (element is list)
 query ??
@@ -5718,7 +5718,7 @@ from array_distinct_table_2D;
 ----
 [[1, 2], [3, 4], [5, 6]]
 [[1, 2], [3, 4], [5, 6], [7, 8], [9, 10]]
-[, [5, 6]]
+[NULL, [5, 6]]
 
 query ?
 select array_distinct(column1)
@@ -5750,7 +5750,7 @@ from array_distinct_table_2D_fixed;
 ----
 [[1, 2], [3, 4], [5, 6]]
 [[1, 2], [3, 4], [5, 6], [7, 8], [9, 10]]
-[, [5, 6]]
+[NULL, [5, 6]]
 
 query ???
 select array_intersect(column1, column2),
@@ -6645,19 +6645,19 @@ select make_array(1, 2.0)
 query ?
 select make_array(null, 1.0)
 ----
-[, 1.0]
+[NULL, 1.0]
 
 # make_array scalar function #3
 query ?
 select make_array(1, 2.0, null, 3)
 ----
-[1.0, 2.0, , 3.0]
+[1.0, 2.0, NULL, 3.0]
 
 # make_array scalar function #4
 query ?
 select make_array(1.0, '2', null)
 ----
-[1.0, 2.0, ]
+[1.0, 2.0, NULL]
 
 ### FixedSizeListArray
 
@@ -6716,10 +6716,10 @@ List(Field { name: "item", data_type: List(Field { name: "item", data_type: Int6
 query ?
 select array_concat(column1, [7]) from arrays_values_v2;
 ----
-[, 2, 3, 7]
+[NULL, 2, 3, 7]
 [7]
-[9, , 10, 7]
-[, 1, 7]
+[9, NULL, 10, 7]
+[NULL, 1, 7]
 [11, 12, 7]
 [7]
 
@@ -6738,21 +6738,21 @@ select flatten(make_array(1, 2, 1, 3, 2)),
        flatten(make_array([1], [2, 3], [null], make_array(4, null, 5))),
        flatten(make_array([[1.1]], [[2.2]], [[3.3], [4.4]]));
 ----
-[1, 2, 1, 3, 2] [1, 2, 3, , 4, , 5] [1.1, 2.2, 3.3, 4.4]
+[1, 2, 1, 3, 2] [1, 2, 3, NULL, 4, NULL, 5] [1.1, 2.2, 3.3, 4.4]
 
 query ???
 select flatten(arrow_cast(make_array(1, 2, 1, 3, 2), 'LargeList(Int64)')),
        flatten(arrow_cast(make_array([1], [2, 3], [null], make_array(4, null, 5)), 'LargeList(LargeList(Int64))')),
        flatten(arrow_cast(make_array([[1.1]], [[2.2]], [[3.3], [4.4]]), 'LargeList(LargeList(LargeList(Float64)))'));
 ----
-[1, 2, 1, 3, 2] [1, 2, 3, , 4, , 5] [1.1, 2.2, 3.3, 4.4]
+[1, 2, 1, 3, 2] [1, 2, 3, NULL, 4, NULL, 5] [1.1, 2.2, 3.3, 4.4]
 
 query ???
 select flatten(arrow_cast(make_array(1, 2, 1, 3, 2), 'FixedSizeList(5, Int64)')),
        flatten(arrow_cast(make_array([1], [2, 3], [null], make_array(4, null, 5)), 'FixedSizeList(4, List(Int64))')),
        flatten(arrow_cast(make_array([[1.1], [2.2]], [[3.3], [4.4]]), 'FixedSizeList(2, List(List(Float64)))'));
 ----
-[1, 2, 1, 3, 2] [1, 2, 3, , 4, , 5] [1.1, 2.2, 3.3, 4.4]
+[1, 2, 1, 3, 2] [1, 2, 3, NULL, 4, NULL, 5] [1.1, 2.2, 3.3, 4.4]
 
 # flatten with column values
 query ????
@@ -6963,7 +6963,7 @@ SELECT string_to_array('abc', NULL)
 query ?
 SELECT string_to_array('abc def', ' ', 'def')
 ----
-[abc, ]
+[abc, NULL]
 
 query ?
 select string_to_array(e, ',') from values;
@@ -7013,7 +7013,7 @@ NULL
 query ?
 select string_to_array(arrow_cast(e, 'LargeUtf8'), ',', arrow_cast('Lorem', 'LargeUtf8')) from values;
 ----
-[]
+[NULL]
 [ipsum]
 [dolor]
 [sit]
@@ -7079,12 +7079,12 @@ select array_resize(arrow_cast(make_array(1, 2, 3), 'LargeList(Int64)'), 1);
 query ?
 select array_resize(make_array(1, 2, 3), 5);
 ----
-[1, 2, 3, , ]
+[1, 2, 3, NULL, NULL]
 
 query ?
 select array_resize(arrow_cast(make_array(1, 2, 3), 'LargeList(Int64)'), 5);
 ----
-[1, 2, 3, , ]
+[1, 2, 3, NULL, NULL]
 
 # array_resize scalar function #3
 query ?
@@ -7116,25 +7116,25 @@ select array_resize(arrow_cast(make_array(1.1, 2.2, 3.3), 'LargeList(Float64)'),
 query ?
 select array_resize(column1, column2, column3) from arrays_values;
 ----
-[]
-[11, 12, 13, 14, 15, 16, 17, 18, , 20, 2, 2]
-[21, 22, 23, , 25, 26, 27, 28, 29, 30, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3]
-[31, 32, 33, 34, 35, , 37, 38, 39, 40, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4]
+[NULL]
+[11, 12, 13, 14, 15, 16, 17, 18, NULL, 20, 2, 2]
+[21, 22, 23, NULL, 25, 26, 27, 28, 29, 30, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3]
+[31, 32, 33, 34, 35, NULL, 37, 38, 39, 40, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4]
 NULL
 []
-[51, 52, , 54, 55, 56, 57, 58, 59, 60, , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , ]
+[51, 52, NULL, 54, 55, 56, 57, 58, 59, 60, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL]
 [61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7]
 
 query ?
 select array_resize(arrow_cast(column1, 'LargeList(Int64)'), column2, column3) from arrays_values;
 ----
-[]
-[11, 12, 13, 14, 15, 16, 17, 18, , 20, 2, 2]
-[21, 22, 23, , 25, 26, 27, 28, 29, 30, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3]
-[31, 32, 33, 34, 35, , 37, 38, 39, 40, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4]
+[NULL]
+[11, 12, 13, 14, 15, 16, 17, 18, NULL, 20, 2, 2]
+[21, 22, 23, NULL, 25, 26, 27, 28, 29, 30, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3]
+[31, 32, 33, 34, 35, NULL, 37, 38, 39, 40, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4]
 NULL
 []
-[51, 52, , 54, 55, 56, 57, 58, 59, 60, , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , ]
+[51, 52, NULL, 54, 55, 56, 57, 58, 59, 60, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL]
 [61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7]
 
 # array_resize scalar function #5
@@ -7171,26 +7171,26 @@ AS VALUES
 query ?
 select array_resize(column1, column2, column3) from array_resize_values;
 ----
-[1, ]
-[11, 12, , 14, 15]
-[21, 22, 23, 24, , 26, 27, 28]
-[31, 32, 33, 34, 35, 36, , 38, 39, 40, 4, 4]
+[1, NULL]
+[11, 12, NULL, 14, 15]
+[21, 22, 23, 24, NULL, 26, 27, 28]
+[31, 32, 33, 34, 35, 36, NULL, 38, 39, 40, 4, 4]
 NULL
 []
-[51, 52, 53, 54, 55, , 57, 58, 59, 60, , , ]
+[51, 52, 53, 54, 55, NULL, 57, 58, 59, 60, NULL, NULL, NULL]
 [61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 7, 7, 7, 7, 7]
 
 # array_resize columnar test #2
 query ?
 select array_resize(arrow_cast(column1, 'LargeList(Int64)'), column2, column3) from array_resize_values;
 ----
-[1, ]
-[11, 12, , 14, 15]
-[21, 22, 23, 24, , 26, 27, 28]
-[31, 32, 33, 34, 35, 36, , 38, 39, 40, 4, 4]
+[1, NULL]
+[11, 12, NULL, 14, 15]
+[21, 22, 23, 24, NULL, 26, 27, 28]
+[31, 32, 33, 34, 35, 36, NULL, 38, 39, 40, 4, 4]
 NULL
 []
-[51, 52, 53, 54, 55, , 57, 58, 59, 60, , , ]
+[51, 52, 53, 54, 55, NULL, 57, 58, 59, 60, NULL, NULL, NULL]
 [61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 7, 7, 7, 7, 7]
 
 ## array_reverse
@@ -7218,13 +7218,13 @@ NULL []
 query ??
 select array_reverse(column1), column1 from arrays_values;
 ----
-[10, 9, 8, 7, 6, 5, 4, 3, 2, ] [, 2, 3, 4, 5, 6, 7, 8, 9, 10]
-[20, , 18, 17, 16, 15, 14, 13, 12, 11] [11, 12, 13, 14, 15, 16, 17, 18, , 20]
-[30, 29, 28, 27, 26, 25, , 23, 22, 21] [21, 22, 23, , 25, 26, 27, 28, 29, 30]
-[40, 39, 38, 37, , 35, 34, 33, 32, 31] [31, 32, 33, 34, 35, , 37, 38, 39, 40]
+[10, 9, 8, 7, 6, 5, 4, 3, 2, NULL] [NULL, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+[20, NULL, 18, 17, 16, 15, 14, 13, 12, 11] [11, 12, 13, 14, 15, 16, 17, 18, NULL, 20]
+[30, 29, 28, 27, 26, 25, NULL, 23, 22, 21] [21, 22, 23, NULL, 25, 26, 27, 28, 29, 30]
+[40, 39, 38, 37, NULL, 35, 34, 33, 32, 31] [31, 32, 33, 34, 35, NULL, 37, 38, 39, 40]
 NULL NULL
 [50, 49, 48, 47, 46, 45, 44, 43, 42, 41] [41, 42, 43, 44, 45, 46, 47, 48, 49, 50]
-[60, 59, 58, 57, 56, 55, 54, , 52, 51] [51, 52, , 54, 55, 56, 57, 58, 59, 60]
+[60, 59, 58, 57, 56, 55, 54, NULL, 52, 51] [51, 52, NULL, 54, 55, 56, 57, 58, 59, 60]
 [70, 69, 68, 67, 66, 65, 64, 63, 62, 61] [61, 62, 63, 64, 65, 66, 67, 68, 69, 70]
 
 

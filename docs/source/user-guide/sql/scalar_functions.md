@@ -4076,7 +4076,7 @@ SELECT MAP('type', 'test');
 
 SELECT MAP(['POST', 'HEAD', 'PATCH'], [41, 33, null]);
 ----
-{POST: 41, HEAD: 33, PATCH: }
+{POST: 41, HEAD: 33, PATCH: NULL}
 
 SELECT MAP([[1,2], [3,4]], ['a', 'b']);
 ----

@@ -44,10 +44,9 @@ use datafusion_execution::TaskContext;
 use datafusion_expr::{Accumulator, Aggregate};
 use datafusion_physical_expr::aggregate::AggregateFunctionExpr;
 use datafusion_physical_expr::{
-    equivalence::{collapse_lex_req, ProjectionMapping},
-    expressions::Column,
-    physical_exprs_contains, EquivalenceProperties, LexOrdering, LexRequirement,
-    PhysicalExpr, PhysicalSortRequirement,
+    equivalence::ProjectionMapping, expressions::Column, physical_exprs_contains,
+    EquivalenceProperties, LexOrdering, LexRequirement, PhysicalExpr,
+    PhysicalSortRequirement,
 };
 
 use itertools::Itertools;
@@ -249,6 +248,10 @@ impl PhysicalGroupBy {
         } else {
             self.expr.len() + 1
         }
+    }
+
+    pub fn group_schema(&self, schema: &Schema) -> Result<SchemaRef> {
+        Ok(Arc::new(Schema::new(self.group_fields(schema)?)))
     }
 
     /// Returns the fields that are used as the grouping keys.
@@ -473,7 +476,7 @@ impl AggregateExec {
             &mode,
         )?;
         new_requirement.inner.extend(req);
-        new_requirement = collapse_lex_req(new_requirement);
+        new_requirement = new_requirement.collapse();
 
         // If our aggregation has grouping sets then our base grouping exprs will
         // be expanded based on the flags in `group_by.groups` where for each
@@ -942,10 +945,6 @@ fn create_schema(
         fields,
         input_schema.metadata().clone(),
     ))
-}
-
-fn group_schema(input_schema: &Schema, group_by: &PhysicalGroupBy) -> Result<SchemaRef> {
-    Ok(Arc::new(Schema::new(group_by.group_fields(input_schema)?)))
 }
 
 /// Determines the lexical ordering requirement for an aggregate expression.
