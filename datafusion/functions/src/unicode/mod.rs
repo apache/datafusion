@@ -102,7 +102,7 @@ pub mod expr_fn {
         string
     ),(
         find_in_set,
-        "Returns a value in the range of 1 to N if the string str is in the string list strlist consisting of N substrings",
+        "Returns a value in the range of 1 to N if the string `str` is in the string list `strlist` consisting of N substrings",
         string strlist
     ));
 
