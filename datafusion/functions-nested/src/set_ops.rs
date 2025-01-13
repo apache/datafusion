@@ -90,9 +90,15 @@ make_udf_expr_and_func!(
     )
 )]
 #[derive(Debug)]
-pub(super) struct ArrayUnion {
+pub struct ArrayUnion {
     signature: Signature,
     aliases: Vec<String>,
+}
+
+impl Default for ArrayUnion {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl ArrayUnion {
@@ -507,7 +513,7 @@ fn general_array_distinct<OffsetSize: OffsetSizeTrait>(
     array: &GenericListArray<OffsetSize>,
     field: &FieldRef,
 ) -> Result<ArrayRef> {
-    if array.len() == 0 {
+    if array.is_empty() {
         return Ok(Arc::new(array.clone()) as ArrayRef);
     }
     let dt = array.value_type();
@@ -516,11 +522,16 @@ fn general_array_distinct<OffsetSize: OffsetSizeTrait>(
     let mut new_arrays = Vec::with_capacity(array.len());
     let converter = RowConverter::new(vec![SortField::new(dt)])?;
     // distinct for each list in ListArray
-    for arr in array.iter().flatten() {
+    for arr in array.iter() {
+        let last_offset: OffsetSize = offsets.last().copied().unwrap();
+        let Some(arr) = arr else {
+            // Add same offset for null
+            offsets.push(last_offset);
+            continue;
+        };
         let values = converter.convert_columns(&[arr])?;
         // sort elements in list and remove duplicates
         let rows = values.iter().sorted().dedup().collect::<Vec<_>>();
-        let last_offset: OffsetSize = offsets.last().copied().unwrap();
         offsets.push(last_offset + OffsetSize::usize_as(rows.len()));
         let arrays = converter.convert_rows(rows)?;
         let array = match arrays.first() {
@@ -531,6 +542,9 @@ fn general_array_distinct<OffsetSize: OffsetSizeTrait>(
         };
         new_arrays.push(array);
     }
+    if new_arrays.is_empty() {
+        return Ok(Arc::new(array.clone()) as ArrayRef);
+    }
     let offsets = OffsetBuffer::new(offsets.into());
     let new_arrays_ref = new_arrays.iter().map(|v| v.as_ref()).collect::<Vec<_>>();
     let values = compute::concat(&new_arrays_ref)?;
@@ -538,6 +552,7 @@ fn general_array_distinct<OffsetSize: OffsetSizeTrait>(
         Arc::clone(field),
         offsets,
         values,
-        None,
+        // Keep the list nulls
+        array.nulls().cloned(),
     )?))
 }

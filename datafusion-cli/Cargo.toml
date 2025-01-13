@@ -25,7 +25,6 @@ keywords = ["arrow", "datafusion", "query", "sql"]
 license = "Apache-2.0"
 homepage = "https://datafusion.apache.org"
 repository = "https://github.com/apache/datafusion"
-# Specify MSRV here as `cargo msrv` doesn't support workspace version
 rust-version = "1.80.1"
 readme = "README.md"
 
@@ -63,11 +62,11 @@ parquet = { version = "53.0.0", default-features = false }
 regex = "1.8"
 rustyline = "14.0"
 tokio = { version = "1.24", features = ["macros", "rt", "rt-multi-thread", "sync", "parking_lot", "signal"] }
-url = "2.2"
+url = "2.5.4"
 
 [dev-dependencies]
 assert_cmd = "2.0"
-ctor = "0.2.0"
+ctor = "0.2.9"
 predicates = "3.0"
 rstest = "0.22"
 

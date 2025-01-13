@@ -215,10 +215,14 @@ pub enum LogicalPlan {
     /// Windows input based on a set of window spec and window
     /// function (e.g. SUM or RANK).  This is used to implement SQL
     /// window functions, and the `OVER` clause.
+    ///
+    /// See [`Window`] for more details
     Window(Window),
     /// Aggregates its input based on a set of grouping and aggregate
     /// expressions (e.g. SUM). This is used to implement SQL aggregates
     /// and `GROUP BY`.
+    ///
+    /// See [`Aggregate`] for more details
     Aggregate(Aggregate),
     /// Sorts its input according to a list of sort expressions. This
     /// is used to implement SQL `ORDER BY`
@@ -1317,18 +1321,13 @@ impl LogicalPlan {
                 join_type,
                 ..
             }) => match join_type {
-                JoinType::Inner | JoinType::Left | JoinType::Right | JoinType::Full => {
-                    match (left.max_rows(), right.max_rows()) {
-                        (Some(left_max), Some(right_max)) => {
-                            let min_rows = match join_type {
-                                JoinType::Left => left_max,
-                                JoinType::Right => right_max,
-                                JoinType::Full => left_max + right_max,
-                                _ => 0,
-                            };
-                            Some((left_max * right_max).max(min_rows))
-                        }
-                        _ => None,
+                JoinType::Inner => Some(left.max_rows()? * right.max_rows()?),
+                JoinType::Left | JoinType::Right | JoinType::Full => {
+                    match (left.max_rows()?, right.max_rows()?, join_type) {
+                        (0, 0, _) => Some(0),
+                        (max_rows, 0, JoinType::Left | JoinType::Full) => Some(max_rows),
+                        (0, max_rows, JoinType::Right | JoinType::Full) => Some(max_rows),
+                        (left_max, right_max, _) => Some(left_max * right_max),
                     }
                 }
                 JoinType::LeftSemi | JoinType::LeftAnti | JoinType::LeftMark => {
@@ -1337,17 +1336,12 @@ impl LogicalPlan {
                 JoinType::RightSemi | JoinType::RightAnti => right.max_rows(),
             },
             LogicalPlan::Repartition(Repartition { input, .. }) => input.max_rows(),
-            LogicalPlan::Union(Union { inputs, .. }) => inputs
-                .iter()
-                .map(|plan| plan.max_rows())
-                .try_fold(0usize, |mut acc, input_max| {
-                    if let Some(i_max) = input_max {
-                        acc += i_max;
-                        Some(acc)
-                    } else {
-                        None
-                    }
-                }),
+            LogicalPlan::Union(Union { inputs, .. }) => {
+                inputs.iter().try_fold(0usize, |mut acc, plan| {
+                    acc += plan.max_rows()?;
+                    Some(acc)
+                })
+            }
             LogicalPlan::TableScan(TableScan { fetch, .. }) => *fetch,
             LogicalPlan::EmptyRelation(_) => Some(0),
             LogicalPlan::RecursiveQuery(_) => None,
@@ -2375,6 +2369,19 @@ impl Filter {
 }
 
 /// Window its input based on a set of window spec and window function (e.g. SUM or RANK)
+///
+/// # Output Schema
+///
+/// The output schema is the input schema followed by the window function
+/// expressions, in order.
+///
+/// For example, given the input schema `"A", "B", "C"` and the window function
+/// `SUM(A) OVER (PARTITION BY B+1 ORDER BY C)`, the output schema will be `"A",
+/// "B", "C", "SUM(A) OVER ..."` where `"SUM(A) OVER ..."` is the name of the
+/// output column.
+///
+/// Note that the `PARTITION BY` expression "B+1" is not produced in the output
+/// schema.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Window {
     /// The incoming logical plan
@@ -2978,6 +2985,16 @@ impl PartialOrd for DistinctOn {
 
 /// Aggregates its input based on a set of grouping and aggregate
 /// expressions (e.g. SUM).
+///
+/// # Output Schema
+///
+/// The output schema is the group expressions followed by the aggregate
+/// expressions in order.
+///
+/// For example, given the input schema `"A", "B", "C"` and the aggregate
+/// `SUM(A) GROUP BY C+B`, the output schema will be `"C+B", "SUM(A)"` where
+/// "C+B" and "SUM(A)" are the names of the output columns. Note that "C+B" is a
+/// single new column
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 // mark non_exhaustive to encourage use of try_new/new()
 #[non_exhaustive]
@@ -3433,15 +3450,15 @@ pub enum Partitioning {
 ///   input             output_name
 ///  ┌─────────┐      ┌─────────┐
 ///  │{{1,2}}  │      │ 1       │
-///  ├─────────┼─────►├─────────┤           
-///  │{{3}}    │      │ 2       │           
-///  ├─────────┤      ├─────────┤           
-///  │{{4},{5}}│      │ 3       │           
-///  └─────────┘      ├─────────┤           
-///                   │ 4       │           
-///                   ├─────────┤           
-///                   │ 5       │           
-///                   └─────────┘           
+///  ├─────────┼─────►├─────────┤
+///  │{{3}}    │      │ 2       │
+///  ├─────────┤      ├─────────┤
+///  │{{4},{5}}│      │ 3       │
+///  └─────────┘      ├─────────┤
+///                   │ 4       │
+///                   ├─────────┤
+///                   │ 5       │
+///                   └─────────┘
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd)]
 pub struct ColumnUnnestList {

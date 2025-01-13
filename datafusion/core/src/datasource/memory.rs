@@ -293,7 +293,7 @@ impl TableProvider for MemTable {
         if insert_op != InsertOp::Append {
             return not_impl_err!("{insert_op} not implemented for MemoryTable yet");
         }
-        let sink = Arc::new(MemSink::new(self.batches.clone()));
+        let sink = Arc::new(MemSink::try_new(self.batches.clone())?);
         Ok(Arc::new(DataSinkExec::new(
             input,
             sink,
@@ -333,8 +333,14 @@ impl DisplayAs for MemSink {
 }
 
 impl MemSink {
-    fn new(batches: Vec<PartitionData>) -> Self {
-        Self { batches }
+    /// Creates a new [`MemSink`].
+    ///
+    /// The caller is responsible for ensuring that there is at least one partition to insert into.
+    fn try_new(batches: Vec<PartitionData>) -> Result<Self> {
+        if batches.is_empty() {
+            return plan_err!("Cannot insert into MemTable with zero partitions");
+        }
+        Ok(Self { batches })
     }
 }
 
@@ -777,6 +783,29 @@ mod tests {
         .await?;
         // Ensure that the table now contains two batches of data in the same partition
         assert_eq!(resulting_data_in_table[0].len(), 2);
+        Ok(())
+    }
+
+    // Test inserting a batch into a MemTable without any partitions
+    #[tokio::test]
+    async fn test_insert_into_zero_partition() -> Result<()> {
+        // Create a new schema with one field called "a" of type Int32
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
+
+        // Create a new batch of data to insert into the table
+        let batch = RecordBatch::try_new(
+            schema.clone(),
+            vec![Arc::new(Int32Array::from(vec![1, 2, 3]))],
+        )?;
+        // Run the experiment and expect an error
+        let experiment_result = experiment(schema, vec![], vec![vec![batch.clone()]])
+            .await
+            .unwrap_err();
+        // Ensure that there is a descriptive error message
+        assert_eq!(
+            "Error during planning: Cannot insert into MemTable with zero partitions",
+            experiment_result.strip_backtrace()
+        );
         Ok(())
     }
 }

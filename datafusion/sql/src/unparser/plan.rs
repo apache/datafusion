@@ -706,13 +706,6 @@ impl Unparser<'_> {
                 Ok(())
             }
             LogicalPlan::Union(union) => {
-                if union.inputs.len() != 2 {
-                    return not_impl_err!(
-                        "UNION ALL expected 2 inputs, but found {}",
-                        union.inputs.len()
-                    );
-                }
-
                 // Covers cases where the UNION is a subquery and the projection is at the top level
                 if select.already_projected() {
                     return self.derive_with_dialect_alias(
@@ -729,12 +722,22 @@ impl Unparser<'_> {
                     .map(|input| self.select_to_sql_expr(input, query))
                     .collect::<Result<Vec<_>>>()?;
 
-                let union_expr = SetExpr::SetOperation {
-                    op: ast::SetOperator::Union,
-                    set_quantifier: ast::SetQuantifier::All,
-                    left: Box::new(input_exprs[0].clone()),
-                    right: Box::new(input_exprs[1].clone()),
-                };
+                if input_exprs.len() < 2 {
+                    return internal_err!("UNION operator requires at least 2 inputs");
+                }
+
+                // Build the union expression tree bottom-up by reversing the order
+                // note that we are also swapping left and right inputs because of the rev
+                let union_expr = input_exprs
+                    .into_iter()
+                    .rev()
+                    .reduce(|a, b| SetExpr::SetOperation {
+                        op: ast::SetOperator::Union,
+                        set_quantifier: ast::SetQuantifier::All,
+                        left: Box::new(b),
+                        right: Box::new(a),
+                    })
+                    .unwrap();
 
                 let Some(query) = query.as_mut() else {
                     return internal_err!(

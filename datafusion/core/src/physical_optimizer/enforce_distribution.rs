@@ -1208,7 +1208,7 @@ fn ensure_distribution(
     // We store the updated children in `new_children`.
     let children = izip!(
         children.into_iter(),
-        plan.required_input_ordering().iter(),
+        plan.required_input_ordering(),
         plan.maintains_input_order(),
         repartition_status_flags.into_iter()
     )
@@ -1275,7 +1275,7 @@ fn ensure_distribution(
                 let ordering_satisfied = child
                     .plan
                     .equivalence_properties()
-                    .ordering_satisfy_requirement(required_input_ordering);
+                    .ordering_satisfy_requirement(&required_input_ordering);
                 if (!ordering_satisfied || !order_preserving_variants_desirable)
                     && child.data
                 {

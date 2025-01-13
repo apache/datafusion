@@ -78,9 +78,15 @@ make_udf_expr_and_func!(ArrayReplaceAll,
     argument(name = "to", description = "Final element.")
 )]
 #[derive(Debug)]
-pub(super) struct ArrayReplace {
+pub struct ArrayReplace {
     signature: Signature,
     aliases: Vec<String>,
+}
+
+impl Default for ArrayReplace {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl ArrayReplace {

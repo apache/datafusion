@@ -40,6 +40,13 @@ make_udf_expr_and_func!(
     array_sort_udf
 );
 
+/// Implementation of `array_sort` function
+///
+/// `array_sort` sorts the elements of an array
+///
+/// # Example
+///
+/// `array_sort([3, 1, 2])` returns `[1, 2, 3]`
 #[user_doc(
     doc_section(label = "Array Functions"),
     description = "Sort array.",
@@ -66,9 +73,15 @@ make_udf_expr_and_func!(
     )
 )]
 #[derive(Debug)]
-pub(super) struct ArraySort {
+pub struct ArraySort {
     signature: Signature,
     aliases: Vec<String>,
+}
+
+impl Default for ArraySort {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl ArraySort {

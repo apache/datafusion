@@ -56,8 +56,14 @@ SELECT map_keys(map([100, 5], [42, 43]));
     )
 )]
 #[derive(Debug)]
-pub(crate) struct MapKeysFunc {
+pub struct MapKeysFunc {
     signature: Signature,
+}
+
+impl Default for MapKeysFunc {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl MapKeysFunc {

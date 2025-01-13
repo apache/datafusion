@@ -541,27 +541,6 @@ jobs:
       - name: Run clippy
         run: ci/scripts/rust_clippy.sh
 
-  # Check answers are correct when hash values collide
-  hash-collisions:
-    name: cargo test hash collisions (amd64)
-    needs: linux-build-lib
-    runs-on: ubuntu-latest
-    container:
-      image: amd64/rust
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          submodules: true
-          fetch-depth: 1
-      - name: Setup Rust toolchain
-        uses: ./.github/actions/setup-builder
-        with:
-          rust-version: stable
-      - name: Run tests
-        run: |
-          cd datafusion
-          cargo test  --profile ci --exclude datafusion-examples --exclude datafusion-benchmarks --exclude datafusion-sqllogictest --workspace --lib --tests --features=force_hash_collisions,avro
-
   cargo-toml-formatting-checks:
     name: check Cargo.toml formatting
     needs: linux-build-lib

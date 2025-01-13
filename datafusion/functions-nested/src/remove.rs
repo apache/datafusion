@@ -64,9 +64,15 @@ make_udf_expr_and_func!(
     )
 )]
 #[derive(Debug)]
-pub(super) struct ArrayRemove {
+pub struct ArrayRemove {
     signature: Signature,
     aliases: Vec<String>,
+}
+
+impl Default for ArrayRemove {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl ArrayRemove {
