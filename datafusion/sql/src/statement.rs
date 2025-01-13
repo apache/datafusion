@@ -175,10 +175,10 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             DFStatement::Statement(s) => self.sql_statement_to_plan(*s),
             DFStatement::CopyTo(s) => self.copy_to_plan(s),
             DFStatement::Explain(ExplainStatement {
-                                     verbose,
-                                     analyze,
-                                     statement,
-                                 }) => self.explain_to_plan(verbose, analyze, *statement),
+                verbose,
+                analyze,
+                statement,
+            }) => self.explain_to_plan(verbose, analyze, *statement),
         }
     }
 
@@ -1679,7 +1679,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             table_source,
             None,
         )?
-            .build()?;
+        .build()?;
         let mut planner_context = PlannerContext::new();
 
         let source = match predicate_expr {
