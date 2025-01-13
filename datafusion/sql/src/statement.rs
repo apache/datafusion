@@ -791,12 +791,12 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     )?;
                 }
                 let Some(ShowStatementIn {
-                    // specifies if the syntax was `SHOW COLUMNS IN` or `SHOW
-                    // COLUMNS FROM` which is not different in DataFusion
-                    clause: _,
-                    parent_type,
-                    parent_name,
-                }) = show_in
+                             // specifies if the syntax was `SHOW COLUMNS IN` or `SHOW
+                             // COLUMNS FROM` which is not different in DataFusion
+                             clause: _,
+                             parent_type,
+                             parent_name,
+                         }) = show_in
                 else {
                     return plan_err!("SHOW COLUMNS requires a table name");
                 };
@@ -816,23 +816,23 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             }
 
             Statement::Insert(Insert {
-                or,
-                into,
-                table_name,
-                columns,
-                overwrite,
-                source,
-                partitioned,
-                after_columns,
-                table,
-                on,
-                returning,
-                ignore,
-                table_alias,
-                mut replace_into,
-                priority,
-                insert_alias,
-            }) => {
+                                  or,
+                                  into,
+                                  table_name,
+                                  columns,
+                                  overwrite,
+                                  source,
+                                  partitioned,
+                                  after_columns,
+                                  table,
+                                  on,
+                                  returning,
+                                  ignore,
+                                  table_alias,
+                                  mut replace_into,
+                                  priority,
+                                  insert_alias,
+                              }) => {
                 if let Some(or) = or {
                     match or {
                         SqliteOnConflict::Replace => replace_into = true,
@@ -894,14 +894,14 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             }
 
             Statement::Delete(Delete {
-                tables,
-                using,
-                selection,
-                returning,
-                from,
-                order_by,
-                limit,
-            }) => {
+                                  tables,
+                                  using,
+                                  selection,
+                                  returning,
+                                  from,
+                                  order_by,
+                                  limit,
+                              }) => {
                 if !tables.is_empty() {
                     plan_err!("DELETE <TABLE> not supported")?;
                 }
@@ -1002,16 +1002,16 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 Ok(LogicalPlan::Statement(statement))
             }
             Statement::CreateFunction(ast::CreateFunction {
-                or_replace,
-                temporary,
-                name,
-                args,
-                return_type,
-                function_body,
-                behavior,
-                language,
-                ..
-            }) => {
+                                          or_replace,
+                                          temporary,
+                                          name,
+                                          args,
+                                          return_type,
+                                          function_body,
+                                          behavior,
+                                          language,
+                                          ..
+                                      }) => {
                 let return_type = match return_type {
                     Some(t) => Some(self.convert_data_type(&t)?),
                     None => None,
@@ -1120,14 +1120,14 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 }
             }
             Statement::CreateIndex(CreateIndex {
-                name,
-                table_name,
-                using,
-                columns,
-                unique,
-                if_not_exists,
-                ..
-            }) => {
+                                       name,
+                                       table_name,
+                                       using,
+                                       columns,
+                                       unique,
+                                       if_not_exists,
+                                       ..
+                                   }) => {
                 let name: Option<String> = name.as_ref().map(object_name_to_string);
                 let table = self.object_name_to_table_reference(table_name)?;
                 let table_schema = self
@@ -1373,8 +1373,8 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             .transpose()?;
         if (file_type == "PARQUET" || file_type == "AVRO" || file_type == "ARROW")
             && compression
-                .map(|c| c != CompressionTypeVariant::UNCOMPRESSED)
-                .unwrap_or(false)
+            .map(|c| c != CompressionTypeVariant::UNCOMPRESSED)
+            .unwrap_or(false)
         {
             plan_err!(
                 "File compression type cannot be set for PARQUET, AVRO, or ARROW files."
@@ -1440,7 +1440,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                                         .map(|name| format!("with name '{name}' "))
                                         .unwrap_or("".to_string());
                                     DataFusionError::Execution(
-                                        format!("Column for unique constraint {}not found in schema: {}", name,u.value)
+                                        format!("Column for unique constraint {}not found in schema: {}", name, u.value)
                                     )
                                 })?;
                             Ok(idx)
