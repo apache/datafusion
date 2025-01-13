@@ -22,8 +22,8 @@ use std::borrow::Cow;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use crate::datasource::physical_plan::FileSinkConfig;
 use crate::datasource::listing::ListingTableUrl;
+use crate::datasource::physical_plan::FileSinkConfig;
 use crate::error::Result;
 use crate::physical_plan::SendableRecordBatchStream;
 

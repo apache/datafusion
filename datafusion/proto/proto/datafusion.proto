@@ -728,6 +728,7 @@ message FileSinkConfig {
   repeated PartitionColumn table_partition_cols = 5;
   bool keep_partition_by_columns = 9;
   InsertOp insert_op = 10;
+  string file_extension = 11;
 }
 
 enum InsertOp {
