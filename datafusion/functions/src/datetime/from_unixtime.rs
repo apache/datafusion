@@ -24,7 +24,8 @@ use arrow::datatypes::TimeUnit::Second;
 use datafusion_common::{exec_err, internal_err, Result, ScalarValue};
 use datafusion_expr::TypeSignature::Exact;
 use datafusion_expr::{
-    ColumnarValue, Documentation, ReturnTypeArgs, ScalarUDFImpl, Signature, Volatility,
+    ColumnarValue, Documentation, ReturnInfo, ReturnTypeArgs, ScalarUDFImpl, Signature,
+    Volatility,
 };
 use datafusion_macros::user_doc;
 
@@ -81,14 +82,14 @@ impl ScalarUDFImpl for FromUnixtimeFunc {
         &self.signature
     }
 
-    fn return_type_from_args(&self, args: ReturnTypeArgs) -> Result<DataType> {
+    fn return_type_from_args(&self, args: ReturnTypeArgs) -> Result<ReturnInfo> {
         if args.arguments.len() == 1 {
-            Ok(Timestamp(Second, None))
+            Ok(ReturnInfo::new_nullable(Timestamp(Second, None)))
         } else {
-            Ok(Timestamp(
+            Ok(ReturnInfo::new_nullable(Timestamp(
                 Second,
                 Some(Arc::from(args.arguments[1].to_string())),
-            ))
+            )))
         }
     }
 

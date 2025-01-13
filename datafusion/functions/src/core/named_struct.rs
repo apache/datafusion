@@ -19,7 +19,7 @@ use arrow::array::StructArray;
 use arrow::datatypes::{DataType, Field, Fields};
 use datafusion_common::{exec_err, internal_err, HashSet, Result, ScalarValue};
 use datafusion_expr::scalar_doc_sections::DOC_SECTION_STRUCT;
-use datafusion_expr::{ColumnarValue, Documentation, ReturnTypeArgs};
+use datafusion_expr::{ColumnarValue, Documentation, ReturnInfo, ReturnTypeArgs};
 use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
 use std::any::Any;
 use std::sync::{Arc, OnceLock};
@@ -126,7 +126,7 @@ impl ScalarUDFImpl for NamedStructFunc {
         internal_err!("named_struct: return_type called instead of return_type_from_args")
     }
 
-    fn return_type_from_args(&self, args: ReturnTypeArgs) -> Result<DataType> {
+    fn return_type_from_args(&self, args: ReturnTypeArgs) -> Result<ReturnInfo> {
         // do not accept 0 arguments.
         if args.arguments.is_empty() {
             return exec_err!(
@@ -150,7 +150,9 @@ impl ScalarUDFImpl for NamedStructFunc {
             .map(|(name, data_type)| Ok(Field::new(name, data_type.to_owned(), true)))
             .collect::<Result<Vec<Field>>>()?;
 
-        Ok(DataType::Struct(Fields::from(return_fields)))
+        Ok(ReturnInfo::new_nullable(DataType::Struct(Fields::from(
+            return_fields,
+        ))))
     }
 
     fn invoke_batch(

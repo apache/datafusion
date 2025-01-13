@@ -23,7 +23,8 @@ use std::any::Any;
 use datafusion_common::{internal_err, Result, ScalarValue};
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyInfo};
 use datafusion_expr::{
-    ColumnarValue, Documentation, Expr, ScalarUDFImpl, Signature, Volatility,
+    ColumnarValue, Documentation, Expr, ReturnInfo, ReturnTypeArgs, ScalarUDFImpl,
+    Signature, Volatility,
 };
 use datafusion_macros::user_doc;
 
@@ -76,8 +77,15 @@ impl ScalarUDFImpl for NowFunc {
         &self.signature
     }
 
+    fn return_type_from_args(&self, _args: ReturnTypeArgs) -> Result<ReturnInfo> {
+        Ok(ReturnInfo::new_non_nullable(Timestamp(
+            Nanosecond,
+            Some("+00:00".into()),
+        )))
+    }
+
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        Ok(Timestamp(Nanosecond, Some("+00:00".into())))
+        internal_err!("return_type_from_args should be called instead")
     }
 
     fn invoke_batch(
@@ -104,10 +112,6 @@ impl ScalarUDFImpl for NowFunc {
 
     fn aliases(&self) -> &[String] {
         &self.aliases
-    }
-
-    fn is_nullable_from_args_nullable(&self, _args_nullables: &[bool]) -> bool {
-        false
     }
 
     fn documentation(&self) -> Option<&Documentation> {

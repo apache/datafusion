@@ -20,11 +20,15 @@
 use crate::expr::schema_name_from_exprs_comma_separated_without_space;
 use crate::simplify::{ExprSimplifyResult, SimplifyInfo};
 use crate::sort_properties::{ExprProperties, SortProperties};
+use crate::type_coercion::functions::data_types_with_scalar_udf;
 use crate::{
-    ColumnarValue, Documentation, Expr, ScalarFunctionImplementation, Signature,
+    utils, ColumnarValue, Documentation, Expr, ExprSchemable,
+    ScalarFunctionImplementation, Signature,
 };
 use arrow::datatypes::DataType;
-use datafusion_common::{not_impl_err, ExprSchema, Result};
+use datafusion_common::{
+    not_impl_err, plan_datafusion_err, DataFusionError, ExprSchema, Result, ScalarValue,
+};
 use datafusion_expr_common::interval_arithmetic::Interval;
 use std::any::Any;
 use std::cmp::Ordering;
@@ -193,7 +197,7 @@ impl ScalarUDF {
         self.inner.return_type_from_exprs(args, schema, arg_types)
     }
 
-    pub fn return_type_from_args(&self, args: ReturnTypeArgs) -> Result<DataType> {
+    pub fn return_type_from_args(&self, args: ReturnTypeArgs) -> Result<ReturnInfo> {
         self.inner.return_type_from_args(args)
     }
 
@@ -217,10 +221,6 @@ impl ScalarUDF {
     #[allow(deprecated)]
     pub fn is_nullable(&self, args: &[Expr], schema: &dyn ExprSchema) -> bool {
         self.inner.is_nullable(args, schema)
-    }
-
-    pub fn is_nullable_from_args_nullable(&self, args_nullables: &[bool]) -> bool {
-        self.inner.is_nullable_from_args_nullable(args_nullables)
     }
 
     pub fn invoke_batch(
@@ -358,6 +358,48 @@ pub struct ReturnTypeArgs<'a> {
     pub arg_types: &'a [DataType],
     /// The Utf8 arguments to the function, if the expression is not Utf8, it will be empty string
     pub arguments: &'a [String],
+    pub nullables: &'a [bool],
+}
+
+#[derive(Debug)]
+pub struct ReturnInfo {
+    return_type: DataType,
+    nullable: bool,
+}
+
+impl ReturnInfo {
+    pub fn new(return_type: DataType, nullable: bool) -> Self {
+        Self {
+            return_type,
+            nullable,
+        }
+    }
+
+    pub fn new_nullable(return_type: DataType) -> Self {
+        Self {
+            return_type,
+            nullable: true,
+        }
+    }
+
+    pub fn new_non_nullable(return_type: DataType) -> Self {
+        Self {
+            return_type,
+            nullable: false,
+        }
+    }
+
+    pub fn return_type(&self) -> &DataType {
+        &self.return_type
+    }
+
+    pub fn nullable(&self) -> bool {
+        self.nullable
+    }
+
+    pub fn into_parts(self) -> (DataType, bool) {
+        (self.return_type, self.nullable)
+    }
 }
 
 /// Trait for implementing user defined scalar functions.
@@ -534,21 +576,16 @@ pub trait ScalarUDFImpl: Debug + Send + Sync {
     /// This function must consistently return the same type for the same
     /// logical input even if the input is simplified (e.g. it must return the same
     /// value for `('foo' | 'bar')` as it does for ('foobar').
-    fn return_type_from_args(&self, args: ReturnTypeArgs) -> Result<DataType> {
-        self.return_type(args.arg_types)
+    fn return_type_from_args(&self, args: ReturnTypeArgs) -> Result<ReturnInfo> {
+        let return_type = self.return_type(args.arg_types)?;
+        Ok(ReturnInfo::new_nullable(return_type))
     }
 
     #[deprecated(
         since = "45.0.0",
-        note = "Use `is_nullable_from_args_nullable` instead"
+        note = "Use `return_type_from_args` instead. if you use `is_nullable` that returns non-nullable with `return_type`, you would need to switch to `return_type_from_args`, you might have error"
     )]
     fn is_nullable(&self, _args: &[Expr], _schema: &dyn ExprSchema) -> bool {
-        true
-    }
-
-    /// `is_nullable` from pre-computed nullable flags.
-    /// It has less dependencies on the input arguments.
-    fn is_nullable_from_args_nullable(&self, _args_nullables: &[bool]) -> bool {
         true
     }
 
@@ -855,7 +892,7 @@ impl ScalarUDFImpl for AliasedScalarUDFImpl {
         self.inner.return_type_from_exprs(args, schema, arg_types)
     }
 
-    fn return_type_from_args(&self, args: ReturnTypeArgs) -> Result<DataType> {
+    fn return_type_from_args(&self, args: ReturnTypeArgs) -> Result<ReturnInfo> {
         self.inner.return_type_from_args(args)
     }
 

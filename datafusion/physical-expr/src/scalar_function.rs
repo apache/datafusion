@@ -101,7 +101,7 @@ impl ScalarFunctionExpr {
         // verify that input data types is consistent with function's `TypeSignature`
         data_types_with_scalar_udf(&arg_types, &fun)?;
 
-        let arg_nullables = args
+        let nullables = args
             .iter()
             .map(|e| e.nullable(schema))
             .collect::<Result<Vec<_>>>()?;
@@ -121,9 +121,9 @@ impl ScalarFunctionExpr {
         let ret_args = ReturnTypeArgs {
             arg_types: &arg_types,
             arguments: &arguments,
+            nullables: &nullables,
         };
-        let return_type = fun.return_type_from_args(ret_args)?;
-        let nullable = fun.is_nullable_from_args_nullable(&arg_nullables);
+        let (return_type, nullable) = fun.return_type_from_args(ret_args)?.into_parts();
         Ok(Self {
             fun,
             name,

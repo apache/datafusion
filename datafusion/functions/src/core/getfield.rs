@@ -24,7 +24,7 @@ use datafusion_common::{
     exec_err, internal_err, plan_datafusion_err, plan_err, Result, ScalarValue,
 };
 use datafusion_expr::scalar_doc_sections::DOC_SECTION_OTHER;
-use datafusion_expr::{ColumnarValue, Documentation, Expr, ReturnTypeArgs};
+use datafusion_expr::{ColumnarValue, Documentation, Expr, ReturnInfo, ReturnTypeArgs};
 use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
 use std::any::Any;
 use std::sync::{Arc, OnceLock};
@@ -106,7 +106,7 @@ impl ScalarUDFImpl for GetFieldFunc {
         internal_err!("return_type_from_args should be called instead")
     }
 
-    fn return_type_from_args(&self, args: ReturnTypeArgs) -> Result<DataType> {
+    fn return_type_from_args(&self, args: ReturnTypeArgs) -> Result<ReturnInfo> {
         if args.arguments.len() != 2 {
             return exec_err!(
                 "get_field function requires 2 arguments, got {}",
@@ -131,7 +131,7 @@ impl ScalarUDFImpl for GetFieldFunc {
                         // instead, we assume that the second column is the "value" column both here and in
                         // execution.
                         let value_field = fields.get(1).expect("fields should have exactly two members");
-                        Ok(value_field.data_type().clone())
+                        Ok(ReturnInfo::new_nullable(value_field.data_type().clone()))
                     },
                     _ => plan_err!("Map fields must contain a Struct with exactly 2 fields"),
                 }
@@ -143,10 +143,10 @@ impl ScalarUDFImpl for GetFieldFunc {
                     )
                 } else {
                     let field = fields.iter().find(|f| f.name() == s);
-                    field.ok_or(plan_datafusion_err!("Field {s} not found in struct")).map(|f| f.data_type().clone())
+                    field.ok_or(plan_datafusion_err!("Field {s} not found in struct")).map(|f| ReturnInfo::new_nullable(f.data_type().to_owned()))
                 }
             }
-            (DataType::Null, _) => Ok(DataType::Null),
+            (DataType::Null, _) => Ok(ReturnInfo::new_nullable(DataType::Null)),
             (other, _) => plan_err!("The expression to get an indexed field is only valid for `Struct`, `Map` or `Null` types, got {other}"),
         }
     }

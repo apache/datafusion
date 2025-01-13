@@ -19,10 +19,10 @@ use arrow::array::{new_null_array, BooleanArray};
 use arrow::compute::kernels::zip::zip;
 use arrow::compute::{and, is_not_null, is_null};
 use arrow::datatypes::DataType;
-use datafusion_common::{exec_err, Result};
+use datafusion_common::{exec_err, internal_err, Result};
 use datafusion_expr::binary::try_type_union_resolution;
 use datafusion_expr::scalar_doc_sections::DOC_SECTION_CONDITIONAL;
-use datafusion_expr::{ColumnarValue, Documentation};
+use datafusion_expr::{ColumnarValue, Documentation, ReturnInfo, ReturnTypeArgs};
 use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
 use itertools::Itertools;
 use std::any::Any;
@@ -60,17 +60,20 @@ impl ScalarUDFImpl for CoalesceFunc {
         &self.signature
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        Ok(arg_types
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        internal_err!("return_type_from_args should be called instead")
+    }
+
+    fn return_type_from_args(&self, args: ReturnTypeArgs) -> Result<ReturnInfo> {
+        // If any the arguments in coalesce is non-null, the result is non-null
+        let nullable = args.nullables.iter().all(|&nullable| nullable);
+        let return_type = args
+            .arg_types
             .iter()
             .find_or_first(|d| !d.is_null())
             .unwrap()
-            .clone())
-    }
-
-    // If any the arguments in coalesce is non-null, the result is non-null
-    fn is_nullable_from_args_nullable(&self, args_nullables: &[bool]) -> bool {
-        args_nullables.iter().all(|&nullable| nullable)
+            .clone();
+        Ok(ReturnInfo::new(return_type, nullable))
     }
 
     /// coalesce evaluates to the first value which is not NULL

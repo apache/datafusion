@@ -94,7 +94,8 @@ pub use udaf::{
     aggregate_doc_sections, AggregateUDF, AggregateUDFImpl, ReversedUDAF, StatisticsArgs,
 };
 pub use udf::{
-    scalar_doc_sections, ReturnTypeArgs, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl,
+    scalar_doc_sections, ReturnInfo, ReturnTypeArgs, ScalarFunctionArgs, ScalarUDF,
+    ScalarUDFImpl,
 };
 pub use udwf::{window_doc_sections, ReversedUDWF, WindowUDF, WindowUDFImpl};
 pub use window_frame::{WindowFrame, WindowFrameBound, WindowFrameUnits};

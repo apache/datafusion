@@ -18,6 +18,7 @@
 //! [`ArrowCastFunc`]: Implementation of the `arrow_cast`
 
 use arrow::datatypes::DataType;
+use arrow::error::ArrowError;
 use datafusion_common::DataFusionError;
 use datafusion_common::{
     arrow_datafusion_err, internal_err, plan_datafusion_err, plan_err, Result,
@@ -29,8 +30,8 @@ use std::sync::OnceLock;
 use datafusion_expr::scalar_doc_sections::DOC_SECTION_OTHER;
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyInfo};
 use datafusion_expr::{
-    ColumnarValue, Documentation, Expr, ReturnTypeArgs, ScalarUDFImpl, Signature,
-    Volatility,
+    ColumnarValue, Documentation, Expr, ReturnInfo, ReturnTypeArgs, ScalarUDFImpl,
+    Signature, Volatility,
 };
 
 /// Implements casting to arbitrary arrow types (rather than SQL types)
@@ -90,11 +91,9 @@ impl ScalarUDFImpl for ArrowCastFunc {
         internal_err!("return_type_from_args should be called instead")
     }
 
-    fn is_nullable_from_args_nullable(&self, args_nullables: &[bool]) -> bool {
-        args_nullables.iter().any(|&nullable| nullable)
-    }
+    fn return_type_from_args(&self, args: ReturnTypeArgs) -> Result<ReturnInfo> {
+        let nullable = args.nullables.iter().any(|&nullable| nullable);
 
-    fn return_type_from_args(&self, args: ReturnTypeArgs) -> Result<DataType> {
         if args.arguments.len() != 2 {
             return plan_err!(
                 "{} needs 2 arguments, {} provided",
@@ -111,12 +110,13 @@ impl ScalarUDFImpl for ArrowCastFunc {
             );
         };
 
-        val.parse().map_err(|e| match e {
+        match val.parse::<DataType>() {
+            Ok(data_type) => Ok(ReturnInfo::new(data_type, nullable)),
             // If the data type cannot be parsed, return a Plan error to signal an
             // error in the input rather than a more general ArrowError
-            arrow::error::ArrowError::ParseError(e) => plan_datafusion_err!("{e}"),
-            e => arrow_datafusion_err!(e),
-        })
+            Err(ArrowError::ParseError(e)) => Err(plan_datafusion_err!("{e}")),
+            Err(e) => Err(arrow_datafusion_err!(e)),
+        }
     }
 
     fn invoke_batch(
@@ -201,7 +201,7 @@ fn data_type_from_args(args: &[Expr]) -> Result<DataType> {
     val.parse().map_err(|e| match e {
         // If the data type cannot be parsed, return a Plan error to signal an
         // error in the input rather than a more general ArrowError
-        arrow::error::ArrowError::ParseError(e) => plan_datafusion_err!("{e}"),
+        ArrowError::ParseError(e) => plan_datafusion_err!("{e}"),
         e => arrow_datafusion_err!(e),
     })
 }

@@ -41,7 +41,7 @@ use datafusion_common::{
     Result, ScalarValue,
 };
 use datafusion_expr::{
-    ColumnarValue, Documentation, ReturnTypeArgs, ScalarUDFImpl, Signature,
+    ColumnarValue, Documentation, ReturnInfo, ReturnTypeArgs, ScalarUDFImpl, Signature,
     TypeSignature, Volatility,
 };
 use datafusion_expr_common::signature::TypeSignatureClass;
@@ -139,11 +139,11 @@ impl ScalarUDFImpl for DatePartFunc {
         internal_err!("return_type_from_args should be called instead")
     }
 
-    fn return_type_from_args(&self, args: ReturnTypeArgs) -> Result<DataType> {
+    fn return_type_from_args(&self, args: ReturnTypeArgs) -> Result<ReturnInfo> {
         if is_epoch(&args.arguments[0]) {
-            Ok(DataType::Float64)
+            Ok(ReturnInfo::new_nullable(DataType::Float64))
         } else {
-            Ok(DataType::Int32)
+            Ok(ReturnInfo::new_nullable(DataType::Int32))
         }
     }
 
