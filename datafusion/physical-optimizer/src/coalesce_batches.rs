@@ -70,8 +70,7 @@ impl PhysicalOptimizerRule for CoalesceBatches {
                             repart_exec.partitioning().clone(),
                             Partitioning::RoundRobinBatch(_)
                         )
-                    })
-                    .unwrap_or(false);
+                    }).unwrap_or(false);
             if wrap_in_coalesce {
                 Ok(Transformed::yes(Arc::new(CoalesceBatchesExec::new(
                     plan,

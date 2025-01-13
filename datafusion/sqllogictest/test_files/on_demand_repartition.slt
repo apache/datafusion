@@ -1,0 +1,445 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+
+#   http://www.apache.org/licenses/LICENSE-2.0
+
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+##########
+# Tests for On-Demand Repartitioning
+##########
+
+# Set 4 partitions for deterministic output plans
+statement ok
+set datafusion.execution.target_partitions = 4;
+
+# enable round robin repartitioning
+statement ok
+set datafusion.optimizer.enable_round_robin_repartition = true;
+
+##########
+# Read from parquet source with on-demand repartitioning
+##########
+
+statement ok
+COPY  (VALUES (1, 2), (2, 5), (3, 2), (4, 5), (5, 0)) TO 'test_files/scratch/repartition/parquet_table/2.parquet'
+STORED AS PARQUET;
+
+statement ok
+CREATE EXTERNAL TABLE parquet_table(column1 int, column2 int)
+STORED AS PARQUET
+LOCATION 'test_files/scratch/repartition/parquet_table/';
+
+# Enable on-demand repartitioning
+statement ok
+set datafusion.optimizer.prefer_round_robin_repartition = false;
+
+query TT
+EXPLAIN SELECT column1, SUM(column2) FROM parquet_table GROUP BY column1;
+----
+logical_plan
+01)Aggregate: groupBy=[[parquet_table.column1]], aggr=[[sum(CAST(parquet_table.column2 AS Int64))]]
+02)--TableScan: parquet_table projection=[column1, column2]
+physical_plan
+01)AggregateExec: mode=FinalPartitioned, gby=[column1@0 as column1], aggr=[sum(parquet_table.column2)]
+02)--CoalesceBatchesExec: target_batch_size=8192
+03)----RepartitionExec: partitioning=Hash([column1@0], 4), input_partitions=4
+04)------AggregateExec: mode=Partial, gby=[column1@0 as column1], aggr=[sum(parquet_table.column2)]
+05)--------OnDemandRepartitionExec: partitioning=OnDemand(4), input_partitions=1
+06)----------ParquetExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/repartition/parquet_table/2.parquet]]}, projection=[column1, column2]
+
+# Disable on-demand repartitioning
+statement ok
+set datafusion.optimizer.prefer_round_robin_repartition = true;
+
+query TT
+EXPLAIN SELECT column1, SUM(column2) FROM parquet_table GROUP BY column1;
+----
+logical_plan
+01)Aggregate: groupBy=[[parquet_table.column1]], aggr=[[sum(CAST(parquet_table.column2 AS Int64))]]
+02)--TableScan: parquet_table projection=[column1, column2]
+physical_plan
+01)AggregateExec: mode=FinalPartitioned, gby=[column1@0 as column1], aggr=[sum(parquet_table.column2)]
+02)--CoalesceBatchesExec: target_batch_size=8192
+03)----RepartitionExec: partitioning=Hash([column1@0], 4), input_partitions=4
+04)------AggregateExec: mode=Partial, gby=[column1@0 as column1], aggr=[sum(parquet_table.column2)]
+05)--------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+06)----------ParquetExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/repartition/parquet_table/2.parquet]]}, projection=[column1, column2]
+
+# Cleanup
+statement ok
+DROP TABLE parquet_table;
+
+##########
+# Read from CSV source with on-demand repartitioning
+##########
+
+# Test CSV source with on-demand repartitioning
+statement ok
+set datafusion.optimizer.enable_round_robin_repartition = true;
+
+statement ok
+set datafusion.optimizer.prefer_round_robin_repartition = false;
+
+
+# create_external_table_with_quote_escape
+statement ok
+CREATE EXTERNAL TABLE csv_with_quote (
+column1 VARCHAR,
+column2 VARCHAR
+) STORED AS CSV
+LOCATION '../core/tests/data/quote.csv'
+OPTIONS ('format.quote' '~',
+         'format.delimiter' ',',
+         'format.has_header' 'true');
+
+statement ok
+CREATE EXTERNAL TABLE csv_with_escape (
+column1 VARCHAR,
+column2 VARCHAR
+) STORED AS CSV
+OPTIONS ('format.escape' '\',
+         'format.delimiter' ',',
+         'format.has_header' 'true')
+LOCATION '../core/tests/data/escape.csv';
+
+query TT
+EXPLAIN SELECT column1 FROM csv_with_quote GROUP BY column1;
+----
+logical_plan
+01)Aggregate: groupBy=[[csv_with_quote.column1]], aggr=[[]]
+02)--TableScan: csv_with_quote projection=[column1]
+physical_plan
+01)AggregateExec: mode=FinalPartitioned, gby=[column1@0 as column1], aggr=[]
+02)--CoalesceBatchesExec: target_batch_size=8192
+03)----RepartitionExec: partitioning=Hash([column1@0], 4), input_partitions=4
+04)------AggregateExec: mode=Partial, gby=[column1@0 as column1], aggr=[]
+05)--------OnDemandRepartitionExec: partitioning=OnDemand(4), input_partitions=1
+06)----------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/quote.csv]]}, projection=[column1], has_header=true
+
+query TT
+EXPLAIN SELECT column1 FROM csv_with_escape GROUP BY column1;
+----
+logical_plan
+01)Aggregate: groupBy=[[csv_with_escape.column1]], aggr=[[]]
+02)--TableScan: csv_with_escape projection=[column1]
+physical_plan
+01)AggregateExec: mode=FinalPartitioned, gby=[column1@0 as column1], aggr=[]
+02)--CoalesceBatchesExec: target_batch_size=8192
+03)----RepartitionExec: partitioning=Hash([column1@0], 4), input_partitions=4
+04)------AggregateExec: mode=Partial, gby=[column1@0 as column1], aggr=[]
+05)--------OnDemandRepartitionExec: partitioning=OnDemand(4), input_partitions=1
+06)----------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/escape.csv]]}, projection=[column1], has_header=true
+
+statement ok
+DROP TABLE csv_with_quote;
+
+statement ok
+DROP TABLE csv_with_escape;
+
+##########
+# Read from arrow source with on-demand repartitioning
+##########
+
+statement ok
+CREATE EXTERNAL TABLE arrow_simple(
+column1 INT,
+column2 VARCHAR,
+column3 BOOLEAN
+) STORED AS ARROW
+LOCATION '../core/tests/data/example.arrow';
+
+query TT
+EXPLAIN SELECT column1 FROM arrow_simple GROUP BY column1;
+----
+logical_plan
+01)Aggregate: groupBy=[[arrow_simple.column1]], aggr=[[]]
+02)--TableScan: arrow_simple projection=[column1]
+physical_plan
+01)AggregateExec: mode=FinalPartitioned, gby=[column1@0 as column1], aggr=[]
+02)--CoalesceBatchesExec: target_batch_size=8192
+03)----RepartitionExec: partitioning=Hash([column1@0], 4), input_partitions=4
+04)------AggregateExec: mode=Partial, gby=[column1@0 as column1], aggr=[]
+05)--------OnDemandRepartitionExec: partitioning=OnDemand(4), input_partitions=1
+06)----------ArrowExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/example.arrow]]}, projection=[column1]
+
+statement ok
+DROP TABLE arrow_simple;
+
+##########
+# Read from steaming table source with on-demand repartitioning
+##########
+
+# Unbounded repartition
+# See https://github.com/apache/datafusion/issues/5278
+# Set up unbounded table and run a query - the query plan should display a `RepartitionExec`
+# and a `CoalescePartitionsExec`
+statement ok
+CREATE UNBOUNDED EXTERNAL TABLE sink_table (
+        c1  VARCHAR NOT NULL,
+        c2  TINYINT NOT NULL,
+        c3  SMALLINT NOT NULL,
+        c4  SMALLINT NOT NULL,
+        c5  INTEGER NOT NULL,
+        c6  BIGINT NOT NULL,
+        c7  SMALLINT NOT NULL,
+        c8  INT NOT NULL,
+        c9  INT UNSIGNED NOT NULL,
+        c10 BIGINT UNSIGNED NOT NULL,
+        c11 FLOAT NOT NULL,
+        c12 DOUBLE NOT NULL,
+        c13 VARCHAR NOT NULL
+    )
+STORED AS CSV
+LOCATION '../../testing/data/csv/aggregate_test_100.csv'
+OPTIONS ('format.has_header' 'true');
+
+query TII
+SELECT c1, c2, c3 FROM sink_table WHERE c3 > 0 LIMIT 5;
+----
+c 2 1
+b 1 29
+e 3 104
+a 3 13
+d 1 38
+
+statement ok
+set datafusion.execution.target_partitions = 3;
+
+statement ok
+set datafusion.optimizer.enable_round_robin_repartition = true;
+
+statement ok
+set datafusion.optimizer.prefer_round_robin_repartition = false;
+
+query TT
+EXPLAIN SELECT c1, c2, c3 FROM sink_table WHERE c3 > 0 LIMIT 5;
+----
+logical_plan
+01)Limit: skip=0, fetch=5
+02)--Filter: sink_table.c3 > Int16(0)
+03)----TableScan: sink_table projection=[c1, c2, c3]
+physical_plan
+01)CoalescePartitionsExec: fetch=5
+02)--CoalesceBatchesExec: target_batch_size=8192, fetch=5
+03)----FilterExec: c3@2 > 0
+04)------OnDemandRepartitionExec: partitioning=OnDemand(3), input_partitions=1
+05)--------StreamingTableExec: partition_sizes=1, projection=[c1, c2, c3], infinite_source=true
+
+# Start repratition on empty column test.
+# See https://github.com/apache/datafusion/issues/12057
+
+statement ok
+CREATE TABLE t1(v1 int);
+
+statement ok
+INSERT INTO t1 values(42);
+
+query I
+SELECT sum(1) OVER (PARTITION BY false=false) 
+FROM t1 WHERE ((false > (v1 = v1)) IS DISTINCT FROM true);
+----
+1
+
+statement ok
+DROP TABLE t1;
+
+# End repartition on empty columns test
+
+##########
+# Read from memory table source with on-demand repartitioning
+##########
+
+statement ok
+CREATE TABLE memory_table AS SELECT * FROM (VALUES (1, 2), (2, 5), (3, 2), (4, 5), (5, 0)) AS t(column1, column2);
+
+query TT
+EXPLAIN SELECT column1 FROM memory_table GROUP BY column1;
+----
+logical_plan
+01)Aggregate: groupBy=[[memory_table.column1]], aggr=[[]]
+02)--TableScan: memory_table projection=[column1]
+physical_plan
+01)AggregateExec: mode=FinalPartitioned, gby=[column1@0 as column1], aggr=[]
+02)--CoalesceBatchesExec: target_batch_size=8192
+03)----RepartitionExec: partitioning=Hash([column1@0], 3), input_partitions=3
+04)------OnDemandRepartitionExec: partitioning=OnDemand(3), input_partitions=1
+05)--------AggregateExec: mode=Partial, gby=[column1@0 as column1], aggr=[]
+06)----------MemoryExec: partitions=1, partition_sizes=[1]
+
+statement ok
+DROP TABLE memory_table;
+
+
+##########
+# Tests for Join with On-Demand Repartitioning
+##########
+
+statement ok
+set datafusion.execution.target_partitions = 1;
+
+statement ok
+set datafusion.execution.batch_size = 2;
+
+statement ok
+CREATE TABLE join_t1(t1_id INT UNSIGNED, t1_name VARCHAR, t1_int INT UNSIGNED)
+AS VALUES
+(11, 'a', 1),
+(22, 'b', 2),
+(33, 'c', 3),
+(44, 'd', 4);
+
+statement ok
+CREATE TABLE join_t2(t2_id INT UNSIGNED, t2_name VARCHAR, t2_int INT UNSIGNED)
+AS VALUES
+(11, 'z', 3),
+(22, 'y', 1),
+(44, 'x', 3),
+(55, 'w', 3);
+
+statement ok
+set datafusion.optimizer.repartition_joins = true;
+
+statement ok
+set datafusion.execution.target_partitions = 2;
+
+# left join
+query TT
+EXPLAIN
+select join_t1.t1_id, join_t2.t2_id
+from join_t1
+left join join_t2 on join_t1.t1_id = join_t2.t2_id;
+----
+logical_plan
+01)Left Join: join_t1.t1_id = join_t2.t2_id
+02)--TableScan: join_t1 projection=[t1_id]
+03)--TableScan: join_t2 projection=[t2_id]
+physical_plan
+01)CoalesceBatchesExec: target_batch_size=2
+02)--HashJoinExec: mode=Partitioned, join_type=Left, on=[(t1_id@0, t2_id@0)]
+03)----CoalesceBatchesExec: target_batch_size=2
+04)------RepartitionExec: partitioning=Hash([t1_id@0], 2), input_partitions=2
+05)--------OnDemandRepartitionExec: partitioning=OnDemand(2), input_partitions=1
+06)----------MemoryExec: partitions=1, partition_sizes=[1]
+07)----CoalesceBatchesExec: target_batch_size=2
+08)------RepartitionExec: partitioning=Hash([t2_id@0], 2), input_partitions=2
+09)--------OnDemandRepartitionExec: partitioning=OnDemand(2), input_partitions=1
+10)----------MemoryExec: partitions=1, partition_sizes=[1]
+
+# right join
+query TT
+EXPLAIN
+select join_t1.t1_id, join_t2.t2_id
+from join_t1
+right join join_t2 on join_t1.t1_id = join_t2.t2_id;
+----
+logical_plan
+01)Right Join: join_t1.t1_id = join_t2.t2_id
+02)--TableScan: join_t1 projection=[t1_id]
+03)--TableScan: join_t2 projection=[t2_id]
+physical_plan
+01)CoalesceBatchesExec: target_batch_size=2
+02)--HashJoinExec: mode=Partitioned, join_type=Right, on=[(t1_id@0, t2_id@0)]
+03)----CoalesceBatchesExec: target_batch_size=2
+04)------RepartitionExec: partitioning=Hash([t1_id@0], 2), input_partitions=2
+05)--------OnDemandRepartitionExec: partitioning=OnDemand(2), input_partitions=1
+06)----------MemoryExec: partitions=1, partition_sizes=[1]
+07)----CoalesceBatchesExec: target_batch_size=2
+08)------RepartitionExec: partitioning=Hash([t2_id@0], 2), input_partitions=2
+09)--------OnDemandRepartitionExec: partitioning=OnDemand(2), input_partitions=1
+10)----------MemoryExec: partitions=1, partition_sizes=[1]
+
+# inner join
+query TT
+EXPLAIN
+select join_t1.t1_id, join_t2.t2_id
+from join_t1
+inner join join_t2 on join_t1.t1_id = join_t2.t2_id;
+----
+logical_plan
+01)Inner Join: join_t1.t1_id = join_t2.t2_id
+02)--TableScan: join_t1 projection=[t1_id]
+03)--TableScan: join_t2 projection=[t2_id]
+physical_plan
+01)CoalesceBatchesExec: target_batch_size=2
+02)--HashJoinExec: mode=Partitioned, join_type=Inner, on=[(t1_id@0, t2_id@0)]
+03)----CoalesceBatchesExec: target_batch_size=2
+04)------RepartitionExec: partitioning=Hash([t1_id@0], 2), input_partitions=2
+05)--------OnDemandRepartitionExec: partitioning=OnDemand(2), input_partitions=1
+06)----------MemoryExec: partitions=1, partition_sizes=[1]
+07)----CoalesceBatchesExec: target_batch_size=2
+08)------RepartitionExec: partitioning=Hash([t2_id@0], 2), input_partitions=2
+09)--------OnDemandRepartitionExec: partitioning=OnDemand(2), input_partitions=1
+10)----------MemoryExec: partitions=1, partition_sizes=[1]
+
+statement ok
+DROP TABLE join_t1;
+
+statement ok
+DROP TABLE join_t2;
+
+
+##########
+# Tests for Join with On-Demand Repartitioning
+##########
+statement ok
+CREATE EXTERNAL TABLE aggregate_test_100 (
+  c1  VARCHAR NOT NULL,
+  c2  TINYINT NOT NULL,
+  c3  SMALLINT NOT NULL,
+  c4  SMALLINT,
+  c5  INT,
+  c6  BIGINT NOT NULL,
+  c7  SMALLINT NOT NULL,
+  c8  INT NOT NULL,
+  c9  BIGINT UNSIGNED NOT NULL,
+  c10 VARCHAR NOT NULL,
+  c11 FLOAT NOT NULL,
+  c12 DOUBLE NOT NULL,
+  c13 VARCHAR NOT NULL
+)
+STORED AS CSV
+LOCATION '../../testing/data/csv/aggregate_test_100.csv'
+OPTIONS ('format.has_header' 'true');
+
+statement ok
+set datafusion.execution.batch_size = 4096;
+
+statement ok
+set datafusion.optimizer.repartition_windows = true;
+
+query TT
+EXPLAIN SELECT
+    SUM(c4) OVER(PARTITION BY c1, c2 ORDER BY c2 ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING),
+    COUNT(*) OVER(PARTITION BY c1 ORDER BY c2 ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING)
+    FROM aggregate_test_100
+----
+logical_plan
+01)Projection: sum(aggregate_test_100.c4) PARTITION BY [aggregate_test_100.c1, aggregate_test_100.c2] ORDER BY [aggregate_test_100.c2 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING, count(*) PARTITION BY [aggregate_test_100.c1] ORDER BY [aggregate_test_100.c2 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING
+02)--WindowAggr: windowExpr=[[count(Int64(1)) PARTITION BY [aggregate_test_100.c1] ORDER BY [aggregate_test_100.c2 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING AS count(*) PARTITION BY [aggregate_test_100.c1] ORDER BY [aggregate_test_100.c2 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING]]
+03)----Projection: aggregate_test_100.c1, aggregate_test_100.c2, sum(aggregate_test_100.c4) PARTITION BY [aggregate_test_100.c1, aggregate_test_100.c2] ORDER BY [aggregate_test_100.c2 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING
+04)------WindowAggr: windowExpr=[[sum(CAST(aggregate_test_100.c4 AS Int64)) PARTITION BY [aggregate_test_100.c1, aggregate_test_100.c2] ORDER BY [aggregate_test_100.c2 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING]]
+05)--------TableScan: aggregate_test_100 projection=[c1, c2, c4]
+physical_plan
+01)ProjectionExec: expr=[sum(aggregate_test_100.c4) PARTITION BY [aggregate_test_100.c1, aggregate_test_100.c2] ORDER BY [aggregate_test_100.c2 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING@2 as sum(aggregate_test_100.c4) PARTITION BY [aggregate_test_100.c1, aggregate_test_100.c2] ORDER BY [aggregate_test_100.c2 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING, count(*) PARTITION BY [aggregate_test_100.c1] ORDER BY [aggregate_test_100.c2 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING@3 as count(*) PARTITION BY [aggregate_test_100.c1] ORDER BY [aggregate_test_100.c2 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING]
+02)--BoundedWindowAggExec: wdw=[count(*) PARTITION BY [aggregate_test_100.c1] ORDER BY [aggregate_test_100.c2 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING: Ok(Field { name: "count(*) PARTITION BY [aggregate_test_100.c1] ORDER BY [aggregate_test_100.c2 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(1)), end_bound: Following(UInt64(1)), is_causal: false }], mode=[Sorted]
+03)----SortExec: expr=[c1@0 ASC NULLS LAST, c2@1 ASC NULLS LAST], preserve_partitioning=[true]
+04)------CoalesceBatchesExec: target_batch_size=4096
+05)--------RepartitionExec: partitioning=Hash([c1@0], 2), input_partitions=2
+06)----------ProjectionExec: expr=[c1@0 as c1, c2@1 as c2, sum(aggregate_test_100.c4) PARTITION BY [aggregate_test_100.c1, aggregate_test_100.c2] ORDER BY [aggregate_test_100.c2 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING@3 as sum(aggregate_test_100.c4) PARTITION BY [aggregate_test_100.c1, aggregate_test_100.c2] ORDER BY [aggregate_test_100.c2 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING]
+07)------------BoundedWindowAggExec: wdw=[sum(aggregate_test_100.c4) PARTITION BY [aggregate_test_100.c1, aggregate_test_100.c2] ORDER BY [aggregate_test_100.c2 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING: Ok(Field { name: "sum(aggregate_test_100.c4) PARTITION BY [aggregate_test_100.c1, aggregate_test_100.c2] ORDER BY [aggregate_test_100.c2 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(1)), end_bound: Following(UInt64(1)), is_causal: false }], mode=[Sorted]
+08)--------------SortExec: expr=[c1@0 ASC NULLS LAST, c2@1 ASC NULLS LAST], preserve_partitioning=[true]
+09)----------------CoalesceBatchesExec: target_batch_size=4096
+10)------------------RepartitionExec: partitioning=Hash([c1@0, c2@1], 2), input_partitions=2
+11)--------------------OnDemandRepartitionExec: partitioning=OnDemand(2), input_partitions=1
+12)----------------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c1, c2, c4], has_header=true

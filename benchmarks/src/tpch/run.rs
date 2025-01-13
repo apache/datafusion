@@ -90,6 +90,11 @@ pub struct RunOpt {
     /// True by default.
     #[structopt(short = "j", long = "prefer_hash_join", default_value = "true")]
     prefer_hash_join: BoolDefaultTrue,
+
+    /// If true then round robin repartitioning is used, if false then on demand repartitioning
+    /// True by default.
+    #[structopt(short = "r", long = "prefer_round_robin", default_value = "true")]
+    prefer_round_robin: BoolDefaultTrue,
 }
 
 const TPCH_QUERY_START_ID: usize = 1;
@@ -357,6 +362,7 @@ mod tests {
             output_path: None,
             disable_statistics: false,
             prefer_hash_join: true,
+            prefer_round_robin: true,
         };
         opt.register_tables(&ctx).await?;
         let queries = get_query_sql(query)?;
@@ -393,6 +399,7 @@ mod tests {
             output_path: None,
             disable_statistics: false,
             prefer_hash_join: true,
+            prefer_round_robin: true,
         };
         opt.register_tables(&ctx).await?;
         let queries = get_query_sql(query)?;

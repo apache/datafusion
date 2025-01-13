@@ -451,6 +451,9 @@ pub fn parse_protobuf_partitioning(
             )) => Ok(Some(Partitioning::RoundRobinBatch(
                 *partition_count as usize,
             ))),
+            Some(protobuf::partitioning::PartitionMethod::OnDemand(partition_count)) => {
+                Ok(Some(Partitioning::OnDemand(*partition_count as usize)))
+            }
             Some(protobuf::partitioning::PartitionMethod::Hash(hash_repartition)) => {
                 parse_protobuf_hash_partitioning(
                     Some(hash_repartition),

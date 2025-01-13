@@ -671,7 +671,7 @@ query TT
 explain select * from t1 inner join t2 on true;
 ----
 logical_plan
-01)Cross Join: 
+01)Cross Join:
 02)--TableScan: t1 projection=[t1_id, t1_name, t1_int]
 03)--TableScan: t2 projection=[t2_id, t2_name, t2_int]
 physical_plan

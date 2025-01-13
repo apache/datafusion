@@ -235,6 +235,11 @@ impl PartialEq for Partitioning {
             {
                 true
             }
+            (Partitioning::OnDemand(count1), Partitioning::OnDemand(count2))
+                if count1 == count2 =>
+            {
+                true
+            }
             _ => false,
         }
     }

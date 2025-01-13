@@ -52,6 +52,7 @@ use datafusion_physical_plan::joins::{
     CrossJoinExec, HashJoinExec, PartitionMode, SortMergeJoinExec,
 };
 use datafusion_physical_plan::projection::ProjectionExec;
+use datafusion_physical_plan::repartition::on_demand_repartition::OnDemandRepartitionExec;
 use datafusion_physical_plan::repartition::RepartitionExec;
 use datafusion_physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
 use datafusion_physical_plan::tree_node::PlanContext;
@@ -1052,6 +1053,45 @@ fn replace_order_preserving_variants(
     context.update_plan_from_children()
 }
 
+fn replace_round_robin_repartition_with_on_demand(
+    mut context: DistributionContext,
+) -> Result<DistributionContext> {
+    context.children = context
+        .children
+        .into_iter()
+        .map(|child| {
+            if child.data {
+                replace_round_robin_repartition_with_on_demand(child)
+            } else {
+                Ok(child)
+            }
+        })
+        .collect::<Result<Vec<_>>>()?;
+
+    if let Some(repartition) = context.plan.as_any().downcast_ref::<RepartitionExec>() {
+        if let Partitioning::RoundRobinBatch(n) = repartition.partitioning() {
+            let child_plan = Arc::clone(&context.children[0].plan);
+            context.plan = if repartition.preserve_order() {
+                Arc::new(
+                    OnDemandRepartitionExec::try_new(
+                        child_plan,
+                        Partitioning::OnDemand(*n),
+                    )?
+                    .with_preserve_order(),
+                )
+            } else {
+                Arc::new(OnDemandRepartitionExec::try_new(
+                    child_plan,
+                    Partitioning::OnDemand(*n),
+                )?)
+            };
+            return Ok(context);
+        }
+    }
+
+    context.update_plan_from_children()
+}
+
 /// A struct to keep track of repartition requirements for each child node.
 struct RepartitionRequirementStatus {
     /// The distribution requirement for the node.
@@ -1168,6 +1208,8 @@ pub fn ensure_distribution(
     let target_partitions = config.execution.target_partitions;
     // When `false`, round robin repartition will not be added to increase parallelism
     let enable_round_robin = config.optimizer.enable_round_robin_repartition;
+    // When `false`, replace round robin repartition with on-demand repartition
+    let prefer_round_robin_repartition = config.optimizer.prefer_round_robin_repartition;
     let repartition_file_scans = config.optimizer.repartition_file_scans;
     let batch_size = config.execution.batch_size;
     let should_use_estimates = config
@@ -1319,6 +1361,9 @@ pub fn ensure_distribution(
                         }
                     }
                 }
+            }
+            if !prefer_round_robin_repartition {
+                child = replace_round_robin_repartition_with_on_demand(child)?;
             }
             Ok(child)
         },
