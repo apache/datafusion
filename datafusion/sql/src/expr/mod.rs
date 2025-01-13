@@ -22,7 +22,8 @@ use datafusion_expr::planner::{
 };
 use sqlparser::ast::{
     BinaryOperator, CastFormat, CastKind, DataType as SQLDataType, DictionaryField,
-    Expr as SQLExpr, MapEntry, StructField, Subscript, TrimWhereField, Value,
+    Expr as SQLExpr, ExprWithAlias as SQLExprWithAlias, MapEntry, StructField, Subscript,
+    TrimWhereField, Value,
 };
 
 use datafusion_common::{
@@ -48,7 +49,20 @@ mod substring;
 mod unary_op;
 mod value;
 
-impl<'a, S: ContextProvider> SqlToRel<'a, S> {
+impl<S: ContextProvider> SqlToRel<'_, S> {
+    pub(crate) fn sql_expr_to_logical_expr_with_alias(
+        &self,
+        sql: SQLExprWithAlias,
+        schema: &DFSchema,
+        planner_context: &mut PlannerContext,
+    ) -> Result<Expr> {
+        let mut expr =
+            self.sql_expr_to_logical_expr(sql.expr, schema, planner_context)?;
+        if let Some(alias) = sql.alias {
+            expr = expr.alias(alias.value);
+        }
+        Ok(expr)
+    }
     pub(crate) fn sql_expr_to_logical_expr(
         &self,
         sql: SQLExpr,
@@ -57,7 +71,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     ) -> Result<Expr> {
         enum StackEntry {
             SQLExpr(Box<SQLExpr>),
-            Operator(sqlparser::ast::BinaryOperator),
+            Operator(BinaryOperator),
         }
 
         // Virtual stack machine to convert SQLExpr to Expr
@@ -130,6 +144,20 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         )))
     }
 
+    pub fn sql_to_expr_with_alias(
+        &self,
+        sql: SQLExprWithAlias,
+        schema: &DFSchema,
+        planner_context: &mut PlannerContext,
+    ) -> Result<Expr> {
+        let mut expr =
+            self.sql_expr_to_logical_expr_with_alias(sql, schema, planner_context)?;
+        expr = self.rewrite_partial_qualifier(expr, schema);
+        self.validate_schema_satisfies_exprs(schema, &[expr.clone()])?;
+        let (expr, _) = expr.infer_placeholder_types(schema)?;
+        Ok(expr)
+    }
+
     /// Generate a relational expression from a SQL expression
     pub fn sql_to_expr(
         &self,
@@ -139,8 +167,8 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     ) -> Result<Expr> {
         let mut expr = self.sql_expr_to_logical_expr(sql, schema, planner_context)?;
         expr = self.rewrite_partial_qualifier(expr, schema);
-        self.validate_schema_satisfies_exprs(schema, &[expr.clone()])?;
-        let expr = expr.infer_placeholder_types(schema)?;
+        self.validate_schema_satisfies_exprs(schema, std::slice::from_ref(&expr))?;
+        let (expr, _) = expr.infer_placeholder_types(schema)?;
         Ok(expr)
     }
 
@@ -168,16 +196,18 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
     /// Internal implementation. Use
     /// [`Self::sql_expr_to_logical_expr`] to plan exprs.
+    #[cfg_attr(feature = "recursive_protection", recursive::recursive)]
     fn sql_expr_to_logical_expr_internal(
         &self,
         sql: SQLExpr,
         schema: &DFSchema,
         planner_context: &mut PlannerContext,
     ) -> Result<Expr> {
-        // NOTE: This function is called recusively, so each match arm body should be as
-        //       small as possible to avoid stack overflows in debug builds. Follow the
-        //       common pattern of extracting into a separate function for non-trivial
-        //       arms. See https://github.com/apache/datafusion/pull/12384 for more context.
+        // NOTE: This function is called recursively, so each match arm body should be as
+        //       small as possible to decrease stack requirement.
+        //       Follow the common pattern of extracting into a separate function for
+        //       non-trivial arms. See https://github.com/apache/datafusion/pull/12384 for
+        //       more context.
         match sql {
             SQLExpr::Value(value) => {
                 self.parse_value(value, planner_context.prepare_param_data_types())
@@ -201,9 +231,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             }
 
             SQLExpr::Array(arr) => self.sql_array_literal(arr.elem, schema),
-            SQLExpr::Interval(interval) => {
-                self.sql_interval_to_expr(false, interval, schema, planner_context)
-            }
+            SQLExpr::Interval(interval) => self.sql_interval_to_expr(false, interval),
             SQLExpr::Identifier(id) => {
                 self.sql_identifier_to_expr(id, schema, planner_context)
             }
@@ -366,6 +394,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 expr,
                 pattern,
                 escape_char,
+                any,
             } => self.sql_like_to_expr(
                 negated,
                 *expr,
@@ -374,6 +403,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 schema,
                 planner_context,
                 false,
+                any,
             ),
 
             SQLExpr::ILike {
@@ -381,6 +411,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 expr,
                 pattern,
                 escape_char,
+                any,
             } => self.sql_like_to_expr(
                 negated,
                 *expr,
@@ -389,6 +420,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 schema,
                 planner_context,
                 true,
+                any,
             ),
 
             SQLExpr::SimilarTo {
@@ -531,6 +563,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 left,
                 compare_op,
                 right,
+                // ANY/SOME are equivalent, this field specifies which the user
+                // specified but it doesn't affect the plan so ignore the field
+                is_some: _,
             } => {
                 let mut binary_expr = RawBinaryExpr {
                     op: compare_op,
@@ -557,13 +592,13 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 }
                 not_impl_err!("AnyOp not supported by ExprPlanner: {binary_expr:?}")
             }
-            SQLExpr::Wildcard => Ok(Expr::Wildcard {
+            SQLExpr::Wildcard(_token) => Ok(Expr::Wildcard {
                 qualifier: None,
-                options: WildcardOptions::default(),
+                options: Box::new(WildcardOptions::default()),
             }),
-            SQLExpr::QualifiedWildcard(object_name) => Ok(Expr::Wildcard {
+            SQLExpr::QualifiedWildcard(object_name, _token) => Ok(Expr::Wildcard {
                 qualifier: Some(self.object_name_to_table_reference(object_name)?),
-                options: WildcardOptions::default(),
+                options: Box::new(WildcardOptions::default()),
             }),
             SQLExpr::Tuple(values) => self.parse_tuple(schema, planner_context, values),
             _ => not_impl_err!("Unsupported ast node in sqltorel: {sql:?}"),
@@ -778,7 +813,11 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         schema: &DFSchema,
         planner_context: &mut PlannerContext,
         case_insensitive: bool,
+        any: bool,
     ) -> Result<Expr> {
+        if any {
+            return not_impl_err!("ANY in LIKE expression");
+        }
         let pattern = self.sql_expr_to_logical_expr(pattern, schema, planner_context)?;
         let pattern_type = pattern.get_type(schema)?;
         if pattern_type != DataType::Utf8 && pattern_type != DataType::Null {
@@ -1079,8 +1118,11 @@ mod tests {
             None
         }
 
-        fn get_aggregate_meta(&self, _name: &str) -> Option<Arc<AggregateUDF>> {
-            None
+        fn get_aggregate_meta(&self, name: &str) -> Option<Arc<AggregateUDF>> {
+            match name {
+                "sum" => Some(datafusion_functions_aggregate::sum::sum_udaf()),
+                _ => None,
+            }
         }
 
         fn get_variable_type(&self, _variable_names: &[String]) -> Option<DataType> {
@@ -1100,7 +1142,7 @@ mod tests {
         }
 
         fn udaf_names(&self) -> Vec<String> {
-            Vec::new()
+            vec!["sum".to_string()]
         }
 
         fn udwf_names(&self) -> Vec<String> {
@@ -1155,4 +1197,25 @@ mod tests {
     test_stack_overflow!(2048);
     test_stack_overflow!(4096);
     test_stack_overflow!(8192);
+    #[test]
+    fn test_sql_to_expr_with_alias() {
+        let schema = DFSchema::empty();
+        let mut planner_context = PlannerContext::default();
+
+        let expr_str = "SUM(int_col) as sum_int_col";
+
+        let dialect = GenericDialect {};
+        let mut parser = Parser::new(&dialect).try_with_sql(expr_str).unwrap();
+        // from sqlparser
+        let sql_expr = parser.parse_expr_with_alias().unwrap();
+
+        let context_provider = TestContextProvider::new();
+        let sql_to_rel = SqlToRel::new(&context_provider);
+
+        let expr = sql_to_rel
+            .sql_expr_to_logical_expr_with_alias(sql_expr, &schema, &mut planner_context)
+            .unwrap();
+
+        assert!(matches!(expr, Expr::Alias(_)));
+    }
 }

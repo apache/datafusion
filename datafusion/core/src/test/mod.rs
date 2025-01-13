@@ -17,6 +17,8 @@
 
 //! Common unit test utility methods
 
+#![allow(missing_docs)]
+
 use std::any::Any;
 use std::fs::File;
 use std::io::prelude::*;
@@ -43,10 +45,9 @@ use arrow::record_batch::RecordBatch;
 use datafusion_common::{DataFusionError, Statistics};
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_physical_expr::{EquivalenceProperties, Partitioning, PhysicalSortExpr};
+use datafusion_physical_plan::execution_plan::{Boundedness, EmissionType};
 use datafusion_physical_plan::streaming::{PartitionStream, StreamingTableExec};
-use datafusion_physical_plan::{
-    DisplayAs, DisplayFormatType, ExecutionMode, PlanProperties,
-};
+use datafusion_physical_plan::{DisplayAs, DisplayFormatType, PlanProperties};
 
 #[cfg(feature = "compression")]
 use bzip2::write::BzEncoder;
@@ -69,7 +70,7 @@ pub fn create_table_dual() -> Arc<dyn TableProvider> {
     let batch = RecordBatch::try_new(
         dual_schema.clone(),
         vec![
-            Arc::new(array::Int32Array::from(vec![1])),
+            Arc::new(Int32Array::from(vec![1])),
             Arc::new(array::StringArray::from(vec!["a"])),
         ],
     )
@@ -103,6 +104,28 @@ pub fn scan_partitioned_csv(partitions: usize, work_dir: &Path) -> Result<Arc<Cs
             .with_file_compression_type(FileCompressionType::UNCOMPRESSED)
             .build(),
     ))
+}
+
+/// Auto finish the wrapped BzEncoder on drop
+#[cfg(feature = "compression")]
+struct AutoFinishBzEncoder<W: Write>(BzEncoder<W>);
+
+#[cfg(feature = "compression")]
+impl<W: Write> Write for AutoFinishBzEncoder<W> {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.0.write(buf)
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.0.flush()
+    }
+}
+
+#[cfg(feature = "compression")]
+impl<W: Write> Drop for AutoFinishBzEncoder<W> {
+    fn drop(&mut self) {
+        let _ = self.0.try_finish();
+    }
 }
 
 /// Returns file groups [`Vec<Vec<PartitionedFile>>`] for scanning `partitions` of `filename`
@@ -146,9 +169,10 @@ pub fn partitioned_file_groups(
                 Box::new(encoder)
             }
             #[cfg(feature = "compression")]
-            FileCompressionType::BZIP2 => {
-                Box::new(BzEncoder::new(file, BzCompression::default()))
-            }
+            FileCompressionType::BZIP2 => Box::new(AutoFinishBzEncoder(BzEncoder::new(
+                file,
+                BzCompression::default(),
+            ))),
             #[cfg(not(feature = "compression"))]
             FileCompressionType::GZIP
             | FileCompressionType::BZIP2
@@ -182,8 +206,8 @@ pub fn partitioned_file_groups(
         }
     }
 
-    // Must drop the stream before creating ObjectMeta below as drop
-    // triggers finish for ZstdEncoder which writes additional data
+    // Must drop the stream before creating ObjectMeta below as drop triggers
+    // finish for ZstdEncoder/BzEncoder which writes additional data
     for mut w in writers.into_iter() {
         w.flush().unwrap();
     }
@@ -297,6 +321,7 @@ pub fn csv_exec_sorted(
 }
 
 // construct a stream partition for test purposes
+#[derive(Debug)]
 pub(crate) struct TestStreamPartition {
     pub schema: SchemaRef,
 }
@@ -383,13 +408,11 @@ impl StatisticsExec {
 
     /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
     fn compute_properties(schema: SchemaRef) -> PlanProperties {
-        let eq_properties = EquivalenceProperties::new(schema);
         PlanProperties::new(
-            eq_properties,
-            // Output Partitioning
+            EquivalenceProperties::new(schema),
             Partitioning::UnknownPartitioning(2),
-            // Execution Mode
-            ExecutionMode::Bounded,
+            EmissionType::Incremental,
+            Boundedness::Bounded,
         )
     }
 }

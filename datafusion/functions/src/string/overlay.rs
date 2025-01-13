@@ -21,16 +21,38 @@ use std::sync::Arc;
 use arrow::array::{ArrayRef, GenericStringArray, OffsetSizeTrait};
 use arrow::datatypes::DataType;
 
+use crate::utils::{make_scalar_function, utf8_to_str_type};
 use datafusion_common::cast::{
     as_generic_string_array, as_int64_array, as_string_view_array,
 };
 use datafusion_common::{exec_err, Result};
-use datafusion_expr::TypeSignature::*;
-use datafusion_expr::{ColumnarValue, Volatility};
+use datafusion_expr::{ColumnarValue, Documentation, TypeSignature, Volatility};
 use datafusion_expr::{ScalarUDFImpl, Signature};
+use datafusion_macros::user_doc;
 
-use crate::utils::{make_scalar_function, utf8_to_str_type};
-
+#[user_doc(
+    doc_section(label = "String Functions"),
+    description = "Returns the string which is replaced by another string from the specified position and specified count length.",
+    syntax_example = "overlay(str PLACING substr FROM pos [FOR count])",
+    sql_example = r#"```sql
+> select overlay('Txxxxas' placing 'hom' from 2 for 4);
++--------------------------------------------------------+
+| overlay(Utf8("Txxxxas"),Utf8("hom"),Int64(2),Int64(4)) |
++--------------------------------------------------------+
+| Thomas                                                 |
++--------------------------------------------------------+
+```"#,
+    standard_argument(name = "str", prefix = "String"),
+    argument(name = "substr", description = "Substring to replace in str."),
+    argument(
+        name = "pos",
+        description = "The start position to start the replace in str."
+    ),
+    argument(
+        name = "count",
+        description = "The count of characters to be replaced from start position of str. If not specified, will use substr length instead."
+    )
+)]
 #[derive(Debug)]
 pub struct OverlayFunc {
     signature: Signature,
@@ -48,12 +70,12 @@ impl OverlayFunc {
         Self {
             signature: Signature::one_of(
                 vec![
-                    Exact(vec![Utf8View, Utf8View, Int64, Int64]),
-                    Exact(vec![Utf8, Utf8, Int64, Int64]),
-                    Exact(vec![LargeUtf8, LargeUtf8, Int64, Int64]),
-                    Exact(vec![Utf8View, Utf8View, Int64]),
-                    Exact(vec![Utf8, Utf8, Int64]),
-                    Exact(vec![LargeUtf8, LargeUtf8, Int64]),
+                    TypeSignature::Exact(vec![Utf8View, Utf8View, Int64, Int64]),
+                    TypeSignature::Exact(vec![Utf8, Utf8, Int64, Int64]),
+                    TypeSignature::Exact(vec![LargeUtf8, LargeUtf8, Int64, Int64]),
+                    TypeSignature::Exact(vec![Utf8View, Utf8View, Int64]),
+                    TypeSignature::Exact(vec![Utf8, Utf8, Int64]),
+                    TypeSignature::Exact(vec![LargeUtf8, LargeUtf8, Int64]),
                 ],
                 Volatility::Immutable,
             ),
@@ -78,7 +100,11 @@ impl ScalarUDFImpl for OverlayFunc {
         utf8_to_str_type(&arg_types[0], "overlay")
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         match args[0].data_type() {
             DataType::Utf8View | DataType::Utf8 => {
                 make_scalar_function(overlay::<i32>, vec![])(args)
@@ -86,6 +112,10 @@ impl ScalarUDFImpl for OverlayFunc {
             DataType::LargeUtf8 => make_scalar_function(overlay::<i64>, vec![])(args),
             other => exec_err!("Unsupported data type {other:?} for function overlay"),
         }
+    }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        self.doc()
     }
 }
 

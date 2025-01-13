@@ -14,6 +14,7 @@
 // KIND, either express or implied.  See the License for the
 // specific language governing permissions and limitations
 // under the License.
+
 // Make cheap clones clear: https://github.com/apache/datafusion/issues/11143
 #![deny(clippy::clone_on_ref_ptr)]
 
@@ -79,6 +80,7 @@ pub mod expr_fn {
     pub use super::distance::array_distance;
     pub use super::empty::array_empty;
     pub use super::except::array_except;
+    pub use super::extract::array_any_value;
     pub use super::extract::array_element;
     pub use super::extract::array_pop_back;
     pub use super::extract::array_pop_front;
@@ -128,6 +130,7 @@ pub fn all_default_nested_functions() -> Vec<Arc<ScalarUDF>> {
         extract::array_pop_back_udf(),
         extract::array_pop_front_udf(),
         extract::array_slice_udf(),
+        extract::array_any_value_udf(),
         make_array::make_array_udf(),
         array_has::array_has_udf(),
         array_has::array_has_all_udf(),

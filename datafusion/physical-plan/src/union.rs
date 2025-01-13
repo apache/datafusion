@@ -27,12 +27,12 @@ use std::task::{Context, Poll};
 use std::{any::Any, sync::Arc};
 
 use super::{
-    execution_mode_from_children,
     metrics::{ExecutionPlanMetricsSet, MetricsSet},
     ColumnStatistics, DisplayAs, DisplayFormatType, ExecutionPlan,
     ExecutionPlanProperties, Partitioning, PlanProperties, RecordBatchStream,
     SendableRecordBatchStream, Statistics,
 };
+use crate::execution_plan::{boundedness_from_children, emission_type_from_children};
 use crate::metrics::BaselineMetrics;
 use crate::stream::ObservedStream;
 
@@ -85,7 +85,7 @@ use tokio::macros::support::thread_rng_n;
 ///                  │Input 1          │  │Input 2           │
 ///                  └─────────────────┘  └──────────────────┘
 /// ```
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct UnionExec {
     /// Input execution plan
     inputs: Vec<Arc<dyn ExecutionPlan>>,
@@ -135,14 +135,11 @@ impl UnionExec {
             .map(|plan| plan.output_partitioning().partition_count())
             .sum();
         let output_partitioning = Partitioning::UnknownPartitioning(num_partitions);
-
-        // Determine execution mode:
-        let mode = execution_mode_from_children(inputs.iter());
-
         Ok(PlanProperties::new(
             eq_properties,
             output_partitioning,
-            mode,
+            emission_type_from_children(inputs),
+            boundedness_from_children(inputs),
         ))
     }
 }
@@ -298,7 +295,7 @@ impl ExecutionPlan for UnionExec {
 /// |         |-----------------+
 /// +---------+
 /// ```
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct InterleaveExec {
     /// Input execution plan
     inputs: Vec<Arc<dyn ExecutionPlan>>,
@@ -335,10 +332,12 @@ impl InterleaveExec {
         let eq_properties = EquivalenceProperties::new(schema);
         // Get output partitioning:
         let output_partitioning = inputs[0].output_partitioning().clone();
-        // Determine execution mode:
-        let mode = execution_mode_from_children(inputs.iter());
-
-        PlanProperties::new(eq_properties, output_partitioning, mode)
+        PlanProperties::new(
+            eq_properties,
+            output_partitioning,
+            emission_type_from_children(inputs),
+            boundedness_from_children(inputs),
+        )
     }
 }
 
@@ -468,26 +467,41 @@ pub fn can_interleave<T: Borrow<Arc<dyn ExecutionPlan>>>(
 }
 
 fn union_schema(inputs: &[Arc<dyn ExecutionPlan>]) -> SchemaRef {
-    let fields: Vec<Field> = (0..inputs[0].schema().fields().len())
+    let first_schema = inputs[0].schema();
+
+    let fields = (0..first_schema.fields().len())
         .map(|i| {
             inputs
                 .iter()
-                .filter_map(|input| {
-                    if input.schema().fields().len() > i {
-                        Some(input.schema().field(i).clone())
-                    } else {
-                        None
-                    }
+                .enumerate()
+                .map(|(input_idx, input)| {
+                    let field = input.schema().field(i).clone();
+                    let mut metadata = field.metadata().clone();
+
+                    let other_metadatas = inputs
+                        .iter()
+                        .enumerate()
+                        .filter(|(other_idx, _)| *other_idx != input_idx)
+                        .flat_map(|(_, other_input)| {
+                            other_input.schema().field(i).metadata().clone().into_iter()
+                        });
+
+                    metadata.extend(other_metadatas);
+                    field.with_metadata(metadata)
                 })
-                .find_or_first(|f| f.is_nullable())
+                .find_or_first(Field::is_nullable)
+                // We can unwrap this because if inputs was empty, this would've already panic'ed when we
+                // indexed into inputs[0].
                 .unwrap()
         })
+        .collect::<Vec<_>>();
+
+    let all_metadata_merged = inputs
+        .iter()
+        .flat_map(|i| i.schema().metadata().clone().into_iter())
         .collect();
 
-    Arc::new(Schema::new_with_metadata(
-        fields,
-        inputs[0].schema().metadata().clone(),
-    ))
+    Arc::new(Schema::new_with_metadata(fields, all_metadata_merged))
 }
 
 /// CombinedRecordBatchStream can be used to combine a Vec of SendableRecordBatchStreams into one
@@ -592,6 +606,7 @@ mod tests {
     use datafusion_common::ScalarValue;
     use datafusion_physical_expr::expressions::col;
     use datafusion_physical_expr::{PhysicalExpr, PhysicalSortExpr};
+    use datafusion_physical_expr_common::sort_expr::LexOrdering;
 
     // Generate a schema which consists of 7 columns (a, b, c, d, e, f, g)
     fn create_test_schema() -> Result<SchemaRef> {
@@ -610,14 +625,14 @@ mod tests {
     // Convert each tuple to PhysicalSortExpr
     fn convert_to_sort_exprs(
         in_data: &[(&Arc<dyn PhysicalExpr>, SortOptions)],
-    ) -> Vec<PhysicalSortExpr> {
+    ) -> LexOrdering {
         in_data
             .iter()
             .map(|(expr, options)| PhysicalSortExpr {
                 expr: Arc::clone(*expr),
                 options: *options,
             })
-            .collect::<Vec<_>>()
+            .collect::<LexOrdering>()
     }
 
     #[tokio::test]
@@ -800,11 +815,11 @@ mod tests {
                 .collect::<Vec<_>>();
             let child1 = Arc::new(
                 MemoryExec::try_new(&[], Arc::clone(&schema), None)?
-                    .with_sort_information(first_orderings),
+                    .try_with_sort_information(first_orderings)?,
             );
             let child2 = Arc::new(
                 MemoryExec::try_new(&[], Arc::clone(&schema), None)?
-                    .with_sort_information(second_orderings),
+                    .try_with_sort_information(second_orderings)?,
             );
 
             let mut union_expected_eq = EquivalenceProperties::new(Arc::clone(&schema));
@@ -828,9 +843,9 @@ mod tests {
     ) {
         // Check whether orderings are same.
         let lhs_orderings = lhs.oeq_class();
-        let rhs_orderings = &rhs.oeq_class.orderings;
+        let rhs_orderings = rhs.oeq_class();
         assert_eq!(lhs_orderings.len(), rhs_orderings.len(), "{}", err_msg);
-        for rhs_ordering in rhs_orderings {
+        for rhs_ordering in rhs_orderings.iter() {
             assert!(lhs_orderings.contains(rhs_ordering), "{}", err_msg);
         }
     }

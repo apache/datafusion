@@ -17,27 +17,35 @@
 
 //! Execution plan for reading in-memory batches of data
 
+use parking_lot::RwLock;
 use std::any::Any;
 use std::fmt;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
-use super::expressions::PhysicalSortExpr;
 use super::{
-    common, DisplayAs, DisplayFormatType, ExecutionMode, ExecutionPlan, Partitioning,
-    PlanProperties, RecordBatchStream, SendableRecordBatchStream, Statistics,
+    common, ColumnarValue, DisplayAs, DisplayFormatType, ExecutionPlan, Partitioning,
+    PhysicalExpr, PlanProperties, RecordBatchStream, SendableRecordBatchStream,
+    Statistics,
 };
+use crate::execution_plan::{Boundedness, EmissionType};
 
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
-use datafusion_common::{internal_err, project_schema, Result};
+use arrow_array::RecordBatchOptions;
+use arrow_schema::Schema;
+use datafusion_common::{internal_err, plan_err, project_schema, Result, ScalarValue};
 use datafusion_execution::memory_pool::MemoryReservation;
 use datafusion_execution::TaskContext;
+use datafusion_physical_expr::equivalence::ProjectionMapping;
+use datafusion_physical_expr::expressions::Column;
+use datafusion_physical_expr::utils::collect_columns;
 use datafusion_physical_expr::{EquivalenceProperties, LexOrdering};
 
 use futures::Stream;
 
 /// Execution plan for reading in-memory batches of data
+#[derive(Clone)]
 pub struct MemoryExec {
     /// The partitions to query
     partitions: Vec<Vec<RecordBatch>>,
@@ -56,22 +64,17 @@ pub struct MemoryExec {
 
 impl fmt::Debug for MemoryExec {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "partitions: [...]")?;
-        write!(f, "schema: {:?}", self.projected_schema)?;
-        write!(f, "projection: {:?}", self.projection)?;
-        if let Some(sort_info) = &self.sort_information.first() {
-            write!(f, ", output_ordering: {:?}", sort_info)?;
-        }
-        Ok(())
+        f.debug_struct("MemoryExec")
+            .field("partitions", &"[...]")
+            .field("schema", &self.schema)
+            .field("projection", &self.projection)
+            .field("sort_information", &self.sort_information)
+            .finish()
     }
 }
 
 impl DisplayAs for MemoryExec {
-    fn fmt_as(
-        &self,
-        t: DisplayFormatType,
-        f: &mut std::fmt::Formatter,
-    ) -> std::fmt::Result {
+    fn fmt_as(&self, t: DisplayFormatType, f: &mut fmt::Formatter) -> fmt::Result {
         match t {
             DisplayFormatType::Default | DisplayFormatType::Verbose => {
                 let partition_sizes: Vec<_> =
@@ -81,10 +84,7 @@ impl DisplayAs for MemoryExec {
                     .sort_information
                     .first()
                     .map(|output_ordering| {
-                        format!(
-                            ", output_ordering={}",
-                            PhysicalSortExpr::format_list(output_ordering)
-                        )
+                        format!(", output_ordering={}", output_ordering)
                     })
                     .unwrap_or_default();
 
@@ -117,7 +117,7 @@ impl ExecutionPlan for MemoryExec {
     }
 
     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
-        // this is a leaf node and has no children
+        // This is a leaf node and has no children
         vec![]
     }
 
@@ -177,18 +177,120 @@ impl MemoryExec {
         })
     }
 
-    /// set `show_sizes` to determine whether to display partition sizes
+    /// Create a new execution plan from a list of constant values (`ValuesExec`)
+    pub fn try_new_as_values(
+        schema: SchemaRef,
+        data: Vec<Vec<Arc<dyn PhysicalExpr>>>,
+    ) -> Result<Self> {
+        if data.is_empty() {
+            return plan_err!("Values list cannot be empty");
+        }
+
+        let n_row = data.len();
+        let n_col = schema.fields().len();
+
+        // We have this single row batch as a placeholder to satisfy evaluation argument
+        // and generate a single output row
+        let placeholder_schema = Arc::new(Schema::empty());
+        let placeholder_batch = RecordBatch::try_new_with_options(
+            Arc::clone(&placeholder_schema),
+            vec![],
+            &RecordBatchOptions::new().with_row_count(Some(1)),
+        )?;
+
+        // Evaluate each column
+        let arrays = (0..n_col)
+            .map(|j| {
+                (0..n_row)
+                    .map(|i| {
+                        let expr = &data[i][j];
+                        let result = expr.evaluate(&placeholder_batch)?;
+
+                        match result {
+                            ColumnarValue::Scalar(scalar) => Ok(scalar),
+                            ColumnarValue::Array(array) if array.len() == 1 => {
+                                ScalarValue::try_from_array(&array, 0)
+                            }
+                            ColumnarValue::Array(_) => {
+                                plan_err!("Cannot have array values in a values list")
+                            }
+                        }
+                    })
+                    .collect::<Result<Vec<_>>>()
+                    .and_then(ScalarValue::iter_to_array)
+            })
+            .collect::<Result<Vec<_>>>()?;
+
+        let batch = RecordBatch::try_new_with_options(
+            Arc::clone(&schema),
+            arrays,
+            &RecordBatchOptions::new().with_row_count(Some(n_row)),
+        )?;
+
+        let partitions = vec![batch];
+        Self::try_new_from_batches(Arc::clone(&schema), partitions)
+    }
+
+    /// Create a new plan using the provided schema and batches.
+    ///
+    /// Errors if any of the batches don't match the provided schema, or if no
+    /// batches are provided.
+    pub fn try_new_from_batches(
+        schema: SchemaRef,
+        batches: Vec<RecordBatch>,
+    ) -> Result<Self> {
+        if batches.is_empty() {
+            return plan_err!("Values list cannot be empty");
+        }
+
+        for batch in &batches {
+            let batch_schema = batch.schema();
+            if batch_schema != schema {
+                return plan_err!(
+                    "Batch has invalid schema. Expected: {}, got: {}",
+                    schema,
+                    batch_schema
+                );
+            }
+        }
+
+        let partitions = vec![batches];
+        let cache = Self::compute_properties(Arc::clone(&schema), &[], &partitions);
+        Ok(Self {
+            partitions,
+            schema: Arc::clone(&schema),
+            projected_schema: Arc::clone(&schema),
+            projection: None,
+            sort_information: vec![],
+            cache,
+            show_sizes: true,
+        })
+    }
+
+    /// Set `show_sizes` to determine whether to display partition sizes
     pub fn with_show_sizes(mut self, show_sizes: bool) -> Self {
         self.show_sizes = show_sizes;
         self
     }
 
+    /// Ref to partitions
     pub fn partitions(&self) -> &[Vec<RecordBatch>] {
         &self.partitions
     }
 
+    /// Ref to projection
     pub fn projection(&self) -> &Option<Vec<usize>> {
         &self.projection
+    }
+
+    /// Show sizes
+    pub fn show_sizes(&self) -> bool {
+        self.show_sizes
+    }
+
+    /// Ref to sort information
+    pub fn sort_information(&self) -> &[LexOrdering] {
+        &self.sort_information
     }
 
     /// A memory table can be ordered by multiple expressions simultaneously.
@@ -207,18 +309,66 @@ impl MemoryExec {
     /// where both `a ASC` and `b DESC` can describe the table ordering. With
     /// [`EquivalenceProperties`], we can keep track of these equivalences
     /// and treat `a ASC` and `b DESC` as the same ordering requirement.
-    pub fn with_sort_information(mut self, sort_information: Vec<LexOrdering>) -> Self {
-        self.sort_information = sort_information;
+    ///
+    /// Note that if there is an internal projection, that projection will be
+    /// also applied to the given `sort_information`.
+    pub fn try_with_sort_information(
+        mut self,
+        mut sort_information: Vec<LexOrdering>,
+    ) -> Result<Self> {
+        // All sort expressions must refer to the original schema
+        let fields = self.schema.fields();
+        let ambiguous_column = sort_information
+            .iter()
+            .flat_map(|ordering| ordering.inner.clone())
+            .flat_map(|expr| collect_columns(&expr.expr))
+            .find(|col| {
+                fields
+                    .get(col.index())
+                    .map(|field| field.name() != col.name())
+                    .unwrap_or(true)
+            });
+        if let Some(col) = ambiguous_column {
+            return internal_err!(
+                "Column {:?} is not found in the original schema of the MemoryExec",
+                col
+            );
+        }
 
+        // If there is a projection on the source, we also need to project orderings
+        if let Some(projection) = &self.projection {
+            let base_eqp = EquivalenceProperties::new_with_orderings(
+                self.original_schema(),
+                &sort_information,
+            );
+            let proj_exprs = projection
+                .iter()
+                .map(|idx| {
+                    let base_schema = self.original_schema();
+                    let name = base_schema.field(*idx).name();
+                    (Arc::new(Column::new(name, *idx)) as _, name.to_string())
+                })
+                .collect::<Vec<_>>();
+            let projection_mapping =
+                ProjectionMapping::try_new(&proj_exprs, &self.original_schema())?;
+            sort_information = base_eqp
+                .project(&projection_mapping, self.schema())
+                .into_oeq_class()
+                .into_inner();
+        }
+
+        self.sort_information = sort_information;
         // We need to update equivalence properties when updating sort information.
         let eq_properties = EquivalenceProperties::new_with_orderings(
             self.schema(),
             &self.sort_information,
         );
         self.cache = self.cache.with_eq_properties(eq_properties);
-        self
+
+        Ok(self)
     }
 
+    /// Arc clone of ref to original schema
     pub fn original_schema(&self) -> SchemaRef {
         Arc::clone(&self.schema)
     }
@@ -229,11 +379,11 @@ impl MemoryExec {
         orderings: &[LexOrdering],
         partitions: &[Vec<RecordBatch>],
     ) -> PlanProperties {
-        let eq_properties = EquivalenceProperties::new_with_orderings(schema, orderings);
         PlanProperties::new(
-            eq_properties,                                       // Equivalence Properties
-            Partitioning::UnknownPartitioning(partitions.len()), // Output Partitioning
-            ExecutionMode::Bounded,                              // Execution Mode
+            EquivalenceProperties::new_with_orderings(schema, orderings),
+            Partitioning::UnknownPartitioning(partitions.len()),
+            EmissionType::Incremental,
+            Boundedness::Bounded,
         )
     }
 }
@@ -310,8 +460,166 @@ impl RecordBatchStream for MemoryStream {
     }
 }
 
+pub trait LazyBatchGenerator: Send + Sync + fmt::Debug + fmt::Display {
+    /// Generate the next batch, return `None` when no more batches are available
+    fn generate_next_batch(&mut self) -> Result<Option<RecordBatch>>;
+}
+
+/// Execution plan for lazy in-memory batches of data
+///
+/// This plan generates output batches lazily, it doesn't have to buffer all batches
+/// in memory up front (compared to `MemoryExec`), thus consuming constant memory.
+pub struct LazyMemoryExec {
+    /// Schema representing the data
+    schema: SchemaRef,
+    /// Functions to generate batches for each partition
+    batch_generators: Vec<Arc<RwLock<dyn LazyBatchGenerator>>>,
+    /// Plan properties cache storing equivalence properties, partitioning, and execution mode
+    cache: PlanProperties,
+}
+
+impl LazyMemoryExec {
+    /// Create a new lazy memory execution plan
+    pub fn try_new(
+        schema: SchemaRef,
+        generators: Vec<Arc<RwLock<dyn LazyBatchGenerator>>>,
+    ) -> Result<Self> {
+        let cache = PlanProperties::new(
+            EquivalenceProperties::new(Arc::clone(&schema)),
+            Partitioning::RoundRobinBatch(generators.len()),
+            EmissionType::Incremental,
+            Boundedness::Bounded,
+        );
+        Ok(Self {
+            schema,
+            batch_generators: generators,
+            cache,
+        })
+    }
+}
+
+impl fmt::Debug for LazyMemoryExec {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.debug_struct("LazyMemoryExec")
+            .field("schema", &self.schema)
+            .field("batch_generators", &self.batch_generators)
+            .finish()
+    }
+}
+
+impl DisplayAs for LazyMemoryExec {
+    fn fmt_as(&self, t: DisplayFormatType, f: &mut fmt::Formatter) -> fmt::Result {
+        match t {
+            DisplayFormatType::Default | DisplayFormatType::Verbose => {
+                write!(
+                    f,
+                    "LazyMemoryExec: partitions={}, batch_generators=[{}]",
+                    self.batch_generators.len(),
+                    self.batch_generators
+                        .iter()
+                        .map(|g| g.read().to_string())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                )
+            }
+        }
+    }
+}
+
+impl ExecutionPlan for LazyMemoryExec {
+    fn name(&self) -> &'static str {
+        "LazyMemoryExec"
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn schema(&self) -> SchemaRef {
+        Arc::clone(&self.schema)
+    }
+
+    fn properties(&self) -> &PlanProperties {
+        &self.cache
+    }
+
+    fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
+        vec![]
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        if children.is_empty() {
+            Ok(self)
+        } else {
+            internal_err!("Children cannot be replaced in LazyMemoryExec")
+        }
+    }
+
+    fn execute(
+        &self,
+        partition: usize,
+        _context: Arc<TaskContext>,
+    ) -> Result<SendableRecordBatchStream> {
+        if partition >= self.batch_generators.len() {
+            return internal_err!(
+                "Invalid partition {} for LazyMemoryExec with {} partitions",
+                partition,
+                self.batch_generators.len()
+            );
+        }
+
+        Ok(Box::pin(LazyMemoryStream {
+            schema: Arc::clone(&self.schema),
+            generator: Arc::clone(&self.batch_generators[partition]),
+        }))
+    }
+
+    fn statistics(&self) -> Result<Statistics> {
+        Ok(Statistics::new_unknown(&self.schema))
+    }
+}
+
+/// Stream that generates record batches on demand
+pub struct LazyMemoryStream {
+    schema: SchemaRef,
+    /// Generator to produce batches
+    ///
+    /// Note: Idiomatically, DataFusion uses plan-time parallelism - each stream
+    /// should have a unique `LazyBatchGenerator`. Use RepartitionExec or
+    /// construct multiple `LazyMemoryStream`s during planning to enable
+    /// parallel execution.
+    /// Sharing generators between streams should be used with caution.
+    generator: Arc<RwLock<dyn LazyBatchGenerator>>,
+}
+
+impl Stream for LazyMemoryStream {
+    type Item = Result<RecordBatch>;
+
+    fn poll_next(
+        self: std::pin::Pin<&mut Self>,
+        _: &mut Context<'_>,
+    ) -> Poll<Option<Self::Item>> {
+        let batch = self.generator.write().generate_next_batch();
+
+        match batch {
+            Ok(Some(batch)) => Poll::Ready(Some(Ok(batch))),
+            Ok(None) => Poll::Ready(None),
+            Err(e) => Poll::Ready(Some(Err(e))),
+        }
+    }
+}
+
+impl RecordBatchStream for LazyMemoryStream {
+    fn schema(&self) -> SchemaRef {
+        Arc::clone(&self.schema)
+    }
+}
+
 #[cfg(test)]
-mod tests {
+mod memory_exec_tests {
     use std::sync::Arc;
 
     use crate::memory::MemoryExec;
@@ -320,6 +628,7 @@ mod tests {
     use arrow_schema::{DataType, Field, Schema, SortOptions};
     use datafusion_physical_expr::expressions::col;
     use datafusion_physical_expr::PhysicalSortExpr;
+    use datafusion_physical_expr_common::sort_expr::LexOrdering;
 
     #[test]
     fn test_memory_order_eq() -> datafusion_common::Result<()> {
@@ -328,7 +637,7 @@ mod tests {
             Field::new("b", DataType::Int64, false),
             Field::new("c", DataType::Int64, false),
         ]));
-        let sort1 = vec![
+        let sort1 = LexOrdering::new(vec![
             PhysicalSortExpr {
                 expr: col("a", &schema)?,
                 options: SortOptions::default(),
@@ -337,26 +646,239 @@ mod tests {
                 expr: col("b", &schema)?,
                 options: SortOptions::default(),
             },
-        ];
-        let sort2 = vec![PhysicalSortExpr {
+        ]);
+        let sort2 = LexOrdering::new(vec![PhysicalSortExpr {
             expr: col("c", &schema)?,
             options: SortOptions::default(),
-        }];
-        let mut expected_output_order = vec![];
+        }]);
+        let mut expected_output_order = LexOrdering::default();
         expected_output_order.extend(sort1.clone());
         expected_output_order.extend(sort2.clone());
 
         let sort_information = vec![sort1.clone(), sort2.clone()];
         let mem_exec = MemoryExec::try_new(&[vec![]], schema, None)?
-            .with_sort_information(sort_information);
+            .try_with_sort_information(sort_information)?;
 
         assert_eq!(
-            mem_exec.properties().output_ordering().unwrap(),
-            expected_output_order
+            mem_exec.properties().output_ordering().unwrap().to_vec(),
+            expected_output_order.inner
         );
         let eq_properties = mem_exec.properties().equivalence_properties();
         assert!(eq_properties.oeq_class().contains(&sort1));
         assert!(eq_properties.oeq_class().contains(&sort2));
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod lazy_memory_tests {
+    use super::*;
+    use arrow::array::Int64Array;
+    use arrow::datatypes::{DataType, Field, Schema};
+    use futures::StreamExt;
+
+    #[derive(Debug, Clone)]
+    struct TestGenerator {
+        counter: i64,
+        max_batches: i64,
+        batch_size: usize,
+        schema: SchemaRef,
+    }
+
+    impl fmt::Display for TestGenerator {
+        fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+            write!(
+                f,
+                "TestGenerator: counter={}, max_batches={}, batch_size={}",
+                self.counter, self.max_batches, self.batch_size
+            )
+        }
+    }
+
+    impl LazyBatchGenerator for TestGenerator {
+        fn generate_next_batch(&mut self) -> Result<Option<RecordBatch>> {
+            if self.counter >= self.max_batches {
+                return Ok(None);
+            }
+
+            let array = Int64Array::from_iter_values(
+                (self.counter * self.batch_size as i64)
+                    ..(self.counter * self.batch_size as i64 + self.batch_size as i64),
+            );
+            self.counter += 1;
+            Ok(Some(RecordBatch::try_new(
+                Arc::clone(&self.schema),
+                vec![Arc::new(array)],
+            )?))
+        }
+    }
+
+    #[tokio::test]
+    async fn test_lazy_memory_exec() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int64, false)]));
+        let generator = TestGenerator {
+            counter: 0,
+            max_batches: 3,
+            batch_size: 2,
+            schema: Arc::clone(&schema),
+        };
+
+        let exec =
+            LazyMemoryExec::try_new(schema, vec![Arc::new(RwLock::new(generator))])?;
+
+        // Test schema
+        assert_eq!(exec.schema().fields().len(), 1);
+        assert_eq!(exec.schema().field(0).name(), "a");
+
+        // Test execution
+        let stream = exec.execute(0, Arc::new(TaskContext::default()))?;
+        let batches: Vec<_> = stream.collect::<Vec<_>>().await;
+
+        assert_eq!(batches.len(), 3);
+
+        // Verify batch contents
+        let batch0 = batches[0].as_ref().unwrap();
+        let array0 = batch0
+            .column(0)
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .unwrap();
+        assert_eq!(array0.values(), &[0, 1]);
+
+        let batch1 = batches[1].as_ref().unwrap();
+        let array1 = batch1
+            .column(0)
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .unwrap();
+        assert_eq!(array1.values(), &[2, 3]);
+
+        let batch2 = batches[2].as_ref().unwrap();
+        let array2 = batch2
+            .column(0)
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .unwrap();
+        assert_eq!(array2.values(), &[4, 5]);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_lazy_memory_exec_invalid_partition() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int64, false)]));
+        let generator = TestGenerator {
+            counter: 0,
+            max_batches: 1,
+            batch_size: 1,
+            schema: Arc::clone(&schema),
+        };
+
+        let exec =
+            LazyMemoryExec::try_new(schema, vec![Arc::new(RwLock::new(generator))])?;
+
+        // Test invalid partition
+        let result = exec.execute(1, Arc::new(TaskContext::default()));
+
+        // partition is 0-indexed, so there only should be partition 0
+        assert!(matches!(
+            result,
+            Err(e) if e.to_string().contains("Invalid partition 1 for LazyMemoryExec with 1 partitions")
+        ));
+
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::expressions::lit;
+    use crate::test::{self, make_partition};
+
+    use arrow_schema::{DataType, Field};
+    use datafusion_common::stats::{ColumnStatistics, Precision};
+
+    #[tokio::test]
+    async fn values_empty_case() -> Result<()> {
+        let schema = test::aggr_test_schema();
+        let empty = MemoryExec::try_new_as_values(schema, vec![]);
+        assert!(empty.is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn new_exec_with_batches() {
+        let batch = make_partition(7);
+        let schema = batch.schema();
+        let batches = vec![batch.clone(), batch];
+        let _exec = MemoryExec::try_new_from_batches(schema, batches).unwrap();
+    }
+
+    #[test]
+    fn new_exec_with_batches_empty() {
+        let batch = make_partition(7);
+        let schema = batch.schema();
+        let _ = MemoryExec::try_new_from_batches(schema, Vec::new()).unwrap_err();
+    }
+
+    #[test]
+    fn new_exec_with_batches_invalid_schema() {
+        let batch = make_partition(7);
+        let batches = vec![batch.clone(), batch];
+
+        let invalid_schema = Arc::new(Schema::new(vec![
+            Field::new("col0", DataType::UInt32, false),
+            Field::new("col1", DataType::Utf8, false),
+        ]));
+        let _ = MemoryExec::try_new_from_batches(invalid_schema, batches).unwrap_err();
+    }
+
+    // Test issue: https://github.com/apache/datafusion/issues/8763
+    #[test]
+    fn new_exec_with_non_nullable_schema() {
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "col0",
+            DataType::UInt32,
+            false,
+        )]));
+        let _ = MemoryExec::try_new_as_values(Arc::clone(&schema), vec![vec![lit(1u32)]])
+            .unwrap();
+        // Test that a null value is rejected
+        let _ = MemoryExec::try_new_as_values(
+            schema,
+            vec![vec![lit(ScalarValue::UInt32(None))]],
+        )
+        .unwrap_err();
+    }
+
+    #[test]
+    fn values_stats_with_nulls_only() -> Result<()> {
+        let data = vec![
+            vec![lit(ScalarValue::Null)],
+            vec![lit(ScalarValue::Null)],
+            vec![lit(ScalarValue::Null)],
+        ];
+        let rows = data.len();
+        let values = MemoryExec::try_new_as_values(
+            Arc::new(Schema::new(vec![Field::new("col0", DataType::Null, true)])),
+            data,
+        )?;
+
+        assert_eq!(
+            values.statistics()?,
+            Statistics {
+                num_rows: Precision::Exact(rows),
+                total_byte_size: Precision::Exact(8), // not important
+                column_statistics: vec![ColumnStatistics {
+                    null_count: Precision::Exact(rows), // there are only nulls
+                    distinct_count: Precision::Absent,
+                    max_value: Precision::Absent,
+                    min_value: Precision::Absent,
+                },],
+            }
+        );
+
         Ok(())
     }
 }

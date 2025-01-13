@@ -40,198 +40,204 @@ pub mod signum;
 pub mod trunc;
 
 // Create UDFs
-make_udf_function!(abs::AbsFunc, ABS, abs);
+make_udf_function!(abs::AbsFunc, abs);
 make_math_unary_udf!(
     AcosFunc,
-    ACOS,
     acos,
     acos,
     super::acos_order,
-    super::bounds::acos_bounds
+    super::bounds::acos_bounds,
+    super::get_acos_doc
 );
 make_math_unary_udf!(
     AcoshFunc,
-    ACOSH,
     acosh,
     acosh,
     super::acosh_order,
-    super::bounds::acosh_bounds
+    super::bounds::acosh_bounds,
+    super::get_acosh_doc
 );
 make_math_unary_udf!(
     AsinFunc,
-    ASIN,
     asin,
     asin,
     super::asin_order,
-    super::bounds::asin_bounds
+    super::bounds::asin_bounds,
+    super::get_asin_doc
 );
 make_math_unary_udf!(
     AsinhFunc,
-    ASINH,
     asinh,
     asinh,
     super::asinh_order,
-    super::bounds::unbounded_bounds
+    super::bounds::unbounded_bounds,
+    super::get_asinh_doc
 );
 make_math_unary_udf!(
     AtanFunc,
-    ATAN,
     atan,
     atan,
     super::atan_order,
-    super::bounds::atan_bounds
+    super::bounds::atan_bounds,
+    super::get_atan_doc
 );
 make_math_unary_udf!(
     AtanhFunc,
-    ATANH,
     atanh,
     atanh,
     super::atanh_order,
-    super::bounds::unbounded_bounds
+    super::bounds::unbounded_bounds,
+    super::get_atanh_doc
 );
-make_math_binary_udf!(Atan2, ATAN2, atan2, atan2, super::atan2_order);
+make_math_binary_udf!(
+    Atan2,
+    atan2,
+    atan2,
+    super::atan2_order,
+    super::get_atan2_doc
+);
 make_math_unary_udf!(
     CbrtFunc,
-    CBRT,
     cbrt,
     cbrt,
     super::cbrt_order,
-    super::bounds::unbounded_bounds
+    super::bounds::unbounded_bounds,
+    super::get_cbrt_doc
 );
 make_math_unary_udf!(
     CeilFunc,
-    CEIL,
     ceil,
     ceil,
     super::ceil_order,
-    super::bounds::unbounded_bounds
+    super::bounds::unbounded_bounds,
+    super::get_ceil_doc
 );
 make_math_unary_udf!(
     CosFunc,
-    COS,
     cos,
     cos,
     super::cos_order,
-    super::bounds::cos_bounds
+    super::bounds::cos_bounds,
+    super::get_cos_doc
 );
 make_math_unary_udf!(
     CoshFunc,
-    COSH,
     cosh,
     cosh,
     super::cosh_order,
-    super::bounds::cosh_bounds
+    super::bounds::cosh_bounds,
+    super::get_cosh_doc
 );
-make_udf_function!(cot::CotFunc, COT, cot);
+make_udf_function!(cot::CotFunc, cot);
 make_math_unary_udf!(
     DegreesFunc,
-    DEGREES,
     degrees,
     to_degrees,
     super::degrees_order,
-    super::bounds::unbounded_bounds
+    super::bounds::unbounded_bounds,
+    super::get_degrees_doc
 );
 make_math_unary_udf!(
     ExpFunc,
-    EXP,
     exp,
     exp,
     super::exp_order,
-    super::bounds::exp_bounds
+    super::bounds::exp_bounds,
+    super::get_exp_doc
 );
-make_udf_function!(factorial::FactorialFunc, FACTORIAL, factorial);
+make_udf_function!(factorial::FactorialFunc, factorial);
 make_math_unary_udf!(
     FloorFunc,
-    FLOOR,
     floor,
     floor,
     super::floor_order,
-    super::bounds::unbounded_bounds
+    super::bounds::unbounded_bounds,
+    super::get_floor_doc
 );
-make_udf_function!(log::LogFunc, LOG, log);
-make_udf_function!(gcd::GcdFunc, GCD, gcd);
-make_udf_function!(nans::IsNanFunc, ISNAN, isnan);
-make_udf_function!(iszero::IsZeroFunc, ISZERO, iszero);
-make_udf_function!(lcm::LcmFunc, LCM, lcm);
+make_udf_function!(log::LogFunc, log);
+make_udf_function!(gcd::GcdFunc, gcd);
+make_udf_function!(nans::IsNanFunc, isnan);
+make_udf_function!(iszero::IsZeroFunc, iszero);
+make_udf_function!(lcm::LcmFunc, lcm);
 make_math_unary_udf!(
     LnFunc,
-    LN,
     ln,
     ln,
     super::ln_order,
-    super::bounds::unbounded_bounds
+    super::bounds::unbounded_bounds,
+    super::get_ln_doc
 );
 make_math_unary_udf!(
     Log2Func,
-    LOG2,
     log2,
     log2,
     super::log2_order,
-    super::bounds::unbounded_bounds
+    super::bounds::unbounded_bounds,
+    super::get_log2_doc
 );
 make_math_unary_udf!(
     Log10Func,
-    LOG10,
     log10,
     log10,
     super::log10_order,
-    super::bounds::unbounded_bounds
+    super::bounds::unbounded_bounds,
+    super::get_log10_doc
 );
-make_udf_function!(nanvl::NanvlFunc, NANVL, nanvl);
-make_udf_function!(pi::PiFunc, PI, pi);
-make_udf_function!(power::PowerFunc, POWER, power);
+make_udf_function!(nanvl::NanvlFunc, nanvl);
+make_udf_function!(pi::PiFunc, pi);
+make_udf_function!(power::PowerFunc, power);
 make_math_unary_udf!(
     RadiansFunc,
-    RADIANS,
     radians,
     to_radians,
     super::radians_order,
-    super::bounds::radians_bounds
+    super::bounds::radians_bounds,
+    super::get_radians_doc
 );
-make_udf_function!(random::RandomFunc, RANDOM, random);
-make_udf_function!(round::RoundFunc, ROUND, round);
-make_udf_function!(signum::SignumFunc, SIGNUM, signum);
+make_udf_function!(random::RandomFunc, random);
+make_udf_function!(round::RoundFunc, round);
+make_udf_function!(signum::SignumFunc, signum);
 make_math_unary_udf!(
     SinFunc,
-    SIN,
     sin,
     sin,
     super::sin_order,
-    super::bounds::sin_bounds
+    super::bounds::sin_bounds,
+    super::get_sin_doc
 );
 make_math_unary_udf!(
     SinhFunc,
-    SINH,
     sinh,
     sinh,
     super::sinh_order,
-    super::bounds::unbounded_bounds
+    super::bounds::unbounded_bounds,
+    super::get_sinh_doc
 );
 make_math_unary_udf!(
     SqrtFunc,
-    SQRT,
     sqrt,
     sqrt,
     super::sqrt_order,
-    super::bounds::sqrt_bounds
+    super::bounds::sqrt_bounds,
+    super::get_sqrt_doc
 );
 make_math_unary_udf!(
     TanFunc,
-    TAN,
     tan,
     tan,
     super::tan_order,
-    super::bounds::unbounded_bounds
+    super::bounds::unbounded_bounds,
+    super::get_tan_doc
 );
 make_math_unary_udf!(
     TanhFunc,
-    TANH,
     tanh,
     tanh,
     super::tanh_order,
-    super::bounds::tanh_bounds
+    super::bounds::tanh_bounds,
+    super::get_tanh_doc
 );
-make_udf_function!(trunc::TruncFunc, TRUNC, trunc);
+make_udf_function!(trunc::TruncFunc, trunc);
 
 pub mod expr_fn {
     export_functions!(

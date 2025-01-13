@@ -14,6 +14,7 @@
 // KIND, either express or implied.  See the License for the
 // specific language governing permissions and limitations
 // under the License.
+
 // Make cheap clones clear: https://github.com/apache/datafusion/issues/11143
 #![deny(clippy::clone_on_ref_ptr)]
 
@@ -27,7 +28,6 @@
 //!
 //! The [expr_fn] module contains functions for creating expressions.
 
-mod built_in_window_function;
 mod literal;
 mod operation;
 mod partition_evaluator;
@@ -63,16 +63,16 @@ pub mod type_coercion;
 pub mod utils;
 pub mod var_provider;
 pub mod window_frame;
-pub mod window_function;
 pub mod window_state;
 
-pub use built_in_window_function::BuiltInWindowFunction;
+pub use datafusion_doc::{DocSection, Documentation, DocumentationBuilder};
 pub use datafusion_expr_common::accumulator::Accumulator;
 pub use datafusion_expr_common::columnar_value::ColumnarValue;
 pub use datafusion_expr_common::groups_accumulator::{EmitTo, GroupsAccumulator};
 pub use datafusion_expr_common::operator::Operator;
 pub use datafusion_expr_common::signature::{
-    ArrayFunctionSignature, Signature, TypeSignature, Volatility, TIMEZONE_WILDCARD,
+    ArrayFunctionSignature, Signature, TypeSignature, TypeSignatureClass, Volatility,
+    TIMEZONE_WILDCARD,
 };
 pub use datafusion_expr_common::type_coercion::binary;
 pub use expr::{
@@ -90,9 +90,11 @@ pub use logical_plan::*;
 pub use partition_evaluator::PartitionEvaluator;
 pub use sqlparser;
 pub use table_source::{TableProviderFilterPushDown, TableSource, TableType};
-pub use udaf::{AggregateUDF, AggregateUDFImpl, ReversedUDAF};
-pub use udf::{ScalarUDF, ScalarUDFImpl};
-pub use udwf::{WindowUDF, WindowUDFImpl};
+pub use udaf::{
+    aggregate_doc_sections, AggregateUDF, AggregateUDFImpl, ReversedUDAF, StatisticsArgs,
+};
+pub use udf::{scalar_doc_sections, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl};
+pub use udwf::{window_doc_sections, ReversedUDWF, WindowUDF, WindowUDFImpl};
 pub use window_frame::{WindowFrame, WindowFrameBound, WindowFrameUnits};
 
 #[cfg(test)]

@@ -24,10 +24,12 @@ use datafusion_common::Result;
 use datafusion_common::{not_impl_err, ScalarValue};
 use datafusion_expr::function::AccumulatorArgs;
 use datafusion_expr::{
-    Accumulator, AggregateUDFImpl, Signature, TypeSignature, Volatility,
+    Accumulator, AggregateUDFImpl, Documentation, Signature, TypeSignature, Volatility,
 };
+use datafusion_macros::user_doc;
 use datafusion_physical_expr::expressions::Literal;
 use std::any::Any;
+use std::mem::size_of_val;
 
 make_udaf_expr_and_func!(
     StringAgg,
@@ -37,6 +39,28 @@ make_udaf_expr_and_func!(
     string_agg_udaf
 );
 
+#[user_doc(
+    doc_section(label = "General Functions"),
+    description = "Concatenates the values of string expressions and places separator values between them.",
+    syntax_example = "string_agg(expression, delimiter)",
+    sql_example = r#"```sql
+> SELECT string_agg(name, ', ') AS names_list
+  FROM employee;
++--------------------------+
+| names_list               |
++--------------------------+
+| Alice, Bob, Charlie      |
++--------------------------+
+```"#,
+    argument(
+        name = "expression",
+        description = "The string expression to concatenate. Can be a column or any valid string expression."
+    ),
+    argument(
+        name = "delimiter",
+        description = "A literal string used as a separator between the concatenated values."
+    )
+)]
 /// STRING_AGG aggregate expression
 #[derive(Debug)]
 pub struct StringAgg {
@@ -98,6 +122,10 @@ impl AggregateUDFImpl for StringAgg {
 
         not_impl_err!("expect literal")
     }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        self.doc()
+    }
 }
 
 #[derive(Debug)]
@@ -146,7 +174,7 @@ impl Accumulator for StringAggAccumulator {
     }
 
     fn size(&self) -> usize {
-        std::mem::size_of_val(self)
+        size_of_val(self)
             + self.values.as_ref().map(|v| v.capacity()).unwrap_or(0)
             + self.delimiter.capacity()
     }

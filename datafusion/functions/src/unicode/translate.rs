@@ -22,14 +22,36 @@ use arrow::array::{
     ArrayAccessor, ArrayIter, ArrayRef, AsArray, GenericStringArray, OffsetSizeTrait,
 };
 use arrow::datatypes::DataType;
-use hashbrown::HashMap;
+use datafusion_common::HashMap;
 use unicode_segmentation::UnicodeSegmentation;
 
 use crate::utils::{make_scalar_function, utf8_to_str_type};
 use datafusion_common::{exec_err, Result};
 use datafusion_expr::TypeSignature::Exact;
-use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
+use datafusion_expr::{
+    ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
+};
+use datafusion_macros::user_doc;
 
+#[user_doc(
+    doc_section(label = "String Functions"),
+    description = "Translates characters in a string to specified translation characters.",
+    syntax_example = "translate(str, chars, translation)",
+    sql_example = r#"```sql
+> select translate('twice', 'wic', 'her');
++--------------------------------------------------+
+| translate(Utf8("twice"),Utf8("wic"),Utf8("her")) |
++--------------------------------------------------+
+| there                                            |
++--------------------------------------------------+
+```"#,
+    standard_argument(name = "str", prefix = "String"),
+    argument(name = "chars", description = "Characters to translate."),
+    argument(
+        name = "translation",
+        description = "Translation characters. Translation characters replace only characters at the same position in the **chars** string."
+    )
+)]
 #[derive(Debug)]
 pub struct TranslateFunc {
     signature: Signature,
@@ -73,8 +95,16 @@ impl ScalarUDFImpl for TranslateFunc {
         utf8_to_str_type(&arg_types[0], "translate")
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         make_scalar_function(invoke_translate, vec![])(args)
+    }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        self.doc()
     }
 }
 
@@ -170,7 +200,7 @@ mod tests {
     fn test_functions() -> Result<()> {
         test_function!(
             TranslateFunc::new(),
-            &[
+            vec![
                 ColumnarValue::Scalar(ScalarValue::from("12345")),
                 ColumnarValue::Scalar(ScalarValue::from("143")),
                 ColumnarValue::Scalar(ScalarValue::from("ax"))
@@ -182,7 +212,7 @@ mod tests {
         );
         test_function!(
             TranslateFunc::new(),
-            &[
+            vec![
                 ColumnarValue::Scalar(ScalarValue::Utf8(None)),
                 ColumnarValue::Scalar(ScalarValue::from("143")),
                 ColumnarValue::Scalar(ScalarValue::from("ax"))
@@ -194,7 +224,7 @@ mod tests {
         );
         test_function!(
             TranslateFunc::new(),
-            &[
+            vec![
                 ColumnarValue::Scalar(ScalarValue::from("12345")),
                 ColumnarValue::Scalar(ScalarValue::Utf8(None)),
                 ColumnarValue::Scalar(ScalarValue::from("ax"))
@@ -206,7 +236,7 @@ mod tests {
         );
         test_function!(
             TranslateFunc::new(),
-            &[
+            vec![
                 ColumnarValue::Scalar(ScalarValue::from("12345")),
                 ColumnarValue::Scalar(ScalarValue::from("143")),
                 ColumnarValue::Scalar(ScalarValue::Utf8(None))
@@ -218,7 +248,7 @@ mod tests {
         );
         test_function!(
             TranslateFunc::new(),
-            &[
+            vec![
                 ColumnarValue::Scalar(ScalarValue::from("é2íñ5")),
                 ColumnarValue::Scalar(ScalarValue::from("éñí")),
                 ColumnarValue::Scalar(ScalarValue::from("óü")),
@@ -231,7 +261,7 @@ mod tests {
         #[cfg(not(feature = "unicode_expressions"))]
         test_function!(
             TranslateFunc::new(),
-            &[
+            vec![
                 ColumnarValue::Scalar(ScalarValue::from("12345")),
                 ColumnarValue::Scalar(ScalarValue::from("143")),
                 ColumnarValue::Scalar(ScalarValue::from("ax")),

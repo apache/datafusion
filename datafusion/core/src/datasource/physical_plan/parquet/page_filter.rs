@@ -118,14 +118,16 @@ impl PagePruningAccessPlanFilter {
         let predicates = split_conjunction(expr)
             .into_iter()
             .filter_map(|predicate| {
-                let pp =
-                    match PruningPredicate::try_new(predicate.clone(), schema.clone()) {
-                        Ok(pp) => pp,
-                        Err(e) => {
-                            debug!("Ignoring error creating page pruning predicate: {e}");
-                            return None;
-                        }
-                    };
+                let pp = match PruningPredicate::try_new(
+                    Arc::clone(predicate),
+                    Arc::clone(&schema),
+                ) {
+                    Ok(pp) => pp,
+                    Err(e) => {
+                        debug!("Ignoring error creating page pruning predicate: {e}");
+                        return None;
+                    }
+                };
 
                 if pp.always_true() {
                     debug!("Ignoring always true page pruning predicate: {predicate}");
@@ -178,6 +180,8 @@ impl PagePruningAccessPlanFilter {
 
         // track the total number of rows that should be skipped
         let mut total_skip = 0;
+        // track the total number of rows that should not be skipped
+        let mut total_select = 0;
 
         // for each row group specified in the access plan
         let row_group_indexes = access_plan.row_group_indexes();
@@ -242,8 +246,10 @@ impl PagePruningAccessPlanFilter {
             if let Some(overall_selection) = overall_selection {
                 if overall_selection.selects_any() {
                     let rows_skipped = rows_skipped(&overall_selection);
-                    trace!("Overall selection from predicate skipped {rows_skipped}: {overall_selection:?}");
+                    let rows_selected = rows_selected(&overall_selection);
+                    trace!("Overall selection from predicate skipped {rows_skipped}, selected {rows_selected}: {overall_selection:?}");
                     total_skip += rows_skipped;
+                    total_select += rows_selected;
                     access_plan.scan_selection(row_group_index, overall_selection)
                 } else {
                     // Selection skips all rows, so skip the entire row group
@@ -258,7 +264,8 @@ impl PagePruningAccessPlanFilter {
             }
         }
 
-        file_metrics.page_index_rows_filtered.add(total_skip);
+        file_metrics.page_index_rows_pruned.add(total_skip);
+        file_metrics.page_index_rows_matched.add(total_select);
         access_plan
     }
 
@@ -274,6 +281,14 @@ fn rows_skipped(selection: &RowSelection) -> usize {
     selection
         .iter()
         .fold(0, |acc, x| if x.skip { acc + x.row_count } else { acc })
+}
+
+/// returns the number of rows not skipped in the selection
+/// TODO should this be upstreamed to RowSelection?
+fn rows_selected(selection: &RowSelection) -> usize {
+    selection
+        .iter()
+        .fold(0, |acc, x| if x.skip { acc } else { acc + x.row_count })
 }
 
 fn update_selection(
@@ -434,7 +449,7 @@ impl<'a> PagesPruningStatistics<'a> {
         Some(vec)
     }
 }
-impl<'a> PruningStatistics for PagesPruningStatistics<'a> {
+impl PruningStatistics for PagesPruningStatistics<'_> {
     fn min_values(&self, _column: &datafusion_common::Column) -> Option<ArrayRef> {
         match self.converter.data_page_mins(
             self.column_index,

@@ -249,7 +249,7 @@ fn criterion_benchmark(c: &mut Criterion) {
     }
 
     // Temporary file must outlive the benchmarks, it is deleted when dropped
-    std::mem::drop(temp_file);
+    drop(temp_file);
 }
 
 criterion_group!(benches, criterion_benchmark);

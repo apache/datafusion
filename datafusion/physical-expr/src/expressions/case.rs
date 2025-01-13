@@ -16,28 +16,29 @@
 // under the License.
 
 use std::borrow::Cow;
-use std::hash::{Hash, Hasher};
+use std::hash::Hash;
 use std::{any::Any, sync::Arc};
 
 use crate::expressions::try_cast;
-use crate::physical_expr::down_cast_any_ref;
 use crate::PhysicalExpr;
 
 use arrow::array::*;
-use arrow::compute::kernels::cmp::eq;
 use arrow::compute::kernels::zip::zip;
 use arrow::compute::{and, and_not, is_null, not, nullif, or, prep_null_mask_filter};
 use arrow::datatypes::{DataType, Schema};
 use datafusion_common::cast::as_boolean_array;
-use datafusion_common::{exec_err, internal_err, DataFusionError, Result, ScalarValue};
+use datafusion_common::{
+    exec_err, internal_datafusion_err, internal_err, DataFusionError, Result, ScalarValue,
+};
 use datafusion_expr::ColumnarValue;
 
 use super::{Column, Literal};
+use datafusion_physical_expr_common::datum::compare_with_eq;
 use itertools::Itertools;
 
 type WhenThen = (Arc<dyn PhysicalExpr>, Arc<dyn PhysicalExpr>);
 
-#[derive(Debug, Hash)]
+#[derive(Debug, Hash, PartialEq, Eq)]
 enum EvalMethod {
     /// CASE WHEN condition THEN result
     ///      [WHEN ...]
@@ -61,6 +62,11 @@ enum EvalMethod {
     /// are literal values
     /// CASE WHEN condition THEN literal ELSE literal END
     ScalarOrScalar,
+    /// This is a specialization for a specific use case where we can take a fast path
+    /// if there is just one when/then pair and both the `then` and `else` are expressions
+    ///
+    /// CASE WHEN condition THEN expression ELSE expression END
+    ExpressionOrExpression,
 }
 
 /// The CASE expression is similar to a series of nested if/else and there are two forms that
@@ -80,7 +86,7 @@ enum EvalMethod {
 ///     [WHEN ...]
 ///     [ELSE result]
 /// END
-#[derive(Debug, Hash)]
+#[derive(Debug, Hash, PartialEq, Eq)]
 pub struct CaseExpr {
     /// Optional base expression that can be compared to literal values in the "when" expressions
     expr: Option<Arc<dyn PhysicalExpr>>,
@@ -150,6 +156,8 @@ impl CaseExpr {
                 && else_expr.as_ref().unwrap().as_any().is::<Literal>()
             {
                 EvalMethod::ScalarOrScalar
+            } else if when_then_expr.len() == 1 && else_expr.is_some() {
+                EvalMethod::ExpressionOrExpression
             } else {
                 EvalMethod::NoExpression
             };
@@ -204,7 +212,13 @@ impl CaseExpr {
                 .evaluate_selection(batch, &remainder)?;
             let when_value = when_value.into_array(batch.num_rows())?;
             // build boolean array representing which rows match the "when" value
-            let when_match = eq(&when_value, &base_value)?;
+            let when_match = compare_with_eq(
+                &when_value,
+                &base_value,
+                // The types of case and when expressions will be coerced to match.
+                // We only need to check if the base_value is nested.
+                base_value.data_type().is_nested(),
+            )?;
             // Treat nulls as false
             let when_match = match when_match.null_count() {
                 0 => Cow::Borrowed(&when_match),
@@ -237,10 +251,9 @@ impl CaseExpr {
             remainder = and_not(&remainder, &when_match)?;
         }
 
-        if let Some(e) = &self.else_expr {
+        if let Some(e) = self.else_expr() {
             // keep `else_expr`'s data type and return type consistent
-            let expr = try_cast(Arc::clone(e), &batch.schema(), return_type.clone())
-                .unwrap_or_else(|_| Arc::clone(e));
+            let expr = try_cast(Arc::clone(e), &batch.schema(), return_type.clone())?;
             // null and unmatched tuples should be assigned else value
             remainder = or(&base_nulls, &remainder)?;
             let else_ = expr
@@ -270,11 +283,8 @@ impl CaseExpr {
                 .0
                 .evaluate_selection(batch, &remainder)?;
             let when_value = when_value.into_array(batch.num_rows())?;
-            let when_value = as_boolean_array(&when_value).map_err(|e| {
-                DataFusionError::Context(
-                    "WHEN expression did not return a BooleanArray".to_string(),
-                    Box::new(e),
-                )
+            let when_value = as_boolean_array(&when_value).map_err(|_| {
+                internal_datafusion_err!("WHEN expression did not return a BooleanArray")
             })?;
             // Treat 'NULL' as false value
             let when_value = match when_value.null_count() {
@@ -310,10 +320,9 @@ impl CaseExpr {
             remainder = and_not(&remainder, &when_value)?;
         }
 
-        if let Some(e) = &self.else_expr {
+        if let Some(e) = self.else_expr() {
             // keep `else_expr`'s data type and return type consistent
-            let expr = try_cast(Arc::clone(e), &batch.schema(), return_type.clone())
-                .unwrap_or_else(|_| Arc::clone(e));
+            let expr = try_cast(Arc::clone(e), &batch.schema(), return_type.clone())?;
             let else_ = expr
                 .evaluate_selection(batch, &remainder)?
                 .into_array(batch.num_rows())?;
@@ -341,7 +350,10 @@ impl CaseExpr {
                 .downcast_ref::<BooleanArray>()
                 .expect("predicate should evaluate to a boolean array");
             // invert the bitmask
-            let bit_mask = not(bit_mask)?;
+            let bit_mask = match bit_mask.null_count() {
+                0 => not(bit_mask)?,
+                _ => not(&prep_null_mask_filter(bit_mask))?,
+            };
             match then_expr.evaluate(batch)? {
                 ColumnarValue::Array(array) => {
                     Ok(ColumnarValue::Array(nullif(&array, &bit_mask)?))
@@ -361,6 +373,35 @@ impl CaseExpr {
         // evaluate when expression
         let when_value = self.when_then_expr[0].0.evaluate(batch)?;
         let when_value = when_value.into_array(batch.num_rows())?;
+        let when_value = as_boolean_array(&when_value).map_err(|_| {
+            internal_datafusion_err!("WHEN expression did not return a BooleanArray")
+        })?;
+
+        // Treat 'NULL' as false value
+        let when_value = match when_value.null_count() {
+            0 => Cow::Borrowed(when_value),
+            _ => Cow::Owned(prep_null_mask_filter(when_value)),
+        };
+
+        // evaluate then_value
+        let then_value = self.when_then_expr[0].1.evaluate(batch)?;
+        let then_value = Scalar::new(then_value.into_array(1)?);
+
+        let Some(e) = self.else_expr() else {
+            return internal_err!("expression did not evaluate to an array");
+        };
+        // keep `else_expr`'s data type and return type consistent
+        let expr = try_cast(Arc::clone(e), &batch.schema(), return_type)?;
+        let else_ = Scalar::new(expr.evaluate(batch)?.into_array(1)?);
+        Ok(ColumnarValue::Array(zip(&when_value, &then_value, &else_)?))
+    }
+
+    fn expr_or_expr(&self, batch: &RecordBatch) -> Result<ColumnarValue> {
+        let return_type = self.data_type(&batch.schema())?;
+
+        // evalute when condition on batch
+        let when_value = self.when_then_expr[0].0.evaluate(batch)?;
+        let when_value = when_value.into_array(batch.num_rows())?;
         let when_value = as_boolean_array(&when_value).map_err(|e| {
             DataFusionError::Context(
                 "WHEN expression did not return a BooleanArray".to_string(),
@@ -374,17 +415,22 @@ impl CaseExpr {
             _ => Cow::Owned(prep_null_mask_filter(when_value)),
         };
 
-        // evaluate then_value
-        let then_value = self.when_then_expr[0].1.evaluate(batch)?;
-        let then_value = Scalar::new(then_value.into_array(1)?);
+        let then_value = self.when_then_expr[0]
+            .1
+            .evaluate_selection(batch, &when_value)?
+            .into_array(batch.num_rows())?;
 
-        // keep `else_expr`'s data type and return type consistent
+        // evaluate else expression on the values not covered by when_value
+        let remainder = not(&when_value)?;
         let e = self.else_expr.as_ref().unwrap();
-        let expr = try_cast(Arc::clone(e), &batch.schema(), return_type)
+        // keep `else_expr`'s data type and return type consistent
+        let expr = try_cast(Arc::clone(e), &batch.schema(), return_type.clone())
             .unwrap_or_else(|_| Arc::clone(e));
-        let else_ = Scalar::new(expr.evaluate(batch)?.into_array(1)?);
+        let else_ = expr
+            .evaluate_selection(batch, &remainder)?
+            .into_array(batch.num_rows())?;
 
-        Ok(ColumnarValue::Array(zip(&when_value, &then_value, &else_)?))
+        Ok(ColumnarValue::Array(zip(&remainder, &else_, &then_value)?))
     }
 }
 
@@ -449,6 +495,7 @@ impl PhysicalExpr for CaseExpr {
                 self.case_column_or_null(batch)
             }
             EvalMethod::ScalarOrScalar => self.scalar_or_scalar(batch),
+            EvalMethod::ExpressionOrExpression => self.expr_or_expr(batch),
         }
     }
 
@@ -499,39 +546,6 @@ impl PhysicalExpr for CaseExpr {
                 else_expr.cloned(),
             )?))
         }
-    }
-
-    fn dyn_hash(&self, state: &mut dyn Hasher) {
-        let mut s = state;
-        self.hash(&mut s);
-    }
-}
-
-impl PartialEq<dyn Any> for CaseExpr {
-    fn eq(&self, other: &dyn Any) -> bool {
-        down_cast_any_ref(other)
-            .downcast_ref::<Self>()
-            .map(|x| {
-                let expr_eq = match (&self.expr, &x.expr) {
-                    (Some(expr1), Some(expr2)) => expr1.eq(expr2),
-                    (None, None) => true,
-                    _ => false,
-                };
-                let else_expr_eq = match (&self.else_expr, &x.else_expr) {
-                    (Some(expr1), Some(expr2)) => expr1.eq(expr2),
-                    (None, None) => true,
-                    _ => false,
-                };
-                expr_eq
-                    && else_expr_eq
-                    && self.when_then_expr.len() == x.when_then_expr.len()
-                    && self.when_then_expr.iter().zip(x.when_then_expr.iter()).all(
-                        |((when1, then1), (when2, then2))| {
-                            when1.eq(when2) && then1.eq(then2)
-                        },
-                    )
-            })
-            .unwrap_or(false)
     }
 }
 
@@ -913,6 +927,32 @@ mod tests {
         Ok(())
     }
 
+    #[test]
+    fn test_when_null_and_some_cond_else_null() -> Result<()> {
+        let batch = case_test_batch()?;
+        let schema = batch.schema();
+
+        let when = binary(
+            Arc::new(Literal::new(ScalarValue::Boolean(None))),
+            Operator::And,
+            binary(col("a", &schema)?, Operator::Eq, lit("foo"), &schema)?,
+            &schema,
+        )?;
+        let then = col("a", &schema)?;
+
+        // SELECT CASE WHEN (NULL AND a = 'foo') THEN a ELSE NULL END
+        let expr = Arc::new(CaseExpr::try_new(None, vec![(when, then)], None)?);
+        let result = expr
+            .evaluate(&batch)?
+            .into_array(batch.num_rows())
+            .expect("Failed to convert to array");
+        let result = as_string_array(&result);
+
+        // all result values should be null
+        assert_eq!(result.logical_null_count(), batch.num_rows());
+        Ok(())
+    }
+
     fn case_test_batch() -> Result<RecordBatch> {
         let schema = Schema::new(vec![Field::new("a", DataType::Utf8, true)]);
         let a = StringArray::from(vec![Some("foo"), Some("baz"), None, Some("bar")]);
@@ -1090,16 +1130,15 @@ mod tests {
 
         let expr2 = Arc::clone(&expr)
             .transform(|e| {
-                let transformed =
-                    match e.as_any().downcast_ref::<crate::expressions::Literal>() {
-                        Some(lit_value) => match lit_value.value() {
-                            ScalarValue::Utf8(Some(str_value)) => {
-                                Some(lit(str_value.to_uppercase()))
-                            }
-                            _ => None,
-                        },
+                let transformed = match e.as_any().downcast_ref::<Literal>() {
+                    Some(lit_value) => match lit_value.value() {
+                        ScalarValue::Utf8(Some(str_value)) => {
+                            Some(lit(str_value.to_uppercase()))
+                        }
                         _ => None,
-                    };
+                    },
+                    _ => None,
+                };
                 Ok(if let Some(transformed) = transformed {
                     Transformed::yes(transformed)
                 } else {
@@ -1111,16 +1150,15 @@ mod tests {
 
         let expr3 = Arc::clone(&expr)
             .transform_down(|e| {
-                let transformed =
-                    match e.as_any().downcast_ref::<crate::expressions::Literal>() {
-                        Some(lit_value) => match lit_value.value() {
-                            ScalarValue::Utf8(Some(str_value)) => {
-                                Some(lit(str_value.to_uppercase()))
-                            }
-                            _ => None,
-                        },
+                let transformed = match e.as_any().downcast_ref::<Literal>() {
+                    Some(lit_value) => match lit_value.value() {
+                        ScalarValue::Utf8(Some(str_value)) => {
+                            Some(lit(str_value.to_uppercase()))
+                        }
                         _ => None,
-                    };
+                    },
+                    _ => None,
+                };
                 Ok(if let Some(transformed) = transformed {
                     Transformed::yes(transformed)
                 } else {
@@ -1172,6 +1210,45 @@ mod tests {
             }
             _ => unreachable!(),
         }
+        Ok(())
+    }
+
+    #[test]
+    fn test_expr_or_expr_specialization() -> Result<()> {
+        let batch = case_test_batch1()?;
+        let schema = batch.schema();
+        let when = binary(
+            col("a", &schema)?,
+            Operator::LtEq,
+            lit(2i32),
+            &batch.schema(),
+        )?;
+        let then = binary(
+            col("a", &schema)?,
+            Operator::Plus,
+            lit(1i32),
+            &batch.schema(),
+        )?;
+        let else_expr = binary(
+            col("a", &schema)?,
+            Operator::Minus,
+            lit(1i32),
+            &batch.schema(),
+        )?;
+        let expr = CaseExpr::try_new(None, vec![(when, then)], Some(else_expr))?;
+        assert!(matches!(
+            expr.eval_method,
+            EvalMethod::ExpressionOrExpression
+        ));
+        let result = expr
+            .evaluate(&batch)?
+            .into_array(batch.num_rows())
+            .expect("Failed to convert to array");
+        let result = as_int32_array(&result).expect("failed to downcast to Int32Array");
+
+        let expected = &Int32Array::from(vec![Some(2), Some(1), None, Some(4)]);
+
+        assert_eq!(expected, result);
         Ok(())
     }
 

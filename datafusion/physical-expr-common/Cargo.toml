@@ -41,4 +41,4 @@ arrow = { workspace = true }
 datafusion-common = { workspace = true, default-features = true }
 datafusion-expr-common = { workspace = true }
 hashbrown = { workspace = true }
-rand = { workspace = true }
+itertools = { workspace = true }

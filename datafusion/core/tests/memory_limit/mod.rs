@@ -31,10 +31,11 @@ use datafusion_execution::memory_pool::{
 };
 use datafusion_expr::{Expr, TableType};
 use datafusion_physical_expr::{LexOrdering, PhysicalSortExpr};
+use datafusion_physical_plan::spill::get_record_batch_memory_size;
 use futures::StreamExt;
 use std::any::Any;
 use std::num::NonZeroUsize;
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, LazyLock};
 use tokio::fs::File;
 
 use datafusion::datasource::streaming::StreamingTable;
@@ -238,15 +239,15 @@ async fn sort_preserving_merge() {
             // SortPreservingMergeExec (not a Sort which would compete
             // with the SortPreservingMergeExec for memory)
             &[
-                "+---------------+-----------------------------------------------------------------------------------------------------------+",
-                "| plan_type     | plan                                                                                                      |",
-                "+---------------+-----------------------------------------------------------------------------------------------------------+",
-                "| logical_plan  | Sort: t.a ASC NULLS LAST, t.b ASC NULLS LAST, fetch=10                                                    |",
-                "|               |   TableScan: t projection=[a, b]                                                                          |",
-                "| physical_plan | SortPreservingMergeExec: [a@0 ASC NULLS LAST,b@1 ASC NULLS LAST], fetch=10                                |",
-                "|               |   MemoryExec: partitions=2, partition_sizes=[5, 5], output_ordering=a@0 ASC NULLS LAST,b@1 ASC NULLS LAST |",
-                "|               |                                                                                                           |",
-                "+---------------+-----------------------------------------------------------------------------------------------------------+",
+                "+---------------+------------------------------------------------------------------------------------------------------------+",
+                "| plan_type     | plan                                                                                                       |",
+                "+---------------+------------------------------------------------------------------------------------------------------------+",
+                "| logical_plan  | Sort: t.a ASC NULLS LAST, t.b ASC NULLS LAST, fetch=10                                                     |",
+                "|               |   TableScan: t projection=[a, b]                                                                           |",
+                "| physical_plan | SortPreservingMergeExec: [a@0 ASC NULLS LAST, b@1 ASC NULLS LAST], fetch=10                                |",
+                "|               |   MemoryExec: partitions=2, partition_sizes=[5, 5], output_ordering=a@0 ASC NULLS LAST, b@1 ASC NULLS LAST |",
+                "|               |                                                                                                            |",
+                "+---------------+------------------------------------------------------------------------------------------------------------+",
             ]
         )
         .run()
@@ -265,6 +266,10 @@ async fn sort_spill_reservation() {
     // This test case shows how sort_spill_reservation works by
     // purposely sorting data that requires non trivial memory to
     // sort/merge.
+
+    // Merge operation needs extra memory to do row conversion, so make the
+    // memory limit larger.
+    let mem_limit = partition_size * 2;
     let test = TestCase::new()
     // This query uses a different order than the input table to
     // force a sort. It also needs to have multiple columns to
@@ -272,7 +277,7 @@ async fn sort_spill_reservation() {
     // substantial memory
         .with_query("select * from t ORDER BY a , b DESC")
     // enough memory to sort if we don't try to merge it all at once
-        .with_memory_limit(partition_size)
+        .with_memory_limit(mem_limit)
     // use a single partition so only a sort is needed
         .with_scenario(scenario)
         .with_disk_manager_config(DiskManagerConfig::NewOs)
@@ -281,15 +286,15 @@ async fn sort_spill_reservation() {
             // also merge, so we can ensure the sort could finish
             // given enough merging memory
             &[
-                "+---------------+--------------------------------------------------------------------------------------------------------+",
-                "| plan_type     | plan                                                                                                   |",
-                "+---------------+--------------------------------------------------------------------------------------------------------+",
-                "| logical_plan  | Sort: t.a ASC NULLS LAST, t.b DESC NULLS FIRST                                                         |",
-                "|               |   TableScan: t projection=[a, b]                                                                       |",
-                "| physical_plan | SortExec: expr=[a@0 ASC NULLS LAST,b@1 DESC], preserve_partitioning=[false]                            |",
-                "|               |   MemoryExec: partitions=1, partition_sizes=[5], output_ordering=a@0 ASC NULLS LAST,b@1 ASC NULLS LAST |",
-                "|               |                                                                                                        |",
-                "+---------------+--------------------------------------------------------------------------------------------------------+",
+                "+---------------+---------------------------------------------------------------------------------------------------------+",
+                "| plan_type     | plan                                                                                                    |",
+                "+---------------+---------------------------------------------------------------------------------------------------------+",
+                "| logical_plan  | Sort: t.a ASC NULLS LAST, t.b DESC NULLS FIRST                                                          |",
+                "|               |   TableScan: t projection=[a, b]                                                                        |",
+                "| physical_plan | SortExec: expr=[a@0 ASC NULLS LAST, b@1 DESC], preserve_partitioning=[false]                            |",
+                "|               |   MemoryExec: partitions=1, partition_sizes=[5], output_ordering=a@0 ASC NULLS LAST, b@1 ASC NULLS LAST |",
+                "|               |                                                                                                         |",
+                "+---------------+---------------------------------------------------------------------------------------------------------+",
             ]
         );
 
@@ -311,7 +316,7 @@ async fn sort_spill_reservation() {
         // reserve sufficient space up front for merge and this time,
         // which will force the spills to happen with less buffered
         // input and thus with enough to merge.
-        .with_sort_spill_reservation_bytes(partition_size / 2);
+        .with_sort_spill_reservation_bytes(mem_limit / 2);
 
     test.with_config(config).with_expected_success().run().await;
 }
@@ -654,7 +659,7 @@ impl Scenario {
                     descending: false,
                     nulls_first: false,
                 };
-                let sort_information = vec![vec![
+                let sort_information = vec![LexOrdering::new(vec![
                     PhysicalSortExpr {
                         expr: col("a", &schema).unwrap(),
                         options,
@@ -663,7 +668,7 @@ impl Scenario {
                         expr: col("b", &schema).unwrap(),
                         options,
                     },
-                ]];
+                ])];
 
                 let table = SortedTableProvider::new(batches, sort_information);
                 Arc::new(table)
@@ -725,15 +730,14 @@ fn maybe_split_batches(
         .collect()
 }
 
-static DICT_BATCHES: OnceLock<Vec<RecordBatch>> = OnceLock::new();
-
 /// Returns 5 sorted string dictionary batches each with 50 rows with
 /// this schema.
 ///
 /// a: Dictionary<Utf8, Int32>,
 /// b: Dictionary<Utf8, Int32>,
 fn dict_batches() -> Vec<RecordBatch> {
-    DICT_BATCHES.get_or_init(make_dict_batches).clone()
+    static DICT_BATCHES: LazyLock<Vec<RecordBatch>> = LazyLock::new(make_dict_batches);
+    DICT_BATCHES.clone()
 }
 
 fn make_dict_batches() -> Vec<RecordBatch> {
@@ -774,9 +778,10 @@ fn make_dict_batches() -> Vec<RecordBatch> {
 
 // How many bytes does the memory from dict_batches consume?
 fn batches_byte_size(batches: &[RecordBatch]) -> usize {
-    batches.iter().map(|b| b.get_array_memory_size()).sum()
+    batches.iter().map(get_record_batch_memory_size).sum()
 }
 
+#[derive(Debug)]
 struct DummyStreamPartition {
     schema: SchemaRef,
     batches: Vec<RecordBatch>,
@@ -798,6 +803,7 @@ impl PartitionStream for DummyStreamPartition {
 }
 
 ///  Wrapper over a TableProvider that can provide ordering information
+#[derive(Debug)]
 struct SortedTableProvider {
     schema: SchemaRef,
     batches: Vec<Vec<RecordBatch>>,
@@ -838,7 +844,7 @@ impl TableProvider for SortedTableProvider {
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let mem_exec =
             MemoryExec::try_new(&self.batches, self.schema(), projection.cloned())?
-                .with_sort_information(self.sort_information.clone());
+                .try_with_sort_information(self.sort_information.clone())?;
 
         Ok(Arc::new(mem_exec))
     }

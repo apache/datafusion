@@ -31,15 +31,14 @@ pub use datafusion_expr::{Accumulator, ColumnarValue};
 pub use datafusion_physical_expr::window::WindowExpr;
 use datafusion_physical_expr::PhysicalSortExpr;
 pub use datafusion_physical_expr::{
-    expressions, functions, udf, Distribution, Partitioning, PhysicalExpr,
+    expressions, udf, Distribution, Partitioning, PhysicalExpr,
 };
 
 pub use crate::display::{DefaultDisplay, DisplayAs, DisplayFormatType, VerboseDisplay};
-pub(crate) use crate::execution_plan::execution_mode_from_children;
 pub use crate::execution_plan::{
     collect, collect_partitioned, displayable, execute_input_stream, execute_stream,
     execute_stream_partitioned, get_plan_string, with_new_children_if_necessary,
-    ExecutionMode, ExecutionPlan, ExecutionPlanProperties, PlanProperties,
+    ExecutionPlan, ExecutionPlanProperties, PlanProperties,
 };
 pub use crate::metrics::Metric;
 pub use crate::ordering::InputOrderMode;
@@ -82,6 +81,7 @@ pub mod windows;
 pub mod work_table;
 
 pub mod udaf {
+    pub use datafusion_expr::StatisticsArgs;
     pub use datafusion_physical_expr::aggregate::AggregateFunctionExpr;
 }
 

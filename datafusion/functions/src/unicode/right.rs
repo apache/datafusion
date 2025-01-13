@@ -32,8 +32,27 @@ use datafusion_common::cast::{
 use datafusion_common::exec_err;
 use datafusion_common::Result;
 use datafusion_expr::TypeSignature::Exact;
-use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
+use datafusion_expr::{
+    ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
+};
+use datafusion_macros::user_doc;
 
+#[user_doc(
+    doc_section(label = "String Functions"),
+    description = "Returns a specified number of characters from the right side of a string.",
+    syntax_example = "right(str, n)",
+    sql_example = r#"```sql
+> select right('datafusion', 6);
++------------------------------------+
+| right(Utf8("datafusion"),Int64(6)) |
++------------------------------------+
+| fusion                             |
++------------------------------------+
+```"#,
+    standard_argument(name = "str", prefix = "String"),
+    argument(name = "n", description = "Number of characters to return."),
+    related_udf(name = "left")
+)]
 #[derive(Debug)]
 pub struct RightFunc {
     signature: Signature,
@@ -78,7 +97,11 @@ impl ScalarUDFImpl for RightFunc {
         utf8_to_str_type(&arg_types[0], "right")
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         match args[0].data_type() {
             DataType::Utf8 | DataType::Utf8View => {
                 make_scalar_function(right::<i32>, vec![])(args)
@@ -89,6 +112,10 @@ impl ScalarUDFImpl for RightFunc {
             expected Utf8View, Utf8 or LargeUtf8."
             ),
         }
+    }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        self.doc()
     }
 }
 
@@ -155,7 +182,7 @@ mod tests {
     fn test_functions() -> Result<()> {
         test_function!(
             RightFunc::new(),
-            &[
+            vec![
                 ColumnarValue::Scalar(ScalarValue::from("abcde")),
                 ColumnarValue::Scalar(ScalarValue::from(2i64)),
             ],
@@ -166,7 +193,7 @@ mod tests {
         );
         test_function!(
             RightFunc::new(),
-            &[
+            vec![
                 ColumnarValue::Scalar(ScalarValue::from("abcde")),
                 ColumnarValue::Scalar(ScalarValue::from(200i64)),
             ],
@@ -177,7 +204,7 @@ mod tests {
         );
         test_function!(
             RightFunc::new(),
-            &[
+            vec![
                 ColumnarValue::Scalar(ScalarValue::from("abcde")),
                 ColumnarValue::Scalar(ScalarValue::from(-2i64)),
             ],
@@ -188,7 +215,7 @@ mod tests {
         );
         test_function!(
             RightFunc::new(),
-            &[
+            vec![
                 ColumnarValue::Scalar(ScalarValue::from("abcde")),
                 ColumnarValue::Scalar(ScalarValue::from(-200i64)),
             ],
@@ -199,7 +226,7 @@ mod tests {
         );
         test_function!(
             RightFunc::new(),
-            &[
+            vec![
                 ColumnarValue::Scalar(ScalarValue::from("abcde")),
                 ColumnarValue::Scalar(ScalarValue::from(0i64)),
             ],
@@ -210,7 +237,7 @@ mod tests {
         );
         test_function!(
             RightFunc::new(),
-            &[
+            vec![
                 ColumnarValue::Scalar(ScalarValue::Utf8(None)),
                 ColumnarValue::Scalar(ScalarValue::from(2i64)),
             ],
@@ -221,7 +248,7 @@ mod tests {
         );
         test_function!(
             RightFunc::new(),
-            &[
+            vec![
                 ColumnarValue::Scalar(ScalarValue::from("abcde")),
                 ColumnarValue::Scalar(ScalarValue::Int64(None)),
             ],
@@ -232,7 +259,7 @@ mod tests {
         );
         test_function!(
             RightFunc::new(),
-            &[
+            vec![
                 ColumnarValue::Scalar(ScalarValue::from("joséésoj")),
                 ColumnarValue::Scalar(ScalarValue::from(5i64)),
             ],
@@ -243,7 +270,7 @@ mod tests {
         );
         test_function!(
             RightFunc::new(),
-            &[
+            vec![
                 ColumnarValue::Scalar(ScalarValue::from("joséésoj")),
                 ColumnarValue::Scalar(ScalarValue::from(-3i64)),
             ],

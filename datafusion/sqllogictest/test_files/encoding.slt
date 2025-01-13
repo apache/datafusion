@@ -28,14 +28,14 @@ CREATE TABLE test(
 ;
 
 # errors
-query error DataFusion error: Error during planning: The encode function can only accept utf8 or binary\.
-select encode(12, 'hex')
+query error 1st argument should be Utf8 or Binary or Null, got Int64
+select encode(12, 'hex');
 
 query error DataFusion error: Error during planning: There is no built\-in encoding named 'non_encoding', currently supported encodings are: base64, hex
 select encode(bin_field, 'non_encoding') from test;
 
-query error DataFusion error: Error during planning: The decode function can only accept utf8 or binary\.
-select decode(12, 'hex')
+query error 1st argument should be Utf8 or Binary or Null, got Int64
+select decode(12, 'hex');
 
 query error DataFusion error: Error during planning: There is no built\-in encoding named 'non_encoding', currently supported encodings are: base64, hex
 select decode(hex_field, 'non_encoding') from test;
@@ -71,3 +71,34 @@ select to_hex(num) from test ORDER BY num;
 0
 1
 2
+
+# test for Utf8View support for encode
+statement ok
+CREATE TABLE test_source AS VALUES
+    ('Andrew', 'X'),
+    ('Xiangpeng', 'Xiangpeng'),
+    ('Raphael', 'R'),
+    (NULL, 'R');
+
+statement ok
+CREATE TABLE test_utf8view AS
+select
+  arrow_cast(column1, 'Utf8View') AS column1_utf8view,
+  arrow_cast(column2, 'Utf8View') AS column2_utf8view
+FROM test_source;
+
+query TTTTTT
+SELECT
+  column1_utf8view,
+  encode(column1_utf8view, 'base64') AS column1_base64,
+  encode(column1_utf8view, 'hex') AS column1_hex,
+  
+  column2_utf8view,
+  encode(column2_utf8view, 'base64') AS column2_base64,
+  encode(column2_utf8view, 'hex') AS column2_hex
+FROM test_utf8view;
+----
+Andrew QW5kcmV3 416e64726577 X WA 58
+Xiangpeng WGlhbmdwZW5n 5869616e6770656e67 Xiangpeng WGlhbmdwZW5n 5869616e6770656e67
+Raphael UmFwaGFlbA 5261706861656c R Ug 52
+NULL NULL NULL R Ug 52

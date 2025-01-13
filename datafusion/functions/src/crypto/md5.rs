@@ -19,9 +19,26 @@
 use crate::crypto::basic::md5;
 use arrow::datatypes::DataType;
 use datafusion_common::{plan_err, Result};
-use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
+use datafusion_expr::{
+    ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
+};
+use datafusion_macros::user_doc;
 use std::any::Any;
 
+#[user_doc(
+    doc_section(label = "Hashing Functions"),
+    description = "Computes an MD5 128-bit checksum for a string expression.",
+    syntax_example = "md5(expression)",
+    sql_example = r#"```sql
+> select md5('foo');
++-------------------------------------+
+| md5(Utf8("foo"))                    |
++-------------------------------------+
+| <md5_checksum_result>               |
++-------------------------------------+
+```"#,
+    standard_argument(name = "expression", prefix = "String")
+)]
 #[derive(Debug)]
 pub struct Md5Func {
     signature: Signature,
@@ -38,7 +55,7 @@ impl Md5Func {
         Self {
             signature: Signature::uniform(
                 1,
-                vec![Utf8, LargeUtf8, Binary, LargeBinary],
+                vec![Utf8View, Utf8, LargeUtf8, Binary, LargeBinary],
                 Volatility::Immutable,
             ),
         }
@@ -60,11 +77,11 @@ impl ScalarUDFImpl for Md5Func {
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
         use DataType::*;
         Ok(match &arg_types[0] {
-            LargeUtf8 | LargeBinary => LargeUtf8,
-            Utf8 | Binary => Utf8,
+            LargeUtf8 | LargeBinary => Utf8,
+            Utf8View | Utf8 | Binary => Utf8,
             Null => Null,
             Dictionary(_, t) => match **t {
-                LargeUtf8 | LargeBinary => LargeUtf8,
+                LargeUtf8 | LargeBinary => Utf8,
                 Utf8 | Binary => Utf8,
                 Null => Null,
                 _ => {
@@ -81,7 +98,15 @@ impl ScalarUDFImpl for Md5Func {
             }
         })
     }
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         md5(args)
+    }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        self.doc()
     }
 }

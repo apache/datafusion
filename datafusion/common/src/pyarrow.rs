@@ -34,7 +34,7 @@ impl From<DataFusionError> for PyErr {
 }
 
 impl FromPyArrow for ScalarValue {
-    fn from_pyarrow_bound(value: &pyo3::Bound<'_, pyo3::PyAny>) -> PyResult<Self> {
+    fn from_pyarrow_bound(value: &Bound<'_, PyAny>) -> PyResult<Self> {
         let py = value.py();
         let typ = value.getattr("type")?;
         let val = value.call_method0("as_py")?;
@@ -138,6 +138,9 @@ mod tests {
     fn test_py_scalar() {
         init_python();
 
+        // TODO: remove this attribute when bumping pyo3 to v0.23.0
+        // See: <https://github.com/PyO3/pyo3/blob/v0.23.0/guide/src/migration.md#gil-refs-feature-removed>
+        #[allow(unexpected_cfgs)]
         Python::with_gil(|py| {
             let scalar_float = ScalarValue::Float64(Some(12.34));
             let py_float = scalar_float.into_py(py).call_method0(py, "as_py").unwrap();

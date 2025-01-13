@@ -68,9 +68,6 @@ use arrow::{
     record_batch::RecordBatch,
     util::pretty::pretty_format_batches,
 };
-use async_trait::async_trait;
-use futures::{Stream, StreamExt};
-
 use datafusion::execution::session_state::SessionStateBuilder;
 use datafusion::{
     common::cast::{as_int64_array, as_string_array},
@@ -81,15 +78,14 @@ use datafusion::{
         runtime_env::RuntimeEnv,
     },
     logical_expr::{
-        Expr, Extension, Limit, LogicalPlan, Sort, UserDefinedLogicalNode,
+        Expr, Extension, LogicalPlan, Sort, UserDefinedLogicalNode,
         UserDefinedLogicalNodeCore,
     },
     optimizer::{OptimizerConfig, OptimizerRule},
     physical_expr::EquivalenceProperties,
     physical_plan::{
-        DisplayAs, DisplayFormatType, Distribution, ExecutionMode, ExecutionPlan,
-        Partitioning, PlanProperties, RecordBatchStream, SendableRecordBatchStream,
-        Statistics,
+        DisplayAs, DisplayFormatType, Distribution, ExecutionPlan, Partitioning,
+        PlanProperties, RecordBatchStream, SendableRecordBatchStream, Statistics,
     },
     physical_planner::{DefaultPhysicalPlanner, ExtensionPlanner, PhysicalPlanner},
     prelude::{SessionConfig, SessionContext},
@@ -97,10 +93,13 @@ use datafusion::{
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::ScalarValue;
-use datafusion_expr::tree_node::replace_sort_expression;
-use datafusion_expr::{Projection, SortExpr};
+use datafusion_expr::{FetchType, Projection, SortExpr};
 use datafusion_optimizer::optimizer::ApplyOrder;
 use datafusion_optimizer::AnalyzerRule;
+use datafusion_physical_plan::execution_plan::{Boundedness, EmissionType};
+
+use async_trait::async_trait;
+use futures::{Stream, StreamExt};
 
 /// Execute the specified sql and return the resulting record batches
 /// pretty printed as a String.
@@ -312,6 +311,7 @@ fn make_topk_context() -> SessionContext {
 
 // ------ The implementation of the TopK code follows -----
 
+#[derive(Debug)]
 struct TopKQueryPlanner {}
 
 #[async_trait]
@@ -335,7 +335,9 @@ impl QueryPlanner for TopKQueryPlanner {
     }
 }
 
+#[derive(Default, Debug)]
 struct TopKOptimizerRule {}
+
 impl OptimizerRule for TopKOptimizerRule {
     fn name(&self) -> &str {
         "topk"
@@ -358,28 +360,28 @@ impl OptimizerRule for TopKOptimizerRule {
         // Note: this code simply looks for the pattern of a Limit followed by a
         // Sort and replaces it by a TopK node. It does not handle many
         // edge cases (e.g multiple sort columns, sort ASC / DESC), etc.
-        if let LogicalPlan::Limit(Limit {
-            fetch: Some(fetch),
-            input,
+        let LogicalPlan::Limit(ref limit) = plan else {
+            return Ok(Transformed::no(plan));
+        };
+        let FetchType::Literal(Some(fetch)) = limit.get_fetch_type()? else {
+            return Ok(Transformed::no(plan));
+        };
+
+        if let LogicalPlan::Sort(Sort {
+            ref expr,
+            ref input,
             ..
-        }) = &plan
+        }) = limit.input.as_ref()
         {
-            if let LogicalPlan::Sort(Sort {
-                ref expr,
-                ref input,
-                ..
-            }) = **input
-            {
-                if expr.len() == 1 {
-                    // we found a sort with a single sort expr, replace with a a TopK
-                    return Ok(Transformed::yes(LogicalPlan::Extension(Extension {
-                        node: Arc::new(TopKPlanNode {
-                            k: *fetch,
-                            input: input.as_ref().clone(),
-                            expr: expr[0].clone(),
-                        }),
-                    })));
-                }
+            if expr.len() == 1 {
+                // we found a sort with a single sort expr, replace with a a TopK
+                return Ok(Transformed::yes(LogicalPlan::Extension(Extension {
+                    node: Arc::new(TopKPlanNode {
+                        k: fetch,
+                        input: input.as_ref().clone(),
+                        expr: expr[0].clone(),
+                    }),
+                })));
             }
         }
 
@@ -387,7 +389,7 @@ impl OptimizerRule for TopKOptimizerRule {
     }
 }
 
-#[derive(PartialEq, Eq, Hash)]
+#[derive(PartialEq, Eq, PartialOrd, Hash)]
 struct TopKPlanNode {
     k: usize,
     input: LogicalPlan,
@@ -437,8 +439,12 @@ impl UserDefinedLogicalNodeCore for TopKPlanNode {
         Ok(Self {
             k: self.k,
             input: inputs.swap_remove(0),
-            expr: replace_sort_expression(self.expr.clone(), exprs.swap_remove(0)),
+            expr: self.expr.with_expr(exprs.swap_remove(0)),
         })
+    }
+
+    fn supports_limit_pushdown(&self) -> bool {
+        false // Disallow limit push-down by default
     }
 }
 
@@ -476,7 +482,7 @@ impl ExtensionPlanner for TopKPlanner {
 /// code is not general and is meant as an illustration only
 struct TopKExec {
     input: Arc<dyn ExecutionPlan>,
-    /// The maxium number of values
+    /// The maximum number of values
     k: usize,
     cache: PlanProperties,
 }
@@ -489,12 +495,11 @@ impl TopKExec {
 
     /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
     fn compute_properties(schema: SchemaRef) -> PlanProperties {
-        let eq_properties = EquivalenceProperties::new(schema);
-
         PlanProperties::new(
-            eq_properties,
+            EquivalenceProperties::new(schema),
             Partitioning::UnknownPartitioning(1),
-            ExecutionMode::Bounded,
+            EmissionType::Incremental,
+            Boundedness::Bounded,
         )
     }
 }
@@ -506,11 +511,7 @@ impl Debug for TopKExec {
 }
 
 impl DisplayAs for TopKExec {
-    fn fmt_as(
-        &self,
-        t: DisplayFormatType,
-        f: &mut std::fmt::Formatter,
-    ) -> std::fmt::Result {
+    fn fmt_as(&self, t: DisplayFormatType, f: &mut fmt::Formatter) -> fmt::Result {
         match t {
             DisplayFormatType::Default | DisplayFormatType::Verbose => {
                 write!(f, "TopKExec: k={}", self.k)
@@ -686,6 +687,7 @@ impl RecordBatchStream for TopKReader {
     }
 }
 
+#[derive(Default, Debug)]
 struct MyAnalyzerRule {}
 
 impl AnalyzerRule for MyAnalyzerRule {

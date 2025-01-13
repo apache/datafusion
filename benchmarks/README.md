@@ -32,7 +32,7 @@ DataFusion is included in the benchmark setups for several popular
 benchmarks that compare performance with other engines. For example:
 
 * [ClickBench] scripts are in the [ClickBench repo](https://github.com/ClickHouse/ClickBench/tree/main/datafusion)
-* [H2o.ai `db-benchmark`] scripts are in [db-benchmark](db-benchmark) directory
+* [H2o.ai `db-benchmark`] scripts are in [db-benchmark](https://github.com/apache/datafusion/tree/main/benchmarks/src/h2o.rs)
 
 [ClickBench]: https://github.com/ClickHouse/ClickBench/tree/main
 [H2o.ai `db-benchmark`]: https://github.com/h2oai/db-benchmark
@@ -330,6 +330,40 @@ steps.
 The tests sort the entire dataset using several different sort
 orders.
 
+## Sort TPCH
+
+Test performance of end-to-end sort SQL queries. (While the `Sort` benchmark focuses on a single sort executor, this benchmark tests how sorting is executed across multiple CPU cores by benchmarking sorting the whole relational table.)
+
+Sort integration benchmark runs whole table sort queries on TPCH `lineitem` table, with different characteristics. For example, different number of sort keys, different sort key cardinality, different number of payload columns, etc.
+
+See [`sort_tpch.rs`](src/sort_tpch.rs) for more details.
+
+### Sort TPCH Benchmark Example Runs
+1. Run all queries with default setting:
+```bash
+ cargo run --release --bin dfbench -- sort-tpch -p '....../datafusion/benchmarks/data/tpch_sf1' -o '/tmp/sort_tpch.json'
+```
+
+2. Run a specific query:
+```bash
+ cargo run --release --bin dfbench -- sort-tpch -p '....../datafusion/benchmarks/data/tpch_sf1' -o '/tmp/sort_tpch.json' --query 2
+```
+
+3. Run all queries with `bench.sh` script:
+```bash
+./bench.sh run sort_tpch
+```
+
+## IMDB
+
+Run Join Order Benchmark (JOB) on IMDB dataset.
+
+The Internet Movie Database (IMDB) dataset contains real-world movie data. Unlike synthetic datasets like TPCH, which assume uniform data distribution and uncorrelated columns, the IMDB dataset includes skewed data and correlated columns (which are common for real dataset), making it more suitable for testing query optimizers, particularly for cardinality estimation.
+
+This benchmark is derived from [Join Order Benchmark](https://github.com/gregrahn/join-order-benchmark).
+
+See paper [How Good Are Query Optimizers, Really](http://www.vldb.org/pvldb/vol9/p204-leis.pdf) for more details.
+
 ## TPCH
 
 Run the tpch benchmark.
@@ -342,32 +376,79 @@ This benchmarks is derived from the [TPC-H][1] version
 [2]: https://github.com/databricks/tpch-dbgen.git,
 [2.17.1]: https://www.tpc.org/tpc_documents_current_versions/pdf/tpc-h_v2.17.1.pdf
 
+## External Aggregation
 
-# Older Benchmarks
+Run the benchmark for aggregations with limited memory.
 
-## h2o benchmarks
+When the memory limit is exceeded, the aggregation intermediate results will be spilled to disk, and finally read back with sort-merge.
 
+External aggregation benchmarks run several aggregation queries with different memory limits, on TPCH `lineitem` table. Queries can be found in [`external_aggr.rs`](src/bin/external_aggr.rs).
+
+This benchmark is inspired by [DuckDB's external aggregation paper](https://hannes.muehleisen.org/publications/icde2024-out-of-core-kuiper-boncz-muehleisen.pdf), specifically Section VI.
+
+### External Aggregation Example Runs
+1. Run all queries with predefined memory limits:
 ```bash
-cargo run --release --bin h2o group-by --query 1 --path /mnt/bigdata/h2oai/N_1e7_K_1e2_single.csv --mem-table --debug
+# Under 'benchmarks/' directory
+cargo run --release --bin external_aggr -- benchmark -n 4 --iterations 3 -p '....../data/tpch_sf1' -o '/tmp/aggr.json'
 ```
 
-Example run:
-
+2. Run a query with specific memory limit:
+```bash
+cargo run --release --bin external_aggr -- benchmark -n 4 --iterations 3 -p '....../data/tpch_sf1' -o '/tmp/aggr.json' --query 1 --memory-limit 30M
 ```
-Running benchmarks with the following options: GroupBy(GroupBy { query: 1, path: "/mnt/bigdata/h2oai/N_1e7_K_1e2_single.csv", debug: false })
-Executing select id1, sum(v1) as v1 from x group by id1
-+-------+--------+
-| id1   | v1     |
-+-------+--------+
-| id063 | 199420 |
-| id094 | 200127 |
-| id044 | 198886 |
-...
-| id093 | 200132 |
-| id003 | 199047 |
-+-------+--------+
 
-h2o groupby query 1 took 1669 ms
+3. Run all queries with `bench.sh` script:
+```bash
+./bench.sh data external_aggr
+./bench.sh run external_aggr
+```
+
+
+## h2o benchmarks for groupby
+
+### Generate data for h2o benchmarks
+There are three options for generating data for h2o benchmarks: `small`, `medium`, and `big`. The data is generated in the `data` directory.
+
+1. Generate small data (1e7 rows)
+```bash
+./bench.sh data h2o_small
+```
+
+
+2. Generate medium data (1e8 rows)
+```bash
+./bench.sh data h2o_medium
+```
+
+
+3. Generate large data (1e9 rows)
+```bash
+./bench.sh data h2o_big
+```
+
+### Run h2o benchmarks
+There are three options for running h2o benchmarks: `small`, `medium`, and `big`.
+1. Run small data benchmark
+```bash
+./bench.sh run h2o_small
+```
+
+2. Run medium data benchmark
+```bash
+./bench.sh run h2o_medium
+```
+
+3. Run large data benchmark
+```bash
+./bench.sh run h2o_big
+```
+
+4. Run a specific query with a specific data path
+
+For example, to run query 1 with the small data generated above:
+```bash
+cargo run --release --bin dfbench -- h2o --path ./benchmarks/data/h2o/G1_1e7_1e7_100_0.csv  --query 1
 ```
 
 [1]: http://www.tpc.org/tpch/

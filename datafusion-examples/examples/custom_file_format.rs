@@ -74,10 +74,7 @@ impl FileFormat for TSVFileFormat {
         "tsv".to_string()
     }
 
-    fn get_ext_with_compression(
-        &self,
-        c: &FileCompressionType,
-    ) -> datafusion::error::Result<String> {
+    fn get_ext_with_compression(&self, c: &FileCompressionType) -> Result<String> {
         if c == &FileCompressionType::UNCOMPRESSED {
             Ok("tsv".to_string())
         } else {
@@ -154,7 +151,7 @@ impl FileFormatFactory for TSVFileFactory {
         &self,
         state: &SessionState,
         format_options: &std::collections::HashMap<String, String>,
-    ) -> Result<std::sync::Arc<dyn FileFormat>> {
+    ) -> Result<Arc<dyn FileFormat>> {
         let mut new_options = format_options.clone();
         new_options.insert("format.delimiter".to_string(), "\t".to_string());
 
@@ -164,7 +161,7 @@ impl FileFormatFactory for TSVFileFactory {
         Ok(tsv_file_format)
     }
 
-    fn default(&self) -> std::sync::Arc<dyn FileFormat> {
+    fn default(&self) -> Arc<dyn FileFormat> {
         todo!()
     }
 

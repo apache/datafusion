@@ -115,7 +115,7 @@ pub enum DataFusionError {
     Execution(String),
     /// [`JoinError`] during execution of the query.
     ///
-    /// This error can unoccur for unjoined tasks, such as execution shutdown.
+    /// This error can't occur for unjoined tasks, such as execution shutdown.
     ExecutionJoin(JoinError),
     /// Error when resources (such as memory of scratch disk space) are exhausted.
     ///
@@ -598,9 +598,9 @@ macro_rules! arrow_err {
 #[macro_export]
 macro_rules! schema_datafusion_err {
     ($ERR:expr) => {
-        DataFusionError::SchemaError(
+        $crate::error::DataFusionError::SchemaError(
             $ERR,
-            Box::new(Some(DataFusionError::get_back_trace())),
+            Box::new(Some($crate::error::DataFusionError::get_back_trace())),
         )
     };
 }
@@ -609,9 +609,9 @@ macro_rules! schema_datafusion_err {
 #[macro_export]
 macro_rules! schema_err {
     ($ERR:expr) => {
-        Err(DataFusionError::SchemaError(
+        Err($crate::error::DataFusionError::SchemaError(
             $ERR,
-            Box::new(Some(DataFusionError::get_back_trace())),
+            Box::new(Some($crate::error::DataFusionError::get_back_trace())),
         ))
     };
 }

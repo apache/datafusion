@@ -57,7 +57,6 @@ async fn test_named_query_parameters() -> Result<()> {
     let ctx = create_ctx_with_partition(&tmp_dir, partition_count).await?;
 
     // sql to statement then to logical plan with parameters
-    // c1 defined as UINT32, c2 defined as UInt64
     let results = ctx
         .sql("SELECT c1, c2 FROM test WHERE c1 > $coo AND c1 < $foo")
         .await?
@@ -106,9 +105,9 @@ async fn test_prepare_statement() -> Result<()> {
     let ctx = create_ctx_with_partition(&tmp_dir, partition_count).await?;
 
     // sql to statement then to prepare logical plan with parameters
-    // c1 defined as UINT32, c2 defined as UInt64 but the params are Int32 and Float64
-    let dataframe =
-        ctx.sql("PREPARE my_plan(INT, DOUBLE) AS SELECT c1, c2 FROM test WHERE c1 > $2 AND c1 < $1").await?;
+    let dataframe = ctx
+        .sql("SELECT c1, c2 FROM test WHERE c1 > $2 AND c1 < $1")
+        .await?;
 
     // prepare logical plan to logical plan without parameters
     let param_values = vec![ScalarValue::Int32(Some(3)), ScalarValue::Float64(Some(0.0))];
@@ -156,7 +155,7 @@ async fn prepared_statement_type_coercion() -> Result<()> {
         ("unsigned", Arc::new(unsigned_ints) as ArrayRef),
     ])?;
     ctx.register_batch("test", batch)?;
-    let results = ctx.sql("PREPARE my_plan(BIGINT, INT, TEXT) AS SELECT signed, unsigned FROM test WHERE $1 >= signed AND signed <= $2 AND unsigned = $3")
+    let results = ctx.sql("SELECT signed, unsigned FROM test WHERE $1 >= signed AND signed <= $2 AND unsigned = $3")
         .await?
         .with_param_values(vec![
             ScalarValue::from(1_i64),
@@ -173,27 +172,6 @@ async fn prepared_statement_type_coercion() -> Result<()> {
         "+--------+----------+",
     ];
     assert_batches_sorted_eq!(expected, &results);
-    Ok(())
-}
-
-#[tokio::test]
-async fn prepared_statement_invalid_types() -> Result<()> {
-    let ctx = SessionContext::new();
-    let signed_ints: Int32Array = vec![-1, 0, 1].into();
-    let unsigned_ints: UInt64Array = vec![1, 2, 3].into();
-    let batch = RecordBatch::try_from_iter(vec![
-        ("signed", Arc::new(signed_ints) as ArrayRef),
-        ("unsigned", Arc::new(unsigned_ints) as ArrayRef),
-    ])?;
-    ctx.register_batch("test", batch)?;
-    let results = ctx
-        .sql("PREPARE my_plan(INT) AS SELECT signed FROM test WHERE signed = $1")
-        .await?
-        .with_param_values(vec![ScalarValue::from("1")]);
-    assert_eq!(
-        results.unwrap_err().strip_backtrace(),
-        "Error during planning: Expected parameter of type Int32, got Utf8 at index 0"
-    );
     Ok(())
 }
 
@@ -249,4 +227,126 @@ async fn test_parameter_invalid_types() -> Result<()> {
         "type_coercion\ncaused by\nError during planning: Cannot infer common argument type for comparison operation List(Field { name: \"item\", data_type: Int32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }) = Int32"
 );
     Ok(())
+}
+
+#[tokio::test]
+async fn test_positional_parameter_not_bound() -> Result<()> {
+    let ctx = SessionContext::new();
+    let signed_ints: Int32Array = vec![-1, 0, 1].into();
+    let unsigned_ints: UInt64Array = vec![1, 2, 3].into();
+    let batch = RecordBatch::try_from_iter(vec![
+        ("signed", Arc::new(signed_ints) as ArrayRef),
+        ("unsigned", Arc::new(unsigned_ints) as ArrayRef),
+    ])?;
+    ctx.register_batch("test", batch)?;
+
+    let query = "SELECT signed, unsigned FROM test \
+            WHERE $1 >= signed AND signed <= $2 \
+            AND unsigned <= $3 AND unsigned = $4";
+
+    let results = ctx.sql(query).await?.collect().await;
+
+    assert_eq!(
+        results.unwrap_err().strip_backtrace(),
+        "Execution error: Placeholder '$1' was not provided a value for execution."
+    );
+
+    let results = ctx
+        .sql(query)
+        .await?
+        .with_param_values(vec![
+            ScalarValue::from(4_i32),
+            ScalarValue::from(-1_i64),
+            ScalarValue::from(2_i32),
+            ScalarValue::from("1"),
+        ])?
+        .collect()
+        .await?;
+
+    let expected = [
+        "+--------+----------+",
+        "| signed | unsigned |",
+        "+--------+----------+",
+        "| -1     | 1        |",
+        "+--------+----------+",
+    ];
+    assert_batches_sorted_eq!(expected, &results);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_named_parameter_not_bound() -> Result<()> {
+    let ctx = SessionContext::new();
+    let signed_ints: Int32Array = vec![-1, 0, 1].into();
+    let unsigned_ints: UInt64Array = vec![1, 2, 3].into();
+    let batch = RecordBatch::try_from_iter(vec![
+        ("signed", Arc::new(signed_ints) as ArrayRef),
+        ("unsigned", Arc::new(unsigned_ints) as ArrayRef),
+    ])?;
+    ctx.register_batch("test", batch)?;
+
+    let query = "SELECT signed, unsigned FROM test \
+            WHERE $foo >= signed AND signed <= $bar \
+            AND unsigned <= $baz AND unsigned = $str";
+
+    let results = ctx.sql(query).await?.collect().await;
+
+    assert_eq!(
+        results.unwrap_err().strip_backtrace(),
+        "Execution error: Placeholder '$foo' was not provided a value for execution."
+    );
+
+    let results = ctx
+        .sql(query)
+        .await?
+        .with_param_values(vec![
+            ("foo", ScalarValue::from(4_i32)),
+            ("bar", ScalarValue::from(-1_i64)),
+            ("baz", ScalarValue::from(2_i32)),
+            ("str", ScalarValue::from("1")),
+        ])?
+        .collect()
+        .await?;
+
+    let expected = [
+        "+--------+----------+",
+        "| signed | unsigned |",
+        "+--------+----------+",
+        "| -1     | 1        |",
+        "+--------+----------+",
+    ];
+    assert_batches_sorted_eq!(expected, &results);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_version_function() {
+    let expected_version = format!(
+        "Apache DataFusion {}, {} on {}",
+        env!("CARGO_PKG_VERSION"),
+        std::env::consts::ARCH,
+        std::env::consts::OS,
+    );
+
+    let ctx = SessionContext::new();
+    let results = ctx
+        .sql("select version()")
+        .await
+        .unwrap()
+        .collect()
+        .await
+        .unwrap();
+
+    // since width of columns varies between platforms, we can't compare directly
+    // so we just check that the version string is present
+
+    // expect a single string column with a single row
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].num_columns(), 1);
+    let version = results[0].column(0).as_string::<i32>();
+    assert_eq!(version.len(), 1);
+
+    assert_eq!(version.value(0), expected_version);
 }

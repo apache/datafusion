@@ -36,13 +36,37 @@ use datafusion_common::{exec_err, plan_err, DataFusionError, Result, ScalarValue
 use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
 use datafusion_expr::TypeSignature::Exact;
 use datafusion_expr::{
-    ColumnarValue, ScalarUDFImpl, Signature, Volatility, TIMEZONE_WILDCARD,
+    ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility, TIMEZONE_WILDCARD,
 };
+use datafusion_macros::user_doc;
 
 use chrono::{
     DateTime, Datelike, Duration, LocalResult, NaiveDateTime, Offset, TimeDelta, Timelike,
 };
 
+#[user_doc(
+    doc_section(label = "Time and Date Functions"),
+    description = "Truncates a timestamp value to a specified precision.",
+    syntax_example = "date_trunc(precision, expression)",
+    argument(
+        name = "precision",
+        description = r#"Time precision to truncate to. The following precisions are supported:
+
+    - year / YEAR
+    - quarter / QUARTER
+    - month / MONTH
+    - week / WEEK
+    - day / DAY
+    - hour / HOUR
+    - minute / MINUTE
+    - second / SECOND
+"#
+    ),
+    argument(
+        name = "expression",
+        description = "Time expression to operate on. Can be a constant, column, or function."
+    )
+)]
 #[derive(Debug)]
 pub struct DateTruncFunc {
     signature: Signature,
@@ -123,7 +147,9 @@ impl ScalarUDFImpl for DateTruncFunc {
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
         match &arg_types[1] {
-            Timestamp(Nanosecond, None) | Utf8 | Null => Ok(Timestamp(Nanosecond, None)),
+            Timestamp(Nanosecond, None) | Utf8 | DataType::Date32 | Null => {
+                Ok(Timestamp(Nanosecond, None))
+            }
             Timestamp(Nanosecond, tz_opt) => Ok(Timestamp(Nanosecond, tz_opt.clone())),
             Timestamp(Microsecond, tz_opt) => Ok(Timestamp(Microsecond, tz_opt.clone())),
             Timestamp(Millisecond, tz_opt) => Ok(Timestamp(Millisecond, tz_opt.clone())),
@@ -134,7 +160,11 @@ impl ScalarUDFImpl for DateTruncFunc {
         }
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         let (granularity, array) = (&args[0], &args[1]);
 
         let granularity = if let ColumnarValue::Scalar(ScalarValue::Utf8(Some(v))) =
@@ -189,36 +219,37 @@ impl ScalarUDFImpl for DateTruncFunc {
             }
             ColumnarValue::Array(array) => {
                 let array_type = array.data_type();
-                match array_type {
-                    Timestamp(Second, tz_opt) => {
-                        process_array::<TimestampSecondType>(array, granularity, tz_opt)?
+                if let Timestamp(unit, tz_opt) = array_type {
+                    match unit {
+                        Second => process_array::<TimestampSecondType>(
+                            array,
+                            granularity,
+                            tz_opt,
+                        )?,
+                        Millisecond => process_array::<TimestampMillisecondType>(
+                            array,
+                            granularity,
+                            tz_opt,
+                        )?,
+                        Microsecond => process_array::<TimestampMicrosecondType>(
+                            array,
+                            granularity,
+                            tz_opt,
+                        )?,
+                        Nanosecond => process_array::<TimestampNanosecondType>(
+                            array,
+                            granularity,
+                            tz_opt,
+                        )?,
                     }
-                    Timestamp(Millisecond, tz_opt) => process_array::<
-                        TimestampMillisecondType,
-                    >(
-                        array, granularity, tz_opt
-                    )?,
-                    Timestamp(Microsecond, tz_opt) => process_array::<
-                        TimestampMicrosecondType,
-                    >(
-                        array, granularity, tz_opt
-                    )?,
-                    Timestamp(Nanosecond, tz_opt) => process_array::<
-                        TimestampNanosecondType,
-                    >(
-                        array, granularity, tz_opt
-                    )?,
-                    _ => process_array::<TimestampNanosecondType>(
-                        array,
-                        granularity,
-                        &None,
-                    )?,
+                } else {
+                    return exec_err!("second argument of `date_trunc` is an unsupported array type: {array_type}");
                 }
             }
             _ => {
                 return exec_err!(
-            "second argument of `date_trunc` must be nanosecond timestamp scalar or array"
-        );
+                    "second argument of `date_trunc` must be timestamp scalar or array"
+                );
             }
         })
     }
@@ -237,6 +268,9 @@ impl ScalarUDFImpl for DateTruncFunc {
         } else {
             Ok(SortProperties::Unordered)
         }
+    }
+    fn documentation(&self) -> Option<&Documentation> {
+        self.doc()
     }
 }
 
@@ -446,7 +480,7 @@ mod tests {
 
     use arrow::array::cast::as_primitive_array;
     use arrow::array::types::TimestampNanosecondType;
-    use arrow::array::TimestampNanosecondArray;
+    use arrow::array::{Array, TimestampNanosecondArray};
     use arrow::compute::kernels::cast_utils::string_to_timestamp_nanos;
     use arrow::datatypes::{DataType, TimeUnit};
     use datafusion_common::ScalarValue;
@@ -686,11 +720,16 @@ mod tests {
                 .map(|s| Some(string_to_timestamp_nanos(s).unwrap()))
                 .collect::<TimestampNanosecondArray>()
                 .with_timezone_opt(tz_opt.clone());
+            let batch_len = input.len();
+            #[allow(deprecated)] // TODO migrate UDF invoke to invoke_batch
             let result = DateTruncFunc::new()
-                .invoke(&[
-                    ColumnarValue::Scalar(ScalarValue::from("day")),
-                    ColumnarValue::Array(Arc::new(input)),
-                ])
+                .invoke_batch(
+                    &[
+                        ColumnarValue::Scalar(ScalarValue::from("day")),
+                        ColumnarValue::Array(Arc::new(input)),
+                    ],
+                    batch_len,
+                )
                 .unwrap();
             if let ColumnarValue::Array(result) = result {
                 assert_eq!(
@@ -844,11 +883,16 @@ mod tests {
                 .map(|s| Some(string_to_timestamp_nanos(s).unwrap()))
                 .collect::<TimestampNanosecondArray>()
                 .with_timezone_opt(tz_opt.clone());
+            let batch_len = input.len();
+            #[allow(deprecated)] // TODO migrate UDF invoke to invoke_batch
             let result = DateTruncFunc::new()
-                .invoke(&[
-                    ColumnarValue::Scalar(ScalarValue::from("hour")),
-                    ColumnarValue::Array(Arc::new(input)),
-                ])
+                .invoke_batch(
+                    &[
+                        ColumnarValue::Scalar(ScalarValue::from("hour")),
+                        ColumnarValue::Array(Arc::new(input)),
+                    ],
+                    batch_len,
+                )
                 .unwrap();
             if let ColumnarValue::Array(result) = result {
                 assert_eq!(

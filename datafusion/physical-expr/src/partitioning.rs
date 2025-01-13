@@ -17,13 +17,14 @@
 
 //! [`Partitioning`] and [`Distribution`] for `ExecutionPlans`
 
-use std::fmt;
-use std::sync::Arc;
-
 use crate::{
     equivalence::ProjectionMapping, expressions::UnKnownColumn, physical_exprs_equal,
     EquivalenceProperties, PhysicalExpr,
 };
+use datafusion_physical_expr_common::physical_expr::format_physical_expr_list;
+use std::fmt;
+use std::fmt::Display;
+use std::sync::Arc;
 
 /// Output partitioning supported by [`ExecutionPlan`]s.
 ///
@@ -96,7 +97,7 @@ use crate::{
 /// # Additional Examples
 ///
 /// A simple `FileScanExec` might produce one output stream (partition) for each
-/// file (note the actual DataFusion file scaners can read individual files in
+/// file (note the actual DataFusion file scanners can read individual files in
 /// parallel, potentially producing multiple partitions per file)
 ///
 /// Plans such as `SortPreservingMerge` produce a single output stream
@@ -120,8 +121,8 @@ pub enum Partitioning {
     UnknownPartitioning(usize),
 }
 
-impl fmt::Display for Partitioning {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+impl Display for Partitioning {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             Partitioning::RoundRobinBatch(size) => write!(f, "RoundRobinBatch({size})"),
             Partitioning::Hash(phy_exprs, size) => {
@@ -259,6 +260,18 @@ impl Distribution {
             Distribution::SinglePartition => Partitioning::UnknownPartitioning(1),
             Distribution::HashPartitioned(expr) => {
                 Partitioning::Hash(expr, partition_count)
+            }
+        }
+    }
+}
+
+impl Display for Distribution {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            Distribution::UnspecifiedDistribution => write!(f, "Unspecified"),
+            Distribution::SinglePartition => write!(f, "SinglePartition"),
+            Distribution::HashPartitioned(exprs) => {
+                write!(f, "HashPartitioned[{}])", format_physical_expr_list(exprs))
             }
         }
     }

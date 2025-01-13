@@ -22,7 +22,7 @@ SELECT true, false, false = false, true = false
 true false true false
 
 # test_mathematical_expressions_with_null
-query RRRRRRRRRRRRRRRRRR?RRRRRIIIRRRRRRBB
+query RRRRRRRRRRRRRRRRRRRRRRRRIIIRRRRRRBB
 SELECT
     sqrt(NULL),
     cbrt(NULL),
@@ -107,7 +107,7 @@ SELECT
     STRUCT(true, false),
     STRUCT('str1', 'str2')
 ----
-{c0: 1, c1: 2, c2: 3, c3: 4, c4: 5} {c0: } {c0: 2} {c0: 1, c1: } {c0: true, c1: false} {c0: str1, c1: str2}
+{c0: 1, c1: 2, c2: 3, c3: 4, c4: 5} {c0: NULL} {c0: 2} {c0: 1, c1: NULL} {c0: true, c1: false} {c0: str1, c1: str2}
 
 # test binary_bitwise_shift
 query IIII
@@ -226,12 +226,6 @@ SELECT interval '0.49999999999 day'
 
 query ?
 SELECT interval '5 day'
-----
-5 days
-
-# Hour is ignored, this matches PostgreSQL
-query ?
-SELECT interval '5 day' hour
 ----
 5 days
 
@@ -369,6 +363,11 @@ query I
 SELECT bit_length(NULL)
 ----
 NULL
+
+query I
+SELECT bit_length(arrow_cast('jonathan', 'Utf8View'));
+----
+64
 
 query T
 SELECT btrim(' xyxtrimyyx ', NULL)
@@ -555,6 +554,14 @@ query T
 SELECT repeat(NULL, 4)
 ----
 NULL
+
+query T
+select repeat('-1.2', arrow_cast(3, 'Int32'));
+----
+-1.2-1.2-1.2
+
+query error DataFusion error: Error during planning: Internal error: Expect TypeSignatureClass::Native\(LogicalType\(Native\(Int64\), Int64\)\) but received Float64
+select repeat('-1.2', 3.2);
 
 query T
 SELECT replace('abcdefabcdef', 'cd', 'XX')
@@ -824,701 +831,6 @@ SELECT
     TRY_CAST('x' AS INT) as d
 ----
 0 NULL 0 NULL
-
-# test_extract_date_part
-
-query error
-SELECT EXTRACT("'''year'''" FROM  timestamp '2020-09-08T12:00:00+00:00')
-
-query error
-SELECT EXTRACT("'year'" FROM  timestamp '2020-09-08T12:00:00+00:00')
-
-query R
-SELECT date_part('YEAR', CAST('2000-01-01' AS DATE))
-----
-2000
-
-query R
-SELECT EXTRACT(year FROM  timestamp '2020-09-08T12:00:00+00:00')
-----
-2020
-
-query R
-SELECT EXTRACT("year" FROM  timestamp '2020-09-08T12:00:00+00:00')
-----
-2020
-
-query R
-SELECT EXTRACT('year' FROM  timestamp '2020-09-08T12:00:00+00:00')
-----
-2020
-
-query R
-SELECT date_part('QUARTER', CAST('2000-01-01' AS DATE))
-----
-1
-
-query R
-SELECT EXTRACT(quarter FROM to_timestamp('2020-09-08T12:00:00+00:00'))
-----
-3
-
-query R
-SELECT EXTRACT("quarter" FROM to_timestamp('2020-09-08T12:00:00+00:00'))
-----
-3
-
-query R
-SELECT EXTRACT('quarter' FROM to_timestamp('2020-09-08T12:00:00+00:00'))
-----
-3
-
-query R
-SELECT date_part('MONTH', CAST('2000-01-01' AS DATE))
-----
-1
-
-query R
-SELECT EXTRACT(month FROM to_timestamp('2020-09-08T12:00:00+00:00'))
-----
-9
-
-query R
-SELECT EXTRACT("month" FROM to_timestamp('2020-09-08T12:00:00+00:00'))
-----
-9
-
-query R
-SELECT EXTRACT('month' FROM to_timestamp('2020-09-08T12:00:00+00:00'))
-----
-9
-
-query R
-SELECT date_part('WEEK', CAST('2003-01-01' AS DATE))
-----
-1
-
-query R
-SELECT EXTRACT(WEEK FROM to_timestamp('2020-09-08T12:00:00+00:00'))
-----
-37
-
-query R
-SELECT EXTRACT("WEEK" FROM to_timestamp('2020-09-08T12:00:00+00:00'))
-----
-37
-
-query R
-SELECT EXTRACT('WEEK' FROM to_timestamp('2020-09-08T12:00:00+00:00'))
-----
-37
-
-query R
-SELECT date_part('DAY', CAST('2000-01-01' AS DATE))
-----
-1
-
-query R
-SELECT EXTRACT(day FROM to_timestamp('2020-09-08T12:00:00+00:00'))
-----
-8
-
-query R
-SELECT EXTRACT("day" FROM to_timestamp('2020-09-08T12:00:00+00:00'))
-----
-8
-
-query R
-SELECT EXTRACT('day' FROM to_timestamp('2020-09-08T12:00:00+00:00'))
-----
-8
-
-query R
-SELECT date_part('DOY', CAST('2000-01-01' AS DATE))
-----
-1
-
-query R
-SELECT EXTRACT(doy FROM to_timestamp('2020-09-08T12:00:00+00:00'))
-----
-252
-
-query R
-SELECT EXTRACT("doy" FROM to_timestamp('2020-09-08T12:00:00+00:00'))
-----
-252
-
-query R
-SELECT EXTRACT('doy' FROM to_timestamp('2020-09-08T12:00:00+00:00'))
-----
-252
-
-query R
-SELECT date_part('DOW', CAST('2000-01-01' AS DATE))
-----
-6
-
-query R
-SELECT EXTRACT(dow FROM to_timestamp('2020-09-08T12:00:00+00:00'))
-----
-2
-
-query R
-SELECT EXTRACT("dow" FROM to_timestamp('2020-09-08T12:00:00+00:00'))
-----
-2
-
-query R
-SELECT EXTRACT('dow' FROM to_timestamp('2020-09-08T12:00:00+00:00'))
-----
-2
-
-query R
-SELECT date_part('HOUR', CAST('2000-01-01' AS DATE))
-----
-0
-
-query R
-SELECT EXTRACT(hour FROM to_timestamp('2020-09-08T12:03:03+00:00'))
-----
-12
-
-query R
-SELECT EXTRACT("hour" FROM to_timestamp('2020-09-08T12:03:03+00:00'))
-----
-12
-
-query R
-SELECT EXTRACT('hour' FROM to_timestamp('2020-09-08T12:03:03+00:00'))
-----
-12
-
-query R
-SELECT EXTRACT(minute FROM to_timestamp('2020-09-08T12:12:00+00:00'))
-----
-12
-
-query R
-SELECT EXTRACT("minute" FROM to_timestamp('2020-09-08T12:12:00+00:00'))
-----
-12
-
-query R
-SELECT EXTRACT('minute' FROM to_timestamp('2020-09-08T12:12:00+00:00'))
-----
-12
-
-query R
-SELECT date_part('minute', to_timestamp('2020-09-08T12:12:00+00:00'))
-----
-12
-
-query R
-SELECT EXTRACT(second FROM timestamp '2020-09-08T12:00:12.12345678+00:00')
-----
-12.12345678
-
-query R
-SELECT EXTRACT(millisecond FROM timestamp '2020-09-08T12:00:12.12345678+00:00')
-----
-12123.45678
-
-query R
-SELECT EXTRACT(microsecond FROM timestamp '2020-09-08T12:00:12.12345678+00:00')
-----
-12123456.78
-
-query R
-SELECT EXTRACT(nanosecond FROM timestamp '2020-09-08T12:00:12.12345678+00:00')
-----
-12123456780
-
-query R
-SELECT EXTRACT("second" FROM timestamp '2020-09-08T12:00:12.12345678+00:00')
-----
-12.12345678
-
-query R
-SELECT EXTRACT("millisecond" FROM timestamp '2020-09-08T12:00:12.12345678+00:00')
-----
-12123.45678
-
-query R
-SELECT EXTRACT("microsecond" FROM timestamp '2020-09-08T12:00:12.12345678+00:00')
-----
-12123456.78
-
-query R
-SELECT EXTRACT("nanosecond" FROM timestamp '2020-09-08T12:00:12.12345678+00:00')
-----
-12123456780
-
-query R
-SELECT EXTRACT('second' FROM timestamp '2020-09-08T12:00:12.12345678+00:00')
-----
-12.12345678
-
-query R
-SELECT EXTRACT('millisecond' FROM timestamp '2020-09-08T12:00:12.12345678+00:00')
-----
-12123.45678
-
-query R
-SELECT EXTRACT('microsecond' FROM timestamp '2020-09-08T12:00:12.12345678+00:00')
-----
-12123456.78
-
-query R
-SELECT EXTRACT('nanosecond' FROM timestamp '2020-09-08T12:00:12.12345678+00:00')
-----
-12123456780
-
-# Keep precision when coercing Utf8 to Timestamp
-query R
-SELECT date_part('second', timestamp '2020-09-08T12:00:12.12345678+00:00')
-----
-12.12345678
-
-query R
-SELECT date_part('millisecond', timestamp '2020-09-08T12:00:12.12345678+00:00')
-----
-12123.45678
-
-query R
-SELECT date_part('microsecond', timestamp '2020-09-08T12:00:12.12345678+00:00')
-----
-12123456.78
-
-query R
-SELECT date_part('nanosecond', timestamp '2020-09-08T12:00:12.12345678+00:00')
-----
-12123456780
-
-query R
-SELECT date_part('second', '2020-09-08T12:00:12.12345678+00:00')
-----
-12.12345678
-
-query R
-SELECT date_part('millisecond', '2020-09-08T12:00:12.12345678+00:00')
-----
-12123.45678
-
-query R
-SELECT date_part('microsecond', '2020-09-08T12:00:12.12345678+00:00')
-----
-12123456.78
-
-query R
-SELECT date_part('nanosecond', '2020-09-08T12:00:12.12345678+00:00')
-----
-12123456780
-
-# test_date_part_time
-
-## time32 seconds
-query R
-SELECT date_part('hour', arrow_cast('23:32:50'::time, 'Time32(Second)'))
-----
-23
-
-query R
-SELECT extract(hour from arrow_cast('23:32:50'::time, 'Time32(Second)'))
-----
-23
-
-query R
-SELECT date_part('minute', arrow_cast('23:32:50'::time, 'Time32(Second)'))
-----
-32
-
-query R
-SELECT extract(minute from arrow_cast('23:32:50'::time, 'Time32(Second)'))
-----
-32
-
-query R
-SELECT date_part('second', arrow_cast('23:32:50'::time, 'Time32(Second)'))
-----
-50
-
-query R
-SELECT extract(second from arrow_cast('23:32:50'::time, 'Time32(Second)'))
-----
-50
-
-query R
-SELECT date_part('millisecond', arrow_cast('23:32:50'::time, 'Time32(Second)'))
-----
-50000
-
-query R
-SELECT extract(millisecond from arrow_cast('23:32:50'::time, 'Time32(Second)'))
-----
-50000
-
-query R
-SELECT date_part('microsecond', arrow_cast('23:32:50'::time, 'Time32(Second)'))
-----
-50000000
-
-query R
-SELECT extract(microsecond from arrow_cast('23:32:50'::time, 'Time32(Second)'))
-----
-50000000
-
-query R
-SELECT date_part('nanosecond', arrow_cast('23:32:50'::time, 'Time32(Second)'))
-----
-50000000000
-
-query R
-SELECT extract(nanosecond from arrow_cast('23:32:50'::time, 'Time32(Second)'))
-----
-50000000000
-
-query R
-SELECT date_part('epoch', arrow_cast('23:32:50'::time, 'Time32(Second)'))
-----
-84770
-
-query R
-SELECT extract(epoch from arrow_cast('23:32:50'::time, 'Time32(Second)'))
-----
-84770
-
-## time32 milliseconds
-query R
-SELECT date_part('hour', arrow_cast('23:32:50.123'::time, 'Time32(Millisecond)'))
-----
-23
-
-query R
-SELECT extract(hour from arrow_cast('23:32:50.123'::time, 'Time32(Millisecond)'))
-----
-23
-
-query R
-SELECT date_part('minute', arrow_cast('23:32:50.123'::time, 'Time32(Millisecond)'))
-----
-32
-
-query R
-SELECT extract(minute from arrow_cast('23:32:50.123'::time, 'Time32(Millisecond)'))
-----
-32
-
-query R
-SELECT date_part('second', arrow_cast('23:32:50.123'::time, 'Time32(Millisecond)'))
-----
-50.123
-
-query R
-SELECT extract(second from arrow_cast('23:32:50.123'::time, 'Time32(Millisecond)'))
-----
-50.123
-
-query R
-SELECT date_part('millisecond', arrow_cast('23:32:50.123'::time, 'Time32(Millisecond)'))
-----
-50123
-
-query R
-SELECT extract(millisecond from arrow_cast('23:32:50.123'::time, 'Time32(Millisecond)'))
-----
-50123
-
-query R
-SELECT date_part('microsecond', arrow_cast('23:32:50.123'::time, 'Time32(Millisecond)'))
-----
-50123000
-
-query R
-SELECT extract(microsecond from arrow_cast('23:32:50.123'::time, 'Time32(Millisecond)'))
-----
-50123000
-
-query R
-SELECT date_part('nanosecond', arrow_cast('23:32:50.123'::time, 'Time32(Millisecond)'))
-----
-50123000000
-
-query R
-SELECT extract(nanosecond from arrow_cast('23:32:50.123'::time, 'Time32(Millisecond)'))
-----
-50123000000
-
-query R
-SELECT date_part('epoch', arrow_cast('23:32:50.123'::time, 'Time32(Millisecond)'))
-----
-84770.123
-
-query R
-SELECT extract(epoch from arrow_cast('23:32:50.123'::time, 'Time32(Millisecond)'))
-----
-84770.123
-
-## time64 microseconds
-query R
-SELECT date_part('hour', arrow_cast('23:32:50.123456'::time, 'Time64(Microsecond)'))
-----
-23
-
-query R
-SELECT extract(hour from arrow_cast('23:32:50.123456'::time, 'Time64(Microsecond)'))
-----
-23
-
-query R
-SELECT date_part('minute', arrow_cast('23:32:50.123456'::time, 'Time64(Microsecond)'))
-----
-32
-
-query R
-SELECT extract(minute from arrow_cast('23:32:50.123456'::time, 'Time64(Microsecond)'))
-----
-32
-
-query R
-SELECT date_part('second', arrow_cast('23:32:50.123456'::time, 'Time64(Microsecond)'))
-----
-50.123456
-
-query R
-SELECT extract(second from arrow_cast('23:32:50.123456'::time, 'Time64(Microsecond)'))
-----
-50.123456
-
-query R
-SELECT date_part('millisecond', arrow_cast('23:32:50.123456'::time, 'Time64(Microsecond)'))
-----
-50123.456
-
-query R
-SELECT extract(millisecond from arrow_cast('23:32:50.123456'::time, 'Time64(Microsecond)'))
-----
-50123.456
-
-query R
-SELECT date_part('microsecond', arrow_cast('23:32:50.123456'::time, 'Time64(Microsecond)'))
-----
-50123456
-
-query R
-SELECT extract(microsecond from arrow_cast('23:32:50.123456'::time, 'Time64(Microsecond)'))
-----
-50123456
-
-query R
-SELECT date_part('nanosecond', arrow_cast('23:32:50.123456'::time, 'Time64(Microsecond)'))
-----
-50123456000
-
-query R
-SELECT extract(nanosecond from arrow_cast('23:32:50.123456'::time, 'Time64(Microsecond)'))
-----
-50123456000
-
-query R
-SELECT date_part('epoch', arrow_cast('23:32:50.123456'::time, 'Time64(Microsecond)'))
-----
-84770.123456
-
-query R
-SELECT extract(epoch from arrow_cast('23:32:50.123456'::time, 'Time64(Microsecond)'))
-----
-84770.123456
-
-## time64 nanoseconds
-query R
-SELECT date_part('hour', arrow_cast('23:32:50.123456789'::time, 'Time64(Nanosecond)'))
-----
-23
-
-query R
-SELECT extract(hour from arrow_cast('23:32:50.123456789'::time, 'Time64(Nanosecond)'))
-----
-23
-
-query R
-SELECT date_part('minute', arrow_cast('23:32:50.123456789'::time, 'Time64(Nanosecond)'))
-----
-32
-
-query R
-SELECT extract(minute from arrow_cast('23:32:50.123456789'::time, 'Time64(Nanosecond)'))
-----
-32
-
-query R
-SELECT date_part('second', arrow_cast('23:32:50.123456789'::time, 'Time64(Nanosecond)'))
-----
-50.123456789
-
-query R
-SELECT extract(second from arrow_cast('23:32:50.123456789'::time, 'Time64(Nanosecond)'))
-----
-50.123456789
-
-query R
-SELECT date_part('millisecond', arrow_cast('23:32:50.123456789'::time, 'Time64(Nanosecond)'))
-----
-50123.456789
-
-query R
-SELECT extract(millisecond from arrow_cast('23:32:50.123456789'::time, 'Time64(Nanosecond)'))
-----
-50123.456789
-
-# just some floating point stuff happening in the result here
-query R
-SELECT date_part('microsecond', arrow_cast('23:32:50.123456789'::time, 'Time64(Nanosecond)'))
-----
-50123456.789000005
-
-query R
-SELECT extract(microsecond from arrow_cast('23:32:50.123456789'::time, 'Time64(Nanosecond)'))
-----
-50123456.789000005
-
-query R
-SELECT date_part('nanosecond', arrow_cast('23:32:50.123456789'::time, 'Time64(Nanosecond)'))
-----
-50123456789
-
-query R
-SELECT extract(nanosecond from arrow_cast('23:32:50.123456789'::time, 'Time64(Nanosecond)'))
-----
-50123456789
-
-query R
-SELECT date_part('epoch', arrow_cast('23:32:50.123456789'::time, 'Time64(Nanosecond)'))
-----
-84770.123456789
-
-query R
-SELECT extract(epoch from arrow_cast('23:32:50.123456789'::time, 'Time64(Nanosecond)'))
-----
-84770.123456789
-
-# test_extract_epoch
-
-query R
-SELECT extract(epoch from '1870-01-01T07:29:10.256'::timestamp)
-----
--3155646649.744
-
-query R
-SELECT extract(epoch from '2000-01-01T00:00:00.000'::timestamp)
-----
-946684800
-
-query R
-SELECT extract(epoch from to_timestamp('2000-01-01T00:00:00+00:00'))
-----
-946684800
-
-query R
-SELECT extract(epoch from NULL::timestamp)
-----
-NULL
-
-query R
-SELECT extract(epoch from arrow_cast('1970-01-01', 'Date32'))
-----
-0
-
-query R
-SELECT extract(epoch from arrow_cast('1970-01-02', 'Date32'))
-----
-86400
-
-query R
-SELECT extract(epoch from arrow_cast('1970-01-11', 'Date32'))
-----
-864000
-
-query R
-SELECT extract(epoch from arrow_cast('1969-12-31', 'Date32'))
-----
--86400
-
-query R
-SELECT extract(epoch from arrow_cast('1970-01-01', 'Date64'))
-----
-0
-
-query R
-SELECT extract(epoch from arrow_cast('1970-01-02', 'Date64'))
-----
-86400
-
-query R
-SELECT extract(epoch from arrow_cast('1970-01-11', 'Date64'))
-----
-864000
-
-query R
-SELECT extract(epoch from arrow_cast('1969-12-31', 'Date64'))
-----
--86400
-
-# test_extract_date_part_func
-
-query B
-SELECT (date_part('year', now()) = EXTRACT(year FROM now()))
-----
-true
-
-query B
-SELECT (date_part('quarter', now()) = EXTRACT(quarter FROM now()))
-----
-true
-
-query B
-SELECT (date_part('month', now()) = EXTRACT(month FROM now()))
-----
-true
-
-query B
-SELECT (date_part('week', now()) = EXTRACT(week FROM now()))
-----
-true
-
-query B
-SELECT (date_part('day', now()) = EXTRACT(day FROM now()))
-----
-true
-
-query B
-SELECT (date_part('hour', now()) = EXTRACT(hour FROM now()))
-----
-true
-
-query B
-SELECT (date_part('minute', now()) = EXTRACT(minute FROM now()))
-----
-true
-
-query B
-SELECT (date_part('second', now()) = EXTRACT(second FROM now()))
-----
-true
-
-query B
-SELECT (date_part('millisecond', now()) = EXTRACT(millisecond FROM now()))
-----
-true
-
-query B
-SELECT (date_part('microsecond', now()) = EXTRACT(microsecond FROM now()))
-----
-true
-
-query B
-SELECT (date_part('nanosecond', now()) = EXTRACT(nanosecond FROM now()))
-----
-true
 
 query B
 SELECT 'a' IN ('a','b')
@@ -2025,6 +1337,11 @@ SELECT digest('','blake3');
 ----
 af1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262
 
+# vverify utf8view
+query ?
+SELECT sha224(arrow_cast('tom', 'Utf8View'));
+----
+0bf6cb62649c42a9ae3876ab6f6d92ad36cb5414e495f8873292be4d
 
 query T
 SELECT substring('alphabet', 1)
@@ -2466,7 +1783,7 @@ select struct(time,load1,load2,host) from t1;
 {c0: 2018-05-22T19:53:26, c1: 1.1, c2: 101.0, c3: host1}
 {c0: 2018-05-22T19:53:26, c1: 2.2, c2: 202.0, c3: host2}
 {c0: 2018-05-22T19:53:26, c1: 3.3, c2: 303.0, c3: host3}
-{c0: 2018-05-22T19:53:26, c1: 1.1, c2: 101.0, c3: }
+{c0: 2018-05-22T19:53:26, c1: 1.1, c2: 101.0, c3: NULL}
 
 # can have an aggregate function with an inner coalesce
 query TR
@@ -2646,3 +1963,20 @@ drop table t;
 
 statement ok
 set datafusion.sql_parser.dialect = 'Generic';
+
+# test between expression with null
+query I
+select 1 where null between null and null;
+----
+
+query T
+select 'A' where null between null and null;
+----
+
+query I
+select 1 where null between null and 2;
+----
+
+query T
+select 'A' where null between 2 and null;
+---

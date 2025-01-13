@@ -17,21 +17,23 @@
 
 //! [ScalarUDFImpl] definitions for array_distance function.
 
-use crate::utils::{downcast_arg, make_scalar_function};
+use crate::utils::make_scalar_function;
 use arrow_array::{
     Array, ArrayRef, Float64Array, LargeListArray, ListArray, OffsetSizeTrait,
 };
 use arrow_schema::DataType;
 use arrow_schema::DataType::{FixedSizeList, Float64, LargeList, List};
-use core::any::type_name;
 use datafusion_common::cast::{
     as_float32_array, as_float64_array, as_generic_list_array, as_int32_array,
     as_int64_array,
 };
 use datafusion_common::utils::coerced_fixed_size_list_to_list;
-use datafusion_common::DataFusionError;
-use datafusion_common::{exec_err, Result};
-use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
+use datafusion_common::{exec_err, internal_datafusion_err, Result};
+use datafusion_expr::{
+    ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
+};
+use datafusion_functions::{downcast_arg, downcast_named_arg};
+use datafusion_macros::user_doc;
 use std::any::Any;
 use std::sync::Arc;
 
@@ -43,10 +45,37 @@ make_udf_expr_and_func!(
     array_distance_udf
 );
 
+#[user_doc(
+    doc_section(label = "Array Functions"),
+    description = "Returns the Euclidean distance between two input arrays of equal length.",
+    syntax_example = "array_distance(array1, array2)",
+    sql_example = r#"```sql
+> select array_distance([1, 2], [1, 4]);
++------------------------------------+
+| array_distance(List([1,2], [1,4])) |
++------------------------------------+
+| 2.0                                |
++------------------------------------+
+```"#,
+    argument(
+        name = "array1",
+        description = "Array expression. Can be a constant, column, or function, and any combination of array operators."
+    ),
+    argument(
+        name = "array2",
+        description = "Array expression. Can be a constant, column, or function, and any combination of array operators."
+    )
+)]
 #[derive(Debug)]
-pub(super) struct ArrayDistance {
+pub struct ArrayDistance {
     signature: Signature,
     aliases: Vec<String>,
+}
+
+impl Default for ArrayDistance {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl ArrayDistance {
@@ -93,12 +122,20 @@ impl ScalarUDFImpl for ArrayDistance {
         Ok(result)
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         make_scalar_function(array_distance_inner)(args)
     }
 
     fn aliases(&self) -> &[String] {
         &self.aliases
+    }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        self.doc()
     }
 }
 
@@ -207,7 +244,7 @@ fn compute_array_distance(
 /// Converts an array of any numeric type to a Float64Array.
 fn convert_to_f64_array(array: &ArrayRef) -> Result<Float64Array> {
     match array.data_type() {
-        DataType::Float64 => Ok(as_float64_array(array)?.clone()),
+        Float64 => Ok(as_float64_array(array)?.clone()),
         DataType::Float32 => {
             let array = as_float32_array(array)?;
             let converted: Float64Array =

@@ -38,7 +38,8 @@ use datafusion_common::config::ConfigOptions;
 use datafusion_common::Statistics;
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::{EquivalenceProperties, LexOrdering};
-use datafusion_physical_plan::{ExecutionMode, PlanProperties};
+use datafusion_physical_plan::execution_plan::{Boundedness, EmissionType};
+use datafusion_physical_plan::PlanProperties;
 
 use futures::StreamExt;
 use itertools::Itertools;
@@ -46,7 +47,6 @@ use object_store::{GetOptions, GetRange, GetResultPayload, ObjectStore};
 
 /// Execution plan for scanning Arrow data source
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 pub struct ArrowExec {
     base_config: FileScanConfig,
     projected_statistics: Statistics,
@@ -63,7 +63,7 @@ impl ArrowExec {
         let (projected_schema, projected_statistics, projected_output_ordering) =
             base_config.project();
         let cache = Self::compute_properties(
-            projected_schema.clone(),
+            Arc::clone(&projected_schema),
             &projected_output_ordering,
             &base_config,
         );
@@ -98,7 +98,8 @@ impl ArrowExec {
         PlanProperties::new(
             eq_properties,
             Self::output_partitioning_helper(file_scan_config), // Output Partitioning
-            ExecutionMode::Bounded,                             // Execution Mode
+            EmissionType::Incremental,
+            Boundedness::Bounded,
         )
     }
 
@@ -207,7 +208,7 @@ impl ExecutionPlan for ArrowExec {
         Some(Arc::new(Self {
             base_config: new_config,
             projected_statistics: self.projected_statistics.clone(),
-            projected_schema: self.projected_schema.clone(),
+            projected_schema: Arc::clone(&self.projected_schema),
             projected_output_ordering: self.projected_output_ordering.clone(),
             metrics: self.metrics.clone(),
             cache: self.cache.clone(),
@@ -222,7 +223,7 @@ pub struct ArrowOpener {
 
 impl FileOpener for ArrowOpener {
     fn open(&self, file_meta: FileMeta) -> Result<FileOpenFuture> {
-        let object_store = self.object_store.clone();
+        let object_store = Arc::clone(&self.object_store);
         let projection = self.projection.clone();
         Ok(Box::pin(async move {
             let range = file_meta.range.clone();

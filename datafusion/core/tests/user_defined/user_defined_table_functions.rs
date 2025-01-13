@@ -21,7 +21,6 @@ use arrow::csv::ReaderBuilder;
 use async_trait::async_trait;
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::arrow::record_batch::RecordBatch;
-use datafusion::datasource::function::TableFunctionImpl;
 use datafusion::datasource::TableProvider;
 use datafusion::error::Result;
 use datafusion::execution::TaskContext;
@@ -29,6 +28,7 @@ use datafusion::physical_plan::memory::MemoryExec;
 use datafusion::physical_plan::{collect, ExecutionPlan};
 use datafusion::prelude::SessionContext;
 use datafusion_catalog::Session;
+use datafusion_catalog::TableFunctionImpl;
 use datafusion_common::{assert_batches_eq, DFSchema, ScalarValue};
 use datafusion_expr::{EmptyRelation, Expr, LogicalPlan, Projection, TableType};
 use std::fs::File;
@@ -105,6 +105,7 @@ async fn test_deregister_udtf() -> Result<()> {
     Ok(())
 }
 
+#[derive(Debug)]
 struct SimpleCsvTable {
     schema: SchemaRef,
     exprs: Vec<Expr>,
@@ -191,6 +192,7 @@ impl SimpleCsvTable {
     }
 }
 
+#[derive(Debug)]
 struct SimpleCsvTableFunc {}
 
 impl TableFunctionImpl for SimpleCsvTableFunc {
@@ -226,8 +228,8 @@ fn read_csv_batches(csv_path: impl AsRef<Path>) -> Result<(SchemaRef, Vec<Record
         .with_header(true)
         .build(file)?;
     let mut batches = vec![];
-    for bacth in reader {
-        batches.push(bacth?);
+    for batch in reader {
+        batches.push(batch?);
     }
     let schema = Arc::new(schema);
     Ok((schema, batches))

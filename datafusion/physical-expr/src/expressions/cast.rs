@@ -17,10 +17,10 @@
 
 use std::any::Any;
 use std::fmt;
-use std::hash::{Hash, Hasher};
+use std::hash::Hash;
 use std::sync::Arc;
 
-use crate::physical_expr::{down_cast_any_ref, PhysicalExpr};
+use crate::physical_expr::PhysicalExpr;
 
 use arrow::compute::{can_cast_types, CastOptions};
 use arrow::datatypes::{DataType, DataType::*, Schema};
@@ -42,7 +42,7 @@ const DEFAULT_SAFE_CAST_OPTIONS: CastOptions<'static> = CastOptions {
 };
 
 /// CAST expression casts an expression to a specific data type and returns a runtime error on invalid cast
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Eq)]
 pub struct CastExpr {
     /// The expression to cast
     pub expr: Arc<dyn PhysicalExpr>,
@@ -50,6 +50,23 @@ pub struct CastExpr {
     cast_type: DataType,
     /// Cast options
     cast_options: CastOptions<'static>,
+}
+
+// Manually derive PartialEq and Hash to work around https://github.com/rust-lang/rust/issues/78808
+impl PartialEq for CastExpr {
+    fn eq(&self, other: &Self) -> bool {
+        self.expr.eq(&other.expr)
+            && self.cast_type.eq(&other.cast_type)
+            && self.cast_options.eq(&other.cast_options)
+    }
+}
+
+impl Hash for CastExpr {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.expr.hash(state);
+        self.cast_type.hash(state);
+        self.cast_options.hash(state);
+    }
 }
 
 impl CastExpr {
@@ -160,13 +177,6 @@ impl PhysicalExpr for CastExpr {
         ]))
     }
 
-    fn dyn_hash(&self, state: &mut dyn Hasher) {
-        let mut s = state;
-        self.expr.hash(&mut s);
-        self.cast_type.hash(&mut s);
-        self.cast_options.hash(&mut s);
-    }
-
     /// A [`CastExpr`] preserves the ordering of its child if the cast is done
     /// under the same datatype family.
     fn get_properties(&self, children: &[ExprProperties]) -> Result<ExprProperties> {
@@ -183,19 +193,6 @@ impl PhysicalExpr for CastExpr {
         } else {
             Ok(ExprProperties::new_unknown().with_range(unbounded))
         }
-    }
-}
-
-impl PartialEq<dyn Any> for CastExpr {
-    fn eq(&self, other: &dyn Any) -> bool {
-        down_cast_any_ref(other)
-            .downcast_ref::<Self>()
-            .map(|x| {
-                self.expr.eq(&x.expr)
-                    && self.cast_type == x.cast_type
-                    && self.cast_options == x.cast_options
-            })
-            .unwrap_or(false)
     }
 }
 
@@ -693,7 +690,7 @@ mod tests {
         let result = cast(
             col("a", &schema).unwrap(),
             &schema,
-            DataType::Interval(IntervalUnit::MonthDayNano),
+            Interval(IntervalUnit::MonthDayNano),
         );
         result.expect_err("expected Invalid CAST");
     }

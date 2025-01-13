@@ -21,12 +21,11 @@ use std::sync::Arc;
 use arrow::array::ArrayRef;
 use arrow::datatypes::DataType;
 
-use datafusion_common::{internal_err, Result};
-use datafusion_expr::ColumnarValue;
-use datafusion_expr::TypeSignature::*;
-use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
-
 use crate::utils::make_scalar_function;
+use datafusion_common::{internal_err, Result};
+use datafusion_expr::{ColumnarValue, Documentation};
+use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
+use datafusion_macros::user_doc;
 
 /// Returns true if string starts with prefix.
 /// starts_with('alphabet', 'alph') = 't'
@@ -35,6 +34,21 @@ pub fn starts_with(args: &[ArrayRef]) -> Result<ArrayRef> {
     Ok(Arc::new(result) as ArrayRef)
 }
 
+#[user_doc(
+    doc_section(label = "String Functions"),
+    description = "Tests if a string starts with a substring.",
+    syntax_example = "starts_with(str, substr)",
+    sql_example = r#"```sql
+> select starts_with('datafusion','data');
++----------------------------------------------+
+| starts_with(Utf8("datafusion"),Utf8("data")) |
++----------------------------------------------+
+| true                                         |
++----------------------------------------------+
+```"#,
+    standard_argument(name = "str", prefix = "String"),
+    argument(name = "substr", description = "Substring to test for.")
+)]
 #[derive(Debug)]
 pub struct StartsWithFunc {
     signature: Signature,
@@ -49,17 +63,7 @@ impl Default for StartsWithFunc {
 impl StartsWithFunc {
     pub fn new() -> Self {
         Self {
-            signature: Signature::one_of(
-                vec![
-                    // Planner attempts coercion to the target type starting with the most preferred candidate.
-                    // For example, given input `(Utf8View, Utf8)`, it first tries coercing to `(Utf8View, Utf8View)`.
-                    // If that fails, it proceeds to `(Utf8, Utf8)`.
-                    Exact(vec![DataType::Utf8View, DataType::Utf8View]),
-                    Exact(vec![DataType::Utf8, DataType::Utf8]),
-                    Exact(vec![DataType::LargeUtf8, DataType::LargeUtf8]),
-                ],
-                Volatility::Immutable,
-            ),
+            signature: Signature::string(2, Volatility::Immutable),
         }
     }
 }
@@ -81,13 +85,21 @@ impl ScalarUDFImpl for StartsWithFunc {
         Ok(DataType::Boolean)
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         match args[0].data_type() {
             DataType::Utf8View | DataType::Utf8 | DataType::LargeUtf8 => {
                 make_scalar_function(starts_with, vec![])(args)
             }
             _ => internal_err!("Unsupported data types for starts_with. Expected Utf8, LargeUtf8 or Utf8View")?,
         }
+    }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        self.doc()
     }
 }
 
@@ -137,7 +149,7 @@ mod tests {
         for (args, expected) in test_cases {
             test_function!(
                 StartsWithFunc::new(),
-                &args,
+                args,
                 Ok(expected),
                 bool,
                 Boolean,

@@ -30,7 +30,7 @@ Patch releases are made on an adhoc basis, but we try and avoid them given the f
 - Once the PR is approved and merged, we tag the rc in the release branch, and release from the release branch
 - Bug fixes can be merged to the release branch and patch releases can be created from the release branch
 
-#### How to add changes to `branch-*` branch?
+#### How to backport (add changes) to `branch-*` branch
 
 If you would like to propose your change for inclusion in a release branch for a
 patch release:
@@ -38,6 +38,16 @@ patch release:
 1. Find (or create) the issue for the incremental release ([example release issue]) and discuss the proposed change there with the maintainers.
 1. Follow normal workflow to create PR to `main` branch and wait for its approval and merge.
 1. After PR is squash merged to `main`, branch from most recent release branch (e.g. `branch-37`), cherry-pick the commit and create a PR targeting the release branch [example backport PR].
+
+For example, to backport commit `12345` from `main` to `branch-43`:
+
+```shell
+git checkout branch-43
+git checkout -b backport_to_43
+git cherry-pick 12345
+git push -u <your fork>
+# make a PR as normal
+```
 
 [example release issue]: https://github.com/apache/datafusion/issues/9904
 [example backport pr]: https://github.com/apache/datafusion/pull/10123
@@ -260,29 +270,32 @@ Verify that the Cargo.toml in the tarball contains the correct version
 
 ```shell
 (cd datafusion/common && cargo publish)
+(cd datafusion/expr-common && cargo publish)
+(cd datafusion/physical-expr-common && cargo publish)
+(cd datafusion/functions-aggregate-common && cargo publish)
+(cd datafusion/functions-window-common && cargo publish)
+(cd datafusion/doc && cargo publish)
+(cd datafusion/macros && cargo publish)
 (cd datafusion/expr && cargo publish)
 (cd datafusion/execution && cargo publish)
-(cd datafusion/physical-expr-common && cargo publish)
-(cd datafusion/functions-aggregate && cargo publish)
-(cd datafusion/physical-expr && cargo publish)
 (cd datafusion/functions && cargo publish)
+(cd datafusion/physical-expr && cargo publish)
+(cd datafusion/functions-aggregate && cargo publish)
+(cd datafusion/functions-window && cargo publish)
 (cd datafusion/functions-nested && cargo publish)
+(cd datafusion/functions-table && cargo publish)
 (cd datafusion/sql && cargo publish)
 (cd datafusion/optimizer && cargo publish)
 (cd datafusion/common-runtime && cargo publish)
-(cd datafusion/catalog && cargo publish)
 (cd datafusion/physical-plan && cargo publish)
 (cd datafusion/physical-optimizer && cargo publish)
+(cd datafusion/catalog && cargo publish)
 (cd datafusion/core && cargo publish)
 (cd datafusion/proto-common && cargo publish)
 (cd datafusion/proto && cargo publish)
 (cd datafusion/substrait && cargo publish)
-```
-
-The CLI needs a `--no-verify` argument because `build.rs` generates source into the `src` directory.
-
-```shell
-(cd datafusion-cli && cargo publish --no-verify)
+(cd datafusion/ffi && cargo publish)
+(cd datafusion-cli && cargo publish)
 ```
 
 ### Publish datafusion-cli on Homebrew

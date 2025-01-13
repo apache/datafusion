@@ -25,10 +25,21 @@ use arrow::datatypes::DataType;
 use arrow::datatypes::DataType::Int64;
 
 use crate::utils::make_scalar_function;
-use datafusion_common::{arrow_datafusion_err, exec_err, DataFusionError, Result};
-use datafusion_expr::ColumnarValue;
-use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
+use datafusion_common::{
+    arrow_datafusion_err, exec_err, internal_datafusion_err, DataFusionError, Result,
+};
+use datafusion_expr::{
+    ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
+};
+use datafusion_macros::user_doc;
 
+#[user_doc(
+    doc_section(label = "Math Functions"),
+    description = "Returns the greatest common divisor of `expression_x` and `expression_y`. Returns 0 if both inputs are zero.",
+    syntax_example = "gcd(expression_x, expression_y)",
+    standard_argument(name = "expression_x", prefix = "First numeric"),
+    standard_argument(name = "expression_y", prefix = "Second numeric")
+)]
 #[derive(Debug)]
 pub struct GcdFunc {
     signature: Signature,
@@ -66,8 +77,16 @@ impl ScalarUDFImpl for GcdFunc {
         Ok(Int64)
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         make_scalar_function(gcd, vec![])(args)
+    }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        self.doc()
     }
 }
 
@@ -75,8 +94,8 @@ impl ScalarUDFImpl for GcdFunc {
 fn gcd(args: &[ArrayRef]) -> Result<ArrayRef> {
     match args[0].data_type() {
         Int64 => {
-            let arg1 = downcast_arg!(&args[0], "x", Int64Array);
-            let arg2 = downcast_arg!(&args[1], "y", Int64Array);
+            let arg1 = downcast_named_arg!(&args[0], "x", Int64Array);
+            let arg2 = downcast_named_arg!(&args[1], "y", Int64Array);
 
             Ok(arg1
                 .iter()
@@ -102,8 +121,6 @@ pub(super) fn unsigned_gcd(mut a: u64, mut b: u64) -> u64 {
     }
 
     let shift = (a | b).trailing_zeros();
-    a >>= shift;
-    b >>= shift;
     a >>= a.trailing_zeros();
     loop {
         b >>= b.trailing_zeros();

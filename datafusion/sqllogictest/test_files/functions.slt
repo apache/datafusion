@@ -18,46 +18,6 @@
 
 # unicode expressions
 
-query I
-SELECT char_length('')
-----
-0
-
-query I
-SELECT char_length('chars')
-----
-5
-
-query I
-SELECT char_length('josé')
-----
-4
-
-query I
-SELECT char_length(NULL)
-----
-NULL
-
-query I
-SELECT character_length('')
-----
-0
-
-query I
-SELECT character_length('chars')
-----
-5
-
-query I
-SELECT character_length('josé')
-----
-4
-
-query I
-SELECT character_length(NULL)
-----
-NULL
-
 query T
 SELECT left('abcde', -2)
 ----
@@ -134,152 +94,6 @@ SELECT length(NULL)
 NULL
 
 query T
-SELECT lpad('hi', -1, 'xy')
-----
-(empty)
-
-query T
-SELECT lpad('hi', 5, 'xy')
-----
-xyxhi
-
-query T
-SELECT lpad('hi', -1)
-----
-(empty)
-
-query T
-SELECT lpad('hi', 0)
-----
-(empty)
-
-query T
-SELECT lpad('hi', 21, 'abcdef')
-----
-abcdefabcdefabcdefahi
-
-query T
-SELECT lpad('hi', 5, 'xy')
-----
-xyxhi
-
-query T
-SELECT lpad('hi', 5, NULL)
-----
-NULL
-
-query T
-SELECT lpad('hi', 5)
-----
-   hi
-
-query T
-SELECT lpad(arrow_cast('hi', 'Dictionary(Int32, Utf8)'), 5)
-----
-   hi
-
-query T
-SELECT lpad('hi', CAST(NULL AS INT), 'xy')
-----
-NULL
-
-query T
-SELECT lpad('hi', CAST(NULL AS INT))
-----
-NULL
-
-query T
-SELECT lpad('xyxhi', 3)
-----
-xyx
-
-query T
-SELECT lpad(NULL, 0)
-----
-NULL
-
-query T
-SELECT lpad(NULL, 5, 'xy')
-----
-NULL
-
-# test largeutf8, utf8view for lpad
-query T
-SELECT lpad(arrow_cast('hi', 'LargeUtf8'), 5, 'xy')
-----
-xyxhi
-
-query T
-SELECT lpad(arrow_cast('hi', 'Utf8View'), 5, 'xy')
-----
-xyxhi
-
-query T
-SELECT lpad(arrow_cast('hi', 'LargeUtf8'), 5, arrow_cast('xy', 'LargeUtf8'))
-----
-xyxhi
-
-query T
-SELECT lpad(arrow_cast('hi', 'Utf8View'), 5, arrow_cast('xy', 'Utf8View'))
-----
-xyxhi
-
-query T
-SELECT lpad(arrow_cast(NULL, 'Utf8View'), 5, 'xy')
-----
-NULL
-
-query T
-SELECT reverse('abcde')
-----
-edcba
-
-query T
-SELECT reverse(arrow_cast('abcde', 'LargeUtf8'))
-----
-edcba
-
-query T
-SELECT reverse(arrow_cast('abcde', 'Utf8View'))
-----
-edcba
-
-query T
-SELECT reverse(arrow_cast('abcde', 'Dictionary(Int32, Utf8)'))
-----
-edcba
-
-query T
-SELECT reverse('loẅks')
-----
-sk̈wol
-
-query T
-SELECT reverse(arrow_cast('loẅks', 'LargeUtf8'))
-----
-sk̈wol
-
-query T
-SELECT reverse(arrow_cast('loẅks', 'Utf8View'))
-----
-sk̈wol
-
-query T
-SELECT reverse(NULL)
-----
-NULL
-
-query T
-SELECT reverse(arrow_cast(NULL, 'LargeUtf8'))
-----
-NULL
-
-query T
-SELECT reverse(arrow_cast(NULL, 'Utf8View'))
-----
-NULL
-
-query T
 SELECT right('abcde', -2)
 ----
 cde
@@ -324,124 +138,6 @@ SELECT right(NULL, CAST(NULL AS INT))
 ----
 NULL
 
-
-query T
-SELECT rpad('hi', -1, 'xy')
-----
-(empty)
-
-query T
-SELECT rpad('hi', 5, 'xy')
-----
-hixyx
-
-query T
-SELECT rpad('hi', -1)
-----
-(empty)
-
-query T
-SELECT rpad('hi', 0)
-----
-(empty)
-
-query T
-SELECT rpad('hi', 21, 'abcdef')
-----
-hiabcdefabcdefabcdefa
-
-query T
-SELECT rpad('hi', 5, 'xy')
-----
-hixyx
-
-query T
-SELECT rpad(arrow_cast('hi', 'Dictionary(Int32, Utf8)'), 5, 'xy')
-----
-hixyx
-
-query T
-SELECT rpad('hi', 5, NULL)
-----
-NULL
-
-query T
-SELECT rpad('hi', 5)
-----
-hi   
-
-query T
-SELECT rpad('hi', CAST(NULL AS INT), 'xy')
-----
-NULL
-
-query T
-SELECT rpad('hi', CAST(NULL AS INT))
-----
-NULL
-
-query T
-SELECT rpad('xyxhi', 3)
-----
-xyx
-
-# test for rpad with largeutf8 and utf8View
-
-query T
-SELECT rpad(arrow_cast('hi', 'LargeUtf8'), 5, 'xy')
-----
-hixyx
-
-query T
-SELECT rpad(arrow_cast('hi', 'Utf8View'), 5, 'xy')
-----
-hixyx
-
-query T
-SELECT rpad(arrow_cast('hi', 'LargeUtf8'), 5, arrow_cast('xy', 'LargeUtf8'))
-----
-hixyx
-
-query T
-SELECT rpad(arrow_cast('hi', 'Utf8View'), 5, arrow_cast('xy', 'Utf8View'))
-----
-hixyx
-
-query T
-SELECT rpad(arrow_cast(NULL, 'Utf8View'), 5, 'xy')
-----
-NULL
-
-query I
-SELECT strpos('abc', 'c')
-----
-3
-
-query I
-SELECT strpos('josé', 'é')
-----
-4
-
-query I
-SELECT strpos('joséésoj', 'so')
-----
-6
-
-query I
-SELECT strpos('joséésoj', 'abc')
-----
-0
-
-query I
-SELECT strpos(NULL, 'abc')
-----
-NULL
-
-query I
-SELECT strpos('joséésoj', NULL)
-----
-NULL
-
 query T
 SELECT substr('alphabet', -3)
 ----
@@ -473,6 +169,11 @@ SELECT substr('alphabet', 30)
 (empty)
 
 query T
+SELECT substr('alphabet', CAST(NULL AS int))
+----
+NULL
+
+query T
 SELECT substr('alphabet', 3, 2)
 ----
 ph
@@ -482,132 +183,21 @@ SELECT substr('alphabet', 3, 20)
 ----
 phabet
 
-# test range ouside of string length
-query TTTTTTTTTTTT
-SELECT
-    substr('hi🌏', 1, 3),
-    substr('hi🌏', 1, 4),
-    substr('hi🌏', 1, 100),
-    substr('hi🌏', 0, 1),
-    substr('hi🌏', 0, 2),
-    substr('hi🌏', 0, 4),
-    substr('hi🌏', 0, 5),
-    substr('hi🌏', -10, 100),
-    substr('hi🌏', -10, 12),
-    substr('hi🌏', -10, 5),
-    substr('hi🌏', 10, 0),
-    substr('hi🌏', 10, 10);
+query T
+SELECT substr('alphabet', CAST(NULL AS int), 20)
 ----
-hi🌏 hi🌏 hi🌏 (empty) h hi🌏 hi🌏 hi🌏 h (empty) (empty) (empty)
-
-query TTTTTTTTTTTT
-SELECT
-    substr('', 1, 3),
-    substr('', 1, 4),
-    substr('', 1, 100),
-    substr('', 0, 1),
-    substr('', 0, 2),
-    substr('', 0, 4),
-    substr('', 0, 5),
-    substr('', -10, 100),
-    substr('', -10, 12),
-    substr('', -10, 5),
-    substr('', 10, 0),
-    substr('', 10, 10);
-----
-(empty) (empty) (empty) (empty) (empty) (empty) (empty) (empty) (empty) (empty) (empty) (empty)
-
-# Nulls
-query TTTTTTTTTT
-SELECT 
-  substr('alphabet', NULL),
-  substr(NULL, 1),
-  substr(NULL, NULL),
-  substr('alphabet', CAST(NULL AS int), -20),
-  substr('alphabet', 3, CAST(NULL AS int)),
-  substr(NULL, 3, -4),
-  substr(NULL, NULL, 4),
-  substr(NULL, 1, NULL),
-  substr('', NULL, NULL),
-  substr(NULL, NULL, NULL);
-----
-NULL NULL NULL NULL NULL NULL NULL NULL NULL NULL
+NULL
 
 query T
-SELECT substr('Hello🌏世界', 5)
+SELECT substr('alphabet', 3, CAST(NULL AS int))
 ----
-o🌏世界
+NULL
 
-query T
-SELECT substr('Hello🌏世界', 5, 3)
-----
-o🌏世
-
-statement ok
-create table test_substr (
-    c1 VARCHAR
-) as values ('foo'), ('hello🌏世界'), ('💩'), ('ThisIsAVeryLongASCIIString'), (''), (NULL);
-
-statement ok
-create table test_substr_stringview as
-select c1 as c1, arrow_cast(c1, 'Utf8View') as c1_view from test_substr;
-
-# `substr()` on `StringViewArray`'s implementation operates directly on view's
-# logical pointers, so check it's consistent with `StringArray`
-query BBBBBBBBBBBBBB
-select 
-    substr(c1, 1) = substr(c1_view, 1),
-    substr(c1, 3) = substr(c1_view, 3),
-    substr(c1, 100) = substr(c1_view, 100),
-    substr(c1, -1) = substr(c1_view, -1),
-    substr(c1, 0, 0) = substr(c1_view, 0, 0),
-    substr(c1, -1, 2) = substr(c1_view, -1, 2),
-    substr(c1, -2, 10) = substr(c1_view, -2, 10),
-    substr(c1, -100, 200) = substr(c1_view, -100, 200),
-    substr(c1, -10, 10) = substr(c1_view, -10, 10),
-    substr(c1, -100, 10) = substr(c1_view, -100, 10),
-    substr(c1, 1, 100) = substr(c1_view, 1, 100),
-    substr(c1, 5, 3) = substr(c1_view, 5, 3),
-    substr(c1, 100, 200) = substr(c1_view, 100, 200),
-    substr(c1, 8, 0) = substr(c1_view, 8, 0)
-from test_substr_stringview;
-----
-true true true true true true true true true true true true true true
-true true true true true true true true true true true true true true
-true true true true true true true true true true true true true true
-true true true true true true true true true true true true true true
-true true true true true true true true true true true true true true
-NULL NULL NULL NULL NULL NULL NULL NULL NULL NULL NULL NULL NULL NULL
-
-# Check for non-ASCII strings
-query TT
-select substr(c1_view, 1), substr(c1_view, 5,3) from test_substr_stringview;
-----
-foo (empty)
-hello🌏世界 o🌏世
-💩 (empty)
-ThisIsAVeryLongASCIIString IsA
-(empty) (empty)
-NULL NULL
-
-statement ok
-drop table test_substr;
-
-statement ok
-drop table test_substr_stringview;
-
-
-statement error The SUBSTR function can only accept strings, but got Int64.
+statement error The first argument of the substr function can only be a string, but got Int64
 SELECT substr(1, 3)
 
-statement error The SUBSTR function can only accept strings, but got Int64.
+statement error The first argument of the substr function can only be a string, but got Int64
 SELECT substr(1, 3, 4)
-
-statement error Execution error: negative substring length not allowed
-select substr(arrow_cast('foo', 'Utf8View'), 1, -1);
-
-statement error Execution error: negative substring length not allowed
-select substr('', 1, -1);
 
 query T
 SELECT translate('12345', '143', 'ax')
@@ -902,45 +492,6 @@ SELECT md5(arrow_cast('foo', 'Dictionary(Int32, Utf8)'))
 ----
 acbd18db4cc2f85cedef654fccc4a4d8
 
-query T
-SELECT regexp_replace('foobar', 'bar', 'xx', 'gi')
-----
-fooxx
-
-query T
-SELECT regexp_replace(arrow_cast('foobar', 'Dictionary(Int32, Utf8)'), 'bar', 'xx', 'gi')
-----
-fooxx
-
-query T
-SELECT repeat('foo', 3)
-----
-foofoofoo
-
-query T
-SELECT repeat(arrow_cast('foo', 'Dictionary(Int32, Utf8)'), 3)
-----
-foofoofoo
-
-query T
-SELECT replace('foobar', 'bar', 'hello')
-----
-foohello
-
-query T
-SELECT replace(arrow_cast('foobar', 'Dictionary(Int32, Utf8)'), 'bar', 'hello')
-----
-foohello
-
-query T
-SELECT replace(arrow_cast('foobar', 'Utf8View'), arrow_cast('bar', 'Utf8View'), arrow_cast('hello', 'Utf8View'))
-----
-foohello
-
-query T
-SELECT replace(arrow_cast('foobar', 'LargeUtf8'), arrow_cast('bar', 'LargeUtf8'), arrow_cast('hello', 'LargeUtf8'))
-----
-foohello
 
 query T
 SELECT rtrim(' foo  ')
@@ -951,68 +502,6 @@ query T
 SELECT rtrim(arrow_cast(' foo  ', 'Dictionary(Int32, Utf8)'))
 ----
  foo
-
-query T
-SELECT split_part('foo_bar', '_', 2)
-----
-bar
-
-query T
-SELECT split_part(arrow_cast('foo_bar', 'Dictionary(Int32, Utf8)'), '_', 2)
-----
-bar
-
-# test largeutf8, utf8view for split_part
-query T
-SELECT split_part(arrow_cast('large_apple_large_orange_large_banana', 'LargeUtf8'), '_', 3)
-----
-large
-
-query T
-SELECT split_part(arrow_cast('view_apple_view_orange_view_banana', 'Utf8View'), '_', 3);
-----
-view
-
-query T
-SELECT split_part('test_large_split_large_case', arrow_cast('_large', 'LargeUtf8'), 2)
-----
-_split
-
-query T
-SELECT split_part(arrow_cast('huge_large_apple_large_orange_large_banana', 'LargeUtf8'), arrow_cast('_', 'Utf8View'), 2)
-----
-large
-
-query T
-SELECT split_part(arrow_cast('view_apple_view_large_banana', 'Utf8View'), arrow_cast('_large', 'LargeUtf8'), 2)
-----
-_banana
-
-query T
-SELECT split_part(NULL, '_', 2)
-----
-NULL
-
-
-query B
-SELECT starts_with('foobar', 'foo')
-----
-true
-
-query B
-SELECT starts_with('foobar', 'bar')
-----
-false
-
-query B
-SELECT ends_with('foobar', 'bar')
-----
-true
-
-query B
-SELECT ends_with('foobar', 'foo')
-----
-false
 
 query T
 SELECT trim('  foo  ')
@@ -1063,6 +552,16 @@ query I
 SELECT strpos(arrow_cast('helloworld', 'Dictionary(Int32, Utf8)'), 'world')
 ----
 6
+
+query I
+SELECT strpos('helloworld', NULL)
+----
+NULL
+
+query I
+SELECT strpos(arrow_cast('helloworld', 'Dictionary(Int32, Utf8)'), NULL)
+----
+NULL
 
 statement ok
 CREATE TABLE products (
@@ -1170,279 +669,6 @@ NULL
 Thomxas
 NULL
 
-query I
-SELECT levenshtein('kitten', 'sitting')
-----
-3
-
-query I
-SELECT levenshtein('kitten', NULL)
-----
-NULL
-
-query I
-SELECT levenshtein(NULL, 'sitting')
-----
-NULL
-
-query I
-SELECT levenshtein(NULL, NULL)
-----
-NULL
-
-# Test substring_index using '.' as delimiter
-# This query is compatible with MySQL(8.0.19 or later), convenient for comparing results
-query TIT
-SELECT str, n, substring_index(str, '.', n) AS c FROM
-  (VALUES
-    ROW('arrow.apache.org'),
-    ROW('.'),
-    ROW('...'),
-    ROW(NULL)
-  ) AS strings(str),
-  (VALUES
-    ROW(1),
-    ROW(2),
-    ROW(3),
-    ROW(100),
-    ROW(-1),
-    ROW(-2),
-    ROW(-3),
-    ROW(-100)
-  ) AS occurrences(n)
-ORDER BY str DESC, n;
-----
-NULL -100 NULL
-NULL -3 NULL
-NULL -2 NULL
-NULL -1 NULL
-NULL 1 NULL
-NULL 2 NULL
-NULL 3 NULL
-NULL 100 NULL
-arrow.apache.org -100 arrow.apache.org
-arrow.apache.org -3 arrow.apache.org
-arrow.apache.org -2 apache.org
-arrow.apache.org -1 org
-arrow.apache.org 1 arrow
-arrow.apache.org 2 arrow.apache
-arrow.apache.org 3 arrow.apache.org
-arrow.apache.org 100 arrow.apache.org
-... -100 ...
-... -3 ..
-... -2 .
-... -1 (empty)
-... 1 (empty)
-... 2 .
-... 3 ..
-... 100 ...
-. -100 .
-. -3 .
-. -2 .
-. -1 (empty)
-. 1 (empty)
-. 2 .
-. 3 .
-. 100 .
-
-query I
-SELECT levenshtein(NULL, NULL)
-----
-NULL
-
-# Test substring_index using '.' as delimiter with utf8view
-query TIT
-SELECT str, n, substring_index(arrow_cast(str, 'Utf8View'), '.', n) AS c FROM
-  (VALUES
-    ROW('arrow.apache.org'),
-    ROW('.'),
-    ROW('...'),
-    ROW(NULL)
-  ) AS strings(str),
-  (VALUES
-    ROW(1),
-    ROW(2),
-    ROW(3),
-    ROW(100),
-    ROW(-1),
-    ROW(-2),
-    ROW(-3),
-    ROW(-100)
-  ) AS occurrences(n)
-ORDER BY str DESC, n;
-----
-NULL -100 NULL
-NULL -3 NULL
-NULL -2 NULL
-NULL -1 NULL
-NULL 1 NULL
-NULL 2 NULL
-NULL 3 NULL
-NULL 100 NULL
-arrow.apache.org -100 arrow.apache.org
-arrow.apache.org -3 arrow.apache.org
-arrow.apache.org -2 apache.org
-arrow.apache.org -1 org
-arrow.apache.org 1 arrow
-arrow.apache.org 2 arrow.apache
-arrow.apache.org 3 arrow.apache.org
-arrow.apache.org 100 arrow.apache.org
-... -100 ...
-... -3 ..
-... -2 .
-... -1 (empty)
-... 1 (empty)
-... 2 .
-... 3 ..
-... 100 ...
-. -100 .
-. -3 .
-. -2 .
-. -1 (empty)
-. 1 (empty)
-. 2 .
-. 3 .
-. 100 .
-
-# Test substring_index using 'ac' as delimiter
-query TIT
-SELECT str, n, substring_index(str, 'ac', n) AS c FROM
-  (VALUES
-    -- input string does not contain the delimiter
-    ROW('arrow'),
-    -- input string contains the delimiter
-    ROW('arrow.apache.org')
-  ) AS strings(str),
-  (VALUES
-    ROW(1),
-    ROW(2),
-    ROW(-1),
-    ROW(-2)
-  ) AS occurrences(n)
-ORDER BY str DESC, n;
-----
-arrow.apache.org -2 arrow.apache.org
-arrow.apache.org -1 he.org
-arrow.apache.org 1 arrow.ap
-arrow.apache.org 2 arrow.apache.org
-arrow -2 arrow
-arrow -1 arrow
-arrow 1 arrow
-arrow 2 arrow
-
-# Test substring_index with NULL values
-query TTTT
-SELECT
-  substring_index(NULL, '.', 1),
-  substring_index('arrow.apache.org', NULL, 1),
-  substring_index('arrow.apache.org', '.', NULL),
-  substring_index(NULL, NULL, NULL)
-----
-NULL NULL NULL NULL
-
-# Test substring_index with empty strings
-query TT
-SELECT
-  -- input string is empty
-  substring_index('', '.', 1),
-  -- delimiter is empty
-  substring_index('arrow.apache.org', '', 1)
-----
-(empty) (empty)
-
-# Test substring_index with 0 occurrence
-query T
-SELECT substring_index('arrow.apache.org', 'ac', 0)
-----
-(empty)
-
-# Test substring_index with large occurrences
-query TT
-SELECT
-  -- i64::MIN
-  substring_index('arrow.apache.org', '.', -9223372036854775808) as c1,
-  -- i64::MAX
-  substring_index('arrow.apache.org', '.', 9223372036854775807) as c2;
-----
-arrow.apache.org arrow.apache.org
-
-# Test substring_index issue https://github.com/apache/datafusion/issues/9472
-query TTT
-SELECT
-  url,
-  substring_index(url, '.', 1) AS subdomain,
-  substring_index(url, '.', -1) AS tld
-FROM
-  (VALUES ROW('docs.apache.com'),
-          ROW('community.influxdata.com'),
-          ROW('arrow.apache.org')
-  ) data(url)
-----
-docs.apache.com docs com
-community.influxdata.com community com
-arrow.apache.org arrow org
-
-# find_in_set tests
-query I
-SELECT find_in_set('b', 'a,b,c,d')
-----
-2
-
-
-query I
-SELECT find_in_set('a', 'a,b,c,d,a')
-----
-1
-
-query I
-SELECT find_in_set('', 'a,b,c,d,a')
-----
-0
-
-query I
-SELECT find_in_set('a', '')
-----
-0
-
-
-query I
-SELECT find_in_set('', '')
-----
-1
-
-query I
-SELECT find_in_set(NULL, 'a,b,c,d')
-----
-NULL
-
-query I
-SELECT find_in_set('a', NULL)
-----
-NULL
-
-
-query I
-SELECT find_in_set(NULL, NULL)
-----
-NULL
-
-# find_in_set tests with utf8view
-query I
-SELECT find_in_set(arrow_cast('b', 'Utf8View'), 'a,b,c,d')
-----
-2
-
-
-query I
-SELECT find_in_set('a', arrow_cast('a,b,c,d,a', 'Utf8View'))
-----
-1
-
-query I
-SELECT find_in_set(arrow_cast('', 'Utf8View'), arrow_cast('a,b,c,d,a', 'Utf8View'))
-----
-0
-
 # Verify that multiple calls to volatile functions like `random()` are not combined / optimized away
 query B
 SELECT r FROM (SELECT r1 == r2 r, r1, r2 FROM (SELECT random()+1 r1, random()+1 r2) WHERE r1 > 0 AND r2 > 0)
@@ -1509,3 +735,421 @@ query B
 select contains('', '');
 ----
 true
+
+
+## Demonstrate how to test for trailing whitespace
+
+# Note no trailing whitespace
+query T
+select substr('Andrew Lamb', 1, 7)
+----
+Andrew
+
+# Note two spaces between `Andrew` and `|`
+query TT
+select substr('Andrew Lamb', 1, 7), '|'
+----
+Andrew  |
+
+# Note only one space between `Andrew` and `|`
+query TT
+select substr('Andrew Lamb', 1, 6), '|'
+----
+Andrew |
+
+
+# test for greatest
+statement ok
+CREATE TABLE t1 (a int, b int, c int) as VALUES
+(4, NULL, NULL),
+(1, 2, 3),
+(3, 1, 2),
+(1, NULL, -1),
+(NULL, NULL, NULL),
+(3, 0, -1);
+
+query I
+SELECT greatest(a, b, c) FROM t1
+----
+4
+3
+3
+1
+NULL
+3
+
+statement ok
+drop table t1
+
+query I
+SELECT greatest(1)
+----
+1
+
+query I
+SELECT greatest(1, 2)
+----
+2
+
+query I
+SELECT greatest(3, 1)
+----
+3
+
+query ?
+SELECT greatest(NULL)
+----
+NULL
+
+query I
+SELECT greatest(1, NULL, -1)
+----
+1
+
+query I
+SELECT greatest((3), (0), (-1));
+----
+3
+
+query ?
+SELECT greatest([4, 3], [4, 2], [4, 4]);
+----
+[4, 4]
+
+query ?
+SELECT greatest([2, 3], [1, 4], [5, 0]);
+----
+[5, 0]
+
+query I
+SELECT greatest(1::int, 2::text)
+----
+2
+
+query R
+SELECT greatest(-1, 1, 2.3, 123456789, 3 + 5, -(-4))
+----
+123456789
+
+query R
+SELECT greatest(-1.123, 1.21313, 2.3, 123456789.321, 3 + 5.3213, -(-4.3213), abs(-9))
+----
+123456789.321
+
+query R
+SELECT greatest(-1, 1, 2.3, 123456789, 3 + 5, -(-4), abs(-9.0))
+----
+123456789
+
+
+query error greatest does not support zero arguments
+SELECT greatest()
+
+query I
+SELECT greatest(4, 5, 7, 1, 2)
+----
+7
+
+query I
+SELECT greatest(4, NULL, 7, 1, 2)
+----
+7
+
+query I
+SELECT greatest(NULL, NULL, 7, NULL, 2)
+----
+7
+
+query I
+SELECT greatest(NULL, NULL, NULL, NULL, 2)
+----
+2
+
+query I
+SELECT greatest(2, NULL, NULL, NULL, NULL)
+----
+2
+
+query ?
+SELECT greatest(NULL, NULL, NULL)
+----
+NULL
+
+query I
+SELECT greatest(2, '4')
+----
+4
+
+query T
+SELECT greatest('foo', 'bar', 'foobar')
+----
+foobar
+
+query R
+SELECT greatest(1, 1.2)
+----
+1.2
+
+statement ok
+CREATE TABLE foo (a int)
+
+statement ok
+INSERT INTO foo (a) VALUES (1)
+
+# Test homogenous functions that can't be constant folded.
+query I
+SELECT greatest(NULL, a, 5, NULL) FROM foo
+----
+5
+
+query I
+SELECT greatest(NULL, NULL, NULL, a, -1) FROM foo
+----
+1
+
+statement ok
+drop table foo
+
+query R
+select greatest(arrow_cast('NAN','Float64'), arrow_cast('NAN','Float64'))
+----
+NaN
+
+query R
+select greatest(arrow_cast('NAN','Float64'), arrow_cast('NAN','Float32'))
+----
+NaN
+
+query R
+select greatest(arrow_cast('NAN','Float64'), '+Inf'::Double)
+----
+NaN
+
+query R
+select greatest(arrow_cast('NAN','Float64'), NULL)
+----
+NaN
+
+query R
+select greatest(NULL, '+Inf'::Double)
+----
+Infinity
+
+query R
+select greatest(NULL, '-Inf'::Double)
+----
+-Infinity
+
+statement ok
+CREATE TABLE t1 (a double, b double, c double) as VALUES
+(1, arrow_cast('NAN', 'Float64'), '+Inf'::Double),
+(NULL, arrow_cast('NAN','Float64'), '+Inf'::Double),
+(1, '+Inf'::Double, NULL);
+
+query R
+SELECT greatest(a, b, c) FROM t1
+----
+NaN
+NaN
+Infinity
+
+statement ok
+drop table t1
+
+# test for least
+statement ok
+CREATE TABLE t1 (a int, b int, c int) as VALUES
+(4, NULL, NULL),
+(1, 2, 3),
+(3, 1, 2),
+(1, NULL, -1),
+(NULL, NULL, NULL),
+(3, 0, -1);
+
+query I
+SELECT least(a, b, c) FROM t1
+----
+4
+1
+1
+-1
+NULL
+-1
+
+statement ok
+drop table t1
+
+query I
+SELECT least(1)
+----
+1
+
+query I
+SELECT least(1, 2)
+----
+1
+
+query I
+SELECT least(3, 1)
+----
+1
+
+query ?
+SELECT least(NULL)
+----
+NULL
+
+query I
+SELECT least(1, NULL, -1)
+----
+-1
+
+query I
+SELECT least((3), (0), (-1));
+----
+-1
+
+query ?
+SELECT least([4, 3], [4, 2], [4, 4]);
+----
+[4, 2]
+
+query ?
+SELECT least([2, 3], [1, 4], [5, 0]);
+----
+[1, 4]
+
+query I
+SELECT least(1::int, 2::text)
+----
+1
+
+query R
+SELECT least(-1, 1, 2.3, 123456789, 3 + 5, -(-4))
+----
+-1
+
+query R
+SELECT least(-1.123, 1.21313, 2.3, 123456789.321, 3 + 5.3213, -(-4.3213), abs(-9))
+----
+-1.123
+
+query R
+SELECT least(-1, 1, 2.3, 123456789, 3 + 5, -(-4), abs(-9.0))
+----
+-1
+
+
+query error least does not support zero arguments
+SELECT least()
+
+query I
+SELECT least(4, 5, 7, 1, 2)
+----
+1
+
+query I
+SELECT least(4, NULL, 7, 1, 2)
+----
+1
+
+query I
+SELECT least(NULL, NULL, 7, NULL, 2)
+----
+2
+
+query I
+SELECT least(NULL, NULL, NULL, NULL, 2)
+----
+2
+
+query I
+SELECT least(2, NULL, NULL, NULL, NULL)
+----
+2
+
+query ?
+SELECT least(NULL, NULL, NULL)
+----
+NULL
+
+query I
+SELECT least(2, '4')
+----
+2
+
+query T
+SELECT least('foo', 'bar', 'foobar')
+----
+bar
+
+query R
+SELECT least(1, 1.2)
+----
+1
+
+statement ok
+CREATE TABLE foo (a int)
+
+statement ok
+INSERT INTO foo (a) VALUES (1)
+
+# Test homogenous functions that can't be constant folded.
+query I
+SELECT least(NULL, a, 5, NULL) FROM foo
+----
+1
+
+query I
+SELECT least(NULL, NULL, NULL, a, -1) FROM foo
+----
+-1
+
+statement ok
+drop table foo
+
+query R
+select least(arrow_cast('NAN','Float64'), arrow_cast('NAN','Float64'))
+----
+NaN
+
+query R
+select least(arrow_cast('NAN','Float64'), arrow_cast('NAN','Float32'))
+----
+NaN
+
+query R
+select least(arrow_cast('NAN','Float64'), '+Inf'::Double)
+----
+Infinity
+
+query R
+select least(arrow_cast('NAN','Float64'), NULL)
+----
+NaN
+
+query R
+select least(NULL, '+Inf'::Double)
+----
+Infinity
+
+query R
+select least(NULL, '-Inf'::Double)
+----
+-Infinity
+
+statement ok
+CREATE TABLE t1 (a double, b double, c double) as VALUES
+(1, arrow_cast('NAN', 'Float64'), '+Inf'::Double),
+(NULL, arrow_cast('NAN','Float64'), '+Inf'::Double),
+(1, '+Inf'::Double, NULL);
+
+query R
+SELECT least(a, b, c) FROM t1
+----
+1
+Infinity
+1
+
+statement ok
+drop table t1

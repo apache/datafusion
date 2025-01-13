@@ -26,9 +26,7 @@ pub mod binary_map {
 }
 pub mod equivalence;
 pub mod expressions;
-pub mod functions;
 pub mod intervals;
-pub mod math_expressions;
 mod partitioning;
 mod physical_expr;
 pub mod planner;
@@ -47,7 +45,9 @@ pub mod execution_props {
 
 pub use aggregate::groups_accumulator::{GroupsAccumulatorAdapter, NullState};
 pub use analysis::{analyze, AnalysisContext, ExprBoundaries};
-pub use equivalence::{calculate_union, ConstExpr, EquivalenceProperties};
+pub use equivalence::{
+    calculate_union, AcrossPartitions, ConstExpr, EquivalenceProperties,
+};
 pub use partitioning::{Distribution, Partitioning};
 pub use physical_expr::{
     physical_exprs_bag_equal, physical_exprs_contains, physical_exprs_equal,
@@ -56,8 +56,7 @@ pub use physical_expr::{
 
 pub use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 pub use datafusion_physical_expr_common::sort_expr::{
-    LexOrdering, LexOrderingRef, LexRequirement, LexRequirementRef, PhysicalSortExpr,
-    PhysicalSortRequirement,
+    LexOrdering, LexRequirement, PhysicalSortExpr, PhysicalSortRequirement,
 };
 
 pub use planner::{create_physical_expr, create_physical_exprs};

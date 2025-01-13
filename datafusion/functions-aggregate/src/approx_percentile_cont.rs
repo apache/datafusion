@@ -17,6 +17,7 @@
 
 use std::any::Any;
 use std::fmt::{Debug, Formatter};
+use std::mem::size_of_val;
 use std::sync::Arc;
 
 use arrow::array::{Array, RecordBatch};
@@ -38,12 +39,13 @@ use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::type_coercion::aggregates::{INTEGERS, NUMERICS};
 use datafusion_expr::utils::format_state_name;
 use datafusion_expr::{
-    Accumulator, AggregateUDFImpl, ColumnarValue, Expr, Signature, TypeSignature,
-    Volatility,
+    Accumulator, AggregateUDFImpl, ColumnarValue, Documentation, Expr, Signature,
+    TypeSignature, Volatility,
 };
 use datafusion_functions_aggregate_common::tdigest::{
     TDigest, TryIntoF64, DEFAULT_MAX_SIZE,
 };
+use datafusion_macros::user_doc;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 
 create_func!(ApproxPercentileCont, approx_percentile_cont_udaf);
@@ -62,6 +64,28 @@ pub fn approx_percentile_cont(
     approx_percentile_cont_udaf().call(args)
 }
 
+#[user_doc(
+    doc_section(label = "Approximate Functions"),
+    description = "Returns the approximate percentile of input values using the t-digest algorithm.",
+    syntax_example = "approx_percentile_cont(expression, percentile, centroids)",
+    sql_example = r#"```sql
+> SELECT approx_percentile_cont(column_name, 0.75, 100) FROM table_name;
++-------------------------------------------------+
+| approx_percentile_cont(column_name, 0.75, 100)  |
++-------------------------------------------------+
+| 65.0                                            |
++-------------------------------------------------+
+```"#,
+    standard_argument(name = "expression",),
+    argument(
+        name = "percentile",
+        description = "Percentile to compute. Must be a float value between 0 and 1 (inclusive)."
+    ),
+    argument(
+        name = "centroids",
+        description = "Number of centroids to use in the t-digest algorithm. _Default is 100_. A higher number results in more accurate approximation but requires more memory."
+    )
+)]
 pub struct ApproxPercentileCont {
     signature: Signature,
 }
@@ -207,7 +231,7 @@ impl AggregateUDFImpl for ApproxPercentileCont {
     }
 
     #[allow(rustdoc::private_intra_doc_links)]
-    /// See [`TDigest::to_scalar_state()`] for a description of the serialised
+    /// See [`TDigest::to_scalar_state()`] for a description of the serialized
     /// state.
     fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<Field>> {
         Ok(vec![
@@ -238,7 +262,7 @@ impl AggregateUDFImpl for ApproxPercentileCont {
             ),
             Field::new_list(
                 format_state_name(args.name, "centroids"),
-                Field::new("item", DataType::Float64, true),
+                Field::new_list_field(DataType::Float64, true),
                 false,
             ),
         ])
@@ -267,6 +291,10 @@ impl AggregateUDFImpl for ApproxPercentileCont {
             );
         }
         Ok(arg_types[0].clone())
+    }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        self.doc()
     }
 }
 
@@ -455,10 +483,9 @@ impl Accumulator for ApproxPercentileAccumulator {
     }
 
     fn size(&self) -> usize {
-        std::mem::size_of_val(self) + self.digest.size()
-            - std::mem::size_of_val(&self.digest)
+        size_of_val(self) + self.digest.size() - size_of_val(&self.digest)
             + self.return_type.size()
-            - std::mem::size_of_val(&self.return_type)
+            - size_of_val(&self.return_type)
     }
 }
 

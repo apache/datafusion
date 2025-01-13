@@ -24,7 +24,7 @@ use arrow::array::cast::AsArray;
 use arrow::array::{Array, ArrayBuilder, ArrayRef, GenericByteViewBuilder};
 use arrow::datatypes::{BinaryViewType, ByteViewType, DataType, StringViewType};
 use datafusion_common::hash_utils::create_hashes;
-use datafusion_common::utils::proxy::{RawTableAllocExt, VecAllocExt};
+use datafusion_common::utils::proxy::{HashTableAllocExt, VecAllocExt};
 use std::fmt::Debug;
 use std::sync::Arc;
 
@@ -88,8 +88,9 @@ impl ArrowBytesViewSet {
 /// values that can produce the set of keys on
 /// output as `GenericBinaryViewArray` without copies.
 ///
-/// Equivalent to `HashSet<String, V>` but with better performance for arrow
-/// data.
+/// Equivalent to `HashSet<String, V>` but with better performance if you need
+/// to emit the keys as an Arrow `StringViewArray` / `BinaryViewArray`. For other
+/// purposes it is the same as a `HashMap<String, V>`
 ///
 /// # Generic Arguments
 ///
@@ -113,7 +114,6 @@ impl ArrowBytesViewSet {
 /// This map is used by the special `COUNT DISTINCT` aggregate function to
 /// store the distinct values, and by the `GROUP BY` operator to store
 /// group values when they are a single string array.
-
 pub struct ArrowBytesViewMap<V>
 where
     V: Debug + PartialEq + Eq + Clone + Copy + Default,
@@ -121,7 +121,7 @@ where
     /// Should the output be StringView or BinaryView?
     output_type: OutputType,
     /// Underlying hash set for each distinct value
-    map: hashbrown::raw::RawTable<Entry<V>>,
+    map: hashbrown::hash_table::HashTable<Entry<V>>,
     /// Total size of the map in bytes
     map_size: usize,
 
@@ -147,7 +147,7 @@ where
     pub fn new(output_type: OutputType) -> Self {
         Self {
             output_type,
-            map: hashbrown::raw::RawTable::with_capacity(INITIAL_MAP_CAPACITY),
+            map: hashbrown::hash_table::HashTable::with_capacity(INITIAL_MAP_CAPACITY),
             map_size: 0,
             builder: GenericByteViewBuilder::new(),
             random_state: RandomState::new(),
@@ -243,7 +243,7 @@ where
         let batch_hashes = &mut self.hashes_buffer;
         batch_hashes.clear();
         batch_hashes.resize(values.len(), 0);
-        create_hashes(&[values.clone()], &self.random_state, batch_hashes)
+        create_hashes(&[Arc::clone(values)], &self.random_state, batch_hashes)
             // hash is supported for all types and create_hashes only
             // returns errors for unsupported types
             .unwrap();
@@ -273,7 +273,7 @@ where
             // get the value as bytes
             let value: &[u8] = value.as_ref();
 
-            let entry = self.map.get_mut(hash, |header| {
+            let entry = self.map.find_mut(hash, |header| {
                 let v = self.builder.get_value(header.view_idx);
 
                 if v.len() != value.len() {
@@ -392,7 +392,7 @@ where
 #[cfg(test)]
 mod tests {
     use arrow::array::{BinaryViewArray, GenericByteViewArray, StringViewArray};
-    use hashbrown::HashMap;
+    use datafusion_common::HashMap;
 
     use super::*;
 

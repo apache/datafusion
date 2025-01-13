@@ -17,9 +17,10 @@
 
 //! [`TreeNode`] for visiting and rewriting expression and plan trees
 
-use std::sync::Arc;
-
 use crate::Result;
+use std::collections::HashMap;
+use std::hash::Hash;
+use std::sync::Arc;
 
 /// These macros are used to determine continuation during transforming traversals.
 macro_rules! handle_transform_recursion {
@@ -123,6 +124,7 @@ pub trait TreeNode: Sized {
     /// TreeNodeVisitor::f_up(ChildNode2)
     /// TreeNodeVisitor::f_up(ParentNode)
     /// ```
+    #[cfg_attr(feature = "recursive_protection", recursive::recursive)]
     fn visit<'n, V: TreeNodeVisitor<'n, Node = Self>>(
         &'n self,
         visitor: &mut V,
@@ -172,6 +174,7 @@ pub trait TreeNode: Sized {
     /// TreeNodeRewriter::f_up(ChildNode2)
     /// TreeNodeRewriter::f_up(ParentNode)
     /// ```
+    #[cfg_attr(feature = "recursive_protection", recursive::recursive)]
     fn rewrite<R: TreeNodeRewriter<Node = Self>>(
         self,
         rewriter: &mut R,
@@ -194,6 +197,7 @@ pub trait TreeNode: Sized {
         &'n self,
         mut f: F,
     ) -> Result<TreeNodeRecursion> {
+        #[cfg_attr(feature = "recursive_protection", recursive::recursive)]
         fn apply_impl<'n, N: TreeNode, F: FnMut(&'n N) -> Result<TreeNodeRecursion>>(
             node: &'n N,
             f: &mut F,
@@ -228,6 +232,7 @@ pub trait TreeNode: Sized {
         self,
         mut f: F,
     ) -> Result<Transformed<Self>> {
+        #[cfg_attr(feature = "recursive_protection", recursive::recursive)]
         fn transform_down_impl<N: TreeNode, F: FnMut(N) -> Result<Transformed<N>>>(
             node: N,
             f: &mut F,
@@ -236,15 +241,6 @@ pub trait TreeNode: Sized {
         }
 
         transform_down_impl(self, &mut f)
-    }
-
-    /// Same as [`Self::transform_down`] but with a mutable closure.
-    #[deprecated(since = "38.0.0", note = "Use `transform_down` instead")]
-    fn transform_down_mut<F: FnMut(Self) -> Result<Transformed<Self>>>(
-        self,
-        f: &mut F,
-    ) -> Result<Transformed<Self>> {
-        self.transform_down(f)
     }
 
     /// Recursively rewrite the node using `f` in a bottom-up (post-order)
@@ -260,6 +256,7 @@ pub trait TreeNode: Sized {
         self,
         mut f: F,
     ) -> Result<Transformed<Self>> {
+        #[cfg_attr(feature = "recursive_protection", recursive::recursive)]
         fn transform_up_impl<N: TreeNode, F: FnMut(N) -> Result<Transformed<N>>>(
             node: N,
             f: &mut F,
@@ -269,15 +266,6 @@ pub trait TreeNode: Sized {
         }
 
         transform_up_impl(self, &mut f)
-    }
-
-    /// Same as [`Self::transform_up`] but with a mutable closure.
-    #[deprecated(since = "38.0.0", note = "Use `transform_up` instead")]
-    fn transform_up_mut<F: FnMut(Self) -> Result<Transformed<Self>>>(
-        self,
-        f: &mut F,
-    ) -> Result<Transformed<Self>> {
-        self.transform_up(f)
     }
 
     /// Transforms the node using `f_down` while traversing the tree top-down
@@ -383,6 +371,7 @@ pub trait TreeNode: Sized {
         mut f_down: FD,
         mut f_up: FU,
     ) -> Result<Transformed<Self>> {
+        #[cfg_attr(feature = "recursive_protection", recursive::recursive)]
         fn transform_down_up_impl<
             N: TreeNode,
             FD: FnMut(N) -> Result<Transformed<N>>,
@@ -681,7 +670,7 @@ impl<T> Transformed<T> {
         }
     }
 
-    /// Create a `Transformed` with `transformed and [`TreeNodeRecursion::Continue`].
+    /// Create a `Transformed` with `transformed` and [`TreeNodeRecursion::Continue`].
     pub fn new_transformed(data: T, transformed: bool) -> Self {
         Self::new(data, transformed, TreeNodeRecursion::Continue)
     }
@@ -780,6 +769,297 @@ impl<T> Transformed<T> {
     }
 }
 
+/// [`TreeNodeContainer`] contains elements that a function can be applied on or mapped.
+/// The elements of the container are siblings so the continuation rules are similar to
+/// [`TreeNodeRecursion::visit_sibling`] / [`Transformed::transform_sibling`].
+pub trait TreeNodeContainer<'a, T: 'a>: Sized {
+    /// Applies `f` to all elements of the container.
+    /// This method is usually called from [`TreeNode::apply_children`] implementations as
+    /// a node is actually a container of the node's children.
+    fn apply_elements<F: FnMut(&'a T) -> Result<TreeNodeRecursion>>(
+        &'a self,
+        f: F,
+    ) -> Result<TreeNodeRecursion>;
+
+    /// Maps all elements of the container with `f`.
+    /// This method is usually called from [`TreeNode::map_children`] implementations as
+    /// a node is actually a container of the node's children.
+    fn map_elements<F: FnMut(T) -> Result<Transformed<T>>>(
+        self,
+        f: F,
+    ) -> Result<Transformed<Self>>;
+}
+
+impl<'a, T: 'a, C: TreeNodeContainer<'a, T>> TreeNodeContainer<'a, T> for Box<C> {
+    fn apply_elements<F: FnMut(&'a T) -> Result<TreeNodeRecursion>>(
+        &'a self,
+        f: F,
+    ) -> Result<TreeNodeRecursion> {
+        self.as_ref().apply_elements(f)
+    }
+
+    fn map_elements<F: FnMut(T) -> Result<Transformed<T>>>(
+        self,
+        f: F,
+    ) -> Result<Transformed<Self>> {
+        (*self).map_elements(f)?.map_data(|c| Ok(Self::new(c)))
+    }
+}
+
+impl<'a, T: 'a, C: TreeNodeContainer<'a, T> + Clone> TreeNodeContainer<'a, T> for Arc<C> {
+    fn apply_elements<F: FnMut(&'a T) -> Result<TreeNodeRecursion>>(
+        &'a self,
+        f: F,
+    ) -> Result<TreeNodeRecursion> {
+        self.as_ref().apply_elements(f)
+    }
+
+    fn map_elements<F: FnMut(T) -> Result<Transformed<T>>>(
+        self,
+        f: F,
+    ) -> Result<Transformed<Self>> {
+        Arc::unwrap_or_clone(self)
+            .map_elements(f)?
+            .map_data(|c| Ok(Arc::new(c)))
+    }
+}
+
+impl<'a, T: 'a, C: TreeNodeContainer<'a, T>> TreeNodeContainer<'a, T> for Option<C> {
+    fn apply_elements<F: FnMut(&'a T) -> Result<TreeNodeRecursion>>(
+        &'a self,
+        f: F,
+    ) -> Result<TreeNodeRecursion> {
+        match self {
+            Some(t) => t.apply_elements(f),
+            None => Ok(TreeNodeRecursion::Continue),
+        }
+    }
+
+    fn map_elements<F: FnMut(T) -> Result<Transformed<T>>>(
+        self,
+        f: F,
+    ) -> Result<Transformed<Self>> {
+        self.map_or(Ok(Transformed::no(None)), |c| {
+            c.map_elements(f)?.map_data(|c| Ok(Some(c)))
+        })
+    }
+}
+
+impl<'a, T: 'a, C: TreeNodeContainer<'a, T>> TreeNodeContainer<'a, T> for Vec<C> {
+    fn apply_elements<F: FnMut(&'a T) -> Result<TreeNodeRecursion>>(
+        &'a self,
+        mut f: F,
+    ) -> Result<TreeNodeRecursion> {
+        let mut tnr = TreeNodeRecursion::Continue;
+        for c in self {
+            tnr = c.apply_elements(&mut f)?;
+            match tnr {
+                TreeNodeRecursion::Continue | TreeNodeRecursion::Jump => {}
+                TreeNodeRecursion::Stop => return Ok(TreeNodeRecursion::Stop),
+            }
+        }
+        Ok(tnr)
+    }
+
+    fn map_elements<F: FnMut(T) -> Result<Transformed<T>>>(
+        self,
+        mut f: F,
+    ) -> Result<Transformed<Self>> {
+        let mut tnr = TreeNodeRecursion::Continue;
+        let mut transformed = false;
+        self.into_iter()
+            .map(|c| match tnr {
+                TreeNodeRecursion::Continue | TreeNodeRecursion::Jump => {
+                    c.map_elements(&mut f).map(|result| {
+                        tnr = result.tnr;
+                        transformed |= result.transformed;
+                        result.data
+                    })
+                }
+                TreeNodeRecursion::Stop => Ok(c),
+            })
+            .collect::<Result<Vec<_>>>()
+            .map(|data| Transformed::new(data, transformed, tnr))
+    }
+}
+
+impl<'a, T: 'a, K: Eq + Hash, C: TreeNodeContainer<'a, T>> TreeNodeContainer<'a, T>
+    for HashMap<K, C>
+{
+    fn apply_elements<F: FnMut(&'a T) -> Result<TreeNodeRecursion>>(
+        &'a self,
+        mut f: F,
+    ) -> Result<TreeNodeRecursion> {
+        let mut tnr = TreeNodeRecursion::Continue;
+        for c in self.values() {
+            tnr = c.apply_elements(&mut f)?;
+            match tnr {
+                TreeNodeRecursion::Continue | TreeNodeRecursion::Jump => {}
+                TreeNodeRecursion::Stop => return Ok(TreeNodeRecursion::Stop),
+            }
+        }
+        Ok(tnr)
+    }
+
+    fn map_elements<F: FnMut(T) -> Result<Transformed<T>>>(
+        self,
+        mut f: F,
+    ) -> Result<Transformed<Self>> {
+        let mut tnr = TreeNodeRecursion::Continue;
+        let mut transformed = false;
+        self.into_iter()
+            .map(|(k, c)| match tnr {
+                TreeNodeRecursion::Continue | TreeNodeRecursion::Jump => {
+                    c.map_elements(&mut f).map(|result| {
+                        tnr = result.tnr;
+                        transformed |= result.transformed;
+                        (k, result.data)
+                    })
+                }
+                TreeNodeRecursion::Stop => Ok((k, c)),
+            })
+            .collect::<Result<HashMap<_, _>>>()
+            .map(|data| Transformed::new(data, transformed, tnr))
+    }
+}
+
+impl<'a, T: 'a, C0: TreeNodeContainer<'a, T>, C1: TreeNodeContainer<'a, T>>
+    TreeNodeContainer<'a, T> for (C0, C1)
+{
+    fn apply_elements<F: FnMut(&'a T) -> Result<TreeNodeRecursion>>(
+        &'a self,
+        mut f: F,
+    ) -> Result<TreeNodeRecursion> {
+        self.0
+            .apply_elements(&mut f)?
+            .visit_sibling(|| self.1.apply_elements(&mut f))
+    }
+
+    fn map_elements<F: FnMut(T) -> Result<Transformed<T>>>(
+        self,
+        mut f: F,
+    ) -> Result<Transformed<Self>> {
+        self.0
+            .map_elements(&mut f)?
+            .map_data(|new_c0| Ok((new_c0, self.1)))?
+            .transform_sibling(|(new_c0, c1)| {
+                c1.map_elements(&mut f)?
+                    .map_data(|new_c1| Ok((new_c0, new_c1)))
+            })
+    }
+}
+
+impl<
+        'a,
+        T: 'a,
+        C0: TreeNodeContainer<'a, T>,
+        C1: TreeNodeContainer<'a, T>,
+        C2: TreeNodeContainer<'a, T>,
+    > TreeNodeContainer<'a, T> for (C0, C1, C2)
+{
+    fn apply_elements<F: FnMut(&'a T) -> Result<TreeNodeRecursion>>(
+        &'a self,
+        mut f: F,
+    ) -> Result<TreeNodeRecursion> {
+        self.0
+            .apply_elements(&mut f)?
+            .visit_sibling(|| self.1.apply_elements(&mut f))?
+            .visit_sibling(|| self.2.apply_elements(&mut f))
+    }
+
+    fn map_elements<F: FnMut(T) -> Result<Transformed<T>>>(
+        self,
+        mut f: F,
+    ) -> Result<Transformed<Self>> {
+        self.0
+            .map_elements(&mut f)?
+            .map_data(|new_c0| Ok((new_c0, self.1, self.2)))?
+            .transform_sibling(|(new_c0, c1, c2)| {
+                c1.map_elements(&mut f)?
+                    .map_data(|new_c1| Ok((new_c0, new_c1, c2)))
+            })?
+            .transform_sibling(|(new_c0, new_c1, c2)| {
+                c2.map_elements(&mut f)?
+                    .map_data(|new_c2| Ok((new_c0, new_c1, new_c2)))
+            })
+    }
+}
+
+/// [`TreeNodeRefContainer`] contains references to elements that a function can be
+/// applied on. The elements of the container are siblings so the continuation rules are
+/// similar to [`TreeNodeRecursion::visit_sibling`].
+///
+/// This container is similar to [`TreeNodeContainer`], but the lifetime of the reference
+/// elements (`T`) are not derived from the container's lifetime.
+/// A typical usage of this container is in `Expr::apply_children` when we need to
+/// construct a temporary container to be able to call `apply_ref_elements` on a
+/// collection of tree node references. But in that case the container's temporary
+/// lifetime is different to the lifetime of tree nodes that we put into it.
+/// Please find an example use case in `Expr::apply_children` with the `Expr::Case` case.
+///
+/// Most of the cases we don't need to create a temporary container with
+/// `TreeNodeRefContainer`, but we can just call `TreeNodeContainer::apply_elements`.
+/// Please find an example use case in `Expr::apply_children` with the `Expr::GroupingSet`
+/// case.
+pub trait TreeNodeRefContainer<'a, T: 'a>: Sized {
+    /// Applies `f` to all elements of the container.
+    /// This method is usually called from [`TreeNode::apply_children`] implementations as
+    /// a node is actually a container of the node's children.
+    fn apply_ref_elements<F: FnMut(&'a T) -> Result<TreeNodeRecursion>>(
+        &self,
+        f: F,
+    ) -> Result<TreeNodeRecursion>;
+}
+
+impl<'a, T: 'a, C: TreeNodeContainer<'a, T>> TreeNodeRefContainer<'a, T> for Vec<&'a C> {
+    fn apply_ref_elements<F: FnMut(&'a T) -> Result<TreeNodeRecursion>>(
+        &self,
+        mut f: F,
+    ) -> Result<TreeNodeRecursion> {
+        let mut tnr = TreeNodeRecursion::Continue;
+        for c in self {
+            tnr = c.apply_elements(&mut f)?;
+            match tnr {
+                TreeNodeRecursion::Continue | TreeNodeRecursion::Jump => {}
+                TreeNodeRecursion::Stop => return Ok(TreeNodeRecursion::Stop),
+            }
+        }
+        Ok(tnr)
+    }
+}
+
+impl<'a, T: 'a, C0: TreeNodeContainer<'a, T>, C1: TreeNodeContainer<'a, T>>
+    TreeNodeRefContainer<'a, T> for (&'a C0, &'a C1)
+{
+    fn apply_ref_elements<F: FnMut(&'a T) -> Result<TreeNodeRecursion>>(
+        &self,
+        mut f: F,
+    ) -> Result<TreeNodeRecursion> {
+        self.0
+            .apply_elements(&mut f)?
+            .visit_sibling(|| self.1.apply_elements(&mut f))
+    }
+}
+
+impl<
+        'a,
+        T: 'a,
+        C0: TreeNodeContainer<'a, T>,
+        C1: TreeNodeContainer<'a, T>,
+        C2: TreeNodeContainer<'a, T>,
+    > TreeNodeRefContainer<'a, T> for (&'a C0, &'a C1, &'a C2)
+{
+    fn apply_ref_elements<F: FnMut(&'a T) -> Result<TreeNodeRecursion>>(
+        &self,
+        mut f: F,
+    ) -> Result<TreeNodeRecursion> {
+        self.0
+            .apply_elements(&mut f)?
+            .visit_sibling(|| self.1.apply_elements(&mut f))?
+            .visit_sibling(|| self.2.apply_elements(&mut f))
+    }
+}
+
 /// Transformation helper to process a sequence of iterable tree nodes that are siblings.
 pub trait TreeNodeIterator: Iterator {
     /// Apples `f` to each item in this iterator
@@ -852,50 +1132,6 @@ impl<I: Iterator> TreeNodeIterator for I {
         .collect::<Result<Vec<_>>>()
         .map(|data| Transformed::new(data, transformed, tnr))
     }
-}
-
-/// Transformation helper to process a heterogeneous sequence of tree node containing
-/// expressions.
-///
-/// This macro is very similar to [TreeNodeIterator::map_until_stop_and_collect] to
-/// process nodes that are siblings, but it accepts an initial transformation (`F0`) and
-/// a sequence of pairs. Each pair is made of an expression (`EXPR`) and its
-/// transformation (`F`).
-///
-/// The macro builds up a tuple that contains `Transformed.data` result of `F0` as the
-/// first element and further elements from the sequence of pairs. An element from a pair
-/// is either the value of `EXPR` or the `Transformed.data` result of `F`, depending on
-/// the `Transformed.tnr` result of previous `F`s (`F0` initially).
-///
-/// # Returns
-/// Error if any of the transformations returns an error
-///
-/// Ok(Transformed<(data0, ..., dataN)>) such that:
-/// 1. `transformed` is true if any of the transformations had transformed true
-/// 2. `(data0, ..., dataN)`, where `data0` is the `Transformed.data` from `F0` and
-///     `data1` ... `dataN` are from either `EXPR` or the `Transformed.data` of `F`
-/// 3. `tnr` from `F0` or the last invocation of `F`
-#[macro_export]
-macro_rules! map_until_stop_and_collect {
-    ($F0:expr, $($EXPR:expr, $F:expr),*) => {{
-        $F0.and_then(|Transformed { data: data0, mut transformed, mut tnr }| {
-            let all_datas = (
-                data0,
-                $(
-                    if tnr == TreeNodeRecursion::Continue || tnr == TreeNodeRecursion::Jump {
-                        $F.map(|result| {
-                            tnr = result.tnr;
-                            transformed |= result.transformed;
-                            result.data
-                        })?
-                    } else {
-                        $EXPR
-                    },
-                )*
-            );
-            Ok(Transformed::new(all_datas, transformed, tnr))
-        })
-    }}
 }
 
 /// Transformation helper to access [`Transformed`] fields in a [`Result`] easily.
@@ -1027,25 +1263,36 @@ impl<T: ConcreteTreeNode> TreeNode for T {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use std::collections::HashMap;
     use std::fmt::Display;
 
     use crate::tree_node::{
-        Transformed, TreeNode, TreeNodeIterator, TreeNodeRecursion, TreeNodeRewriter,
+        Transformed, TreeNode, TreeNodeContainer, TreeNodeRecursion, TreeNodeRewriter,
         TreeNodeVisitor,
     };
     use crate::Result;
 
-    #[derive(Debug, Eq, Hash, PartialEq)]
-    struct TestTreeNode<T> {
-        children: Vec<TestTreeNode<T>>,
-        data: T,
+    #[derive(Debug, Eq, Hash, PartialEq, Clone)]
+    pub struct TestTreeNode<T> {
+        pub(crate) children: Vec<TestTreeNode<T>>,
+        pub(crate) data: T,
     }
 
     impl<T> TestTreeNode<T> {
-        fn new(children: Vec<TestTreeNode<T>>, data: T) -> Self {
+        pub(crate) fn new(children: Vec<TestTreeNode<T>>, data: T) -> Self {
             Self { children, data }
+        }
+
+        pub(crate) fn new_leaf(data: T) -> Self {
+            Self {
+                children: vec![],
+                data,
+            }
+        }
+
+        pub(crate) fn is_leaf(&self) -> bool {
+            self.children.is_empty()
         }
     }
 
@@ -1054,7 +1301,7 @@ mod tests {
             &'n self,
             f: F,
         ) -> Result<TreeNodeRecursion> {
-            self.children.iter().apply_until_stop(f)
+            self.children.apply_elements(f)
         }
 
         fn map_children<F: FnMut(Self) -> Result<Transformed<Self>>>(
@@ -1063,12 +1310,27 @@ mod tests {
         ) -> Result<Transformed<Self>> {
             Ok(self
                 .children
-                .into_iter()
-                .map_until_stop_and_collect(f)?
+                .map_elements(f)?
                 .update_data(|new_children| Self {
                     children: new_children,
                     ..self
                 }))
+        }
+    }
+
+    impl<'a, T: 'a> TreeNodeContainer<'a, Self> for TestTreeNode<T> {
+        fn apply_elements<F: FnMut(&'a Self) -> Result<TreeNodeRecursion>>(
+            &'a self,
+            mut f: F,
+        ) -> Result<TreeNodeRecursion> {
+            f(self)
+        }
+
+        fn map_elements<F: FnMut(Self) -> Result<Transformed<Self>>>(
+            self,
+            mut f: F,
+        ) -> Result<Transformed<Self>> {
+            f(self)
         }
     }
 
@@ -1086,12 +1348,12 @@ mod tests {
     //       |
     //       A
     fn test_tree() -> TestTreeNode<String> {
-        let node_a = TestTreeNode::new(vec![], "a".to_string());
-        let node_b = TestTreeNode::new(vec![], "b".to_string());
+        let node_a = TestTreeNode::new_leaf("a".to_string());
+        let node_b = TestTreeNode::new_leaf("b".to_string());
         let node_d = TestTreeNode::new(vec![node_a], "d".to_string());
         let node_c = TestTreeNode::new(vec![node_b, node_d], "c".to_string());
         let node_e = TestTreeNode::new(vec![node_c], "e".to_string());
-        let node_h = TestTreeNode::new(vec![], "h".to_string());
+        let node_h = TestTreeNode::new_leaf("h".to_string());
         let node_g = TestTreeNode::new(vec![node_h], "g".to_string());
         let node_f = TestTreeNode::new(vec![node_e, node_g], "f".to_string());
         let node_i = TestTreeNode::new(vec![node_f], "i".to_string());
@@ -1130,13 +1392,13 @@ mod tests {
 
     // Expected transformed tree after a combined traversal
     fn transformed_tree() -> TestTreeNode<String> {
-        let node_a = TestTreeNode::new(vec![], "f_up(f_down(a))".to_string());
-        let node_b = TestTreeNode::new(vec![], "f_up(f_down(b))".to_string());
+        let node_a = TestTreeNode::new_leaf("f_up(f_down(a))".to_string());
+        let node_b = TestTreeNode::new_leaf("f_up(f_down(b))".to_string());
         let node_d = TestTreeNode::new(vec![node_a], "f_up(f_down(d))".to_string());
         let node_c =
             TestTreeNode::new(vec![node_b, node_d], "f_up(f_down(c))".to_string());
         let node_e = TestTreeNode::new(vec![node_c], "f_up(f_down(e))".to_string());
-        let node_h = TestTreeNode::new(vec![], "f_up(f_down(h))".to_string());
+        let node_h = TestTreeNode::new_leaf("f_up(f_down(h))".to_string());
         let node_g = TestTreeNode::new(vec![node_h], "f_up(f_down(g))".to_string());
         let node_f =
             TestTreeNode::new(vec![node_e, node_g], "f_up(f_down(f))".to_string());
@@ -1146,12 +1408,12 @@ mod tests {
 
     // Expected transformed tree after a top-down traversal
     fn transformed_down_tree() -> TestTreeNode<String> {
-        let node_a = TestTreeNode::new(vec![], "f_down(a)".to_string());
-        let node_b = TestTreeNode::new(vec![], "f_down(b)".to_string());
+        let node_a = TestTreeNode::new_leaf("f_down(a)".to_string());
+        let node_b = TestTreeNode::new_leaf("f_down(b)".to_string());
         let node_d = TestTreeNode::new(vec![node_a], "f_down(d)".to_string());
         let node_c = TestTreeNode::new(vec![node_b, node_d], "f_down(c)".to_string());
         let node_e = TestTreeNode::new(vec![node_c], "f_down(e)".to_string());
-        let node_h = TestTreeNode::new(vec![], "f_down(h)".to_string());
+        let node_h = TestTreeNode::new_leaf("f_down(h)".to_string());
         let node_g = TestTreeNode::new(vec![node_h], "f_down(g)".to_string());
         let node_f = TestTreeNode::new(vec![node_e, node_g], "f_down(f)".to_string());
         let node_i = TestTreeNode::new(vec![node_f], "f_down(i)".to_string());
@@ -1160,12 +1422,12 @@ mod tests {
 
     // Expected transformed tree after a bottom-up traversal
     fn transformed_up_tree() -> TestTreeNode<String> {
-        let node_a = TestTreeNode::new(vec![], "f_up(a)".to_string());
-        let node_b = TestTreeNode::new(vec![], "f_up(b)".to_string());
+        let node_a = TestTreeNode::new_leaf("f_up(a)".to_string());
+        let node_b = TestTreeNode::new_leaf("f_up(b)".to_string());
         let node_d = TestTreeNode::new(vec![node_a], "f_up(d)".to_string());
         let node_c = TestTreeNode::new(vec![node_b, node_d], "f_up(c)".to_string());
         let node_e = TestTreeNode::new(vec![node_c], "f_up(e)".to_string());
-        let node_h = TestTreeNode::new(vec![], "f_up(h)".to_string());
+        let node_h = TestTreeNode::new_leaf("f_up(h)".to_string());
         let node_g = TestTreeNode::new(vec![node_h], "f_up(g)".to_string());
         let node_f = TestTreeNode::new(vec![node_e, node_g], "f_up(f)".to_string());
         let node_i = TestTreeNode::new(vec![node_f], "f_up(i)".to_string());
@@ -1202,12 +1464,12 @@ mod tests {
     }
 
     fn f_down_jump_on_a_transformed_down_tree() -> TestTreeNode<String> {
-        let node_a = TestTreeNode::new(vec![], "f_down(a)".to_string());
-        let node_b = TestTreeNode::new(vec![], "f_down(b)".to_string());
+        let node_a = TestTreeNode::new_leaf("f_down(a)".to_string());
+        let node_b = TestTreeNode::new_leaf("f_down(b)".to_string());
         let node_d = TestTreeNode::new(vec![node_a], "f_down(d)".to_string());
         let node_c = TestTreeNode::new(vec![node_b, node_d], "f_down(c)".to_string());
         let node_e = TestTreeNode::new(vec![node_c], "f_down(e)".to_string());
-        let node_h = TestTreeNode::new(vec![], "f_down(h)".to_string());
+        let node_h = TestTreeNode::new_leaf("f_down(h)".to_string());
         let node_g = TestTreeNode::new(vec![node_h], "f_down(g)".to_string());
         let node_f = TestTreeNode::new(vec![node_e, node_g], "f_down(f)".to_string());
         let node_i = TestTreeNode::new(vec![node_f], "f_down(i)".to_string());
@@ -1236,12 +1498,12 @@ mod tests {
     }
 
     fn f_down_jump_on_e_transformed_tree() -> TestTreeNode<String> {
-        let node_a = TestTreeNode::new(vec![], "a".to_string());
-        let node_b = TestTreeNode::new(vec![], "b".to_string());
+        let node_a = TestTreeNode::new_leaf("a".to_string());
+        let node_b = TestTreeNode::new_leaf("b".to_string());
         let node_d = TestTreeNode::new(vec![node_a], "d".to_string());
         let node_c = TestTreeNode::new(vec![node_b, node_d], "c".to_string());
         let node_e = TestTreeNode::new(vec![node_c], "f_up(f_down(e))".to_string());
-        let node_h = TestTreeNode::new(vec![], "f_up(f_down(h))".to_string());
+        let node_h = TestTreeNode::new_leaf("f_up(f_down(h))".to_string());
         let node_g = TestTreeNode::new(vec![node_h], "f_up(f_down(g))".to_string());
         let node_f =
             TestTreeNode::new(vec![node_e, node_g], "f_up(f_down(f))".to_string());
@@ -1250,12 +1512,12 @@ mod tests {
     }
 
     fn f_down_jump_on_e_transformed_down_tree() -> TestTreeNode<String> {
-        let node_a = TestTreeNode::new(vec![], "a".to_string());
-        let node_b = TestTreeNode::new(vec![], "b".to_string());
+        let node_a = TestTreeNode::new_leaf("a".to_string());
+        let node_b = TestTreeNode::new_leaf("b".to_string());
         let node_d = TestTreeNode::new(vec![node_a], "d".to_string());
         let node_c = TestTreeNode::new(vec![node_b, node_d], "c".to_string());
         let node_e = TestTreeNode::new(vec![node_c], "f_down(e)".to_string());
-        let node_h = TestTreeNode::new(vec![], "f_down(h)".to_string());
+        let node_h = TestTreeNode::new_leaf("f_down(h)".to_string());
         let node_g = TestTreeNode::new(vec![node_h], "f_down(g)".to_string());
         let node_f = TestTreeNode::new(vec![node_e, node_g], "f_down(f)".to_string());
         let node_i = TestTreeNode::new(vec![node_f], "f_down(i)".to_string());
@@ -1289,12 +1551,12 @@ mod tests {
     }
 
     fn f_up_jump_on_a_transformed_tree() -> TestTreeNode<String> {
-        let node_a = TestTreeNode::new(vec![], "f_up(f_down(a))".to_string());
-        let node_b = TestTreeNode::new(vec![], "f_up(f_down(b))".to_string());
+        let node_a = TestTreeNode::new_leaf("f_up(f_down(a))".to_string());
+        let node_b = TestTreeNode::new_leaf("f_up(f_down(b))".to_string());
         let node_d = TestTreeNode::new(vec![node_a], "f_down(d)".to_string());
         let node_c = TestTreeNode::new(vec![node_b, node_d], "f_down(c)".to_string());
         let node_e = TestTreeNode::new(vec![node_c], "f_down(e)".to_string());
-        let node_h = TestTreeNode::new(vec![], "f_up(f_down(h))".to_string());
+        let node_h = TestTreeNode::new_leaf("f_up(f_down(h))".to_string());
         let node_g = TestTreeNode::new(vec![node_h], "f_up(f_down(g))".to_string());
         let node_f =
             TestTreeNode::new(vec![node_e, node_g], "f_up(f_down(f))".to_string());
@@ -1303,12 +1565,12 @@ mod tests {
     }
 
     fn f_up_jump_on_a_transformed_up_tree() -> TestTreeNode<String> {
-        let node_a = TestTreeNode::new(vec![], "f_up(a)".to_string());
-        let node_b = TestTreeNode::new(vec![], "f_up(b)".to_string());
+        let node_a = TestTreeNode::new_leaf("f_up(a)".to_string());
+        let node_b = TestTreeNode::new_leaf("f_up(b)".to_string());
         let node_d = TestTreeNode::new(vec![node_a], "d".to_string());
         let node_c = TestTreeNode::new(vec![node_b, node_d], "c".to_string());
         let node_e = TestTreeNode::new(vec![node_c], "e".to_string());
-        let node_h = TestTreeNode::new(vec![], "f_up(h)".to_string());
+        let node_h = TestTreeNode::new_leaf("f_up(h)".to_string());
         let node_g = TestTreeNode::new(vec![node_h], "f_up(g)".to_string());
         let node_f = TestTreeNode::new(vec![node_e, node_g], "f_up(f)".to_string());
         let node_i = TestTreeNode::new(vec![node_f], "f_up(i)".to_string());
@@ -1372,12 +1634,12 @@ mod tests {
     }
 
     fn f_down_stop_on_a_transformed_tree() -> TestTreeNode<String> {
-        let node_a = TestTreeNode::new(vec![], "f_down(a)".to_string());
-        let node_b = TestTreeNode::new(vec![], "f_up(f_down(b))".to_string());
+        let node_a = TestTreeNode::new_leaf("f_down(a)".to_string());
+        let node_b = TestTreeNode::new_leaf("f_up(f_down(b))".to_string());
         let node_d = TestTreeNode::new(vec![node_a], "f_down(d)".to_string());
         let node_c = TestTreeNode::new(vec![node_b, node_d], "f_down(c)".to_string());
         let node_e = TestTreeNode::new(vec![node_c], "f_down(e)".to_string());
-        let node_h = TestTreeNode::new(vec![], "h".to_string());
+        let node_h = TestTreeNode::new_leaf("h".to_string());
         let node_g = TestTreeNode::new(vec![node_h], "g".to_string());
         let node_f = TestTreeNode::new(vec![node_e, node_g], "f_down(f)".to_string());
         let node_i = TestTreeNode::new(vec![node_f], "f_down(i)".to_string());
@@ -1385,12 +1647,12 @@ mod tests {
     }
 
     fn f_down_stop_on_a_transformed_down_tree() -> TestTreeNode<String> {
-        let node_a = TestTreeNode::new(vec![], "f_down(a)".to_string());
-        let node_b = TestTreeNode::new(vec![], "f_down(b)".to_string());
+        let node_a = TestTreeNode::new_leaf("f_down(a)".to_string());
+        let node_b = TestTreeNode::new_leaf("f_down(b)".to_string());
         let node_d = TestTreeNode::new(vec![node_a], "f_down(d)".to_string());
         let node_c = TestTreeNode::new(vec![node_b, node_d], "f_down(c)".to_string());
         let node_e = TestTreeNode::new(vec![node_c], "f_down(e)".to_string());
-        let node_h = TestTreeNode::new(vec![], "h".to_string());
+        let node_h = TestTreeNode::new_leaf("h".to_string());
         let node_g = TestTreeNode::new(vec![node_h], "g".to_string());
         let node_f = TestTreeNode::new(vec![node_e, node_g], "f_down(f)".to_string());
         let node_i = TestTreeNode::new(vec![node_f], "f_down(i)".to_string());
@@ -1406,12 +1668,12 @@ mod tests {
     }
 
     fn f_down_stop_on_e_transformed_tree() -> TestTreeNode<String> {
-        let node_a = TestTreeNode::new(vec![], "a".to_string());
-        let node_b = TestTreeNode::new(vec![], "b".to_string());
+        let node_a = TestTreeNode::new_leaf("a".to_string());
+        let node_b = TestTreeNode::new_leaf("b".to_string());
         let node_d = TestTreeNode::new(vec![node_a], "d".to_string());
         let node_c = TestTreeNode::new(vec![node_b, node_d], "c".to_string());
         let node_e = TestTreeNode::new(vec![node_c], "f_down(e)".to_string());
-        let node_h = TestTreeNode::new(vec![], "h".to_string());
+        let node_h = TestTreeNode::new_leaf("h".to_string());
         let node_g = TestTreeNode::new(vec![node_h], "g".to_string());
         let node_f = TestTreeNode::new(vec![node_e, node_g], "f_down(f)".to_string());
         let node_i = TestTreeNode::new(vec![node_f], "f_down(i)".to_string());
@@ -1419,12 +1681,12 @@ mod tests {
     }
 
     fn f_down_stop_on_e_transformed_down_tree() -> TestTreeNode<String> {
-        let node_a = TestTreeNode::new(vec![], "a".to_string());
-        let node_b = TestTreeNode::new(vec![], "b".to_string());
+        let node_a = TestTreeNode::new_leaf("a".to_string());
+        let node_b = TestTreeNode::new_leaf("b".to_string());
         let node_d = TestTreeNode::new(vec![node_a], "d".to_string());
         let node_c = TestTreeNode::new(vec![node_b, node_d], "c".to_string());
         let node_e = TestTreeNode::new(vec![node_c], "f_down(e)".to_string());
-        let node_h = TestTreeNode::new(vec![], "h".to_string());
+        let node_h = TestTreeNode::new_leaf("h".to_string());
         let node_g = TestTreeNode::new(vec![node_h], "g".to_string());
         let node_f = TestTreeNode::new(vec![node_e, node_g], "f_down(f)".to_string());
         let node_i = TestTreeNode::new(vec![node_f], "f_down(i)".to_string());
@@ -1451,12 +1713,12 @@ mod tests {
     }
 
     fn f_up_stop_on_a_transformed_tree() -> TestTreeNode<String> {
-        let node_a = TestTreeNode::new(vec![], "f_up(f_down(a))".to_string());
-        let node_b = TestTreeNode::new(vec![], "f_up(f_down(b))".to_string());
+        let node_a = TestTreeNode::new_leaf("f_up(f_down(a))".to_string());
+        let node_b = TestTreeNode::new_leaf("f_up(f_down(b))".to_string());
         let node_d = TestTreeNode::new(vec![node_a], "f_down(d)".to_string());
         let node_c = TestTreeNode::new(vec![node_b, node_d], "f_down(c)".to_string());
         let node_e = TestTreeNode::new(vec![node_c], "f_down(e)".to_string());
-        let node_h = TestTreeNode::new(vec![], "h".to_string());
+        let node_h = TestTreeNode::new_leaf("h".to_string());
         let node_g = TestTreeNode::new(vec![node_h], "g".to_string());
         let node_f = TestTreeNode::new(vec![node_e, node_g], "f_down(f)".to_string());
         let node_i = TestTreeNode::new(vec![node_f], "f_down(i)".to_string());
@@ -1464,12 +1726,12 @@ mod tests {
     }
 
     fn f_up_stop_on_a_transformed_up_tree() -> TestTreeNode<String> {
-        let node_a = TestTreeNode::new(vec![], "f_up(a)".to_string());
-        let node_b = TestTreeNode::new(vec![], "f_up(b)".to_string());
+        let node_a = TestTreeNode::new_leaf("f_up(a)".to_string());
+        let node_b = TestTreeNode::new_leaf("f_up(b)".to_string());
         let node_d = TestTreeNode::new(vec![node_a], "d".to_string());
         let node_c = TestTreeNode::new(vec![node_b, node_d], "c".to_string());
         let node_e = TestTreeNode::new(vec![node_c], "e".to_string());
-        let node_h = TestTreeNode::new(vec![], "h".to_string());
+        let node_h = TestTreeNode::new_leaf("h".to_string());
         let node_g = TestTreeNode::new(vec![node_h], "g".to_string());
         let node_f = TestTreeNode::new(vec![node_e, node_g], "f".to_string());
         let node_i = TestTreeNode::new(vec![node_f], "i".to_string());
@@ -1499,13 +1761,13 @@ mod tests {
     }
 
     fn f_up_stop_on_e_transformed_tree() -> TestTreeNode<String> {
-        let node_a = TestTreeNode::new(vec![], "f_up(f_down(a))".to_string());
-        let node_b = TestTreeNode::new(vec![], "f_up(f_down(b))".to_string());
+        let node_a = TestTreeNode::new_leaf("f_up(f_down(a))".to_string());
+        let node_b = TestTreeNode::new_leaf("f_up(f_down(b))".to_string());
         let node_d = TestTreeNode::new(vec![node_a], "f_up(f_down(d))".to_string());
         let node_c =
             TestTreeNode::new(vec![node_b, node_d], "f_up(f_down(c))".to_string());
         let node_e = TestTreeNode::new(vec![node_c], "f_up(f_down(e))".to_string());
-        let node_h = TestTreeNode::new(vec![], "h".to_string());
+        let node_h = TestTreeNode::new_leaf("h".to_string());
         let node_g = TestTreeNode::new(vec![node_h], "g".to_string());
         let node_f = TestTreeNode::new(vec![node_e, node_g], "f_down(f)".to_string());
         let node_i = TestTreeNode::new(vec![node_f], "f_down(i)".to_string());
@@ -1513,12 +1775,12 @@ mod tests {
     }
 
     fn f_up_stop_on_e_transformed_up_tree() -> TestTreeNode<String> {
-        let node_a = TestTreeNode::new(vec![], "f_up(a)".to_string());
-        let node_b = TestTreeNode::new(vec![], "f_up(b)".to_string());
+        let node_a = TestTreeNode::new_leaf("f_up(a)".to_string());
+        let node_b = TestTreeNode::new_leaf("f_up(b)".to_string());
         let node_d = TestTreeNode::new(vec![node_a], "f_up(d)".to_string());
         let node_c = TestTreeNode::new(vec![node_b, node_d], "f_up(c)".to_string());
         let node_e = TestTreeNode::new(vec![node_c], "f_up(e)".to_string());
-        let node_h = TestTreeNode::new(vec![], "h".to_string());
+        let node_h = TestTreeNode::new_leaf("h".to_string());
         let node_g = TestTreeNode::new(vec![node_h], "g".to_string());
         let node_f = TestTreeNode::new(vec![node_e, node_g], "f".to_string());
         let node_i = TestTreeNode::new(vec![node_f], "i".to_string());
@@ -2016,16 +2278,16 @@ mod tests {
     //       A
     #[test]
     fn test_apply_and_visit_references() -> Result<()> {
-        let node_a = TestTreeNode::new(vec![], "a".to_string());
-        let node_b = TestTreeNode::new(vec![], "b".to_string());
+        let node_a = TestTreeNode::new_leaf("a".to_string());
+        let node_b = TestTreeNode::new_leaf("b".to_string());
         let node_d = TestTreeNode::new(vec![node_a], "d".to_string());
         let node_c = TestTreeNode::new(vec![node_b, node_d], "c".to_string());
         let node_e = TestTreeNode::new(vec![node_c], "e".to_string());
-        let node_a_2 = TestTreeNode::new(vec![], "a".to_string());
-        let node_b_2 = TestTreeNode::new(vec![], "b".to_string());
+        let node_a_2 = TestTreeNode::new_leaf("a".to_string());
+        let node_b_2 = TestTreeNode::new_leaf("b".to_string());
         let node_d_2 = TestTreeNode::new(vec![node_a_2], "d".to_string());
         let node_c_2 = TestTreeNode::new(vec![node_b_2, node_d_2], "c".to_string());
-        let node_a_3 = TestTreeNode::new(vec![], "a".to_string());
+        let node_a_3 = TestTreeNode::new_leaf("a".to_string());
         let tree = TestTreeNode::new(vec![node_e, node_c_2, node_a_3], "f".to_string());
 
         let node_f_ref = &tree;
@@ -2085,5 +2347,19 @@ mod tests {
         assert_eq!(visitor.m, expected);
 
         Ok(())
+    }
+
+    #[cfg(feature = "recursive_protection")]
+    #[test]
+    fn test_large_tree() {
+        let mut item = TestTreeNode::new_leaf("initial".to_string());
+        for i in 0..3000 {
+            item = TestTreeNode::new(vec![item], format!("parent-{}", i));
+        }
+
+        let mut visitor =
+            TestVisitor::new(Box::new(visit_continue), Box::new(visit_continue));
+
+        item.visit(&mut visitor).unwrap();
     }
 }

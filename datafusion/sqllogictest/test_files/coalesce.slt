@@ -220,13 +220,13 @@ select
 statement ok
 create table test1 as values (arrow_cast('foo', 'Dictionary(Int32, Utf8)')), (null);
 
-query ?
+query T
 select coalesce(column1, 'none_set') from test1;
 ----
 foo
 none_set
 
-query ?
+query T
 select coalesce(null, column1, 'none_set') from test1;
 ----
 foo
@@ -242,11 +242,19 @@ none_set
 statement ok
 drop table test1
 
+# coalesce with utf8view
+query TTT
+select coalesce(arrow_cast(null, 'Utf8View'), arrow_cast('t', 'Utf8')),
+       arrow_typeof(coalesce(arrow_cast(null, 'Utf8View'), arrow_cast('t', 'Utf8'))),
+       arrow_typeof(coalesce(arrow_cast(null, 'Utf8'), arrow_cast('t', 'Utf8View')));
+----
+t Utf8View Utf8View
+
 # test dict coercion with value
 statement ok
 create table t(c varchar) as values ('a'), (null);
 
-query ?T
+query TT
 select 
   coalesce(c, arrow_cast('b', 'Dictionary(Int32, Utf8)')),
   arrow_typeof(coalesce(c, arrow_cast('b', 'Dictionary(Int32, Utf8)')))
@@ -264,7 +272,7 @@ create table t as values
   (arrow_cast('foo', 'Dictionary(Int32, Utf8)')), 
   (null);
 
-query ?T
+query TT
 select 
   coalesce(column1, arrow_cast('bar', 'Dictionary(Int64, LargeUtf8)')),
   arrow_typeof(coalesce(column1, arrow_cast('bar', 'Dictionary(Int64, LargeUtf8)')))
@@ -273,7 +281,7 @@ from t;
 foo Dictionary(Int64, LargeUtf8)
 bar Dictionary(Int64, LargeUtf8)
 
-query ?T
+query TT
 select 
   coalesce(column1, arrow_cast('bar', 'Dictionary(Int32, LargeUtf8)')),
   arrow_typeof(coalesce(column1, arrow_cast('bar', 'Dictionary(Int32, LargeUtf8)')))
@@ -282,7 +290,7 @@ from t;
 foo Dictionary(Int32, LargeUtf8)
 bar Dictionary(Int32, LargeUtf8)
 
-query ?T
+query TT
 select 
   coalesce(column1, arrow_cast('bar', 'Dictionary(Int64, Utf8)')),
   arrow_typeof(coalesce(column1, arrow_cast('bar', 'Dictionary(Int64, Utf8)')))

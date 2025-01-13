@@ -24,17 +24,17 @@ use super::FileScanConfig;
 use crate::error::Result;
 use crate::physical_plan::metrics::{ExecutionPlanMetricsSet, MetricsSet};
 use crate::physical_plan::{
-    DisplayAs, DisplayFormatType, ExecutionMode, ExecutionPlan, Partitioning,
-    PlanProperties, SendableRecordBatchStream, Statistics,
+    DisplayAs, DisplayFormatType, ExecutionPlan, Partitioning, PlanProperties,
+    SendableRecordBatchStream, Statistics,
 };
 
 use arrow::datatypes::SchemaRef;
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::{EquivalenceProperties, LexOrdering};
+use datafusion_physical_plan::execution_plan::{Boundedness, EmissionType};
 
 /// Execution plan for scanning Avro data source
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 pub struct AvroExec {
     base_config: FileScanConfig,
     projected_statistics: Statistics,
@@ -51,7 +51,7 @@ impl AvroExec {
         let (projected_schema, projected_statistics, projected_output_ordering) =
             base_config.project();
         let cache = Self::compute_properties(
-            projected_schema.clone(),
+            Arc::clone(&projected_schema),
             &projected_output_ordering,
             &base_config,
         );
@@ -82,7 +82,8 @@ impl AvroExec {
         PlanProperties::new(
             eq_properties,
             Partitioning::UnknownPartitioning(n_partitions), // Output Partitioning
-            ExecutionMode::Bounded,                          // Execution Mode
+            EmissionType::Incremental,
+            Boundedness::Bounded,
         )
     }
 }
@@ -175,7 +176,7 @@ impl ExecutionPlan for AvroExec {
         Some(Arc::new(Self {
             base_config: new_config,
             projected_statistics: self.projected_statistics.clone(),
-            projected_schema: self.projected_schema.clone(),
+            projected_schema: Arc::clone(&self.projected_schema),
             projected_output_ordering: self.projected_output_ordering.clone(),
             metrics: self.metrics.clone(),
             cache: self.cache.clone(),
@@ -205,7 +206,7 @@ mod private {
         fn open<R: std::io::Read>(&self, reader: R) -> Result<AvroReader<'static, R>> {
             AvroReader::try_new(
                 reader,
-                self.schema.clone(),
+                Arc::clone(&self.schema),
                 self.batch_size,
                 self.projection.clone(),
             )
@@ -218,7 +219,7 @@ mod private {
 
     impl FileOpener for AvroOpener {
         fn open(&self, file_meta: FileMeta) -> Result<FileOpenFuture> {
-            let config = self.config.clone();
+            let config = Arc::clone(&self.config);
             Ok(Box::pin(async move {
                 let r = config.object_store.get(file_meta.location()).await?;
                 match r.payload {
@@ -285,7 +286,7 @@ mod tests {
         let meta = local_unpartitioned_file(filename);
 
         let file_schema = AvroFormat {}
-            .infer_schema(&state, &store, &[meta.clone()])
+            .infer_schema(&state, &store, std::slice::from_ref(&meta))
             .await?;
 
         let avro_exec = AvroExec::new(
@@ -350,7 +351,7 @@ mod tests {
         let object_store_url = ObjectStoreUrl::local_filesystem();
         let meta = local_unpartitioned_file(filename);
         let actual_schema = AvroFormat {}
-            .infer_schema(&state, &object_store, &[meta.clone()])
+            .infer_schema(&state, &object_store, std::slice::from_ref(&meta))
             .await?;
 
         let mut builder = SchemaBuilder::from(actual_schema.fields());
@@ -423,7 +424,7 @@ mod tests {
         let object_store_url = ObjectStoreUrl::local_filesystem();
         let meta = local_unpartitioned_file(filename);
         let file_schema = AvroFormat {}
-            .infer_schema(&state, &object_store, &[meta.clone()])
+            .infer_schema(&state, &object_store, std::slice::from_ref(&meta))
             .await?;
 
         let mut partitioned_file = PartitionedFile::from(meta);

@@ -1,0 +1,90 @@
+{
+  "extensionUris": [{
+    "extensionUriAnchor": 1,
+    "uri": "/functions_arithmetic.yaml"
+  }],
+  "extensions": [{
+    "extensionFunction": {
+      "extensionUriReference": 1,
+      "functionAnchor": 0,
+      "name": "add:i64_i64"
+    }
+  }],
+  "relations": [{
+    "root": {
+      "input": {
+        "project": {
+          "common": {
+            "direct": {
+            }
+          },
+          "input": {
+            "read": {
+              "common": {
+                "direct": {
+                }
+              },
+              "baseSchema": {
+                "names": ["A", "B"],
+                "struct": {
+                  "types": [{
+                    "i64": {
+                      "typeVariationReference": 0,
+                      "nullability": "NULLABILITY_NULLABLE"
+                    }
+                  }, {
+                    "i64": {
+                      "typeVariationReference": 0,
+                      "nullability": "NULLABILITY_NULLABLE"
+                    }
+                  }],
+                  "typeVariationReference": 0,
+                  "nullability": "NULLABILITY_REQUIRED"
+                }
+              },
+              "namedTable": {
+                "names": ["DATA"]
+              }
+            }
+          },
+          "expressions": [{
+            "scalarFunction": {
+              "functionReference": 0,
+              "args": [],
+              "outputType": {
+                "i64": {
+                  "typeVariationReference": 0,
+                  "nullability": "NULLABILITY_NULLABLE"
+                }
+              },
+              "arguments": [{
+                "value": {
+                  "selection": {
+                    "directReference": {
+                      "structField": {
+                        "field": 0
+                      }
+                    },
+                    "rootReference": {
+                    }
+                  }
+                }
+              }, {
+                "value": {
+                  "literal": {
+                    "i64": 1,
+                    "nullable": false,
+                    "typeVariationReference": 0
+                  }
+                }
+              }],
+              "options": []
+            }
+          }]
+        }
+      },
+      "names": ["a", "b", "add1"]
+    }
+  }],
+  "expectedTypeUrls": []
+}

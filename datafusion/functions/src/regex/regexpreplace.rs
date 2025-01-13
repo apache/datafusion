@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Regx expressions
+//! Regex expressions
 use arrow::array::ArrayDataBuilder;
 use arrow::array::BufferBuilder;
 use arrow::array::GenericStringArray;
@@ -32,14 +32,15 @@ use datafusion_common::{
     cast::as_generic_string_array, internal_err, DataFusionError, Result,
 };
 use datafusion_expr::function::Hint;
+use datafusion_expr::scalar_doc_sections::DOC_SECTION_REGEX;
 use datafusion_expr::ColumnarValue;
-use datafusion_expr::TypeSignature::*;
-use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
+use datafusion_expr::TypeSignature;
+use datafusion_expr::{Documentation, ScalarUDFImpl, Signature, Volatility};
 use regex::Regex;
 use std::any::Any;
 use std::collections::HashMap;
-use std::sync::Arc;
-use std::sync::OnceLock;
+use std::sync::{Arc, LazyLock, OnceLock};
+
 #[derive(Debug)]
 pub struct RegexpReplaceFunc {
     signature: Signature,
@@ -56,10 +57,10 @@ impl RegexpReplaceFunc {
         Self {
             signature: Signature::one_of(
                 vec![
-                    Exact(vec![Utf8, Utf8, Utf8]),
-                    Exact(vec![Utf8View, Utf8, Utf8]),
-                    Exact(vec![Utf8, Utf8, Utf8, Utf8]),
-                    Exact(vec![Utf8View, Utf8, Utf8, Utf8]),
+                    TypeSignature::Exact(vec![Utf8, Utf8, Utf8]),
+                    TypeSignature::Exact(vec![Utf8View, Utf8, Utf8]),
+                    TypeSignature::Exact(vec![Utf8, Utf8, Utf8, Utf8]),
+                    TypeSignature::Exact(vec![Utf8View, Utf8, Utf8, Utf8]),
                 ],
                 Volatility::Immutable,
             ),
@@ -105,7 +106,11 @@ impl ScalarUDFImpl for RegexpReplaceFunc {
             }
         })
     }
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         let len = args
             .iter()
             .fold(Option::<usize>::None, |acc, arg| match arg {
@@ -123,6 +128,50 @@ impl ScalarUDFImpl for RegexpReplaceFunc {
             result.map(ColumnarValue::Array)
         }
     }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        Some(get_regexp_replace_doc())
+    }
+}
+
+static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
+
+fn get_regexp_replace_doc() -> &'static Documentation {
+    DOCUMENTATION.get_or_init(|| {
+    Documentation::builder(
+        DOC_SECTION_REGEX,
+        "Replaces substrings in a string that match a [regular expression](https://docs.rs/regex/latest/regex/#syntax).",
+        "regexp_replace(str, regexp, replacement[, flags])")
+        .with_sql_example(r#"```sql
+> select regexp_replace('foobarbaz', 'b(..)', 'X\\1Y', 'g');
++------------------------------------------------------------------------+
+| regexp_replace(Utf8("foobarbaz"),Utf8("b(..)"),Utf8("X\1Y"),Utf8("g")) |
++------------------------------------------------------------------------+
+| fooXarYXazY                                                            |
++------------------------------------------------------------------------+
+SELECT regexp_replace('aBc', '(b|d)', 'Ab\\1a', 'i');
++-------------------------------------------------------------------+
+| regexp_replace(Utf8("aBc"),Utf8("(b|d)"),Utf8("Ab\1a"),Utf8("i")) |
++-------------------------------------------------------------------+
+| aAbBac                                                            |
++-------------------------------------------------------------------+
+```
+Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/regexp.rs)
+"#)
+        .with_standard_argument("str", Some("String"))
+        .with_argument("regexp","Regular expression to match against.
+        Can be a constant, column, or function.")
+        .with_standard_argument("replacement", Some("Replacement string"))
+        .with_argument("flags",
+                       r#"Optional regular expression flags that control the behavior of the regular expression. The following flags are supported:
+- **g**: (global) Search globally and don't return after the first match
+- **i**: case-insensitive: letters match both upper and lower case
+- **m**: multi-line mode: ^ and $ match begin/end of line
+- **s**: allow . to match \n
+- **R**: enables CRLF mode: when multi-line mode is enabled, \r\n is used
+- **U**: swap the meaning of x* and x*?"#)
+        .build()
+})
 }
 
 fn regexp_replace_func(args: &[ColumnarValue]) -> Result<ArrayRef> {
@@ -139,11 +188,9 @@ fn regexp_replace_func(args: &[ColumnarValue]) -> Result<ArrayRef> {
 /// replace POSIX capture groups (like \1) with Rust Regex group (like ${1})
 /// used by regexp_replace
 fn regex_replace_posix_groups(replacement: &str) -> String {
-    fn capture_groups_re() -> &'static Regex {
-        static CAPTURE_GROUPS_RE_LOCK: OnceLock<Regex> = OnceLock::new();
-        CAPTURE_GROUPS_RE_LOCK.get_or_init(|| Regex::new(r"(\\)(\d*)").unwrap())
-    }
-    capture_groups_re()
+    static CAPTURE_GROUPS_RE_LOCK: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r"(\\)(\d*)").unwrap());
+    CAPTURE_GROUPS_RE_LOCK
         .replace_all(replacement, "$${$2}")
         .into_owned()
 }
@@ -526,7 +573,7 @@ pub fn specialize_regexp_replace<T: OffsetSizeTrait>(
                         Hint::AcceptsSingular => 1,
                         Hint::Pad => inferred_length,
                     };
-                    arg.clone().into_array(expansion_len)
+                    arg.to_array(expansion_len)
                 })
                 .collect::<Result<Vec<_>>>()?;
             _regexp_replace_static_pattern_replace::<T>(&args)
@@ -537,7 +584,7 @@ pub fn specialize_regexp_replace<T: OffsetSizeTrait>(
         (_, _, _, _) => {
             let args = args
                 .iter()
-                .map(|arg| arg.clone().into_array(inferred_length))
+                .map(|arg| arg.to_array(inferred_length))
                 .collect::<Result<Vec<_>>>()?;
 
             match args[0].data_type() {

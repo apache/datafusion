@@ -30,6 +30,8 @@ use crate::arrow::datatypes::Schema;
 use crate::error::Result;
 #[cfg(feature = "avro")]
 pub use reader::{Reader, ReaderBuilder};
+#[cfg(feature = "avro")]
+pub use schema::to_arrow_schema;
 use std::io::Read;
 
 #[cfg(feature = "avro")]
@@ -37,7 +39,7 @@ use std::io::Read;
 pub fn read_avro_schema_from_reader<R: Read>(reader: &mut R) -> Result<Schema> {
     let avro_reader = apache_avro::Reader::new(reader)?;
     let schema = avro_reader.writer_schema();
-    schema::to_arrow_schema(schema)
+    to_arrow_schema(schema)
 }
 
 #[cfg(not(feature = "avro"))]

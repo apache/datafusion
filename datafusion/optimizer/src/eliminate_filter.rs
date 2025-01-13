@@ -30,7 +30,7 @@ use crate::{OptimizerConfig, OptimizerRule};
 ///
 /// This saves time in planning and executing the query.
 /// Note that this rule should be applied after simplify expressions optimizer rule.
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub struct EliminateFilter;
 
 impl EliminateFilter {

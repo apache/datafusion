@@ -25,10 +25,31 @@ use crate::utils::{make_scalar_function, utf8_to_int_type};
 use datafusion_common::cast::{as_generic_string_array, as_string_view_array};
 use datafusion_common::utils::datafusion_strsim;
 use datafusion_common::{exec_err, Result};
-use datafusion_expr::ColumnarValue;
-use datafusion_expr::TypeSignature::*;
+use datafusion_expr::{ColumnarValue, Documentation};
 use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
+use datafusion_macros::user_doc;
 
+#[user_doc(
+    doc_section(label = "String Functions"),
+    description = "Returns the [`Levenshtein distance`](https://en.wikipedia.org/wiki/Levenshtein_distance) between the two given strings.",
+    syntax_example = "levenshtein(str1, str2)",
+    sql_example = r#"```sql
+> select levenshtein('kitten', 'sitting');
++---------------------------------------------+
+| levenshtein(Utf8("kitten"),Utf8("sitting")) |
++---------------------------------------------+
+| 3                                           |
++---------------------------------------------+
+```"#,
+    argument(
+        name = "str1",
+        description = "String expression to compute Levenshtein distance with str2."
+    ),
+    argument(
+        name = "str2",
+        description = "String expression to compute Levenshtein distance with str1."
+    )
+)]
 #[derive(Debug)]
 pub struct LevenshteinFunc {
     signature: Signature,
@@ -43,14 +64,7 @@ impl Default for LevenshteinFunc {
 impl LevenshteinFunc {
     pub fn new() -> Self {
         Self {
-            signature: Signature::one_of(
-                vec![
-                    Exact(vec![DataType::Utf8View, DataType::Utf8View]),
-                    Exact(vec![DataType::Utf8, DataType::Utf8]),
-                    Exact(vec![DataType::LargeUtf8, DataType::LargeUtf8]),
-                ],
-                Volatility::Immutable,
-            ),
+            signature: Signature::string(2, Volatility::Immutable),
         }
     }
 }
@@ -72,7 +86,11 @@ impl ScalarUDFImpl for LevenshteinFunc {
         utf8_to_int_type(&arg_types[0], "levenshtein")
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         match args[0].data_type() {
             DataType::Utf8View | DataType::Utf8 => {
                 make_scalar_function(levenshtein::<i32>, vec![])(args)
@@ -82,6 +100,10 @@ impl ScalarUDFImpl for LevenshteinFunc {
                 exec_err!("Unsupported data type {other:?} for function levenshtein")
             }
         }
+    }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        self.doc()
     }
 }
 

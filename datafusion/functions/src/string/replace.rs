@@ -21,14 +21,31 @@ use std::sync::Arc;
 use arrow::array::{ArrayRef, GenericStringArray, OffsetSizeTrait, StringArray};
 use arrow::datatypes::DataType;
 
+use crate::utils::{make_scalar_function, utf8_to_str_type};
 use datafusion_common::cast::{as_generic_string_array, as_string_view_array};
 use datafusion_common::{exec_err, Result};
-use datafusion_expr::TypeSignature::*;
-use datafusion_expr::{ColumnarValue, Volatility};
+use datafusion_expr::{ColumnarValue, Documentation, Volatility};
 use datafusion_expr::{ScalarUDFImpl, Signature};
-
-use crate::utils::{make_scalar_function, utf8_to_str_type};
-
+use datafusion_macros::user_doc;
+#[user_doc(
+    doc_section(label = "String Functions"),
+    description = "Replaces all occurrences of a specified substring in a string with a new substring.",
+    syntax_example = "replace(str, substr, replacement)",
+    sql_example = r#"```sql
+> select replace('ABabbaBA', 'ab', 'cd');
++-------------------------------------------------+
+| replace(Utf8("ABabbaBA"),Utf8("ab"),Utf8("cd")) |
++-------------------------------------------------+
+| ABcdbaBA                                        |
++-------------------------------------------------+
+```"#,
+    standard_argument(name = "str", prefix = "String"),
+    standard_argument(
+        name = "substr",
+        prefix = "Substring expression to replace in the input string. Substring"
+    ),
+    standard_argument(name = "replacement", prefix = "Replacement substring")
+)]
 #[derive(Debug)]
 pub struct ReplaceFunc {
     signature: Signature,
@@ -42,16 +59,8 @@ impl Default for ReplaceFunc {
 
 impl ReplaceFunc {
     pub fn new() -> Self {
-        use DataType::*;
         Self {
-            signature: Signature::one_of(
-                vec![
-                    Exact(vec![Utf8View, Utf8View, Utf8View]),
-                    Exact(vec![Utf8, Utf8, Utf8]),
-                    Exact(vec![LargeUtf8, LargeUtf8, LargeUtf8]),
-                ],
-                Volatility::Immutable,
-            ),
+            signature: Signature::string(3, Volatility::Immutable),
         }
     }
 }
@@ -73,7 +82,11 @@ impl ScalarUDFImpl for ReplaceFunc {
         utf8_to_str_type(&arg_types[0], "replace")
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         match args[0].data_type() {
             DataType::Utf8 => make_scalar_function(replace::<i32>, vec![])(args),
             DataType::LargeUtf8 => make_scalar_function(replace::<i64>, vec![])(args),
@@ -82,6 +95,10 @@ impl ScalarUDFImpl for ReplaceFunc {
                 exec_err!("Unsupported data type {other:?} for function replace")
             }
         }
+    }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        self.doc()
     }
 }
 
@@ -135,7 +152,7 @@ mod tests {
     fn test_functions() -> Result<()> {
         test_function!(
             ReplaceFunc::new(),
-            &[
+            vec![
                 ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from("aabbdqcbb")))),
                 ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from("bb")))),
                 ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from("ccc")))),
@@ -148,7 +165,7 @@ mod tests {
 
         test_function!(
             ReplaceFunc::new(),
-            &[
+            vec![
                 ColumnarValue::Scalar(ScalarValue::LargeUtf8(Some(String::from(
                     "aabbb"
                 )))),
@@ -163,7 +180,7 @@ mod tests {
 
         test_function!(
             ReplaceFunc::new(),
-            &[
+            vec![
                 ColumnarValue::Scalar(ScalarValue::Utf8View(Some(String::from(
                     "aabbbcw"
                 )))),

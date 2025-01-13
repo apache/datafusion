@@ -36,6 +36,7 @@ pub use self::parquet::{ParquetExec, ParquetFileMetrics, ParquetFileReaderFactor
 pub use arrow_file::ArrowExec;
 pub use avro::AvroExec;
 pub use csv::{CsvConfig, CsvExec, CsvExecBuilder, CsvOpener};
+use datafusion_expr::dml::InsertOp;
 pub use file_groups::FileGroupPartitioner;
 pub use file_scan_config::{
     wrap_partition_type_in_dict, wrap_partition_value_in_dict, FileScanConfig,
@@ -64,6 +65,7 @@ use crate::{
 use arrow::datatypes::{DataType, SchemaRef};
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::PhysicalSortExpr;
+use datafusion_physical_expr_common::sort_expr::LexOrdering;
 
 use futures::StreamExt;
 use log::debug;
@@ -83,8 +85,9 @@ pub struct FileSinkConfig {
     /// A vector of column names and their corresponding data types,
     /// representing the partitioning columns for the file
     pub table_partition_cols: Vec<(String, DataType)>,
-    /// Controls whether existing data should be overwritten by this sink
-    pub overwrite: bool,
+    /// Controls how new data should be written to the file, determining whether
+    /// to append to, overwrite, or replace records in existing files.
+    pub insert_op: InsertOp,
     /// Controls whether partition columns are kept for the file
     pub keep_partition_by_columns: bool,
 }
@@ -136,7 +139,7 @@ impl DisplayAs for FileScanConfig {
 #[derive(Debug)]
 struct FileGroupsDisplay<'a>(&'a [Vec<PartitionedFile>]);
 
-impl<'a> DisplayAs for FileGroupsDisplay<'a> {
+impl DisplayAs for FileGroupsDisplay<'_> {
     fn fmt_as(&self, t: DisplayFormatType, f: &mut Formatter) -> FmtResult {
         let n_groups = self.0.len();
         let groups = if n_groups == 1 { "group" } else { "groups" };
@@ -168,7 +171,7 @@ impl<'a> DisplayAs for FileGroupsDisplay<'a> {
 #[derive(Debug)]
 pub(crate) struct FileGroupDisplay<'a>(pub &'a [PartitionedFile]);
 
-impl<'a> DisplayAs for FileGroupDisplay<'a> {
+impl DisplayAs for FileGroupDisplay<'_> {
     fn fmt_as(&self, t: DisplayFormatType, f: &mut Formatter) -> FmtResult {
         write!(f, "[")?;
         match t {
@@ -245,6 +248,8 @@ pub struct FileMeta {
     pub range: Option<FileRange>,
     /// An optional field for user defined per object metadata
     pub extensions: Option<Arc<dyn std::any::Any + Send + Sync>>,
+    /// Size hint for the metadata of this file
+    pub metadata_size_hint: Option<usize>,
 }
 
 impl FileMeta {
@@ -260,6 +265,7 @@ impl From<ObjectMeta> for FileMeta {
             object_meta,
             range: None,
             extensions: None,
+            metadata_size_hint: None,
         }
     }
 }
@@ -326,11 +332,11 @@ impl From<ObjectMeta> for FileMeta {
 fn get_projected_output_ordering(
     base_config: &FileScanConfig,
     projected_schema: &SchemaRef,
-) -> Vec<Vec<PhysicalSortExpr>> {
+) -> Vec<LexOrdering> {
     let mut all_orderings = vec![];
     for output_ordering in &base_config.output_ordering {
-        let mut new_ordering = vec![];
-        for PhysicalSortExpr { expr, options } in output_ordering {
+        let mut new_ordering = LexOrdering::default();
+        for PhysicalSortExpr { expr, options } in output_ordering.iter() {
             if let Some(col) = expr.as_any().downcast_ref::<Column>() {
                 let name = col.name();
                 if let Some((idx, _)) = projected_schema.column_with_name(name) {
@@ -420,9 +426,11 @@ enum RangeCalculation {
 async fn calculate_range(
     file_meta: &FileMeta,
     store: &Arc<dyn ObjectStore>,
+    terminator: Option<u8>,
 ) -> Result<RangeCalculation> {
     let location = file_meta.location();
     let file_size = file_meta.object_meta.size;
+    let newline = terminator.unwrap_or(b'\n');
 
     match file_meta.range {
         None => Ok(RangeCalculation::Range(None)),
@@ -430,13 +438,13 @@ async fn calculate_range(
             let (start, end) = (start as usize, end as usize);
 
             let start_delta = if start != 0 {
-                find_first_newline(store, location, start - 1, file_size).await?
+                find_first_newline(store, location, start - 1, file_size, newline).await?
             } else {
                 0
             };
 
             let end_delta = if end != file_size {
-                find_first_newline(store, location, end - 1, file_size).await?
+                find_first_newline(store, location, end - 1, file_size, newline).await?
             } else {
                 0
             };
@@ -456,7 +464,7 @@ async fn calculate_range(
 /// within an object, such as a file, in an object store.
 ///
 /// This function scans the contents of the object starting from the specified `start` position
-/// up to the `end` position, looking for the first occurrence of a newline (`'\n'`) character.
+/// up to the `end` position, looking for the first occurrence of a newline character.
 /// It returns the position of the first newline relative to the start of the range.
 ///
 /// Returns a `Result` wrapping a `usize` that represents the position of the first newline character found within the specified range. If no newline is found, it returns the length of the scanned data, effectively indicating the end of the range.
@@ -468,6 +476,7 @@ async fn find_first_newline(
     location: &Path,
     start: usize,
     end: usize,
+    newline: u8,
 ) -> Result<usize> {
     let options = GetOptions {
         range: Some(GetRange::Bounded(start..end)),
@@ -480,7 +489,7 @@ async fn find_first_newline(
     let mut index = 0;
 
     while let Some(chunk) = result_stream.next().await.transpose()? {
-        if let Some(position) = chunk.iter().position(|&byte| byte == b'\n') {
+        if let Some(position) = chunk.iter().position(|&byte| byte == newline) {
             return Ok(index + position);
         }
 
@@ -516,7 +525,8 @@ mod tests {
             Field::new("c3", DataType::Float64, true),
         ]));
 
-        let adapter = DefaultSchemaAdapterFactory::default().create(table_schema.clone());
+        let adapter = DefaultSchemaAdapterFactory
+            .create(table_schema.clone(), table_schema.clone());
 
         let file_schema = Schema::new(vec![
             Field::new("c1", DataType::Utf8, true),
@@ -573,7 +583,7 @@ mod tests {
 
         let indices = vec![1, 2, 4];
         let schema = SchemaRef::from(table_schema.project(&indices).unwrap());
-        let adapter = DefaultSchemaAdapterFactory::default().create(schema);
+        let adapter = DefaultSchemaAdapterFactory.create(schema, table_schema.clone());
         let (mapping, projection) = adapter.map_schema(&file_schema).unwrap();
 
         let id = Int32Array::from(vec![Some(1), Some(2), Some(3)]);
@@ -760,7 +770,7 @@ mod tests {
     /// create a PartitionedFile for testing
     fn partitioned_file(path: &str) -> PartitionedFile {
         let object_meta = ObjectMeta {
-            location: object_store::path::Path::parse(path).unwrap(),
+            location: Path::parse(path).unwrap(),
             last_modified: Utc::now(),
             size: 42,
             e_tag: None,
@@ -773,6 +783,7 @@ mod tests {
             range: None,
             statistics: None,
             extensions: None,
+            metadata_size_hint: None,
         }
     }
 }

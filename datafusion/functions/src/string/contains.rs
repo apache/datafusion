@@ -15,22 +15,36 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::regexp_common::regexp_is_match_utf8;
 use crate::utils::make_scalar_function;
-
-use arrow::array::{Array, ArrayRef, AsArray, GenericStringArray, StringViewArray};
+use arrow::array::{Array, ArrayRef, AsArray};
+use arrow::compute::contains as arrow_contains;
 use arrow::datatypes::DataType;
 use arrow::datatypes::DataType::{Boolean, LargeUtf8, Utf8, Utf8View};
 use datafusion_common::exec_err;
 use datafusion_common::DataFusionError;
 use datafusion_common::Result;
-use datafusion_expr::ScalarUDFImpl;
-use datafusion_expr::TypeSignature::Exact;
-use datafusion_expr::{ColumnarValue, Signature, Volatility};
-
+use datafusion_expr::{
+    ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
+};
+use datafusion_macros::user_doc;
 use std::any::Any;
 use std::sync::Arc;
 
+#[user_doc(
+    doc_section(label = "String Functions"),
+    description = "Return true if search_str is found within string (case-sensitive).",
+    syntax_example = "contains(str, search_str)",
+    sql_example = r#"```sql
+> select contains('the quick brown fox', 'row');
++---------------------------------------------------+
+| contains(Utf8("the quick brown fox"),Utf8("row")) |
++---------------------------------------------------+
+| true                                              |
++---------------------------------------------------+
+```"#,
+    standard_argument(name = "str", prefix = "String"),
+    argument(name = "search_str", description = "The string to search for in str.")
+)]
 #[derive(Debug)]
 pub struct ContainsFunc {
     signature: Signature,
@@ -44,22 +58,8 @@ impl Default for ContainsFunc {
 
 impl ContainsFunc {
     pub fn new() -> Self {
-        use DataType::*;
         Self {
-            signature: Signature::one_of(
-                vec![
-                    Exact(vec![Utf8View, Utf8View]),
-                    Exact(vec![Utf8View, Utf8]),
-                    Exact(vec![Utf8View, LargeUtf8]),
-                    Exact(vec![Utf8, Utf8View]),
-                    Exact(vec![Utf8, Utf8]),
-                    Exact(vec![Utf8, LargeUtf8]),
-                    Exact(vec![LargeUtf8, Utf8View]),
-                    Exact(vec![LargeUtf8, Utf8]),
-                    Exact(vec![LargeUtf8, LargeUtf8]),
-                ],
-                Volatility::Immutable,
-            ),
+            signature: Signature::string(2, Volatility::Immutable),
         }
     }
 }
@@ -81,111 +81,38 @@ impl ScalarUDFImpl for ContainsFunc {
         Ok(Boolean)
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         make_scalar_function(contains, vec![])(args)
+    }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        self.doc()
     }
 }
 
-/// use regexp_is_match_utf8_scalar to do the calculation for contains
+/// use `arrow::compute::contains` to do the calculation for contains
 pub fn contains(args: &[ArrayRef]) -> Result<ArrayRef, DataFusionError> {
     match (args[0].data_type(), args[1].data_type()) {
         (Utf8View, Utf8View) => {
             let mod_str = args[0].as_string_view();
             let match_str = args[1].as_string_view();
-            let res = regexp_is_match_utf8::<
-                StringViewArray,
-                StringViewArray,
-                GenericStringArray<i32>,
-            >(mod_str, match_str, None)?;
-
-            Ok(Arc::new(res) as ArrayRef)
-        }
-        (Utf8View, Utf8) => {
-            let mod_str = args[0].as_string_view();
-            let match_str = args[1].as_string::<i32>();
-            let res = regexp_is_match_utf8::<
-                StringViewArray,
-                GenericStringArray<i32>,
-                GenericStringArray<i32>,
-            >(mod_str, match_str, None)?;
-
-            Ok(Arc::new(res) as ArrayRef)
-        }
-        (Utf8View, LargeUtf8) => {
-            let mod_str = args[0].as_string_view();
-            let match_str = args[1].as_string::<i64>();
-            let res = regexp_is_match_utf8::<
-                StringViewArray,
-                GenericStringArray<i64>,
-                GenericStringArray<i32>,
-            >(mod_str, match_str, None)?;
-
-            Ok(Arc::new(res) as ArrayRef)
-        }
-        (Utf8, Utf8View) => {
-            let mod_str = args[0].as_string::<i32>();
-            let match_str = args[1].as_string_view();
-            let res = regexp_is_match_utf8::<
-                GenericStringArray<i32>,
-                StringViewArray,
-                GenericStringArray<i32>,
-            >(mod_str, match_str, None)?;
-
+            let res = arrow_contains(mod_str, match_str)?;
             Ok(Arc::new(res) as ArrayRef)
         }
         (Utf8, Utf8) => {
             let mod_str = args[0].as_string::<i32>();
             let match_str = args[1].as_string::<i32>();
-            let res = regexp_is_match_utf8::<
-                GenericStringArray<i32>,
-                GenericStringArray<i32>,
-                GenericStringArray<i32>,
-            >(mod_str, match_str, None)?;
-
-            Ok(Arc::new(res) as ArrayRef)
-        }
-        (Utf8, LargeUtf8) => {
-            let mod_str = args[0].as_string::<i32>();
-            let match_str = args[1].as_string::<i64>();
-            let res = regexp_is_match_utf8::<
-                GenericStringArray<i32>,
-                GenericStringArray<i64>,
-                GenericStringArray<i32>,
-            >(mod_str, match_str, None)?;
-
-            Ok(Arc::new(res) as ArrayRef)
-        }
-        (LargeUtf8, Utf8View) => {
-            let mod_str = args[0].as_string::<i64>();
-            let match_str = args[1].as_string_view();
-            let res = regexp_is_match_utf8::<
-                GenericStringArray<i64>,
-                StringViewArray,
-                GenericStringArray<i32>,
-            >(mod_str, match_str, None)?;
-
-            Ok(Arc::new(res) as ArrayRef)
-        }
-        (LargeUtf8, Utf8) => {
-            let mod_str = args[0].as_string::<i64>();
-            let match_str = args[1].as_string::<i32>();
-            let res = regexp_is_match_utf8::<
-                GenericStringArray<i64>,
-                GenericStringArray<i32>,
-                GenericStringArray<i32>,
-            >(mod_str, match_str, None)?;
-
+            let res = arrow_contains(mod_str, match_str)?;
             Ok(Arc::new(res) as ArrayRef)
         }
         (LargeUtf8, LargeUtf8) => {
             let mod_str = args[0].as_string::<i64>();
             let match_str = args[1].as_string::<i64>();
-            let res = regexp_is_match_utf8::<
-                GenericStringArray<i64>,
-                GenericStringArray<i64>,
-                GenericStringArray<i32>,
-            >(mod_str, match_str, None)?;
-
+            let res = arrow_contains(mod_str, match_str)?;
             Ok(Arc::new(res) as ArrayRef)
         }
         other => {
@@ -195,93 +122,30 @@ pub fn contains(args: &[ArrayRef]) -> Result<ArrayRef, DataFusionError> {
 }
 
 #[cfg(test)]
-mod tests {
-    use crate::string::contains::ContainsFunc;
-    use crate::utils::test::test_function;
-    use arrow::array::Array;
-    use arrow::{array::BooleanArray, datatypes::DataType::Boolean};
-    use datafusion_common::Result;
+mod test {
+    use super::ContainsFunc;
+    use arrow::array::{BooleanArray, StringArray};
     use datafusion_common::ScalarValue;
-    use datafusion_expr::ColumnarValue;
-    use datafusion_expr::ScalarUDFImpl;
+    use datafusion_expr::{ColumnarValue, ScalarUDFImpl};
+    use std::sync::Arc;
+
     #[test]
-    fn test_functions() -> Result<()> {
-        test_function!(
-            ContainsFunc::new(),
-            &[
-                ColumnarValue::Scalar(ScalarValue::from("alphabet")),
-                ColumnarValue::Scalar(ScalarValue::from("alph")),
-            ],
-            Ok(Some(true)),
-            bool,
-            Boolean,
-            BooleanArray
+    fn test_contains_udf() {
+        let udf = ContainsFunc::new();
+        let array = ColumnarValue::Array(Arc::new(StringArray::from(vec![
+            Some("xxx?()"),
+            Some("yyy?()"),
+        ])));
+        let scalar = ColumnarValue::Scalar(ScalarValue::Utf8(Some("x?(".to_string())));
+        #[allow(deprecated)] // TODO migrate UDF to invoke
+        let actual = udf.invoke_batch(&[array, scalar], 2).unwrap();
+        let expect = ColumnarValue::Array(Arc::new(BooleanArray::from(vec![
+            Some(true),
+            Some(false),
+        ])));
+        assert_eq!(
+            *actual.into_array(2).unwrap(),
+            *expect.into_array(2).unwrap()
         );
-        test_function!(
-            ContainsFunc::new(),
-            &[
-                ColumnarValue::Scalar(ScalarValue::from("alphabet")),
-                ColumnarValue::Scalar(ScalarValue::from("dddddd")),
-            ],
-            Ok(Some(false)),
-            bool,
-            Boolean,
-            BooleanArray
-        );
-        test_function!(
-            ContainsFunc::new(),
-            &[
-                ColumnarValue::Scalar(ScalarValue::from("alphabet")),
-                ColumnarValue::Scalar(ScalarValue::from("pha")),
-            ],
-            Ok(Some(true)),
-            bool,
-            Boolean,
-            BooleanArray
-        );
-
-        test_function!(
-            ContainsFunc::new(),
-            &[
-                ColumnarValue::Scalar(ScalarValue::Utf8View(Some(String::from(
-                    "Apache"
-                )))),
-                ColumnarValue::Scalar(ScalarValue::Utf8View(Some(String::from("pac")))),
-            ],
-            Ok(Some(true)),
-            bool,
-            Boolean,
-            BooleanArray
-        );
-        test_function!(
-            ContainsFunc::new(),
-            &[
-                ColumnarValue::Scalar(ScalarValue::Utf8View(Some(String::from(
-                    "Apache"
-                )))),
-                ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from("ap")))),
-            ],
-            Ok(Some(false)),
-            bool,
-            Boolean,
-            BooleanArray
-        );
-        test_function!(
-            ContainsFunc::new(),
-            &[
-                ColumnarValue::Scalar(ScalarValue::Utf8View(Some(String::from(
-                    "Apache"
-                )))),
-                ColumnarValue::Scalar(ScalarValue::LargeUtf8(Some(String::from(
-                    "DataFusion"
-                )))),
-            ],
-            Ok(Some(false)),
-            bool,
-            Boolean,
-            BooleanArray
-        );
-
-        Ok(())
     }
 }

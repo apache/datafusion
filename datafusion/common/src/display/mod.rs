@@ -27,7 +27,7 @@ use std::{
 
 /// Represents which type of plan, when storing multiple
 /// for use in EXPLAIN plans
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Hash)]
 pub enum PlanType {
     /// The initial LogicalPlan provided to DataFusion
     InitialLogicalPlan,
@@ -62,6 +62,8 @@ pub enum PlanType {
     FinalPhysicalPlanWithStats,
     /// The final with schema, fully optimized physical plan which would be executed
     FinalPhysicalPlanWithSchema,
+    /// An error creating the physical plan
+    PhysicalPlanError,
 }
 
 impl Display for PlanType {
@@ -91,12 +93,13 @@ impl Display for PlanType {
             PlanType::FinalPhysicalPlanWithSchema => {
                 write!(f, "physical_plan_with_schema")
             }
+            PlanType::PhysicalPlanError => write!(f, "physical_plan_error"),
         }
     }
 }
 
 /// Represents some sort of execution plan, in String form
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Hash)]
 pub struct StringifiedPlan {
     /// An identifier of what type of plan this string represents
     pub plan_type: PlanType,
@@ -118,7 +121,9 @@ impl StringifiedPlan {
     /// `verbose_mode = true` will display all available plans
     pub fn should_display(&self, verbose_mode: bool) -> bool {
         match self.plan_type {
-            PlanType::FinalLogicalPlan | PlanType::FinalPhysicalPlan => true,
+            PlanType::FinalLogicalPlan
+            | PlanType::FinalPhysicalPlan
+            | PlanType::PhysicalPlanError => true,
             _ => verbose_mode,
         }
     }

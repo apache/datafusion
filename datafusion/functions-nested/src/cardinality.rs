@@ -27,9 +27,10 @@ use datafusion_common::cast::{as_large_list_array, as_list_array, as_map_array};
 use datafusion_common::Result;
 use datafusion_common::{exec_err, plan_err};
 use datafusion_expr::{
-    ArrayFunctionSignature, ColumnarValue, ScalarUDFImpl, Signature, TypeSignature,
-    Volatility,
+    ArrayFunctionSignature, ColumnarValue, Documentation, ScalarUDFImpl, Signature,
+    TypeSignature, Volatility,
 };
+use datafusion_macros::user_doc;
 use std::any::Any;
 use std::sync::Arc;
 
@@ -56,10 +57,33 @@ impl Cardinality {
     }
 }
 
+#[user_doc(
+    doc_section(label = "Array Functions"),
+    description = "Returns the total number of elements in the array.",
+    syntax_example = "cardinality(array)",
+    sql_example = r#"```sql
+> select cardinality([[1, 2, 3, 4], [5, 6, 7, 8]]);
++--------------------------------------+
+| cardinality(List([1,2,3,4,5,6,7,8])) |
++--------------------------------------+
+| 8                                    |
++--------------------------------------+
+```"#,
+    argument(
+        name = "array",
+        description = "Array expression. Can be a constant, column, or function, and any combination of array operators."
+    )
+)]
 #[derive(Debug)]
-pub(super) struct Cardinality {
+pub struct Cardinality {
     signature: Signature,
     aliases: Vec<String>,
+}
+
+impl Default for Cardinality {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 impl ScalarUDFImpl for Cardinality {
     fn as_any(&self) -> &dyn Any {
@@ -82,12 +106,20 @@ impl ScalarUDFImpl for Cardinality {
         })
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         make_scalar_function(cardinality_inner)(args)
     }
 
     fn aliases(&self) -> &[String] {
         &self.aliases
+    }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        self.doc()
     }
 }
 

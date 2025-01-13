@@ -20,9 +20,10 @@
 use crate::expr_rewriter::FunctionRewrite;
 use crate::planner::ExprPlanner;
 use crate::{AggregateUDF, ScalarUDF, UserDefinedLogicalNode, WindowUDF};
-use datafusion_common::{not_impl_err, plan_datafusion_err, Result};
-use std::collections::HashMap;
-use std::{collections::HashSet, sync::Arc};
+use datafusion_common::{not_impl_err, plan_datafusion_err, HashMap, Result};
+use std::collections::HashSet;
+use std::fmt::Debug;
+use std::sync::Arc;
 
 /// A registry knows how to build logical expressions out of user-defined function' names
 pub trait FunctionRegistry {
@@ -123,7 +124,7 @@ pub trait FunctionRegistry {
 }
 
 /// Serializer and deserializer registry for extensions like [UserDefinedLogicalNode].
-pub trait SerializerRegistry: Send + Sync {
+pub trait SerializerRegistry: Debug + Send + Sync {
     /// Serialize this node to a byte array. This serialization should not include
     /// input plans.
     fn serialize_logical_plan(

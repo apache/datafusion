@@ -20,13 +20,15 @@
 use std::any::Any;
 use std::fmt;
 use std::fmt::Debug;
+use std::ops::Range;
 use std::sync::Arc;
 
 use super::write::demux::start_demuxer_task;
 use super::write::{create_writer, SharedBuffer};
 use super::{
-    coerce_file_schema_to_view_type, transform_schema_to_view, FileFormat,
-    FileFormatFactory, FileScanConfig,
+    coerce_file_schema_to_string_type, coerce_file_schema_to_view_type,
+    transform_binary_to_string, transform_schema_to_view, FileFormat, FileFormatFactory,
+    FilePushdownSupport, FileScanConfig,
 };
 use crate::arrow::array::RecordBatch;
 use crate::arrow::datatypes::{Fields, Schema, SchemaRef};
@@ -43,47 +45,52 @@ use crate::physical_plan::{
 
 use arrow::compute::sum;
 use datafusion_common::config::{ConfigField, ConfigFileType, TableParquetOptions};
-use datafusion_common::file_options::parquet_writer::ParquetWriterOptions;
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::stats::Precision;
 use datafusion_common::{
-    exec_err, internal_datafusion_err, not_impl_err, DataFusionError, GetExt,
+    internal_datafusion_err, internal_err, not_impl_err, DataFusionError, GetExt,
     DEFAULT_PARQUET_EXTENSION,
 };
 use datafusion_common_runtime::SpawnedTask;
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryPool, MemoryReservation};
 use datafusion_execution::TaskContext;
+use datafusion_expr::dml::InsertOp;
+use datafusion_expr::Expr;
 use datafusion_functions_aggregate::min_max::{MaxAccumulator, MinAccumulator};
 use datafusion_physical_expr::PhysicalExpr;
 use datafusion_physical_plan::metrics::MetricsSet;
 
 use async_trait::async_trait;
-use bytes::{BufMut, BytesMut};
-use hashbrown::HashMap;
+use bytes::Bytes;
+use datafusion_common::HashMap;
 use log::debug;
 use object_store::buffered::BufWriter;
 use parquet::arrow::arrow_writer::{
     compute_leaves, get_column_writers, ArrowColumnChunk, ArrowColumnWriter,
-    ArrowLeafColumn,
+    ArrowLeafColumn, ArrowWriterOptions,
 };
 use parquet::arrow::{
     arrow_to_parquet_schema, parquet_to_arrow_schema, AsyncArrowWriter,
 };
-use parquet::file::footer::{decode_footer, decode_metadata};
-use parquet::file::metadata::{ParquetMetaData, RowGroupMetaData};
-use parquet::file::properties::WriterProperties;
+use parquet::file::metadata::{ParquetMetaData, ParquetMetaDataReader, RowGroupMetaData};
+use parquet::file::properties::{WriterProperties, WriterPropertiesBuilder};
 use parquet::file::writer::SerializedFileWriter;
 use parquet::format::FileMetaData;
 use tokio::io::{AsyncWrite, AsyncWriteExt};
 use tokio::sync::mpsc::{self, Receiver, Sender};
 use tokio::task::JoinSet;
 
-use crate::datasource::physical_plan::parquet::ParquetExecBuilder;
+use crate::datasource::physical_plan::parquet::{
+    can_expr_be_pushed_down_with_schemas, ParquetExecBuilder,
+};
 use datafusion_physical_expr_common::sort_expr::LexRequirement;
-use futures::{StreamExt, TryStreamExt};
+use futures::future::BoxFuture;
+use futures::{FutureExt, StreamExt, TryStreamExt};
 use object_store::path::Path;
 use object_store::{ObjectMeta, ObjectStore};
 use parquet::arrow::arrow_reader::statistics::StatisticsConverter;
+use parquet::arrow::async_reader::MetadataFetch;
+use parquet::errors::ParquetError;
 
 /// Initial writing buffer size. Note this is just a size hint for efficiency. It
 /// will grow beyond the set value if needed.
@@ -157,7 +164,7 @@ impl GetExt for ParquetFormatFactory {
     }
 }
 
-impl fmt::Debug for ParquetFormatFactory {
+impl Debug for ParquetFormatFactory {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("ParquetFormatFactory")
             .field("ParquetFormatFactory", &self.options)
@@ -246,11 +253,27 @@ impl ParquetFormat {
         self.options.global.schema_force_view_types
     }
 
-    /// If true, will use view types (StringView and BinaryView).
-    ///
-    /// Refer to [`Self::force_view_types`].
+    /// If true, will use view types. See [`Self::force_view_types`] for details
     pub fn with_force_view_types(mut self, use_views: bool) -> Self {
         self.options.global.schema_force_view_types = use_views;
+        self
+    }
+
+    /// Return `true` if binary types will be read as strings.
+    ///
+    /// If this returns true, DataFusion will instruct the parquet reader
+    /// to read binary columns such as `Binary` or `BinaryView` as the
+    /// corresponding string type such as `Utf8` or `LargeUtf8`.
+    /// The parquet reader has special optimizations for `Utf8` and `LargeUtf8`
+    /// validation, and such queries are significantly faster than reading
+    /// binary columns and then casting to string columns.
+    pub fn binary_as_string(&self) -> bool {
+        self.options.global.binary_as_string
+    }
+
+    /// If true, will read binary types as strings. See [`Self::binary_as_string`] for details
+    pub fn with_binary_as_string(mut self, binary_as_string: bool) -> Self {
+        self.options.global.binary_as_string = binary_as_string;
         self
     }
 }
@@ -299,9 +322,7 @@ impl FileFormat for ParquetFormat {
         let ext = self.get_ext();
         match file_compression_type.get_variant() {
             CompressionTypeVariant::UNCOMPRESSED => Ok(ext),
-            _ => Err(DataFusionError::Internal(
-                "Parquet FileFormat does not support compression.".into(),
-            )),
+            _ => internal_err!("Parquet FileFormat does not support compression."),
         }
     }
 
@@ -342,6 +363,12 @@ impl FileFormat for ParquetFormat {
         } else {
             Schema::try_merge(schemas)
         }?;
+
+        let schema = if self.binary_as_string() {
+            transform_binary_to_string(&schema)
+        } else {
+            schema
+        };
 
         let schema = if self.force_view_types() {
             transform_schema_to_view(&schema)
@@ -400,11 +427,11 @@ impl FileFormat for ParquetFormat {
         conf: FileSinkConfig,
         order_requirements: Option<LexRequirement>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        if conf.overwrite {
+        if conf.insert_op != InsertOp::Append {
             return not_impl_err!("Overwrites are not implemented yet for Parquet");
         }
 
-        let sink_schema = conf.output_schema().clone();
+        let sink_schema = Arc::clone(conf.output_schema());
         let sink = Arc::new(ParquetSink::new(conf, self.options.clone()));
 
         Ok(Arc::new(DataSinkExec::new(
@@ -413,6 +440,54 @@ impl FileFormat for ParquetFormat {
             sink_schema,
             order_requirements,
         )) as _)
+    }
+
+    fn supports_filters_pushdown(
+        &self,
+        file_schema: &Schema,
+        table_schema: &Schema,
+        filters: &[&Expr],
+    ) -> Result<FilePushdownSupport> {
+        if !self.options().global.pushdown_filters {
+            return Ok(FilePushdownSupport::NoSupport);
+        }
+
+        let all_supported = filters.iter().all(|filter| {
+            can_expr_be_pushed_down_with_schemas(filter, file_schema, table_schema)
+        });
+
+        Ok(if all_supported {
+            FilePushdownSupport::Supported
+        } else {
+            FilePushdownSupport::NotSupportedForFilter
+        })
+    }
+}
+
+/// [`MetadataFetch`] adapter for reading bytes from an [`ObjectStore`]
+struct ObjectStoreFetch<'a> {
+    store: &'a dyn ObjectStore,
+    meta: &'a ObjectMeta,
+}
+
+impl<'a> ObjectStoreFetch<'a> {
+    fn new(store: &'a dyn ObjectStore, meta: &'a ObjectMeta) -> Self {
+        Self { store, meta }
+    }
+}
+
+impl MetadataFetch for ObjectStoreFetch<'_> {
+    fn fetch(
+        &mut self,
+        range: Range<usize>,
+    ) -> BoxFuture<'_, Result<Bytes, ParquetError>> {
+        async {
+            self.store
+                .get_range(&self.meta.location, range)
+                .await
+                .map_err(ParquetError::from)
+        }
+        .boxed()
     }
 }
 
@@ -427,57 +502,14 @@ pub async fn fetch_parquet_metadata(
     meta: &ObjectMeta,
     size_hint: Option<usize>,
 ) -> Result<ParquetMetaData> {
-    if meta.size < 8 {
-        return exec_err!("file size of {} is less than footer", meta.size);
-    }
+    let file_size = meta.size;
+    let fetch = ObjectStoreFetch::new(store, meta);
 
-    // If a size hint is provided, read more than the minimum size
-    // to try and avoid a second fetch.
-    let footer_start = if let Some(size_hint) = size_hint {
-        meta.size.saturating_sub(size_hint)
-    } else {
-        meta.size - 8
-    };
-
-    let suffix = store
-        .get_range(&meta.location, footer_start..meta.size)
-        .await?;
-
-    let suffix_len = suffix.len();
-
-    let mut footer = [0; 8];
-    footer.copy_from_slice(&suffix[suffix_len - 8..suffix_len]);
-
-    let length = decode_footer(&footer)?;
-
-    if meta.size < length + 8 {
-        return exec_err!(
-            "file size of {} is less than footer + metadata {}",
-            meta.size,
-            length + 8
-        );
-    }
-
-    // Did not fetch the entire file metadata in the initial read, need to make a second request
-    if length > suffix_len - 8 {
-        let metadata_start = meta.size - length - 8;
-        let remaining_metadata = store
-            .get_range(&meta.location, metadata_start..footer_start)
-            .await?;
-
-        let mut metadata = BytesMut::with_capacity(length);
-
-        metadata.put(remaining_metadata.as_ref());
-        metadata.put(&suffix[..suffix_len - 8]);
-
-        Ok(decode_metadata(metadata.as_ref())?)
-    } else {
-        let metadata_start = meta.size - length - 8;
-
-        Ok(decode_metadata(
-            &suffix[metadata_start - footer_start..suffix_len - 8],
-        )?)
-    }
+    ParquetMetaDataReader::new()
+        .with_prefetch_hint(size_hint)
+        .load_and_finish(fetch, file_size)
+        .await
+        .map_err(DataFusionError::from)
 }
 
 /// Read and parse the schema of the Parquet file at location `path`
@@ -540,6 +572,10 @@ pub fn statistics_from_parquet_meta_calc(
         file_metadata.schema_descr(),
         file_metadata.key_value_metadata(),
     )?;
+    if let Some(merged) = coerce_file_schema_to_string_type(&table_schema, &file_schema) {
+        file_schema = merged;
+    }
+
     if let Some(merged) = coerce_file_schema_to_view_type(&table_schema, &file_schema) {
         file_schema = merged;
     }
@@ -699,17 +735,40 @@ impl ParquetSink {
                 .iter()
                 .map(|(s, _)| s)
                 .collect();
-            Arc::new(Schema::new(
+            Arc::new(Schema::new_with_metadata(
                 schema
                     .fields()
                     .iter()
                     .filter(|f| !partition_names.contains(&f.name()))
                     .map(|f| (**f).clone())
                     .collect::<Vec<_>>(),
+                schema.metadata().clone(),
             ))
         } else {
-            self.config.output_schema().clone()
+            Arc::clone(self.config.output_schema())
         }
+    }
+
+    /// Create writer properties based upon configuration settings,
+    /// including partitioning and the inclusion of arrow schema metadata.
+    fn create_writer_props(&self) -> Result<WriterProperties> {
+        let schema = if self.parquet_options.global.allow_single_file_parallelism {
+            // If parallelizing writes, we may be also be doing hive style partitioning
+            // into multiple files which impacts the schema per file.
+            // Refer to `self.get_writer_schema()`
+            &self.get_writer_schema()
+        } else {
+            self.config.output_schema()
+        };
+
+        // TODO: avoid this clone in follow up PR, where the writer properties & schema
+        // are calculated once on `ParquetSink::new`
+        let mut parquet_opts = self.parquet_options.clone();
+        if !self.parquet_options.global.skip_arrow_metadata {
+            parquet_opts.arrow_schema(schema);
+        }
+
+        Ok(WriterPropertiesBuilder::try_from(&parquet_opts)?.build())
     }
 
     /// Creates an AsyncArrowWriter which serializes a parquet file to an ObjectStore
@@ -721,10 +780,14 @@ impl ParquetSink {
         parquet_props: WriterProperties,
     ) -> Result<AsyncArrowWriter<BufWriter>> {
         let buf_writer = BufWriter::new(object_store, location.clone());
-        let writer = AsyncArrowWriter::try_new(
+        let options = ArrowWriterOptions::new()
+            .with_properties(parquet_props)
+            .with_skip_arrow_metadata(self.parquet_options.global.skip_arrow_metadata);
+
+        let writer = AsyncArrowWriter::try_new_with_options(
             buf_writer,
             self.get_writer_schema(),
-            Some(parquet_props),
+            options,
         )?;
         Ok(writer)
     }
@@ -750,7 +813,7 @@ impl DataSink for ParquetSink {
         data: SendableRecordBatchStream,
         context: &Arc<TaskContext>,
     ) -> Result<u64> {
-        let parquet_props = ParquetWriterOptions::try_from(&self.parquet_options)?;
+        let parquet_props = self.create_writer_props()?;
 
         let object_store = context
             .runtime_env()
@@ -793,8 +856,8 @@ impl DataSink for ParquetSink {
                 let mut writer = self
                     .create_async_arrow_writer(
                         &path,
-                        object_store.clone(),
-                        parquet_props.writer_options().clone(),
+                        Arc::clone(&object_store),
+                        parquet_props.clone(),
                     )
                     .await?;
                 let mut reservation =
@@ -817,7 +880,7 @@ impl DataSink for ParquetSink {
                     // manage compressed blocks themselves.
                     FileCompressionType::UNCOMPRESSED,
                     &path,
-                    object_store.clone(),
+                    Arc::clone(&object_store),
                 )
                 .await?;
                 let schema = self.get_writer_schema();
@@ -829,7 +892,7 @@ impl DataSink for ParquetSink {
                         writer,
                         rx,
                         schema,
-                        props.writer_options(),
+                        &props,
                         parallel_options_clone,
                         pool,
                     )
@@ -1004,8 +1067,8 @@ fn spawn_parquet_parallel_serialization_task(
         let max_row_group_rows = writer_props.max_row_group_size();
         let (mut column_writer_handles, mut col_array_channels) =
             spawn_column_parallel_row_group_writer(
-                schema.clone(),
-                writer_props.clone(),
+                Arc::clone(&schema),
+                Arc::clone(&writer_props),
                 max_buffer_rb,
                 &pool,
             )?;
@@ -1017,15 +1080,23 @@ fn spawn_parquet_parallel_serialization_task(
             // function.
             loop {
                 if current_rg_rows + rb.num_rows() < max_row_group_rows {
-                    send_arrays_to_col_writers(&col_array_channels, &rb, schema.clone())
-                        .await?;
+                    send_arrays_to_col_writers(
+                        &col_array_channels,
+                        &rb,
+                        Arc::clone(&schema),
+                    )
+                    .await?;
                     current_rg_rows += rb.num_rows();
                     break;
                 } else {
                     let rows_left = max_row_group_rows - current_rg_rows;
                     let a = rb.slice(0, rows_left);
-                    send_arrays_to_col_writers(&col_array_channels, &a, schema.clone())
-                        .await?;
+                    send_arrays_to_col_writers(
+                        &col_array_channels,
+                        &a,
+                        Arc::clone(&schema),
+                    )
+                    .await?;
 
                     // Signal the parallel column writers that the RowGroup is done, join and finalize RowGroup
                     // on a separate task, so that we can immediately start on the next RG before waiting
@@ -1048,8 +1119,8 @@ fn spawn_parquet_parallel_serialization_task(
 
                     (column_writer_handles, col_array_channels) =
                         spawn_column_parallel_row_group_writer(
-                            schema.clone(),
-                            writer_props.clone(),
+                            Arc::clone(&schema),
+                            Arc::clone(&writer_props),
                             max_buffer_rb,
                             &pool,
                         )?;
@@ -1152,15 +1223,15 @@ async fn output_single_parquet_file_parallelized(
     let launch_serialization_task = spawn_parquet_parallel_serialization_task(
         data,
         serialize_tx,
-        output_schema.clone(),
-        arc_props.clone(),
+        Arc::clone(&output_schema),
+        Arc::clone(&arc_props),
         parallel_options,
         Arc::clone(&pool),
     );
     let file_metadata = concatenate_parallel_row_groups(
         serialize_rx,
-        output_schema.clone(),
-        arc_props.clone(),
+        Arc::clone(&output_schema),
+        Arc::clone(&arc_props),
         object_store_writer,
         pool,
     )
@@ -1266,7 +1337,7 @@ mod tests {
 
     use crate::datasource::file_format::parquet::test_util::store_parquet;
     use crate::physical_plan::metrics::MetricValue;
-    use crate::prelude::{SessionConfig, SessionContext};
+    use crate::prelude::{ParquetReadOptions, SessionConfig, SessionContext};
     use arrow::array::{Array, ArrayRef, StringArray};
     use arrow_array::types::Int32Type;
     use arrow_array::{DictionaryArray, Int32Array, Int64Array};
@@ -1277,8 +1348,8 @@ mod tests {
         as_float64_array, as_int32_array, as_timestamp_nanosecond_array,
     };
     use datafusion_common::config::ParquetOptions;
-    use datafusion_common::ScalarValue;
     use datafusion_common::ScalarValue::Utf8;
+    use datafusion_common::{assert_batches_eq, ScalarValue};
     use datafusion_execution::object_store::ObjectStoreUrl;
     use datafusion_execution::runtime_env::RuntimeEnv;
     use datafusion_physical_plan::stream::RecordBatchStreamAdapter;
@@ -1399,7 +1470,7 @@ mod tests {
     }
 
     impl Display for RequestCountingObjectStore {
-        fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
             write!(f, "RequestCounting({})", self.inner)
         }
     }
@@ -1667,7 +1738,7 @@ mod tests {
         let null_utf8 = if force_views {
             ScalarValue::Utf8View(None)
         } else {
-            ScalarValue::Utf8(None)
+            Utf8(None)
         };
 
         // Fetch statistics for first file
@@ -1680,7 +1751,7 @@ mod tests {
         let expected_type = if force_views {
             ScalarValue::Utf8View
         } else {
-            ScalarValue::Utf8
+            Utf8
         };
         assert_eq!(
             c1_stats.max_value,
@@ -2205,6 +2276,59 @@ mod tests {
         scan_format(state, &*format, &testdata, file_name, projection, limit).await
     }
 
+    /// Test that 0-byte files don't break while reading
+    #[tokio::test]
+    async fn test_read_empty_parquet() -> Result<()> {
+        let tmp_dir = tempfile::TempDir::new().unwrap();
+        let path = format!("{}/empty.parquet", tmp_dir.path().to_string_lossy());
+        File::create(&path).await?;
+
+        let ctx = SessionContext::new();
+
+        let df = ctx
+            .read_parquet(&path, ParquetReadOptions::default())
+            .await
+            .expect("read_parquet should succeed");
+
+        let result = df.collect().await?;
+        #[rustfmt::skip]
+        let expected = ["++",
+            "++"];
+        assert_batches_eq!(expected, &result);
+
+        Ok(())
+    }
+
+    /// Test that 0-byte files don't break while reading
+    #[tokio::test]
+    async fn test_read_partitioned_empty_parquet() -> Result<()> {
+        let tmp_dir = tempfile::TempDir::new().unwrap();
+        let partition_dir = tmp_dir.path().join("col1=a");
+        std::fs::create_dir(&partition_dir).unwrap();
+        File::create(partition_dir.join("empty.parquet"))
+            .await
+            .unwrap();
+
+        let ctx = SessionContext::new();
+
+        let df = ctx
+            .read_parquet(
+                tmp_dir.path().to_str().unwrap(),
+                ParquetReadOptions::new()
+                    .table_partition_cols(vec![("col1".to_string(), DataType::Utf8)]),
+            )
+            .await
+            .expect("read_parquet should succeed");
+
+        let result = df.collect().await?;
+        #[rustfmt::skip]
+        let expected = ["++",
+            "++"];
+        assert_batches_eq!(expected, &result);
+
+        Ok(())
+    }
+
     fn build_ctx(store_url: &url::Url) -> Arc<TaskContext> {
         let tmp_dir = tempfile::TempDir::new().unwrap();
         let local = Arc::new(
@@ -2234,6 +2358,216 @@ mod tests {
 
     #[tokio::test]
     async fn parquet_sink_write() -> Result<()> {
+        let parquet_sink = create_written_parquet_sink("file:///").await?;
+
+        // assert written to proper path
+        let (path, file_metadata) = get_written(parquet_sink)?;
+        let path_parts = path.parts().collect::<Vec<_>>();
+        assert_eq!(path_parts.len(), 1, "should not have path prefix");
+
+        // check the file metadata
+        let expected_kv_meta = vec![
+            // default is to include arrow schema
+            KeyValue {
+                key: "ARROW:schema".to_string(),
+                value: Some(ENCODED_ARROW_SCHEMA.to_string()),
+            },
+            KeyValue {
+                key: "my-data".to_string(),
+                value: Some("stuff".to_string()),
+            },
+            KeyValue {
+                key: "my-data-bool-key".to_string(),
+                value: None,
+            },
+        ];
+        assert_file_metadata(file_metadata, &expected_kv_meta);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn parquet_sink_parallel_write() -> Result<()> {
+        let opts = ParquetOptions {
+            allow_single_file_parallelism: true,
+            maximum_parallel_row_group_writers: 2,
+            maximum_buffered_record_batches_per_stream: 2,
+            ..Default::default()
+        };
+
+        let parquet_sink =
+            create_written_parquet_sink_using_config("file:///", opts).await?;
+
+        // assert written to proper path
+        let (path, file_metadata) = get_written(parquet_sink)?;
+        let path_parts = path.parts().collect::<Vec<_>>();
+        assert_eq!(path_parts.len(), 1, "should not have path prefix");
+
+        // check the file metadata
+        let expected_kv_meta = vec![
+            // default is to include arrow schema
+            KeyValue {
+                key: "ARROW:schema".to_string(),
+                value: Some(ENCODED_ARROW_SCHEMA.to_string()),
+            },
+            KeyValue {
+                key: "my-data".to_string(),
+                value: Some("stuff".to_string()),
+            },
+            KeyValue {
+                key: "my-data-bool-key".to_string(),
+                value: None,
+            },
+        ];
+        assert_file_metadata(file_metadata, &expected_kv_meta);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn parquet_sink_write_insert_schema_into_metadata() -> Result<()> {
+        // expected kv metadata without schema
+        let expected_without = vec![
+            KeyValue {
+                key: "my-data".to_string(),
+                value: Some("stuff".to_string()),
+            },
+            KeyValue {
+                key: "my-data-bool-key".to_string(),
+                value: None,
+            },
+        ];
+        // expected kv metadata with schema
+        let expected_with = [
+            vec![KeyValue {
+                key: "ARROW:schema".to_string(),
+                value: Some(ENCODED_ARROW_SCHEMA.to_string()),
+            }],
+            expected_without.clone(),
+        ]
+        .concat();
+
+        // single threaded write, skip insert
+        let opts = ParquetOptions {
+            allow_single_file_parallelism: false,
+            skip_arrow_metadata: true,
+            ..Default::default()
+        };
+        let parquet_sink =
+            create_written_parquet_sink_using_config("file:///", opts).await?;
+        let (_, file_metadata) = get_written(parquet_sink)?;
+        assert_file_metadata(file_metadata, &expected_without);
+
+        // single threaded write, do not skip insert
+        let opts = ParquetOptions {
+            allow_single_file_parallelism: false,
+            skip_arrow_metadata: false,
+            ..Default::default()
+        };
+        let parquet_sink =
+            create_written_parquet_sink_using_config("file:///", opts).await?;
+        let (_, file_metadata) = get_written(parquet_sink)?;
+        assert_file_metadata(file_metadata, &expected_with);
+
+        // multithreaded write, skip insert
+        let opts = ParquetOptions {
+            allow_single_file_parallelism: true,
+            maximum_parallel_row_group_writers: 2,
+            maximum_buffered_record_batches_per_stream: 2,
+            skip_arrow_metadata: true,
+            ..Default::default()
+        };
+        let parquet_sink =
+            create_written_parquet_sink_using_config("file:///", opts).await?;
+        let (_, file_metadata) = get_written(parquet_sink)?;
+        assert_file_metadata(file_metadata, &expected_without);
+
+        // multithreaded write, do not skip insert
+        let opts = ParquetOptions {
+            allow_single_file_parallelism: true,
+            maximum_parallel_row_group_writers: 2,
+            maximum_buffered_record_batches_per_stream: 2,
+            skip_arrow_metadata: false,
+            ..Default::default()
+        };
+        let parquet_sink =
+            create_written_parquet_sink_using_config("file:///", opts).await?;
+        let (_, file_metadata) = get_written(parquet_sink)?;
+        assert_file_metadata(file_metadata, &expected_with);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn parquet_sink_write_with_extension() -> Result<()> {
+        let filename = "test_file.custom_ext";
+        let file_path = format!("file:///path/to/{}", filename);
+        let parquet_sink = create_written_parquet_sink(file_path.as_str()).await?;
+
+        // assert written to proper path
+        let (path, _) = get_written(parquet_sink)?;
+        let path_parts = path.parts().collect::<Vec<_>>();
+        assert_eq!(
+            path_parts.len(),
+            3,
+            "Expected 3 path parts, instead found {}",
+            path_parts.len()
+        );
+        assert_eq!(path_parts.last().unwrap().as_ref(), filename);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn parquet_sink_write_with_directory_name() -> Result<()> {
+        let file_path = "file:///path/to";
+        let parquet_sink = create_written_parquet_sink(file_path).await?;
+
+        // assert written to proper path
+        let (path, _) = get_written(parquet_sink)?;
+        let path_parts = path.parts().collect::<Vec<_>>();
+        assert_eq!(
+            path_parts.len(),
+            3,
+            "Expected 3 path parts, instead found {}",
+            path_parts.len()
+        );
+        assert!(path_parts.last().unwrap().as_ref().ends_with(".parquet"));
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn parquet_sink_write_with_folder_ending() -> Result<()> {
+        let file_path = "file:///path/to/";
+        let parquet_sink = create_written_parquet_sink(file_path).await?;
+
+        // assert written to proper path
+        let (path, _) = get_written(parquet_sink)?;
+        let path_parts = path.parts().collect::<Vec<_>>();
+        assert_eq!(
+            path_parts.len(),
+            3,
+            "Expected 3 path parts, instead found {}",
+            path_parts.len()
+        );
+        assert!(path_parts.last().unwrap().as_ref().ends_with(".parquet"));
+
+        Ok(())
+    }
+
+    async fn create_written_parquet_sink(table_path: &str) -> Result<Arc<ParquetSink>> {
+        create_written_parquet_sink_using_config(table_path, ParquetOptions::default())
+            .await
+    }
+
+    static ENCODED_ARROW_SCHEMA: &str = "/////5QAAAAQAAAAAAAKAAwACgAJAAQACgAAABAAAAAAAQQACAAIAAAABAAIAAAABAAAAAIAAAA8AAAABAAAANz///8UAAAADAAAAAAAAAUMAAAAAAAAAMz///8BAAAAYgAAABAAFAAQAAAADwAEAAAACAAQAAAAGAAAAAwAAAAAAAAFEAAAAAAAAAAEAAQABAAAAAEAAABhAAAA";
+
+    async fn create_written_parquet_sink_using_config(
+        table_path: &str,
+        global: ParquetOptions,
+    ) -> Result<Arc<ParquetSink>> {
+        // schema should match the ENCODED_ARROW_SCHEMA bove
         let field_a = Field::new("a", DataType::Utf8, false);
         let field_b = Field::new("b", DataType::Utf8, false);
         let schema = Arc::new(Schema::new(vec![field_a, field_b]));
@@ -2242,10 +2576,10 @@ mod tests {
         let file_sink_config = FileSinkConfig {
             object_store_url: object_store_url.clone(),
             file_groups: vec![PartitionedFile::new("/tmp".to_string(), 1)],
-            table_paths: vec![ListingTableUrl::parse("file:///")?],
+            table_paths: vec![ListingTableUrl::parse(table_path)?],
             output_schema: schema.clone(),
             table_partition_cols: vec![],
-            overwrite: true,
+            insert_op: InsertOp::Overwrite,
             keep_partition_by_columns: false,
         };
         let parquet_sink = Arc::new(ParquetSink::new(
@@ -2255,6 +2589,7 @@ mod tests {
                     ("my-data".to_string(), Some("stuff".to_string())),
                     ("my-data-bool-key".to_string(), None),
                 ]),
+                global,
                 ..Default::default()
             },
         ));
@@ -2276,7 +2611,10 @@ mod tests {
             .await
             .unwrap();
 
-        // assert written
+        Ok(parquet_sink)
+    }
+
+    fn get_written(parquet_sink: Arc<ParquetSink>) -> Result<(Path, FileMetaData)> {
         let mut written = parquet_sink.written();
         let written = written.drain();
         assert_eq!(
@@ -2286,19 +2624,17 @@ mod tests {
             written.len()
         );
 
-        // check the file metadata
-        let (
-            path,
-            FileMetaData {
-                num_rows,
-                schema,
-                key_value_metadata,
-                ..
-            },
-        ) = written.take(1).next().unwrap();
-        let path_parts = path.parts().collect::<Vec<_>>();
-        assert_eq!(path_parts.len(), 1, "should not have path prefix");
+        let (path, file_metadata) = written.take(1).next().unwrap();
+        Ok((path, file_metadata))
+    }
 
+    fn assert_file_metadata(file_metadata: FileMetaData, expected_kv: &Vec<KeyValue>) {
+        let FileMetaData {
+            num_rows,
+            schema,
+            key_value_metadata,
+            ..
+        } = file_metadata;
         assert_eq!(num_rows, 2, "file metadata to have 2 rows");
         assert!(
             schema.iter().any(|col_schema| col_schema.name == "a"),
@@ -2311,19 +2647,7 @@ mod tests {
 
         let mut key_value_metadata = key_value_metadata.unwrap();
         key_value_metadata.sort_by(|a, b| a.key.cmp(&b.key));
-        let expected_metadata = vec![
-            KeyValue {
-                key: "my-data".to_string(),
-                value: Some("stuff".to_string()),
-            },
-            KeyValue {
-                key: "my-data-bool-key".to_string(),
-                value: None,
-            },
-        ];
-        assert_eq!(key_value_metadata, expected_metadata);
-
-        Ok(())
+        assert_eq!(&key_value_metadata, expected_kv);
     }
 
     #[tokio::test]
@@ -2340,7 +2664,7 @@ mod tests {
             table_paths: vec![ListingTableUrl::parse("file:///")?],
             output_schema: schema.clone(),
             table_partition_cols: vec![("a".to_string(), DataType::Utf8)], // add partitioning
-            overwrite: true,
+            insert_op: InsertOp::Overwrite,
             keep_partition_by_columns: false,
         };
         let parquet_sink = Arc::new(ParquetSink::new(
@@ -2423,7 +2747,7 @@ mod tests {
                 table_paths: vec![ListingTableUrl::parse("file:///")?],
                 output_schema: schema.clone(),
                 table_partition_cols: vec![],
-                overwrite: true,
+                insert_op: InsertOp::Overwrite,
                 keep_partition_by_columns: false,
             };
             let parquet_sink = Arc::new(ParquetSink::new(

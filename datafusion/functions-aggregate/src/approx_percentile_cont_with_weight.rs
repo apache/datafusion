@@ -17,6 +17,7 @@
 
 use std::any::Any;
 use std::fmt::{Debug, Formatter};
+use std::mem::size_of_val;
 use std::sync::Arc;
 
 use arrow::{
@@ -29,10 +30,13 @@ use datafusion_common::{not_impl_err, plan_err, Result};
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::type_coercion::aggregates::NUMERICS;
 use datafusion_expr::Volatility::Immutable;
-use datafusion_expr::{Accumulator, AggregateUDFImpl, Signature, TypeSignature};
+use datafusion_expr::{
+    Accumulator, AggregateUDFImpl, Documentation, Signature, TypeSignature,
+};
 use datafusion_functions_aggregate_common::tdigest::{
     Centroid, TDigest, DEFAULT_MAX_SIZE,
 };
+use datafusion_macros::user_doc;
 
 use crate::approx_percentile_cont::{ApproxPercentileAccumulator, ApproxPercentileCont};
 
@@ -45,6 +49,28 @@ make_udaf_expr_and_func!(
 );
 
 /// APPROX_PERCENTILE_CONT_WITH_WEIGHT aggregate expression
+#[user_doc(
+    doc_section(label = "Approximate Functions"),
+    description = "Returns the weighted approximate percentile of input values using the t-digest algorithm.",
+    syntax_example = "approx_percentile_cont_with_weight(expression, weight, percentile)",
+    sql_example = r#"```sql
+> SELECT approx_percentile_cont_with_weight(column_name, weight_column, 0.90) FROM table_name;
++----------------------------------------------------------------------+
+| approx_percentile_cont_with_weight(column_name, weight_column, 0.90) |
++----------------------------------------------------------------------+
+| 78.5                                                                 |
++----------------------------------------------------------------------+
+```"#,
+    standard_argument(name = "expression", prefix = "The"),
+    argument(
+        name = "weight",
+        description = "Expression to use as weight. Can be a constant, column, or function, and any combination of arithmetic operators."
+    ),
+    argument(
+        name = "percentile",
+        description = "Percentile to compute. Must be a float value between 0 and 1 (inclusive)."
+    )
+)]
 pub struct ApproxPercentileContWithWeight {
     signature: Signature,
     approx_percentile_cont: ApproxPercentileCont,
@@ -146,10 +172,14 @@ impl AggregateUDFImpl for ApproxPercentileContWithWeight {
     }
 
     #[allow(rustdoc::private_intra_doc_links)]
-    /// See [`TDigest::to_scalar_state()`] for a description of the serialised
+    /// See [`TDigest::to_scalar_state()`] for a description of the serialized
     /// state.
     fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<Field>> {
         self.approx_percentile_cont.state_fields(args)
+    }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        self.doc()
     }
 }
 
@@ -205,8 +235,7 @@ impl Accumulator for ApproxPercentileWithWeightAccumulator {
     }
 
     fn size(&self) -> usize {
-        std::mem::size_of_val(self)
-            - std::mem::size_of_val(&self.approx_percentile_cont_accumulator)
+        size_of_val(self) - size_of_val(&self.approx_percentile_cont_accumulator)
             + self.approx_percentile_cont_accumulator.size()
     }
 }

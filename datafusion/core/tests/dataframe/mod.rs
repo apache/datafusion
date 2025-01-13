@@ -114,10 +114,7 @@ async fn test_count_wildcard_on_where_in() -> Result<()> {
                     .await?
                     .aggregate(vec![], vec![count(wildcard())])?
                     .select(vec![count(wildcard())])?
-                    .into_unoptimized_plan(),
-                // Usually, into_optimized_plan() should be used here, but due to
-                // https://github.com/apache/datafusion/issues/5771,
-                // subqueries in SQL cannot be optimized, resulting in differences in logical_plan. Therefore, into_unoptimized_plan() is temporarily used here.
+                    .into_optimized_plan()?,
             ),
         ))?
         .select(vec![col("a"), col("b")])?
@@ -1143,7 +1140,7 @@ async fn unnest_fixed_list_drop_nulls() -> Result<()> {
 }
 
 #[tokio::test]
-async fn unnest_fixed_list_nonull() -> Result<()> {
+async fn unnest_fixed_list_non_null() -> Result<()> {
     let mut shape_id_builder = UInt32Builder::new();
     let mut tags_builder = FixedSizeListBuilder::new(StringBuilder::new(), 2);
 
@@ -1250,6 +1247,43 @@ async fn unnest_aggregate_columns() -> Result<()> {
 }
 
 #[tokio::test]
+async fn unnest_no_empty_batches() -> Result<()> {
+    let mut shape_id_builder = UInt32Builder::new();
+    let mut tag_id_builder = UInt32Builder::new();
+
+    for shape_id in 1..=10 {
+        for tag_id in 1..=10 {
+            shape_id_builder.append_value(shape_id as u32);
+            tag_id_builder.append_value((shape_id * 10 + tag_id) as u32);
+        }
+    }
+
+    let batch = RecordBatch::try_from_iter(vec![
+        ("shape_id", Arc::new(shape_id_builder.finish()) as ArrayRef),
+        ("tag_id", Arc::new(tag_id_builder.finish()) as ArrayRef),
+    ])?;
+
+    let ctx = SessionContext::new();
+    ctx.register_batch("shapes", batch)?;
+    let df = ctx.table("shapes").await?;
+
+    let results = df
+        .clone()
+        .aggregate(
+            vec![col("shape_id")],
+            vec![array_agg(col("tag_id")).alias("tag_id")],
+        )?
+        .collect()
+        .await?;
+
+    // Assert that there are no empty batches in result
+    for rb in results {
+        assert!(rb.num_rows() > 0);
+    }
+    Ok(())
+}
+
+#[tokio::test]
 async fn unnest_array_agg() -> Result<()> {
     let mut shape_id_builder = UInt32Builder::new();
     let mut tag_id_builder = UInt32Builder::new();
@@ -1271,6 +1305,12 @@ async fn unnest_array_agg() -> Result<()> {
     let df = ctx.table("shapes").await?;
 
     let results = df.clone().collect().await?;
+
+    // Assert that there are no empty batches in result
+    for rb in results.clone() {
+        assert!(rb.num_rows() > 0);
+    }
+
     let expected = vec![
         "+----------+--------+",
         "| shape_id | tag_id |",
@@ -1391,7 +1431,7 @@ async fn unnest_with_redundant_columns() -> Result<()> {
     let optimized_plan = df.clone().into_optimized_plan()?;
     let expected = vec![
         "Projection: shapes.shape_id [shape_id:UInt32]",
-        "  Unnest: lists[shape_id2] structs[] [shape_id:UInt32, shape_id2:UInt32;N]",
+        "  Unnest: lists[shape_id2|depth=1] structs[] [shape_id:UInt32, shape_id2:UInt32;N]",
         "    Aggregate: groupBy=[[shapes.shape_id]], aggr=[[array_agg(shapes.shape_id) AS shape_id2]] [shape_id:UInt32, shape_id2:List(Field { name: \"item\", data_type: UInt32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} });N]",
         "      TableScan: shapes projection=[shape_id] [shape_id:UInt32]",
     ];
@@ -1434,9 +1474,7 @@ async fn unnest_analyze_metrics() -> Result<()> {
         .explain(false, true)?
         .collect()
         .await?;
-    let formatted = arrow::util::pretty::pretty_format_batches(&results)
-        .unwrap()
-        .to_string();
+    let formatted = pretty_format_batches(&results).unwrap().to_string();
     assert_contains!(&formatted, "elapsed_compute=");
     assert_contains!(&formatted, "input_batches=1");
     assert_contains!(&formatted, "input_rows=5");
@@ -1990,6 +2028,7 @@ async fn test_array_agg() -> Result<()> {
 async fn test_dataframe_placeholder_missing_param_values() -> Result<()> {
     let ctx = SessionContext::new();
 
+    // Creating LogicalPlans with placeholders should work.
     let df = ctx
         .read_empty()
         .unwrap()
@@ -2011,17 +2050,16 @@ async fn test_dataframe_placeholder_missing_param_values() -> Result<()> {
         "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
     );
 
-    // The placeholder is not replaced with a value,
-    // so the filter data type is not know, i.e. a = $0.
-    // Therefore, the optimization fails.
-    let optimized_plan = ctx.state().optimize(logical_plan);
-    assert!(optimized_plan.is_err());
-    assert!(optimized_plan
-        .unwrap_err()
-        .to_string()
-        .contains("Placeholder type could not be resolved. Make sure that the placeholder is bound to a concrete type, e.g. by providing parameter values."));
+    // Executing LogicalPlans with placeholders that don't have bound values
+    // should fail.
+    let results = df.collect().await;
+    let err_msg = results.unwrap_err().strip_backtrace();
+    assert_eq!(
+        err_msg,
+        "Execution error: Placeholder '$0' was not provided a value for execution."
+    );
 
-    // Prodiving a parameter value should resolve the error
+    // Providing a parameter value should resolve the error
     let df = ctx
         .read_empty()
         .unwrap()
@@ -2045,12 +2083,152 @@ async fn test_dataframe_placeholder_missing_param_values() -> Result<()> {
         "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
     );
 
-    let optimized_plan = ctx.state().optimize(logical_plan);
-    assert!(optimized_plan.is_ok());
+    // N.B., the test is basically `SELECT 1 as a WHERE a = 3;` which returns no results.
+    #[rustfmt::skip]
+    let expected = [
+        "++",
+        "++"
+    ];
 
-    let actual = optimized_plan.unwrap().display_indent_schema().to_string();
-    let expected = "EmptyRelation [a:Int32]";
-    assert_eq!(expected, actual);
+    assert_batches_eq!(expected, &df.collect().await.unwrap());
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_dataframe_placeholder_column_parameter() -> Result<()> {
+    let ctx = SessionContext::new();
+
+    // Creating LogicalPlans with placeholders should work
+    let df = ctx.read_empty().unwrap().select_exprs(&["$1"]).unwrap();
+    let logical_plan = df.logical_plan();
+    let formatted = logical_plan.display_indent_schema().to_string();
+    let actual: Vec<&str> = formatted.trim().lines().collect();
+
+    #[rustfmt::skip]
+    let expected = vec![
+        "Projection: $1 [$1:Null;N]",
+        "  EmptyRelation []"
+    ];
+
+    assert_eq!(
+        expected, actual,
+        "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
+    );
+
+    // Executing LogicalPlans with placeholders that don't have bound values
+    // should fail.
+    let results = df.collect().await;
+    let err_msg = results.unwrap_err().strip_backtrace();
+    assert_eq!(
+        err_msg,
+        "Execution error: Placeholder '$1' was not provided a value for execution."
+    );
+
+    // Providing a parameter value should resolve the error
+    let df = ctx
+        .read_empty()
+        .unwrap()
+        .select_exprs(&["$1"])
+        .unwrap()
+        .with_param_values(vec![("1", ScalarValue::from(3i32))])
+        .unwrap();
+
+    let logical_plan = df.logical_plan();
+    let formatted = logical_plan.display_indent_schema().to_string();
+    let actual: Vec<&str> = formatted.trim().lines().collect();
+    let expected = vec![
+        "Projection: Int32(3) AS $1 [$1:Null;N]",
+        "  EmptyRelation []",
+    ];
+    assert_eq!(
+        expected, actual,
+        "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
+    );
+
+    #[rustfmt::skip]
+    let expected = [
+        "+----+",
+        "| $1 |",
+        "+----+",
+        "| 3  |",
+        "+----+"
+    ];
+
+    assert_batches_eq!(expected, &df.collect().await.unwrap());
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_dataframe_placeholder_like_expression() -> Result<()> {
+    let ctx = SessionContext::new();
+
+    // Creating LogicalPlans with placeholders should work
+    let df = ctx
+        .read_empty()
+        .unwrap()
+        .with_column("a", lit("foo"))
+        .unwrap()
+        .filter(col("a").like(placeholder("$1")))
+        .unwrap();
+
+    let logical_plan = df.logical_plan();
+    let formatted = logical_plan.display_indent_schema().to_string();
+    let actual: Vec<&str> = formatted.trim().lines().collect();
+    let expected = vec![
+        "Filter: a LIKE $1 [a:Utf8]",
+        "  Projection: Utf8(\"foo\") AS a [a:Utf8]",
+        "    EmptyRelation []",
+    ];
+    assert_eq!(
+        expected, actual,
+        "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
+    );
+
+    // Executing LogicalPlans with placeholders that don't have bound values
+    // should fail.
+    let results = df.collect().await;
+    let err_msg = results.unwrap_err().strip_backtrace();
+    assert_eq!(
+        err_msg,
+        "Execution error: Placeholder '$1' was not provided a value for execution."
+    );
+
+    // Providing a parameter value should resolve the error
+    let df = ctx
+        .read_empty()
+        .unwrap()
+        .with_column("a", lit("foo"))
+        .unwrap()
+        .filter(col("a").like(placeholder("$1")))
+        .unwrap()
+        .with_param_values(vec![("1", ScalarValue::from("f%"))])
+        .unwrap();
+
+    let logical_plan = df.logical_plan();
+    let formatted = logical_plan.display_indent_schema().to_string();
+    let actual: Vec<&str> = formatted.trim().lines().collect();
+    let expected = vec![
+        "Filter: a LIKE Utf8(\"f%\") [a:Utf8]",
+        "  Projection: Utf8(\"foo\") AS a [a:Utf8]",
+        "    EmptyRelation []",
+    ];
+    assert_eq!(
+        expected, actual,
+        "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
+    );
+
+    #[rustfmt::skip]
+    let expected = [
+        "+-----+",
+        "| a   |",
+        "+-----+",
+        "| foo |",
+        "+-----+"
+    ];
+
+    assert_batches_eq!(expected, &df.collect().await.unwrap());
 
     Ok(())
 }
@@ -2099,12 +2277,12 @@ async fn write_partitioned_parquet_results() -> Result<()> {
 
     // Explicitly read the parquet file at c2=123 to verify the physical files are partitioned
     let partitioned_file = format!("{out_dir}/c2=123", out_dir = out_dir);
-    let filted_df = ctx
+    let filter_df = ctx
         .read_parquet(&partitioned_file, ParquetReadOptions::default())
         .await?;
 
     // Check that the c2 column is gone and that c1 is abc.
-    let results = filted_df.collect().await?;
+    let results = filter_df.collect().await?;
     let expected = ["+-----+", "| c1  |", "+-----+", "| abc |", "+-----+"];
 
     assert_batches_eq!(expected, &results);

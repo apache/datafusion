@@ -34,6 +34,7 @@ use crate::{
     make_array::make_array,
 };
 
+#[derive(Debug)]
 pub struct NestedFunctionPlanner;
 
 impl ExprPlanner for NestedFunctionPlanner {
@@ -130,8 +131,8 @@ impl ExprPlanner for NestedFunctionPlanner {
     }
 }
 
+#[derive(Debug)]
 pub struct FieldAccessPlanner;
-
 impl ExprPlanner for FieldAccessPlanner {
     fn plan_field_access(
         &self,
@@ -184,5 +185,5 @@ impl ExprPlanner for FieldAccessPlanner {
 }
 
 fn is_array_agg(agg_func: &datafusion_expr::expr::AggregateFunction) -> bool {
-    return agg_func.func.name() == "array_agg";
+    agg_func.func.name() == "array_agg"
 }

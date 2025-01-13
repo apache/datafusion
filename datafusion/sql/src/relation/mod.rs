@@ -28,7 +28,7 @@ use sqlparser::ast::{FunctionArg, FunctionArgExpr, TableFactor};
 
 mod join;
 
-impl<'a, S: ContextProvider> SqlToRel<'a, S> {
+impl<S: ContextProvider> SqlToRel<'_, S> {
     /// Create a `LogicalPlan` that scans the named relation
     fn create_relation(
         &self,
@@ -70,7 +70,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     .build()?;
                     (plan, alias)
                 } else {
-                    // normalize name and alias
+                    // Normalize name and alias
                     let table_ref = self.object_name_to_table_reference(name)?;
                     let table_name = table_ref.to_string();
                     let cte = planner_context.get_cte(&table_name);
@@ -163,7 +163,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         subquery: TableFactor,
         planner_context: &mut PlannerContext,
     ) -> Result<LogicalPlan> {
-        // At this point for a syntacitally valid query the outer_from_schema is
+        // At this point for a syntactically valid query the outer_from_schema is
         // guaranteed to be set, so the `.unwrap()` call will never panic. This
         // is the case because we only call this method for lateral table
         // factors, and those can never be the first factor in a FROM list. This
@@ -187,6 +187,12 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
         planner_context.set_outer_query_schema(old_query_schema);
         planner_context.set_outer_from_schema(Some(old_from_schema));
+
+        // We can omit the subquery wrapper if there are no columns
+        // referencing the outer scope.
+        if outer_ref_columns.is_empty() {
+            return Ok(plan);
+        }
 
         match plan {
             LogicalPlan::SubqueryAlias(SubqueryAlias { input, alias, .. }) => {

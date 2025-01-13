@@ -17,7 +17,8 @@
 
 //! [`ScalarUDFImpl`] definitions for `array_append`, `array_prepend` and `array_concat` functions.
 
-use std::{any::Any, cmp::Ordering, sync::Arc};
+use std::sync::Arc;
+use std::{any::Any, cmp::Ordering};
 
 use arrow::array::{Capacities, MutableArrayData};
 use arrow_array::{Array, ArrayRef, GenericListArray, OffsetSizeTrait};
@@ -28,9 +29,10 @@ use datafusion_common::{
     cast::as_generic_list_array, exec_err, not_impl_err, plan_err, utils::list_ndims,
 };
 use datafusion_expr::{
-    type_coercion::binary::get_wider_type, ColumnarValue, ScalarUDFImpl, Signature,
-    Volatility,
+    type_coercion::binary::get_wider_type, ColumnarValue, Documentation, ScalarUDFImpl,
+    Signature, Volatility,
 };
+use datafusion_macros::user_doc;
 
 use crate::utils::{align_array_dimensions, check_datatypes, make_scalar_function};
 
@@ -42,6 +44,24 @@ make_udf_expr_and_func!(
     array_append_udf                              // internal function name
 );
 
+#[user_doc(
+    doc_section(label = "Array Functions"),
+    description = "Appends an element to the end of an array.",
+    syntax_example = "array_append(array, element)",
+    sql_example = r#"```sql
+> select array_append([1, 2, 3], 4);
++--------------------------------------+
+| array_append(List([1,2,3]),Int64(4)) |
++--------------------------------------+
+| [1, 2, 3, 4]                         |
++--------------------------------------+
+```"#,
+    argument(
+        name = "array",
+        description = "Array expression. Can be a constant, column, or function, and any combination of array operators."
+    ),
+    argument(name = "element", description = "Element to append to the array.")
+)]
 #[derive(Debug)]
 pub struct ArrayAppend {
     signature: Signature,
@@ -84,12 +104,20 @@ impl ScalarUDFImpl for ArrayAppend {
         Ok(arg_types[0].clone())
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         make_scalar_function(array_append_inner)(args)
     }
 
     fn aliases(&self) -> &[String] {
         &self.aliases
+    }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        self.doc()
     }
 }
 
@@ -101,6 +129,24 @@ make_udf_expr_and_func!(
     array_prepend_udf
 );
 
+#[user_doc(
+    doc_section(label = "Array Functions"),
+    description = "Prepends an element to the beginning of an array.",
+    syntax_example = "array_prepend(element, array)",
+    sql_example = r#"```sql
+> select array_prepend(1, [2, 3, 4]);
++---------------------------------------+
+| array_prepend(Int64(1),List([2,3,4])) |
++---------------------------------------+
+| [1, 2, 3, 4]                          |
++---------------------------------------+
+```"#,
+    argument(
+        name = "array",
+        description = "Array expression. Can be a constant, column, or function, and any combination of array operators."
+    ),
+    argument(name = "element", description = "Element to prepend to the array.")
+)]
 #[derive(Debug)]
 pub struct ArrayPrepend {
     signature: Signature,
@@ -143,12 +189,20 @@ impl ScalarUDFImpl for ArrayPrepend {
         Ok(arg_types[1].clone())
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         make_scalar_function(array_prepend_inner)(args)
     }
 
     fn aliases(&self) -> &[String] {
         &self.aliases
+    }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        self.doc()
     }
 }
 
@@ -159,6 +213,27 @@ make_udf_expr_and_func!(
     array_concat_udf
 );
 
+#[user_doc(
+    doc_section(label = "Array Functions"),
+    description = "Concatenates arrays.",
+    syntax_example = "array_concat(array[, ..., array_n])",
+    sql_example = r#"```sql
+> select array_concat([1, 2], [3, 4], [5, 6]);
++---------------------------------------------------+
+| array_concat(List([1,2]),List([3,4]),List([5,6])) |
++---------------------------------------------------+
+| [1, 2, 3, 4, 5, 6]                                |
++---------------------------------------------------+
+```"#,
+    argument(
+        name = "array",
+        description = "Array expression. Can be a constant, column, or function, and any combination of array operators."
+    ),
+    argument(
+        name = "array_n",
+        description = "Subsequent array column or literal array to concatenate."
+    )
+)]
 #[derive(Debug)]
 pub struct ArrayConcat {
     signature: Signature,
@@ -226,12 +301,20 @@ impl ScalarUDFImpl for ArrayConcat {
         Ok(expr_type)
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         make_scalar_function(array_concat_inner)(args)
     }
 
     fn aliases(&self) -> &[String] {
         &self.aliases
+    }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        self.doc()
     }
 }
 
@@ -312,7 +395,7 @@ fn concat_internal<O: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
         .collect::<Vec<&dyn Array>>();
 
     let list_arr = GenericListArray::<O>::new(
-        Arc::new(Field::new("item", data_type, true)),
+        Arc::new(Field::new_list_field(data_type, true)),
         OffsetBuffer::from_lengths(array_lengths),
         Arc::new(arrow::compute::concat(elements.as_slice())?),
         Some(NullBuffer::new(buffer)),
@@ -321,7 +404,7 @@ fn concat_internal<O: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
     Ok(Arc::new(list_arr))
 }
 
-/// Kernal functions
+// Kernel functions
 
 /// Array_append SQL function
 pub(crate) fn array_append_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
@@ -441,7 +524,7 @@ where
     let data = mutable.freeze();
 
     Ok(Arc::new(GenericListArray::<O>::try_new(
-        Arc::new(Field::new("item", data_type.to_owned(), true)),
+        Arc::new(Field::new_list_field(data_type.to_owned(), true)),
         OffsetBuffer::new(offsets.into()),
         arrow_array::make_array(data),
         None,

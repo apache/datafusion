@@ -17,6 +17,8 @@
 
 //! Collection of testing utility functions that are leveraged by the query optimizer rules
 
+#![allow(missing_docs)]
+
 use std::any::Any;
 use std::fmt::Formatter;
 use std::sync::Arc;
@@ -56,9 +58,7 @@ use datafusion_physical_plan::{
 
 use async_trait::async_trait;
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
-use datafusion_physical_expr_common::sort_expr::{
-    LexRequirement, PhysicalSortRequirement,
-};
+use datafusion_physical_expr_common::sort_expr::{LexOrdering, LexRequirement};
 
 async fn register_current_csv(
     ctx: &SessionContext,
@@ -243,7 +243,7 @@ pub fn bounded_window_exec(
     sort_exprs: impl IntoIterator<Item = PhysicalSortExpr>,
     input: Arc<dyn ExecutionPlan>,
 ) -> Arc<dyn ExecutionPlan> {
-    let sort_exprs: Vec<_> = sort_exprs.into_iter().collect();
+    let sort_exprs: LexOrdering = sort_exprs.into_iter().collect();
     let schema = input.schema();
 
     Arc::new(
@@ -253,7 +253,7 @@ pub fn bounded_window_exec(
                 "count".to_owned(),
                 &[col(col_name, &schema).unwrap()],
                 &[],
-                &sort_exprs,
+                sort_exprs.as_ref(),
                 Arc::new(WindowFrame::new(Some(false))),
                 schema.as_ref(),
                 false,
@@ -364,7 +364,7 @@ pub fn sort_exec(
 /// A test [`ExecutionPlan`] whose requirements can be configured.
 #[derive(Debug)]
 pub struct RequirementsTestExec {
-    required_input_ordering: Vec<PhysicalSortExpr>,
+    required_input_ordering: LexOrdering,
     maintains_input_order: bool,
     input: Arc<dyn ExecutionPlan>,
 }
@@ -372,7 +372,7 @@ pub struct RequirementsTestExec {
 impl RequirementsTestExec {
     pub fn new(input: Arc<dyn ExecutionPlan>) -> Self {
         Self {
-            required_input_ordering: vec![],
+            required_input_ordering: LexOrdering::default(),
             maintains_input_order: true,
             input,
         }
@@ -381,7 +381,7 @@ impl RequirementsTestExec {
     /// sets the required input ordering
     pub fn with_required_input_ordering(
         mut self,
-        required_input_ordering: Vec<PhysicalSortExpr>,
+        required_input_ordering: LexOrdering,
     ) -> Self {
         self.required_input_ordering = required_input_ordering;
         self
@@ -419,8 +419,7 @@ impl ExecutionPlan for RequirementsTestExec {
     }
 
     fn required_input_ordering(&self) -> Vec<Option<LexRequirement>> {
-        let requirement =
-            PhysicalSortRequirement::from_sort_exprs(&self.required_input_ordering);
+        let requirement = LexRequirement::from(self.required_input_ordering.clone());
         vec![Some(requirement)]
     }
 

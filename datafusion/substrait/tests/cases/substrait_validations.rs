@@ -18,8 +18,8 @@
 #[cfg(test)]
 mod tests {
 
-    // verify the schema compatability validations
-    mod schema_compatability {
+    // verify the schema compatibility validations
+    mod schema_compatibility {
         use crate::utils::test::read_json;
         use datafusion::arrow::datatypes::{DataType, Field};
         use datafusion::catalog_common::TableReference;
@@ -65,12 +65,12 @@ mod tests {
                 vec![("a", DataType::Int32, false), ("b", DataType::Int32, true)];
 
             let ctx = generate_context_with_table("DATA", df_schema)?;
-            let plan = from_substrait_plan(&ctx, &proto_plan).await?;
+            let plan = from_substrait_plan(&ctx.state(), &proto_plan).await?;
 
             assert_eq!(
                 format!("{}", plan),
                 "Projection: DATA.a, DATA.b\
-                \n  TableScan: DATA projection=[a, b]"
+                \n  TableScan: DATA"
             );
             Ok(())
         }
@@ -86,13 +86,12 @@ mod tests {
                 ("c", DataType::Int32, false),
             ];
             let ctx = generate_context_with_table("DATA", df_schema)?;
-            let plan = from_substrait_plan(&ctx, &proto_plan).await?;
+            let plan = from_substrait_plan(&ctx.state(), &proto_plan).await?;
 
             assert_eq!(
                 format!("{}", plan),
                 "Projection: DATA.a, DATA.b\
-                \n  Projection: DATA.a, DATA.b\
-                \n    TableScan: DATA projection=[b, a]"
+                \n  TableScan: DATA projection=[a, b]"
             );
             Ok(())
         }
@@ -102,22 +101,20 @@ mod tests {
             let proto_plan = read_json(
                 "tests/testdata/test_plans/simple_select_with_mask.substrait.json",
             );
-            // the DataFusion schema { b, a, c, d } contains the Substrait schema { a, b, c }
+            // the DataFusion schema { d, a, c, b } contains the Substrait schema { a, b, c }
             let df_schema = vec![
-                ("b", DataType::Int32, true),
+                ("d", DataType::Int32, true),
                 ("a", DataType::Int32, false),
                 ("c", DataType::Int32, false),
-                ("d", DataType::Int32, false),
+                ("b", DataType::Int32, false),
             ];
             let ctx = generate_context_with_table("DATA", df_schema)?;
-            let plan = from_substrait_plan(&ctx, &proto_plan).await?;
+            let plan = from_substrait_plan(&ctx.state(), &proto_plan).await?;
 
             assert_eq!(
                 format!("{}", plan),
                 "Projection: DATA.a, DATA.b\
-                \n  Projection: DATA.a, DATA.b\
-                \n    Projection: DATA.a, DATA.b, DATA.c\
-                \n      TableScan: DATA projection=[b, a, c]"
+                \n  TableScan: DATA projection=[a, b]"
             );
             Ok(())
         }
@@ -131,7 +128,7 @@ mod tests {
                 vec![("a", DataType::Int32, false), ("c", DataType::Int32, true)];
 
             let ctx = generate_context_with_table("DATA", df_schema)?;
-            let res = from_substrait_plan(&ctx, &proto_plan).await;
+            let res = from_substrait_plan(&ctx.state(), &proto_plan).await;
             assert!(res.is_err());
             Ok(())
         }
@@ -143,7 +140,7 @@ mod tests {
 
             let ctx =
                 generate_context_with_table("DATA", vec![("a", DataType::Date32, true)])?;
-            let res = from_substrait_plan(&ctx, &proto_plan).await;
+            let res = from_substrait_plan(&ctx.state(), &proto_plan).await;
             assert!(res.is_err());
             Ok(())
         }

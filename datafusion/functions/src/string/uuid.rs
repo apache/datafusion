@@ -23,10 +23,24 @@ use arrow::datatypes::DataType;
 use arrow::datatypes::DataType::Utf8;
 use uuid::Uuid;
 
-use datafusion_common::{not_impl_err, Result};
-use datafusion_expr::{ColumnarValue, Volatility};
+use datafusion_common::{internal_err, Result};
+use datafusion_expr::{ColumnarValue, Documentation, Volatility};
 use datafusion_expr::{ScalarUDFImpl, Signature};
+use datafusion_macros::user_doc;
 
+#[user_doc(
+    doc_section(label = "String Functions"),
+    description = "Returns [`UUID v4`](https://en.wikipedia.org/wiki/Universally_unique_identifier#Version_4_(random)) string value which is unique per row.",
+    syntax_example = "uuid()",
+    sql_example = r#"```sql
+> select uuid();
++--------------------------------------+
+| uuid()                               |
++--------------------------------------+
+| 6ec17ef8-1934-41cc-8d59-d0c8f9eea1f0 |
++--------------------------------------+
+```"#
+)]
 #[derive(Debug)]
 pub struct UuidFunc {
     signature: Signature,
@@ -63,15 +77,22 @@ impl ScalarUDFImpl for UuidFunc {
         Ok(Utf8)
     }
 
-    fn invoke(&self, _args: &[ColumnarValue]) -> Result<ColumnarValue> {
-        not_impl_err!("{} function does not accept arguments", self.name())
-    }
-
     /// Prints random (v4) uuid values per row
     /// uuid() = 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11'
-    fn invoke_no_args(&self, num_rows: usize) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        num_rows: usize,
+    ) -> Result<ColumnarValue> {
+        if !args.is_empty() {
+            return internal_err!("{} function does not accept arguments", self.name());
+        }
         let values = std::iter::repeat_with(|| Uuid::new_v4().to_string()).take(num_rows);
         let array = GenericStringArray::<i32>::from_iter_values(values);
         Ok(ColumnarValue::Array(Arc::new(array)))
+    }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        self.doc()
     }
 }

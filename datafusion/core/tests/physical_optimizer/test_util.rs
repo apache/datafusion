@@ -25,11 +25,11 @@ use datafusion::datasource::{
     physical_plan::{FileScanConfig, ParquetExec},
 };
 use datafusion_execution::object_store::ObjectStoreUrl;
-use datafusion_physical_expr::PhysicalSortExpr;
+use datafusion_physical_expr_common::sort_expr::LexOrdering;
 
 /// create a single parquet file that is sorted
 pub(crate) fn parquet_exec_with_sort(
-    output_ordering: Vec<Vec<PhysicalSortExpr>>,
+    output_ordering: Vec<LexOrdering>,
 ) -> Arc<ParquetExec> {
     ParquetExec::builder(
         FileScanConfig::new(ObjectStoreUrl::parse("test:///").unwrap(), schema())

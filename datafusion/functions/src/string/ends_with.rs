@@ -21,13 +21,33 @@ use std::sync::Arc;
 use arrow::array::ArrayRef;
 use arrow::datatypes::DataType;
 
-use datafusion_common::{internal_err, Result};
-use datafusion_expr::TypeSignature::*;
-use datafusion_expr::{ColumnarValue, Volatility};
-use datafusion_expr::{ScalarUDFImpl, Signature};
-
 use crate::utils::make_scalar_function;
+use datafusion_common::{internal_err, Result};
+use datafusion_expr::{ColumnarValue, Documentation, Volatility};
+use datafusion_expr::{ScalarUDFImpl, Signature};
+use datafusion_macros::user_doc;
 
+#[user_doc(
+    doc_section(label = "String Functions"),
+    description = "Tests if a string ends with a substring.",
+    syntax_example = "ends_with(str, substr)",
+    sql_example = r#"```sql
+>  select ends_with('datafusion', 'soin');
++--------------------------------------------+
+| ends_with(Utf8("datafusion"),Utf8("soin")) |
++--------------------------------------------+
+| false                                      |
++--------------------------------------------+
+> select ends_with('datafusion', 'sion');
++--------------------------------------------+
+| ends_with(Utf8("datafusion"),Utf8("sion")) |
++--------------------------------------------+
+| true                                       |
++--------------------------------------------+
+```"#,
+    standard_argument(name = "str", prefix = "String"),
+    argument(name = "substr", description = "Substring to test for.")
+)]
 #[derive(Debug)]
 pub struct EndsWithFunc {
     signature: Signature,
@@ -42,17 +62,7 @@ impl Default for EndsWithFunc {
 impl EndsWithFunc {
     pub fn new() -> Self {
         Self {
-            signature: Signature::one_of(
-                vec![
-                    // Planner attempts coercion to the target type starting with the most preferred candidate.
-                    // For example, given input `(Utf8View, Utf8)`, it first tries coercing to `(Utf8View, Utf8View)`.
-                    // If that fails, it proceeds to `(Utf8, Utf8)`.
-                    Exact(vec![DataType::Utf8View, DataType::Utf8View]),
-                    Exact(vec![DataType::Utf8, DataType::Utf8]),
-                    Exact(vec![DataType::LargeUtf8, DataType::LargeUtf8]),
-                ],
-                Volatility::Immutable,
-            ),
+            signature: Signature::string(2, Volatility::Immutable),
         }
     }
 }
@@ -74,7 +84,11 @@ impl ScalarUDFImpl for EndsWithFunc {
         Ok(DataType::Boolean)
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         match args[0].data_type() {
             DataType::Utf8View | DataType::Utf8 | DataType::LargeUtf8 => {
                 make_scalar_function(ends_with, vec![])(args)
@@ -83,6 +97,10 @@ impl ScalarUDFImpl for EndsWithFunc {
                 internal_err!("Unsupported data type {other:?} for function ends_with. Expected Utf8, LargeUtf8 or Utf8View")?
             }
         }
+    }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        self.doc()
     }
 }
 
@@ -110,7 +128,7 @@ mod tests {
     fn test_functions() -> Result<()> {
         test_function!(
             EndsWithFunc::new(),
-            &[
+            vec![
                 ColumnarValue::Scalar(ScalarValue::from("alphabet")),
                 ColumnarValue::Scalar(ScalarValue::from("alph")),
             ],
@@ -121,7 +139,7 @@ mod tests {
         );
         test_function!(
             EndsWithFunc::new(),
-            &[
+            vec![
                 ColumnarValue::Scalar(ScalarValue::from("alphabet")),
                 ColumnarValue::Scalar(ScalarValue::from("bet")),
             ],
@@ -132,7 +150,7 @@ mod tests {
         );
         test_function!(
             EndsWithFunc::new(),
-            &[
+            vec![
                 ColumnarValue::Scalar(ScalarValue::Utf8(None)),
                 ColumnarValue::Scalar(ScalarValue::from("alph")),
             ],
@@ -143,7 +161,7 @@ mod tests {
         );
         test_function!(
             EndsWithFunc::new(),
-            &[
+            vec![
                 ColumnarValue::Scalar(ScalarValue::from("alphabet")),
                 ColumnarValue::Scalar(ScalarValue::Utf8(None)),
             ],

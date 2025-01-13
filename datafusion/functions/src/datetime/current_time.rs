@@ -15,16 +15,27 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::any::Any;
-
 use arrow::datatypes::DataType;
 use arrow::datatypes::DataType::Time64;
 use arrow::datatypes::TimeUnit::Nanosecond;
+use std::any::Any;
 
 use datafusion_common::{internal_err, Result, ScalarValue};
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyInfo};
-use datafusion_expr::{ColumnarValue, Expr, ScalarUDFImpl, Signature, Volatility};
+use datafusion_expr::{
+    ColumnarValue, Documentation, Expr, ScalarUDFImpl, Signature, Volatility,
+};
+use datafusion_macros::user_doc;
 
+#[user_doc(
+    doc_section(label = "Time and Date Functions"),
+    description = r#"
+Returns the current UTC time.
+
+The `current_time()` return value is determined at query time and will return the same time, no matter when in the query plan the function executes.
+"#,
+    syntax_example = "current_time()"
+)]
 #[derive(Debug)]
 pub struct CurrentTimeFunc {
     signature: Signature,
@@ -39,7 +50,7 @@ impl Default for CurrentTimeFunc {
 impl CurrentTimeFunc {
     pub fn new() -> Self {
         Self {
-            signature: Signature::uniform(0, vec![], Volatility::Stable),
+            signature: Signature::nullary(Volatility::Stable),
         }
     }
 }
@@ -67,7 +78,11 @@ impl ScalarUDFImpl for CurrentTimeFunc {
         Ok(Time64(Nanosecond))
     }
 
-    fn invoke(&self, _args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        _args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         internal_err!(
             "invoke should not be called on a simplified current_time() function"
         )
@@ -83,5 +98,9 @@ impl ScalarUDFImpl for CurrentTimeFunc {
         Ok(ExprSimplifyResult::Simplified(Expr::Literal(
             ScalarValue::Time64Nanosecond(nano),
         )))
+    }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        self.doc()
     }
 }

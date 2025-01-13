@@ -1,3 +1,6 @@
+// Licensed to the Apache Software Foundation (ASF) under one
+// or more contributor license agreements.  See the NOTICE file
+// distributed with this work for additional information
 // regarding copyright ownership.  The ASF licenses this file
 // to you under the Apache License, Version 2.0 (the
 // "License"); you may not use this file except in compliance
@@ -14,33 +17,29 @@
 
 //! [`PushDownFilter`] applies filters as early as possible
 
-use indexmap::IndexSet;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
+use indexmap::IndexSet;
 use itertools::Itertools;
 
 use datafusion_common::tree_node::{
     Transformed, TransformedResult, TreeNode, TreeNodeRecursion,
 };
 use datafusion_common::{
-    internal_err, plan_err, qualified_name, Column, DFSchema, DFSchemaRef,
-    JoinConstraint, Result,
+    internal_err, plan_err, qualified_name, Column, DFSchema, Result,
 };
 use datafusion_expr::expr_rewriter::replace_col;
-use datafusion_expr::logical_plan::{
-    CrossJoin, Join, JoinType, LogicalPlan, TableScan, Union,
-};
+use datafusion_expr::logical_plan::{Join, JoinType, LogicalPlan, TableScan, Union};
 use datafusion_expr::utils::{
     conjunction, expr_to_columns, split_conjunction, split_conjunction_owned,
 };
 use datafusion_expr::{
-    and, build_join_schema, or, BinaryExpr, Expr, Filter, LogicalPlanBuilder, Operator,
-    Projection, TableProviderFilterPushDown,
+    and, or, BinaryExpr, Expr, Filter, Operator, Projection, TableProviderFilterPushDown,
 };
 
 use crate::optimizer::ApplyOrder;
-use crate::utils::has_all_column_refs;
+use crate::utils::{has_all_column_refs, is_restrict_null_predicate};
 use crate::{OptimizerConfig, OptimizerRule};
 
 /// Optimizer rule for pushing (moving) filter expressions down in a plan so
@@ -130,7 +129,7 @@ use crate::{OptimizerConfig, OptimizerRule};
 /// reaches a plan node that does not commute with that filter, it adds the
 /// filter to that place. When it passes through a projection, it re-writes the
 /// filter's expression taking into account that projection.
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub struct PushDownFilter {}
 
 /// For a given JOIN type, determine whether each input of the join is preserved
@@ -165,7 +164,7 @@ pub(crate) fn lr_is_preserved(join_type: JoinType) -> (bool, bool) {
         JoinType::Full => (false, false),
         // No columns from the right side of the join can be referenced in output
         // predicates for semi/anti joins, so whether we specify t/f doesn't matter.
-        JoinType::LeftSemi | JoinType::LeftAnti => (true, false),
+        JoinType::LeftSemi | JoinType::LeftAnti | JoinType::LeftMark => (true, false),
         // No columns from the left side of the join can be referenced in output
         // predicates for semi/anti joins, so whether we specify t/f doesn't matter.
         JoinType::RightSemi | JoinType::RightAnti => (false, true),
@@ -190,6 +189,7 @@ pub(crate) fn on_lr_is_preserved(join_type: JoinType) -> (bool, bool) {
         JoinType::LeftSemi | JoinType::RightSemi => (true, true),
         JoinType::LeftAnti => (false, true),
         JoinType::RightAnti => (true, false),
+        JoinType::LeftMark => (false, true),
     }
 }
 
@@ -562,10 +562,6 @@ fn infer_join_predicates(
     predicates: &[Expr],
     on_filters: &[Expr],
 ) -> Result<Vec<Expr>> {
-    if join.join_type != JoinType::Inner {
-        return Ok(vec![]);
-    }
-
     // Only allow both side key is column.
     let join_col_keys = join
         .on
@@ -577,55 +573,178 @@ fn infer_join_predicates(
         })
         .collect::<Vec<_>>();
 
-    // TODO refine the logic, introduce EquivalenceProperties to logical plan and infer additional filters to push down
-    // For inner joins, duplicate filters for joined columns so filters can be pushed down
-    // to both sides. Take the following query as an example:
-    //
-    // ```sql
-    // SELECT * FROM t1 JOIN t2 on t1.id = t2.uid WHERE t1.id > 1
-    // ```
-    //
-    // `t1.id > 1` predicate needs to be pushed down to t1 table scan, while
-    // `t2.uid > 1` predicate needs to be pushed down to t2 table scan.
-    //
-    // Join clauses with `Using` constraints also take advantage of this logic to make sure
-    // predicates reference the shared join columns are pushed to both sides.
-    // This logic should also been applied to conditions in JOIN ON clause
-    predicates
-        .iter()
-        .chain(on_filters.iter())
-        .filter_map(|predicate| {
-            let mut join_cols_to_replace = HashMap::new();
+    let join_type = join.join_type;
 
-            let columns = predicate.column_refs();
+    let mut inferred_predicates = InferredPredicates::new(join_type);
 
-            for &col in columns.iter() {
-                for (l, r) in join_col_keys.iter() {
-                    if col == *l {
-                        join_cols_to_replace.insert(col, *r);
-                        break;
-                    } else if col == *r {
-                        join_cols_to_replace.insert(col, *l);
-                        break;
-                    }
+    infer_join_predicates_from_predicates(
+        &join_col_keys,
+        predicates,
+        &mut inferred_predicates,
+    )?;
+
+    infer_join_predicates_from_on_filters(
+        &join_col_keys,
+        join_type,
+        on_filters,
+        &mut inferred_predicates,
+    )?;
+
+    Ok(inferred_predicates.predicates)
+}
+
+/// Inferred predicates collector.
+/// When the JoinType is not Inner, we need to detect whether the inferred predicate can strictly
+/// filter out NULL, otherwise ignore it. e.g.
+/// ```text
+/// SELECT * FROM t1 LEFT JOIN t2 ON t1.c0 = t2.c0 WHERE t2.c0 IS NULL;
+/// ```
+/// We cannot infer the predicate `t1.c0 IS NULL`, otherwise the predicate will be pushed down to
+/// the left side, resulting in the wrong result.
+struct InferredPredicates {
+    predicates: Vec<Expr>,
+    is_inner_join: bool,
+}
+
+impl InferredPredicates {
+    fn new(join_type: JoinType) -> Self {
+        Self {
+            predicates: vec![],
+            is_inner_join: matches!(join_type, JoinType::Inner),
+        }
+    }
+
+    fn try_build_predicate(
+        &mut self,
+        predicate: Expr,
+        replace_map: &HashMap<&Column, &Column>,
+    ) -> Result<()> {
+        if self.is_inner_join
+            || matches!(
+                is_restrict_null_predicate(
+                    predicate.clone(),
+                    replace_map.keys().cloned()
+                ),
+                Ok(true)
+            )
+        {
+            self.predicates.push(replace_col(predicate, replace_map)?);
+        }
+
+        Ok(())
+    }
+}
+
+/// Infer predicates from the pushed down predicates.
+///
+/// Parameters
+/// * `join_col_keys` column pairs from the join ON clause
+///
+/// * `predicates` the pushed down predicates
+///
+/// * `inferred_predicates` the inferred results
+///
+fn infer_join_predicates_from_predicates(
+    join_col_keys: &[(&Column, &Column)],
+    predicates: &[Expr],
+    inferred_predicates: &mut InferredPredicates,
+) -> Result<()> {
+    infer_join_predicates_impl::<true, true>(
+        join_col_keys,
+        predicates,
+        inferred_predicates,
+    )
+}
+
+/// Infer predicates from the join filter.
+///
+/// Parameters
+/// * `join_col_keys` column pairs from the join ON clause
+///
+/// * `join_type` the JoinType of Join
+///
+/// * `on_filters` filters from the join ON clause that have not already been
+///   identified as join predicates
+///
+/// * `inferred_predicates` the inferred results
+///
+fn infer_join_predicates_from_on_filters(
+    join_col_keys: &[(&Column, &Column)],
+    join_type: JoinType,
+    on_filters: &[Expr],
+    inferred_predicates: &mut InferredPredicates,
+) -> Result<()> {
+    match join_type {
+        JoinType::Full | JoinType::LeftAnti | JoinType::RightAnti => Ok(()),
+        JoinType::Inner => infer_join_predicates_impl::<true, true>(
+            join_col_keys,
+            on_filters,
+            inferred_predicates,
+        ),
+        JoinType::Left | JoinType::LeftSemi | JoinType::LeftMark => {
+            infer_join_predicates_impl::<true, false>(
+                join_col_keys,
+                on_filters,
+                inferred_predicates,
+            )
+        }
+        JoinType::Right | JoinType::RightSemi => {
+            infer_join_predicates_impl::<false, true>(
+                join_col_keys,
+                on_filters,
+                inferred_predicates,
+            )
+        }
+    }
+}
+
+/// Infer predicates from the given predicates.
+///
+/// Parameters
+/// * `join_col_keys` column pairs from the join ON clause
+///
+/// * `input_predicates` the given predicates. It can be the pushed down predicates,
+///   or it can be the filters of the Join
+///
+/// * `inferred_predicates` the inferred results
+///
+/// * `ENABLE_LEFT_TO_RIGHT` indicates that the right table related predicate can
+///   be inferred from the left table related predicate
+///
+/// * `ENABLE_RIGHT_TO_LEFT` indicates that the left table related predicate can
+///   be inferred from the right table related predicate
+///
+fn infer_join_predicates_impl<
+    const ENABLE_LEFT_TO_RIGHT: bool,
+    const ENABLE_RIGHT_TO_LEFT: bool,
+>(
+    join_col_keys: &[(&Column, &Column)],
+    input_predicates: &[Expr],
+    inferred_predicates: &mut InferredPredicates,
+) -> Result<()> {
+    for predicate in input_predicates {
+        let mut join_cols_to_replace = HashMap::new();
+
+        for &col in &predicate.column_refs() {
+            for (l, r) in join_col_keys.iter() {
+                if ENABLE_LEFT_TO_RIGHT && col == *l {
+                    join_cols_to_replace.insert(col, *r);
+                    break;
+                }
+                if ENABLE_RIGHT_TO_LEFT && col == *r {
+                    join_cols_to_replace.insert(col, *l);
+                    break;
                 }
             }
+        }
+        if join_cols_to_replace.is_empty() {
+            continue;
+        }
 
-            if join_cols_to_replace.is_empty() {
-                return None;
-            }
-
-            let join_side_predicate =
-                match replace_col(predicate.clone(), &join_cols_to_replace) {
-                    Ok(p) => p,
-                    Err(e) => {
-                        return Some(Err(e));
-                    }
-                };
-
-            Some(Ok(join_side_predicate))
-        })
-        .collect::<Result<Vec<_>>>()
+        inferred_predicates
+            .try_build_predicate(predicate.clone(), &join_cols_to_replace)?;
+    }
+    Ok(())
 }
 
 impl OptimizerRule for PushDownFilter {
@@ -743,7 +862,9 @@ impl OptimizerRule for PushDownFilter {
                     let mut accum: HashSet<Column> = HashSet::new();
                     expr_to_columns(&predicate, &mut accum)?;
 
-                    if unnest.exec_columns.iter().any(|c| accum.contains(c)) {
+                    if unnest.list_type_columns.iter().any(|(_, unnest_list)| {
+                        accum.contains(&unnest_list.output_column)
+                    }) {
                         unnest_predicates.push(predicate);
                     } else {
                         non_unnest_predicates.push(predicate);
@@ -864,31 +985,116 @@ impl OptimizerRule for PushDownFilter {
                         }
                     })
             }
-            LogicalPlan::Join(join) => push_down_join(join, Some(&filter.predicate)),
-            LogicalPlan::CrossJoin(cross_join) => {
+            // Tries to push filters based on the partition key(s) of the window function(s) used.
+            // Example:
+            //   Before:
+            //     Filter: (a > 1) and (b > 1) and (c > 1)
+            //      Window: func() PARTITION BY [a] ...
+            //   ---
+            //   After:
+            //     Filter: (b > 1) and (c > 1)
+            //      Window: func() PARTITION BY [a] ...
+            //        Filter: (a > 1)
+            LogicalPlan::Window(window) => {
+                // Retrieve the set of potential partition keys where we can push filters by.
+                // Unlike aggregations, where there is only one statement per SELECT, there can be
+                // multiple window functions, each with potentially different partition keys.
+                // Therefore, we need to ensure that any potential partition key returned is used in
+                // ALL window functions. Otherwise, filters cannot be pushed by through that column.
+                let potential_partition_keys = window
+                    .window_expr
+                    .iter()
+                    .map(|e| {
+                        if let Expr::WindowFunction(window_expression) = e {
+                            window_expression
+                                .partition_by
+                                .iter()
+                                .map(|c| {
+                                    Column::from_qualified_name(
+                                        c.schema_name().to_string(),
+                                    )
+                                })
+                                .collect::<HashSet<_>>()
+                        } else {
+                            // window functions expressions are only Expr::WindowFunction
+                            unreachable!()
+                        }
+                    })
+                    // performs the set intersection of the partition keys of all window functions,
+                    // returning only the common ones
+                    .reduce(|a, b| &a & &b)
+                    .unwrap_or_default();
+
                 let predicates = split_conjunction_owned(filter.predicate);
-                let join = convert_cross_join_to_inner_join(cross_join)?;
-                let plan = push_down_all_join(predicates, vec![], join, vec![])?;
-                convert_to_cross_join_if_beneficial(plan.data)
-            }
-            LogicalPlan::TableScan(scan) => {
-                let filter_predicates = split_conjunction(&filter.predicate);
-                let results = scan
-                    .source
-                    .supports_filters_pushdown(filter_predicates.as_slice())?;
-                if filter_predicates.len() != results.len() {
-                    return internal_err!(
-                        "Vec returned length: {} from supports_filters_pushdown is not the same size as the filters passed, which length is: {}",
-                        results.len(),
-                        filter_predicates.len());
+                let mut keep_predicates = vec![];
+                let mut push_predicates = vec![];
+                for expr in predicates {
+                    let cols = expr.column_refs();
+                    if cols.iter().all(|c| potential_partition_keys.contains(c)) {
+                        push_predicates.push(expr);
+                    } else {
+                        keep_predicates.push(expr);
+                    }
                 }
 
-                let zip = filter_predicates.into_iter().zip(results);
+                // Unlike with aggregations, there are no cases where we have to replace, e.g.,
+                // `a+b` with Column(a)+Column(b). This is because partition expressions are not
+                // available as standalone columns to the user. For example, while an aggregation on
+                // `a+b` becomes Column(a + b), in a window partition it becomes
+                // `func() PARTITION BY [a + b] ...`. Thus, filters on expressions always remain in
+                // place, so we can use `push_predicates` directly. This is consistent with other
+                // optimizers, such as the one used by Postgres.
+
+                let window_input = Arc::clone(&window.input);
+                Transformed::yes(LogicalPlan::Window(window))
+                    .transform_data(|new_plan| {
+                        // If we have a filter to push, we push it down to the input of the window
+                        if let Some(predicate) = conjunction(push_predicates) {
+                            let new_filter = make_filter(predicate, window_input)?;
+                            insert_below(new_plan, new_filter)
+                        } else {
+                            Ok(Transformed::no(new_plan))
+                        }
+                    })?
+                    .map_data(|child_plan| {
+                        // if there are any remaining predicates we can't push, add them
+                        // back as a filter
+                        if let Some(predicate) = conjunction(keep_predicates) {
+                            make_filter(predicate, Arc::new(child_plan))
+                        } else {
+                            Ok(child_plan)
+                        }
+                    })
+            }
+            LogicalPlan::Join(join) => push_down_join(join, Some(&filter.predicate)),
+            LogicalPlan::TableScan(scan) => {
+                let filter_predicates = split_conjunction(&filter.predicate);
+
+                let (volatile_filters, non_volatile_filters): (Vec<&Expr>, Vec<&Expr>) =
+                    filter_predicates
+                        .into_iter()
+                        .partition(|pred| pred.is_volatile());
+
+                // Check which non-volatile filters are supported by source
+                let supported_filters = scan
+                    .source
+                    .supports_filters_pushdown(non_volatile_filters.as_slice())?;
+                if non_volatile_filters.len() != supported_filters.len() {
+                    return internal_err!(
+                        "Vec returned length: {} from supports_filters_pushdown is not the same size as the filters passed, which length is: {}",
+                        supported_filters.len(),
+                        non_volatile_filters.len());
+                }
+
+                // Compose scan filters from non-volatile filters of `Exact` or `Inexact` pushdown type
+                let zip = non_volatile_filters.into_iter().zip(supported_filters);
 
                 let new_scan_filters = zip
                     .clone()
                     .filter(|(_, res)| res != &TableProviderFilterPushDown::Unsupported)
                     .map(|(pred, _)| pred);
+
+                // Add new scan filters
                 let new_scan_filters: Vec<Expr> = scan
                     .filters
                     .iter()
@@ -896,9 +1102,13 @@ impl OptimizerRule for PushDownFilter {
                     .unique()
                     .cloned()
                     .collect();
+
+                // Compose predicates to be of `Unsupported` or `Inexact` pushdown type, and also include volatile filters
                 let new_predicate: Vec<Expr> = zip
                     .filter(|(_, res)| res != &TableProviderFilterPushDown::Exact)
-                    .map(|(pred, _)| pred.clone())
+                    .map(|(pred, _)| pred)
+                    .chain(volatile_filters)
+                    .cloned()
                     .collect();
 
                 let new_scan = LogicalPlan::TableScan(TableScan {
@@ -1033,7 +1243,7 @@ fn rewrite_projection(
 
             (qualified_name(qualifier, field.name()), expr)
         })
-        .partition(|(_, value)| value.is_volatile().unwrap_or(true));
+        .partition(|(_, value)| value.is_volatile());
 
     let mut push_predicates = vec![];
     let mut keep_predicates = vec![];
@@ -1112,48 +1322,6 @@ impl PushDownFilter {
     }
 }
 
-/// Converts the given cross join to an inner join with an empty equality
-/// predicate and an empty filter condition.
-fn convert_cross_join_to_inner_join(cross_join: CrossJoin) -> Result<Join> {
-    let CrossJoin { left, right, .. } = cross_join;
-    let join_schema = build_join_schema(left.schema(), right.schema(), &JoinType::Inner)?;
-    Ok(Join {
-        left,
-        right,
-        join_type: JoinType::Inner,
-        join_constraint: JoinConstraint::On,
-        on: vec![],
-        filter: None,
-        schema: DFSchemaRef::new(join_schema),
-        null_equals_null: false,
-    })
-}
-
-/// Converts the given inner join with an empty equality predicate and an
-/// empty filter condition to a cross join.
-fn convert_to_cross_join_if_beneficial(
-    plan: LogicalPlan,
-) -> Result<Transformed<LogicalPlan>> {
-    match plan {
-        // Can be converted back to cross join
-        LogicalPlan::Join(join) if join.on.is_empty() && join.filter.is_none() => {
-            LogicalPlanBuilder::from(Arc::unwrap_or_clone(join.left))
-                .cross_join(Arc::unwrap_or_clone(join.right))?
-                .build()
-                .map(Transformed::yes)
-        }
-        LogicalPlan::Filter(filter) => {
-            convert_to_cross_join_if_beneficial(Arc::unwrap_or_clone(filter.input))?
-                .transform_data(|child_plan| {
-                    Filter::try_new(filter.predicate, Arc::new(child_plan))
-                        .map(LogicalPlan::Filter)
-                        .map(Transformed::yes)
-                })
-        }
-        plan => Ok(Transformed::no(plan)),
-    }
-}
-
 /// replaces columns by its name on the projection.
 pub fn replace_cols_by_name(
     e: Expr,
@@ -1195,22 +1363,23 @@ fn contain(e: &Expr, check_map: &HashMap<String, Expr>) -> bool {
 #[cfg(test)]
 mod tests {
     use std::any::Any;
+    use std::cmp::Ordering;
     use std::fmt::{Debug, Formatter};
 
     use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
     use async_trait::async_trait;
 
-    use datafusion_common::ScalarValue;
-    use datafusion_expr::expr::ScalarFunction;
+    use datafusion_common::{DFSchemaRef, ScalarValue};
+    use datafusion_expr::expr::{ScalarFunction, WindowFunction};
     use datafusion_expr::logical_plan::table_scan;
     use datafusion_expr::{
-        col, in_list, in_subquery, lit, ColumnarValue, Extension, ScalarUDF,
-        ScalarUDFImpl, Signature, TableSource, TableType, UserDefinedLogicalNodeCore,
-        Volatility,
+        col, in_list, in_subquery, lit, ColumnarValue, ExprFunctionExt, Extension,
+        LogicalPlanBuilder, ScalarUDF, ScalarUDFImpl, Signature, TableSource, TableType,
+        UserDefinedLogicalNodeCore, Volatility, WindowFunctionDefinition,
     };
 
     use crate::optimizer::Optimizer;
-    use crate::rewrite_disjunctive_predicate::RewriteDisjunctivePredicate;
+    use crate::simplify_expressions::SimplifyExpressions;
     use crate::test::*;
     use crate::OptimizerContext;
     use datafusion_expr::test::function_stub::sum;
@@ -1232,7 +1401,7 @@ mod tests {
         expected: &str,
     ) -> Result<()> {
         let optimizer = Optimizer::with_rules(vec![
-            Arc::new(RewriteDisjunctivePredicate::new()),
+            Arc::new(SimplifyExpressions::new()),
             Arc::new(PushDownFilter::new()),
         ]);
         let optimized_plan =
@@ -1354,6 +1523,227 @@ mod tests {
         assert_optimized_plan_eq(plan, expected)
     }
 
+    /// verifies that when partitioning by 'a' and 'b', and filtering by 'b', 'b' is pushed
+    #[test]
+    fn filter_move_window() -> Result<()> {
+        let table_scan = test_table_scan()?;
+
+        let window = Expr::WindowFunction(WindowFunction::new(
+            WindowFunctionDefinition::WindowUDF(
+                datafusion_functions_window::rank::rank_udwf(),
+            ),
+            vec![],
+        ))
+        .partition_by(vec![col("a"), col("b")])
+        .order_by(vec![col("c").sort(true, true)])
+        .build()
+        .unwrap();
+
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .window(vec![window])?
+            .filter(col("b").gt(lit(10i64)))?
+            .build()?;
+
+        let expected = "\
+        WindowAggr: windowExpr=[[rank() PARTITION BY [test.a, test.b] ORDER BY [test.c ASC NULLS FIRST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]\
+        \n  TableScan: test, full_filters=[test.b > Int64(10)]";
+        assert_optimized_plan_eq(plan, expected)
+    }
+
+    /// verifies that when partitioning by 'a' and 'b', and filtering by 'a' and 'b', both 'a' and
+    /// 'b' are pushed
+    #[test]
+    fn filter_move_complex_window() -> Result<()> {
+        let table_scan = test_table_scan()?;
+
+        let window = Expr::WindowFunction(WindowFunction::new(
+            WindowFunctionDefinition::WindowUDF(
+                datafusion_functions_window::rank::rank_udwf(),
+            ),
+            vec![],
+        ))
+        .partition_by(vec![col("a"), col("b")])
+        .order_by(vec![col("c").sort(true, true)])
+        .build()
+        .unwrap();
+
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .window(vec![window])?
+            .filter(and(col("a").gt(lit(10i64)), col("b").eq(lit(1i64))))?
+            .build()?;
+
+        let expected = "\
+            WindowAggr: windowExpr=[[rank() PARTITION BY [test.a, test.b] ORDER BY [test.c ASC NULLS FIRST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]\
+            \n  TableScan: test, full_filters=[test.a > Int64(10), test.b = Int64(1)]";
+        assert_optimized_plan_eq(plan, expected)
+    }
+
+    /// verifies that when partitioning by 'a' and filtering by 'a' and 'b', only 'a' is pushed
+    #[test]
+    fn filter_move_partial_window() -> Result<()> {
+        let table_scan = test_table_scan()?;
+
+        let window = Expr::WindowFunction(WindowFunction::new(
+            WindowFunctionDefinition::WindowUDF(
+                datafusion_functions_window::rank::rank_udwf(),
+            ),
+            vec![],
+        ))
+        .partition_by(vec![col("a")])
+        .order_by(vec![col("c").sort(true, true)])
+        .build()
+        .unwrap();
+
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .window(vec![window])?
+            .filter(and(col("a").gt(lit(10i64)), col("b").eq(lit(1i64))))?
+            .build()?;
+
+        let expected = "\
+        Filter: test.b = Int64(1)\
+        \n  WindowAggr: windowExpr=[[rank() PARTITION BY [test.a] ORDER BY [test.c ASC NULLS FIRST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]\
+        \n    TableScan: test, full_filters=[test.a > Int64(10)]";
+        assert_optimized_plan_eq(plan, expected)
+    }
+
+    /// verifies that filters on partition expressions are not pushed, as the single expression
+    /// column is not available to the user, unlike with aggregations
+    #[test]
+    fn filter_expression_keep_window() -> Result<()> {
+        let table_scan = test_table_scan()?;
+
+        let window = Expr::WindowFunction(WindowFunction::new(
+            WindowFunctionDefinition::WindowUDF(
+                datafusion_functions_window::rank::rank_udwf(),
+            ),
+            vec![],
+        ))
+        .partition_by(vec![add(col("a"), col("b"))]) // PARTITION BY a + b
+        .order_by(vec![col("c").sort(true, true)])
+        .build()
+        .unwrap();
+
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .window(vec![window])?
+            // unlike with aggregations, single partition column "test.a + test.b" is not available
+            // to the plan, so we use multiple columns when filtering
+            .filter(add(col("a"), col("b")).gt(lit(10i64)))?
+            .build()?;
+
+        let expected = "\
+        Filter: test.a + test.b > Int64(10)\
+        \n  WindowAggr: windowExpr=[[rank() PARTITION BY [test.a + test.b] ORDER BY [test.c ASC NULLS FIRST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]\
+        \n    TableScan: test";
+        assert_optimized_plan_eq(plan, expected)
+    }
+
+    /// verifies that filters are not pushed on order by columns (that are not used in partitioning)
+    #[test]
+    fn filter_order_keep_window() -> Result<()> {
+        let table_scan = test_table_scan()?;
+
+        let window = Expr::WindowFunction(WindowFunction::new(
+            WindowFunctionDefinition::WindowUDF(
+                datafusion_functions_window::rank::rank_udwf(),
+            ),
+            vec![],
+        ))
+        .partition_by(vec![col("a")])
+        .order_by(vec![col("c").sort(true, true)])
+        .build()
+        .unwrap();
+
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .window(vec![window])?
+            .filter(col("c").gt(lit(10i64)))?
+            .build()?;
+
+        let expected = "\
+        Filter: test.c > Int64(10)\
+        \n  WindowAggr: windowExpr=[[rank() PARTITION BY [test.a] ORDER BY [test.c ASC NULLS FIRST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]\
+        \n    TableScan: test";
+        assert_optimized_plan_eq(plan, expected)
+    }
+
+    /// verifies that when we use multiple window functions with a common partition key, the filter
+    /// on that key is pushed
+    #[test]
+    fn filter_multiple_windows_common_partitions() -> Result<()> {
+        let table_scan = test_table_scan()?;
+
+        let window1 = Expr::WindowFunction(WindowFunction::new(
+            WindowFunctionDefinition::WindowUDF(
+                datafusion_functions_window::rank::rank_udwf(),
+            ),
+            vec![],
+        ))
+        .partition_by(vec![col("a")])
+        .order_by(vec![col("c").sort(true, true)])
+        .build()
+        .unwrap();
+
+        let window2 = Expr::WindowFunction(WindowFunction::new(
+            WindowFunctionDefinition::WindowUDF(
+                datafusion_functions_window::rank::rank_udwf(),
+            ),
+            vec![],
+        ))
+        .partition_by(vec![col("b"), col("a")])
+        .order_by(vec![col("c").sort(true, true)])
+        .build()
+        .unwrap();
+
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .window(vec![window1, window2])?
+            .filter(col("a").gt(lit(10i64)))? // a appears in both window functions
+            .build()?;
+
+        let expected = "\
+            WindowAggr: windowExpr=[[rank() PARTITION BY [test.a] ORDER BY [test.c ASC NULLS FIRST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW, rank() PARTITION BY [test.b, test.a] ORDER BY [test.c ASC NULLS FIRST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]\
+            \n  TableScan: test, full_filters=[test.a > Int64(10)]";
+        assert_optimized_plan_eq(plan, expected)
+    }
+
+    /// verifies that when we use multiple window functions with different partitions keys, the
+    /// filter cannot be pushed
+    #[test]
+    fn filter_multiple_windows_disjoint_partitions() -> Result<()> {
+        let table_scan = test_table_scan()?;
+
+        let window1 = Expr::WindowFunction(WindowFunction::new(
+            WindowFunctionDefinition::WindowUDF(
+                datafusion_functions_window::rank::rank_udwf(),
+            ),
+            vec![],
+        ))
+        .partition_by(vec![col("a")])
+        .order_by(vec![col("c").sort(true, true)])
+        .build()
+        .unwrap();
+
+        let window2 = Expr::WindowFunction(WindowFunction::new(
+            WindowFunctionDefinition::WindowUDF(
+                datafusion_functions_window::rank::rank_udwf(),
+            ),
+            vec![],
+        ))
+        .partition_by(vec![col("b"), col("a")])
+        .order_by(vec![col("c").sort(true, true)])
+        .build()
+        .unwrap();
+
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .window(vec![window1, window2])?
+            .filter(col("b").gt(lit(10i64)))? // b only appears in one window function
+            .build()?;
+
+        let expected = "\
+            Filter: test.b > Int64(10)\
+            \n  WindowAggr: windowExpr=[[rank() PARTITION BY [test.a] ORDER BY [test.c ASC NULLS FIRST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW, rank() PARTITION BY [test.b, test.a] ORDER BY [test.c ASC NULLS FIRST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]\
+            \n    TableScan: test";
+        assert_optimized_plan_eq(plan, expected)
+    }
+
     /// verifies that a filter is pushed to before a projection, the filter expression is correctly re-written
     #[test]
     fn alias() -> Result<()> {
@@ -1451,6 +1841,13 @@ mod tests {
         schema: DFSchemaRef,
     }
 
+    // Manual implementation needed because of `schema` field. Comparison excludes this field.
+    impl PartialOrd for NoopPlan {
+        fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+            self.input.partial_cmp(&other.input)
+        }
+    }
+
     impl UserDefinedLogicalNodeCore for NoopPlan {
         fn name(&self) -> &str {
             "NoopPlan"
@@ -1488,6 +1885,10 @@ mod tests {
                 input: inputs,
                 schema: Arc::clone(&self.schema),
             })
+        }
+
+        fn supports_limit_pushdown(&self) -> bool {
+            false // Disallow limit push-down by default
         }
     }
 
@@ -1713,7 +2114,7 @@ mod tests {
             .build()?;
 
         let expected = "Projection: test.a, test1.d\
-        \n  CrossJoin:\
+        \n  Cross Join: \
         \n    Projection: test.a, test.b, test.c\
         \n      TableScan: test, full_filters=[test.a = Int32(1)]\
         \n    Projection: test1.d, test1.e, test1.f\
@@ -1740,7 +2141,7 @@ mod tests {
             .build()?;
 
         let expected = "Projection: test.a, test1.a\
-        \n  CrossJoin:\
+        \n  Cross Join: \
         \n    Projection: test.a, test.b, test.c\
         \n      TableScan: test, full_filters=[test.a = Int32(1)]\
         \n    Projection: test1.a, test1.b, test1.c\
@@ -2030,7 +2431,7 @@ mod tests {
         let expected = "\
         Filter: test2.a <= Int64(1)\
         \n  Left Join: Using test.a = test2.a\
-        \n    TableScan: test\
+        \n    TableScan: test, full_filters=[test.a <= Int64(1)]\
         \n    Projection: test2.a\
         \n      TableScan: test2";
         assert_optimized_plan_eq(plan, expected)
@@ -2070,7 +2471,7 @@ mod tests {
         \n  Right Join: Using test.a = test2.a\
         \n    TableScan: test\
         \n    Projection: test2.a\
-        \n      TableScan: test2";
+        \n      TableScan: test2, full_filters=[test2.a <= Int64(1)]";
         assert_optimized_plan_eq(plan, expected)
     }
 
@@ -2425,28 +2826,36 @@ mod tests {
                 .collect())
         }
 
-        fn as_any(&self) -> &dyn std::any::Any {
+        fn as_any(&self) -> &dyn Any {
             self
         }
+    }
+
+    fn table_scan_with_pushdown_provider_builder(
+        filter_support: TableProviderFilterPushDown,
+        filters: Vec<Expr>,
+        projection: Option<Vec<usize>>,
+    ) -> Result<LogicalPlanBuilder> {
+        let test_provider = PushDownProvider { filter_support };
+
+        let table_scan = LogicalPlan::TableScan(TableScan {
+            table_name: "test".into(),
+            filters,
+            projected_schema: Arc::new(DFSchema::try_from(
+                (*test_provider.schema()).clone(),
+            )?),
+            projection,
+            source: Arc::new(test_provider),
+            fetch: None,
+        });
+
+        Ok(LogicalPlanBuilder::from(table_scan))
     }
 
     fn table_scan_with_pushdown_provider(
         filter_support: TableProviderFilterPushDown,
     ) -> Result<LogicalPlan> {
-        let test_provider = PushDownProvider { filter_support };
-
-        let table_scan = LogicalPlan::TableScan(TableScan {
-            table_name: "test".into(),
-            filters: vec![],
-            projected_schema: Arc::new(DFSchema::try_from(
-                (*test_provider.schema()).clone(),
-            )?),
-            projection: None,
-            source: Arc::new(test_provider),
-            fetch: None,
-        });
-
-        LogicalPlanBuilder::from(table_scan)
+        table_scan_with_pushdown_provider_builder(filter_support, vec![], None)?
             .filter(col("a").eq(lit(1i64)))?
             .build()
     }
@@ -2503,25 +2912,14 @@ mod tests {
 
     #[test]
     fn multi_combined_filter() -> Result<()> {
-        let test_provider = PushDownProvider {
-            filter_support: TableProviderFilterPushDown::Inexact,
-        };
-
-        let table_scan = LogicalPlan::TableScan(TableScan {
-            table_name: "test".into(),
-            filters: vec![col("a").eq(lit(10i64)), col("b").gt(lit(11i64))],
-            projected_schema: Arc::new(DFSchema::try_from(
-                (*test_provider.schema()).clone(),
-            )?),
-            projection: Some(vec![0]),
-            source: Arc::new(test_provider),
-            fetch: None,
-        });
-
-        let plan = LogicalPlanBuilder::from(table_scan)
-            .filter(and(col("a").eq(lit(10i64)), col("b").gt(lit(11i64))))?
-            .project(vec![col("a"), col("b")])?
-            .build()?;
+        let plan = table_scan_with_pushdown_provider_builder(
+            TableProviderFilterPushDown::Inexact,
+            vec![col("a").eq(lit(10i64)), col("b").gt(lit(11i64))],
+            Some(vec![0]),
+        )?
+        .filter(and(col("a").eq(lit(10i64)), col("b").gt(lit(11i64))))?
+        .project(vec![col("a"), col("b")])?
+        .build()?;
 
         let expected = "Projection: a, b\
             \n  Filter: a = Int64(10) AND b > Int64(11)\
@@ -2532,25 +2930,14 @@ mod tests {
 
     #[test]
     fn multi_combined_filter_exact() -> Result<()> {
-        let test_provider = PushDownProvider {
-            filter_support: TableProviderFilterPushDown::Exact,
-        };
-
-        let table_scan = LogicalPlan::TableScan(TableScan {
-            table_name: "test".into(),
-            filters: vec![],
-            projected_schema: Arc::new(DFSchema::try_from(
-                (*test_provider.schema()).clone(),
-            )?),
-            projection: Some(vec![0]),
-            source: Arc::new(test_provider),
-            fetch: None,
-        });
-
-        let plan = LogicalPlanBuilder::from(table_scan)
-            .filter(and(col("a").eq(lit(10i64)), col("b").gt(lit(11i64))))?
-            .project(vec![col("a"), col("b")])?
-            .build()?;
+        let plan = table_scan_with_pushdown_provider_builder(
+            TableProviderFilterPushDown::Exact,
+            vec![],
+            Some(vec![0]),
+        )?
+        .filter(and(col("a").eq(lit(10i64)), col("b").gt(lit(11i64))))?
+        .project(vec![col("a"), col("b")])?
+        .build()?;
 
         let expected = r#"
 Projection: a, b
@@ -2853,6 +3240,46 @@ Projection: a, b
     }
 
     #[test]
+    fn left_semi_join() -> Result<()> {
+        let left = test_table_scan_with_name("test1")?;
+        let right_table_scan = test_table_scan_with_name("test2")?;
+        let right = LogicalPlanBuilder::from(right_table_scan)
+            .project(vec![col("a"), col("b")])?
+            .build()?;
+        let plan = LogicalPlanBuilder::from(left)
+            .join(
+                right,
+                JoinType::LeftSemi,
+                (
+                    vec![Column::from_qualified_name("test1.a")],
+                    vec![Column::from_qualified_name("test2.a")],
+                ),
+                None,
+            )?
+            .filter(col("test2.a").lt_eq(lit(1i64)))?
+            .build()?;
+
+        // not part of the test, just good to know:
+        assert_eq!(
+            format!("{plan}"),
+            "Filter: test2.a <= Int64(1)\
+            \n  LeftSemi Join: test1.a = test2.a\
+            \n    TableScan: test1\
+            \n    Projection: test2.a, test2.b\
+            \n      TableScan: test2"
+        );
+
+        // Inferred the predicate `test1.a <= Int64(1)` and push it down to the left side.
+        let expected = "\
+        Filter: test2.a <= Int64(1)\
+        \n  LeftSemi Join: test1.a = test2.a\
+        \n    TableScan: test1, full_filters=[test1.a <= Int64(1)]\
+        \n    Projection: test2.a, test2.b\
+        \n      TableScan: test2";
+        assert_optimized_plan_eq(plan, expected)
+    }
+
+    #[test]
     fn left_semi_join_with_filters() -> Result<()> {
         let left = test_table_scan_with_name("test1")?;
         let right_table_scan = test_table_scan_with_name("test2")?;
@@ -2894,6 +3321,46 @@ Projection: a, b
     }
 
     #[test]
+    fn right_semi_join() -> Result<()> {
+        let left = test_table_scan_with_name("test1")?;
+        let right_table_scan = test_table_scan_with_name("test2")?;
+        let right = LogicalPlanBuilder::from(right_table_scan)
+            .project(vec![col("a"), col("b")])?
+            .build()?;
+        let plan = LogicalPlanBuilder::from(left)
+            .join(
+                right,
+                JoinType::RightSemi,
+                (
+                    vec![Column::from_qualified_name("test1.a")],
+                    vec![Column::from_qualified_name("test2.a")],
+                ),
+                None,
+            )?
+            .filter(col("test1.a").lt_eq(lit(1i64)))?
+            .build()?;
+
+        // not part of the test, just good to know:
+        assert_eq!(
+            format!("{plan}"),
+            "Filter: test1.a <= Int64(1)\
+            \n  RightSemi Join: test1.a = test2.a\
+            \n    TableScan: test1\
+            \n    Projection: test2.a, test2.b\
+            \n      TableScan: test2",
+        );
+
+        // Inferred the predicate `test2.a <= Int64(1)` and push it down to the right side.
+        let expected = "\
+        Filter: test1.a <= Int64(1)\
+        \n  RightSemi Join: test1.a = test2.a\
+        \n    TableScan: test1\
+        \n    Projection: test2.a, test2.b\
+        \n      TableScan: test2, full_filters=[test2.a <= Int64(1)]";
+        assert_optimized_plan_eq(plan, expected)
+    }
+
+    #[test]
     fn right_semi_join_with_filters() -> Result<()> {
         let left = test_table_scan_with_name("test1")?;
         let right_table_scan = test_table_scan_with_name("test2")?;
@@ -2931,6 +3398,51 @@ Projection: a, b
         \n  TableScan: test1, full_filters=[test1.b > UInt32(1)]\
         \n  Projection: test2.a, test2.b\
         \n    TableScan: test2, full_filters=[test2.b > UInt32(2)]";
+        assert_optimized_plan_eq(plan, expected)
+    }
+
+    #[test]
+    fn left_anti_join() -> Result<()> {
+        let table_scan = test_table_scan_with_name("test1")?;
+        let left = LogicalPlanBuilder::from(table_scan)
+            .project(vec![col("a"), col("b")])?
+            .build()?;
+        let right_table_scan = test_table_scan_with_name("test2")?;
+        let right = LogicalPlanBuilder::from(right_table_scan)
+            .project(vec![col("a"), col("b")])?
+            .build()?;
+        let plan = LogicalPlanBuilder::from(left)
+            .join(
+                right,
+                JoinType::LeftAnti,
+                (
+                    vec![Column::from_qualified_name("test1.a")],
+                    vec![Column::from_qualified_name("test2.a")],
+                ),
+                None,
+            )?
+            .filter(col("test2.a").gt(lit(2u32)))?
+            .build()?;
+
+        // not part of the test, just good to know:
+        assert_eq!(
+            format!("{plan}"),
+            "Filter: test2.a > UInt32(2)\
+            \n  LeftAnti Join: test1.a = test2.a\
+            \n    Projection: test1.a, test1.b\
+            \n      TableScan: test1\
+            \n    Projection: test2.a, test2.b\
+            \n      TableScan: test2",
+        );
+
+        // For left anti, filter of the right side filter can be pushed down.
+        let expected = "\
+        Filter: test2.a > UInt32(2)\
+        \n  LeftAnti Join: test1.a = test2.a\
+        \n    Projection: test1.a, test1.b\
+        \n      TableScan: test1, full_filters=[test1.a > UInt32(2)]\
+        \n    Projection: test2.a, test2.b\
+        \n      TableScan: test2";
         assert_optimized_plan_eq(plan, expected)
     }
 
@@ -2977,6 +3489,51 @@ Projection: a, b
         \n    TableScan: test1\
         \n  Projection: test2.a, test2.b\
         \n    TableScan: test2, full_filters=[test2.b > UInt32(2)]";
+        assert_optimized_plan_eq(plan, expected)
+    }
+
+    #[test]
+    fn right_anti_join() -> Result<()> {
+        let table_scan = test_table_scan_with_name("test1")?;
+        let left = LogicalPlanBuilder::from(table_scan)
+            .project(vec![col("a"), col("b")])?
+            .build()?;
+        let right_table_scan = test_table_scan_with_name("test2")?;
+        let right = LogicalPlanBuilder::from(right_table_scan)
+            .project(vec![col("a"), col("b")])?
+            .build()?;
+        let plan = LogicalPlanBuilder::from(left)
+            .join(
+                right,
+                JoinType::RightAnti,
+                (
+                    vec![Column::from_qualified_name("test1.a")],
+                    vec![Column::from_qualified_name("test2.a")],
+                ),
+                None,
+            )?
+            .filter(col("test1.a").gt(lit(2u32)))?
+            .build()?;
+
+        // not part of the test, just good to know:
+        assert_eq!(
+            format!("{plan}"),
+            "Filter: test1.a > UInt32(2)\
+             \n  RightAnti Join: test1.a = test2.a\
+             \n    Projection: test1.a, test1.b\
+             \n      TableScan: test1\
+             \n    Projection: test2.a, test2.b\
+             \n      TableScan: test2",
+        );
+
+        // For right anti, filter of the left side can be pushed down.
+        let expected = "\
+        Filter: test1.a > UInt32(2)\
+        \n  RightAnti Join: test1.a = test2.a\
+        \n    Projection: test1.a, test1.b\
+        \n      TableScan: test1\
+        \n    Projection: test2.a, test2.b\
+        \n      TableScan: test2, full_filters=[test2.a > UInt32(2)]";
         assert_optimized_plan_eq(plan, expected)
     }
 
@@ -3046,7 +3603,11 @@ Projection: a, b
             Ok(DataType::Int32)
         }
 
-        fn invoke(&self, _args: &[ColumnarValue]) -> Result<ColumnarValue> {
+        fn invoke_batch(
+            &self,
+            _args: &[ColumnarValue],
+            _number_rows: usize,
+        ) -> Result<ColumnarValue> {
             Ok(ColumnarValue::Scalar(ScalarValue::from(1)))
         }
     }
@@ -3129,5 +3690,88 @@ Projection: a, b
         \n          TableScan: test1\
         \n          TableScan: test2";
         assert_optimized_plan_eq(plan, expected)
+    }
+
+    #[test]
+    fn test_push_down_volatile_table_scan() -> Result<()> {
+        // SELECT test.a, test.b FROM test as t WHERE TestScalarUDF() > 0.1;
+        let table_scan = test_table_scan()?;
+        let fun = ScalarUDF::new_from_impl(TestScalarUDF {
+            signature: Signature::exact(vec![], Volatility::Volatile),
+        });
+        let expr = Expr::ScalarFunction(ScalarFunction::new_udf(Arc::new(fun), vec![]));
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .project(vec![col("a"), col("b")])?
+            .filter(expr.gt(lit(0.1)))?
+            .build()?;
+
+        let expected_before = "Filter: TestScalarUDF() > Float64(0.1)\
+        \n  Projection: test.a, test.b\
+        \n    TableScan: test";
+        assert_eq!(format!("{plan}"), expected_before);
+
+        let expected_after = "Projection: test.a, test.b\
+        \n  Filter: TestScalarUDF() > Float64(0.1)\
+        \n    TableScan: test";
+        assert_optimized_plan_eq(plan, expected_after)
+    }
+
+    #[test]
+    fn test_push_down_volatile_mixed_table_scan() -> Result<()> {
+        // SELECT test.a, test.b FROM test as t WHERE TestScalarUDF() > 0.1 and test.a > 5 and test.b > 10;
+        let table_scan = test_table_scan()?;
+        let fun = ScalarUDF::new_from_impl(TestScalarUDF {
+            signature: Signature::exact(vec![], Volatility::Volatile),
+        });
+        let expr = Expr::ScalarFunction(ScalarFunction::new_udf(Arc::new(fun), vec![]));
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .project(vec![col("a"), col("b")])?
+            .filter(
+                expr.gt(lit(0.1))
+                    .and(col("t.a").gt(lit(5)))
+                    .and(col("t.b").gt(lit(10))),
+            )?
+            .build()?;
+
+        let expected_before = "Filter: TestScalarUDF() > Float64(0.1) AND t.a > Int32(5) AND t.b > Int32(10)\
+        \n  Projection: test.a, test.b\
+        \n    TableScan: test";
+        assert_eq!(format!("{plan}"), expected_before);
+
+        let expected_after = "Projection: test.a, test.b\
+        \n  Filter: TestScalarUDF() > Float64(0.1)\
+        \n    TableScan: test, full_filters=[t.a > Int32(5), t.b > Int32(10)]";
+        assert_optimized_plan_eq(plan, expected_after)
+    }
+
+    #[test]
+    fn test_push_down_volatile_mixed_unsupported_table_scan() -> Result<()> {
+        // SELECT test.a, test.b FROM test as t WHERE TestScalarUDF() > 0.1 and test.a > 5 and test.b > 10;
+        let fun = ScalarUDF::new_from_impl(TestScalarUDF {
+            signature: Signature::exact(vec![], Volatility::Volatile),
+        });
+        let expr = Expr::ScalarFunction(ScalarFunction::new_udf(Arc::new(fun), vec![]));
+        let plan = table_scan_with_pushdown_provider_builder(
+            TableProviderFilterPushDown::Unsupported,
+            vec![],
+            None,
+        )?
+        .project(vec![col("a"), col("b")])?
+        .filter(
+            expr.gt(lit(0.1))
+                .and(col("t.a").gt(lit(5)))
+                .and(col("t.b").gt(lit(10))),
+        )?
+        .build()?;
+
+        let expected_before = "Filter: TestScalarUDF() > Float64(0.1) AND t.a > Int32(5) AND t.b > Int32(10)\
+        \n  Projection: a, b\
+        \n    TableScan: test";
+        assert_eq!(format!("{plan}"), expected_before);
+
+        let expected_after = "Projection: a, b\
+        \n  Filter: t.a > Int32(5) AND t.b > Int32(10) AND TestScalarUDF() > Float64(0.1)\
+        \n    TableScan: test";
+        assert_optimized_plan_eq(plan, expected_after)
     }
 }

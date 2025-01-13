@@ -20,9 +20,9 @@
 
 use crate::utils::split_disjunction;
 use crate::{split_conjunction, PhysicalExpr};
-use datafusion_common::{Column, ScalarValue};
+use datafusion_common::{Column, HashMap, ScalarValue};
 use datafusion_expr::Operator;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::fmt::{self, Display, Formatter};
 use std::sync::Arc;
 
@@ -93,18 +93,18 @@ impl LiteralGuarantee {
     /// Create a new instance of the guarantee if the provided operator is
     /// supported. Returns None otherwise. See [`LiteralGuarantee::analyze`] to
     /// create these structures from an predicate (boolean expression).
-    fn try_new<'a>(
+    fn new<'a>(
         column_name: impl Into<String>,
         guarantee: Guarantee,
         literals: impl IntoIterator<Item = &'a ScalarValue>,
-    ) -> Option<Self> {
+    ) -> Self {
         let literals: HashSet<_> = literals.into_iter().cloned().collect();
 
-        Some(Self {
+        Self {
             column: Column::from_name(column_name),
             guarantee,
             literals,
-        })
+        }
     }
 
     /// Return a list of [`LiteralGuarantee`]s that must be satisfied for `expr`
@@ -124,7 +124,7 @@ impl LiteralGuarantee {
             // for an `AND` conjunction to be true, all terms individually must be true
             .fold(GuaranteeBuilder::new(), |builder, expr| {
                 if let Some(cel) = ColOpLit::try_new(expr) {
-                    return builder.aggregate_conjunct(cel);
+                    builder.aggregate_conjunct(cel)
                 } else if let Some(inlist) = expr
                     .as_any()
                     .downcast_ref::<crate::expressions::InListExpr>()
@@ -225,26 +225,21 @@ impl LiteralGuarantee {
 
 impl Display for LiteralGuarantee {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        let mut sorted_literals: Vec<_> =
+            self.literals.iter().map(|lit| lit.to_string()).collect();
+        sorted_literals.sort();
         match self.guarantee {
             Guarantee::In => write!(
                 f,
                 "{} in ({})",
                 self.column.name,
-                self.literals
-                    .iter()
-                    .map(|lit| lit.to_string())
-                    .collect::<Vec<_>>()
-                    .join(", ")
+                sorted_literals.join(", ")
             ),
             Guarantee::NotIn => write!(
                 f,
                 "{} not in ({})",
                 self.column.name,
-                self.literals
-                    .iter()
-                    .map(|lit| lit.to_string())
-                    .collect::<Vec<_>>()
-                    .join(", ")
+                sorted_literals.join(", ")
             ),
         }
     }
@@ -343,13 +338,10 @@ impl<'a> GuaranteeBuilder<'a> {
             // This is a new guarantee
             let new_values: HashSet<_> = new_values.into_iter().collect();
 
-            if let Some(guarantee) =
-                LiteralGuarantee::try_new(col.name(), guarantee, new_values)
-            {
-                // add it to the list of guarantees
-                self.guarantees.push(Some(guarantee));
-                self.map.insert(key, self.guarantees.len() - 1);
-            }
+            let guarantee = LiteralGuarantee::new(col.name(), guarantee, new_values);
+            // add it to the list of guarantees
+            self.guarantees.push(Some(guarantee));
+            self.map.insert(key, self.guarantees.len() - 1);
         }
 
         self
@@ -420,7 +412,7 @@ impl<'a> ColOpLit<'a> {
 
 #[cfg(test)]
 mod test {
-    use std::sync::OnceLock;
+    use std::sync::LazyLock;
 
     use super::*;
     use crate::planner::logical2physical;
@@ -816,7 +808,7 @@ mod test {
             vec![not_in_guarantee("b", [1, 2, 3]), in_guarantee("b", [3, 4])],
         );
         // b IN (1, 2, 3) OR b = 2
-        // TODO this should be in_guarantee("b", [1, 2, 3]) but currently we don't support to anylize this kind of disjunction. Only `ColOpLit OR ColOpLit` is supported.
+        // TODO this should be in_guarantee("b", [1, 2, 3]) but currently we don't support to analyze this kind of disjunction. Only `ColOpLit OR ColOpLit` is supported.
         test_analyze(
             col("b")
                 .in_list(vec![lit(1), lit(2), lit(3)], false)
@@ -856,7 +848,7 @@ mod test {
         S: Into<ScalarValue> + 'a,
     {
         let literals: Vec<_> = literals.into_iter().map(|s| s.into()).collect();
-        LiteralGuarantee::try_new(column, Guarantee::In, literals.iter()).unwrap()
+        LiteralGuarantee::new(column, Guarantee::In, literals.iter())
     }
 
     /// Guarantee that the expression is true if the column is NOT any of the specified values
@@ -866,18 +858,17 @@ mod test {
         S: Into<ScalarValue> + 'a,
     {
         let literals: Vec<_> = literals.into_iter().map(|s| s.into()).collect();
-        LiteralGuarantee::try_new(column, Guarantee::NotIn, literals.iter()).unwrap()
+        LiteralGuarantee::new(column, Guarantee::NotIn, literals.iter())
     }
 
     // Schema for testing
     fn schema() -> SchemaRef {
-        Arc::clone(SCHEMA.get_or_init(|| {
+        static SCHEMA: LazyLock<SchemaRef> = LazyLock::new(|| {
             Arc::new(Schema::new(vec![
                 Field::new("a", DataType::Utf8, false),
                 Field::new("b", DataType::Int32, false),
             ]))
-        }))
+        });
+        Arc::clone(&SCHEMA)
     }
-
-    static SCHEMA: OnceLock<SchemaRef> = OnceLock::new();
 }

@@ -15,19 +15,17 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::any::Any;
-
 use arrow::array::{ArrayRef, OffsetSizeTrait};
 use arrow::datatypes::DataType;
-
-use datafusion_common::{exec_err, Result};
-use datafusion_expr::function::Hint;
-use datafusion_expr::TypeSignature::*;
-use datafusion_expr::{ColumnarValue, Volatility};
-use datafusion_expr::{ScalarUDFImpl, Signature};
+use std::any::Any;
 
 use crate::string::common::*;
 use crate::utils::{make_scalar_function, utf8_to_str_type};
+use datafusion_common::{exec_err, Result};
+use datafusion_expr::function::Hint;
+use datafusion_expr::{ColumnarValue, Documentation, TypeSignature, Volatility};
+use datafusion_expr::{ScalarUDFImpl, Signature};
+use datafusion_macros::user_doc;
 
 /// Returns the longest string  with leading characters removed. If the characters are not specified, whitespace is removed.
 /// ltrim('zzzytest', 'xyz') = 'test'
@@ -36,6 +34,33 @@ fn ltrim<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
     general_trim::<T>(args, TrimType::Left, use_string_view)
 }
 
+#[user_doc(
+    doc_section(label = "String Functions"),
+    description = "Trims the specified trim string from the beginning of a string. If no trim string is provided, all whitespace is removed from the start of the input string.",
+    syntax_example = "ltrim(str[, trim_str])",
+    sql_example = r#"```sql
+> select ltrim('  datafusion  ');
++-------------------------------+
+| ltrim(Utf8("  datafusion  ")) |
++-------------------------------+
+| datafusion                    |
++-------------------------------+
+> select ltrim('___datafusion___', '_');
++-------------------------------------------+
+| ltrim(Utf8("___datafusion___"),Utf8("_")) |
++-------------------------------------------+
+| datafusion___                             |
++-------------------------------------------+
+```"#,
+    standard_argument(name = "str", prefix = "String"),
+    argument(
+        name = "trim_str",
+        description = r"String expression to trim from the beginning of the input string. Can be a constant, column, or function, and any combination of arithmetic operators. _Default is whitespace characters._"
+    ),
+    alternative_syntax = "trim(LEADING trim_str FROM str)",
+    related_udf(name = "btrim"),
+    related_udf(name = "rtrim")
+)]
 #[derive(Debug)]
 pub struct LtrimFunc {
     signature: Signature,
@@ -49,18 +74,9 @@ impl Default for LtrimFunc {
 
 impl LtrimFunc {
     pub fn new() -> Self {
-        use DataType::*;
         Self {
             signature: Signature::one_of(
-                vec![
-                    // Planner attempts coercion to the target type starting with the most preferred candidate.
-                    // For example, given input `(Utf8View, Utf8)`, it first tries coercing to `(Utf8View, Utf8View)`.
-                    // If that fails, it proceeds to `(Utf8, Utf8)`.
-                    Exact(vec![Utf8View, Utf8View]),
-                    Exact(vec![Utf8, Utf8]),
-                    Exact(vec![Utf8View]),
-                    Exact(vec![Utf8]),
-                ],
+                vec![TypeSignature::String(2), TypeSignature::String(1)],
                 Volatility::Immutable,
             ),
         }
@@ -81,10 +97,18 @@ impl ScalarUDFImpl for LtrimFunc {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        utf8_to_str_type(&arg_types[0], "ltrim")
+        if arg_types[0] == DataType::Utf8View {
+            Ok(DataType::Utf8View)
+        } else {
+            utf8_to_str_type(&arg_types[0], "ltrim")
+        }
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         match args[0].data_type() {
             DataType::Utf8 | DataType::Utf8View => make_scalar_function(
                 ltrim::<i32>,
@@ -99,5 +123,155 @@ impl ScalarUDFImpl for LtrimFunc {
                 expected Utf8, LargeUtf8 or Utf8View."
             ),
         }
+    }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        self.doc()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use arrow::array::{Array, StringArray, StringViewArray};
+    use arrow::datatypes::DataType::{Utf8, Utf8View};
+
+    use datafusion_common::{Result, ScalarValue};
+    use datafusion_expr::{ColumnarValue, ScalarUDFImpl};
+
+    use crate::string::ltrim::LtrimFunc;
+    use crate::utils::test::test_function;
+
+    #[test]
+    fn test_functions() {
+        // String view cases for checking normal logic
+        test_function!(
+            LtrimFunc::new(),
+            vec![ColumnarValue::Scalar(ScalarValue::Utf8View(Some(
+                String::from("alphabet  ")
+            ))),],
+            Ok(Some("alphabet  ")),
+            &str,
+            Utf8View,
+            StringViewArray
+        );
+        test_function!(
+            LtrimFunc::new(),
+            vec![ColumnarValue::Scalar(ScalarValue::Utf8View(Some(
+                String::from("  alphabet  ")
+            ))),],
+            Ok(Some("alphabet  ")),
+            &str,
+            Utf8View,
+            StringViewArray
+        );
+        test_function!(
+            LtrimFunc::new(),
+            vec![
+                ColumnarValue::Scalar(ScalarValue::Utf8View(Some(String::from(
+                    "alphabet"
+                )))),
+                ColumnarValue::Scalar(ScalarValue::Utf8View(Some(String::from("t")))),
+            ],
+            Ok(Some("alphabet")),
+            &str,
+            Utf8View,
+            StringViewArray
+        );
+        test_function!(
+            LtrimFunc::new(),
+            vec![
+                ColumnarValue::Scalar(ScalarValue::Utf8View(Some(String::from(
+                    "alphabet"
+                )))),
+                ColumnarValue::Scalar(ScalarValue::Utf8View(Some(String::from(
+                    "alphabe"
+                )))),
+            ],
+            Ok(Some("t")),
+            &str,
+            Utf8View,
+            StringViewArray
+        );
+        test_function!(
+            LtrimFunc::new(),
+            vec![
+                ColumnarValue::Scalar(ScalarValue::Utf8View(Some(String::from(
+                    "alphabet"
+                )))),
+                ColumnarValue::Scalar(ScalarValue::Utf8View(None)),
+            ],
+            Ok(None),
+            &str,
+            Utf8View,
+            StringViewArray
+        );
+        // Special string view case for checking unlined output(len > 12)
+        test_function!(
+            LtrimFunc::new(),
+            vec![
+                ColumnarValue::Scalar(ScalarValue::Utf8View(Some(String::from(
+                    "xxxalphabetalphabet"
+                )))),
+                ColumnarValue::Scalar(ScalarValue::Utf8View(Some(String::from("x")))),
+            ],
+            Ok(Some("alphabetalphabet")),
+            &str,
+            Utf8View,
+            StringViewArray
+        );
+        // String cases
+        test_function!(
+            LtrimFunc::new(),
+            vec![ColumnarValue::Scalar(ScalarValue::Utf8(Some(
+                String::from("alphabet  ")
+            ))),],
+            Ok(Some("alphabet  ")),
+            &str,
+            Utf8,
+            StringArray
+        );
+        test_function!(
+            LtrimFunc::new(),
+            vec![ColumnarValue::Scalar(ScalarValue::Utf8(Some(
+                String::from("alphabet  ")
+            ))),],
+            Ok(Some("alphabet  ")),
+            &str,
+            Utf8,
+            StringArray
+        );
+        test_function!(
+            LtrimFunc::new(),
+            vec![
+                ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from("alphabet")))),
+                ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from("t")))),
+            ],
+            Ok(Some("alphabet")),
+            &str,
+            Utf8,
+            StringArray
+        );
+        test_function!(
+            LtrimFunc::new(),
+            vec![
+                ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from("alphabet")))),
+                ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from("alphabe")))),
+            ],
+            Ok(Some("t")),
+            &str,
+            Utf8,
+            StringArray
+        );
+        test_function!(
+            LtrimFunc::new(),
+            vec![
+                ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from("alphabet")))),
+                ColumnarValue::Scalar(ScalarValue::Utf8(None)),
+            ],
+            Ok(None),
+            &str,
+            Utf8,
+            StringArray
+        );
     }
 }

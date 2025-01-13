@@ -25,7 +25,6 @@ pub mod default_table_source;
 pub mod dynamic_file;
 pub mod empty;
 pub mod file_format;
-pub mod function;
 pub mod listing;
 pub mod listing_table_factory;
 pub mod memory;
@@ -62,7 +61,7 @@ fn create_ordering(
 
     for exprs in sort_order {
         // Construct PhysicalSortExpr objects from Expr objects:
-        let mut sort_exprs = vec![];
+        let mut sort_exprs = LexOrdering::default();
         for sort in exprs {
             match &sort.expr {
                 Expr::Column(col) => match expressions::col(&col.name, schema) {

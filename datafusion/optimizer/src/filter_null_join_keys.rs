@@ -29,7 +29,7 @@ use std::sync::Arc;
 /// The FilterNullJoinKeys rule will identify joins with equi-join conditions
 /// where the join key is nullable and then insert an `IsNotNull` filter on the nullable side since null values
 /// can never match.
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub struct FilterNullJoinKeys {}
 
 impl OptimizerRule for FilterNullJoinKeys {
@@ -262,6 +262,34 @@ mod tests {
         \n  Filter: t2.optional_id + UInt32(1) IS NOT NULL\
         \n    TableScan: t2";
         assert_optimized_plan_equal(plan, expected)
+    }
+
+    #[test]
+    fn one_side_unqualified() -> Result<()> {
+        let (t1, t2) = test_tables()?;
+        let plan_from_exprs = LogicalPlanBuilder::from(t1.clone())
+            .join_with_expr_keys(
+                t2.clone(),
+                JoinType::Inner,
+                (vec![col("optional_id")], vec![col("t2.optional_id")]),
+                None,
+            )?
+            .build()?;
+        let plan_from_cols = LogicalPlanBuilder::from(t1)
+            .join(
+                t2,
+                JoinType::Inner,
+                (vec!["optional_id"], vec!["t2.optional_id"]),
+                None,
+            )?
+            .build()?;
+        let expected = "Inner Join: t1.optional_id = t2.optional_id\
+        \n  Filter: t1.optional_id IS NOT NULL\
+        \n    TableScan: t1\
+        \n  Filter: t2.optional_id IS NOT NULL\
+        \n    TableScan: t2";
+        assert_optimized_plan_equal(plan_from_cols, expected)?;
+        assert_optimized_plan_equal(plan_from_exprs, expected)
     }
 
     fn build_plan(

@@ -127,6 +127,7 @@ pub async fn from_substrait_rel(
                             range: None,
                             statistics: None,
                             extensions: None,
+                            metadata_size_hint: None,
                         };
 
                         let part_index = file.partition_index as usize;

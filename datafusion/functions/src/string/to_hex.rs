@@ -23,13 +23,14 @@ use arrow::datatypes::{
     ArrowNativeType, ArrowPrimitiveType, DataType, Int32Type, Int64Type,
 };
 
+use crate::utils::make_scalar_function;
 use datafusion_common::cast::as_primitive_array;
 use datafusion_common::Result;
 use datafusion_common::{exec_err, plan_err};
-use datafusion_expr::ColumnarValue;
-use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
 
-use crate::utils::make_scalar_function;
+use datafusion_expr::{ColumnarValue, Documentation};
+use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
+use datafusion_macros::user_doc;
 
 /// Converts the number to its equivalent hexadecimal representation.
 /// to_hex(2147483647) = '7fffffff'
@@ -59,6 +60,20 @@ where
     Ok(Arc::new(result) as ArrayRef)
 }
 
+#[user_doc(
+    doc_section(label = "String Functions"),
+    description = "Converts an integer to a hexadecimal string.",
+    syntax_example = "to_hex(int)",
+    sql_example = r#"```sql
+> select to_hex(12345689);
++-------------------------+
+| to_hex(Int64(12345689)) |
++-------------------------+
+| bc6159                  |
++-------------------------+
+```"#,
+    standard_argument(name = "int", prefix = "Integer")
+)]
 #[derive(Debug)]
 pub struct ToHexFunc {
     signature: Signature,
@@ -103,12 +118,20 @@ impl ScalarUDFImpl for ToHexFunc {
         })
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         match args[0].data_type() {
             DataType::Int32 => make_scalar_function(to_hex::<Int32Type>, vec![])(args),
             DataType::Int64 => make_scalar_function(to_hex::<Int64Type>, vec![])(args),
             other => exec_err!("Unsupported data type {other:?} for function to_hex"),
         }
+    }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        self.doc()
     }
 }
 

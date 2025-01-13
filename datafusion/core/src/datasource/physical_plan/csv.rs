@@ -24,6 +24,7 @@ use std::task::Poll;
 
 use super::{calculate_range, FileGroupPartitioner, FileScanConfig, RangeCalculation};
 use crate::datasource::file_format::file_compression_type::FileCompressionType;
+use crate::datasource::file_format::{deserialize_stream, DecoderDeserializer};
 use crate::datasource::listing::{FileRange, ListingTableUrl, PartitionedFile};
 use crate::datasource::physical_plan::file_stream::{
     FileOpenFuture, FileOpener, FileStream,
@@ -32,8 +33,8 @@ use crate::datasource::physical_plan::FileMeta;
 use crate::error::{DataFusionError, Result};
 use crate::physical_plan::metrics::{ExecutionPlanMetricsSet, MetricsSet};
 use crate::physical_plan::{
-    DisplayAs, DisplayFormatType, ExecutionMode, ExecutionPlan, ExecutionPlanProperties,
-    Partitioning, PlanProperties, SendableRecordBatchStream, Statistics,
+    DisplayAs, DisplayFormatType, ExecutionPlan, ExecutionPlanProperties, Partitioning,
+    PlanProperties, SendableRecordBatchStream, Statistics,
 };
 
 use arrow::csv;
@@ -42,8 +43,8 @@ use datafusion_common::config::ConfigOptions;
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::{EquivalenceProperties, LexOrdering};
 
-use bytes::{Buf, Bytes};
-use futures::{ready, StreamExt, TryStreamExt};
+use datafusion_physical_plan::execution_plan::{Boundedness, EmissionType};
+use futures::{StreamExt, TryStreamExt};
 use object_store::buffered::BufWriter;
 use object_store::{GetOptions, GetResultPayload, ObjectStore};
 use tokio::io::AsyncWriteExt;
@@ -327,7 +328,8 @@ impl CsvExec {
         PlanProperties::new(
             eq_properties,
             Self::output_partitioning_helper(file_scan_config), // Output Partitioning
-            ExecutionMode::Bounded,                             // Execution Mode
+            EmissionType::Incremental,
+            Boundedness::Bounded,
         )
     }
 
@@ -521,7 +523,7 @@ impl CsvConfig {
     }
 
     fn builder(&self) -> csv::ReaderBuilder {
-        let mut builder = csv::ReaderBuilder::new(self.file_schema.clone())
+        let mut builder = csv::ReaderBuilder::new(Arc::clone(&self.file_schema))
             .with_delimiter(self.delimiter)
             .with_batch_size(self.batch_size)
             .with_header(self.has_header)
@@ -611,12 +613,14 @@ impl FileOpener for CsvOpener {
             );
         }
 
-        let store = self.config.object_store.clone();
+        let store = Arc::clone(&self.config.object_store);
+        let terminator = self.config.terminator;
 
         Ok(Box::pin(async move {
             // Current partition contains bytes [start_byte, end_byte) (might contain incomplete lines at boundaries)
 
-            let calculated_range = calculate_range(&file_meta, &store).await?;
+            let calculated_range =
+                calculate_range(&file_meta, &store, terminator).await?;
 
             let range = match calculated_range {
                 RangeCalculation::Range(None) => None,
@@ -651,36 +655,14 @@ impl FileOpener for CsvOpener {
                     Ok(futures::stream::iter(config.open(decoder)?).boxed())
                 }
                 GetResultPayload::Stream(s) => {
-                    let mut decoder = config.builder().build_decoder();
+                    let decoder = config.builder().build_decoder();
                     let s = s.map_err(DataFusionError::from);
-                    let mut input =
-                        file_compression_type.convert_stream(s.boxed())?.fuse();
-                    let mut buffered = Bytes::new();
+                    let input = file_compression_type.convert_stream(s.boxed())?.fuse();
 
-                    let s = futures::stream::poll_fn(move |cx| {
-                        loop {
-                            if buffered.is_empty() {
-                                match ready!(input.poll_next_unpin(cx)) {
-                                    Some(Ok(b)) => buffered = b,
-                                    Some(Err(e)) => {
-                                        return Poll::Ready(Some(Err(e.into())))
-                                    }
-                                    None => {}
-                                };
-                            }
-                            let decoded = match decoder.decode(buffered.as_ref()) {
-                                // Note: the decoder needs to be called with an empty
-                                // array to delimt the final record
-                                Ok(0) => break,
-                                Ok(decoded) => decoded,
-                                Err(e) => return Poll::Ready(Some(Err(e))),
-                            };
-                            buffered.advance(decoded);
-                        }
-
-                        Poll::Ready(decoder.flush().transpose())
-                    });
-                    Ok(s.boxed())
+                    Ok(deserialize_stream(
+                        input,
+                        DecoderDeserializer::from(decoder),
+                    ))
                 }
             }
         }))
@@ -698,12 +680,12 @@ pub async fn plan_to_csv(
     let store = task_ctx.runtime_env().object_store(&object_store_url)?;
     let mut join_set = JoinSet::new();
     for i in 0..plan.output_partitioning().partition_count() {
-        let storeref = store.clone();
-        let plan: Arc<dyn ExecutionPlan> = plan.clone();
+        let storeref = Arc::clone(&store);
+        let plan: Arc<dyn ExecutionPlan> = Arc::clone(&plan);
         let filename = format!("{}/part-{i}.csv", parsed.prefix());
         let file = object_store::path::Path::parse(filename)?;
 
-        let mut stream = plan.execute(i, task_ctx.clone())?;
+        let mut stream = plan.execute(i, Arc::clone(&task_ctx))?;
         join_set.spawn(async move {
             let mut buf_writer = BufWriter::new(storeref, file.clone());
             let mut buffer = Vec::with_capacity(1024);
@@ -753,6 +735,7 @@ mod tests {
     use crate::{scalar::ScalarValue, test_util::aggr_test_schema};
 
     use arrow::datatypes::*;
+    use bytes::Bytes;
     use datafusion_common::test_util::arrow_test_data;
 
     use datafusion_common::config::CsvOptions;
@@ -1216,7 +1199,7 @@ mod tests {
         let session_ctx = SessionContext::new();
         let store = object_store::memory::InMemory::new();
 
-        let data = bytes::Bytes::from("a,b\n1,2\n3,4");
+        let data = Bytes::from("a,b\n1,2\n3,4");
         let path = object_store::path::Path::from("a.csv");
         store.put(&path, data.into()).await.unwrap();
 
@@ -1247,7 +1230,7 @@ mod tests {
         let session_ctx = SessionContext::new();
         let store = object_store::memory::InMemory::new();
 
-        let data = bytes::Bytes::from("a,b\r1,2\r3,4");
+        let data = Bytes::from("a,b\r1,2\r3,4");
         let path = object_store::path::Path::from("a.csv");
         store.put(&path, data.into()).await.unwrap();
 

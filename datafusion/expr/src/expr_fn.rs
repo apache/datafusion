@@ -27,8 +27,8 @@ use crate::function::{
 };
 use crate::{
     conditional_expressions::CaseBuilder, expr::Sort, logical_plan::Subquery,
-    AggregateUDF, Expr, LogicalPlan, Operator, ScalarFunctionImplementation, ScalarUDF,
-    Signature, Volatility,
+    AggregateUDF, Expr, LogicalPlan, Operator, PartitionEvaluator,
+    ScalarFunctionImplementation, ScalarUDF, Signature, Volatility,
 };
 use crate::{
     AggregateUDFImpl, ColumnarValue, ScalarUDFImpl, WindowFrame, WindowUDF, WindowUDFImpl,
@@ -38,6 +38,8 @@ use arrow::compute::kernels::cast_utils::{
 };
 use arrow::datatypes::{DataType, Field};
 use datafusion_common::{plan_err, Column, Result, ScalarValue, TableReference};
+use datafusion_functions_window_common::field::WindowUDFFieldArgs;
+use datafusion_functions_window_common::partition::PartitionEvaluatorArgs;
 use sqlparser::ast::NullTreatment;
 use std::any::Any;
 use std::fmt::Debug;
@@ -121,7 +123,7 @@ pub fn placeholder(id: impl Into<String>) -> Expr {
 pub fn wildcard() -> Expr {
     Expr::Wildcard {
         qualifier: None,
-        options: WildcardOptions::default(),
+        options: Box::new(WildcardOptions::default()),
     }
 }
 
@@ -129,7 +131,7 @@ pub fn wildcard() -> Expr {
 pub fn wildcard_with_options(options: WildcardOptions) -> Expr {
     Expr::Wildcard {
         qualifier: None,
-        options,
+        options: Box::new(options),
     }
 }
 
@@ -146,7 +148,7 @@ pub fn wildcard_with_options(options: WildcardOptions) -> Expr {
 pub fn qualified_wildcard(qualifier: impl Into<TableReference>) -> Expr {
     Expr::Wildcard {
         qualifier: Some(qualifier.into()),
-        options: WildcardOptions::default(),
+        options: Box::new(WildcardOptions::default()),
     }
 }
 
@@ -157,7 +159,7 @@ pub fn qualified_wildcard_with_options(
 ) -> Expr {
     Expr::Wildcard {
         qualifier: Some(qualifier.into()),
-        options,
+        options: Box::new(options),
     }
 }
 
@@ -390,11 +392,10 @@ pub fn unnest(expr: Expr) -> Expr {
 pub fn create_udf(
     name: &str,
     input_types: Vec<DataType>,
-    return_type: Arc<DataType>,
+    return_type: DataType,
     volatility: Volatility,
     fun: ScalarFunctionImplementation,
 ) -> ScalarUDF {
-    let return_type = Arc::unwrap_or_clone(return_type);
     ScalarUDF::from(SimpleScalarUDF::new(
         name,
         input_types,
@@ -415,9 +416,10 @@ pub struct SimpleScalarUDF {
 
 impl Debug for SimpleScalarUDF {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        f.debug_struct("ScalarUDF")
+        f.debug_struct("SimpleScalarUDF")
             .field("name", &self.name)
             .field("signature", &self.signature)
+            .field("return_type", &self.return_type)
             .field("fun", &"<FUNC>")
             .finish()
     }
@@ -433,10 +435,24 @@ impl SimpleScalarUDF {
         volatility: Volatility,
         fun: ScalarFunctionImplementation,
     ) -> Self {
-        let name = name.into();
-        let signature = Signature::exact(input_types, volatility);
-        Self {
+        Self::new_with_signature(
             name,
+            Signature::exact(input_types, volatility),
+            return_type,
+            fun,
+        )
+    }
+
+    /// Create a new `SimpleScalarUDF` from a name, signature, return type and
+    /// implementation. Implementing [`ScalarUDFImpl`] allows more flexibility
+    pub fn new_with_signature(
+        name: impl Into<String>,
+        signature: Signature,
+        return_type: DataType,
+        fun: ScalarFunctionImplementation,
+    ) -> Self {
+        Self {
+            name: name.into(),
             signature,
             return_type,
             fun,
@@ -461,7 +477,11 @@ impl ScalarUDFImpl for SimpleScalarUDF {
         Ok(self.return_type.clone())
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         (self.fun)(args)
     }
 }
@@ -505,16 +525,17 @@ pub struct SimpleAggregateUDF {
 
 impl Debug for SimpleAggregateUDF {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        f.debug_struct("AggregateUDF")
+        f.debug_struct("SimpleAggregateUDF")
             .field("name", &self.name)
             .field("signature", &self.signature)
+            .field("return_type", &self.return_type)
             .field("fun", &"<FUNC>")
             .finish()
     }
 }
 
 impl SimpleAggregateUDF {
-    /// Create a new `AggregateUDFImpl` from a name, input types, return type, state type and
+    /// Create a new `SimpleAggregateUDF` from a name, input types, return type, state type and
     /// implementation. Implementing [`AggregateUDFImpl`] allows more flexibility
     pub fn new(
         name: impl Into<String>,
@@ -535,6 +556,8 @@ impl SimpleAggregateUDF {
         }
     }
 
+    /// Create a new `SimpleAggregateUDF` from a name, signature, return type, state type and
+    /// implementation. Implementing [`AggregateUDFImpl`] allows more flexibility
     pub fn new_with_signature(
         name: impl Into<String>,
         signature: Signature,
@@ -658,12 +681,19 @@ impl WindowUDFImpl for SimpleWindowUDF {
         &self.signature
     }
 
-    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        Ok(self.return_type.clone())
+    fn partition_evaluator(
+        &self,
+        _partition_evaluator_args: PartitionEvaluatorArgs,
+    ) -> Result<Box<dyn PartitionEvaluator>> {
+        (self.partition_evaluator_factory)()
     }
 
-    fn partition_evaluator(&self) -> Result<Box<dyn crate::PartitionEvaluator>> {
-        (self.partition_evaluator_factory)()
+    fn field(&self, field_args: WindowUDFFieldArgs) -> Result<Field> {
+        Ok(Field::new(
+            field_args.name(),
+            self.return_type.clone(),
+            true,
+        ))
     }
 }
 
@@ -693,7 +723,6 @@ pub fn interval_month_day_nano_lit(value: &str) -> Expr {
 /// # use datafusion_expr::test::function_stub::count;
 /// # use sqlparser::ast::NullTreatment;
 /// # use datafusion_expr::{ExprFunctionExt, lit, Expr, col};
-/// # use datafusion_expr::window_function::percent_rank;
 /// # // first_value is an aggregate function in another crate
 /// # fn first_value(_arg: Expr) -> Expr {
 /// unimplemented!() }
@@ -713,6 +742,9 @@ pub fn interval_month_day_nano_lit(value: &str) -> Expr {
 /// // Create a window expression for percent rank partitioned on column a
 /// // equivalent to:
 /// // `PERCENT_RANK() OVER (PARTITION BY a ORDER BY b ASC NULLS LAST IGNORE NULLS)`
+/// // percent_rank is an udwf function in another crate
+/// # fn percent_rank() -> Expr {
+/// unimplemented!() }
 /// let window = percent_rank()
 ///     .partition_by(vec![col("a")])
 ///     .order_by(vec![col("b").sort(true, true)])

@@ -100,6 +100,7 @@ pub async fn main() -> Result<()> {
 
 /// An example OptimizerRule that replaces all `col = <const>` predicates with a
 /// user defined function
+#[derive(Default, Debug)]
 struct MyOptimizerRule {}
 
 impl OptimizerRule for MyOptimizerRule {
@@ -145,7 +146,7 @@ impl MyOptimizerRule {
             // Closure called for each sub tree
             match expr {
                 Expr::BinaryExpr(binary_expr) if is_binary_eq(&binary_expr) => {
-                    // destruture the expression
+                    // destructure the expression
                     let BinaryExpr { left, op: _, right } = binary_expr;
                     // rewrite to `my_eq(left, right)`
                     let udf = ScalarUDF::new_from_impl(MyEq::new());
@@ -204,7 +205,11 @@ impl ScalarUDFImpl for MyEq {
         Ok(DataType::Boolean)
     }
 
-    fn invoke(&self, _args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        _args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         // this example simply returns "true" which is not what a real
         // implementation would do.
         Ok(ColumnarValue::Scalar(ScalarValue::from(true)))

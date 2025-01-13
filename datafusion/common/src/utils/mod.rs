@@ -23,17 +23,14 @@ pub mod proxy;
 pub mod string_utils;
 
 use crate::error::{_internal_datafusion_err, _internal_err};
-use crate::{arrow_datafusion_err, DataFusionError, Result, ScalarValue};
-use arrow::array::{ArrayRef, PrimitiveArray};
+use crate::{DataFusionError, Result, ScalarValue};
+use arrow::array::ArrayRef;
 use arrow::buffer::OffsetBuffer;
-use arrow::compute;
 use arrow::compute::{partition, SortColumn, SortOptions};
-use arrow::datatypes::{Field, SchemaRef, UInt32Type};
-use arrow::record_batch::RecordBatch;
+use arrow::datatypes::{Field, SchemaRef};
 use arrow_array::cast::AsArray;
 use arrow_array::{
     Array, FixedSizeListArray, LargeListArray, ListArray, OffsetSizeTrait,
-    RecordBatchOptions,
 };
 use arrow_schema::DataType;
 use sqlparser::ast::Ident;
@@ -42,8 +39,10 @@ use sqlparser::parser::Parser;
 use std::borrow::{Borrow, Cow};
 use std::cmp::{min, Ordering};
 use std::collections::HashSet;
+use std::num::NonZero;
 use std::ops::Range;
 use std::sync::Arc;
+use std::thread::available_parallelism;
 
 /// Applies an optional projection to a [`SchemaRef`], returning the
 /// projected schema
@@ -91,20 +90,6 @@ pub fn get_row_at_idx(columns: &[ArrayRef], idx: usize) -> Result<Vec<ScalarValu
         .iter()
         .map(|arr| ScalarValue::try_from_array(arr, idx))
         .collect()
-}
-
-/// Construct a new RecordBatch from the rows of the `record_batch` at the `indices`.
-pub fn get_record_batch_at_indices(
-    record_batch: &RecordBatch,
-    indices: &PrimitiveArray<UInt32Type>,
-) -> Result<RecordBatch> {
-    let new_columns = get_arrayref_at_indices(record_batch.columns(), indices)?;
-    RecordBatch::try_new_with_options(
-        record_batch.schema(),
-        new_columns,
-        &RecordBatchOptions::new().with_row_count(Some(indices.len())),
-    )
-    .map_err(|e| arrow_datafusion_err!(e))
 }
 
 /// This function compares two tuples depending on the given sort options.
@@ -290,24 +275,6 @@ pub(crate) fn parse_identifiers(s: &str) -> Result<Vec<Ident>> {
     Ok(idents)
 }
 
-/// Construct a new [`Vec`] of [`ArrayRef`] from the rows of the `arrays` at the `indices`.
-pub fn get_arrayref_at_indices(
-    arrays: &[ArrayRef],
-    indices: &PrimitiveArray<UInt32Type>,
-) -> Result<Vec<ArrayRef>> {
-    arrays
-        .iter()
-        .map(|array| {
-            compute::take(
-                array.as_ref(),
-                indices,
-                None, // None: no index check
-            )
-            .map_err(|e| arrow_datafusion_err!(e))
-        })
-        .collect()
-}
-
 pub(crate) fn parse_identifiers_normalized(s: &str, ignore_case: bool) -> Vec<String> {
     parse_identifiers(s)
         .unwrap_or_default()
@@ -354,52 +321,201 @@ pub fn longest_consecutive_prefix<T: Borrow<usize>>(
     count
 }
 
-/// Array Utils
+/// Creates single element [`ListArray`], [`LargeListArray`] and
+/// [`FixedSizeListArray`] from other arrays
+///
+/// For example this builder can convert `[1, 2, 3]` into `[[1, 2, 3]]`
+///
+/// # Example
+/// ```
+/// # use std::sync::Arc;
+/// # use arrow_array::{Array, ListArray};
+/// # use arrow_array::types::Int64Type;
+/// # use datafusion_common::utils::SingleRowListArrayBuilder;
+/// // Array is [1, 2, 3]
+/// let arr = ListArray::from_iter_primitive::<Int64Type, _, _>(vec![
+///       Some(vec![Some(1), Some(2), Some(3)]),
+/// ]);
+/// // Wrap as a list array: [[1, 2, 3]]
+/// let list_arr = SingleRowListArrayBuilder::new(Arc::new(arr)).build_list_array();
+/// assert_eq!(list_arr.len(), 1);
+/// ```
+#[derive(Debug, Clone)]
+pub struct SingleRowListArrayBuilder {
+    /// array to be wrapped
+    arr: ArrayRef,
+    /// Should the resulting array be nullable? Defaults to `true`.
+    nullable: bool,
+    /// Specify the field name for the resulting array. Defaults to value used in
+    /// [`Field::new_list_field`]
+    field_name: Option<String>,
+}
+
+impl SingleRowListArrayBuilder {
+    /// Create a new instance of [`SingleRowListArrayBuilder`]
+    pub fn new(arr: ArrayRef) -> Self {
+        Self {
+            arr,
+            nullable: true,
+            field_name: None,
+        }
+    }
+
+    /// Set the nullable flag
+    pub fn with_nullable(mut self, nullable: bool) -> Self {
+        self.nullable = nullable;
+        self
+    }
+
+    /// sets the field name for the resulting array
+    pub fn with_field_name(mut self, field_name: Option<String>) -> Self {
+        self.field_name = field_name;
+        self
+    }
+
+    /// Copies field name and nullable from the specified field
+    pub fn with_field(self, field: &Field) -> Self {
+        self.with_field_name(Some(field.name().to_owned()))
+            .with_nullable(field.is_nullable())
+    }
+
+    /// Build a single element [`ListArray`]
+    pub fn build_list_array(self) -> ListArray {
+        let (field, arr) = self.into_field_and_arr();
+        let offsets = OffsetBuffer::from_lengths([arr.len()]);
+        ListArray::new(field, offsets, arr, None)
+    }
+
+    /// Build a single element [`ListArray`] and wrap as [`ScalarValue::List`]
+    pub fn build_list_scalar(self) -> ScalarValue {
+        ScalarValue::List(Arc::new(self.build_list_array()))
+    }
+
+    /// Build a single element [`LargeListArray`]
+    pub fn build_large_list_array(self) -> LargeListArray {
+        let (field, arr) = self.into_field_and_arr();
+        let offsets = OffsetBuffer::from_lengths([arr.len()]);
+        LargeListArray::new(field, offsets, arr, None)
+    }
+
+    /// Build a single element [`LargeListArray`] and wrap as [`ScalarValue::LargeList`]
+    pub fn build_large_list_scalar(self) -> ScalarValue {
+        ScalarValue::LargeList(Arc::new(self.build_large_list_array()))
+    }
+
+    /// Build a single element [`FixedSizeListArray`]
+    pub fn build_fixed_size_list_array(self, list_size: usize) -> FixedSizeListArray {
+        let (field, arr) = self.into_field_and_arr();
+        FixedSizeListArray::new(field, list_size as i32, arr, None)
+    }
+
+    /// Build a single element [`FixedSizeListArray`] and wrap as [`ScalarValue::FixedSizeList`]
+    pub fn build_fixed_size_list_scalar(self, list_size: usize) -> ScalarValue {
+        ScalarValue::FixedSizeList(Arc::new(self.build_fixed_size_list_array(list_size)))
+    }
+
+    /// Helper function: convert this builder into a tuple of field and array
+    fn into_field_and_arr(self) -> (Arc<Field>, ArrayRef) {
+        let Self {
+            arr,
+            nullable,
+            field_name,
+        } = self;
+        let data_type = arr.data_type().to_owned();
+        let field = match field_name {
+            Some(name) => Field::new(name, data_type, nullable),
+            None => Field::new_list_field(data_type, nullable),
+        };
+        (Arc::new(field), arr)
+    }
+}
 
 /// Wrap an array into a single element `ListArray`.
 /// For example `[1, 2, 3]` would be converted into `[[1, 2, 3]]`
 /// The field in the list array is nullable.
+#[deprecated(
+    since = "44.0.0",
+    note = "please use `SingleRowListArrayBuilder` instead"
+)]
 pub fn array_into_list_array_nullable(arr: ArrayRef) -> ListArray {
-    array_into_list_array(arr, true)
+    SingleRowListArrayBuilder::new(arr)
+        .with_nullable(true)
+        .build_list_array()
 }
-
-/// Array Utils
 
 /// Wrap an array into a single element `ListArray`.
 /// For example `[1, 2, 3]` would be converted into `[[1, 2, 3]]`
+#[deprecated(
+    since = "44.0.0",
+    note = "please use `SingleRowListArrayBuilder` instead"
+)]
 pub fn array_into_list_array(arr: ArrayRef, nullable: bool) -> ListArray {
-    let offsets = OffsetBuffer::from_lengths([arr.len()]);
-    ListArray::new(
-        Arc::new(Field::new_list_field(arr.data_type().to_owned(), nullable)),
-        offsets,
-        arr,
-        None,
-    )
+    SingleRowListArrayBuilder::new(arr)
+        .with_nullable(nullable)
+        .build_list_array()
+}
+
+#[deprecated(
+    since = "44.0.0",
+    note = "please use `SingleRowListArrayBuilder` instead"
+)]
+pub fn array_into_list_array_with_field_name(
+    arr: ArrayRef,
+    nullable: bool,
+    field_name: &str,
+) -> ListArray {
+    SingleRowListArrayBuilder::new(arr)
+        .with_nullable(nullable)
+        .with_field_name(Some(field_name.to_string()))
+        .build_list_array()
 }
 
 /// Wrap an array into a single element `LargeListArray`.
 /// For example `[1, 2, 3]` would be converted into `[[1, 2, 3]]`
+#[deprecated(
+    since = "44.0.0",
+    note = "please use `SingleRowListArrayBuilder` instead"
+)]
 pub fn array_into_large_list_array(arr: ArrayRef) -> LargeListArray {
-    let offsets = OffsetBuffer::from_lengths([arr.len()]);
-    LargeListArray::new(
-        Arc::new(Field::new_list_field(arr.data_type().to_owned(), true)),
-        offsets,
-        arr,
-        None,
-    )
+    SingleRowListArrayBuilder::new(arr).build_large_list_array()
 }
 
+#[deprecated(
+    since = "44.0.0",
+    note = "please use `SingleRowListArrayBuilder` instead"
+)]
+pub fn array_into_large_list_array_with_field_name(
+    arr: ArrayRef,
+    field_name: &str,
+) -> LargeListArray {
+    SingleRowListArrayBuilder::new(arr)
+        .with_field_name(Some(field_name.to_string()))
+        .build_large_list_array()
+}
+
+#[deprecated(
+    since = "44.0.0",
+    note = "please use `SingleRowListArrayBuilder` instead"
+)]
 pub fn array_into_fixed_size_list_array(
     arr: ArrayRef,
     list_size: usize,
 ) -> FixedSizeListArray {
-    let list_size = list_size as i32;
-    FixedSizeListArray::new(
-        Arc::new(Field::new_list_field(arr.data_type().to_owned(), true)),
-        list_size,
-        arr,
-        None,
-    )
+    SingleRowListArrayBuilder::new(arr).build_fixed_size_list_array(list_size)
+}
+
+#[deprecated(
+    since = "44.0.0",
+    note = "please use `SingleRowListArrayBuilder` instead"
+)]
+pub fn array_into_fixed_size_list_array_with_field_name(
+    arr: ArrayRef,
+    list_size: usize,
+    field_name: &str,
+) -> FixedSizeListArray {
+    SingleRowListArrayBuilder::new(arr)
+        .with_field_name(Some(field_name.to_string()))
+        .build_fixed_size_list_array(list_size)
 }
 
 /// Wrap arrays into a single element `ListArray`.
@@ -563,7 +679,7 @@ pub mod datafusion_strsim {
 
     struct StringWrapper<'a>(&'a str);
 
-    impl<'a, 'b> IntoIterator for &'a StringWrapper<'b> {
+    impl<'b> IntoIterator for &StringWrapper<'b> {
         type Item = char;
         type IntoIter = Chars<'b>;
 
@@ -759,12 +875,22 @@ pub fn combine_limit(
     (combined_skip, combined_fetch)
 }
 
+/// Returns the estimated number of threads available for parallel execution.
+///
+/// This is a wrapper around `std::thread::available_parallelism`, providing a default value
+/// of `1` if the system's parallelism cannot be determined.
+pub fn get_available_parallelism() -> usize {
+    available_parallelism()
+        .unwrap_or(NonZero::new(1).expect("literal value `1` shouldn't be zero"))
+        .get()
+}
+
 #[cfg(test)]
 mod tests {
+    use super::*;
     use crate::ScalarValue::Null;
     use arrow::array::Float64Array;
-
-    use super::*;
+    use sqlparser::tokenizer::Span;
 
     #[test]
     fn test_bisect_linear_left_and_right() -> Result<()> {
@@ -992,6 +1118,7 @@ mod tests {
             let expected_parsed = vec![Ident {
                 value: identifier.to_string(),
                 quote_style,
+                span: Span::empty(),
             }];
 
             assert_eq!(
@@ -1000,39 +1127,6 @@ mod tests {
             );
         }
 
-        Ok(())
-    }
-
-    #[test]
-    fn test_get_arrayref_at_indices() -> Result<()> {
-        let arrays: Vec<ArrayRef> = vec![
-            Arc::new(Float64Array::from(vec![5.0, 7.0, 8.0, 9., 10.])),
-            Arc::new(Float64Array::from(vec![2.0, 3.0, 3.0, 4.0, 5.0])),
-            Arc::new(Float64Array::from(vec![5.0, 7.0, 8.0, 10., 11.0])),
-            Arc::new(Float64Array::from(vec![15.0, 13.0, 8.0, 5., 0.0])),
-        ];
-
-        let row_indices_vec: Vec<Vec<u32>> = vec![
-            // Get rows 0 and 1
-            vec![0, 1],
-            // Get rows 0 and 1
-            vec![0, 2],
-            // Get rows 1 and 3
-            vec![1, 3],
-            // Get rows 2 and 4
-            vec![2, 4],
-        ];
-        for row_indices in row_indices_vec {
-            let indices = PrimitiveArray::from_iter_values(row_indices.iter().cloned());
-            let chunk = get_arrayref_at_indices(&arrays, &indices)?;
-            for (arr_orig, arr_chunk) in arrays.iter().zip(&chunk) {
-                for (idx, orig_idx) in row_indices.iter().enumerate() {
-                    let res1 = ScalarValue::try_from_array(arr_orig, *orig_idx as usize)?;
-                    let res2 = ScalarValue::try_from_array(arr_chunk, idx)?;
-                    assert_eq!(res1, res2);
-                }
-            }
-        }
         Ok(())
     }
 

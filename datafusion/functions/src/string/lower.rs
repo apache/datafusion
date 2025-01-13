@@ -15,17 +15,32 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::any::Any;
-
 use arrow::datatypes::DataType;
-
-use datafusion_common::Result;
-use datafusion_expr::ColumnarValue;
-use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
+use std::any::Any;
 
 use crate::string::common::to_lower;
 use crate::utils::utf8_to_str_type;
+use datafusion_common::Result;
+use datafusion_expr::{ColumnarValue, Documentation};
+use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
+use datafusion_macros::user_doc;
 
+#[user_doc(
+    doc_section(label = "String Functions"),
+    description = "Converts a string to lower-case.",
+    syntax_example = "lower(str)",
+    sql_example = r#"```sql
+> select lower('Ångström');
++-------------------------+
+| lower(Utf8("Ångström")) |
++-------------------------+
+| ångström                |
++-------------------------+
+```"#,
+    standard_argument(name = "str", prefix = "String"),
+    related_udf(name = "initcap"),
+    related_udf(name = "upper")
+)]
 #[derive(Debug)]
 pub struct LowerFunc {
     signature: Signature,
@@ -39,13 +54,8 @@ impl Default for LowerFunc {
 
 impl LowerFunc {
     pub fn new() -> Self {
-        use DataType::*;
         Self {
-            signature: Signature::uniform(
-                1,
-                vec![Utf8, LargeUtf8, Utf8View],
-                Volatility::Immutable,
-            ),
+            signature: Signature::string(1, Volatility::Immutable),
         }
     }
 }
@@ -67,23 +77,33 @@ impl ScalarUDFImpl for LowerFunc {
         utf8_to_str_type(&arg_types[0], "lower")
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         to_lower(args, "lower")
+    }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        self.doc()
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow::array::{ArrayRef, StringArray};
+    use arrow::array::{Array, ArrayRef, StringArray};
     use std::sync::Arc;
 
     fn to_lower(input: ArrayRef, expected: ArrayRef) -> Result<()> {
         let func = LowerFunc::new();
+        let batch_len = input.len();
         let args = vec![ColumnarValue::Array(input)];
-        let result = match func.invoke(&args)? {
+        #[allow(deprecated)] // TODO migrate UDF to invoke
+        let result = match func.invoke_batch(&args, batch_len)? {
             ColumnarValue::Array(result) => result,
-            _ => unreachable!(),
+            _ => unreachable!("lower"),
         };
         assert_eq!(&expected, &result);
         Ok(())

@@ -26,7 +26,7 @@ use datafusion_expr::{Aggregate, Expr, LogicalPlan, LogicalPlanBuilder, Volatili
 /// Optimizer rule that removes constant expressions from `GROUP BY` clause
 /// and places additional projection on top of aggregation, to preserve
 /// original schema
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub struct EliminateGroupByConstant {}
 
 impl EliminateGroupByConstant {
@@ -94,7 +94,7 @@ impl OptimizerRule for EliminateGroupByConstant {
 /// Checks if expression is constant, and can be eliminated from group by.
 ///
 /// Intended to be used only within this rule, helper function, which heavily
-/// reiles on `SimplifyExpressions` result.
+/// relies on `SimplifyExpressions` result.
 fn is_constant_expression(expr: &Expr) -> bool {
     match expr {
         Expr::Alias(e) => is_constant_expression(&e.expr),
@@ -155,7 +155,11 @@ mod tests {
         fn return_type(&self, _args: &[DataType]) -> Result<DataType> {
             Ok(DataType::Int32)
         }
-        fn invoke(&self, _args: &[ColumnarValue]) -> Result<ColumnarValue> {
+        fn invoke_batch(
+            &self,
+            _args: &[ColumnarValue],
+            _number_rows: usize,
+        ) -> Result<ColumnarValue> {
             unimplemented!()
         }
     }

@@ -38,18 +38,27 @@
 [Chat](https://discord.com/channels/885562378132000778/885562378132000781)
 
 <a href="https://datafusion.apache.org/">
-  <img src="./docs/source/_static/images/2x_bgwhite_original.png" width="512" alt="logo"/>
+  <img src="https://github.com/apache/datafusion/raw/HEAD/docs/source/_static/images/2x_bgwhite_original.png" width="512" alt="logo"/>
 </a>
 
 DataFusion is an extensible query engine written in [Rust] that
-uses [Apache Arrow] as its in-memory format. DataFusion's target users are
-developers building fast and feature rich database and analytic systems,
-customized to particular workloads. See [use cases] for examples.
+uses [Apache Arrow] as its in-memory format.
 
-"Out of the box," DataFusion offers [SQL] and [`Dataframe`] APIs,
-excellent [performance], built-in support for CSV, Parquet, JSON, and Avro,
-extensive customization, and a great community.
-[Python Bindings] are also available.
+This crate provides libraries and binaries for developers building fast and
+feature rich database and analytic systems, customized to particular workloads.
+See [use cases] for examples. The following related subprojects target end users:
+
+- [DataFusion Python](https://github.com/apache/datafusion-python/) offers a Python interface for SQL and DataFrame
+  queries.
+- [DataFusion Ray](https://github.com/apache/datafusion-ray/) provides a distributed version of DataFusion that scales
+  out on Ray clusters.
+- [DataFusion Comet](https://github.com/apache/datafusion-comet/) is an accelerator for Apache Spark based on
+  DataFusion.
+
+"Out of the box,"
+DataFusion offers [SQL] and [`Dataframe`] APIs, excellent [performance],
+built-in support for CSV, Parquet, JSON, and Avro, extensive customization, and
+a great community.
 
 DataFusion features a full query planner, a columnar, streaming, multi-threaded,
 vectorized execution engine, and partitioned data sources. You can
@@ -103,7 +112,8 @@ Default features:
 - `parquet`: support for reading the [Apache Parquet] format
 - `regex_expressions`: regular expression functions, such as `regexp_match`
 - `unicode_expressions`: Include unicode aware functions such as `character_length`
-- `unparser` : enables support to reverse LogicalPlans back into SQL
+- `unparser`: enables support to reverse LogicalPlans back into SQL
+- `recursive_protection`: uses [recursive](https://docs.rs/recursive/latest/recursive/) for stack overflow protection.
 
 Optional features:
 
@@ -117,11 +127,22 @@ Optional features:
 
 ## Rust Version Compatibility Policy
 
-DataFusion's Minimum Required Stable Rust Version (MSRV) policy is to support stable [4 latest
-Rust versions](https://releases.rs) OR the stable minor Rust version as of 4 months, whichever is lower.
+The Rust toolchain releases are tracked at [Rust Versions](https://releases.rs) and follow
+[semantic versioning](https://semver.org/). A Rust toolchain release can be identified
+by a version string like `1.80.0`, or more generally `major.minor.patch`.
+
+DataFusion's supports the last 4 stable Rust minor versions released and any such versions released within the last 4 months.
 
 For example, given the releases `1.78.0`, `1.79.0`, `1.80.0`, `1.80.1` and `1.81.0` DataFusion will support 1.78.0, which is 3 minor versions prior to the most minor recent `1.81`.
 
-If a hotfix is released for the minimum supported Rust version (MSRV), the MSRV will be the minor version with all hotfixes, even if it surpasses the four-month window.
+Note: If a Rust hotfix is released for the current MSRV, the MSRV will be updated to the specific minor version that includes all applicable hotfixes preceding other policies.
 
-We enforce this policy using a [MSRV CI Check](https://github.com/search?q=repo%3Aapache%2Fdatafusion+rust-version+language%3ATOML+path%3A%2F%5ECargo.toml%2F&type=code)
+DataFusion enforces MSRV policy using a [MSRV CI Check](https://github.com/search?q=repo%3Aapache%2Fdatafusion+rust-version+language%3ATOML+path%3A%2F%5ECargo.toml%2F&type=code)
+
+## DataFusion API Evolution and Deprecation Guidelines
+
+Public methods in Apache DataFusion evolve over time: while we try to maintain a
+stable API, we also improve the API over time. As a result, we typically
+deprecate methods before removing them, according to the [deprecation guidelines].
+
+[deprecation guidelines]: https://datafusion.apache.org/library-user-guide/api-health.html

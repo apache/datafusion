@@ -31,10 +31,22 @@ rust-version = { workspace = true }
 [lints]
 workspace = true
 
+[features]
+recursive_protection = ["dep:recursive"]
+
 [dependencies]
-arrow-schema = { workspace = true }
+arrow = { workspace = true }
 datafusion-common = { workspace = true, default-features = true }
 datafusion-execution = { workspace = true }
+datafusion-expr-common = { workspace = true, default-features = true }
 datafusion-physical-expr = { workspace = true }
 datafusion-physical-plan = { workspace = true }
 itertools = { workspace = true }
+log = { workspace = true }
+recursive = { workspace = true, optional = true }
+
+[dev-dependencies]
+datafusion-expr = { workspace = true }
+datafusion-functions-aggregate = { workspace = true }
+datafusion-functions-nested = { workspace = true }
+tokio = { workspace = true }

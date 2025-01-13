@@ -6,7 +6,7 @@
 // "License"); you may not use this file except in compliance
 // with the License.  You may obtain a copy of the License at
 //
-//http://www.apache.org/licenses/LICENSE-2.0
+//   http://www.apache.org/licenses/LICENSE-2.0
 //
 // Unless required by applicable law or agreed to in writing,
 // software distributed under the License is distributed on an
@@ -30,9 +30,11 @@ use datafusion_common::config::{ConfigOptions, OptimizerOptions};
 use datafusion_common::plan_err;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_physical_expr::intervals::utils::{check_support, is_datatype_supported};
+use datafusion_physical_plan::execution_plan::{Boundedness, EmissionType};
 use datafusion_physical_plan::joins::SymmetricHashJoinExec;
 use datafusion_physical_plan::{get_plan_string, ExecutionPlanProperties};
 
+use datafusion_physical_expr_common::sort_expr::format_physical_sort_requirement_list;
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use itertools::izip;
 
@@ -41,7 +43,7 @@ use itertools::izip;
 ///    are not satisfied by their children.
 /// 2. Plans that use pipeline-breaking operators on infinite input(s),
 ///    it is impossible to execute such queries (they will never generate output nor finish)
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub struct SanityCheckPlan {}
 
 impl SanityCheckPlan {
@@ -84,7 +86,15 @@ pub fn check_finiteness_requirements(
                               the 'allow_symmetric_joins_without_pruning' configuration flag");
         }
     }
-    if !input.execution_mode().pipeline_friendly() {
+
+    if matches!(
+        input.boundedness(),
+        Boundedness::Unbounded {
+            requires_infinite_memory: true
+        }
+    ) || (input.boundedness().is_unbounded()
+        && input.pipeline_behavior() == EmissionType::Final)
+    {
         plan_err!(
             "Cannot execute pipeline breaking queries, operator: {:?}",
             input
@@ -102,7 +112,7 @@ pub fn check_finiteness_requirements(
 /// [`PhysicalExpr`]: crate::physical_plan::PhysicalExpr
 /// [`Operator`]: datafusion_expr::Operator
 fn is_prunable(join: &SymmetricHashJoinExec) -> bool {
-    join.filter().map_or(false, |filter| {
+    join.filter().is_some_and(|filter| {
         check_support(filter.expression(), &join.schema())
             && filter
                 .schema()
@@ -118,34 +128,34 @@ pub fn check_plan_sanity(
     plan: Arc<dyn ExecutionPlan>,
     optimizer_options: &OptimizerOptions,
 ) -> Result<Transformed<Arc<dyn ExecutionPlan>>> {
-    check_finiteness_requirements(plan.clone(), optimizer_options)?;
+    check_finiteness_requirements(Arc::clone(&plan), optimizer_options)?;
 
     for ((idx, child), sort_req, dist_req) in izip!(
-        plan.children().iter().enumerate(),
-        plan.required_input_ordering().iter(),
-        plan.required_input_distribution().iter()
+        plan.children().into_iter().enumerate(),
+        plan.required_input_ordering(),
+        plan.required_input_distribution(),
     ) {
         let child_eq_props = child.equivalence_properties();
         if let Some(sort_req) = sort_req {
-            if !child_eq_props.ordering_satisfy_requirement(sort_req) {
+            if !child_eq_props.ordering_satisfy_requirement(&sort_req) {
                 let plan_str = get_plan_string(&plan);
                 return plan_err!(
-                    "Plan: {:?} does not satisfy order requirements: {:?}. Child-{} order: {:?}",
+                    "Plan: {:?} does not satisfy order requirements: {}. Child-{} order: {}",
                     plan_str,
-                    sort_req,
+                    format_physical_sort_requirement_list(&sort_req),
                     idx,
-                    child_eq_props.oeq_class
+                    child_eq_props.oeq_class()
                 );
             }
         }
 
         if !child
             .output_partitioning()
-            .satisfy(dist_req, child_eq_props)
+            .satisfy(&dist_req, child_eq_props)
         {
             let plan_str = get_plan_string(&plan);
             return plan_err!(
-                "Plan: {:?} does not satisfy distribution requirements: {:?}. Child-{} output partitioning: {:?}",
+                "Plan: {:?} does not satisfy distribution requirements: {}. Child-{} output partitioning: {}",
                 plan_str,
                 dist_req,
                 idx,
@@ -214,7 +224,9 @@ mod tests {
 
         let test2 = BinaryTestCase {
             source_types: (SourceType::Bounded, SourceType::Unbounded),
-            expect_fail: true,
+            // Left join for bounded build side and unbounded probe side can generate
+            // both incremental matched rows and final non-matched rows.
+            expect_fail: false,
         };
         let test3 = BinaryTestCase {
             source_types: (SourceType::Bounded, SourceType::Bounded),
@@ -289,7 +301,9 @@ mod tests {
         };
         let test2 = BinaryTestCase {
             source_types: (SourceType::Bounded, SourceType::Unbounded),
-            expect_fail: true,
+            // Full join for bounded build side and unbounded probe side can generate
+            // both incremental matched rows and final non-matched rows.
+            expect_fail: false,
         };
         let test3 = BinaryTestCase {
             source_types: (SourceType::Bounded, SourceType::Bounded),

@@ -20,21 +20,23 @@
 
 use std::any::Any;
 use std::collections::VecDeque;
+use std::mem::{size_of, size_of_val};
 use std::sync::Arc;
 
 use arrow::array::{new_empty_array, ArrayRef, AsArray, StructArray};
 use arrow_schema::{DataType, Field, Fields};
 
-use datafusion_common::utils::{array_into_list_array_nullable, get_row_at_idx};
+use datafusion_common::utils::{get_row_at_idx, SingleRowListArrayBuilder};
 use datafusion_common::{exec_err, internal_err, not_impl_err, Result, ScalarValue};
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::utils::format_state_name;
 use datafusion_expr::{
-    lit, Accumulator, AggregateUDFImpl, ExprFunctionExt, ReversedUDAF, Signature,
-    SortExpr, Volatility,
+    lit, Accumulator, AggregateUDFImpl, Documentation, ExprFunctionExt, ReversedUDAF,
+    Signature, SortExpr, Volatility,
 };
 use datafusion_functions_aggregate_common::merge_arrays::merge_ordered_arrays;
 use datafusion_functions_aggregate_common::utils::ordering_fields;
+use datafusion_macros::user_doc;
 use datafusion_physical_expr::expressions::Literal;
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
 
@@ -58,6 +60,32 @@ pub fn nth_value(
     }
 }
 
+#[user_doc(
+    doc_section(label = "Statistical Functions"),
+    description = "Returns the nth value in a group of values.",
+    syntax_example = "nth_value(expression, n ORDER BY expression)",
+    sql_example = r#"```sql
+> SELECT dept_id, salary, NTH_VALUE(salary, 2) OVER (PARTITION BY dept_id ORDER BY salary ASC) AS second_salary_by_dept
+  FROM employee;
++---------+--------+-------------------------+
+| dept_id | salary | second_salary_by_dept   |
++---------+--------+-------------------------+
+| 1       | 30000  | NULL                    |
+| 1       | 40000  | 40000                   |
+| 1       | 50000  | 40000                   |
+| 2       | 35000  | NULL                    |
+| 2       | 45000  | 45000                   |
++---------+--------+-------------------------+
+```"#,
+    argument(
+        name = "expression",
+        description = "The column or expression to retrieve the nth value from."
+    ),
+    argument(
+        name = "n",
+        description = "The position (nth) of the value to retrieve, based on the ordering."
+    )
+)]
 /// Expression for a `NTH_VALUE(... ORDER BY ..., ...)` aggregation. In a multi
 /// partition setting, partial aggregations are computed for every partition,
 /// and then their results are merged.
@@ -131,7 +159,7 @@ impl AggregateUDFImpl for NthValueAgg {
             n,
             &data_type,
             &ordering_dtypes,
-            acc_args.ordering_req.to_vec(),
+            acc_args.ordering_req.clone(),
         )
         .map(|acc| Box::new(acc) as _)
     }
@@ -140,14 +168,14 @@ impl AggregateUDFImpl for NthValueAgg {
         let mut fields = vec![Field::new_list(
             format_state_name(self.name(), "nth_value"),
             // See COMMENTS.md to understand why nullable is set to true
-            Field::new("item", args.input_types[0].clone(), true),
+            Field::new_list_field(args.input_types[0].clone(), true),
             false,
         )];
         let orderings = args.ordering_fields.to_vec();
         if !orderings.is_empty() {
             fields.push(Field::new_list(
                 format_state_name(self.name(), "nth_value_orderings"),
-                Field::new("item", DataType::Struct(Fields::from(orderings)), true),
+                Field::new_list_field(DataType::Struct(Fields::from(orderings)), true),
                 false,
             ));
         }
@@ -160,6 +188,10 @@ impl AggregateUDFImpl for NthValueAgg {
 
     fn reverse_expr(&self) -> ReversedUDAF {
         ReversedUDAF::Reversed(nth_value_udaf())
+    }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        self.doc()
     }
 }
 
@@ -343,25 +375,23 @@ impl Accumulator for NthValueAccumulator {
     }
 
     fn size(&self) -> usize {
-        let mut total = std::mem::size_of_val(self)
-            + ScalarValue::size_of_vec_deque(&self.values)
-            - std::mem::size_of_val(&self.values);
+        let mut total = size_of_val(self) + ScalarValue::size_of_vec_deque(&self.values)
+            - size_of_val(&self.values);
 
         // Add size of the `self.ordering_values`
-        total +=
-            std::mem::size_of::<Vec<ScalarValue>>() * self.ordering_values.capacity();
+        total += size_of::<Vec<ScalarValue>>() * self.ordering_values.capacity();
         for row in &self.ordering_values {
-            total += ScalarValue::size_of_vec(row) - std::mem::size_of_val(row);
+            total += ScalarValue::size_of_vec(row) - size_of_val(row);
         }
 
         // Add size of the `self.datatypes`
-        total += std::mem::size_of::<DataType>() * self.datatypes.capacity();
+        total += size_of::<DataType>() * self.datatypes.capacity();
         for dtype in &self.datatypes {
-            total += dtype.size() - std::mem::size_of_val(dtype);
+            total += dtype.size() - size_of_val(dtype);
         }
 
         // Add size of the `self.ordering_req`
-        total += std::mem::size_of::<PhysicalSortExpr>() * self.ordering_req.capacity();
+        total += size_of::<PhysicalSortExpr>() * self.ordering_req.capacity();
         // TODO: Calculate size of each `PhysicalSortExpr` more accurately.
         total
     }
@@ -369,7 +399,7 @@ impl Accumulator for NthValueAccumulator {
 
 impl NthValueAccumulator {
     fn evaluate_orderings(&self) -> Result<ScalarValue> {
-        let fields = ordering_fields(&self.ordering_req, &self.datatypes[1..]);
+        let fields = ordering_fields(self.ordering_req.as_ref(), &self.datatypes[1..]);
         let struct_field = Fields::from(fields.clone());
 
         let mut column_wise_ordering_values = vec![];
@@ -391,9 +421,7 @@ impl NthValueAccumulator {
         let ordering_array =
             StructArray::try_new(struct_field, column_wise_ordering_values, None)?;
 
-        Ok(ScalarValue::List(Arc::new(array_into_list_array_nullable(
-            Arc::new(ordering_array),
-        ))))
+        Ok(SingleRowListArrayBuilder::new(Arc::new(ordering_array)).build_list_scalar())
     }
 
     fn evaluate_values(&self) -> ScalarValue {

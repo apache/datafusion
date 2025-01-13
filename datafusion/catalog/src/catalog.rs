@@ -16,6 +16,7 @@
 // under the License.
 
 use std::any::Any;
+use std::fmt::Debug;
 use std::sync::Arc;
 
 pub use crate::schema::SchemaProvider;
@@ -51,12 +52,16 @@ use datafusion_common::Result;
 ///
 /// # Implementing "Remote" catalogs
 ///
+/// See [`remote_catalog`] for an end to end example of how to implement a
+/// remote catalog.
+///
 /// Sometimes catalog information is stored remotely and requires a network call
 /// to retrieve. For example, the [Delta Lake] table format stores table
 /// metadata in files on S3 that must be first downloaded to discover what
 /// schemas and tables exist.
 ///
 /// [Delta Lake]: https://delta.io/
+/// [`remote_catalog`]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/remote_catalog.rs
 ///
 /// The [`CatalogProvider`] can support this use case, but it takes some care.
 /// The planning APIs in DataFusion are not `async` and thus network IO can not
@@ -71,15 +76,15 @@ use datafusion_common::Result;
 /// batch access to the remote catalog to retrieve multiple schemas and tables
 /// in a single network call.
 ///
-/// Note that [`SchemaProvider::table`] is an `async` function in order to
+/// Note that [`SchemaProvider::table`] **is** an `async` function in order to
 /// simplify implementing simple [`SchemaProvider`]s. For many table formats it
 /// is easy to list all available tables but there is additional non trivial
 /// access required to read table details (e.g. statistics).
 ///
 /// The pattern that DataFusion itself uses to plan SQL queries is to walk over
-/// the query to find all table references,
-/// performing required remote catalog in parallel, and then plans the query
-/// using that snapshot.
+/// the query to find all table references, performing required remote catalog
+/// lookups in parallel, storing the results in a cached snapshot, and then plans
+/// the query using that snapshot.
 ///
 /// # Example Catalog Implementations
 ///
@@ -100,8 +105,7 @@ use datafusion_common::Result;
 /// [`UnityCatalogProvider`]: https://github.com/delta-io/delta-rs/blob/951436ecec476ce65b5ed3b58b50fb0846ca7b91/crates/deltalake-core/src/data_catalog/unity/datafusion.rs#L111-L123
 ///
 /// [`TableProvider`]: crate::TableProvider
-
-pub trait CatalogProvider: Sync + Send {
+pub trait CatalogProvider: Debug + Sync + Send {
     /// Returns the catalog provider as [`Any`]
     /// so that it can be downcast to a specific implementation.
     fn as_any(&self) -> &dyn Any;
@@ -150,9 +154,9 @@ pub trait CatalogProvider: Sync + Send {
 
 /// Represent a list of named [`CatalogProvider`]s.
 ///
-/// Please see the documentation on `CatalogProvider` for details of
+/// Please see the documentation on [`CatalogProvider`] for details of
 /// implementing a custom catalog.
-pub trait CatalogProviderList: Sync + Send {
+pub trait CatalogProviderList: Debug + Sync + Send {
     /// Returns the catalog list as [`Any`]
     /// so that it can be downcast to a specific implementation.
     fn as_any(&self) -> &dyn Any;

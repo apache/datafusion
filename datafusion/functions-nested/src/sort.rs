@@ -25,7 +25,10 @@ use arrow_schema::DataType::{FixedSizeList, LargeList, List};
 use arrow_schema::{DataType, Field, SortOptions};
 use datafusion_common::cast::{as_list_array, as_string_array};
 use datafusion_common::{exec_err, Result};
-use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
+use datafusion_expr::{
+    ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
+};
+use datafusion_macros::user_doc;
 use std::any::Any;
 use std::sync::Arc;
 
@@ -37,10 +40,48 @@ make_udf_expr_and_func!(
     array_sort_udf
 );
 
+/// Implementation of `array_sort` function
+///
+/// `array_sort` sorts the elements of an array
+///
+/// # Example
+///
+/// `array_sort([3, 1, 2])` returns `[1, 2, 3]`
+#[user_doc(
+    doc_section(label = "Array Functions"),
+    description = "Sort array.",
+    syntax_example = "array_sort(array, desc, nulls_first)",
+    sql_example = r#"```sql
+> select array_sort([3, 1, 2]);
++-----------------------------+
+| array_sort(List([3,1,2]))   |
++-----------------------------+
+| [1, 2, 3]                   |
++-----------------------------+
+```"#,
+    argument(
+        name = "array",
+        description = "Array expression. Can be a constant, column, or function, and any combination of array operators."
+    ),
+    argument(
+        name = "desc",
+        description = "Whether to sort in descending order(`ASC` or `DESC`)."
+    ),
+    argument(
+        name = "nulls_first",
+        description = "Whether to sort nulls first(`NULLS FIRST` or `NULLS LAST`)."
+    )
+)]
 #[derive(Debug)]
-pub(super) struct ArraySort {
+pub struct ArraySort {
     signature: Signature,
     aliases: Vec<String>,
+}
+
+impl Default for ArraySort {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl ArraySort {
@@ -67,13 +108,10 @@ impl ScalarUDFImpl for ArraySort {
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
         match &arg_types[0] {
-            List(field) | FixedSizeList(field, _) => Ok(List(Arc::new(Field::new(
-                "item",
-                field.data_type().clone(),
-                true,
-            )))),
-            LargeList(field) => Ok(LargeList(Arc::new(Field::new(
-                "item",
+            List(field) | FixedSizeList(field, _) => Ok(List(Arc::new(
+                Field::new_list_field(field.data_type().clone(), true),
+            ))),
+            LargeList(field) => Ok(LargeList(Arc::new(Field::new_list_field(
                 field.data_type().clone(),
                 true,
             )))),
@@ -83,12 +121,20 @@ impl ScalarUDFImpl for ArraySort {
         }
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         make_scalar_function(array_sort_inner)(args)
     }
 
     fn aliases(&self) -> &[String] {
         &self.aliases
+    }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        self.doc()
     }
 }
 
@@ -152,7 +198,7 @@ pub fn array_sort_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
         .collect::<Vec<&dyn Array>>();
 
     let list_arr = ListArray::new(
-        Arc::new(Field::new("item", data_type, true)),
+        Arc::new(Field::new_list_field(data_type, true)),
         OffsetBuffer::from_lengths(array_lengths),
         Arc::new(compute::concat(elements.as_slice())?),
         Some(NullBuffer::new(buffer)),
