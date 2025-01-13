@@ -28,7 +28,9 @@ use super::{
     DEFAULT_SCHEMA_INFER_MAX_RECORD,
 };
 use crate::datasource::file_format::file_compression_type::FileCompressionType;
-use crate::datasource::file_format::write::demux::DemuxedStreamReceiver;
+use crate::datasource::file_format::write::demux::{
+    start_demuxer_task, DemuxedStreamReceiver,
+};
 use crate::datasource::file_format::write::BatchSerializer;
 use crate::datasource::physical_plan::{
     CsvExec, FileGroupDisplay, FileScanConfig, FileSink, FileSinkConfig,
@@ -743,7 +745,7 @@ impl DataSink for CsvSink {
     ) -> Result<u64> {
         let object_store = self.config.get_object_store(context)?;
         let (demux_task, file_stream_rx) =
-            self.config.start_demuxer_task(data, context, "csv".into());
+            start_demuxer_task(&self.config, data, context);
         self.spawn_writer_tasks_and_join(
             context,
             demux_task,

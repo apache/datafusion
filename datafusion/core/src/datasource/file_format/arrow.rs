@@ -26,7 +26,7 @@ use std::fmt::{self, Debug};
 use std::sync::Arc;
 
 use super::file_compression_type::FileCompressionType;
-use super::write::demux::DemuxedStreamReceiver;
+use super::write::demux::{start_demuxer_task, DemuxedStreamReceiver};
 use super::write::{create_writer, SharedBuffer};
 use super::FileFormatFactory;
 use crate::datasource::file_format::FileFormat;
@@ -344,8 +344,7 @@ impl DataSink for ArrowFileSink {
     ) -> Result<u64> {
         let object_store = self.config.get_object_store(context)?;
         let (demux_task, file_stream_rx) =
-            self.config
-                .start_demuxer_task(data, context, "arrow".into());
+            start_demuxer_task(&self.config, data, context);
         self.spawn_writer_tasks_and_join(
             context,
             demux_task,

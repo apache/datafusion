@@ -1072,6 +1072,8 @@ pub struct FileSinkConfig {
     pub keep_partition_by_columns: bool,
     #[prost(enumeration = "InsertOp", tag = "10")]
     pub insert_op: i32,
+    #[prost(string, tag = "11")]
+    pub file_extension: ::prost::alloc::string::String,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct JsonSink {

@@ -52,9 +52,7 @@ use std::{
 };
 
 use super::listing::ListingTableUrl;
-use crate::datasource::file_format::write::demux::{
-    hive_style_partitions_demuxer, row_count_demuxer, DemuxedStreamReceiver,
-};
+use crate::datasource::file_format::write::demux::DemuxedStreamReceiver;
 use crate::error::Result;
 use crate::physical_plan::{DisplayAs, DisplayFormatType};
 use crate::{
@@ -67,7 +65,7 @@ use crate::{
 
 use arrow::datatypes::{DataType, SchemaRef};
 use datafusion_common_runtime::SpawnedTask;
-use datafusion_execution::{SendableRecordBatchStream, TaskContext};
+use datafusion_execution::TaskContext;
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::PhysicalSortExpr;
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
@@ -76,7 +74,6 @@ use async_trait::async_trait;
 use futures::StreamExt;
 use log::debug;
 use object_store::{path::Path, GetOptions, GetRange, ObjectMeta, ObjectStore};
-use tokio::sync::mpsc;
 
 /// General behaviors for files that do `DataSink` operations
 #[async_trait]
@@ -111,6 +108,8 @@ pub struct FileSinkConfig {
     pub insert_op: InsertOp,
     /// Controls whether partition columns are kept for the file
     pub keep_partition_by_columns: bool,
+    /// File extension without a dot(.)
+    pub file_extension: String,
 }
 
 impl FileSinkConfig {
@@ -125,98 +124,6 @@ impl FileSinkConfig {
         context: &Arc<TaskContext>,
     ) -> Result<Arc<dyn ObjectStore>> {
         context.runtime_env().object_store(&self.object_store_url)
-    }
-
-    /// Splits a single [SendableRecordBatchStream] into a dynamically determined
-    /// number of partitions at execution time.
-    ///
-    /// The partitions are determined by factors known only at execution time, such
-    /// as total number of rows and partition column values. The demuxer task
-    /// communicates to the caller by sending channels over a channel. The inner
-    /// channels send RecordBatches which should be contained within the same output
-    /// file. The outer channel is used to send a dynamic number of inner channels,
-    /// representing a dynamic number of total output files.
-    ///
-    /// The caller is also responsible to monitor the demux task for errors and
-    /// abort accordingly.
-    ///
-    /// A path with an extension will force only a single file to
-    /// be written with the extension from the path. Otherwise the default extension
-    /// will be used and the output will be split into multiple files.
-    ///
-    /// Examples of `base_output_path`
-    ///  * `tmp/dataset/` -> is a folder since it ends in `/`
-    ///  * `tmp/dataset` -> is still a folder since it does not end in `/` but has no valid file extension
-    ///  * `tmp/file.parquet` -> is a file since it does not end in `/` and has a valid file extension `.parquet`
-    ///  * `tmp/file.parquet/` -> is a folder since it ends in `/`
-    ///
-    /// The `partition_by` parameter will additionally split the input based on the
-    /// unique values of a specific column, see
-    /// <https://github.com/apache/datafusion/issues/7744>
-    ///
-    /// ```text
-    ///                                                                              ┌───────────┐               ┌────────────┐    ┌─────────────┐
-    ///                                                                     ┌──────▶ │  batch 1  ├────▶...──────▶│   Batch a  │    │ Output File1│
-    ///                                                                     │        └───────────┘               └────────────┘    └─────────────┘
-    ///                                                                     │
-    ///                                                 ┌──────────┐        │        ┌───────────┐               ┌────────────┐    ┌─────────────┐
-    /// ┌───────────┐               ┌────────────┐      │          │        ├──────▶ │  batch a+1├────▶...──────▶│   Batch b  │    │ Output File2│
-    /// │  batch 1  ├────▶...──────▶│   Batch N  ├─────▶│  Demux   ├────────┤ ...    └───────────┘               └────────────┘    └─────────────┘
-    /// └───────────┘               └────────────┘      │          │        │
-    ///                                                 └──────────┘        │        ┌───────────┐               ┌────────────┐    ┌─────────────┐
-    ///                                                                     └──────▶ │  batch d  ├────▶...──────▶│   Batch n  │    │ Output FileN│
-    ///                                                                              └───────────┘               └────────────┘    └─────────────┘
-    /// ```
-    pub(crate) fn start_demuxer_task(
-        &self,
-        data: SendableRecordBatchStream,
-        context: &Arc<TaskContext>,
-        file_extension: String,
-    ) -> (SpawnedTask<Result<()>>, DemuxedStreamReceiver) {
-        let base_output_path = &self.table_paths[0];
-        let part_cols = if !self.table_partition_cols.is_empty() {
-            Some(self.table_partition_cols.clone())
-        } else {
-            None
-        };
-
-        let (tx, rx) = mpsc::unbounded_channel();
-        let context = Arc::clone(context);
-        let single_file_output = !base_output_path.is_collection()
-            && base_output_path.file_extension().is_some();
-        let base_output_path_clone = base_output_path.clone();
-        let keep_partition_by_columns = self.keep_partition_by_columns;
-        let task = match part_cols {
-            Some(parts) => {
-                // There could be an arbitrarily large number of parallel hive style partitions being written to, so we cannot
-                // bound this channel without risking a deadlock.
-                SpawnedTask::spawn(async move {
-                    hive_style_partitions_demuxer(
-                        tx,
-                        data,
-                        context,
-                        parts,
-                        base_output_path_clone,
-                        file_extension,
-                        keep_partition_by_columns,
-                    )
-                    .await
-                })
-            }
-            None => SpawnedTask::spawn(async move {
-                row_count_demuxer(
-                    tx,
-                    data,
-                    context,
-                    base_output_path_clone,
-                    file_extension,
-                    single_file_output,
-                )
-                .await
-            }),
-        };
-
-        (task, rx)
     }
 }
 

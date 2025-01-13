@@ -22,6 +22,7 @@ use std::borrow::Cow;
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use crate::datasource::physical_plan::FileSinkConfig;
 use crate::datasource::listing::ListingTableUrl;
 use crate::error::Result;
 use crate::physical_plan::SendableRecordBatchStream;
@@ -35,6 +36,7 @@ use datafusion_common::cast::{
     as_string_array, as_string_view_array,
 };
 use datafusion_common::{exec_datafusion_err, not_impl_err, DataFusionError};
+use datafusion_common_runtime::SpawnedTask;
 use datafusion_execution::TaskContext;
 
 use chrono::NaiveDate;
@@ -46,8 +48,100 @@ use tokio::sync::mpsc::{self, Receiver, Sender, UnboundedReceiver, UnboundedSend
 type RecordBatchReceiver = Receiver<RecordBatch>;
 pub type DemuxedStreamReceiver = UnboundedReceiver<(Path, RecordBatchReceiver)>;
 
+/// Splits a single [SendableRecordBatchStream] into a dynamically determined
+/// number of partitions at execution time.
+///
+/// The partitions are determined by factors known only at execution time, such
+/// as total number of rows and partition column values. The demuxer task
+/// communicates to the caller by sending channels over a channel. The inner
+/// channels send RecordBatches which should be contained within the same output
+/// file. The outer channel is used to send a dynamic number of inner channels,
+/// representing a dynamic number of total output files.
+///
+/// The caller is also responsible to monitor the demux task for errors and
+/// abort accordingly.
+///
+/// A path with an extension will force only a single file to
+/// be written with the extension from the path. Otherwise the default extension
+/// will be used and the output will be split into multiple files.
+///
+/// Examples of `base_output_path`
+///  * `tmp/dataset/` -> is a folder since it ends in `/`
+///  * `tmp/dataset` -> is still a folder since it does not end in `/` but has no valid file extension
+///  * `tmp/file.parquet` -> is a file since it does not end in `/` and has a valid file extension `.parquet`
+///  * `tmp/file.parquet/` -> is a folder since it ends in `/`
+///
+/// The `partition_by` parameter will additionally split the input based on the
+/// unique values of a specific column, see
+/// <https://github.com/apache/datafusion/issues/7744>
+///
+/// ```text
+///                                                                              ┌───────────┐               ┌────────────┐    ┌─────────────┐
+///                                                                     ┌──────▶ │  batch 1  ├────▶...──────▶│   Batch a  │    │ Output File1│
+///                                                                     │        └───────────┘               └────────────┘    └─────────────┘
+///                                                                     │
+///                                                 ┌──────────┐        │        ┌───────────┐               ┌────────────┐    ┌─────────────┐
+/// ┌───────────┐               ┌────────────┐      │          │        ├──────▶ │  batch a+1├────▶...──────▶│   Batch b  │    │ Output File2│
+/// │  batch 1  ├────▶...──────▶│   Batch N  ├─────▶│  Demux   ├────────┤ ...    └───────────┘               └────────────┘    └─────────────┘
+/// └───────────┘               └────────────┘      │          │        │
+///                                                 └──────────┘        │        ┌───────────┐               ┌────────────┐    ┌─────────────┐
+///                                                                     └──────▶ │  batch d  ├────▶...──────▶│   Batch n  │    │ Output FileN│
+///                                                                              └───────────┘               └────────────┘    └─────────────┘
+/// ```
+pub(crate) fn start_demuxer_task(
+    config: &FileSinkConfig,
+    data: SendableRecordBatchStream,
+    context: &Arc<TaskContext>,
+) -> (SpawnedTask<Result<()>>, DemuxedStreamReceiver) {
+    let base_output_path = &config.table_paths[0];
+    let part_cols = if !config.table_partition_cols.is_empty() {
+        Some(config.table_partition_cols.clone())
+    } else {
+        None
+    };
+
+    let (tx, rx) = mpsc::unbounded_channel();
+    let context = Arc::clone(context);
+    let single_file_output =
+        !base_output_path.is_collection() && base_output_path.file_extension().is_some();
+    let base_output_path_clone = base_output_path.clone();
+    let keep_partition_by_columns = config.keep_partition_by_columns;
+    let file_extension = config.file_extension.clone();
+    let task = match part_cols {
+        Some(parts) => {
+            // There could be an arbitrarily large number of parallel hive style partitions being written to, so we cannot
+            // bound this channel without risking a deadlock.
+            SpawnedTask::spawn(async move {
+                hive_style_partitions_demuxer(
+                    tx,
+                    data,
+                    context,
+                    parts,
+                    base_output_path_clone,
+                    file_extension,
+                    keep_partition_by_columns,
+                )
+                .await
+            })
+        }
+        None => SpawnedTask::spawn(async move {
+            row_count_demuxer(
+                tx,
+                data,
+                context,
+                base_output_path_clone,
+                file_extension,
+                single_file_output,
+            )
+            .await
+        }),
+    };
+
+    (task, rx)
+}
+
 /// Dynamically partitions input stream to achieve desired maximum rows per file
-pub(crate) async fn row_count_demuxer(
+async fn row_count_demuxer(
     mut tx: UnboundedSender<(Path, Receiver<RecordBatch>)>,
     mut input: SendableRecordBatchStream,
     context: Arc<TaskContext>,
@@ -168,7 +262,7 @@ fn create_new_file_stream(
 /// Splits an input stream based on the distinct values of a set of columns
 /// Assumes standard hive style partition paths such as
 /// /col1=val1/col2=val2/outputfile.parquet
-pub(crate) async fn hive_style_partitions_demuxer(
+async fn hive_style_partitions_demuxer(
     tx: UnboundedSender<(Path, Receiver<RecordBatch>)>,
     mut input: SendableRecordBatchStream,
     context: Arc<TaskContext>,

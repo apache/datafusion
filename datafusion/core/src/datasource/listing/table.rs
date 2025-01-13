@@ -1050,6 +1050,7 @@ impl TableProvider for ListingTable {
             table_partition_cols: self.options.table_partition_cols.clone(),
             insert_op,
             keep_partition_by_columns,
+            file_extension: self.options().format.get_ext(),
         };
 
         let order_requirements = if !self.options().file_sort_order.is_empty() {

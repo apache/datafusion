@@ -23,7 +23,7 @@ use std::fmt::Debug;
 use std::ops::Range;
 use std::sync::Arc;
 
-use super::write::demux::DemuxedStreamReceiver;
+use super::write::demux::{start_demuxer_task, DemuxedStreamReceiver};
 use super::write::{create_writer, SharedBuffer};
 use super::{
     coerce_file_schema_to_string_type, coerce_file_schema_to_view_type,
@@ -924,8 +924,7 @@ impl DataSink for ParquetSink {
     ) -> Result<u64> {
         let object_store = self.config.get_object_store(context)?;
         let (demux_task, file_stream_rx) =
-            self.config
-                .start_demuxer_task(data, context, "parquet".into());
+            start_demuxer_task(&self.config, data, context);
         self.spawn_writer_tasks_and_join(
             context,
             demux_task,
@@ -2584,6 +2583,7 @@ mod tests {
             table_partition_cols: vec![],
             insert_op: InsertOp::Overwrite,
             keep_partition_by_columns: false,
+            file_extension: "parquet".into(),
         };
         let parquet_sink = Arc::new(ParquetSink::new(
             file_sink_config,
@@ -2669,6 +2669,7 @@ mod tests {
             table_partition_cols: vec![("a".to_string(), DataType::Utf8)], // add partitioning
             insert_op: InsertOp::Overwrite,
             keep_partition_by_columns: false,
+            file_extension: "parquet".into(),
         };
         let parquet_sink = Arc::new(ParquetSink::new(
             file_sink_config,
@@ -2752,6 +2753,7 @@ mod tests {
                 table_partition_cols: vec![],
                 insert_op: InsertOp::Overwrite,
                 keep_partition_by_columns: false,
+                file_extension: "parquet".into(),
             };
             let parquet_sink = Arc::new(ParquetSink::new(
                 file_sink_config,
