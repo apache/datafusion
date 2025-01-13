@@ -1080,6 +1080,7 @@ impl EquivalenceProperties {
             .filter_map(|(_, target)| target.as_any().downcast_ref::<Column>())
             .map(|col| col.index())
             .collect::<Vec<_>>();
+        debug_assert_eq!(mapping.map.len(), indices.len());
         self.constraints.project(&indices)
     }
 
