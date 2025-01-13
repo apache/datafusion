@@ -230,7 +230,7 @@ pub fn window_expr_common_partition_keys(window_exprs: &[Expr]) -> Result<&[Expr
 
 /// Returns a validated `DataType` for the specified precision and
 /// scale
-pub(crate) fn make_decimal_type(
+pub fn make_decimal_type(
     precision: Option<u64>,
     scale: Option<u64>,
 ) -> Result<DataType> {
@@ -261,7 +261,7 @@ pub(crate) fn make_decimal_type(
 }
 
 /// Normalize an owned identifier to a lowercase string, unless the identifier is quoted.
-pub(crate) fn normalize_ident(id: Ident) -> String {
+pub fn normalize_ident(id: Ident) -> String {
     match id.quote_style {
         Some(_) => id.value,
         None => id.value.to_ascii_lowercase(),

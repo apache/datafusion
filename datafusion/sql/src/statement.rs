@@ -71,7 +71,7 @@ fn ident_to_string(ident: &Ident) -> String {
     normalize_ident(ident.to_owned())
 }
 
-fn object_name_to_string(object_name: &ObjectName) -> String {
+pub fn object_name_to_string(object_name: &ObjectName) -> String {
     object_name
         .0
         .iter()
@@ -94,7 +94,7 @@ fn get_schema_name(schema_name: &SchemaName) -> String {
 
 /// Construct `TableConstraint`(s) for the given columns by iterating over
 /// `columns` and extracting individual inline constraint definitions.
-fn calc_inline_constraints_from_columns(columns: &[ColumnDef]) -> Vec<TableConstraint> {
+pub fn calc_inline_constraints_from_columns(columns: &[ColumnDef]) -> Vec<TableConstraint> {
     let mut constraints = vec![];
     for column in columns {
         for ast::ColumnOptionDef { name, option } in &column.options {
@@ -175,10 +175,10 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             DFStatement::Statement(s) => self.sql_statement_to_plan(*s),
             DFStatement::CopyTo(s) => self.copy_to_plan(s),
             DFStatement::Explain(ExplainStatement {
-                verbose,
-                analyze,
-                statement,
-            }) => self.explain_to_plan(verbose, analyze, *statement),
+                                     verbose,
+                                     analyze,
+                                     statement,
+                                 }) => self.explain_to_plan(verbose, analyze, *statement),
         }
     }
 
@@ -230,50 +230,50 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             } => self.set_variable_to_plan(local, hivevar, &variables, value),
 
             Statement::CreateTable(CreateTable {
-                temporary,
-                external,
-                global,
-                transient,
-                volatile,
-                hive_distribution,
-                hive_formats,
-                file_format,
-                location,
-                query,
-                name,
-                columns,
-                constraints,
-                table_properties,
-                with_options,
-                if_not_exists,
-                or_replace,
-                without_rowid,
-                like,
-                clone,
-                engine,
-                comment,
-                auto_increment_offset,
-                default_charset,
-                collation,
-                on_commit,
-                on_cluster,
-                primary_key,
-                order_by,
-                partition_by,
-                cluster_by,
-                clustered_by,
-                options,
-                strict,
-                copy_grants,
-                enable_schema_evolution,
-                change_tracking,
-                data_retention_time_in_days,
-                max_data_extension_time_in_days,
-                default_ddl_collation,
-                with_aggregation_policy,
-                with_row_access_policy,
-                with_tags,
-            }) if table_properties.is_empty() && with_options.is_empty() => {
+                                       temporary,
+                                       external,
+                                       global,
+                                       transient,
+                                       volatile,
+                                       hive_distribution,
+                                       hive_formats,
+                                       file_format,
+                                       location,
+                                       query,
+                                       name,
+                                       columns,
+                                       constraints,
+                                       table_properties,
+                                       with_options,
+                                       if_not_exists,
+                                       or_replace,
+                                       without_rowid,
+                                       like,
+                                       clone,
+                                       engine,
+                                       comment,
+                                       auto_increment_offset,
+                                       default_charset,
+                                       collation,
+                                       on_commit,
+                                       on_cluster,
+                                       primary_key,
+                                       order_by,
+                                       partition_by,
+                                       cluster_by,
+                                       clustered_by,
+                                       options,
+                                       strict,
+                                       copy_grants,
+                                       enable_schema_evolution,
+                                       change_tracking,
+                                       data_retention_time_in_days,
+                                       max_data_extension_time_in_days,
+                                       default_ddl_collation,
+                                       with_aggregation_policy,
+                                       with_row_access_policy,
+                                       with_tags,
+                                   }) if table_properties.is_empty() && with_options.is_empty() => {
                 if temporary {
                     return not_impl_err!("Temporary tables not supported")?;
                 }
@@ -431,7 +431,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                                         col(input_field.name()),
                                         field.data_type().clone(),
                                     )
-                                    .alias(field.name())
+                                        .alias(field.name())
                                 })
                                 .collect::<Vec<_>>();
                             LogicalPlanBuilder::from(plan.clone())
@@ -1418,7 +1418,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
     }
 
     /// Convert each [TableConstraint] to corresponding [Constraint]
-    fn new_constraint_from_table_constraints(
+    pub fn new_constraint_from_table_constraints(
         constraints: &[TableConstraint],
         df_schema: &DFSchemaRef,
     ) -> Result<Constraints> {
@@ -1679,7 +1679,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             table_source,
             None,
         )?
-        .build()?;
+            .build()?;
         let mut planner_context = PlannerContext::new();
 
         let source = match predicate_expr {
@@ -2097,7 +2097,7 @@ ON p.function_name = r.routine_name
     }
 
     /// Return true if there is a table provider available for "schema.table"
-    fn has_table(&self, schema: &str, table: &str) -> bool {
+    pub fn has_table(&self, schema: &str, table: &str) -> bool {
         let tables_reference = TableReference::Partial {
             schema: schema.into(),
             table: table.into(),
