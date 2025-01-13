@@ -393,16 +393,14 @@ fn exclude_using_columns(plan: &LogicalPlan) -> Result<HashSet<Column>> {
             // qualified column
             cols.sort();
             let mut out_column_names: HashSet<String> = HashSet::new();
-            cols.into_iter()
-                .filter_map(|c| {
-                    if out_column_names.contains(&c.name) {
-                        Some(c)
-                    } else {
-                        out_column_names.insert(c.name);
-                        None
-                    }
-                })
-                .collect::<Vec<_>>()
+            cols.into_iter().filter_map(move |c| {
+                if out_column_names.contains(&c.name) {
+                    Some(c)
+                } else {
+                    out_column_names.insert(c.name);
+                    None
+                }
+            })
         })
         .collect::<HashSet<_>>();
     Ok(excluded)
