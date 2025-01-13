@@ -4552,3 +4552,31 @@ fn test_error_message_invalid_window_aggregate_function_signature() {
         "Error during planning: sum does not support zero arguments",
     );
 }
+
+// Test issue: https://github.com/apache/datafusion/issues/14058
+// Select with wildcard over a USING/NATURAL JOIN should deduplicate condition columns.
+#[test]
+fn test_using_join_wildcard_schema() {
+    let sql = "SELECT * FROM orders o1 JOIN orders o2 USING (order_id)";
+    let plan = logical_plan(sql).unwrap();
+    let count = plan
+        .schema()
+        .iter()
+        .filter(|(_, f)| f.name() == "order_id")
+        .count();
+    // Only one order_id column
+    assert_eq!(count, 1);
+
+    let sql = "SELECT * FROM orders o1 NATURAL JOIN orders o2";
+    let plan = logical_plan(sql).unwrap();
+    // Only columns from one join side should be present
+    let expected_fields = vec![
+        "o1.order_id".to_string(),
+        "o1.customer_id".to_string(),
+        "o1.o_item_id".to_string(),
+        "o1.qty".to_string(),
+        "o1.price".to_string(),
+        "o1.delivered".to_string(),
+    ];
+    assert_eq!(plan.schema().field_names(), expected_fields);
+}

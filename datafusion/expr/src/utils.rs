@@ -35,8 +35,8 @@ use datafusion_common::tree_node::{
 };
 use datafusion_common::utils::get_at_indices;
 use datafusion_common::{
-    internal_err, plan_datafusion_err, plan_err, Column, DFSchema, DFSchemaRef,
-    DataFusionError, HashMap, Result, TableReference,
+    internal_err, plan_datafusion_err, plan_err, Column, DFSchema, DFSchemaRef, HashMap,
+    Result, TableReference,
 };
 
 use indexmap::IndexSet;
@@ -720,15 +720,13 @@ pub fn exprlist_to_fields<'a>(
                         wildcard_schema,
                         None,
                     )?);
-                    Ok::<_, DataFusionError>(
-                        wildcard_schema
-                            .iter()
-                            .filter(|(q, f)| {
-                                !excluded.contains(&Column::new(q.cloned(), f.name()))
-                            })
-                            .map(|(q, f)| (q.cloned(), Arc::clone(f)))
-                            .collect::<Vec<_>>(),
-                    )
+                    Ok(wildcard_schema
+                        .iter()
+                        .filter(|(q, f)| {
+                            !excluded.contains(&Column::new(q.cloned(), f.name()))
+                        })
+                        .map(|(q, f)| (q.cloned(), Arc::clone(f)))
+                        .collect::<Vec<_>>())
                 }
                 Some(qualifier) => {
                     let excluded: Vec<String> = get_excluded_columns(
