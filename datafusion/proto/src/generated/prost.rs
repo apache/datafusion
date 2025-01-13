@@ -1442,7 +1442,7 @@ pub struct FileScanExecConf {
     pub object_store_url: ::prost::alloc::string::String,
     #[prost(message, repeated, tag = "9")]
     pub output_ordering: ::prost::alloc::vec::Vec<PhysicalSortExprNodeCollection>,
-    #[prost(message, optional, tag = "10")]
+    #[prost(message, optional, tag = "11")]
     pub constraints: ::core::option::Option<super::datafusion_common::Constraints>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
