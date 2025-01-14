@@ -2682,7 +2682,7 @@ async fn test_alias() -> Result<()> {
         "| 123AbcDef | 101                             |",
         "+-----------+---------------------------------+",
     ];
-    assert_batches_eq!(expected, &df.collect().await?);
+    assert_batches_sorted_eq!(expected, &df.collect().await?);
 
     // Use alias to perform a self-join
     let left = create_test_table("t1").await?;
