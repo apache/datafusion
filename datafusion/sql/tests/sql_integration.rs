@@ -4549,3 +4549,77 @@ fn test_error_message_invalid_window_aggregate_function_signature() {
         "Error during planning: sum does not support zero arguments",
     );
 }
+
+// Test issue: https://github.com/apache/datafusion/issues/14058
+// Select with wildcard over a USING/NATURAL JOIN should deduplicate condition columns.
+#[test]
+fn test_using_join_wildcard_schema() {
+    let sql = "SELECT * FROM orders o1 JOIN orders o2 USING (order_id)";
+    let plan = logical_plan(sql).unwrap();
+    let count = plan
+        .schema()
+        .iter()
+        .filter(|(_, f)| f.name() == "order_id")
+        .count();
+    // Only one order_id column
+    assert_eq!(count, 1);
+
+    let sql = "SELECT * FROM orders o1 NATURAL JOIN orders o2";
+    let plan = logical_plan(sql).unwrap();
+    // Only columns from one join side should be present
+    let expected_fields = vec![
+        "o1.order_id".to_string(),
+        "o1.customer_id".to_string(),
+        "o1.o_item_id".to_string(),
+        "o1.qty".to_string(),
+        "o1.price".to_string(),
+        "o1.delivered".to_string(),
+    ];
+    assert_eq!(plan.schema().field_names(), expected_fields);
+
+    // Reproducible example of issue #14058
+    let sql = "WITH t1 AS (SELECT 1 AS id, 'a' AS value1),
+        t2 AS (SELECT 1 AS id, 'x' AS value2)
+        SELECT * FROM t1 NATURAL JOIN t2";
+    let plan = logical_plan(sql).unwrap();
+    assert_eq!(
+        plan.schema().field_names(),
+        [
+            "t1.id".to_string(),
+            "t1.value1".to_string(),
+            "t2.value2".to_string()
+        ]
+    );
+
+    // Multiple joins
+    let sql = "WITH t1 AS (SELECT 1 AS a, 1 AS b),
+        t2 AS (SELECT 1 AS a, 2 AS c),
+        t3 AS (SELECT 1 AS c, 2 AS d)
+        SELECT * FROM t1 NATURAL JOIN t2 RIGHT JOIN t3 USING (c)";
+    let plan = logical_plan(sql).unwrap();
+    assert_eq!(
+        plan.schema().field_names(),
+        [
+            "t1.a".to_string(),
+            "t1.b".to_string(),
+            "t2.c".to_string(),
+            "t3.d".to_string()
+        ]
+    );
+
+    // Subquery
+    let sql = "WITH t1 AS (SELECT 1 AS a, 1 AS b),
+        t2 AS (SELECT 1 AS a, 2 AS c),
+        t3 AS (SELECT 1 AS c, 2 AS d)
+        SELECT * FROM (SELECT * FROM t1 LEFT JOIN t2 USING(a)) NATURAL JOIN t3";
+    let plan = logical_plan(sql).unwrap();
+    assert_eq!(
+        plan.schema().field_names(),
+        [
+            "t1.a".to_string(),
+            "t1.b".to_string(),
+            "t2.c".to_string(),
+            "t3.d".to_string()
+        ]
+    );
+}
