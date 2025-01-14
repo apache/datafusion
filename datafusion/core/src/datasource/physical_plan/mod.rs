@@ -69,6 +69,7 @@ use datafusion_execution::TaskContext;
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::PhysicalSortExpr;
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
+use datafusion_physical_plan::insert::DataSink;
 
 use async_trait::async_trait;
 use futures::StreamExt;
@@ -77,7 +78,7 @@ use object_store::{path::Path, GetOptions, GetRange, ObjectMeta, ObjectStore};
 
 /// General behaviors for files that do `DataSink` operations
 #[async_trait]
-pub trait FileSink {
+pub trait FileSink: DataSink {
     /// Spawn writer tasks and uses tokio::join to collect results
     /// returns total write count
     async fn spawn_writer_tasks_and_join(

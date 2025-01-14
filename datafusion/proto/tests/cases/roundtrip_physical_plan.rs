@@ -1292,7 +1292,6 @@ fn roundtrip_json_sink() -> Result<()> {
     roundtrip_test(Arc::new(DataSinkExec::new(
         input,
         data_sink,
-        schema,
         Some(sort_order),
     )))
 }
@@ -1329,12 +1328,7 @@ fn roundtrip_csv_sink() -> Result<()> {
     let ctx = SessionContext::new();
     let codec = DefaultPhysicalExtensionCodec {};
     let roundtrip_plan = roundtrip_test_and_return(
-        Arc::new(DataSinkExec::new(
-            input,
-            data_sink,
-            schema,
-            Some(sort_order),
-        )),
+        Arc::new(DataSinkExec::new(input, data_sink, Some(sort_order))),
         &ctx,
         &codec,
     )
@@ -1389,7 +1383,6 @@ fn roundtrip_parquet_sink() -> Result<()> {
     roundtrip_test(Arc::new(DataSinkExec::new(
         input,
         data_sink,
-        schema,
         Some(sort_order),
     )))
 }

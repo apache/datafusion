@@ -1043,7 +1043,6 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                 Ok(Arc::new(DataSinkExec::new(
                     input,
                     Arc::new(data_sink),
-                    sink_schema,
                     sort_order,
                 )))
             }
@@ -1073,7 +1072,6 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                 Ok(Arc::new(DataSinkExec::new(
                     input,
                     Arc::new(data_sink),
-                    sink_schema,
                     sort_order,
                 )))
             }
@@ -1110,7 +1108,6 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                     Ok(Arc::new(DataSinkExec::new(
                         input,
                         Arc::new(data_sink),
-                        sink_schema,
                         sort_order,
                     )))
                 }

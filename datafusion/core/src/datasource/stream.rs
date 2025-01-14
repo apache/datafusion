@@ -366,7 +366,6 @@ impl TableProvider for StreamTable {
         Ok(Arc::new(DataSinkExec::new(
             input,
             Arc::new(StreamWrite(Arc::clone(&self.0))),
-            Arc::clone(self.0.source.schema()),
             ordering,
         )))
     }
@@ -415,6 +414,10 @@ impl DataSink for StreamWrite {
 
     fn metrics(&self) -> Option<MetricsSet> {
         None
+    }
+
+    fn schema(&self) -> &SchemaRef {
+        self.0.source.schema()
     }
 
     async fn write_all(

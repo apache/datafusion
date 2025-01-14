@@ -270,15 +270,9 @@ impl FileFormat for JsonFormat {
 
         let writer_options = JsonWriterOptions::try_from(&self.options)?;
 
-        let sink_schema = Arc::clone(conf.output_schema());
         let sink = Arc::new(JsonSink::new(conf, writer_options));
 
-        Ok(Arc::new(DataSinkExec::new(
-            input,
-            sink,
-            sink_schema,
-            order_requirements,
-        )) as _)
+        Ok(Arc::new(DataSinkExec::new(input, sink, order_requirements)) as _)
     }
 }
 
@@ -383,6 +377,10 @@ impl DataSink for JsonSink {
 
     fn metrics(&self) -> Option<MetricsSet> {
         None
+    }
+
+    fn schema(&self) -> &SchemaRef {
+        self.config.output_schema()
     }
 
     async fn write_all(

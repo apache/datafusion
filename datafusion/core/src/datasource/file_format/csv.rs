@@ -471,15 +471,9 @@ impl FileFormat for CsvFormat {
 
         let writer_options = CsvWriterOptions::try_from(&options)?;
 
-        let sink_schema = Arc::clone(conf.output_schema());
         let sink = Arc::new(CsvSink::new(conf, writer_options));
 
-        Ok(Arc::new(DataSinkExec::new(
-            input,
-            sink,
-            sink_schema,
-            order_requirements,
-        )) as _)
+        Ok(Arc::new(DataSinkExec::new(input, sink, order_requirements)) as _)
     }
 }
 
@@ -736,6 +730,10 @@ impl DataSink for CsvSink {
 
     fn metrics(&self) -> Option<MetricsSet> {
         None
+    }
+
+    fn schema(&self) -> &SchemaRef {
+        self.config.output_schema()
     }
 
     async fn write_all(

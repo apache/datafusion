@@ -33,6 +33,10 @@ use super::{
 use crate::arrow::array::RecordBatch;
 use crate::arrow::datatypes::{Fields, Schema, SchemaRef};
 use crate::datasource::file_format::file_compression_type::FileCompressionType;
+use crate::datasource::file_format::write::get_writer_schema;
+use crate::datasource::physical_plan::parquet::{
+    can_expr_be_pushed_down_with_schemas, ParquetExecBuilder,
+};
 use crate::datasource::physical_plan::{FileGroupDisplay, FileSink, FileSinkConfig};
 use crate::datasource::statistics::{create_max_min_accs, get_col_stats};
 use crate::error::Result;
@@ -47,6 +51,7 @@ use arrow::compute::sum;
 use datafusion_common::config::{ConfigField, ConfigFileType, TableParquetOptions};
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::stats::Precision;
+use datafusion_common::HashMap;
 use datafusion_common::{
     internal_datafusion_err, internal_err, not_impl_err, DataFusionError, GetExt,
     DEFAULT_PARQUET_EXTENSION,
@@ -58,20 +63,27 @@ use datafusion_expr::dml::InsertOp;
 use datafusion_expr::Expr;
 use datafusion_functions_aggregate::min_max::{MaxAccumulator, MinAccumulator};
 use datafusion_physical_expr::PhysicalExpr;
+use datafusion_physical_expr_common::sort_expr::LexRequirement;
 use datafusion_physical_plan::metrics::MetricsSet;
 
 use async_trait::async_trait;
 use bytes::Bytes;
-use datafusion_common::HashMap;
+use futures::future::BoxFuture;
+use futures::{FutureExt, StreamExt, TryStreamExt};
 use log::debug;
 use object_store::buffered::BufWriter;
+use object_store::path::Path;
+use object_store::{ObjectMeta, ObjectStore};
+use parquet::arrow::arrow_reader::statistics::StatisticsConverter;
 use parquet::arrow::arrow_writer::{
     compute_leaves, get_column_writers, ArrowColumnChunk, ArrowColumnWriter,
     ArrowLeafColumn, ArrowWriterOptions,
 };
+use parquet::arrow::async_reader::MetadataFetch;
 use parquet::arrow::{
     arrow_to_parquet_schema, parquet_to_arrow_schema, AsyncArrowWriter,
 };
+use parquet::errors::ParquetError;
 use parquet::file::metadata::{ParquetMetaData, ParquetMetaDataReader, RowGroupMetaData};
 use parquet::file::properties::{WriterProperties, WriterPropertiesBuilder};
 use parquet::file::writer::SerializedFileWriter;
@@ -79,18 +91,6 @@ use parquet::format::FileMetaData;
 use tokio::io::{AsyncWrite, AsyncWriteExt};
 use tokio::sync::mpsc::{self, Receiver, Sender};
 use tokio::task::JoinSet;
-
-use crate::datasource::physical_plan::parquet::{
-    can_expr_be_pushed_down_with_schemas, ParquetExecBuilder,
-};
-use datafusion_physical_expr_common::sort_expr::LexRequirement;
-use futures::future::BoxFuture;
-use futures::{FutureExt, StreamExt, TryStreamExt};
-use object_store::path::Path;
-use object_store::{ObjectMeta, ObjectStore};
-use parquet::arrow::arrow_reader::statistics::StatisticsConverter;
-use parquet::arrow::async_reader::MetadataFetch;
-use parquet::errors::ParquetError;
 
 /// Initial writing buffer size. Note this is just a size hint for efficiency. It
 /// will grow beyond the set value if needed.
@@ -431,15 +431,9 @@ impl FileFormat for ParquetFormat {
             return not_impl_err!("Overwrites are not implemented yet for Parquet");
         }
 
-        let sink_schema = Arc::clone(conf.output_schema());
         let sink = Arc::new(ParquetSink::new(conf, self.options.clone()));
 
-        Ok(Arc::new(DataSinkExec::new(
-            input,
-            sink,
-            sink_schema,
-            order_requirements,
-        )) as _)
+        Ok(Arc::new(DataSinkExec::new(input, sink, order_requirements)) as _)
     }
 
     fn supports_filters_pushdown(
@@ -721,42 +715,14 @@ impl ParquetSink {
         self.written.lock().clone()
     }
 
-    /// Converts table schema to writer schema, which may differ in the case
-    /// of hive style partitioning where some columns are removed from the
-    /// underlying files.
-    fn get_writer_schema(&self) -> Arc<Schema> {
-        if !self.config.table_partition_cols.is_empty()
-            && !self.config.keep_partition_by_columns
-        {
-            let schema = self.config.output_schema();
-            let partition_names: Vec<_> = self
-                .config
-                .table_partition_cols
-                .iter()
-                .map(|(s, _)| s)
-                .collect();
-            Arc::new(Schema::new_with_metadata(
-                schema
-                    .fields()
-                    .iter()
-                    .filter(|f| !partition_names.contains(&f.name()))
-                    .map(|f| (**f).clone())
-                    .collect::<Vec<_>>(),
-                schema.metadata().clone(),
-            ))
-        } else {
-            Arc::clone(self.config.output_schema())
-        }
-    }
-
     /// Create writer properties based upon configuration settings,
     /// including partitioning and the inclusion of arrow schema metadata.
     fn create_writer_props(&self) -> Result<WriterProperties> {
         let schema = if self.parquet_options.global.allow_single_file_parallelism {
             // If parallelizing writes, we may be also be doing hive style partitioning
             // into multiple files which impacts the schema per file.
-            // Refer to `self.get_writer_schema()`
-            &self.get_writer_schema()
+            // Refer to `get_writer_schema()`
+            &get_writer_schema(&self.config)
         } else {
             self.config.output_schema()
         };
@@ -786,7 +752,7 @@ impl ParquetSink {
 
         let writer = AsyncArrowWriter::try_new_with_options(
             buf_writer,
-            self.get_writer_schema(),
+            get_writer_schema(&self.config),
             options,
         )?;
         Ok(writer)
@@ -857,7 +823,7 @@ impl FileSink for ParquetSink {
                     Arc::clone(&object_store),
                 )
                 .await?;
-                let schema = self.get_writer_schema();
+                let schema = get_writer_schema(&self.config);
                 let props = parquet_props.clone();
                 let parallel_options_clone = parallel_options.clone();
                 let pool = Arc::clone(context.memory_pool());
@@ -915,6 +881,10 @@ impl DataSink for ParquetSink {
 
     fn metrics(&self) -> Option<MetricsSet> {
         None
+    }
+
+    fn schema(&self) -> &SchemaRef {
+        self.config.output_schema()
     }
 
     async fn write_all(

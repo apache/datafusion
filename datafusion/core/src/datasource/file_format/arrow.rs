@@ -29,6 +29,7 @@ use super::file_compression_type::FileCompressionType;
 use super::write::demux::{start_demuxer_task, DemuxedStreamReceiver};
 use super::write::{create_writer, SharedBuffer};
 use super::FileFormatFactory;
+use crate::datasource::file_format::write::get_writer_schema;
 use crate::datasource::file_format::FileFormat;
 use crate::datasource::physical_plan::{
     ArrowExec, FileGroupDisplay, FileScanConfig, FileSink, FileSinkConfig,
@@ -187,15 +188,9 @@ impl FileFormat for ArrowFormat {
             return not_impl_err!("Overwrites are not implemented yet for Arrow format");
         }
 
-        let sink_schema = Arc::clone(conf.output_schema());
         let sink = Arc::new(ArrowFileSink::new(conf));
 
-        Ok(Arc::new(DataSinkExec::new(
-            input,
-            sink,
-            sink_schema,
-            order_requirements,
-        )) as _)
+        Ok(Arc::new(DataSinkExec::new(input, sink, order_requirements)) as _)
     }
 }
 
@@ -207,31 +202,6 @@ struct ArrowFileSink {
 impl ArrowFileSink {
     fn new(config: FileSinkConfig) -> Self {
         Self { config }
-    }
-
-    /// Converts table schema to writer schema, which may differ in the case
-    /// of hive style partitioning where some columns are removed from the
-    /// underlying files.
-    fn get_writer_schema(&self) -> Arc<Schema> {
-        if !self.config.table_partition_cols.is_empty() {
-            let schema = self.config.output_schema();
-            let partition_names: Vec<_> = self
-                .config
-                .table_partition_cols
-                .iter()
-                .map(|(s, _)| s)
-                .collect();
-            Arc::new(Schema::new(
-                schema
-                    .fields()
-                    .iter()
-                    .filter(|f| !partition_names.contains(&f.name()))
-                    .map(|f| (**f).clone())
-                    .collect::<Vec<_>>(),
-            ))
-        } else {
-            Arc::clone(self.config.output_schema())
-        }
     }
 }
 
@@ -254,7 +224,7 @@ impl FileSink for ArrowFileSink {
             let shared_buffer = SharedBuffer::new(INITIAL_BUFFER_BYTES);
             let mut arrow_writer = arrow_ipc::writer::FileWriter::try_new_with_options(
                 shared_buffer.clone(),
-                &self.get_writer_schema(),
+                &get_writer_schema(&self.config),
                 ipc_options.clone(),
             )?;
             let mut object_store_writer = create_writer(
@@ -335,6 +305,10 @@ impl DataSink for ArrowFileSink {
 
     fn metrics(&self) -> Option<MetricsSet> {
         None
+    }
+
+    fn schema(&self) -> &SchemaRef {
+        self.config.output_schema()
     }
 
     async fn write_all(
