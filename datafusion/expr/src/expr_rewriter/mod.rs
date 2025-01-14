@@ -463,8 +463,6 @@ mod test {
                 .unwrap_err()
                 .strip_backtrace();
         let expected = "Schema error: No field named b. \
-            You can use double quotes to refer to the \"b\" column \
-            or set the datafusion.sql_parser.enable_ident_normalization configuration option. \
             Valid fields are \"tableA\".a.";
         assert_eq!(error, expected);
     }

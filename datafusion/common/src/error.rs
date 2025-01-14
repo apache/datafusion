@@ -167,12 +167,18 @@ impl Display for SchemaError {
                 valid_fields,
             } => {
                 write!(f, "No field named {}", field.quoted_flat_name())?;
-                write!(
-                    f,
-                    ". You can use double quotes to refer to the \"{}\" column",
-                    field.quoted_flat_name()
-                )?;
-                write!(f, " or set the datafusion.sql_parser.enable_ident_normalization configuration option")?;
+                let lower_valid_fields = valid_fields
+                    .iter()
+                    .map(|column| column.flat_name().to_lowercase())
+                    .collect::<Vec<String>>();
+                if lower_valid_fields.contains(&field.flat_name().to_lowercase()) {
+                    write!(
+                        f,
+                        ". Column names are case sensitive. You can use double quotes to refer to the \"{}\" column \
+                        or set the datafusion.sql_parser.enable_ident_normalization configuration",
+                        field.quoted_flat_name()
+                    )?;
+                }
                 if !valid_fields.is_empty() {
                     write!(
                         f,
