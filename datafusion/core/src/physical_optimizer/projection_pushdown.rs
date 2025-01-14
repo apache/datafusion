@@ -1355,7 +1355,7 @@ mod tests {
         ColumnarValue, Operator, ScalarUDF, ScalarUDFImpl, Signature, Volatility,
     };
     use datafusion_physical_expr::expressions::{
-        binary, col, BinaryExpr, CaseExpr, CastExpr, NegativeExpr
+        binary, col, BinaryExpr, CaseExpr, CastExpr, NegativeExpr,
     };
     use datafusion_physical_expr::ScalarFunctionExpr;
     use datafusion_physical_plan::joins::PartitionMode;
