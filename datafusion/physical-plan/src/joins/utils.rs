@@ -1775,6 +1775,39 @@ fn swap_reverting_projection(
     left_cols.chain(right_cols).collect()
 }
 
+/// This function swaps the given join's projection.
+pub(super) fn swap_join_projection(
+    left_schema_len: usize,
+    right_schema_len: usize,
+    projection: Option<&Vec<usize>>,
+    join_type: &JoinType,
+) -> Option<Vec<usize>> {
+    match join_type {
+        // For Anti/Semi join types, projection should remain unmodified,
+        // since these joins output schema remains the same after swap
+        JoinType::LeftAnti
+        | JoinType::LeftSemi
+        | JoinType::RightAnti
+        | JoinType::RightSemi => projection.cloned(),
+
+        _ => projection.map(|p| {
+            p.iter()
+                .map(|i| {
+                    // If the index is less than the left schema length, it is from
+                    // the left schema, so we add the right schema length to it.
+                    // Otherwise, it is from the right schema, so we subtract the left
+                    // schema length from it.
+                    if *i < left_schema_len {
+                        *i + right_schema_len
+                    } else {
+                        *i - left_schema_len
+                    }
+                })
+                .collect()
+        }),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::pin::Pin;

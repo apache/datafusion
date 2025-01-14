@@ -24,9 +24,7 @@ use std::sync::Arc;
 use std::task::Poll;
 
 use super::utils::{
-    asymmetric_join_output_partitioning, need_produce_result_in_final,
-    reorder_output_after_swap, BatchSplitter, BatchTransformer, NoopBatchTransformer,
-    StatefulStreamResult,
+    asymmetric_join_output_partitioning, need_produce_result_in_final, reorder_output_after_swap, swap_join_projection, BatchSplitter, BatchTransformer, NoopBatchTransformer, StatefulStreamResult
 };
 use crate::coalesce_partitions::CoalescePartitionsExec;
 use crate::common::can_project;
@@ -383,41 +381,6 @@ impl NestedLoopJoinExec {
         };
 
         Ok(plan)
-    }
-}
-
-// TODO: Merge this one with the hash join one
-/// The same logic as the hash join one, but for nested loop join
-/// This function swaps the given join's projection.
-fn swap_join_projection(
-    left_schema_len: usize,
-    right_schema_len: usize,
-    projection: Option<&Vec<usize>>,
-    join_type: &JoinType,
-) -> Option<Vec<usize>> {
-    match join_type {
-        // For Anti/Semi join types, projection should remain unmodified,
-        // since these joins output schema remains the same after swap
-        JoinType::LeftAnti
-        | JoinType::LeftSemi
-        | JoinType::RightAnti
-        | JoinType::RightSemi => projection.cloned(),
-
-        _ => projection.map(|p| {
-            p.iter()
-                .map(|i| {
-                    // If the index is less than the left schema length, it is from
-                    // the left schema, so we add the right schema length to it.
-                    // Otherwise, it is from the right schema, so we subtract the left
-                    // schema length from it.
-                    if *i < left_schema_len {
-                        *i + right_schema_len
-                    } else {
-                        *i - left_schema_len
-                    }
-                })
-                .collect()
-        }),
     }
 }
 
