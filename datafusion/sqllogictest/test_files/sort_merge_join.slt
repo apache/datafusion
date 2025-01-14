@@ -647,6 +647,54 @@ NULL NULL 7 9
 NULL NULL 8 10
 NULL NULL 9 11
 
+query II
+select * from (
+with
+t1 as (
+    select 31 a, 32 b union all
+    select 31 a, 33 b
+),
+t2 as (
+    select 31 a, 32 b union all
+    select 31 a, 35 b
+)
+select t2.* from t1 right anti join t2 on t1.a = t2.a and t1.b = t2.b
+) order by 1, 2;
+----
+31 35
+
+query II
+select * from (
+with
+t1 as (
+    select 41 a, 42 b union all
+    select 41 a, 43 b
+),
+t2 as (
+    select 41 a, 42 b union all
+    select 41 a, 45 b
+)
+select t2.* from t1 right anti join t2 on t1.a = t2.a and t1.b = t2.b
+) order by 1, 2;
+----
+41 45
+
+query II
+select * from (
+with
+t1 as (
+    select 51 a, 52 b union all
+    select 51 a, 53 b
+),
+t2 as (
+    select 51 a, 52 b union all
+    select 51 a, 54 b
+)
+select t2.* from t1 right anti join t2 on t1.a = t2.a and t1.b = t2.b
+) order by 1, 2;
+----
+51 54
+
 # return sql params back to default values
 statement ok
 set datafusion.optimizer.prefer_hash_join = true;

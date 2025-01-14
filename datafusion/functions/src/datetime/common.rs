@@ -19,7 +19,7 @@ use std::sync::Arc;
 
 use arrow::array::{
     Array, ArrowPrimitiveType, AsArray, GenericStringArray, PrimitiveArray,
-    StringViewArray,
+    StringArrayType, StringViewArray,
 };
 use arrow::compute::kernels::cast_utils::string_to_timestamp_nanos;
 use arrow::datatypes::DataType;
@@ -27,7 +27,6 @@ use chrono::format::{parse, Parsed, StrftimeItems};
 use chrono::LocalResult::Single;
 use chrono::{DateTime, TimeZone, Utc};
 
-use crate::strings::StringArrayType;
 use datafusion_common::cast::as_generic_string_array;
 use datafusion_common::{
     exec_err, unwrap_or_internal_err, DataFusionError, Result, ScalarType, ScalarValue,

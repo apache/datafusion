@@ -333,7 +333,7 @@ impl ParquetExecBuilder {
 
     /// Set the filter predicate when reading.
     ///
-    /// See the "Predicate Pushdown" section of the [`ParquetExec`] documenation
+    /// See the "Predicate Pushdown" section of the [`ParquetExec`] documentation
     /// for more details.
     pub fn with_predicate(mut self, predicate: Arc<dyn PhysicalExpr>) -> Self {
         self.predicate = Some(predicate);
@@ -611,7 +611,7 @@ impl ParquetExec {
     }
 
     /// If enabled, the reader will read the page index
-    /// This is used to optimise filter pushdown
+    /// This is used to optimize filter pushdown
     /// via `RowSelector` and `RowFilter` by
     /// eliminating unnecessary IO and decoding
     pub fn with_enable_page_index(mut self, enable_page_index: bool) -> Self {

@@ -433,16 +433,16 @@ logical_plan
 08)----------TableScan: t1 projection=[t1_int]
 
 #invalid_scalar_subquery
-statement error DataFusion error: check_analyzed_plan\ncaused by\nError during planning: Scalar subquery should only return one column, but found 2: t2.t2_id, t2.t2_name
+statement error DataFusion error: Invalid \(non-executable\) plan after Analyzer\ncaused by\nError during planning: Scalar subquery should only return one column, but found 2: t2.t2_id, t2.t2_name
 SELECT t1_id, t1_name, t1_int, (select t2_id, t2_name FROM t2 WHERE t2.t2_id = t1.t1_int) FROM t1
 
 #subquery_not_allowed
 #In/Exist Subquery is not allowed in ORDER BY clause.
-statement error DataFusion error: check_analyzed_plan\ncaused by\nError during planning: In/Exist subquery can only be used in Projection, Filter, Window functions, Aggregate and Join plan nodes, but was used in \[Sort: t1.t1_int IN \(<subquery>\) ASC NULLS LAST\]
+statement error DataFusion error: Invalid \(non-executable\) plan after Analyzer\ncaused by\nError during planning: In/Exist subquery can only be used in Projection, Filter, TableScan, Window functions, Aggregate and Join plan nodes, but was used in \[Sort: t1.t1_int IN \(<subquery>\) ASC NULLS LAST\]
 SELECT t1_id, t1_name, t1_int FROM t1 order by t1_int in (SELECT t2_int FROM t2 WHERE t1.t1_id > t1.t1_int)
 
 #non_aggregated_correlated_scalar_subquery
-statement error DataFusion error: check_analyzed_plan\ncaused by\nError during planning: Correlated scalar subquery must be aggregated to return at most one row
+statement error DataFusion error: Invalid \(non-executable\) plan after Analyzer\ncaused by\nError during planning: Correlated scalar subquery must be aggregated to return at most one row
 SELECT t1_id, (SELECT t2_int FROM t2 WHERE t2.t2_int = t1.t1_int) as t2_int from t1
 
 #non_aggregated_correlated_scalar_subquery_unique
@@ -456,11 +456,11 @@ SELECT t1_id, (SELECT t3_int FROM t3 WHERE t3.t3_id = t1.t1_id) as t3_int from t
 
 
 #non_aggregated_correlated_scalar_subquery
-statement error DataFusion error: check_analyzed_plan\ncaused by\nError during planning: Correlated scalar subquery must be aggregated to return at most one row
+statement error DataFusion error: Invalid \(non-executable\) plan after Analyzer\ncaused by\nError during planning: Correlated scalar subquery must be aggregated to return at most one row
 SELECT t1_id, (SELECT t2_int FROM t2 WHERE t2.t2_int = t1_int group by t2_int) as t2_int from t1
 
 #non_aggregated_correlated_scalar_subquery_with_limit
-statement error DataFusion error: check_analyzed_plan\ncaused by\nError during planning: Correlated scalar subquery must be aggregated to return at most one row
+statement error DataFusion error: Invalid \(non-executable\) plan after Analyzer\ncaused by\nError during planning: Correlated scalar subquery must be aggregated to return at most one row
 SELECT t1_id, (SELECT t2_int FROM t2 WHERE t2.t2_int = t1.t1_int limit 2) as t2_int from t1
 
 #non_aggregated_correlated_scalar_subquery_with_single_row
@@ -523,7 +523,7 @@ logical_plan
 07)--TableScan: t1 projection=[t1_id]
 
 #aggregated_correlated_scalar_subquery_with_extra_group_by_columns
-statement error DataFusion error: check_analyzed_plan\ncaused by\nError during planning: A GROUP BY clause in a scalar correlated subquery cannot contain non-correlated columns
+statement error DataFusion error: Invalid \(non-executable\) plan after Analyzer\ncaused by\nError during planning: A GROUP BY clause in a scalar correlated subquery cannot contain non-correlated columns
 SELECT t1_id, (SELECT sum(t2_int) FROM t2 WHERE t2.t2_id = t1.t1_id group by t2_name) as t2_sum from t1
 
 #support_agg_correlated_columns

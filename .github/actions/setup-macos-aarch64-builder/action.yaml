@@ -30,8 +30,8 @@ runs:
       run: |
         mkdir -p $HOME/d/protoc
         cd $HOME/d/protoc
-        export PROTO_ZIP="protoc-21.4-osx-aarch_64.zip"        
-        curl -LO https://github.com/protocolbuffers/protobuf/releases/download/v21.4/$PROTO_ZIP
+        export PROTO_ZIP="protoc-29.1-osx-aarch_64.zip"
+        curl -LO https://github.com/protocolbuffers/protobuf/releases/download/v29.1/$PROTO_ZIP
         unzip $PROTO_ZIP
         echo "$HOME/d/protoc/bin" >> $GITHUB_PATH
         export PATH=$PATH:$HOME/d/protoc/bin
@@ -43,5 +43,7 @@ runs:
         rustup toolchain install stable
         rustup default stable
         rustup component add rustfmt
+    - name: Setup rust cache
+      uses: Swatinem/rust-cache@v2
     - name: Configure rust runtime env
       uses: ./.github/actions/setup-rust-runtime        

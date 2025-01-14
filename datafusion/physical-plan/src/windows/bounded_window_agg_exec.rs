@@ -459,7 +459,7 @@ pub struct LinearSearch {
 
 impl PartitionSearcher for LinearSearch {
     /// This method constructs output columns using the result of each window expression.
-    // Assume input buffer is         |      Partition Buffers would be (Where each partition and its data is seperated)
+    // Assume input buffer is         |      Partition Buffers would be (Where each partition and its data is separated)
     // a, 2                           |      a, 2
     // b, 2                           |      a, 2
     // a, 2                           |      a, 2

@@ -35,6 +35,9 @@ workspace = true
 name = "datafusion_expr"
 path = "src/lib.rs"
 
+[features]
+recursive_protection = ["dep:recursive"]
+
 [dependencies]
 arrow = { workspace = true }
 chrono = { workspace = true }
@@ -46,7 +49,7 @@ datafusion-functions-window-common = { workspace = true }
 datafusion-physical-expr-common = { workspace = true }
 indexmap = { workspace = true }
 paste = "^1.0"
-recursive = { workspace = true }
+recursive = { workspace = true, optional = true }
 serde_json = { workspace = true }
 sqlparser = { workspace = true }
 

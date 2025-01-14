@@ -414,7 +414,6 @@ dependencies = [
  "bzip2 0.4.4",
  "flate2",
  "futures-core",
- "futures-io",
  "memchr",
  "pin-project-lite",
  "tokio",
@@ -1232,7 +1231,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion"
-version = "43.0.0"
+version = "44.0.0"
 dependencies = [
  "apache-avro",
  "arrow",
@@ -1264,7 +1263,7 @@ dependencies = [
  "flate2",
  "futures",
  "glob",
- "itertools",
+ "itertools 0.14.0",
  "log",
  "num-traits",
  "object_store",
@@ -1284,7 +1283,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-catalog"
-version = "43.0.0"
+version = "44.0.0"
 dependencies = [
  "arrow-schema",
  "async-trait",
@@ -1297,7 +1296,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-cli"
-version = "43.0.0"
+version = "44.0.0"
 dependencies = [
  "arrow",
  "assert_cmd",
@@ -1329,14 +1328,16 @@ dependencies = [
 
 [[package]]
 name = "datafusion-common"
-version = "43.0.0"
+version = "44.0.0"
 dependencies = [
  "ahash",
  "apache-avro",
  "arrow",
  "arrow-array",
  "arrow-buffer",
+ "arrow-ipc",
  "arrow-schema",
+ "base64 0.22.1",
  "half",
  "hashbrown 0.14.5",
  "indexmap",
@@ -1353,7 +1354,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-common-runtime"
-version = "43.0.0"
+version = "44.0.0"
 dependencies = [
  "log",
  "tokio",
@@ -1361,11 +1362,11 @@ dependencies = [
 
 [[package]]
 name = "datafusion-doc"
-version = "43.0.0"
+version = "44.0.0"
 
 [[package]]
 name = "datafusion-execution"
-version = "43.0.0"
+version = "44.0.0"
 dependencies = [
  "arrow",
  "dashmap",
@@ -1382,7 +1383,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-expr"
-version = "43.0.0"
+version = "44.0.0"
 dependencies = [
  "arrow",
  "chrono",
@@ -1401,16 +1402,16 @@ dependencies = [
 
 [[package]]
 name = "datafusion-expr-common"
-version = "43.0.0"
+version = "44.0.0"
 dependencies = [
  "arrow",
  "datafusion-common",
- "itertools",
+ "itertools 0.14.0",
 ]
 
 [[package]]
 name = "datafusion-functions"
-version = "43.0.0"
+version = "44.0.0"
 dependencies = [
  "arrow",
  "arrow-buffer",
@@ -1426,7 +1427,7 @@ dependencies = [
  "datafusion-macros",
  "hashbrown 0.14.5",
  "hex",
- "itertools",
+ "itertools 0.14.0",
  "log",
  "md-5",
  "rand",
@@ -1438,7 +1439,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-functions-aggregate"
-version = "43.0.0"
+version = "44.0.0"
 dependencies = [
  "ahash",
  "arrow",
@@ -1458,7 +1459,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-functions-aggregate-common"
-version = "43.0.0"
+version = "44.0.0"
 dependencies = [
  "ahash",
  "arrow",
@@ -1469,7 +1470,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-functions-nested"
-version = "43.0.0"
+version = "44.0.0"
 dependencies = [
  "arrow",
  "arrow-array",
@@ -1477,19 +1478,21 @@ dependencies = [
  "arrow-ord",
  "arrow-schema",
  "datafusion-common",
+ "datafusion-doc",
  "datafusion-execution",
  "datafusion-expr",
  "datafusion-functions",
  "datafusion-functions-aggregate",
+ "datafusion-macros",
  "datafusion-physical-expr-common",
- "itertools",
+ "itertools 0.14.0",
  "log",
  "paste",
 ]
 
 [[package]]
 name = "datafusion-functions-table"
-version = "43.0.0"
+version = "44.0.0"
 dependencies = [
  "arrow",
  "async-trait",
@@ -1503,7 +1506,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-functions-window"
-version = "43.0.0"
+version = "44.0.0"
 dependencies = [
  "datafusion-common",
  "datafusion-doc",
@@ -1518,7 +1521,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-functions-window-common"
-version = "43.0.0"
+version = "44.0.0"
 dependencies = [
  "datafusion-common",
  "datafusion-physical-expr-common",
@@ -1526,7 +1529,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-macros"
-version = "43.0.0"
+version = "44.0.0"
 dependencies = [
  "quote",
  "syn",
@@ -1534,7 +1537,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-optimizer"
-version = "43.0.0"
+version = "44.0.0"
 dependencies = [
  "arrow",
  "chrono",
@@ -1542,7 +1545,7 @@ dependencies = [
  "datafusion-expr",
  "datafusion-physical-expr",
  "indexmap",
- "itertools",
+ "itertools 0.14.0",
  "log",
  "recursive",
  "regex",
@@ -1551,7 +1554,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-physical-expr"
-version = "43.0.0"
+version = "44.0.0"
 dependencies = [
  "ahash",
  "arrow",
@@ -1566,7 +1569,7 @@ dependencies = [
  "half",
  "hashbrown 0.14.5",
  "indexmap",
- "itertools",
+ "itertools 0.14.0",
  "log",
  "paste",
  "petgraph",
@@ -1574,19 +1577,19 @@ dependencies = [
 
 [[package]]
 name = "datafusion-physical-expr-common"
-version = "43.0.0"
+version = "44.0.0"
 dependencies = [
  "ahash",
  "arrow",
  "datafusion-common",
  "datafusion-expr-common",
  "hashbrown 0.14.5",
- "itertools",
+ "itertools 0.14.0",
 ]
 
 [[package]]
 name = "datafusion-physical-optimizer"
-version = "43.0.0"
+version = "44.0.0"
 dependencies = [
  "arrow",
  "datafusion-common",
@@ -1594,14 +1597,14 @@ dependencies = [
  "datafusion-expr-common",
  "datafusion-physical-expr",
  "datafusion-physical-plan",
- "itertools",
+ "itertools 0.14.0",
  "log",
  "recursive",
 ]
 
 [[package]]
 name = "datafusion-physical-plan"
-version = "43.0.0"
+version = "44.0.0"
 dependencies = [
  "ahash",
  "arrow",
@@ -1622,7 +1625,7 @@ dependencies = [
  "half",
  "hashbrown 0.14.5",
  "indexmap",
- "itertools",
+ "itertools 0.14.0",
  "log",
  "parking_lot",
  "pin-project-lite",
@@ -1631,7 +1634,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-sql"
-version = "43.0.0"
+version = "44.0.0"
 dependencies = [
  "arrow",
  "arrow-array",
@@ -1786,9 +1789,9 @@ dependencies = [
 
 [[package]]
 name = "fixedbitset"
-version = "0.4.2"
+version = "0.5.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0ce7134b9999ecaf8bcd65542e436736ef32ddca1b3e06094cb6ec5755203b80"
+checksum = "1d674e81391d1e1ab681a28d99df07927c6d4aa5b027d7da16ba32d1d21ecd99"
 
 [[package]]
 name = "flatbuffers"
@@ -2430,6 +2433,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "itertools"
+version = "0.14.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2b192c782037fadd9cfa75548310488aabdbf3d2da73885b31bd0abd03351285"
+dependencies = [
+ "either",
+]
+
+[[package]]
 name = "itoa"
 version = "1.0.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2809,7 +2821,7 @@ dependencies = [
  "futures",
  "humantime",
  "hyper 1.5.2",
- "itertools",
+ "itertools 0.13.0",
  "md-5",
  "parking_lot",
  "percent-encoding",
@@ -2942,9 +2954,9 @@ checksum = "e3148f5046208a5d56bcfc03053e3ca6334e51da8dfb19b6cdc8b306fae3283e"
 
 [[package]]
 name = "petgraph"
-version = "0.6.5"
+version = "0.7.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b4c5cc86750666a3ed20bdaf5ca2a0344f9c67674cae0515bec2da16fbaa47db"
+checksum = "3672b37090dbd86368a4145bc067582552b29c27377cad4e0a306c97f9bd7772"
 dependencies = [
  "fixedbitset",
  "indexmap",

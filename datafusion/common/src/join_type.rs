@@ -73,6 +73,40 @@ impl JoinType {
     pub fn is_outer(self) -> bool {
         self == JoinType::Left || self == JoinType::Right || self == JoinType::Full
     }
+
+    /// Returns the `JoinType` if the (2) inputs were swapped
+    ///
+    /// Panics if [`Self::supports_swap`] returns false
+    pub fn swap(&self) -> JoinType {
+        match self {
+            JoinType::Inner => JoinType::Inner,
+            JoinType::Full => JoinType::Full,
+            JoinType::Left => JoinType::Right,
+            JoinType::Right => JoinType::Left,
+            JoinType::LeftSemi => JoinType::RightSemi,
+            JoinType::RightSemi => JoinType::LeftSemi,
+            JoinType::LeftAnti => JoinType::RightAnti,
+            JoinType::RightAnti => JoinType::LeftAnti,
+            JoinType::LeftMark => {
+                unreachable!("LeftMark join type does not support swapping")
+            }
+        }
+    }
+
+    /// Does the join type support swapping  inputs?
+    pub fn supports_swap(&self) -> bool {
+        matches!(
+            self,
+            JoinType::Inner
+                | JoinType::Left
+                | JoinType::Right
+                | JoinType::Full
+                | JoinType::LeftSemi
+                | JoinType::RightSemi
+                | JoinType::LeftAnti
+                | JoinType::RightAnti
+        )
+    }
 }
 
 impl Display for JoinType {

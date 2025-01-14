@@ -17,7 +17,7 @@
 
 use std::any::Any;
 use std::str::FromStr;
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
 use arrow::array::{Array, ArrayRef, Float64Array, Int32Array};
 use arrow::compute::kernels::cast_utils::IntervalUnit;
@@ -41,11 +41,42 @@ use datafusion_common::{
     ExprSchema, Result, ScalarValue,
 };
 use datafusion_expr::{
-    scalar_doc_sections::DOC_SECTION_DATETIME, ColumnarValue, Documentation, Expr,
-    ScalarUDFImpl, Signature, TypeSignature, Volatility,
+    ColumnarValue, Documentation, Expr, ScalarUDFImpl, Signature, TypeSignature,
+    Volatility,
 };
 use datafusion_expr_common::signature::TypeSignatureClass;
+use datafusion_macros::user_doc;
 
+#[user_doc(
+    doc_section(label = "Time and Date Functions"),
+    description = "Returns the specified part of the date as an integer.",
+    syntax_example = "date_part(part, expression)",
+    alternative_syntax = "extract(field FROM source)",
+    argument(
+        name = "part",
+        description = r#"Part of the date to return. The following date parts are supported:
+        
+    - year
+    - quarter (emits value in inclusive range [1, 4] based on which quartile of the year the date is in)
+    - month
+    - week (week of the year)
+    - day (day of the month)
+    - hour
+    - minute
+    - second
+    - millisecond
+    - microsecond
+    - nanosecond
+    - dow (day of the week)
+    - doy (day of the year)
+    - epoch (seconds since Unix epoch)
+"#
+    ),
+    argument(
+        name = "expression",
+        description = "Time expression to operate on. Can be a constant, column, or function."
+    )
+)]
 #[derive(Debug)]
 pub struct DatePartFunc {
     signature: Signature,
@@ -105,7 +136,7 @@ impl ScalarUDFImpl for DatePartFunc {
     }
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        internal_err!("return_type_from_exprs shoud be called instead")
+        internal_err!("return_type_from_exprs should be called instead")
     }
 
     fn return_type_from_exprs(
@@ -190,7 +221,7 @@ impl ScalarUDFImpl for DatePartFunc {
         &self.aliases
     }
     fn documentation(&self) -> Option<&Documentation> {
-        Some(get_date_part_doc())
+        self.doc()
     }
 }
 
@@ -204,43 +235,6 @@ fn part_normalization(part: &str) -> &str {
     part.strip_prefix(|c| c == '\'' || c == '\"')
         .and_then(|s| s.strip_suffix(|c| c == '\'' || c == '\"'))
         .unwrap_or(part)
-}
-
-static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
-
-fn get_date_part_doc() -> &'static Documentation {
-    DOCUMENTATION.get_or_init(|| {
-        Documentation::builder(
-            DOC_SECTION_DATETIME,
-            "Returns the specified part of the date as an integer.",
-            "date_part(part, expression)")
-            .with_argument(
-                "part",
-                r#"Part of the date to return. The following date parts are supported:
-
-    - year
-    - quarter (emits value in inclusive range [1, 4] based on which quartile of the year the date is in)
-    - month
-    - week (week of the year)
-    - day (day of the month)
-    - hour
-    - minute
-    - second
-    - millisecond
-    - microsecond
-    - nanosecond
-    - dow (day of the week)
-    - doy (day of the year)
-    - epoch (seconds since Unix epoch)
-"#,
-            )
-            .with_argument(
-                "expression",
-                "Time expression to operate on. Can be a constant, column, or function.",
-            )
-            .with_alternative_syntax("extract(field FROM source)")
-            .build()
-    })
 }
 
 /// Invoke [`date_part`] on an `array` (e.g. Timestamp) and convert the

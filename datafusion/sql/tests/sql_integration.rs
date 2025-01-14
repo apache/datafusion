@@ -4500,3 +4500,55 @@ fn test_custom_type_plan() -> Result<()> {
 
     Ok(())
 }
+
+fn error_message_test(sql: &str, err_msg_starts_with: &str) {
+    let err = logical_plan(sql).expect_err("query should have failed");
+    assert!(
+        err.strip_backtrace().starts_with(err_msg_starts_with),
+        "Expected error to start with '{}', but got: '{}'",
+        err_msg_starts_with,
+        err.strip_backtrace(),
+    );
+}
+
+#[test]
+fn test_error_message_invalid_scalar_function_signature() {
+    error_message_test(
+        "select sqrt()",
+        "Error during planning: sqrt does not support zero arguments",
+    );
+    error_message_test(
+        "select sqrt(1, 2)",
+        "Error during planning: Failed to coerce arguments",
+    );
+}
+
+#[test]
+fn test_error_message_invalid_aggregate_function_signature() {
+    error_message_test(
+        "select sum()",
+        "Error during planning: sum does not support zero arguments",
+    );
+    // We keep two different prefixes because they clarify each other.
+    // It might be incorrect, and we should consider keeping only one.
+    error_message_test(
+        "select max(9, 3)",
+        "Error during planning: Execution error: User-defined coercion failed",
+    );
+}
+
+#[test]
+fn test_error_message_invalid_window_function_signature() {
+    error_message_test(
+        "select rank(1) over()",
+        "Error during planning: The function expected zero argument but received 1",
+    );
+}
+
+#[test]
+fn test_error_message_invalid_window_aggregate_function_signature() {
+    error_message_test(
+        "select sum() over()",
+        "Error during planning: sum does not support zero arguments",
+    );
+}

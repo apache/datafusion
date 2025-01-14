@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::sync::Arc;
+use std::{collections::HashMap, sync::Arc};
 
 use arrow_schema::TimeUnit;
 use datafusion_common::Result;
@@ -28,6 +28,9 @@ use sqlparser::{
 };
 
 use super::{utils::character_length_to_sql, utils::date_part_to_sql, Unparser};
+
+pub type ScalarFnToSqlHandler =
+    Box<dyn Fn(&Unparser, &[Expr]) -> Result<Option<ast::Expr>> + Send + Sync>;
 
 /// `Dialect` to use for Unparsing
 ///
@@ -150,9 +153,21 @@ pub trait Dialect: Send + Sync {
         Ok(None)
     }
 
+    /// Extends the dialect's default rules for unparsing scalar functions.
+    /// This is useful for supporting application-specific UDFs or custom engine extensions.
+    fn with_custom_scalar_overrides(
+        self,
+        _handlers: Vec<(&str, ScalarFnToSqlHandler)>,
+    ) -> Self
+    where
+        Self: Sized,
+    {
+        unimplemented!("Custom scalar overrides are not supported by this dialect yet");
+    }
+
     /// Allow to unparse a qualified column with a full qualified name
     /// (e.g. catalog_name.schema_name.table_name.column_name)
-    /// Otherwise, the column will be unparsed with only the table name and colum name
+    /// Otherwise, the column will be unparsed with only the table name and column name
     /// (e.g. table_name.column_name)
     fn full_qualified_col(&self) -> bool {
         false
@@ -305,7 +320,19 @@ impl PostgreSqlDialect {
     }
 }
 
-pub struct DuckDBDialect {}
+#[derive(Default)]
+pub struct DuckDBDialect {
+    custom_scalar_fn_overrides: HashMap<String, ScalarFnToSqlHandler>,
+}
+
+impl DuckDBDialect {
+    #[must_use]
+    pub fn new() -> Self {
+        Self {
+            custom_scalar_fn_overrides: HashMap::new(),
+        }
+    }
+}
 
 impl Dialect for DuckDBDialect {
     fn identifier_quote_style(&self, _: &str) -> Option<char> {
@@ -320,12 +347,27 @@ impl Dialect for DuckDBDialect {
         BinaryOperator::DuckIntegerDivide
     }
 
+    fn with_custom_scalar_overrides(
+        mut self,
+        handlers: Vec<(&str, ScalarFnToSqlHandler)>,
+    ) -> Self {
+        for (func_name, handler) in handlers {
+            self.custom_scalar_fn_overrides
+                .insert(func_name.to_string(), handler);
+        }
+        self
+    }
+
     fn scalar_function_to_sql_overrides(
         &self,
         unparser: &Unparser,
         func_name: &str,
         args: &[Expr],
     ) -> Result<Option<ast::Expr>> {
+        if let Some(handler) = self.custom_scalar_fn_overrides.get(func_name) {
+            return handler(unparser, args);
+        }
+
         if func_name == "character_length" {
             return character_length_to_sql(
                 unparser,

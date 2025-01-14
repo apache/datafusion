@@ -636,7 +636,7 @@ mod tests {
 
             let err_msg = format!(
                 "test_idx: {:?}, actual: {:?}, expected: {:?}, projection_mapping: {:?}",
-                idx, orderings.orderings, expected, projection_mapping
+                idx, orderings, expected, projection_mapping
             );
 
             assert_eq!(orderings.len(), expected.len(), "{}", err_msg);
@@ -825,7 +825,7 @@ mod tests {
 
             let err_msg = format!(
                 "test idx: {:?}, actual: {:?}, expected: {:?}, projection_mapping: {:?}",
-                idx, orderings.orderings, expected, projection_mapping
+                idx, orderings, expected, projection_mapping
             );
 
             assert_eq!(orderings.len(), expected.len(), "{}", err_msg);
@@ -971,7 +971,7 @@ mod tests {
 
             let err_msg = format!(
                 "actual: {:?}, expected: {:?}, projection_mapping: {:?}",
-                orderings.orderings, expected, projection_mapping
+                orderings, expected, projection_mapping
             );
 
             assert_eq!(orderings.len(), expected.len(), "{}", err_msg);

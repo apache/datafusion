@@ -436,6 +436,12 @@ config_namespace! {
         /// valid values are "1.0" and "2.0"
         pub writer_version: String, default = "1.0".to_string()
 
+        /// (writing) Skip encoding the embedded arrow metadata in the KV_meta
+        ///
+        /// This is analogous to the `ArrowWriterOptions::with_skip_arrow_metadata`.
+        /// Refer to <https://docs.rs/parquet/53.3.0/parquet/arrow/arrow_writer/struct.ArrowWriterOptions.html#method.with_skip_arrow_metadata>
+        pub skip_arrow_metadata: bool, default = false
+
         /// (writing) Sets default parquet compression codec.
         /// Valid values are: uncompressed, snappy, gzip(level),
         /// lzo, brotli(level), lz4, zstd(level), and lz4_raw.
@@ -889,8 +895,48 @@ impl ConfigOptions {
     }
 }
 
-/// [`ConfigExtension`] provides a mechanism to store third-party configuration within DataFusion
+/// [`ConfigExtension`] provides a mechanism to store third-party configuration
+/// within DataFusion [`ConfigOptions`]
 ///
+/// This mechanism can be used to pass configuration to user defined functions
+/// or optimizer passes
+///
+/// # Example
+/// ```
+/// use datafusion_common::{
+///     config::ConfigExtension, extensions_options,
+///     config::ConfigOptions,
+/// };
+///  // Define a new configuration struct using the `extensions_options` macro
+///  extensions_options! {
+///     /// My own config options.
+///     pub struct MyConfig {
+///         /// Should "foo" be replaced by "bar"?
+///         pub foo_to_bar: bool, default = true
+///
+///         /// How many "baz" should be created?
+///         pub baz_count: usize, default = 1337
+///     }
+///  }
+///
+///  impl ConfigExtension for MyConfig {
+///     const PREFIX: &'static str = "my_config";
+///  }
+///
+///  // set up config struct and register extension
+///  let mut config = ConfigOptions::default();
+///  config.extensions.insert(MyConfig::default());
+///
+///  // overwrite config default
+///  config.set("my_config.baz_count", "42").unwrap();
+///
+///  // check config state
+///  let my_config = config.extensions.get::<MyConfig>().unwrap();
+///  assert!(my_config.foo_to_bar,);
+///  assert_eq!(my_config.baz_count, 42,);
+/// ```
+///
+/// # Note:
 /// Unfortunately associated constants are not currently object-safe, and so this
 /// extends the object-safe [`ExtensionOptions`]
 pub trait ConfigExtension: ExtensionOptions {
@@ -900,16 +946,18 @@ pub trait ConfigExtension: ExtensionOptions {
     const PREFIX: &'static str;
 }
 
-/// An object-safe API for storing arbitrary configuration
+/// An object-safe API for storing arbitrary configuration.
+///
+/// See [`ConfigExtension`] for user defined configuration
 pub trait ExtensionOptions: Send + Sync + fmt::Debug + 'static {
     /// Return `self` as [`Any`]
     ///
-    /// This is needed until trait upcasting is stabilised
+    /// This is needed until trait upcasting is stabilized
     fn as_any(&self) -> &dyn Any;
 
     /// Return `self` as [`Any`]
     ///
-    /// This is needed until trait upcasting is stabilised
+    /// This is needed until trait upcasting is stabilized
     fn as_any_mut(&mut self) -> &mut dyn Any;
 
     /// Return a deep clone of this [`ExtensionOptions`]
@@ -1108,6 +1156,8 @@ pub trait Visit {
 /// - `<default_value>`: Default value matching the field type like `42`.
 ///
 /// # Example
+/// See also a full example on the [`ConfigExtension`] documentation
+///
 /// ```
 /// use datafusion_common::extensions_options;
 ///
@@ -1495,6 +1545,20 @@ impl TableParquetOptions {
     /// Return new default TableParquetOptions
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Set whether the encoding of the arrow metadata should occur
+    /// during the writing of parquet.
+    ///
+    /// Default is to encode the arrow schema in the file kv_metadata.
+    pub fn with_skip_arrow_metadata(self, skip: bool) -> Self {
+        Self {
+            global: ParquetOptions {
+                skip_arrow_metadata: skip,
+                ..self.global
+            },
+            ..self
+        }
     }
 }
 
