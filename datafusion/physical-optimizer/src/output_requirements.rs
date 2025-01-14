@@ -223,6 +223,11 @@ impl PhysicalOptimizerRule for OutputRequirements {
     fn schema_check(&self) -> bool {
         true
     }
+
+    /// [`OutputRequirements`] is expected to produce invalid plans.
+    fn executable_check(&self, _previous_plan_is_valid: bool) -> bool {
+        false
+    }
 }
 
 /// This functions adds ancillary `OutputRequirementExec` to the physical plan, so that
