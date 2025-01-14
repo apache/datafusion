@@ -2661,10 +2661,28 @@ async fn test_alias() -> Result<()> {
      \n  Projection: test.a, test.b, Int32(1) AS one [a:Utf8, b:Int32, one:Int32]\
      \n    TableScan: test [a:Utf8, b:Int32]";
     let plan = df
+        .clone()
         .into_unoptimized_plan()
         .display_indent_schema()
         .to_string();
+
+    // Select over the aliased DataFrame
     assert_eq!(plan, expected);
+    let df = df.select(vec![
+        col("table_alias.a"),
+        col("b") + col("table_alias.one"),
+    ])?;
+    let expected = [
+        "+-----------+---------------------------------+",
+        "| a         | table_alias.b + table_alias.one |",
+        "+-----------+---------------------------------+",
+        "| abcDEF    | 2                               |",
+        "| abc123    | 11                              |",
+        "| CBAdef    | 11                              |",
+        "| 123AbcDef | 101                             |",
+        "+-----------+---------------------------------+",
+    ];
+    assert_batches_eq!(expected, &df.collect().await?);
 
     // Use alias to perform a self-join
     let left = create_test_table("t1").await?;
