@@ -99,7 +99,9 @@ pub trait FileSink: DataSink {
         context: &Arc<TaskContext>,
     ) -> Result<u64> {
         let config = self.config();
-        let object_store = config.get_object_store(context)?;
+        let object_store = context
+            .runtime_env()
+            .object_store(&config.object_store_url)?;
         let (demux_task, file_stream_rx) = start_demuxer_task(config, data, context);
         self.spawn_writer_tasks_and_join(
             context,
@@ -138,14 +140,6 @@ impl FileSinkConfig {
     /// Get output schema
     pub fn output_schema(&self) -> &SchemaRef {
         &self.output_schema
-    }
-
-    /// Get object store from task context
-    pub fn get_object_store(
-        &self,
-        context: &Arc<TaskContext>,
-    ) -> Result<Arc<dyn ObjectStore>> {
-        context.runtime_env().object_store(&self.object_store_url)
     }
 }
 

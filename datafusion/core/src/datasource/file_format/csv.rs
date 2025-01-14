@@ -53,7 +53,6 @@ use datafusion_common_runtime::SpawnedTask;
 use datafusion_execution::TaskContext;
 use datafusion_expr::dml::InsertOp;
 use datafusion_physical_expr::PhysicalExpr;
-use datafusion_physical_plan::metrics::MetricsSet;
 
 use async_trait::async_trait;
 use bytes::{Buf, Bytes};
@@ -723,10 +722,6 @@ impl FileSink for CsvSink {
 impl DataSink for CsvSink {
     fn as_any(&self) -> &dyn Any {
         self
-    }
-
-    fn metrics(&self) -> Option<MetricsSet> {
-        None
     }
 
     fn schema(&self) -> &SchemaRef {

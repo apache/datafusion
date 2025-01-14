@@ -1055,17 +1055,17 @@ impl TableProvider for ListingTable {
 
         let order_requirements = if !self.options().file_sort_order.is_empty() {
             // Multiple sort orders in outer vec are equivalent, so we pass only the first one
-            let ordering = self
-                .try_create_output_ordering()?
-                .first()
-                .ok_or(DataFusionError::Internal(
-                    "Expected ListingTable to have a sort order, but none found!".into(),
-                ))?
-                .clone();
+            let orderings = self.try_create_output_ordering()?;
+            let Some(ordering) = orderings.first() else {
+                return internal_err!(
+                    "Expected ListingTable to have a sort order, but none found!"
+                );
+            };
             // Converts Vec<Vec<SortExpr>> into type required by execution plan to specify its required input ordering
             Some(LexRequirement::new(
                 ordering
                     .into_iter()
+                    .cloned()
                     .map(PhysicalSortRequirement::from)
                     .collect::<Vec<_>>(),
             ))

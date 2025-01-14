@@ -52,7 +52,6 @@ use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_expr::dml::InsertOp;
 use datafusion_physical_expr::PhysicalExpr;
 use datafusion_physical_plan::insert::{DataSink, DataSinkExec};
-use datafusion_physical_plan::metrics::MetricsSet;
 
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -305,10 +304,6 @@ impl DisplayAs for ArrowFileSink {
 impl DataSink for ArrowFileSink {
     fn as_any(&self) -> &dyn Any {
         self
-    }
-
-    fn metrics(&self) -> Option<MetricsSet> {
-        None
     }
 
     fn schema(&self) -> &SchemaRef {

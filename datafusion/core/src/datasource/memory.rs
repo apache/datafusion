@@ -42,7 +42,6 @@ use datafusion_common::{not_impl_err, plan_err, Constraints, DFSchema, SchemaExt
 use datafusion_execution::TaskContext;
 use datafusion_expr::dml::InsertOp;
 use datafusion_expr::SortExpr;
-use datafusion_physical_plan::metrics::MetricsSet;
 
 use async_trait::async_trait;
 use futures::StreamExt;
@@ -293,11 +292,8 @@ impl TableProvider for MemTable {
         if insert_op != InsertOp::Append {
             return not_impl_err!("{insert_op} not implemented for MemoryTable yet");
         }
-        let sink = Arc::new(MemSink::try_new(
-            self.batches.clone(),
-            Arc::clone(&self.schema),
-        )?);
-        Ok(Arc::new(DataSinkExec::new(input, sink, None)))
+        let sink = MemSink::try_new(self.batches.clone(), Arc::clone(&self.schema))?;
+        Ok(Arc::new(DataSinkExec::new(input, Arc::new(sink), None)))
     }
 
     fn get_column_default(&self, column: &str) -> Option<&Expr> {
@@ -347,10 +343,6 @@ impl MemSink {
 impl DataSink for MemSink {
     fn as_any(&self) -> &dyn Any {
         self
-    }
-
-    fn metrics(&self) -> Option<MetricsSet> {
-        None
     }
 
     fn schema(&self) -> &SchemaRef {

@@ -36,7 +36,6 @@ use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_expr::dml::InsertOp;
 use datafusion_expr::{CreateExternalTable, Expr, SortExpr, TableType};
 use datafusion_physical_plan::insert::{DataSink, DataSinkExec};
-use datafusion_physical_plan::metrics::MetricsSet;
 use datafusion_physical_plan::stream::RecordBatchReceiverStreamBuilder;
 use datafusion_physical_plan::streaming::{PartitionStream, StreamingTableExec};
 use datafusion_physical_plan::{DisplayAs, DisplayFormatType, ExecutionPlan};
@@ -410,10 +409,6 @@ impl DisplayAs for StreamWrite {
 impl DataSink for StreamWrite {
     fn as_any(&self) -> &dyn Any {
         self
-    }
-
-    fn metrics(&self) -> Option<MetricsSet> {
-        None
     }
 
     fn schema(&self) -> &SchemaRef {

@@ -64,7 +64,6 @@ use datafusion_expr::Expr;
 use datafusion_functions_aggregate::min_max::{MaxAccumulator, MinAccumulator};
 use datafusion_physical_expr::PhysicalExpr;
 use datafusion_physical_expr_common::sort_expr::LexRequirement;
-use datafusion_physical_plan::metrics::MetricsSet;
 
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -876,10 +875,6 @@ impl FileSink for ParquetSink {
 impl DataSink for ParquetSink {
     fn as_any(&self) -> &dyn Any {
         self
-    }
-
-    fn metrics(&self) -> Option<MetricsSet> {
-        None
     }
 
     fn schema(&self) -> &SchemaRef {

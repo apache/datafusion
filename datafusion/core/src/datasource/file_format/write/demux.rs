@@ -93,48 +93,41 @@ pub(crate) fn start_demuxer_task(
     data: SendableRecordBatchStream,
     context: &Arc<TaskContext>,
 ) -> (SpawnedTask<Result<()>>, DemuxedStreamReceiver) {
-    let base_output_path = &config.table_paths[0];
-    let part_cols = if !config.table_partition_cols.is_empty() {
-        Some(config.table_partition_cols.clone())
-    } else {
-        None
-    };
-
     let (tx, rx) = mpsc::unbounded_channel();
     let context = Arc::clone(context);
-    let single_file_output =
-        !base_output_path.is_collection() && base_output_path.file_extension().is_some();
-    let base_output_path_clone = base_output_path.clone();
-    let keep_partition_by_columns = config.keep_partition_by_columns;
     let file_extension = config.file_extension.clone();
-    let task = match part_cols {
-        Some(parts) => {
-            // There could be an arbitrarily large number of parallel hive style partitions being written to, so we cannot
-            // bound this channel without risking a deadlock.
-            SpawnedTask::spawn(async move {
-                hive_style_partitions_demuxer(
-                    tx,
-                    data,
-                    context,
-                    parts,
-                    base_output_path_clone,
-                    file_extension,
-                    keep_partition_by_columns,
-                )
-                .await
-            })
-        }
-        None => SpawnedTask::spawn(async move {
+    let base_output_path = config.table_paths[0].clone();
+    let task = if config.table_partition_cols.is_empty() {
+        let single_file_output = !base_output_path.is_collection()
+            && base_output_path.file_extension().is_some();
+        SpawnedTask::spawn(async move {
             row_count_demuxer(
                 tx,
                 data,
                 context,
-                base_output_path_clone,
+                base_output_path,
                 file_extension,
                 single_file_output,
             )
             .await
-        }),
+        })
+    } else {
+        // There could be an arbitrarily large number of parallel hive style partitions being written to, so we cannot
+        // bound this channel without risking a deadlock.
+        let partition_by = config.table_partition_cols.clone();
+        let keep_partition_by_columns = config.keep_partition_by_columns;
+        SpawnedTask::spawn(async move {
+            hive_style_partitions_demuxer(
+                tx,
+                data,
+                context,
+                partition_by,
+                base_output_path,
+                file_extension,
+                keep_partition_by_columns,
+            )
+            .await
+        })
     };
 
     (task, rx)

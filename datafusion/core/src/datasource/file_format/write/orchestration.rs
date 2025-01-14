@@ -260,14 +260,15 @@ pub(crate) async fn spawn_writer_tasks_and_join(
         let writer =
             create_writer(compression, &location, Arc::clone(&object_store)).await?;
 
-        tx_file_bundle
+        if tx_file_bundle
             .send((rb_stream, Arc::clone(&serializer), writer))
             .await
-            .map_err(|_| {
-                internal_datafusion_err!(
-                    "Writer receive file bundle channel closed unexpectedly!"
-                )
-            })?;
+            .is_err()
+        {
+            internal_datafusion_err!(
+                "Writer receive file bundle channel closed unexpectedly!"
+            );
+        }
     }
 
     // Signal to the write coordinator that no more files are coming
@@ -280,9 +281,8 @@ pub(crate) async fn spawn_writer_tasks_and_join(
     r1.map_err(DataFusionError::ExecutionJoin)??;
     r2.map_err(DataFusionError::ExecutionJoin)??;
 
-    let total_count = rx_row_cnt.await.map_err(|_| {
+    // Return total row count:
+    rx_row_cnt.await.map_err(|_| {
         internal_datafusion_err!("Did not receive row count from write coordinator")
-    })?;
-
-    Ok(total_count)
+    })
 }

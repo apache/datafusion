@@ -57,7 +57,9 @@ pub trait DataSink: DisplayAs + Debug + Send + Sync {
     /// [DataSink].
     ///
     /// See [ExecutionPlan::metrics()] for more details
-    fn metrics(&self) -> Option<MetricsSet>;
+    fn metrics(&self) -> Option<MetricsSet> {
+        None
+    }
 
     /// Returns the sink schema
     fn schema(&self) -> &SchemaRef;
