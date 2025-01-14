@@ -492,7 +492,8 @@ Dml: op=[Insert Into] table=[test_decimal]
 )]
 #[case::non_existing_column(
     "INSERT INTO test_decimal (nonexistent, price) VALUES (1, 2), (4, 5)",
-    "Schema error: No field named nonexistent. Valid fields are id, price."
+    "Schema error: No field named nonexistent. \
+    Valid fields are id, price."
 )]
 #[case::target_column_count_mismatch(
     "INSERT INTO person (id, first_name, last_name) VALUES ($1, $2)",
@@ -1358,9 +1359,11 @@ fn select_simple_aggregate_with_groupby_column_unselected() {
 fn select_simple_aggregate_with_groupby_and_column_in_group_by_does_not_exist() {
     let sql = "SELECT sum(age) FROM person GROUP BY doesnotexist";
     let err = logical_plan(sql).expect_err("query should have failed");
-    assert_eq!("Schema error: No field named doesnotexist. Valid fields are \"sum(person.age)\", \
+    let expected = "Schema error: No field named doesnotexist. \
+        Valid fields are \"sum(person.age)\", \
         person.id, person.first_name, person.last_name, person.age, person.state, \
-        person.salary, person.birth_date, person.\"😀\".", err.strip_backtrace());
+        person.salary, person.birth_date, person.\"😀\".";
+    assert_eq!(err.strip_backtrace(), expected);
 }
 
 #[test]
@@ -3636,10 +3639,8 @@ fn test_prepare_statement_to_plan_panic_prepare_wrong_syntax() {
 #[test]
 fn test_prepare_statement_to_plan_panic_no_relation_and_constant_param() {
     let sql = "PREPARE my_plan(INT) AS SELECT id + $1";
-    assert_eq!(
-        logical_plan(sql).unwrap_err().strip_backtrace(),
-        "Schema error: No field named id."
-    )
+    let expected = "Schema error: No field named id.";
+    assert_eq!(logical_plan(sql).unwrap_err().strip_backtrace(), expected);
 }
 
 #[test]
@@ -4334,18 +4335,14 @@ fn test_multi_grouping_sets() {
 fn test_field_not_found_window_function() {
     let order_by_sql = "SELECT count() OVER (order by a);";
     let order_by_err = logical_plan(order_by_sql).expect_err("query should have failed");
-    assert_eq!(
-        "Schema error: No field named a.",
-        order_by_err.strip_backtrace()
-    );
+    let expected = "Schema error: No field named a.";
+    assert_eq!(order_by_err.strip_backtrace(), expected);
 
     let partition_by_sql = "SELECT count() OVER (PARTITION BY a);";
     let partition_by_err =
         logical_plan(partition_by_sql).expect_err("query should have failed");
-    assert_eq!(
-        "Schema error: No field named a.",
-        partition_by_err.strip_backtrace()
-    );
+    let expected = "Schema error: No field named a.";
+    assert_eq!(partition_by_err.strip_backtrace(), expected);
 
     let qualified_sql =
         "SELECT order_id, MAX(qty) OVER (PARTITION BY orders.order_id) from orders";
