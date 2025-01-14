@@ -51,7 +51,7 @@ use std::{
     vec,
 };
 
-use super::listing::ListingTableUrl;
+use super::{file_format::write::demux::start_demuxer_task, listing::ListingTableUrl};
 use crate::datasource::file_format::write::demux::DemuxedStreamReceiver;
 use crate::error::Result;
 use crate::physical_plan::{DisplayAs, DisplayFormatType};
@@ -65,7 +65,7 @@ use crate::{
 
 use arrow::datatypes::{DataType, SchemaRef};
 use datafusion_common_runtime::SpawnedTask;
-use datafusion_execution::TaskContext;
+use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::PhysicalSortExpr;
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
@@ -79,8 +79,11 @@ use object_store::{path::Path, GetOptions, GetRange, ObjectMeta, ObjectStore};
 /// General behaviors for files that do `DataSink` operations
 #[async_trait]
 pub trait FileSink: DataSink {
-    /// Spawn writer tasks and uses tokio::join to collect results
-    /// returns total write count
+    /// Retrieves the file sink configuration.
+    fn config(&self) -> &FileSinkConfig;
+
+    /// Spawns writer tasks and uses `tokio::join` to collect results.
+    /// Returns the total write count.
     async fn spawn_writer_tasks_and_join(
         &self,
         context: &Arc<TaskContext>,
@@ -88,6 +91,24 @@ pub trait FileSink: DataSink {
         file_stream_rx: DemuxedStreamReceiver,
         object_store: Arc<dyn ObjectStore>,
     ) -> Result<u64>;
+
+    /// File sink implementation of the [`DataSink::write_all`] method.
+    async fn write_all(
+        &self,
+        data: SendableRecordBatchStream,
+        context: &Arc<TaskContext>,
+    ) -> Result<u64> {
+        let config = self.config();
+        let object_store = config.get_object_store(context)?;
+        let (demux_task, file_stream_rx) = start_demuxer_task(config, data, context);
+        self.spawn_writer_tasks_and_join(
+            context,
+            demux_task,
+            file_stream_rx,
+            object_store,
+        )
+        .await
+    }
 }
 
 /// The base configurations to provide when creating a physical plan for

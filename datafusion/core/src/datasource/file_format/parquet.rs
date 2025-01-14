@@ -23,7 +23,7 @@ use std::fmt::Debug;
 use std::ops::Range;
 use std::sync::Arc;
 
-use super::write::demux::{start_demuxer_task, DemuxedStreamReceiver};
+use super::write::demux::DemuxedStreamReceiver;
 use super::write::{create_writer, SharedBuffer};
 use super::{
     coerce_file_schema_to_string_type, coerce_file_schema_to_view_type,
@@ -704,11 +704,6 @@ impl ParquetSink {
         }
     }
 
-    /// Retrieve the inner [`FileSinkConfig`].
-    pub fn config(&self) -> &FileSinkConfig {
-        &self.config
-    }
-
     /// Retrieve the file metadata for the written files, keyed to the path
     /// which may be partitioned (in the case of hive style partitioning).
     pub fn written(&self) -> HashMap<Path, FileMetaData> {
@@ -766,6 +761,10 @@ impl ParquetSink {
 
 #[async_trait]
 impl FileSink for ParquetSink {
+    fn config(&self) -> &FileSinkConfig {
+        &self.config
+    }
+
     async fn spawn_writer_tasks_and_join(
         &self,
         context: &Arc<TaskContext>,
@@ -892,16 +891,7 @@ impl DataSink for ParquetSink {
         data: SendableRecordBatchStream,
         context: &Arc<TaskContext>,
     ) -> Result<u64> {
-        let object_store = self.config.get_object_store(context)?;
-        let (demux_task, file_stream_rx) =
-            start_demuxer_task(&self.config, data, context);
-        self.spawn_writer_tasks_and_join(
-            context,
-            demux_task,
-            file_stream_rx,
-            object_store,
-        )
-        .await
+        FileSink::write_all(self, data, context).await
     }
 }
 
@@ -2573,16 +2563,15 @@ mod tests {
         let batch = RecordBatch::try_from_iter(vec![("a", col_a), ("b", col_b)]).unwrap();
 
         // write stream
-        parquet_sink
-            .write_all(
-                Box::pin(RecordBatchStreamAdapter::new(
-                    schema,
-                    futures::stream::iter(vec![Ok(batch)]),
-                )),
-                &build_ctx(object_store_url.as_ref()),
-            )
-            .await
-            .unwrap();
+        FileSink::write_all(
+            parquet_sink.as_ref(),
+            Box::pin(RecordBatchStreamAdapter::new(
+                schema,
+                futures::stream::iter(vec![Ok(batch)]),
+            )),
+            &build_ctx(object_store_url.as_ref()),
+        )
+        .await?;
 
         Ok(parquet_sink)
     }
@@ -2652,16 +2641,15 @@ mod tests {
         let batch = RecordBatch::try_from_iter(vec![("a", col_a), ("b", col_b)]).unwrap();
 
         // write stream
-        parquet_sink
-            .write_all(
-                Box::pin(RecordBatchStreamAdapter::new(
-                    schema,
-                    futures::stream::iter(vec![Ok(batch)]),
-                )),
-                &build_ctx(object_store_url.as_ref()),
-            )
-            .await
-            .unwrap();
+        FileSink::write_all(
+            parquet_sink.as_ref(),
+            Box::pin(RecordBatchStreamAdapter::new(
+                schema,
+                futures::stream::iter(vec![Ok(batch)]),
+            )),
+            &build_ctx(object_store_url.as_ref()),
+        )
+        .await?;
 
         // assert written
         let mut written = parquet_sink.written();
@@ -2751,7 +2739,8 @@ mod tests {
                 "no bytes are reserved yet"
             );
 
-            let mut write_task = parquet_sink.write_all(
+            let mut write_task = FileSink::write_all(
+                parquet_sink.as_ref(),
                 Box::pin(RecordBatchStreamAdapter::new(
                     schema,
                     bounded_stream(batch, 1000),

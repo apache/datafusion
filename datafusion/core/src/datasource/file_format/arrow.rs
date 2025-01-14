@@ -26,7 +26,7 @@ use std::fmt::{self, Debug};
 use std::sync::Arc;
 
 use super::file_compression_type::FileCompressionType;
-use super::write::demux::{start_demuxer_task, DemuxedStreamReceiver};
+use super::write::demux::DemuxedStreamReceiver;
 use super::write::{create_writer, SharedBuffer};
 use super::FileFormatFactory;
 use crate::datasource::file_format::write::get_writer_schema;
@@ -194,7 +194,7 @@ impl FileFormat for ArrowFormat {
     }
 }
 
-/// Implements [`DataSink`] for writing to arrow_ipc files
+/// Implements [`FileSink`] for writing to arrow_ipc files
 struct ArrowFileSink {
     config: FileSinkConfig,
 }
@@ -207,6 +207,10 @@ impl ArrowFileSink {
 
 #[async_trait]
 impl FileSink for ArrowFileSink {
+    fn config(&self) -> &FileSinkConfig {
+        &self.config
+    }
+
     async fn spawn_writer_tasks_and_join(
         &self,
         _context: &Arc<TaskContext>,
@@ -316,16 +320,7 @@ impl DataSink for ArrowFileSink {
         data: SendableRecordBatchStream,
         context: &Arc<TaskContext>,
     ) -> Result<u64> {
-        let object_store = self.config.get_object_store(context)?;
-        let (demux_task, file_stream_rx) =
-            start_demuxer_task(&self.config, data, context);
-        self.spawn_writer_tasks_and_join(
-            context,
-            demux_task,
-            file_stream_rx,
-            object_store,
-        )
-        .await
+        FileSink::write_all(self, data, context).await
     }
 }
 
