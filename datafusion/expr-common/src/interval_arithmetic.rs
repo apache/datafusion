@@ -76,6 +76,14 @@ macro_rules! get_extreme_value {
             DataType::Interval(IntervalUnit::MonthDayNano) => {
                 ScalarValue::IntervalMonthDayNano(Some(IntervalMonthDayNano::$extreme))
             }
+            DataType::Decimal128(precision, scale) => {
+                ScalarValue::Decimal128(Some(i128::$extreme), *precision, *scale)
+            }
+            DataType::Decimal256(precision, scale) => ScalarValue::Decimal256(
+                Some(arrow::datatypes::i256::$extreme),
+                *precision,
+                *scale,
+            ),
             _ => unreachable!(),
         }
     };
@@ -1008,17 +1016,20 @@ fn handle_overflow<const UPPER: bool>(
     lhs: &ScalarValue,
     rhs: &ScalarValue,
 ) -> ScalarValue {
-    let zero = ScalarValue::new_zero(dt).unwrap();
+    let lhs_zero = ScalarValue::new_zero(&lhs.data_type()).unwrap();
+    let rhs_zero = ScalarValue::new_zero(&rhs.data_type()).unwrap();
     let positive_sign = match op {
         Operator::Multiply | Operator::Divide => {
-            lhs.lt(&zero) && rhs.lt(&zero) || lhs.gt(&zero) && rhs.gt(&zero)
+            lhs.lt(&lhs_zero) && rhs.lt(&rhs_zero)
+                || lhs.gt(&lhs_zero) && rhs.gt(&rhs_zero)
         }
-        Operator::Plus => lhs.ge(&zero),
+        Operator::Plus => lhs.ge(&lhs_zero),
         Operator::Minus => lhs.ge(rhs),
         _ => {
             unreachable!()
         }
     };
+
     match (UPPER, positive_sign) {
         (true, true) | (false, false) => ScalarValue::try_from(dt).unwrap(),
         (true, false) => {
