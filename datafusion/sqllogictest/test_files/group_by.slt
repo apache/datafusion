@@ -3429,11 +3429,10 @@ physical_plan
 05)--------CoalesceBatchesExec: target_batch_size=4
 06)----------RepartitionExec: partitioning=Hash([sn@0, amount@1], 8), input_partitions=8
 07)------------AggregateExec: mode=Partial, gby=[sn@1 as sn, amount@2 as amount], aggr=[sum(l.amount)]
-08)--------------ProjectionExec: expr=[amount@1 as amount, sn@2 as sn, amount@3 as amount]
-09)----------------NestedLoopJoinExec: join_type=Inner, filter=sn@0 >= sn@1
-10)------------------MemoryExec: partitions=1, partition_sizes=[1]
-11)------------------RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
-12)--------------------MemoryExec: partitions=1, partition_sizes=[1]
+08)--------------NestedLoopJoinExec: join_type=Inner, filter=sn@0 >= sn@1, projection=[amount@1, sn@2, amount@3]
+09)----------------MemoryExec: partitions=1, partition_sizes=[1]
+10)----------------RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
+11)------------------MemoryExec: partitions=1, partition_sizes=[1]
 
 query IRR
 SELECT r.sn, SUM(l.amount), r.amount

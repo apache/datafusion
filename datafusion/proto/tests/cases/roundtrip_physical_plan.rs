@@ -270,6 +270,7 @@ fn roundtrip_nested_loop_join() -> Result<()> {
             Arc::new(EmptyExec::new(schema_right.clone())),
             None,
             join_type,
+            None,
         )?))?;
     }
     Ok(())

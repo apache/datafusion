@@ -1063,6 +1063,7 @@ mod tests_statistical {
                 Arc::clone(&small),
                 nl_join_filter(),
                 &join_type,
+                None,
             )
             .unwrap(),
         );
@@ -1131,6 +1132,7 @@ mod tests_statistical {
                 Arc::clone(&small),
                 nl_join_filter(),
                 &join_type,
+                None,
             )
             .unwrap(),
         );

@@ -1001,6 +1001,7 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                     right,
                     filter,
                     &join_type.into(),
+                    None,
                 )?))
             }
             PhysicalPlanType::Analyze(analyze) => {
