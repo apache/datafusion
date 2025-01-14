@@ -761,7 +761,8 @@ fn try_pushdown_through_hash_join(
         new_on,
         new_filter,
         hash_join.join_type(),
-        hash_join.projection.clone(),
+        // Early return if projection is not None
+        None,
         *hash_join.partition_mode(),
         hash_join.null_equals_null,
     )?)))
