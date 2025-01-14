@@ -15,7 +15,7 @@
 # specific language governing permissions and limitations
 # under the License.
 
-name: Rust Hash Collisions
+name: Datafusion extended tests
 
 concurrency:
   group: ${{ github.repository }}-${{ github.head_ref || github.sha }}-${{ github.workflow }}
@@ -24,8 +24,8 @@ concurrency:
 # https://docs.github.com/en/actions/writing-workflows/choosing-when-your-workflow-runs/events-that-trigger-workflows#running-your-pull_request-workflow-when-a-pull-request-merges
 #
 # this job is intended to only run only on the main branch as it is time consuming
-# and very rarely fails. However, it is important coverage to ensure correctness
-# in the (very rare) event of a hash failure.
+# and should not fail often. However, it is important coverage to ensure correctness
+# in the (very rare) event of a hash failure or sqlite query failure.
 on:
   # Run on all commits to main
   push:
@@ -52,3 +52,19 @@ jobs:
         run: |
           cd datafusion
           cargo test  --profile ci --exclude datafusion-examples --exclude datafusion-benchmarks --exclude datafusion-sqllogictest --workspace --lib --tests --features=force_hash_collisions,avro
+  sqllogictest-sqlite:
+    name: "Run sqllogictests with the sqlite test suite"
+    runs-on: ubuntu-latest
+    container:
+      image: amd64/rust
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+          fetch-depth: 1
+      - name: Setup Rust toolchain
+        uses: ./.github/actions/setup-builder
+        with:
+          rust-version: stable
+      - name: Run sqllogictest
+        run: cargo test --profile release-nonlto --test sqllogictests -- --include-sqlite
