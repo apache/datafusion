@@ -76,6 +76,7 @@ pub async fn get_statistics_with_limit(
             col_stats_set[index].null_count = file_column.null_count;
             col_stats_set[index].max_value = file_column.max_value;
             col_stats_set[index].min_value = file_column.min_value;
+            col_stats_set[index].sum_value = file_column.sum_value;
         }
 
         // If the number of rows exceeds the limit, we can stop processing
@@ -113,12 +114,14 @@ pub async fn get_statistics_with_limit(
                         null_count: file_nc,
                         max_value: file_max,
                         min_value: file_min,
+                        sum_value: file_sum,
                         distinct_count: _,
                     } = file_col_stats;
 
                     col_stats.null_count = add_row_stats(*file_nc, col_stats.null_count);
                     set_max_if_greater(file_max, &mut col_stats.max_value);
-                    set_min_if_lesser(file_min, &mut col_stats.min_value)
+                    set_min_if_lesser(file_min, &mut col_stats.min_value);
+                    col_stats.sum_value = file_sum.add(&col_stats.sum_value);
                 }
 
                 // If the number of rows exceeds the limit, we can stop processing
@@ -204,6 +207,7 @@ pub(crate) fn get_col_stats(
                 null_count: null_counts[i],
                 max_value: max_value.map(Precision::Exact).unwrap_or(Precision::Absent),
                 min_value: min_value.map(Precision::Exact).unwrap_or(Precision::Absent),
+                sum_value: Precision::Absent,
                 distinct_count: Precision::Absent,
             }
         })
