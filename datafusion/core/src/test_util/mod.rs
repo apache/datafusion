@@ -36,12 +36,8 @@ use crate::dataframe::DataFrame;
 use crate::datasource::stream::{FileStreamProvider, StreamConfig, StreamTable};
 use crate::datasource::{empty::EmptyTable, provider_as_source};
 use crate::error::Result;
-use crate::execution::context::TaskContext;
 use crate::logical_expr::{LogicalPlanBuilder, UNNAMED_TABLE};
-use crate::physical_plan::{
-    DisplayAs, DisplayFormatType, ExecutionPlan, Partitioning, PlanProperties,
-    RecordBatchStream, SendableRecordBatchStream,
-};
+use crate::physical_plan::{ExecutionPlan, RecordBatchStream, SendableRecordBatchStream};
 use crate::prelude::{CsvReadOptions, SessionContext};
 
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
@@ -52,8 +48,7 @@ use datafusion_expr::utils::COUNT_STAR_EXPANSION;
 use datafusion_expr::{CreateExternalTable, Expr, SortExpr, TableType};
 use datafusion_functions_aggregate::count::count_udaf;
 use datafusion_physical_expr::aggregate::{AggregateExprBuilder, AggregateFunctionExpr};
-use datafusion_physical_expr::{expressions, EquivalenceProperties, PhysicalExpr};
-use datafusion_physical_plan::execution_plan::{Boundedness, EmissionType};
+use datafusion_physical_expr::{expressions, PhysicalExpr};
 
 use async_trait::async_trait;
 use futures::Stream;
@@ -227,137 +222,6 @@ impl TableProvider for TestTableProvider {
         _limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         unimplemented!("TestTableProvider is a stub for testing.")
-    }
-}
-
-/// A mock execution plan that simply returns the provided data source characteristic
-#[derive(Debug, Clone)]
-pub struct UnboundedExec {
-    batch_produce: Option<usize>,
-    batch: RecordBatch,
-    cache: PlanProperties,
-}
-impl UnboundedExec {
-    /// Create new exec that clones the given record batch to its output.
-    ///
-    /// Set `batch_produce` to `Some(n)` to emit exactly `n` batches per partition.
-    pub fn new(
-        batch_produce: Option<usize>,
-        batch: RecordBatch,
-        partitions: usize,
-    ) -> Self {
-        let cache = Self::compute_properties(batch.schema(), batch_produce, partitions);
-        Self {
-            batch_produce,
-            batch,
-            cache,
-        }
-    }
-
-    /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
-    fn compute_properties(
-        schema: SchemaRef,
-        batch_produce: Option<usize>,
-        n_partitions: usize,
-    ) -> PlanProperties {
-        let boundedness = if batch_produce.is_none() {
-            Boundedness::Unbounded {
-                requires_infinite_memory: false,
-            }
-        } else {
-            Boundedness::Bounded
-        };
-        PlanProperties::new(
-            EquivalenceProperties::new(schema),
-            Partitioning::UnknownPartitioning(n_partitions),
-            EmissionType::Incremental,
-            boundedness,
-        )
-    }
-}
-
-impl DisplayAs for UnboundedExec {
-    fn fmt_as(
-        &self,
-        t: DisplayFormatType,
-        f: &mut std::fmt::Formatter,
-    ) -> std::fmt::Result {
-        match t {
-            DisplayFormatType::Default | DisplayFormatType::Verbose => {
-                write!(
-                    f,
-                    "UnboundedExec: unbounded={}",
-                    self.batch_produce.is_none(),
-                )
-            }
-        }
-    }
-}
-
-impl ExecutionPlan for UnboundedExec {
-    fn name(&self) -> &'static str {
-        Self::static_name()
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
-    fn properties(&self) -> &PlanProperties {
-        &self.cache
-    }
-
-    fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
-        vec![]
-    }
-
-    fn with_new_children(
-        self: Arc<Self>,
-        _: Vec<Arc<dyn ExecutionPlan>>,
-    ) -> Result<Arc<dyn ExecutionPlan>> {
-        Ok(self)
-    }
-
-    fn execute(
-        &self,
-        _partition: usize,
-        _context: Arc<TaskContext>,
-    ) -> Result<SendableRecordBatchStream> {
-        Ok(Box::pin(UnboundedStream {
-            batch_produce: self.batch_produce,
-            count: 0,
-            batch: self.batch.clone(),
-        }))
-    }
-}
-
-#[derive(Debug)]
-struct UnboundedStream {
-    batch_produce: Option<usize>,
-    count: usize,
-    batch: RecordBatch,
-}
-
-impl Stream for UnboundedStream {
-    type Item = Result<RecordBatch>;
-
-    fn poll_next(
-        mut self: Pin<&mut Self>,
-        _cx: &mut Context<'_>,
-    ) -> Poll<Option<Self::Item>> {
-        if let Some(val) = self.batch_produce {
-            if val <= self.count {
-                return Poll::Ready(None);
-            }
-        }
-        self.count += 1;
-        Poll::Ready(Some(Ok(self.batch.clone())))
-    }
-}
-
-impl RecordBatchStream for UnboundedStream {
-    fn schema(&self) -> SchemaRef {
-        self.batch.schema()
     }
 }
 
