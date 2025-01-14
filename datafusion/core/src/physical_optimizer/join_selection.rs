@@ -200,6 +200,11 @@ impl PhysicalOptimizerRule for JoinSelection {
     fn schema_check(&self) -> bool {
         true
     }
+
+    /// [`JoinSelection`] is expected to produce invalid plans.
+    fn executable_check(&self, _previous_plan_is_valid: bool) -> bool {
+        false
+    }
 }
 
 /// Tries to create a [`HashJoinExec`] in [`PartitionMode::CollectLeft`] when possible.

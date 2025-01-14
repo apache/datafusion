@@ -36,6 +36,7 @@ use crate::logical_expr::{
     UserDefinedLogicalNode,
 };
 use crate::physical_expr::{create_physical_expr, create_physical_exprs};
+use crate::physical_optimizer::sanity_checker::check_plan_sanity;
 use crate::physical_plan::aggregates::{AggregateExec, AggregateMode, PhysicalGroupBy};
 use crate::physical_plan::analyze::AnalyzeExec;
 use crate::physical_plan::empty::EmptyExec;
@@ -64,7 +65,9 @@ use arrow::compute::SortOptions;
 use arrow::datatypes::{Schema, SchemaRef};
 use arrow_array::builder::StringBuilder;
 use arrow_array::RecordBatch;
+use datafusion_common::config::OptimizerOptions;
 use datafusion_common::display::ToStringifiedPlan;
+use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion, TreeNodeVisitor};
 use datafusion_common::{
     exec_err, internal_datafusion_err, internal_err, not_impl_err, plan_err, DFSchema,
     ScalarValue,
@@ -1872,7 +1875,8 @@ impl DefaultPhysicalPlanner {
             displayable(plan.as_ref()).indent(true)
         );
 
-        let mut new_plan = plan;
+        let mut new_plan = Arc::clone(&plan);
+        let mut input_plan_is_valid = true;
         for optimizer in optimizers {
             let before_schema = new_plan.schema();
             new_plan = optimizer
@@ -1880,18 +1884,15 @@ impl DefaultPhysicalPlanner {
                 .map_err(|e| {
                     DataFusionError::Context(optimizer.name().to_string(), Box::new(e))
                 })?;
-            if optimizer.schema_check() && new_plan.schema() != before_schema {
-                let e = DataFusionError::Internal(format!(
-                    "PhysicalOptimizer rule '{}' failed, due to generate a different schema, original schema: {:?}, new schema: {:?}",
-                    optimizer.name(),
-                    before_schema,
-                    new_plan.schema()
-                ));
-                return Err(DataFusionError::Context(
-                    optimizer.name().to_string(),
-                    Box::new(e),
-                ));
-            }
+
+            // confirm optimizer change did not violate invariants
+            let mut validator = InvariantChecker::new(
+                &session_state.config_options().optimizer,
+                optimizer,
+            );
+            validator.check(&new_plan, before_schema, input_plan_is_valid)?;
+            input_plan_is_valid = optimizer.executable_check(input_plan_is_valid);
+
             trace!(
                 "Optimized physical plan by {}:\n{}\n",
                 optimizer.name(),
@@ -2006,6 +2007,71 @@ fn tuple_err<T, R>(value: (Result<T>, Result<R>)) -> Result<(T, R)> {
     }
 }
 
+/// Confirms that a given [`PhysicalOptimizerRule`] run conforms
+/// to the invariants per rule, and per [`ExecutionPlan`] invariants.
+struct InvariantChecker<'a> {
+    options: &'a OptimizerOptions,
+    rule: &'a Arc<dyn PhysicalOptimizerRule + Send + Sync>,
+}
+
+impl<'a> InvariantChecker<'a> {
+    /// Create an [`InvariantChecker`].
+    pub fn new(
+        options: &'a OptimizerOptions,
+        rule: &'a Arc<dyn PhysicalOptimizerRule + Send + Sync>,
+    ) -> Self {
+        Self { options, rule }
+    }
+
+    /// Checks that the plan change is permitted, returning an Error if not.
+    ///
+    /// In debug mode, this recursively walks the entire physical plan and
+    /// performs additional checks using Datafusions's [`check_plan_sanity`]
+    /// and any user defined [`ExecutionPlan::check_node_invariants`] extensions.
+    pub fn check(
+        &mut self,
+        plan: &Arc<dyn ExecutionPlan>,
+        previous_schema: Arc<Schema>,
+        input_plan_is_valid: bool,
+    ) -> Result<()> {
+        // if the rule is not permitted to change the schema, confirm that it did not change.
+        if self.rule.schema_check() && plan.schema() != previous_schema {
+            internal_err!("PhysicalOptimizer rule '{}' failed, due to generate a different schema, original schema: {:?}, new schema: {:?}",
+                self.rule.name(),
+                previous_schema,
+                plan.schema()
+            )?
+        }
+
+        // if the rule requires that the new plan is executable, confirm that it is.
+        #[cfg(debug_assertions)]
+        if self.rule.executable_check(input_plan_is_valid) {
+            plan.visit(self)?;
+        }
+
+        Ok(())
+    }
+}
+
+impl<'n> TreeNodeVisitor<'n> for InvariantChecker<'_> {
+    type Node = Arc<dyn ExecutionPlan>;
+
+    fn f_down(&mut self, node: &'n Self::Node) -> Result<TreeNodeRecursion> {
+        // Datafusion's defined physical plan invariants
+        check_plan_sanity(Arc::clone(node), self.options).map_err(|e| {
+            e.context(format!(
+                "SanityCheckPlan failed for PhysicalOptimizer rule '{}'",
+                self.rule.name()
+            ))
+        })?;
+
+        // user defined invariants per ExecutionPlan extension
+        node.check_node_invariants().map_err(|e| e.context(format!("Invariant for ExecutionPlan node '{}' failed for PhysicalOptimizer rule '{}'", node.name(), self.rule.name())))?;
+
+        Ok(TreeNodeRecursion::Continue)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::any::Any;
@@ -2016,6 +2082,8 @@ mod tests {
     use super::*;
     use crate::datasource::file_format::options::CsvReadOptions;
     use crate::datasource::MemTable;
+    use crate::physical_optimizer::enforce_sorting::EnforceSorting;
+    use crate::physical_optimizer::sanity_checker::SanityCheckPlan;
     use crate::physical_plan::{
         expressions, DisplayAs, DisplayFormatType, PlanProperties,
         SendableRecordBatchStream,
@@ -2026,12 +2094,17 @@ mod tests {
     use crate::execution::session_state::SessionStateBuilder;
     use arrow::array::{ArrayRef, DictionaryArray, Int32Array};
     use arrow::datatypes::{DataType, Field, Int32Type};
+    use datafusion_common::config::ConfigOptions;
     use datafusion_common::{assert_contains, DFSchemaRef, TableReference};
     use datafusion_execution::runtime_env::RuntimeEnv;
     use datafusion_execution::TaskContext;
     use datafusion_expr::{col, lit, LogicalPlanBuilder, UserDefinedLogicalNodeCore};
     use datafusion_functions_aggregate::expr_fn::sum;
-    use datafusion_physical_expr::EquivalenceProperties;
+    use datafusion_physical_expr::expressions::{
+        col as physical_expr_col, lit as physical_expr_lit,
+    };
+    use datafusion_physical_expr::{Distribution, EquivalenceProperties, LexRequirement};
+    use datafusion_physical_optimizer::output_requirements::OutputRequirementExec;
     use datafusion_physical_plan::execution_plan::{Boundedness, EmissionType};
 
     fn make_session_state() -> SessionState {
@@ -2779,5 +2852,324 @@ digraph {
         );
 
         assert_contains!(generated_graph, expected_tooltip);
+    }
+
+    fn default_plan_props() -> PlanProperties {
+        PlanProperties::new(
+            EquivalenceProperties::new(Arc::new(Schema::empty())),
+            Partitioning::RoundRobinBatch(1),
+            EmissionType::Final,
+            Boundedness::Bounded,
+        )
+    }
+
+    /// Extension Node which passes invariant checks
+    #[derive(Debug)]
+    struct OkExtensionNode {
+        children: Vec<Arc<dyn ExecutionPlan>>,
+        properties: PlanProperties,
+    }
+    impl OkExtensionNode {
+        fn new(children: Vec<Arc<dyn ExecutionPlan>>) -> Self {
+            Self {
+                children,
+                properties: default_plan_props(),
+            }
+        }
+    }
+    impl ExecutionPlan for OkExtensionNode {
+        fn name(&self) -> &str {
+            "always ok"
+        }
+        fn with_new_children(
+            self: Arc<Self>,
+            children: Vec<Arc<dyn ExecutionPlan>>,
+        ) -> Result<Arc<dyn ExecutionPlan>> {
+            Ok(Arc::new(Self::new(children)))
+        }
+        fn schema(&self) -> SchemaRef {
+            Arc::new(Schema::empty())
+        }
+        fn as_any(&self) -> &dyn Any {
+            self
+        }
+        fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
+            self.children.iter().collect::<Vec<_>>()
+        }
+        fn properties(&self) -> &PlanProperties {
+            &self.properties
+        }
+        fn execute(
+            &self,
+            _partition: usize,
+            _context: Arc<TaskContext>,
+        ) -> Result<SendableRecordBatchStream> {
+            unimplemented!()
+        }
+    }
+    impl DisplayAs for OkExtensionNode {
+        fn fmt_as(&self, _t: DisplayFormatType, f: &mut fmt::Formatter) -> fmt::Result {
+            write!(f, "{}", self.name())
+        }
+    }
+
+    /// Extension Node which fails invariant checks
+    #[derive(Debug)]
+    struct InvariantFailsExtensionNode {
+        properties: PlanProperties,
+    }
+    impl InvariantFailsExtensionNode {
+        fn new() -> Self {
+            Self {
+                properties: default_plan_props(),
+            }
+        }
+    }
+    impl ExecutionPlan for InvariantFailsExtensionNode {
+        fn name(&self) -> &str {
+            "InvariantFailsExtensionNode"
+        }
+        fn check_node_invariants(&self) -> Result<()> {
+            plan_err!("extension node failed it's user-defined invariant check")
+        }
+        fn schema(&self) -> SchemaRef {
+            Arc::new(Schema::empty())
+        }
+        fn with_new_children(
+            self: Arc<Self>,
+            _children: Vec<Arc<dyn ExecutionPlan>>,
+        ) -> Result<Arc<dyn ExecutionPlan>> {
+            unimplemented!()
+        }
+        fn as_any(&self) -> &dyn Any {
+            self
+        }
+        fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
+            vec![]
+        }
+        fn properties(&self) -> &PlanProperties {
+            &self.properties
+        }
+        fn execute(
+            &self,
+            _partition: usize,
+            _context: Arc<TaskContext>,
+        ) -> Result<SendableRecordBatchStream> {
+            unimplemented!()
+        }
+    }
+    impl DisplayAs for InvariantFailsExtensionNode {
+        fn fmt_as(&self, _t: DisplayFormatType, f: &mut fmt::Formatter) -> fmt::Result {
+            write!(f, "{}", self.name())
+        }
+    }
+
+    /// Extension Optimizer rule that requires the schema check
+    #[derive(Debug)]
+    struct OptimizerRuleWithSchemaCheck;
+    impl PhysicalOptimizerRule for OptimizerRuleWithSchemaCheck {
+        fn optimize(
+            &self,
+            plan: Arc<dyn ExecutionPlan>,
+            _config: &ConfigOptions,
+        ) -> Result<Arc<dyn ExecutionPlan>> {
+            Ok(plan)
+        }
+        fn name(&self) -> &str {
+            "OptimizerRuleWithSchemaCheck"
+        }
+        fn schema_check(&self) -> bool {
+            true
+        }
+        fn executable_check(&self, _previous_plan_is_valid: bool) -> bool {
+            true
+        }
+    }
+
+    #[test]
+    fn test_invariant_checker_with_execution_plan_extensions() -> Result<()> {
+        let rule: Arc<dyn PhysicalOptimizerRule + Send + Sync> =
+            Arc::new(OptimizerRuleWithSchemaCheck);
+
+        // ok plan
+        let ok_node: Arc<dyn ExecutionPlan> = Arc::new(OkExtensionNode::new(vec![]));
+        let child = Arc::clone(&ok_node);
+        let ok_plan = Arc::clone(&ok_node).with_new_children(vec![
+            Arc::clone(&child).with_new_children(vec![Arc::clone(&child)])?,
+            Arc::clone(&child),
+        ])?;
+
+        // Test: check should pass with same schema
+        let equal_schema = ok_plan.schema();
+        InvariantChecker::new(&Default::default(), &rule).check(
+            &ok_plan,
+            equal_schema,
+            true,
+        )?;
+
+        // Test: should fail with schema changed
+        let different_schema =
+            Arc::new(Schema::new(vec![Field::new("a", DataType::Boolean, false)]));
+        let expected_err = InvariantChecker::new(&Default::default(), &rule)
+            .check(&ok_plan, different_schema, true)
+            .unwrap_err();
+        assert!(expected_err.to_string().contains("PhysicalOptimizer rule 'OptimizerRuleWithSchemaCheck' failed, due to generate a different schema"));
+
+        // Test: should fail when extension node fails it's own invariant check
+        let failing_node: Arc<dyn ExecutionPlan> =
+            Arc::new(InvariantFailsExtensionNode::new());
+        let expected_err = InvariantChecker::new(&Default::default(), &rule)
+            .check(&failing_node, ok_plan.schema(), true)
+            .unwrap_err();
+        assert!(expected_err
+            .to_string()
+            .contains("extension node failed it's user-defined invariant check"));
+
+        // Test: should fail when descendent extension node fails
+        let failing_node: Arc<dyn ExecutionPlan> =
+            Arc::new(InvariantFailsExtensionNode::new());
+        let invalid_plan = ok_node.with_new_children(vec![
+            Arc::clone(&child).with_new_children(vec![Arc::clone(&failing_node)])?,
+            Arc::clone(&child),
+        ])?;
+        let expected_err = InvariantChecker::new(&Default::default(), &rule)
+            .check(&invalid_plan, ok_plan.schema(), true)
+            .unwrap_err();
+        assert!(expected_err
+            .to_string()
+            .contains("extension node failed it's user-defined invariant check"));
+
+        // Test: confirm error message contains both the user-defined extension name and the optimizer rule name
+        assert!(expected_err
+            .to_string()
+            .contains("Invariant for ExecutionPlan node 'InvariantFailsExtensionNode' failed for PhysicalOptimizer rule 'OptimizerRuleWithSchemaCheck'"));
+
+        Ok(())
+    }
+
+    fn wrap_in_nonexecutable(
+        plan: Arc<dyn ExecutionPlan>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        let schema =
+            Arc::new(Schema::new(vec![Field::new("a", DataType::UInt32, false)]));
+        let col_a = physical_expr_col("a", &schema)?;
+
+        // mutate the tree is such a way that is NOT yet executable
+        Ok(Arc::new(OutputRequirementExec::new(
+            plan,
+            Some(LexRequirement::from_lex_ordering(
+                vec![PhysicalSortExpr::new_default(col_a)].into(),
+            )),
+            Distribution::UnspecifiedDistribution,
+        )))
+    }
+
+    /// Extension where the physical plan mutation creates a non-executable plan.
+    ///
+    /// This is a "failing" extension, since it doesn't implement [`PhysicalOptimizerRule::executable_check`]
+    /// as false.
+    #[derive(Debug)]
+    struct ExtensionRuleDoesBadMutation;
+    impl PhysicalOptimizerRule for ExtensionRuleDoesBadMutation {
+        fn optimize(
+            &self,
+            plan: Arc<dyn ExecutionPlan>,
+            _config: &ConfigOptions,
+        ) -> Result<Arc<dyn ExecutionPlan>> {
+            wrap_in_nonexecutable(plan)
+        }
+        fn name(&self) -> &str {
+            "ExtensionRuleDoesBadMutation"
+        }
+        fn schema_check(&self) -> bool {
+            true
+        }
+    }
+
+    /// Extension where the physical plan mutation creates a non-executable plan.
+    ///
+    /// This extension properly implements [`PhysicalOptimizerRule::executable_check`] => false.
+    /// And then the follow up optimizer runs may be performed.
+    #[derive(Debug)]
+    struct ExtensionRuleNeedsMoreRuns;
+    impl PhysicalOptimizerRule for ExtensionRuleNeedsMoreRuns {
+        fn optimize(
+            &self,
+            plan: Arc<dyn ExecutionPlan>,
+            _config: &ConfigOptions,
+        ) -> Result<Arc<dyn ExecutionPlan>> {
+            wrap_in_nonexecutable(plan)
+        }
+        fn name(&self) -> &str {
+            "ExtensionRuleNeedsMoreRuns"
+        }
+        fn schema_check(&self) -> bool {
+            true
+        }
+        fn executable_check(&self, _previous_plan_is_valid: bool) -> bool {
+            false
+        }
+    }
+
+    #[test]
+    fn test_invariant_checker_with_optimization_extension() -> Result<()> {
+        let planner = DefaultPhysicalPlanner {
+            extension_planners: vec![],
+        };
+
+        // ok plan
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::UInt32, true)]));
+        let ok_plan = Arc::new(MemoryExec::try_new_as_values(
+            schema,
+            vec![vec![physical_expr_lit(ScalarValue::UInt32(None))]],
+        )?);
+
+        // Test: check should pass with valid OpimizerRule mutation
+        let session = SessionStateBuilder::new()
+            .with_physical_optimizer_rules(vec![Arc::new(OptimizerRuleWithSchemaCheck)])
+            .build();
+        assert_eq!(
+            session.physical_optimizers().len(),
+            1,
+            "should have the 1 valid optimizer rule"
+        );
+        planner.optimize_physical_plan(ok_plan.clone(), &session, |_, _| {})?;
+
+        // Test: should fail with invalid OpimizerRule mutation that leaves plan not executable
+        let session = SessionStateBuilder::new()
+            .with_physical_optimizer_rules(vec![
+                Arc::new(SanityCheckPlan::new()), // should produce executable plan
+                Arc::new(ExtensionRuleDoesBadMutation), // will fail executable check
+            ])
+            .build();
+        assert_eq!(
+            session.physical_optimizers().len(),
+            2,
+            "should have 2 optimizer rules"
+        );
+        let expected_err = planner
+            .optimize_physical_plan(ok_plan.clone(), &session, |_, _| {})
+            .unwrap_err();
+        assert!(expected_err
+            .to_string()
+            .contains("SanityCheckPlan failed for PhysicalOptimizer rule 'ExtensionRuleDoesBadMutation'"));
+
+        // Test: should pass once the proper additional optimizer rules are applied after the Extension rule
+        let session = SessionStateBuilder::new()
+            .with_physical_optimizer_rules(vec![
+                Arc::new(SanityCheckPlan::new()), // should produce executable plan
+                Arc::new(ExtensionRuleNeedsMoreRuns), // Extension states that the returned plan is not executable
+                Arc::new(EnforceSorting::new()),      // should mutate plan
+                Arc::new(SanityCheckPlan::new()),     // should produce executable plan
+            ])
+            .build();
+        assert_eq!(
+            session.physical_optimizers().len(),
+            4,
+            "should have 4 optimizer rules"
+        );
+        planner.optimize_physical_plan(ok_plan, &session, |_, _| {})?;
+
+        Ok(())
     }
 }

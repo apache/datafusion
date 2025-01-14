@@ -70,6 +70,11 @@ impl PhysicalOptimizerRule for SanityCheckPlan {
     fn schema_check(&self) -> bool {
         true
     }
+
+    /// [`SanityCheckPlan`] confirms the plan is executable.
+    fn executable_check(&self, _previous_plan_is_valid: bool) -> bool {
+        true
+    }
 }
 
 /// This function propagates finiteness information and rejects any plan with
