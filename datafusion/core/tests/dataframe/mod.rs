@@ -2665,9 +2665,9 @@ async fn test_alias() -> Result<()> {
         .into_unoptimized_plan()
         .display_indent_schema()
         .to_string();
+    assert_eq!(plan, expected);
 
     // Select over the aliased DataFrame
-    assert_eq!(plan, expected);
     let df = df.select(vec![
         col("table_alias.a"),
         col("b") + col("table_alias.one"),
