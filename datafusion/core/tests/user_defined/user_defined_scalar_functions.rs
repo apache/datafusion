@@ -34,12 +34,13 @@ use datafusion_common::cast::{as_float64_array, as_int32_array};
 use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::{
     assert_batches_eq, assert_batches_sorted_eq, assert_contains, exec_err, internal_err,
-    not_impl_err, plan_err, DFSchema, DataFusionError, HashMap, Result,
-    ScalarValue,
+    not_impl_err, plan_err, DFSchema, DataFusionError, HashMap, Result, ScalarValue,
 };
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyInfo};
 use datafusion_expr::{
-    Accumulator, ColumnarValue, CreateFunction, CreateFunctionBody, LogicalPlanBuilder, OperateFunctionArg, ReturnInfo, ReturnTypeArgs, ScalarUDF, ScalarUDFImpl, Signature, Volatility
+    Accumulator, ColumnarValue, CreateFunction, CreateFunctionBody, LogicalPlanBuilder,
+    OperateFunctionArg, ReturnInfo, ReturnTypeArgs, ScalarUDF, ScalarUDFImpl, Signature,
+    Volatility,
 };
 use datafusion_functions_nested::range::range_udf;
 use parking_lot::Mutex;
@@ -817,10 +818,7 @@ impl ScalarUDFImpl for TakeUDF {
     ///
     /// 1. If the third argument is '0', return the type of the first argument
     /// 2. If the third argument is '1', return the type of the second argument
-    fn return_type_from_args(
-        &self,
-        args: ReturnTypeArgs,
-    ) -> Result<ReturnInfo> {
+    fn return_type_from_args(&self, args: ReturnTypeArgs) -> Result<ReturnInfo> {
         if args.arg_types.len() != 3 {
             return plan_err!("Expected 3 arguments, got {}.", args.arg_types.len());
         }
@@ -840,7 +838,9 @@ impl ScalarUDFImpl for TakeUDF {
             );
         };
 
-        Ok(ReturnInfo::new_nullable(args.arg_types[take_idx].to_owned()))
+        Ok(ReturnInfo::new_nullable(
+            args.arg_types[take_idx].to_owned(),
+        ))
     }
 
     // The actual implementation
