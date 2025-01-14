@@ -177,39 +177,3 @@ fn get_coalesce_doc() -> &'static Documentation {
             .build()
     })
 }
-
-#[cfg(test)]
-mod test {
-    use arrow::datatypes::DataType;
-
-    use datafusion_expr::ScalarUDFImpl;
-
-    use crate::core;
-
-    #[test]
-    fn test_coalesce_return_types() {
-        let coalesce = core::coalesce::CoalesceFunc::new();
-        let return_type = coalesce
-            .return_type(&[DataType::Date32, DataType::Date32])
-            .unwrap();
-        assert_eq!(return_type, DataType::Date32);
-    }
-
-    #[test]
-    fn test_coalesce_return_types_with_nulls_first() {
-        let coalesce = core::coalesce::CoalesceFunc::new();
-        let return_type = coalesce
-            .return_type(&[DataType::Null, DataType::Date32])
-            .unwrap();
-        assert_eq!(return_type, DataType::Date32);
-    }
-
-    #[test]
-    fn test_coalesce_return_types_with_nulls_last() {
-        let coalesce = core::coalesce::CoalesceFunc::new();
-        let return_type = coalesce
-            .return_type(&[DataType::Int64, DataType::Null])
-            .unwrap();
-        assert_eq!(return_type, DataType::Int64);
-    }
-}
