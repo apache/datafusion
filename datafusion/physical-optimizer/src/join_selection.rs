@@ -875,32 +875,27 @@ mod tests_statistical {
         for join_type in join_types {
             let (big, small) = create_big_and_small();
 
-            let join = Arc::new(
-                HashJoinExec::try_new(
-                    Arc::clone(&big),
-                    Arc::clone(&small),
-                    vec![(
-                        Arc::new(
-                            Column::new_with_schema("big_col", &big.schema()).unwrap(),
-                        ),
-                        Arc::new(
-                            Column::new_with_schema("small_col", &small.schema())
-                                .unwrap(),
-                        ),
-                    )],
-                    None,
-                    &join_type,
-                    None,
-                    PartitionMode::Partitioned,
-                    false,
-                )
-                .unwrap(),
-            );
+            let join = HashJoinExec::try_new(
+                Arc::clone(&big),
+                Arc::clone(&small),
+                vec![(
+                    Arc::new(Column::new_with_schema("big_col", &big.schema()).unwrap()),
+                    Arc::new(
+                        Column::new_with_schema("small_col", &small.schema()).unwrap(),
+                    ),
+                )],
+                None,
+                &join_type,
+                None,
+                PartitionMode::Partitioned,
+                false,
+            )
+            .unwrap();
 
             let original_schema = join.schema();
 
             let optimized_join = JoinSelection::new()
-                .optimize(Arc::clone(&join), &ConfigOptions::new())
+                .optimize(Arc::new(join), &ConfigOptions::new())
                 .unwrap();
 
             let swapped_join = optimized_join
