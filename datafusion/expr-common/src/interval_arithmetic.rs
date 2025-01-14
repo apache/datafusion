@@ -1843,7 +1843,12 @@ impl NullableInterval {
 
 #[cfg(test)]
 mod tests {
-    use crate::interval_arithmetic::{next_value, prev_value, satisfy_greater, Interval};
+    use crate::{
+        interval_arithmetic::{
+            handle_overflow, next_value, prev_value, satisfy_greater, Interval,
+        },
+        operator::Operator,
+    };
 
     use arrow::datatypes::DataType;
     use datafusion_common::{Result, ScalarValue};
@@ -3115,6 +3120,70 @@ mod tests {
                 assert_eq!(result, case.2);
             }
         }
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_overflow_handling() -> Result<()> {
+        // Test integer overflow handling:
+        let dt = DataType::Int32;
+        let op = Operator::Plus;
+        let lhs = ScalarValue::Int32(Some(i32::MAX));
+        let rhs = ScalarValue::Int32(Some(1));
+        let result = handle_overflow::<true>(&dt, op, &lhs, &rhs);
+        assert_eq!(result, ScalarValue::Int32(None));
+        let result = handle_overflow::<false>(&dt, op, &lhs, &rhs);
+        assert_eq!(result, ScalarValue::Int32(Some(i32::MAX)));
+
+        // Test float overflow handling:
+        let dt = DataType::Float32;
+        let op = Operator::Multiply;
+        let lhs = ScalarValue::Float32(Some(f32::MAX));
+        let rhs = ScalarValue::Float32(Some(2.0));
+        let result = handle_overflow::<true>(&dt, op, &lhs, &rhs);
+        assert_eq!(result, ScalarValue::Float32(None));
+        let result = handle_overflow::<false>(&dt, op, &lhs, &rhs);
+        assert_eq!(result, ScalarValue::Float32(Some(f32::MAX)));
+
+        // Test float underflow handling:
+        let lhs = ScalarValue::Float32(Some(f32::MIN));
+        let rhs = ScalarValue::Float32(Some(2.0));
+        let result = handle_overflow::<true>(&dt, op, &lhs, &rhs);
+        assert_eq!(result, ScalarValue::Float32(Some(f32::MIN)));
+        let result = handle_overflow::<false>(&dt, op, &lhs, &rhs);
+        assert_eq!(result, ScalarValue::Float32(None));
+
+        // Test integer underflow handling:
+        let dt = DataType::Int64;
+        let op = Operator::Minus;
+        let lhs = ScalarValue::Int64(Some(i64::MIN));
+        let rhs = ScalarValue::Int64(Some(1));
+        let result = handle_overflow::<true>(&dt, op, &lhs, &rhs);
+        assert_eq!(result, ScalarValue::Int64(Some(i64::MIN)));
+        let result = handle_overflow::<false>(&dt, op, &lhs, &rhs);
+        assert_eq!(result, ScalarValue::Int64(None));
+
+        // Test unsigned integer handling:
+        let dt = DataType::UInt32;
+        let op = Operator::Minus;
+        let lhs = ScalarValue::UInt32(Some(0));
+        let rhs = ScalarValue::UInt32(Some(1));
+        let result = handle_overflow::<true>(&dt, op, &lhs, &rhs);
+        assert_eq!(result, ScalarValue::UInt32(Some(0)));
+        let result = handle_overflow::<false>(&dt, op, &lhs, &rhs);
+        assert_eq!(result, ScalarValue::UInt32(None));
+
+        // Test decimal handling:
+        let dt = DataType::Decimal128(38, 35);
+        let op = Operator::Plus;
+        let lhs =
+            ScalarValue::Decimal128(Some(54321543215432154321543215432154321), 35, 35);
+        let rhs = ScalarValue::Decimal128(Some(10000), 20, 0);
+        let result = handle_overflow::<true>(&dt, op, &lhs, &rhs);
+        assert_eq!(result, ScalarValue::Decimal128(None, 38, 35));
+        let result = handle_overflow::<false>(&dt, op, &lhs, &rhs);
+        assert_eq!(result, ScalarValue::Decimal128(Some(i128::MAX), 38, 35));
 
         Ok(())
     }
