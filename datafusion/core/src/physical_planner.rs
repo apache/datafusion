@@ -21,7 +21,7 @@ use std::borrow::Cow;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use crate::datasource::file_format::file_type_to_format;
+use crate::datasource::file_format::{file_type_to_format, is_file_parquet_format};
 use crate::datasource::listing::ListingTableUrl;
 use crate::datasource::physical_plan::FileSinkConfig;
 use crate::datasource::source_as_provider;
@@ -64,6 +64,7 @@ use arrow::compute::SortOptions;
 use arrow::datatypes::{Schema, SchemaRef};
 use arrow_array::builder::StringBuilder;
 use arrow_array::RecordBatch;
+use async_trait::async_trait;
 use datafusion_common::display::ToStringifiedPlan;
 use datafusion_common::{
     exec_err, internal_datafusion_err, internal_err, not_impl_err, plan_err, DFSchema,
@@ -82,15 +83,14 @@ use datafusion_expr::{
 use datafusion_physical_expr::aggregate::{AggregateExprBuilder, AggregateFunctionExpr};
 use datafusion_physical_expr::expressions::Literal;
 use datafusion_physical_expr::LexOrdering;
+use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use datafusion_physical_plan::placeholder_row::PlaceholderRowExec;
 use datafusion_physical_plan::unnest::ListUnnest;
 use datafusion_sql::utils::window_expr_common_partition_keys;
-
-use async_trait::async_trait;
-use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use futures::{StreamExt, TryStreamExt};
 use itertools::{multiunzip, Itertools};
 use log::{debug, trace};
+use regex::Regex;
 use sqlparser::ast::NullTreatment;
 use tokio::sync::Mutex;
 
@@ -532,8 +532,28 @@ impl DefaultPhysicalPlanner {
                     keep_partition_by_columns,
                 };
 
+                let mut source_option_tuples = source_option_tuples.clone();
+
+                if is_file_parquet_format(file_type) {
+                    if let LogicalPlan::Sort(Sort { expr, .. }) = input.as_ref() {
+                        let sort_value = expr
+                            .iter()
+                            .map(|e| {
+                                let re = Regex::new(r"^[^.]+\.(.*)$").unwrap();
+                                re.replace(e.to_string().as_str(), "$1").to_string()
+                            })
+                            .collect::<Vec<String>>()
+                            .join(", ");
+
+                        source_option_tuples.insert(
+                            "format.metadata::DATAFUSION_ORDER_BY".to_string(),
+                            sort_value,
+                        );
+                    }
+                }
+
                 let sink_format = file_type_to_format(file_type)?
-                    .create(session_state, source_option_tuples)?;
+                    .create(session_state, &source_option_tuples)?;
 
                 sink_format
                     .create_writer_physical_plan(input_exec, session_state, config, None)

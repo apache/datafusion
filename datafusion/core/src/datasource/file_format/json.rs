@@ -242,6 +242,15 @@ impl FileFormat for JsonFormat {
         Ok(Statistics::new_unknown(&table_schema))
     }
 
+    async fn infer_file_ordering(
+        &self,
+        _store: &Arc<dyn ObjectStore>,
+        _object: &ObjectMeta,
+    ) -> Option<String> {
+        // Json infer files order are not supported
+        None
+    }
+
     async fn create_physical_plan(
         &self,
         _state: &SessionState,
