@@ -701,7 +701,7 @@ impl FileSink for CsvSink {
         object_store: Arc<dyn ObjectStore>,
     ) -> Result<u64> {
         let builder = self.writer_options.writer_options.clone();
-        let header = self.writer_options.writer_options.header();
+        let header = builder.header();
         let serializer = Arc::new(
             CsvSerializer::new()
                 .with_builder(builder)
