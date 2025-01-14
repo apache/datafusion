@@ -2194,7 +2194,8 @@ pub async fn from_window_function(
         )
     }?;
 
-    let order_by = from_substrait_sorts(consumer, &window.sorts, input_schema).await?;
+    let mut order_by =
+        from_substrait_sorts(consumer, &window.sorts, input_schema).await?;
 
     let bound_units = match BoundsType::try_from(window.bounds_type).map_err(|e| {
         plan_datafusion_err!("Invalid bound type {}: {e}", window.bounds_type)
@@ -2212,17 +2213,21 @@ pub async fn from_window_function(
             }
         }
     };
+    let window_frame = datafusion::logical_expr::WindowFrame::new_bounds(
+        bound_units,
+        from_substrait_bound(&window.lower_bound, true)?,
+        from_substrait_bound(&window.upper_bound, false)?,
+    );
+
+    window_frame.regularize_order_bys(&mut order_by)?;
+
     Ok(Expr::WindowFunction(expr::WindowFunction {
         fun,
         args: from_substrait_func_args(consumer, &window.arguments, input_schema).await?,
         partition_by: from_substrait_rex_vec(consumer, &window.partitions, input_schema)
             .await?,
         order_by,
-        window_frame: datafusion::logical_expr::WindowFrame::new_bounds(
-            bound_units,
-            from_substrait_bound(&window.lower_bound, true)?,
-            from_substrait_bound(&window.upper_bound, false)?,
-        ),
+        window_frame,
         null_treatment: None,
     }))
 }
