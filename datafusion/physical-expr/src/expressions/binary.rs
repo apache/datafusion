@@ -23,6 +23,7 @@ use std::{any::Any, sync::Arc};
 use crate::intervals::cp_solver::{propagate_arithmetic, propagate_comparison};
 use crate::PhysicalExpr;
 
+use crate::expressions::binary::kernels::concat_elements_utf8view;
 use arrow::array::*;
 use arrow::compute::kernels::boolean::{and_kleene, not, or_kleene};
 use arrow::compute::kernels::cmp::*;
@@ -38,13 +39,16 @@ use datafusion_expr::sort_properties::ExprProperties;
 use datafusion_expr::type_coercion::binary::get_result_type;
 use datafusion_expr::{ColumnarValue, Operator};
 use datafusion_physical_expr_common::datum::{apply, apply_cmp, apply_cmp_for_nested};
-
-use crate::expressions::binary::kernels::concat_elements_utf8view;
+use datafusion_physical_expr_common::stats::StatisticsV2;
+use datafusion_physical_expr_common::stats::StatisticsV2::{
+    Gaussian, Uniform,
+};
 use kernels::{
     bitwise_and_dyn, bitwise_and_dyn_scalar, bitwise_or_dyn, bitwise_or_dyn_scalar,
     bitwise_shift_left_dyn, bitwise_shift_left_dyn_scalar, bitwise_shift_right_dyn,
     bitwise_shift_right_dyn_scalar, bitwise_xor_dyn, bitwise_xor_dyn_scalar,
 };
+use crate::utils::stats::new_unknown_from_binary_expr;
 
 /// Binary expression
 #[derive(Debug, Clone, Eq)]
@@ -392,6 +396,70 @@ impl PhysicalExpr for BinaryExpr {
         apply_operator(&self.op, left_interval, right_interval)
     }
 
+    fn evaluate_statistics(
+        &self,
+        children_stat: &[&StatisticsV2],
+    ) -> Result<StatisticsV2> {
+        let (left_stat, right_stat) = (children_stat[0], children_stat[1]);
+
+        // We can evaluate statistics only with numeric data types on stats.
+        // TODO: move the data type check to the the higher levels.
+        if (left_stat.data_type().is_none() || right_stat.data_type().is_none())
+            || !left_stat.data_type().unwrap().is_numeric() 
+            || !right_stat.data_type().unwrap().is_numeric() {
+            return Ok(StatisticsV2::new_unknown());
+        }
+
+        match &self.op {
+            Operator::Plus | Operator::Minus | Operator::Multiply | Operator::Divide => {
+                match (left_stat, right_stat) {
+                    (Uniform { interval: left_interval}, Uniform { interval: right_interval, }) => {
+                        new_unknown_from_binary_expr(
+                            &self.op,
+                            left_stat,
+                            right_stat,
+                            apply_operator(&self.op, left_interval, right_interval)?,
+                        )
+                    },
+                    (Uniform {..}, _) | (_, Uniform {..}) => new_unknown_from_binary_expr(
+                        &self.op,
+                        left_stat,
+                        right_stat,
+                        Interval::make_unbounded(&left_stat.data_type().unwrap())?,
+                    ),
+                    (Gaussian { mean: left_mean, variance: left_v, ..},
+                        Gaussian { mean: right_mean, variance: right_v}, ) => {
+                        if self.op.eq(&Operator::Plus) {
+                            Ok(Gaussian {
+                                mean: left_mean.add(right_mean)?,
+                                variance: left_v.add(right_v)?,
+                            })
+                        } else if self.op.eq(&Operator::Minus) {
+                            Ok(Gaussian {
+                                mean: left_mean.sub(right_mean)?,
+                                variance: left_v.add(right_v)?,
+                            })
+                        } else {
+                            new_unknown_from_binary_expr(
+                                &self.op,
+                                left_stat,
+                                right_stat,
+                                Interval::make_unbounded(&left_stat.data_type().unwrap())?,
+                            )
+                        }
+                    }
+                    (_, _) => new_unknown_from_binary_expr(
+                        &self.op,
+                        left_stat,
+                        right_stat,
+                        Interval::make_unbounded(&left_stat.data_type().unwrap())?,
+                    )
+                }
+            }
+            _ => internal_err!("BinaryExpr requires exactly 2 children")
+        }
+    }
+
     fn propagate_constraints(
         &self,
         interval: &Interval,
@@ -404,7 +472,7 @@ impl PhysicalExpr for BinaryExpr {
         if self.op.eq(&Operator::And) {
             if interval.eq(&Interval::CERTAINLY_TRUE) {
                 // A certainly true logical conjunction can only derive from possibly
-                // true operands. Otherwise, we prove infeasibility.
+                // true operands. Otherwise, we prove infeasability.
                 Ok((!left_interval.eq(&Interval::CERTAINLY_FALSE)
                     && !right_interval.eq(&Interval::CERTAINLY_FALSE))
                 .then(|| vec![Interval::CERTAINLY_TRUE, Interval::CERTAINLY_TRUE]))
@@ -444,7 +512,7 @@ impl PhysicalExpr for BinaryExpr {
         } else if self.op.eq(&Operator::Or) {
             if interval.eq(&Interval::CERTAINLY_FALSE) {
                 // A certainly false logical conjunction can only derive from certainly
-                // false operands. Otherwise, we prove infeasibility.
+                // false operands. Otherwise, we prove infeasability.
                 Ok((!left_interval.eq(&Interval::CERTAINLY_TRUE)
                     && !right_interval.eq(&Interval::CERTAINLY_TRUE))
                 .then(|| vec![Interval::CERTAINLY_FALSE, Interval::CERTAINLY_FALSE]))
@@ -492,6 +560,14 @@ impl PhysicalExpr for BinaryExpr {
                     .map(|(left, right)| vec![left, right]),
             )
         }
+    }
+
+    fn propagate_statistics(
+        &self,
+        _parent_stat: &StatisticsV2,
+        _children_stat: &[&StatisticsV2],
+    ) -> Result<Option<Vec<StatisticsV2>>> {
+        todo!()
     }
 
     /// For each operator, [`BinaryExpr`] has distinct rules.

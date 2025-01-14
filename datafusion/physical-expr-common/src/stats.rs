@@ -1,7 +1,7 @@
+use crate::stats::StatisticsV2::{Exponential, Gaussian, Uniform, Unknown};
 use arrow::datatypes::DataType;
 use datafusion_common::ScalarValue;
 use datafusion_expr_common::interval_arithmetic::Interval;
-use crate::stats::StatisticsV2::{Uniform, Exponential, Gaussian, Unknown};
 
 /// New, enhanced `Statistics` definition, represents three core definitions
 #[derive(Clone, Debug)]
@@ -38,7 +38,7 @@ impl Default for StatisticsV2 {
 }
 
 impl StatisticsV2 {
-    pub fn new_unknown(&self) -> Self {
+    pub fn new_unknown() -> Self {
         Unknown {
             mean: None,
             median: None,
@@ -99,62 +99,63 @@ impl StatisticsV2 {
     /// - [`Exponential`] distribution mean is calculable by formula: 1/λ. λ must be non-negative.
     /// - [`Gaussian`] distribution has it explicitly
     /// - [`Unknown`] distribution _may_ have it explicitly
-    pub fn mean(&self) -> Option<ScalarValue> {
+    pub fn mean(&self) -> datafusion_common::Result<Option<ScalarValue>> {
         if !self.is_valid() {
-            return None;
+            return Ok(None);
         }
         match &self {
             Uniform { interval, .. } => {
-                let aggregate = interval.lower().add_checked(interval.upper());
-                if aggregate.is_err() {
-                    // TODO: logs
-                    return None;
+                let agg = interval
+                    .lower()
+                    .add_checked(interval.upper())?
+                    .cast_to(&DataType::Float64);
+                if let Ok(mean) = agg?.div(ScalarValue::Float64(Some(2.))) {
+                    return Ok(Some(mean));
                 }
-
-                let float_aggregate = aggregate.unwrap().cast_to(&DataType::Float64);
-                if float_aggregate.is_err() {
-                    // TODO: logs
-                    return None;
-                }
-
-                if let Ok(mean) =
-                    float_aggregate.unwrap().div(ScalarValue::Float64(Some(2.)))
-                {
-                    return Some(mean);
-                }
-                None
+                Ok(None)
             }
             Exponential { rate, .. } => {
-                let one = &ScalarValue::new_one(&rate.data_type()).unwrap();
+                let one = &ScalarValue::new_one(&rate.data_type())?;
                 if let Ok(mean) = one.div(rate) {
-                    return Some(mean);
+                    return Ok(Some(mean));
                 }
-                None
+                Ok(None)
             }
-            Gaussian { mean, .. } => Some(mean.clone()),
-            Unknown { mean, .. } => mean.clone(),
+            Gaussian { mean, .. } => Ok(Some(mean.clone())),
+            Unknown { mean, .. } => Ok(mean.clone()),
         }
     }
 
     /// Extract the median value of given statistic, available for given statistic kinds:
+    /// - [`Uniform`] distribution median is equals to mean: (a + b) / 2
     /// - [`Exponential`] distribution median is calculable by formula: ln2/λ. λ must be non-negative.
     /// - [`Gaussian`] distribution median is equals to mean, which is present explicitly.
     /// - [`Unknown`] distribution median _may_ be present explicitly.
-    pub fn median(&self) -> Option<ScalarValue> {
+    pub fn median(&self) -> datafusion_common::Result<Option<ScalarValue>> {
         if !self.is_valid() {
-            return None;
+            return Ok(None);
         }
         match &self {
+            Uniform { interval, .. } => {
+                let agg = interval
+                    .lower()
+                    .add_checked(interval.upper())?
+                    .cast_to(&DataType::Float64);
+                if let Ok(mean) = agg?.div(ScalarValue::Float64(Some(2.))) {
+                    return Ok(Some(mean));
+                }
+                Ok(None)
+            }
             Exponential { rate, .. } => {
+                // TODO: move, if possible, to a constant
                 let ln_two = ScalarValue::Float64(Some(2_f64.ln()));
                 if let Ok(median) = ln_two.div(rate) {
-                    return Some(median);
+                    return Ok(Some(median));
                 }
-                None
+                Ok(None)
             }
-            Gaussian { mean, .. } => Some(mean.clone()),
-            Unknown { median, .. } => median.clone(),
-            _ => None,
+            Gaussian { mean, .. } => Ok(Some(mean.clone())),
+            Unknown { median, .. } => Ok(median.clone())
         }
     }
 
@@ -163,37 +164,33 @@ impl StatisticsV2 {
     /// - [`Exponential`]'s variance is equal to mean value and calculable as 1/λ^2
     /// - [`Gaussian`]'s variance is available explicitly
     /// - [`Unknown`]'s distribution variance _may_ be present explicitly.
-    pub fn variance(&self) -> Option<ScalarValue> {
+    pub fn variance(&self) -> datafusion_common::Result<Option<ScalarValue>> {
         if !self.is_valid() {
-            return None;
+            return Ok(None);
         }
         match &self {
             Uniform { interval, .. } => {
-                let base = interval.upper().sub_checked(interval.lower());
-                if base.is_err() {
-                    return None;
-                }
-                let base_value = &base.unwrap();
-                let base_pow = base_value.mul_checked(base_value);
-                if let Ok(res) = base_pow.unwrap().div(ScalarValue::Float64(Some(12.))) {
-                    Some(res)
+                let base_value_ref = &interval.upper().sub_checked(interval.lower())?;
+                let base_pow = base_value_ref.mul_checked(base_value_ref);
+                if let Ok(res) = base_pow?.div(ScalarValue::Float64(Some(12.))) {
+                    Ok(Some(res))
                 } else {
-                    None
+                    Ok(None)
                 }
             }
             Exponential { rate, .. } => {
-                let one = &ScalarValue::new_one(&rate.data_type()).unwrap();
+                let one = &ScalarValue::new_one(&rate.data_type())?;
                 let rate_squared = rate.mul(rate);
                 if rate_squared.is_err() {
-                    return None;
+                    return Ok(None);
                 }
                 if let Ok(variance) = one.div(rate_squared.unwrap()) {
-                    return Some(variance);
+                    return Ok(Some(variance));
                 }
-                None
+                Ok(None)
             }
-            Gaussian { variance, .. } => Some(variance.clone()),
-            Unknown { variance, .. } => variance.clone()
+            Gaussian { variance, .. } => Ok(Some(variance.clone())),
+            Unknown { variance, .. } => Ok(variance.clone())
         }
     }
 
@@ -208,7 +205,7 @@ impl StatisticsV2 {
         }
     }
 
-    /// Returns data type of the statistics, if present
+    /// Returns a data type of the statistics, if present
     /// explicitly, or able to determine implicitly.
     pub fn data_type(&self) -> Option<DataType> {
         match &self {
@@ -228,7 +225,7 @@ mod tests {
     use datafusion_expr_common::interval_arithmetic::Interval;
 
     //region is_valid tests
-    // The test data in the following tests are placed as follows : (stat -> expected answer)
+    // The test data in the following tests are placed as follows: (stat -> expected answer)
     #[test]
     fn uniform_stats_is_valid_test() {
         let uniform_stats = vec![
@@ -529,20 +526,26 @@ mod tests {
         //endregion
 
         for case in stats {
-            assert_eq!(case.0.mean(), case.1);
+            assert_eq!(case.0.mean().unwrap(), case.1);
         }
     }
 
     #[test]
     fn median_extraction_test() {
-        // The test data is placed as follows : (stat -> expected answer)
+        // The test data is placed as follows: (stat -> expected answer)
         //region uniform
         let stats = vec![
             (
                 StatisticsV2::Uniform {
                     interval: Interval::make_zero(&DataType::Int64).unwrap(),
                 },
-                None,
+                Some(ScalarValue::Float64(Some(0.))),
+            ),
+            (
+                StatisticsV2::Uniform {
+                    interval: Interval::make(Some(25.), Some(75.)).unwrap(),
+                },
+                Some(ScalarValue::Float64(Some(50.))),
             ),
             (
                 StatisticsV2::Exponential {
@@ -599,7 +602,7 @@ mod tests {
         ];
 
         for case in stats {
-            assert_eq!(case.0.median(), case.1);
+            assert_eq!(case.0.median().unwrap(), case.1);
         }
     }
 
@@ -624,7 +627,7 @@ mod tests {
                 StatisticsV2::Gaussian {
                     mean: ScalarValue::Float64(Some(0.)),
                     variance: ScalarValue::Float64(Some(1.)),
-                }, 
+                },
                 Some(ScalarValue::Float64(Some(1.))),
             ),
             (
@@ -650,7 +653,7 @@ mod tests {
         //endregion
 
         for case in stats {
-            assert_eq!(case.0.variance(), case.1);
+            assert_eq!(case.0.variance().unwrap(), case.1);
         }
     }
 }

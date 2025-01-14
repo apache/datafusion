@@ -145,8 +145,8 @@ pub trait PhysicalExpr: Send + Sync + Display + Debug + DynEq + DynHash {
         Ok(Some(vec![]))
     }
 
-    /// Finds the final statistic of the expression by combining the inputs statistics
-    /// in post-order bottom-up manner (post-order DFS in statistics graph).
+    /// Finds the final statistic of the expression by combining the input statistics
+    /// in a post-order bottom-up manner (post-order DFS in statistics graph).
     /// 
     /// The part of [`StatisticsV2`] framework, work in progress.
     fn evaluate_statistics(&self, _stats: &[&StatisticsV2]) -> Result<StatisticsV2> {
@@ -176,7 +176,7 @@ pub trait PhysicalExpr: Send + Sync + Display + Debug + DynEq + DynHash {
 }
 
 /// [`PhysicalExpr`] can't be constrained by [`Eq`] directly because it must remain object
-/// safe. To ease implementation blanket implementation is provided for [`Eq`] types.
+/// safe. To ease implementation, blanket implementation is provided for [`Eq`] types.
 pub trait DynEq {
     fn dyn_eq(&self, other: &dyn Any) -> bool;
 }
