@@ -1722,6 +1722,8 @@ pub struct NestedLoopJoinExecNode {
     pub join_type: i32,
     #[prost(message, optional, tag = "4")]
     pub filter: ::core::option::Option<JoinFilter>,
+    #[prost(uint32, repeated, tag = "5")]
+    pub projection: ::prost::alloc::vec::Vec<u32>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct CoalesceBatchesExecNode {

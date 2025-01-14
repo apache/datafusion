@@ -1178,6 +1178,7 @@ message NestedLoopJoinExecNode {
   PhysicalPlanNode right = 2;
   datafusion_common.JoinType join_type = 3;
   JoinFilter filter = 4;
+  repeated uint32 projection = 5;
 }
 
 message CoalesceBatchesExecNode {

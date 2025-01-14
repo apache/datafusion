@@ -11418,6 +11418,9 @@ impl serde::Serialize for NestedLoopJoinExecNode {
         if self.filter.is_some() {
             len += 1;
         }
+        if !self.projection.is_empty() {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("datafusion.NestedLoopJoinExecNode", len)?;
         if let Some(v) = self.left.as_ref() {
             struct_ser.serialize_field("left", v)?;
@@ -11432,6 +11435,9 @@ impl serde::Serialize for NestedLoopJoinExecNode {
         }
         if let Some(v) = self.filter.as_ref() {
             struct_ser.serialize_field("filter", v)?;
+        }
+        if !self.projection.is_empty() {
+            struct_ser.serialize_field("projection", &self.projection)?;
         }
         struct_ser.end()
     }
@@ -11448,6 +11454,7 @@ impl<'de> serde::Deserialize<'de> for NestedLoopJoinExecNode {
             "join_type",
             "joinType",
             "filter",
+            "projection",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -11456,6 +11463,7 @@ impl<'de> serde::Deserialize<'de> for NestedLoopJoinExecNode {
             Right,
             JoinType,
             Filter,
+            Projection,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -11481,6 +11489,7 @@ impl<'de> serde::Deserialize<'de> for NestedLoopJoinExecNode {
                             "right" => Ok(GeneratedField::Right),
                             "joinType" | "join_type" => Ok(GeneratedField::JoinType),
                             "filter" => Ok(GeneratedField::Filter),
+                            "projection" => Ok(GeneratedField::Projection),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -11504,6 +11513,7 @@ impl<'de> serde::Deserialize<'de> for NestedLoopJoinExecNode {
                 let mut right__ = None;
                 let mut join_type__ = None;
                 let mut filter__ = None;
+                let mut projection__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::Left => {
@@ -11530,6 +11540,15 @@ impl<'de> serde::Deserialize<'de> for NestedLoopJoinExecNode {
                             }
                             filter__ = map_.next_value()?;
                         }
+                        GeneratedField::Projection => {
+                            if projection__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("projection"));
+                            }
+                            projection__ = 
+                                Some(map_.next_value::<Vec<::pbjson::private::NumberDeserialize<_>>>()?
+                                    .into_iter().map(|x| x.0).collect())
+                            ;
+                        }
                     }
                 }
                 Ok(NestedLoopJoinExecNode {
@@ -11537,6 +11556,7 @@ impl<'de> serde::Deserialize<'de> for NestedLoopJoinExecNode {
                     right: right__,
                     join_type: join_type__.unwrap_or_default(),
                     filter: filter__,
+                    projection: projection__.unwrap_or_default(),
                 })
             }
         }

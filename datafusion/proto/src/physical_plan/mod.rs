@@ -996,12 +996,13 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                     })
                     .map_or(Ok(None), |v: Result<JoinFilter>| v.map(Some))?;
 
+                let projection = join.projection.iter().map(|i| *i as usize).collect();
                 Ok(Arc::new(NestedLoopJoinExec::try_new(
                     left,
                     right,
                     filter,
                     &join_type.into(),
-                    None,
+                    Some(projection),
                 )?))
             }
             PhysicalPlanType::Analyze(analyze) => {
@@ -1834,6 +1835,11 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                 })
                 .map_or(Ok(None), |v: Result<protobuf::JoinFilter>| v.map(Some))?;
 
+            let projection = match exec.projection() {
+                Some(projection) => projection.iter().map(|&i| i as u32).collect(),
+                None => Vec::new(),
+            };
+
             return Ok(protobuf::PhysicalPlanNode {
                 physical_plan_type: Some(PhysicalPlanType::NestedLoopJoin(Box::new(
                     protobuf::NestedLoopJoinExecNode {
@@ -1841,6 +1847,7 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                         right: Some(Box::new(right)),
                         join_type: join_type.into(),
                         filter,
+                        projection,
                     },
                 ))),
             });
