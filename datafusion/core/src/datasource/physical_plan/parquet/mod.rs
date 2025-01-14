@@ -39,9 +39,7 @@ use crate::{
     },
 };
 
-use arrow::datatypes::SchemaRef;
-use datafusion_common::Constraints;
-use datafusion_physical_expr::{EquivalenceProperties, LexOrdering, PhysicalExpr};
+use datafusion_physical_expr::{EquivalenceProperties, PhysicalExpr};
 use datafusion_physical_plan::execution_plan::{Boundedness, EmissionType};
 
 use itertools::Itertools;
@@ -265,7 +263,7 @@ pub use writer::plan_to_parquet;
 pub struct ParquetExec {
     /// Base configuration for this scan
     base_config: FileScanConfig,
-    projected_statistics: Statistics,
+    projected_config: FileScanConfig,
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
     /// Optional predicate for row filtering during parquet scan
@@ -445,22 +443,12 @@ impl ParquetExecBuilder {
             })
             .map(Arc::new);
 
-        let (
-            projected_schema,
-            projected_constraints,
-            projected_statistics,
-            projected_output_ordering,
-        ) = base_config.project();
+        let projected_config = base_config.project();
 
-        let cache = ParquetExec::compute_properties(
-            projected_schema,
-            &projected_output_ordering,
-            projected_constraints,
-            &base_config,
-        );
+        let cache = ParquetExec::compute_properties(&projected_config);
         ParquetExec {
             base_config,
-            projected_statistics,
+            projected_config,
             metrics,
             predicate,
             pruning_predicate,
@@ -512,7 +500,7 @@ impl ParquetExec {
         // `build` on the builder)
         let Self {
             base_config,
-            projected_statistics: _,
+            projected_config: _,
             metrics: _,
             predicate,
             pruning_predicate: _,
@@ -656,15 +644,13 @@ impl ParquetExec {
     }
 
     /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
-    fn compute_properties(
-        schema: SchemaRef,
-        orderings: &[LexOrdering],
-        constraints: Constraints,
-        file_config: &FileScanConfig,
-    ) -> PlanProperties {
+    fn compute_properties(file_config: &FileScanConfig) -> PlanProperties {
         PlanProperties::new(
-            EquivalenceProperties::new_with_orderings(schema, orderings)
-                .with_constraints(constraints),
+            EquivalenceProperties::new_with_orderings(
+                Arc::clone(&file_config.file_schema),
+                &file_config.output_ordering,
+            )
+            .with_constraints(file_config.constraints.clone()),
             Self::output_partitioning_helper(file_config), // Output Partitioning
             EmissionType::Incremental,
             Boundedness::Bounded,
@@ -843,9 +829,9 @@ impl ExecutionPlan for ParquetExec {
             || self.page_pruning_predicate.is_some()
             || (self.predicate.is_some() && self.pushdown_filters())
         {
-            self.projected_statistics.clone().to_inexact()
+            self.projected_config.statistics.clone().to_inexact()
         } else {
-            self.projected_statistics.clone()
+            self.projected_config.statistics.clone()
         };
         Ok(stats)
     }
@@ -856,10 +842,10 @@ impl ExecutionPlan for ParquetExec {
 
     fn with_fetch(&self, limit: Option<usize>) -> Option<Arc<dyn ExecutionPlan>> {
         let new_config = self.base_config.clone().with_limit(limit);
-
+        let new_projected_config = self.projected_config.clone().with_limit(limit);
         Some(Arc::new(Self {
             base_config: new_config,
-            projected_statistics: self.projected_statistics.clone(),
+            projected_config: new_projected_config,
             metrics: self.metrics.clone(),
             predicate: self.predicate.clone(),
             pruning_predicate: self.pruning_predicate.clone(),
@@ -915,7 +901,7 @@ mod tests {
     };
     use arrow::datatypes::{Field, Schema, SchemaBuilder};
     use arrow::record_batch::RecordBatch;
-    use arrow_schema::{DataType, Fields};
+    use arrow_schema::{DataType, Fields, SchemaRef};
     use bytes::{BufMut, BytesMut};
     use datafusion_common::{assert_contains, ScalarValue};
     use datafusion_expr::{col, lit, when, Expr};

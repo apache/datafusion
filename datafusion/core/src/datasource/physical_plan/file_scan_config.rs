@@ -222,14 +222,9 @@ impl FileScanConfig {
     }
 
     /// Project the schema, constraints, and the statistics on the given column indices
-    pub fn project(&self) -> (SchemaRef, Constraints, Statistics, Vec<LexOrdering>) {
+    pub fn project(&self) -> Self {
         if self.projection.is_none() && self.table_partition_cols.is_empty() {
-            return (
-                Arc::clone(&self.file_schema),
-                self.constraints.clone(),
-                self.statistics.clone(),
-                self.output_ordering.clone(),
-            );
+            return self.clone();
         }
 
         // Get projection indices once, reuse for both schema and constraints
@@ -273,12 +268,17 @@ impl FileScanConfig {
         let projected_output_ordering =
             get_projected_output_ordering(self, &projected_schema);
 
-        (
-            projected_schema,
-            projected_constraints,
-            table_stats,
-            projected_output_ordering,
-        )
+        Self {
+            object_store_url: self.object_store_url.clone(),
+            file_schema: projected_schema,
+            file_groups: self.file_groups.clone(),
+            constraints: projected_constraints,
+            statistics: table_stats,
+            projection: None,
+            output_ordering: projected_output_ordering,
+            limit: self.limit,
+            table_partition_cols: self.table_partition_cols.clone(),
+        }
     }
 
     #[cfg_attr(not(feature = "avro"), allow(unused))] // Only used by avro
@@ -656,7 +656,11 @@ mod tests {
             )]),
         );
 
-        let (proj_schema, _, proj_statistics, _) = conf.project();
+        let FileScanConfig {
+            file_schema: proj_schema,
+            statistics: proj_statistics,
+            ..
+        } = conf.project();
         assert_eq!(proj_schema.fields().len(), file_schema.fields().len() + 1);
         assert_eq!(
             proj_schema.field(file_schema.fields().len()).name(),
@@ -696,7 +700,10 @@ mod tests {
         );
 
         // verify the proj_schema includes the last column and exactly the same the field it is defined
-        let (proj_schema, _, _, _) = conf.project();
+        let FileScanConfig {
+            file_schema: proj_schema,
+            ..
+        } = conf.project();
         assert_eq!(proj_schema.fields().len(), file_schema.fields().len() + 1);
         assert_eq!(
             *proj_schema.field(file_schema.fields().len()),
@@ -729,7 +736,11 @@ mod tests {
             )]),
         );
 
-        let (proj_schema, _, proj_statistics, _) = conf.project();
+        let FileScanConfig {
+            file_schema: proj_schema,
+            statistics: proj_statistics,
+            ..
+        } = conf.project();
         assert_eq!(
             columns(&proj_schema),
             vec!["date".to_owned(), "c1".to_owned()]
@@ -782,7 +793,10 @@ mod tests {
             Statistics::new_unknown(&file_batch.schema()),
             to_partition_cols(partition_cols.clone()),
         );
-        let (proj_schema, ..) = conf.project();
+        let FileScanConfig {
+            file_schema: proj_schema,
+            ..
+        } = conf.project();
         // created a projector for that projected schema
         let mut proj = PartitionColumnProjector::new(
             proj_schema,
