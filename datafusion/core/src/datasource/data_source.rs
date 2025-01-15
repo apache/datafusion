@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! DataSource and DataSourceFileConfig trait implementations
+//! DataSource and FileSource trait implementations
 
 use std::any::Any;
 use std::fmt;
@@ -65,9 +65,9 @@ pub trait FileSource: Send + Sync {
     fn with_projection(&self, config: &FileScanConfig) -> Arc<dyn FileSource>;
 }
 
-/// Holds generic file configuration, and common behaviors.
+/// Holds generic file configuration, and common behaviors for file sources.
 /// Can be initialized with a `FileScanConfig`
-/// and a `dyn DataSourceFileConfig` type such as `CsvConfig`, `ParquetConfig`, `AvroConfig`, etc.
+/// and a `dyn FileSource` type such as `CsvConfig`, `ParquetConfig`, `AvroConfig`, etc.
 #[derive(Clone)]
 pub struct FileSourceConfig {
     source: Arc<dyn FileSource>,
@@ -75,6 +75,116 @@ pub struct FileSourceConfig {
     metrics: ExecutionPlanMetricsSet,
     projected_statistics: Statistics,
     cache: PlanProperties,
+}
+
+impl FileSourceConfig {
+    /// Returns a new [`DataSourceExec`] from file configurations
+    pub fn new_exec(
+        base_config: FileScanConfig,
+        file_source: Arc<dyn FileSource>,
+    ) -> Arc<DataSourceExec> {
+        let source = Arc::new(Self::new(base_config, file_source));
+        Arc::new(DataSourceExec::new(source))
+    }
+
+    /// Initialize a new `FileSourceConfig` instance with metrics, cache, and statistics.
+    pub fn new(base_config: FileScanConfig, file_source: Arc<dyn FileSource>) -> Self {
+        let (projected_schema, projected_statistics, projected_output_ordering) =
+            base_config.project();
+        let cache = Self::compute_properties(
+            Arc::clone(&projected_schema),
+            &projected_output_ordering,
+            &base_config,
+        );
+        let mut metrics = ExecutionPlanMetricsSet::new();
+
+        #[cfg(feature = "parquet")]
+        if let Some(parquet_config) = file_source.as_any().downcast_ref::<ParquetConfig>()
+        {
+            metrics = parquet_config.metrics();
+            let _predicate_creation_errors = MetricBuilder::new(&metrics)
+                .global_counter("num_predicate_creation_errors");
+        };
+
+        Self {
+            source: file_source,
+            base_config,
+            metrics,
+            projected_statistics,
+            cache,
+        }
+    }
+
+    /// Write the data_type based on file_source
+    fn fmt_file_source(&self, f: &mut Formatter) -> fmt::Result {
+        let file_source = self.source.as_any();
+        let data_type = [
+            ("avro", file_source.downcast_ref::<AvroConfig>().is_some()),
+            ("arrow", file_source.downcast_ref::<ArrowConfig>().is_some()),
+            ("csv", file_source.downcast_ref::<CsvConfig>().is_some()),
+            ("json", file_source.downcast_ref::<JsonConfig>().is_some()),
+            #[cfg(feature = "parquet")]
+            (
+                "parquet",
+                file_source.downcast_ref::<ParquetConfig>().is_some(),
+            ),
+        ]
+        .iter()
+        .find(|(_, is_some)| *is_some)
+        .map(|(name, _)| *name)
+        .unwrap_or("unknown");
+
+        write!(f, ", file_type={}", data_type)
+    }
+
+    /// Returns the base_config
+    pub fn base_config(&self) -> &FileScanConfig {
+        &self.base_config
+    }
+
+    /// Returns the file_source
+    pub fn file_source(&self) -> &Arc<dyn FileSource> {
+        &self.source
+    }
+
+    /// Returns the `PlanProperties` of the plan
+    pub(crate) fn cache(&self) -> PlanProperties {
+        self.cache.clone()
+    }
+
+    fn compute_properties(
+        schema: SchemaRef,
+        orderings: &[LexOrdering],
+        file_scan_config: &FileScanConfig,
+    ) -> PlanProperties {
+        // Equivalence Properties
+        let eq_properties = EquivalenceProperties::new_with_orderings(schema, orderings);
+
+        PlanProperties::new(
+            eq_properties,
+            Self::output_partitioning_helper(file_scan_config), // Output Partitioning
+            EmissionType::Incremental,
+            Boundedness::Bounded,
+        )
+    }
+
+    fn output_partitioning_helper(file_scan_config: &FileScanConfig) -> Partitioning {
+        Partitioning::UnknownPartitioning(file_scan_config.file_groups.len())
+    }
+
+    fn with_file_groups(mut self, file_groups: Vec<Vec<PartitionedFile>>) -> Self {
+        self.base_config.file_groups = file_groups;
+        // Changing file groups may invalidate output partitioning. Update it also
+        let output_partitioning = Self::output_partitioning_helper(&self.base_config);
+        self.cache = self.cache.with_partitioning(output_partitioning);
+        self
+    }
+
+    fn supports_repartition(&self) -> bool {
+        !(self.base_config.file_compression_type.is_compressed()
+            || self.base_config.new_lines_in_values
+            || self.source.as_any().downcast_ref::<AvroConfig>().is_some())
+    }
 }
 
 impl DataSource for FileSourceConfig {
@@ -230,115 +340,5 @@ impl DataSource for FileSourceConfig {
 
     fn properties(&self) -> PlanProperties {
         self.cache()
-    }
-}
-
-impl FileSourceConfig {
-    /// Returns a new [`DataSourceExec`] from file configurations
-    pub fn new_exec(
-        base_config: FileScanConfig,
-        file_source: Arc<dyn FileSource>,
-    ) -> Arc<DataSourceExec> {
-        let source = Arc::new(Self::new(base_config, file_source));
-        Arc::new(DataSourceExec::new(source))
-    }
-
-    /// Initialize a new `FileSourceConfig` instance with metrics, cache, and statistics.
-    pub fn new(base_config: FileScanConfig, file_source: Arc<dyn FileSource>) -> Self {
-        let (projected_schema, projected_statistics, projected_output_ordering) =
-            base_config.project();
-        let cache = Self::compute_properties(
-            Arc::clone(&projected_schema),
-            &projected_output_ordering,
-            &base_config,
-        );
-        let mut metrics = ExecutionPlanMetricsSet::new();
-
-        #[cfg(feature = "parquet")]
-        if let Some(parquet_config) = file_source.as_any().downcast_ref::<ParquetConfig>()
-        {
-            metrics = parquet_config.metrics();
-            let _predicate_creation_errors = MetricBuilder::new(&metrics)
-                .global_counter("num_predicate_creation_errors");
-        };
-
-        Self {
-            source: file_source,
-            base_config,
-            metrics,
-            projected_statistics,
-            cache,
-        }
-    }
-
-    /// Write the data_type based on file_source
-    fn fmt_file_source(&self, f: &mut Formatter) -> fmt::Result {
-        let file_source = self.source.as_any();
-        let data_type = [
-            ("avro", file_source.downcast_ref::<AvroConfig>().is_some()),
-            ("arrow", file_source.downcast_ref::<ArrowConfig>().is_some()),
-            ("csv", file_source.downcast_ref::<CsvConfig>().is_some()),
-            ("json", file_source.downcast_ref::<JsonConfig>().is_some()),
-            #[cfg(feature = "parquet")]
-            (
-                "parquet",
-                file_source.downcast_ref::<ParquetConfig>().is_some(),
-            ),
-        ]
-        .iter()
-        .find(|(_, is_some)| *is_some)
-        .map(|(name, _)| *name)
-        .unwrap_or("unknown");
-
-        write!(f, ", file_type={}", data_type)
-    }
-
-    /// Returns the base_config
-    pub fn base_config(&self) -> &FileScanConfig {
-        &self.base_config
-    }
-
-    /// Returns the file_source
-    pub fn file_source(&self) -> &Arc<dyn FileSource> {
-        &self.source
-    }
-
-    /// Returns the `PlanProperties` of the plan
-    pub(crate) fn cache(&self) -> PlanProperties {
-        self.cache.clone()
-    }
-
-    fn compute_properties(
-        schema: SchemaRef,
-        orderings: &[LexOrdering],
-        file_scan_config: &FileScanConfig,
-    ) -> PlanProperties {
-        // Equivalence Properties
-        let eq_properties = EquivalenceProperties::new_with_orderings(schema, orderings);
-
-        PlanProperties::new(
-            eq_properties,
-            Self::output_partitioning_helper(file_scan_config), // Output Partitioning
-            EmissionType::Incremental,
-            Boundedness::Bounded,
-        )
-    }
-
-    fn output_partitioning_helper(file_scan_config: &FileScanConfig) -> Partitioning {
-        Partitioning::UnknownPartitioning(file_scan_config.file_groups.len())
-    }
-
-    fn with_file_groups(mut self, file_groups: Vec<Vec<PartitionedFile>>) -> Self {
-        self.base_config.file_groups = file_groups;
-        // Changing file groups may invalidate output partitioning. Update it also
-        let output_partitioning = Self::output_partitioning_helper(&self.base_config);
-        self.cache = self.cache.with_partitioning(output_partitioning);
-        self
-    }
-
-    fn supports_repartition(&self) -> bool {
-        !(self.base_config.file_compression_type.is_compressed()
-            || self.base_config.new_lines_in_values
-            || self.source.as_any().downcast_ref::<AvroConfig>().is_some())
     }
 }
