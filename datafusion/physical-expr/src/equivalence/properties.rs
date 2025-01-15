@@ -578,7 +578,7 @@ impl EquivalenceProperties {
     ) -> bool {
         self.constraints.iter().any(|constraint| match constraint {
             Constraint::PrimaryKey(indices) | Constraint::Unique(indices) => self
-                .constraint_indices_match_sort_prefix(
+                .satisfied_by_constraint(
                     normalized_reqs,
                     indices,
                     matches!(constraint, Constraint::Unique(_)),
@@ -586,54 +586,70 @@ impl EquivalenceProperties {
         })
     }
 
-    /// Checks if the constraint indices match the prefix of the sort requirements
-    /// and if the sort options match the existing ordering
-    fn constraint_indices_match_sort_prefix(
+    /// Checks if sort requirements are satisfied by a constraint (primary key or unique).
+    /// Returns true if the constraint indices form a valid prefix of an existing ordering
+    /// that matches the requirements. For unique constraints, also verifies nullable columns.
+    fn satisfied_by_constraint(
         &self,
         normalized_reqs: &[PhysicalSortRequirement],
         indices: &[usize],
         check_null: bool,
     ) -> bool {
-        // Indices must be a prefix of requirements
+        // Requirements must contain indices
         if indices.len() > normalized_reqs.len() {
             return false;
         }
 
-        // Check that indices match the prefix of requirements
-        indices.iter().zip(normalized_reqs).all(|(&idx, req)| {
-            // Only handle Column expressions
-            let Some(col) = req.expr.as_any().downcast_ref::<Column>() else {
-                return false;
-            };
+        // Find orderings that contain all required indices
+        let prefix_candidates = self
+            .oeq_class
+            .iter()
+            .filter(|&ordering| {
+                if indices.len() > ordering.len() {
+                    return false;
+                }
 
-            // Column index must match
-            if col.index() != idx {
-                return false;
-            }
+                // Check if all constraint indices appear in this ordering
+                indices.iter().all(|&idx| {
+                    ordering.iter().enumerate().any(|(pos, req)| {
+                        // Only handle Column expressions
+                        let Some(col) = req.expr.as_any().downcast_ref::<Column>() else {
+                            return false;
+                        };
 
-            // For unique constraints, verify column is not nullable
-            if check_null && req.expr.nullable(&self.schema).unwrap_or(true) {
-                return false;
-            }
+                        // Column index must match
+                        if col.index() != idx {
+                            return false;
+                        }
 
-            true
-        }) && {
-            // If sort options are specified, verify the entire prefix matches an existing ordering
-            let prefix_len = indices.len();
-            prefix_len == 0
-                || self.oeq_class.iter().any(|ordering| {
-                    ordering.len() >= prefix_len
-                        && normalized_reqs[..prefix_len].iter().zip(ordering).all(
-                            |(req, existing)| {
-                                // Check if expressions are the same and sort options match
-                                req.expr.eq(&existing.expr)
-                                    && req.options.map_or(true, |req_options| {
-                                        req_options == existing.options
-                                    })
-                            },
-                        )
+                        // For unique constraints, verify column is not nullable if it's first/last
+                        if check_null && (pos == 0 || pos == ordering.len() - 1) {
+                            return !col.nullable(&self.schema).unwrap_or(true);
+                        }
+
+                        true
+                    })
                 })
+            })
+            .collect::<Vec<_>>();
+
+        if prefix_candidates.is_empty() {
+            return false;
         }
+
+        // Check if any candidate ordering matches requirements prefix
+        prefix_candidates.iter().any(|&ordering| {
+            let prefix_len = indices.len();
+            ordering.len() >= prefix_len
+                && normalized_reqs[..prefix_len].iter().zip(ordering).all(
+                    |(req, existing)| {
+                        req.expr.eq(&existing.expr)
+                            && req
+                                .options
+                                .map_or(true, |req_opts| req_opts == existing.options)
+                    },
+                )
+        })
     }
 
     /// Determines whether the ordering specified by the given sort requirement
@@ -4363,20 +4379,20 @@ mod tests {
                 vec![vec!["b", "a"], vec!["c", "a"]],
             ),
             (
-                "multi-column primary key",
-                &pk_schema,
-                vec![Constraint::PrimaryKey(vec![0, 1])],
-                vec!["a", "b"], // base ordering
-                vec![vec!["a", "b", "c"], vec!["a", "b", "d"]],
-                vec![vec!["b", "a"], vec!["a", "c", "b"]],
-            ),
-            (
                 "single column unique",
                 &unique_schema,
                 vec![Constraint::Unique(vec![0])],
                 vec!["a"], // base ordering
                 vec![vec!["a", "b"], vec!["a", "c", "d"]],
                 vec![vec!["b", "a"], vec!["c", "a"]],
+            ),
+            (
+                "multi-column primary key",
+                &pk_schema,
+                vec![Constraint::PrimaryKey(vec![0, 1])],
+                vec!["a", "b"], // base ordering
+                vec![vec!["a", "b", "c"], vec!["a", "b", "d"]],
+                vec![vec!["b", "a"], vec!["a", "c", "b"]],
             ),
             (
                 "multi-column unique",
@@ -4393,6 +4409,22 @@ mod tests {
                 vec!["c", "d"], // base ordering
                 vec![],
                 vec![vec!["c", "d", "a"]],
+            ),
+            (
+                "ordering with arbitrary column unique",
+                &unique_schema,
+                vec![Constraint::Unique(vec![0, 1])],
+                vec!["a", "c", "b"], // base ordering
+                vec![vec!["a", "c", "b", "d"]],
+                vec![vec!["a", "b", "d"]],
+            ),
+            (
+                "ordering with arbitrary column pk",
+                &pk_schema,
+                vec![Constraint::PrimaryKey(vec![0, 1])],
+                vec!["a", "c", "b"], // base ordering
+                vec![vec!["a", "c", "b", "d"]],
+                vec![vec!["a", "b", "d"]],
             ),
         ];
 
