@@ -53,7 +53,6 @@ use crate::physical_plan::repartition::RepartitionExec;
 use crate::physical_plan::sorts::sort::SortExec;
 use crate::physical_plan::union::UnionExec;
 use crate::physical_plan::unnest::UnnestExec;
-use crate::physical_plan::values::ValuesExec;
 use crate::physical_plan::windows::{BoundedWindowAggExec, WindowAggExec};
 use crate::physical_plan::{
     displayable, windows, ExecutionPlan, ExecutionPlanProperties, InputOrderMode,
@@ -467,7 +466,8 @@ impl DefaultPhysicalPlanner {
                             .collect::<Result<Vec<Arc<dyn PhysicalExpr>>>>()
                     })
                     .collect::<Result<Vec<_>>>()?;
-                let value_exec = ValuesExec::try_new(SchemaRef::new(exec_schema), exprs)?;
+                let value_exec =
+                    MemoryExec::try_new_as_values(SchemaRef::new(exec_schema), exprs)?;
                 Arc::new(value_exec)
             }
             LogicalPlan::EmptyRelation(EmptyRelation {
@@ -522,6 +522,9 @@ impl DefaultPhysicalPlanner {
                         return Err(DataFusionError::Configuration(format!("provided value for 'execution.keep_partition_by_columns' was not recognized: \"{}\"", value))),
                 };
 
+                let sink_format = file_type_to_format(file_type)?
+                    .create(session_state, source_option_tuples)?;
+
                 // Set file sink related options
                 let config = FileSinkConfig {
                     object_store_url,
@@ -531,10 +534,8 @@ impl DefaultPhysicalPlanner {
                     table_partition_cols,
                     insert_op: InsertOp::Append,
                     keep_partition_by_columns,
+                    file_extension: sink_format.get_ext(),
                 };
-
-                let sink_format = file_type_to_format(file_type)?
-                    .create(session_state, source_option_tuples)?;
 
                 sink_format
                     .create_writer_physical_plan(input_exec, session_state, config, None)

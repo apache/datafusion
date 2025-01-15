@@ -659,6 +659,7 @@ impl TryFrom<&protobuf::FileSinkConfig> for FileSinkConfig {
             table_partition_cols,
             insert_op,
             keep_partition_by_columns: conf.keep_partition_by_columns,
+            file_extension: conf.file_extension.clone(),
         })
     }
 }

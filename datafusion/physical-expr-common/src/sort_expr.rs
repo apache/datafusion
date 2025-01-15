@@ -409,6 +409,22 @@ impl LexOrdering {
             .map(PhysicalSortExpr::from)
             .collect()
     }
+
+    /// Collapse a `LexOrdering` into a new duplicate-free `LexOrdering` based on expression.
+    ///
+    /// This function filters  duplicate entries that have same physical
+    /// expression inside, ignoring [`SortOptions`]. For example:
+    ///
+    /// `vec![a ASC, a DESC]` collapses to `vec![a ASC]`.
+    pub fn collapse(self) -> Self {
+        let mut output = LexOrdering::default();
+        for item in self {
+            if !output.iter().any(|req| req.expr.eq(&item.expr)) {
+                output.push(item);
+            }
+        }
+        output
+    }
 }
 
 impl From<Vec<PhysicalSortExpr>> for LexOrdering {
@@ -539,6 +555,21 @@ impl LexRequirement {
                 .map(PhysicalSortRequirement::from)
                 .collect(),
         )
+    }
+
+    /// Constructs a duplicate-free `LexOrderingReq` by filtering out
+    /// duplicate entries that have same physical expression inside.
+    ///
+    /// For example, `vec![a Some(ASC), a Some(DESC)]` collapses to `vec![a
+    /// Some(ASC)]`.
+    pub fn collapse(self) -> Self {
+        let mut output = Vec::<PhysicalSortRequirement>::new();
+        for item in self {
+            if !output.iter().any(|req| req.expr.eq(&item.expr)) {
+                output.push(item);
+            }
+        }
+        LexRequirement::new(output)
     }
 }
 

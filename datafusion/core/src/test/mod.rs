@@ -19,7 +19,6 @@
 
 #![allow(missing_docs)]
 
-use std::any::Any;
 use std::fs::File;
 use std::io::prelude::*;
 use std::io::{BufReader, BufWriter};
@@ -43,13 +42,11 @@ use crate::test_util::{aggr_test_schema, arrow_test_data};
 use arrow::array::{self, Array, ArrayRef, Decimal128Builder, Int32Array};
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
-use datafusion_common::{DataFusionError, Statistics};
+use datafusion_common::DataFusionError;
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
-use datafusion_physical_expr::{EquivalenceProperties, Partitioning, PhysicalSortExpr};
-use datafusion_physical_plan::execution_plan::{Boundedness, EmissionType};
+use datafusion_physical_expr::PhysicalSortExpr;
 use datafusion_physical_plan::source::DataSourceExec;
 use datafusion_physical_plan::streaming::{PartitionStream, StreamingTableExec};
-use datafusion_physical_plan::{DisplayAs, DisplayFormatType, PlanProperties};
 
 #[cfg(feature = "compression")]
 use bzip2::write::BzEncoder;
@@ -356,95 +353,6 @@ pub fn data_source_exec_csv_ordered(
             .with_output_ordering(vec![sort_exprs]);
     let source_config = Arc::new(CsvConfig::new(true, 0, b'"'));
     FileSourceConfig::new_exec(config, source_config)
-}
-
-/// A mock execution plan that simply returns the provided statistics
-#[derive(Debug, Clone)]
-pub struct StatisticsExec {
-    stats: Statistics,
-    schema: Arc<Schema>,
-    cache: PlanProperties,
-}
-
-impl StatisticsExec {
-    pub fn new(stats: Statistics, schema: Schema) -> Self {
-        assert_eq!(
-            stats.column_statistics.len(), schema.fields().len(),
-            "if defined, the column statistics vector length should be the number of fields"
-        );
-        let cache = Self::compute_properties(Arc::new(schema.clone()));
-        Self {
-            stats,
-            schema: Arc::new(schema),
-            cache,
-        }
-    }
-
-    /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
-    fn compute_properties(schema: SchemaRef) -> PlanProperties {
-        PlanProperties::new(
-            EquivalenceProperties::new(schema),
-            Partitioning::UnknownPartitioning(2),
-            EmissionType::Incremental,
-            Boundedness::Bounded,
-        )
-    }
-}
-
-impl DisplayAs for StatisticsExec {
-    fn fmt_as(
-        &self,
-        t: DisplayFormatType,
-        f: &mut std::fmt::Formatter,
-    ) -> std::fmt::Result {
-        match t {
-            DisplayFormatType::Default | DisplayFormatType::Verbose => {
-                write!(
-                    f,
-                    "StatisticsExec: col_count={}, row_count={:?}",
-                    self.schema.fields().len(),
-                    self.stats.num_rows,
-                )
-            }
-        }
-    }
-}
-
-impl ExecutionPlan for StatisticsExec {
-    fn name(&self) -> &'static str {
-        Self::static_name()
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
-    fn properties(&self) -> &PlanProperties {
-        &self.cache
-    }
-
-    fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
-        vec![]
-    }
-
-    fn with_new_children(
-        self: Arc<Self>,
-        _: Vec<Arc<dyn ExecutionPlan>>,
-    ) -> Result<Arc<dyn ExecutionPlan>> {
-        Ok(self)
-    }
-
-    fn execute(
-        &self,
-        _partition: usize,
-        _context: Arc<TaskContext>,
-    ) -> Result<SendableRecordBatchStream> {
-        unimplemented!("This plan only serves for testing statistics")
-    }
-
-    fn statistics(&self) -> Result<Statistics> {
-        Ok(self.stats.clone())
-    }
 }
 
 pub mod object_store;

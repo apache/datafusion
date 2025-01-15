@@ -19,6 +19,7 @@ use std::sync::Arc;
 
 #[cfg(feature = "parquet")]
 use datafusion::datasource::file_format::parquet::ParquetSink;
+use datafusion::datasource::physical_plan::FileSink;
 use datafusion::physical_expr::window::{SlidingAggregateWindowExpr, StandardWindowExpr};
 use datafusion::physical_expr::{LexOrdering, PhysicalSortExpr, ScalarFunctionExpr};
 use datafusion::physical_plan::expressions::{
@@ -609,6 +610,7 @@ impl TryFrom<&FileSinkConfig> for protobuf::FileSinkConfig {
             table_partition_cols,
             keep_partition_by_columns: conf.keep_partition_by_columns,
             insert_op: conf.insert_op as i32,
+            file_extension: conf.file_extension.to_string(),
         })
     }
 }

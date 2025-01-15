@@ -339,8 +339,8 @@ query ??
 SELECT int64_list, utf8_list FROM list_columns
 ----
 [1, 2, 3] [abc, efg, hij]
-[, 1] NULL
-[4] [efg, , hij, xyz]
+[NULL, 1] NULL
+[4] [efg, NULL, hij, xyz]
 
 statement ok
 DROP TABLE list_columns;

@@ -61,6 +61,7 @@ message LogicalPlanNode {
     UnnestNode unnest = 30;
     RecursiveQueryNode recursive_query = 31;
     CteWorkTableScanNode cte_work_table_scan = 32;
+    DmlNode dml = 33;
   }
 }
 
@@ -262,6 +263,22 @@ message CopyToNode {
   string output_url = 2;
   bytes file_type = 3;
   repeated string partition_by = 7;
+}
+
+message DmlNode{
+   enum Type {
+    UPDATE = 0;
+    DELETE = 1;
+    CTAS = 2;
+    INSERT_APPEND = 3;
+    INSERT_OVERWRITE = 4;
+    INSERT_REPLACE = 5;
+    
+  }
+  Type dml_type = 1;
+  LogicalPlanNode input = 2;
+  TableReference table_name = 3;
+  datafusion_common.DfSchema schema = 4;
 }
 
 message UnnestNode {
@@ -728,6 +745,7 @@ message FileSinkConfig {
   repeated PartitionColumn table_partition_cols = 5;
   bool keep_partition_by_columns = 9;
   InsertOp insert_op = 10;
+  string file_extension = 11;
 }
 
 enum InsertOp {

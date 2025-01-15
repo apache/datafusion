@@ -22,16 +22,17 @@ use std::collections::{HashMap, HashSet};
 use std::fmt::{self, Debug};
 use std::sync::Arc;
 
-use super::write::orchestration::stateless_multipart_put;
+use super::write::orchestration::spawn_writer_tasks_and_join;
 use super::{
     Decoder, DecoderDeserializer, FileFormat, FileFormatFactory,
     DEFAULT_SCHEMA_INFER_MAX_RECORD,
 };
 use crate::datasource::data_source::FileSourceConfig;
 use crate::datasource::file_format::file_compression_type::FileCompressionType;
+use crate::datasource::file_format::write::demux::DemuxedStreamReceiver;
 use crate::datasource::file_format::write::BatchSerializer;
 use crate::datasource::physical_plan::{
-    CsvConfig, FileGroupDisplay, FileScanConfig, FileSinkConfig,
+    CsvConfig, FileGroupDisplay, FileScanConfig, FileSink, FileSinkConfig,
 };
 use crate::error::Result;
 use crate::execution::context::SessionState;
@@ -49,11 +50,11 @@ use datafusion_common::file_options::csv_writer::CsvWriterOptions;
 use datafusion_common::{
     exec_err, not_impl_err, DataFusionError, GetExt, DEFAULT_CSV_EXTENSION,
 };
+use datafusion_common_runtime::SpawnedTask;
 use datafusion_execution::TaskContext;
 use datafusion_expr::dml::InsertOp;
 use datafusion_physical_expr::PhysicalExpr;
 use datafusion_physical_expr_common::sort_expr::LexRequirement;
-use datafusion_physical_plan::metrics::MetricsSet;
 use datafusion_physical_plan::source::DataSourceExec;
 
 use async_trait::async_trait;
@@ -470,15 +471,9 @@ impl FileFormat for CsvFormat {
 
         let writer_options = CsvWriterOptions::try_from(&options)?;
 
-        let sink_schema = Arc::clone(conf.output_schema());
         let sink = Arc::new(CsvSink::new(conf, writer_options));
 
-        Ok(Arc::new(DataSinkExec::new(
-            input,
-            sink,
-            sink_schema,
-            order_requirements,
-        )) as _)
+        Ok(Arc::new(DataSinkExec::new(input, sink, order_requirements)) as _)
     }
 }
 
@@ -688,42 +683,41 @@ impl CsvSink {
         }
     }
 
-    /// Retrieve the inner [`FileSinkConfig`].
-    pub fn config(&self) -> &FileSinkConfig {
-        &self.config
-    }
-
-    async fn multipartput_all(
-        &self,
-        data: SendableRecordBatchStream,
-        context: &Arc<TaskContext>,
-    ) -> Result<u64> {
-        let builder = &self.writer_options.writer_options;
-
-        let builder_clone = builder.clone();
-        let options_clone = self.writer_options.clone();
-        let get_serializer = move || {
-            Arc::new(
-                CsvSerializer::new()
-                    .with_builder(builder_clone.clone())
-                    .with_header(options_clone.writer_options.header()),
-            ) as _
-        };
-
-        stateless_multipart_put(
-            data,
-            context,
-            "csv".into(),
-            Box::new(get_serializer),
-            &self.config,
-            self.writer_options.compression.into(),
-        )
-        .await
-    }
-
     /// Retrieve the writer options
     pub fn writer_options(&self) -> &CsvWriterOptions {
         &self.writer_options
+    }
+}
+
+#[async_trait]
+impl FileSink for CsvSink {
+    fn config(&self) -> &FileSinkConfig {
+        &self.config
+    }
+
+    async fn spawn_writer_tasks_and_join(
+        &self,
+        context: &Arc<TaskContext>,
+        demux_task: SpawnedTask<Result<()>>,
+        file_stream_rx: DemuxedStreamReceiver,
+        object_store: Arc<dyn ObjectStore>,
+    ) -> Result<u64> {
+        let builder = self.writer_options.writer_options.clone();
+        let header = builder.header();
+        let serializer = Arc::new(
+            CsvSerializer::new()
+                .with_builder(builder)
+                .with_header(header),
+        ) as _;
+        spawn_writer_tasks_and_join(
+            context,
+            serializer,
+            self.writer_options.compression.into(),
+            object_store,
+            demux_task,
+            file_stream_rx,
+        )
+        .await
     }
 }
 
@@ -733,8 +727,8 @@ impl DataSink for CsvSink {
         self
     }
 
-    fn metrics(&self) -> Option<MetricsSet> {
-        None
+    fn schema(&self) -> &SchemaRef {
+        self.config.output_schema()
     }
 
     async fn write_all(
@@ -742,8 +736,7 @@ impl DataSink for CsvSink {
         data: SendableRecordBatchStream,
         context: &Arc<TaskContext>,
     ) -> Result<u64> {
-        let total_count = self.multipartput_all(data, context).await?;
-        Ok(total_count)
+        FileSink::write_all(self, data, context).await
     }
 }
 

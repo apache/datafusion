@@ -190,6 +190,10 @@ impl CatalogProviderList for ResolvedCatalogProviderList {
 /// After implementing this trait you can call the [`AsyncSchemaProvider::resolve`] method to get an
 /// `Arc<dyn SchemaProvider>` that contains a cached copy of the referenced tables.  The `resolve`
 /// method can be slow and asynchronous as it is only called once, before planning.
+///
+/// See the [remote_catalog.rs] for an end to end example
+///
+/// [remote_catalog.rs]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/remote_catalog.rs
 #[async_trait]
 pub trait AsyncSchemaProvider: Send + Sync {
     /// Lookup a table in the schema provider
@@ -202,6 +206,8 @@ pub trait AsyncSchemaProvider: Send + Sync {
     ///
     /// This cache is intended to be short-lived for the execution of a single query.  There is no mechanism
     /// for refresh or eviction of stale entries.
+    ///
+    /// See the [`AsyncSchemaProvider`] documentation for additional details
     async fn resolve(
         &self,
         references: &[TableReference],
