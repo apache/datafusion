@@ -1611,12 +1611,9 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
 
         if let Some(exec) = plan.downcast_ref::<DataSourceExec>() {
             let source = exec.source();
-            println!("DataSourceExec!");
             if let Some(maybe_csv) = source.as_any().downcast_ref::<FileSourceConfig>() {
-                let source = maybe_csv.source_config();
-                println!("Source!");
+                let source = maybe_csv.file_source();
                 if let Some(csv_config) = source.as_any().downcast_ref::<CsvConfig>() {
-                    println!("CSV!");
                     return Ok(protobuf::PhysicalPlanNode {
                         physical_plan_type: Some(PhysicalPlanType::CsvScan(
                             protobuf::CsvScanExecNode {
@@ -1665,7 +1662,7 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
             if let Some(maybe_parquet) =
                 source.as_any().downcast_ref::<FileSourceConfig>()
             {
-                let source = maybe_parquet.source_config();
+                let source = maybe_parquet.file_source();
                 if let Some(conf) = source.as_any().downcast_ref::<ParquetConfig>() {
                     let predicate = conf
                         .predicate()
@@ -1689,7 +1686,7 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
         if let Some(exec) = plan.downcast_ref::<DataSourceExec>() {
             let source = exec.source();
             if let Some(maybe_avro) = source.as_any().downcast_ref::<FileSourceConfig>() {
-                let source = maybe_avro.source_config();
+                let source = maybe_avro.file_source();
                 if source.as_any().downcast_ref::<AvroConfig>().is_some() {
                     return Ok(protobuf::PhysicalPlanNode {
                         physical_plan_type: Some(PhysicalPlanType::AvroScan(

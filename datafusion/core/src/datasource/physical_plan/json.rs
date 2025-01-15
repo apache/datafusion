@@ -30,12 +30,12 @@ use crate::datasource::physical_plan::file_stream::{FileOpenFuture, FileOpener};
 use crate::datasource::physical_plan::FileMeta;
 use crate::error::{DataFusionError, Result};
 use crate::physical_plan::{ExecutionPlan, ExecutionPlanProperties};
+use crate::datasource::data_source::FileSource;
 
 use arrow::json::ReaderBuilder;
 use arrow::{datatypes::SchemaRef, json};
 use datafusion_execution::TaskContext;
 
-use crate::datasource::data_source::DataSourceFileConfig;
 use futures::{StreamExt, TryStreamExt};
 use object_store::buffered::BufWriter;
 use object_store::{GetOptions, GetResultPayload, ObjectStore};
@@ -80,7 +80,7 @@ impl JsonConfig {
     }
 }
 
-impl DataSourceFileConfig for JsonConfig {
+impl FileSource for JsonConfig {
     fn create_file_opener(
         &self,
         object_store: Result<Arc<dyn ObjectStore>>,
@@ -101,17 +101,17 @@ impl DataSourceFileConfig for JsonConfig {
         self
     }
 
-    fn with_batch_size(&self, batch_size: usize) -> Arc<dyn DataSourceFileConfig> {
+    fn with_batch_size(&self, batch_size: usize) -> Arc<dyn FileSource> {
         let mut conf = self.clone();
         conf.batch_size = Some(batch_size);
         Arc::new(conf)
     }
 
-    fn with_schema(&self, _schema: SchemaRef) -> Arc<dyn DataSourceFileConfig> {
+    fn with_schema(&self, _schema: SchemaRef) -> Arc<dyn FileSource> {
         Arc::new(Self { ..*self })
     }
 
-    fn with_projection(&self, _config: &FileScanConfig) -> Arc<dyn DataSourceFileConfig> {
+    fn with_projection(&self, _config: &FileScanConfig) -> Arc<dyn FileSource> {
         Arc::new(Self { ..*self })
     }
 }

@@ -18,7 +18,7 @@
 use std::sync::Arc;
 
 use arrow_schema::{DataType, Field, Schema};
-use datafusion::datasource::data_source::DataSourceFileConfig;
+use datafusion::datasource::data_source::FileSource;
 use datafusion::{
     assert_batches_eq,
     datasource::{

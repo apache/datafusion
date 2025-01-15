@@ -90,7 +90,7 @@ async fn parquet_partition_pruning_filter() -> Result<()> {
     let source = data_source.source();
     let file_source = source.as_any().downcast_ref::<FileSourceConfig>().unwrap();
     let parquet_config = file_source
-        .source_config()
+        .file_source()
         .as_any()
         .downcast_ref::<ParquetConfig>()
         .unwrap();

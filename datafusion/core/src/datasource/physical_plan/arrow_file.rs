@@ -20,7 +20,7 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use crate::datasource::data_source::DataSourceFileConfig;
+use crate::datasource::data_source::FileSource;
 use crate::datasource::physical_plan::{
     FileMeta, FileOpenFuture, FileOpener, FileScanConfig,
 };
@@ -38,7 +38,7 @@ use object_store::{GetOptions, GetRange, GetResultPayload, ObjectStore};
 #[derive(Clone, Default)]
 pub struct ArrowConfig {}
 
-impl DataSourceFileConfig for ArrowConfig {
+impl FileSource for ArrowConfig {
     fn create_file_opener(
         &self,
         object_store: Result<Arc<dyn ObjectStore>>,
@@ -55,15 +55,15 @@ impl DataSourceFileConfig for ArrowConfig {
         self
     }
 
-    fn with_batch_size(&self, _batch_size: usize) -> Arc<dyn DataSourceFileConfig> {
+    fn with_batch_size(&self, _batch_size: usize) -> Arc<dyn FileSource> {
         Arc::new(ArrowConfig::default())
     }
 
-    fn with_schema(&self, _schema: SchemaRef) -> Arc<dyn DataSourceFileConfig> {
+    fn with_schema(&self, _schema: SchemaRef) -> Arc<dyn FileSource> {
         Arc::new(ArrowConfig::default())
     }
 
-    fn with_projection(&self, _config: &FileScanConfig) -> Arc<dyn DataSourceFileConfig> {
+    fn with_projection(&self, _config: &FileScanConfig) -> Arc<dyn FileSource> {
         Arc::new(ArrowConfig::default())
     }
 }

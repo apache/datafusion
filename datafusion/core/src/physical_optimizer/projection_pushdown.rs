@@ -115,7 +115,7 @@ pub fn remove_unnecessary_projections(
                     .downcast_ref::<FileSourceConfig>()
                     .and_then(|file_config| {
                         file_config
-                            .source_config()
+                            .file_source()
                             .as_any()
                             .downcast_ref::<CsvConfig>()
                             .map(|_| true)
@@ -223,7 +223,7 @@ fn try_swapping_with_csv(
                 .unwrap_or((0..csv.schema().fields().len()).collect()),
         );
         file_scan.projection = Some(new_projections);
-        FileSourceConfig::new_exec(file_scan, Arc::clone(csv_config.source_config())) as _
+        FileSourceConfig::new_exec(file_scan, Arc::clone(csv_config.file_source())) as _
     })
 }
 

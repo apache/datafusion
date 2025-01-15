@@ -53,7 +53,7 @@ impl ExecutionPlanVisitor for MetricsFinder {
             if let Some(file_config) = source.as_any().downcast_ref::<FileSourceConfig>()
             {
                 if file_config
-                    .source_config()
+                    .file_source()
                     .as_any()
                     .downcast_ref::<ParquetConfig>()
                     .is_some()

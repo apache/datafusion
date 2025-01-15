@@ -53,7 +53,7 @@ pub fn to_substrait_rel(
         let source = data_source.source();
         if let Some(file_config) = source.as_any().downcast_ref::<FileSourceConfig>() {
             let is_parquet = file_config
-                .source_config()
+                .file_source()
                 .as_any()
                 .downcast_ref::<ParquetConfig>()
                 .is_some();

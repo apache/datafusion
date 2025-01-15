@@ -206,7 +206,7 @@ impl TestParquetFile {
                 source.as_any().downcast_ref::<FileSourceConfig>()
             {
                 if maybe_parquet
-                    .source_config()
+                    .file_source()
                     .as_any()
                     .downcast_ref::<ParquetConfig>()
                     .is_some()

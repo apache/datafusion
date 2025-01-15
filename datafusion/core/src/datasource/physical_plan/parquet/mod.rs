@@ -20,7 +20,7 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use crate::datasource::data_source::DataSourceFileConfig;
+use crate::datasource::data_source::FileSource;
 use crate::datasource::physical_plan::{
     parquet::page_filter::PagePruningAccessPlanFilter, FileOpener, FileScanConfig,
 };
@@ -186,7 +186,7 @@ pub use writer::plan_to_parquet;
 /// let source = parquet_exec().source();
 /// let data_source = source.as_any().downcast_ref::<FileSourceConfig>().unwrap();
 /// let base_config = data_source.base_config();
-/// let source_config = data_source.source_config();
+/// let file_source = data_source.file_source();
 /// let existing_file_groups = &base_config.file_groups;
 /// let new_execs = existing_file_groups
 ///   .iter()
@@ -196,7 +196,7 @@ pub use writer::plan_to_parquet;
 ///         .clone()
 ///        .with_file_groups(vec![file_group.clone()]);
 ///
-///     FileSourceConfig::new_exec(new_config, source_config.clone())
+///     FileSourceConfig::new_exec(new_config, file_source.clone())
 ///   })
 ///   .collect::<Vec<_>>();
 /// ```
@@ -524,7 +524,7 @@ impl ParquetConfig {
     }
 }
 
-impl DataSourceFileConfig for ParquetConfig {
+impl FileSource for ParquetConfig {
     fn create_file_opener(
         &self,
         object_store: Result<Arc<dyn ObjectStore>>,
@@ -575,17 +575,17 @@ impl DataSourceFileConfig for ParquetConfig {
         self
     }
 
-    fn with_batch_size(&self, batch_size: usize) -> Arc<dyn DataSourceFileConfig> {
+    fn with_batch_size(&self, batch_size: usize) -> Arc<dyn FileSource> {
         let mut conf = self.clone();
         conf.batch_size = Some(batch_size);
         Arc::new(conf)
     }
 
-    fn with_schema(&self, _schema: SchemaRef) -> Arc<dyn DataSourceFileConfig> {
+    fn with_schema(&self, _schema: SchemaRef) -> Arc<dyn FileSource> {
         Arc::new(Self { ..self.clone() })
     }
 
-    fn with_projection(&self, _config: &FileScanConfig) -> Arc<dyn DataSourceFileConfig> {
+    fn with_projection(&self, _config: &FileScanConfig) -> Arc<dyn FileSource> {
         Arc::new(Self { ..self.clone() })
     }
 }

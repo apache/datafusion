@@ -23,7 +23,7 @@ use std::sync::Arc;
 use super::{FileOpener, FileScanConfig};
 #[cfg(feature = "avro")]
 use crate::datasource::avro_to_arrow::Reader as AvroReader;
-use crate::datasource::data_source::DataSourceFileConfig;
+use crate::datasource::data_source::FileSource;
 use crate::error::Result;
 
 use arrow::datatypes::SchemaRef;
@@ -55,7 +55,7 @@ impl AvroConfig {
     }
 }
 
-impl DataSourceFileConfig for AvroConfig {
+impl FileSource for AvroConfig {
     #[cfg(feature = "avro")]
     fn create_file_opener(
         &self,
@@ -83,19 +83,19 @@ impl DataSourceFileConfig for AvroConfig {
         self
     }
 
-    fn with_batch_size(&self, batch_size: usize) -> Arc<dyn DataSourceFileConfig> {
+    fn with_batch_size(&self, batch_size: usize) -> Arc<dyn FileSource> {
         let mut conf = self.clone();
         conf.batch_size = Some(batch_size);
         Arc::new(conf)
     }
 
-    fn with_schema(&self, schema: SchemaRef) -> Arc<dyn DataSourceFileConfig> {
+    fn with_schema(&self, schema: SchemaRef) -> Arc<dyn FileSource> {
         let mut conf = self.clone();
         conf.schema = Some(schema);
         Arc::new(conf)
     }
 
-    fn with_projection(&self, config: &FileScanConfig) -> Arc<dyn DataSourceFileConfig> {
+    fn with_projection(&self, config: &FileScanConfig) -> Arc<dyn FileSource> {
         let mut conf = self.clone();
         conf.projection = config.projected_file_column_names();
         Arc::new(conf)

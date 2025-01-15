@@ -23,6 +23,7 @@ use std::sync::Arc;
 use std::task::Poll;
 
 use super::{calculate_range, FileScanConfig, RangeCalculation};
+use crate::datasource::data_source::FileSource;
 use crate::datasource::file_format::file_compression_type::FileCompressionType;
 use crate::datasource::file_format::{deserialize_stream, DecoderDeserializer};
 use crate::datasource::listing::{FileRange, ListingTableUrl};
@@ -35,7 +36,6 @@ use arrow::csv;
 use arrow::datatypes::SchemaRef;
 use datafusion_execution::TaskContext;
 
-use crate::datasource::data_source::DataSourceFileConfig;
 use futures::{StreamExt, TryStreamExt};
 use object_store::buffered::BufWriter;
 use object_store::{GetOptions, GetResultPayload, ObjectStore};
@@ -210,7 +210,7 @@ impl CsvOpener {
     }
 }
 
-impl DataSourceFileConfig for CsvConfig {
+impl FileSource for CsvConfig {
     fn create_file_opener(
         &self,
         object_store: Result<Arc<dyn ObjectStore>>,
@@ -228,19 +228,19 @@ impl DataSourceFileConfig for CsvConfig {
         self
     }
 
-    fn with_batch_size(&self, batch_size: usize) -> Arc<dyn DataSourceFileConfig> {
+    fn with_batch_size(&self, batch_size: usize) -> Arc<dyn FileSource> {
         let mut conf = self.clone();
         conf.batch_size = Some(batch_size);
         Arc::new(conf)
     }
 
-    fn with_schema(&self, schema: SchemaRef) -> Arc<dyn DataSourceFileConfig> {
+    fn with_schema(&self, schema: SchemaRef) -> Arc<dyn FileSource> {
         let mut conf = self.clone();
         conf.file_schema = Some(schema);
         Arc::new(conf)
     }
 
-    fn with_projection(&self, config: &FileScanConfig) -> Arc<dyn DataSourceFileConfig> {
+    fn with_projection(&self, config: &FileScanConfig) -> Arc<dyn FileSource> {
         let mut conf = self.clone();
         conf.file_projection = config.file_column_projection_indices();
         Arc::new(conf)

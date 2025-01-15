@@ -47,8 +47,7 @@ use itertools::Itertools;
 use object_store::ObjectStore;
 
 /// Common behaviors that every `FileSourceConfig` needs to implement.
-/// Being stored as source_config in `DataSourceExec`.
-pub trait DataSourceFileConfig: Send + Sync {
+pub trait FileSource: Send + Sync {
     /// Creates a `dyn FileOpener` based on given parameters
     fn create_file_opener(
         &self,
@@ -56,16 +55,14 @@ pub trait DataSourceFileConfig: Send + Sync {
         base_config: &FileScanConfig,
         partition: usize,
     ) -> datafusion_common::Result<Arc<dyn FileOpener>>;
-
     /// Any
     fn as_any(&self) -> &dyn Any;
-
     /// Initialize new type with batch size configuration
-    fn with_batch_size(&self, batch_size: usize) -> Arc<dyn DataSourceFileConfig>;
+    fn with_batch_size(&self, batch_size: usize) -> Arc<dyn FileSource>;
     /// Initialize new instance with a new schema
-    fn with_schema(&self, schema: SchemaRef) -> Arc<dyn DataSourceFileConfig>;
+    fn with_schema(&self, schema: SchemaRef) -> Arc<dyn FileSource>;
     /// Initialize new instance with projection information
-    fn with_projection(&self, config: &FileScanConfig) -> Arc<dyn DataSourceFileConfig>;
+    fn with_projection(&self, config: &FileScanConfig) -> Arc<dyn FileSource>;
 }
 
 /// Holds generic file configuration, and common behaviors.
@@ -73,7 +70,7 @@ pub trait DataSourceFileConfig: Send + Sync {
 /// and a `dyn DataSourceFileConfig` type such as `CsvConfig`, `ParquetConfig`, `AvroConfig`, etc.
 #[derive(Clone)]
 pub struct FileSourceConfig {
-    source_config: Arc<dyn DataSourceFileConfig>,
+    source: Arc<dyn FileSource>,
     base_config: FileScanConfig,
     metrics: ExecutionPlanMetricsSet,
     projected_statistics: Statistics,
@@ -90,17 +87,14 @@ impl DataSource for FileSourceConfig {
             .runtime_env()
             .object_store(&self.base_config.object_store_url);
 
-        let source_config = self
-            .source_config
+        let source = self
+            .source
             .with_batch_size(context.session_config().batch_size())
             .with_schema(Arc::clone(&self.base_config.file_schema))
             .with_projection(&self.base_config);
 
-        let opener = source_config.create_file_opener(
-            object_store,
-            &self.base_config,
-            partition,
-        )?;
+        let opener =
+            source.create_file_opener(object_store, &self.base_config, partition)?;
 
         let stream =
             FileStream::new(&self.base_config, partition, opener, &self.metrics)?;
@@ -113,16 +107,16 @@ impl DataSource for FileSourceConfig {
 
     fn fmt_as(&self, t: DisplayFormatType, f: &mut Formatter) -> fmt::Result {
         self.base_config.fmt_as(t, f)?;
-        self.fmt_source_config(f)?;
+        self.fmt_file_source(f)?;
 
-        if let Some(csv_conf) = self.source_config.as_any().downcast_ref::<CsvConfig>() {
+        if let Some(csv_conf) = self.source.as_any().downcast_ref::<CsvConfig>() {
             return write!(f, ", has_header={}", csv_conf.has_header);
         }
 
         #[cfg(feature = "parquet")]
         if cfg!(feature = "parquet") {
             if let Some(parquet_conf) =
-                self.source_config.as_any().downcast_ref::<ParquetConfig>()
+                self.source.as_any().downcast_ref::<ParquetConfig>()
             {
                 match t {
                     DisplayFormatType::Default | DisplayFormatType::Verbose => {
@@ -194,7 +188,7 @@ impl DataSource for FileSourceConfig {
 
         #[cfg(feature = "parquet")]
         let stats = if let Some(parquet_config) =
-            self.source_config.as_any().downcast_ref::<ParquetConfig>()
+            self.source.as_any().downcast_ref::<ParquetConfig>()
         {
             // When filters are pushed down, we have no way of knowing the exact statistics.
             // Note that pruning predicate is also a kind of filter pushdown.
@@ -218,7 +212,7 @@ impl DataSource for FileSourceConfig {
     fn with_fetch(&self, limit: Option<usize>) -> Option<Arc<dyn DataSource>> {
         let config = self.base_config.clone().with_limit(limit);
         Some(Arc::new(Self {
-            source_config: Arc::clone(&self.source_config),
+            source: Arc::clone(&self.source),
             base_config: config,
             metrics: self.metrics.clone(),
             projected_statistics: self.projected_statistics.clone(),
@@ -243,17 +237,14 @@ impl FileSourceConfig {
     /// Returns a new [`DataSourceExec`] from file configurations
     pub fn new_exec(
         base_config: FileScanConfig,
-        source_config: Arc<dyn DataSourceFileConfig>,
+        file_source: Arc<dyn FileSource>,
     ) -> Arc<DataSourceExec> {
-        let source = Arc::new(Self::new(base_config, source_config));
+        let source = Arc::new(Self::new(base_config, file_source));
         Arc::new(DataSourceExec::new(source))
     }
 
     /// Initialize a new `FileSourceConfig` instance with metrics, cache, and statistics.
-    pub fn new(
-        base_config: FileScanConfig,
-        source_config: Arc<dyn DataSourceFileConfig>,
-    ) -> Self {
+    pub fn new(base_config: FileScanConfig, file_source: Arc<dyn FileSource>) -> Self {
         let (projected_schema, projected_statistics, projected_output_ordering) =
             base_config.project();
         let cache = Self::compute_properties(
@@ -264,8 +255,7 @@ impl FileSourceConfig {
         let mut metrics = ExecutionPlanMetricsSet::new();
 
         #[cfg(feature = "parquet")]
-        if let Some(parquet_config) =
-            source_config.as_any().downcast_ref::<ParquetConfig>()
+        if let Some(parquet_config) = file_source.as_any().downcast_ref::<ParquetConfig>()
         {
             metrics = parquet_config.metrics();
             let _predicate_creation_errors = MetricBuilder::new(&metrics)
@@ -273,7 +263,7 @@ impl FileSourceConfig {
         };
 
         Self {
-            source_config,
+            source: file_source,
             base_config,
             metrics,
             projected_statistics,
@@ -281,21 +271,18 @@ impl FileSourceConfig {
         }
     }
 
-    /// Write the data_type based on source_config
-    fn fmt_source_config(&self, f: &mut Formatter) -> fmt::Result {
-        let source_config = self.source_config.as_any();
+    /// Write the data_type based on file_source
+    fn fmt_file_source(&self, f: &mut Formatter) -> fmt::Result {
+        let file_source = self.source.as_any();
         let data_type = [
-            ("avro", source_config.downcast_ref::<AvroConfig>().is_some()),
-            (
-                "arrow",
-                source_config.downcast_ref::<ArrowConfig>().is_some(),
-            ),
-            ("csv", source_config.downcast_ref::<CsvConfig>().is_some()),
-            ("json", source_config.downcast_ref::<JsonConfig>().is_some()),
+            ("avro", file_source.downcast_ref::<AvroConfig>().is_some()),
+            ("arrow", file_source.downcast_ref::<ArrowConfig>().is_some()),
+            ("csv", file_source.downcast_ref::<CsvConfig>().is_some()),
+            ("json", file_source.downcast_ref::<JsonConfig>().is_some()),
             #[cfg(feature = "parquet")]
             (
                 "parquet",
-                source_config.downcast_ref::<ParquetConfig>().is_some(),
+                file_source.downcast_ref::<ParquetConfig>().is_some(),
             ),
         ]
         .iter()
@@ -311,9 +298,9 @@ impl FileSourceConfig {
         &self.base_config
     }
 
-    /// Returns the source_config
-    pub fn source_config(&self) -> &Arc<dyn DataSourceFileConfig> {
-        &self.source_config
+    /// Returns the file_source
+    pub fn file_source(&self) -> &Arc<dyn FileSource> {
+        &self.source
     }
 
     /// Returns the `PlanProperties` of the plan
@@ -352,10 +339,6 @@ impl FileSourceConfig {
     fn supports_repartition(&self) -> bool {
         !(self.base_config.file_compression_type.is_compressed()
             || self.base_config.new_lines_in_values
-            || self
-                .source_config
-                .as_any()
-                .downcast_ref::<AvroConfig>()
-                .is_some())
+            || self.source.as_any().downcast_ref::<AvroConfig>().is_some())
     }
 }
