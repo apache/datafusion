@@ -82,8 +82,27 @@ pub trait FileSink: DataSink {
     /// Retrieves the file sink configuration.
     fn config(&self) -> &FileSinkConfig;
 
-    /// Spawns writer tasks and uses `tokio::join` to collect results.
-    /// Returns the total write count.
+    /// Spawns writer tasks and joins them to perform file writing operations.
+    /// Is a critical part of `FileSink` trait, since it's the very last step for `write_all`.
+    ///
+    /// This function handles the process of writing data to files by:
+    /// 1. Spawning tasks for writing data to individual files.
+    /// 2. Coordinating the tasks using a demuxer to distribute data among files.
+    /// 3. Collecting results using `tokio::join`, ensuring that all tasks complete successfully.
+    ///
+    /// # Parameters
+    /// - `context`: The execution context (`TaskContext`) that provides resources
+    ///   like memory management and runtime environment.
+    /// - `demux_task`: A spawned task that handles demuxing, responsible for splitting
+    ///   an input [`SendableRecordBatchStream`] into dynamically determined partitions.
+    ///   See `start_demuxer_task()`
+    /// - `file_stream_rx`: A receiver that yields streams of record batches and their
+    ///   corresponding file paths for writing. See `start_demuxer_task()`
+    /// - `object_store`: A handle to the object store where the files are written.
+    ///
+    /// # Returns
+    /// - `Result<u64>`: Returns the total number of rows written across all files.
+    /// ```
     async fn spawn_writer_tasks_and_join(
         &self,
         context: &Arc<TaskContext>,
