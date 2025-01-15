@@ -1836,3 +1836,7 @@ DROP TABLE test;
 # Can't reference an unqualified column by a qualified name
 query error DataFusion error: Schema error: No field named t1.v1. Column names are case sensitive. You can use double quotes to refer to the "t1.v1" column or set the datafusion.sql_parser.enable_ident_normalization configuration. Valid fields are "t1.v1".
 SELECT t1.v1 FROM (SELECT 1 AS "t1.v1");
+
+# Test issue: https://github.com/apache/datafusion/issues/14124
+query error DataFusion error: Arrow error: Arithmetic overflow: Overflow happened on: 10000 \* 100000000000000000000000000000000000
+SELECT ('0.54321543215432154321543215432154321'::DECIMAL(35,35) + 10000)::VARCHAR
