@@ -783,6 +783,40 @@ impl From<protobuf::JoinSide> for JoinSide {
     }
 }
 
+impl From<&protobuf::Constraint> for Constraint {
+    fn from(value: &protobuf::Constraint) -> Self {
+        match &value.constraint_mode {
+            Some(protobuf::constraint::ConstraintMode::PrimaryKey(elem)) => {
+                Constraint::PrimaryKey(
+                    elem.indices.iter().map(|&item| item as usize).collect(),
+                )
+            }
+            Some(protobuf::constraint::ConstraintMode::Unique(elem)) => {
+                Constraint::Unique(
+                    elem.indices.iter().map(|&item| item as usize).collect(),
+                )
+            }
+            None => panic!("constraint_mode not set"),
+        }
+    }
+}
+
+impl TryFrom<&protobuf::Constraints> for Constraints {
+    type Error = DataFusionError;
+
+    fn try_from(
+        constraints: &protobuf::Constraints,
+    ) -> datafusion_common::Result<Self, Self::Error> {
+        Ok(Constraints::new_unverified(
+            constraints
+                .constraints
+                .iter()
+                .map(|item| item.into())
+                .collect(),
+        ))
+    }
+}
+
 impl TryFrom<&protobuf::Statistics> for Statistics {
     type Error = DataFusionError;
 

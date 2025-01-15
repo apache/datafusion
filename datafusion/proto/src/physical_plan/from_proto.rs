@@ -485,6 +485,8 @@ pub fn parse_protobuf_file_scan_config(
     } else {
         Some(projection)
     };
+
+    let constraints = convert_required!(proto.constraints)?;
     let statistics = convert_required!(proto.statistics)?;
 
     let file_groups: Vec<Vec<PartitionedFile>> = proto
@@ -532,6 +534,7 @@ pub fn parse_protobuf_file_scan_config(
         object_store_url,
         file_schema,
         file_groups,
+        constraints,
         statistics,
         projection,
         limit: proto.limit.as_ref().map(|sl| sl.limit as usize),
