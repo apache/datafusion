@@ -233,10 +233,15 @@ impl FileScanConfig {
         }
 
         // Get projection indices once, reuse for both schema and constraints
-        let proj_indices = self.projection.clone().unwrap_or_else(|| {
-            (0..(self.file_schema.fields().len() + self.table_partition_cols.len()))
-                .collect::<Vec<_>>()
-        });
+        let proj_indices = self
+            .projection
+            .as_ref()
+            .map(|p| p.as_slice())
+            .unwrap_or_else(|| {
+                (0..(self.file_schema.fields().len() + self.table_partition_cols.len()))
+                    .collect::<Vec<_>>()
+                    .as_slice()
+            });
 
         let mut table_fields = vec![];
         let mut table_cols_stats = vec![];
