@@ -98,8 +98,8 @@ pub trait SqlTestCase {
 
 /// [UnaryTestCase] is designed for single input [ExecutionPlan]s.
 pub struct UnaryTestCase {
-    pub(crate) source_type: SourceType,
-    pub(crate) expect_fail: bool,
+    pub source_type: SourceType,
+    pub expect_fail: bool,
 }
 
 #[async_trait]
@@ -116,8 +116,8 @@ impl SqlTestCase for UnaryTestCase {
 }
 /// [BinaryTestCase] is designed for binary input [ExecutionPlan]s.
 pub struct BinaryTestCase {
-    pub(crate) source_types: (SourceType, SourceType),
-    pub(crate) expect_fail: bool,
+    pub source_types: (SourceType, SourceType),
+    pub expect_fail: bool,
 }
 
 #[async_trait]
@@ -136,14 +136,14 @@ impl SqlTestCase for BinaryTestCase {
 }
 
 pub struct QueryCase {
-    pub(crate) sql: String,
-    pub(crate) cases: Vec<Arc<dyn SqlTestCase>>,
-    pub(crate) error_operator: String,
+    pub sql: String,
+    pub cases: Vec<Arc<dyn SqlTestCase>>,
+    pub error_operator: String,
 }
 
 impl QueryCase {
     /// Run the test cases
-    pub(crate) async fn run(&self) -> Result<()> {
+    pub async fn run(&self) -> Result<()> {
         for case in &self.cases {
             let ctx = SessionContext::new();
             case.register_table(&ctx).await?;
@@ -215,7 +215,7 @@ pub fn coalesce_partitions_exec(input: Arc<dyn ExecutionPlan>) -> Arc<dyn Execut
     Arc::new(CoalescePartitionsExec::new(input))
 }
 
-pub(crate) fn memory_exec(schema: &SchemaRef) -> Arc<dyn ExecutionPlan> {
+pub fn memory_exec(schema: &SchemaRef) -> Arc<dyn ExecutionPlan> {
     Arc::new(MemoryExec::try_new(&[vec![]], schema.clone(), None).unwrap())
 }
 
