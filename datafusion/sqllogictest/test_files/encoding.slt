@@ -120,3 +120,9 @@ Andrew QW5kcmV3 416e64726577 X WA 58
 Xiangpeng WGlhbmdwZW5n 5869616e6770656e67 Xiangpeng WGlhbmdwZW5n 5869616e6770656e67
 Raphael UmFwaGFlbA 5261706861656c R Ug 52
 NULL NULL NULL R Ug 52
+
+# test for hex digest
+query T
+select encode(digest('hello', 'sha256'), 'hex');
+----
+2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824

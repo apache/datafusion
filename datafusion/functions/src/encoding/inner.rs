@@ -92,6 +92,7 @@ impl ScalarUDFImpl for EncodeFunc {
         Ok(match arg_types[0] {
             Utf8 => Utf8,
             LargeUtf8 => LargeUtf8,
+            Utf8View => Utf8,
             Binary => Utf8,
             LargeBinary => LargeUtf8,
             Null => Null,
