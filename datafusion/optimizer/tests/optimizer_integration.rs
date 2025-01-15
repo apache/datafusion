@@ -409,6 +409,8 @@ fn test_union_coercion_with_wildcard() -> Result<()> {
             err,
             "Error during planning: Wildcard should be expanded before type coercion"
         );
+    } else {
+        panic!("Expected Union plan");
     }
     Ok(())
 }
