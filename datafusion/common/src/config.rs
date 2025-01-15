@@ -1377,6 +1377,7 @@ impl TableOptions {
     /// # Returns
     ///
     /// A new `TableOptions` instance with updated settings from the session config.
+    #[must_use = "this method returns a new instance"]
     pub fn combine_with_session_config(&self, config: &ConfigOptions) -> Self {
         let mut clone = self.clone();
         clone.parquet.global = config.execution.parquet.clone();
