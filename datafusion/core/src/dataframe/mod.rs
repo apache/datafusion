@@ -1903,6 +1903,17 @@ impl DataFrame {
         let mem_table = MemTable::try_new(schema, partitions)?;
         context.read_table(Arc::new(mem_table))
     }
+
+    /// Apply an alias to the DataFrame.
+    ///
+    /// This method replaces the qualifiers of output columns with the given alias.
+    pub fn alias(self, alias: &str) -> Result<DataFrame> {
+        let plan = LogicalPlanBuilder::from(self.plan).alias(alias)?.build()?;
+        Ok(DataFrame {
+            session_state: self.session_state,
+            plan,
+        })
+    }
 }
 
 #[derive(Debug)]
