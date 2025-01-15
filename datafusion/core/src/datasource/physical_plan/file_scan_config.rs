@@ -130,7 +130,7 @@ pub struct FileScanConfig {
     pub output_ordering: Vec<LexOrdering>,
     /// File compression type
     pub file_compression_type: FileCompressionType,
-    /// New Lines in Values for CSVOptions
+    /// Are new lines in values supported for CSVOptions
     pub new_lines_in_values: bool,
 }
 

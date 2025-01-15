@@ -412,6 +412,7 @@ mod tests {
 
     use super::*;
     use crate::dataframe::DataFrameWriteOptions;
+    use crate::datasource::data_source::FileSourceConfig;
     use crate::datasource::file_format::csv::CsvFormat;
     use crate::prelude::*;
     use crate::test::{partitioned_csv_config, partitioned_file_groups};
@@ -420,9 +421,8 @@ mod tests {
     use arrow::datatypes::*;
     use bytes::Bytes;
     use datafusion_common::test_util::arrow_test_data;
-
-    use crate::datasource::data_source::FileSourceConfig;
     use datafusion_physical_plan::metrics::MetricsSet;
+
     use object_store::chunked::ChunkedStore;
     use object_store::local::LocalFileSystem;
     use rstest::*;

@@ -15,15 +15,17 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::metrics::{ExecutionPlanMetricsSet, MetricsSet};
-use crate::{DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties};
-use datafusion_common::config::ConfigOptions;
-use datafusion_common::Statistics;
-use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use std::any::Any;
 use std::fmt;
 use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
+
+use crate::metrics::{ExecutionPlanMetricsSet, MetricsSet};
+use crate::{DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties};
+
+use datafusion_common::config::ConfigOptions;
+use datafusion_common::Statistics;
+use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 
 /// Common behaviors in Data Sources for both from Files and Memory.
 /// See `DataSourceExec` for physical plan implementation
