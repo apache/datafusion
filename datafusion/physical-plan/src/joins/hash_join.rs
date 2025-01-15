@@ -27,7 +27,7 @@ use std::{any::Any, vec};
 use super::utils::{asymmetric_join_output_partitioning, reorder_output_after_swap};
 use super::{
     utils::{OnceAsync, OnceFut},
-    PartitionMode,
+    PartitionMode, SharedBitmapBuilder,
 };
 use crate::execution_plan::{boundedness_from_children, EmissionType};
 use crate::ExecutionPlanProperties;
@@ -78,8 +78,6 @@ use datafusion_physical_expr_common::datum::compare_op_for_nested;
 use futures::{ready, Stream, StreamExt, TryStreamExt};
 use parking_lot::Mutex;
 
-type SharedBitmapBuilder = Mutex<BooleanBufferBuilder>;
-
 /// HashTable and input data for the left (build side) of a join
 struct JoinLeftData {
     /// The hash table with indices into `batch`
@@ -87,7 +85,7 @@ struct JoinLeftData {
     /// The input rows for the build side
     batch: RecordBatch,
     /// Shared bitmap builder for visited left indices
-    visited_indices_bitmap: Mutex<BooleanBufferBuilder>,
+    visited_indices_bitmap: SharedBitmapBuilder,
     /// Counter of running probe-threads, potentially
     /// able to update `visited_indices_bitmap`
     probe_threads_counter: AtomicUsize,
