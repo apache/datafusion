@@ -16,13 +16,13 @@
 // under the License.
 
 use std::fmt::Display;
-use std::hash::Hash;
+use std::hash::{Hash, Hasher};
 use std::sync::Arc;
-use std::vec::IntoIter;
 
 use crate::equivalence::add_offset_to_expr;
 use crate::{LexOrdering, PhysicalExpr};
 use arrow_schema::SortOptions;
+use indexmap::IndexSet;
 
 /// An `OrderingEquivalenceClass` object keeps track of different alternative
 /// orderings than can describe a schema. For example, consider the following table:
@@ -37,9 +37,18 @@ use arrow_schema::SortOptions;
 ///
 /// Here, both `vec![a ASC, b ASC]` and `vec![c DESC, d ASC]` describe the table
 /// ordering. In this case, we say that these orderings are equivalent.
-#[derive(Debug, Clone, Eq, PartialEq, Hash, Default)]
+#[derive(Debug, Clone, Eq, PartialEq, Default)]
 pub struct OrderingEquivalenceClass {
-    orderings: Vec<LexOrdering>,
+    /// Use index set to maintain order but avoid duplicates.
+    orderings: IndexSet<LexOrdering>,
+}
+
+impl Hash for OrderingEquivalenceClass {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        for ordering in &self.orderings {
+            ordering.hash(state);
+        }
+    }
 }
 
 impl OrderingEquivalenceClass {
@@ -56,15 +65,16 @@ impl OrderingEquivalenceClass {
     /// Creates new ordering equivalence class from the given orderings
     ///
     /// Any redundant entries are removed
-    pub fn new(orderings: Vec<LexOrdering>) -> Self {
-        let mut result = Self { orderings };
-        result.remove_redundant_entries();
-        result
+    pub fn new(orderings: impl IntoIterator<Item = LexOrdering>) -> Self {
+        let orderings = orderings.into_iter().collect();
+        Self { orderings }
     }
 
     /// Converts this OrderingEquivalenceClass to a vector of orderings.
+    ///
+    // TODO remove / rename into_vec if it is needed
     pub fn into_inner(self) -> Vec<LexOrdering> {
-        self.orderings
+        self.orderings.into_iter().collect()
     }
 
     /// Checks whether `ordering` is a member of this equivalence class.
@@ -195,32 +205,36 @@ impl OrderingEquivalenceClass {
         let n_ordering = self.orderings.len();
         // Replicate entries before cross product
         let n_cross = std::cmp::max(n_ordering, other.len() * n_ordering);
-        self.orderings = self
+        let mut new_orderings: Vec<_> = self
             .orderings
             .iter()
             .cloned()
             .cycle()
             .take(n_cross)
             .collect();
+
         // Suffix orderings of other to the current orderings.
         for (outer_idx, ordering) in other.iter().enumerate() {
             for idx in 0..n_ordering {
                 // Calculate cross product index
                 let idx = outer_idx * n_ordering + idx;
-                self.orderings[idx].extend(ordering.iter().cloned());
+                new_orderings[idx].extend(ordering.iter().cloned());
             }
         }
+        // turn back to indexset
+        self.orderings = new_orderings.into_iter().collect();
         self
     }
 
-    /// Adds `offset` value to the index of each expression inside this
-    /// ordering equivalence class.
-    pub fn add_offset(&mut self, offset: usize) {
-        for ordering in self.orderings.iter_mut() {
+    /// shift all column references by `offset`
+    pub fn add_offset(self, offset: usize) -> Self {
+        let rewritten_exprs = self.orderings.into_iter().map(|mut ordering| {
             ordering.transform(|sort_expr| {
-                sort_expr.expr = add_offset_to_expr(Arc::clone(&sort_expr.expr), offset);
-            })
-        }
+                sort_expr.expr = add_offset_to_expr(&sort_expr.expr, offset);
+            });
+            ordering
+        });
+        Self::new(rewritten_exprs)
     }
 
     /// Gets sort options associated with this expression if it is a leading
@@ -239,7 +253,7 @@ impl OrderingEquivalenceClass {
 /// Convert the `OrderingEquivalenceClass` into an iterator of LexOrderings
 impl IntoIterator for OrderingEquivalenceClass {
     type Item = LexOrdering;
-    type IntoIter = IntoIter<LexOrdering>;
+    type IntoIter = indexmap::set::IntoIter<LexOrdering>;
 
     fn into_iter(self) -> Self::IntoIter {
         self.orderings.into_iter()
@@ -258,6 +272,12 @@ impl Display for OrderingEquivalenceClass {
         }
         write!(f, "]")?;
         Ok(())
+    }
+}
+
+impl From<IndexSet<LexOrdering>> for OrderingEquivalenceClass {
+    fn from(orderings: IndexSet<LexOrdering>) -> Self {
+        Self { orderings }
     }
 }
 

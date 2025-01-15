@@ -48,19 +48,24 @@ pub fn collapse_lex_req(input: LexRequirement) -> LexRequirement {
 
 /// Adds the `offset` value to `Column` indices inside `expr`. This function is
 /// generally used during the update of the right table schema in join operations.
-pub fn add_offset_to_expr(
-    expr: Arc<dyn PhysicalExpr>,
+fn add_offset_to_expr(
+    expr: &Arc<dyn PhysicalExpr>,
     offset: usize,
 ) -> Arc<dyn PhysicalExpr> {
-    expr.transform_down(|e| match e.as_any().downcast_ref::<Column>() {
-        Some(col) => Ok(Transformed::yes(Arc::new(Column::new(
-            col.name(),
-            offset + col.index(),
-        )))),
-        None => Ok(Transformed::no(e)),
-    })
-    .data()
-    .unwrap()
+    // special case a top level <Column> and avoid clone and transform_down overhead
+    if let Some(column) = expr.as_any().downcast_ref::<Column>() {
+        return Arc::new(Column::new(column.name(), column.index() + offset));
+    }
+    Arc::clone(expr)
+        .transform_down(|e| match e.as_any().downcast_ref::<Column>() {
+            Some(col) => Ok(Transformed::yes(Arc::new(Column::new(
+                col.name(),
+                offset + col.index(),
+            )))),
+            None => Ok(Transformed::no(e)),
+        })
+        .data()
+        .unwrap()
     // Note that we can safely unwrap here since our transform always returns
     // an `Ok` value.
 }

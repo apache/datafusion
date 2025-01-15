@@ -310,7 +310,6 @@ impl EquivalenceClass {
         let new_exprs = self
             .exprs
             .iter()
-            .cloned()
             .map(|e| add_offset_to_expr(e, offset))
             .collect();
         Self::new(new_exprs)

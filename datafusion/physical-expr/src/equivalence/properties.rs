@@ -198,8 +198,7 @@ impl EquivalenceProperties {
         OrderingEquivalenceClass::new(
             self.oeq_class
                 .iter()
-                .map(|ordering| self.normalize_sort_exprs(ordering))
-                .collect(),
+                .map(|ordering| self.normalize_sort_exprs(ordering)),
         )
     }
 
@@ -713,7 +712,7 @@ impl EquivalenceProperties {
             .iter()
             .map(|order| self.substitute_ordering_component(mapping, order))
             .collect::<Result<Vec<_>>>()?;
-        let new_order = new_order.into_iter().flatten().collect();
+        let new_order = new_order.into_iter().flatten();
         self.oeq_class = OrderingEquivalenceClass::new(new_order);
         Ok(())
     }
@@ -1849,7 +1848,7 @@ pub fn join_equivalence_properties(
     } = left;
     let EquivalenceProperties {
         constants: right_constants,
-        oeq_class: mut right_oeq_class,
+        oeq_class: right_oeq_class,
         ..
     } = right;
     match maintains_input_order {
@@ -1857,8 +1856,8 @@ pub fn join_equivalence_properties(
             // In this special case, right side ordering can be prefixed with
             // the left side ordering.
             if let (Some(JoinSide::Left), JoinType::Inner) = (probe_side, join_type) {
-                updated_right_ordering_equivalence_class(
-                    &mut right_oeq_class,
+                let right_oeq_class = updated_right_ordering_equivalence_class(
+                    right_oeq_class,
                     join_type,
                     left_size,
                 );
@@ -1878,8 +1877,8 @@ pub fn join_equivalence_properties(
             }
         }
         [false, true] => {
-            updated_right_ordering_equivalence_class(
-                &mut right_oeq_class,
+            let right_oeq_class = updated_right_ordering_equivalence_class(
+                right_oeq_class,
                 join_type,
                 left_size,
             );
@@ -1924,15 +1923,17 @@ pub fn join_equivalence_properties(
 /// is the case for `Inner`, `Left`, `Full` and `Right` joins. For other cases,
 /// indices do not change.
 fn updated_right_ordering_equivalence_class(
-    right_oeq_class: &mut OrderingEquivalenceClass,
+    right_oeq_class: OrderingEquivalenceClass,
     join_type: &JoinType,
     left_size: usize,
-) {
+) -> OrderingEquivalenceClass {
     if matches!(
         join_type,
         JoinType::Inner | JoinType::Left | JoinType::Full | JoinType::Right
     ) {
-        right_oeq_class.add_offset(left_size);
+        right_oeq_class.add_offset(left_size)
+    } else {
+        right_oeq_class
     }
 }
 
@@ -2365,8 +2366,8 @@ mod tests {
         let col_b = &col("b", &schema)?;
         let col_c = &col("c", &schema)?;
         let offset = schema.fields.len();
-        let col_a2 = &add_offset_to_expr(Arc::clone(col_a), offset);
-        let col_b2 = &add_offset_to_expr(Arc::clone(col_b), offset);
+        let col_a2 = &add_offset_to_expr(col_a, offset);
+        let col_b2 = &add_offset_to_expr(col_b, offset);
         let option_asc = SortOptions {
             descending: false,
             nulls_first: false,
@@ -2493,7 +2494,7 @@ mod tests {
         ];
         let orderings = convert_to_orderings(&orderings);
         // Right child ordering equivalences
-        let mut right_oeq_class = OrderingEquivalenceClass::new(orderings);
+        let right_oeq_class = OrderingEquivalenceClass::new(orderings);
 
         let left_columns_len = 4;
 
@@ -2516,8 +2517,8 @@ mod tests {
         join_eq_properties.add_equal_conditions(col_a, col_x)?;
         join_eq_properties.add_equal_conditions(col_d, col_w)?;
 
-        updated_right_ordering_equivalence_class(
-            &mut right_oeq_class,
+        let right_oeq_class = updated_right_ordering_equivalence_class(
+            right_oeq_class,
             &join_type,
             left_columns_len,
         );
