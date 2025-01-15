@@ -40,6 +40,7 @@ use datafusion_proto::{
     protobuf::LogicalExprList,
 };
 use prost::Message;
+use tokio::runtime::Runtime;
 
 use crate::{
     arrow_wrappers::WrappedSchema,
@@ -139,6 +140,9 @@ pub struct FFI_TableProvider {
     /// Release the memory of the private data when it is no longer being used.
     pub release: unsafe extern "C" fn(arg: &mut Self),
 
+    /// Return the major DataFusion version number of this provider.
+    pub version: unsafe extern "C" fn() -> u64,
+
     /// Internal data. This is only to be accessed by the provider of the plan.
     /// A [`ForeignExecutionPlan`] should never attempt to access this data.
     pub private_data: *mut c_void,
@@ -149,6 +153,7 @@ unsafe impl Sync for FFI_TableProvider {}
 
 struct ProviderPrivateData {
     provider: Arc<dyn TableProvider + Send>,
+    runtime: Option<Arc<Runtime>>,
 }
 
 unsafe extern "C" fn schema_fn_wrapper(provider: &FFI_TableProvider) -> WrappedSchema {
@@ -216,6 +221,7 @@ unsafe extern "C" fn scan_fn_wrapper(
     let private_data = provider.private_data as *mut ProviderPrivateData;
     let internal_provider = &(*private_data).provider;
     let session_config = session_config.clone();
+    let runtime = &(*private_data).runtime;
 
     async move {
         let config = match ForeignSessionConfig::try_from(&session_config) {
@@ -261,7 +267,11 @@ unsafe extern "C" fn scan_fn_wrapper(
             Err(e) => return RResult::RErr(e.to_string().into()),
         };
 
-        RResult::ROk(FFI_ExecutionPlan::new(plan, ctx.task_ctx()))
+        RResult::ROk(FFI_ExecutionPlan::new(
+            plan,
+            ctx.task_ctx(),
+            runtime.clone(),
+        ))
     }
     .into_ffi()
 }
@@ -273,9 +283,11 @@ unsafe extern "C" fn release_fn_wrapper(provider: &mut FFI_TableProvider) {
 
 unsafe extern "C" fn clone_fn_wrapper(provider: &FFI_TableProvider) -> FFI_TableProvider {
     let old_private_data = provider.private_data as *const ProviderPrivateData;
+    let runtime = (*old_private_data).runtime.clone();
 
     let private_data = Box::into_raw(Box::new(ProviderPrivateData {
         provider: Arc::clone(&(*old_private_data).provider),
+        runtime,
     })) as *mut c_void;
 
     FFI_TableProvider {
@@ -285,6 +297,7 @@ unsafe extern "C" fn clone_fn_wrapper(provider: &FFI_TableProvider) -> FFI_Table
         supports_filters_pushdown: provider.supports_filters_pushdown,
         clone: clone_fn_wrapper,
         release: release_fn_wrapper,
+        version: super::version,
         private_data,
     }
 }
@@ -300,8 +313,9 @@ impl FFI_TableProvider {
     pub fn new(
         provider: Arc<dyn TableProvider + Send>,
         can_support_pushdown_filters: bool,
+        runtime: Option<Arc<Runtime>>,
     ) -> Self {
-        let private_data = Box::new(ProviderPrivateData { provider });
+        let private_data = Box::new(ProviderPrivateData { provider, runtime });
 
         Self {
             schema: schema_fn_wrapper,
@@ -313,6 +327,7 @@ impl FFI_TableProvider {
             },
             clone: clone_fn_wrapper,
             release: release_fn_wrapper,
+            version: super::version,
             private_data: Box::into_raw(private_data) as *mut c_void,
         }
     }
@@ -463,7 +478,7 @@ mod tests {
         let provider =
             Arc::new(MemTable::try_new(schema, vec![vec![batch1], vec![batch2]])?);
 
-        let ffi_provider = FFI_TableProvider::new(provider, true);
+        let ffi_provider = FFI_TableProvider::new(provider, true, None);
 
         let foreign_table_provider: ForeignTableProvider = (&ffi_provider).into();
 
