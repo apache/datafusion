@@ -161,3 +161,17 @@ create table records (timestamp timestamp, value float) as values (
     '2021-01-01 00:00:00', 1.0,
     '2021-01-01 00:00:00', 2.0
 );
+
+# Error number of nested expressions exceeds limit
+statement error DataFusion error: SQL error: RecursionLimitExceeded
+SELECT
+    c1
+FROM
+    aggregate_test_100
+WHERE
+    c1=0 OR (c2=0 OR (c3=0 OR (c4=0 OR (c5=0 OR (c6=0 OR (c7=0 OR (c8=0 OR (c9=0 OR (c10=0 OR
+    (c1=1 OR (c2=1 OR (c3=1 OR (c4=1 OR (c5=1 OR (c6=1 OR (c7=1 OR (c8=1 OR (c9=1 OR (c10=1 OR
+    (c1=2 OR (c2=2 OR (c3=2 OR (c4=2 OR (c5=2 OR (c6=2 OR (c7=2 OR (c8=2 OR (c9=2 OR (c10=2 OR
+    (c1=3 OR (c2=3 OR (c3=3 OR (c4=3 OR (c5=3 OR (c6=3 OR (c7=3 OR (c8=3 OR (c9=3 OR (c10=3 OR
+    (c1=4 OR (c2=4 OR (c3=4 OR (c4=4 OR (c5=4 OR (c6=4 OR (c7=4 OR (c8=4 OR (c9=4 OR (c10=4
+    )))))))))))))))))))))))))))))))))))))))))))))))));
