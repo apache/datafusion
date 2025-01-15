@@ -55,6 +55,16 @@ pub trait TableProvider: Debug + Sync + Send {
     /// Get a reference to the schema for this table
     fn schema(&self) -> SchemaRef;
 
+    /// Get metadata columns of this table.
+    /// See Also: [`datafusion_common::DFSchema::metadata`]
+    ///
+    /// Returns:
+    /// - `None` for tables that do not have metadata columns.
+    /// - `Some(SchemaRef)` for tables having metadata columns.
+    fn metadata_columns(&self) -> Option<SchemaRef> {
+        None
+    }
+
     /// Get a reference to the constraints of the table.
     /// Returns:
     /// - `None` for tables that do not support constraints.

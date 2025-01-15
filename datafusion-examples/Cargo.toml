@@ -70,6 +70,7 @@ datafusion-proto = { workspace = true }
 datafusion-sql = { workspace = true }
 env_logger = { workspace = true }
 futures = { workspace = true }
+itertools = { workspace = true }
 log = { workspace = true }
 mimalloc = { version = "0.1", default-features = false }
 object_store = { workspace = true, features = ["aws", "http"] }
