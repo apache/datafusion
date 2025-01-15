@@ -158,8 +158,8 @@ CI tests always run against the latest compatible versions of all dependencies
 and we rely on Dependabot for other upgrades. This strategy has two problems
 that occasionally arise:
 
-2. CI failures when downstream libraries upgrade in some non compatible way
-3. Local development builds that fail when DataFusion inadvertently relies on
+1. CI failures when downstream libraries upgrade in some non compatible way
+2. Local development builds that fail when DataFusion inadvertently relies on
    a feature in a newer version of a dependency than declared in `Cargo.toml`
    (e.g. a new method is added to a trait that we use).
 
