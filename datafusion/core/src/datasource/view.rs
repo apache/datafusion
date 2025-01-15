@@ -31,6 +31,7 @@ use datafusion_common::config::ConfigOptions;
 use datafusion_common::Column;
 use datafusion_expr::{LogicalPlanBuilder, TableProviderFilterPushDown};
 use datafusion_optimizer::analyzer::expand_wildcard_rule::ExpandWildcardRule;
+use datafusion_optimizer::analyzer::type_coercion::TypeCoercion;
 use datafusion_optimizer::Analyzer;
 
 use crate::datasource::{TableProvider, TableType};
@@ -67,11 +68,11 @@ impl ViewTable {
 
     fn apply_required_rule(logical_plan: LogicalPlan) -> Result<LogicalPlan> {
         let options = ConfigOptions::default();
-        Analyzer::with_rules(vec![Arc::new(ExpandWildcardRule::new())]).execute_and_check(
-            logical_plan,
-            &options,
-            |_, _| {},
-        )
+        Analyzer::with_rules(vec![
+            Arc::new(ExpandWildcardRule::new()),
+            Arc::new(TypeCoercion::new()),
+        ])
+        .execute_and_check(logical_plan, &options, |_, _| {})
     }
 
     /// Get definition ref
