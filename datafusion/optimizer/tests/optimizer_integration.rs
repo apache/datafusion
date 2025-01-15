@@ -22,7 +22,7 @@ use std::sync::Arc;
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef, TimeUnit};
 
 use datafusion_common::config::ConfigOptions;
-use datafusion_common::{plan_err, Result};
+use datafusion_common::{assert_contains, plan_err, Result};
 use datafusion_expr::sqlparser::dialect::PostgreSqlDialect;
 use datafusion_expr::test::function_stub::sum_udaf;
 use datafusion_expr::{AggregateUDF, LogicalPlan, ScalarUDF, TableSource, WindowUDF};
@@ -405,7 +405,10 @@ fn test_union_coercion_with_wildcard() -> Result<()> {
             .err()
             .unwrap()
             .to_string();
-        assert_eq!(err, "Error during planning: Wildcard should be expanded before going to the method");
+        assert_contains!(
+            err,
+            "Error during planning: Wildcard should be expanded before type coercion"
+        );
     }
     Ok(())
 }
