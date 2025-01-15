@@ -786,7 +786,7 @@ physical_plan
 08)--------------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
 09)----------------AggregateExec: mode=Partial, gby=[t@0 as t], aggr=[]
 10)------------------ProjectionExec: expr=[column1@0 as t]
-11)--------------------MemoryExec: partitions=1, partition_sizes=[1]
+11)--------------------DataSourceExec: partitions=1, partition_sizes=[1]
 12)------ProjectionExec: expr=[1 as m, t@0 as t]
 13)--------AggregateExec: mode=FinalPartitioned, gby=[t@0 as t], aggr=[]
 14)----------CoalesceBatchesExec: target_batch_size=8192
@@ -794,7 +794,7 @@ physical_plan
 16)--------------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
 17)----------------AggregateExec: mode=Partial, gby=[t@0 as t], aggr=[]
 18)------------------ProjectionExec: expr=[column1@0 as t]
-19)--------------------MemoryExec: partitions=1, partition_sizes=[1]
+19)--------------------DataSourceExec: partitions=1, partition_sizes=[1]
 
 #####
 # Multi column sorting with lists

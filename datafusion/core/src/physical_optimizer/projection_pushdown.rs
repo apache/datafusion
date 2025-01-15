@@ -243,12 +243,12 @@ fn try_swapping_with_memory(
                 memory.projection().as_ref().unwrap_or(&all_projections),
             );
 
-            let source = Arc::new(MemorySourceConfig::try_new(
+            let exec = MemorySourceConfig::try_new_exec(
                 memory.partitions(),
                 memory.original_schema(),
                 Some(new_projections),
-            )?);
-            Ok(Arc::new(DataSourceExec::new(source)) as _)
+            )? as _;
+            Ok(exec)
         })
         .transpose()
 }
@@ -1788,10 +1788,7 @@ mod tests {
             Field::new("e", DataType::Int32, true),
         ]));
 
-        let source = Arc::new(
-            MemorySourceConfig::try_new(&[], schema, Some(vec![2, 0, 3, 4])).unwrap(),
-        );
-        Arc::new(DataSourceExec::new(source))
+        MemorySourceConfig::try_new_exec(&[], schema, Some(vec![2, 0, 3, 4])).unwrap()
     }
 
     #[test]

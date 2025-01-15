@@ -55,7 +55,6 @@ use datafusion_execution::TaskContext;
 use datafusion_expr::dml::InsertOp;
 use datafusion_physical_expr::PhysicalExpr;
 use datafusion_physical_expr_common::sort_expr::LexRequirement;
-use datafusion_physical_plan::source::DataSourceExec;
 
 use async_trait::async_trait;
 use bytes::{Buf, Bytes};
@@ -434,9 +433,8 @@ impl FileFormat for CsvFormat {
                 .with_comment(self.options.comment),
         );
 
-        let source = Arc::new(FileSourceConfig::new(conf, source_config));
-        let exec = DataSourceExec::new(source);
-        Ok(Arc::new(exec))
+        let exec = FileSourceConfig::new_exec(conf, source_config);
+        Ok(exec)
     }
 
     async fn create_writer_physical_plan(

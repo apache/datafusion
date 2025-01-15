@@ -29,7 +29,6 @@ use datafusion::physical_plan::collect;
 use datafusion::prelude::SessionContext;
 use datafusion_common::Result;
 use datafusion_execution::object_store::ObjectStoreUrl;
-use datafusion_physical_plan::source::DataSourceExec;
 
 use object_store::path::Path;
 use object_store::ObjectMeta;
@@ -63,15 +62,15 @@ async fn multi_parquet_coercion() {
     ]));
     let source_config = Arc::new(ParquetConfig::default());
 
-    let parquet_exec = DataSourceExec::new(Arc::new(FileSourceConfig::new(
+    let parquet_exec = FileSourceConfig::new_exec(
         FileScanConfig::new(ObjectStoreUrl::local_filesystem(), file_schema)
             .with_file_group(file_group),
         source_config,
-    )));
+    );
 
     let session_ctx = SessionContext::new();
     let task_ctx = session_ctx.task_ctx();
-    let read = collect(Arc::new(parquet_exec), task_ctx).await.unwrap();
+    let read = collect(parquet_exec, task_ctx).await.unwrap();
 
     let expected = [
         "+-------+----+------+",
@@ -117,16 +116,16 @@ async fn multi_parquet_coercion_projection() {
         Field::new("c2", DataType::Int32, true),
         Field::new("c3", DataType::Float64, true),
     ]));
-    let parquet_exec = DataSourceExec::new(Arc::new(FileSourceConfig::new(
+    let parquet_exec = FileSourceConfig::new_exec(
         FileScanConfig::new(ObjectStoreUrl::local_filesystem(), file_schema)
             .with_file_group(file_group)
             .with_projection(Some(vec![1, 0, 2])),
         Arc::new(ParquetConfig::default()),
-    )));
+    );
 
     let session_ctx = SessionContext::new();
     let task_ctx = session_ctx.task_ctx();
-    let read = collect(Arc::new(parquet_exec), task_ctx).await.unwrap();
+    let read = collect(parquet_exec, task_ctx).await.unwrap();
 
     let expected = [
         "+----+-------+------+",

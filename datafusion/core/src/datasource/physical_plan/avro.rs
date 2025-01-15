@@ -152,7 +152,6 @@ mod tests {
     use crate::scalar::ScalarValue;
     use crate::test::object_store::local_unpartitioned_file;
 
-    use datafusion_physical_plan::source::DataSourceExec;
     use datafusion_physical_plan::ExecutionPlan;
 
     use futures::StreamExt;
@@ -199,9 +198,7 @@ mod tests {
             .with_projection(Some(vec![0, 1, 2]));
 
         let source_config = Arc::new(AvroConfig::new());
-
-        let source = Arc::new(FileSourceConfig::new(conf, source_config));
-        let source_exec = DataSourceExec::new(source);
+        let source_exec = FileSourceConfig::new_exec(conf, source_config);
         assert_eq!(
             source_exec
                 .properties()
@@ -274,8 +271,7 @@ mod tests {
             .with_projection(projection);
 
         let source_config = Arc::new(AvroConfig::new());
-        let source = Arc::new(FileSourceConfig::new(conf, source_config));
-        let source_exec = DataSourceExec::new(source);
+        let source_exec = FileSourceConfig::new_exec(conf, source_config);
         assert_eq!(
             source_exec
                 .properties()
@@ -349,8 +345,7 @@ mod tests {
             .with_table_partition_cols(vec![Field::new("date", DataType::Utf8, false)]);
 
         let source_config = Arc::new(AvroConfig::new());
-        let source = Arc::new(FileSourceConfig::new(conf, source_config));
-        let source_exec = DataSourceExec::new(source);
+        let source_exec = FileSourceConfig::new_exec(conf, source_config);
 
         assert_eq!(
             source_exec

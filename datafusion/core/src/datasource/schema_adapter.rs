@@ -452,7 +452,6 @@ mod tests {
     use crate::prelude::SessionContext;
 
     use datafusion_common::record_batch;
-    use datafusion_physical_plan::source::DataSourceExec;
     #[cfg(feature = "parquet")]
     use parquet::arrow::ArrowWriter;
     use tempfile::TempDir;
@@ -510,12 +509,11 @@ mod tests {
                 .with_schema_adapter_factory(Arc::new(TestSchemaAdapterFactory {})),
         );
 
-        let source = Arc::new(FileSourceConfig::new(base_conf, source_config));
-        let parquet_exec = DataSourceExec::new(source);
+        let parquet_exec = FileSourceConfig::new_exec(base_conf, source_config);
 
         let session_ctx = SessionContext::new();
         let task_ctx = session_ctx.task_ctx();
-        let read = collect(Arc::new(parquet_exec), task_ctx).await.unwrap();
+        let read = collect(parquet_exec, task_ctx).await.unwrap();
 
         let expected = [
             "+----+--------------+",

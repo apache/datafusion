@@ -36,7 +36,6 @@ use datafusion::catalog::TableProvider;
 use datafusion::common::Result;
 use datafusion::execution::SendableRecordBatchStream;
 use datafusion::physical_plan::memory::MemorySourceConfig;
-use datafusion::physical_plan::source::DataSourceExec;
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::prelude::{DataFrame, SessionContext};
@@ -255,11 +254,11 @@ impl TableProvider for RemoteTable {
             .await?
             .try_collect()
             .await?;
-        let source = Arc::new(MemorySourceConfig::try_new(
+        let exec = MemorySourceConfig::try_new_exec(
             &[batches],
             self.schema.clone(),
             projection.cloned(),
-        )?);
-        Ok(Arc::new(DataSourceExec::new(source)))
+        )?;
+        Ok(exec)
     }
 }

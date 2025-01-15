@@ -424,19 +424,19 @@ query TT
 EXPLAIN VALUES (1, 'a', -1, 1.1),(NULL, 'b', -3, 0.5)
 ----
 logical_plan Values: (Int64(1), Utf8("a"), Int64(-1), Float64(1.1)), (Int64(NULL), Utf8("b"), Int64(-3), Float64(0.5))
-physical_plan MemoryExec: partitions=1, partition_sizes=[1]
+physical_plan DataSourceExec: partitions=1, partition_sizes=[1]
 
 query TT
 EXPLAIN VALUES ('1'::float)
 ----
 logical_plan Values: (Float32(1) AS Utf8("1"))
-physical_plan MemoryExec: partitions=1, partition_sizes=[1]
+physical_plan DataSourceExec: partitions=1, partition_sizes=[1]
 
 query TT
 EXPLAIN VALUES (('1'||'2')::int unsigned)
 ----
 logical_plan Values: (UInt32(12) AS Utf8("1") || Utf8("2"))
-physical_plan MemoryExec: partitions=1, partition_sizes=[1]
+physical_plan DataSourceExec: partitions=1, partition_sizes=[1]
 
 
 # all where empty

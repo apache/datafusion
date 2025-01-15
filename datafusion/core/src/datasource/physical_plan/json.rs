@@ -259,7 +259,6 @@ mod tests {
     use arrow::array::Array;
     use arrow::datatypes::{Field, SchemaBuilder};
     use datafusion_common::cast::{as_int32_array, as_int64_array, as_string_array};
-    use datafusion_physical_plan::source::DataSourceExec;
 
     use object_store::chunked::ChunkedStore;
     use object_store::local::LocalFileSystem;
@@ -390,8 +389,7 @@ mod tests {
 
         let source_config = Arc::new(JsonConfig::new());
 
-        let source = Arc::new(FileSourceConfig::new(conf, source_config));
-        let exec = DataSourceExec::new(source);
+        let exec = FileSourceConfig::new_exec(conf, source_config);
 
         // TODO: this is not where schema inference should be tested
 
@@ -463,8 +461,7 @@ mod tests {
             .with_file_compression_type(file_compression_type.to_owned());
 
         let source_config = Arc::new(JsonConfig::new());
-        let source = Arc::new(FileSourceConfig::new(conf, source_config));
-        let exec = DataSourceExec::new(source);
+        let exec = FileSourceConfig::new_exec(conf, source_config);
 
         let mut it = exec.execute(0, task_ctx)?;
         let batch = it.next().await.unwrap()?;
@@ -505,8 +502,7 @@ mod tests {
             .with_file_compression_type(file_compression_type.to_owned());
 
         let source_config = Arc::new(JsonConfig::new());
-        let source = Arc::new(FileSourceConfig::new(conf, source_config));
-        let exec = DataSourceExec::new(source);
+        let exec = FileSourceConfig::new_exec(conf, source_config);
         let inferred_schema = exec.schema();
         assert_eq!(inferred_schema.fields().len(), 2);
 
@@ -552,8 +548,7 @@ mod tests {
             .with_file_compression_type(file_compression_type.to_owned());
 
         let source_config = Arc::new(JsonConfig::new());
-        let source = Arc::new(FileSourceConfig::new(conf, source_config));
-        let exec = DataSourceExec::new(source);
+        let exec = FileSourceConfig::new_exec(conf, source_config);
         let inferred_schema = exec.schema();
         assert_eq!(inferred_schema.fields().len(), 3);
 

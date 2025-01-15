@@ -162,16 +162,11 @@ impl MemTable {
             }
         }
 
-        let source = Arc::new(MemorySourceConfig::try_new(
-            &data,
-            Arc::clone(&schema),
-            None,
-        )?);
-        let exec = DataSourceExec::new(source);
+        let exec = MemorySourceConfig::try_new_exec(&data, Arc::clone(&schema), None)?;
 
         if let Some(num_partitions) = output_partitions {
             let exec = RepartitionExec::try_new(
-                Arc::new(exec),
+                exec,
                 Partitioning::RoundRobinBatch(num_partitions),
             )?;
 

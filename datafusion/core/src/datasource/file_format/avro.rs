@@ -41,7 +41,6 @@ use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::GetExt;
 use datafusion_common::DEFAULT_AVRO_EXTENSION;
 use datafusion_physical_expr::PhysicalExpr;
-use datafusion_physical_plan::source::DataSourceExec;
 use object_store::{GetResultPayload, ObjectMeta, ObjectStore};
 
 #[derive(Default)]
@@ -153,9 +152,8 @@ impl FileFormat for AvroFormat {
         _filters: Option<&Arc<dyn PhysicalExpr>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let source_config = Arc::new(AvroConfig::new());
-        let source = Arc::new(FileSourceConfig::new(conf, source_config));
-        let exec = DataSourceExec::new(source);
-        Ok(Arc::new(exec))
+        let exec = FileSourceConfig::new_exec(conf, source_config);
+        Ok(exec)
     }
 }
 

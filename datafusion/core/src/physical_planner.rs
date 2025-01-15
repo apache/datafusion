@@ -84,7 +84,6 @@ use datafusion_physical_expr::LexOrdering;
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use datafusion_physical_plan::memory::MemorySourceConfig;
 use datafusion_physical_plan::placeholder_row::PlaceholderRowExec;
-use datafusion_physical_plan::source::DataSourceExec;
 use datafusion_physical_plan::unnest::ListUnnest;
 use datafusion_sql::utils::window_expr_common_partition_keys;
 
@@ -1941,12 +1940,8 @@ impl DefaultPhysicalPlanner {
         let schema = record_batch.schema();
         let partitions = vec![vec![record_batch]];
         let projection = None;
-        let mem_exec = DataSourceExec::new(Arc::new(MemorySourceConfig::try_new(
-            &partitions,
-            schema,
-            projection,
-        )?));
-        Ok(Arc::new(mem_exec))
+        let mem_exec = MemorySourceConfig::try_new_exec(&partitions, schema, projection)?;
+        Ok(mem_exec)
     }
 
     fn create_project_physical_exec(

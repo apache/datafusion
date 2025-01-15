@@ -37,7 +37,6 @@ use datafusion::physical_plan::{
 use datafusion::prelude::SessionContext;
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use datafusion_physical_plan::memory::MemorySourceConfig;
-use datafusion_physical_plan::source::DataSourceExec;
 
 // Initialize the operator using the provided record batches and the sort key
 // as inputs. All record batches must have the same schema.
@@ -56,16 +55,13 @@ fn sort_preserving_merge_operator(
         })
         .collect::<LexOrdering>();
 
-    let source = Arc::new(
-        MemorySourceConfig::try_new(
-            &batches.into_iter().map(|rb| vec![rb]).collect::<Vec<_>>(),
-            schema,
-            None,
-        )
-        .unwrap(),
-    );
-    let exec = DataSourceExec::new(source);
-    let merge = Arc::new(SortPreservingMergeExec::new(sort, Arc::new(exec)));
+    let exec = MemorySourceConfig::try_new_exec(
+        &batches.into_iter().map(|rb| vec![rb]).collect::<Vec<_>>(),
+        schema,
+        None,
+    )
+    .unwrap();
+    let merge = Arc::new(SortPreservingMergeExec::new(sort, exec));
     let task_ctx = session_ctx.task_ctx();
     let rt = Runtime::new().unwrap();
     rt.block_on(collect(merge, task_ctx)).unwrap();

@@ -428,16 +428,13 @@ impl JoinFuzzTestCase {
     fn left_right(&self) -> (Arc<DataSourceExec>, Arc<DataSourceExec>) {
         let schema1 = self.input1[0].schema();
         let schema2 = self.input2[0].schema();
-        let left = Arc::new(
-            MemorySourceConfig::try_new(&[self.input1.clone()], schema1, None).unwrap(),
-        );
-        let right = Arc::new(
-            MemorySourceConfig::try_new(&[self.input2.clone()], schema2, None).unwrap(),
-        );
-        (
-            Arc::new(DataSourceExec::new(left)),
-            Arc::new(DataSourceExec::new(right)),
-        )
+        let left =
+            MemorySourceConfig::try_new_exec(&[self.input1.clone()], schema1, None)
+                .unwrap();
+        let right =
+            MemorySourceConfig::try_new_exec(&[self.input2.clone()], schema2, None)
+                .unwrap();
+        (left, right)
     }
 
     fn join_filter(&self) -> Option<JoinFilter> {

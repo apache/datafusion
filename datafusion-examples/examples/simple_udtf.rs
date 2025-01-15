@@ -25,7 +25,6 @@ use datafusion::datasource::TableProvider;
 use datafusion::error::Result;
 use datafusion::execution::context::ExecutionProps;
 use datafusion::physical_plan::memory::MemorySourceConfig;
-use datafusion::physical_plan::source::DataSourceExec;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::prelude::SessionContext;
 use datafusion_catalog::TableFunctionImpl;
@@ -121,12 +120,12 @@ impl TableProvider for LocalCsvTable {
         } else {
             self.batches.clone()
         };
-        let source = Arc::new(MemorySourceConfig::try_new(
+        let exec = MemorySourceConfig::try_new_exec(
             &[batches],
             TableProvider::schema(self),
             projection.cloned(),
-        )?);
-        Ok(Arc::new(DataSourceExec::new(source)))
+        )?;
+        Ok(exec)
     }
 }
 

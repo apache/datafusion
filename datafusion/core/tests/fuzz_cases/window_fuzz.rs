@@ -160,12 +160,8 @@ async fn bounded_window_causal_non_causal() -> Result<()> {
     // Remove empty batches:
     batches.retain(|batch| batch.num_rows() > 0);
     let schema = batches[0].schema();
-    let memory_conf = Arc::new(MemorySourceConfig::try_new(
-        &[batches.clone()],
-        schema.clone(),
-        None,
-    )?);
-    let memory_exec = Arc::new(DataSourceExec::new(memory_conf));
+    let memory_exec =
+        MemorySourceConfig::try_new_exec(&[batches.clone()], schema.clone(), None)?;
 
     // Different window functions to test causality
     let window_functions = vec![

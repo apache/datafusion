@@ -423,7 +423,6 @@ mod tests {
 
     use crate::datasource::data_source::FileSourceConfig;
     use datafusion_physical_plan::metrics::MetricsSet;
-    use datafusion_physical_plan::source::DataSourceExec;
     use object_store::chunked::ChunkedStore;
     use object_store::local::LocalFileSystem;
     use rstest::*;
@@ -467,8 +466,7 @@ mod tests {
         config.projection = Some(vec![0, 2, 4]);
 
         let source_config = Arc::new(CsvConfig::new(true, b',', b'"'));
-        let source = Arc::new(FileSourceConfig::new(config.clone(), source_config));
-        let csv = Arc::new(DataSourceExec::new(source));
+        let csv = FileSourceConfig::new_exec(config.clone(), source_config);
 
         assert_eq!(13, config.file_schema.fields().len());
         assert_eq!(3, csv.schema().fields().len());
@@ -533,8 +531,7 @@ mod tests {
         config.projection = Some(vec![4, 0, 2]);
 
         let source_config = Arc::new(CsvConfig::new(true, b',', b'"'));
-        let source = Arc::new(FileSourceConfig::new(config.clone(), source_config));
-        let csv = Arc::new(DataSourceExec::new(source));
+        let csv = FileSourceConfig::new_exec(config.clone(), source_config);
         assert_eq!(13, config.file_schema.fields().len());
         assert_eq!(3, csv.schema().fields().len());
 
@@ -598,8 +595,7 @@ mod tests {
         config.limit = Some(5);
 
         let source_config = Arc::new(CsvConfig::new(true, b',', b'"'));
-        let source = Arc::new(FileSourceConfig::new(config.clone(), source_config));
-        let csv = Arc::new(DataSourceExec::new(source));
+        let csv = FileSourceConfig::new_exec(config.clone(), source_config);
         assert_eq!(13, config.file_schema.fields().len());
         assert_eq!(13, csv.schema().fields().len());
 
@@ -660,8 +656,7 @@ mod tests {
         config.limit = Some(5);
 
         let source_config = Arc::new(CsvConfig::new(true, b',', b'"'));
-        let source = Arc::new(FileSourceConfig::new(config.clone(), source_config));
-        let csv = Arc::new(DataSourceExec::new(source));
+        let csv = FileSourceConfig::new_exec(config.clone(), source_config);
         assert_eq!(14, config.file_schema.fields().len());
         assert_eq!(14, csv.schema().fields().len());
 
@@ -722,8 +717,7 @@ mod tests {
         // partitions are resolved during scan anyway
 
         let source_config = Arc::new(CsvConfig::new(true, b',', b'"'));
-        let source = Arc::new(FileSourceConfig::new(config.clone(), source_config));
-        let csv = Arc::new(DataSourceExec::new(source));
+        let csv = FileSourceConfig::new_exec(config.clone(), source_config);
         assert_eq!(13, config.file_schema.fields().len());
         assert_eq!(2, csv.schema().fields().len());
 
@@ -813,8 +807,7 @@ mod tests {
             .with_newlines_in_values(false)
             .with_file_compression_type(file_compression_type.to_owned());
         let source_config = Arc::new(CsvConfig::new(true, b',', b'"'));
-        let source = Arc::new(FileSourceConfig::new(config, source_config));
-        let csv = Arc::new(DataSourceExec::new(source));
+        let csv = FileSourceConfig::new_exec(config.clone(), source_config);
 
         let it = csv.execute(0, task_ctx).unwrap();
         let batches: Vec<_> = it.try_collect().await.unwrap();

@@ -56,7 +56,6 @@ use datafusion_common_runtime::SpawnedTask;
 use datafusion_execution::TaskContext;
 use datafusion_expr::dml::InsertOp;
 use datafusion_physical_expr::PhysicalExpr;
-use datafusion_physical_plan::source::DataSourceExec;
 use datafusion_physical_plan::ExecutionPlan;
 
 use async_trait::async_trait;
@@ -255,9 +254,8 @@ impl FileFormat for JsonFormat {
         let source_config = Arc::new(JsonConfig::new());
         conf.file_compression_type = FileCompressionType::from(self.options.compression);
 
-        let source = Arc::new(FileSourceConfig::new(conf, source_config));
-        let exec = DataSourceExec::new(source);
-        Ok(Arc::new(exec))
+        let exec = FileSourceConfig::new_exec(conf, source_config);
+        Ok(exec)
     }
 
     async fn create_writer_physical_plan(

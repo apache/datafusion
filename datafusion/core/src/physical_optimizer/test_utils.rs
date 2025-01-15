@@ -218,9 +218,7 @@ pub fn coalesce_partitions_exec(input: Arc<dyn ExecutionPlan>) -> Arc<dyn Execut
 }
 
 pub(crate) fn memory_exec(schema: &SchemaRef) -> Arc<dyn ExecutionPlan> {
-    let source =
-        Arc::new(MemorySourceConfig::try_new(&[vec![]], schema.clone(), None).unwrap());
-    Arc::new(DataSourceExec::new(source))
+    MemorySourceConfig::try_new_exec(&[vec![]], schema.clone(), None).unwrap()
 }
 
 pub fn hash_join_exec(

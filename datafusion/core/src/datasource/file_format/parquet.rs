@@ -65,7 +65,6 @@ use datafusion_expr::Expr;
 use datafusion_functions_aggregate::min_max::{MaxAccumulator, MinAccumulator};
 use datafusion_physical_expr::PhysicalExpr;
 use datafusion_physical_expr_common::sort_expr::LexRequirement;
-use datafusion_physical_plan::source::DataSourceExec;
 
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -424,9 +423,8 @@ impl FileFormat for ParquetFormat {
             metadata_size_hint,
             self.options.clone(),
         ));
-        let source = Arc::new(FileSourceConfig::new(conf, source_config));
-
-        Ok(Arc::new(DataSourceExec::new(source)))
+        let exec = FileSourceConfig::new_exec(conf, source_config);
+        Ok(exec)
     }
 
     async fn create_writer_physical_plan(

@@ -34,7 +34,6 @@ use datafusion::parquet::arrow::{
     arrow_reader::ParquetRecordBatchReaderBuilder, ArrowWriter,
 };
 use datafusion::physical_optimizer::pruning::{PruningPredicate, PruningStatistics};
-use datafusion::physical_plan::source::DataSourceExec;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::prelude::*;
 use datafusion_common::config::TableParquetOptions;
@@ -264,8 +263,8 @@ impl TableProvider for IndexTableProvider {
             None,
             TableParquetOptions::default(),
         ));
-        let source = Arc::new(FileSourceConfig::new(file_scan_config, source_config));
-        Ok(Arc::new(DataSourceExec::new(source)))
+        let exec = FileSourceConfig::new_exec(file_scan_config, source_config);
+        Ok(exec)
     }
 
     /// Tell DataFusion to push filters down to the scan method

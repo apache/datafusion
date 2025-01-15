@@ -30,7 +30,6 @@ use datafusion_common::config::TableParquetOptions;
 use datafusion_common::DFSchema;
 use datafusion_execution::object_store::ObjectStoreUrl;
 use datafusion_physical_expr::PhysicalExpr;
-use datafusion_physical_plan::source::DataSourceExec;
 use datafusion_physical_plan::{collect, filter::FilterExec, ExecutionPlan};
 use itertools::Itertools;
 use object_store::{memory::InMemory, path::Path, ObjectStore, PutPayload};
@@ -332,8 +331,7 @@ async fn execute_with_predicate(
             TableParquetOptions::default(),
         )
     };
-    let source = Arc::new(FileSourceConfig::new(scan, Arc::new(parquet_conf)));
-    let exec = Arc::new(DataSourceExec::new(source)) as Arc<dyn ExecutionPlan>;
+    let exec = FileSourceConfig::new_exec(scan, Arc::new(parquet_conf));
     let exec =
         Arc::new(FilterExec::try_new(predicate, exec).unwrap()) as Arc<dyn ExecutionPlan>;
 

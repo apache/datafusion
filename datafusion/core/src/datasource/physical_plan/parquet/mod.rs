@@ -112,7 +112,7 @@ pub use writer::plan_to_parquet;
 ///         TableParquetOptions::default()
 ///     )
 /// );
-/// let exec = DataSourceExec::new(Arc::new(FileSourceConfig::new(file_scan_config, source_config)));
+/// let exec = FileSourceConfig::new_exec(file_scan_config, source_config);
 /// ```
 ///
 /// # Features
@@ -196,7 +196,7 @@ pub use writer::plan_to_parquet;
 ///         .clone()
 ///        .with_file_groups(vec![file_group.clone()]);
 ///
-///     DataSourceExec::new(Arc::new(FileSourceConfig::new(new_config, source_config.clone())))
+///     FileSourceConfig::new_exec(new_config, source_config.clone())
 ///   })
 ///   .collect::<Vec<_>>();
 /// ```
@@ -241,7 +241,7 @@ pub use writer::plan_to_parquet;
 /// let source_config = Arc::new(ParquetConfig::default());
 /// // this parquet exec will not even try to read row groups 2 and 4. Additional
 /// // pruning based on predicates may also happen
-/// let exec = DataSourceExec::new(Arc::new(FileSourceConfig::new(file_scan_config, source_config)));
+/// let exec = FileSourceConfig::new_exec(file_scan_config, source_config);
 /// ```
 ///
 /// For a complete example, see the [`advanced_parquet_index` example]).
@@ -763,11 +763,8 @@ mod tests {
 
             let session_ctx = SessionContext::new();
             let task_ctx = session_ctx.task_ctx();
-            let source = Arc::new(FileSourceConfig::new(
-                base_config,
-                Arc::new(source_config.clone()),
-            ));
-            let parquet_exec = Arc::new(DataSourceExec::new(source));
+            let parquet_exec =
+                FileSourceConfig::new_exec(base_config, Arc::new(source_config.clone()));
             RoundTripResult {
                 batches: collect(parquet_exec.clone(), task_ctx).await,
                 parquet_exec,
@@ -1402,12 +1399,11 @@ mod tests {
             expected_row_num: Option<usize>,
             file_schema: SchemaRef,
         ) -> Result<()> {
-            let source = Arc::new(FileSourceConfig::new(
+            let parquet_exec = FileSourceConfig::new_exec(
                 FileScanConfig::new(ObjectStoreUrl::local_filesystem(), file_schema)
                     .with_file_groups(file_groups),
                 Arc::new(ParquetConfig::default()),
-            ));
-            let parquet_exec = DataSourceExec::new(source);
+            );
             assert_eq!(
                 parquet_exec
                     .properties()
@@ -1505,7 +1501,7 @@ mod tests {
         ]);
 
         let source_config = Arc::new(ParquetConfig::default());
-        let parquet_exec = DataSourceExec::new(Arc::new(FileSourceConfig::new(
+        let parquet_exec = FileSourceConfig::new_exec(
             FileScanConfig::new(object_store_url, schema.clone())
                 .with_file(partitioned_file)
                 // file has 10 cols so index 12 should be month and 13 should be day
@@ -1523,7 +1519,7 @@ mod tests {
                     ),
                 ]),
             source_config,
-        )));
+        );
         let partition_count = parquet_exec
             .source()
             .properties()
@@ -1581,11 +1577,11 @@ mod tests {
         };
 
         let file_schema = Arc::new(Schema::empty());
-        let parquet_exec = DataSourceExec::new(Arc::new(FileSourceConfig::new(
+        let parquet_exec = FileSourceConfig::new_exec(
             FileScanConfig::new(ObjectStoreUrl::local_filesystem(), file_schema)
                 .with_file(partitioned_file),
             Arc::new(ParquetConfig::default()),
-        )));
+        );
 
         let mut results = parquet_exec.execute(0, state.task_ctx())?;
         let batch = results.next().await.unwrap();
@@ -2210,7 +2206,7 @@ mod tests {
                 .with_parquet_file_reader_factory(reader_factory)
                 .with_metadata_size_hint(456),
         );
-        let exec = DataSourceExec::new(Arc::new(FileSourceConfig::new(
+        let exec = FileSourceConfig::new_exec(
             FileScanConfig::new(store_url, schema)
                 .with_file(
                     PartitionedFile {
@@ -2244,9 +2240,8 @@ mod tests {
                     metadata_size_hint: None,
                 }),
             source_config,
-        )));
+        );
 
-        let exec = Arc::new(exec);
         let res = collect(exec, ctx.task_ctx()).await.unwrap();
         assert_eq!(res.len(), 2);
 

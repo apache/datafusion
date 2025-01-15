@@ -35,7 +35,6 @@ use datafusion::physical_plan::collect;
 use datafusion::physical_plan::metrics::ExecutionPlanMetricsSet;
 use datafusion::prelude::SessionContext;
 use datafusion_common::Result;
-use datafusion_physical_plan::source::DataSourceExec;
 
 use bytes::Bytes;
 use futures::future::BoxFuture;
@@ -91,12 +90,11 @@ async fn route_data_access_ops_to_parquet_file_reader_factory() {
             )),
     );
 
-    let parquet_exec =
-        DataSourceExec::new(Arc::new(FileSourceConfig::new(base_config, source_config)));
+    let parquet_exec = FileSourceConfig::new_exec(base_config, source_config);
 
     let session_ctx = SessionContext::new();
     let task_ctx = session_ctx.task_ctx();
-    let read = collect(Arc::new(parquet_exec), task_ctx).await.unwrap();
+    let read = collect(parquet_exec, task_ctx).await.unwrap();
 
     let expected = [
         "+-----+----+----+",

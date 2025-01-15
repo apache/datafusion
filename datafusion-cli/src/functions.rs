@@ -32,7 +32,6 @@ use datafusion::datasource::TableProvider;
 use datafusion::error::Result;
 use datafusion::logical_expr::Expr;
 use datafusion::physical_plan::memory::MemorySourceConfig;
-use datafusion::physical_plan::source::DataSourceExec;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::scalar::ScalarValue;
 use datafusion_catalog::TableFunctionImpl;
@@ -244,12 +243,12 @@ impl TableProvider for ParquetMetadataTable {
         _filters: &[Expr],
         _limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let source = Arc::new(MemorySourceConfig::try_new(
+        let exec = MemorySourceConfig::try_new_exec(
             &[vec![self.batch.clone()]],
             TableProvider::schema(self),
             projection.cloned(),
-        )?);
-        Ok(Arc::new(DataSourceExec::new(source)))
+        )?;
+        Ok(exec)
     }
 }
 

@@ -128,7 +128,7 @@ physical_plan
 01)DataSinkExec: sink=CsvSink(file_groups=[])
 02)--SortExec: expr=[a@0 ASC NULLS LAST, b@1 DESC], preserve_partitioning=[false]
 03)----ProjectionExec: expr=[column1@0 as a, column2@1 as b]
-04)------MemoryExec: partitions=1, partition_sizes=[1]
+04)------DataSourceExec: partitions=1, partition_sizes=[1]
 
 query I
 INSERT INTO ordered_insert_test values (5, 1), (4, 2), (7,7), (7,8), (7,9), (7,10), (3, 3), (2, 4), (1, 5);

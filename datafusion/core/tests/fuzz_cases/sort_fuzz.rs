@@ -31,7 +31,6 @@ use datafusion_execution::memory_pool::GreedyMemoryPool;
 use datafusion_physical_expr::expressions::col;
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use datafusion_physical_plan::memory::MemorySourceConfig;
-use datafusion_physical_plan::source::DataSourceExec;
 use rand::Rng;
 use std::sync::Arc;
 use test_utils::{batches_to_vec, partitions_to_sorted_vec};
@@ -124,9 +123,8 @@ impl SortTest {
             },
         }]);
 
-        let config = MemorySourceConfig::try_new(&input, schema, None).unwrap();
-        let exec = DataSourceExec::new(Arc::new(config));
-        let sort = Arc::new(SortExec::new(sort, Arc::new(exec)));
+        let exec = MemorySourceConfig::try_new_exec(&input, schema, None).unwrap();
+        let sort = Arc::new(SortExec::new(sort, exec));
 
         let session_config = SessionConfig::new();
         let session_ctx = if let Some(pool_size) = self.pool_size {

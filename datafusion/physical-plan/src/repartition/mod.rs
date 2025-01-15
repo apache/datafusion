@@ -1019,7 +1019,7 @@ mod tests {
                 ErrorExec, MockExec,
             },
         },
-        {collect, expressions::col, memory::MemorySourceConfig, source::DataSourceExec},
+        {collect, expressions::col, memory::MemorySourceConfig},
     };
 
     use arrow::array::{ArrayRef, StringArray, UInt32Array};
@@ -1124,12 +1124,12 @@ mod tests {
     ) -> Result<Vec<Vec<RecordBatch>>> {
         let task_ctx = Arc::new(TaskContext::default());
         // create physical plan
-        let exec = DataSourceExec::new(Arc::new(MemorySourceConfig::try_new(
+        let exec = MemorySourceConfig::try_new_exec(
             &input_partitions,
             Arc::clone(schema),
             None,
-        )?));
-        let exec = RepartitionExec::try_new(Arc::new(exec), partitioning)?;
+        )?;
+        let exec = RepartitionExec::try_new(exec, partitioning)?;
 
         // execute and collect results
         let mut output_partitions = vec![];
@@ -1519,12 +1519,12 @@ mod tests {
         let task_ctx = Arc::new(task_ctx);
 
         // create physical plan
-        let exec = DataSourceExec::new(Arc::new(MemorySourceConfig::try_new(
+        let exec = MemorySourceConfig::try_new_exec(
             &input_partitions,
             Arc::clone(&schema),
             None,
-        )?));
-        let exec = RepartitionExec::try_new(Arc::new(exec), partitioning)?;
+        )?;
+        let exec = RepartitionExec::try_new(exec, partitioning)?;
 
         // pull partitions
         for i in 0..exec.partitioning().partition_count() {

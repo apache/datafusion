@@ -304,11 +304,12 @@ async fn run_aggregate_test(input1: Vec<RecordBatch>, group_by_columns: Vec<&str
 
     let concat_input_record = concat_batches(&schema, &input1).unwrap();
 
-    let source = Arc::new(
-        MemorySourceConfig::try_new(&[vec![concat_input_record]], schema.clone(), None)
-            .unwrap(),
-    );
-    let usual_source = Arc::new(DataSourceExec::new(source));
+    let usual_source = MemorySourceConfig::try_new_exec(
+        &[vec![concat_input_record]],
+        schema.clone(),
+        None,
+    )
+    .unwrap();
 
     let running_source = Arc::new(DataSourceExec::new(Arc::new(
         MemorySourceConfig::try_new(&[input1.clone()], schema.clone(), None)

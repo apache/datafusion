@@ -45,7 +45,6 @@ use datafusion::parquet::schema::types::ColumnPath;
 use datafusion::physical_expr::PhysicalExpr;
 use datafusion::physical_optimizer::pruning::PruningPredicate;
 use datafusion::physical_plan::metrics::ExecutionPlanMetricsSet;
-use datafusion::physical_plan::source::DataSourceExec;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::prelude::*;
 use datafusion_common::config::TableParquetOptions;
@@ -509,9 +508,9 @@ impl TableProvider for IndexTableProvider {
             // provide the factory to create parquet reader without re-reading metadata
             .with_parquet_file_reader_factory(Arc::new(reader_factory)),
         );
-        let source = Arc::new(FileSourceConfig::new(file_scan_config, source_config));
         // Finally, put it all together into a DataSourceExec
-        Ok(Arc::new(DataSourceExec::new(source)))
+        let exec = FileSourceConfig::new_exec(file_scan_config, source_config);
+        Ok(exec)
     }
 
     /// Tell DataFusion to push filters down to the scan method
