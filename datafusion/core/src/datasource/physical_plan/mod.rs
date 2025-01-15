@@ -102,7 +102,6 @@ pub trait FileSink: DataSink {
     ///
     /// # Returns
     /// - `Result<u64>`: Returns the total number of rows written across all files.
-    /// ```
     async fn spawn_writer_tasks_and_join(
         &self,
         context: &Arc<TaskContext>,
