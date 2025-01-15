@@ -19,7 +19,7 @@
 
 use crate::expr_rewriter::FunctionRewrite;
 use crate::planner::ExprPlanner;
-use crate::{AggregateUDF, ScalarUDF, UserDefinedLogicalNode, WindowUDF};
+use crate::{AggregateUDF, ScalarUDF, TableSource, UserDefinedLogicalNode, WindowUDF};
 use datafusion_common::{not_impl_err, plan_datafusion_err, HashMap, Result};
 use std::collections::HashSet;
 use std::fmt::Debug;
@@ -123,23 +123,57 @@ pub trait FunctionRegistry {
     }
 }
 
-/// Serializer and deserializer registry for extensions like [UserDefinedLogicalNode].
+/// Serializer and deserializer registry for extensions like [UserDefinedLogicalNode]
+/// and custom table providers for which the name alone is meaningless in the target
+/// execution context, e.g. UDTFs, manually registered tables etc.
 pub trait SerializerRegistry: Debug + Send + Sync {
     /// Serialize this node to a byte array. This serialization should not include
     /// input plans.
     fn serialize_logical_plan(
         &self,
         node: &dyn UserDefinedLogicalNode,
-    ) -> Result<Vec<u8>>;
+    ) -> Result<NamedBytes> {
+        not_impl_err!(
+            "Serializing user defined logical plan node `{}` is not supported",
+            node.name()
+        )
+    }
 
     /// Deserialize user defined logical plan node ([UserDefinedLogicalNode]) from
     /// bytes.
     fn deserialize_logical_plan(
         &self,
         name: &str,
-        bytes: &[u8],
-    ) -> Result<Arc<dyn UserDefinedLogicalNode>>;
+        _bytes: &[u8],
+    ) -> Result<Arc<dyn UserDefinedLogicalNode>> {
+        not_impl_err!(
+            "Deserializing user defined logical plan node `{name}` is not supported"
+        )
+    }
+
+    /// Serialized table definition for UDTFs or some other table provider implementation that
+    /// can't be marshaled by reference.
+    fn serialize_custom_table(
+        &self,
+        _table: &dyn TableSource,
+    ) -> Result<Option<NamedBytes>> {
+        Ok(None)
+    }
+
+    /// Deserialize a custom table.
+    fn deserialize_custom_table(
+        &self,
+        name: &str,
+        _bytes: &[u8],
+    ) -> Result<Arc<dyn TableSource>> {
+        not_impl_err!("Deserializing custom table `{name}` is not supported")
+    }
 }
+
+/// A sequence of bytes with a string qualifier. Meant to encapsulate serialized extensions
+/// that need to carry their type, e.g. the `type_url` for protobuf messages.
+#[derive(Debug, Clone)]
+pub struct NamedBytes(pub String, pub Vec<u8>);
 
 /// A  [`FunctionRegistry`] that uses in memory [`HashMap`]s
 #[derive(Default, Debug)]
