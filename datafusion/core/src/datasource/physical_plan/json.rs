@@ -23,6 +23,7 @@ use std::sync::Arc;
 use std::task::Poll;
 
 use super::{calculate_range, FileScanConfig, RangeCalculation};
+use crate::datasource::data_source::FileSource;
 use crate::datasource::file_format::file_compression_type::FileCompressionType;
 use crate::datasource::file_format::{deserialize_stream, DecoderDeserializer};
 use crate::datasource::listing::ListingTableUrl;
@@ -30,7 +31,6 @@ use crate::datasource::physical_plan::file_stream::{FileOpenFuture, FileOpener};
 use crate::datasource::physical_plan::FileMeta;
 use crate::error::{DataFusionError, Result};
 use crate::physical_plan::{ExecutionPlan, ExecutionPlanProperties};
-use crate::datasource::data_source::FileSource;
 
 use arrow::json::ReaderBuilder;
 use arrow::{datatypes::SchemaRef, json};
