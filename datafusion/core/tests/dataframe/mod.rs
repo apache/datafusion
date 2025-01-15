@@ -2687,6 +2687,7 @@ async fn test_alias() -> Result<()> {
 }
 
 // Use alias to perform a self-join
+// Issue: https://github.com/apache/datafusion/issues/14112
 #[tokio::test]
 async fn test_alias_self_join() -> Result<()> {
     let left = create_test_table("t1").await?;
