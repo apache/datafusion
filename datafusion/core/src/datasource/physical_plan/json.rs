@@ -39,8 +39,9 @@ use crate::physical_plan::{
 
 use arrow::json::ReaderBuilder;
 use arrow::{datatypes::SchemaRef, json};
+use datafusion_common::Constraints;
 use datafusion_execution::TaskContext;
-use datafusion_physical_expr::EquivalenceProperties;
+use datafusion_physical_expr::{EquivalenceProperties, LexOrdering};
 use datafusion_physical_plan::execution_plan::{Boundedness, EmissionType};
 
 use futures::{StreamExt, TryStreamExt};
@@ -53,7 +54,7 @@ use tokio::task::JoinSet;
 #[derive(Debug, Clone)]
 pub struct NdJsonExec {
     base_config: FileScanConfig,
-    projected_config: FileScanConfig,
+    projected_statistics: Statistics,
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
     file_compression_type: FileCompressionType,
@@ -66,11 +67,21 @@ impl NdJsonExec {
         base_config: FileScanConfig,
         file_compression_type: FileCompressionType,
     ) -> Self {
-        let projected_config = base_config.project();
-        let cache = Self::compute_properties(&projected_config);
+        let (
+            projected_schema,
+            projected_constraints,
+            projected_statistics,
+            projected_output_ordering,
+        ) = base_config.project();
+        let cache = Self::compute_properties(
+            projected_schema,
+            &projected_output_ordering,
+            projected_constraints,
+            &base_config,
+        );
         Self {
             base_config,
-            projected_config,
+            projected_statistics,
             metrics: ExecutionPlanMetricsSet::new(),
             file_compression_type,
             cache,
@@ -92,13 +103,15 @@ impl NdJsonExec {
     }
 
     /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
-    fn compute_properties(file_scan_config: &FileScanConfig) -> PlanProperties {
+    fn compute_properties(
+        schema: SchemaRef,
+        orderings: &[LexOrdering],
+        constraints: Constraints,
+        file_scan_config: &FileScanConfig,
+    ) -> PlanProperties {
         // Equivalence Properties
-        let eq_properties = EquivalenceProperties::new_with_orderings(
-            Arc::clone(&file_scan_config.file_schema),
-            &file_scan_config.output_ordering,
-        )
-        .with_constraints(file_scan_config.constraints.clone());
+        let eq_properties = EquivalenceProperties::new_with_orderings(schema, orderings)
+            .with_constraints(constraints);
 
         PlanProperties::new(
             eq_properties,
@@ -202,7 +215,7 @@ impl ExecutionPlan for NdJsonExec {
     }
 
     fn statistics(&self) -> Result<Statistics> {
-        Ok(self.projected_config.statistics.clone())
+        Ok(self.projected_statistics.clone())
     }
 
     fn metrics(&self) -> Option<MetricsSet> {
@@ -215,10 +228,10 @@ impl ExecutionPlan for NdJsonExec {
 
     fn with_fetch(&self, limit: Option<usize>) -> Option<Arc<dyn ExecutionPlan>> {
         let new_config = self.base_config.clone().with_limit(limit);
-        let new_projected_config = self.projected_config.clone().with_limit(limit);
+
         Some(Arc::new(Self {
             base_config: new_config,
-            projected_config: new_projected_config,
+            projected_statistics: self.projected_statistics.clone(),
             metrics: self.metrics.clone(),
             file_compression_type: self.file_compression_type,
             cache: self.cache.clone(),

@@ -251,10 +251,7 @@ impl<F: FileOpener> FileStream<F> {
         file_opener: F,
         metrics: &ExecutionPlanMetricsSet,
     ) -> Result<Self> {
-        let FileScanConfig {
-            file_schema: projected_schema,
-            ..
-        } = config.project();
+        let (projected_schema, ..) = config.project();
         let pc_projector = PartitionColumnProjector::new(
             Arc::clone(&projected_schema),
             &config

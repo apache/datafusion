@@ -29,15 +29,18 @@ use crate::physical_plan::{
 };
 
 use arrow::datatypes::SchemaRef;
+use datafusion_common::Constraints;
 use datafusion_execution::TaskContext;
-use datafusion_physical_expr::EquivalenceProperties;
+use datafusion_physical_expr::{EquivalenceProperties, LexOrdering};
 use datafusion_physical_plan::execution_plan::{Boundedness, EmissionType};
 
 /// Execution plan for scanning Avro data source
 #[derive(Debug, Clone)]
 pub struct AvroExec {
     base_config: FileScanConfig,
-    projected_config: FileScanConfig,
+    projected_statistics: Statistics,
+    projected_schema: SchemaRef,
+    projected_output_ordering: Vec<LexOrdering>,
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
     cache: PlanProperties,
@@ -46,11 +49,23 @@ pub struct AvroExec {
 impl AvroExec {
     /// Create a new Avro reader execution plan provided base configurations
     pub fn new(base_config: FileScanConfig) -> Self {
-        let projected_config = base_config.project();
-        let cache = Self::compute_properties(&projected_config);
+        let (
+            projected_schema,
+            projected_constraints,
+            projected_statistics,
+            projected_output_ordering,
+        ) = base_config.project();
+        let cache = Self::compute_properties(
+            Arc::clone(&projected_schema),
+            &projected_output_ordering,
+            projected_constraints,
+            &base_config,
+        );
         Self {
             base_config,
-            projected_config,
+            projected_schema,
+            projected_statistics,
+            projected_output_ordering,
             metrics: ExecutionPlanMetricsSet::new(),
             cache,
         }
@@ -61,13 +76,15 @@ impl AvroExec {
     }
 
     /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
-    fn compute_properties(file_scan_config: &FileScanConfig) -> PlanProperties {
+    fn compute_properties(
+        schema: SchemaRef,
+        orderings: &[LexOrdering],
+        constraints: Constraints,
+        file_scan_config: &FileScanConfig,
+    ) -> PlanProperties {
         // Equivalence Properties
-        let eq_properties = EquivalenceProperties::new_with_orderings(
-            Arc::clone(&file_scan_config.file_schema),
-            &file_scan_config.output_ordering,
-        )
-        .with_constraints(file_scan_config.constraints.clone());
+        let eq_properties = EquivalenceProperties::new_with_orderings(schema, orderings)
+            .with_constraints(constraints);
         let n_partitions = file_scan_config.file_groups.len();
 
         PlanProperties::new(
@@ -150,7 +167,7 @@ impl ExecutionPlan for AvroExec {
     }
 
     fn statistics(&self) -> Result<Statistics> {
-        Ok(self.projected_config.statistics.clone())
+        Ok(self.projected_statistics.clone())
     }
 
     fn metrics(&self) -> Option<MetricsSet> {
@@ -163,11 +180,12 @@ impl ExecutionPlan for AvroExec {
 
     fn with_fetch(&self, limit: Option<usize>) -> Option<Arc<dyn ExecutionPlan>> {
         let new_config = self.base_config.clone().with_limit(limit);
-        let new_projected_config = self.projected_config.clone().with_limit(limit);
 
         Some(Arc::new(Self {
             base_config: new_config,
-            projected_config: new_projected_config,
+            projected_statistics: self.projected_statistics.clone(),
+            projected_schema: Arc::clone(&self.projected_schema),
+            projected_output_ordering: self.projected_output_ordering.clone(),
             metrics: self.metrics.clone(),
             cache: self.cache.clone(),
         }))
