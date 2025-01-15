@@ -1799,7 +1799,7 @@ select a + b from (select 1 as a, 2 as b, 1 as "a + b");
 3
 
 # Can't reference an output column by expression over projection.
-query error DataFusion error: Schema error: No field named a\. Valid fields are "a \+ Int64\(1\)"\.
+query error DataFusion error: Schema error: No field named a. Valid fields are "a \+ Int64\(1\)"\.
 select a + 1 from (select a+1 from (select 1 as a));
 
 query I
@@ -1834,5 +1834,5 @@ statement ok
 DROP TABLE test;
 
 # Can't reference an unqualified column by a qualified name
-query error DataFusion error: Schema error: No field named t1\.v1\. Valid fields are "t1\.v1"\.
+query error DataFusion error: Schema error: No field named t1.v1. Column names are case sensitive. You can use double quotes to refer to the "t1.v1" column or set the datafusion.sql_parser.enable_ident_normalization configuration. Valid fields are "t1.v1".
 SELECT t1.v1 FROM (SELECT 1 AS "t1.v1");
