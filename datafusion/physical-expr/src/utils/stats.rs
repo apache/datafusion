@@ -73,7 +73,7 @@ impl ExprStatisticGraphNode {
             statistics: Unknown {
                 mean: None,
                 median: None,
-                std_dev: None,
+                variance: None,
                 range: Interval::make_unbounded(dt)?,
             },
         })
