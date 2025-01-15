@@ -995,16 +995,19 @@ fn project_with_column_index(
         .enumerate()
         .map(|(i, e)| match e {
             Expr::Alias(Alias { ref name, .. }) if name != schema.field(i).name() => {
-                e.unalias().alias(schema.field(i).name())
+                Ok(e.unalias().alias(schema.field(i).name()))
             }
             Expr::Column(Column {
                 relation: _,
                 ref name,
-            }) if name != schema.field(i).name() => e.alias(schema.field(i).name()),
-            Expr::Alias { .. } | Expr::Column { .. } => e,
-            _ => e.alias(schema.field(i).name()),
+            }) if name != schema.field(i).name() => Ok(e.alias(schema.field(i).name())),
+            Expr::Alias { .. } | Expr::Column { .. } => Ok(e),
+            Expr::Wildcard { .. } => {
+                plan_err!("Wildcard should be expanded before type coercion")
+            }
+            _ => Ok(e.alias(schema.field(i).name())),
         })
-        .collect::<Vec<_>>();
+        .collect::<Result<Vec<_>>>()?;
 
     Projection::try_new_with_schema(alias_expr, input, schema)
         .map(LogicalPlan::Projection)
@@ -1018,11 +1021,17 @@ mod test {
     use arrow::datatypes::DataType::Utf8;
     use arrow::datatypes::{DataType, Field, TimeUnit};
 
+    use crate::analyzer::type_coercion::{
+        coerce_case_expression, TypeCoercion, TypeCoercionRewriter,
+    };
+    use crate::test::{assert_analyzed_plan_eq, assert_analyzed_plan_with_config_eq};
     use datafusion_common::config::ConfigOptions;
     use datafusion_common::tree_node::{TransformedResult, TreeNode};
     use datafusion_common::{DFSchema, DFSchemaRef, Result, ScalarValue};
     use datafusion_expr::expr::{self, InSubquery, Like, ScalarFunction};
     use datafusion_expr::logical_plan::{EmptyRelation, Projection, Sort};
+    use datafusion_expr::sqlparser::dialect::PostgreSqlDialect;
+    use datafusion_expr::sqlparser::parser::Parser;
     use datafusion_expr::test::function_stub::avg_udaf;
     use datafusion_expr::{
         cast, col, create_udaf, is_true, lit, AccumulatorFactoryFunction, AggregateUDF,
@@ -1031,11 +1040,7 @@ mod test {
         Volatility,
     };
     use datafusion_functions_aggregate::average::AvgAccumulator;
-
-    use crate::analyzer::type_coercion::{
-        coerce_case_expression, TypeCoercion, TypeCoercionRewriter,
-    };
-    use crate::test::{assert_analyzed_plan_eq, assert_analyzed_plan_with_config_eq};
+    use datafusion_sql::planner::SqlToRel;
 
     fn empty() -> Arc<LogicalPlan> {
         Arc::new(LogicalPlan::EmptyRelation(EmptyRelation {
