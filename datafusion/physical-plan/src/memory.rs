@@ -816,7 +816,8 @@ mod tests {
             Field::new("col0", DataType::UInt32, false),
             Field::new("col1", DataType::Utf8, false),
         ]));
-        let _ = MemorySourceConfig::try_new_from_batches(invalid_schema, batches).unwrap_err();
+        let _ = MemorySourceConfig::try_new_from_batches(invalid_schema, batches)
+            .unwrap_err();
     }
 
     // Test issue: https://github.com/apache/datafusion/issues/8763
@@ -827,8 +828,11 @@ mod tests {
             DataType::UInt32,
             false,
         )]));
-        let _ = MemorySourceConfig::try_new_as_values(Arc::clone(&schema), vec![vec![lit(1u32)]])
-            .unwrap();
+        let _ = MemorySourceConfig::try_new_as_values(
+            Arc::clone(&schema),
+            vec![vec![lit(1u32)]],
+        )
+        .unwrap();
         // Test that a null value is rejected
         let _ = MemorySourceConfig::try_new_as_values(
             schema,

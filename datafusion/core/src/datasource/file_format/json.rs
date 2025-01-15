@@ -33,7 +33,9 @@ use crate::datasource::data_source::FileSourceConfig;
 use crate::datasource::file_format::file_compression_type::FileCompressionType;
 use crate::datasource::file_format::write::demux::DemuxedStreamReceiver;
 use crate::datasource::file_format::write::BatchSerializer;
-use crate::datasource::physical_plan::{FileGroupDisplay, FileSink, FileSinkConfig, JsonConfig};
+use crate::datasource::physical_plan::{
+    FileGroupDisplay, FileSink, FileSinkConfig, JsonConfig,
+};
 use crate::error::Result;
 use crate::execution::context::SessionState;
 use crate::physical_plan::insert::{DataSink, DataSinkExec};

@@ -466,9 +466,8 @@ impl DefaultPhysicalPlanner {
                             .collect::<Result<Vec<Arc<dyn PhysicalExpr>>>>()
                     })
                     .collect::<Result<Vec<_>>>()?;
-                let value_exec =
-                    MemoryExec::try_new_as_values(SchemaRef::new(exec_schema), exprs)?;
-                Arc::new(value_exec)
+                MemorySourceConfig::try_new_as_values(SchemaRef::new(exec_schema), exprs)?
+                    as _
             }
             LogicalPlan::EmptyRelation(EmptyRelation {
                 produce_one_row: false,
