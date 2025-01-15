@@ -27,6 +27,7 @@ pub mod enforce_sorting;
 pub mod optimizer;
 pub mod projection_pushdown;
 pub mod replace_with_order_preserving_variants;
+#[cfg(test)]
 pub mod test_utils;
 
 mod sort_pushdown;
