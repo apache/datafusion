@@ -90,11 +90,12 @@ impl DisplayAs for MemoryExec {
                     })
                     .unwrap_or_default();
 
+                let constraints = self.cache.equivalence_properties().constraints();
                 let constraints =
-                    if self.cache.equivalence_properties().constraints().is_empty() {
+                    if constraints.is_empty() {
                         String::new()
                     } else {
-                        format!(", {}", self.cache.equivalence_properties().constraints())
+                        format!(", {}", constraints)
                     };
 
                 if self.show_sizes {
