@@ -639,6 +639,7 @@ fn try_pushdown_through_nested_loop_join(
     projection: &ProjectionExec,
     nl_join: &NestedLoopJoinExec,
 ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+    // TODO: currently if there is projection in NestedLoopJoinExec, we can't push down projection to left or right input. Maybe we can pushdown the mixed projection later.
     if nl_join.contain_projection() {
         return Ok(None);
     }
@@ -761,7 +762,7 @@ fn try_pushdown_through_hash_join(
         new_on,
         new_filter,
         hash_join.join_type(),
-        // Early return if projection is not None
+        // Returned early if projection is not None
         None,
         *hash_join.partition_mode(),
         hash_join.null_equals_null,
