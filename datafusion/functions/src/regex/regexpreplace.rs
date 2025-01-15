@@ -62,19 +62,24 @@ SELECT regexp_replace('aBc', '(b|d)', 'Ab\\1a', 'i');
 Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/regexp.rs)
 "#,
     standard_argument(name = "str", prefix = "String"),
-    standard_argument(name = "replacement", prefix = "Replacement string"),
     argument(
         name = "regexp",
-        description = "Regular expression to match against. Can be a constant, column, or function."
+        description = "Regular expression to match against.
+  Can be a constant, column, or function."
+    ),
+    argument(
+        name = "replacement",
+        description = "Replacement string expression to operate on. Can be a constant, column, or function, and any combination of operators."
     ),
     argument(
         name = "flags",
         description = r#"Optional regular expression flags that control the behavior of the regular expression. The following flags are supported:
-  - **i**: case-insensitive: letters match both upper and lower case
-  - **m**: multi-line mode: ^ and $ match begin/end of line
-  - **s**: allow . to match \n
-  - **R**: enables CRLF mode: when multi-line mode is enabled, \r\n is used
-  - **U**: swap the meaning of x* and x*?"#
+- **g**: (global) Search globally and don't return after the first match        
+- **i**: case-insensitive: letters match both upper and lower case
+- **m**: multi-line mode: ^ and $ match begin/end of line
+- **s**: allow . to match \n
+- **R**: enables CRLF mode: when multi-line mode is enabled, \r\n is used
+- **U**: swap the meaning of x* and x*?"#
     )
 )]
 #[derive(Debug)]

@@ -46,7 +46,7 @@ use std::sync::Arc;
 +---------------------------------------------------------------+
 ```"#,
     standard_argument(name = "str", prefix = "String"),
-    standard_argument(name = "Regexp", prefix = "Regular"),
+    standard_argument(name = "regexp", prefix = "Regular"),
     argument(
         name = "start",
         description = "- **start**: Optional start position (the first position is 1) to search for the regular expression. Can be a constant, column, or function."

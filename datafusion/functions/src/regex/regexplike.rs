@@ -53,11 +53,7 @@ SELECT regexp_like('aBc', '(b|d)', 'i');
 Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/regexp.rs)
 "#,
     standard_argument(name = "str", prefix = "String"),
-    standard_argument(name = "Regexp", prefix = "Regular"),
-    argument(
-        name = "start",
-        description = "- **start**: Optional start position (the first position is 1) to search for the regular expression. Can be a constant, column, or function."
-    ),
+    standard_argument(name = "regexp", prefix = "Regular"),
     argument(
         name = "flags",
         description = r#"Optional regular expression flags that control the behavior of the regular expression. The following flags are supported:

@@ -37,25 +37,26 @@ use std::sync::Arc;
     description = "Returns the first [regular expression](https://docs.rs/regex/latest/regex/#syntax) matches in a string.",
     syntax_example = "regexp_match(str, regexp[, flags])",
     sql_example = r#"```sql
-> select regexp_match('Köln', '[a-zA-Z]ö[a-zA-Z]{2}');
-+---------------------------------------------------------+
-| regexp_match(Utf8("Köln"),Utf8("[a-zA-Z]ö[a-zA-Z]{2}")) |
-+---------------------------------------------------------+
-| [Köln]                                                  |
-+---------------------------------------------------------+
-SELECT regexp_match('aBc', '(b|d)', 'i');
-+---------------------------------------------------+
-| regexp_match(Utf8("aBc"),Utf8("(b|d)"),Utf8("i")) |
-+---------------------------------------------------+
-| [B]                                               |
-+---------------------------------------------------+
+            > select regexp_match('Köln', '[a-zA-Z]ö[a-zA-Z]{2}');
+            +---------------------------------------------------------+
+            | regexp_match(Utf8("Köln"),Utf8("[a-zA-Z]ö[a-zA-Z]{2}")) |
+            +---------------------------------------------------------+
+            | [Köln]                                                  |
+            +---------------------------------------------------------+
+            SELECT regexp_match('aBc', '(b|d)', 'i');
+            +---------------------------------------------------+
+            | regexp_match(Utf8("aBc"),Utf8("(b|d)"),Utf8("i")) |
+            +---------------------------------------------------+
+            | [B]                                               |
+            +---------------------------------------------------+
 ```
 Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/regexp.rs)
 "#,
     standard_argument(name = "str", prefix = "String"),
     argument(
         name = "regexp",
-        description = "Regular expression to match against. Can be a constant, column, or function."
+        description = "Regular expression to match against.
+            Can be a constant, column, or function."
     ),
     argument(
         name = "flags",
