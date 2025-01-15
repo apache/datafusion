@@ -182,6 +182,7 @@ impl ScalarUDF {
     ///
     ///
     /// See [`ScalarUDFImpl::return_type_from_exprs`] for more details.
+    #[allow(deprecated)]
     pub fn return_type_from_exprs(
         &self,
         args: &[Expr],
@@ -190,6 +191,10 @@ impl ScalarUDF {
     ) -> Result<DataType> {
         // If the implementation provides a return_type_from_exprs, use it
         self.inner.return_type_from_exprs(args, schema, arg_types)
+    }
+
+    pub fn return_type_from_args(&self, args: ReturnTypeArgs) -> Result<ReturnInfo> {
+        self.inner.return_type_from_args(args)
     }
 
     /// Do the function rewrite
@@ -209,6 +214,7 @@ impl ScalarUDF {
         self.inner.invoke(args)
     }
 
+    #[allow(deprecated)]
     pub fn is_nullable(&self, args: &[Expr], schema: &dyn ExprSchema) -> bool {
         self.inner.is_nullable(args, schema)
     }
@@ -340,6 +346,56 @@ pub struct ScalarFunctionArgs<'a> {
     /// The return type of the scalar function returned (from `return_type` or `return_type_from_exprs`)
     /// when creating the physical expression from the logical expression
     pub return_type: &'a DataType,
+}
+
+#[derive(Debug)]
+pub struct ReturnTypeArgs<'a> {
+    /// The data types of the arguments to the function
+    pub arg_types: &'a [DataType],
+    /// The Utf8 arguments to the function, if the expression is not Utf8, it will be empty string
+    pub arguments: &'a [String],
+    pub nullables: &'a [bool],
+}
+
+#[derive(Debug)]
+pub struct ReturnInfo {
+    return_type: DataType,
+    nullable: bool,
+}
+
+impl ReturnInfo {
+    pub fn new(return_type: DataType, nullable: bool) -> Self {
+        Self {
+            return_type,
+            nullable,
+        }
+    }
+
+    pub fn new_nullable(return_type: DataType) -> Self {
+        Self {
+            return_type,
+            nullable: true,
+        }
+    }
+
+    pub fn new_non_nullable(return_type: DataType) -> Self {
+        Self {
+            return_type,
+            nullable: false,
+        }
+    }
+
+    pub fn return_type(&self) -> &DataType {
+        &self.return_type
+    }
+
+    pub fn nullable(&self) -> bool {
+        self.nullable
+    }
+
+    pub fn into_parts(self) -> (DataType, bool) {
+        (self.return_type, self.nullable)
+    }
 }
 
 /// Trait for implementing user defined scalar functions.
@@ -481,6 +537,7 @@ pub trait ScalarUDFImpl: Debug + Send + Sync {
     /// This function must consistently return the same type for the same
     /// logical input even if the input is simplified (e.g. it must return the same
     /// value for `('foo' | 'bar')` as it does for ('foobar').
+    #[deprecated(since = "45.0.0", note = "Use `return_type_from_args` instead")]
     fn return_type_from_exprs(
         &self,
         _args: &[Expr],
@@ -490,6 +547,40 @@ pub trait ScalarUDFImpl: Debug + Send + Sync {
         self.return_type(arg_types)
     }
 
+    /// What [`DataType`] will be returned by this function, given the
+    /// arguments?
+    ///
+    /// Note most UDFs should implement [`Self::return_type`] and not this
+    /// function. The output type for most functions only depends on the types
+    /// of their inputs (e.g. `sqrt(f32)` is always `f32`).
+    ///
+    /// By default, this function calls [`Self::return_type`] with the
+    /// types of each argument.
+    ///
+    /// This method can be overridden for functions that return different
+    /// *types* based on the *values* of their arguments.
+    ///
+    /// For example, the following two function calls get the same argument
+    /// types (something and a `Utf8` string) but return different types based
+    /// on the value of the second argument:
+    ///
+    /// * `arrow_cast(x, 'Int16')` --> `Int16`
+    /// * `arrow_cast(x, 'Float32')` --> `Float32`
+    ///
+    /// # Notes:
+    ///
+    /// This function must consistently return the same type for the same
+    /// logical input even if the input is simplified (e.g. it must return the same
+    /// value for `('foo' | 'bar')` as it does for ('foobar').
+    fn return_type_from_args(&self, args: ReturnTypeArgs) -> Result<ReturnInfo> {
+        let return_type = self.return_type(args.arg_types)?;
+        Ok(ReturnInfo::new_nullable(return_type))
+    }
+
+    #[deprecated(
+        since = "45.0.0",
+        note = "Use `return_type_from_args` instead. if you use `is_nullable` that returns non-nullable with `return_type`, you would need to switch to `return_type_from_args`, you might have error"
+    )]
     fn is_nullable(&self, _args: &[Expr], _schema: &dyn ExprSchema) -> bool {
         true
     }
@@ -787,6 +878,7 @@ impl ScalarUDFImpl for AliasedScalarUDFImpl {
         &self.aliases
     }
 
+    #[allow(deprecated)]
     fn return_type_from_exprs(
         &self,
         args: &[Expr],
@@ -794,6 +886,10 @@ impl ScalarUDFImpl for AliasedScalarUDFImpl {
         arg_types: &[DataType],
     ) -> Result<DataType> {
         self.inner.return_type_from_exprs(args, schema, arg_types)
+    }
+
+    fn return_type_from_args(&self, args: ReturnTypeArgs) -> Result<ReturnInfo> {
+        self.inner.return_type_from_args(args)
     }
 
     fn invoke_batch(

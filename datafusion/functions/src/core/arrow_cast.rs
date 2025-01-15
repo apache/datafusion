@@ -18,9 +18,11 @@
 //! [`ArrowCastFunc`]: Implementation of the `arrow_cast`
 
 use arrow::datatypes::DataType;
+use arrow::error::ArrowError;
+use datafusion_common::DataFusionError;
 use datafusion_common::{
-    arrow_datafusion_err, internal_err, plan_datafusion_err, plan_err, DataFusionError,
-    ExprSchema, Result, ScalarValue,
+    arrow_datafusion_err, internal_err, plan_datafusion_err, plan_err, Result,
+    ScalarValue,
 };
 use std::any::Any;
 use std::sync::OnceLock;
@@ -28,8 +30,8 @@ use std::sync::OnceLock;
 use datafusion_expr::scalar_doc_sections::DOC_SECTION_OTHER;
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyInfo};
 use datafusion_expr::{
-    ColumnarValue, Documentation, Expr, ExprSchemable, ScalarUDFImpl, Signature,
-    Volatility,
+    ColumnarValue, Documentation, Expr, ReturnInfo, ReturnTypeArgs, ScalarUDFImpl,
+    Signature, Volatility,
 };
 
 /// Implements casting to arbitrary arrow types (rather than SQL types)
@@ -86,22 +88,35 @@ impl ScalarUDFImpl for ArrowCastFunc {
     }
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        // should be using return_type_from_exprs and not calling the default
-        // implementation
-        internal_err!("arrow_cast should return type from exprs")
+        internal_err!("return_type_from_args should be called instead")
     }
 
-    fn is_nullable(&self, args: &[Expr], schema: &dyn ExprSchema) -> bool {
-        args.iter().any(|e| e.nullable(schema).ok().unwrap_or(true))
-    }
+    fn return_type_from_args(&self, args: ReturnTypeArgs) -> Result<ReturnInfo> {
+        let nullable = args.nullables.iter().any(|&nullable| nullable);
 
-    fn return_type_from_exprs(
-        &self,
-        args: &[Expr],
-        _schema: &dyn ExprSchema,
-        _arg_types: &[DataType],
-    ) -> Result<DataType> {
-        data_type_from_args(args)
+        if args.arguments.len() != 2 {
+            return plan_err!(
+                "{} needs 2 arguments, {} provided",
+                self.name(),
+                args.arguments.len()
+            );
+        }
+
+        let val = &args.arguments[1];
+        if val.is_empty() {
+            return plan_err!(
+                "{} requires its second argument to be a constant string",
+                self.name()
+            );
+        };
+
+        match val.parse::<DataType>() {
+            Ok(data_type) => Ok(ReturnInfo::new(data_type, nullable)),
+            // If the data type cannot be parsed, return a Plan error to signal an
+            // error in the input rather than a more general ArrowError
+            Err(ArrowError::ParseError(e)) => Err(plan_datafusion_err!("{e}")),
+            Err(e) => Err(arrow_datafusion_err!(e)),
+        }
     }
 
     fn invoke_batch(
@@ -186,7 +201,7 @@ fn data_type_from_args(args: &[Expr]) -> Result<DataType> {
     val.parse().map_err(|e| match e {
         // If the data type cannot be parsed, return a Plan error to signal an
         // error in the input rather than a more general ArrowError
-        arrow::error::ArrowError::ParseError(e) => plan_datafusion_err!("{e}"),
+        ArrowError::ParseError(e) => plan_datafusion_err!("{e}"),
         e => arrow_datafusion_err!(e),
     })
 }
