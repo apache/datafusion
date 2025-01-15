@@ -1030,8 +1030,6 @@ mod test {
     use datafusion_common::{DFSchema, DFSchemaRef, Result, ScalarValue};
     use datafusion_expr::expr::{self, InSubquery, Like, ScalarFunction};
     use datafusion_expr::logical_plan::{EmptyRelation, Projection, Sort};
-    use datafusion_expr::sqlparser::dialect::PostgreSqlDialect;
-    use datafusion_expr::sqlparser::parser::Parser;
     use datafusion_expr::test::function_stub::avg_udaf;
     use datafusion_expr::{
         cast, col, create_udaf, is_true, lit, AccumulatorFactoryFunction, AggregateUDF,
@@ -1040,7 +1038,6 @@ mod test {
         Volatility,
     };
     use datafusion_functions_aggregate::average::AvgAccumulator;
-    use datafusion_sql::planner::SqlToRel;
 
     fn empty() -> Arc<LogicalPlan> {
         Arc::new(LogicalPlan::EmptyRelation(EmptyRelation {
