@@ -52,7 +52,9 @@ pub trait DataSource: Send + Sync {
     fn fetch(&self) -> Option<usize> {
         None
     }
-    fn metrics(&self) -> ExecutionPlanMetricsSet;
+    fn metrics(&self) -> ExecutionPlanMetricsSet {
+        ExecutionPlanMetricsSet::new()
+    }
     fn properties(&self) -> PlanProperties;
 }
 

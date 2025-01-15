@@ -29,7 +29,6 @@ use super::{
     Statistics,
 };
 use crate::execution_plan::{Boundedness, EmissionType};
-use crate::metrics::ExecutionPlanMetricsSet;
 use crate::source::{DataSource, DataSourceExec};
 
 use arrow::datatypes::SchemaRef;
@@ -114,10 +113,6 @@ impl DataSource for MemorySourceConfig {
             &self.schema,
             self.projection.clone(),
         ))
-    }
-
-    fn metrics(&self) -> ExecutionPlanMetricsSet {
-        ExecutionPlanMetricsSet::new()
     }
 
     fn properties(&self) -> PlanProperties {
