@@ -251,7 +251,7 @@ impl RequirementsTestExec {
         self
     }
 
-    /// returns this ExecutionPlan as an Arc<dyn ExecutionPlan>
+    /// returns this ExecutionPlan as an `Arc<dyn ExecutionPlan>`
     pub fn into_arc(self) -> Arc<dyn ExecutionPlan> {
         Arc::new(self)
     }
