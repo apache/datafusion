@@ -423,8 +423,7 @@ impl FileFormat for ParquetFormat {
             metadata_size_hint,
             self.options.clone(),
         ));
-        let exec = FileSourceConfig::new_exec(conf, source_config);
-        Ok(exec)
+        Ok(FileSourceConfig::new_exec(conf, source_config))
     }
 
     async fn create_writer_physical_plan(

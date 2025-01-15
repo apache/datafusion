@@ -33,10 +33,10 @@ use datafusion::physical_plan::sorts::sort_preserving_merge::SortPreservingMerge
 use datafusion::physical_plan::{
     collect,
     expressions::{col, PhysicalSortExpr},
+    memory::MemorySourceConfig,
 };
 use datafusion::prelude::SessionContext;
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
-use datafusion_physical_plan::memory::MemorySourceConfig;
 
 // Initialize the operator using the provided record batches and the sort key
 // as inputs. All record batches must have the same schema.

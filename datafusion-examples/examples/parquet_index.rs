@@ -263,8 +263,7 @@ impl TableProvider for IndexTableProvider {
             None,
             TableParquetOptions::default(),
         ));
-        let exec = FileSourceConfig::new_exec(file_scan_config, source_config);
-        Ok(exec)
+        Ok(FileSourceConfig::new_exec(file_scan_config, source_config))
     }
 
     /// Tell DataFusion to push filters down to the scan method

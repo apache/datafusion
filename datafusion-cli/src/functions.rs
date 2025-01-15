@@ -243,12 +243,11 @@ impl TableProvider for ParquetMetadataTable {
         _filters: &[Expr],
         _limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let exec = MemorySourceConfig::try_new_exec(
+        Ok(MemorySourceConfig::try_new_exec(
             &[vec![self.batch.clone()]],
             TableProvider::schema(self),
             projection.cloned(),
-        )?;
-        Ok(exec)
+        )?)
     }
 }
 

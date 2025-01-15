@@ -120,12 +120,11 @@ impl TableProvider for LocalCsvTable {
         } else {
             self.batches.clone()
         };
-        let exec = MemorySourceConfig::try_new_exec(
+        Ok(MemorySourceConfig::try_new_exec(
             &[batches],
             TableProvider::schema(self),
             projection.cloned(),
-        )?;
-        Ok(exec)
+        )?)
     }
 }
 

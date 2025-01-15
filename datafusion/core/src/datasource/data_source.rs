@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! DataSource trait implementation
+//! DataSource and DataSourceFileConfig trait implementations
 
 use std::any::Any;
 use std::fmt;
@@ -246,7 +246,6 @@ impl FileSourceConfig {
         source_config: Arc<dyn DataSourceFileConfig>,
     ) -> Arc<DataSourceExec> {
         let source = Arc::new(Self::new(base_config, source_config));
-
         Arc::new(DataSourceExec::new(source))
     }
 
@@ -284,46 +283,26 @@ impl FileSourceConfig {
 
     /// Write the data_type based on source_config
     fn fmt_source_config(&self, f: &mut Formatter) -> fmt::Result {
-        let mut data_type = if self
-            .source_config
-            .as_any()
-            .downcast_ref::<AvroConfig>()
-            .is_some()
-        {
-            "avro"
-        } else if self
-            .source_config
-            .as_any()
-            .downcast_ref::<ArrowConfig>()
-            .is_some()
-        {
-            "arrow"
-        } else if self
-            .source_config
-            .as_any()
-            .downcast_ref::<CsvConfig>()
-            .is_some()
-        {
-            "csv"
-        } else if self
-            .source_config
-            .as_any()
-            .downcast_ref::<JsonConfig>()
-            .is_some()
-        {
-            "json"
-        } else {
-            "unknown"
-        };
-        #[cfg(feature = "parquet")]
-        if self
-            .source_config
-            .as_any()
-            .downcast_ref::<ParquetConfig>()
-            .is_some()
-        {
-            data_type = "parquet";
-        }
+        let source_config = self.source_config.as_any();
+        let data_type = [
+            ("avro", source_config.downcast_ref::<AvroConfig>().is_some()),
+            (
+                "arrow",
+                source_config.downcast_ref::<ArrowConfig>().is_some(),
+            ),
+            ("csv", source_config.downcast_ref::<CsvConfig>().is_some()),
+            ("json", source_config.downcast_ref::<JsonConfig>().is_some()),
+            #[cfg(feature = "parquet")]
+            (
+                "parquet",
+                source_config.downcast_ref::<ParquetConfig>().is_some(),
+            ),
+        ]
+        .iter()
+        .find(|(_, is_some)| *is_some)
+        .map(|(name, _)| *name)
+        .unwrap_or("unknown");
+
         write!(f, ", file_type={}", data_type)
     }
 

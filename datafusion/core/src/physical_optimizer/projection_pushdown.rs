@@ -243,12 +243,11 @@ fn try_swapping_with_memory(
                 memory.projection().as_ref().unwrap_or(&all_projections),
             );
 
-            let exec = MemorySourceConfig::try_new_exec(
+            Ok(MemorySourceConfig::try_new_exec(
                 memory.partitions(),
                 memory.original_schema(),
                 Some(new_projections),
-            )? as _;
-            Ok(exec)
+            )? as _)
         })
         .transpose()
 }

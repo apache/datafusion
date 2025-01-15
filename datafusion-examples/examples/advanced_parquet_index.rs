@@ -509,8 +509,7 @@ impl TableProvider for IndexTableProvider {
             .with_parquet_file_reader_factory(Arc::new(reader_factory)),
         );
         // Finally, put it all together into a DataSourceExec
-        let exec = FileSourceConfig::new_exec(file_scan_config, source_config);
-        Ok(exec)
+        Ok(FileSourceConfig::new_exec(file_scan_config, source_config))
     }
 
     /// Tell DataFusion to push filters down to the scan method

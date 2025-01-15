@@ -529,7 +529,6 @@ mod tests {
             .with_newlines_in_values(false)
             .with_file_compression_type(file_compression_type.to_owned());
         config.projection = Some(vec![4, 0, 2]);
-
         let source_config = Arc::new(CsvConfig::new(true, b',', b'"'));
         let csv = FileSourceConfig::new_exec(config.clone(), source_config);
         assert_eq!(13, config.file_schema.fields().len());
@@ -593,7 +592,6 @@ mod tests {
             .with_newlines_in_values(false)
             .with_file_compression_type(file_compression_type.to_owned());
         config.limit = Some(5);
-
         let source_config = Arc::new(CsvConfig::new(true, b',', b'"'));
         let csv = FileSourceConfig::new_exec(config.clone(), source_config);
         assert_eq!(13, config.file_schema.fields().len());

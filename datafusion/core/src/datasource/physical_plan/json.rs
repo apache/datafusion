@@ -386,9 +386,7 @@ mod tests {
             .with_file_groups(file_groups)
             .with_limit(Some(3))
             .with_file_compression_type(file_compression_type.to_owned());
-
         let source_config = Arc::new(JsonConfig::new());
-
         let exec = FileSourceConfig::new_exec(conf, source_config);
 
         // TODO: this is not where schema inference should be tested
@@ -459,7 +457,6 @@ mod tests {
             .with_file_groups(file_groups)
             .with_limit(Some(3))
             .with_file_compression_type(file_compression_type.to_owned());
-
         let source_config = Arc::new(JsonConfig::new());
         let exec = FileSourceConfig::new_exec(conf, source_config);
 
@@ -500,7 +497,6 @@ mod tests {
             .with_file_groups(file_groups)
             .with_projection(Some(vec![0, 2]))
             .with_file_compression_type(file_compression_type.to_owned());
-
         let source_config = Arc::new(JsonConfig::new());
         let exec = FileSourceConfig::new_exec(conf, source_config);
         let inferred_schema = exec.schema();
@@ -546,7 +542,6 @@ mod tests {
             .with_file_groups(file_groups)
             .with_projection(Some(vec![3, 0, 2]))
             .with_file_compression_type(file_compression_type.to_owned());
-
         let source_config = Arc::new(JsonConfig::new());
         let exec = FileSourceConfig::new_exec(conf, source_config);
         let inferred_schema = exec.schema();
