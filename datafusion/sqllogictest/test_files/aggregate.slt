@@ -4236,7 +4236,7 @@ query T?
 SELECT tag, array_agg(millis - arrow_cast(secs, 'Timestamp(Millisecond, None)')) FROM t GROUP BY tag ORDER BY tag;
 ----
 X [0 days 0 hours 0 mins 0.011 secs, 0 days 0 hours 0 mins 0.123 secs]
-Y [, 0 days 0 hours 0 mins 0.432 secs]
+Y [NULL, 0 days 0 hours 0 mins 0.432 secs]
 
 statement ok
 drop table t_source;
