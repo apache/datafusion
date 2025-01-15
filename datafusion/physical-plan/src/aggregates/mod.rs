@@ -656,22 +656,22 @@ impl AggregateExec {
 
         // Group by expression will be a distinct value after the aggregation.
         // Add it into the constraint set.
-        let target_columns = group_expr_mapping
-            .map
-            .iter()
-            .filter_map(|(_, target_col)| target_col.as_any().downcast_ref::<Column>())
-            .collect::<Vec<_>>();
-        debug_assert_eq!(target_columns.len(), group_expr_mapping.map.len());
-        let mut existing_constraints = eq_properties.constraints().to_vec();
+        let mut constraints = eq_properties.constraints().to_vec();
         let new_constraint = Constraint::Unique(
-            target_columns
+            group_expr_mapping
+                .map
                 .iter()
-                .map(|col| col.index())
-                .collect::<Vec<_>>(),
+                .filter_map(|(_, target_col)| {
+                    target_col
+                        .as_any()
+                        .downcast_ref::<Column>()
+                        .map(|c| c.index())
+                })
+                .collect(),
         );
-        existing_constraints.push(new_constraint);
-        eq_properties = eq_properties
-            .with_constraints(Constraints::new_unverified(existing_constraints));
+        constraints.push(new_constraint);
+        eq_properties =
+            eq_properties.with_constraints(Constraints::new_unverified(constraints));
 
         // Get output partitioning:
         let input_partitioning = input.output_partitioning().clone();
