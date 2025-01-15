@@ -37,5 +37,6 @@ path = "src/user_doc.rs"
 proc-macro = true
 
 [dependencies]
+datafusion-expr = { workspace = true }
 quote = "1.0.37"
 syn = { version = "2.0.79", features = ["full"] }
