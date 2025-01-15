@@ -20,10 +20,11 @@ use std::sync::Arc;
 
 use arrow::array::ArrayRef;
 use arrow::datatypes::DataType;
+use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyInfo};
 
 use crate::utils::make_scalar_function;
-use datafusion_common::{internal_err, Result};
-use datafusion_expr::{ColumnarValue, Documentation};
+use datafusion_common::{internal_err, Result, ScalarValue};
+use datafusion_expr::{ColumnarValue, Documentation, Expr, Like};
 use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
 use datafusion_macros::user_doc;
 
@@ -96,6 +97,27 @@ impl ScalarUDFImpl for StartsWithFunc {
             }
             _ => internal_err!("Unsupported data types for starts_with. Expected Utf8, LargeUtf8 or Utf8View")?,
         }
+    }
+
+    fn simplify(
+        &self,
+        args: Vec<Expr>,
+        _info: &dyn SimplifyInfo,
+    ) -> Result<ExprSimplifyResult> {
+        if let Expr::Literal(ScalarValue::Utf8(Some(pattern))) = &args[1] {
+            // Convert starts_with (col, 'prefix') to col LIKE 'prefix%'
+            let like_pattern = format!("{}%", pattern);
+
+            return Ok(ExprSimplifyResult::Simplified(Expr::Like(Like {
+                negated: false,
+                expr: Box::new(args[0].clone()),
+                pattern: Box::new(Expr::Literal(ScalarValue::Utf8(Some(like_pattern)))),
+                escape_char: None,
+                case_insensitive: false,
+            })));
+        }
+
+        Ok(ExprSimplifyResult::Original(args))
     }
 
     fn documentation(&self) -> Option<&Documentation> {
