@@ -251,7 +251,7 @@ impl DataSource for FileSourceConfig {
 
                     write!(f, "{}{}", predicate_string, pruning_predicate_string)
                 }
-            }
+            };
         }
         Ok(())
     }
