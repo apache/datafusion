@@ -138,8 +138,8 @@ impl OrderingEquivalenceClass {
     /// then there is no need to keep ordering `[a ASC, b ASC]` in the state.
     fn remove_redundant_entries(&mut self) {
         // todo rework this algorthtm to avoid Vec
-        let mut orderings:Vec<_> = std::mem::take(&mut self.orderings).into_iter()
-            .collect();
+        let mut orderings: Vec<_> =
+            std::mem::take(&mut self.orderings).into_iter().collect();
         let mut work = true;
         while work {
             work = false;
@@ -148,7 +148,8 @@ impl OrderingEquivalenceClass {
                 let mut ordering_idx = idx + 1;
                 let mut removal = orderings[idx].is_empty();
                 while ordering_idx < orderings.len() {
-                    if let Some(new_len) = resolve_overlap(&orderings, idx, ordering_idx) {
+                    if let Some(new_len) = resolve_overlap(&orderings, idx, ordering_idx)
+                    {
                         work = true;
                         orderings[idx].truncate(new_len);
                     }
@@ -156,12 +157,13 @@ impl OrderingEquivalenceClass {
                         removal = true;
                         break;
                     }
-                    if let Some(new_len) = resolve_overlap(&orderings, ordering_idx, idx) {
+                    if let Some(new_len) = resolve_overlap(&orderings, ordering_idx, idx)
+                    {
                         work = true;
                         orderings[ordering_idx].truncate(new_len);
                     }
                     if orderings[ordering_idx].is_empty() {
-                       orderings.swap_remove(ordering_idx);
+                        orderings.swap_remove(ordering_idx);
                     } else {
                         ordering_idx += 1;
                     }
@@ -173,13 +175,12 @@ impl OrderingEquivalenceClass {
                 }
             }
         }
-        orderings.iter().for_each(|ordering| {
-            assert!(ordering.len()>0)
-        });
+        orderings
+            .iter()
+            .for_each(|ordering| assert!(ordering.len() > 0));
         // recreate the indexset
         self.orderings = orderings.into_iter().collect();
     }
-
 
     /// Returns the concatenation of all the orderings. This enables merge
     /// operations to preserve all equivalent orderings simultaneously.
@@ -253,13 +254,15 @@ impl OrderingEquivalenceClass {
 /// For example, if `orderings[idx]` is `[a ASC, b ASC, c DESC]` and
 /// `orderings[pre_idx]` is `[b ASC, c DESC]`, then the function will return a
 /// new size of `1`, corresponding to updating `orderings[idx]` to `[a ASC]`.
-fn resolve_overlap(orderings: &[LexOrdering], idx: usize, pre_idx: usize) -> Option<usize> {
+fn resolve_overlap(
+    orderings: &[LexOrdering],
+    idx: usize,
+    pre_idx: usize,
+) -> Option<usize> {
     let length = orderings[idx].len();
     let other_length = orderings[pre_idx].len();
     for overlap in 1..=length.min(other_length) {
-        if orderings[idx][length - overlap..]
-            == orderings[pre_idx][..overlap]
-        {
+        if orderings[idx][length - overlap..] == orderings[pre_idx][..overlap] {
             return Some(length - overlap);
         }
     }
