@@ -456,8 +456,8 @@ mod tests {
     use datafusion_expr::{cast, col, lit, Expr};
     use datafusion_physical_expr::planner::logical2physical;
 
-    use parquet::arrow::ArrowSchemaConverter;
     use parquet::arrow::async_reader::ParquetObjectReader;
+    use parquet::arrow::ArrowSchemaConverter;
     use parquet::basic::LogicalType;
     use parquet::data_type::{ByteArray, FixedLenByteArray};
     use parquet::file::metadata::ColumnChunkMetaData;
