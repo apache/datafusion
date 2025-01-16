@@ -146,3 +146,27 @@ stable API, we also improve the API over time. As a result, we typically
 deprecate methods before removing them, according to the [deprecation guidelines].
 
 [deprecation guidelines]: https://datafusion.apache.org/library-user-guide/api-health.html
+
+## Dependencies and a `Cargo.lock`
+
+`datafusion` is intended for use as a library and thus purposely does not have a
+`Cargo.lock` file checked in. You can read more about the distinction in the
+[Cargo book].
+
+CI tests always run against the latest compatible versions of all dependencies
+(the equivalent of doing `cargo update`), as suggested in the [Cargo CI guide]
+and we rely on Dependabot for other upgrades. This strategy has two problems
+that occasionally arise:
+
+1. CI failures when downstream libraries upgrade in some non compatible way
+2. Local development builds that fail when DataFusion inadvertently relies on
+   a feature in a newer version of a dependency than declared in `Cargo.toml`
+   (e.g. a new method is added to a trait that we use).
+
+However, we think the current strategy is the best tradeoff between maintenance
+overhead and user experience and ensures DataFusion always works with the latest
+compatible versions of all dependencies. If you encounter either of these
+problems, please open an issue or PR.
+
+[cargo book]: https://doc.rust-lang.org/cargo/guide/cargo-toml-vs-cargo-lock.html
+[cargo ci guide]: https://doc.rust-lang.org/cargo/guide/continuous-integration.html#verifying-latest-dependencies

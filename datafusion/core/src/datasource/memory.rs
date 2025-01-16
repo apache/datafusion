@@ -42,7 +42,6 @@ use datafusion_common::{not_impl_err, plan_err, Constraints, DFSchema, SchemaExt
 use datafusion_execution::TaskContext;
 use datafusion_expr::dml::InsertOp;
 use datafusion_expr::SortExpr;
-use datafusion_physical_plan::metrics::MetricsSet;
 
 use async_trait::async_trait;
 use futures::StreamExt;
@@ -293,13 +292,8 @@ impl TableProvider for MemTable {
         if insert_op != InsertOp::Append {
             return not_impl_err!("{insert_op} not implemented for MemoryTable yet");
         }
-        let sink = Arc::new(MemSink::try_new(self.batches.clone())?);
-        Ok(Arc::new(DataSinkExec::new(
-            input,
-            sink,
-            Arc::clone(&self.schema),
-            None,
-        )))
+        let sink = MemSink::try_new(self.batches.clone(), Arc::clone(&self.schema))?;
+        Ok(Arc::new(DataSinkExec::new(input, Arc::new(sink), None)))
     }
 
     fn get_column_default(&self, column: &str) -> Option<&Expr> {
@@ -311,6 +305,7 @@ impl TableProvider for MemTable {
 struct MemSink {
     /// Target locations for writing data
     batches: Vec<PartitionData>,
+    schema: SchemaRef,
 }
 
 impl Debug for MemSink {
@@ -336,11 +331,11 @@ impl MemSink {
     /// Creates a new [`MemSink`].
     ///
     /// The caller is responsible for ensuring that there is at least one partition to insert into.
-    fn try_new(batches: Vec<PartitionData>) -> Result<Self> {
+    fn try_new(batches: Vec<PartitionData>, schema: SchemaRef) -> Result<Self> {
         if batches.is_empty() {
             return plan_err!("Cannot insert into MemTable with zero partitions");
         }
-        Ok(Self { batches })
+        Ok(Self { batches, schema })
     }
 }
 
@@ -350,8 +345,8 @@ impl DataSink for MemSink {
         self
     }
 
-    fn metrics(&self) -> Option<MetricsSet> {
-        None
+    fn schema(&self) -> &SchemaRef {
+        &self.schema
     }
 
     async fn write_all(

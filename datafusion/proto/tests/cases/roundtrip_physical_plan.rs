@@ -1275,6 +1275,7 @@ fn roundtrip_json_sink() -> Result<()> {
         table_partition_cols: vec![("plan_type".to_string(), DataType::Utf8)],
         insert_op: InsertOp::Overwrite,
         keep_partition_by_columns: true,
+        file_extension: "json".into(),
     };
     let data_sink = Arc::new(JsonSink::new(
         file_sink_config,
@@ -1291,7 +1292,6 @@ fn roundtrip_json_sink() -> Result<()> {
     roundtrip_test(Arc::new(DataSinkExec::new(
         input,
         data_sink,
-        schema,
         Some(sort_order),
     )))
 }
@@ -1311,6 +1311,7 @@ fn roundtrip_csv_sink() -> Result<()> {
         table_partition_cols: vec![("plan_type".to_string(), DataType::Utf8)],
         insert_op: InsertOp::Overwrite,
         keep_partition_by_columns: true,
+        file_extension: "csv".into(),
     };
     let data_sink = Arc::new(CsvSink::new(
         file_sink_config,
@@ -1327,12 +1328,7 @@ fn roundtrip_csv_sink() -> Result<()> {
     let ctx = SessionContext::new();
     let codec = DefaultPhysicalExtensionCodec {};
     let roundtrip_plan = roundtrip_test_and_return(
-        Arc::new(DataSinkExec::new(
-            input,
-            data_sink,
-            schema,
-            Some(sort_order),
-        )),
+        Arc::new(DataSinkExec::new(input, data_sink, Some(sort_order))),
         &ctx,
         &codec,
     )
@@ -1370,6 +1366,7 @@ fn roundtrip_parquet_sink() -> Result<()> {
         table_partition_cols: vec![("plan_type".to_string(), DataType::Utf8)],
         insert_op: InsertOp::Overwrite,
         keep_partition_by_columns: true,
+        file_extension: "parquet".into(),
     };
     let data_sink = Arc::new(ParquetSink::new(
         file_sink_config,
@@ -1386,7 +1383,6 @@ fn roundtrip_parquet_sink() -> Result<()> {
     roundtrip_test(Arc::new(DataSinkExec::new(
         input,
         data_sink,
-        schema,
         Some(sort_order),
     )))
 }
