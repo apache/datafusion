@@ -151,12 +151,6 @@ pub async fn validate_query_with_memory_limits(
 
     let session_config = SessionConfig::new().with_target_partitions(4); // Make sure the configuration is the same if test is running on different machines
 
-    // if let Some(mem_limit_bytes) = mem_limit_bytes {
-    //     let spill_reservation_bytes = (mem_limit_bytes as f64 * 0.2) as usize;
-    //     session_config =
-    //         session_config.with_sort_spill_reservation_bytes(spill_reservation_bytes);
-    // }
-
     let ctx = SessionContext::new_with_config_rt(session_config, runtime);
 
     let df = ctx.sql(query).await.unwrap();
