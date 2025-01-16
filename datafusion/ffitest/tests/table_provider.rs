@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use abi_stable::library::development_utils::compute_library_path;
 use abi_stable::library::RootModule;
 use datafusion::error::{DataFusionError, Result};
 use datafusion::prelude::SessionContext;
@@ -25,6 +24,39 @@ use datafusion_ffi_test;
 use datafusion_ffi_test::TableProviderModuleRef;
 use std::path::Path;
 use std::sync::Arc;
+
+/// Compute the path to the library. It would be preferable to simply use
+/// abi_stable::library::development_utils::compute_library_path however
+/// our current CI pipeline has a `ci` profile that we need to use to
+/// find the library.
+pub fn compute_library_path<M: RootModule>(
+    target_path: &Path,
+) -> std::io::Result<std::path::PathBuf> {
+    let debug_dir = target_path.join("debug");
+    let release_dir = target_path.join("release");
+    let ci_dir = target_path.join("ci");
+
+    let debug_path = M::get_library_path(&debug_dir.join("deps"));
+    let release_path = M::get_library_path(&release_dir.join("deps"));
+    let ci_path = M::get_library_path(&ci_dir.join("deps"));
+
+    let all_paths = vec![
+        (debug_dir.clone(), debug_path),
+        (release_dir, release_path),
+        (ci_dir, ci_path),
+    ];
+
+    let best_path = all_paths
+        .into_iter()
+        .filter(|(_, path)| path.exists())
+        .filter_map(|(dir, path)| path.metadata().map(|m| (dir, m)).ok())
+        .filter_map(|(dir, meta)| meta.modified().map(|m| (dir, m)).ok())
+        .max_by_key(|(_, date)| *date)
+        .map(|(dir, _)| dir)
+        .unwrap_or(debug_dir);
+
+    Ok(best_path)
+}
 
 /// It is important that this test is in the `tests` directory and not in the
 /// library directory so we can verify we are building a dynamic library and
