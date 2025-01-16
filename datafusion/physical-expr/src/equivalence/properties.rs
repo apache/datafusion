@@ -4420,6 +4420,14 @@ mod tests {
                 vec![vec!["a", "c", "b", "d"]],
                 vec![vec!["a", "b", "d"]],
             ),
+            (
+                "ordering with arbitrary column pk complex",
+                &pk_schema,
+                vec![Constraint::PrimaryKey(vec![3, 1])],
+                vec!["b", "a", "d"], // base ordering
+                vec![vec!["b", "a", "d", "c"]],
+                vec![vec!["b", "c", "d", "a"], vec!["b", "a", "c", "d"]],
+            ),
         ];
 
         for (
