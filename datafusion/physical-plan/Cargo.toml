@@ -33,6 +33,7 @@ workspace = true
 
 [features]
 force_hash_collisions = []
+compress = ["flate2"]
 
 [lib]
 name = "datafusion_physical_plan"
@@ -63,6 +64,7 @@ log = { workspace = true }
 parking_lot = { workspace = true }
 pin-project-lite = "^0.2.7"
 tokio = { workspace = true }
+flate2 = { version = "1.0.35", optional = true }
 
 [dev-dependencies]
 criterion = { version = "0.5", features = ["async_futures"] }

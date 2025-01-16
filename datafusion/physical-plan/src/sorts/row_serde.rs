@@ -14,6 +14,7 @@
 // KIND, either express or implied.  See the License for the
 // specific language governing permissions and limitations
 // under the License.
+
 use arrow::row::RowConverter;
 use arrow::row::Rows;
 use datafusion_common::error::DataFusionError;
@@ -25,9 +26,8 @@ use std::io::Write;
 use std::io::{BufReader, Read, Seek, SeekFrom};
 use std::path::Path;
 
-use std::path::PathBuf;
 use std::sync::Arc;
-use std::vec::IntoIter;
+
 use tokio::sync::mpsc::Sender;
 
 use crate::stream::ReceiverStreamBuilder;
@@ -230,7 +230,6 @@ impl RowReader {
         reader.read_exact(&mut metadata_buf)?;
         let metadata = Self::decompress(&metadata_buf, compression)?;
 
-        let block_count = u32::from_le_bytes(metadata[0..4].try_into().unwrap()) as usize;
         let block_offsets = metadata[4..]
             .chunks_exact(4)
             .map(|chunk| u32::from_le_bytes(chunk.try_into().unwrap()) as u64)
