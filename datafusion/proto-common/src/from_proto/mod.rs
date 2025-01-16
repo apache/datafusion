@@ -321,6 +321,7 @@ impl TryFrom<&protobuf::Field> for Field {
     fn try_from(field: &protobuf::Field) -> Result<Self, Self::Error> {
         let datatype = field.arrow_type.as_deref().required("arrow_type")?;
         let field = if field.dict_id != 0 {
+            #[allow(deprecated)]
             Self::new_dict(
                 field.name.as_str(),
                 datatype,
@@ -434,7 +435,11 @@ impl TryFrom<&protobuf::ScalarValue> for ScalarValue {
 
                     let id = dict_batch.id();
 
-                    let fields_using_this_dictionary = schema.fields_with_dict_id(id);
+                    let fields_using_this_dictionary = {
+                        #[allow(deprecated)]
+                        schema.fields_with_dict_id(id)
+                    };
+
                     let first_field = fields_using_this_dictionary.first().ok_or_else(|| {
                         Error::General("dictionary id not found in schema while deserializing ScalarValue::List".to_string())
                     })?;
