@@ -174,6 +174,7 @@ pub mod test {
                         ReadType::LocalFiles(_) => todo!(),
                         ReadType::NamedTable(nt) => self.collect_named_table(r, nt)?,
                         ReadType::ExtensionTable(_) => todo!(),
+                        ReadType::IcebergTable(_) => todo!(),
                     }
                     if let Some(expr) = r.filter.as_ref() {
                         self.collect_schemas_from_expr(expr)?

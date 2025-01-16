@@ -39,15 +39,14 @@ use arrow::datatypes::{Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use arrow_array::{UInt16Array, UInt32Array, UInt64Array, UInt8Array};
 use datafusion_common::stats::Precision;
-use datafusion_common::{internal_err, not_impl_err, Result};
+use datafusion_common::{internal_err, not_impl_err, Constraint, Constraints, Result};
 use datafusion_execution::TaskContext;
 use datafusion_expr::{Accumulator, Aggregate};
 use datafusion_physical_expr::aggregate::AggregateFunctionExpr;
 use datafusion_physical_expr::{
-    equivalence::{collapse_lex_req, ProjectionMapping},
-    expressions::Column,
-    physical_exprs_contains, EquivalenceProperties, LexOrdering, LexRequirement,
-    PhysicalExpr, PhysicalSortRequirement,
+    equivalence::ProjectionMapping, expressions::Column, physical_exprs_contains,
+    EquivalenceProperties, LexOrdering, LexRequirement, PhysicalExpr,
+    PhysicalSortRequirement,
 };
 
 use itertools::Itertools;
@@ -249,6 +248,10 @@ impl PhysicalGroupBy {
         } else {
             self.expr.len() + 1
         }
+    }
+
+    pub fn group_schema(&self, schema: &Schema) -> Result<SchemaRef> {
+        Ok(Arc::new(Schema::new(self.group_fields(schema)?)))
     }
 
     /// Returns the fields that are used as the grouping keys.
@@ -473,7 +476,7 @@ impl AggregateExec {
             &mode,
         )?;
         new_requirement.inner.extend(req);
-        new_requirement = collapse_lex_req(new_requirement);
+        new_requirement = new_requirement.collapse();
 
         // If our aggregation has grouping sets then our base grouping exprs will
         // be expanded based on the flags in `group_by.groups` where for each
@@ -497,7 +500,7 @@ impl AggregateExec {
         };
 
         // construct a map from the input expression to the output expression of the Aggregation group by
-        let projection_mapping =
+        let group_expr_mapping =
             ProjectionMapping::try_new(&group_by.expr, &input.schema())?;
 
         let required_input_ordering =
@@ -506,7 +509,7 @@ impl AggregateExec {
         let cache = Self::compute_properties(
             &input,
             Arc::clone(&schema),
-            &projection_mapping,
+            &group_expr_mapping,
             &mode,
             &input_order_mode,
         );
@@ -642,14 +645,33 @@ impl AggregateExec {
     pub fn compute_properties(
         input: &Arc<dyn ExecutionPlan>,
         schema: SchemaRef,
-        projection_mapping: &ProjectionMapping,
+        group_expr_mapping: &ProjectionMapping,
         mode: &AggregateMode,
         input_order_mode: &InputOrderMode,
     ) -> PlanProperties {
         // Construct equivalence properties:
-        let eq_properties = input
+        let mut eq_properties = input
             .equivalence_properties()
-            .project(projection_mapping, schema);
+            .project(group_expr_mapping, schema);
+
+        // Group by expression will be a distinct value after the aggregation.
+        // Add it into the constraint set.
+        let mut constraints = eq_properties.constraints().to_vec();
+        let new_constraint = Constraint::Unique(
+            group_expr_mapping
+                .map
+                .iter()
+                .filter_map(|(_, target_col)| {
+                    target_col
+                        .as_any()
+                        .downcast_ref::<Column>()
+                        .map(|c| c.index())
+                })
+                .collect(),
+        );
+        constraints.push(new_constraint);
+        eq_properties =
+            eq_properties.with_constraints(Constraints::new_unverified(constraints));
 
         // Get output partitioning:
         let input_partitioning = input.output_partitioning().clone();
@@ -658,7 +680,7 @@ impl AggregateExec {
             // but needs to respect aliases (e.g. mapping in the GROUP BY
             // expression).
             let input_eq_properties = input.equivalence_properties();
-            input_partitioning.project(projection_mapping, input_eq_properties)
+            input_partitioning.project(group_expr_mapping, input_eq_properties)
         } else {
             input_partitioning.clone()
         };
@@ -923,10 +945,6 @@ fn create_schema(
         fields,
         input_schema.metadata().clone(),
     ))
-}
-
-fn group_schema(input_schema: &Schema, group_by: &PhysicalGroupBy) -> Result<SchemaRef> {
-    Ok(Arc::new(Schema::new(group_by.group_fields(input_schema)?)))
 }
 
 /// Determines the lexical ordering requirement for an aggregate expression.

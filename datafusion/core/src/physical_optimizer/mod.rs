@@ -24,11 +24,9 @@
 
 pub mod enforce_distribution;
 pub mod enforce_sorting;
-pub mod join_selection;
 pub mod optimizer;
 pub mod projection_pushdown;
 pub mod replace_with_order_preserving_variants;
-pub mod sanity_checker;
 #[cfg(test)]
 pub mod test_utils;
 

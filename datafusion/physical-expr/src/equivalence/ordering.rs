@@ -135,12 +135,12 @@ impl OrderingEquivalenceClass {
                 let mut ordering_idx = idx + 1;
                 let mut removal = self.orderings[idx].is_empty();
                 while ordering_idx < self.orderings.len() {
-                    work |= resolve_overlap(&mut self.orderings, idx, ordering_idx);
+                    work |= self.resolve_overlap(idx, ordering_idx);
                     if self.orderings[idx].is_empty() {
                         removal = true;
                         break;
                     }
-                    work |= resolve_overlap(&mut self.orderings, ordering_idx, idx);
+                    work |= self.resolve_overlap(ordering_idx, idx);
                     if self.orderings[ordering_idx].is_empty() {
                         self.orderings.swap_remove(ordering_idx);
                     } else {
@@ -156,11 +156,36 @@ impl OrderingEquivalenceClass {
         }
     }
 
+    /// Trims `orderings[idx]` if some suffix of it overlaps with a prefix of
+    /// `orderings[pre_idx]`. Returns `true` if there is any overlap, `false` otherwise.
+    ///
+    /// For example, if `orderings[idx]` is `[a ASC, b ASC, c DESC]` and
+    /// `orderings[pre_idx]` is `[b ASC, c DESC]`, then the function will trim
+    /// `orderings[idx]` to `[a ASC]`.
+    fn resolve_overlap(&mut self, idx: usize, pre_idx: usize) -> bool {
+        let length = self.orderings[idx].len();
+        let other_length = self.orderings[pre_idx].len();
+        for overlap in 1..=length.min(other_length) {
+            if self.orderings[idx][length - overlap..]
+                == self.orderings[pre_idx][..overlap]
+            {
+                self.orderings[idx].truncate(length - overlap);
+                return true;
+            }
+        }
+        false
+    }
+
     /// Returns the concatenation of all the orderings. This enables merge
     /// operations to preserve all equivalent orderings simultaneously.
     pub fn output_ordering(&self) -> Option<LexOrdering> {
-        let output_ordering = self.orderings.iter().flatten().cloned().collect();
-        let output_ordering = collapse_lex_ordering(output_ordering);
+        let output_ordering = self
+            .orderings
+            .iter()
+            .flatten()
+            .cloned()
+            .collect::<LexOrdering>()
+            .collapse();
         (!output_ordering.is_empty()).then_some(output_ordering)
     }
 
@@ -219,33 +244,6 @@ impl IntoIterator for OrderingEquivalenceClass {
     fn into_iter(self) -> Self::IntoIter {
         self.orderings.into_iter()
     }
-}
-
-/// This function constructs a duplicate-free `LexOrdering` by filtering out
-/// duplicate entries that have same physical expression inside. For example,
-/// `vec![a ASC, a DESC]` collapses to `vec![a ASC]`.
-pub fn collapse_lex_ordering(input: LexOrdering) -> LexOrdering {
-    let mut output = LexOrdering::default();
-    for item in input.iter() {
-        if !output.iter().any(|req| req.expr.eq(&item.expr)) {
-            output.push(item.clone());
-        }
-    }
-    output
-}
-
-/// Trims `orderings[idx]` if some suffix of it overlaps with a prefix of
-/// `orderings[pre_idx]`. Returns `true` if there is any overlap, `false` otherwise.
-fn resolve_overlap(orderings: &mut [LexOrdering], idx: usize, pre_idx: usize) -> bool {
-    let length = orderings[idx].len();
-    let other_length = orderings[pre_idx].len();
-    for overlap in 1..=length.min(other_length) {
-        if orderings[idx][length - overlap..] == orderings[pre_idx][..overlap] {
-            orderings[idx].truncate(length - overlap);
-            return true;
-        }
-    }
-    false
 }
 
 impl Display for OrderingEquivalenceClass {

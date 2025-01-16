@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use super::{add_offset_to_expr, collapse_lex_req, ProjectionMapping};
+use super::{add_offset_to_expr, ProjectionMapping};
 use crate::{
     expressions::Column, LexOrdering, LexRequirement, PhysicalExpr, PhysicalExprRef,
     PhysicalSortExpr, PhysicalSortRequirement,
@@ -526,12 +526,13 @@ impl EquivalenceGroup {
         &self,
         sort_reqs: &LexRequirement,
     ) -> LexRequirement {
-        collapse_lex_req(LexRequirement::new(
+        LexRequirement::new(
             sort_reqs
                 .iter()
                 .map(|sort_req| self.normalize_sort_requirement(sort_req.clone()))
                 .collect(),
-        ))
+        )
+        .collapse()
     }
 
     /// Projects `expr` according to the given projection mapping.

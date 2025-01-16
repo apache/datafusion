@@ -16,6 +16,6 @@
 // under the License.
 
 mod combine_partial_final_agg;
-mod limit_pushdown;
 mod limited_distinct_aggregation;
-mod test_util;
+mod sanity_checker;
+pub(crate) mod test_util;

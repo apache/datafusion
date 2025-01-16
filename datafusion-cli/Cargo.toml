@@ -31,10 +31,14 @@ readme = "README.md"
 [dependencies]
 arrow = { version = "53.0.0" }
 async-trait = "0.1.73"
-aws-config = "1.5.5"
-aws-sdk-sso = "1.43.0"
-aws-sdk-ssooidc = "1.44.0"
-aws-sdk-sts = "1.43.0"
+## 1.5.13 requires a hiher MSRV 1.81 so lock until DataFusion MSRV catches up
+aws-config = "=1.5.10"
+## 1.53.0 requires a higher MSRV 1.81 so lock until DataFusion MSRV catches up
+aws-sdk-sso = "=1.50.0"
+## 1.54.0 requires a higher MSRV 1.81 so lock until DataFusion MSRV catches up
+aws-sdk-ssooidc = "=1.51.0"
+## 1.54.1 requires a higher MSRV 1.81 so lock until DataFusion MSRV catches up
+aws-sdk-sts = "=1.51.0"
 # end pin aws-sdk crates
 aws-credential-types = "1.2.0"
 clap = { version = "4.5.16", features = ["derive", "cargo"] }
@@ -66,7 +70,7 @@ url = "2.5.4"
 
 [dev-dependencies]
 assert_cmd = "2.0"
-ctor = "0.2.0"
+ctor = "0.2.9"
 insta = { version = "1.41.1", features = ["glob", "filters"] }
 insta-cmd = "0.6.0"
 predicates = "3.0"

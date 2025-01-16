@@ -32,7 +32,6 @@ use datafusion_expr::{
     PartitionEvaluator, ReversedUDWF, WindowFrame, WindowFunctionDefinition, WindowUDF,
 };
 use datafusion_physical_expr::aggregate::{AggregateExprBuilder, AggregateFunctionExpr};
-use datafusion_physical_expr::equivalence::collapse_lex_req;
 use datafusion_physical_expr::{
     reverse_order_bys,
     window::{SlidingAggregateWindowExpr, StandardWindowFunctionExpr},
@@ -469,8 +468,8 @@ pub fn get_window_mode(
     {
         let req = LexRequirement::new(
             [partition_by_reqs.inner.clone(), order_by_reqs.inner].concat(),
-        );
-        let req = collapse_lex_req(req);
+        )
+        .collapse();
         if partition_by_eqs.ordering_satisfy_requirement(&req) {
             // Window can be run with existing ordering
             let mode = if indices.len() == partitionby_exprs.len() {

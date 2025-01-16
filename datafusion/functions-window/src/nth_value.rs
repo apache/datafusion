@@ -345,24 +345,27 @@ impl PartitionEvaluator for NthValueEvaluator {
                 return ScalarValue::try_from(arr.data_type());
             }
 
-            // Extract valid indices if ignoring nulls.
+            // If null values exist and need to be ignored, extract the valid indices.
             let valid_indices = if self.ignore_nulls {
-                // Calculate valid indices, inside the window frame boundaries
+                // Calculate valid indices, inside the window frame boundaries.
                 let slice = arr.slice(range.start, n_range);
-                let valid_indices = slice
-                    .nulls()
-                    .map(|nulls| {
-                        nulls
+                match slice.nulls() {
+                    Some(nulls) => {
+                        let valid_indices = nulls
                             .valid_indices()
-                            // Add offset `range.start` to valid indices, to point correct index in the original arr.
-                            .map(|idx| idx + range.start)
-                            .collect::<Vec<_>>()
-                    })
-                    .unwrap_or_default();
-                if valid_indices.is_empty() {
-                    return ScalarValue::try_from(arr.data_type());
+                            .map(|idx| {
+                                // Add offset `range.start` to valid indices, to point correct index in the original arr.
+                                idx + range.start
+                            })
+                            .collect::<Vec<_>>();
+                        if valid_indices.is_empty() {
+                            // If all values are null, return directly.
+                            return ScalarValue::try_from(arr.data_type());
+                        }
+                        Some(valid_indices)
+                    }
+                    None => None,
                 }
-                Some(valid_indices)
             } else {
                 None
             };
