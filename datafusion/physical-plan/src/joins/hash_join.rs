@@ -469,7 +469,7 @@ impl HashJoinExec {
     }
 
     /// Return whether the join contains a projection
-    pub fn contain_projection(&self) -> bool {
+    pub fn contains_projection(&self) -> bool {
         self.projection.is_some()
     }
 
@@ -626,7 +626,7 @@ impl DisplayAs for HashJoinExec {
                     || "".to_string(),
                     |f| format!(", filter={}", f.expression()),
                 );
-                let display_projections = if self.contain_projection() {
+                let display_projections = if self.contains_projection() {
                     format!(
                         ", projection=[{}]",
                         self.projection
