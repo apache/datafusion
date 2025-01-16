@@ -1113,7 +1113,7 @@ pub(crate) fn need_produce_result_in_final(join_type: JoinType) -> bool {
     )
 }
 
-pub fn get_final_indices_from_shared_bitmap(
+pub(crate) fn get_final_indices_from_shared_bitmap(
     shared_bitmap: &SharedBitmapBuilder,
     join_type: JoinType,
 ) -> (UInt64Array, UInt32Array) {
