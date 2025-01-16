@@ -26,10 +26,11 @@ use std::{any::Any, vec};
 
 use super::utils::{
     asymmetric_join_output_partitioning, reorder_output_after_swap, swap_join_projection,
+    get_final_indices_from_shared_bitmap,
 };
 use super::{
     utils::{OnceAsync, OnceFut},
-    PartitionMode,
+    PartitionMode, SharedBitmapBuilder,
 };
 use crate::execution_plan::{boundedness_from_children, EmissionType};
 use crate::ExecutionPlanProperties;
@@ -41,10 +42,10 @@ use crate::{
     joins::utils::{
         adjust_indices_by_join_type, apply_join_filter_to_indices,
         build_batch_from_indices, build_join_schema, check_join_is_valid,
-        estimate_join_statistics, get_final_indices_from_bit_map,
-        need_produce_result_in_final, symmetric_join_output_partitioning,
-        BuildProbeJoinMetrics, ColumnIndex, JoinFilter, JoinHashMap, JoinHashMapOffset,
-        JoinHashMapType, JoinOn, JoinOnRef, StatefulStreamResult,
+        estimate_join_statistics, need_produce_result_in_final,
+        symmetric_join_output_partitioning, BuildProbeJoinMetrics, ColumnIndex,
+        JoinFilter, JoinHashMap, JoinHashMapOffset, JoinHashMapType, JoinOn, JoinOnRef,
+        StatefulStreamResult,
     },
     metrics::{ExecutionPlanMetricsSet, MetricsSet},
     DisplayAs, DisplayFormatType, Distribution, ExecutionPlan, Partitioning,
@@ -80,8 +81,6 @@ use datafusion_physical_expr_common::datum::compare_op_for_nested;
 use futures::{ready, Stream, StreamExt, TryStreamExt};
 use parking_lot::Mutex;
 
-type SharedBitmapBuilder = Mutex<BooleanBufferBuilder>;
-
 /// HashTable and input data for the left (build side) of a join
 struct JoinLeftData {
     /// The hash table with indices into `batch`
@@ -89,7 +88,7 @@ struct JoinLeftData {
     /// The input rows for the build side
     batch: RecordBatch,
     /// Shared bitmap builder for visited left indices
-    visited_indices_bitmap: Mutex<BooleanBufferBuilder>,
+    visited_indices_bitmap: SharedBitmapBuilder,
     /// Counter of running probe-threads, potentially
     /// able to update `visited_indices_bitmap`
     probe_threads_counter: AtomicUsize,
@@ -1319,14 +1318,6 @@ pub fn equal_rows_arr(
         downcast_array(left_filtered.as_ref()),
         downcast_array(right_filtered.as_ref()),
     ))
-}
-
-fn get_final_indices_from_shared_bitmap(
-    shared_bitmap: &SharedBitmapBuilder,
-    join_type: JoinType,
-) -> (UInt64Array, UInt32Array) {
-    let bitmap = shared_bitmap.lock();
-    get_final_indices_from_bit_map(&bitmap, join_type)
 }
 
 impl HashJoinStream {

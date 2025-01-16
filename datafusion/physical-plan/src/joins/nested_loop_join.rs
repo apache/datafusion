@@ -24,7 +24,7 @@ use std::sync::Arc;
 use std::task::Poll;
 
 use super::utils::{
-    asymmetric_join_output_partitioning, need_produce_result_in_final,
+    asymmetric_join_output_partitioning, need_produce_result_in_final, get_final_indices_from_shared_bitmap,
     reorder_output_after_swap, swap_join_projection, BatchSplitter, BatchTransformer,
     NoopBatchTransformer, StatefulStreamResult,
 };
@@ -34,8 +34,7 @@ use crate::execution_plan::{boundedness_from_children, EmissionType};
 use crate::joins::utils::{
     adjust_indices_by_join_type, apply_join_filter_to_indices, build_batch_from_indices,
     build_join_schema, check_join_is_valid, estimate_join_statistics,
-    get_final_indices_from_bit_map, BuildProbeJoinMetrics, ColumnIndex, JoinFilter,
-    OnceAsync, OnceFut,
+    BuildProbeJoinMetrics, ColumnIndex, JoinFilter, OnceAsync, OnceFut,
 };
 use crate::metrics::{ExecutionPlanMetricsSet, MetricsSet};
 use crate::{
@@ -58,11 +57,10 @@ use datafusion_physical_expr::equivalence::{
     join_equivalence_properties, ProjectionMapping,
 };
 
+use crate::joins::SharedBitmapBuilder;
 use futures::{ready, Stream, StreamExt, TryStreamExt};
 use parking_lot::Mutex;
 
-/// Shared bitmap for visited left-side indices
-type SharedBitmapBuilder = Mutex<BooleanBufferBuilder>;
 /// Left (build-side) data
 struct JoinLeftData {
     /// Build-side data collected to single batch
@@ -962,14 +960,6 @@ fn join_left_and_right_batch(
         column_indices,
         JoinSide::Left,
     )
-}
-
-fn get_final_indices_from_shared_bitmap(
-    shared_bitmap: &SharedBitmapBuilder,
-    join_type: JoinType,
-) -> (UInt64Array, UInt32Array) {
-    let bitmap = shared_bitmap.lock();
-    get_final_indices_from_bit_map(&bitmap, join_type)
 }
 
 impl<T: BatchTransformer + Unpin + Send> Stream for NestedLoopJoinStream<T> {

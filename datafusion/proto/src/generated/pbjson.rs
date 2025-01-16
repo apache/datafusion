@@ -5972,6 +5972,9 @@ impl serde::Serialize for FileSinkConfig {
         if self.insert_op != 0 {
             len += 1;
         }
+        if !self.file_extension.is_empty() {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("datafusion.FileSinkConfig", len)?;
         if !self.object_store_url.is_empty() {
             struct_ser.serialize_field("objectStoreUrl", &self.object_store_url)?;
@@ -5995,6 +5998,9 @@ impl serde::Serialize for FileSinkConfig {
             let v = InsertOp::try_from(self.insert_op)
                 .map_err(|_| serde::ser::Error::custom(format!("Invalid variant {}", self.insert_op)))?;
             struct_ser.serialize_field("insertOp", &v)?;
+        }
+        if !self.file_extension.is_empty() {
+            struct_ser.serialize_field("fileExtension", &self.file_extension)?;
         }
         struct_ser.end()
     }
@@ -6020,6 +6026,8 @@ impl<'de> serde::Deserialize<'de> for FileSinkConfig {
             "keepPartitionByColumns",
             "insert_op",
             "insertOp",
+            "file_extension",
+            "fileExtension",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -6031,6 +6039,7 @@ impl<'de> serde::Deserialize<'de> for FileSinkConfig {
             TablePartitionCols,
             KeepPartitionByColumns,
             InsertOp,
+            FileExtension,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -6059,6 +6068,7 @@ impl<'de> serde::Deserialize<'de> for FileSinkConfig {
                             "tablePartitionCols" | "table_partition_cols" => Ok(GeneratedField::TablePartitionCols),
                             "keepPartitionByColumns" | "keep_partition_by_columns" => Ok(GeneratedField::KeepPartitionByColumns),
                             "insertOp" | "insert_op" => Ok(GeneratedField::InsertOp),
+                            "fileExtension" | "file_extension" => Ok(GeneratedField::FileExtension),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -6085,6 +6095,7 @@ impl<'de> serde::Deserialize<'de> for FileSinkConfig {
                 let mut table_partition_cols__ = None;
                 let mut keep_partition_by_columns__ = None;
                 let mut insert_op__ = None;
+                let mut file_extension__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::ObjectStoreUrl => {
@@ -6129,6 +6140,12 @@ impl<'de> serde::Deserialize<'de> for FileSinkConfig {
                             }
                             insert_op__ = Some(map_.next_value::<InsertOp>()? as i32);
                         }
+                        GeneratedField::FileExtension => {
+                            if file_extension__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("fileExtension"));
+                            }
+                            file_extension__ = Some(map_.next_value()?);
+                        }
                     }
                 }
                 Ok(FileSinkConfig {
@@ -6139,6 +6156,7 @@ impl<'de> serde::Deserialize<'de> for FileSinkConfig {
                     table_partition_cols: table_partition_cols__.unwrap_or_default(),
                     keep_partition_by_columns: keep_partition_by_columns__.unwrap_or_default(),
                     insert_op: insert_op__.unwrap_or_default(),
+                    file_extension: file_extension__.unwrap_or_default(),
                 })
             }
         }
