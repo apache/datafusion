@@ -24,7 +24,10 @@ use std::sync::Arc;
 use std::task::Poll;
 use std::{any::Any, vec};
 
-use super::utils::{asymmetric_join_output_partitioning, reorder_output_after_swap};
+use super::utils::{
+    asymmetric_join_output_partitioning, get_final_indices_from_shared_bitmap,
+    reorder_output_after_swap,
+};
 use super::{
     utils::{OnceAsync, OnceFut},
     PartitionMode, SharedBitmapBuilder,
@@ -39,10 +42,10 @@ use crate::{
     joins::utils::{
         adjust_indices_by_join_type, apply_join_filter_to_indices,
         build_batch_from_indices, build_join_schema, check_join_is_valid,
-        estimate_join_statistics, get_final_indices_from_bit_map,
-        need_produce_result_in_final, symmetric_join_output_partitioning,
-        BuildProbeJoinMetrics, ColumnIndex, JoinFilter, JoinHashMap, JoinHashMapOffset,
-        JoinHashMapType, JoinOn, JoinOnRef, StatefulStreamResult,
+        estimate_join_statistics, need_produce_result_in_final,
+        symmetric_join_output_partitioning, BuildProbeJoinMetrics, ColumnIndex,
+        JoinFilter, JoinHashMap, JoinHashMapOffset, JoinHashMapType, JoinOn, JoinOnRef,
+        StatefulStreamResult,
     },
     metrics::{ExecutionPlanMetricsSet, MetricsSet},
     DisplayAs, DisplayFormatType, Distribution, ExecutionPlan, Partitioning,
@@ -1347,14 +1350,6 @@ pub fn equal_rows_arr(
         downcast_array(left_filtered.as_ref()),
         downcast_array(right_filtered.as_ref()),
     ))
-}
-
-fn get_final_indices_from_shared_bitmap(
-    shared_bitmap: &SharedBitmapBuilder,
-    join_type: JoinType,
-) -> (UInt64Array, UInt32Array) {
-    let bitmap = shared_bitmap.lock();
-    get_final_indices_from_bit_map(&bitmap, join_type)
 }
 
 impl HashJoinStream {
