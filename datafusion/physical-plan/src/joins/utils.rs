@@ -441,7 +441,7 @@ pub fn adjust_right_output_partitioning(
         Partitioning::Hash(exprs, size) => {
             let new_exprs = exprs
                 .iter()
-                .map(|expr| add_offset_to_expr(Arc::clone(expr), left_columns_len))
+                .map(|expr| add_offset_to_expr(expr, left_columns_len))
                 .collect();
             Partitioning::Hash(new_exprs, *size)
         }
@@ -484,7 +484,7 @@ fn offset_ordering(
         JoinType::Inner | JoinType::Left | JoinType::Full | JoinType::Right => ordering
             .iter()
             .map(|sort_expr| PhysicalSortExpr {
-                expr: add_offset_to_expr(Arc::clone(&sort_expr.expr), offset),
+                expr: add_offset_to_expr(&sort_expr.expr, offset),
                 options: sort_expr.options,
             })
             .collect(),

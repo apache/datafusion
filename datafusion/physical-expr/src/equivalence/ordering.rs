@@ -137,54 +137,49 @@ impl OrderingEquivalenceClass {
     /// For instance, if we already have the ordering `[a ASC, b ASC, c DESC]`,
     /// then there is no need to keep ordering `[a ASC, b ASC]` in the state.
     fn remove_redundant_entries(&mut self) {
+        // todo rework this algorthtm to avoid Vec
+        let mut orderings:Vec<_> = std::mem::take(&mut self.orderings).into_iter()
+            .collect();
         let mut work = true;
         while work {
             work = false;
             let mut idx = 0;
-            while idx < self.orderings.len() {
+            while idx < orderings.len() {
                 let mut ordering_idx = idx + 1;
-                let mut removal = self.orderings[idx].is_empty();
-                while ordering_idx < self.orderings.len() {
-                    work |= self.resolve_overlap(idx, ordering_idx);
-                    if self.orderings[idx].is_empty() {
+                let mut removal = orderings[idx].is_empty();
+                while ordering_idx < orderings.len() {
+                    if let Some(new_len) = resolve_overlap(&orderings, idx, ordering_idx) {
+                        work = true;
+                        orderings[idx].truncate(new_len);
+                    }
+                    if orderings[idx].is_empty() {
                         removal = true;
                         break;
                     }
-                    work |= self.resolve_overlap(ordering_idx, idx);
-                    if self.orderings[ordering_idx].is_empty() {
-                        self.orderings.swap_remove(ordering_idx);
+                    if let Some(new_len) = resolve_overlap(&orderings, ordering_idx, idx) {
+                        work = true;
+                        orderings[ordering_idx].truncate(new_len);
+                    }
+                    if orderings[ordering_idx].is_empty() {
+                       orderings.swap_remove(ordering_idx);
                     } else {
                         ordering_idx += 1;
                     }
                 }
                 if removal {
-                    self.orderings.swap_remove(idx);
+                    orderings.swap_remove(idx);
                 } else {
                     idx += 1;
                 }
             }
         }
+        orderings.iter().for_each(|ordering| {
+            assert!(ordering.len()>0)
+        });
+        // recreate the indexset
+        self.orderings = orderings.into_iter().collect();
     }
 
-    /// Trims `orderings[idx]` if some suffix of it overlaps with a prefix of
-    /// `orderings[pre_idx]`. Returns `true` if there is any overlap, `false` otherwise.
-    ///
-    /// For example, if `orderings[idx]` is `[a ASC, b ASC, c DESC]` and
-    /// `orderings[pre_idx]` is `[b ASC, c DESC]`, then the function will trim
-    /// `orderings[idx]` to `[a ASC]`.
-    fn resolve_overlap(&mut self, idx: usize, pre_idx: usize) -> bool {
-        let length = self.orderings[idx].len();
-        let other_length = self.orderings[pre_idx].len();
-        for overlap in 1..=length.min(other_length) {
-            if self.orderings[idx][length - overlap..]
-                == self.orderings[pre_idx][..overlap]
-            {
-                self.orderings[idx].truncate(length - overlap);
-                return true;
-            }
-        }
-        false
-    }
 
     /// Returns the concatenation of all the orderings. This enables merge
     /// operations to preserve all equivalent orderings simultaneously.
@@ -248,6 +243,27 @@ impl OrderingEquivalenceClass {
         }
         None
     }
+}
+
+/// Returns the length that `orderings[idx]` could be trimmed to it overlaps with a prefix of
+/// `orderings[pre_idx]`. Returns `Some(new_len)` if there is any overlap, `None` otherwise.
+///
+/// new_len is always greater than 0
+///
+/// For example, if `orderings[idx]` is `[a ASC, b ASC, c DESC]` and
+/// `orderings[pre_idx]` is `[b ASC, c DESC]`, then the function will return a
+/// new size of `1`, corresponding to updating `orderings[idx]` to `[a ASC]`.
+fn resolve_overlap(orderings: &[LexOrdering], idx: usize, pre_idx: usize) -> Option<usize> {
+    let length = orderings[idx].len();
+    let other_length = orderings[pre_idx].len();
+    for overlap in 1..=length.min(other_length) {
+        if orderings[idx][length - overlap..]
+            == orderings[pre_idx][..overlap]
+        {
+            return Some(length - overlap);
+        }
+    }
+    None
 }
 
 /// Convert the `OrderingEquivalenceClass` into an iterator of LexOrderings
