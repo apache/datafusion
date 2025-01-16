@@ -17,4 +17,5 @@
 
 mod combine_partial_final_agg;
 mod limited_distinct_aggregation;
-mod test_util;
+mod sanity_checker;
+pub(crate) mod test_util;
