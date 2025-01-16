@@ -32,7 +32,6 @@ use tokio::sync::mpsc::Sender;
 
 use crate::stream::ReceiverStreamBuilder;
 /// used for spill Rows
-
 pub struct RowStreamBuilder {
     inner: ReceiverStreamBuilder<Rows>,
 }
