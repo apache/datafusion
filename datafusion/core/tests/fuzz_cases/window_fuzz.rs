@@ -22,6 +22,7 @@ use arrow::compute::{concat_batches, SortOptions};
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use arrow::util::pretty::pretty_format_batches;
+use datafusion::functions_window::row_number::row_number_udwf;
 use datafusion::physical_plan::sorts::sort::SortExec;
 use datafusion::physical_plan::windows::{
     create_window_expr, schema_add_window_field, BoundedWindowAggExec, WindowAggExec,
@@ -29,6 +30,7 @@ use datafusion::physical_plan::windows::{
 use datafusion::physical_plan::InputOrderMode::{Linear, PartiallySorted, Sorted};
 use datafusion::physical_plan::{collect, InputOrderMode};
 use datafusion::prelude::{SessionConfig, SessionContext};
+use datafusion_common::HashMap;
 use datafusion_common::{Result, ScalarValue};
 use datafusion_common_runtime::SpawnedTask;
 use datafusion_expr::type_coercion::functions::data_types_with_aggregate_udf;
@@ -38,23 +40,21 @@ use datafusion_expr::{
 use datafusion_functions_aggregate::count::count_udaf;
 use datafusion_functions_aggregate::min_max::{max_udaf, min_udaf};
 use datafusion_functions_aggregate::sum::sum_udaf;
-use datafusion_physical_expr::expressions::{cast, col, lit};
-use datafusion_physical_expr::{PhysicalExpr, PhysicalSortExpr};
-use test_utils::add_empty_batches;
-
-use datafusion::functions_window::row_number::row_number_udwf;
-use datafusion_common::HashMap;
 use datafusion_functions_window::lead_lag::{lag_udwf, lead_udwf};
 use datafusion_functions_window::nth_value::{
     first_value_udwf, last_value_udwf, nth_value_udwf,
 };
 use datafusion_functions_window::rank::{dense_rank_udwf, rank_udwf};
+use datafusion_physical_expr::expressions::{cast, col, lit};
+use datafusion_physical_expr::{PhysicalExpr, PhysicalSortExpr};
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use datafusion_physical_plan::memory::MemorySourceConfig;
 use datafusion_physical_plan::source::DataSourceExec;
+
 use rand::distributions::Alphanumeric;
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
+use test_utils::add_empty_batches;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 16)]
 async fn window_bounded_window_random_comparison() -> Result<()> {

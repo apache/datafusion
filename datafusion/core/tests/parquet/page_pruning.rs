@@ -15,10 +15,12 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::parquet::Unit::Page;
-use crate::parquet::{ContextWithParquet, Scenario};
 use std::sync::Arc;
 
+use crate::parquet::Unit::Page;
+use crate::parquet::{ContextWithParquet, Scenario};
+
+use datafusion::datasource::data_source::FileSourceConfig;
 use datafusion::datasource::file_format::parquet::ParquetFormat;
 use datafusion::datasource::file_format::FileFormat;
 use datafusion::datasource::listing::PartitionedFile;
@@ -28,14 +30,13 @@ use datafusion::execution::context::SessionState;
 use datafusion::physical_plan::metrics::MetricValue;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::prelude::SessionContext;
+use datafusion_common::config::TableParquetOptions;
 use datafusion_common::{ScalarValue, ToDFSchema};
 use datafusion_expr::execution_props::ExecutionProps;
 use datafusion_expr::{col, lit, Expr};
 use datafusion_physical_expr::create_physical_expr;
-
-use datafusion::datasource::data_source::FileSourceConfig;
-use datafusion_common::config::TableParquetOptions;
 use datafusion_physical_plan::source::DataSourceExec;
+
 use futures::StreamExt;
 use object_store::path::Path;
 use object_store::ObjectMeta;

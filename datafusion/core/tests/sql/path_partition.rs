@@ -24,6 +24,7 @@ use std::ops::Range;
 use std::sync::Arc;
 
 use arrow::datatypes::DataType;
+use datafusion::datasource::data_source::FileSourceConfig;
 use datafusion::datasource::listing::ListingTableUrl;
 use datafusion::datasource::physical_plan::ParquetConfig;
 use datafusion::{
@@ -41,14 +42,13 @@ use datafusion_catalog::TableProvider;
 use datafusion_common::stats::Precision;
 use datafusion_common::ScalarValue;
 use datafusion_execution::config::SessionConfig;
+use datafusion_expr::{col, lit, Expr, Operator};
+use datafusion_physical_expr::expressions::{BinaryExpr, Column, Literal};
+use datafusion_physical_plan::source::DataSourceExec;
 
 use async_trait::async_trait;
 use bytes::Bytes;
 use chrono::{TimeZone, Utc};
-use datafusion::datasource::data_source::FileSourceConfig;
-use datafusion_expr::{col, lit, Expr, Operator};
-use datafusion_physical_expr::expressions::{BinaryExpr, Column, Literal};
-use datafusion_physical_plan::source::DataSourceExec;
 use futures::stream::{self, BoxStream};
 use object_store::{
     path::Path, GetOptions, GetResult, GetResultPayload, ListResult, ObjectMeta,

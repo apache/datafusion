@@ -27,11 +27,12 @@ use arrow::{
 use datafusion::physical_plan::{
     collect,
     expressions::{col, PhysicalSortExpr},
+    memory::MemorySourceConfig,
     sorts::sort_preserving_merge::SortPreservingMergeExec,
 };
 use datafusion::prelude::{SessionConfig, SessionContext};
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
-use datafusion_physical_plan::memory::MemorySourceConfig;
+
 use test_utils::{batches_to_vec, partitions_to_sorted_vec, stagger_batch_with_seed};
 
 #[tokio::test]

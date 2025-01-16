@@ -17,6 +17,8 @@
 
 //! Fuzz Test for various corner cases sorting RecordBatches exceeds available memory and should spill
 
+use std::sync::Arc;
+
 use arrow::{
     array::{ArrayRef, Int32Array},
     compute::SortOptions,
@@ -31,8 +33,8 @@ use datafusion_execution::memory_pool::GreedyMemoryPool;
 use datafusion_physical_expr::expressions::col;
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use datafusion_physical_plan::memory::MemorySourceConfig;
+
 use rand::Rng;
-use std::sync::Arc;
 use test_utils::{batches_to_vec, partitions_to_sorted_vec};
 
 const KB: usize = 1 << 10;

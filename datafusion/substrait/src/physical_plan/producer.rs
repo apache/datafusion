@@ -15,17 +15,20 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::collections::HashMap;
+
 use crate::variation_const::{
     DEFAULT_CONTAINER_TYPE_VARIATION_REF, LARGE_CONTAINER_TYPE_VARIATION_REF,
     VIEW_CONTAINER_TYPE_VARIATION_REF,
 };
+
 use datafusion::arrow::datatypes::DataType;
 use datafusion::datasource::data_source::FileSourceConfig;
 use datafusion::datasource::physical_plan::ParquetConfig;
 use datafusion::error::{DataFusionError, Result};
 use datafusion::physical_plan::source::DataSourceExec;
 use datafusion::physical_plan::{displayable, ExecutionPlan};
-use std::collections::HashMap;
+
 use substrait::proto::expression::mask_expression::{StructItem, StructSelect};
 use substrait::proto::expression::MaskExpression;
 use substrait::proto::r#type::{

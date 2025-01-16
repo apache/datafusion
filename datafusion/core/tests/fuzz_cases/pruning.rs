@@ -20,10 +20,12 @@ use std::sync::{Arc, OnceLock};
 use arrow_array::{Array, RecordBatch, StringArray};
 use arrow_schema::{DataType, Field, Schema};
 use bytes::{BufMut, Bytes, BytesMut};
-use datafusion::datasource::data_source::FileSourceConfig;
-use datafusion::datasource::physical_plan::ParquetConfig;
 use datafusion::{
-    datasource::{listing::PartitionedFile, physical_plan::FileScanConfig},
+    datasource::{
+        data_source::FileSourceConfig,
+        listing::PartitionedFile,
+        physical_plan::{FileScanConfig, ParquetConfig},
+    },
     prelude::*,
 };
 use datafusion_common::config::TableParquetOptions;
