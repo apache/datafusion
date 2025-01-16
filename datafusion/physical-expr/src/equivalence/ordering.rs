@@ -67,7 +67,9 @@ impl OrderingEquivalenceClass {
     /// Any redundant entries are removed
     pub fn new(orderings: impl IntoIterator<Item = LexOrdering>) -> Self {
         let orderings = orderings.into_iter().collect();
-        Self { orderings }
+        let mut result = Self { orderings };
+        result.remove_redundant_entries();
+        result
     }
 
     /// Converts this OrderingEquivalenceClass to a vector of orderings.
