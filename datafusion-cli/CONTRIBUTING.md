@@ -59,6 +59,7 @@ docker run -d \
   quay.io/minio/minio server /data
 
 docker exec datafusion-test-minio /bin/sh -c "\
+  mc ready local
   mc alias set localminio http://localhost:9000 TEST-DataFusionLogin TEST-DataFusionPassword && \
   mc mb localminio/data && \
   mc cp -r /source/* localminio/data"
