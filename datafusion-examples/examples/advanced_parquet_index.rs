@@ -95,29 +95,29 @@ use url::Url;
 ///
 /// # Diagram
 ///
-/// This diagram shows how the `ParquetExec` is configured to do only a single
+/// This diagram shows how the `DataSourceExec` with `ParquetConfig` is configured to do only a single
 /// (range) read from a parquet file, for the data that is needed. It does
 /// not read the file footer or any of the row groups that are not needed.
 ///
 /// ```text
 ///         ┌───────────────────────┐ The TableProvider configures the
-///         │ ┌───────────────────┐ │ ParquetExec:
+///         │ ┌───────────────────┐ │ DataSourceExec:
 ///         │ │                   │ │
 ///         │ └───────────────────┘ │
 ///         │ ┌───────────────────┐ │
 /// Row     │ │                   │ │  1. To read only specific Row
-/// Groups  │ └───────────────────┘ │  Groups (the ParquetExec tries
+/// Groups  │ └───────────────────┘ │  Groups (the DataSourceExec tries
 ///         │ ┌───────────────────┐ │  to reduce this further based
 ///         │ │                   │ │  on metadata)
-///         │ └───────────────────┘ │              ┌────────────────────┐
-///         │ ┌───────────────────┐ │              │                    │
-///         │ │                   │◀┼ ─ ─ ┐        │    ParquetExec     │
-///         │ └───────────────────┘ │     │        │  (Parquet Reader)  │
-///         │          ...          │     └ ─ ─ ─ ─│                    │
-///         │ ┌───────────────────┐ │              │ ╔═══════════════╗  │
-///         │ │                   │ │              │ ║ParquetMetadata║  │
-///         │ └───────────────────┘ │              │ ╚═══════════════╝  │
-///         │ ╔═══════════════════╗ │              └────────────────────┘
+///         │ └───────────────────┘ │              ┌──────────────────────┐
+///         │ ┌───────────────────┐ │              │                      │
+///         │ │                   │◀┼ ─ ─ ┐        │   DataSourceExec     │
+///         │ └───────────────────┘ │     │        │  (Parquet Reader)    │
+///         │          ...          │     └ ─ ─ ─ ─│                      │
+///         │ ┌───────────────────┐ │              │ ╔═══════════════╗    │
+///         │ │                   │ │              │ ║ParquetMetadata║    │
+///         │ └───────────────────┘ │              │ ╚═══════════════╝    │
+///         │ ╔═══════════════════╗ │              └──────────────────────┘
 ///         │ ║  Thrift metadata  ║ │
 ///         │ ╚═══════════════════╝ │      1. With cached ParquetMetadata, so
 ///         └───────────────────────┘      the ParquetConfig does not re-read /
@@ -136,15 +136,15 @@ use url::Url;
 ///         │                       │   Data Page is not fetched or decoded.
 ///         │ ┌───────────────────┐ │   Note this requires a PageIndex
 ///         │ │     ┌──────────┐  │ │
-/// Row     │ │     │DataPage 0│  │ │                 ┌────────────────────┐
-/// Groups  │ │     └──────────┘  │ │                 │                    │
-///         │ │     ┌──────────┐  │ │                 │    ParquetExec     │
-///         │ │ ... │DataPage 1│ ◀┼ ┼ ─ ─ ─           │  (Parquet Reader)  │
-///         │ │     └──────────┘  │ │      └ ─ ─ ─ ─ ─│                    │
-///         │ │     ┌──────────┐  │ │                 │ ╔═══════════════╗  │
-///         │ │     │DataPage 2│  │ │ If only rows    │ ║ParquetMetadata║  │
-///         │ │     └──────────┘  │ │ from DataPage 1 │ ╚═══════════════╝  │
-///         │ └───────────────────┘ │ are selected,   └────────────────────┘
+/// Row     │ │     │DataPage 0│  │ │                 ┌──────────────────────┐
+/// Groups  │ │     └──────────┘  │ │                 │                      │
+///         │ │     ┌──────────┐  │ │                 │   DataSourceExec     │
+///         │ │ ... │DataPage 1│ ◀┼ ┼ ─ ─ ─           │  (Parquet Reader)    │
+///         │ │     └──────────┘  │ │      └ ─ ─ ─ ─ ─│                      │
+///         │ │     ┌──────────┐  │ │                 │ ╔═══════════════╗    │
+///         │ │     │DataPage 2│  │ │ If only rows    │ ║ParquetMetadata║    │
+///         │ │     └──────────┘  │ │ from DataPage 1 │ ╚═══════════════╝    │
+///         │ └───────────────────┘ │ are selected,   └──────────────────────┘
 ///         │                       │ only DataPage 1
 ///         │          ...          │ is fetched and
 ///         │                       │ decoded

@@ -131,7 +131,7 @@ physical plan in Figure 1 in tree format will look like
 Each node in the tree/plan ends with `Exec` and is sometimes also called an `operator` or `ExecutionPlan` where data is
 processed, transformed and sent up.
 
-1. First, data in parquet the `hits.parquet` file us read in parallel using 16 cores in 16 "partitions" (more on this later) from `ParquetExec`, which applies a first pass at filtering during the scan.
+1. First, data in parquet the `hits.parquet` file us read in parallel using 16 cores in 16 "partitions" (more on this later) from `DataSourceExec`, which applies a first pass at filtering during the scan.
 2. Next, the output is filtered using `FilterExec` to ensure only rows where `starts_with(URL, 'http://domcheloveplanet.ru/')` evaluates to true are passed on
 3. The `CoalesceBatchesExec` then ensures that the data is grouped into larger batches for processing
 4. The `ProjectionExec` then projects the data to rename the `WatchID` and `ClientIP` columns to `wid` and `ip` respectively.
@@ -197,14 +197,14 @@ In this case, DataFusion actually ran the query, but discarded any results, and
 instead returned an annotated plan with a new field, `metrics=[...]`
 
 Most operators have the common metrics `output_rows` and `elapsed_compute` and
-some have operator specific metrics such as `ParquetExec` which has
+some have operator specific metrics such as `DataSourceExec` with `ParquetConfig` which has
 `bytes_scanned=3703192723`. Note that times and counters are reported across all
 cores, so if you have 16 cores, the time reported is the sum of the time taken
 by all 16 cores.
 
 Again, reading from bottom up:
 
-- `ParquetExec`
+- `DataSourceExec`
   - `output_rows=99997497`: A total 99.9M rows were produced
   - `bytes_scanned=3703192723`: Of the 14GB file, 3.7GB were actually read (due to projection pushdown)
   - `time_elapsed_opening=308.203002ms`: It took 300ms to open the file and prepare to read it
@@ -223,7 +223,7 @@ Again, reading from bottom up:
 - `SortPreservingMergeExec`
   - `output_rows=5`, `elapsed_compute=2.375µs`: Produced the final 5 rows in 2.375µs (microseconds)
 
-When predicate pushdown is enabled, `ParquetExec` gains the following metrics:
+When predicate pushdown is enabled, `DataSourceExec` with `ParquetConfig` gains the following metrics:
 
 - `page_index_rows_matched`: number of rows in pages that were tested by a page index filter, and passed
 - `page_index_rows_pruned`: number of rows in pages that were tested by a page index filter, and did not pass
@@ -247,7 +247,7 @@ planning. Roughly speaking, each "partition" in the plan is run independently us
 a separate core. Data crosses between cores only within certain operators such as
 `RepartitionExec`, `CoalescePartitions` and `SortPreservingMergeExec`
 
-You can read more about this in the [Partitoning Docs].
+You can read more about this in the [Partitioning Docs].
 
 [partitoning docs]: https://docs.rs/datafusion/latest/datafusion/physical_expr/enum.Partitioning.html
 
@@ -307,11 +307,11 @@ For this query, let's again read the plan from the bottom to the top:
 
 **Physical plan operators**
 
-- `ParquetExec`
+- `DataSourceExec`
   - `file_groups={10 groups: [...]}`: Reads 10 groups in parallel from `hits.parquet`file. (The example above was run on a machine with 10 cores.)
   - `projection=[UserID]`: Pushes down projection of the `UserID` column. The parquet format is columnar and the DataFusion reader only decodes the columns required.
 - `AggregateExec`
-  - `mode=Partial` Runs a [partial aggregation] in parallel across each of the 10 partitions from the `ParquetExec` immediately after reading.
+  - `mode=Partial` Runs a [partial aggregation] in parallel across each of the 10 partitions from the `DataSourceExec` immediately after reading.
   - `gby=[UserID@0 as UserID]`: Represents `GROUP BY` in the [physical plan] and groups together the same values of `UserID`.
   - `aggr=[count(*)]`: Applies the `COUNT` aggregate on all rows for each group.
 - `RepartitionExec`

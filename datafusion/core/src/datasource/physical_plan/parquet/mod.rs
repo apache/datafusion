@@ -204,12 +204,12 @@ pub use writer::plan_to_parquet;
 /// # Implementing External Indexes
 ///
 /// It is possible to restrict the row groups and selections within those row
-/// groups that the ParquetExec will consider by providing an initial
+/// groups that the DataSourceExec will consider by providing an initial
 /// [`ParquetAccessPlan`] as `extensions` on `PartitionedFile`. This can be
 /// used to implement external indexes on top of parquet files and select only
 /// portions of the files.
 ///
-/// The `ParquetExec` will try and reduce any provided `ParquetAccessPlan`
+/// The `DataSourceExec` will try and reduce any provided `ParquetAccessPlan`
 /// further based on the contents of `ParquetMetadata` and other settings.
 ///
 /// ## Example of providing a ParquetAccessPlan
@@ -234,12 +234,12 @@ pub use writer::plan_to_parquet;
 /// // provide the plan as extension to the FileScanConfig
 /// let partitioned_file = PartitionedFile::new("my_file.parquet", 1234)
 ///   .with_extensions(Arc::new(access_plan));
-/// // create a ParquetExec to scan this file
+/// // create a FileScanConfig to scan this file
 /// let file_scan_config = FileScanConfig::new(ObjectStoreUrl::local_filesystem(), schema())
 ///     .with_file(partitioned_file);
 /// // create a ParguetConfig for file opener configurations
 /// let source_config = Arc::new(ParquetConfig::default());
-/// // this parquet exec will not even try to read row groups 2 and 4. Additional
+/// // this parquet DataSourceExec will not even try to read row groups 2 and 4. Additional
 /// // pruning based on predicates may also happen
 /// let exec = FileSourceConfig::new_exec(file_scan_config, source_config);
 /// ```
@@ -363,7 +363,7 @@ impl ParquetConfig {
     ///
     /// This value determines how many bytes at the end of the file the default
     /// [`ParquetFileReaderFactory`] will request in the initial IO. If this is
-    /// too small, the ParquetExec will need to make additional IO requests to
+    /// too small, the ParquetConfig will need to make additional IO requests to
     /// read the footer.
     pub fn with_metadata_size_hint(mut self, metadata_size_hint: usize) -> Self {
         self.metadata_size_hint = Some(metadata_size_hint);
@@ -1107,7 +1107,7 @@ mod tests {
         // This does not look correct since the "c2" values in the result do not in fact match the predicate `c2 == 0`
         // but parquet pruning is not exact. If the min/max values are not defined (which they are not in this case since the it is
         // a null array, then the pruning predicate (currently) can not be applied.
-        // In a real query where this predicate was pushed down from a filter stage instead of created directly in the `ParquetExec`,
+        // In a real query where this predicate was pushed down from a filter stage instead of created directly in the `DataSourceExec`,
         // the filter stage would be preserved as a separate execution plan stage so the actual query results would be as expected.
         let expected = [
             "+-----+----+",

@@ -1425,7 +1425,7 @@ mod tests {
         let physical_plan = sort_preserving_merge_exec(sort_exprs, union);
 
         // Input is an invalid plan. In this case rule should add required sorting in appropriate places.
-        // First ParquetExec has output ordering(nullable_col@0 ASC). However, it doesn't satisfy the
+        // First DataSourceExec has output ordering(nullable_col@0 ASC). However, it doesn't satisfy the
         // required ordering of SortPreservingMergeExec.
         let expected_input = ["SortPreservingMergeExec: [nullable_col@0 ASC, non_nullable_col@1 ASC]",
             "  UnionExec",

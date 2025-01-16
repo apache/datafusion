@@ -18,7 +18,7 @@
 //! Tests for [`LimitedDistinctAggregation`] physical optimizer rule
 //!
 //! Note these tests are not in the same module as the optimizer pass because
-//! they rely on `ParquetExec` which is in the core crate.
+//! they rely on `DataSourceExec` which is in the core crate.
 use super::test_util::{parquet_exec_with_sort, schema, trim_plan_display};
 
 use std::sync::Arc;
