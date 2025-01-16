@@ -40,7 +40,7 @@ pub fn add_sort_above<T: Clone + Default>(
     fetch: Option<usize>,
 ) -> PlanContext<T> {
     let mut sort_expr = LexOrdering::from(sort_requirements);
-    sort_expr.inner.retain(|sort_expr| {
+    sort_expr.retain(|sort_expr| {
         !node
             .plan
             .equivalence_properties()
