@@ -353,7 +353,13 @@ mod tests {
 
         let a = Arc::new(Int32Array::from(vec![1, 2, 3, 4])) as ArrayRef;
         let b = Arc::new(Int32Array::from(vec![5, 6, 7, 8])) as ArrayRef;
-        let batch = RecordBatch::try_new(schema.clone(), vec![a.clone(), b.clone()])?;
+        let batch = RecordBatch::try_new(
+            Arc::<Schema>::clone(&schema),
+            vec![
+                Arc::<dyn arrow_array::Array>::clone(&a),
+                Arc::<dyn arrow_array::Array>::clone(&b),
+            ],
+        )?;
 
         let temp_file = NamedTempFile::new()?;
         let temp_path = temp_file.path();
@@ -365,19 +371,20 @@ mod tests {
         row_writer.write_rows(&rows)?;
         row_writer.finish()?;
 
-        let row_reader = RowReader::new(temp_path, None, converter.clone())?;
+        let row_reader =
+            RowReader::new(temp_path, None, Arc::<RowConverter>::clone(&converter))?;
         let mut read_batches = Vec::new();
 
         for rows in row_reader {
             let rows = rows?;
             let columns = converter.convert_rows(&rows)?;
-            let record_batch = RecordBatch::try_new(schema.clone(), columns)?;
+            let record_batch =
+                RecordBatch::try_new(Arc::<Schema>::clone(&schema), columns)?;
             read_batches.push(record_batch);
         }
         let read_batch = concat_batches(&schema, &read_batches)?;
 
         assert_eq!(read_batch.schema(), schema);
-        println!("{:?}", read_batch);
         assert_eq!(read_batch.num_rows(), batch.num_rows());
         assert_eq!(
             read_batch
