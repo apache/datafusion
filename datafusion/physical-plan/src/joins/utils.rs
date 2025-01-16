@@ -56,6 +56,7 @@ use datafusion_physical_expr::{
     LexOrdering, PhysicalExpr, PhysicalExprRef, PhysicalSortExpr,
 };
 
+use crate::joins::SharedBitmapBuilder;
 use crate::projection::ProjectionExec;
 use futures::future::{BoxFuture, Shared};
 use futures::{ready, FutureExt};
@@ -1110,6 +1111,14 @@ pub(crate) fn need_produce_result_in_final(join_type: JoinType) -> bool {
             | JoinType::LeftMark
             | JoinType::Full
     )
+}
+
+pub fn get_final_indices_from_shared_bitmap(
+    shared_bitmap: &SharedBitmapBuilder,
+    join_type: JoinType,
+) -> (UInt64Array, UInt32Array) {
+    let bitmap = shared_bitmap.lock();
+    get_final_indices_from_bit_map(&bitmap, join_type)
 }
 
 /// In the end of join execution, need to use bit map of the matched
