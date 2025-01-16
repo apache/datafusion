@@ -600,13 +600,20 @@ pub fn get_required_group_by_exprs_indices(
 
 /// Updates entries inside the `entries` vector with their corresponding
 /// indices inside the `proj_indices` vector.
-fn update_elements_with_matching_indices(
+fn update_elements_with_matching_indices<'a>(
     entries: &[usize],
-    proj_indices: &[usize],
+    proj_indices: impl IntoIterator<Item = &'a usize>,
 ) -> Vec<usize> {
-    entries
-        .iter()
-        .filter_map(|val| proj_indices.iter().position(|proj_idx| proj_idx == val))
+    proj_indices
+        .into_iter()
+        .enumerate()
+        .filter_map(|(pos, proj_idx)| {
+            if entries.contains(proj_idx) {
+                Some(pos)
+            } else {
+                None
+            }
+        })
         .collect()
 }
 
