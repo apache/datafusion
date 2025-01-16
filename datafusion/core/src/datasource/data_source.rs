@@ -224,40 +224,32 @@ impl DataSource for FileSourceConfig {
         }
 
         #[cfg(feature = "parquet")]
-        if cfg!(feature = "parquet") {
-            if let Some(parquet_conf) =
-                self.source.as_any().downcast_ref::<ParquetConfig>()
-            {
-                match t {
-                    DisplayFormatType::Default | DisplayFormatType::Verbose => {
-                        let predicate_string = parquet_conf
-                            .predicate()
-                            .map(|p| format!(", predicate={p}"))
-                            .unwrap_or_default();
+        if let Some(parquet_conf) = self.source.as_any().downcast_ref::<ParquetConfig>() {
+            return match t {
+                DisplayFormatType::Default | DisplayFormatType::Verbose => {
+                    let predicate_string = parquet_conf
+                        .predicate()
+                        .map(|p| format!(", predicate={p}"))
+                        .unwrap_or_default();
 
-                        let pruning_predicate_string = parquet_conf
-                            .pruning_predicate()
-                            .map(|pre| {
-                                let mut guarantees = pre
-                                    .literal_guarantees()
-                                    .iter()
-                                    .map(|item| format!("{}", item))
-                                    .collect_vec();
-                                guarantees.sort();
-                                format!(
-                                    ", pruning_predicate={}, required_guarantees=[{}]",
-                                    pre.predicate_expr(),
-                                    guarantees.join(", ")
-                                )
-                            })
-                            .unwrap_or_default();
+                    let pruning_predicate_string = parquet_conf
+                        .pruning_predicate()
+                        .map(|pre| {
+                            let mut guarantees = pre
+                                .literal_guarantees()
+                                .iter()
+                                .map(|item| format!("{}", item))
+                                .collect_vec();
+                            guarantees.sort();
+                            format!(
+                                ", pruning_predicate={}, required_guarantees=[{}]",
+                                pre.predicate_expr(),
+                                guarantees.join(", ")
+                            )
+                        })
+                        .unwrap_or_default();
 
-                        return write!(
-                            f,
-                            "{}{}",
-                            predicate_string, pruning_predicate_string,
-                        );
-                    }
+                    write!(f, "{}{}", predicate_string, pruning_predicate_string)
                 }
             }
         }
