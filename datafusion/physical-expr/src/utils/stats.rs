@@ -4,7 +4,7 @@ use crate::utils::{build_dag, ExprTreeNode};
 use arrow::datatypes::{DataType, Schema};
 use datafusion_common::ScalarValue;
 use datafusion_common::ScalarValue::Float64;
-use datafusion_expr_common::interval_arithmetic::Interval;
+use datafusion_expr_common::interval_arithmetic::{apply_operator, Interval};
 use datafusion_expr_common::operator::Operator;
 use datafusion_physical_expr_common::stats::StatisticsV2;
 use datafusion_physical_expr_common::stats::StatisticsV2::{Exponential, Uniform, Unknown};
@@ -192,14 +192,13 @@ pub fn new_unknown_with_range(range: Interval) -> StatisticsV2 {
 pub fn new_unknown_from_binary_expr(
     op: &Operator,
     left: &StatisticsV2,
-    right: &StatisticsV2,
-    range: Interval
+    right: &StatisticsV2
 ) -> datafusion_common::Result<StatisticsV2> {
     Ok(Unknown {
         mean: compute_mean(op, left, right)?,
         median: compute_median(op, left, right)?,
         variance: compute_variance(op, left, right)?,
-        range
+        range: compute_range(op, left, right)?,
     })
 }
 
@@ -333,48 +332,106 @@ pub fn compute_variance(
     }
 }
 
+pub fn compute_range(op: &Operator, left_stat: &StatisticsV2, right_stat: &StatisticsV2)
+    -> datafusion_common::Result<Interval> {
+    match (left_stat, right_stat) {
+        (Uniform { interval: l }, Uniform { interval: r })
+        | (Uniform { interval: l }, Unknown { range: r, .. })
+        | (Unknown { range: l, .. }, Uniform { interval: r })
+        | (Unknown { range: l, .. }, Unknown { range: r, .. }) => {
+            match op {
+                Operator::Plus | Operator::Minus | Operator::Multiply
+                | Operator::Gt | Operator::GtEq | Operator::Lt | Operator::LtEq  => {
+                    apply_operator(op, l, r)
+                },
+                Operator::Eq => {
+                    // Note: unwrap is legit, because Uniform & Unknown always have ranges
+                    if let Some(intersection) = left_stat.range().unwrap()
+                        .intersect(right_stat.range().unwrap())? {
+                        Ok(intersection)
+                    } else if let Some(data_type) = left_stat.data_type() {
+                        Interval::make_unbounded(&data_type)
+                    } else {
+                        Interval::make_unbounded(&DataType::Float64)
+                    }
+                },
+                Operator::NotEq => Ok(Interval::CERTAINLY_FALSE),
+                _ => Interval::make_unbounded(&DataType::Float64)
+            }
+        }
+        (_, _) => Interval::make_unbounded(&DataType::Float64)
+    }
+}
+
 #[cfg(test)]
 // #[cfg(all(test, feature = "stats_v2"))]
 mod tests {
-    use crate::utils::stats::{compute_mean, compute_median, compute_variance};
+    use crate::utils::stats::{compute_mean, compute_median, compute_range, compute_variance};
     use datafusion_common::ScalarValue;
     use datafusion_common::ScalarValue::Float64;
-    use datafusion_expr_common::interval_arithmetic::Interval;
-    use datafusion_expr_common::operator::Operator::{Minus, Multiply, Plus};
-    use datafusion_physical_expr_common::stats::StatisticsV2::Uniform;
+    use datafusion_expr_common::interval_arithmetic::{apply_operator, Interval};
+    use datafusion_expr_common::operator::Operator::{Divide, Minus, Multiply, Eq, NotEq, Plus, Gt, GtEq, Lt, LtEq};
+    use datafusion_physical_expr_common::stats::StatisticsV2::{Uniform, Unknown};
 
     type Actual = Option<ScalarValue>;
     type Expected = Option<ScalarValue>;
 
+    // Expected test results were calculated in Wolfram Mathematica, by using
+    // *METHOD_NAME*[TransformedDistribution[x op y, {x ~ *DISTRIBUTION_X*[..], y ~ *DISTRIBUTION_Y*[..]}]]
     #[test]
-    fn test_unknown_properties_uniform_uniform() {
+    fn test_unknown_properties_uniform_uniform() -> datafusion_common::Result<()> {
         let stat_a = Uniform {
-            interval: Interval::make(Some(0.), Some(12.0)).unwrap()
+            interval: Interval::make(Some(0.), Some(12.0))?
         };
 
         let stat_b = Uniform {
-            interval: Interval::make(Some(12.0), Some(36.0)).unwrap()
+            interval: Interval::make(Some(12.0), Some(36.0))?
         };
 
         let test_data: Vec<(Actual, Expected)> = vec![
             // mean
-            (compute_mean(&Plus, &stat_a, &stat_b).unwrap(), Some(Float64(Some(30.)))),
-            (compute_mean(&Minus, &stat_a, &stat_b).unwrap(), Some(Float64(Some(-18.)))),
-            (compute_mean(&Multiply, &stat_a, &stat_b).unwrap(), Some(Float64(Some(144.)))),
+            (compute_mean(&Plus, &stat_a, &stat_b)?, Some(Float64(Some(30.)))),
+            (compute_mean(&Minus, &stat_a, &stat_b)?, Some(Float64(Some(-18.)))),
+            (compute_mean(&Multiply, &stat_a, &stat_b)?, Some(Float64(Some(144.)))),
 
             // median
-            (compute_median(&Plus, &stat_a, &stat_b).unwrap(), Some(Float64(Some(30.)))),
-            (compute_median(&Minus, &stat_a, &stat_b).unwrap(), Some(Float64(Some(-18.)))),
+            (compute_median(&Plus, &stat_a, &stat_b)?, Some(Float64(Some(30.)))),
+            (compute_median(&Minus, &stat_a, &stat_b)?, Some(Float64(Some(-18.)))),
             // FYI: median of combined distributions for mul, div and mod ops doesn't exist.
 
             // variance
-            (compute_variance(&Plus, &stat_a, &stat_b).unwrap(), Some(Float64(Some(60.)))),
-            (compute_variance(&Minus, &stat_a, &stat_b).unwrap(), Some(Float64(Some(60.)))),
-            // (compute_variance(&Operator::Multiply, &stat_a, &stat_b).unwrap(), Some(Float64(Some(9216.)))),
+            (compute_variance(&Plus, &stat_a, &stat_b)?, Some(Float64(Some(60.)))),
+            (compute_variance(&Minus, &stat_a, &stat_b)?, Some(Float64(Some(60.)))),
+            // (compute_variance(&Operator::Multiply, &stat_a, &stat_b), Some(Float64(Some(9216.)))),
         ];
-
         for (actual, expected) in test_data {
             assert_eq!(actual, expected);
         }
+
+        Ok(())
+    }
+
+    /// Test for Uniform-Uniform, Uniform-Unknown, Unknown-Uniform, Unknown-Unknown pairs,
+    /// where range is always present.
+    #[test]
+    fn test_compute_range_where_present() -> datafusion_common::Result<()> {
+        let a = &Interval::make(Some(0.), Some(12.0))?;
+        let b = &Interval::make(Some(0.), Some(12.0))?;
+        for (stat_a, stat_b) in [
+            (Uniform { interval: a.clone() }, Uniform { interval: b.clone() }), 
+            (Unknown { mean: None, median: None, variance: None, range: a.clone() }, Uniform { interval: b.clone() }), 
+            (Uniform { interval: a.clone() }, Unknown { mean: None, median: None, variance: None, range: b.clone() }), 
+            (Unknown { mean: None, median: None, variance: None, range: a.clone() }, 
+              Unknown { mean: None, median: None, variance: None, range: b.clone() })] {
+
+            // range
+            for op in [Plus, Minus, Multiply, Divide, Gt, GtEq, Lt, LtEq] {
+                assert_eq!(compute_range(&op, &stat_a, &stat_b)?, apply_operator(&op, a, b)?);
+            }
+            assert_eq!(compute_range(&Eq, &stat_a, &stat_b)?, a.intersect(b)?.unwrap());
+            assert_eq!(compute_range(&NotEq, &stat_a, &stat_b)?, Interval::CERTAINLY_FALSE);
+        }
+
+        Ok(())
     }
 }

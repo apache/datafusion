@@ -41,9 +41,7 @@ use datafusion_expr::type_coercion::binary::get_result_type;
 use datafusion_expr::{ColumnarValue, Operator};
 use datafusion_physical_expr_common::datum::{apply, apply_cmp, apply_cmp_for_nested};
 use datafusion_physical_expr_common::stats::StatisticsV2;
-use datafusion_physical_expr_common::stats::StatisticsV2::{
-    Gaussian, Uniform,
-};
+use datafusion_physical_expr_common::stats::StatisticsV2::{Gaussian, Uniform};
 use kernels::{
     bitwise_and_dyn, bitwise_and_dyn_scalar, bitwise_or_dyn, bitwise_or_dyn_scalar,
     bitwise_shift_left_dyn, bitwise_shift_left_dyn_scalar, bitwise_shift_right_dyn,
@@ -513,22 +511,8 @@ impl PhysicalExpr for BinaryExpr {
         }
 
         match &self.op {
-            Operator::Plus | Operator::Minus | Operator::Multiply | Operator::Divide => {
+            Operator::Plus | Operator::Minus | Operator::Multiply => {
                 match (left_stat, right_stat) {
-                    (Uniform { interval: left_interval}, Uniform { interval: right_interval, }) => {
-                        new_unknown_from_binary_expr(
-                            &self.op,
-                            left_stat,
-                            right_stat,
-                            apply_operator(&self.op, left_interval, right_interval)?,
-                        )
-                    },
-                    (Uniform {..}, _) | (_, Uniform {..}) => new_unknown_from_binary_expr(
-                        &self.op,
-                        left_stat,
-                        right_stat,
-                        Interval::make_unbounded(&left_stat.data_type().unwrap())?,
-                    ),
                     (Gaussian { mean: left_mean, variance: left_v, ..},
                         Gaussian { mean: right_mean, variance: right_v}, ) => {
                         if self.op.eq(&Operator::Plus) {
@@ -542,22 +526,27 @@ impl PhysicalExpr for BinaryExpr {
                                 variance: left_v.add(right_v)?,
                             })
                         } else {
-                            new_unknown_from_binary_expr(
-                                &self.op,
-                                left_stat,
-                                right_stat,
-                                Interval::make_unbounded(&left_stat.data_type().unwrap())?,
-                            )
+                            new_unknown_from_binary_expr(&self.op, left_stat, right_stat)
                         }
-                    }
-                    (_, _) => new_unknown_from_binary_expr(
-                        &self.op,
-                        left_stat,
-                        right_stat,
-                        Interval::make_unbounded(&left_stat.data_type().unwrap())?,
-                    )
+                    },
+                    (_, _) => new_unknown_from_binary_expr(&self.op, left_stat, right_stat)
                 }
-            }
+            },
+            Operator::Divide => new_unknown_from_binary_expr(&self.op, left_stat, right_stat),
+            Operator::Eq  => {
+                match (left_stat, right_stat) {
+                    (Uniform { .. }, Uniform { .. }) => {
+                        let intersection = left_stat.range().unwrap()
+                            .intersect(right_stat.range().unwrap())?;
+                        if let Some(interval) = intersection {
+                            Ok(Uniform { interval })
+                        } else {
+                            Ok(Uniform { interval: Interval::CERTAINLY_FALSE })
+                        }
+                    },
+                    (_, _) => new_unknown_from_binary_expr(&self.op, left_stat, right_stat)
+                }
+            },
             _ => internal_err!("BinaryExpr requires exactly 2 children")
         }
     }
@@ -4502,17 +4491,12 @@ mod tests {
         for op in ops {
             let expr = binary_expr(Arc::clone(&a), op, Arc::clone(&b), schema)?;
             // TODO: to think, if maybe we want to handcraft the expected value...
-            let expected = new_unknown_from_binary_expr(
-                &op,
-                ref_view[0],
-                ref_view[1],
-                apply_operator(&op, &left_interval, &right_interval)?
-            )?;
-            assert_eq!(expr.evaluate_statistics(&ref_view)?, expected);
+            assert_eq!(
+                expr.evaluate_statistics(&ref_view)?,
+                new_unknown_from_binary_expr(&op, ref_view[0], ref_view[1])?
+            );
         }
-
         Ok(())
     }
-
     //endregion evaluate_statistics test
 }
