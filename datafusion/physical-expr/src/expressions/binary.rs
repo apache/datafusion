@@ -510,6 +510,9 @@ impl PhysicalExpr for BinaryExpr {
             return Ok(StatisticsV2::new_unknown());
         }
 
+        // TODO, to think: maybe, we can separate also Unknown + Unknown 
+        //  just for clarity and better reader understanding, how exactly 
+        //  mean, median, variance and range are computed, if it is possible.
         match &self.op {
             Operator::Plus | Operator::Minus | Operator::Multiply => {
                 match (left_stat, right_stat) {
@@ -547,7 +550,9 @@ impl PhysicalExpr for BinaryExpr {
                     (_, _) => new_unknown_from_binary_expr(&self.op, left_stat, right_stat)
                 }
             },
-            _ => internal_err!("BinaryExpr requires exactly 2 children")
+            Operator::NotEq => new_unknown_from_binary_expr(&self.op, left_stat, right_stat),
+            // TODO: express gt/ge/lt/le operations
+            _ => new_unknown_from_binary_expr(&self.op, left_stat, right_stat)
         }
     }
 
@@ -807,6 +812,7 @@ mod tests {
     use crate::expressions::{col, lit, try_cast, Column, Literal};
     use datafusion_common::plan_datafusion_err;
     use datafusion_expr::type_coercion::binary::get_input_types;
+    // TODO: remove
     //region tests
     /// Performs a binary operation, applying any type coercion necessary
     fn binary_op(
