@@ -51,6 +51,7 @@ use datafusion_physical_expr::{
     utils::collect_columns, Partitioning, PhysicalExpr, PhysicalExprRef,
     PhysicalSortExpr, PhysicalSortRequirement,
 };
+use datafusion_physical_plan::joins::utils::{JoinOn, JoinOnRef};
 use datafusion_physical_plan::streaming::StreamingTableExec;
 use datafusion_physical_plan::union::UnionExec;
 
@@ -137,14 +138,11 @@ pub fn remove_unnecessary_projections(
         } else if let Some(union) = input.downcast_ref::<UnionExec>() {
             try_pushdown_through_union(projection, union)?
         } else if let Some(hash_join) = input.downcast_ref::<HashJoinExec>() {
-            try_pushdown_through_hash_join(projection, hash_join)?.map_or_else(
-                || try_embed_projection(projection, hash_join),
-                |e| Ok(Some(e)),
-            )?
+            try_pushdown_through_hash_join(projection, hash_join)?
         } else if let Some(cross_join) = input.downcast_ref::<CrossJoinExec>() {
             try_swapping_with_cross_join(projection, cross_join)?
         } else if let Some(nl_join) = input.downcast_ref::<NestedLoopJoinExec>() {
-            try_swapping_with_nested_loop_join(projection, nl_join)?
+            try_pushdown_through_nested_loop_join(projection, nl_join)?
         } else if let Some(sm_join) = input.downcast_ref::<SortMergeJoinExec>() {
             try_swapping_with_sort_merge_join(projection, sm_join)?
         } else if let Some(sym_join) = input.downcast_ref::<SymmetricHashJoinExec>() {
@@ -549,6 +547,12 @@ impl EmbeddedProjection for HashJoinExec {
     }
 }
 
+impl EmbeddedProjection for NestedLoopJoinExec {
+    fn with_projection(&self, projection: Option<Vec<usize>>) -> Result<Self> {
+        self.with_projection(projection)
+    }
+}
+
 impl EmbeddedProjection for FilterExec {
     fn with_projection(&self, projection: Option<Vec<usize>>) -> Result<Self> {
         self.with_projection(projection)
@@ -626,53 +630,44 @@ fn collect_column_indices(exprs: &[(Arc<dyn PhysicalExpr>, String)]) -> Vec<usiz
     indices
 }
 
-/// Tries to push `projection` down through `hash_join`. If possible, performs the
-/// pushdown and returns a new [`HashJoinExec`] as the top plan which has projections
-/// as its children. Otherwise, returns `None`.
-fn try_pushdown_through_hash_join(
-    projection: &ProjectionExec,
-    hash_join: &HashJoinExec,
-) -> Result<Option<Arc<dyn ExecutionPlan>>> {
-    // TODO: currently if there is projection in HashJoinExec, we can't push down projection to left or right input. Maybe we can pushdown the mixed projection later.
-    if hash_join.contain_projection() {
-        return Ok(None);
-    }
+struct JoinData {
+    projected_left_child: ProjectionExec,
+    projected_right_child: ProjectionExec,
+    join_filter: Option<JoinFilter>,
+    join_on: JoinOn,
+}
 
-    // Convert projected expressions to columns. We can not proceed if this is
-    // not possible.
+fn try_pushdown_through_join(
+    projection: &ProjectionExec,
+    join_left: &Arc<dyn ExecutionPlan>,
+    join_right: &Arc<dyn ExecutionPlan>,
+    join_on: JoinOnRef,
+    schema: SchemaRef,
+    filter: Option<&JoinFilter>,
+) -> Result<Option<JoinData>> {
+    // Convert projected expressions to columns. We can not proceed if this is not possible.
     let Some(projection_as_columns) = physical_to_column_exprs(projection.expr()) else {
         return Ok(None);
     };
 
-    let (far_right_left_col_ind, far_left_right_col_ind) = join_table_borders(
-        hash_join.left().schema().fields().len(),
-        &projection_as_columns,
-    );
+    let (far_right_left_col_ind, far_left_right_col_ind) =
+        join_table_borders(join_left.schema().fields().len(), &projection_as_columns);
 
     if !join_allows_pushdown(
         &projection_as_columns,
-        &hash_join.schema(),
+        &schema,
         far_right_left_col_ind,
         far_left_right_col_ind,
     ) {
         return Ok(None);
     }
 
-    let Some(new_on) = update_join_on(
-        &projection_as_columns[0..=far_right_left_col_ind as _],
-        &projection_as_columns[far_left_right_col_ind as _..],
-        hash_join.on(),
-        hash_join.left().schema().fields().len(),
-    ) else {
-        return Ok(None);
-    };
-
-    let new_filter = if let Some(filter) = hash_join.filter() {
+    let new_filter = if let Some(filter) = filter {
         match update_join_filter(
             &projection_as_columns[0..=far_right_left_col_ind as _],
             &projection_as_columns[far_left_right_col_ind as _..],
             filter,
-            hash_join.left().schema().fields().len(),
+            join_left.schema().fields().len(),
         ) {
             Some(updated_filter) => Some(updated_filter),
             None => return Ok(None),
@@ -681,24 +676,108 @@ fn try_pushdown_through_hash_join(
         None
     };
 
+    let Some(new_on) = update_join_on(
+        &projection_as_columns[0..=far_right_left_col_ind as _],
+        &projection_as_columns[far_left_right_col_ind as _..],
+        join_on,
+        join_left.schema().fields().len(),
+    ) else {
+        return Ok(None);
+    };
+
     let (new_left, new_right) = new_join_children(
         &projection_as_columns,
         far_right_left_col_ind,
         far_left_right_col_ind,
-        hash_join.left(),
-        hash_join.right(),
+        join_left,
+        join_right,
     )?;
 
-    Ok(Some(Arc::new(HashJoinExec::try_new(
-        Arc::new(new_left),
-        Arc::new(new_right),
-        new_on,
-        new_filter,
-        hash_join.join_type(),
-        hash_join.projection.clone(),
-        *hash_join.partition_mode(),
-        hash_join.null_equals_null,
-    )?)))
+    Ok(Some(JoinData {
+        projected_left_child: new_left,
+        projected_right_child: new_right,
+        join_filter: new_filter,
+        join_on: new_on,
+    }))
+}
+
+/// Tries to push `projection` down through `nested_loop_join`. If possible, performs the
+/// pushdown and returns a new [`NestedLoopJoinExec`] as the top plan which has projections
+/// as its children. Otherwise, returns `None`.
+fn try_pushdown_through_nested_loop_join(
+    projection: &ProjectionExec,
+    nl_join: &NestedLoopJoinExec,
+) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+    // TODO: currently if there is projection in NestedLoopJoinExec, we can't push down projection to left or right input. Maybe we can pushdown the mixed projection later.
+    if nl_join.contains_projection() {
+        return Ok(None);
+    }
+
+    if let Some(JoinData {
+        projected_left_child,
+        projected_right_child,
+        join_filter,
+        ..
+    }) = try_pushdown_through_join(
+        projection,
+        nl_join.left(),
+        nl_join.right(),
+        &[],
+        nl_join.schema(),
+        nl_join.filter(),
+    )? {
+        Ok(Some(Arc::new(NestedLoopJoinExec::try_new(
+            Arc::new(projected_left_child),
+            Arc::new(projected_right_child),
+            join_filter,
+            nl_join.join_type(),
+            // Returned early if projection is not None
+            None,
+        )?)))
+    } else {
+        try_embed_projection(projection, nl_join)
+    }
+}
+
+/// Tries to push `projection` down through `hash_join`. If possible, performs the
+/// pushdown and returns a new [`HashJoinExec`] as the top plan which has projections
+/// as its children. Otherwise, returns `None`.
+fn try_pushdown_through_hash_join(
+    projection: &ProjectionExec,
+    hash_join: &HashJoinExec,
+) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+    // TODO: currently if there is projection in HashJoinExec, we can't push down projection to left or right input. Maybe we can pushdown the mixed projection later.
+    if hash_join.contains_projection() {
+        return Ok(None);
+    }
+
+    if let Some(JoinData {
+        projected_left_child,
+        projected_right_child,
+        join_filter,
+        join_on,
+    }) = try_pushdown_through_join(
+        projection,
+        hash_join.left(),
+        hash_join.right(),
+        hash_join.on(),
+        hash_join.schema(),
+        hash_join.filter(),
+    )? {
+        Ok(Some(Arc::new(HashJoinExec::try_new(
+            Arc::new(projected_left_child),
+            Arc::new(projected_right_child),
+            join_on,
+            join_filter,
+            hash_join.join_type(),
+            // Returned early if projection is not None
+            None,
+            *hash_join.partition_mode(),
+            hash_join.null_equals_null,
+        )?)))
+    } else {
+        try_embed_projection(projection, hash_join)
+    }
 }
 
 /// Tries to swap the projection with its input [`CrossJoinExec`]. If it can be done,
@@ -739,62 +818,6 @@ fn try_swapping_with_cross_join(
         Arc::new(new_left),
         Arc::new(new_right),
     ))))
-}
-
-/// Tries to swap the projection with its input [`NestedLoopJoinExec`]. If it can be done,
-/// it returns the new swapped version having the [`NestedLoopJoinExec`] as the top plan.
-/// Otherwise, it returns None.
-fn try_swapping_with_nested_loop_join(
-    projection: &ProjectionExec,
-    nl_join: &NestedLoopJoinExec,
-) -> Result<Option<Arc<dyn ExecutionPlan>>> {
-    // Convert projected PhysicalExpr's to columns. If not possible, we cannot proceed.
-    let Some(projection_as_columns) = physical_to_column_exprs(projection.expr()) else {
-        return Ok(None);
-    };
-
-    let (far_right_left_col_ind, far_left_right_col_ind) = join_table_borders(
-        nl_join.left().schema().fields().len(),
-        &projection_as_columns,
-    );
-
-    if !join_allows_pushdown(
-        &projection_as_columns,
-        &nl_join.schema(),
-        far_right_left_col_ind,
-        far_left_right_col_ind,
-    ) {
-        return Ok(None);
-    }
-
-    let new_filter = if let Some(filter) = nl_join.filter() {
-        match update_join_filter(
-            &projection_as_columns[0..=far_right_left_col_ind as _],
-            &projection_as_columns[far_left_right_col_ind as _..],
-            filter,
-            nl_join.left().schema().fields().len(),
-        ) {
-            Some(updated_filter) => Some(updated_filter),
-            None => return Ok(None),
-        }
-    } else {
-        None
-    };
-
-    let (new_left, new_right) = new_join_children(
-        &projection_as_columns,
-        far_right_left_col_ind,
-        far_left_right_col_ind,
-        nl_join.left(),
-        nl_join.right(),
-    )?;
-
-    Ok(Some(Arc::new(NestedLoopJoinExec::try_new(
-        Arc::new(new_left),
-        Arc::new(new_right),
-        new_filter,
-        nl_join.join_type(),
-    )?)))
 }
 
 /// Tries to swap the projection with its input [`SortMergeJoinExec`]. If it can be done,
@@ -1345,7 +1368,7 @@ mod tests {
         ColumnarValue, Operator, ScalarUDF, ScalarUDFImpl, Signature, Volatility,
     };
     use datafusion_physical_expr::expressions::{
-        BinaryExpr, CaseExpr, CastExpr, NegativeExpr,
+        binary, col, BinaryExpr, CaseExpr, CastExpr, NegativeExpr,
     };
     use datafusion_physical_expr::ScalarFunctionExpr;
     use datafusion_physical_plan::joins::PartitionMode;
@@ -2399,6 +2422,73 @@ mod tests {
         ));
         let column_indices = collect_column_indices(&[(expr, "b-(1+a)".to_string())]);
         assert_eq!(column_indices, vec![1, 7]);
+        Ok(())
+    }
+
+    #[test]
+    fn test_nested_loop_join_after_projection() -> Result<()> {
+        let left_csv = create_simple_csv_exec();
+        let right_csv = create_simple_csv_exec();
+
+        let col_left_a = col("a", &left_csv.schema())?;
+        let col_right_b = col("b", &right_csv.schema())?;
+        let col_left_c = col("c", &left_csv.schema())?;
+        // left_a < right_b
+        let filter_expr =
+            binary(col_left_a, Operator::Lt, col_right_b, &Schema::empty())?;
+        let filter_column_indices = vec![
+            ColumnIndex {
+                index: 0,
+                side: JoinSide::Left,
+            },
+            ColumnIndex {
+                index: 1,
+                side: JoinSide::Right,
+            },
+            ColumnIndex {
+                index: 2,
+                side: JoinSide::Right,
+            },
+        ];
+        let filter_schema = Schema::new(vec![
+            Field::new("a", DataType::Int32, true),
+            Field::new("b", DataType::Int32, true),
+            Field::new("c", DataType::Int32, true),
+        ]);
+
+        let join: Arc<dyn ExecutionPlan> = Arc::new(NestedLoopJoinExec::try_new(
+            left_csv,
+            right_csv,
+            Some(JoinFilter::new(
+                filter_expr,
+                filter_column_indices,
+                filter_schema,
+            )),
+            &JoinType::Inner,
+            None,
+        )?);
+
+        let projection: Arc<dyn ExecutionPlan> = Arc::new(ProjectionExec::try_new(
+            vec![(col_left_c, "c".to_string())],
+            Arc::clone(&join),
+        )?);
+        let initial = get_plan_string(&projection);
+        let expected_initial = [
+            "ProjectionExec: expr=[c@2 as c]",
+            "  NestedLoopJoinExec: join_type=Inner, filter=a@0 < b@1",
+            "    CsvExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], has_header=false",
+            "    CsvExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], has_header=false",
+            ];
+        assert_eq!(initial, expected_initial);
+
+        let after_optimize =
+            ProjectionPushdown::new().optimize(projection, &ConfigOptions::new())?;
+        let expected = [
+            "NestedLoopJoinExec: join_type=Inner, filter=a@0 < b@1, projection=[c@2]",
+            "  CsvExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], has_header=false",
+            "  CsvExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], has_header=false",
+        ];
+        assert_eq!(get_plan_string(&after_optimize), expected);
         Ok(())
     }
 

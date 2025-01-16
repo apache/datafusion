@@ -26,7 +26,7 @@ use std::{any::Any, vec};
 
 use super::utils::{
     asymmetric_join_output_partitioning, get_final_indices_from_shared_bitmap,
-    reorder_output_after_swap,
+    reorder_output_after_swap, swap_join_projection,
 };
 use super::{
     utils::{OnceAsync, OnceFut},
@@ -477,7 +477,7 @@ impl HashJoinExec {
     }
 
     /// Return whether the join contains a projection
-    pub fn contain_projection(&self) -> bool {
+    pub fn contains_projection(&self) -> bool {
         self.projection.is_some()
     }
 
@@ -626,38 +626,6 @@ impl HashJoinExec {
     }
 }
 
-/// This function swaps the given join's projection.
-fn swap_join_projection(
-    left_schema_len: usize,
-    right_schema_len: usize,
-    projection: Option<&Vec<usize>>,
-    join_type: &JoinType,
-) -> Option<Vec<usize>> {
-    match join_type {
-        // For Anti/Semi join types, projection should remain unmodified,
-        // since these joins output schema remains the same after swap
-        JoinType::LeftAnti
-        | JoinType::LeftSemi
-        | JoinType::RightAnti
-        | JoinType::RightSemi => projection.cloned(),
-
-        _ => projection.map(|p| {
-            p.iter()
-                .map(|i| {
-                    // If the index is less than the left schema length, it is from
-                    // the left schema, so we add the right schema length to it.
-                    // Otherwise, it is from the right schema, so we subtract the left
-                    // schema length from it.
-                    if *i < left_schema_len {
-                        *i + right_schema_len
-                    } else {
-                        *i - left_schema_len
-                    }
-                })
-                .collect()
-        }),
-    }
-}
 impl DisplayAs for HashJoinExec {
     fn fmt_as(&self, t: DisplayFormatType, f: &mut fmt::Formatter) -> fmt::Result {
         match t {
@@ -666,7 +634,7 @@ impl DisplayAs for HashJoinExec {
                     || "".to_string(),
                     |f| format!(", filter={}", f.expression()),
                 );
-                let display_projections = if self.contain_projection() {
+                let display_projections = if self.contains_projection() {
                     format!(
                         ", projection=[{}]",
                         self.projection
