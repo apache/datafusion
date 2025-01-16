@@ -21,8 +21,16 @@ pub enum DiagnosticEntryKind {
 }
 
 impl Diagnostic {
-    pub fn new(entries: impl IntoIterator<Item = DiagnosticEntry>) -> Self {
-        Diagnostic::from_iter(entries)
+    pub fn new() -> Self {
+        Default::default()
+    }
+}
+
+impl Default for Diagnostic {
+    fn default() -> Self {
+        Diagnostic {
+            entries: Vec::new(),
+        }
     }
 }
 
@@ -32,6 +40,27 @@ impl FromIterator<DiagnosticEntry> for Diagnostic {
             entries: iter.into_iter().collect(),
         }
     }
+}
+
+macro_rules! with_kind {
+    ($name:ident, $kind:expr) => {
+        pub fn $name(mut self, message: impl Into<String>, span: Span) -> Self {
+            let entry = DiagnosticEntry {
+                span,
+                message: message.into(),
+                kind: $kind,
+            };
+            self.entries.push(entry);
+            self
+        }
+    };
+}
+
+impl Diagnostic {
+    with_kind!(with_error, DiagnosticEntryKind::Error);
+    with_kind!(with_warning, DiagnosticEntryKind::Warning);
+    with_kind!(with_note, DiagnosticEntryKind::Note);
+    with_kind!(with_help, DiagnosticEntryKind::Help);
 }
 
 impl DiagnosticEntry {
