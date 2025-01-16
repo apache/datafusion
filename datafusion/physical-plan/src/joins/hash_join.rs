@@ -905,9 +905,9 @@ async fn collect_left_input(
 
     let (left_input, left_input_partition) = if let Some(partition) = partition {
         (left, partition)
-    } else if left.output_partitioning().partition_count() != 1 {
-        (Arc::new(CoalescePartitionsExec::new(left)) as _, 0)
     } else {
+        // For PartitionMode::CollectLeft, we required a single partition for the left input
+        assert_eq!(left.output_partitioning().partition_count(), 1);
         (left, 0)
     };
 
