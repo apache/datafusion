@@ -16,6 +16,7 @@
 // under the License.
 
 //! This module contains tests for limiting memory at runtime in DataFusion
+mod memory_limit_validation;
 
 use arrow::datatypes::{Int32Type, SchemaRef};
 use arrow::record_batch::RecordBatch;
