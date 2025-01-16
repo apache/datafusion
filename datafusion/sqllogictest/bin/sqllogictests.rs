@@ -52,6 +52,7 @@ const SQLITE_PREFIX: &str = "sqlite";
 pub fn main() -> Result<()> {
     tokio::runtime::Builder::new_multi_thread()
         .enable_all()
+        .thread_stack_size(4 * 1024 * 1024)
         .build()?
         .block_on(run_tests())
 }
