@@ -35,23 +35,26 @@ pub mod utils {
     };
 }
 
+use std::fmt::Debug;
+use std::sync::Arc;
+
+use crate::expressions::Column;
+
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+use arrow_schema::SortOptions;
 use datafusion_common::ScalarValue;
 use datafusion_common::{internal_err, not_impl_err, Result};
 use datafusion_expr::AggregateUDF;
 use datafusion_expr::ReversedUDAF;
 use datafusion_expr_common::accumulator::Accumulator;
+use datafusion_expr_common::groups_accumulator::GroupsAccumulator;
 use datafusion_expr_common::type_coercion::aggregates::check_arg_count;
 use datafusion_functions_aggregate_common::accumulator::AccumulatorArgs;
 use datafusion_functions_aggregate_common::accumulator::StateFieldsArgs;
 use datafusion_functions_aggregate_common::order::AggregateOrderSensitivity;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
-use datafusion_physical_expr_common::sort_expr::LexOrdering;
+use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
 use datafusion_physical_expr_common::utils::reverse_order_bys;
-
-use datafusion_expr_common::groups_accumulator::GroupsAccumulator;
-use std::fmt::Debug;
-use std::sync::Arc;
 
 /// Builder for physical [`AggregateFunctionExpr`]
 ///
@@ -532,6 +535,29 @@ impl AggregateFunctionExpr {
     /// while `count` returns 0 if input is Null
     pub fn default_value(&self, data_type: &DataType) -> Result<ScalarValue> {
         self.fun.default_value(data_type)
+    }
+
+    /// Indicates whether the aggregation function is monotonic as a set function. A set
+    /// function is monotonically increasing if its value increases as its argument grows
+    /// (as a set). Formally, `f` is a monotonically increasing set function if `f(S) >= f(T)`
+    /// whenever `S` is a superset of `T`.
+    ///
+    /// Returns None if the function is not monotonic.
+    /// If the function is monotonically decreasing returns Some(false) e.g. Min
+    /// If the function is monotonically increasing returns Some(true) e.g. Max
+    pub fn is_monotonic(&self) -> Option<bool> {
+        self.fun.inner().is_monotonic()
+    }
+
+    /// Returns PhysicalSortExpr based on monotonicity of the function
+    pub fn natural_sort_expr(&self, schema: &SchemaRef) -> Option<PhysicalSortExpr> {
+        // If the aggregate expressions are monotonic, the output data is naturally ordered with it.
+        let is_ascending = self.is_monotonic()?;
+        let idx = schema.index_of(self.name()).unwrap_or(0);
+        let expr = Arc::new(Column::new(self.name(), idx));
+
+        let options = SortOptions::new(!is_ascending, false);
+        Some(PhysicalSortExpr { expr, options })
     }
 }
 

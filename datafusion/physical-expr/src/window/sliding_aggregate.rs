@@ -21,16 +21,18 @@ use std::any::Any;
 use std::ops::Range;
 use std::sync::Arc;
 
-use arrow::array::{Array, ArrayRef};
-use arrow::datatypes::Field;
-use arrow::record_batch::RecordBatch;
-
 use crate::aggregate::AggregateFunctionExpr;
 use crate::window::window_expr::AggregateWindowExpr;
 use crate::window::{
     PartitionBatches, PartitionWindowAggStates, PlainAggregateWindowExpr, WindowExpr,
 };
-use crate::{expressions::PhysicalSortExpr, reverse_order_bys, PhysicalExpr};
+use crate::{
+    expressions::PhysicalSortExpr, reverse_order_bys, EquivalenceProperties, PhysicalExpr,
+};
+
+use arrow::array::{Array, ArrayRef};
+use arrow::datatypes::Field;
+use arrow::record_batch::RecordBatch;
 use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::{Accumulator, WindowFrame};
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
@@ -66,6 +68,16 @@ impl SlidingAggregateWindowExpr {
     /// Get the [AggregateFunctionExpr] of this object.
     pub fn get_aggregate_expr(&self) -> &AggregateFunctionExpr {
         &self.aggregate
+    }
+
+    pub fn add_equal_orderings(&self, eq_properties: &mut EquivalenceProperties) {
+        let Some(expr) = self
+            .get_aggregate_expr()
+            .natural_sort_expr(eq_properties.schema())
+        else {
+            return;
+        };
+        eq_properties.add_new_ordering_expr_with_partition_by(expr, &self.partition_by);
     }
 }
 
@@ -119,7 +131,7 @@ impl WindowExpr for SlidingAggregateWindowExpr {
     fn get_reverse_expr(&self) -> Option<Arc<dyn WindowExpr>> {
         self.aggregate.reverse_expr().map(|reverse_expr| {
             let reverse_window_frame = self.window_frame.reverse();
-            if reverse_window_frame.start_bound.is_unbounded() {
+            if reverse_window_frame.is_ever_expanding() {
                 Arc::new(PlainAggregateWindowExpr::new(
                     Arc::new(reverse_expr),
                     &self.partition_by.clone(),

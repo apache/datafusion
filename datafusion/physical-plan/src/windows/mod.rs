@@ -133,7 +133,7 @@ fn window_expr_from_aggregate_expr(
     aggregate: Arc<AggregateFunctionExpr>,
 ) -> Arc<dyn WindowExpr> {
     // Is there a potentially unlimited sized window frame?
-    let unbounded_window = window_frame.start_bound.is_unbounded();
+    let unbounded_window = window_frame.is_ever_expanding();
 
     if !unbounded_window {
         Arc::new(SlidingAggregateWindowExpr::new(
@@ -347,6 +347,14 @@ pub(crate) fn window_equivalence_properties(
         if let Some(udf_window_expr) = expr.as_any().downcast_ref::<StandardWindowExpr>()
         {
             udf_window_expr.add_equal_orderings(&mut window_eq_properties);
+        } else if let Some(aggregate_udf_window_expr) =
+            expr.as_any().downcast_ref::<PlainAggregateWindowExpr>()
+        {
+            aggregate_udf_window_expr.add_equal_orderings(&mut window_eq_properties);
+        } else if let Some(aggregate_udf_window_expr) =
+            expr.as_any().downcast_ref::<SlidingAggregateWindowExpr>()
+        {
+            aggregate_udf_window_expr.add_equal_orderings(&mut window_eq_properties);
         }
     }
     window_eq_properties

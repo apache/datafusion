@@ -512,6 +512,7 @@ impl AggregateExec {
             &projection_mapping,
             &mode,
             &input_order_mode,
+            aggr_expr.clone(),
         );
 
         Ok(AggregateExec {
@@ -648,9 +649,10 @@ impl AggregateExec {
         projection_mapping: &ProjectionMapping,
         mode: &AggregateMode,
         input_order_mode: &InputOrderMode,
+        aggr_exprs: Vec<Arc<AggregateFunctionExpr>>,
     ) -> PlanProperties {
         // Construct equivalence properties:
-        let eq_properties = input
+        let mut eq_properties = input
             .equivalence_properties()
             .project(projection_mapping, schema);
 
@@ -672,6 +674,12 @@ impl AggregateExec {
         } else {
             input.pipeline_behavior()
         };
+
+        for aggr_expr in aggr_exprs {
+            if let Some(expr) = aggr_expr.natural_sort_expr(eq_properties.schema()) {
+                eq_properties.add_new_ordering(LexOrdering::new(vec![expr]));
+            }
+        }
 
         PlanProperties::new(
             eq_properties,

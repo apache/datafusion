@@ -351,6 +351,10 @@ impl AggregateUDFImpl for Count {
     fn documentation(&self) -> Option<&Documentation> {
         self.doc()
     }
+
+    fn is_monotonic(&self) -> Option<bool> {
+        Some(true)
+    }
 }
 
 #[derive(Debug)]

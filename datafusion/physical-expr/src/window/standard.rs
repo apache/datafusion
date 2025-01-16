@@ -74,24 +74,10 @@ impl StandardWindowExpr {
     pub fn add_equal_orderings(&self, eq_properties: &mut EquivalenceProperties) {
         let schema = eq_properties.schema();
         if let Some(fn_res_ordering) = self.expr.get_result_ordering(schema) {
-            if self.partition_by.is_empty() {
-                // In the absence of a PARTITION BY, ordering of `self.expr` is global:
-                eq_properties
-                    .add_new_orderings([LexOrdering::new(vec![fn_res_ordering])]);
-            } else {
-                // If we have a PARTITION BY, standard functions can not introduce
-                // a global ordering unless the existing ordering is compatible
-                // with PARTITION BY expressions. To elaborate, when PARTITION BY
-                // expressions and existing ordering expressions are equal (w.r.t.
-                // set equality), we can prefix the ordering of `self.expr` with
-                // the existing ordering.
-                let (mut ordering, _) =
-                    eq_properties.find_longest_permutation(&self.partition_by);
-                if ordering.len() == self.partition_by.len() {
-                    ordering.push(fn_res_ordering);
-                    eq_properties.add_new_orderings([ordering]);
-                }
-            }
+            eq_properties.add_new_ordering_expr_with_partition_by(
+                fn_res_ordering,
+                &self.partition_by,
+            );
         }
     }
 }

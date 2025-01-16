@@ -361,6 +361,10 @@ impl AggregateUDFImpl for Max {
     fn documentation(&self) -> Option<&Documentation> {
         self.doc()
     }
+
+    fn is_monotonic(&self) -> Option<bool> {
+        Some(true)
+    }
 }
 
 // Statically-typed version of min/max(array) -> ScalarValue for string types
@@ -1182,6 +1186,10 @@ impl AggregateUDFImpl for Min {
 
     fn documentation(&self) -> Option<&Documentation> {
         self.doc()
+    }
+
+    fn is_monotonic(&self) -> Option<bool> {
+        Some(false)
     }
 }
 

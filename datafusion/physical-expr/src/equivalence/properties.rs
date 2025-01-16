@@ -239,6 +239,30 @@ impl EquivalenceProperties {
         self.oeq_class.add_new_orderings(orderings);
     }
 
+    /// Adds new ordering expression into the existing ordering equivalence class based on partition by information.
+    pub fn add_new_ordering_expr_with_partition_by(
+        &mut self,
+        expr: PhysicalSortExpr,
+        partition_by: &Vec<Arc<dyn PhysicalExpr>>,
+    ) {
+        if partition_by.is_empty() {
+            // In the absence of a PARTITION BY, ordering of `self.expr` is global:
+            self.add_new_orderings([LexOrdering::new(vec![expr])]);
+        } else {
+            // If we have a PARTITION BY, standard functions can not introduce
+            // a global ordering unless the existing ordering is compatible
+            // with PARTITION BY expressions. To elaborate, when PARTITION BY
+            // expressions and existing ordering expressions are equal (w.r.t.
+            // set equality), we can prefix the ordering of `self.expr` with
+            // the existing ordering.
+            let (mut ordering, _) = self.find_longest_permutation(partition_by);
+            if ordering.len() == partition_by.len() {
+                ordering.push(expr);
+                self.add_new_orderings([ordering]);
+            }
+        }
+    }
+
     /// Adds a single ordering to the existing ordering equivalence class.
     pub fn add_new_ordering(&mut self, ordering: LexOrdering) {
         self.add_new_orderings([ordering]);

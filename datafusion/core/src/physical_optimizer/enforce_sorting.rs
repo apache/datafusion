@@ -659,7 +659,9 @@ mod tests {
     use super::*;
     use crate::physical_optimizer::enforce_distribution::EnforceDistribution;
     use crate::physical_optimizer::test_utils::{
-        aggregate_exec, bounded_window_exec, check_integrity, coalesce_batches_exec,
+        aggregate_exec, aggregate_exec_monotonic, aggregate_exec_non_monotonic,
+        bounded_window_exec, bounded_window_exec_non_monotonic,
+        bounded_window_exec_with_partition, check_integrity, coalesce_batches_exec,
         coalesce_partitions_exec, filter_exec, global_limit_exec, hash_join_exec,
         limit_exec, local_limit_exec, memory_exec, parquet_exec, parquet_exec_sorted,
         repartition_exec, sort_exec, sort_expr, sort_expr_options, sort_merge_join_exec,
@@ -701,6 +703,17 @@ mod tests {
         let c = Field::new("c", DataType::Int32, true);
         let d = Field::new("d", DataType::Int32, false);
         let e = Field::new("e", DataType::Int32, false);
+        let schema = Arc::new(Schema::new(vec![a, b, c, d, e]));
+        Ok(schema)
+    }
+
+    // Generate a schema which consists of 5 columns (a, b, c, d, e) of Uint64
+    fn create_test_schema4() -> Result<SchemaRef> {
+        let a = Field::new("a", DataType::UInt64, true);
+        let b = Field::new("b", DataType::UInt64, false);
+        let c = Field::new("c", DataType::UInt64, true);
+        let d = Field::new("d", DataType::UInt64, false);
+        let e = Field::new("e", DataType::UInt64, false);
         let schema = Arc::new(Schema::new(vec![a, b, c, d, e]));
         Ok(schema)
     }
@@ -1002,6 +1015,63 @@ mod tests {
             "  CoalescePartitionsExec",
             "    RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
             "      MemoryExec: partitions=1, partition_sizes=[0]",
+        ];
+        assert_optimized!(expected_input, expected_optimized, physical_plan, true);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_aggregate_monotonic() -> Result<()> {
+        let schema = create_test_schema4()?;
+        let source = memory_exec(&schema);
+        let sort_exprs = vec![sort_expr("a", &schema)];
+        let sort = sort_exec(sort_exprs.clone(), source);
+
+        let aggregate = aggregate_exec_monotonic(sort);
+        let sort_exprs = LexOrdering::new(vec![sort_expr("count", &aggregate.schema())]);
+        let physical_plan: Arc<dyn ExecutionPlan> =
+            Arc::new(SortExec::new(sort_exprs.clone(), aggregate)) as _;
+
+        let expected_input = [
+            "SortExec: expr=[count@0 ASC], preserve_partitioning=[false]",
+            "  AggregateExec: mode=Final, gby=[], aggr=[count]",
+            "    SortExec: expr=[a@0 ASC], preserve_partitioning=[false]",
+            "      MemoryExec: partitions=1, partition_sizes=[0]",
+        ];
+
+        let expected_optimized = [
+            "AggregateExec: mode=Final, gby=[], aggr=[count]",
+            "  MemoryExec: partitions=1, partition_sizes=[0]",
+        ];
+        assert_optimized!(expected_input, expected_optimized, physical_plan, true);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_aggregate_non_monotonic() -> Result<()> {
+        let schema = create_test_schema4()?;
+        let source = memory_exec(&schema);
+        let sort_exprs = vec![sort_expr("a", &schema)];
+        let sort = sort_exec(sort_exprs.clone(), source);
+
+        let aggregate = aggregate_exec_non_monotonic(sort);
+        let sort_exprs = LexOrdering::new(vec![sort_expr("avg", &aggregate.schema())]);
+        let physical_plan: Arc<dyn ExecutionPlan> =
+            Arc::new(SortExec::new(sort_exprs.clone(), aggregate)) as _;
+
+        let expected_input = [
+            "SortExec: expr=[avg@0 ASC], preserve_partitioning=[false]",
+            "  AggregateExec: mode=Final, gby=[], aggr=[avg]",
+            "    SortExec: expr=[a@0 ASC], preserve_partitioning=[false]",
+            "      MemoryExec: partitions=1, partition_sizes=[0]",
+        ];
+
+        let expected_optimized = [
+            "SortExec: expr=[avg@0 ASC], preserve_partitioning=[false]",
+            "  AggregateExec: mode=Final, gby=[], aggr=[avg]",
+            "    MemoryExec: partitions=1, partition_sizes=[0]",
         ];
         assert_optimized!(expected_input, expected_optimized, physical_plan, true);
 
@@ -1751,6 +1821,207 @@ mod tests {
             "    UnionExec",
             "      ParquetExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], output_ordering=[nullable_col@0 ASC, non_nullable_col@1 ASC]",
             "      ParquetExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], output_ordering=[nullable_col@0 ASC]"];
+        assert_optimized!(expected_input, expected_optimized, physical_plan, true);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_bounded_window_monotonic_sort() -> Result<()> {
+        let schema = create_test_schema()?;
+        let sort_exprs = vec![sort_expr_options(
+            "nullable_col",
+            &schema,
+            SortOptions {
+                descending: true,
+                nulls_first: false,
+            },
+        )];
+        let source = parquet_exec_sorted(&schema, sort_exprs.clone());
+        let sort = sort_exec(sort_exprs.clone(), source);
+
+        let bounded_window =
+            bounded_window_exec("nullable_col", sort_exprs.clone(), sort);
+        let output_schema = bounded_window.schema();
+        let sort_exprs2 = vec![sort_expr_options(
+            "count",
+            &output_schema,
+            SortOptions {
+                descending: false,
+                nulls_first: false,
+            },
+        )];
+        let physical_plan = sort_exec(sort_exprs2.clone(), bounded_window);
+
+        let expected_input = [
+            "SortExec: expr=[count@2 ASC NULLS LAST], preserve_partitioning=[false]",
+            "  BoundedWindowAggExec: wdw=[count: Ok(Field { name: \"count\", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(NULL), end_bound: CurrentRow, is_causal: false }], mode=[Sorted]",
+            "    SortExec: expr=[nullable_col@0 DESC NULLS LAST], preserve_partitioning=[false]",
+            "      ParquetExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], output_ordering=[nullable_col@0 DESC NULLS LAST]",
+        ];
+        let expected_optimized = [
+            "BoundedWindowAggExec: wdw=[count: Ok(Field { name: \"count\", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(NULL), end_bound: CurrentRow, is_causal: false }], mode=[Sorted]",
+            "  ParquetExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], output_ordering=[nullable_col@0 DESC NULLS LAST]",
+        ];
+        assert_optimized!(expected_input, expected_optimized, physical_plan, true);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_bounded_plain_window_monotonic_sort_with_partitions() -> Result<()> {
+        let schema = create_test_schema()?;
+        let sort_exprs = vec![sort_expr_options(
+            "nullable_col",
+            &schema,
+            SortOptions {
+                descending: true,
+                nulls_first: false,
+            },
+        )];
+        let source = parquet_exec_sorted(&schema, sort_exprs.clone());
+        let sort = sort_exec(sort_exprs.clone(), source);
+        let partition_bys = &[col("nullable_col", &schema)?];
+
+        let bounded_window = bounded_window_exec_with_partition(
+            "nullable_col",
+            sort_exprs.clone(),
+            partition_bys,
+            sort,
+            false,
+        );
+        let output_schema = bounded_window.schema();
+        let sort_exprs2 = vec![
+            sort_expr_options(
+                "nullable_col",
+                &output_schema,
+                SortOptions {
+                    descending: true,
+                    nulls_first: false,
+                },
+            ),
+            sort_expr_options(
+                "count",
+                &output_schema,
+                SortOptions {
+                    descending: false,
+                    nulls_first: false,
+                },
+            ),
+        ];
+        let physical_plan = sort_exec(sort_exprs2.clone(), bounded_window);
+
+        let expected_input = [
+            "SortExec: expr=[nullable_col@0 DESC NULLS LAST, count@2 ASC NULLS LAST], preserve_partitioning=[false]",
+            "  BoundedWindowAggExec: wdw=[count: Ok(Field { name: \"count\", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(NULL), end_bound: CurrentRow, is_causal: false }], mode=[Sorted]",
+            "    SortExec: expr=[nullable_col@0 DESC NULLS LAST], preserve_partitioning=[false]",
+            "      ParquetExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], output_ordering=[nullable_col@0 DESC NULLS LAST]",
+        ];
+        let expected_optimized = [
+            "BoundedWindowAggExec: wdw=[count: Ok(Field { name: \"count\", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(NULL), end_bound: CurrentRow, is_causal: false }], mode=[Sorted]",
+            "  ParquetExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], output_ordering=[nullable_col@0 DESC NULLS LAST]",
+        ];
+        assert_optimized!(expected_input, expected_optimized, physical_plan, true);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_bounded_sliding_window_monotonic_sort_with_partitions() -> Result<()> {
+        let schema = create_test_schema()?;
+        let sort_exprs = vec![sort_expr_options(
+            "nullable_col",
+            &schema,
+            SortOptions {
+                descending: true,
+                nulls_first: false,
+            },
+        )];
+        let source = parquet_exec_sorted(&schema, sort_exprs.clone());
+        let sort = sort_exec(sort_exprs.clone(), source);
+        let partition_bys = &[col("nullable_col", &schema)?];
+
+        let bounded_window = bounded_window_exec_with_partition(
+            "nullable_col",
+            sort_exprs.clone(),
+            partition_bys,
+            sort,
+            true,
+        );
+        let output_schema = bounded_window.schema();
+        let sort_exprs2 = vec![
+            sort_expr_options(
+                "nullable_col",
+                &output_schema,
+                SortOptions {
+                    descending: true,
+                    nulls_first: false,
+                },
+            ),
+            sort_expr_options(
+                "count",
+                &output_schema,
+                SortOptions {
+                    descending: false,
+                    nulls_first: false,
+                },
+            ),
+        ];
+        let physical_plan = sort_exec(sort_exprs2.clone(), bounded_window);
+
+        let expected_input = [
+            "SortExec: expr=[nullable_col@0 DESC NULLS LAST, count@2 ASC NULLS LAST], preserve_partitioning=[false]",
+            "  BoundedWindowAggExec: wdw=[count: Ok(Field { name: \"count\", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: CurrentRow, end_bound: Following(NULL), is_causal: false }], mode=[Sorted]",
+            "    SortExec: expr=[nullable_col@0 DESC NULLS LAST], preserve_partitioning=[false]",
+            "      ParquetExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], output_ordering=[nullable_col@0 DESC NULLS LAST]",
+        ];
+        let expected_optimized = [
+            "BoundedWindowAggExec: wdw=[count: Ok(Field { name: \"count\", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: CurrentRow, end_bound: Following(NULL), is_causal: false }], mode=[Sorted]",
+            "  ParquetExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], output_ordering=[nullable_col@0 DESC NULLS LAST]",
+        ];
+        assert_optimized!(expected_input, expected_optimized, physical_plan, true);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_bounded_window_non_monotonic_sort() -> Result<()> {
+        let schema = create_test_schema4()?;
+        let sort_exprs = vec![sort_expr_options(
+            "a",
+            &schema,
+            SortOptions {
+                descending: true,
+                nulls_first: false,
+            },
+        )];
+        let source = parquet_exec_sorted(&schema, sort_exprs.clone());
+        let sort = sort_exec(sort_exprs.clone(), source);
+
+        let bounded_window =
+            bounded_window_exec_non_monotonic("a", sort_exprs.clone(), sort);
+        let output_schema = bounded_window.schema();
+        let sort_exprs2 = vec![sort_expr_options(
+            "avg",
+            &output_schema,
+            SortOptions {
+                descending: false,
+                nulls_first: false,
+            },
+        )];
+        let physical_plan = sort_exec(sort_exprs2.clone(), bounded_window);
+
+        let expected_input = [
+            "SortExec: expr=[avg@5 ASC NULLS LAST], preserve_partitioning=[false]",
+            "  BoundedWindowAggExec: wdw=[avg: Ok(Field { name: \"avg\", data_type: Float64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(NULL), end_bound: CurrentRow, is_causal: false }], mode=[Sorted]",
+            "    SortExec: expr=[a@0 DESC NULLS LAST], preserve_partitioning=[false]",
+            "      ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[a@0 DESC NULLS LAST]",
+        ];
+        let expected_optimized = [
+            "SortExec: expr=[avg@5 ASC NULLS LAST], preserve_partitioning=[false]",
+            "  BoundedWindowAggExec: wdw=[avg: Ok(Field { name: \"avg\", data_type: Float64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(NULL), end_bound: CurrentRow, is_causal: false }], mode=[Sorted]",
+            "    ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[a@0 DESC NULLS LAST]",
+        ];
         assert_optimized!(expected_input, expected_optimized, physical_plan, true);
 
         Ok(())
