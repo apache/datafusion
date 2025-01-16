@@ -24,9 +24,9 @@ use std::sync::Arc;
 use std::task::Poll;
 
 use super::utils::{
-    asymmetric_join_output_partitioning, need_produce_result_in_final, get_final_indices_from_shared_bitmap,
-    reorder_output_after_swap, swap_join_projection, BatchSplitter, BatchTransformer,
-    NoopBatchTransformer, StatefulStreamResult,
+    asymmetric_join_output_partitioning, get_final_indices_from_shared_bitmap,
+    need_produce_result_in_final, reorder_output_after_swap, swap_join_projection,
+    BatchSplitter, BatchTransformer, NoopBatchTransformer, StatefulStreamResult,
 };
 use crate::coalesce_partitions::CoalescePartitionsExec;
 use crate::common::can_project;

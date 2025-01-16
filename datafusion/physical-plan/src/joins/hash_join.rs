@@ -25,8 +25,8 @@ use std::task::Poll;
 use std::{any::Any, vec};
 
 use super::utils::{
-    asymmetric_join_output_partitioning, reorder_output_after_swap, swap_join_projection,
-    get_final_indices_from_shared_bitmap,
+    asymmetric_join_output_partitioning, get_final_indices_from_shared_bitmap,
+    reorder_output_after_swap, swap_join_projection,
 };
 use super::{
     utils::{OnceAsync, OnceFut},
