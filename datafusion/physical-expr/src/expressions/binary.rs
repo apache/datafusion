@@ -24,6 +24,7 @@ use crate::intervals::cp_solver::{propagate_arithmetic, propagate_comparison};
 use crate::PhysicalExpr;
 
 use crate::expressions::binary::kernels::concat_elements_utf8view;
+use crate::utils::stats::new_unknown_from_binary_expr;
 use arrow::array::*;
 use arrow::compute::kernels::boolean::{and_kleene, not, or_kleene};
 use arrow::compute::kernels::cmp::*;
@@ -48,7 +49,6 @@ use kernels::{
     bitwise_shift_left_dyn, bitwise_shift_left_dyn_scalar, bitwise_shift_right_dyn,
     bitwise_shift_right_dyn_scalar, bitwise_xor_dyn, bitwise_xor_dyn_scalar,
 };
-use crate::utils::stats::new_unknown_from_binary_expr;
 
 /// Binary expression
 #[derive(Debug, Clone, Eq)]
@@ -396,70 +396,6 @@ impl PhysicalExpr for BinaryExpr {
         apply_operator(&self.op, left_interval, right_interval)
     }
 
-    fn evaluate_statistics(
-        &self,
-        children_stat: &[&StatisticsV2],
-    ) -> Result<StatisticsV2> {
-        let (left_stat, right_stat) = (children_stat[0], children_stat[1]);
-
-        // We can evaluate statistics only with numeric data types on stats.
-        // TODO: move the data type check to the the higher levels.
-        if (left_stat.data_type().is_none() || right_stat.data_type().is_none())
-            || !left_stat.data_type().unwrap().is_numeric() 
-            || !right_stat.data_type().unwrap().is_numeric() {
-            return Ok(StatisticsV2::new_unknown());
-        }
-
-        match &self.op {
-            Operator::Plus | Operator::Minus | Operator::Multiply | Operator::Divide => {
-                match (left_stat, right_stat) {
-                    (Uniform { interval: left_interval}, Uniform { interval: right_interval, }) => {
-                        new_unknown_from_binary_expr(
-                            &self.op,
-                            left_stat,
-                            right_stat,
-                            apply_operator(&self.op, left_interval, right_interval)?,
-                        )
-                    },
-                    (Uniform {..}, _) | (_, Uniform {..}) => new_unknown_from_binary_expr(
-                        &self.op,
-                        left_stat,
-                        right_stat,
-                        Interval::make_unbounded(&left_stat.data_type().unwrap())?,
-                    ),
-                    (Gaussian { mean: left_mean, variance: left_v, ..},
-                        Gaussian { mean: right_mean, variance: right_v}, ) => {
-                        if self.op.eq(&Operator::Plus) {
-                            Ok(Gaussian {
-                                mean: left_mean.add(right_mean)?,
-                                variance: left_v.add(right_v)?,
-                            })
-                        } else if self.op.eq(&Operator::Minus) {
-                            Ok(Gaussian {
-                                mean: left_mean.sub(right_mean)?,
-                                variance: left_v.add(right_v)?,
-                            })
-                        } else {
-                            new_unknown_from_binary_expr(
-                                &self.op,
-                                left_stat,
-                                right_stat,
-                                Interval::make_unbounded(&left_stat.data_type().unwrap())?,
-                            )
-                        }
-                    }
-                    (_, _) => new_unknown_from_binary_expr(
-                        &self.op,
-                        left_stat,
-                        right_stat,
-                        Interval::make_unbounded(&left_stat.data_type().unwrap())?,
-                    )
-                }
-            }
-            _ => internal_err!("BinaryExpr requires exactly 2 children")
-        }
-    }
-
     fn propagate_constraints(
         &self,
         interval: &Interval,
@@ -559,6 +495,70 @@ impl PhysicalExpr for BinaryExpr {
                 propagate_arithmetic(&self.op, interval, left_interval, right_interval)?
                     .map(|(left, right)| vec![left, right]),
             )
+        }
+    }
+
+    fn evaluate_statistics(
+        &self,
+        children_stat: &[&StatisticsV2],
+    ) -> Result<StatisticsV2> {
+        let (left_stat, right_stat) = (children_stat[0], children_stat[1]);
+
+        // We can evaluate statistics only with numeric data types on stats.
+        // TODO: move the data type check to the the higher levels.
+        if (left_stat.data_type().is_none() || right_stat.data_type().is_none())
+            || !left_stat.data_type().unwrap().is_numeric()
+            || !right_stat.data_type().unwrap().is_numeric() {
+            return Ok(StatisticsV2::new_unknown());
+        }
+
+        match &self.op {
+            Operator::Plus | Operator::Minus | Operator::Multiply | Operator::Divide => {
+                match (left_stat, right_stat) {
+                    (Uniform { interval: left_interval}, Uniform { interval: right_interval, }) => {
+                        new_unknown_from_binary_expr(
+                            &self.op,
+                            left_stat,
+                            right_stat,
+                            apply_operator(&self.op, left_interval, right_interval)?,
+                        )
+                    },
+                    (Uniform {..}, _) | (_, Uniform {..}) => new_unknown_from_binary_expr(
+                        &self.op,
+                        left_stat,
+                        right_stat,
+                        Interval::make_unbounded(&left_stat.data_type().unwrap())?,
+                    ),
+                    (Gaussian { mean: left_mean, variance: left_v, ..},
+                        Gaussian { mean: right_mean, variance: right_v}, ) => {
+                        if self.op.eq(&Operator::Plus) {
+                            Ok(Gaussian {
+                                mean: left_mean.add(right_mean)?,
+                                variance: left_v.add(right_v)?,
+                            })
+                        } else if self.op.eq(&Operator::Minus) {
+                            Ok(Gaussian {
+                                mean: left_mean.sub(right_mean)?,
+                                variance: left_v.add(right_v)?,
+                            })
+                        } else {
+                            new_unknown_from_binary_expr(
+                                &self.op,
+                                left_stat,
+                                right_stat,
+                                Interval::make_unbounded(&left_stat.data_type().unwrap())?,
+                            )
+                        }
+                    }
+                    (_, _) => new_unknown_from_binary_expr(
+                        &self.op,
+                        left_stat,
+                        right_stat,
+                        Interval::make_unbounded(&left_stat.data_type().unwrap())?,
+                    )
+                }
+            }
+            _ => internal_err!("BinaryExpr requires exactly 2 children")
         }
     }
 
@@ -818,7 +818,7 @@ mod tests {
     use crate::expressions::{col, lit, try_cast, Column, Literal};
     use datafusion_common::plan_datafusion_err;
     use datafusion_expr::type_coercion::binary::get_input_types;
-
+    //region tests
     /// Performs a binary operation, applying any type coercion necessary
     fn binary_op(
         left: Arc<dyn PhysicalExpr>,
@@ -4463,4 +4463,56 @@ mod tests {
         )
         .unwrap();
     }
+    //endregion
+
+    //region evaluate_statistics test
+
+    fn binary_expr(
+        left: Arc<dyn PhysicalExpr>,
+        op: Operator,
+        right: Arc<dyn PhysicalExpr>,
+        schema: &Schema,
+    ) -> Result<BinaryExpr> {
+        Ok(binary_op(Arc::clone(&left), op, Arc::clone(&right), schema)?
+            .as_any().downcast_ref::<BinaryExpr>().unwrap().clone())
+    }
+
+    // TODO: generate the test case(s) with the macros
+    #[test]
+    fn test_evaluate_statistics_uniform_uniform() -> Result<()> {
+        let schema = &Schema::new(vec![
+            Field::new("a", DataType::Float64, false),
+        ]);
+        let a: Arc<dyn PhysicalExpr> = Arc::new(Column::new("a", 0));
+        let b = lit(ScalarValue::Float64(Some(12.0)));
+
+        let left_interval = Interval::make(Some(0.0), Some(12.0))?;
+        let right_interval = Interval::make(Some(12.0), Some(36.0))?;
+        let children = &vec![
+            Uniform { interval: left_interval.clone() },
+            Uniform { interval: right_interval.clone() }
+        ];
+        let ref_view: Vec<&StatisticsV2> = children.iter().collect();
+
+        let ops = vec![
+            Operator::Plus, Operator::Minus, Operator::Multiply, Operator::Divide
+        ];
+       // Eq, NotEq, Gt, GtEq, Lt, LtEq];
+
+        for op in ops {
+            let expr = binary_expr(Arc::clone(&a), op, Arc::clone(&b), schema)?;
+            // TODO: to think, if maybe we want to handcraft the expected value...
+            let expected = new_unknown_from_binary_expr(
+                &op,
+                ref_view[0],
+                ref_view[1],
+                apply_operator(&op, &left_interval, &right_interval)?
+            )?;
+            assert_eq!(expr.evaluate_statistics(&ref_view)?, expected);
+        }
+
+        Ok(())
+    }
+
+    //endregion evaluate_statistics test
 }

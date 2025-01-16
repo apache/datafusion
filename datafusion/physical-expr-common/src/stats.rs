@@ -4,7 +4,7 @@ use datafusion_common::ScalarValue;
 use datafusion_expr_common::interval_arithmetic::Interval;
 
 /// New, enhanced `Statistics` definition, represents three core definitions
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum StatisticsV2 {
     Uniform {
         interval: Interval,

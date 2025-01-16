@@ -2,9 +2,9 @@ use crate::expressions::Literal;
 use crate::physical_expr::PhysicalExpr;
 use crate::utils::{build_dag, ExprTreeNode};
 use arrow::datatypes::{DataType, Schema};
-use datafusion_common::ScalarValue::Float64;
 use datafusion_common::ScalarValue;
-use datafusion_expr_common::interval_arithmetic::{apply_operator, Interval};
+use datafusion_common::ScalarValue::Float64;
+use datafusion_expr_common::interval_arithmetic::Interval;
 use datafusion_expr_common::operator::Operator;
 use datafusion_physical_expr_common::stats::StatisticsV2;
 use datafusion_physical_expr_common::stats::StatisticsV2::{Exponential, Uniform, Unknown};
@@ -188,7 +188,7 @@ pub fn new_unknown_with_range(range: Interval) -> StatisticsV2 {
 }
 
 /// Creates a new [`Unknown`] distribution, and tries to compute
-/// mean/median/variance, if it is calculable.
+/// mean/median/variance if it is calculable.
 pub fn new_unknown_from_binary_expr(
     op: &Operator,
     left: &StatisticsV2,
@@ -340,14 +340,14 @@ mod tests {
     use datafusion_common::ScalarValue;
     use datafusion_common::ScalarValue::Float64;
     use datafusion_expr_common::interval_arithmetic::Interval;
-    use datafusion_expr_common::operator::Operator;
+    use datafusion_expr_common::operator::Operator::{Minus, Multiply, Plus};
     use datafusion_physical_expr_common::stats::StatisticsV2::Uniform;
 
     type Actual = Option<ScalarValue>;
     type Expected = Option<ScalarValue>;
 
     #[test]
-    fn test_uniform_uniform() {
+    fn test_unknown_properties_uniform_uniform() {
         let stat_a = Uniform {
             interval: Interval::make(Some(0.), Some(12.0)).unwrap()
         };
@@ -358,18 +358,18 @@ mod tests {
 
         let test_data: Vec<(Actual, Expected)> = vec![
             // mean
-            (compute_mean(&Operator::Plus, &stat_a, &stat_b).unwrap(), Some(Float64(Some(30.)))),
-            (compute_mean(&Operator::Minus, &stat_a, &stat_b).unwrap(), Some(Float64(Some(-18.)))),
-            (compute_mean(&Operator::Multiply, &stat_a, &stat_b).unwrap(), Some(Float64(Some(144.)))),
+            (compute_mean(&Plus, &stat_a, &stat_b).unwrap(), Some(Float64(Some(30.)))),
+            (compute_mean(&Minus, &stat_a, &stat_b).unwrap(), Some(Float64(Some(-18.)))),
+            (compute_mean(&Multiply, &stat_a, &stat_b).unwrap(), Some(Float64(Some(144.)))),
 
             // median
-            (compute_median(&Operator::Plus, &stat_a, &stat_b).unwrap(), Some(Float64(Some(30.)))),
-            (compute_median(&Operator::Minus, &stat_a, &stat_b).unwrap(), Some(Float64(Some(-18.)))),
+            (compute_median(&Plus, &stat_a, &stat_b).unwrap(), Some(Float64(Some(30.)))),
+            (compute_median(&Minus, &stat_a, &stat_b).unwrap(), Some(Float64(Some(-18.)))),
             // FYI: median of combined distributions for mul, div and mod ops doesn't exist.
 
             // variance
-            (compute_variance(&Operator::Plus, &stat_a, &stat_b).unwrap(), Some(Float64(Some(60.)))),
-            (compute_variance(&Operator::Minus, &stat_a, &stat_b).unwrap(), Some(Float64(Some(60.)))),
+            (compute_variance(&Plus, &stat_a, &stat_b).unwrap(), Some(Float64(Some(60.)))),
+            (compute_variance(&Minus, &stat_a, &stat_b).unwrap(), Some(Float64(Some(60.)))),
             // (compute_variance(&Operator::Multiply, &stat_a, &stat_b).unwrap(), Some(Float64(Some(9216.)))),
         ];
 
