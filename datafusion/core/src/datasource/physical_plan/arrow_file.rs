@@ -68,7 +68,7 @@ impl FileSource for ArrowConfig {
     }
 }
 
-/// The struct that implements `[FileOpener]`
+/// The struct arrow that implements `[FileOpener]` trait
 pub struct ArrowOpener {
     pub object_store: Arc<dyn ObjectStore>,
     pub projection: Option<Vec<usize>>,

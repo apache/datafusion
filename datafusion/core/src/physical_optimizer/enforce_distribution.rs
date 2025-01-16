@@ -971,7 +971,7 @@ fn add_spm_on_top(input: DistributionContext) -> DistributionContext {
 /// them and returns following plan:
 ///
 /// ```text
-/// "DataSourceExec: file_groups={2 groups: \[\[x], \[y]]}, projection=\[a, b, c, d, e], output_ordering=\[a@0 ASC]",
+/// "DataSourceExec: file_groups={2 groups: \[\[x], \[y]]}, projection=\[a, b, c, d, e], output_ordering=\[a@0 ASC], file_type=parquet",
 /// ```
 fn remove_dist_changing_operators(
     mut distribution_context: DistributionContext,
@@ -996,7 +996,7 @@ fn remove_dist_changing_operators(
 /// "SortPreservingMergeExec: \[a@0 ASC]"
 /// "  RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=10, preserve_order=true",
 /// "    RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=2, preserve_order=true",
-/// "      DataSourceExec: file_groups={2 groups: \[\[x], \[y]]}, projection=\[a, b, c, d, e], output_ordering=\[a@0 ASC], file_type=csv",
+/// "      DataSourceExec: file_groups={2 groups: \[\[x], \[y]]}, projection=\[a, b, c, d, e], output_ordering=\[a@0 ASC], file_type=parquet",
 /// ```
 ///
 /// This function converts plan above to the following:
@@ -1005,7 +1005,7 @@ fn remove_dist_changing_operators(
 /// "CoalescePartitionsExec"
 /// "  RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=10",
 /// "    RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=2",
-/// "      DataSourceExec: file_groups={2 groups: \[\[x], \[y]]}, projection=\[a, b, c, d, e], output_ordering=\[a@0 ASC], file_type=csv",
+/// "      DataSourceExec: file_groups={2 groups: \[\[x], \[y]]}, projection=\[a, b, c, d, e], output_ordering=\[a@0 ASC], file_type=parquet",
 /// ```
 fn replace_order_preserving_variants(
     mut context: DistributionContext,
