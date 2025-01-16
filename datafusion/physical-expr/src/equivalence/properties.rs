@@ -633,9 +633,9 @@ impl EquivalenceProperties {
             }
 
             // Check if this ordering matches requirements prefix
-            let prefix_len = indices.len();
-            ordering.len() >= prefix_len
-                && normalized_reqs[..prefix_len].iter().zip(ordering).all(
+            let ordering_len = ordering.len();
+            normalized_reqs.len() >= ordering_len
+                && normalized_reqs[..ordering_len].iter().zip(ordering).all(
                     |(req, existing)| {
                         req.expr.eq(&existing.expr)
                             && req
