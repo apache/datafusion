@@ -55,11 +55,10 @@ use datafusion_execution::TaskContext;
 use datafusion_expr::JoinType;
 use datafusion_physical_expr::equivalence::join_equivalence_properties;
 
+use crate::joins::SharedBitmapBuilder;
 use futures::{ready, Stream, StreamExt, TryStreamExt};
 use parking_lot::Mutex;
 
-/// Shared bitmap for visited left-side indices
-type SharedBitmapBuilder = Mutex<BooleanBufferBuilder>;
 /// Left (build-side) data
 struct JoinLeftData {
     /// Build-side data collected to single batch
