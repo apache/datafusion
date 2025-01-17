@@ -16,9 +16,12 @@
 // under the License.
 
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
-use datafusion_common::{not_impl_err, Result};
+use datafusion_common::{not_impl_err, plan_err, Diagnostic, Result};
 use datafusion_expr::{LogicalPlan, LogicalPlanBuilder};
-use sqlparser::ast::{SetExpr, SetOperator, SetQuantifier};
+use sqlparser::{
+    ast::{SetExpr, SetOperator, SetQuantifier, Spanned},
+    tokenizer::Span,
+};
 
 impl<S: ContextProvider> SqlToRel<'_, S> {
     #[cfg_attr(feature = "recursive_protection", recursive::recursive)]
@@ -27,6 +30,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         set_expr: SetExpr,
         planner_context: &mut PlannerContext,
     ) -> Result<LogicalPlan> {
+        let set_expr_span = set_expr.span();
         match set_expr {
             SetExpr::Select(s) => self.select_to_plan(*s, vec![], planner_context),
             SetExpr::Values(v) => self.sql_values_to_plan(v, planner_context),
@@ -36,8 +40,17 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 right,
                 set_quantifier,
             } => {
-                let left_plan = self.set_expr_to_plan(*left, planner_context)?;
-                let right_plan = self.set_expr_to_plan(*right, planner_context)?;
+                let left_plan = self.set_expr_to_plan(*left.clone(), planner_context)?;
+                let right_plan =
+                    self.set_expr_to_plan(*right.clone(), planner_context)?;
+                self.validate_set_expr_num_of_columns(
+                    op,
+                    &left,
+                    &right,
+                    &left_plan,
+                    &right_plan,
+                    set_expr_span,
+                )?;
                 self.set_operation_to_plan(op, left_plan, right_plan, set_quantifier)
             }
             SetExpr::Query(q) => self.query_to_plan(*q, planner_context),
@@ -59,6 +72,44 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 not_impl_err!("UNION DISTINCT BY NAME not implemented")
             }
         }
+    }
+
+    fn validate_set_expr_num_of_columns(
+        &self,
+        op: SetOperator,
+        left: &SetExpr,
+        right: &SetExpr,
+        left_plan: &LogicalPlan,
+        right_plan: &LogicalPlan,
+        set_expr_span: Span,
+    ) -> Result<()> {
+        if left_plan.schema().fields().len() == right_plan.schema().fields().len() {
+            return Ok(());
+        }
+
+        plan_err!("{} queries have different number of columns", op).map_err(|err| {
+            err.with_diagnostic(
+                Diagnostic::new()
+                    .with_error(
+                        format!("{} queries have different number of columns", op),
+                        set_expr_span,
+                    )
+                    .with_note(
+                        format!(
+                            "this side has {} fields",
+                            left_plan.schema().fields().len()
+                        ),
+                        left.span(),
+                    )
+                    .with_note(
+                        format!(
+                            "this side has {} fields",
+                            right_plan.schema().fields().len()
+                        ),
+                        right.span(),
+                    ),
+            )
+        })
     }
 
     pub(super) fn set_operation_to_plan(
