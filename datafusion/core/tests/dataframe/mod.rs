@@ -35,7 +35,11 @@ use arrow_array::{
 };
 use arrow_buffer::ScalarBuffer;
 use arrow_schema::{ArrowError, SchemaRef, UnionFields, UnionMode};
-use datafusion_functions_aggregate::count::{count_distinct, count_udaf};
+use datafusion_functions_aggregate::count::count_udaf;
+use datafusion_functions_aggregate::expr_fn::{
+    array_agg, avg, count, count_distinct, max, median, min, sum,
+};
+use datafusion_functions_window::expr_fn::{first_value, row_number};
 use object_store::local::LocalFileSystem;
 use sqlparser::ast::NullTreatment;
 use std::collections::HashMap;
@@ -68,16 +72,15 @@ use datafusion_execution::runtime_env::RuntimeEnv;
 use datafusion_expr::expr::{GroupingSet, Sort, WindowFunction};
 use datafusion_expr::var_provider::{VarProvider, VarType};
 use datafusion_expr::{
-    cast, col, create_udf, exists, expr, in_subquery, lit, out_ref_col, placeholder,
+    cast, col, create_udf, exists, in_subquery, lit, out_ref_col, placeholder,
     scalar_subquery, when, wildcard, Expr, ExprFunctionExt, ExprSchemable, LogicalPlan,
     ScalarFunctionImplementation, WindowFrame, WindowFrameBound, WindowFrameUnits,
     WindowFunctionDefinition,
 };
-use datafusion_functions_aggregate::expr_fn::{array_agg, avg, count, max, sum};
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::Partitioning;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
-use datafusion_physical_plan::get_plan_string;
+use datafusion_physical_plan::{get_plan_string, ExecutionPlanProperties};
 
 // Get string representation of the plan
 async fn assert_physical_plan(df: &DataFrame, expected: Vec<&str>) {
@@ -242,7 +245,7 @@ async fn select_columns() -> Result<()> {
 
     let t = test_table().await?;
     let t2 = t.select_columns(&["c1", "c2", "c11"])?;
-    let plan = t2.plan.clone();
+    let plan = t2.logical_plan().clone();
 
     // build query using SQL
     let sql_plan = create_plan("SELECT c1, c2, c11 FROM aggregate_test_100").await?;
@@ -258,7 +261,7 @@ async fn select_expr() -> Result<()> {
     // build plan using Table API
     let t = test_table().await?;
     let t2 = t.select(vec![col("c1"), col("c2"), col("c11")])?;
-    let plan = t2.plan.clone();
+    let plan = t2.logical_plan().clone();
 
     // build query using SQL
     let sql_plan = create_plan("SELECT c1, c2, c11 FROM aggregate_test_100").await?;
@@ -276,7 +279,8 @@ async fn select_exprs() -> Result<()> {
     let plan = t
         .clone()
         .select_exprs(&["c1", "c2", "c11", "c2 * c11"])?
-        .plan;
+        .logical_plan()
+        .clone();
 
     // build plan using select
     let expected_plan = t
@@ -286,7 +290,8 @@ async fn select_exprs() -> Result<()> {
             col("c11"),
             col("c2") * col("c11"),
         ])?
-        .plan;
+        .logical_plan()
+        .clone();
 
     assert_same_plan(&expected_plan, &plan);
 
@@ -297,15 +302,12 @@ async fn select_exprs() -> Result<()> {
 async fn select_with_window_exprs() -> Result<()> {
     // build plan using Table API
     let t = test_table().await?;
-    let first_row = Expr::WindowFunction(WindowFunction::new(
-        WindowFunctionDefinition::WindowUDF(first_value_udwf()),
-        vec![col("aggregate_test_100.c1")],
-    ))
-    .partition_by(vec![col("aggregate_test_100.c2")])
-    .build()
-    .unwrap();
+    let first_row = first_value(col("aggregate_test_100.c1"))
+        .partition_by(vec![col("aggregate_test_100.c2")])
+        .build()
+        .unwrap();
     let t2 = t.select(vec![col("c1"), first_row])?;
-    let plan = t2.plan.clone();
+    let plan = t2.logical_plan().clone();
 
     let sql_plan = create_plan(
         "select c1, first_value(c1) over (partition by c2) from aggregate_test_100",
@@ -342,7 +344,7 @@ async fn drop_columns() -> Result<()> {
     // build plan using Table API
     let t = test_table().await?;
     let t2 = t.drop_columns(&["c2", "c11"])?;
-    let plan = t2.plan.clone();
+    let plan = t2.logical_plan().clone();
 
     // build query using SQL
     let sql_plan =
@@ -360,7 +362,7 @@ async fn drop_columns_with_duplicates() -> Result<()> {
     // build plan using Table API
     let t = test_table().await?;
     let t2 = t.drop_columns(&["c2", "c11", "c2", "c2"])?;
-    let plan = t2.plan.clone();
+    let plan = t2.logical_plan().clone();
 
     // build query using SQL
     let sql_plan =
@@ -378,7 +380,7 @@ async fn drop_columns_with_nonexistent_columns() -> Result<()> {
     // build plan using Table API
     let t = test_table().await?;
     let t2 = t.drop_columns(&["canada", "c2", "rocks"])?;
-    let plan = t2.plan.clone();
+    let plan = t2.logical_plan().clone();
 
     // build query using SQL
     let sql_plan = create_plan(
@@ -397,7 +399,7 @@ async fn drop_columns_with_empty_array() -> Result<()> {
     // build plan using Table API
     let t = test_table().await?;
     let t2 = t.drop_columns(&[])?;
-    let plan = t2.plan.clone();
+    let plan = t2.logical_plan().clone();
 
     // build query using SQL
     let sql_plan = create_plan(
@@ -962,7 +964,7 @@ async fn test_distinct() -> Result<()> {
         .unwrap()
         .distinct()
         .unwrap()
-        .plan
+        .logical_plan()
         .clone();
 
     let sql_plan = create_plan("select distinct c1 from aggregate_test_100").await?;
@@ -1027,7 +1029,7 @@ async fn test_distinct_on() -> Result<()> {
     let sql_plan =
         create_plan("select distinct on (c1) c1 from aggregate_test_100").await?;
 
-    assert_same_plan(&plan.plan.clone(), &sql_plan);
+    assert_same_plan(&plan.logical_plan().clone(), &sql_plan);
 
     let df_results = plan.clone().collect().await?;
 
@@ -1189,7 +1191,7 @@ async fn limit() -> Result<()> {
     // build query using Table API
     let t = test_table().await?;
     let t2 = t.select_columns(&["c1", "c2", "c11"])?.limit(0, Some(10))?;
-    let plan = t2.plan.clone();
+    let plan = t2.logical_plan().clone();
 
     // build query using SQL
     let sql_plan =
@@ -1216,7 +1218,7 @@ async fn explain() -> Result<()> {
         .select_columns(&["c1", "c2", "c11"])?
         .limit(0, Some(10))?
         .explain(false, false)?;
-    let plan = df.plan.clone();
+    let plan = df.logical_plan().clone();
 
     // build query using SQL
     let sql_plan =
@@ -1257,7 +1259,7 @@ async fn registry() -> Result<()> {
     let sql_plan = ctx.sql("SELECT my_fn(c12) FROM aggregate_test_100").await?;
 
     // the two plans should be identical
-    assert_same_plan(&df.plan, &sql_plan.plan);
+    assert_same_plan(df.logical_plan(), sql_plan.logical_plan());
 
     Ok(())
 }
@@ -1278,7 +1280,7 @@ async fn intersect() -> Result<()> {
     let df = test_table().await?.select_columns(&["c1", "c3"])?;
     let d2 = df.clone();
     let plan = df.intersect(d2)?;
-    let result = plan.plan.clone();
+    let result = plan.logical_plan().clone();
     let expected = create_plan(
         "SELECT c1, c3 FROM aggregate_test_100
             INTERSECT ALL SELECT c1, c3 FROM aggregate_test_100",
@@ -1293,7 +1295,7 @@ async fn except() -> Result<()> {
     let df = test_table().await?.select_columns(&["c1", "c3"])?;
     let d2 = df.clone();
     let plan = df.except(d2)?;
-    let result = plan.plan.clone();
+    let result = plan.logical_plan().clone();
     let expected = create_plan(
         "SELECT c1, c3 FROM aggregate_test_100
             EXCEPT ALL SELECT c1, c3 FROM aggregate_test_100",
@@ -1307,7 +1309,7 @@ async fn except() -> Result<()> {
 async fn register_table() -> Result<()> {
     let df = test_table().await?.select_columns(&["c1", "c12"])?;
     let ctx = SessionContext::new();
-    let df_impl = DataFrame::new(ctx.state(), df.plan.clone());
+    let df_impl = DataFrame::new(ctx.state(), df.logical_plan().clone());
 
     // register a dataframe as a table
     ctx.register_table("test_table", df_impl.clone().into_view())?;
@@ -1374,7 +1376,7 @@ async fn create_plan(sql: &str) -> Result<LogicalPlan> {
 async fn with_column() -> Result<()> {
     let df = test_table().await?.select_columns(&["c1", "c2", "c3"])?;
     let ctx = SessionContext::new();
-    let df_impl = DataFrame::new(ctx.state(), df.plan.clone());
+    let df_impl = DataFrame::new(ctx.state(), df.logical_plan().clone());
 
     let df = df_impl
         .filter(col("c2").eq(lit(3)).and(col("c1").eq(lit("a"))))?
@@ -1455,7 +1457,7 @@ async fn with_column() -> Result<()> {
 async fn test_window_function_with_column() -> Result<()> {
     let df = test_table().await?.select_columns(&["c1", "c2", "c3"])?;
     let ctx = SessionContext::new();
-    let df_impl = DataFrame::new(ctx.state(), df.plan.clone());
+    let df_impl = DataFrame::new(ctx.state(), df.logical_plan().clone());
     let func = row_number().alias("row_num");
 
     // This first `with_column` results in a column without a `qualifier`
@@ -2521,7 +2523,7 @@ async fn test_count_wildcard_on_window() -> Result<()> {
     let df_results = ctx
         .table("t1")
         .await?
-        .select(vec![Expr::WindowFunction(expr::WindowFunction::new(
+        .select(vec![Expr::WindowFunction(WindowFunction::new(
             WindowFunctionDefinition::AggregateUDF(count_udaf()),
             vec![wildcard()],
         ))
@@ -2622,7 +2624,7 @@ async fn test_count_wildcard_on_where_scalar_subquery() -> Result<()> {
 }
 
 #[tokio::test]
-async fn join() -> Result<()> {
+async fn join2() -> Result<()> {
     let schema1 = Arc::new(Schema::new(vec![
         Field::new("a", DataType::Utf8, false),
         Field::new("b", DataType::Int32, false),
