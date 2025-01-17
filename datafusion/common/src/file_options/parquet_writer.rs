@@ -26,6 +26,7 @@ use crate::{
 };
 
 use arrow_schema::Schema;
+#[allow(deprecated)]
 use parquet::{
     arrow::ARROW_SCHEMA_META_KEY,
     basic::{BrotliLevel, GzipLevel, ZstdLevel},
@@ -157,8 +158,10 @@ impl TryFrom<&TableParquetOptions> for WriterPropertiesBuilder {
             }
 
             if let Some(max_statistics_size) = options.max_statistics_size {
-                builder =
-                    builder.set_column_max_statistics_size(path, max_statistics_size);
+                builder = {
+                    #[allow(deprecated)]
+                    builder.set_column_max_statistics_size(path, max_statistics_size)
+                }
             }
         }
 
@@ -244,14 +247,18 @@ impl ParquetOptions {
                     .and_then(|s| parse_statistics_string(s).ok())
                     .unwrap_or(DEFAULT_STATISTICS_ENABLED),
             )
-            .set_max_statistics_size(
-                max_statistics_size.unwrap_or(DEFAULT_MAX_STATISTICS_SIZE),
-            )
             .set_max_row_group_size(*max_row_group_size)
             .set_created_by(created_by.clone())
             .set_column_index_truncate_length(*column_index_truncate_length)
             .set_data_page_row_count_limit(*data_page_row_count_limit)
             .set_bloom_filter_enabled(*bloom_filter_on_write);
+
+        builder = {
+            #[allow(deprecated)]
+            builder.set_max_statistics_size(
+                max_statistics_size.unwrap_or(DEFAULT_MAX_STATISTICS_SIZE),
+            )
+        };
 
         if let Some(bloom_filter_fpp) = bloom_filter_fpp {
             builder = builder.set_bloom_filter_fpp(*bloom_filter_fpp);
@@ -528,6 +535,7 @@ mod tests {
             ),
             bloom_filter_fpp: bloom_filter_default_props.map(|p| p.fpp),
             bloom_filter_ndv: bloom_filter_default_props.map(|p| p.ndv),
+            #[allow(deprecated)]
             max_statistics_size: Some(props.max_statistics_size(&col)),
         }
     }
