@@ -1056,19 +1056,24 @@ impl Stream for SortMergeJoinStream {
                                     {
                                         self.freeze_all()?;
 
+                                        // If join is filtered and there is joined tuples waiting
+                                        // to be filtered
                                         if !self
                                             .staging_output_record_batches
                                             .batches
                                             .is_empty()
                                         {
+                                            // Apply filter on joined tuples and get filtered batch
                                             let out_filtered_batch =
                                                 self.filter_joined_batch()?;
 
+                                            // Append filtered batch to the output buffer
                                             self.output = concat_batches(
                                                 &self.schema(),
                                                 vec![&self.output, &out_filtered_batch],
                                             )?;
 
+                                            // Send to output if the output buffer surpassed the `batch_size`
                                             if self.output.num_rows() >= self.batch_size {
                                                 let record_batch = std::mem::replace(
                                                     &mut self.output,
