@@ -99,6 +99,7 @@ fn plan_with_order_preserving_variants(
     // Flag indicating that it is desirable to replace `CoalescePartitionsExec`s
     // with `SortPreservingMergeExec`s:
     is_spm_better: bool,
+    fetch: Option<usize>,
 ) -> Result<OrderPreservationContext> {
     sort_input.children = sort_input
         .children
@@ -106,7 +107,12 @@ fn plan_with_order_preserving_variants(
         .map(|node| {
             // Update descendants in the given tree if there is a connection:
             if node.data {
-                plan_with_order_preserving_variants(node, is_spr_better, is_spm_better)
+                plan_with_order_preserving_variants(
+                    node,
+                    is_spr_better,
+                    is_spm_better,
+                    fetch,
+                )
             } else {
                 Ok(node)
             }
@@ -133,7 +139,8 @@ fn plan_with_order_preserving_variants(
             // When the input of a `CoalescePartitionsExec` has an ordering,
             // replace it with a `SortPreservingMergeExec` if appropriate:
             let spm =
-                SortPreservingMergeExec::new(LexOrdering::new(ordering), child.clone());
+                SortPreservingMergeExec::new(LexOrdering::new(ordering), child.clone())
+                    .with_fetch(fetch);
             sort_input.plan = Arc::new(spm) as _;
             sort_input.children[0].data = true;
             return Ok(sort_input);
@@ -251,6 +258,7 @@ pub(crate) fn replace_with_order_preserving_variants(
         requirements.children.swap_remove(0),
         is_spr_better || use_order_preserving_variant,
         is_spm_better || use_order_preserving_variant,
+        requirements.plan.fetch(),
     )?;
 
     // If the alternate plan makes this sort unnecessary, accept the alternate:
