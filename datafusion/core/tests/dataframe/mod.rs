@@ -54,8 +54,8 @@ use datafusion::error::Result;
 use datafusion::execution::context::SessionContext;
 use datafusion::execution::session_state::SessionStateBuilder;
 use datafusion::logical_expr::{ColumnarValue, Volatility};
-use datafusion::prelude::{AvroReadOptions, JoinType, NdJsonReadOptions};
 use datafusion::prelude::{CsvReadOptions, ParquetReadOptions};
+use datafusion::prelude::{JoinType, NdJsonReadOptions};
 use datafusion::test_util::{
     parquet_test_data, populate_csv_partitions, register_aggregate_csv, test_table,
     test_table_with_name,
