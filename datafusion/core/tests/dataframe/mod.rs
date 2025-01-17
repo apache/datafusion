@@ -2833,7 +2833,7 @@ async fn register_non_parquet_file() {
     let err = ctx
         .register_parquet(
             "data",
-            "tests/data/1.parquet",
+            "tests/data/1.json",
             ParquetReadOptions::default(),
         )
         .await;
