@@ -161,7 +161,7 @@ impl TryFrom<&TableParquetOptions> for WriterPropertiesBuilder {
             if let Some(max_statistics_size) = options.max_statistics_size {
                 builder =
                     {
-                        #[allow(deprecated)]
+                    #[allow(deprecated)]
                     builder.set_column_max_statistics_size(path, max_statistics_size)
                 }
             }
