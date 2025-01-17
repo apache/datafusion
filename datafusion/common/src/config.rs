@@ -112,19 +112,23 @@ use crate::{DataFusionError, Result};
 macro_rules! config_namespace {
     (
      $(#[doc = $struct_d:tt])*
+     $(#[allow($($struct_depr:tt)*)])?
      $vis:vis struct $struct_name:ident {
         $(
         $(#[doc = $d:tt])*
+        $(#[allow($($field_depr:tt)*)])?
         $field_vis:vis $field_name:ident : $field_type:ty, $(warn = $warn: expr,)? $(transform = $transform:expr,)? default = $default:expr
         )*$(,)*
     }
     ) => {
 
         $(#[doc = $struct_d])*
+        $(#[allow($($struct_depr)*)])?
         #[derive(Debug, Clone, PartialEq)]
         $vis struct $struct_name{
             $(
             $(#[doc = $d])*
+            $(#[allow($($field_depr)*)])?
             $field_vis $field_name : $field_type,
             )*
         }
@@ -378,6 +382,7 @@ config_namespace! {
     /// See also: [`SessionConfig`]
     ///
     /// [`SessionConfig`]: https://docs.rs/datafusion/latest/datafusion/prelude/struct.SessionConfig.html
+    // #[derive(Debug)]
     pub struct ParquetOptions {
         // The following options affect reading parquet files
 
@@ -467,6 +472,7 @@ config_namespace! {
 
         /// (writing) Sets max statistics size for any column. If NULL, uses
         /// default parquet writer setting
+        #[allow(deprecated)]
         pub max_statistics_size: Option<usize>, default = Some(4096)
 
         /// (writing) Target maximum number of rows in each row group (defaults to 1M
@@ -1598,19 +1604,23 @@ impl ConfigField for TableParquetOptions {
 macro_rules! config_namespace_with_hashmap {
     (
      $(#[doc = $struct_d:tt])*
+     $(#[allow($($struct_depr:tt)*)])?
      $vis:vis struct $struct_name:ident {
         $(
         $(#[doc = $d:tt])*
+        $(#[allow($($field_depr:tt)*)])?
         $field_vis:vis $field_name:ident : $field_type:ty, $(transform = $transform:expr,)? default = $default:expr
         )*$(,)*
     }
     ) => {
 
         $(#[doc = $struct_d])*
+        $(#[allow($($struct_depr)*)])?
         #[derive(Debug, Clone, PartialEq)]
         $vis struct $struct_name{
             $(
             $(#[doc = $d])*
+            $(#[allow($($field_depr)*)])?
             $field_vis $field_name : $field_type,
             )*
         }
@@ -1669,6 +1679,7 @@ macro_rules! config_namespace_with_hashmap {
                     $(
                     let key = format!("{}.{field}::{}", key_prefix, column_name, field = stringify!($field_name));
                     let desc = concat!($($d),*).trim();
+                    #[allow(deprecated)]
                     col_options.$field_name.visit(v, key.as_str(), desc);
                     )*
                 }
@@ -1720,6 +1731,7 @@ config_namespace_with_hashmap! {
 
         /// Sets max statistics size for the column path. If NULL, uses
         /// default parquet options
+        #[allow(deprecated)]
         pub max_statistics_size: Option<usize>, default = None
     }
 }

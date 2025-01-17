@@ -156,9 +156,14 @@ impl TryFrom<&TableParquetOptions> for WriterPropertiesBuilder {
                     builder.set_column_bloom_filter_ndv(path.clone(), bloom_filter_ndv);
             }
 
+            //max_statistics_size is deprecated as per latest arrow version.
+            #[allow(deprecated)]
             if let Some(max_statistics_size) = options.max_statistics_size {
                 builder =
-                    builder.set_column_max_statistics_size(path, max_statistics_size);
+                    {
+                        #[allow(deprecated)]
+                    builder.set_column_max_statistics_size(path, max_statistics_size)
+                }
             }
         }
 
@@ -207,6 +212,8 @@ impl ParquetOptions {
             dictionary_enabled,
             dictionary_page_size_limit,
             statistics_enabled,
+            
+            #[allow(deprecated)]
             max_statistics_size,
             max_row_group_size,
             created_by,
