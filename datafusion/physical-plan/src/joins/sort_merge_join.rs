@@ -1053,7 +1053,7 @@ impl Stream for SortMergeJoinStream {
                                     {
                                         self.freeze_all()?;
 
-                                        if !self.output_record_batches.batches.is_empty()
+                                        if !self.output_record_batches.batches.is_empty() && self.output_size >= self.batch_size
                                         {
                                             let out_filtered_batch =
                                                 self.filter_joined_batch()?;
