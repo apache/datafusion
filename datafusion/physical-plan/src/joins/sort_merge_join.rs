@@ -792,7 +792,10 @@ struct SortMergeJoinStream {
     /// optional join filter
     pub filter: Option<JoinFilter>,
     /// Staging output array builders
-    pub output_record_batches: JoinedRecordBatches,
+    pub staging_output_record_batches: JoinedRecordBatches,
+    /// Output buffer. Currently used by filtering as it requires double buffering
+    /// to avoid small/empty batches. Non-filtered join outputs directly from `staging_output_record_batches.batches`
+    pub output: RecordBatch,
     /// Staging output size, including output batches and staging joined results.
     /// Increased when we put rows into buffer and decreased after we actually output batches.
     /// Used to trigger output when sufficient rows are ready
@@ -1053,14 +1056,30 @@ impl Stream for SortMergeJoinStream {
                                     {
                                         self.freeze_all()?;
 
-                                        if !self.output_record_batches.batches.is_empty()
-                                            && self.output_size >= self.batch_size
+                                        if !self
+                                            .staging_output_record_batches
+                                            .batches
+                                            .is_empty()
                                         {
                                             let out_filtered_batch =
                                                 self.filter_joined_batch()?;
-                                            return Poll::Ready(Some(Ok(
-                                                out_filtered_batch,
-                                            )));
+
+                                            self.output = concat_batches(
+                                                &self.schema(),
+                                                vec![&self.output, &out_filtered_batch],
+                                            )?;
+
+                                            if self.output.num_rows() >= self.batch_size {
+                                                let record_batch = std::mem::replace(
+                                                    &mut self.output,
+                                                    RecordBatch::new_empty(
+                                                        out_filtered_batch.schema(),
+                                                    ),
+                                                );
+                                                return Poll::Ready(Some(Ok(
+                                                    record_batch,
+                                                )));
+                                            }
                                         }
                                     }
 
@@ -1117,7 +1136,7 @@ impl Stream for SortMergeJoinStream {
                         }
                     } else {
                         self.freeze_all()?;
-                        if !self.output_record_batches.batches.is_empty() {
+                        if !self.staging_output_record_batches.batches.is_empty() {
                             let record_batch = self.output_record_batch_and_reset()?;
                             // For non-filtered join output whenever the target output batch size
                             // is hit. For filtered join its needed to output on later phase
@@ -1147,7 +1166,8 @@ impl Stream for SortMergeJoinStream {
                 SortMergeJoinState::Exhausted => {
                     self.freeze_all()?;
 
-                    if !self.output_record_batches.batches.is_empty() {
+                    // if there is still something not processed
+                    if !self.staging_output_record_batches.batches.is_empty() {
                         if self.filter.is_some()
                             && matches!(
                                 self.join_type,
@@ -1160,12 +1180,20 @@ impl Stream for SortMergeJoinStream {
                                     | JoinType::LeftMark
                             )
                         {
-                            let out = self.filter_joined_batch()?;
-                            return Poll::Ready(Some(Ok(out)));
+                            let record_batch = self.filter_joined_batch()?;
+                            return Poll::Ready(Some(Ok(record_batch)));
                         } else {
                             let record_batch = self.output_record_batch_and_reset()?;
                             return Poll::Ready(Some(Ok(record_batch)));
                         }
+                    } else if self.output.num_rows() > 0 {
+                        // if processed but still not outputted because it didn't hit batch size before
+                        let schema = self.output.schema();
+                        let record_batch = std::mem::replace(
+                            &mut self.output,
+                            RecordBatch::new_empty(schema),
+                        );
+                        return Poll::Ready(Some(Ok(record_batch)));
                     } else {
                         return Poll::Ready(None);
                     }
@@ -1198,7 +1226,7 @@ impl SortMergeJoinStream {
             state: SortMergeJoinState::Init,
             sort_options,
             null_equals_null,
-            schema,
+            schema: Arc::clone(&schema),
             streamed_schema: Arc::clone(&streamed_schema),
             buffered_schema,
             streamed,
@@ -1213,12 +1241,13 @@ impl SortMergeJoinStream {
             on_streamed,
             on_buffered,
             filter,
-            output_record_batches: JoinedRecordBatches {
+            staging_output_record_batches: JoinedRecordBatches {
                 batches: vec![],
                 filter_mask: BooleanBuilder::new(),
                 row_indices: UInt64Builder::new(),
                 batch_ids: vec![],
             },
+            output: RecordBatch::new_empty(schema),
             output_size: 0,
             batch_size,
             join_type,
@@ -1608,17 +1637,20 @@ impl SortMergeJoinStream {
                 buffered_batch,
             )? {
                 let num_rows = record_batch.num_rows();
-                self.output_record_batches
+                self.staging_output_record_batches
                     .filter_mask
                     .append_nulls(num_rows);
-                self.output_record_batches
+                self.staging_output_record_batches
                     .row_indices
                     .append_nulls(num_rows);
-                self.output_record_batches
-                    .batch_ids
-                    .resize(self.output_record_batches.batch_ids.len() + num_rows, 0);
+                self.staging_output_record_batches.batch_ids.resize(
+                    self.staging_output_record_batches.batch_ids.len() + num_rows,
+                    0,
+                );
 
-                self.output_record_batches.batches.push(record_batch);
+                self.staging_output_record_batches
+                    .batches
+                    .push(record_batch);
             }
             buffered_batch.null_joined.clear();
         }
@@ -1652,16 +1684,19 @@ impl SortMergeJoinStream {
         )? {
             let num_rows = record_batch.num_rows();
 
-            self.output_record_batches
+            self.staging_output_record_batches
                 .filter_mask
                 .append_nulls(num_rows);
-            self.output_record_batches
+            self.staging_output_record_batches
                 .row_indices
                 .append_nulls(num_rows);
-            self.output_record_batches
-                .batch_ids
-                .resize(self.output_record_batches.batch_ids.len() + num_rows, 0);
-            self.output_record_batches.batches.push(record_batch);
+            self.staging_output_record_batches.batch_ids.resize(
+                self.staging_output_record_batches.batch_ids.len() + num_rows,
+                0,
+            );
+            self.staging_output_record_batches
+                .batches
+                .push(record_batch);
         }
         buffered_batch.join_filter_not_matched_map.clear();
 
@@ -1795,20 +1830,29 @@ impl SortMergeJoinStream {
                             | JoinType::LeftMark
                             | JoinType::Full
                     ) {
-                        self.output_record_batches.batches.push(output_batch);
+                        self.staging_output_record_batches
+                            .batches
+                            .push(output_batch);
                     } else {
                         let filtered_batch = filter_record_batch(&output_batch, &mask)?;
-                        self.output_record_batches.batches.push(filtered_batch);
+                        self.staging_output_record_batches
+                            .batches
+                            .push(filtered_batch);
                     }
 
                     if !matches!(self.join_type, JoinType::Full) {
-                        self.output_record_batches.filter_mask.extend(&mask);
+                        self.staging_output_record_batches.filter_mask.extend(&mask);
                     } else {
-                        self.output_record_batches.filter_mask.extend(pre_mask);
+                        self.staging_output_record_batches
+                            .filter_mask
+                            .extend(pre_mask);
                     }
-                    self.output_record_batches.row_indices.extend(&left_indices);
-                    self.output_record_batches.batch_ids.resize(
-                        self.output_record_batches.batch_ids.len() + left_indices.len(),
+                    self.staging_output_record_batches
+                        .row_indices
+                        .extend(&left_indices);
+                    self.staging_output_record_batches.batch_ids.resize(
+                        self.staging_output_record_batches.batch_ids.len()
+                            + left_indices.len(),
                         self.streamed_batch_counter.load(Relaxed),
                     );
 
@@ -1840,10 +1884,14 @@ impl SortMergeJoinStream {
                         }
                     }
                 } else {
-                    self.output_record_batches.batches.push(output_batch);
+                    self.staging_output_record_batches
+                        .batches
+                        .push(output_batch);
                 }
             } else {
-                self.output_record_batches.batches.push(output_batch);
+                self.staging_output_record_batches
+                    .batches
+                    .push(output_batch);
             }
         }
 
@@ -1854,7 +1902,7 @@ impl SortMergeJoinStream {
 
     fn output_record_batch_and_reset(&mut self) -> Result<RecordBatch> {
         let record_batch =
-            concat_batches(&self.schema, &self.output_record_batches.batches)?;
+            concat_batches(&self.schema, &self.staging_output_record_batches.batches)?;
         self.join_metrics.output_batches.add(1);
         self.join_metrics.output_rows.add(record_batch.num_rows());
         // If join filter exists, `self.output_size` is not accurate as we don't know the exact
@@ -1880,16 +1928,17 @@ impl SortMergeJoinStream {
                     | JoinType::Full
             ))
         {
-            self.output_record_batches.batches.clear();
+            self.staging_output_record_batches.batches.clear();
         }
         Ok(record_batch)
     }
 
     fn filter_joined_batch(&mut self) -> Result<RecordBatch> {
-        let record_batch = self.output_record_batch_and_reset()?;
-        let mut out_indices = self.output_record_batches.row_indices.finish();
-        let mut out_mask = self.output_record_batches.filter_mask.finish();
-        let mut batch_ids = &self.output_record_batches.batch_ids;
+        let record_batch =
+            concat_batches(&self.schema, &self.staging_output_record_batches.batches)?;
+        let mut out_indices = self.staging_output_record_batches.row_indices.finish();
+        let mut out_mask = self.staging_output_record_batches.filter_mask.finish();
+        let mut batch_ids = &self.staging_output_record_batches.batch_ids;
         let default_batch_ids = vec![0; record_batch.num_rows()];
 
         // If only nulls come in and indices sizes doesn't match with expected record batch count
@@ -1904,7 +1953,7 @@ impl SortMergeJoinStream {
         }
 
         if out_mask.is_empty() {
-            self.output_record_batches.batches.clear();
+            self.staging_output_record_batches.batches.clear();
             return Ok(record_batch);
         }
 
@@ -2047,7 +2096,7 @@ impl SortMergeJoinStream {
             )?;
         }
 
-        self.output_record_batches.clear();
+        self.staging_output_record_batches.clear();
 
         Ok(filtered_record_batch)
     }
