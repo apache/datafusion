@@ -399,7 +399,10 @@ fn analyze_immediate_sort_removal(
             {
                 // Replace the sort with a sort-preserving merge:
                 let expr = LexOrdering::new(sort_exec.expr().to_vec());
-                Arc::new(SortPreservingMergeExec::new(expr, sort_input.clone())) as _
+                Arc::new(
+                    SortPreservingMergeExec::new(expr, sort_input.clone())
+                        .with_fetch(node.plan.fetch()),
+                ) as _
             } else {
                 // Remove the sort:
                 node.children = node.children.swap_remove(0).children;
@@ -618,11 +621,12 @@ fn remove_corresponding_sort_from_sub_plan(
         // If there is existing ordering, to preserve ordering use
         // `SortPreservingMergeExec` instead of a `CoalescePartitionsExec`.
         let plan = node.plan.clone();
+        let fetch = plan.fetch();
         let plan = if let Some(ordering) = plan.output_ordering() {
-            Arc::new(SortPreservingMergeExec::new(
-                LexOrdering::new(ordering.to_vec()),
-                plan,
-            )) as _
+            Arc::new(
+                SortPreservingMergeExec::new(LexOrdering::new(ordering.to_vec()), plan)
+                    .with_fetch(fetch),
+            ) as _
         } else {
             Arc::new(CoalescePartitionsExec::new(plan)) as _
         };
