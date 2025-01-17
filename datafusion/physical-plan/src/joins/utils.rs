@@ -456,7 +456,7 @@ fn replace_on_columns_of_right_ordering(
     right_ordering: &mut LexOrdering,
 ) -> Result<()> {
     for (left_col, right_col) in on_columns {
-        for item in right_ordering.inner.iter_mut() {
+        right_ordering.transform(|item| {
             let new_expr = Arc::clone(&item.expr)
                 .transform(|e| {
                     if e.eq(right_col) {
@@ -465,9 +465,10 @@ fn replace_on_columns_of_right_ordering(
                         Ok(Transformed::no(e))
                     }
                 })
-                .data()?;
+                .data()
+                .expect("closure is infallible");
             item.expr = new_expr;
-        }
+        });
     }
     Ok(())
 }
