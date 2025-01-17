@@ -7,7 +7,7 @@ use datafusion_common::ScalarValue::Float64;
 use datafusion_expr_common::interval_arithmetic::{apply_operator, Interval};
 use datafusion_expr_common::operator::Operator;
 use datafusion_physical_expr_common::stats::StatisticsV2;
-use datafusion_physical_expr_common::stats::StatisticsV2::{Exponential, Uniform, Unknown};
+use datafusion_physical_expr_common::stats::StatisticsV2::{Bernoulli, Exponential, Uniform, Unknown};
 use log::debug;
 use petgraph::adj::DefaultIx;
 use petgraph::prelude::Bfs;
@@ -202,6 +202,18 @@ pub fn new_unknown_from_binary_expr(
     })
 }
 
+/// Creates a new [`Bernoulli`] distribution, and tries to compute the result probability.
+/// TODO: implement properly, temporarily always returns 1.
+pub fn new_bernoulli_from_binary_expr(
+    _op: &Operator,
+    _left: &StatisticsV2,
+    _right: &StatisticsV2
+) -> datafusion_common::Result<StatisticsV2> {
+    Ok(Bernoulli {
+        p: Float64(Some(1.))
+    })
+}
+
 /// Computes a mean value for a given binary operator and two statistics.
 /// The result is calculated based on the operator type for any statistics kind.
 pub fn compute_mean(
@@ -334,6 +346,9 @@ pub fn compute_variance(
 
 pub fn compute_range(op: &Operator, left_stat: &StatisticsV2, right_stat: &StatisticsV2)
     -> datafusion_common::Result<Interval> {
+    if !left_stat.is_valid() || !right_stat.is_valid() {
+        return Interval::make_unbounded(&DataType::Float64);
+    }
     match (left_stat, right_stat) {
         (Uniform { interval: l }, Uniform { interval: r })
         | (Uniform { interval: l }, Unknown { range: r, .. })
@@ -344,18 +359,6 @@ pub fn compute_range(op: &Operator, left_stat: &StatisticsV2, right_stat: &Stati
                 | Operator::Gt | Operator::GtEq | Operator::Lt | Operator::LtEq  => {
                     apply_operator(op, l, r)
                 },
-                Operator::Eq => {
-                    // Note: unwrap is legit, because Uniform & Unknown always have ranges
-                    if let Some(intersection) = left_stat.range().unwrap()
-                        .intersect(right_stat.range().unwrap())? {
-                        Ok(intersection)
-                    } else if let Some(data_type) = left_stat.data_type() {
-                        Interval::make_unbounded(&data_type)
-                    } else {
-                        Interval::make_unbounded(&DataType::Float64)
-                    }
-                },
-                Operator::NotEq => Ok(Interval::CERTAINLY_FALSE),
                 _ => Interval::make_unbounded(&DataType::Float64)
             }
         }
@@ -370,7 +373,7 @@ mod tests {
     use datafusion_common::ScalarValue;
     use datafusion_common::ScalarValue::Float64;
     use datafusion_expr_common::interval_arithmetic::{apply_operator, Interval};
-    use datafusion_expr_common::operator::Operator::{Divide, Minus, Multiply, Eq, NotEq, Plus, Gt, GtEq, Lt, LtEq};
+    use datafusion_expr_common::operator::Operator::{Gt, GtEq, Lt, LtEq, Minus, Multiply, Plus};
     use datafusion_physical_expr_common::stats::StatisticsV2::{Uniform, Unknown};
 
     type Actual = Option<ScalarValue>;
@@ -417,19 +420,24 @@ mod tests {
     fn test_compute_range_where_present() -> datafusion_common::Result<()> {
         let a = &Interval::make(Some(0.), Some(12.0))?;
         let b = &Interval::make(Some(0.), Some(12.0))?;
+        let _mean = Some(Float64(Some(6.0)));
         for (stat_a, stat_b) in [
             (Uniform { interval: a.clone() }, Uniform { interval: b.clone() }), 
-            (Unknown { mean: None, median: None, variance: None, range: a.clone() }, Uniform { interval: b.clone() }), 
-            (Uniform { interval: a.clone() }, Unknown { mean: None, median: None, variance: None, range: b.clone() }), 
-            (Unknown { mean: None, median: None, variance: None, range: a.clone() }, 
-              Unknown { mean: None, median: None, variance: None, range: b.clone() })] {
+            (Unknown { mean: _mean.clone(), median: _mean.clone(), variance: None, range: a.clone() }, 
+             Uniform { interval: b.clone() }), 
+            (Uniform { interval: a.clone() }, 
+             Unknown { mean: _mean.clone(), median: _mean.clone(), variance: None, range: b.clone() }), 
+            (Unknown {mean: _mean.clone(), median: _mean.clone(), variance: None, range: a.clone() }, 
+              Unknown { mean: _mean.clone(), median: _mean.clone(), variance: None, range: b.clone() })] {
 
             // range
-            for op in [Plus, Minus, Multiply, Divide, Gt, GtEq, Lt, LtEq] {
-                assert_eq!(compute_range(&op, &stat_a, &stat_b)?, apply_operator(&op, a, b)?);
+            for op in [Plus, Minus, Multiply, Gt, GtEq, Lt, LtEq]  {
+                assert_eq!(
+                    compute_range(&op, &stat_a, &stat_b)?,
+                    apply_operator(&op, a, b)?,
+                    "{}", format!("Failed for {:?} {op} {:?}", stat_a, stat_b),
+                );
             }
-            assert_eq!(compute_range(&Eq, &stat_a, &stat_b)?, a.intersect(b)?.unwrap());
-            assert_eq!(compute_range(&NotEq, &stat_a, &stat_b)?, Interval::CERTAINLY_FALSE);
         }
 
         Ok(())

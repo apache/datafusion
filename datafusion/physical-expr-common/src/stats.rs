@@ -1,4 +1,4 @@
-use crate::stats::StatisticsV2::{Exponential, Gaussian, Uniform, Unknown};
+use crate::stats::StatisticsV2::{Bernoulli, Exponential, Gaussian, Uniform, Unknown};
 use arrow::datatypes::DataType;
 use datafusion_common::ScalarValue;
 use datafusion_expr_common::interval_arithmetic::Interval;
@@ -18,23 +18,15 @@ pub enum StatisticsV2 {
         mean: ScalarValue,
         variance: ScalarValue,
     },
+    Bernoulli {
+        p: ScalarValue,
+    },
     Unknown {
         mean: Option<ScalarValue>,
         median: Option<ScalarValue>,
         variance: Option<ScalarValue>,
         range: Interval,
     },
-}
-
-impl Default for StatisticsV2 {
-    fn default() -> Self {
-        Unknown {
-            mean: None,
-            median: None,
-            variance: None,
-            range: Interval::make_unbounded(&DataType::Null).unwrap(),
-        }
-    }
 }
 
 impl StatisticsV2 {
@@ -61,18 +53,22 @@ impl StatisticsV2 {
                 }
                 let zero = &ScalarValue::new_zero(&rate.data_type()).unwrap();
                 rate.gt(zero)
-            }
+            },
             Gaussian { variance, .. } => {
                 if variance.is_null() {
                     return false;
                 }
                 let zero = &ScalarValue::new_zero(&variance.data_type()).unwrap();
                 variance.ge(zero)
-            }
+            },
+            Bernoulli {p} => {
+                p.ge(&ScalarValue::new_zero(&DataType::Float64).unwrap())
+                && p.le(&ScalarValue::new_one(&DataType::Float64).unwrap())
+            },
             Unknown {
                 mean,
                 median,
-                variance: std_dev,
+                variance,
                 range,
             } => {
                 if let (Some(mn), Some(md)) = (mean, median) {
@@ -80,11 +76,11 @@ impl StatisticsV2 {
                         return false;
                     }
                     range.contains_value(mn).unwrap() && range.contains_value(md).unwrap()
-                } else if let Some(dev) = std_dev {
-                    if dev.is_null() {
+                } else if let Some(v) = variance {
+                    if v.is_null() {
                         return false;
                     }
-                    dev.gt(&ScalarValue::new_zero(&dev.data_type()).unwrap())
+                    v.gt(&ScalarValue::new_zero(&v.data_type()).unwrap())
                 } else {
                     false
                 }
@@ -98,6 +94,7 @@ impl StatisticsV2 {
     ///   by addition of upper and lower bound and dividing the result by 2.
     /// - [`Exponential`] distribution mean is calculable by formula: 1/λ. λ must be non-negative.
     /// - [`Gaussian`] distribution has it explicitly
+    /// - [`Bernoulli`] mean is `p`
     /// - [`Unknown`] distribution _may_ have it explicitly
     pub fn mean(&self) -> datafusion_common::Result<Option<ScalarValue>> {
         if !self.is_valid() {
@@ -122,6 +119,7 @@ impl StatisticsV2 {
                 Ok(None)
             }
             Gaussian { mean, .. } => Ok(Some(mean.clone())),
+            Bernoulli { p } => Ok(Some(p.clone())),
             Unknown { mean, .. } => Ok(mean.clone()),
         }
     }
@@ -155,6 +153,13 @@ impl StatisticsV2 {
                 Ok(None)
             }
             Gaussian { mean, .. } => Ok(Some(mean.clone())),
+            Bernoulli { p } => {
+                if p.gt(&ScalarValue::Float64(Some(0.5))) {
+                    Ok(Some(ScalarValue::new_one(&DataType::Float64)?))
+                } else {
+                    Ok(Some(ScalarValue::new_zero(&DataType::Float64)?))
+                }
+            },
             Unknown { median, .. } => Ok(median.clone())
         }
     }
@@ -177,19 +182,20 @@ impl StatisticsV2 {
                 } else {
                     Ok(None)
                 }
-            }
+            },
             Exponential { rate, .. } => {
                 let one = &ScalarValue::new_one(&rate.data_type())?;
-                let rate_squared = rate.mul(rate);
-                if rate_squared.is_err() {
-                    return Ok(None);
-                }
-                if let Ok(variance) = one.div(rate_squared.unwrap()) {
+                let rate_squared = rate.mul(rate)?;
+                if let Ok(variance) = one.div(rate_squared) {
                     return Ok(Some(variance));
                 }
                 Ok(None)
-            }
+            },
             Gaussian { variance, .. } => Ok(Some(variance.clone())),
+            Bernoulli { p} => {
+                let one = &ScalarValue::new_one(&DataType::Float64)?;
+                Ok(Some(one.sub_checked(p)?.mul_checked(p)?))
+            },
             Unknown { variance, .. } => Ok(variance.clone())
         }
     }
@@ -200,6 +206,7 @@ impl StatisticsV2 {
     pub fn range(&self) -> Option<&Interval> {
         match &self {
             Uniform { interval, .. } => Some(interval),
+            Bernoulli { .. } => Some(&Interval::UNCERTAIN),
             Unknown { range, .. } => Some(range),
             _ => None,
         }
@@ -210,6 +217,7 @@ impl StatisticsV2 {
     pub fn data_type(&self) -> Option<DataType> {
         match &self {
             Uniform { interval, .. } => Some(interval.data_type()),
+            Bernoulli { p } => Some(p.data_type()),
             Unknown { range, .. } => Some(range.data_type()),
             _ => None,
         }
@@ -320,6 +328,39 @@ mod tests {
                     mean: ScalarValue::Float32(Some(0.)),
                     variance: ScalarValue::Float32(Some(-0.5)),
                 },
+                false,
+            ),
+        ];
+        for case in gaussian_stats {
+            assert_eq!(case.0.is_valid(), case.1);
+        }
+    }
+
+    #[test]
+    fn bernoulli_stats_is_valid_test() {
+        let gaussian_stats = vec![
+            (
+                StatisticsV2::Bernoulli { p: ScalarValue::Null },
+                false,
+            ),
+            (
+                StatisticsV2::Bernoulli { p: ScalarValue::Float64(Some(0.25)) },
+                true,
+            ),
+            (
+                StatisticsV2::Bernoulli { p: ScalarValue::Float64(Some(0.)) },
+                true,
+            ),
+            (
+                StatisticsV2::Bernoulli { p: ScalarValue::Float64(Some(1.)) },
+                true,
+            ),
+            (
+                StatisticsV2::Bernoulli { p: ScalarValue::Float64(Some(10.)) },
+                false,
+            ),
+            (
+                StatisticsV2::Bernoulli { p: ScalarValue::Float64(Some(-10.)) },
                 false,
             ),
         ];
@@ -484,6 +525,17 @@ mod tests {
         ));
         //endregion
 
+        // region bernoulli
+        stats.push((
+            StatisticsV2::Bernoulli {p: ScalarValue::Null},
+            None,
+        ));
+        stats.push((
+            StatisticsV2::Bernoulli {p: ScalarValue::Float64(Some(0.5))},
+            Some(ScalarValue::Float64(Some(0.5))),
+        ));
+        //endregion
+
         //region unknown
         stats.push((
             StatisticsV2::Unknown {
@@ -562,6 +614,21 @@ mod tests {
                 Some(ScalarValue::Float64(Some(2.))),
             ),
             (
+                StatisticsV2::Bernoulli { p: ScalarValue::Float64(Some(0.25)) },
+                Some(ScalarValue::Float64(Some(0.))),
+            ),
+            (
+                StatisticsV2::Bernoulli { p: ScalarValue::Float64(Some(0.75)) },
+                Some(ScalarValue::Float64(Some(1.))),
+            ),
+            (
+                StatisticsV2::Gaussian {
+                    mean: ScalarValue::Float64(Some(2.)),
+                    variance: ScalarValue::Float64(Some(1.)),
+                },
+                Some(ScalarValue::Float64(Some(2.))),
+            ),
+            (
                 StatisticsV2::Unknown {
                     mean: None,
                     median: None,
@@ -629,6 +696,10 @@ mod tests {
                     variance: ScalarValue::Float64(Some(1.)),
                 },
                 Some(ScalarValue::Float64(Some(1.))),
+            ),
+            (
+                StatisticsV2::Bernoulli { p: ScalarValue::Float64(Some(0.5)) },
+                Some(ScalarValue::Float64(Some(0.25))),
             ),
             (
                 StatisticsV2::Unknown {

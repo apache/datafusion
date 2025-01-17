@@ -24,7 +24,7 @@ use crate::intervals::cp_solver::{propagate_arithmetic, propagate_comparison};
 use crate::PhysicalExpr;
 
 use crate::expressions::binary::kernels::concat_elements_utf8view;
-use crate::utils::stats::new_unknown_from_binary_expr;
+use crate::utils::stats::{new_bernoulli_from_binary_expr, new_unknown_from_binary_expr};
 use arrow::array::*;
 use arrow::compute::kernels::boolean::{and_kleene, not, or_kleene};
 use arrow::compute::kernels::cmp::*;
@@ -41,7 +41,7 @@ use datafusion_expr::type_coercion::binary::get_result_type;
 use datafusion_expr::{ColumnarValue, Operator};
 use datafusion_physical_expr_common::datum::{apply, apply_cmp, apply_cmp_for_nested};
 use datafusion_physical_expr_common::stats::StatisticsV2;
-use datafusion_physical_expr_common::stats::StatisticsV2::{Gaussian, Uniform};
+use datafusion_physical_expr_common::stats::StatisticsV2::{Bernoulli, Gaussian};
 use kernels::{
     bitwise_and_dyn, bitwise_and_dyn_scalar, bitwise_or_dyn, bitwise_or_dyn_scalar,
     bitwise_shift_left_dyn, bitwise_shift_left_dyn_scalar, bitwise_shift_right_dyn,
@@ -503,12 +503,13 @@ impl PhysicalExpr for BinaryExpr {
         let (left_stat, right_stat) = (children_stat[0], children_stat[1]);
 
         // We can evaluate statistics only with numeric data types on stats.
-        // TODO: move the data type check to the the higher levels.
+        // TODO: move the data type check to the the higher levels, if possible.
         if (left_stat.data_type().is_none() || right_stat.data_type().is_none())
             || !left_stat.data_type().unwrap().is_numeric()
             || !right_stat.data_type().unwrap().is_numeric() {
             return Ok(StatisticsV2::new_unknown());
         }
+
 
         // TODO, to think: maybe, we can separate also Unknown + Unknown 
         //  just for clarity and better reader understanding, how exactly 
@@ -536,22 +537,30 @@ impl PhysicalExpr for BinaryExpr {
                 }
             },
             Operator::Divide => new_unknown_from_binary_expr(&self.op, left_stat, right_stat),
-            Operator::Eq  => {
+            Operator::Eq | Operator::NotEq | Operator::LtEq | Operator::GtEq
+            | Operator::Lt | Operator::Gt => {
+                new_bernoulli_from_binary_expr(&self.op, left_stat, right_stat)
+            },
+            Operator::And => {
                 match (left_stat, right_stat) {
-                    (Uniform { .. }, Uniform { .. }) => {
-                        let intersection = left_stat.range().unwrap()
-                            .intersect(right_stat.range().unwrap())?;
-                        if let Some(interval) = intersection {
-                            Ok(Uniform { interval })
-                        } else {
-                            Ok(Uniform { interval: Interval::CERTAINLY_FALSE })
-                        }
+                    (Bernoulli { p: p_left }, Bernoulli { p: p_right }, ) => {
+                        Ok(Bernoulli { p : p_left.mul_checked(p_right)? })
                     },
+                    // TODO: complement with more cases
                     (_, _) => new_unknown_from_binary_expr(&self.op, left_stat, right_stat)
                 }
             },
-            Operator::NotEq => new_unknown_from_binary_expr(&self.op, left_stat, right_stat),
-            // TODO: express gt/ge/lt/le operations
+            Operator::Or => {
+                match (left_stat, right_stat) {
+                    (Bernoulli { p: p_left }, Bernoulli { p: p_right }, ) => {
+                        Ok(Bernoulli {
+                            p : ScalarValue::Float64(Some(1.)).sub(p_left.mul_checked(p_right)?)?
+                        })
+                    },
+                    // TODO: complement with more cases
+                    (_, _) => new_unknown_from_binary_expr(&self.op, left_stat, right_stat)
+                }
+            }
             _ => new_unknown_from_binary_expr(&self.op, left_stat, right_stat)
         }
     }
@@ -812,6 +821,8 @@ mod tests {
     use crate::expressions::{col, lit, try_cast, Column, Literal};
     use datafusion_common::plan_datafusion_err;
     use datafusion_expr::type_coercion::binary::get_input_types;
+    use datafusion_physical_expr_common::stats::StatisticsV2::Uniform;
+
     // TODO: remove
     //region tests
     /// Performs a binary operation, applying any type coercion necessary
