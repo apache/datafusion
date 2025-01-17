@@ -30,6 +30,7 @@ use arrow::datatypes::SchemaRef;
 
 use object_store::ObjectStore;
 
+// TODO projected_constraints
 /// AvroConfig holds the extra configuration that is necessary for opening avro files
 #[derive(Clone, Default)]
 pub struct AvroConfig {

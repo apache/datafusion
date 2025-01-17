@@ -488,7 +488,7 @@ impl JoinFuzzTestCase {
         let filter = JoinFilter::new(expression, column_indices, intermediate_schema);
 
         Arc::new(
-            NestedLoopJoinExec::try_new(left, right, Some(filter), &self.join_type)
+            NestedLoopJoinExec::try_new(left, right, Some(filter), &self.join_type, None)
                 .unwrap(),
         )
     }

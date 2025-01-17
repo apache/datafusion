@@ -1594,10 +1594,14 @@ name = "datafusion-physical-optimizer"
 version = "44.0.0"
 dependencies = [
  "arrow",
+ "arrow-schema",
  "datafusion-common",
  "datafusion-execution",
+ "datafusion-expr",
  "datafusion-expr-common",
+ "datafusion-functions-aggregate",
  "datafusion-physical-expr",
+ "datafusion-physical-expr-common",
  "datafusion-physical-plan",
  "futures",
  "itertools 0.14.0",

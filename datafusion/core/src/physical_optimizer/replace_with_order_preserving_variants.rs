@@ -286,7 +286,6 @@ mod tests {
     use super::*;
 
     use crate::execution::TaskContext;
-    use crate::physical_optimizer::test_utils::check_integrity;
     use crate::physical_plan::coalesce_batches::CoalesceBatchesExec;
     use crate::physical_plan::filter::FilterExec;
     use crate::physical_plan::joins::{HashJoinExec, PartitionMode};
@@ -296,6 +295,7 @@ mod tests {
     };
     use crate::prelude::{SessionConfig, SessionContext};
     use crate::test::TestStreamPartition;
+    use datafusion_physical_optimizer::test_utils::check_integrity;
 
     use arrow::array::{ArrayRef, Int32Array};
     use arrow::compute::SortOptions;

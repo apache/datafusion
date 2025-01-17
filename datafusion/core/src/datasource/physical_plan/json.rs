@@ -34,6 +34,7 @@ use crate::physical_plan::{ExecutionPlan, ExecutionPlanProperties};
 
 use arrow::json::ReaderBuilder;
 use arrow::{datatypes::SchemaRef, json};
+use datafusion_common::Constraints;
 use datafusion_execution::TaskContext;
 
 use futures::{StreamExt, TryStreamExt};

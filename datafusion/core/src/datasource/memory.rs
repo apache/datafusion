@@ -132,6 +132,7 @@ impl MemTable {
         state: &SessionState,
     ) -> Result<Self> {
         let schema = t.schema();
+        let constraints = t.constraints();
         let exec = t.scan(state, None, &[], None).await?;
         let partition_count = exec.output_partitioning().partition_count();
 
@@ -162,7 +163,10 @@ impl MemTable {
             }
         }
 
-        let exec = MemorySourceConfig::try_new_exec(&data, Arc::clone(&schema), None)?;
+        let mut exec = MemorySourceConfig::try_new_exec(&data, Arc::clone(&schema), None)?;
+        if let Some(cons) = constraints {
+            exec = exec.with_constraints(cons.clone());
+        }
 
         if let Some(num_partitions) = output_partitions {
             let exec = RepartitionExec::try_new(
