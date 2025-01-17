@@ -15,11 +15,21 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::ops::ControlFlow;
+
 use arrow_schema::DataType;
 use arrow_schema::TimeUnit;
+use datafusion_common::Column;
+use datafusion_common::DataFusionError;
+use datafusion_common::Diagnostic;
+use datafusion_common::SchemaError;
 use datafusion_expr::planner::{
     PlannerResult, RawBinaryExpr, RawDictionaryExpr, RawFieldAccessExpr,
 };
+use datafusion_expr::utils::find_column_exprs;
+use sqlparser::ast::Spanned;
+use sqlparser::ast::Visit;
+use sqlparser::ast::Visitor;
 use sqlparser::ast::{
     BinaryOperator, CastFormat, CastKind, DataType as SQLDataType, DictionaryField,
     Expr as SQLExpr, ExprWithAlias as SQLExprWithAlias, MapEntry, StructField, Subscript,
@@ -36,7 +46,9 @@ use datafusion_expr::{
     lit, Between, BinaryExpr, Cast, Expr, ExprSchemable, GetFieldAccess, Like, Literal,
     Operator, TryCast,
 };
+use sqlparser::tokenizer::Span;
 
+use crate::planner::IdentNormalizer;
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 
 mod binary_op;
@@ -165,11 +177,124 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         schema: &DFSchema,
         planner_context: &mut PlannerContext,
     ) -> Result<Expr> {
-        let mut expr = self.sql_expr_to_logical_expr(sql, schema, planner_context)?;
+        // The location of the original SQL expression in the source code
+        let mut expr =
+            self.sql_expr_to_logical_expr(sql.clone(), schema, planner_context)?;
         expr = self.rewrite_partial_qualifier(expr, schema);
-        self.validate_schema_satisfies_exprs(schema, std::slice::from_ref(&expr))?;
+        let validation_result =
+            self.validate_schema_satisfies_exprs(schema, std::slice::from_ref(&expr));
+
+        // Must do it here because `validate_schema_satisfies_exprs` doesn't
+        // have access to the original SQL expression from the parser
+        validation_result.map_err(|err| {
+            if let DataFusionError::SchemaError(
+                SchemaError::FieldNotFound {
+                    field,
+                    valid_fields: _,
+                },
+                _,
+            ) = &err
+            {
+                let diagnostic = self.get_field_not_found_diagnostic(
+                    &sql,
+                    field,
+                    schema,
+                    planner_context,
+                );
+                err.with_diagnostic(diagnostic)
+            } else {
+                err
+            }
+        })?;
+
         let (expr, _) = expr.infer_placeholder_types(schema)?;
         Ok(expr)
+    }
+
+    /// Given an unresolved field in an expression, returns a [`Diagnostic`]
+    fn get_field_not_found_diagnostic(
+        &self,
+        expr: &SQLExpr,
+        unresolved_field: &Column,
+        schema: &DFSchema,
+        planner_context: &mut PlannerContext,
+    ) -> Diagnostic {
+        // Given a SQL expression like SELECT color, megabytes FROM fruit, where
+        // we assume that the 'megabytes' column doesn't exist in table 'fruit',
+        // we find that the logical expression Expr::Column(Column('megabytes'))
+        // is unresolved. Though, because we don't store `sqlparser::Span` in
+        // `datafusion::Expr`, we have no simple way to find where 'megabytes'
+        // appears in the query.
+        //
+        // Instead, we have to walk down the tree of subexpressions
+        // `sqlparser::Expr` rooted in the parameter `expr: sqlparser::Expr` to
+        // find a node that matches the unresolved one.
+        struct UnresolvedFieldFinder<'a, S: ContextProvider> {
+            unresolved_field: &'a Column,
+            sql_to_rel: &'a SqlToRel<'a, S>,
+            schema: &'a DFSchema,
+            planner_context: &'a mut PlannerContext,
+        }
+        impl<S: ContextProvider> Visitor for UnresolvedFieldFinder<'_, S> {
+            type Break = Span;
+
+            fn post_visit_expr(
+                &mut self,
+                sql_expr: &SQLExpr,
+            ) -> ControlFlow<Self::Break> {
+                let (logical_expr, span) = match sql_expr {
+                    SQLExpr::Identifier(ident) => (
+                        self.sql_to_rel
+                            .sql_identifier_to_expr(
+                                ident.clone(),
+                                self.schema,
+                                self.planner_context,
+                            )
+                            .ok(),
+                        sql_expr.span(),
+                    ),
+                    SQLExpr::CompoundIdentifier(idents) => (
+                        self.sql_to_rel
+                            .sql_compound_identifier_to_expr(
+                                idents.clone(),
+                                self.schema,
+                                self.planner_context,
+                            )
+                            .ok(),
+                        sql_expr.span(),
+                    ),
+                    _ => (None, Span::empty()),
+                };
+                match logical_expr {
+                    Some(Expr::Column(col)) if &col == self.unresolved_field => {
+                        ControlFlow::Break(span)
+                    }
+                    _ => ControlFlow::Continue(()),
+                }
+            }
+        }
+        let mut visitor = UnresolvedFieldFinder {
+            unresolved_field: &unresolved_field,
+            sql_to_rel: self,
+            schema,
+            planner_context,
+        };
+        let span = match expr.visit(&mut visitor) {
+            ControlFlow::Break(span) => Some(span),
+            ControlFlow::Continue(_) => None,
+        };
+
+        if let Some(relation) = &unresolved_field.relation {
+            Diagnostic::new().with_error(
+                format!("column '{}' not found in '{}'", &unresolved_field.name, relation.to_string()),
+                span.unwrap_or(Span::empty()),
+            )
+        } else {
+            Diagnostic::new().with_error(
+                format!("column '{}' not found", &unresolved_field.name),
+                span.unwrap_or(Span::empty()),
+            )
+        }
     }
 
     /// Rewrite aliases which are not-complete (e.g. ones that only include only table qualifier in a schema.table qualified relation)
