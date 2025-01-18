@@ -33,7 +33,7 @@ workspace = true
 
 [features]
 recursive_protection = ["dep:recursive"]
-parquet = ["parquet"]
+parquet = ["dep:parquet"]
 
 [dependencies]
 arrow = { workspace = true }
@@ -49,6 +49,7 @@ futures = { workspace = true }
 itertools = { workspace = true }
 log = { workspace = true }
 recursive = { workspace = true, optional = true }
+parquet = { workspace = true, optional = true, default-features = true }
 
 [dev-dependencies]
 datafusion-expr = { workspace = true }
