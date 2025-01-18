@@ -983,9 +983,6 @@ message PhysicalSortExprNodeCollection {
 }
 
 message FileScanExecConf {
-  // Was repeated ConfigOption options = 10;
-  reserved 10;
-
   repeated FileGroup file_groups = 1;
   datafusion_common.Schema schema = 2;
   repeated uint32 projection = 4;
@@ -994,6 +991,11 @@ message FileScanExecConf {
   repeated string table_partition_cols = 7;
   string object_store_url = 8;
   repeated PhysicalSortExprNodeCollection output_ordering = 9;
+
+  // Was repeated ConfigOption options = 10;
+  reserved 10;
+
+  datafusion_common.Constraints constraints = 11;
 }
 
 message ParquetScanExecNode {
@@ -1196,6 +1198,7 @@ message NestedLoopJoinExecNode {
   PhysicalPlanNode right = 2;
   datafusion_common.JoinType join_type = 3;
   JoinFilter filter = 4;
+  repeated uint32 projection = 5;
 }
 
 message CoalesceBatchesExecNode {
