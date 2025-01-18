@@ -21,10 +21,8 @@
 //! This file is organized as:
 //! - Test runners that spawn individual test processes
 //! - Test cases that contain the actual validation logic
-#[cfg(feature = "extended_tests")]
 use std::{process::Command, str};
 
-#[cfg(feature = "extended_tests")]
 use log::info;
 
 use crate::memory_limit::memory_limit_validation::utils;
@@ -35,43 +33,36 @@ use crate::memory_limit::memory_limit_validation::utils;
 // ===========================================================================
 
 #[test]
-#[cfg(feature = "extended_tests")]
 fn memory_limit_validation_runner_works_runner() {
     spawn_test_process("memory_limit_validation_runner_works");
 }
 
 #[test]
-#[cfg(feature = "extended_tests")]
 fn sort_no_mem_limit_runner() {
     spawn_test_process("sort_no_mem_limit");
 }
 
 #[test]
-#[cfg(feature = "extended_tests")]
 fn sort_with_mem_limit_1_runner() {
     spawn_test_process("sort_with_mem_limit_1");
 }
 
 #[test]
-#[cfg(feature = "extended_tests")]
 fn sort_with_mem_limit_2_runner() {
     spawn_test_process("sort_with_mem_limit_2");
 }
 
 #[test]
-#[cfg(feature = "extended_tests")]
 fn sort_with_mem_limit_3_runner() {
     spawn_test_process("sort_with_mem_limit_3");
 }
 
 #[test]
-#[cfg(feature = "extended_tests")]
 fn sort_with_mem_limit_2_cols_1_runner() {
     spawn_test_process("sort_with_mem_limit_2_cols_1");
 }
 
 #[test]
-#[cfg(feature = "extended_tests")]
 fn sort_with_mem_limit_2_cols_2_runner() {
     spawn_test_process("sort_with_mem_limit_2_cols_2");
 }
@@ -79,7 +70,6 @@ fn sort_with_mem_limit_2_cols_2_runner() {
 /// Helper function that executes a test in a separate process with the required environment
 /// variable set. Memory limit validation tasks need to measure memory resident set
 /// size (RSS), so they must run in a separate process.
-#[cfg(feature = "extended_tests")]
 fn spawn_test_process(test: &str) {
     let test_path = format!(
         "memory_limit::memory_limit_validation::sort_mem_validation::{}",
@@ -131,7 +121,6 @@ fn spawn_test_process(test: &str) {
 // ===========================================================================
 
 /// Test runner itself: if memory limit violated, test should fail.
-#[cfg(feature = "extended_tests")]
 #[tokio::test]
 async fn memory_limit_validation_runner_works() {
     if std::env::var("DATAFUSION_TEST_MEM_LIMIT_VALIDATION").is_err() {
@@ -158,7 +147,6 @@ async fn memory_limit_validation_runner_works() {
     );
 }
 
-#[cfg(feature = "extended_tests")]
 #[tokio::test]
 async fn sort_no_mem_limit() {
     utils::validate_query_with_memory_limits(
@@ -170,7 +158,6 @@ async fn sort_no_mem_limit() {
     .await;
 }
 
-#[cfg(feature = "extended_tests")]
 #[tokio::test]
 async fn sort_with_mem_limit_1() {
     utils::validate_query_with_memory_limits(
@@ -182,7 +169,6 @@ async fn sort_with_mem_limit_1() {
     .await;
 }
 
-#[cfg(feature = "extended_tests")]
 #[tokio::test]
 async fn sort_with_mem_limit_2() {
     utils::validate_query_with_memory_limits(
@@ -194,7 +180,6 @@ async fn sort_with_mem_limit_2() {
     .await;
 }
 
-#[cfg(feature = "extended_tests")]
 #[tokio::test]
 async fn sort_with_mem_limit_3() {
     utils::validate_query_with_memory_limits(
@@ -206,7 +191,6 @@ async fn sort_with_mem_limit_3() {
     .await;
 }
 
-#[cfg(feature = "extended_tests")]
 #[tokio::test]
 async fn sort_with_mem_limit_2_cols_1() {
     let memory_usage_in_theory = 80_000_000 * 2; // 2 columns
@@ -222,7 +206,6 @@ async fn sort_with_mem_limit_2_cols_1() {
 
 // TODO: Query fails, fix it
 // Issue: https://github.com/apache/datafusion/issues/14143
-#[cfg(feature = "extended_tests")]
 #[ignore]
 #[tokio::test]
 async fn sort_with_mem_limit_2_cols_2() {
