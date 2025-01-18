@@ -54,8 +54,9 @@ use datafusion::error::Result;
 use datafusion::execution::context::SessionContext;
 use datafusion::execution::session_state::SessionStateBuilder;
 use datafusion::logical_expr::{ColumnarValue, Volatility};
-use datafusion::prelude::{CsvReadOptions, ParquetReadOptions};
-use datafusion::prelude::{JoinType, NdJsonReadOptions};
+use datafusion::prelude::{
+    AvroReadOptions, CsvReadOptions, JoinType, NdJsonReadOptions, ParquetReadOptions,
+};
 use datafusion::test_util::{
     parquet_test_data, populate_csv_partitions, register_aggregate_csv, test_table,
     test_table_with_name,
@@ -5120,4 +5121,64 @@ async fn test_alias_nested() -> Result<()> {
         Valid fields are alias2.a, alias2.b, alias2.one."
     );
     Ok(())
+}
+
+#[tokio::test]
+async fn register_non_json_file() {
+    let ctx = SessionContext::new();
+    let err = ctx
+        .register_json(
+            "data",
+            "tests/data/test_binary.parquet",
+            NdJsonReadOptions::default(),
+        )
+        .await;
+    assert_contains!(
+        err.unwrap_err().to_string(),
+        "test_binary.parquet' does not match the expected extension '.json'"
+    );
+}
+
+#[tokio::test]
+async fn register_non_csv_file() {
+    let ctx = SessionContext::new();
+    let err = ctx
+        .register_csv(
+            "data",
+            "tests/data/test_binary.parquet",
+            CsvReadOptions::default(),
+        )
+        .await;
+    assert_contains!(
+        err.unwrap_err().to_string(),
+        "test_binary.parquet' does not match the expected extension '.csv'"
+    );
+}
+
+#[tokio::test]
+async fn register_non_avro_file() {
+    let ctx = SessionContext::new();
+    let err = ctx
+        .register_avro(
+            "data",
+            "tests/data/test_binary.parquet",
+            AvroReadOptions::default(),
+        )
+        .await;
+    assert_contains!(
+        err.unwrap_err().to_string(),
+        "test_binary.parquet' does not match the expected extension '.avro'"
+    );
+}
+
+#[tokio::test]
+async fn register_non_parquet_file() {
+    let ctx = SessionContext::new();
+    let err = ctx
+        .register_parquet("data", "tests/data/1.json", ParquetReadOptions::default())
+        .await;
+    assert_contains!(
+        err.unwrap_err().to_string(),
+        "1.json' does not match the expected extension '.parquet'"
+    );
 }
