@@ -158,7 +158,7 @@ impl TryFrom<&TableParquetOptions> for WriterPropertiesBuilder {
                     builder.set_column_bloom_filter_ndv(path.clone(), bloom_filter_ndv);
             }
 
-            // max_statistics_size is deprecated, currently it is not being used 
+            // max_statistics_size is deprecated, currently it is not being used
             // TODO: remove once deprecated
             #[allow(deprecated)]
             if let Some(max_statistics_size) = options.max_statistics_size {

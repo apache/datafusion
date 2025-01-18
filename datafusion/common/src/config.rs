@@ -112,15 +112,15 @@ macro_rules! config_namespace {
     (
         $(#[doc = $struct_d:tt])* // Struct-level documentation attributes
         $(#[deprecated($($struct_depr:tt)*)])? // Optional struct-level deprecated attribute
-        $(#[allow($($struct_de:tt)*)])? 
+        $(#[allow($($struct_de:tt)*)])?
         $vis:vis struct $struct_name:ident {
             $(
                 $(#[doc = $d:tt])* // Field-level documentation attributes
                 $(#[deprecated($($field_depr:tt)*)])? // Optional field-level deprecated attribute
-                $(#[allow($($field_de:tt)*)])? 
-                $field_vis:vis $field_name:ident : $field_type:ty, 
-                $(warn = $warn:expr,)? 
-                $(transform = $transform:expr,)? 
+                $(#[allow($($field_de:tt)*)])?
+                $field_vis:vis $field_name:ident : $field_type:ty,
+                $(warn = $warn:expr,)?
+                $(transform = $transform:expr,)?
                 default = $default:expr
             )*$(,)*
         }
@@ -145,7 +145,7 @@ macro_rules! config_namespace {
                     $(
                         stringify!($field_name) => {
                             // Safely apply deprecated attribute if present
-                            // $(#[allow(deprecated)])? 
+                            // $(#[allow(deprecated)])?
                             {
                                 $(let value = $transform(value);)? // Apply transformation if specified
                                 $(log::warn!($warn);)? // Log warning if specified
@@ -179,7 +179,6 @@ macro_rules! config_namespace {
         }
     }
 }
-
 
 config_namespace! {
     /// Options related to catalog and directory scanning
@@ -482,7 +481,7 @@ config_namespace! {
 
         /// (writing) Sets max statistics size for any column. If NULL, uses
         /// default parquet writer setting
-        /// max_statistics_size is deprecated, currently it is not being used 
+        /// max_statistics_size is deprecated, currently it is not being used
         // TODO: remove once deprecated
         #[deprecated(since = "45.0.0", note = "Setting does not do anything")]
         pub max_statistics_size: Option<usize>, default = Some(4096)
@@ -1748,7 +1747,7 @@ config_namespace_with_hashmap! {
 
         /// Sets max statistics size for the column path. If NULL, uses
         /// default parquet options
-        /// max_statistics_size is deprecated, currently it is not being used 
+        /// max_statistics_size is deprecated, currently it is not being used
         // TODO: remove once deprecated
         #[deprecated(since = "45.0.0", note = "Setting does not do anything")]
         pub max_statistics_size: Option<usize>, default = None
