@@ -22,7 +22,6 @@
 //!
 //! [`ExecutionPlan`]: crate::physical_plan::ExecutionPlan
 
-// pub mod enforce_distribution;
 pub mod enforce_sorting;
 pub mod optimizer;
 pub mod projection_pushdown;

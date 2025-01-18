@@ -24,8 +24,8 @@
 use std::fmt::Debug;
 use std::sync::Arc;
 
-use crate::output_requirements::OutputRequirementExec;
 use crate::optimizer::PhysicalOptimizerRule;
+use crate::output_requirements::OutputRequirementExec;
 use crate::utils::{
     add_sort_above_with_check, is_coalesce_partitions, is_repartition,
     is_sort_preserving_merge,
@@ -34,7 +34,9 @@ use crate::utils::{
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::error::Result;
 
-use datafusion_physical_plan::aggregates::{AggregateExec, AggregateMode, PhysicalGroupBy};
+use datafusion_physical_plan::aggregates::{
+    AggregateExec, AggregateMode, PhysicalGroupBy,
+};
 use datafusion_physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion_physical_plan::joins::{
     CrossJoinExec, HashJoinExec, PartitionMode, SortMergeJoinExec,
