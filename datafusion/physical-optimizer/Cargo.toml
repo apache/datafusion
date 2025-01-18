@@ -33,6 +33,7 @@ workspace = true
 
 [features]
 recursive_protection = ["dep:recursive"]
+parquet = ["parquet"]
 
 [dependencies]
 arrow = { workspace = true }

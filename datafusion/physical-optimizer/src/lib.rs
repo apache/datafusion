@@ -31,5 +31,6 @@ pub mod sanity_checker;
 pub mod test_utils;
 pub mod topk_aggregation;
 pub mod update_aggr_exprs;
-
+pub mod enforce_distribution;
 pub use optimizer::PhysicalOptimizerRule;
+mod utils;

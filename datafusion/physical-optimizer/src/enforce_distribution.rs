@@ -24,24 +24,28 @@
 use std::fmt::Debug;
 use std::sync::Arc;
 
-use crate::config::ConfigOptions;
-use crate::error::Result;
-use crate::physical_optimizer::utils::{
+use crate::output_requirements::OutputRequirementExec;
+use crate::optimizer::PhysicalOptimizerRule;
+use crate::utils::{
     add_sort_above_with_check, is_coalesce_partitions, is_repartition,
     is_sort_preserving_merge,
 };
-use crate::physical_plan::aggregates::{AggregateExec, AggregateMode, PhysicalGroupBy};
-use crate::physical_plan::coalesce_partitions::CoalescePartitionsExec;
-use crate::physical_plan::joins::{
+
+use datafusion_common::config::ConfigOptions;
+use datafusion_common::error::Result;
+
+use datafusion_physical_plan::aggregates::{AggregateExec, AggregateMode, PhysicalGroupBy};
+use datafusion_physical_plan::coalesce_partitions::CoalescePartitionsExec;
+use datafusion_physical_plan::joins::{
     CrossJoinExec, HashJoinExec, PartitionMode, SortMergeJoinExec,
 };
-use crate::physical_plan::projection::ProjectionExec;
-use crate::physical_plan::repartition::RepartitionExec;
-use crate::physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
-use crate::physical_plan::tree_node::PlanContext;
-use crate::physical_plan::union::{can_interleave, InterleaveExec, UnionExec};
-use crate::physical_plan::windows::WindowAggExec;
-use crate::physical_plan::{Distribution, ExecutionPlan, Partitioning};
+use datafusion_physical_plan::projection::ProjectionExec;
+use datafusion_physical_plan::repartition::RepartitionExec;
+use datafusion_physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
+use datafusion_physical_plan::tree_node::PlanContext;
+use datafusion_physical_plan::union::{can_interleave, InterleaveExec, UnionExec};
+use datafusion_physical_plan::windows::WindowAggExec;
+use datafusion_physical_plan::{Distribution, ExecutionPlan, Partitioning};
 
 use arrow::compute::SortOptions;
 use datafusion_common::stats::Precision;
@@ -53,8 +57,8 @@ use datafusion_physical_expr::{
     physical_exprs_equal, EquivalenceProperties, PhysicalExpr, PhysicalExprRef,
 };
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
-use datafusion_physical_optimizer::output_requirements::OutputRequirementExec;
-use datafusion_physical_optimizer::PhysicalOptimizerRule;
+// use datafusion_physical_optimizer::output_requirements::OutputRequirementExec;
+// use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use datafusion_physical_plan::execution_plan::EmissionType;
 use datafusion_physical_plan::windows::{get_best_fitting_window, BoundedWindowAggExec};
 use datafusion_physical_plan::ExecutionPlanProperties;
