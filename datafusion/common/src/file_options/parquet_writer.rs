@@ -159,9 +159,8 @@ impl TryFrom<&TableParquetOptions> for WriterPropertiesBuilder {
             //max_statistics_size is deprecated as per latest arrow version.
             #[allow(deprecated)]
             if let Some(max_statistics_size) = options.max_statistics_size {
-                builder =
-                    {
-                        #[allow(deprecated)]
+                builder = {
+                    #[allow(deprecated)]
                     builder.set_column_max_statistics_size(path, max_statistics_size)
                 }
             }
