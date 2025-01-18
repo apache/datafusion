@@ -353,7 +353,7 @@ impl MemoryExec {
         let fields = self.schema.fields();
         let ambiguous_column = sort_information
             .iter()
-            .flat_map(|ordering| ordering.inner.clone())
+            .flat_map(|ordering| ordering.clone())
             .flat_map(|expr| collect_columns(&expr.expr))
             .find(|col| {
                 fields
@@ -695,8 +695,8 @@ mod memory_exec_tests {
             .try_with_sort_information(sort_information)?;
 
         assert_eq!(
-            mem_exec.properties().output_ordering().unwrap().to_vec(),
-            expected_output_order.inner
+            mem_exec.properties().output_ordering().unwrap(),
+            &expected_output_order
         );
         let eq_properties = mem_exec.properties().equivalence_properties();
         assert!(eq_properties.oeq_class().contains(&sort1));

@@ -207,7 +207,7 @@ impl OrderingEquivalenceClass {
             for idx in 0..n_ordering {
                 // Calculate cross product index
                 let idx = outer_idx * n_ordering + idx;
-                self.orderings[idx].inner.extend(ordering.iter().cloned());
+                self.orderings[idx].extend(ordering.iter().cloned());
             }
         }
         self
@@ -217,9 +217,9 @@ impl OrderingEquivalenceClass {
     /// ordering equivalence class.
     pub fn add_offset(&mut self, offset: usize) {
         for ordering in self.orderings.iter_mut() {
-            for sort_expr in ordering.inner.iter_mut() {
+            ordering.transform(|sort_expr| {
                 sort_expr.expr = add_offset_to_expr(Arc::clone(&sort_expr.expr), offset);
-            }
+            })
         }
     }
 

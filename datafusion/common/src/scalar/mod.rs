@@ -2595,7 +2595,7 @@ impl ScalarValue {
     /// use datafusion_common::ScalarValue;
     /// use arrow::array::ListArray;
     /// use arrow::datatypes::{DataType, Int32Type};
-    /// use datafusion_common::utils::array_into_list_array_nullable;
+    /// use datafusion_common::utils::SingleRowListArrayBuilder;
     /// use std::sync::Arc;
     ///
     /// let list_arr = ListArray::from_iter_primitive::<Int32Type, _, _>(vec![
@@ -2604,7 +2604,7 @@ impl ScalarValue {
     /// ]);
     ///
     /// // Wrap into another layer of list, we got nested array as [ [[1,2,3], [4,5]] ]
-    /// let list_arr = array_into_list_array_nullable(Arc::new(list_arr));
+    /// let list_arr = SingleRowListArrayBuilder::new(Arc::new(list_arr)).build_list_array();
     ///
     /// // Convert the array into Scalar Values for each row, we got 1D arrays in this example
     /// let scalar_vec = ScalarValue::convert_array_to_scalar_vec(&list_arr).unwrap();
@@ -2847,6 +2847,50 @@ impl ScalarValue {
     /// Try to parse `value` into a ScalarValue of type `target_type`
     pub fn try_from_string(value: String, target_type: &DataType) -> Result<Self> {
         ScalarValue::from(value).cast_to(target_type)
+    }
+
+    /// Returns the Some(`&str`) representation of `ScalarValue` of logical string type
+    ///
+    /// Returns `None` if this `ScalarValue` is not a logical string type or the
+    /// `ScalarValue` represents the `NULL` value.
+    ///
+    /// Note you can use [`Option::flatten`] to check for non null logical
+    /// strings.
+    ///
+    /// For example, [`ScalarValue::Utf8`], [`ScalarValue::LargeUtf8`], and
+    /// [`ScalarValue::Dictionary`] with a logical string value and store
+    /// strings and can be accessed as `&str` using this method.
+    ///
+    /// # Example: logical strings
+    /// ```
+    /// # use datafusion_common::ScalarValue;
+    /// /// non strings return None
+    /// let scalar = ScalarValue::from(42);
+    /// assert_eq!(scalar.try_as_str(), None);
+    /// // Non null logical string returns Some(Some(&str))
+    /// let scalar = ScalarValue::from("hello");
+    /// assert_eq!(scalar.try_as_str(), Some(Some("hello")));
+    /// // Null logical string returns Some(None)
+    /// let scalar = ScalarValue::Utf8(None);
+    /// assert_eq!(scalar.try_as_str(), Some(None));
+    /// ```
+    ///
+    /// # Example: use [`Option::flatten`] to check for non-null logical strings
+    /// ```
+    /// # use datafusion_common::ScalarValue;
+    /// // Non null logical string returns Some(Some(&str))
+    /// let scalar = ScalarValue::from("hello");
+    /// assert_eq!(scalar.try_as_str().flatten(), Some("hello"));
+    /// ```
+    pub fn try_as_str(&self) -> Option<Option<&str>> {
+        let v = match self {
+            ScalarValue::Utf8(v) => v,
+            ScalarValue::LargeUtf8(v) => v,
+            ScalarValue::Utf8View(v) => v,
+            ScalarValue::Dictionary(_, v) => return v.try_as_str(),
+            _ => return None,
+        };
+        Some(v.as_ref().map(|v| v.as_str()))
     }
 
     /// Try to cast this value to a ScalarValue of type `data_type`
