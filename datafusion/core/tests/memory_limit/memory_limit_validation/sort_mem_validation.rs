@@ -15,82 +15,114 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::process::Command;
-use std::str;
+//! Memory limit validation tests for the sort queries
+//!
+//! These tests must run in separate processes to accurately measure memory usage.
+//! This file is organized as:
+//! - Test runners that spawn individual test processes
+//! - Test cases that contain the actual validation logic
+#[cfg(feature = "extended_tests")]
+use std::{process::Command, str};
 
+#[cfg(feature = "extended_tests")]
 use log::info;
 
 use crate::memory_limit::memory_limit_validation::utils;
 
-/// Runner that executes each test in a separate process with the required environment
-/// variable set. Memory limit validation tasks need to measure memory resident set
-/// size (RSS), so they must run in a separate process.
+// ===========================================================================
+// Test runners:
+// Runners are splitted into multiple tests to run in parallel
+// ===========================================================================
+
 #[test]
-fn test_runner() {
-    let tests = vec![
-        "memory_limit_validation_runner_works",
-        "sort_no_mem_limit",
-        "sort_with_mem_limit_1",
-        "sort_with_mem_limit_2",
-        "sort_with_mem_limit_3",
-        "sort_with_mem_limit_2_cols_1",
-        "sort_with_mem_limit_2_cols_2",
-    ];
-
-    let mut handles = vec![];
-
-    // Run tests in parallel, each test in a separate process
-    for test in tests {
-        let test = test.to_string();
-        let handle = std::thread::spawn(move || {
-            let test_path = format!(
-                "memory_limit::memory_limit_validation::sort_mem_validation::{}",
-                test
-            );
-            info!("Running test: {}", test_path);
-
-            // Run the test command
-            let output = Command::new("cargo")
-                .arg("test")
-                .arg("--package")
-                .arg("datafusion")
-                .arg("--test")
-                .arg("core_integration")
-                .arg("--")
-                .arg(&test_path)
-                .arg("--exact")
-                .arg("--nocapture")
-                .env("DATAFUSION_TEST_MEM_LIMIT_VALIDATION", "1")
-                .output()
-                .expect("Failed to execute test command");
-
-            // Convert output to strings
-            let stdout = str::from_utf8(&output.stdout).unwrap_or("");
-            let stderr = str::from_utf8(&output.stderr).unwrap_or("");
-
-            info!("{}", stdout);
-
-            // Return test result and output for error reporting
-            (test, output.status, stdout.to_string(), stderr.to_string())
-        });
-        handles.push(handle);
-    }
-
-    // Wait for all threads to complete and check results
-    for handle in handles {
-        let (test, status, stdout, stderr) = handle.join().unwrap();
-        assert!(
-            status.success(),
-            "Test '{}' failed with status: {}\nstdout:\n{}\nstderr:\n{}",
-            test,
-            status,
-            stdout,
-            stderr
-        );
-    }
+#[cfg(feature = "extended_tests")]
+fn memory_limit_validation_runner_works_runner() {
+    spawn_test_process("memory_limit_validation_runner_works");
 }
 
-// All following tests need to be run through the `test_runner()` function.
+#[test]
+#[cfg(feature = "extended_tests")]
+fn sort_no_mem_limit_runner() {
+    spawn_test_process("sort_no_mem_limit");
+}
+
+#[test]
+#[cfg(feature = "extended_tests")]
+fn sort_with_mem_limit_1_runner() {
+    spawn_test_process("sort_with_mem_limit_1");
+}
+
+#[test]
+#[cfg(feature = "extended_tests")]
+fn sort_with_mem_limit_2_runner() {
+    spawn_test_process("sort_with_mem_limit_2");
+}
+
+#[test]
+#[cfg(feature = "extended_tests")]
+fn sort_with_mem_limit_3_runner() {
+    spawn_test_process("sort_with_mem_limit_3");
+}
+
+#[test]
+#[cfg(feature = "extended_tests")]
+fn sort_with_mem_limit_2_cols_1_runner() {
+    spawn_test_process("sort_with_mem_limit_2_cols_1");
+}
+
+#[test]
+#[cfg(feature = "extended_tests")]
+fn sort_with_mem_limit_2_cols_2_runner() {
+    spawn_test_process("sort_with_mem_limit_2_cols_2");
+}
+
+/// Helper function that executes a test in a separate process with the required environment
+/// variable set. Memory limit validation tasks need to measure memory resident set
+/// size (RSS), so they must run in a separate process.
+#[cfg(feature = "extended_tests")]
+fn spawn_test_process(test: &str) {
+    let test_path = format!(
+        "memory_limit::memory_limit_validation::sort_mem_validation::{}",
+        test
+    );
+    info!("Running test: {}", test_path);
+
+    // Run the test command
+    let output = Command::new("cargo")
+        .arg("test")
+        .arg("--package")
+        .arg("datafusion")
+        .arg("--test")
+        .arg("core_integration")
+        .arg("--features")
+        .arg("extended_tests")
+        .arg("--")
+        .arg(&test_path)
+        .arg("--exact")
+        .arg("--nocapture")
+        .env("DATAFUSION_TEST_MEM_LIMIT_VALIDATION", "1")
+        .output()
+        .expect("Failed to execute test command");
+
+    // Convert output to strings
+    let stdout = str::from_utf8(&output.stdout).unwrap_or("");
+    let stderr = str::from_utf8(&output.stderr).unwrap_or("");
+
+    info!("{}", stdout);
+
+    assert!(
+        output.status.success(),
+        "Test '{}' failed with status: {}\nstdout:\n{}\nstderr:\n{}",
+        test,
+        output.status,
+        stdout,
+        stderr
+    );
+}
+
+// ===========================================================================
+// Test cases:
+// All following tests need to be run through their individual test wrapper.
 // When run directly, environment variable `DATAFUSION_TEST_MEM_LIMIT_VALIDATION`
 // is not set, test will return with a no-op.
 //
@@ -99,8 +131,9 @@ fn test_runner() {
 // ===========================================================================
 
 /// Test runner itself: if memory limit violated, test should fail.
+#[cfg(feature = "extended_tests")]
 #[tokio::test]
-async fn test_memory_limit_validation_runner() {
+async fn memory_limit_validation_runner_works() {
     if std::env::var("DATAFUSION_TEST_MEM_LIMIT_VALIDATION").is_err() {
         println!("Skipping test because DATAFUSION_TEST_MEM_LIMIT_VALIDATION is not set");
 
@@ -125,6 +158,7 @@ async fn test_memory_limit_validation_runner() {
     );
 }
 
+#[cfg(feature = "extended_tests")]
 #[tokio::test]
 async fn sort_no_mem_limit() {
     utils::validate_query_with_memory_limits(
@@ -136,6 +170,7 @@ async fn sort_no_mem_limit() {
     .await;
 }
 
+#[cfg(feature = "extended_tests")]
 #[tokio::test]
 async fn sort_with_mem_limit_1() {
     utils::validate_query_with_memory_limits(
@@ -147,6 +182,7 @@ async fn sort_with_mem_limit_1() {
     .await;
 }
 
+#[cfg(feature = "extended_tests")]
 #[tokio::test]
 async fn sort_with_mem_limit_2() {
     utils::validate_query_with_memory_limits(
@@ -158,6 +194,7 @@ async fn sort_with_mem_limit_2() {
     .await;
 }
 
+#[cfg(feature = "extended_tests")]
 #[tokio::test]
 async fn sort_with_mem_limit_3() {
     utils::validate_query_with_memory_limits(
@@ -169,6 +206,7 @@ async fn sort_with_mem_limit_3() {
     .await;
 }
 
+#[cfg(feature = "extended_tests")]
 #[tokio::test]
 async fn sort_with_mem_limit_2_cols_1() {
     let memory_usage_in_theory = 80_000_000 * 2; // 2 columns
@@ -184,6 +222,7 @@ async fn sort_with_mem_limit_2_cols_1() {
 
 // TODO: Query fails, fix it
 // Issue: https://github.com/apache/datafusion/issues/14143
+#[cfg(feature = "extended_tests")]
 #[ignore]
 #[tokio::test]
 async fn sort_with_mem_limit_2_cols_2() {

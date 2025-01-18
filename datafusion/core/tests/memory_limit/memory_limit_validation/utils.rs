@@ -28,7 +28,7 @@ use datafusion_execution::{
 };
 
 /// Measures the maximum RSS (in bytes) during the execution of an async task. RSS
-/// will be sampled every 20ms.
+/// will be sampled every 7ms.
 ///
 /// # Arguments
 ///
@@ -58,7 +58,7 @@ where
     // Spawn a monitoring task
     let monitor_handle = SpawnedTask::spawn(async move {
         let mut sys = System::new_all();
-        let mut interval = interval(Duration::from_millis(20));
+        let mut interval = interval(Duration::from_millis(7));
 
         loop {
             interval.tick().await;

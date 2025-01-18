@@ -80,6 +80,7 @@ unicode_expressions = [
     "datafusion-sql/unicode_expressions",
     "datafusion-functions/unicode_expressions",
 ]
+extended_tests = []
 
 [dependencies]
 apache-avro = { version = "0.17", optional = true }
