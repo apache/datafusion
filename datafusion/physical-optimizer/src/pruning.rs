@@ -1639,17 +1639,12 @@ fn build_like_match(
     // column LIKE '%foo%' => min <= '' && '' <= max => true
     // column LIKE 'foo' => min <= 'foo' && 'foo' <= max
 
-    fn unpack_string(s: &ScalarValue) -> Option<&String> {
-        match s {
-            ScalarValue::Utf8(Some(s)) => Some(s),
-            ScalarValue::LargeUtf8(Some(s)) => Some(s),
-            ScalarValue::Utf8View(Some(s)) => Some(s),
-            ScalarValue::Dictionary(_, value) => unpack_string(value),
-            _ => None,
-        }
+    /// returns the string literal of the scalar value if it is a string
+    fn unpack_string(s: &ScalarValue) -> Option<&str> {
+        s.try_as_str().flatten()
     }
 
-    fn extract_string_literal(expr: &Arc<dyn PhysicalExpr>) -> Option<&String> {
+    fn extract_string_literal(expr: &Arc<dyn PhysicalExpr>) -> Option<&str> {
         if let Some(lit) = expr.as_any().downcast_ref::<phys_expr::Literal>() {
             let s = unpack_string(lit.value())?;
             return Some(s);
@@ -1681,7 +1676,9 @@ fn build_like_match(
         (lower_bound_lit, upper_bound_lit)
     } else {
         // the like expression is a literal and can be converted into a comparison
-        let bound = Arc::new(phys_expr::Literal::new(ScalarValue::Utf8(Some(s.clone()))));
+        let bound = Arc::new(phys_expr::Literal::new(ScalarValue::Utf8(Some(
+            s.to_string(),
+        ))));
         (Arc::clone(&bound), bound)
     };
     let lower_bound_expr = Arc::new(phys_expr::BinaryExpr::new(
