@@ -2831,11 +2831,7 @@ async fn register_non_avro_file() {
 async fn register_non_parquet_file() {
     let ctx = SessionContext::new();
     let err = ctx
-        .register_parquet(
-            "data",
-            "tests/data/1.json",
-            ParquetReadOptions::default(),
-        )
+        .register_parquet("data", "tests/data/1.json", ParquetReadOptions::default())
         .await;
     assert_contains!(
         err.unwrap_err().to_string(),
