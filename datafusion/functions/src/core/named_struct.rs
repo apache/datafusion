@@ -19,10 +19,11 @@ use arrow::array::StructArray;
 use arrow::datatypes::{DataType, Field, Fields};
 use datafusion_common::{exec_err, internal_err, HashSet, Result, ScalarValue};
 use datafusion_expr::scalar_doc_sections::DOC_SECTION_STRUCT;
-use datafusion_expr::{ColumnarValue, Documentation, ReturnInfo, ReturnTypeArgs};
+use datafusion_expr::{ColumnarValue, Documentation, Expr, ExprSchemable, ReturnInfo, ReturnTypeArgs};
 use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
+use datafusion_macros::user_doc;
 use std::any::Any;
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
 /// Put values in a struct array.
 fn named_struct_expr(args: &[ColumnarValue]) -> Result<ColumnarValue> {
@@ -90,6 +91,38 @@ fn named_struct_expr(args: &[ColumnarValue]) -> Result<ColumnarValue> {
     Ok(ColumnarValue::Array(Arc::new(struct_array)))
 }
 
+#[user_doc(
+    doc_section(label = "Struct Functions"),
+    description = "Returns an Arrow struct using the specified name and input expressions pairs.",
+    syntax_example = "named_struct(expression1_name, expression1_input[, ..., expression_n_name, expression_n_input])",
+    sql_example = r#"
+For example, this query converts two columns `a` and `b` to a single column with
+a struct type of fields `field_a` and `field_b`:
+```sql
+> select * from t;
++---+---+
+| a | b |
++---+---+
+| 1 | 2 |
+| 3 | 4 |
++---+---+
+> select named_struct('field_a', a, 'field_b', b) from t;
++-------------------------------------------------------+
+| named_struct(Utf8("field_a"),t.a,Utf8("field_b"),t.b) |
++-------------------------------------------------------+
+| {field_a: 1, field_b: 2}                              |
+| {field_a: 3, field_b: 4}                              |
++-------------------------------------------------------+
+```"#,
+    argument(
+        name = "expression_n_name",
+        description = "Name of the column field. Must be a constant string."
+    ),
+    argument(
+        name = "expression_n_input",
+        description = "Expression to include in the output struct. Can be a constant, column, or function, and any combination of arithmetic or string operators."
+    )
+)]
 #[derive(Debug)]
 pub struct NamedStructFunc {
     signature: Signature,
@@ -164,43 +197,6 @@ impl ScalarUDFImpl for NamedStructFunc {
     }
 
     fn documentation(&self) -> Option<&Documentation> {
-        Some(get_named_struct_doc())
+        self.doc()
     }
-}
-
-static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
-
-fn get_named_struct_doc() -> &'static Documentation {
-    DOCUMENTATION.get_or_init(|| {
-        Documentation::builder(
-            DOC_SECTION_STRUCT,
-            "Returns an Arrow struct using the specified name and input expressions pairs.",
-            "named_struct(expression1_name, expression1_input[, ..., expression_n_name, expression_n_input])")
-            .with_sql_example(r#"
-For example, this query converts two columns `a` and `b` to a single column with
-a struct type of fields `field_a` and `field_b`:
-```sql
-> select * from t;
-+---+---+
-| a | b |
-+---+---+
-| 1 | 2 |
-| 3 | 4 |
-+---+---+
-> select named_struct('field_a', a, 'field_b', b) from t;
-+-------------------------------------------------------+
-| named_struct(Utf8("field_a"),t.a,Utf8("field_b"),t.b) |
-+-------------------------------------------------------+
-| {field_a: 1, field_b: 2}                              |
-| {field_a: 3, field_b: 4}                              |
-+-------------------------------------------------------+
-```
-"#)
-            .with_argument(
-                "expression_n_name",
-                "Name of the column field. Must be a constant string."
-            )
-            .with_argument("expression_n_input", "Expression to include in the output struct. Can be a constant, column, or function, and any combination of arithmetic or string operators.")
-            .build()
-    })
 }

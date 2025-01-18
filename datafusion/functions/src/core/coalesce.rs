@@ -22,12 +22,29 @@ use arrow::datatypes::DataType;
 use datafusion_common::{exec_err, internal_err, Result};
 use datafusion_expr::binary::try_type_union_resolution;
 use datafusion_expr::scalar_doc_sections::DOC_SECTION_CONDITIONAL;
-use datafusion_expr::{ColumnarValue, Documentation, ReturnInfo, ReturnTypeArgs};
+use datafusion_expr::{ColumnarValue, Documentation, Expr, ExprSchemable, ReturnInfo, ReturnTypeArgs};
 use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
+use datafusion_macros::user_doc;
 use itertools::Itertools;
 use std::any::Any;
-use std::sync::OnceLock;
 
+#[user_doc(
+    doc_section(label = "Conditional Functions"),
+    description = "Returns the first of its arguments that is not _null_. Returns _null_ if all arguments are _null_. This function is often used to substitute a default value for _null_ values.",
+    syntax_example = "coalesce(expression1[, ..., expression_n])",
+    sql_example = r#"```sql
+> select coalesce(null, null, 'datafusion');
++----------------------------------------+
+| coalesce(NULL,NULL,Utf8("datafusion")) |
++----------------------------------------+
+| datafusion                             |
++----------------------------------------+
+```"#,
+    argument(
+        name = "expression1, expression_n",
+        description = "Expression to use if previous expressions are _null_. Can be a constant, column, or function, and any combination of arithmetic operators. Pass as many expression arguments as necessary."
+    )
+)]
 #[derive(Debug)]
 pub struct CoalesceFunc {
     signature: Signature,
@@ -149,7 +166,7 @@ impl ScalarUDFImpl for CoalesceFunc {
     }
 
     fn documentation(&self) -> Option<&Documentation> {
-        Some(get_coalesce_doc())
+        self.doc()
     }
 }
 

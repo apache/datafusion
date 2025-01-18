@@ -977,6 +977,22 @@ pub mod scalar_doc_sections {
         ]
     }
 
+    pub const fn doc_sections_const() -> &'static [DocSection] {
+        &[
+            DOC_SECTION_MATH,
+            DOC_SECTION_CONDITIONAL,
+            DOC_SECTION_STRING,
+            DOC_SECTION_BINARY_STRING,
+            DOC_SECTION_REGEX,
+            DOC_SECTION_DATETIME,
+            DOC_SECTION_ARRAY,
+            DOC_SECTION_STRUCT,
+            DOC_SECTION_MAP,
+            DOC_SECTION_HASHING,
+            DOC_SECTION_OTHER,
+        ]
+    }
+
     pub const DOC_SECTION_MATH: DocSection = DocSection {
         include: true,
         label: "Math Functions",

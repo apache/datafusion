@@ -135,12 +135,12 @@ impl OrderingEquivalenceClass {
                 let mut ordering_idx = idx + 1;
                 let mut removal = self.orderings[idx].is_empty();
                 while ordering_idx < self.orderings.len() {
-                    work |= resolve_overlap(&mut self.orderings, idx, ordering_idx);
+                    work |= self.resolve_overlap(idx, ordering_idx);
                     if self.orderings[idx].is_empty() {
                         removal = true;
                         break;
                     }
-                    work |= resolve_overlap(&mut self.orderings, ordering_idx, idx);
+                    work |= self.resolve_overlap(ordering_idx, idx);
                     if self.orderings[ordering_idx].is_empty() {
                         self.orderings.swap_remove(ordering_idx);
                     } else {
@@ -154,6 +154,26 @@ impl OrderingEquivalenceClass {
                 }
             }
         }
+    }
+
+    /// Trims `orderings[idx]` if some suffix of it overlaps with a prefix of
+    /// `orderings[pre_idx]`. Returns `true` if there is any overlap, `false` otherwise.
+    ///
+    /// For example, if `orderings[idx]` is `[a ASC, b ASC, c DESC]` and
+    /// `orderings[pre_idx]` is `[b ASC, c DESC]`, then the function will trim
+    /// `orderings[idx]` to `[a ASC]`.
+    fn resolve_overlap(&mut self, idx: usize, pre_idx: usize) -> bool {
+        let length = self.orderings[idx].len();
+        let other_length = self.orderings[pre_idx].len();
+        for overlap in 1..=length.min(other_length) {
+            if self.orderings[idx][length - overlap..]
+                == self.orderings[pre_idx][..overlap]
+            {
+                self.orderings[idx].truncate(length - overlap);
+                return true;
+            }
+        }
+        false
     }
 
     /// Returns the concatenation of all the orderings. This enables merge
@@ -187,7 +207,7 @@ impl OrderingEquivalenceClass {
             for idx in 0..n_ordering {
                 // Calculate cross product index
                 let idx = outer_idx * n_ordering + idx;
-                self.orderings[idx].inner.extend(ordering.iter().cloned());
+                self.orderings[idx].extend(ordering.iter().cloned());
             }
         }
         self
@@ -197,9 +217,9 @@ impl OrderingEquivalenceClass {
     /// ordering equivalence class.
     pub fn add_offset(&mut self, offset: usize) {
         for ordering in self.orderings.iter_mut() {
-            for sort_expr in ordering.inner.iter_mut() {
+            ordering.transform(|sort_expr| {
                 sort_expr.expr = add_offset_to_expr(Arc::clone(&sort_expr.expr), offset);
-            }
+            })
         }
     }
 
@@ -224,20 +244,6 @@ impl IntoIterator for OrderingEquivalenceClass {
     fn into_iter(self) -> Self::IntoIter {
         self.orderings.into_iter()
     }
-}
-
-/// Trims `orderings[idx]` if some suffix of it overlaps with a prefix of
-/// `orderings[pre_idx]`. Returns `true` if there is any overlap, `false` otherwise.
-fn resolve_overlap(orderings: &mut [LexOrdering], idx: usize, pre_idx: usize) -> bool {
-    let length = orderings[idx].len();
-    let other_length = orderings[pre_idx].len();
-    for overlap in 1..=length.min(other_length) {
-        if orderings[idx][length - overlap..] == orderings[pre_idx][..overlap] {
-            orderings[idx].truncate(length - overlap);
-            return true;
-        }
-    }
-    false
 }
 
 impl Display for OrderingEquivalenceClass {

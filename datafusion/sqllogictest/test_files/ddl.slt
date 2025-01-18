@@ -805,3 +805,39 @@ EXPLAIN CREATE TABLE t(a int) AS VALUES (a + a);
 
 statement error DataFusion error: Schema error: No field named a\.
 CREATE TABLE t(a int) AS SELECT x FROM (VALUES (a)) t(x) WHERE false;
+
+##########
+# Create a view by combining two subqueries with differing column nullability schemas using a UNION
+##########
+
+statement ok
+CREATE UNBOUNDED EXTERNAL TABLE t1(c1 integer NOT NULL, c2 integer NOT NULL)
+STORED as CSV
+LOCATION '../core/tests/data/empty.csv'
+OPTIONS ('format.has_header' 'true');
+
+statement ok
+CREATE UNBOUNDED EXTERNAL TABLE t2(c1 integer NOT NULL, c2 integer)
+STORED as CSV
+LOCATION '../core/tests/data/empty.csv'
+OPTIONS ('format.has_header' 'true');
+
+# create view with union two query
+statement ok
+CREATE VIEW v1 AS SELECT c1, c2 FROM t1 UNION SELECT c1, c2 FROM t2;
+
+query TTT rowsort
+DESCRIBE v1;
+----
+c1 Int32 NO
+c2 Int32 YES
+
+statement ok
+DROP VIEW v1;
+
+statement ok
+DROP TABLE t1;
+
+statement ok
+DROP TABLE t2;
+

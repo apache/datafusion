@@ -2646,3 +2646,135 @@ async fn boolean_dictionary_as_filter() {
 
     assert_batches_eq!(expected, &result_df.collect().await.unwrap());
 }
+
+#[tokio::test]
+async fn test_alias() -> Result<()> {
+    let df = create_test_table("test")
+        .await?
+        .select(vec![col("a"), col("test.b"), lit(1).alias("one")])?
+        .alias("table_alias")?;
+    // All ouput column qualifiers are changed to "table_alias"
+    df.schema().columns().iter().for_each(|c| {
+        assert_eq!(c.relation, Some("table_alias".into()));
+    });
+    let expected = "SubqueryAlias: table_alias [a:Utf8, b:Int32, one:Int32]\
+     \n  Projection: test.a, test.b, Int32(1) AS one [a:Utf8, b:Int32, one:Int32]\
+     \n    TableScan: test [a:Utf8, b:Int32]";
+    let plan = df
+        .clone()
+        .into_unoptimized_plan()
+        .display_indent_schema()
+        .to_string();
+    assert_eq!(plan, expected);
+
+    // Select over the aliased DataFrame
+    let df = df.select(vec![
+        col("table_alias.a"),
+        col("b") + col("table_alias.one"),
+    ])?;
+    let expected = [
+        "+-----------+---------------------------------+",
+        "| a         | table_alias.b + table_alias.one |",
+        "+-----------+---------------------------------+",
+        "| abcDEF    | 2                               |",
+        "| abc123    | 11                              |",
+        "| CBAdef    | 11                              |",
+        "| 123AbcDef | 101                             |",
+        "+-----------+---------------------------------+",
+    ];
+    assert_batches_sorted_eq!(expected, &df.collect().await?);
+    Ok(())
+}
+
+// Use alias to perform a self-join
+// Issue: https://github.com/apache/datafusion/issues/14112
+#[tokio::test]
+async fn test_alias_self_join() -> Result<()> {
+    let left = create_test_table("t1").await?;
+    let right = left.clone().alias("t2")?;
+    let joined = left.join(right, JoinType::Full, &["a"], &["a"], None)?;
+    let expected = [
+        "+-----------+-----+-----------+-----+",
+        "| a         | b   | a         | b   |",
+        "+-----------+-----+-----------+-----+",
+        "| abcDEF    | 1   | abcDEF    | 1   |",
+        "| abc123    | 10  | abc123    | 10  |",
+        "| CBAdef    | 10  | CBAdef    | 10  |",
+        "| 123AbcDef | 100 | 123AbcDef | 100 |",
+        "+-----------+-----+-----------+-----+",
+    ];
+    assert_batches_sorted_eq!(expected, &joined.collect().await?);
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_alias_empty() -> Result<()> {
+    let df = create_test_table("test").await?.alias("")?;
+    let expected = "SubqueryAlias:  [a:Utf8, b:Int32]\
+     \n  TableScan: test [a:Utf8, b:Int32]";
+    let plan = df
+        .clone()
+        .into_unoptimized_plan()
+        .display_indent_schema()
+        .to_string();
+    assert_eq!(plan, expected);
+    let expected = [
+        "+-----------+-----+",
+        "| a         | b   |",
+        "+-----------+-----+",
+        "| abcDEF    | 1   |",
+        "| abc123    | 10  |",
+        "| CBAdef    | 10  |",
+        "| 123AbcDef | 100 |",
+        "+-----------+-----+",
+    ];
+    assert_batches_sorted_eq!(
+        expected,
+        &df.select(vec![col("a"), col("b")])?.collect().await?
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_alias_nested() -> Result<()> {
+    let df = create_test_table("test")
+        .await?
+        .select(vec![col("a"), col("test.b"), lit(1).alias("one")])?
+        .alias("alias1")?
+        .alias("alias2")?;
+    let expected = "SubqueryAlias: alias2 [a:Utf8, b:Int32, one:Int32]\
+     \n  SubqueryAlias: alias1 [a:Utf8, b:Int32, one:Int32]\
+     \n    Projection: test.a, test.b, Int32(1) AS one [a:Utf8, b:Int32, one:Int32]\
+     \n      TableScan: test projection=[a, b] [a:Utf8, b:Int32]";
+    let plan = df
+        .clone()
+        .into_optimized_plan()?
+        .display_indent_schema()
+        .to_string();
+    assert_eq!(plan, expected);
+
+    // Select over the aliased DataFrame
+    let select1 = df
+        .clone()
+        .select(vec![col("alias2.a"), col("b") + col("alias2.one")])?;
+    let expected = [
+        "+-----------+-----------------------+",
+        "| a         | alias2.b + alias2.one |",
+        "+-----------+-----------------------+",
+        "| 123AbcDef | 101                   |",
+        "| CBAdef    | 11                    |",
+        "| abc123    | 11                    |",
+        "| abcDEF    | 2                     |",
+        "+-----------+-----------------------+",
+    ];
+    assert_batches_sorted_eq!(expected, &select1.collect().await?);
+
+    // Only the outermost alias is visible
+    let select2 = df.select(vec![col("alias1.a")]);
+    assert_eq!(
+        select2.unwrap_err().strip_backtrace(),
+        "Schema error: No field named alias1.a. \
+        Valid fields are alias2.a, alias2.b, alias2.one."
+    );
+    Ok(())
+}

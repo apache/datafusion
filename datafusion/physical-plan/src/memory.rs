@@ -24,14 +24,19 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 
 use super::{
-    common, DisplayAs, DisplayFormatType, ExecutionPlan, Partitioning, PlanProperties,
-    RecordBatchStream, SendableRecordBatchStream, Statistics,
+    common, ColumnarValue, DisplayAs, DisplayFormatType, ExecutionPlan, Partitioning,
+    PhysicalExpr, PlanProperties, RecordBatchStream, SendableRecordBatchStream,
+    Statistics,
 };
 use crate::execution_plan::{Boundedness, EmissionType};
 
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
-use datafusion_common::{internal_err, project_schema, Result};
+use arrow_array::RecordBatchOptions;
+use arrow_schema::Schema;
+use datafusion_common::{
+    internal_err, plan_err, project_schema, Constraints, Result, ScalarValue,
+};
 use datafusion_execution::memory_pool::MemoryReservation;
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::equivalence::ProjectionMapping;
@@ -85,14 +90,25 @@ impl DisplayAs for MemoryExec {
                     })
                     .unwrap_or_default();
 
+                let constraints = self.cache.equivalence_properties().constraints();
+                let constraints = if constraints.is_empty() {
+                    String::new()
+                } else {
+                    format!(", {}", constraints)
+                };
+
                 if self.show_sizes {
                     write!(
                         f,
-                        "MemoryExec: partitions={}, partition_sizes={partition_sizes:?}{output_ordering}",
+                        "MemoryExec: partitions={}, partition_sizes={partition_sizes:?}{output_ordering}{constraints}",
                         partition_sizes.len(),
                     )
                 } else {
-                    write!(f, "MemoryExec: partitions={}", partition_sizes.len(),)
+                    write!(
+                        f,
+                        "MemoryExec: partitions={}{output_ordering}{constraints}",
+                        partition_sizes.len(),
+                    )
                 }
             }
         }
@@ -161,8 +177,13 @@ impl MemoryExec {
         projection: Option<Vec<usize>>,
     ) -> Result<Self> {
         let projected_schema = project_schema(&schema, projection.as_ref())?;
-        let cache =
-            Self::compute_properties(Arc::clone(&projected_schema), &[], partitions);
+        let constraints = Constraints::empty();
+        let cache = Self::compute_properties(
+            Arc::clone(&projected_schema),
+            &[],
+            constraints,
+            partitions,
+        );
         Ok(Self {
             partitions: partitions.to_vec(),
             schema,
@@ -174,10 +195,115 @@ impl MemoryExec {
         })
     }
 
+    /// Create a new execution plan from a list of constant values (`ValuesExec`)
+    pub fn try_new_as_values(
+        schema: SchemaRef,
+        data: Vec<Vec<Arc<dyn PhysicalExpr>>>,
+    ) -> Result<Self> {
+        if data.is_empty() {
+            return plan_err!("Values list cannot be empty");
+        }
+
+        let n_row = data.len();
+        let n_col = schema.fields().len();
+
+        // We have this single row batch as a placeholder to satisfy evaluation argument
+        // and generate a single output row
+        let placeholder_schema = Arc::new(Schema::empty());
+        let placeholder_batch = RecordBatch::try_new_with_options(
+            Arc::clone(&placeholder_schema),
+            vec![],
+            &RecordBatchOptions::new().with_row_count(Some(1)),
+        )?;
+
+        // Evaluate each column
+        let arrays = (0..n_col)
+            .map(|j| {
+                (0..n_row)
+                    .map(|i| {
+                        let expr = &data[i][j];
+                        let result = expr.evaluate(&placeholder_batch)?;
+
+                        match result {
+                            ColumnarValue::Scalar(scalar) => Ok(scalar),
+                            ColumnarValue::Array(array) if array.len() == 1 => {
+                                ScalarValue::try_from_array(&array, 0)
+                            }
+                            ColumnarValue::Array(_) => {
+                                plan_err!("Cannot have array values in a values list")
+                            }
+                        }
+                    })
+                    .collect::<Result<Vec<_>>>()
+                    .and_then(ScalarValue::iter_to_array)
+            })
+            .collect::<Result<Vec<_>>>()?;
+
+        let batch = RecordBatch::try_new_with_options(
+            Arc::clone(&schema),
+            arrays,
+            &RecordBatchOptions::new().with_row_count(Some(n_row)),
+        )?;
+
+        let partitions = vec![batch];
+        Self::try_new_from_batches(Arc::clone(&schema), partitions)
+    }
+
+    /// Create a new plan using the provided schema and batches.
+    ///
+    /// Errors if any of the batches don't match the provided schema, or if no
+    /// batches are provided.
+    pub fn try_new_from_batches(
+        schema: SchemaRef,
+        batches: Vec<RecordBatch>,
+    ) -> Result<Self> {
+        if batches.is_empty() {
+            return plan_err!("Values list cannot be empty");
+        }
+
+        for batch in &batches {
+            let batch_schema = batch.schema();
+            if batch_schema != schema {
+                return plan_err!(
+                    "Batch has invalid schema. Expected: {}, got: {}",
+                    schema,
+                    batch_schema
+                );
+            }
+        }
+
+        let partitions = vec![batches];
+        let cache = Self::compute_properties(
+            Arc::clone(&schema),
+            &[],
+            Constraints::empty(),
+            &partitions,
+        );
+        Ok(Self {
+            partitions,
+            schema: Arc::clone(&schema),
+            projected_schema: Arc::clone(&schema),
+            projection: None,
+            sort_information: vec![],
+            cache,
+            show_sizes: true,
+        })
+    }
+
+    pub fn with_constraints(mut self, constraints: Constraints) -> Self {
+        self.cache = self.cache.with_constraints(constraints);
+        self
+    }
+
     /// Set `show_sizes` to determine whether to display partition sizes
     pub fn with_show_sizes(mut self, show_sizes: bool) -> Self {
         self.show_sizes = show_sizes;
         self
+    }
+
+    /// Ref to constraints
+    pub fn constraints(&self) -> &Constraints {
+        self.cache.equivalence_properties().constraints()
     }
 
     /// Ref to partitions
@@ -227,7 +353,7 @@ impl MemoryExec {
         let fields = self.schema.fields();
         let ambiguous_column = sort_information
             .iter()
-            .flat_map(|ordering| ordering.inner.clone())
+            .flat_map(|ordering| ordering.clone())
             .flat_map(|expr| collect_columns(&expr.expr))
             .find(|col| {
                 fields
@@ -284,10 +410,12 @@ impl MemoryExec {
     fn compute_properties(
         schema: SchemaRef,
         orderings: &[LexOrdering],
+        constraints: Constraints,
         partitions: &[Vec<RecordBatch>],
     ) -> PlanProperties {
         PlanProperties::new(
-            EquivalenceProperties::new_with_orderings(schema, orderings),
+            EquivalenceProperties::new_with_orderings(schema, orderings)
+                .with_constraints(constraints),
             Partitioning::UnknownPartitioning(partitions.len()),
             EmissionType::Incremental,
             Boundedness::Bounded,
@@ -567,8 +695,8 @@ mod memory_exec_tests {
             .try_with_sort_information(sort_information)?;
 
         assert_eq!(
-            mem_exec.properties().output_ordering().unwrap().to_vec(),
-            expected_output_order.inner
+            mem_exec.properties().output_ordering().unwrap(),
+            &expected_output_order
         );
         let eq_properties = mem_exec.properties().equivalence_properties();
         assert!(eq_properties.oeq_class().contains(&sort1));
@@ -692,6 +820,99 @@ mod lazy_memory_tests {
             result,
             Err(e) if e.to_string().contains("Invalid partition 1 for LazyMemoryExec with 1 partitions")
         ));
+
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::expressions::lit;
+    use crate::test::{self, make_partition};
+
+    use arrow_schema::{DataType, Field};
+    use datafusion_common::stats::{ColumnStatistics, Precision};
+
+    #[tokio::test]
+    async fn values_empty_case() -> Result<()> {
+        let schema = test::aggr_test_schema();
+        let empty = MemoryExec::try_new_as_values(schema, vec![]);
+        assert!(empty.is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn new_exec_with_batches() {
+        let batch = make_partition(7);
+        let schema = batch.schema();
+        let batches = vec![batch.clone(), batch];
+        let _exec = MemoryExec::try_new_from_batches(schema, batches).unwrap();
+    }
+
+    #[test]
+    fn new_exec_with_batches_empty() {
+        let batch = make_partition(7);
+        let schema = batch.schema();
+        let _ = MemoryExec::try_new_from_batches(schema, Vec::new()).unwrap_err();
+    }
+
+    #[test]
+    fn new_exec_with_batches_invalid_schema() {
+        let batch = make_partition(7);
+        let batches = vec![batch.clone(), batch];
+
+        let invalid_schema = Arc::new(Schema::new(vec![
+            Field::new("col0", DataType::UInt32, false),
+            Field::new("col1", DataType::Utf8, false),
+        ]));
+        let _ = MemoryExec::try_new_from_batches(invalid_schema, batches).unwrap_err();
+    }
+
+    // Test issue: https://github.com/apache/datafusion/issues/8763
+    #[test]
+    fn new_exec_with_non_nullable_schema() {
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "col0",
+            DataType::UInt32,
+            false,
+        )]));
+        let _ = MemoryExec::try_new_as_values(Arc::clone(&schema), vec![vec![lit(1u32)]])
+            .unwrap();
+        // Test that a null value is rejected
+        let _ = MemoryExec::try_new_as_values(
+            schema,
+            vec![vec![lit(ScalarValue::UInt32(None))]],
+        )
+        .unwrap_err();
+    }
+
+    #[test]
+    fn values_stats_with_nulls_only() -> Result<()> {
+        let data = vec![
+            vec![lit(ScalarValue::Null)],
+            vec![lit(ScalarValue::Null)],
+            vec![lit(ScalarValue::Null)],
+        ];
+        let rows = data.len();
+        let values = MemoryExec::try_new_as_values(
+            Arc::new(Schema::new(vec![Field::new("col0", DataType::Null, true)])),
+            data,
+        )?;
+
+        assert_eq!(
+            values.statistics()?,
+            Statistics {
+                num_rows: Precision::Exact(rows),
+                total_byte_size: Precision::Exact(8), // not important
+                column_statistics: vec![ColumnStatistics {
+                    null_count: Precision::Exact(rows), // there are only nulls
+                    distinct_count: Precision::Absent,
+                    max_value: Precision::Absent,
+                    min_value: Precision::Absent,
+                },],
+            }
+        );
 
         Ok(())
     }
