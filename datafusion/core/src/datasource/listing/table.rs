@@ -935,6 +935,7 @@ impl TableProvider for ListingTable {
                 session_state,
                 FileScanConfig::new(object_store_url, Arc::clone(&self.file_schema))
                     .with_file_groups(partitioned_file_lists)
+                    .with_constraints(self.constraints.clone())
                     .with_statistics(statistics)
                     .with_projection(projection.cloned())
                     .with_limit(limit)
@@ -1050,21 +1051,22 @@ impl TableProvider for ListingTable {
             table_partition_cols: self.options.table_partition_cols.clone(),
             insert_op,
             keep_partition_by_columns,
+            file_extension: self.options().format.get_ext(),
         };
 
         let order_requirements = if !self.options().file_sort_order.is_empty() {
             // Multiple sort orders in outer vec are equivalent, so we pass only the first one
-            let ordering = self
-                .try_create_output_ordering()?
-                .first()
-                .ok_or(DataFusionError::Internal(
-                    "Expected ListingTable to have a sort order, but none found!".into(),
-                ))?
-                .clone();
+            let orderings = self.try_create_output_ordering()?;
+            let Some(ordering) = orderings.first() else {
+                return internal_err!(
+                    "Expected ListingTable to have a sort order, but none found!"
+                );
+            };
             // Converts Vec<Vec<SortExpr>> into type required by execution plan to specify its required input ordering
             Some(LexRequirement::new(
                 ordering
                     .into_iter()
+                    .cloned()
                     .map(PhysicalSortRequirement::from)
                     .collect::<Vec<_>>(),
             ))
@@ -1312,15 +1314,15 @@ mod tests {
             // ok with one column
             (
                 vec![vec![col("string_col").sort(true, false)]],
-                Ok(vec![LexOrdering {
-                        inner: vec![PhysicalSortExpr {
+                Ok(vec![LexOrdering::new(
+                        vec![PhysicalSortExpr {
                             expr: physical_col("string_col", &schema).unwrap(),
                             options: SortOptions {
                                 descending: false,
                                 nulls_first: false,
                             },
                         }],
-                    }
+                )
                 ])
             ),
             // ok with two columns, different options
@@ -1329,8 +1331,8 @@ mod tests {
                     col("string_col").sort(true, false),
                     col("int_col").sort(false, true),
                 ]],
-                Ok(vec![LexOrdering {
-                        inner: vec![
+                Ok(vec![LexOrdering::new(
+                        vec![
                             PhysicalSortExpr::new_default(physical_col("string_col", &schema).unwrap())
                                         .asc()
                                         .nulls_last(),
@@ -1338,7 +1340,7 @@ mod tests {
                                         .desc()
                                         .nulls_first()
                         ],
-                    }
+                )
                 ])
             ),
         ];

@@ -521,6 +521,9 @@ impl DefaultPhysicalPlanner {
                         return Err(DataFusionError::Configuration(format!("provided value for 'execution.keep_partition_by_columns' was not recognized: \"{}\"", value))),
                 };
 
+                let sink_format = file_type_to_format(file_type)?
+                    .create(session_state, source_option_tuples)?;
+
                 // Set file sink related options
                 let config = FileSinkConfig {
                     object_store_url,
@@ -530,10 +533,8 @@ impl DefaultPhysicalPlanner {
                     table_partition_cols,
                     insert_op: InsertOp::Append,
                     keep_partition_by_columns,
+                    file_extension: sink_format.get_ext(),
                 };
-
-                let sink_format = file_type_to_format(file_type)?
-                    .create(session_state, source_option_tuples)?;
 
                 sink_format
                     .create_writer_physical_plan(input_exec, session_state, config, None)
@@ -1109,6 +1110,7 @@ impl DefaultPhysicalPlanner {
                             physical_right,
                             join_filter,
                             join_type,
+                            None,
                         )?)
                     }
                 } else if session_state.config().target_partitions() > 1

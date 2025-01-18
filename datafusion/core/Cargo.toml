@@ -142,6 +142,7 @@ async-trait = { workspace = true }
 criterion = { version = "0.5", features = ["async_tokio"] }
 ctor = { workspace = true }
 datafusion-functions-window-common = { workspace = true }
+datafusion-physical-optimizer = { workspace = true }
 doc-comment = { workspace = true }
 env_logger = { workspace = true }
 paste = "^1.0"
