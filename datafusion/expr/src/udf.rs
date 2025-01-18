@@ -505,38 +505,13 @@ pub trait ScalarUDFImpl: Debug + Send + Sync {
     ///
     /// # Notes
     ///
-    /// If you provide an implementation for [`Self::return_type_from_exprs`],
+    /// If you provide an implementation for [`Self::return_type_from_args`],
     /// DataFusion will not call `return_type` (this function). In this case it
     /// is recommended to return [`DataFusionError::Internal`].
     ///
     /// [`DataFusionError::Internal`]: datafusion_common::DataFusionError::Internal
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType>;
 
-    /// What [`DataType`] will be returned by this function, given the
-    /// arguments?
-    ///
-    /// Note most UDFs should implement [`Self::return_type`] and not this
-    /// function. The output type for most functions only depends on the types
-    /// of their inputs (e.g. `sqrt(f32)` is always `f32`).
-    ///
-    /// By default, this function calls [`Self::return_type`] with the
-    /// types of each argument.
-    ///
-    /// This method can be overridden for functions that return different
-    /// *types* based on the *values* of their arguments.
-    ///
-    /// For example, the following two function calls get the same argument
-    /// types (something and a `Utf8` string) but return different types based
-    /// on the value of the second argument:
-    ///
-    /// * `arrow_cast(x, 'Int16')` --> `Int16`
-    /// * `arrow_cast(x, 'Float32')` --> `Float32`
-    ///
-    /// # Notes:
-    ///
-    /// This function must consistently return the same type for the same
-    /// logical input even if the input is simplified (e.g. it must return the same
-    /// value for `('foo' | 'bar')` as it does for ('foobar').
     #[deprecated(since = "45.0.0", note = "Use `return_type_from_args` instead")]
     fn return_type_from_exprs(
         &self,
