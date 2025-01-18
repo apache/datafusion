@@ -1602,6 +1602,25 @@ true
 false 
 true
 
+# Sanity test - comparing <=> with equivalent expression
+query B
+SELECT 
+  (column1 <=> column2) = 
+  (IFNULL(column1, false) = IFNULL(column2, false)) AS comparison_result
+FROM (VALUES 
+  (1, 1),      -- equal values
+  (1, 2),      -- different values
+  (NULL, NULL), -- both NULL
+  (1, NULL),    -- first not NULL, second NULL
+  (NULL, 1)     -- first NULL, second not NULL
+) AS t(column1, column2);
+----
+true
+true
+true
+true
+true
+
 #### binary_mathematical_operator_with_null_lt
 
 # 1. Integer and NULL
