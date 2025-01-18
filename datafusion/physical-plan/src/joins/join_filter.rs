@@ -30,7 +30,7 @@ pub struct JoinFilter {
     /// Column indices required to construct intermediate batch for filtering
     pub(crate) column_indices: Vec<ColumnIndex>,
     /// Physical schema of intermediate batch
-    pub(crate) schema: Schema,
+    pub(crate) schema: Arc<Schema>,
 }
 
 impl JoinFilter {
@@ -38,7 +38,7 @@ impl JoinFilter {
     pub fn new(
         expression: Arc<dyn PhysicalExpr>,
         column_indices: Vec<ColumnIndex>,
-        schema: Schema,
+        schema: Arc<Schema>,
     ) -> JoinFilter {
         JoinFilter {
             expression,
@@ -76,7 +76,7 @@ impl JoinFilter {
     }
 
     /// Intermediate batch schema
-    pub fn schema(&self) -> &Schema {
+    pub fn schema(&self) -> &Arc<Schema> {
         &self.schema
     }
 
@@ -94,7 +94,7 @@ impl JoinFilter {
         JoinFilter::new(
             Arc::clone(self.expression()),
             column_indices,
-            self.schema().clone(),
+            Arc::clone(self.schema()),
         )
     }
 }
