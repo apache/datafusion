@@ -18,8 +18,7 @@
 use arrow::array::StructArray;
 use arrow::datatypes::{DataType, Field, Fields};
 use datafusion_common::{exec_err, internal_err, HashSet, Result, ScalarValue};
-use datafusion_expr::scalar_doc_sections::DOC_SECTION_STRUCT;
-use datafusion_expr::{ColumnarValue, Documentation, Expr, ExprSchemable, ReturnInfo, ReturnTypeArgs};
+use datafusion_expr::{ColumnarValue, Documentation, ReturnInfo, ReturnTypeArgs};
 use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
 use datafusion_macros::user_doc;
 use std::any::Any;
