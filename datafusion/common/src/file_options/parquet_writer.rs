@@ -26,6 +26,7 @@ use crate::{
 };
 
 use arrow_schema::Schema;
+// TODO: handle once deprecated
 #[allow(deprecated)]
 use parquet::{
     arrow::ARROW_SCHEMA_META_KEY,
@@ -157,6 +158,9 @@ impl TryFrom<&TableParquetOptions> for WriterPropertiesBuilder {
                     builder.set_column_bloom_filter_ndv(path.clone(), bloom_filter_ndv);
             }
 
+            // max_statistics_size is deprecated, currently it is not being used 
+            // TODO: remove once deprecated
+            #[allow(deprecated)]
             if let Some(max_statistics_size) = options.max_statistics_size {
                 builder = {
                     #[allow(deprecated)]
@@ -202,6 +206,7 @@ impl ParquetOptions {
     ///
     /// Note that this method does not include the key_value_metadata from [`TableParquetOptions`].
     pub fn into_writer_properties_builder(&self) -> Result<WriterPropertiesBuilder> {
+        #[allow(deprecated)]
         let ParquetOptions {
             data_pagesize_limit,
             write_batch_size,
@@ -535,7 +540,6 @@ mod tests {
             ),
             bloom_filter_fpp: bloom_filter_default_props.map(|p| p.fpp),
             bloom_filter_ndv: bloom_filter_default_props.map(|p| p.ndv),
-            #[allow(deprecated)]
             max_statistics_size: Some(props.max_statistics_size(&col)),
         }
     }
