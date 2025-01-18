@@ -1565,6 +1565,43 @@ select NULL < column1 from (VALUES (true), (false)) as t;
 NULL
 NULL
 
+#### comparisons_with_spaceship_operator
+
+# Basic comparisons
+query B
+select 1 <=> 1;
+----
+true
+
+query B
+select 1 <=> 2;
+----
+false
+
+# NULL handling
+query B
+select NULL <=> NULL;
+----
+true
+
+query B
+select 1 <=> NULL;
+----
+false
+
+query B
+select NULL <=> 1;
+----
+false
+
+# Table comparisons
+query B
+select column1 <=> column2 from (VALUES (1, 1), (2, 3), (NULL, NULL)) as t;
+----
+true
+false 
+true
+
 #### binary_mathematical_operator_with_null_lt
 
 # 1. Integer and NULL
