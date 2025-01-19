@@ -46,23 +46,4 @@ pub trait PhysicalOptimizerRule: Debug {
     /// Some of the optimization rules might change the nullable properties of the schema
     /// and should disable the schema check.
     fn schema_check(&self) -> bool;
-
-    /// A flag to indicate whether the PhysicalOptimizerRule is
-    /// expected to produce an executable physical plan as output,
-    /// dependent upon whether the input plan is executable.
-    ///
-    /// For example, some rules may mutate a plan and produce a non-executable
-    /// output. For those [`PhysicalOptimizerRule`]s it is important to
-    /// perform additional enforcement runs (e.g. to enforce distribution and sorting)
-    /// prior to execution.
-    ///
-    /// Whereas for other [`PhysicalOptimizerRule`]s, it is guarenteed that the output
-    /// plan is executable.
-    fn executable_check(&self, previous_plan_is_valid: bool) -> bool {
-        // Default is that the optimizer run does not impact the current level of executable.
-        //
-        // Non-executable plans remain non-executable,
-        // executable plans remain executable.
-        previous_plan_is_valid
-    }
 }
