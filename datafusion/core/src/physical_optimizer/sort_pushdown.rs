@@ -33,7 +33,7 @@ use arrow_schema::SchemaRef;
 use datafusion_common::tree_node::{
     ConcreteTreeNode, Transformed, TreeNode, TreeNodeRecursion,
 };
-use datafusion_common::{plan_err, HashSet, JoinSide, Result};
+use datafusion_common::{exec_err, plan_err, HashSet, JoinSide, Result};
 use datafusion_expr::JoinType;
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::utils::collect_columns;
@@ -65,11 +65,7 @@ pub fn assign_initial_requirements(node: &mut SortPushDown) {
             ordering_requirement: requirement,
             // If the parent has a fetch value, assign it to the children
             // Or use the fetch value of the child.
-            fetch: if let Some(fetch) = child.plan.fetch() {
-                Some(fetch)
-            } else {
-                None
-            },
+            fetch: child.plan.fetch(),
         };
     }
 }
@@ -110,12 +106,14 @@ fn pushdown_sorts_helper(
         if !satisfy_parent {
             // Make sure this `SortExec` satisfies parent requirements:
             let sort_reqs = requirements.data.ordering_requirement.unwrap_or_default();
-            let fetch = if let Some(fetch) = requirements.data.fetch.clone() {
-                Some(fetch)
-            } else {
-                // It's possible current plan (`SortExec`) has a fetch value.
-                sort_fetch
-            };
+            let fetch = requirements.data.fetch;
+            if fetch.ne(&sort_fetch) {
+                return exec_err!(
+                    "Fetch values are not equal: {:?} != {:?}",
+                    fetch,
+                    sort_fetch
+                );
+            }
             requirements = requirements.children.swap_remove(0);
             requirements = add_sort_above(requirements, sort_reqs, fetch);
         };
@@ -125,11 +123,7 @@ fn pushdown_sorts_helper(
         if let Some(adjusted) =
             pushdown_requirement_to_children(&child.plan, &required_ordering)?
         {
-            let fetch = if let Some(fetch) = sort_fetch {
-                Some(fetch)
-            } else {
-                child.plan.fetch()
-            };
+            let fetch = sort_fetch.or_else(|| child.plan.fetch());
             for (grand_child, order) in child.children.iter_mut().zip(adjusted) {
                 grand_child.data = ParentRequirements {
                     ordering_requirement: order,
