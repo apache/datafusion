@@ -362,6 +362,7 @@ impl TableParquetOptionsProto {
         };
 
         let column_specific_options = global_options.column_specific_options;
+        #[allow(deprecated)] // max_statistics_size
         TableParquetOptionsProto {
             global: Some(ParquetOptionsProto {
                 enable_page_index: global_options.global.enable_page_index,
@@ -455,6 +456,7 @@ impl TableParquetOptionsProto {
 
 impl From<&ParquetOptionsProto> for ParquetOptions {
     fn from(proto: &ParquetOptionsProto) -> Self {
+        #[allow(deprecated)] // max_statistics_size
         ParquetOptions {
             enable_page_index: proto.enable_page_index,
             pruning: proto.pruning,
@@ -509,6 +511,7 @@ impl From<&ParquetOptionsProto> for ParquetOptions {
 
 impl From<ParquetColumnOptionsProto> for ParquetColumnOptions {
     fn from(proto: ParquetColumnOptionsProto) -> Self {
+        #[allow(deprecated)] // max_statistics_size
         ParquetColumnOptions {
             bloom_filter_enabled: proto.bloom_filter_enabled_opt.map(
                 |parquet_column_options::BloomFilterEnabledOpt::BloomFilterEnabled(v)| v,

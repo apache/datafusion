@@ -457,6 +457,7 @@ mod tests {
     fn column_options_with_non_defaults(
         src_col_defaults: &ParquetOptions,
     ) -> ParquetColumnOptions {
+        #[allow(deprecated)] // max_statistics_size
         ParquetColumnOptions {
             compression: Some("zstd(22)".into()),
             dictionary_enabled: src_col_defaults.dictionary_enabled.map(|v| !v),
@@ -477,6 +478,7 @@ mod tests {
             "1.0"
         };
 
+        #[allow(deprecated)] // max_statistics_size
         ParquetOptions {
             data_pagesize_limit: 42,
             write_batch_size: 42,
@@ -520,6 +522,7 @@ mod tests {
     ) -> ParquetColumnOptions {
         let bloom_filter_default_props = props.bloom_filter_properties(&col);
 
+        #[allow(deprecated)] // max_statistics_size
         ParquetColumnOptions {
             bloom_filter_enabled: Some(bloom_filter_default_props.is_some()),
             encoding: props.encoding(&col).map(|s| s.to_string()),
@@ -573,6 +576,7 @@ mod tests {
             HashMap::from([(COL_NAME.into(), configured_col_props)])
         };
 
+        #[allow(deprecated)] // max_statistics_size
         TableParquetOptions {
             global: ParquetOptions {
                 // global options
