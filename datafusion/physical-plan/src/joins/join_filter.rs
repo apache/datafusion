@@ -30,7 +30,7 @@ pub struct JoinFilter {
     /// Column indices required to construct intermediate batch for filtering
     pub(crate) column_indices: Vec<ColumnIndex>,
     /// Physical schema of intermediate batch
-    pub(crate) schema: Arc<Schema>,
+    pub(crate) schema: SchemaRef,
 }
 
 impl JoinFilter {
