@@ -146,7 +146,7 @@ impl TreeNodeRewriter for UnwrapCastExprRewriter {
                     };
                     is_supported_type(&left_type)
                         && is_supported_type(&right_type)
-                        && op.is_comparison_operator()
+                        && op.supports_propagation()
                 } =>
             {
                 match (left.as_mut(), right.as_mut()) {
@@ -281,7 +281,7 @@ fn is_supported_type(data_type: &DataType) -> bool {
         || is_supported_dictionary_type(data_type)
 }
 
-/// Returns true if [[UnwrapCastExprRewriter]] suppors this numeric type
+/// Returns true if [[UnwrapCastExprRewriter]] support this numeric type
 fn is_supported_numeric_type(data_type: &DataType) -> bool {
     matches!(
         data_type,
@@ -475,12 +475,7 @@ fn try_cast_string_literal(
     lit_value: &Scalar,
     target_type: &DataType,
 ) -> Option<ScalarValue> {
-    let string_value = match lit_value.value() {
-        ScalarValue::Utf8(s) | ScalarValue::LargeUtf8(s) | ScalarValue::Utf8View(s) => {
-            s.clone()
-        }
-        _ => return None,
-    };
+    let string_value = lit_value.value().try_as_str()?.map(|s| s.to_string());
     let scalar_value = match target_type {
         DataType::Utf8 => ScalarValue::Utf8(string_value),
         DataType::LargeUtf8 => ScalarValue::LargeUtf8(string_value),

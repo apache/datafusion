@@ -16,23 +16,42 @@
 // under the License.
 
 use std::any::Any;
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
 use arrow::array::{
     ArrayAccessor, ArrayIter, ArrayRef, AsArray, GenericStringArray, OffsetSizeTrait,
 };
 use arrow::datatypes::DataType;
-use hashbrown::HashMap;
+use datafusion_common::HashMap;
 use unicode_segmentation::UnicodeSegmentation;
 
 use crate::utils::{make_scalar_function, utf8_to_str_type};
 use datafusion_common::{exec_err, Result};
-use datafusion_expr::scalar_doc_sections::DOC_SECTION_STRING;
 use datafusion_expr::TypeSignature::Exact;
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
 };
+use datafusion_macros::user_doc;
 
+#[user_doc(
+    doc_section(label = "String Functions"),
+    description = "Translates characters in a string to specified translation characters.",
+    syntax_example = "translate(str, chars, translation)",
+    sql_example = r#"```sql
+> select translate('twice', 'wic', 'her');
++--------------------------------------------------+
+| translate(Utf8("twice"),Utf8("wic"),Utf8("her")) |
++--------------------------------------------------+
+| there                                            |
++--------------------------------------------------+
+```"#,
+    standard_argument(name = "str", prefix = "String"),
+    argument(name = "chars", description = "Characters to translate."),
+    argument(
+        name = "translation",
+        description = "Translation characters. Translation characters replace only characters at the same position in the **chars** string."
+    )
+)]
 #[derive(Debug)]
 pub struct TranslateFunc {
     signature: Signature,
@@ -76,37 +95,17 @@ impl ScalarUDFImpl for TranslateFunc {
         utf8_to_str_type(&arg_types[0], "translate")
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         make_scalar_function(invoke_translate, vec![])(args)
     }
 
     fn documentation(&self) -> Option<&Documentation> {
-        Some(get_translate_doc())
+        self.doc()
     }
-}
-
-static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
-
-fn get_translate_doc() -> &'static Documentation {
-    DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_STRING)
-            .with_description("Translates characters in a string to specified translation characters.")
-            .with_syntax_example("translate(str, chars, translation)")
-            .with_sql_example(r#"```sql
-> select translate('twice', 'wic', 'her');
-+--------------------------------------------------+
-| translate(Utf8("twice"),Utf8("wic"),Utf8("her")) |
-+--------------------------------------------------+
-| there                                            |
-+--------------------------------------------------+
-```"#)
-            .with_standard_argument("str", "String")
-            .with_argument("chars", "Characters to translate.")
-            .with_argument("translation", "Translation characters. Translation characters replace only characters at the same position in the **chars** string.")
-            .build()
-            .unwrap()
-    })
 }
 
 fn invoke_translate(args: &[ArrayRef]) -> Result<ArrayRef> {
@@ -201,7 +200,7 @@ mod tests {
     fn test_functions() -> Result<()> {
         test_function!(
             TranslateFunc::new(),
-            &[
+            vec![
                 ColumnarValue::from(ScalarValue::from("12345")),
                 ColumnarValue::from(ScalarValue::from("143")),
                 ColumnarValue::from(ScalarValue::from("ax"))
@@ -213,7 +212,7 @@ mod tests {
         );
         test_function!(
             TranslateFunc::new(),
-            &[
+            vec![
                 ColumnarValue::from(ScalarValue::Utf8(None)),
                 ColumnarValue::from(ScalarValue::from("143")),
                 ColumnarValue::from(ScalarValue::from("ax"))
@@ -225,7 +224,7 @@ mod tests {
         );
         test_function!(
             TranslateFunc::new(),
-            &[
+            vec![
                 ColumnarValue::from(ScalarValue::from("12345")),
                 ColumnarValue::from(ScalarValue::Utf8(None)),
                 ColumnarValue::from(ScalarValue::from("ax"))
@@ -237,7 +236,7 @@ mod tests {
         );
         test_function!(
             TranslateFunc::new(),
-            &[
+            vec![
                 ColumnarValue::from(ScalarValue::from("12345")),
                 ColumnarValue::from(ScalarValue::from("143")),
                 ColumnarValue::from(ScalarValue::Utf8(None))
@@ -249,7 +248,7 @@ mod tests {
         );
         test_function!(
             TranslateFunc::new(),
-            &[
+            vec![
                 ColumnarValue::from(ScalarValue::from("é2íñ5")),
                 ColumnarValue::from(ScalarValue::from("éñí")),
                 ColumnarValue::from(ScalarValue::from("óü")),
@@ -262,7 +261,7 @@ mod tests {
         #[cfg(not(feature = "unicode_expressions"))]
         test_function!(
             TranslateFunc::new(),
-            &[
+            vec![
                 ColumnarValue::from(ScalarValue::from("12345")),
                 ColumnarValue::from(ScalarValue::from("143")),
                 ColumnarValue::from(ScalarValue::from("ax")),

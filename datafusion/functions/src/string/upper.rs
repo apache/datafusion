@@ -19,12 +19,27 @@ use crate::string::common::to_upper;
 use crate::utils::utf8_to_str_type;
 use arrow::datatypes::DataType;
 use datafusion_common::Result;
-use datafusion_expr::scalar_doc_sections::DOC_SECTION_STRING;
 use datafusion_expr::{ColumnarValue, Documentation};
 use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
+use datafusion_macros::user_doc;
 use std::any::Any;
-use std::sync::OnceLock;
 
+#[user_doc(
+    doc_section(label = "String Functions"),
+    description = "Converts a string to upper-case.",
+    syntax_example = "upper(str)",
+    sql_example = r#"```sql
+> select upper('dataFusion');
++---------------------------+
+| upper(Utf8("dataFusion")) |
++---------------------------+
+| DATAFUSION                |
++---------------------------+
+```"#,
+    standard_argument(name = "str", prefix = "String"),
+    related_udf(name = "initcap"),
+    related_udf(name = "lower")
+)]
 #[derive(Debug)]
 pub struct UpperFunc {
     signature: Signature,
@@ -61,53 +76,33 @@ impl ScalarUDFImpl for UpperFunc {
         utf8_to_str_type(&arg_types[0], "upper")
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         to_upper(args, "upper")
     }
 
     fn documentation(&self) -> Option<&Documentation> {
-        Some(get_upper_doc())
+        self.doc()
     }
-}
-
-static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
-
-fn get_upper_doc() -> &'static Documentation {
-    DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_STRING)
-            .with_description("Converts a string to upper-case.")
-            .with_syntax_example("upper(str)")
-            .with_sql_example(
-                r#"```sql
-> select upper('dataFusion');
-+---------------------------+
-| upper(Utf8("dataFusion")) |
-+---------------------------+
-| DATAFUSION                |
-+---------------------------+
-```"#,
-            )
-            .with_standard_argument("str", "String")
-            .with_related_udf("initcap")
-            .with_related_udf("lower")
-            .build()
-            .unwrap()
-    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow::array::{ArrayRef, StringArray};
+    use arrow::array::{Array, ArrayRef, StringArray};
     use std::sync::Arc;
 
     fn to_upper(input: ArrayRef, expected: ArrayRef) -> Result<()> {
         let func = UpperFunc::new();
+        let batch_len = input.len();
         let args = vec![ColumnarValue::Array(input)];
-        let result = match func.invoke(&args)? {
+        #[allow(deprecated)] // TODO migrate UDF to invoke
+        let result = match func.invoke_batch(&args, batch_len)? {
             ColumnarValue::Array(result) => result,
-            _ => unreachable!(),
+            _ => unreachable!("upper"),
         };
         assert_eq!(&expected, &result);
         Ok(())

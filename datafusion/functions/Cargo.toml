@@ -54,7 +54,7 @@ math_expressions = []
 # enable regular expressions
 regex_expressions = ["regex"]
 # enable string functions
-string_expressions = ["regex_expressions", "uuid"]
+string_expressions = ["uuid"]
 # enable unicode functions
 unicode_expressions = ["hashbrown", "unicode-segmentation"]
 
@@ -72,8 +72,11 @@ blake2 = { version = "^0.10.2", optional = true }
 blake3 = { version = "1.0", optional = true }
 chrono = { workspace = true }
 datafusion-common = { workspace = true }
+datafusion-doc = { workspace = true }
 datafusion-execution = { workspace = true }
 datafusion-expr = { workspace = true }
+datafusion-expr-common = { workspace = true }
+datafusion-macros = { workspace = true }
 hashbrown = { workspace = true, optional = true }
 hex = { version = "0.4", optional = true }
 itertools = { workspace = true }
@@ -89,7 +92,6 @@ uuid = { version = "1.7", features = ["v4"], optional = true }
 arrow = { workspace = true, features = ["test_utils"] }
 criterion = "0.5"
 rand = { workspace = true }
-rstest = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt", "sync"] }
 
 [[bench]]
@@ -119,6 +121,11 @@ required-features = ["datetime_expressions"]
 
 [[bench]]
 harness = false
+name = "iszero"
+required-features = ["math_expressions"]
+
+[[bench]]
+harness = false
 name = "nullif"
 required-features = ["core_expressions"]
 
@@ -131,6 +138,16 @@ required-features = ["datetime_expressions"]
 harness = false
 name = "to_char"
 required-features = ["datetime_expressions"]
+
+[[bench]]
+harness = false
+name = "isnan"
+required-features = ["math_expressions"]
+
+[[bench]]
+harness = false
+name = "signum"
+required-features = ["math_expressions"]
 
 [[bench]]
 harness = false
@@ -179,5 +196,30 @@ required-features = ["unicode_expressions"]
 
 [[bench]]
 harness = false
+name = "cot"
+required-features = ["math_expressions"]
+
+[[bench]]
+harness = false
 name = "strpos"
+required-features = ["unicode_expressions"]
+
+[[bench]]
+harness = false
+name = "reverse"
+required-features = ["unicode_expressions"]
+
+[[bench]]
+harness = false
+name = "trunc"
+required-features = ["math_expressions"]
+
+[[bench]]
+harness = false
+name = "initcap"
+required-features = ["unicode_expressions"]
+
+[[bench]]
+harness = false
+name = "find_in_set"
 required-features = ["unicode_expressions"]

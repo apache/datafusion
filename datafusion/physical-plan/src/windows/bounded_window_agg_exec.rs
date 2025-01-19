@@ -22,13 +22,12 @@
 
 use std::any::Any;
 use std::cmp::{min, Ordering};
-use std::collections::{HashMap, VecDeque};
+use std::collections::VecDeque;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
 use super::utils::create_schema;
-use crate::expressions::PhysicalSortExpr;
 use crate::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
 use crate::windows::{
     calc_requirements, get_ordered_partition_by_indices, get_partition_by_sort_exprs,
@@ -40,19 +39,21 @@ use crate::{
     SendableRecordBatchStream, Statistics, WindowExpr,
 };
 use ahash::RandomState;
+use arrow::compute::take_record_batch;
 use arrow::{
     array::{Array, ArrayRef, RecordBatchOptions, UInt32Builder},
-    compute::{concat, concat_batches, sort_to_indices},
+    compute::{concat, concat_batches, sort_to_indices, take_arrays},
     datatypes::SchemaRef,
     record_batch::RecordBatch,
 };
 use datafusion_common::hash_utils::create_hashes;
 use datafusion_common::stats::Precision;
 use datafusion_common::utils::{
-    evaluate_partition_ranges, get_at_indices, get_record_batch_at_indices,
-    get_row_at_idx, take_arrays,
+    evaluate_partition_ranges, get_at_indices, get_row_at_idx,
 };
-use datafusion_common::{arrow_datafusion_err, exec_err, DataFusionError, Result};
+use datafusion_common::{
+    arrow_datafusion_err, exec_err, DataFusionError, HashMap, Result,
+};
 use datafusion_execution::TaskContext;
 use datafusion_expr::window_state::{PartitionBatchState, WindowAggState};
 use datafusion_expr::ColumnarValue;
@@ -60,15 +61,16 @@ use datafusion_physical_expr::window::{
     PartitionBatches, PartitionKey, PartitionWindowAggStates, WindowState,
 };
 use datafusion_physical_expr::PhysicalExpr;
-use datafusion_physical_expr_common::sort_expr::LexRequirement;
+use datafusion_physical_expr_common::sort_expr::{LexOrdering, LexRequirement};
+
 use futures::stream::Stream;
 use futures::{ready, StreamExt};
-use hashbrown::raw::RawTable;
+use hashbrown::hash_table::HashTable;
 use indexmap::IndexMap;
 use log::debug;
 
 /// Window execution plan
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct BoundedWindowAggExec {
     /// Input plan
     input: Arc<dyn ExecutionPlan>,
@@ -149,7 +151,7 @@ impl BoundedWindowAggExec {
     // We are sure that partition by columns are always at the beginning of sort_keys
     // Hence returned `PhysicalSortExpr` corresponding to `PARTITION BY` columns can be used safely
     // to calculate partition separation points
-    pub fn partition_by_sort_keys(&self) -> Result<Vec<PhysicalSortExpr>> {
+    pub fn partition_by_sort_keys(&self) -> Result<LexOrdering> {
         let partition_by = self.window_expr()[0].partition_by();
         get_partition_by_sort_exprs(
             &self.input,
@@ -200,9 +202,11 @@ impl BoundedWindowAggExec {
 
         // Construct properties cache
         PlanProperties::new(
-            eq_properties,          // Equivalence Properties
-            output_partitioning,    // Output Partitioning
-            input.execution_mode(), // Execution Mode
+            eq_properties,
+            output_partitioning,
+            // TODO: Emission type and boundedness information can be enhanced here
+            input.pipeline_behavior(),
+            input.boundedness(),
         )
     }
 }
@@ -261,7 +265,7 @@ impl ExecutionPlan for BoundedWindowAggExec {
             .ordered_partition_by_indices
             .iter()
             .map(|idx| &partition_bys[*idx]);
-        vec![calc_requirements(partition_bys, order_keys)]
+        vec![calc_requirements(partition_bys, order_keys.iter())]
     }
 
     fn required_input_distribution(&self) -> Vec<Distribution> {
@@ -440,22 +444,22 @@ pub struct LinearSearch {
     /// is ordered by a, b and the window expression contains a PARTITION BY b, a
     /// clause, this attribute stores [1, 0].
     ordered_partition_by_indices: Vec<usize>,
-    /// We use this [`RawTable`] to calculate unique partitions for each new
+    /// We use this [`HashTable`] to calculate unique partitions for each new
     /// RecordBatch. First entry in the tuple is the hash value, the second
     /// entry is the unique ID for each partition (increments from 0 to n).
-    row_map_batch: RawTable<(u64, usize)>,
-    /// We use this [`RawTable`] to calculate the output columns that we can
+    row_map_batch: HashTable<(u64, usize)>,
+    /// We use this [`HashTable`] to calculate the output columns that we can
     /// produce at each cycle. First entry in the tuple is the hash value, the
     /// second entry is the unique ID for each partition (increments from 0 to n).
     /// The third entry stores how many new outputs are calculated for the
     /// corresponding partition.
-    row_map_out: RawTable<(u64, usize, usize)>,
+    row_map_out: HashTable<(u64, usize, usize)>,
     input_schema: SchemaRef,
 }
 
 impl PartitionSearcher for LinearSearch {
     /// This method constructs output columns using the result of each window expression.
-    // Assume input buffer is         |      Partition Buffers would be (Where each partition and its data is seperated)
+    // Assume input buffer is         |      Partition Buffers would be (Where each partition and its data is separated)
     // a, 2                           |      a, 2
     // b, 2                           |      a, 2
     // a, 2                           |      a, 2
@@ -536,7 +540,9 @@ impl PartitionSearcher for LinearSearch {
         // We should emit columns according to row index ordering.
         let sorted_indices = sort_to_indices(&all_indices, None, None)?;
         // Construct new column according to row ordering. This fixes ordering
-        take_arrays(&new_columns, &sorted_indices).map(Some)
+        take_arrays(&new_columns, &sorted_indices, None)
+            .map(Some)
+            .map_err(|e| arrow_datafusion_err!(e))
     }
 
     fn evaluate_partition_batches(
@@ -556,7 +562,7 @@ impl PartitionSearcher for LinearSearch {
                 let mut new_indices = UInt32Builder::with_capacity(indices.len());
                 new_indices.append_slice(&indices);
                 let indices = new_indices.finish();
-                Ok((row, get_record_batch_at_indices(record_batch, &indices)?))
+                Ok((row, take_record_batch(record_batch, &indices)?))
             })
             .collect()
     }
@@ -606,8 +612,8 @@ impl LinearSearch {
             input_buffer_hashes: VecDeque::new(),
             random_state: Default::default(),
             ordered_partition_by_indices,
-            row_map_batch: RawTable::with_capacity(256),
-            row_map_out: RawTable::with_capacity(256),
+            row_map_batch: HashTable::with_capacity(256),
+            row_map_out: HashTable::with_capacity(256),
             input_schema,
         }
     }
@@ -627,7 +633,7 @@ impl LinearSearch {
         // res stores PartitionKey and row indices (indices where these partition occurs in the `batch`) for each partition.
         let mut result: Vec<(PartitionKey, Vec<u32>)> = vec![];
         for (hash, row_idx) in batch_hashes.into_iter().zip(0u32..) {
-            let entry = self.row_map_batch.get_mut(hash, |(_, group_idx)| {
+            let entry = self.row_map_batch.find_mut(hash, |(_, group_idx)| {
                 // We can safely get the first index of the partition indices
                 // since partition indices has one element during initialization.
                 let row = get_row_at_idx(columns, row_idx as usize).unwrap();
@@ -637,8 +643,11 @@ impl LinearSearch {
             if let Some((_, group_idx)) = entry {
                 result[*group_idx].1.push(row_idx)
             } else {
-                self.row_map_batch
-                    .insert(hash, (hash, result.len()), |(hash, _)| *hash);
+                self.row_map_batch.insert_unique(
+                    hash,
+                    (hash, result.len()),
+                    |(hash, _)| *hash,
+                );
                 let row = get_row_at_idx(columns, row_idx as usize)?;
                 // This is a new partition its only index is row_idx for now.
                 result.push((row, vec![row_idx]));
@@ -663,7 +672,7 @@ impl LinearSearch {
         self.row_map_out.clear();
         let mut partition_indices: Vec<(PartitionKey, Vec<u32>)> = vec![];
         for (hash, row_idx) in self.input_buffer_hashes.iter().zip(0u32..) {
-            let entry = self.row_map_out.get_mut(*hash, |(_, group_idx, _)| {
+            let entry = self.row_map_out.find_mut(*hash, |(_, group_idx, _)| {
                 let row =
                     get_row_at_idx(&partition_by_columns, row_idx as usize).unwrap();
                 row == partition_indices[*group_idx].0
@@ -689,7 +698,7 @@ impl LinearSearch {
                 if min_out == 0 {
                     break;
                 }
-                self.row_map_out.insert(
+                self.row_map_out.insert_unique(
                     *hash,
                     (*hash, partition_indices.len(), min_out),
                     |(hash, _, _)| *hash,
@@ -705,7 +714,7 @@ impl LinearSearch {
 /// when computing partitions.
 pub struct SortedSearch {
     /// Stores partition by columns and their ordering information
-    partition_by_sort_keys: Vec<PhysicalSortExpr>,
+    partition_by_sort_keys: LexOrdering,
     /// Input ordering and partition by key ordering need not be the same, so
     /// this vector stores the mapping between them. For instance, if the input
     /// is ordered by a, b and the window expression contains a PARTITION BY b, a
@@ -930,7 +939,7 @@ impl BoundedWindowAggStream {
         })
     }
 
-    fn compute_aggregates(&mut self) -> Result<RecordBatch> {
+    fn compute_aggregates(&mut self) -> Result<Option<RecordBatch>> {
         // calculate window cols
         for (cur_window_expr, state) in
             self.window_expr.iter().zip(&mut self.window_agg_states)
@@ -957,9 +966,9 @@ impl BoundedWindowAggStream {
                 .collect::<Vec<_>>();
             let n_generated = columns_to_show[0].len();
             self.prune_state(n_generated)?;
-            Ok(RecordBatch::try_new(schema, columns_to_show)?)
+            Ok(Some(RecordBatch::try_new(schema, columns_to_show)?))
         } else {
-            Ok(RecordBatch::new_empty(schema))
+            Ok(None)
         }
     }
 
@@ -972,7 +981,7 @@ impl BoundedWindowAggStream {
             return Poll::Ready(None);
         }
 
-        let result = match ready!(self.input.poll_next_unpin(cx)) {
+        match ready!(self.input.poll_next_unpin(cx)) {
             Some(Ok(batch)) => {
                 self.search_mode.update_partition_batch(
                     &mut self.input_buffer,
@@ -980,18 +989,23 @@ impl BoundedWindowAggStream {
                     &self.window_expr,
                     &mut self.partition_buffers,
                 )?;
-                self.compute_aggregates()
+                if let Some(batch) = self.compute_aggregates()? {
+                    return Poll::Ready(Some(Ok(batch)));
+                }
+                self.poll_next_inner(cx)
             }
-            Some(Err(e)) => Err(e),
+            Some(Err(e)) => Poll::Ready(Some(Err(e))),
             None => {
                 self.finished = true;
                 for (_, partition_batch_state) in self.partition_buffers.iter_mut() {
                     partition_batch_state.is_end = true;
                 }
-                self.compute_aggregates()
+                if let Some(batch) = self.compute_aggregates()? {
+                    return Poll::Ready(Some(Ok(batch)));
+                }
+                Poll::Ready(None)
             }
-        };
-        Poll::Ready(Some(result))
+        }
     }
 
     /// Prunes the sections of the record batch (for each partition)
@@ -1157,11 +1171,12 @@ mod tests {
     use std::task::{Context, Poll};
     use std::time::Duration;
 
-    use crate::common::collect;
-    use crate::memory::MemoryExec;
+    use crate::expressions::PhysicalSortExpr;
     use crate::projection::ProjectionExec;
     use crate::streaming::{PartitionStream, StreamingTableExec};
-    use crate::windows::{create_window_expr, BoundedWindowAggExec, InputOrderMode};
+    use crate::windows::{
+        create_udwf_window_expr, create_window_expr, BoundedWindowAggExec, InputOrderMode,
+    };
     use crate::{execute_stream, get_plan_string, ExecutionPlan};
 
     use arrow_array::builder::{Int64Builder, UInt64Builder};
@@ -1178,12 +1193,14 @@ mod tests {
         WindowFrame, WindowFrameBound, WindowFrameUnits, WindowFunctionDefinition,
     };
     use datafusion_functions_aggregate::count::count_udaf;
-    use datafusion_physical_expr::expressions::{col, Column, NthValue};
-    use datafusion_physical_expr::window::{
-        BuiltInWindowExpr, BuiltInWindowFunctionExpr,
-    };
-    use datafusion_physical_expr::{LexOrdering, PhysicalExpr, PhysicalSortExpr};
+    use datafusion_functions_window::nth_value::last_value_udwf;
+    use datafusion_functions_window::nth_value::nth_value_udwf;
+    use datafusion_physical_expr::expressions::{col, Column, Literal};
+    use datafusion_physical_expr::{LexOrdering, PhysicalExpr};
 
+    use crate::common::collect;
+    use crate::memory::MemoryExec;
+    use datafusion_physical_expr::window::StandardWindowExpr;
     use futures::future::Shared;
     use futures::{pin_mut, ready, FutureExt, Stream, StreamExt};
     use itertools::Itertools;
@@ -1284,10 +1301,10 @@ mod tests {
             Arc::new(Column::new(schema.fields[0].name(), 0)) as Arc<dyn PhysicalExpr>;
         let args = vec![col_expr];
         let partitionby_exprs = vec![col(hash, &schema)?];
-        let orderby_exprs = vec![PhysicalSortExpr {
+        let orderby_exprs = LexOrdering::new(vec![PhysicalSortExpr {
             expr: col(order_by, &schema)?,
             options: SortOptions::default(),
-        }];
+        }]);
         let window_frame = WindowFrame::new_bounds(
             WindowFrameUnits::Range,
             WindowFrameBound::CurrentRow,
@@ -1304,7 +1321,7 @@ mod tests {
                 fn_name,
                 &args,
                 &partitionby_exprs,
-                &orderby_exprs,
+                orderby_exprs.as_ref(),
                 Arc::new(window_frame),
                 &input.schema(),
                 false,
@@ -1401,13 +1418,13 @@ mod tests {
     }
 
     fn schema_orders(schema: &SchemaRef) -> Result<Vec<LexOrdering>> {
-        let orderings = vec![vec![PhysicalSortExpr {
+        let orderings = vec![LexOrdering::new(vec![PhysicalSortExpr {
             expr: col("sn", schema)?,
             options: SortOptions {
                 descending: false,
                 nulls_first: false,
             },
-        }]];
+        }])];
         Ok(orderings)
     }
 
@@ -1497,7 +1514,7 @@ mod tests {
         Ok(source)
     }
 
-    // Tests NTH_VALUE(negative index) with memoize feature.
+    // Tests NTH_VALUE(negative index) with memoize feature
     // To be able to trigger memoize feature for NTH_VALUE we need to
     // - feed BoundedWindowAggExec with batch stream data.
     // - Window frame should contain UNBOUNDED PRECEDING.
@@ -1521,36 +1538,45 @@ mod tests {
         )
         .map(|e| Arc::new(e) as Arc<dyn ExecutionPlan>)?;
         let col_a = col("a", &schema)?;
-        let nth_value_func1 = NthValue::nth(
-            "nth_value(-1)",
-            Arc::clone(&col_a),
-            DataType::Int32,
-            1,
+        let nth_value_func1 = create_udwf_window_expr(
+            &nth_value_udwf(),
+            &[
+                Arc::clone(&col_a),
+                Arc::new(Literal::from(ScalarValue::Int32(Some(1)))),
+            ],
+            &schema,
+            "nth_value(-1)".to_string(),
             false,
         )?
         .reverse_expr()
         .unwrap();
-        let nth_value_func2 = NthValue::nth(
-            "nth_value(-2)",
-            Arc::clone(&col_a),
-            DataType::Int32,
-            2,
+        let nth_value_func2 = create_udwf_window_expr(
+            &nth_value_udwf(),
+            &[
+                Arc::clone(&col_a),
+                Arc::new(Literal::from(ScalarValue::Int32(Some(2)))),
+            ],
+            &schema,
+            "nth_value(-2)".to_string(),
             false,
         )?
         .reverse_expr()
         .unwrap();
-        let last_value_func = Arc::new(NthValue::last(
-            "last",
-            Arc::clone(&col_a),
-            DataType::Int32,
+
+        let last_value_func = create_udwf_window_expr(
+            &last_value_udwf(),
+            &[Arc::clone(&col_a)],
+            &schema,
+            "last".to_string(),
             false,
-        )) as _;
+        )?;
+
         let window_exprs = vec![
             // LAST_VALUE(a)
-            Arc::new(BuiltInWindowExpr::new(
+            Arc::new(StandardWindowExpr::new(
                 last_value_func,
                 &[],
-                &[],
+                &LexOrdering::default(),
                 Arc::new(WindowFrame::new_bounds(
                     WindowFrameUnits::Rows,
                     WindowFrameBound::Preceding(ScalarValue::UInt64(None)),
@@ -1558,10 +1584,10 @@ mod tests {
                 )),
             )) as _,
             // NTH_VALUE(a, -1)
-            Arc::new(BuiltInWindowExpr::new(
+            Arc::new(StandardWindowExpr::new(
                 nth_value_func1,
                 &[],
-                &[],
+                &LexOrdering::default(),
                 Arc::new(WindowFrame::new_bounds(
                     WindowFrameUnits::Rows,
                     WindowFrameBound::Preceding(ScalarValue::UInt64(None)),
@@ -1569,10 +1595,10 @@ mod tests {
                 )),
             )) as _,
             // NTH_VALUE(a, -2)
-            Arc::new(BuiltInWindowExpr::new(
+            Arc::new(StandardWindowExpr::new(
                 nth_value_func2,
                 &[],
-                &[],
+                &LexOrdering::default(),
                 Arc::new(WindowFrame::new_bounds(
                     WindowFrameUnits::Rows,
                     WindowFrameBound::Preceding(ScalarValue::UInt64(None)),
@@ -1714,8 +1740,8 @@ mod tests {
         let plan = projection_exec(window)?;
 
         let expected_plan = vec![
-            "ProjectionExec: expr=[sn@0 as sn, hash@1 as hash, count([Column { name: \"sn\", index: 0 }]) PARTITION BY: [[Column { name: \"hash\", index: 1 }]], ORDER BY: [[PhysicalSortExpr { expr: Column { name: \"sn\", index: 0 }, options: SortOptions { descending: false, nulls_first: true } }]]@2 as col_2]",
-            "  BoundedWindowAggExec: wdw=[count([Column { name: \"sn\", index: 0 }]) PARTITION BY: [[Column { name: \"hash\", index: 1 }]], ORDER BY: [[PhysicalSortExpr { expr: Column { name: \"sn\", index: 0 }, options: SortOptions { descending: false, nulls_first: true } }]]: Ok(Field { name: \"count([Column { name: \\\"sn\\\", index: 0 }]) PARTITION BY: [[Column { name: \\\"hash\\\", index: 1 }]], ORDER BY: [[PhysicalSortExpr { expr: Column { name: \\\"sn\\\", index: 0 }, options: SortOptions { descending: false, nulls_first: true } }]]\", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: CurrentRow, end_bound: Following(UInt64(1)), is_causal: false }], mode=[Linear]",
+            "ProjectionExec: expr=[sn@0 as sn, hash@1 as hash, count([Column { name: \"sn\", index: 0 }]) PARTITION BY: [[Column { name: \"hash\", index: 1 }]], ORDER BY: [LexOrdering { inner: [PhysicalSortExpr { expr: Column { name: \"sn\", index: 0 }, options: SortOptions { descending: false, nulls_first: true } }] }]@2 as col_2]",
+            "  BoundedWindowAggExec: wdw=[count([Column { name: \"sn\", index: 0 }]) PARTITION BY: [[Column { name: \"hash\", index: 1 }]], ORDER BY: [LexOrdering { inner: [PhysicalSortExpr { expr: Column { name: \"sn\", index: 0 }, options: SortOptions { descending: false, nulls_first: true } }] }]: Ok(Field { name: \"count([Column { name: \\\"sn\\\", index: 0 }]) PARTITION BY: [[Column { name: \\\"hash\\\", index: 1 }]], ORDER BY: [LexOrdering { inner: [PhysicalSortExpr { expr: Column { name: \\\"sn\\\", index: 0 }, options: SortOptions { descending: false, nulls_first: true } }] }]\", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: CurrentRow, end_bound: Following(UInt64(1)), is_causal: false }], mode=[Linear]",
             "    StreamingTableExec: partition_sizes=1, projection=[sn, hash], infinite_source=true, output_ordering=[sn@0 ASC NULLS LAST]",
         ];
 

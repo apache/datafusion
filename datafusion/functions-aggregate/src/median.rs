@@ -15,9 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::collections::HashSet;
-use std::fmt::Formatter;
-use std::{fmt::Debug, sync::Arc};
+use std::cmp::Ordering;
+use std::fmt::{Debug, Formatter};
+use std::mem::{size_of, size_of_val};
+use std::sync::Arc;
 
 use arrow::array::{downcast_integer, ArrowNumericType};
 use arrow::{
@@ -30,15 +31,16 @@ use arrow::{
 
 use arrow::array::Array;
 use arrow::array::ArrowNativeTypeOp;
-use arrow::datatypes::ArrowNativeType;
+use arrow::datatypes::{ArrowNativeType, ArrowPrimitiveType};
 
-use datafusion_common::{DataFusionError, Result, ScalarValue};
+use datafusion_common::{DataFusionError, HashSet, Result, ScalarValue};
 use datafusion_expr::function::StateFieldsArgs;
 use datafusion_expr::{
     function::AccumulatorArgs, utils::format_state_name, Accumulator, AggregateUDFImpl,
-    Signature, Volatility,
+    Documentation, Signature, Volatility,
 };
 use datafusion_functions_aggregate_common::utils::Hashable;
+use datafusion_macros::user_doc;
 
 make_udaf_expr_and_func!(
     Median,
@@ -48,6 +50,20 @@ make_udaf_expr_and_func!(
     median_udaf
 );
 
+#[user_doc(
+    doc_section(label = "General Functions"),
+    description = "Returns the median value in the specified column.",
+    syntax_example = "median(expression)",
+    sql_example = r#"```sql
+> SELECT median(column_name) FROM table_name;
++----------------------+
+| median(column_name)   |
++----------------------+
+| 45.5                 |
++----------------------+
+```"#,
+    standard_argument(name = "expression", prefix = "The")
+)]
 /// MEDIAN aggregate expression. If using the non-distinct variation, then this uses a
 /// lot of memory because all values need to be stored in memory before a result can be
 /// computed. If an approximation is sufficient then APPROX_MEDIAN provides a much more
@@ -61,7 +77,7 @@ pub struct Median {
 }
 
 impl Debug for Median {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+    fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
         f.debug_struct("Median")
             .field("name", &self.name())
             .field("signature", &self.signature)
@@ -102,7 +118,7 @@ impl AggregateUDFImpl for Median {
 
     fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<Field>> {
         //Intermediate state is a list of the elements we have collected so far
-        let field = Field::new("item", args.input_types[0].clone(), true);
+        let field = Field::new_list_field(args.input_types[0].clone(), true);
         let state_name = if args.is_distinct {
             "distinct_median"
         } else {
@@ -152,6 +168,10 @@ impl AggregateUDFImpl for Median {
     fn aliases(&self) -> &[String] {
         &[]
     }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        self.doc()
+    }
 }
 
 /// The median accumulator accumulates the raw input values
@@ -166,7 +186,7 @@ struct MedianAccumulator<T: ArrowNumericType> {
     all_values: Vec<T::Native>,
 }
 
-impl<T: ArrowNumericType> std::fmt::Debug for MedianAccumulator<T> {
+impl<T: ArrowNumericType> Debug for MedianAccumulator<T> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "MedianAccumulator({})", self.data_type)
     }
@@ -206,8 +226,7 @@ impl<T: ArrowNumericType> Accumulator for MedianAccumulator<T> {
     }
 
     fn size(&self) -> usize {
-        std::mem::size_of_val(self)
-            + self.all_values.capacity() * std::mem::size_of::<T::Native>()
+        size_of_val(self) + self.all_values.capacity() * size_of::<T::Native>()
     }
 }
 
@@ -223,7 +242,7 @@ struct DistinctMedianAccumulator<T: ArrowNumericType> {
     distinct_values: HashSet<Hashable<T::Native>>,
 }
 
-impl<T: ArrowNumericType> std::fmt::Debug for DistinctMedianAccumulator<T> {
+impl<T: ArrowNumericType> Debug for DistinctMedianAccumulator<T> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "DistinctMedianAccumulator({})", self.data_type)
     }
@@ -278,9 +297,23 @@ impl<T: ArrowNumericType> Accumulator for DistinctMedianAccumulator<T> {
     }
 
     fn size(&self) -> usize {
-        std::mem::size_of_val(self)
-            + self.distinct_values.capacity() * std::mem::size_of::<T::Native>()
+        size_of_val(self) + self.distinct_values.capacity() * size_of::<T::Native>()
     }
+}
+
+/// Get maximum entry in the slice,
+fn slice_max<T>(array: &[T::Native]) -> T::Native
+where
+    T: ArrowPrimitiveType,
+    T::Native: PartialOrd, // Ensure the type supports PartialOrd for comparison
+{
+    // Make sure that, array is not empty.
+    debug_assert!(!array.is_empty());
+    // `.unwrap()` is safe here as the array is supposed to be non-empty
+    *array
+        .iter()
+        .max_by(|x, y| x.partial_cmp(y).unwrap_or(Ordering::Less))
+        .unwrap()
 }
 
 fn calculate_median<T: ArrowNumericType>(
@@ -293,8 +326,11 @@ fn calculate_median<T: ArrowNumericType>(
         None
     } else if len % 2 == 0 {
         let (low, high, _) = values.select_nth_unstable_by(len / 2, cmp);
-        let (_, low, _) = low.select_nth_unstable_by(low.len() - 1, cmp);
-        let median = low.add_wrapping(*high).div_wrapping(T::Native::usize_as(2));
+        // Get the maximum of the low (left side after bi-partitioning)
+        let left_max = slice_max::<T>(low);
+        let median = left_max
+            .add_wrapping(*high)
+            .div_wrapping(T::Native::usize_as(2));
         Some(median)
     } else {
         let (_, median, _) = values.select_nth_unstable_by(len / 2, cmp);

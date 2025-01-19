@@ -165,7 +165,7 @@ logical_plan
 03)----TableScan: aggregate_test_100 projection=[c1, c2, c3]
 physical_plan
 01)ProjectionExec: expr=[c1@0 as c1, c2@1 as c2]
-02)--SortExec: expr=[c2@1 ASC NULLS LAST,c3@2 ASC NULLS LAST], preserve_partitioning=[false]
+02)--SortExec: expr=[c2@1 ASC NULLS LAST, c3@2 ASC NULLS LAST], preserve_partitioning=[false]
 03)----CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c1, c2, c3], has_header=true
 
 query II
@@ -330,6 +330,14 @@ select column1 + column2 from foo group by column1, column2 ORDER BY column2 des
 # Test issue: https://github.com/apache/datafusion/issues/11549
 query I
 select column1 from foo order by log(column2);
+----
+1
+3
+5
+
+# Test issue: https://github.com/apache/datafusion/issues/13157
+query I
+select column1 from foo order by column2 % 2, column2;
 ----
 1
 3
@@ -683,7 +691,7 @@ logical_plan
 01)Sort: t1.id DESC NULLS FIRST, t1.name ASC NULLS LAST
 02)--TableScan: t1 projection=[id, name]
 physical_plan
-01)SortExec: expr=[id@0 DESC,name@1 ASC NULLS LAST], preserve_partitioning=[false]
+01)SortExec: expr=[id@0 DESC, name@1 ASC NULLS LAST], preserve_partitioning=[false]
 02)--MemoryExec: partitions=1, partition_sizes=[1]
 
 query IT
@@ -702,7 +710,7 @@ logical_plan
 01)Sort: t1.id ASC NULLS LAST, t1.name ASC NULLS LAST
 02)--TableScan: t1 projection=[id, name]
 physical_plan
-01)SortExec: expr=[id@0 ASC NULLS LAST,name@1 ASC NULLS LAST], preserve_partitioning=[false]
+01)SortExec: expr=[id@0 ASC NULLS LAST, name@1 ASC NULLS LAST], preserve_partitioning=[false]
 02)--MemoryExec: partitions=1, partition_sizes=[1]
 
 
@@ -768,8 +776,8 @@ logical_plan
 13)------------Projection: column1 AS t
 14)--------------Values: (Int64(0)), (Int64(1))
 physical_plan
-01)SortPreservingMergeExec: [m@0 ASC NULLS LAST,t@1 ASC NULLS LAST]
-02)--SortExec: expr=[m@0 ASC NULLS LAST,t@1 ASC NULLS LAST], preserve_partitioning=[true]
+01)SortPreservingMergeExec: [m@0 ASC NULLS LAST, t@1 ASC NULLS LAST]
+02)--SortExec: expr=[m@0 ASC NULLS LAST, t@1 ASC NULLS LAST], preserve_partitioning=[true]
 03)----InterleaveExec
 04)------ProjectionExec: expr=[0 as m, t@0 as t]
 05)--------AggregateExec: mode=FinalPartitioned, gby=[t@0 as t], aggr=[]
@@ -778,7 +786,7 @@ physical_plan
 08)--------------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
 09)----------------AggregateExec: mode=Partial, gby=[t@0 as t], aggr=[]
 10)------------------ProjectionExec: expr=[column1@0 as t]
-11)--------------------ValuesExec
+11)--------------------MemoryExec: partitions=1, partition_sizes=[1]
 12)------ProjectionExec: expr=[1 as m, t@0 as t]
 13)--------AggregateExec: mode=FinalPartitioned, gby=[t@0 as t], aggr=[]
 14)----------CoalesceBatchesExec: target_batch_size=8192
@@ -786,7 +794,7 @@ physical_plan
 16)--------------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
 17)----------------AggregateExec: mode=Partial, gby=[t@0 as t], aggr=[]
 18)------------------ProjectionExec: expr=[column1@0 as t]
-19)--------------------ValuesExec
+19)--------------------MemoryExec: partitions=1, partition_sizes=[1]
 
 #####
 # Multi column sorting with lists
@@ -1229,12 +1237,12 @@ logical_plan
 09)----------TableScan: ordered_table projection=[a0, b, c, d]
 physical_plan
 01)ProjectionExec: expr=[b@0 as b, c@1 as c, a@2 as a, a0@3 as a0]
-02)--SortPreservingMergeExec: [d@4 ASC NULLS LAST,c@1 ASC NULLS LAST,a@2 ASC NULLS LAST,a0@3 ASC NULLS LAST,b@0 ASC NULLS LAST], fetch=2
+02)--SortPreservingMergeExec: [d@4 ASC NULLS LAST, c@1 ASC NULLS LAST, a@2 ASC NULLS LAST, a0@3 ASC NULLS LAST, b@0 ASC NULLS LAST], fetch=2
 03)----UnionExec
-04)------SortExec: TopK(fetch=2), expr=[d@4 ASC NULLS LAST,c@1 ASC NULLS LAST,a@2 ASC NULLS LAST,b@0 ASC NULLS LAST], preserve_partitioning=[false]
+04)------SortExec: TopK(fetch=2), expr=[d@4 ASC NULLS LAST, c@1 ASC NULLS LAST, a@2 ASC NULLS LAST, b@0 ASC NULLS LAST], preserve_partitioning=[false]
 05)--------ProjectionExec: expr=[b@1 as b, c@2 as c, a@0 as a, NULL as a0, d@3 as d]
 06)----------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a, b, c, d], output_ordering=[c@2 ASC NULLS LAST], has_header=true
-07)------SortExec: TopK(fetch=2), expr=[d@4 ASC NULLS LAST,c@1 ASC NULLS LAST,a0@3 ASC NULLS LAST,b@0 ASC NULLS LAST], preserve_partitioning=[false]
+07)------SortExec: TopK(fetch=2), expr=[d@4 ASC NULLS LAST, c@1 ASC NULLS LAST, a0@3 ASC NULLS LAST, b@0 ASC NULLS LAST], preserve_partitioning=[false]
 08)--------ProjectionExec: expr=[b@1 as b, c@2 as c, NULL as a, a0@0 as a0, d@3 as d]
 09)----------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a0, b, c, d], output_ordering=[c@2 ASC NULLS LAST], has_header=true
 
@@ -1252,3 +1260,103 @@ limit 2;
 
 statement ok
 drop table ordered_table;
+
+query TT
+EXPLAIN SELECT
+    CASE
+        WHEN name = 'name1' THEN 0.0
+        WHEN name = 'name2' THEN 0.5
+    END AS a
+FROM (
+    SELECT 'name1' AS name
+    UNION ALL
+    SELECT 'name2'
+)
+ORDER BY a DESC;
+----
+logical_plan
+01)Sort: a DESC NULLS FIRST
+02)--Projection: CASE WHEN name = Utf8("name1") THEN Float64(0) WHEN name = Utf8("name2") THEN Float64(0.5) END AS a
+03)----Union
+04)------Projection: Utf8("name1") AS name
+05)--------EmptyRelation
+06)------Projection: Utf8("name2") AS name
+07)--------EmptyRelation
+physical_plan
+01)SortPreservingMergeExec: [a@0 DESC]
+02)--ProjectionExec: expr=[CASE WHEN name@0 = name1 THEN 0 WHEN name@0 = name2 THEN 0.5 END as a]
+03)----UnionExec
+04)------ProjectionExec: expr=[name1 as name]
+05)--------PlaceholderRowExec
+06)------ProjectionExec: expr=[name2 as name]
+07)--------PlaceholderRowExec
+
+query R
+SELECT
+    CASE
+        WHEN name = 'name1' THEN 0.0
+        WHEN name = 'name2' THEN 0.5
+    END AS a
+FROM (
+    SELECT 'name1' AS name
+    UNION ALL
+    SELECT 'name2'
+)
+ORDER BY a DESC;
+----
+0.5
+0
+
+# Test that when a column has a unique non-null constraint (via PRIMARY KEY) and is ordered (via WITH ORDER),
+# we can eliminate sorts on derived lexicographical orderings that start with that column.
+statement ok
+CREATE EXTERNAL TABLE table_with_ordered_pk (
+  c1 INT,
+  c2 INT,
+  c3 INT,
+  PRIMARY KEY (c1)
+)
+STORED AS CSV
+WITH ORDER (c1 ASC)
+OPTIONS ('format.has_header' 'true')
+LOCATION '../core/tests/data/aggregate_agg_multi_order.csv';
+
+query TT
+EXPLAIN SELECT c1, c2 FROM table_with_ordered_pk ORDER BY c1, c2;
+----
+logical_plan
+01)Sort: table_with_ordered_pk.c1 ASC NULLS LAST, table_with_ordered_pk.c2 ASC NULLS LAST
+02)--TableScan: table_with_ordered_pk projection=[c1, c2]
+physical_plan CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/aggregate_agg_multi_order.csv]]}, projection=[c1, c2], output_ordering=[c1@0 ASC NULLS LAST], constraints=[PrimaryKey([0])], has_header=true
+
+statement ok
+drop table table_with_ordered_pk;
+
+statement ok
+set datafusion.execution.target_partitions = 1;
+
+statement ok
+set datafusion.explain.physical_plan_only = true;
+
+# Aggregation operation also can introduce unique values
+statement ok
+CREATE EXTERNAL TABLE table_with_ordered_not_null (
+  c1 INT NOT NULL,
+  c2 INT,
+  c3 INT,
+)
+STORED AS CSV
+WITH ORDER (c1)
+OPTIONS ('format.has_header' 'true')
+LOCATION '../core/tests/data/aggregate_agg_multi_order.csv';
+
+query TT
+EXPLAIN SELECT c1, SUM(c2) as sum_c2 FROM table_with_ordered_not_null GROUP BY c1 ORDER BY c1, sum_c2;
+----
+physical_plan
+01)ProjectionExec: expr=[c1@0 as c1, sum(table_with_ordered_not_null.c2)@1 as sum_c2]
+02)--AggregateExec: mode=Single, gby=[c1@0 as c1], aggr=[sum(table_with_ordered_not_null.c2)], ordering_mode=Sorted
+03)----CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/aggregate_agg_multi_order.csv]]}, projection=[c1, c2], output_ordering=[c1@0 ASC NULLS LAST], has_header=true
+
+statement ok
+drop table table_with_ordered_not_null;

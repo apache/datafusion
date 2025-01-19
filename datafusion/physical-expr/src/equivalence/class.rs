@@ -15,20 +15,19 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use super::{add_offset_to_expr, ProjectionMapping};
+use crate::{
+    expressions::Column, LexOrdering, LexRequirement, PhysicalExpr, PhysicalExprRef,
+    PhysicalSortExpr, PhysicalSortRequirement,
+};
+use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
+use datafusion_common::{JoinType, ScalarValue};
+use datafusion_physical_expr_common::physical_expr::format_physical_expr_list;
 use std::fmt::Display;
 use std::sync::Arc;
+use std::vec::IntoIter;
 
-use super::{add_offset_to_expr, collapse_lex_req, ProjectionMapping};
-use crate::{
-    expressions::Column, physical_expr::deduplicate_physical_exprs,
-    physical_exprs_bag_equal, physical_exprs_contains, LexOrdering, LexOrderingRef,
-    LexRequirement, LexRequirementRef, PhysicalExpr, PhysicalExprRef, PhysicalSortExpr,
-    PhysicalSortRequirement,
-};
-
-use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
-use datafusion_common::JoinType;
-use datafusion_physical_expr_common::physical_expr::format_physical_expr_list;
+use indexmap::{IndexMap, IndexSet};
 
 /// A structure representing a expression known to be constant in a physical execution plan.
 ///
@@ -56,19 +55,50 @@ use datafusion_physical_expr_common::physical_expr::format_physical_expr_list;
 /// // create a constant expression from a physical expression
 /// let const_expr = ConstExpr::from(col);
 /// ```
+// TODO: Consider refactoring the `across_partitions` and `value` fields into an enum:
+//
+// ```
+// enum PartitionValues {
+//     Uniform(Option<ScalarValue>),           // Same value across all partitions
+//     Heterogeneous(Vec<Option<ScalarValue>>) // Different values per partition
+// }
+// ```
+//
+// This would provide more flexible representation of partition values.
+// Note: This is a breaking change for the equivalence API and should be
+// addressed in a separate issue/PR.
 #[derive(Debug, Clone)]
 pub struct ConstExpr {
     /// The  expression that is known to be constant (e.g. a `Column`)
     expr: Arc<dyn PhysicalExpr>,
     /// Does the constant have the same value across all partitions? See
     /// struct docs for more details
-    across_partitions: bool,
+    across_partitions: AcrossPartitions,
+}
+
+#[derive(PartialEq, Clone, Debug)]
+/// Represents whether a constant expression's value is uniform or varies across partitions.
+///
+/// The `AcrossPartitions` enum is used to describe the nature of a constant expression
+/// in a physical execution plan:
+///
+/// - `Heterogeneous`: The constant expression may have different values for different partitions.
+/// - `Uniform(Option<ScalarValue>)`: The constant expression has the same value across all partitions,
+///   or is `None` if the value is not specified.
+pub enum AcrossPartitions {
+    Heterogeneous,
+    Uniform(Option<ScalarValue>),
+}
+
+impl Default for AcrossPartitions {
+    fn default() -> Self {
+        Self::Heterogeneous
+    }
 }
 
 impl PartialEq for ConstExpr {
     fn eq(&self, other: &Self) -> bool {
-        self.across_partitions == other.across_partitions
-            && self.expr.eq(other.expr.as_any())
+        self.across_partitions == other.across_partitions && self.expr.eq(&other.expr)
     }
 }
 
@@ -81,14 +111,14 @@ impl ConstExpr {
         Self {
             expr,
             // By default, assume constant expressions are not same across partitions.
-            across_partitions: false,
+            across_partitions: Default::default(),
         }
     }
 
     /// Set the `across_partitions` flag
     ///
     /// See struct docs for more details
-    pub fn with_across_partitions(mut self, across_partitions: bool) -> Self {
+    pub fn with_across_partitions(mut self, across_partitions: AcrossPartitions) -> Self {
         self.across_partitions = across_partitions;
         self
     }
@@ -96,8 +126,8 @@ impl ConstExpr {
     /// Is the  expression the same across all partitions?
     ///
     /// See struct docs for more details
-    pub fn across_partitions(&self) -> bool {
-        self.across_partitions
+    pub fn across_partitions(&self) -> AcrossPartitions {
+        self.across_partitions.clone()
     }
 
     pub fn expr(&self) -> &Arc<dyn PhysicalExpr> {
@@ -115,19 +145,19 @@ impl ConstExpr {
         let maybe_expr = f(&self.expr);
         maybe_expr.map(|expr| Self {
             expr,
-            across_partitions: self.across_partitions,
+            across_partitions: self.across_partitions.clone(),
         })
     }
 
     /// Returns true if this constant expression is equal to the given expression
     pub fn eq_expr(&self, other: impl AsRef<dyn PhysicalExpr>) -> bool {
-        self.expr.eq(other.as_ref().as_any())
+        self.expr.as_ref() == other.as_ref()
     }
 
     /// Returns a [`Display`]able list of `ConstExpr`.
     pub fn format_list(input: &[ConstExpr]) -> impl Display + '_ {
         struct DisplayableList<'a>(&'a [ConstExpr]);
-        impl<'a> Display for DisplayableList<'a> {
+        impl Display for DisplayableList<'_> {
             fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
                 let mut first = true;
                 for const_expr in self.0 {
@@ -145,14 +175,20 @@ impl ConstExpr {
     }
 }
 
-/// Display implementation for `ConstExpr`
-///
-/// Example `c` or `c(across_partitions)`
 impl Display for ConstExpr {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.expr)?;
-        if self.across_partitions {
-            write!(f, "(across_partitions)")?;
+        match &self.across_partitions {
+            AcrossPartitions::Heterogeneous => {
+                write!(f, "(heterogeneous)")?;
+            }
+            AcrossPartitions::Uniform(value) => {
+                if let Some(val) = value {
+                    write!(f, "(uniform: {})", val)?;
+                } else {
+                    write!(f, "(uniform: unknown)")?;
+                }
+            }
         }
         Ok(())
     }
@@ -192,47 +228,47 @@ pub struct EquivalenceClass {
     /// The expressions in this equivalence class. The order doesn't
     /// matter for equivalence purposes
     ///
-    /// TODO: use a HashSet for this instead of a Vec
-    exprs: Vec<Arc<dyn PhysicalExpr>>,
+    exprs: IndexSet<Arc<dyn PhysicalExpr>>,
 }
 
 impl PartialEq for EquivalenceClass {
     /// Returns true if other is equal in the sense
     /// of bags (multi-sets), disregarding their orderings.
     fn eq(&self, other: &Self) -> bool {
-        physical_exprs_bag_equal(&self.exprs, &other.exprs)
+        self.exprs.eq(&other.exprs)
     }
 }
 
 impl EquivalenceClass {
     /// Create a new empty equivalence class
     pub fn new_empty() -> Self {
-        Self { exprs: vec![] }
+        Self {
+            exprs: IndexSet::new(),
+        }
     }
 
     // Create a new equivalence class from a pre-existing `Vec`
-    pub fn new(mut exprs: Vec<Arc<dyn PhysicalExpr>>) -> Self {
-        deduplicate_physical_exprs(&mut exprs);
-        Self { exprs }
+    pub fn new(exprs: Vec<Arc<dyn PhysicalExpr>>) -> Self {
+        Self {
+            exprs: exprs.into_iter().collect(),
+        }
     }
 
     /// Return the inner vector of expressions
     pub fn into_vec(self) -> Vec<Arc<dyn PhysicalExpr>> {
-        self.exprs
+        self.exprs.into_iter().collect()
     }
 
     /// Return the "canonical" expression for this class (the first element)
     /// if any
     fn canonical_expr(&self) -> Option<Arc<dyn PhysicalExpr>> {
-        self.exprs.first().cloned()
+        self.exprs.iter().next().cloned()
     }
 
     /// Insert the expression into this class, meaning it is known to be equal to
     /// all other expressions in this class
     pub fn push(&mut self, expr: Arc<dyn PhysicalExpr>) {
-        if !self.contains(&expr) {
-            self.exprs.push(expr);
-        }
+        self.exprs.insert(expr);
     }
 
     /// Inserts all the expressions from other into this class
@@ -245,7 +281,7 @@ impl EquivalenceClass {
 
     /// Returns true if this equivalence class contains t expression
     pub fn contains(&self, expr: &Arc<dyn PhysicalExpr>) -> bool {
-        physical_exprs_contains(&self.exprs, expr)
+        self.exprs.contains(expr)
     }
 
     /// Returns true if this equivalence class has any entries in common with `other`
@@ -287,11 +323,10 @@ impl Display for EquivalenceClass {
     }
 }
 
-/// An `EquivalenceGroup` is a collection of `EquivalenceClass`es where each
-/// class represents a distinct equivalence class in a relation.
+/// A collection of distinct `EquivalenceClass`es
 #[derive(Debug, Clone)]
 pub struct EquivalenceGroup {
-    pub classes: Vec<EquivalenceClass>,
+    classes: Vec<EquivalenceClass>,
 }
 
 impl EquivalenceGroup {
@@ -475,13 +510,13 @@ impl EquivalenceGroup {
     /// This function applies the `normalize_sort_expr` function for all sort
     /// expressions in `sort_exprs` and returns the corresponding normalized
     /// sort expressions.
-    pub fn normalize_sort_exprs(&self, sort_exprs: LexOrderingRef) -> LexOrdering {
+    pub fn normalize_sort_exprs(&self, sort_exprs: &LexOrdering) -> LexOrdering {
         // Convert sort expressions to sort requirements:
-        let sort_reqs = PhysicalSortRequirement::from_sort_exprs(sort_exprs.iter());
+        let sort_reqs = LexRequirement::from(sort_exprs.clone());
         // Normalize the requirements:
         let normalized_sort_reqs = self.normalize_sort_requirements(&sort_reqs);
         // Convert sort requirements back to sort expressions:
-        PhysicalSortRequirement::to_sort_exprs(normalized_sort_reqs.inner)
+        LexOrdering::from(normalized_sort_reqs)
     }
 
     /// This function applies the `normalize_sort_requirement` function for all
@@ -489,14 +524,15 @@ impl EquivalenceGroup {
     /// sort requirements.
     pub fn normalize_sort_requirements(
         &self,
-        sort_reqs: LexRequirementRef,
+        sort_reqs: &LexRequirement,
     ) -> LexRequirement {
-        collapse_lex_req(LexRequirement::new(
+        LexRequirement::new(
             sort_reqs
                 .iter()
                 .map(|sort_req| self.normalize_sort_requirement(sort_req.clone()))
                 .collect(),
-        ))
+        )
+        .collapse()
     }
 
     /// Projects `expr` according to the given projection mapping.
@@ -520,7 +556,7 @@ impl EquivalenceGroup {
                 // and the equivalence class `(a, b)`, expression `b` projects to `a1`.
                 if self
                     .get_equivalence_class(source)
-                    .map_or(false, |group| group.contains(expr))
+                    .is_some_and(|group| group.contains(expr))
                 {
                     return Some(Arc::clone(target));
                 }
@@ -548,28 +584,20 @@ impl EquivalenceGroup {
                 .collect::<Vec<_>>();
             (new_class.len() > 1).then_some(EquivalenceClass::new(new_class))
         });
-        // TODO: Convert the algorithm below to a version that uses `HashMap`.
-        //       once `Arc<dyn PhysicalExpr>` can be stored in `HashMap`.
-        // See issue: https://github.com/apache/datafusion/issues/8027
-        let mut new_classes = vec![];
-        for (source, target) in mapping.iter() {
-            if new_classes.is_empty() {
-                new_classes.push((source, vec![Arc::clone(target)]));
-            }
-            if let Some((_, values)) =
-                new_classes.iter_mut().find(|(key, _)| key.eq(source))
-            {
-                if !physical_exprs_contains(values, target) {
-                    values.push(Arc::clone(target));
-                }
-            }
-        }
+        // the key is the source expression and the value is the EquivalenceClass that contains the target expression of the source expression.
+        let mut new_classes: IndexMap<Arc<dyn PhysicalExpr>, EquivalenceClass> =
+            IndexMap::new();
+        mapping.iter().for_each(|(source, target)| {
+            new_classes
+                .entry(Arc::clone(source))
+                .or_insert_with(EquivalenceClass::new_empty)
+                .push(Arc::clone(target));
+        });
         // Only add equivalence classes with at least two members as singleton
         // equivalence classes are meaningless.
         let new_classes = new_classes
             .into_iter()
-            .filter_map(|(_, values)| (values.len() > 1).then_some(values))
-            .map(EquivalenceClass::new);
+            .filter_map(|(_, cls)| (cls.len() > 1).then_some(cls));
 
         let classes = projected_classes.chain(new_classes).collect();
         Self::new(classes)
@@ -632,9 +660,76 @@ impl EquivalenceGroup {
                 }
                 result
             }
-            JoinType::LeftSemi | JoinType::LeftAnti => self.clone(),
+            JoinType::LeftSemi | JoinType::LeftAnti | JoinType::LeftMark => self.clone(),
             JoinType::RightSemi | JoinType::RightAnti => right_equivalences.clone(),
         }
+    }
+
+    /// Checks if two expressions are equal either directly or through equivalence classes.
+    /// For complex expressions (e.g. a + b), checks that the expression trees are structurally
+    /// identical and their leaf nodes are equivalent either directly or through equivalence classes.
+    pub fn exprs_equal(
+        &self,
+        left: &Arc<dyn PhysicalExpr>,
+        right: &Arc<dyn PhysicalExpr>,
+    ) -> bool {
+        // Direct equality check
+        if left.eq(right) {
+            return true;
+        }
+
+        // Check if expressions are equivalent through equivalence classes
+        // We need to check both directions since expressions might be in different classes
+        if let Some(left_class) = self.get_equivalence_class(left) {
+            if left_class.contains(right) {
+                return true;
+            }
+        }
+        if let Some(right_class) = self.get_equivalence_class(right) {
+            if right_class.contains(left) {
+                return true;
+            }
+        }
+
+        // For non-leaf nodes, check structural equality
+        let left_children = left.children();
+        let right_children = right.children();
+
+        // If either expression is a leaf node and we haven't found equality yet,
+        // they must be different
+        if left_children.is_empty() || right_children.is_empty() {
+            return false;
+        }
+
+        // Type equality check through reflection
+        if left.as_any().type_id() != right.as_any().type_id() {
+            return false;
+        }
+
+        // Check if the number of children is the same
+        if left_children.len() != right_children.len() {
+            return false;
+        }
+
+        // Check if all children are equal
+        left_children
+            .into_iter()
+            .zip(right_children)
+            .all(|(left_child, right_child)| self.exprs_equal(left_child, right_child))
+    }
+
+    /// Return the inner classes of this equivalence group.
+    pub fn into_inner(self) -> Vec<EquivalenceClass> {
+        self.classes
+    }
+}
+
+impl IntoIterator for EquivalenceGroup {
+    type Item = EquivalenceClass;
+    type IntoIter = IntoIter<EquivalenceClass>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.classes.into_iter()
     }
 }
 
@@ -657,9 +752,10 @@ mod tests {
 
     use super::*;
     use crate::equivalence::tests::create_test_params;
-    use crate::expressions::{lit, Literal};
+    use crate::expressions::{lit, BinaryExpr, Literal};
 
     use datafusion_common::{Result, ScalarValue};
+    use datafusion_expr::Operator;
 
     #[test]
     fn test_bridge_groups() -> Result<()> {
@@ -786,5 +882,160 @@ mod tests {
         // there is no common entry
         assert!(!cls1.contains_any(&cls3));
         assert!(!cls2.contains_any(&cls3));
+    }
+
+    #[test]
+    fn test_exprs_equal() -> Result<()> {
+        struct TestCase {
+            left: Arc<dyn PhysicalExpr>,
+            right: Arc<dyn PhysicalExpr>,
+            expected: bool,
+            description: &'static str,
+        }
+
+        // Create test columns
+        let col_a = Arc::new(Column::new("a", 0)) as Arc<dyn PhysicalExpr>;
+        let col_b = Arc::new(Column::new("b", 1)) as Arc<dyn PhysicalExpr>;
+        let col_x = Arc::new(Column::new("x", 2)) as Arc<dyn PhysicalExpr>;
+        let col_y = Arc::new(Column::new("y", 3)) as Arc<dyn PhysicalExpr>;
+
+        // Create test literals
+        let lit_1 =
+            Arc::new(Literal::from(ScalarValue::Int32(Some(1)))) as Arc<dyn PhysicalExpr>;
+        let lit_2 =
+            Arc::new(Literal::from(ScalarValue::Int32(Some(2)))) as Arc<dyn PhysicalExpr>;
+
+        // Create equivalence group with classes (a = x) and (b = y)
+        let eq_group = EquivalenceGroup::new(vec![
+            EquivalenceClass::new(vec![Arc::clone(&col_a), Arc::clone(&col_x)]),
+            EquivalenceClass::new(vec![Arc::clone(&col_b), Arc::clone(&col_y)]),
+        ]);
+
+        let test_cases = vec![
+            // Basic equality tests
+            TestCase {
+                left: Arc::clone(&col_a),
+                right: Arc::clone(&col_a),
+                expected: true,
+                description: "Same column should be equal",
+            },
+            // Equivalence class tests
+            TestCase {
+                left: Arc::clone(&col_a),
+                right: Arc::clone(&col_x),
+                expected: true,
+                description: "Columns in same equivalence class should be equal",
+            },
+            TestCase {
+                left: Arc::clone(&col_b),
+                right: Arc::clone(&col_y),
+                expected: true,
+                description: "Columns in same equivalence class should be equal",
+            },
+            TestCase {
+                left: Arc::clone(&col_a),
+                right: Arc::clone(&col_b),
+                expected: false,
+                description:
+                    "Columns in different equivalence classes should not be equal",
+            },
+            // Literal tests
+            TestCase {
+                left: Arc::clone(&lit_1),
+                right: Arc::clone(&lit_1),
+                expected: true,
+                description: "Same literal should be equal",
+            },
+            TestCase {
+                left: Arc::clone(&lit_1),
+                right: Arc::clone(&lit_2),
+                expected: false,
+                description: "Different literals should not be equal",
+            },
+            // Complex expression tests
+            TestCase {
+                left: Arc::new(BinaryExpr::new(
+                    Arc::clone(&col_a),
+                    Operator::Plus,
+                    Arc::clone(&col_b),
+                )) as Arc<dyn PhysicalExpr>,
+                right: Arc::new(BinaryExpr::new(
+                    Arc::clone(&col_x),
+                    Operator::Plus,
+                    Arc::clone(&col_y),
+                )) as Arc<dyn PhysicalExpr>,
+                expected: true,
+                description:
+                    "Binary expressions with equivalent operands should be equal",
+            },
+            TestCase {
+                left: Arc::new(BinaryExpr::new(
+                    Arc::clone(&col_a),
+                    Operator::Plus,
+                    Arc::clone(&col_b),
+                )) as Arc<dyn PhysicalExpr>,
+                right: Arc::new(BinaryExpr::new(
+                    Arc::clone(&col_x),
+                    Operator::Plus,
+                    Arc::clone(&col_a),
+                )) as Arc<dyn PhysicalExpr>,
+                expected: false,
+                description:
+                    "Binary expressions with non-equivalent operands should not be equal",
+            },
+            TestCase {
+                left: Arc::new(BinaryExpr::new(
+                    Arc::clone(&col_a),
+                    Operator::Plus,
+                    Arc::clone(&lit_1),
+                )) as Arc<dyn PhysicalExpr>,
+                right: Arc::new(BinaryExpr::new(
+                    Arc::clone(&col_x),
+                    Operator::Plus,
+                    Arc::clone(&lit_1),
+                )) as Arc<dyn PhysicalExpr>,
+                expected: true,
+                description: "Binary expressions with equivalent column and same literal should be equal",
+            },
+            TestCase {
+                left: Arc::new(BinaryExpr::new(
+                    Arc::new(BinaryExpr::new(
+                        Arc::clone(&col_a),
+                        Operator::Plus,
+                        Arc::clone(&col_b),
+                    )),
+                    Operator::Multiply,
+                    Arc::clone(&lit_1),
+                )) as Arc<dyn PhysicalExpr>,
+                right: Arc::new(BinaryExpr::new(
+                    Arc::new(BinaryExpr::new(
+                        Arc::clone(&col_x),
+                        Operator::Plus,
+                        Arc::clone(&col_y),
+                    )),
+                    Operator::Multiply,
+                    Arc::clone(&lit_1),
+                )) as Arc<dyn PhysicalExpr>,
+                expected: true,
+                description: "Nested binary expressions with equivalent operands should be equal",
+            },
+        ];
+
+        for TestCase {
+            left,
+            right,
+            expected,
+            description,
+        } in test_cases
+        {
+            let actual = eq_group.exprs_equal(&left, &right);
+            assert_eq!(
+                actual, expected,
+                "{}: Failed comparing {:?} and {:?}, expected {}, got {}",
+                description, left, right, expected, actual
+            );
+        }
+
+        Ok(())
     }
 }

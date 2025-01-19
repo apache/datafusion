@@ -306,9 +306,16 @@ impl NamePreserver {
     /// Create a new NamePreserver for rewriting the `expr` that is part of the specified plan
     pub fn new(plan: &LogicalPlan) -> Self {
         Self {
-            // The schema of Filter and Join nodes comes from their inputs rather than their output expressions,
-            // so there is no need to use aliases to preserve expression names.
-            use_alias: !matches!(plan, LogicalPlan::Filter(_) | LogicalPlan::Join(_)),
+            // The expressions of these plans do not contribute to their output schema,
+            // so there is no need to preserve expression names to prevent a schema change.
+            use_alias: !matches!(
+                plan,
+                LogicalPlan::Filter(_)
+                    | LogicalPlan::Join(_)
+                    | LogicalPlan::TableScan(_)
+                    | LogicalPlan::Limit(_)
+                    | LogicalPlan::Statement(_)
+            ),
         }
     }
 
@@ -454,10 +461,9 @@ mod test {
             normalize_col_with_schemas_and_ambiguity_check(expr, &[&schemas], &[])
                 .unwrap_err()
                 .strip_backtrace();
-        assert_eq!(
-            error,
-            r#"Schema error: No field named b. Valid fields are "tableA".a."#
-        );
+        let expected = "Schema error: No field named b. \
+            Valid fields are \"tableA\".a.";
+        assert_eq!(error, expected);
     }
 
     #[test]

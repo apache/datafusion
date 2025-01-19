@@ -26,7 +26,8 @@ use super::{
     work_table::{ReservedBatches, WorkTable, WorkTableExec},
     PlanProperties, RecordBatchStream, SendableRecordBatchStream, Statistics,
 };
-use crate::{DisplayAs, DisplayFormatType, ExecutionMode, ExecutionPlan};
+use crate::execution_plan::{Boundedness, EmissionType};
+use crate::{DisplayAs, DisplayFormatType, ExecutionPlan};
 
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
@@ -53,7 +54,7 @@ use futures::{ready, Stream, StreamExt};
 /// Note that there won't be any limit or checks applied to detect
 /// an infinite recursion, so it is up to the planner to ensure that
 /// it won't happen.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct RecursiveQueryExec {
     /// Name of the query handler
     name: String,
@@ -95,6 +96,26 @@ impl RecursiveQueryExec {
         })
     }
 
+    /// Ref to name
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    /// Ref to static term
+    pub fn static_term(&self) -> &Arc<dyn ExecutionPlan> {
+        &self.static_term
+    }
+
+    /// Ref to recursive term
+    pub fn recursive_term(&self) -> &Arc<dyn ExecutionPlan> {
+        &self.recursive_term
+    }
+
+    /// is distinct
+    pub fn is_distinct(&self) -> bool {
+        self.is_distinct
+    }
+
     /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
     fn compute_properties(schema: SchemaRef) -> PlanProperties {
         let eq_properties = EquivalenceProperties::new(schema);
@@ -102,7 +123,8 @@ impl RecursiveQueryExec {
         PlanProperties::new(
             eq_properties,
             Partitioning::UnknownPartitioning(1),
-            ExecutionMode::Bounded,
+            EmissionType::Incremental,
+            Boundedness::Bounded,
         )
     }
 }
@@ -125,7 +147,7 @@ impl ExecutionPlan for RecursiveQueryExec {
     }
 
     // TODO: control these hints and see whether we can
-    // infer some from the child plans (static/recurisve terms).
+    // infer some from the child plans (static/recursive terms).
     fn maintains_input_order(&self) -> Vec<bool> {
         vec![false, false]
     }

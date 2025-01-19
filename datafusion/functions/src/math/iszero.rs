@@ -18,17 +18,25 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use arrow::array::{ArrayRef, BooleanArray, Float32Array, Float64Array};
-use arrow::datatypes::DataType;
+use arrow::array::{ArrayRef, AsArray, BooleanArray};
 use arrow::datatypes::DataType::{Boolean, Float32, Float64};
+use arrow::datatypes::{DataType, Float32Type, Float64Type};
 
-use datafusion_common::{exec_err, DataFusionError, Result};
-use datafusion_expr::ColumnarValue;
+use datafusion_common::{exec_err, Result};
 use datafusion_expr::TypeSignature::Exact;
-use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
+use datafusion_expr::{
+    ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
+};
+use datafusion_macros::user_doc;
 
 use crate::utils::make_scalar_function;
 
+#[user_doc(
+    doc_section(label = "Math Functions"),
+    description = "Returns true if a given number is +0.0 or -0.0 otherwise returns false.",
+    syntax_example = "iszero(numeric_expression)",
+    standard_argument(name = "numeric_expression", prefix = "Numeric")
+)]
 #[derive(Debug)]
 pub struct IsZeroFunc {
     signature: Signature,
@@ -69,28 +77,30 @@ impl ScalarUDFImpl for IsZeroFunc {
         Ok(Boolean)
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         make_scalar_function(iszero, vec![])(args)
+    }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        self.doc()
     }
 }
 
 /// Iszero SQL function
 pub fn iszero(args: &[ArrayRef]) -> Result<ArrayRef> {
     match args[0].data_type() {
-        Float64 => Ok(Arc::new(make_function_scalar_inputs_return_type!(
-            &args[0],
-            "x",
-            Float64Array,
-            BooleanArray,
-            { |x: f64| { x == 0_f64 } }
+        Float64 => Ok(Arc::new(BooleanArray::from_unary(
+            args[0].as_primitive::<Float64Type>(),
+            |x| x == 0.0,
         )) as ArrayRef),
 
-        Float32 => Ok(Arc::new(make_function_scalar_inputs_return_type!(
-            &args[0],
-            "x",
-            Float32Array,
-            BooleanArray,
-            { |x: f32| { x == 0_f32 } }
+        Float32 => Ok(Arc::new(BooleanArray::from_unary(
+            args[0].as_primitive::<Float32Type>(),
+            |x| x == 0.0,
         )) as ArrayRef),
 
         other => exec_err!("Unsupported data type {other:?} for function iszero"),

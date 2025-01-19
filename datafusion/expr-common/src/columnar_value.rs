@@ -17,10 +17,9 @@
 
 //! [`ColumnarValue`] represents the result of evaluating an expression.
 
-use arrow::array::ArrayRef;
-use arrow::array::NullArray;
+use arrow::array::{Array, ArrayRef, NullArray};
 use arrow::compute::{kernels, CastOptions};
-use arrow::datatypes::{DataType, TimeUnit};
+use arrow::datatypes::DataType;
 use datafusion_common::format::DEFAULT_CAST_OPTIONS;
 use datafusion_common::{internal_err, Result, ScalarValue};
 use std::sync::Arc;
@@ -132,7 +131,25 @@ impl ColumnarValue {
         })
     }
 
-    /// null columnar values are implemented as a null array in order to pass batch
+    /// Convert a columnar value into an Arrow [`ArrayRef`] with the specified
+    /// number of rows. [`Self::Scalar`] is converted by repeating the same
+    /// scalar multiple times which is not as efficient as handling the scalar
+    /// directly.
+    ///
+    /// See [`Self::values_to_arrays`] to convert multiple columnar values into
+    /// arrays of the same length.
+    ///
+    /// # Errors
+    ///
+    /// Errors if `self` is a Scalar that fails to be converted into an array of size
+    pub fn to_array(&self, num_rows: usize) -> Result<ArrayRef> {
+        Ok(match self {
+            ColumnarValue::Array(array) => Arc::clone(array),
+            ColumnarValue::Scalar(scalar) => scalar.to_array_of_size(num_rows)?,
+        })
+    }
+
+    /// Null columnar values are implemented as a null array in order to pass batch
     /// num_rows
     pub fn create_null_array(num_rows: usize) -> Self {
         ColumnarValue::Array(Arc::new(NullArray::new(num_rows)))
@@ -179,7 +196,7 @@ impl ColumnarValue {
 
         let args = args
             .iter()
-            .map(|arg| arg.clone().into_array(inferred_length))
+            .map(|arg| arg.to_array(inferred_length))
             .collect::<Result<Vec<_>>>()?;
 
         Ok(args)
@@ -196,31 +213,13 @@ impl ColumnarValue {
             ColumnarValue::Array(array) => Ok(ColumnarValue::Array(
                 kernels::cast::cast_with_options(array, cast_type, &cast_options)?,
             )),
-            ColumnarValue::Scalar(scalar) => {
+            ColumnarValue::Scalar(scalar) => Ok(ColumnarValue::from(
                 // TODO(@notfilippo, logical vs physical): if `scalar.data_type` is *logically equivalent*
                 // to `cast_type` then skip the kernel cast and only change the `data_type` of the scalar.
-
-                let scalar_array =
-                    if cast_type == &DataType::Timestamp(TimeUnit::Nanosecond, None) {
-                        if let ScalarValue::Float64(Some(float_ts)) = scalar.value() {
-                            ScalarValue::Int64(Some(
-                                (float_ts * 1_000_000_000_f64).trunc() as i64,
-                            ))
-                            .to_array()?
-                        } else {
-                            scalar.to_array()?
-                        }
-                    } else {
-                        scalar.to_array()?
-                    };
-                let cast_array = kernels::cast::cast_with_options(
-                    &scalar_array,
-                    cast_type,
-                    &cast_options,
-                )?;
-                let cast_scalar = Scalar::try_from_array(&cast_array, 0)?;
-                Ok(ColumnarValue::Scalar(cast_scalar))
-            }
+                scalar
+                    .value()
+                    .cast_to_with_options(cast_type, &cast_options)?,
+            )),
         }
     }
 }

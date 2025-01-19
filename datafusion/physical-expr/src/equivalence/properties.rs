@@ -20,23 +20,23 @@ use std::hash::{Hash, Hasher};
 use std::iter::Peekable;
 use std::slice::Iter;
 use std::sync::Arc;
+use std::{fmt, mem};
 
-use super::ordering::collapse_lex_ordering;
-use crate::equivalence::class::const_exprs_contains;
+use crate::equivalence::class::{const_exprs_contains, AcrossPartitions};
 use crate::equivalence::{
-    collapse_lex_req, EquivalenceClass, EquivalenceGroup, OrderingEquivalenceClass,
-    ProjectionMapping,
+    EquivalenceClass, EquivalenceGroup, OrderingEquivalenceClass, ProjectionMapping,
 };
 use crate::expressions::{with_new_schema, CastExpr, Column, Literal};
 use crate::{
-    physical_exprs_contains, ConstExpr, LexOrdering, LexOrderingRef, LexRequirement,
-    LexRequirementRef, PhysicalExpr, PhysicalExprRef, PhysicalSortExpr,
-    PhysicalSortRequirement,
+    physical_exprs_contains, ConstExpr, LexOrdering, LexRequirement, PhysicalExpr,
+    PhysicalExprRef, PhysicalSortExpr, PhysicalSortRequirement,
 };
 
 use arrow_schema::{SchemaRef, SortOptions};
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
-use datafusion_common::{internal_err, plan_err, JoinSide, JoinType, Result};
+use datafusion_common::{
+    internal_err, plan_err, Constraint, Constraints, HashMap, JoinSide, JoinType, Result,
+};
 use datafusion_expr::interval_arithmetic::Interval;
 use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
 use datafusion_physical_expr_common::utils::ExprPropertiesNode;
@@ -102,7 +102,7 @@ use itertools::Itertools;
 /// # use arrow_schema::{Schema, Field, DataType, SchemaRef};
 /// # use datafusion_physical_expr::{ConstExpr, EquivalenceProperties};
 /// # use datafusion_physical_expr::expressions::col;
-/// use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
+/// use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
 /// # let schema: SchemaRef = Arc::new(Schema::new(vec![
 /// #   Field::new("a", DataType::Int32, false),
 /// #   Field::new("b", DataType::Int32, false),
@@ -115,24 +115,26 @@ use itertools::Itertools;
 /// // with a single constant value of b
 /// let mut eq_properties = EquivalenceProperties::new(schema)
 ///   .with_constants(vec![ConstExpr::from(col_b)]);
-/// eq_properties.add_new_ordering(vec![
+/// eq_properties.add_new_ordering(LexOrdering::new(vec![
 ///   PhysicalSortExpr::new_default(col_a).asc(),
 ///   PhysicalSortExpr::new_default(col_c).desc(),
-/// ]);
+/// ]));
 ///
-/// assert_eq!(eq_properties.to_string(), "order: [[a@0 ASC,c@2 DESC]], const: [b@1]")
+/// assert_eq!(eq_properties.to_string(), "order: [[a@0 ASC, c@2 DESC]], const: [b@1(heterogeneous)]")
 /// ```
 #[derive(Debug, Clone)]
 pub struct EquivalenceProperties {
-    /// Collection of equivalence classes that store expressions with the same
-    /// value.
-    pub eq_group: EquivalenceGroup,
-    /// Equivalent sort expressions for this table.
-    pub oeq_class: OrderingEquivalenceClass,
-    /// Expressions whose values are constant throughout the table.
+    /// Distinct equivalence classes (exprs known to have the same expressions)
+    eq_group: EquivalenceGroup,
+    /// Equivalent sort expressions
+    oeq_class: OrderingEquivalenceClass,
+    /// Expressions whose values are constant
+    ///
     /// TODO: We do not need to track constants separately, they can be tracked
-    ///       inside `eq_groups` as `Literal` expressions.
-    pub constants: Vec<ConstExpr>,
+    ///       inside `eq_group` as `Literal` expressions.
+    constants: Vec<ConstExpr>,
+    /// Table constraints
+    constraints: Constraints,
     /// Schema associated with this object.
     schema: SchemaRef,
 }
@@ -144,8 +146,15 @@ impl EquivalenceProperties {
             eq_group: EquivalenceGroup::empty(),
             oeq_class: OrderingEquivalenceClass::empty(),
             constants: vec![],
+            constraints: Constraints::empty(),
             schema,
         }
+    }
+
+    /// Adds constraints to the properties.
+    pub fn with_constraints(mut self, constraints: Constraints) -> Self {
+        self.constraints = constraints;
+        self
     }
 
     /// Creates a new `EquivalenceProperties` object with the given orderings.
@@ -154,6 +163,7 @@ impl EquivalenceProperties {
             eq_group: EquivalenceGroup::empty(),
             oeq_class: OrderingEquivalenceClass::new(orderings.to_vec()),
             constants: vec![],
+            constraints: Constraints::empty(),
             schema,
         }
     }
@@ -168,6 +178,11 @@ impl EquivalenceProperties {
         &self.oeq_class
     }
 
+    /// Return the inner OrderingEquivalenceClass, consuming self
+    pub fn into_oeq_class(self) -> OrderingEquivalenceClass {
+        self.oeq_class
+    }
+
     /// Returns a reference to the equivalence group within.
     pub fn eq_group(&self) -> &EquivalenceGroup {
         &self.eq_group
@@ -176,6 +191,10 @@ impl EquivalenceProperties {
     /// Returns a reference to the constant expressions
     pub fn constants(&self) -> &[ConstExpr] {
         &self.constants
+    }
+
+    pub fn constraints(&self) -> &Constraints {
+        &self.constraints
     }
 
     /// Returns the output ordering of the properties.
@@ -216,7 +235,9 @@ impl EquivalenceProperties {
     /// Removes constant expressions that may change across partitions.
     /// This method should be used when data from different partitions are merged.
     pub fn clear_per_partition_constants(&mut self) {
-        self.constants.retain(|item| item.across_partitions());
+        self.constants.retain(|item| {
+            matches!(item.across_partitions(), AcrossPartitions::Uniform(_))
+        })
     }
 
     /// Extends this `EquivalenceProperties` by adding the orderings inside the
@@ -256,14 +277,16 @@ impl EquivalenceProperties {
         if self.is_expr_constant(left) {
             // Left expression is constant, add right as constant
             if !const_exprs_contains(&self.constants, right) {
-                self.constants
-                    .push(ConstExpr::from(right).with_across_partitions(true));
+                let const_expr = ConstExpr::from(right)
+                    .with_across_partitions(self.get_expr_constant_value(left));
+                self.constants.push(const_expr);
             }
         } else if self.is_expr_constant(right) {
             // Right expression is constant, add left as constant
             if !const_exprs_contains(&self.constants, left) {
-                self.constants
-                    .push(ConstExpr::from(left).with_across_partitions(true));
+                let const_expr = ConstExpr::from(left)
+                    .with_across_partitions(self.get_expr_constant_value(right));
+                self.constants.push(const_expr);
             }
         }
 
@@ -292,30 +315,28 @@ impl EquivalenceProperties {
         mut self,
         constants: impl IntoIterator<Item = ConstExpr>,
     ) -> Self {
-        let (const_exprs, across_partition_flags): (
-            Vec<Arc<dyn PhysicalExpr>>,
-            Vec<bool>,
-        ) = constants
+        let normalized_constants = constants
             .into_iter()
-            .map(|const_expr| {
-                let across_partitions = const_expr.across_partitions();
-                let expr = const_expr.owned_expr();
-                (expr, across_partitions)
-            })
-            .unzip();
-        for (expr, across_partitions) in self
-            .eq_group
-            .normalize_exprs(const_exprs)
-            .into_iter()
-            .zip(across_partition_flags)
-        {
-            if !const_exprs_contains(&self.constants, &expr) {
-                let const_expr =
-                    ConstExpr::from(expr).with_across_partitions(across_partitions);
-                self.constants.push(const_expr);
-            }
-        }
+            .filter_map(|c| {
+                let across_partitions = c.across_partitions();
+                let expr = c.owned_expr();
+                let normalized_expr = self.eq_group.normalize_expr(expr);
 
+                if const_exprs_contains(&self.constants, &normalized_expr) {
+                    return None;
+                }
+
+                let const_expr = ConstExpr::from(normalized_expr)
+                    .with_across_partitions(across_partitions);
+
+                Some(const_expr)
+            })
+            .collect::<Vec<_>>();
+
+        // Add all new normalized constants
+        self.constants.extend(normalized_constants);
+
+        // Discover any new orderings based on the constants
         for ordering in self.normalized_oeq_class().iter() {
             if let Err(e) = self.discover_new_orderings(&ordering[0].expr) {
                 log::debug!("error discovering new orderings: {e}");
@@ -335,7 +356,6 @@ impl EquivalenceProperties {
         let normalized_expr = self.eq_group().normalize_expr(Arc::clone(expr));
         let eq_class = self
             .eq_group
-            .classes
             .iter()
             .find_map(|class| {
                 class
@@ -345,40 +365,61 @@ impl EquivalenceProperties {
             .unwrap_or_else(|| vec![Arc::clone(&normalized_expr)]);
 
         let mut new_orderings: Vec<LexOrdering> = vec![];
-        for (ordering, next_expr) in self
-            .normalized_oeq_class()
-            .iter()
-            .filter(|ordering| ordering[0].expr.eq(&normalized_expr))
-            // First expression after leading ordering
-            .filter_map(|ordering| Some(ordering).zip(ordering.get(1)))
-        {
-            let leading_ordering = ordering[0].options;
-            // Currently, we only handle expressions with a single child.
-            // TODO: It should be possible to handle expressions orderings like
-            //       f(a, b, c), a, b, c if f is monotonic in all arguments.
+        for ordering in self.normalized_oeq_class().iter() {
+            if !ordering[0].expr.eq(&normalized_expr) {
+                continue;
+            }
+
+            let leading_ordering_options = ordering[0].options;
+
             for equivalent_expr in &eq_class {
                 let children = equivalent_expr.children();
-                if children.len() == 1
-                    && children[0].eq(&next_expr.expr)
-                    && SortProperties::Ordered(leading_ordering)
-                        == equivalent_expr
-                            .get_properties(&[ExprProperties {
-                                sort_properties: SortProperties::Ordered(
-                                    leading_ordering,
-                                ),
-                                range: Interval::make_unbounded(
-                                    &equivalent_expr.data_type(&self.schema)?,
-                                )?,
-                            }])?
-                            .sort_properties
-                {
-                    // Assume existing ordering is [a ASC, b ASC]
-                    // When equality a = f(b) is given, If we know that given ordering `[b ASC]`, ordering `[f(b) ASC]` is valid,
-                    // then we can deduce that ordering `[b ASC]` is also valid.
-                    // Hence, ordering `[b ASC]` can be added to the state as valid ordering.
-                    // (e.g. existing ordering where leading ordering is removed)
-                    new_orderings.push(ordering[1..].to_vec());
-                    break;
+                if children.is_empty() {
+                    continue;
+                }
+
+                // Check if all children match the next expressions in the ordering
+                let mut all_children_match = true;
+                let mut child_properties = vec![];
+
+                // Build properties for each child based on the next expressions
+                for (i, child) in children.iter().enumerate() {
+                    if let Some(next) = ordering.get(i + 1) {
+                        if !child.as_ref().eq(next.expr.as_ref()) {
+                            all_children_match = false;
+                            break;
+                        }
+                        child_properties.push(ExprProperties {
+                            sort_properties: SortProperties::Ordered(next.options),
+                            range: Interval::make_unbounded(
+                                &child.data_type(&self.schema)?,
+                            )?,
+                            preserves_lex_ordering: true,
+                        });
+                    } else {
+                        all_children_match = false;
+                        break;
+                    }
+                }
+
+                if all_children_match {
+                    // Check if the expression is monotonic in all arguments
+                    if let Ok(expr_properties) =
+                        equivalent_expr.get_properties(&child_properties)
+                    {
+                        if expr_properties.preserves_lex_ordering
+                            && SortProperties::Ordered(leading_ordering_options)
+                                == expr_properties.sort_properties
+                        {
+                            // Assume existing ordering is [c ASC, a ASC, b ASC]
+                            // When equality c = f(a,b) is given, if we know that given ordering `[a ASC, b ASC]`,
+                            // ordering `[f(a,b) ASC]` is valid, then we can deduce that ordering `[a ASC, b ASC]` is also valid.
+                            // Hence, ordering `[a ASC, b ASC]` can be added to the state as a valid ordering.
+                            // (e.g. existing ordering where leading ordering is removed)
+                            new_orderings.push(LexOrdering::new(ordering[1..].to_vec()));
+                            break;
+                        }
+                    }
                 }
             }
         }
@@ -390,10 +431,49 @@ impl EquivalenceProperties {
     /// Updates the ordering equivalence group within assuming that the table
     /// is re-sorted according to the argument `sort_exprs`. Note that constants
     /// and equivalence classes are unchanged as they are unaffected by a re-sort.
-    pub fn with_reorder(mut self, sort_exprs: Vec<PhysicalSortExpr>) -> Self {
-        // TODO: In some cases, existing ordering equivalences may still be valid add this analysis.
-        self.oeq_class = OrderingEquivalenceClass::new(vec![sort_exprs]);
+    /// If the given ordering is already satisfied, the function does nothing.
+    pub fn with_reorder(mut self, sort_exprs: LexOrdering) -> Self {
+        // Filter out constant expressions as they don't affect ordering
+        let filtered_exprs = LexOrdering::new(
+            sort_exprs
+                .into_iter()
+                .filter(|expr| !self.is_expr_constant(&expr.expr))
+                .collect(),
+        );
+
+        if filtered_exprs.is_empty() {
+            return self;
+        }
+
+        let mut new_orderings = vec![filtered_exprs.clone()];
+
+        // Preserve valid suffixes from existing orderings
+        let oeq_class = mem::take(&mut self.oeq_class);
+        for existing in oeq_class {
+            if self.is_prefix_of(&filtered_exprs, &existing) {
+                let mut extended = filtered_exprs.clone();
+                extended.extend(existing.into_iter().skip(filtered_exprs.len()));
+                new_orderings.push(extended);
+            }
+        }
+
+        self.oeq_class = OrderingEquivalenceClass::new(new_orderings);
         self
+    }
+
+    /// Checks if the new ordering matches a prefix of the existing ordering
+    /// (considering expression equivalences)
+    fn is_prefix_of(&self, new_order: &LexOrdering, existing: &LexOrdering) -> bool {
+        // Check if new order is longer than existing - can't be a prefix
+        if new_order.len() > existing.len() {
+            return false;
+        }
+
+        // Check if new order matches existing prefix (considering equivalences)
+        new_order.iter().zip(existing).all(|(new, existing)| {
+            self.eq_group.exprs_equal(&new.expr, &existing.expr)
+                && new.options == existing.options
+        })
     }
 
     /// Normalizes the given sort expressions (i.e. `sort_exprs`) using the
@@ -406,13 +486,13 @@ impl EquivalenceProperties {
     /// function would return `vec![a ASC, c ASC]`. Internally, it would first
     /// normalize to `vec![a ASC, c ASC, a ASC]` and end up with the final result
     /// after deduplication.
-    fn normalize_sort_exprs(&self, sort_exprs: LexOrderingRef) -> LexOrdering {
+    fn normalize_sort_exprs(&self, sort_exprs: &LexOrdering) -> LexOrdering {
         // Convert sort expressions to sort requirements:
-        let sort_reqs = PhysicalSortRequirement::from_sort_exprs(sort_exprs.iter());
+        let sort_reqs = LexRequirement::from(sort_exprs.clone());
         // Normalize the requirements:
         let normalized_sort_reqs = self.normalize_sort_requirements(&sort_reqs);
         // Convert sort requirements back to sort expressions:
-        PhysicalSortRequirement::to_sort_exprs(normalized_sort_reqs)
+        LexOrdering::from(normalized_sort_reqs)
     }
 
     /// Normalizes the given sort requirements (i.e. `sort_reqs`) using the
@@ -428,10 +508,7 @@ impl EquivalenceProperties {
     /// function would return `vec![a ASC, c ASC]`. Internally, it would first
     /// normalize to `vec![a ASC, c ASC, a ASC]` and end up with the final result
     /// after deduplication.
-    fn normalize_sort_requirements(
-        &self,
-        sort_reqs: LexRequirementRef,
-    ) -> LexRequirement {
+    fn normalize_sort_requirements(&self, sort_reqs: &LexRequirement) -> LexRequirement {
         let normalized_sort_reqs = self.eq_group.normalize_sort_requirements(sort_reqs);
         let mut constant_exprs = vec![];
         constant_exprs.extend(
@@ -441,31 +518,34 @@ impl EquivalenceProperties {
         );
         let constants_normalized = self.eq_group.normalize_exprs(constant_exprs);
         // Prune redundant sections in the requirement:
-        collapse_lex_req(
-            normalized_sort_reqs
-                .iter()
-                .filter(|&order| {
-                    !physical_exprs_contains(&constants_normalized, &order.expr)
-                })
-                .cloned()
-                .collect(),
-        )
+        normalized_sort_reqs
+            .iter()
+            .filter(|&order| !physical_exprs_contains(&constants_normalized, &order.expr))
+            .cloned()
+            .collect::<LexRequirement>()
+            .collapse()
     }
 
     /// Checks whether the given ordering is satisfied by any of the existing
     /// orderings.
-    pub fn ordering_satisfy(&self, given: LexOrderingRef) -> bool {
+    pub fn ordering_satisfy(&self, given: &LexOrdering) -> bool {
         // Convert the given sort expressions to sort requirements:
-        let sort_requirements = PhysicalSortRequirement::from_sort_exprs(given.iter());
+        let sort_requirements = LexRequirement::from(given.clone());
         self.ordering_satisfy_requirement(&sort_requirements)
     }
 
     /// Checks whether the given sort requirements are satisfied by any of the
     /// existing orderings.
-    pub fn ordering_satisfy_requirement(&self, reqs: LexRequirementRef) -> bool {
+    pub fn ordering_satisfy_requirement(&self, reqs: &LexRequirement) -> bool {
         let mut eq_properties = self.clone();
         // First, standardize the given requirement:
         let normalized_reqs = eq_properties.normalize_sort_requirements(reqs);
+
+        // Check whether given ordering is satisfied by constraints first
+        if self.satisfied_by_constraints(&normalized_reqs) {
+            return true;
+        }
+
         for normalized_req in normalized_reqs {
             // Check whether given ordering is satisfied
             if !eq_properties.ordering_satisfy_single(&normalized_req) {
@@ -489,11 +569,87 @@ impl EquivalenceProperties {
         true
     }
 
+    /// Checks if the sort requirements are satisfied by any of the table constraints (primary key or unique).
+    /// Returns true if any constraint fully satisfies the requirements.
+    fn satisfied_by_constraints(
+        &self,
+        normalized_reqs: &[PhysicalSortRequirement],
+    ) -> bool {
+        self.constraints.iter().any(|constraint| match constraint {
+            Constraint::PrimaryKey(indices) | Constraint::Unique(indices) => self
+                .satisfied_by_constraint(
+                    normalized_reqs,
+                    indices,
+                    matches!(constraint, Constraint::Unique(_)),
+                ),
+        })
+    }
+
+    /// Checks if sort requirements are satisfied by a constraint (primary key or unique).
+    /// Returns true if the constraint indices form a valid prefix of an existing ordering
+    /// that matches the requirements. For unique constraints, also verifies nullable columns.
+    fn satisfied_by_constraint(
+        &self,
+        normalized_reqs: &[PhysicalSortRequirement],
+        indices: &[usize],
+        check_null: bool,
+    ) -> bool {
+        // Requirements must contain indices
+        if indices.len() > normalized_reqs.len() {
+            return false;
+        }
+
+        // Iterate over all orderings
+        self.oeq_class.iter().any(|ordering| {
+            if indices.len() > ordering.len() {
+                return false;
+            }
+
+            // Build a map of column positions in the ordering
+            let mut col_positions = HashMap::with_capacity(ordering.len());
+            for (pos, req) in ordering.iter().enumerate() {
+                if let Some(col) = req.expr.as_any().downcast_ref::<Column>() {
+                    col_positions.insert(
+                        col.index(),
+                        (pos, col.nullable(&self.schema).unwrap_or(true)),
+                    );
+                }
+            }
+
+            // Check if all constraint indices appear in valid positions
+            if !indices.iter().all(|&idx| {
+                col_positions
+                    .get(&idx)
+                    .map(|&(pos, nullable)| {
+                        // For unique constraints, verify column is not nullable if it's first/last
+                        !check_null
+                            || (pos != 0 && pos != ordering.len() - 1)
+                            || !nullable
+                    })
+                    .unwrap_or(false)
+            }) {
+                return false;
+            }
+
+            // Check if this ordering matches requirements prefix
+            let ordering_len = ordering.len();
+            normalized_reqs.len() >= ordering_len
+                && normalized_reqs[..ordering_len].iter().zip(ordering).all(
+                    |(req, existing)| {
+                        req.expr.eq(&existing.expr)
+                            && req
+                                .options
+                                .map_or(true, |req_opts| req_opts == existing.options)
+                    },
+                )
+        })
+    }
+
     /// Determines whether the ordering specified by the given sort requirement
     /// is satisfied based on the orderings within, equivalence classes, and
     /// constant expressions.
     ///
-    /// # Arguments
+    /// # Parameters
     ///
     /// - `req`: A reference to a `PhysicalSortRequirement` for which the ordering
     ///   satisfaction check will be done.
@@ -519,12 +675,12 @@ impl EquivalenceProperties {
         }
     }
 
-    /// Checks whether the `given`` sort requirements are equal or more specific
+    /// Checks whether the `given` sort requirements are equal or more specific
     /// than the `reference` sort requirements.
     pub fn requirements_compatible(
         &self,
-        given: LexRequirementRef,
-        reference: LexRequirementRef,
+        given: &LexRequirement,
+        reference: &LexRequirement,
     ) -> bool {
         let normalized_given = self.normalize_sort_requirements(given);
         let normalized_reference = self.normalize_sort_requirements(reference);
@@ -546,15 +702,15 @@ impl EquivalenceProperties {
     /// the latter.
     pub fn get_finer_ordering(
         &self,
-        lhs: LexOrderingRef,
-        rhs: LexOrderingRef,
+        lhs: &LexOrdering,
+        rhs: &LexOrdering,
     ) -> Option<LexOrdering> {
         // Convert the given sort expressions to sort requirements:
-        let lhs = PhysicalSortRequirement::from_sort_exprs(lhs);
-        let rhs = PhysicalSortRequirement::from_sort_exprs(rhs);
+        let lhs = LexRequirement::from(lhs.clone());
+        let rhs = LexRequirement::from(rhs.clone());
         let finer = self.get_finer_requirement(&lhs, &rhs);
         // Convert the chosen sort requirements back to sort expressions:
-        finer.map(PhysicalSortRequirement::to_sort_exprs)
+        finer.map(LexOrdering::from)
     }
 
     /// Returns the finer ordering among the requirements `lhs` and `rhs`,
@@ -567,8 +723,8 @@ impl EquivalenceProperties {
     /// is the latter.
     pub fn get_finer_requirement(
         &self,
-        req1: LexRequirementRef,
-        req2: LexRequirementRef,
+        req1: &LexRequirement,
+        req2: &LexRequirement,
     ) -> Option<LexRequirement> {
         let mut lhs = self.normalize_sort_requirements(req1);
         let mut rhs = self.normalize_sort_requirements(req2);
@@ -604,8 +760,8 @@ impl EquivalenceProperties {
     pub fn substitute_ordering_component(
         &self,
         mapping: &ProjectionMapping,
-        sort_expr: &[PhysicalSortExpr],
-    ) -> Result<Vec<Vec<PhysicalSortExpr>>> {
+        sort_expr: &LexOrdering,
+    ) -> Result<Vec<LexOrdering>> {
         let new_orderings = sort_expr
             .iter()
             .map(|sort_expr| {
@@ -615,7 +771,7 @@ impl EquivalenceProperties {
                     .filter(|source| expr_refers(source, &sort_expr.expr))
                     .cloned()
                     .collect();
-                let mut res = vec![sort_expr.clone()];
+                let mut res = LexOrdering::new(vec![sort_expr.clone()]);
                 // TODO: Add one-to-ones analysis for ScalarFunctions.
                 for r_expr in referring_exprs {
                     // we check whether this expression is substitutable or not
@@ -639,6 +795,7 @@ impl EquivalenceProperties {
         let res = new_orderings
             .into_iter()
             .multi_cartesian_product()
+            .map(LexOrdering::new)
             .collect::<Vec<_>>();
         Ok(res)
     }
@@ -649,8 +806,8 @@ impl EquivalenceProperties {
     /// Since it would cause bug in dependency constructions, we should substitute the input order in order to get correct
     /// dependency map, happen in issue 8838: <https://github.com/apache/datafusion/issues/8838>
     pub fn substitute_oeq_class(&mut self, mapping: &ProjectionMapping) -> Result<()> {
-        let orderings = &self.oeq_class.orderings;
-        let new_order = orderings
+        let new_order = self
+            .oeq_class
             .iter()
             .map(|order| self.substitute_ordering_component(mapping, order))
             .collect::<Result<Vec<_>>>()?;
@@ -709,7 +866,7 @@ impl EquivalenceProperties {
     /// c ASC: Node {None, HashSet{a ASC}}
     /// ```
     fn construct_dependency_map(&self, mapping: &ProjectionMapping) -> DependencyMap {
-        let mut dependency_map = IndexMap::new();
+        let mut dependency_map = DependencyMap::new();
         for ordering in self.normalized_oeq_class().iter() {
             for (idx, sort_expr) in ordering.iter().enumerate() {
                 let target_sort_expr =
@@ -731,13 +888,11 @@ impl EquivalenceProperties {
                     let dependency = idx.checked_sub(1).map(|a| &ordering[a]);
                     // Add sort expressions that can be projected or referred to
                     // by any of the projection expressions to the dependency map:
-                    dependency_map
-                        .entry(sort_expr.clone())
-                        .or_insert_with(|| DependencyNode {
-                            target_sort_expr: target_sort_expr.clone(),
-                            dependencies: IndexSet::new(),
-                        })
-                        .insert_dependency(dependency);
+                    dependency_map.insert(
+                        sort_expr,
+                        target_sort_expr.as_ref(),
+                        dependency,
+                    );
                 }
                 if !is_projected {
                     // If we can not project, stop constructing the dependency
@@ -837,7 +992,7 @@ impl EquivalenceProperties {
             if prefixes.is_empty() {
                 // If prefix is empty, there is no dependency. Insert
                 // empty ordering:
-                prefixes = vec![vec![]];
+                prefixes = vec![LexOrdering::default()];
             }
             // Append current ordering on top its dependencies:
             for ordering in prefixes.iter_mut() {
@@ -851,7 +1006,7 @@ impl EquivalenceProperties {
         // Simplify each ordering by removing redundant sections:
         orderings
             .chain(projected_orderings)
-            .map(collapse_lex_ordering)
+            .map(|lex_ordering| lex_ordering.collapse())
             .collect()
     }
 
@@ -861,7 +1016,7 @@ impl EquivalenceProperties {
     /// constants based on the existing constants and the mapping. It ensures
     /// that constants are appropriately propagated through the projection.
     ///
-    /// # Arguments
+    /// # Parameters
     ///
     /// - `mapping`: A reference to a `ProjectionMapping` representing the
     ///   mapping of source expressions to target expressions in the projection.
@@ -877,37 +1032,76 @@ impl EquivalenceProperties {
             .constants
             .iter()
             .flat_map(|const_expr| {
-                const_expr.map(|expr| self.eq_group.project_expr(mapping, expr))
+                const_expr
+                    .map(|expr| self.eq_group.project_expr(mapping, expr))
+                    .map(|projected_expr| {
+                        projected_expr
+                            .with_across_partitions(const_expr.across_partitions())
+                    })
             })
             .collect::<Vec<_>>();
+
         // Add projection expressions that are known to be constant:
         for (source, target) in mapping.iter() {
             if self.is_expr_constant(source)
                 && !const_exprs_contains(&projected_constants, target)
             {
-                // Expression evaluates to single value
-                projected_constants
-                    .push(ConstExpr::from(target).with_across_partitions(true));
+                if self.is_expr_constant_accross_partitions(source) {
+                    projected_constants.push(
+                        ConstExpr::from(target)
+                            .with_across_partitions(self.get_expr_constant_value(source)),
+                    )
+                } else {
+                    projected_constants.push(
+                        ConstExpr::from(target)
+                            .with_across_partitions(AcrossPartitions::Heterogeneous),
+                    )
+                }
             }
         }
         projected_constants
     }
 
-    /// Projects the equivalences within according to `projection_mapping`
+    /// Projects constraints according to the given projection mapping.
+    ///
+    /// This function takes a projection mapping and extracts the column indices of the target columns.
+    /// It then projects the constraints to only include relationships between
+    /// columns that exist in the projected output.
+    ///
+    /// # Arguments
+    ///
+    /// * `mapping` - A reference to `ProjectionMapping` that defines how expressions are mapped
+    ///               in the projection operation
+    ///
+    /// # Returns
+    ///
+    /// Returns a new `Constraints` object containing only the constraints
+    /// that are valid for the projected columns.
+    fn projected_constraints(&self, mapping: &ProjectionMapping) -> Option<Constraints> {
+        let indices = mapping
+            .iter()
+            .filter_map(|(_, target)| target.as_any().downcast_ref::<Column>())
+            .map(|col| col.index())
+            .collect::<Vec<_>>();
+        debug_assert_eq!(mapping.map.len(), indices.len());
+        self.constraints.project(&indices)
+    }
+
+    /// Projects the equivalences within according to `mapping`
     /// and `output_schema`.
-    pub fn project(
-        &self,
-        projection_mapping: &ProjectionMapping,
-        output_schema: SchemaRef,
-    ) -> Self {
-        let projected_constants = self.projected_constants(projection_mapping);
-        let projected_eq_group = self.eq_group.project(projection_mapping);
-        let projected_orderings = self.projected_orderings(projection_mapping);
+    pub fn project(&self, mapping: &ProjectionMapping, output_schema: SchemaRef) -> Self {
+        let eq_group = self.eq_group.project(mapping);
+        let oeq_class = OrderingEquivalenceClass::new(self.projected_orderings(mapping));
+        let constants = self.projected_constants(mapping);
+        let constraints = self
+            .projected_constraints(mapping)
+            .unwrap_or_else(Constraints::empty);
         Self {
-            eq_group: projected_eq_group,
-            oeq_class: OrderingEquivalenceClass::new(projected_orderings),
-            constants: projected_constants,
             schema: output_schema,
+            eq_group,
+            oeq_class,
+            constants,
+            constraints,
         }
     }
 
@@ -987,13 +1181,14 @@ impl EquivalenceProperties {
             // Add new ordered section to the state.
             result.extend(ordered_exprs);
         }
-        result.into_iter().unzip()
+        let (left, right) = result.into_iter().unzip();
+        (LexOrdering::new(left), right)
     }
 
     /// This function determines whether the provided expression is constant
     /// based on the known constants.
     ///
-    /// # Arguments
+    /// # Parameters
     ///
     /// - `expr`: A reference to a `Arc<dyn PhysicalExpr>` representing the
     ///   expression to be checked.
@@ -1013,6 +1208,76 @@ impl EquivalenceProperties {
         let normalized_constants = self.eq_group.normalize_exprs(const_exprs);
         let normalized_expr = self.eq_group.normalize_expr(Arc::clone(expr));
         is_constant_recurse(&normalized_constants, &normalized_expr)
+    }
+
+    /// This function determines whether the provided expression is constant
+    /// across partitions based on the known constants.
+    ///
+    /// # Parameters
+    ///
+    /// - `expr`: A reference to a `Arc<dyn PhysicalExpr>` representing the
+    ///   expression to be checked.
+    ///
+    /// # Returns
+    ///
+    /// Returns `true` if the expression is constant across all partitions according
+    /// to equivalence group, `false` otherwise.
+    pub fn is_expr_constant_accross_partitions(
+        &self,
+        expr: &Arc<dyn PhysicalExpr>,
+    ) -> bool {
+        // As an example, assume that we know columns `a` and `b` are constant.
+        // Then, `a`, `b` and `a + b` will all return `true` whereas `c` will
+        // return `false`.
+        let const_exprs = self
+            .constants
+            .iter()
+            .filter_map(|const_expr| {
+                if matches!(
+                    const_expr.across_partitions(),
+                    AcrossPartitions::Uniform { .. }
+                ) {
+                    Some(Arc::clone(const_expr.expr()))
+                } else {
+                    None
+                }
+            })
+            .collect::<Vec<_>>();
+        let normalized_constants = self.eq_group.normalize_exprs(const_exprs);
+        let normalized_expr = self.eq_group.normalize_expr(Arc::clone(expr));
+        is_constant_recurse(&normalized_constants, &normalized_expr)
+    }
+
+    /// Retrieves the constant value of a given physical expression, if it exists.
+    ///
+    /// Normalizes the input expression and checks if it matches any known constants
+    /// in the current context. Returns whether the expression has a uniform value,
+    /// varies across partitions, or is not constant.
+    ///
+    /// # Parameters
+    /// - `expr`: A reference to the physical expression to evaluate.
+    ///
+    /// # Returns
+    /// - `AcrossPartitions::Uniform(value)`: If the expression has the same value across partitions.
+    /// - `AcrossPartitions::Heterogeneous`: If the expression varies across partitions.
+    /// - `None`: If the expression is not recognized as constant.
+    pub fn get_expr_constant_value(
+        &self,
+        expr: &Arc<dyn PhysicalExpr>,
+    ) -> AcrossPartitions {
+        let normalized_expr = self.eq_group.normalize_expr(Arc::clone(expr));
+
+        if let Some(lit) = normalized_expr.as_any().downcast_ref::<Literal>() {
+            return AcrossPartitions::Uniform(Some(lit.scalar().value().clone()));
+        }
+
+        for const_expr in self.constants.iter() {
+            if normalized_expr.eq(const_expr.expr()) {
+                return const_expr.across_partitions();
+            }
+        }
+
+        AcrossPartitions::Heterogeneous
     }
 
     /// Retrieves the properties for a given physical expression.
@@ -1075,7 +1340,7 @@ impl EquivalenceProperties {
 
         // Rewrite orderings according to new schema:
         let mut new_orderings = vec![];
-        for ordering in self.oeq_class.orderings {
+        for ordering in self.oeq_class {
             let new_ordering = ordering
                 .into_iter()
                 .map(|mut sort_expr| {
@@ -1088,7 +1353,7 @@ impl EquivalenceProperties {
 
         // Rewrite equivalence classes according to the new schema:
         let mut eq_classes = vec![];
-        for eq_class in self.eq_group.classes {
+        for eq_class in self.eq_group {
             let new_eq_exprs = eq_class
                 .into_vec()
                 .into_iter()
@@ -1114,7 +1379,7 @@ impl EquivalenceProperties {
 /// order: [[a ASC, b ASC], [a ASC, c ASC]], eq: [[a = b], [a = c]], const: [a = 1]
 /// ```
 impl Display for EquivalenceProperties {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         if self.eq_group.is_empty()
             && self.oeq_class.is_empty()
             && self.constants.is_empty()
@@ -1189,7 +1454,7 @@ fn update_properties(
 /// This function determines whether the provided expression is constant
 /// based on the known constants.
 ///
-/// # Arguments
+/// # Parameters
 ///
 /// - `constants`: A `&[Arc<dyn PhysicalExpr>]` containing expressions known to
 ///   be a constant.
@@ -1257,7 +1522,7 @@ fn referred_dependencies(
     // Associate `PhysicalExpr`s with `PhysicalSortExpr`s that contain them:
     let mut expr_to_sort_exprs = IndexMap::<ExprWrapper, Dependencies>::new();
     for sort_expr in dependency_map
-        .keys()
+        .sort_exprs()
         .filter(|sort_expr| expr_refers(source, &sort_expr.expr))
     {
         let key = ExprWrapper(Arc::clone(&sort_expr.expr));
@@ -1270,10 +1535,16 @@ fn referred_dependencies(
     // Generate all valid dependencies for the source. For example, if the source
     // is `a + b` and the map is `[a -> (a ASC, a DESC), b -> (b ASC)]`, we get
     // `vec![HashSet(a ASC, b ASC), HashSet(a DESC, b ASC)]`.
-    expr_to_sort_exprs
-        .values()
+    let dependencies = expr_to_sort_exprs
+        .into_values()
+        .map(Dependencies::into_inner)
+        .collect::<Vec<_>>();
+    dependencies
+        .iter()
         .multi_cartesian_product()
-        .map(|referred_deps| referred_deps.into_iter().cloned().collect())
+        .map(|referred_deps| {
+            Dependencies::new_from_iter(referred_deps.into_iter().cloned())
+        })
         .collect()
 }
 
@@ -1296,7 +1567,9 @@ fn construct_prefix_orderings(
     dependency_map: &DependencyMap,
 ) -> Vec<LexOrdering> {
     let mut dep_enumerator = DependencyEnumerator::new();
-    dependency_map[relevant_sort_expr]
+    dependency_map
+        .get(relevant_sort_expr)
+        .expect("no relevant sort expr found")
         .dependencies
         .iter()
         .flat_map(|dep| dep_enumerator.construct_orderings(dep, dependency_map))
@@ -1306,8 +1579,8 @@ fn construct_prefix_orderings(
 /// Generates all possible orderings where dependencies are satisfied for the
 /// current projection expression.
 ///
-/// # Examaple
-///  If `dependences` is `a + b ASC` and the dependency map holds dependencies
+/// # Example
+///  If `dependencies` is `a + b ASC` and the dependency map holds dependencies
 ///  * `a ASC` --> `[c ASC]`
 ///  * `b ASC` --> `[d DESC]`,
 ///
@@ -1341,7 +1614,7 @@ fn generate_dependency_orderings(
     // No dependency, dependent is a leading ordering.
     if relevant_prefixes.is_empty() {
         // Return an empty ordering:
-        return vec![vec![]];
+        return vec![LexOrdering::default()];
     }
 
     relevant_prefixes
@@ -1351,7 +1624,12 @@ fn generate_dependency_orderings(
             prefix_orderings
                 .iter()
                 .permutations(prefix_orderings.len())
-                .map(|prefixes| prefixes.into_iter().flatten().cloned().collect())
+                .map(|prefixes| {
+                    prefixes
+                        .into_iter()
+                        .flat_map(|ordering| ordering.clone())
+                        .collect()
+                })
                 .collect::<Vec<_>>()
         })
         .collect()
@@ -1382,11 +1660,13 @@ fn get_expr_properties(
         Ok(ExprProperties {
             sort_properties: SortProperties::Ordered(column_order.options),
             range: Interval::make_unbounded(&expr.data_type(schema)?)?,
+            preserves_lex_ordering: false,
         })
     } else if expr.as_any().downcast_ref::<Column>().is_some() {
         Ok(ExprProperties {
             sort_properties: SortProperties::Unordered,
             range: Interval::make_unbounded(&expr.data_type(schema)?)?,
+            preserves_lex_ordering: false,
         })
     } else if let Some(literal) = expr.as_any().downcast_ref::<Literal>() {
         Ok(ExprProperties {
@@ -1395,6 +1675,7 @@ fn get_expr_properties(
                 literal.scalar().value().clone(),
                 literal.scalar().value().clone(),
             )?,
+            preserves_lex_ordering: true,
         })
     } else {
         // Find orderings of its children
@@ -1436,13 +1717,161 @@ impl DependencyNode {
     }
 }
 
-// Using `IndexMap` and `IndexSet` makes sure to generate consistent results across different executions for the same query.
-// We could have used `HashSet`, `HashMap` in place of them without any loss of functionality.
-// As an example, if existing orderings are `[a ASC, b ASC]`, `[c ASC]` for output ordering
-// both `[a ASC, b ASC, c ASC]` and `[c ASC, a ASC, b ASC]` are valid (e.g. concatenated version of the alternative orderings).
-// When using `HashSet`, `HashMap` it is not guaranteed to generate consistent result, among the possible 2 results in the example above.
-type DependencyMap = IndexMap<PhysicalSortExpr, DependencyNode>;
-type Dependencies = IndexSet<PhysicalSortExpr>;
+impl Display for DependencyNode {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if let Some(target) = &self.target_sort_expr {
+            write!(f, "(target: {}, ", target)?;
+        } else {
+            write!(f, "(")?;
+        }
+        write!(f, "dependencies: [{}])", self.dependencies)
+    }
+}
+
+/// Maps an expression --> DependencyNode
+///
+/// # Debugging / deplaying `DependencyMap`
+///
+/// This structure implements `Display` to assist debugging. For example:
+///
+/// ```text
+/// DependencyMap: {
+///   a@0 ASC --> (target: a@0 ASC, dependencies: [[]])
+///   b@1 ASC --> (target: b@1 ASC, dependencies: [[a@0 ASC, c@2 ASC]])
+///   c@2 ASC --> (target: c@2 ASC, dependencies: [[b@1 ASC, a@0 ASC]])
+///   d@3 ASC --> (target: d@3 ASC, dependencies: [[c@2 ASC, b@1 ASC]])
+/// }
+/// ```
+///
+/// # Note on IndexMap Rationale
+///
+/// Using `IndexMap` (which preserves insert order) to ensure consistent results
+/// across different executions for the same query. We could have used
+/// `HashSet`, `HashMap` in place of them without any loss of functionality.
+///
+/// As an example, if existing orderings are
+/// 1. `[a ASC, b ASC]`
+/// 2. `[c ASC]` for
+///
+/// Then both the following output orderings are valid
+/// 1. `[a ASC, b ASC, c ASC]`
+/// 2. `[c ASC, a ASC, b ASC]`
+///
+/// (this are both valid as they are concatenated versions of the alternative
+/// orderings). When using `HashSet`, `HashMap` it is not guaranteed to generate
+/// consistent result, among the possible 2 results in the example above.
+#[derive(Debug)]
+struct DependencyMap {
+    inner: IndexMap<PhysicalSortExpr, DependencyNode>,
+}
+
+impl DependencyMap {
+    fn new() -> Self {
+        Self {
+            inner: IndexMap::new(),
+        }
+    }
+
+    /// Insert a new dependency `sort_expr` --> `dependency` into the map.
+    ///
+    /// If `target_sort_expr` is none, a new entry is created with empty dependencies.
+    fn insert(
+        &mut self,
+        sort_expr: &PhysicalSortExpr,
+        target_sort_expr: Option<&PhysicalSortExpr>,
+        dependency: Option<&PhysicalSortExpr>,
+    ) {
+        self.inner
+            .entry(sort_expr.clone())
+            .or_insert_with(|| DependencyNode {
+                target_sort_expr: target_sort_expr.cloned(),
+                dependencies: Dependencies::new(),
+            })
+            .insert_dependency(dependency)
+    }
+
+    /// Iterator over (sort_expr, DependencyNode) pairs
+    fn iter(&self) -> impl Iterator<Item = (&PhysicalSortExpr, &DependencyNode)> {
+        self.inner.iter()
+    }
+
+    /// iterator over all sort exprs
+    fn sort_exprs(&self) -> impl Iterator<Item = &PhysicalSortExpr> {
+        self.inner.keys()
+    }
+
+    /// Return the dependency node for the given sort expression, if any
+    fn get(&self, sort_expr: &PhysicalSortExpr) -> Option<&DependencyNode> {
+        self.inner.get(sort_expr)
+    }
+}
+
+impl Display for DependencyMap {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        writeln!(f, "DependencyMap: {{")?;
+        for (sort_expr, node) in self.inner.iter() {
+            writeln!(f, "  {sort_expr} --> {node}")?;
+        }
+        writeln!(f, "}}")
+    }
+}
+
+/// A list of sort expressions that can be calculated from a known set of
+/// dependencies.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+struct Dependencies {
+    inner: IndexSet<PhysicalSortExpr>,
+}
+
+impl Display for Dependencies {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "[")?;
+        let mut iter = self.inner.iter();
+        if let Some(dep) = iter.next() {
+            write!(f, "{}", dep)?;
+        }
+        for dep in iter {
+            write!(f, ", {}", dep)?;
+        }
+        write!(f, "]")
+    }
+}
+
+impl Dependencies {
+    /// Create a new empty `Dependencies` instance.
+    fn new() -> Self {
+        Self {
+            inner: IndexSet::new(),
+        }
+    }
+
+    /// Create a new `Dependencies` from an iterator of `PhysicalSortExpr`.
+    fn new_from_iter(iter: impl IntoIterator<Item = PhysicalSortExpr>) -> Self {
+        Self {
+            inner: iter.into_iter().collect(),
+        }
+    }
+
+    /// Insert a new dependency into the set.
+    fn insert(&mut self, sort_expr: PhysicalSortExpr) {
+        self.inner.insert(sort_expr);
+    }
+
+    /// Iterator over  dependencies in the set
+    fn iter(&self) -> impl Iterator<Item = &PhysicalSortExpr> + Clone {
+        self.inner.iter()
+    }
+
+    /// Return the inner set of dependencies
+    fn into_inner(self) -> IndexSet<PhysicalSortExpr> {
+        self.inner
+    }
+
+    /// Returns true if there are no dependencies
+    fn is_empty(&self) -> bool {
+        self.inner.is_empty()
+    }
+}
 
 /// Contains a mapping of all dependencies we have processed for each sort expr
 struct DependencyEnumerator<'a> {
@@ -1490,17 +1919,18 @@ impl<'a> DependencyEnumerator<'a> {
         referred_sort_expr: &'a PhysicalSortExpr,
         dependency_map: &'a DependencyMap,
     ) -> Vec<LexOrdering> {
-        // We are sure that `referred_sort_expr` is inside `dependency_map`.
-        let node = &dependency_map[referred_sort_expr];
-        // Since we work on intermediate nodes, we are sure `val.target_sort_expr`
-        // exists.
+        let node = dependency_map
+            .get(referred_sort_expr)
+            .expect("`referred_sort_expr` should be inside `dependency_map`"); // Since we work on intermediate nodes, we are sure `val.target_sort_expr`
+                                                                               // exists.
         let target_sort_expr = node.target_sort_expr.as_ref().unwrap();
         // An empty dependency means the referred_sort_expr represents a global ordering.
         // Return its projected version, which is the target_expression.
+        // An empty dependency means the referred_sort_expr represents a global ordering.
+        // Return its projected version, which is the target_expression.
         if node.dependencies.is_empty() {
-            return vec![vec![target_sort_expr.clone()]];
+            return vec![LexOrdering::new(vec![target_sort_expr.clone()])];
         };
-
         node.dependencies
             .iter()
             .flat_map(|dep| {
@@ -1668,20 +2098,34 @@ fn calculate_union_binary(
     }
 
     // First, calculate valid constants for the union. An expression is constant
-    // at the output of the union if it is constant in both sides.
+    // at the output of the union if it is constant in both sides with matching values.
     let constants: Vec<_> = lhs
         .constants()
         .iter()
-        .filter(|const_expr| const_exprs_contains(rhs.constants(), const_expr.expr()))
-        .map(|const_expr| {
-            // TODO: When both sides have a constant column, and the actual
-            // constant value is the same, then the output properties could
-            // reflect the constant is valid across all partitions. However we
-            // don't track the actual value that the ConstExpr takes on, so we
-            // can't determine that yet
-            ConstExpr::new(Arc::clone(const_expr.expr())).with_across_partitions(false)
+        .filter_map(|lhs_const| {
+            // Find matching constant expression in RHS
+            rhs.constants()
+                .iter()
+                .find(|rhs_const| rhs_const.expr().eq(lhs_const.expr()))
+                .map(|rhs_const| {
+                    let mut const_expr = ConstExpr::new(Arc::clone(lhs_const.expr()));
+
+                    // If both sides have matching constant values, preserve the value and set across_partitions=true
+                    if let (
+                        AcrossPartitions::Uniform(Some(lhs_val)),
+                        AcrossPartitions::Uniform(Some(rhs_val)),
+                    ) = (lhs_const.across_partitions(), rhs_const.across_partitions())
+                    {
+                        if lhs_val == rhs_val {
+                            const_expr = const_expr.with_across_partitions(
+                                AcrossPartitions::Uniform(Some(lhs_val)),
+                            )
+                        }
+                    }
+                    const_expr
+                })
         })
-        .collect();
+        .collect::<Vec<_>>();
 
     // remove any constants that are shared in both outputs (avoid double counting them)
     for c in &constants {
@@ -1692,16 +2136,8 @@ fn calculate_union_binary(
     // Next, calculate valid orderings for the union by searching for prefixes
     // in both sides.
     let mut orderings = UnionEquivalentOrderingBuilder::new();
-    orderings.add_satisfied_orderings(
-        lhs.normalized_oeq_class().orderings,
-        lhs.constants(),
-        &rhs,
-    );
-    orderings.add_satisfied_orderings(
-        rhs.normalized_oeq_class().orderings,
-        rhs.constants(),
-        &lhs,
-    );
+    orderings.add_satisfied_orderings(lhs.normalized_oeq_class(), lhs.constants(), &rhs);
+    orderings.add_satisfied_orderings(rhs.normalized_oeq_class(), rhs.constants(), &lhs);
     let orderings = orderings.build();
 
     let mut eq_properties =
@@ -1807,7 +2243,7 @@ impl UnionEquivalentOrderingBuilder {
     ) -> AddedOrdering {
         if ordering.is_empty() {
             AddedOrdering::Yes
-        } else if constants.is_empty() && properties.ordering_satisfy(&ordering) {
+        } else if constants.is_empty() && properties.ordering_satisfy(ordering.as_ref()) {
             // If the ordering satisfies the target properties, no need to
             // augment it with constants.
             self.orderings.push(ordering);
@@ -1840,7 +2276,7 @@ impl UnionEquivalentOrderingBuilder {
 
         // for each equivalent ordering in properties, try and augment
         // `ordering` it with the constants to match
-        for existing_ordering in &properties.oeq_class.orderings {
+        for existing_ordering in properties.oeq_class.iter() {
             if let Some(augmented_ordering) = self.augment_ordering(
                 ordering,
                 constants,
@@ -1848,7 +2284,7 @@ impl UnionEquivalentOrderingBuilder {
                 &properties.constants,
             ) {
                 if !augmented_ordering.is_empty() {
-                    assert!(properties.ordering_satisfy(&augmented_ordering));
+                    assert!(properties.ordering_satisfy(augmented_ordering.as_ref()));
                     self.orderings.push(augmented_ordering);
                 }
             }
@@ -1868,7 +2304,7 @@ impl UnionEquivalentOrderingBuilder {
         existing_ordering: &LexOrdering,
         existing_constants: &[ConstExpr],
     ) -> Option<LexOrdering> {
-        let mut augmented_ordering = vec![];
+        let mut augmented_ordering = LexOrdering::default();
         let mut sort_expr_iter = ordering.iter().peekable();
         let mut existing_sort_expr_iter = existing_ordering.iter().peekable();
 
@@ -1947,16 +2383,17 @@ mod tests {
     use crate::equivalence::add_offset_to_expr;
     use crate::equivalence::tests::{
         convert_to_orderings, convert_to_sort_exprs, convert_to_sort_reqs,
-        create_random_schema, create_test_params, create_test_schema,
-        generate_table_for_eq_properties, is_table_same_after_sort, output_schema,
+        create_test_params, create_test_schema, output_schema,
     };
     use crate::expressions::{col, BinaryExpr, Column};
-    use crate::utils::tests::TestScalarUDF;
+    use crate::ScalarFunctionExpr;
 
     use arrow::datatypes::{DataType, Field, Schema};
     use arrow_schema::{Fields, TimeUnit};
-    use datafusion_common::DFSchema;
-    use datafusion_expr::{Operator, ScalarUDF};
+    use datafusion_common::{Constraint, ScalarValue};
+    use datafusion_expr::Operator;
+
+    use datafusion_functions::string::concat;
 
     #[test]
     fn project_equivalence_properties_test() -> Result<()> {
@@ -1997,7 +2434,7 @@ mod tests {
 
         // At the output a1=a2=a3=a4
         assert_eq!(out_properties.eq_group().len(), 1);
-        let eq_class = &out_properties.eq_group().classes[0];
+        let eq_class = out_properties.eq_group().iter().next().unwrap();
         assert_eq!(eq_class.len(), 4);
         assert!(eq_class.contains(col_a1));
         assert!(eq_class.contains(col_a2));
@@ -2019,20 +2456,20 @@ mod tests {
 
         let mut input_properties = EquivalenceProperties::new(Arc::clone(&input_schema));
         // add equivalent ordering [a, b, c, d]
-        input_properties.add_new_ordering(vec![
+        input_properties.add_new_ordering(LexOrdering::new(vec![
             parse_sort_expr("a", &input_schema),
             parse_sort_expr("b", &input_schema),
             parse_sort_expr("c", &input_schema),
             parse_sort_expr("d", &input_schema),
-        ]);
+        ]));
 
         // add equivalent ordering [a, c, b, d]
-        input_properties.add_new_ordering(vec![
+        input_properties.add_new_ordering(LexOrdering::new(vec![
             parse_sort_expr("a", &input_schema),
             parse_sort_expr("c", &input_schema),
             parse_sort_expr("b", &input_schema), // NB b and c are swapped
             parse_sort_expr("d", &input_schema),
-        ]);
+        ]));
 
         // simply project all the columns in order
         let proj_exprs = vec![
@@ -2046,7 +2483,7 @@ mod tests {
 
         assert_eq!(
             out_properties.to_string(),
-            "order: [[a@0 ASC,c@2 ASC,b@1 ASC,d@3 ASC], [a@0 ASC,b@1 ASC,c@2 ASC,d@3 ASC]]"
+            "order: [[a@0 ASC, c@2 ASC, b@1 ASC, d@3 ASC], [a@0 ASC, b@1 ASC, c@2 ASC, d@3 ASC]]"
         );
 
         Ok(())
@@ -2120,17 +2557,12 @@ mod tests {
                 Some(JoinSide::Left),
                 &[],
             );
-            let orderings = &join_eq.oeq_class.orderings;
-            let err_msg = format!("expected: {:?}, actual:{:?}", expected, orderings);
-            assert_eq!(
-                join_eq.oeq_class.orderings.len(),
-                expected.len(),
-                "{}",
-                err_msg
-            );
-            for ordering in orderings {
+            let err_msg =
+                format!("expected: {:?}, actual:{:?}", expected, &join_eq.oeq_class);
+            assert_eq!(join_eq.oeq_class.len(), expected.len(), "{}", err_msg);
+            for ordering in join_eq.oeq_class {
                 assert!(
-                    expected.contains(ordering),
+                    expected.contains(&ordering),
                     "{}, ordering: {:?}",
                     err_msg,
                     ordering
@@ -2252,27 +2684,27 @@ mod tests {
 
         eq_properties.add_equal_conditions(&col_a_expr, &col_c_expr)?;
         let others = vec![
-            vec![PhysicalSortExpr {
+            LexOrdering::new(vec![PhysicalSortExpr {
                 expr: Arc::clone(&col_b_expr),
                 options: sort_options,
-            }],
-            vec![PhysicalSortExpr {
+            }]),
+            LexOrdering::new(vec![PhysicalSortExpr {
                 expr: Arc::clone(&col_c_expr),
                 options: sort_options,
-            }],
+            }]),
         ];
         eq_properties.add_new_orderings(others);
 
         let mut expected_eqs = EquivalenceProperties::new(Arc::new(schema));
         expected_eqs.add_new_orderings([
-            vec![PhysicalSortExpr {
+            LexOrdering::new(vec![PhysicalSortExpr {
                 expr: Arc::clone(&col_b_expr),
                 options: sort_options,
-            }],
-            vec![PhysicalSortExpr {
+            }]),
+            LexOrdering::new(vec![PhysicalSortExpr {
                 expr: Arc::clone(&col_c_expr),
                 options: sort_options,
-            }],
+            }]),
         ]);
 
         let oeq_class = eq_properties.oeq_class().clone();
@@ -2295,7 +2727,7 @@ mod tests {
         let col_b = &col("b", &schema)?;
         let required_columns = [Arc::clone(col_b), Arc::clone(col_a)];
         let mut eq_properties = EquivalenceProperties::new(Arc::new(schema));
-        eq_properties.add_new_orderings([vec![
+        eq_properties.add_new_orderings([LexOrdering::new(vec![
             PhysicalSortExpr {
                 expr: Arc::new(Column::new("b", 1)),
                 options: sort_options_not,
@@ -2304,12 +2736,12 @@ mod tests {
                 expr: Arc::new(Column::new("a", 0)),
                 options: sort_options,
             },
-        ]]);
+        ])]);
         let (result, idxs) = eq_properties.find_longest_permutation(&required_columns);
         assert_eq!(idxs, vec![0, 1]);
         assert_eq!(
             result,
-            vec![
+            LexOrdering::new(vec![
                 PhysicalSortExpr {
                     expr: Arc::clone(col_b),
                     options: sort_options_not
@@ -2318,7 +2750,7 @@ mod tests {
                     expr: Arc::clone(col_a),
                     options: sort_options
                 }
-            ]
+            ])
         );
 
         let schema = Schema::new(vec![
@@ -2331,11 +2763,11 @@ mod tests {
         let required_columns = [Arc::clone(col_b), Arc::clone(col_a)];
         let mut eq_properties = EquivalenceProperties::new(Arc::new(schema));
         eq_properties.add_new_orderings([
-            vec![PhysicalSortExpr {
+            LexOrdering::new(vec![PhysicalSortExpr {
                 expr: Arc::new(Column::new("c", 2)),
                 options: sort_options,
-            }],
-            vec![
+            }]),
+            LexOrdering::new(vec![
                 PhysicalSortExpr {
                     expr: Arc::new(Column::new("b", 1)),
                     options: sort_options_not,
@@ -2344,13 +2776,13 @@ mod tests {
                     expr: Arc::new(Column::new("a", 0)),
                     options: sort_options,
                 },
-            ],
+            ]),
         ]);
         let (result, idxs) = eq_properties.find_longest_permutation(&required_columns);
         assert_eq!(idxs, vec![0, 1]);
         assert_eq!(
             result,
-            vec![
+            LexOrdering::new(vec![
                 PhysicalSortExpr {
                     expr: Arc::clone(col_b),
                     options: sort_options_not
@@ -2359,7 +2791,7 @@ mod tests {
                     expr: Arc::clone(col_a),
                     options: sort_options
                 }
-            ]
+            ])
         );
 
         let required_columns = [
@@ -2374,7 +2806,7 @@ mod tests {
         let mut eq_properties = EquivalenceProperties::new(Arc::new(schema));
 
         // not satisfied orders
-        eq_properties.add_new_orderings([vec![
+        eq_properties.add_new_orderings([LexOrdering::new(vec![
             PhysicalSortExpr {
                 expr: Arc::new(Column::new("b", 1)),
                 options: sort_options_not,
@@ -2387,7 +2819,7 @@ mod tests {
                 expr: Arc::new(Column::new("a", 0)),
                 options: sort_options,
             },
-        ]]);
+        ])]);
         let (_, idxs) = eq_properties.find_longest_permutation(&required_columns);
         assert_eq!(idxs, vec![0]);
 
@@ -2416,14 +2848,14 @@ mod tests {
         eq_properties.add_equal_conditions(col_b, col_a)?;
         // [b ASC], [d ASC]
         eq_properties.add_new_orderings(vec![
-            vec![PhysicalSortExpr {
+            LexOrdering::new(vec![PhysicalSortExpr {
                 expr: Arc::clone(col_b),
                 options: option_asc,
-            }],
-            vec![PhysicalSortExpr {
+            }]),
+            LexOrdering::new(vec![PhysicalSortExpr {
                 expr: Arc::clone(col_d),
                 options: option_asc,
-            }],
+            }]),
         ]);
 
         let test_cases = vec![
@@ -2468,83 +2900,6 @@ mod tests {
     }
 
     #[test]
-    fn test_find_longest_permutation_random() -> Result<()> {
-        const N_RANDOM_SCHEMA: usize = 100;
-        const N_ELEMENTS: usize = 125;
-        const N_DISTINCT: usize = 5;
-
-        for seed in 0..N_RANDOM_SCHEMA {
-            // Create a random schema with random properties
-            let (test_schema, eq_properties) = create_random_schema(seed as u64)?;
-            // Generate a data that satisfies properties given
-            let table_data_with_properties =
-                generate_table_for_eq_properties(&eq_properties, N_ELEMENTS, N_DISTINCT)?;
-
-            let test_fun = ScalarUDF::new_from_impl(TestScalarUDF::new());
-            let floor_a = crate::udf::create_physical_expr(
-                &test_fun,
-                &[col("a", &test_schema)?],
-                &test_schema,
-                &[],
-                &DFSchema::empty(),
-            )?;
-            let a_plus_b = Arc::new(BinaryExpr::new(
-                col("a", &test_schema)?,
-                Operator::Plus,
-                col("b", &test_schema)?,
-            )) as Arc<dyn PhysicalExpr>;
-            let exprs = [
-                col("a", &test_schema)?,
-                col("b", &test_schema)?,
-                col("c", &test_schema)?,
-                col("d", &test_schema)?,
-                col("e", &test_schema)?,
-                col("f", &test_schema)?,
-                floor_a,
-                a_plus_b,
-            ];
-
-            for n_req in 0..=exprs.len() {
-                for exprs in exprs.iter().combinations(n_req) {
-                    let exprs = exprs.into_iter().cloned().collect::<Vec<_>>();
-                    let (ordering, indices) =
-                        eq_properties.find_longest_permutation(&exprs);
-                    // Make sure that find_longest_permutation return values are consistent
-                    let ordering2 = indices
-                        .iter()
-                        .zip(ordering.iter())
-                        .map(|(&idx, sort_expr)| PhysicalSortExpr {
-                            expr: Arc::clone(&exprs[idx]),
-                            options: sort_expr.options,
-                        })
-                        .collect::<Vec<_>>();
-                    assert_eq!(
-                        ordering, ordering2,
-                        "indices and lexicographical ordering do not match"
-                    );
-
-                    let err_msg = format!(
-                        "Error in test case ordering:{:?}, eq_properties.oeq_class: {:?}, eq_properties.eq_group: {:?}, eq_properties.constants: {:?}",
-                        ordering, eq_properties.oeq_class, eq_properties.eq_group, eq_properties.constants
-                    );
-                    assert_eq!(ordering.len(), indices.len(), "{}", err_msg);
-                    // Since ordered section satisfies schema, we expect
-                    // that result will be same after sort (e.g sort was unnecessary).
-                    assert!(
-                        is_table_same_after_sort(
-                            ordering.clone(),
-                            table_data_with_properties.clone(),
-                        )?,
-                        "{}",
-                        err_msg
-                    );
-                }
-            }
-        }
-
-        Ok(())
-    }
-    #[test]
     fn test_find_longest_permutation() -> Result<()> {
         // Schema satisfies following orderings:
         // [a ASC], [d ASC, b ASC], [e DESC, f ASC, g ASC]
@@ -2575,7 +2930,7 @@ mod tests {
             nulls_first: true,
         };
         // [d ASC, h DESC] also satisfies schema.
-        eq_properties.add_new_orderings([vec![
+        eq_properties.add_new_orderings([LexOrdering::new(vec![
             PhysicalSortExpr {
                 expr: Arc::clone(col_d),
                 options: option_asc,
@@ -2584,7 +2939,7 @@ mod tests {
                 expr: Arc::clone(col_h),
                 options: option_desc,
             },
-        ]]);
+        ])]);
         let test_cases = vec![
             // TEST CASE 1
             (vec![col_a], vec![(col_a, option_asc)]),
@@ -2866,7 +3221,7 @@ mod tests {
             Field::new("c", DataType::Timestamp(TimeUnit::Nanosecond, None), true),
         ]));
         let base_properties = EquivalenceProperties::new(Arc::clone(&schema))
-            .with_reorder(
+            .with_reorder(LexOrdering::new(
                 ["a", "b", "c"]
                     .into_iter()
                     .map(|c| {
@@ -2879,7 +3234,7 @@ mod tests {
                         })
                     })
                     .collect::<Result<Vec<_>>>()?,
-            );
+            ));
 
         struct TestCase {
             name: &'static str,
@@ -2968,10 +3323,10 @@ mod tests {
                             options: SortOptions::default(),
                         })
                     })
-                    .collect::<Result<Vec<_>>>()?;
+                    .collect::<Result<LexOrdering>>()?;
 
                 assert_eq!(
-                    properties.ordering_satisfy(&sort),
+                    properties.ordering_satisfy(sort.as_ref()),
                     case.should_satisfy_ordering,
                     "failed test '{}'",
                     case.name
@@ -3490,7 +3845,7 @@ mod tests {
                     ordering
                         .iter()
                         .map(|name| parse_sort_expr(name, schema))
-                        .collect::<Vec<_>>()
+                        .collect::<LexOrdering>()
                 })
                 .collect::<Vec<_>>();
 
@@ -3526,8 +3881,8 @@ mod tests {
 
         // Check whether orderings are same.
         let lhs_orderings = lhs.oeq_class();
-        let rhs_orderings = &rhs.oeq_class.orderings;
-        for rhs_ordering in rhs_orderings {
+        let rhs_orderings = rhs.oeq_class();
+        for rhs_ordering in rhs_orderings.iter() {
             assert!(
                 lhs_orderings.contains(rhs_ordering),
                 "{err_msg}\nlhs: {lhs}\nrhs: {rhs}"
@@ -3570,5 +3925,605 @@ mod tests {
         );
 
         sort_expr
+    }
+
+    #[test]
+    fn test_ordering_equivalence_with_lex_monotonic_concat() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Utf8, false),
+            Field::new("b", DataType::Utf8, false),
+            Field::new("c", DataType::Utf8, false),
+        ]));
+
+        let col_a = col("a", &schema)?;
+        let col_b = col("b", &schema)?;
+        let col_c = col("c", &schema)?;
+
+        let a_concat_b: Arc<dyn PhysicalExpr> = Arc::new(ScalarFunctionExpr::new(
+            "concat",
+            concat(),
+            vec![Arc::clone(&col_a), Arc::clone(&col_b)],
+            DataType::Utf8,
+        ));
+
+        // Assume existing ordering is [c ASC, a ASC, b ASC]
+        let mut eq_properties = EquivalenceProperties::new(Arc::clone(&schema));
+
+        eq_properties.add_new_ordering(LexOrdering::from(vec![
+            PhysicalSortExpr::new_default(Arc::clone(&col_c)).asc(),
+            PhysicalSortExpr::new_default(Arc::clone(&col_a)).asc(),
+            PhysicalSortExpr::new_default(Arc::clone(&col_b)).asc(),
+        ]));
+
+        // Add equality condition c = concat(a, b)
+        eq_properties.add_equal_conditions(&col_c, &a_concat_b)?;
+
+        let orderings = eq_properties.oeq_class();
+
+        let expected_ordering1 =
+            LexOrdering::from(vec![
+                PhysicalSortExpr::new_default(Arc::clone(&col_c)).asc()
+            ]);
+        let expected_ordering2 = LexOrdering::from(vec![
+            PhysicalSortExpr::new_default(Arc::clone(&col_a)).asc(),
+            PhysicalSortExpr::new_default(Arc::clone(&col_b)).asc(),
+        ]);
+
+        // The ordering should be [c ASC] and [a ASC, b ASC]
+        assert_eq!(orderings.len(), 2);
+        assert!(orderings.contains(&expected_ordering1));
+        assert!(orderings.contains(&expected_ordering2));
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_ordering_equivalence_with_non_lex_monotonic_multiply() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Int32, false),
+            Field::new("c", DataType::Int32, false),
+        ]));
+
+        let col_a = col("a", &schema)?;
+        let col_b = col("b", &schema)?;
+        let col_c = col("c", &schema)?;
+
+        let a_times_b: Arc<dyn PhysicalExpr> = Arc::new(BinaryExpr::new(
+            Arc::clone(&col_a),
+            Operator::Multiply,
+            Arc::clone(&col_b),
+        ));
+
+        // Assume existing ordering is [c ASC, a ASC, b ASC]
+        let mut eq_properties = EquivalenceProperties::new(Arc::clone(&schema));
+
+        let initial_ordering = LexOrdering::from(vec![
+            PhysicalSortExpr::new_default(Arc::clone(&col_c)).asc(),
+            PhysicalSortExpr::new_default(Arc::clone(&col_a)).asc(),
+            PhysicalSortExpr::new_default(Arc::clone(&col_b)).asc(),
+        ]);
+
+        eq_properties.add_new_ordering(initial_ordering.clone());
+
+        // Add equality condition c = a * b
+        eq_properties.add_equal_conditions(&col_c, &a_times_b)?;
+
+        let orderings = eq_properties.oeq_class();
+
+        // The ordering should remain unchanged since multiplication is not lex-monotonic
+        assert_eq!(orderings.len(), 1);
+        assert!(orderings.contains(&initial_ordering));
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_ordering_equivalence_with_concat_equality() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Utf8, false),
+            Field::new("b", DataType::Utf8, false),
+            Field::new("c", DataType::Utf8, false),
+        ]));
+
+        let col_a = col("a", &schema)?;
+        let col_b = col("b", &schema)?;
+        let col_c = col("c", &schema)?;
+
+        let a_concat_b: Arc<dyn PhysicalExpr> = Arc::new(ScalarFunctionExpr::new(
+            "concat",
+            concat(),
+            vec![Arc::clone(&col_a), Arc::clone(&col_b)],
+            DataType::Utf8,
+        ));
+
+        // Assume existing ordering is [concat(a, b) ASC, a ASC, b ASC]
+        let mut eq_properties = EquivalenceProperties::new(Arc::clone(&schema));
+
+        eq_properties.add_new_ordering(LexOrdering::from(vec![
+            PhysicalSortExpr::new_default(Arc::clone(&a_concat_b)).asc(),
+            PhysicalSortExpr::new_default(Arc::clone(&col_a)).asc(),
+            PhysicalSortExpr::new_default(Arc::clone(&col_b)).asc(),
+        ]));
+
+        // Add equality condition c = concat(a, b)
+        eq_properties.add_equal_conditions(&col_c, &a_concat_b)?;
+
+        let orderings = eq_properties.oeq_class();
+
+        let expected_ordering1 = LexOrdering::from(vec![PhysicalSortExpr::new_default(
+            Arc::clone(&a_concat_b),
+        )
+        .asc()]);
+        let expected_ordering2 = LexOrdering::from(vec![
+            PhysicalSortExpr::new_default(Arc::clone(&col_a)).asc(),
+            PhysicalSortExpr::new_default(Arc::clone(&col_b)).asc(),
+        ]);
+
+        // The ordering should be [concat(a, b) ASC] and [a ASC, b ASC]
+        assert_eq!(orderings.len(), 2);
+        assert!(orderings.contains(&expected_ordering1));
+        assert!(orderings.contains(&expected_ordering2));
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_with_reorder_constant_filtering() -> Result<()> {
+        let schema = create_test_schema()?;
+        let mut eq_properties = EquivalenceProperties::new(Arc::clone(&schema));
+
+        // Setup constant columns
+        let col_a = col("a", &schema)?;
+        let col_b = col("b", &schema)?;
+        eq_properties = eq_properties.with_constants([ConstExpr::from(&col_a)]);
+
+        let sort_exprs = LexOrdering::new(vec![
+            PhysicalSortExpr {
+                expr: Arc::clone(&col_a),
+                options: SortOptions::default(),
+            },
+            PhysicalSortExpr {
+                expr: Arc::clone(&col_b),
+                options: SortOptions::default(),
+            },
+        ]);
+
+        let result = eq_properties.with_reorder(sort_exprs);
+
+        // Should only contain b since a is constant
+        assert_eq!(result.oeq_class().len(), 1);
+        let ordering = result.oeq_class().iter().next().unwrap();
+        assert_eq!(ordering.len(), 1);
+        assert!(ordering[0].expr.eq(&col_b));
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_with_reorder_preserve_suffix() -> Result<()> {
+        let schema = create_test_schema()?;
+        let mut eq_properties = EquivalenceProperties::new(Arc::clone(&schema));
+
+        let col_a = col("a", &schema)?;
+        let col_b = col("b", &schema)?;
+        let col_c = col("c", &schema)?;
+
+        let asc = SortOptions::default();
+        let desc = SortOptions {
+            descending: true,
+            nulls_first: true,
+        };
+
+        // Initial ordering: [a ASC, b DESC, c ASC]
+        eq_properties.add_new_orderings([LexOrdering::new(vec![
+            PhysicalSortExpr {
+                expr: Arc::clone(&col_a),
+                options: asc,
+            },
+            PhysicalSortExpr {
+                expr: Arc::clone(&col_b),
+                options: desc,
+            },
+            PhysicalSortExpr {
+                expr: Arc::clone(&col_c),
+                options: asc,
+            },
+        ])]);
+
+        // New ordering: [a ASC]
+        let new_order = LexOrdering::new(vec![PhysicalSortExpr {
+            expr: Arc::clone(&col_a),
+            options: asc,
+        }]);
+
+        let result = eq_properties.with_reorder(new_order);
+
+        // Should only contain [a ASC, b DESC, c ASC]
+        assert_eq!(result.oeq_class().len(), 1);
+        let ordering = result.oeq_class().iter().next().unwrap();
+        assert_eq!(ordering.len(), 3);
+        assert!(ordering[0].expr.eq(&col_a));
+        assert!(ordering[0].options.eq(&asc));
+        assert!(ordering[1].expr.eq(&col_b));
+        assert!(ordering[1].options.eq(&desc));
+        assert!(ordering[2].expr.eq(&col_c));
+        assert!(ordering[2].options.eq(&asc));
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_with_reorder_equivalent_expressions() -> Result<()> {
+        let schema = create_test_schema()?;
+        let mut eq_properties = EquivalenceProperties::new(Arc::clone(&schema));
+
+        let col_a = col("a", &schema)?;
+        let col_b = col("b", &schema)?;
+        let col_c = col("c", &schema)?;
+
+        // Make a and b equivalent
+        eq_properties.add_equal_conditions(&col_a, &col_b)?;
+
+        let asc = SortOptions::default();
+
+        // Initial ordering: [a ASC, c ASC]
+        eq_properties.add_new_orderings([LexOrdering::new(vec![
+            PhysicalSortExpr {
+                expr: Arc::clone(&col_a),
+                options: asc,
+            },
+            PhysicalSortExpr {
+                expr: Arc::clone(&col_c),
+                options: asc,
+            },
+        ])]);
+
+        // New ordering: [b ASC]
+        let new_order = LexOrdering::new(vec![PhysicalSortExpr {
+            expr: Arc::clone(&col_b),
+            options: asc,
+        }]);
+
+        let result = eq_properties.with_reorder(new_order);
+
+        // Should only contain [b ASC, c ASC]
+        assert_eq!(result.oeq_class().len(), 1);
+
+        // Verify orderings
+        let ordering = result.oeq_class().iter().next().unwrap();
+        assert_eq!(ordering.len(), 2);
+        assert!(ordering[0].expr.eq(&col_b));
+        assert!(ordering[0].options.eq(&asc));
+        assert!(ordering[1].expr.eq(&col_c));
+        assert!(ordering[1].options.eq(&asc));
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_with_reorder_incompatible_prefix() -> Result<()> {
+        let schema = create_test_schema()?;
+        let mut eq_properties = EquivalenceProperties::new(Arc::clone(&schema));
+
+        let col_a = col("a", &schema)?;
+        let col_b = col("b", &schema)?;
+
+        let asc = SortOptions::default();
+        let desc = SortOptions {
+            descending: true,
+            nulls_first: true,
+        };
+
+        // Initial ordering: [a ASC, b DESC]
+        eq_properties.add_new_orderings([LexOrdering::new(vec![
+            PhysicalSortExpr {
+                expr: Arc::clone(&col_a),
+                options: asc,
+            },
+            PhysicalSortExpr {
+                expr: Arc::clone(&col_b),
+                options: desc,
+            },
+        ])]);
+
+        // New ordering: [a DESC]
+        let new_order = LexOrdering::new(vec![PhysicalSortExpr {
+            expr: Arc::clone(&col_a),
+            options: desc,
+        }]);
+
+        let result = eq_properties.with_reorder(new_order.clone());
+
+        // Should only contain the new ordering since options don't match
+        assert_eq!(result.oeq_class().len(), 1);
+        let ordering = result.oeq_class().iter().next().unwrap();
+        assert_eq!(ordering, &new_order);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_with_reorder_comprehensive() -> Result<()> {
+        let schema = create_test_schema()?;
+        let mut eq_properties = EquivalenceProperties::new(Arc::clone(&schema));
+
+        let col_a = col("a", &schema)?;
+        let col_b = col("b", &schema)?;
+        let col_c = col("c", &schema)?;
+        let col_d = col("d", &schema)?;
+        let col_e = col("e", &schema)?;
+
+        let asc = SortOptions::default();
+
+        // Constants: c is constant
+        eq_properties = eq_properties.with_constants([ConstExpr::from(&col_c)]);
+
+        // Equality: b = d
+        eq_properties.add_equal_conditions(&col_b, &col_d)?;
+
+        // Orderings: [d ASC, a ASC], [e ASC]
+        eq_properties.add_new_orderings([
+            LexOrdering::new(vec![
+                PhysicalSortExpr {
+                    expr: Arc::clone(&col_d),
+                    options: asc,
+                },
+                PhysicalSortExpr {
+                    expr: Arc::clone(&col_a),
+                    options: asc,
+                },
+            ]),
+            LexOrdering::new(vec![PhysicalSortExpr {
+                expr: Arc::clone(&col_e),
+                options: asc,
+            }]),
+        ]);
+
+        // Initial ordering: [b ASC, c ASC]
+        let new_order = LexOrdering::new(vec![
+            PhysicalSortExpr {
+                expr: Arc::clone(&col_b),
+                options: asc,
+            },
+            PhysicalSortExpr {
+                expr: Arc::clone(&col_c),
+                options: asc,
+            },
+        ]);
+
+        let result = eq_properties.with_reorder(new_order);
+
+        // Should preserve the original [d ASC, a ASC] ordering
+        assert_eq!(result.oeq_class().len(), 1);
+        let ordering = result.oeq_class().iter().next().unwrap();
+        assert_eq!(ordering.len(), 2);
+
+        // First expression should be either b or d (they're equivalent)
+        assert!(
+            ordering[0].expr.eq(&col_b) || ordering[0].expr.eq(&col_d),
+            "Expected b or d as first expression, got {:?}",
+            ordering[0].expr
+        );
+        assert!(ordering[0].options.eq(&asc));
+
+        // Second expression should be a
+        assert!(ordering[1].expr.eq(&col_a));
+        assert!(ordering[1].options.eq(&asc));
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_union_constant_value_preservation() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, true),
+            Field::new("b", DataType::Int32, true),
+        ]));
+
+        let col_a = col("a", &schema)?;
+        let literal_10 = ScalarValue::Int32(Some(10));
+
+        // Create first input with a=10
+        let const_expr1 = ConstExpr::new(Arc::clone(&col_a))
+            .with_across_partitions(AcrossPartitions::Uniform(Some(literal_10.clone())));
+        let input1 = EquivalenceProperties::new(Arc::clone(&schema))
+            .with_constants(vec![const_expr1]);
+
+        // Create second input with a=10
+        let const_expr2 = ConstExpr::new(Arc::clone(&col_a))
+            .with_across_partitions(AcrossPartitions::Uniform(Some(literal_10.clone())));
+        let input2 = EquivalenceProperties::new(Arc::clone(&schema))
+            .with_constants(vec![const_expr2]);
+
+        // Calculate union properties
+        let union_props = calculate_union(vec![input1, input2], schema)?;
+
+        // Verify column 'a' remains constant with value 10
+        let const_a = &union_props.constants()[0];
+        assert!(const_a.expr().eq(&col_a));
+        assert_eq!(
+            const_a.across_partitions(),
+            AcrossPartitions::Uniform(Some(literal_10))
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_ordering_satisfaction_with_key_constraints() -> Result<()> {
+        let pk_schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, true),
+            Field::new("b", DataType::Int32, true),
+            Field::new("c", DataType::Int32, true),
+            Field::new("d", DataType::Int32, true),
+        ]));
+
+        let unique_schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Int32, false),
+            Field::new("c", DataType::Int32, true),
+            Field::new("d", DataType::Int32, true),
+        ]));
+
+        // Test cases to run
+        let test_cases = vec![
+            // (name, schema, constraint, base_ordering, satisfied_orderings, unsatisfied_orderings)
+            (
+                "single column primary key",
+                &pk_schema,
+                vec![Constraint::PrimaryKey(vec![0])],
+                vec!["a"], // base ordering
+                vec![vec!["a", "b"], vec!["a", "c", "d"]],
+                vec![vec!["b", "a"], vec!["c", "a"]],
+            ),
+            (
+                "single column unique",
+                &unique_schema,
+                vec![Constraint::Unique(vec![0])],
+                vec!["a"], // base ordering
+                vec![vec!["a", "b"], vec!["a", "c", "d"]],
+                vec![vec!["b", "a"], vec!["c", "a"]],
+            ),
+            (
+                "multi-column primary key",
+                &pk_schema,
+                vec![Constraint::PrimaryKey(vec![0, 1])],
+                vec!["a", "b"], // base ordering
+                vec![vec!["a", "b", "c"], vec!["a", "b", "d"]],
+                vec![vec!["b", "a"], vec!["a", "c", "b"]],
+            ),
+            (
+                "multi-column unique",
+                &unique_schema,
+                vec![Constraint::Unique(vec![0, 1])],
+                vec!["a", "b"], // base ordering
+                vec![vec!["a", "b", "c"], vec!["a", "b", "d"]],
+                vec![vec!["b", "a"], vec!["c", "a", "b"]],
+            ),
+            (
+                "nullable unique",
+                &unique_schema,
+                vec![Constraint::Unique(vec![2, 3])],
+                vec!["c", "d"], // base ordering
+                vec![],
+                vec![vec!["c", "d", "a"]],
+            ),
+            (
+                "ordering with arbitrary column unique",
+                &unique_schema,
+                vec![Constraint::Unique(vec![0, 1])],
+                vec!["a", "c", "b"], // base ordering
+                vec![vec!["a", "c", "b", "d"]],
+                vec![vec!["a", "b", "d"]],
+            ),
+            (
+                "ordering with arbitrary column pk",
+                &pk_schema,
+                vec![Constraint::PrimaryKey(vec![0, 1])],
+                vec!["a", "c", "b"], // base ordering
+                vec![vec!["a", "c", "b", "d"]],
+                vec![vec!["a", "b", "d"]],
+            ),
+            (
+                "ordering with arbitrary column pk complex",
+                &pk_schema,
+                vec![Constraint::PrimaryKey(vec![3, 1])],
+                vec!["b", "a", "d"], // base ordering
+                vec![vec!["b", "a", "d", "c"]],
+                vec![vec!["b", "c", "d", "a"], vec!["b", "a", "c", "d"]],
+            ),
+        ];
+
+        for (
+            name,
+            schema,
+            constraints,
+            base_order,
+            satisfied_orders,
+            unsatisfied_orders,
+        ) in test_cases
+        {
+            let mut eq_properties = EquivalenceProperties::new(Arc::clone(schema));
+
+            // Convert base ordering
+            let base_ordering = LexOrdering::new(
+                base_order
+                    .iter()
+                    .map(|col_name| PhysicalSortExpr {
+                        expr: col(col_name, schema).unwrap(),
+                        options: SortOptions::default(),
+                    })
+                    .collect(),
+            );
+
+            // Convert string column names to orderings
+            let satisfied_orderings: Vec<LexOrdering> = satisfied_orders
+                .iter()
+                .map(|cols| {
+                    LexOrdering::new(
+                        cols.iter()
+                            .map(|col_name| PhysicalSortExpr {
+                                expr: col(col_name, schema).unwrap(),
+                                options: SortOptions::default(),
+                            })
+                            .collect(),
+                    )
+                })
+                .collect();
+
+            let unsatisfied_orderings: Vec<LexOrdering> = unsatisfied_orders
+                .iter()
+                .map(|cols| {
+                    LexOrdering::new(
+                        cols.iter()
+                            .map(|col_name| PhysicalSortExpr {
+                                expr: col(col_name, schema).unwrap(),
+                                options: SortOptions::default(),
+                            })
+                            .collect(),
+                    )
+                })
+                .collect();
+
+            // Test that orderings are not satisfied before adding constraints
+            for ordering in &satisfied_orderings {
+                assert!(
+                    !eq_properties.ordering_satisfy(ordering),
+                    "{}: ordering {:?} should not be satisfied before adding constraints",
+                    name,
+                    ordering
+                );
+            }
+
+            // Add base ordering
+            eq_properties.add_new_ordering(base_ordering);
+
+            // Add constraints
+            eq_properties =
+                eq_properties.with_constraints(Constraints::new_unverified(constraints));
+
+            // Test that expected orderings are now satisfied
+            for ordering in &satisfied_orderings {
+                assert!(
+                    eq_properties.ordering_satisfy(ordering),
+                    "{}: ordering {:?} should be satisfied after adding constraints",
+                    name,
+                    ordering
+                );
+            }
+
+            // Test that unsatisfied orderings remain unsatisfied
+            for ordering in &unsatisfied_orderings {
+                assert!(
+                    !eq_properties.ordering_satisfy(ordering),
+                    "{}: ordering {:?} should not be satisfied after adding constraints",
+                    name,
+                    ordering
+                );
+            }
+        }
+
+        Ok(())
     }
 }

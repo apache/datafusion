@@ -18,10 +18,13 @@
 use ahash::RandomState;
 use datafusion_common::stats::Precision;
 use datafusion_functions_aggregate_common::aggregate::count_distinct::BytesViewDistinctCountAccumulator;
+use datafusion_macros::user_doc;
 use datafusion_physical_expr::expressions;
 use std::collections::HashSet;
+use std::fmt::Debug;
+use std::mem::{size_of, size_of_val};
 use std::ops::BitAnd;
-use std::{fmt::Debug, sync::Arc};
+use std::sync::Arc;
 
 use arrow::{
     array::{ArrayRef, AsArray},
@@ -46,7 +49,7 @@ use datafusion_common::{
 use datafusion_expr::function::StateFieldsArgs;
 use datafusion_expr::{
     function::AccumulatorArgs, utils::format_state_name, Accumulator, AggregateUDFImpl,
-    EmitTo, GroupsAccumulator, Signature, Volatility,
+    Documentation, EmitTo, GroupsAccumulator, Signature, Volatility,
 };
 use datafusion_expr::{Expr, ReversedUDAF, StatisticsArgs, TypeSignature};
 use datafusion_functions_aggregate_common::aggregate::count_distinct::{
@@ -76,6 +79,27 @@ pub fn count_distinct(expr: Expr) -> Expr {
     ))
 }
 
+#[user_doc(
+    doc_section(label = "General Functions"),
+    description = "Returns the number of non-null values in the specified column. To include null values in the total count, use `count(*)`.",
+    syntax_example = "count(expression)",
+    sql_example = r#"```sql
+> SELECT count(column_name) FROM table_name;
++-----------------------+
+| count(column_name)     |
++-----------------------+
+| 100                   |
++-----------------------+
+
+> SELECT count(*) FROM table_name;
++------------------+
+| count(*)         |
++------------------+
+| 120              |
++------------------+
+```"#,
+    standard_argument(name = "expression",)
+)]
 pub struct Count {
     signature: Signature,
 }
@@ -99,8 +123,7 @@ impl Count {
     pub fn new() -> Self {
         Self {
             signature: Signature::one_of(
-                // TypeSignature::Any(0) is required to handle `Count()` with no args
-                vec![TypeSignature::VariadicAny, TypeSignature::Any(0)],
+                vec![TypeSignature::VariadicAny, TypeSignature::Nullary],
                 Volatility::Immutable,
             ),
         }
@@ -133,7 +156,7 @@ impl AggregateUDFImpl for Count {
             Ok(vec![Field::new_list(
                 format_state_name(args.name, "count distinct"),
                 // See COMMENTS.md to understand why nullable is set to true
-                Field::new("item", args.input_types[0].clone(), true),
+                Field::new_list_field(args.input_types[0].clone(), true),
                 false,
             )])
         } else {
@@ -324,6 +347,10 @@ impl AggregateUDFImpl for Count {
         }
         None
     }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        self.doc()
+    }
 }
 
 #[derive(Debug)]
@@ -357,7 +384,7 @@ impl Accumulator for CountAccumulator {
 
     fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
         let counts = downcast_value!(states[0], Int64Array);
-        let delta = &arrow::compute::sum(counts);
+        let delta = &compute::sum(counts);
         if let Some(d) = delta {
             self.count += *d;
         }
@@ -373,7 +400,7 @@ impl Accumulator for CountAccumulator {
     }
 
     fn size(&self) -> usize {
-        std::mem::size_of_val(self)
+        size_of_val(self)
     }
 }
 
@@ -430,7 +457,8 @@ impl GroupsAccumulator for CountGroupsAccumulator {
         &mut self,
         values: &[ArrayRef],
         group_indices: &[usize],
-        opt_filter: Option<&BooleanArray>,
+        // Since aggregate filter should be applied in partial stage, in final stage there should be no filter
+        _opt_filter: Option<&BooleanArray>,
         total_num_groups: usize,
     ) -> Result<()> {
         assert_eq!(values.len(), 1, "one argument to merge_batch");
@@ -443,22 +471,11 @@ impl GroupsAccumulator for CountGroupsAccumulator {
 
         // Adds the counts with the partial counts
         self.counts.resize(total_num_groups, 0);
-        match opt_filter {
-            Some(filter) => filter
-                .iter()
-                .zip(group_indices.iter())
-                .zip(partial_counts.iter())
-                .for_each(|((filter_value, &group_index), partial_count)| {
-                    if let Some(true) = filter_value {
-                        self.counts[group_index] += partial_count;
-                    }
-                }),
-            None => group_indices.iter().zip(partial_counts.iter()).for_each(
-                |(&group_index, partial_count)| {
-                    self.counts[group_index] += partial_count;
-                },
-            ),
-        }
+        group_indices.iter().zip(partial_counts.iter()).for_each(
+            |(&group_index, partial_count)| {
+                self.counts[group_index] += partial_count;
+            },
+        );
 
         Ok(())
     }
@@ -546,7 +563,7 @@ impl GroupsAccumulator for CountGroupsAccumulator {
     }
 
     fn size(&self) -> usize {
-        self.counts.capacity() * std::mem::size_of::<usize>()
+        self.counts.capacity() * size_of::<usize>()
     }
 }
 
@@ -590,28 +607,28 @@ impl DistinctCountAccumulator {
     // number of batches This method is faster than .full_size(), however it is
     // not suitable for variable length values like strings or complex types
     fn fixed_size(&self) -> usize {
-        std::mem::size_of_val(self)
-            + (std::mem::size_of::<ScalarValue>() * self.values.capacity())
+        size_of_val(self)
+            + (size_of::<ScalarValue>() * self.values.capacity())
             + self
                 .values
                 .iter()
                 .next()
-                .map(|vals| ScalarValue::size(vals) - std::mem::size_of_val(vals))
+                .map(|vals| ScalarValue::size(vals) - size_of_val(vals))
                 .unwrap_or(0)
-            + std::mem::size_of::<DataType>()
+            + size_of::<DataType>()
     }
 
     // calculates the size as accurately as possible. Note that calling this
     // method is expensive
     fn full_size(&self) -> usize {
-        std::mem::size_of_val(self)
-            + (std::mem::size_of::<ScalarValue>() * self.values.capacity())
+        size_of_val(self)
+            + (size_of::<ScalarValue>() * self.values.capacity())
             + self
                 .values
                 .iter()
-                .map(|vals| ScalarValue::size(vals) - std::mem::size_of_val(vals))
+                .map(|vals| ScalarValue::size(vals) - size_of_val(vals))
                 .sum::<usize>()
-            + std::mem::size_of::<DataType>()
+            + size_of::<DataType>()
     }
 }
 
@@ -676,5 +693,19 @@ impl Accumulator for DistinctCountAccumulator {
             d if d.is_primitive() => self.fixed_size(),
             _ => self.full_size(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use arrow::array::NullArray;
+
+    #[test]
+    fn count_accumulator_nulls() -> Result<()> {
+        let mut accumulator = CountAccumulator::new();
+        accumulator.update_batch(&[Arc::new(NullArray::new(10))])?;
+        assert_eq!(accumulator.evaluate()?, ScalarValue::Int64(Some(0)));
+        Ok(())
     }
 }

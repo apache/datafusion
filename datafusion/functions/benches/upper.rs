@@ -37,7 +37,10 @@ fn criterion_benchmark(c: &mut Criterion) {
     for size in [1024, 4096, 8192] {
         let args = create_args(size, 32);
         c.bench_function("upper_all_values_are_ascii", |b| {
-            b.iter(|| black_box(upper.invoke(&args)))
+            b.iter(|| {
+                // TODO use invoke_with_args
+                black_box(upper.invoke_batch(&args, size))
+            })
         });
     }
 }

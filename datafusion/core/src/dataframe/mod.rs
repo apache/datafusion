@@ -20,11 +20,6 @@
 #[cfg(feature = "parquet")]
 mod parquet;
 
-use std::any::Any;
-use std::borrow::Cow;
-use std::collections::HashMap;
-use std::sync::Arc;
-
 use crate::arrow::record_batch::RecordBatch;
 use crate::arrow::util::pretty;
 use crate::datasource::file_format::csv::CsvFormatFactory;
@@ -43,6 +38,10 @@ use crate::physical_plan::{
     ExecutionPlan, SendableRecordBatchStream,
 };
 use crate::prelude::SessionContext;
+use std::any::Any;
+use std::borrow::Cow;
+use std::collections::HashMap;
+use std::sync::Arc;
 
 use arrow::array::{Array, ArrayRef, Int64Array, StringArray};
 use arrow::compute::{cast, concat};
@@ -50,7 +49,8 @@ use arrow::datatypes::{DataType, Field};
 use arrow_schema::{Schema, SchemaRef};
 use datafusion_common::config::{CsvOptions, JsonOptions};
 use datafusion_common::{
-    plan_err, Column, DFSchema, DataFusionError, ParamValues, SchemaError, UnnestOptions,
+    exec_err, not_impl_err, plan_err, Column, DFSchema, DataFusionError, ParamValues,
+    SchemaError, UnnestOptions,
 };
 use datafusion_expr::dml::InsertOp;
 use datafusion_expr::{case, is_null, lit, SortExpr};
@@ -76,6 +76,9 @@ pub struct DataFrameWriteOptions {
     /// Sets which columns should be used for hive-style partitioned writes by name.
     /// Can be set to empty vec![] for non-partitioned writes.
     partition_by: Vec<String>,
+    /// Sets which columns should be used for sorting the output by name.
+    /// Can be set to empty vec![] for non-sorted writes.
+    sort_by: Vec<SortExpr>,
 }
 
 impl DataFrameWriteOptions {
@@ -85,6 +88,7 @@ impl DataFrameWriteOptions {
             insert_op: InsertOp::Append,
             single_file_output: false,
             partition_by: vec![],
+            sort_by: vec![],
         }
     }
 
@@ -103,6 +107,12 @@ impl DataFrameWriteOptions {
     /// Sets the partition_by columns for output partitioning
     pub fn with_partition_by(mut self, partition_by: Vec<String>) -> Self {
         self.partition_by = partition_by;
+        self
+    }
+
+    /// Sets the sort_by columns for output sorting
+    pub fn with_sort_by(mut self, sort_by: Vec<SortExpr>) -> Self {
+        self.sort_by = sort_by;
         self
     }
 }
@@ -373,32 +383,9 @@ impl DataFrame {
         self.select(expr)
     }
 
-    /// Expand each list element of a column to multiple rows.
-    #[deprecated(since = "37.0.0", note = "use unnest_columns instead")]
-    pub fn unnest_column(self, column: &str) -> Result<DataFrame> {
-        self.unnest_columns(&[column])
-    }
-
-    /// Expand each list element of a column to multiple rows, with
-    /// behavior controlled by [`UnnestOptions`].
-    ///
-    /// Please see the documentation on [`UnnestOptions`] for more
-    /// details about the meaning of unnest.
-    #[deprecated(since = "37.0.0", note = "use unnest_columns_with_options instead")]
-    pub fn unnest_column_with_options(
-        self,
-        column: &str,
-        options: UnnestOptions,
-    ) -> Result<DataFrame> {
-        self.unnest_columns_with_options(&[column], options)
-    }
-
     /// Expand multiple list/struct columns into a set of rows and new columns.
     ///
-    /// See also:
-    ///
-    /// 1. [`UnnestOptions`] documentation for the behavior of `unnest`
-    /// 2. [`Self::unnest_column_with_options`]
+    /// See also: [`UnnestOptions`] documentation for the behavior of `unnest`
     ///
     /// # Example
     /// ```
@@ -892,16 +879,16 @@ impl DataFrame {
             for result in describe_record_batch.iter() {
                 let array_ref = match result {
                     Ok(df) => {
-                        let batchs = df.clone().collect().await;
-                        match batchs {
-                            Ok(batchs)
-                                if batchs.len() == 1
-                                    && batchs[0]
+                        let batches = df.clone().collect().await;
+                        match batches {
+                            Ok(batches)
+                                if batches.len() == 1
+                                    && batches[0]
                                         .column_by_name(field.name())
                                         .is_some() =>
                             {
                                 let column =
-                                    batchs[0].column_by_name(field.name()).unwrap();
+                                    batches[0].column_by_name(field.name()).unwrap();
 
                                 if column.data_type().is_null() {
                                     Arc::new(StringArray::from(vec!["null"]))
@@ -924,9 +911,7 @@ impl DataFrame {
                     {
                         Arc::new(StringArray::from(vec!["null"]))
                     }
-                    Err(other_err) => {
-                        panic!("{other_err}")
-                    }
+                    Err(e) => return exec_err!("{}", e),
                 };
                 array_datas.push(array_ref);
             }
@@ -1541,8 +1526,17 @@ impl DataFrame {
         write_options: DataFrameWriteOptions,
     ) -> Result<Vec<RecordBatch>, DataFusionError> {
         let arrow_schema = Schema::from(self.schema());
+
+        let plan = if write_options.sort_by.is_empty() {
+            self.plan
+        } else {
+            LogicalPlanBuilder::from(self.plan)
+                .sort(write_options.sort_by)?
+                .build()?
+        };
+
         let plan = LogicalPlanBuilder::insert_into(
-            self.plan,
+            plan,
             table_name.to_owned(),
             &arrow_schema,
             write_options.insert_op,
@@ -1587,10 +1581,10 @@ impl DataFrame {
         writer_options: Option<CsvOptions>,
     ) -> Result<Vec<RecordBatch>, DataFusionError> {
         if options.insert_op != InsertOp::Append {
-            return Err(DataFusionError::NotImplemented(format!(
+            return not_impl_err!(
                 "{} is not implemented for DataFrame::write_csv.",
                 options.insert_op
-            )));
+            );
         }
 
         let format = if let Some(csv_opts) = writer_options {
@@ -1601,8 +1595,16 @@ impl DataFrame {
 
         let file_type = format_as_file_type(format);
 
+        let plan = if options.sort_by.is_empty() {
+            self.plan
+        } else {
+            LogicalPlanBuilder::from(self.plan)
+                .sort(options.sort_by)?
+                .build()?
+        };
+
         let plan = LogicalPlanBuilder::copy_to(
-            self.plan,
+            plan,
             path.into(),
             file_type,
             HashMap::new(),
@@ -1648,10 +1650,10 @@ impl DataFrame {
         writer_options: Option<JsonOptions>,
     ) -> Result<Vec<RecordBatch>, DataFusionError> {
         if options.insert_op != InsertOp::Append {
-            return Err(DataFusionError::NotImplemented(format!(
+            return not_impl_err!(
                 "{} is not implemented for DataFrame::write_json.",
                 options.insert_op
-            )));
+            );
         }
 
         let format = if let Some(json_opts) = writer_options {
@@ -1662,8 +1664,16 @@ impl DataFrame {
 
         let file_type = format_as_file_type(format);
 
+        let plan = if options.sort_by.is_empty() {
+            self.plan
+        } else {
+            LogicalPlanBuilder::from(self.plan)
+                .sort(options.sort_by)?
+                .build()?
+        };
+
         let plan = LogicalPlanBuilder::copy_to(
-            self.plan,
+            plan,
             path.into(),
             file_type,
             Default::default(),
@@ -1694,7 +1704,7 @@ impl DataFrame {
     /// # }
     /// ```
     pub fn with_column(self, name: &str, expr: Expr) -> Result<DataFrame> {
-        let window_func_exprs = find_window_exprs(&[expr.clone()]);
+        let window_func_exprs = find_window_exprs(std::slice::from_ref(&expr));
 
         let (window_fn_str, plan) = if window_func_exprs.is_empty() {
             (None, self.plan)
@@ -1893,6 +1903,17 @@ impl DataFrame {
         let mem_table = MemTable::try_new(schema, partitions)?;
         context.read_table(Arc::new(mem_table))
     }
+
+    /// Apply an alias to the DataFrame.
+    ///
+    /// This method replaces the qualifiers of output columns with the given alias.
+    pub fn alias(self, alias: &str) -> Result<DataFrame> {
+        let plan = LogicalPlanBuilder::from(self.plan).alias(alias)?.build()?;
+        Ok(DataFrame {
+            session_state: self.session_state,
+            plan,
+        })
+    }
 }
 
 #[derive(Debug)]
@@ -1964,20 +1985,22 @@ mod tests {
     use crate::physical_plan::{ColumnarValue, Partitioning, PhysicalExpr};
     use crate::test_util::{register_aggregate_csv, test_table, test_table_with_name};
 
-    use arrow::array::{self, Int32Array};
+    use crate::prelude::{CsvReadOptions, NdJsonReadOptions, ParquetReadOptions};
+    use arrow::array::Int32Array;
     use datafusion_common::{assert_batches_eq, Constraint, Constraints, ScalarValue};
     use datafusion_common_runtime::SpawnedTask;
     use datafusion_expr::expr::WindowFunction;
     use datafusion_expr::{
-        cast, create_udf, expr, lit, BuiltInWindowFunction, ExprFunctionExt,
-        ScalarFunctionImplementation, Volatility, WindowFrame, WindowFrameBound,
-        WindowFrameUnits, WindowFunctionDefinition,
+        cast, create_udf, lit, ExprFunctionExt, ScalarFunctionImplementation, Volatility,
+        WindowFrame, WindowFrameBound, WindowFrameUnits, WindowFunctionDefinition,
     };
     use datafusion_functions_aggregate::expr_fn::{array_agg, count_distinct};
     use datafusion_functions_window::expr_fn::row_number;
+    use datafusion_functions_window::nth_value::first_value_udwf;
     use datafusion_physical_expr::expressions::Column;
     use datafusion_physical_plan::{get_plan_string, ExecutionPlanProperties};
     use sqlparser::ast::NullTreatment;
+    use tempfile::TempDir;
 
     // Get string representation of the plan
     async fn assert_physical_plan(df: &DataFrame, expected: Vec<&str>) {
@@ -2002,8 +2025,8 @@ mod tests {
         let batch = RecordBatch::try_new(
             dual_schema.clone(),
             vec![
-                Arc::new(array::Int32Array::from(vec![1])),
-                Arc::new(array::StringArray::from(vec!["a"])),
+                Arc::new(Int32Array::from(vec![1])),
+                Arc::new(StringArray::from(vec!["a"])),
             ],
         )
         .unwrap();
@@ -2199,10 +2222,8 @@ mod tests {
     async fn select_with_window_exprs() -> Result<()> {
         // build plan using Table API
         let t = test_table().await?;
-        let first_row = Expr::WindowFunction(expr::WindowFunction::new(
-            WindowFunctionDefinition::BuiltInWindowFunction(
-                BuiltInWindowFunction::FirstValue,
-            ),
+        let first_row = Expr::WindowFunction(WindowFunction::new(
+            WindowFunctionDefinition::WindowUDF(first_value_udwf()),
             vec![col("aggregate_test_100.c1")],
         ))
         .partition_by(vec![col("aggregate_test_100.c2")])
@@ -2402,6 +2423,30 @@ mod tests {
                 "+----+-----------------------------+-----------------------------+-----------------------------+-----------------------------+-------------------------------+----------------------------------------+"],
             &df
         );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn aggregate_assert_no_empty_batches() -> Result<()> {
+        // build plan using DataFrame API
+        let df = test_table().await?;
+        let group_expr = vec![col("c1")];
+        let aggr_expr = vec![
+            min(col("c12")),
+            max(col("c12")),
+            avg(col("c12")),
+            sum(col("c12")),
+            count(col("c12")),
+            count_distinct(col("c12")),
+            median(col("c12")),
+        ];
+
+        let df: Vec<RecordBatch> = df.aggregate(group_expr, aggr_expr)?.collect().await?;
+        // Empty batches should not be produced
+        for batch in df {
+            assert!(batch.num_rows() > 0);
+        }
 
         Ok(())
     }
@@ -2616,6 +2661,54 @@ mod tests {
                 "| 5  |",
                 "| 6  |",
                 "+----+",
+            ],
+            &df_results
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_aggregate_with_union() -> Result<()> {
+        let df = test_table().await?;
+
+        let df1 = df
+            .clone()
+            // GROUP BY `c1`
+            .aggregate(vec![col("c1")], vec![min(col("c2"))])?
+            // SELECT `c1` , min(c2) as `result`
+            .select(vec![col("c1"), min(col("c2")).alias("result")])?;
+        let df2 = df
+            .clone()
+            // GROUP BY `c1`
+            .aggregate(vec![col("c1")], vec![max(col("c3"))])?
+            // SELECT `c1` , max(c3) as `result`
+            .select(vec![col("c1"), max(col("c3")).alias("result")])?;
+
+        let df_union = df1.union(df2)?;
+        let df = df_union
+            // GROUP BY `c1`
+            .aggregate(
+                vec![col("c1")],
+                vec![sum(col("result")).alias("sum_result")],
+            )?
+            // SELECT `c1`, sum(result) as `sum_result`
+            .select(vec![(col("c1")), col("sum_result")])?;
+
+        let df_results = df.collect().await?;
+
+        #[rustfmt::skip]
+        assert_batches_sorted_eq!(
+            [
+                "+----+------------+",
+                "| c1 | sum_result |",
+                "+----+------------+",
+                "| a  | 84         |",
+                "| b  | 69         |",
+                "| c  | 124        |",
+                "| d  | 126        |",
+                "| e  | 121        |",
+                "+----+------------+"
             ],
             &df_results
         );
@@ -2987,9 +3080,7 @@ mod tests {
             JoinType::Inner,
             Some(Expr::from(ScalarValue::Null)),
         )?;
-        let expected_plan = "CrossJoin:\
-        \n  TableScan: a projection=[c1], full_filters=[Boolean(NULL)]\
-        \n  TableScan: b projection=[c1]";
+        let expected_plan = "EmptyRelation";
         assert_eq!(expected_plan, format!("{}", join.into_optimized_plan()?));
 
         // JOIN ON expression must be boolean type
@@ -3235,7 +3326,7 @@ mod tests {
             &df_results
         );
 
-        // check that col with the same name ovwewritten
+        // check that col with the same name overwritten
         let df_results_overwrite = df
             .clone()
             .with_column("c1", col("c2") + col("c3"))?
@@ -3258,7 +3349,7 @@ mod tests {
             &df_results_overwrite
         );
 
-        // check that col with the same name ovwewritten using same name as reference
+        // check that col with the same name overwritten using same name as reference
         let df_results_overwrite_self = df
             .clone()
             .with_column("c2", col("c2") + lit(1))?
@@ -3547,11 +3638,10 @@ mod tests {
 
     #[tokio::test]
     async fn with_column_renamed_case_sensitive() -> Result<()> {
-        let config =
-            SessionConfig::from_string_hash_map(&std::collections::HashMap::from([(
-                "datafusion.sql_parser.enable_ident_normalization".to_owned(),
-                "false".to_owned(),
-            )]))?;
+        let config = SessionConfig::from_string_hash_map(&HashMap::from([(
+            "datafusion.sql_parser.enable_ident_normalization".to_owned(),
+            "false".to_owned(),
+        )]))?;
         let ctx = SessionContext::new_with_config(config);
         let name = "aggregate_test_100";
         register_aggregate_csv(&ctx, name).await?;
@@ -3623,7 +3713,7 @@ mod tests {
 
     #[tokio::test]
     async fn row_writer_resize_test() -> Result<()> {
-        let schema = Arc::new(Schema::new(vec![arrow::datatypes::Field::new(
+        let schema = Arc::new(Schema::new(vec![Field::new(
             "column_1",
             DataType::Utf8,
             false,
@@ -3632,7 +3722,7 @@ mod tests {
         let data = RecordBatch::try_new(
             schema,
             vec![
-                Arc::new(arrow::array::StringArray::from(vec![
+                Arc::new(StringArray::from(vec![
                     Some("2a0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"),
                     Some("3a0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000800"),
                 ]))
@@ -3842,6 +3932,7 @@ mod tests {
             JoinType::RightSemi,
             JoinType::LeftAnti,
             JoinType::RightAnti,
+            JoinType::LeftMark,
         ];
 
         let default_partition_count = SessionConfig::new().target_partitions();
@@ -3859,7 +3950,10 @@ mod tests {
             let join_schema = physical_plan.schema();
 
             match join_type {
-                JoinType::Left | JoinType::LeftSemi | JoinType::LeftAnti => {
+                JoinType::Left
+                | JoinType::LeftSemi
+                | JoinType::LeftAnti
+                | JoinType::LeftMark => {
                     let left_exprs: Vec<Arc<dyn PhysicalExpr>> = vec![
                         Arc::new(Column::new_with_schema("c1", &join_schema)?),
                         Arc::new(Column::new_with_schema("c2", &join_schema)?),
@@ -4008,6 +4102,239 @@ mod tests {
             &df_results
         );
 
+        Ok(())
+    }
+
+    // Test issue: https://github.com/apache/datafusion/issues/13873
+    #[tokio::test]
+    async fn write_parquet_with_order() -> Result<()> {
+        let tmp_dir = TempDir::new()?;
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, true),
+            Field::new("b", DataType::Int32, true),
+        ]));
+
+        let ctx = SessionContext::new();
+        let write_df = ctx.read_batch(RecordBatch::try_new(
+            schema.clone(),
+            vec![
+                Arc::new(Int32Array::from(vec![1, 5, 7, 3, 2])),
+                Arc::new(Int32Array::from(vec![2, 3, 4, 5, 6])),
+            ],
+        )?)?;
+
+        let test_path = tmp_dir.path().join("test.parquet");
+
+        write_df
+            .clone()
+            .write_parquet(
+                test_path.to_str().unwrap(),
+                DataFrameWriteOptions::new()
+                    .with_sort_by(vec![col("a").sort(true, true)]),
+                None,
+            )
+            .await?;
+
+        let ctx = SessionContext::new();
+        ctx.register_parquet(
+            "data",
+            test_path.to_str().unwrap(),
+            ParquetReadOptions::default(),
+        )
+        .await?;
+
+        let df = ctx.sql("SELECT * FROM data").await?;
+        let results = df.collect().await?;
+
+        let df_explain = ctx.sql("explain SELECT a FROM data").await?;
+        let explain_result = df_explain.collect().await?;
+
+        println!("explain_result {:?}", explain_result);
+
+        assert_batches_eq!(
+            &[
+                "+---+---+",
+                "| a | b |",
+                "+---+---+",
+                "| 1 | 2 |",
+                "| 2 | 6 |",
+                "| 3 | 5 |",
+                "| 5 | 3 |",
+                "| 7 | 4 |",
+                "+---+---+",
+            ],
+            &results
+        );
+        Ok(())
+    }
+
+    // Test issue: https://github.com/apache/datafusion/issues/13873
+    #[tokio::test]
+    async fn write_csv_with_order() -> Result<()> {
+        let tmp_dir = TempDir::new()?;
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, true),
+            Field::new("b", DataType::Int32, true),
+        ]));
+
+        let ctx = SessionContext::new();
+        let write_df = ctx.read_batch(RecordBatch::try_new(
+            schema.clone(),
+            vec![
+                Arc::new(Int32Array::from(vec![1, 5, 7, 3, 2])),
+                Arc::new(Int32Array::from(vec![2, 3, 4, 5, 6])),
+            ],
+        )?)?;
+
+        let test_path = tmp_dir.path().join("test.csv");
+
+        write_df
+            .clone()
+            .write_csv(
+                test_path.to_str().unwrap(),
+                DataFrameWriteOptions::new()
+                    .with_sort_by(vec![col("a").sort(true, true)]),
+                None,
+            )
+            .await?;
+
+        let ctx = SessionContext::new();
+        ctx.register_csv(
+            "data",
+            test_path.to_str().unwrap(),
+            CsvReadOptions::new().schema(&schema),
+        )
+        .await?;
+
+        let df = ctx.sql("SELECT * FROM data").await?;
+        let results = df.collect().await?;
+
+        assert_batches_eq!(
+            &[
+                "+---+---+",
+                "| a | b |",
+                "+---+---+",
+                "| 1 | 2 |",
+                "| 2 | 6 |",
+                "| 3 | 5 |",
+                "| 5 | 3 |",
+                "| 7 | 4 |",
+                "+---+---+",
+            ],
+            &results
+        );
+        Ok(())
+    }
+
+    // Test issue: https://github.com/apache/datafusion/issues/13873
+    #[tokio::test]
+    async fn write_json_with_order() -> Result<()> {
+        let tmp_dir = TempDir::new()?;
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, true),
+            Field::new("b", DataType::Int32, true),
+        ]));
+
+        let ctx = SessionContext::new();
+        let write_df = ctx.read_batch(RecordBatch::try_new(
+            schema.clone(),
+            vec![
+                Arc::new(Int32Array::from(vec![1, 5, 7, 3, 2])),
+                Arc::new(Int32Array::from(vec![2, 3, 4, 5, 6])),
+            ],
+        )?)?;
+
+        let test_path = tmp_dir.path().join("test.json");
+
+        write_df
+            .clone()
+            .write_json(
+                test_path.to_str().unwrap(),
+                DataFrameWriteOptions::new()
+                    .with_sort_by(vec![col("a").sort(true, true)]),
+                None,
+            )
+            .await?;
+
+        let ctx = SessionContext::new();
+        ctx.register_json(
+            "data",
+            test_path.to_str().unwrap(),
+            NdJsonReadOptions::default().schema(&schema),
+        )
+        .await?;
+
+        let df = ctx.sql("SELECT * FROM data").await?;
+        let results = df.collect().await?;
+
+        assert_batches_eq!(
+            &[
+                "+---+---+",
+                "| a | b |",
+                "+---+---+",
+                "| 1 | 2 |",
+                "| 2 | 6 |",
+                "| 3 | 5 |",
+                "| 5 | 3 |",
+                "| 7 | 4 |",
+                "+---+---+",
+            ],
+            &results
+        );
+        Ok(())
+    }
+
+    // Test issue: https://github.com/apache/datafusion/issues/13873
+    #[tokio::test]
+    async fn write_table_with_order() -> Result<()> {
+        let tmp_dir = TempDir::new()?;
+        let ctx = SessionContext::new();
+        let location = tmp_dir.path().join("test_table/");
+
+        let mut write_df = ctx
+            .sql("values ('z'), ('x'), ('a'), ('b'), ('c')")
+            .await
+            .unwrap();
+
+        // Ensure the column names and types match the target table
+        write_df = write_df
+            .with_column_renamed("column1", "tablecol1")
+            .unwrap();
+        let sql_str =
+            "create external table data(tablecol1 varchar) stored as parquet location '"
+                .to_owned()
+                + location.to_str().unwrap()
+                + "'";
+
+        ctx.sql(sql_str.as_str()).await?.collect().await?;
+
+        // This is equivalent to INSERT INTO test.
+        write_df
+            .clone()
+            .write_table(
+                "data",
+                DataFrameWriteOptions::new()
+                    .with_sort_by(vec![col("tablecol1").sort(true, true)]),
+            )
+            .await?;
+
+        let df = ctx.sql("SELECT * FROM data").await?;
+        let results = df.collect().await?;
+
+        assert_batches_eq!(
+            &[
+                "+-----------+",
+                "| tablecol1 |",
+                "+-----------+",
+                "| a         |",
+                "| b         |",
+                "| c         |",
+                "| x         |",
+                "| z         |",
+                "+-----------+",
+            ],
+            &results
+        );
         Ok(())
     }
 }

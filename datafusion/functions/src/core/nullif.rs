@@ -17,37 +17,46 @@
 
 use arrow::datatypes::DataType;
 use datafusion_common::{exec_err, Result};
-use datafusion_expr::ColumnarValue;
+use datafusion_expr::{ColumnarValue, Documentation};
 
 use arrow::compute::kernels::cmp::eq;
 use arrow::compute::kernels::nullif::nullif;
 use datafusion_common::ScalarValue;
 use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
+use datafusion_macros::user_doc;
 use std::any::Any;
-
+#[user_doc(
+    doc_section(label = "Conditional Functions"),
+    description = "Returns _null_ if _expression1_ equals _expression2_; otherwise it returns _expression1_.
+This can be used to perform the inverse operation of [`coalesce`](#coalesce).",
+    syntax_example = "nullif(expression1, expression2)",
+    sql_example = r#"```sql
+> select nullif('datafusion', 'data');
++-----------------------------------------+
+| nullif(Utf8("datafusion"),Utf8("data")) |
++-----------------------------------------+
+| datafusion                              |
++-----------------------------------------+
+> select nullif('datafusion', 'datafusion');
++-----------------------------------------------+
+| nullif(Utf8("datafusion"),Utf8("datafusion")) |
++-----------------------------------------------+
+|                                               |
++-----------------------------------------------+
+```"#,
+    argument(
+        name = "expression1",
+        description = "Expression to compare and return if equal to expression2. Can be a constant, column, or function, and any combination of operators."
+    ),
+    argument(
+        name = "expression2",
+        description = "Expression to compare to expression1. Can be a constant, column, or function, and any combination of operators."
+    )
+)]
 #[derive(Debug)]
 pub struct NullIfFunc {
     signature: Signature,
 }
-
-/// Currently supported types by the nullif function.
-/// The order of these types correspond to the order on which coercion applies
-/// This should thus be from least informative to most informative
-static SUPPORTED_NULLIF_TYPES: &[DataType] = &[
-    DataType::Boolean,
-    DataType::UInt8,
-    DataType::UInt16,
-    DataType::UInt32,
-    DataType::UInt64,
-    DataType::Int8,
-    DataType::Int16,
-    DataType::Int32,
-    DataType::Int64,
-    DataType::Float32,
-    DataType::Float64,
-    DataType::Utf8,
-    DataType::LargeUtf8,
-];
 
 impl Default for NullIfFunc {
     fn default() -> Self {
@@ -58,11 +67,20 @@ impl Default for NullIfFunc {
 impl NullIfFunc {
     pub fn new() -> Self {
         Self {
-            signature: Signature::uniform(
-                2,
-                SUPPORTED_NULLIF_TYPES.to_vec(),
-                Volatility::Immutable,
-            ),
+            // Documentation mentioned in Postgres,
+            // The result has the same type as the first argument — but there is a subtlety.
+            // What is actually returned is the first argument of the implied = operator,
+            // and in some cases that will have been promoted to match the second argument's type.
+            // For example, NULLIF(1, 2.2) yields numeric, because there is no integer = numeric operator, only numeric = numeric
+            //
+            // We don't strictly follow Postgres or DuckDB for **simplicity**.
+            // In this function, we will coerce arguments to the same data type for comparison need. Unlike DuckDB
+            // we don't return the **original** first argument type but return the final coerced type.
+            //
+            // In Postgres, nullif('2', 2) returns Null but nullif('2::varchar', 2) returns error.
+            // While in DuckDB both query returns Null. We follow DuckDB in this case since I think they are equivalent thing and should
+            // have the same result as well.
+            signature: Signature::comparable(2, Volatility::Immutable),
         }
     }
 }
@@ -80,18 +98,19 @@ impl ScalarUDFImpl for NullIfFunc {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        // NULLIF has two args and they might get coerced, get a preview of this
-        let coerced_types = datafusion_expr::type_coercion::functions::data_types(
-            arg_types,
-            &self.signature,
-        );
-        coerced_types
-            .map(|typs| typs[0].clone())
-            .map_err(|e| e.context("Failed to coerce arguments for NULLIF"))
+        Ok(arg_types[0].to_owned())
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         nullif_func(args)
+    }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        self.doc()
     }
 }
 
@@ -186,7 +205,7 @@ mod tests {
 
     #[test]
     // Ensure that arrays with no nulls can also invoke NULLIF() correctly
-    fn nullif_int32_nonulls() -> Result<()> {
+    fn nullif_int32_non_nulls() -> Result<()> {
         let a = Int32Array::from(vec![1, 3, 10, 7, 8, 1, 2, 4, 5]);
         let a = ColumnarValue::Array(Arc::new(a));
 

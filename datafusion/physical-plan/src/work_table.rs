@@ -24,8 +24,9 @@ use super::{
     metrics::{ExecutionPlanMetricsSet, MetricsSet},
     SendableRecordBatchStream, Statistics,
 };
+use crate::execution_plan::{Boundedness, EmissionType};
 use crate::memory::MemoryStream;
-use crate::{DisplayAs, DisplayFormatType, ExecutionMode, ExecutionPlan, PlanProperties};
+use crate::{DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties};
 
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
@@ -120,6 +121,16 @@ impl WorkTableExec {
         }
     }
 
+    /// Ref to name
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    /// Arc clone of ref to schema
+    pub fn schema(&self) -> SchemaRef {
+        Arc::clone(&self.schema)
+    }
+
     pub(super) fn with_work_table(&self, work_table: Arc<WorkTable>) -> Self {
         Self {
             name: self.name.clone(),
@@ -132,12 +143,11 @@ impl WorkTableExec {
 
     /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
     fn compute_properties(schema: SchemaRef) -> PlanProperties {
-        let eq_properties = EquivalenceProperties::new(schema);
-
         PlanProperties::new(
-            eq_properties,
+            EquivalenceProperties::new(schema),
             Partitioning::UnknownPartitioning(1),
-            ExecutionMode::Bounded,
+            EmissionType::Incremental,
+            Boundedness::Bounded,
         )
     }
 }
@@ -225,31 +235,31 @@ mod tests {
     #[test]
     fn test_work_table() {
         let work_table = WorkTable::new();
-        // can't take from empty work_table
+        // Can't take from empty work_table
         assert!(work_table.take().is_err());
 
         let pool = Arc::new(UnboundedMemoryPool::default()) as _;
         let mut reservation = MemoryConsumer::new("test_work_table").register(&pool);
 
-        // update batch to work_table
+        // Update batch to work_table
         let array: ArrayRef = Arc::new((0..5).collect::<Int32Array>());
         let batch = RecordBatch::try_from_iter(vec![("col", array)]).unwrap();
         reservation.try_grow(100).unwrap();
         work_table.update(ReservedBatches::new(vec![batch.clone()], reservation));
-        // take from work_table
+        // Take from work_table
         let reserved_batches = work_table.take().unwrap();
         assert_eq!(reserved_batches.batches, vec![batch.clone()]);
 
-        // consume the batch by the MemoryStream
+        // Consume the batch by the MemoryStream
         let memory_stream =
             MemoryStream::try_new(reserved_batches.batches, batch.schema(), None)
                 .unwrap()
                 .with_reservation(reserved_batches.reservation);
 
-        // should still be reserved
+        // Should still be reserved
         assert_eq!(pool.reserved(), 100);
 
-        // the reservation should be freed after drop the memory_stream
+        // The reservation should be freed after drop the memory_stream
         drop(memory_stream);
         assert_eq!(pool.reserved(), 0);
     }

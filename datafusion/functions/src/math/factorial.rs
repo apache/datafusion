@@ -26,9 +26,20 @@ use arrow::datatypes::DataType;
 use arrow::datatypes::DataType::Int64;
 
 use crate::utils::make_scalar_function;
-use datafusion_common::{arrow_datafusion_err, exec_err, DataFusionError, Result};
-use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
+use datafusion_common::{
+    arrow_datafusion_err, exec_err, internal_datafusion_err, DataFusionError, Result,
+};
+use datafusion_expr::{
+    ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
+};
+use datafusion_macros::user_doc;
 
+#[user_doc(
+    doc_section(label = "Math Functions"),
+    description = "Factorial. Returns 1 if value is less than 2.",
+    syntax_example = "factorial(numeric_expression)",
+    standard_argument(name = "numeric_expression", prefix = "Numeric")
+)]
 #[derive(Debug)]
 pub struct FactorialFunc {
     signature: Signature,
@@ -65,16 +76,24 @@ impl ScalarUDFImpl for FactorialFunc {
         Ok(Int64)
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         make_scalar_function(factorial, vec![])(args)
+    }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        self.doc()
     }
 }
 
 /// Factorial SQL function
 fn factorial(args: &[ArrayRef]) -> Result<ArrayRef> {
     match args[0].data_type() {
-        DataType::Int64 => {
-            let arg = downcast_arg!((&args[0]), "value", Int64Array);
+        Int64 => {
+            let arg = downcast_named_arg!((&args[0]), "value", Int64Array);
             Ok(arg
                 .iter()
                 .map(|a| match a {
@@ -97,7 +116,6 @@ fn factorial(args: &[ArrayRef]) -> Result<ArrayRef> {
 
 #[cfg(test)]
 mod test {
-
     use datafusion_common::cast::as_int64_array;
 
     use super::*;

@@ -15,6 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! Tests for [`CombinePartialFinalAggregate`] physical optimizer rule
+//!
+//! Note these tests are not in the same module as the optimizer pass because
+//! they rely on `ParquetExec` which is in the core crate.
 use std::sync::Arc;
 
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
@@ -84,7 +88,7 @@ fn parquet_exec(schema: &SchemaRef) -> Arc<ParquetExec> {
 fn partial_aggregate_exec(
     input: Arc<dyn ExecutionPlan>,
     group_by: PhysicalGroupBy,
-    aggr_expr: Vec<AggregateFunctionExpr>,
+    aggr_expr: Vec<Arc<AggregateFunctionExpr>>,
 ) -> Arc<dyn ExecutionPlan> {
     let schema = input.schema();
     let n_aggr = aggr_expr.len();
@@ -104,7 +108,7 @@ fn partial_aggregate_exec(
 fn final_aggregate_exec(
     input: Arc<dyn ExecutionPlan>,
     group_by: PhysicalGroupBy,
-    aggr_expr: Vec<AggregateFunctionExpr>,
+    aggr_expr: Vec<Arc<AggregateFunctionExpr>>,
 ) -> Arc<dyn ExecutionPlan> {
     let schema = input.schema();
     let n_aggr = aggr_expr.len();
@@ -130,11 +134,12 @@ fn count_expr(
     expr: Arc<dyn PhysicalExpr>,
     name: &str,
     schema: &Schema,
-) -> AggregateFunctionExpr {
+) -> Arc<AggregateFunctionExpr> {
     AggregateExprBuilder::new(count_udaf(), vec![expr])
         .schema(Arc::new(schema.clone()))
         .alias(name)
         .build()
+        .map(Arc::new)
         .unwrap()
 }
 
@@ -218,6 +223,7 @@ fn aggregations_with_group_combined() -> datafusion_common::Result<()> {
             .schema(Arc::clone(&schema))
             .alias("Sum(b)")
             .build()
+            .map(Arc::new)
             .unwrap(),
     ];
     let groups: Vec<(Arc<dyn PhysicalExpr>, String)> =

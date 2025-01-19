@@ -30,7 +30,7 @@ use arrow::{
 };
 use datafusion_common::{exec_err, DataFusionError, Result};
 use datafusion_expr_common::accumulator::Accumulator;
-use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
+use datafusion_physical_expr_common::sort_expr::LexOrdering;
 
 /// Convert scalar values from an accumulator into arrays.
 pub fn get_accum_scalar_values_as_arrays(
@@ -48,6 +48,7 @@ pub fn get_accum_scalar_values_as_arrays(
 /// Since `Decimal128Arrays` created from `Vec<NativeType>` have
 /// default precision and scale, this function adjusts the output to
 /// match `data_type`, if necessary
+#[deprecated(since = "44.0.0", note = "use PrimitiveArray::with_datatype")]
 pub fn adjust_output_array(data_type: &DataType, array: ArrayRef) -> Result<ArrayRef> {
     let array = match data_type {
         DataType::Decimal128(p, s) => Arc::new(
@@ -88,7 +89,7 @@ pub fn adjust_output_array(data_type: &DataType, array: ArrayRef) -> Result<Arra
 
 /// Construct corresponding fields for lexicographical ordering requirement expression
 pub fn ordering_fields(
-    ordering_req: &[PhysicalSortExpr],
+    ordering_req: &LexOrdering,
     // Data type of each expression in the ordering requirement
     data_types: &[DataType],
 ) -> Vec<Field> {
@@ -107,7 +108,7 @@ pub fn ordering_fields(
 }
 
 /// Selects the sort option attribute from all the given `PhysicalSortExpr`s.
-pub fn get_sort_options(ordering_req: &[PhysicalSortExpr]) -> Vec<SortOptions> {
+pub fn get_sort_options(ordering_req: &LexOrdering) -> Vec<SortOptions> {
     ordering_req.iter().map(|item| item.options).collect()
 }
 

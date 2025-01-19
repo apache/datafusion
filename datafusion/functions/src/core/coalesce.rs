@@ -20,14 +20,30 @@ use arrow::compute::kernels::zip::zip;
 use arrow::compute::{and, is_not_null, is_null};
 use arrow::datatypes::DataType;
 use datafusion_common::{exec_err, ExprSchema, Result};
-use datafusion_expr::scalar_doc_sections::DOC_SECTION_CONDITIONAL;
-use datafusion_expr::type_coercion::binary::type_union_resolution;
+use datafusion_expr::binary::try_type_union_resolution;
 use datafusion_expr::{ColumnarValue, Documentation, Expr, ExprSchemable};
 use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
+use datafusion_macros::user_doc;
 use itertools::Itertools;
 use std::any::Any;
-use std::sync::OnceLock;
 
+#[user_doc(
+    doc_section(label = "Conditional Functions"),
+    description = "Returns the first of its arguments that is not _null_. Returns _null_ if all arguments are _null_. This function is often used to substitute a default value for _null_ values.",
+    syntax_example = "coalesce(expression1[, ..., expression_n])",
+    sql_example = r#"```sql
+> select coalesce(null, null, 'datafusion');
++----------------------------------------+
+| coalesce(NULL,NULL,Utf8("datafusion")) |
++----------------------------------------+
+| datafusion                             |
++----------------------------------------+
+```"#,
+    argument(
+        name = "expression1, expression_n",
+        description = "Expression to use if previous expressions are _null_. Can be a constant, column, or function, and any combination of arithmetic operators. Pass as many expression arguments as necessary."
+    )
+)]
 #[derive(Debug)]
 pub struct CoalesceFunc {
     signature: Signature,
@@ -45,23 +61,6 @@ impl CoalesceFunc {
             signature: Signature::user_defined(Volatility::Immutable),
         }
     }
-}
-
-static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
-
-fn get_coalesce_doc() -> &'static Documentation {
-    DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_CONDITIONAL)
-            .with_description("Returns the first of its arguments that is not _null_. Returns _null_ if all arguments are _null_. This function is often used to substitute a default value for _null_ values.")
-            .with_syntax_example("coalesce(expression1[, ..., expression_n])")
-            .with_argument(
-                "expression1, expression_n",
-                "Expression to use if previous expressions are _null_. Can be a constant, column, or function, and any combination of arithmetic operators. Pass as many expression arguments as necessary."
-            )
-            .build()
-            .unwrap()
-    })
 }
 
 impl ScalarUDFImpl for CoalesceFunc {
@@ -91,7 +90,11 @@ impl ScalarUDFImpl for CoalesceFunc {
     }
 
     /// coalesce evaluates to the first value which is not NULL
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         // do not accept 0 arguments.
         if args.is_empty() {
             return exec_err!(
@@ -154,13 +157,12 @@ impl ScalarUDFImpl for CoalesceFunc {
         if arg_types.is_empty() {
             return exec_err!("coalesce must have at least one argument");
         }
-        let new_type = type_union_resolution(arg_types)
-            .unwrap_or(arg_types.first().unwrap().clone());
-        Ok(vec![new_type; arg_types.len()])
+
+        try_type_union_resolution(arg_types)
     }
 
     fn documentation(&self) -> Option<&Documentation> {
-        Some(get_coalesce_doc())
+        self.doc()
     }
 }
 

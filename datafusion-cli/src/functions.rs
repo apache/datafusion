@@ -24,13 +24,13 @@ use async_trait::async_trait;
 
 use datafusion::catalog::Session;
 use datafusion::common::{plan_err, Column};
-use datafusion::datasource::function::TableFunctionImpl;
 use datafusion::datasource::TableProvider;
 use datafusion::error::Result;
 use datafusion::logical_expr::{Expr, Scalar};
 use datafusion::physical_plan::memory::MemoryExec;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::scalar::ScalarValue;
+use datafusion_catalog::TableFunctionImpl;
 use parquet::basic::ConvertedType;
 use parquet::data_type::{ByteArray, FixedLenByteArray};
 use parquet::file::reader::FileReader;
@@ -363,7 +363,7 @@ impl TableFunctionImpl for ParquetMetadataFunc {
             Field::new("total_uncompressed_size", DataType::Int64, true),
         ]));
 
-        // construct recordbatch from metadata
+        // construct record batch from metadata
         let mut filename_arr = vec![];
         let mut row_group_id_arr = vec![];
         let mut row_group_num_rows_arr = vec![];

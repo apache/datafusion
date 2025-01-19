@@ -38,12 +38,12 @@ mod tests {
         let proto_plan =
             read_json("tests/testdata/test_plans/select_not_bool.substrait.json");
         let ctx = add_plan_schemas_to_ctx(SessionContext::new(), &proto_plan)?;
-        let plan = from_substrait_plan(&ctx, &proto_plan).await?;
+        let plan = from_substrait_plan(&ctx.state(), &proto_plan).await?;
 
         assert_eq!(
             format!("{}", plan),
             "Projection: NOT DATA.D AS EXPR$0\
-            \n  TableScan: DATA projection=[D]"
+            \n  TableScan: DATA"
         );
         Ok(())
     }
@@ -63,13 +63,13 @@ mod tests {
         let proto_plan =
             read_json("tests/testdata/test_plans/select_window.substrait.json");
         let ctx = add_plan_schemas_to_ctx(SessionContext::new(), &proto_plan)?;
-        let plan = from_substrait_plan(&ctx, &proto_plan).await?;
+        let plan = from_substrait_plan(&ctx.state(), &proto_plan).await?;
 
         assert_eq!(
             format!("{}", plan),
             "Projection: sum(DATA.D) PARTITION BY [DATA.PART] ORDER BY [DATA.ORD ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND UNBOUNDED FOLLOWING AS LEAD_EXPR\
             \n  WindowAggr: windowExpr=[[sum(DATA.D) PARTITION BY [DATA.PART] ORDER BY [DATA.ORD ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND UNBOUNDED FOLLOWING]]\
-            \n    TableScan: DATA projection=[D, PART, ORD]"
+            \n    TableScan: DATA"
         );
         Ok(())
     }
@@ -82,7 +82,7 @@ mod tests {
         let proto_plan =
             read_json("tests/testdata/test_plans/non_nullable_lists.substrait.json");
         let ctx = add_plan_schemas_to_ctx(SessionContext::new(), &proto_plan)?;
-        let plan = from_substrait_plan(&ctx, &proto_plan).await?;
+        let plan = from_substrait_plan(&ctx.state(), &proto_plan).await?;
 
         assert_eq!(format!("{}", &plan), "Values: (List([1, 2]))");
 

@@ -17,15 +17,22 @@
 
 //! Math function: `isnan()`.
 
-use arrow::datatypes::DataType;
-use datafusion_common::{exec_err, DataFusionError, Result};
+use arrow::datatypes::{DataType, Float32Type, Float64Type};
+use datafusion_common::{exec_err, Result};
 use datafusion_expr::{ColumnarValue, TypeSignature};
 
-use arrow::array::{ArrayRef, BooleanArray, Float32Array, Float64Array};
-use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
+use arrow::array::{ArrayRef, AsArray, BooleanArray};
+use datafusion_expr::{Documentation, ScalarUDFImpl, Signature, Volatility};
+use datafusion_macros::user_doc;
 use std::any::Any;
 use std::sync::Arc;
 
+#[user_doc(
+    doc_section(label = "Math Functions"),
+    description = "Returns true if a given number is +NaN or -NaN otherwise returns false.",
+    syntax_example = "isnan(numeric_expression)",
+    standard_argument(name = "numeric_expression", prefix = "Numeric")
+)]
 #[derive(Debug)]
 pub struct IsNanFunc {
     signature: Signature,
@@ -68,24 +75,23 @@ impl ScalarUDFImpl for IsNanFunc {
         Ok(DataType::Boolean)
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         let args = ColumnarValue::values_to_arrays(args)?;
 
         let arr: ArrayRef = match args[0].data_type() {
-            DataType::Float64 => Arc::new(make_function_scalar_inputs_return_type!(
-                &args[0],
-                self.name(),
-                Float64Array,
-                BooleanArray,
-                { f64::is_nan }
-            )),
-            DataType::Float32 => Arc::new(make_function_scalar_inputs_return_type!(
-                &args[0],
-                self.name(),
-                Float32Array,
-                BooleanArray,
-                { f32::is_nan }
-            )),
+            DataType::Float64 => Arc::new(BooleanArray::from_unary(
+                args[0].as_primitive::<Float64Type>(),
+                f64::is_nan,
+            )) as ArrayRef,
+
+            DataType::Float32 => Arc::new(BooleanArray::from_unary(
+                args[0].as_primitive::<Float32Type>(),
+                f32::is_nan,
+            )) as ArrayRef,
             other => {
                 return exec_err!(
                     "Unsupported data type {other:?} for function {}",
@@ -94,5 +100,9 @@ impl ScalarUDFImpl for IsNanFunc {
             }
         };
         Ok(ColumnarValue::Array(arr))
+    }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        self.doc()
     }
 }

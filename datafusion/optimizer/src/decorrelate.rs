@@ -17,22 +17,24 @@
 
 //! [`PullUpCorrelatedExpr`] converts correlated subqueries to `Joins`
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::BTreeSet;
 use std::ops::Deref;
 use std::sync::Arc;
 
 use crate::simplify_expressions::ExprSimplifier;
-use crate::utils::collect_subquery_cols;
 
 use datafusion_common::tree_node::{
     Transformed, TransformedResult, TreeNode, TreeNodeRecursion, TreeNodeRewriter,
 };
-use datafusion_common::{plan_err, Column, DFSchemaRef, Result, ScalarValue};
+use datafusion_common::{plan_err, Column, DFSchemaRef, HashMap, Result, ScalarValue};
 use datafusion_expr::expr::Alias;
 use datafusion_expr::simplify::SimplifyContext;
-use datafusion_expr::utils::{conjunction, find_join_exprs, split_conjunction};
+use datafusion_expr::utils::{
+    collect_subquery_cols, conjunction, find_join_exprs, split_conjunction,
+};
 use datafusion_expr::{
-    expr, lit, EmptyRelation, Expr, LogicalPlan, LogicalPlanBuilder, Scalar,
+    expr, lit, BinaryExpr, Cast, EmptyRelation, Expr, FetchType, LogicalPlan,
+    LogicalPlanBuilder, Operator, Scalar,
 };
 use datafusion_physical_expr::execution_props::ExecutionProps;
 
@@ -51,6 +53,9 @@ pub struct PullUpCorrelatedExpr {
     pub exists_sub_query: bool,
     /// Can the correlated expressions be pulled up. Defaults to **TRUE**
     pub can_pull_up: bool,
+    /// Indicates if we encounter any correlated expression that can not be pulled up
+    /// above a aggregation without changing the meaning of the query.
+    can_pull_over_aggregation: bool,
     /// Do we need to handle [the Count bug] during the pull up process
     ///
     /// [the Count bug]: https://github.com/apache/datafusion/pull/10500
@@ -75,6 +80,7 @@ impl PullUpCorrelatedExpr {
             in_predicate_opt: None,
             exists_sub_query: false,
             can_pull_up: true,
+            can_pull_over_aggregation: true,
             need_handle_count_bug: false,
             collected_count_expr_map: HashMap::new(),
             pull_up_having_expr: None,
@@ -154,6 +160,11 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
         match &plan {
             LogicalPlan::Filter(plan_filter) => {
                 let subquery_filter_exprs = split_conjunction(&plan_filter.predicate);
+                self.can_pull_over_aggregation = self.can_pull_over_aggregation
+                    && subquery_filter_exprs
+                        .iter()
+                        .filter(|e| e.contains_outer())
+                        .all(|&e| can_pullup_over_aggregation(e));
                 let (mut join_filters, subquery_filters) =
                     find_join_exprs(subquery_filter_exprs)?;
                 if let Some(in_predicate) = &self.in_predicate_opt {
@@ -259,6 +270,12 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
             LogicalPlan::Aggregate(aggregate)
                 if self.in_predicate_opt.is_some() || !self.join_filters.is_empty() =>
             {
+                // If the aggregation is from a distinct it will not change the result for
+                // exists/in subqueries so we can still pull up all predicates.
+                let is_distinct = aggregate.aggr_expr.is_empty();
+                if !is_distinct {
+                    self.can_pull_up = self.can_pull_up && self.can_pull_over_aggregation;
+                }
                 let mut local_correlated_cols = BTreeSet::new();
                 collect_local_correlated_cols(
                     &plan,
@@ -329,16 +346,15 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
                 let new_plan = match (self.exists_sub_query, self.join_filters.is_empty())
                 {
                     // Correlated exist subquery, remove the limit(so that correlated expressions can pull up)
-                    (true, false) => Transformed::yes(
-                        if limit.fetch.filter(|limit_row| *limit_row == 0).is_some() {
+                    (true, false) => Transformed::yes(match limit.get_fetch_type()? {
+                        FetchType::Literal(Some(0)) => {
                             LogicalPlan::EmptyRelation(EmptyRelation {
                                 produce_one_row: false,
                                 schema: Arc::clone(limit.input.schema()),
                             })
-                        } else {
-                            LogicalPlanBuilder::from((*limit.input).clone()).build()?
-                        },
-                    ),
+                        }
+                        _ => LogicalPlanBuilder::from((*limit.input).clone()).build()?,
+                    }),
                     _ => Transformed::no(plan),
                 };
                 if let Some(input_map) = input_expr_map {
@@ -383,6 +399,33 @@ impl PullUpCorrelatedExpr {
             }
         }
         Ok(missing_exprs)
+    }
+}
+
+fn can_pullup_over_aggregation(expr: &Expr) -> bool {
+    if let Expr::BinaryExpr(BinaryExpr {
+        left,
+        op: Operator::Eq,
+        right,
+    }) = expr
+    {
+        match (left.deref(), right.deref()) {
+            (Expr::Column(_), right) => !right.any_column_refs(),
+            (left, Expr::Column(_)) => !left.any_column_refs(),
+            (Expr::Cast(Cast { expr, .. }), right)
+                if matches!(expr.deref(), Expr::Column(_)) =>
+            {
+                !right.any_column_refs()
+            }
+            (left, Expr::Cast(Cast { expr, .. }))
+                if matches!(expr.deref(), Expr::Column(_)) =>
+            {
+                !left.any_column_refs()
+            }
+            (_, _) => false,
+        }
+    } else {
+        false
     }
 }
 

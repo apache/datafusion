@@ -19,29 +19,64 @@ use std::any::Any;
 use std::str::FromStr;
 use std::sync::Arc;
 
-use arrow::array::{Array, ArrayRef, Float64Array};
+use arrow::array::{Array, ArrayRef, Float64Array, Int32Array};
 use arrow::compute::kernels::cast_utils::IntervalUnit;
-use arrow::compute::{binary, cast, date_part, DatePart};
+use arrow::compute::{binary, date_part, DatePart};
 use arrow::datatypes::DataType::{
-    Date32, Date64, Duration, Float64, Interval, Time32, Time64, Timestamp, Utf8,
-    Utf8View,
+    Date32, Date64, Duration, Interval, Time32, Time64, Timestamp,
 };
-use arrow::datatypes::IntervalUnit::{DayTime, MonthDayNano, YearMonth};
 use arrow::datatypes::TimeUnit::{Microsecond, Millisecond, Nanosecond, Second};
 use arrow::datatypes::{DataType, TimeUnit};
 
-use datafusion_common::cast::{
-    as_date32_array, as_date64_array, as_int32_array, as_time32_millisecond_array,
-    as_time32_second_array, as_time64_microsecond_array, as_time64_nanosecond_array,
-    as_timestamp_microsecond_array, as_timestamp_millisecond_array,
-    as_timestamp_nanosecond_array, as_timestamp_second_array,
+use datafusion_common::not_impl_err;
+use datafusion_common::{
+    cast::{
+        as_date32_array, as_date64_array, as_int32_array, as_time32_millisecond_array,
+        as_time32_second_array, as_time64_microsecond_array, as_time64_nanosecond_array,
+        as_timestamp_microsecond_array, as_timestamp_millisecond_array,
+        as_timestamp_nanosecond_array, as_timestamp_second_array,
+    },
+    exec_err, internal_err,
+    types::logical_string,
+    ExprSchema, Result, ScalarValue,
 };
-use datafusion_common::{exec_err, Result, ScalarValue};
-use datafusion_expr::TypeSignature::Exact;
 use datafusion_expr::{
-    ColumnarValue, ScalarUDFImpl, Signature, Volatility, TIMEZONE_WILDCARD,
+    ColumnarValue, Documentation, Expr, ScalarUDFImpl, Signature, TypeSignature,
+    Volatility,
 };
+use datafusion_expr_common::signature::TypeSignatureClass;
+use datafusion_macros::user_doc;
 
+#[user_doc(
+    doc_section(label = "Time and Date Functions"),
+    description = "Returns the specified part of the date as an integer.",
+    syntax_example = "date_part(part, expression)",
+    alternative_syntax = "extract(field FROM source)",
+    argument(
+        name = "part",
+        description = r#"Part of the date to return. The following date parts are supported:
+        
+    - year
+    - quarter (emits value in inclusive range [1, 4] based on which quartile of the year the date is in)
+    - month
+    - week (week of the year)
+    - day (day of the month)
+    - hour
+    - minute
+    - second
+    - millisecond
+    - microsecond
+    - nanosecond
+    - dow (day of the week)
+    - doy (day of the year)
+    - epoch (seconds since Unix epoch)
+"#
+    ),
+    argument(
+        name = "expression",
+        description = "Time expression to operate on. Can be a constant, column, or function."
+    )
+)]
 #[derive(Debug)]
 pub struct DatePartFunc {
     signature: Signature,
@@ -59,72 +94,26 @@ impl DatePartFunc {
         Self {
             signature: Signature::one_of(
                 vec![
-                    Exact(vec![Utf8, Timestamp(Nanosecond, None)]),
-                    Exact(vec![Utf8View, Timestamp(Nanosecond, None)]),
-                    Exact(vec![
-                        Utf8,
-                        Timestamp(Nanosecond, Some(TIMEZONE_WILDCARD.into())),
+                    TypeSignature::Coercible(vec![
+                        TypeSignatureClass::Native(logical_string()),
+                        TypeSignatureClass::Timestamp,
                     ]),
-                    Exact(vec![
-                        Utf8View,
-                        Timestamp(Nanosecond, Some(TIMEZONE_WILDCARD.into())),
+                    TypeSignature::Coercible(vec![
+                        TypeSignatureClass::Native(logical_string()),
+                        TypeSignatureClass::Date,
                     ]),
-                    Exact(vec![Utf8, Timestamp(Millisecond, None)]),
-                    Exact(vec![Utf8View, Timestamp(Millisecond, None)]),
-                    Exact(vec![
-                        Utf8,
-                        Timestamp(Millisecond, Some(TIMEZONE_WILDCARD.into())),
+                    TypeSignature::Coercible(vec![
+                        TypeSignatureClass::Native(logical_string()),
+                        TypeSignatureClass::Time,
                     ]),
-                    Exact(vec![
-                        Utf8View,
-                        Timestamp(Millisecond, Some(TIMEZONE_WILDCARD.into())),
+                    TypeSignature::Coercible(vec![
+                        TypeSignatureClass::Native(logical_string()),
+                        TypeSignatureClass::Interval,
                     ]),
-                    Exact(vec![Utf8, Timestamp(Microsecond, None)]),
-                    Exact(vec![Utf8View, Timestamp(Microsecond, None)]),
-                    Exact(vec![
-                        Utf8,
-                        Timestamp(Microsecond, Some(TIMEZONE_WILDCARD.into())),
+                    TypeSignature::Coercible(vec![
+                        TypeSignatureClass::Native(logical_string()),
+                        TypeSignatureClass::Duration,
                     ]),
-                    Exact(vec![
-                        Utf8View,
-                        Timestamp(Microsecond, Some(TIMEZONE_WILDCARD.into())),
-                    ]),
-                    Exact(vec![Utf8, Timestamp(Second, None)]),
-                    Exact(vec![Utf8View, Timestamp(Second, None)]),
-                    Exact(vec![
-                        Utf8,
-                        Timestamp(Second, Some(TIMEZONE_WILDCARD.into())),
-                    ]),
-                    Exact(vec![
-                        Utf8View,
-                        Timestamp(Second, Some(TIMEZONE_WILDCARD.into())),
-                    ]),
-                    Exact(vec![Utf8, Date64]),
-                    Exact(vec![Utf8View, Date64]),
-                    Exact(vec![Utf8, Date32]),
-                    Exact(vec![Utf8View, Date32]),
-                    Exact(vec![Utf8, Time32(Second)]),
-                    Exact(vec![Utf8View, Time32(Second)]),
-                    Exact(vec![Utf8, Time32(Millisecond)]),
-                    Exact(vec![Utf8View, Time32(Millisecond)]),
-                    Exact(vec![Utf8, Time64(Microsecond)]),
-                    Exact(vec![Utf8View, Time64(Microsecond)]),
-                    Exact(vec![Utf8, Time64(Nanosecond)]),
-                    Exact(vec![Utf8View, Time64(Nanosecond)]),
-                    Exact(vec![Utf8, Interval(YearMonth)]),
-                    Exact(vec![Utf8View, Interval(YearMonth)]),
-                    Exact(vec![Utf8, Interval(DayTime)]),
-                    Exact(vec![Utf8View, Interval(DayTime)]),
-                    Exact(vec![Utf8, Interval(MonthDayNano)]),
-                    Exact(vec![Utf8View, Interval(MonthDayNano)]),
-                    Exact(vec![Utf8, Duration(Second)]),
-                    Exact(vec![Utf8View, Duration(Second)]),
-                    Exact(vec![Utf8, Duration(Millisecond)]),
-                    Exact(vec![Utf8View, Duration(Millisecond)]),
-                    Exact(vec![Utf8, Duration(Microsecond)]),
-                    Exact(vec![Utf8View, Duration(Microsecond)]),
-                    Exact(vec![Utf8, Duration(Nanosecond)]),
-                    Exact(vec![Utf8View, Duration(Nanosecond)]),
                 ],
                 Volatility::Immutable,
             ),
@@ -147,10 +136,29 @@ impl ScalarUDFImpl for DatePartFunc {
     }
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        Ok(Float64)
+        internal_err!("return_type_from_exprs should be called instead")
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn return_type_from_exprs(
+        &self,
+        args: &[Expr],
+        _schema: &dyn ExprSchema,
+        _arg_types: &[DataType],
+    ) -> Result<DataType> {
+        match &args[0] {
+            Expr::Literal(scalar) => match scalar.value() {
+                ScalarValue::Utf8(Some(part)) if is_epoch(part) => Ok(DataType::Float64),
+                _ => Ok(DataType::Int32),
+            },
+            _ => Ok(DataType::Int32),
+        }
+    }
+
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         if args.len() != 2 {
             return exec_err!("Expected two arguments in DATE_PART");
         }
@@ -174,35 +182,31 @@ impl ScalarUDFImpl for DatePartFunc {
             ColumnarValue::Scalar(scalar) => scalar.to_array()?,
         };
 
-        // to remove quotes at most 2 characters
-        let part_trim = part.trim_matches(|c| c == '\'' || c == '\"');
-        if ![2, 0].contains(&(part.len() - part_trim.len())) {
-            return exec_err!("Date part '{part}' not supported");
-        }
+        let part_trim = part_normalization(part);
 
         // using IntervalUnit here means we hand off all the work of supporting plurals (like "seconds")
         // and synonyms ( like "ms,msec,msecond,millisecond") to Arrow
         let arr = if let Ok(interval_unit) = IntervalUnit::from_str(part_trim) {
             match interval_unit {
-                IntervalUnit::Year => date_part_f64(array.as_ref(), DatePart::Year)?,
-                IntervalUnit::Month => date_part_f64(array.as_ref(), DatePart::Month)?,
-                IntervalUnit::Week => date_part_f64(array.as_ref(), DatePart::Week)?,
-                IntervalUnit::Day => date_part_f64(array.as_ref(), DatePart::Day)?,
-                IntervalUnit::Hour => date_part_f64(array.as_ref(), DatePart::Hour)?,
-                IntervalUnit::Minute => date_part_f64(array.as_ref(), DatePart::Minute)?,
-                IntervalUnit::Second => seconds(array.as_ref(), Second)?,
-                IntervalUnit::Millisecond => seconds(array.as_ref(), Millisecond)?,
-                IntervalUnit::Microsecond => seconds(array.as_ref(), Microsecond)?,
-                IntervalUnit::Nanosecond => seconds(array.as_ref(), Nanosecond)?,
+                IntervalUnit::Year => date_part(array.as_ref(), DatePart::Year)?,
+                IntervalUnit::Month => date_part(array.as_ref(), DatePart::Month)?,
+                IntervalUnit::Week => date_part(array.as_ref(), DatePart::Week)?,
+                IntervalUnit::Day => date_part(array.as_ref(), DatePart::Day)?,
+                IntervalUnit::Hour => date_part(array.as_ref(), DatePart::Hour)?,
+                IntervalUnit::Minute => date_part(array.as_ref(), DatePart::Minute)?,
+                IntervalUnit::Second => seconds_as_i32(array.as_ref(), Second)?,
+                IntervalUnit::Millisecond => seconds_as_i32(array.as_ref(), Millisecond)?,
+                IntervalUnit::Microsecond => seconds_as_i32(array.as_ref(), Microsecond)?,
+                IntervalUnit::Nanosecond => seconds_as_i32(array.as_ref(), Nanosecond)?,
                 // century and decade are not supported by `DatePart`, although they are supported in postgres
                 _ => return exec_err!("Date part '{part}' not supported"),
             }
         } else {
             // special cases that can be extracted (in postgres) but are not interval units
             match part_trim.to_lowercase().as_str() {
-                "qtr" | "quarter" => date_part_f64(array.as_ref(), DatePart::Quarter)?,
-                "doy" => date_part_f64(array.as_ref(), DatePart::DayOfYear)?,
-                "dow" => date_part_f64(array.as_ref(), DatePart::DayOfWeekSunday0)?,
+                "qtr" | "quarter" => date_part(array.as_ref(), DatePart::Quarter)?,
+                "doy" => date_part(array.as_ref(), DatePart::DayOfYear)?,
+                "dow" => date_part(array.as_ref(), DatePart::DayOfWeekSunday0)?,
                 "epoch" => epoch(array.as_ref())?,
                 _ => return exec_err!("Date part '{part}' not supported"),
             }
@@ -218,16 +222,81 @@ impl ScalarUDFImpl for DatePartFunc {
     fn aliases(&self) -> &[String] {
         &self.aliases
     }
+    fn documentation(&self) -> Option<&Documentation> {
+        self.doc()
+    }
 }
 
-/// Invoke [`date_part`] and cast the result to Float64
-fn date_part_f64(array: &dyn Array, part: DatePart) -> Result<ArrayRef> {
-    Ok(cast(date_part(array, part)?.as_ref(), &Float64)?)
+fn is_epoch(part: &str) -> bool {
+    let part = part_normalization(part);
+    matches!(part.to_lowercase().as_str(), "epoch")
+}
+
+// Try to remove quote if exist, if the quote is invalid, return original string and let the downstream function handle the error
+fn part_normalization(part: &str) -> &str {
+    part.strip_prefix(|c| c == '\'' || c == '\"')
+        .and_then(|s| s.strip_suffix(|c| c == '\'' || c == '\"'))
+        .unwrap_or(part)
 }
 
 /// Invoke [`date_part`] on an `array` (e.g. Timestamp) and convert the
 /// result to a total number of seconds, milliseconds, microseconds or
 /// nanoseconds
+fn seconds_as_i32(array: &dyn Array, unit: TimeUnit) -> Result<ArrayRef> {
+    // Nanosecond is neither supported in Postgres nor DuckDB, to avoid dealing
+    // with overflow and precision issue we don't support nanosecond
+    if unit == Nanosecond {
+        return not_impl_err!("Date part {unit:?} not supported");
+    }
+
+    let conversion_factor = match unit {
+        Second => 1_000_000_000,
+        Millisecond => 1_000_000,
+        Microsecond => 1_000,
+        Nanosecond => 1,
+    };
+
+    let second_factor = match unit {
+        Second => 1,
+        Millisecond => 1_000,
+        Microsecond => 1_000_000,
+        Nanosecond => 1_000_000_000,
+    };
+
+    let secs = date_part(array, DatePart::Second)?;
+    // This assumes array is primitive and not a dictionary
+    let secs = as_int32_array(secs.as_ref())?;
+    let subsecs = date_part(array, DatePart::Nanosecond)?;
+    let subsecs = as_int32_array(subsecs.as_ref())?;
+
+    // Special case where there are no nulls.
+    if subsecs.null_count() == 0 {
+        let r: Int32Array = binary(secs, subsecs, |secs, subsecs| {
+            secs * second_factor + (subsecs % 1_000_000_000) / conversion_factor
+        })?;
+        Ok(Arc::new(r))
+    } else {
+        // Nulls in secs are preserved, nulls in subsecs are treated as zero to account for the case
+        // where the number of nanoseconds overflows.
+        let r: Int32Array = secs
+            .iter()
+            .zip(subsecs)
+            .map(|(secs, subsecs)| {
+                secs.map(|secs| {
+                    let subsecs = subsecs.unwrap_or(0);
+                    secs * second_factor + (subsecs % 1_000_000_000) / conversion_factor
+                })
+            })
+            .collect();
+        Ok(Arc::new(r))
+    }
+}
+
+/// Invoke [`date_part`] on an `array` (e.g. Timestamp) and convert the
+/// result to a total number of seconds, milliseconds, microseconds or
+/// nanoseconds
+///
+/// Given epoch return f64, this is a duplicated function to optimize for f64 type
 fn seconds(array: &dyn Array, unit: TimeUnit) -> Result<ArrayRef> {
     let sf = match unit {
         Second => 1_f64,

@@ -91,7 +91,7 @@ impl TableProviderFactory for ListingTableFactory {
                         .field_with_name(col)
                         .map_err(|e| arrow_datafusion_err!(e))
                 })
-                .collect::<datafusion_common::Result<Vec<_>>>()?
+                .collect::<Result<Vec<_>>>()?
                 .into_iter()
                 .map(|f| (f.name().to_owned(), f.data_type().to_owned()))
                 .collect();
@@ -127,7 +127,7 @@ impl TableProviderFactory for ListingTableFactory {
             // See: https://github.com/apache/datafusion/issues/7317
             None => {
                 let schema = options.infer_schema(session_state, &table_path).await?;
-                let df_schema = schema.clone().to_dfschema()?;
+                let df_schema = Arc::clone(&schema).to_dfschema()?;
                 let column_refs: HashSet<_> = cmd
                     .order_exprs
                     .iter()
@@ -197,6 +197,7 @@ mod tests {
             schema: Arc::new(DFSchema::empty()),
             table_partition_cols: vec![],
             if_not_exists: false,
+            temporary: false,
             definition: None,
             order_exprs: vec![],
             unbounded: false,
@@ -236,6 +237,7 @@ mod tests {
             schema: Arc::new(DFSchema::empty()),
             table_partition_cols: vec![],
             if_not_exists: false,
+            temporary: false,
             definition: None,
             order_exprs: vec![],
             unbounded: false,
@@ -252,7 +254,7 @@ mod tests {
         let format = listing_table.options().format.clone();
         let csv_format = format.as_any().downcast_ref::<CsvFormat>().unwrap();
         let csv_options = csv_format.options().clone();
-        assert_eq!(csv_options.schema_infer_max_rec, 1000);
+        assert_eq!(csv_options.schema_infer_max_rec, Some(1000));
         let listing_options = listing_table.options();
         assert_eq!(".tbl", listing_options.file_extension);
     }

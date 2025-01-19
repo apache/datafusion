@@ -21,7 +21,7 @@ use datafusion_common::{DFSchema, Result};
 use datafusion_expr::{Expr, GroupingSet};
 use sqlparser::ast::Expr as SQLExpr;
 
-impl<'a, S: ContextProvider> SqlToRel<'a, S> {
+impl<S: ContextProvider> SqlToRel<'_, S> {
     pub(super) fn sql_grouping_sets_to_expr(
         &self,
         exprs: Vec<Vec<SQLExpr>>,

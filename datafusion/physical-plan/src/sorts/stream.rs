@@ -24,6 +24,7 @@ use arrow::record_batch::RecordBatch;
 use arrow::row::{RowConverter, SortField};
 use datafusion_common::Result;
 use datafusion_execution::memory_pool::MemoryReservation;
+use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use futures::stream::{Fuse, StreamExt};
 use std::marker::PhantomData;
 use std::sync::Arc;
@@ -48,7 +49,7 @@ pub trait PartitionedStream: std::fmt::Debug + Send {
     ) -> Poll<Option<Self::Output>>;
 }
 
-/// A newtype wrapper around a set of fused [`SendableRecordBatchStream`]
+/// A new type wrapper around a set of fused [`SendableRecordBatchStream`]
 /// that implements debug, and skips over empty [`RecordBatch`]
 struct FusedStreams(Vec<Fuse<SendableRecordBatchStream>>);
 
@@ -92,7 +93,7 @@ pub struct RowCursorStream {
 impl RowCursorStream {
     pub fn try_new(
         schema: &Schema,
-        expressions: &[PhysicalSortExpr],
+        expressions: &LexOrdering,
         streams: Vec<SendableRecordBatchStream>,
         reservation: MemoryReservation,
     ) -> Result<Self> {

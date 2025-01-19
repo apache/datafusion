@@ -17,11 +17,10 @@
 
 mod kernels;
 
-use std::hash::{Hash, Hasher};
+use std::hash::Hash;
 use std::{any::Any, sync::Arc};
 
 use crate::intervals::cp_solver::{propagate_arithmetic, propagate_comparison};
-use crate::physical_expr::down_cast_any_ref;
 use crate::PhysicalExpr;
 
 use arrow::array::*;
@@ -48,13 +47,31 @@ use kernels::{
 };
 
 /// Binary expression
-#[derive(Debug, Hash, Clone)]
+#[derive(Debug, Clone, Eq)]
 pub struct BinaryExpr {
     left: Arc<dyn PhysicalExpr>,
     op: Operator,
     right: Arc<dyn PhysicalExpr>,
     /// Specifies whether an error is returned on overflow or not
     fail_on_overflow: bool,
+}
+
+// Manually derive PartialEq and Hash to work around https://github.com/rust-lang/rust/issues/78808
+impl PartialEq for BinaryExpr {
+    fn eq(&self, other: &Self) -> bool {
+        self.left.eq(&other.left)
+            && self.op.eq(&other.op)
+            && self.right.eq(&other.right)
+            && self.fail_on_overflow.eq(&other.fail_on_overflow)
+    }
+}
+impl Hash for BinaryExpr {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.left.hash(state);
+        self.op.hash(state);
+        self.right.hash(state);
+        self.fail_on_overflow.hash(state);
+    }
 }
 
 impl BinaryExpr {
@@ -186,13 +203,36 @@ macro_rules! compute_utf8_flag_op {
 }
 
 macro_rules! binary_string_array_flag_op_scalar {
-    ($LEFT:expr, $RIGHT:expr, $OP:ident, $NOT:expr, $FLAG:expr) => {{
+    ($LEFT:ident, $RIGHT:expr, $OP:ident, $NOT:expr, $FLAG:expr) => {{
+        // This macro is slightly different from binary_string_array_flag_op because, when comparing with a scalar value,
+        // the query can be optimized in such a way that operands will be dicts, so we need to support it here
         let result: Result<Arc<dyn Array>> = match $LEFT.data_type() {
             DataType::Utf8View | DataType::Utf8 => {
                 compute_utf8_flag_op_scalar!($LEFT, $RIGHT, $OP, StringArray, $NOT, $FLAG)
             },
             DataType::LargeUtf8 => {
                 compute_utf8_flag_op_scalar!($LEFT, $RIGHT, $OP, LargeStringArray, $NOT, $FLAG)
+            },
+            DataType::Dictionary(_, _) => {
+                let values = $LEFT.as_any_dictionary().values();
+
+                match values.data_type() {
+                    DataType::Utf8View | DataType::Utf8 => compute_utf8_flag_op_scalar!(values, $RIGHT, $OP, StringArray, $NOT, $FLAG),
+                    DataType::LargeUtf8 => compute_utf8_flag_op_scalar!(values, $RIGHT, $OP, LargeStringArray, $NOT, $FLAG),
+                    other => internal_err!(
+                        "Data type {:?} not supported as a dictionary value type for binary_string_array_flag_op_scalar operation '{}' on string array",
+                        other, stringify!($OP)
+                    ),
+                }.map(
+                    // downcast_dictionary_array duplicates code per possible key type, so we aim to do all prep work before
+                    |evaluated_values| downcast_dictionary_array! {
+                        $LEFT => {
+                            let unpacked_dict = evaluated_values.take_iter($LEFT.keys().iter().map(|opt| opt.map(|v| v as _))).collect::<BooleanArray>();
+                            Arc::new(unpacked_dict) as _
+                        },
+                        _ => unreachable!(),
+                    }
+                )
             },
             other => internal_err!(
                 "Data type {:?} not supported for binary_string_array_flag_op_scalar operation '{}' on string array",
@@ -211,20 +251,23 @@ macro_rules! compute_utf8_flag_op_scalar {
             .downcast_ref::<$ARRAYTYPE>()
             .expect("compute_utf8_flag_op_scalar failed to downcast array");
 
-        if let ScalarValue::Utf8(Some(string_value)) | ScalarValue::LargeUtf8(Some(string_value)) = $RIGHT {
-            let flag = $FLAG.then_some("i");
-            let mut array =
-                paste::expr! {[<$OP _scalar>]}(ll, &string_value, flag)?;
-            if $NOT {
-                array = not(&array).unwrap();
-            }
-            Ok(Arc::new(array))
-        } else {
-            internal_err!(
-                "compute_utf8_flag_op_scalar failed to cast literal value {} for operation '{}'",
-                $RIGHT, stringify!($OP)
-            )
+        let string_value = match $RIGHT.try_as_str() {
+            Some(Some(string_value)) => string_value,
+            // null literal or non string
+            _ => return internal_err!(
+                        "compute_utf8_flag_op_scalar failed to cast literal value {} for operation '{}'",
+                        $RIGHT, stringify!($OP)
+                    )
+        };
+
+        let flag = $FLAG.then_some("i");
+        let mut array =
+            paste::expr! {[<$OP _scalar>]}(ll, &string_value, flag)?;
+        if $NOT {
+            array = not(&array).unwrap();
         }
+
+        Ok(Arc::new(array))
     }};
 }
 
@@ -355,7 +398,7 @@ impl PhysicalExpr for BinaryExpr {
         if self.op.eq(&Operator::And) {
             if interval.eq(&Interval::CERTAINLY_TRUE) {
                 // A certainly true logical conjunction can only derive from possibly
-                // true operands. Otherwise, we prove infeasability.
+                // true operands. Otherwise, we prove infeasibility.
                 Ok((!left_interval.eq(&Interval::CERTAINLY_FALSE)
                     && !right_interval.eq(&Interval::CERTAINLY_FALSE))
                 .then(|| vec![Interval::CERTAINLY_TRUE, Interval::CERTAINLY_TRUE]))
@@ -395,7 +438,7 @@ impl PhysicalExpr for BinaryExpr {
         } else if self.op.eq(&Operator::Or) {
             if interval.eq(&Interval::CERTAINLY_FALSE) {
                 // A certainly false logical conjunction can only derive from certainly
-                // false operands. Otherwise, we prove infeasability.
+                // false operands. Otherwise, we prove infeasibility.
                 Ok((!left_interval.eq(&Interval::CERTAINLY_TRUE)
                     && !right_interval.eq(&Interval::CERTAINLY_TRUE))
                 .then(|| vec![Interval::CERTAINLY_FALSE, Interval::CERTAINLY_FALSE]))
@@ -432,7 +475,7 @@ impl PhysicalExpr for BinaryExpr {
                 // end-points of its children.
                 Ok(Some(vec![]))
             }
-        } else if self.op.is_comparison_operator() {
+        } else if self.op.supports_propagation() {
             Ok(
                 propagate_comparison(&self.op, interval, left_interval, right_interval)?
                     .map(|(left, right)| vec![left, right]),
@@ -445,11 +488,6 @@ impl PhysicalExpr for BinaryExpr {
         }
     }
 
-    fn dyn_hash(&self, state: &mut dyn Hasher) {
-        let mut s = state;
-        self.hash(&mut s);
-    }
-
     /// For each operator, [`BinaryExpr`] has distinct rules.
     /// TODO: There may be rules specific to some data types and expression ranges.
     fn get_properties(&self, children: &[ExprProperties]) -> Result<ExprProperties> {
@@ -459,51 +497,45 @@ impl PhysicalExpr for BinaryExpr {
             Operator::Plus => Ok(ExprProperties {
                 sort_properties: l_order.add(&r_order),
                 range: l_range.add(r_range)?,
+                preserves_lex_ordering: false,
             }),
             Operator::Minus => Ok(ExprProperties {
                 sort_properties: l_order.sub(&r_order),
                 range: l_range.sub(r_range)?,
+                preserves_lex_ordering: false,
             }),
             Operator::Gt => Ok(ExprProperties {
                 sort_properties: l_order.gt_or_gteq(&r_order),
                 range: l_range.gt(r_range)?,
+                preserves_lex_ordering: false,
             }),
             Operator::GtEq => Ok(ExprProperties {
                 sort_properties: l_order.gt_or_gteq(&r_order),
                 range: l_range.gt_eq(r_range)?,
+                preserves_lex_ordering: false,
             }),
             Operator::Lt => Ok(ExprProperties {
                 sort_properties: r_order.gt_or_gteq(&l_order),
                 range: l_range.lt(r_range)?,
+                preserves_lex_ordering: false,
             }),
             Operator::LtEq => Ok(ExprProperties {
                 sort_properties: r_order.gt_or_gteq(&l_order),
                 range: l_range.lt_eq(r_range)?,
+                preserves_lex_ordering: false,
             }),
             Operator::And => Ok(ExprProperties {
                 sort_properties: r_order.and_or(&l_order),
                 range: l_range.and(r_range)?,
+                preserves_lex_ordering: false,
             }),
             Operator::Or => Ok(ExprProperties {
                 sort_properties: r_order.and_or(&l_order),
                 range: l_range.or(r_range)?,
+                preserves_lex_ordering: false,
             }),
             _ => Ok(ExprProperties::new_unknown()),
         }
-    }
-}
-
-impl PartialEq<dyn Any> for BinaryExpr {
-    fn eq(&self, other: &dyn Any) -> bool {
-        down_cast_any_ref(other)
-            .downcast_ref::<Self>()
-            .map(|x| {
-                self.left.eq(&x.left)
-                    && self.op == x.op
-                    && self.right.eq(&x.right)
-                    && self.fail_on_overflow.eq(&x.fail_on_overflow)
-            })
-            .unwrap_or(false)
     }
 }
 

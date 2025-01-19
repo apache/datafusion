@@ -84,15 +84,17 @@ fn data() -> (StringArray, StringArray, Int64Array) {
 fn criterion_benchmark(c: &mut Criterion) {
     c.bench_function("substr_index_array_array_1000", |b| {
         let (strings, delimiters, counts) = data();
+        let batch_len = counts.len();
         let strings = ColumnarValue::Array(Arc::new(strings) as ArrayRef);
         let delimiters = ColumnarValue::Array(Arc::new(delimiters) as ArrayRef);
         let counts = ColumnarValue::Array(Arc::new(counts) as ArrayRef);
 
         let args = [strings, delimiters, counts];
         b.iter(|| {
+            #[allow(deprecated)] // TODO: invoke_with_args
             black_box(
                 substr_index()
-                    .invoke(&args)
+                    .invoke_batch(&args, batch_len)
                     .expect("substr_index should work on valid values"),
             )
         })

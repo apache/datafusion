@@ -19,7 +19,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use super::{get_imdb_table_schema, get_query_sql, IMDB_TABLES};
-use crate::{BenchmarkRun, CommonOpt};
+use crate::util::{BenchmarkRun, CommonOpt};
 
 use arrow::record_batch::RecordBatch;
 use arrow::util::pretty::{self, pretty_format_batches};
@@ -35,6 +35,7 @@ use datafusion::physical_plan::display::DisplayableExecutionPlan;
 use datafusion::physical_plan::{collect, displayable};
 use datafusion::prelude::*;
 use datafusion_common::instant::Instant;
+use datafusion_common::utils::get_available_parallelism;
 use datafusion_common::{DEFAULT_CSV_EXTENSION, DEFAULT_PARQUET_EXTENSION};
 
 use log::info;
@@ -305,11 +306,7 @@ impl RunOpt {
             .config()
             .with_collect_statistics(!self.disable_statistics);
         config.options_mut().optimizer.prefer_hash_join = self.prefer_hash_join;
-        config
-            .options_mut()
-            .execution
-            .parquet
-            .schema_force_view_types = self.common.force_view_types;
+
         let ctx = SessionContext::new_with_config(config);
 
         // register tables
@@ -472,7 +469,9 @@ impl RunOpt {
     }
 
     fn partitions(&self) -> usize {
-        self.common.partitions.unwrap_or(num_cpus::get())
+        self.common
+            .partitions
+            .unwrap_or(get_available_parallelism())
     }
 }
 
@@ -489,6 +488,7 @@ mod tests {
 
     use super::*;
 
+    use crate::util::CommonOpt;
     use datafusion::common::exec_err;
     use datafusion::error::Result;
     use datafusion_proto::bytes::{
@@ -516,7 +516,6 @@ mod tests {
             partitions: Some(2),
             batch_size: 8192,
             debug: false,
-            force_view_types: false,
         };
         let opt = RunOpt {
             query: Some(query),
@@ -550,7 +549,6 @@ mod tests {
             partitions: Some(2),
             batch_size: 8192,
             debug: false,
-            force_view_types: false,
         };
         let opt = RunOpt {
             query: Some(query),

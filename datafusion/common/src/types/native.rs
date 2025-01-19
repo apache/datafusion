@@ -15,61 +15,16 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::{ops::Deref, sync::Arc};
-
-use arrow_schema::{DataType, Field, Fields, IntervalUnit, TimeUnit, UnionFields};
-
-use super::{LogicalType, TypeSignature};
-
-/// A record of a native type, its name and its nullability.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct NativeField {
-    name: String,
-    native_type: NativeType,
-    nullable: bool,
-}
-
-impl NativeField {
-    pub fn name(&self) -> &str {
-        &self.name
-    }
-
-    pub fn native_type(&self) -> &NativeType {
-        &self.native_type
-    }
-
-    pub fn nullable(&self) -> bool {
-        self.nullable
-    }
-}
-
-/// A reference counted [`NativeField`].
-pub type NativeFieldRef = Arc<NativeField>;
-
-/// A cheaply cloneable, owned collection of [`NativeFieldRef`].
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct NativeFields(Arc<[NativeFieldRef]>);
-
-impl Deref for NativeFields {
-    type Target = [NativeFieldRef];
-
-    fn deref(&self) -> &Self::Target {
-        self.0.as_ref()
-    }
-}
-
-/// A cheaply cloneable, owned collection of [`NativeFieldRef`] and their
-/// corresponding type ids.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct NativeUnionFields(Arc<[(i8, NativeFieldRef)]>);
-
-impl Deref for NativeUnionFields {
-    type Target = [(i8, NativeFieldRef)];
-
-    fn deref(&self) -> &Self::Target {
-        self.0.as_ref()
-    }
-}
+use super::{
+    LogicalField, LogicalFieldRef, LogicalFields, LogicalType, LogicalUnionFields,
+    TypeSignature,
+};
+use crate::error::{Result, _internal_err};
+use arrow::compute::can_cast_types;
+use arrow_schema::{
+    DataType, Field, FieldRef, Fields, IntervalUnit, TimeUnit, UnionFields,
+};
+use std::{fmt::Display, sync::Arc};
 
 /// Representation of a type that DataFusion can handle natively. It is a subset
 /// of the physical variants in Arrow's native [`DataType`].
@@ -194,15 +149,15 @@ pub enum NativeType {
     /// Enum parameter specifies the number of bytes per value.
     FixedSizeBinary(i32),
     /// A variable-length string in Unicode with UTF-8 encoding.
-    Utf8,
+    String,
     /// A list of some logical data type with variable length.
-    List(NativeFieldRef),
+    List(LogicalFieldRef),
     /// A list of some logical data type with fixed length.
-    FixedSizeList(NativeFieldRef, i32),
+    FixedSizeList(LogicalFieldRef, i32),
     /// A nested type that contains a number of sub-fields.
-    Struct(NativeFields),
+    Struct(LogicalFields),
     /// A nested type that can represent slots of differing types.
-    Union(NativeUnionFields),
+    Union(LogicalUnionFields),
     /// Decimal value with precision and scale
     ///
     /// * precision is the total number of digits
@@ -222,11 +177,16 @@ pub enum NativeType {
     /// The key and value types are not constrained, but keys should be
     /// hashable and unique.
     ///
-    /// In a field with Map type, the field has a child Struct field, which then
-    /// has two children: key type and the second the value type. The names of the
+    /// In a field with Map type, key type and the second the value type. The names of the
     /// child fields may be respectively "entries", "key", and "value", but this is
     /// not enforced.
-    Map(NativeFieldRef),
+    Map(LogicalFieldRef),
+}
+
+impl Display for NativeType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "NativeType::{self:?}")
+    }
 }
 
 impl LogicalType for NativeType {
@@ -237,11 +197,170 @@ impl LogicalType for NativeType {
     fn signature(&self) -> TypeSignature<'_> {
         TypeSignature::Native(self)
     }
+
+    fn default_cast_for(&self, origin: &DataType) -> Result<DataType> {
+        use DataType::*;
+
+        fn default_field_cast(to: &LogicalField, from: &Field) -> Result<FieldRef> {
+            Ok(Arc::new(Field::new(
+                to.name.clone(),
+                to.logical_type.default_cast_for(from.data_type())?,
+                to.nullable,
+            )))
+        }
+
+        Ok(match (self, origin) {
+            (Self::Null, _) => Null,
+            (Self::Boolean, _) => Boolean,
+            (Self::Int8, _) => Int8,
+            (Self::Int16, _) => Int16,
+            (Self::Int32, _) => Int32,
+            (Self::Int64, _) => Int64,
+            (Self::UInt8, _) => UInt8,
+            (Self::UInt16, _) => UInt16,
+            (Self::UInt32, _) => UInt32,
+            (Self::UInt64, _) => UInt64,
+            (Self::Float16, _) => Float16,
+            (Self::Float32, _) => Float32,
+            (Self::Float64, _) => Float64,
+            (Self::Decimal(p, s), _) if p <= &38 => Decimal128(*p, *s),
+            (Self::Decimal(p, s), _) => Decimal256(*p, *s),
+            (Self::Timestamp(tu, tz), _) => Timestamp(*tu, tz.clone()),
+            (Self::Date, _) => Date32,
+            (Self::Time(tu), _) => match tu {
+                TimeUnit::Second | TimeUnit::Millisecond => Time32(*tu),
+                TimeUnit::Microsecond | TimeUnit::Nanosecond => Time64(*tu),
+            },
+            (Self::Duration(tu), _) => Duration(*tu),
+            (Self::Interval(iu), _) => Interval(*iu),
+            (Self::Binary, LargeUtf8) => LargeBinary,
+            (Self::Binary, Utf8View) => BinaryView,
+            (Self::Binary, data_type) if can_cast_types(data_type, &BinaryView) => {
+                BinaryView
+            }
+            (Self::Binary, data_type) if can_cast_types(data_type, &LargeBinary) => {
+                LargeBinary
+            }
+            (Self::Binary, data_type) if can_cast_types(data_type, &Binary) => Binary,
+            (Self::FixedSizeBinary(size), _) => FixedSizeBinary(*size),
+            (Self::String, LargeBinary) => LargeUtf8,
+            (Self::String, BinaryView) => Utf8View,
+            // We don't cast to another kind of string type if the origin one is already a string type
+            (Self::String, Utf8 | LargeUtf8 | Utf8View) => origin.to_owned(),
+            (Self::String, data_type) if can_cast_types(data_type, &Utf8View) => Utf8View,
+            (Self::String, data_type) if can_cast_types(data_type, &LargeUtf8) => {
+                LargeUtf8
+            }
+            (Self::String, data_type) if can_cast_types(data_type, &Utf8) => Utf8,
+            (Self::List(to_field), List(from_field) | FixedSizeList(from_field, _)) => {
+                List(default_field_cast(to_field, from_field)?)
+            }
+            (Self::List(to_field), LargeList(from_field)) => {
+                LargeList(default_field_cast(to_field, from_field)?)
+            }
+            (Self::List(to_field), ListView(from_field)) => {
+                ListView(default_field_cast(to_field, from_field)?)
+            }
+            (Self::List(to_field), LargeListView(from_field)) => {
+                LargeListView(default_field_cast(to_field, from_field)?)
+            }
+            // List array where each element is a len 1 list of the origin type
+            (Self::List(field), _) => List(Arc::new(Field::new(
+                field.name.clone(),
+                field.logical_type.default_cast_for(origin)?,
+                field.nullable,
+            ))),
+            (
+                Self::FixedSizeList(to_field, to_size),
+                FixedSizeList(from_field, from_size),
+            ) if from_size == to_size => {
+                FixedSizeList(default_field_cast(to_field, from_field)?, *to_size)
+            }
+            (
+                Self::FixedSizeList(to_field, size),
+                List(from_field)
+                | LargeList(from_field)
+                | ListView(from_field)
+                | LargeListView(from_field),
+            ) => FixedSizeList(default_field_cast(to_field, from_field)?, *size),
+            // FixedSizeList array where each element is a len 1 list of the origin type
+            (Self::FixedSizeList(field, size), _) => FixedSizeList(
+                Arc::new(Field::new(
+                    field.name.clone(),
+                    field.logical_type.default_cast_for(origin)?,
+                    field.nullable,
+                )),
+                *size,
+            ),
+            // From https://github.com/apache/arrow-rs/blob/56525efbd5f37b89d1b56aa51709cab9f81bc89e/arrow-cast/src/cast/mod.rs#L189-L196
+            (Self::Struct(to_fields), Struct(from_fields))
+                if from_fields.len() == to_fields.len() =>
+            {
+                Struct(
+                    from_fields
+                        .iter()
+                        .zip(to_fields.iter())
+                        .map(|(from, to)| default_field_cast(to, from))
+                        .collect::<Result<Fields>>()?,
+                )
+            }
+            (Self::Struct(to_fields), Null) => Struct(
+                to_fields
+                    .iter()
+                    .map(|field| {
+                        Ok(Arc::new(Field::new(
+                            field.name.clone(),
+                            field.logical_type.default_cast_for(&Null)?,
+                            field.nullable,
+                        )))
+                    })
+                    .collect::<Result<Fields>>()?,
+            ),
+            (Self::Map(to_field), Map(from_field, sorted)) => {
+                Map(default_field_cast(to_field, from_field)?, *sorted)
+            }
+            (Self::Map(field), Null) => Map(
+                Arc::new(Field::new(
+                    field.name.clone(),
+                    field.logical_type.default_cast_for(&Null)?,
+                    field.nullable,
+                )),
+                false,
+            ),
+            (Self::Union(to_fields), Union(from_fields, mode))
+                if from_fields.len() == to_fields.len() =>
+            {
+                Union(
+                    from_fields
+                        .iter()
+                        .zip(to_fields.iter())
+                        .map(|((_, from), (i, to))| {
+                            Ok((*i, default_field_cast(to, from)?))
+                        })
+                        .collect::<Result<UnionFields>>()?,
+                    *mode,
+                )
+            }
+            _ => {
+                return _internal_err!(
+                "Unavailable default cast for native type {:?} from physical type {:?}",
+                self,
+                origin
+            )
+            }
+        })
+    }
 }
 
 // The following From<DataType>, From<Field>, ... implementations are temporary
 // mapping solutions to provide backwards compatibility while transitioning from
 // the purely physical system to a logical / physical system.
+
+impl From<&DataType> for NativeType {
+    fn from(value: &DataType) -> Self {
+        value.clone().into()
+    }
+}
 
 impl From<DataType> for NativeType {
     fn from(value: DataType) -> Self {
@@ -267,7 +386,7 @@ impl From<DataType> for NativeType {
             DataType::Interval(iu) => Interval(iu),
             DataType::Binary | DataType::LargeBinary | DataType::BinaryView => Binary,
             DataType::FixedSizeBinary(size) => FixedSizeBinary(size),
-            DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View => Utf8,
+            DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View => String,
             DataType::List(field)
             | DataType::ListView(field)
             | DataType::LargeList(field)
@@ -275,54 +394,70 @@ impl From<DataType> for NativeType {
             DataType::FixedSizeList(field, size) => {
                 FixedSizeList(Arc::new(field.as_ref().into()), size)
             }
-            DataType::Struct(fields) => Struct(NativeFields::from(&fields)),
+            DataType::Struct(fields) => Struct(LogicalFields::from(&fields)),
             DataType::Union(union_fields, _) => {
-                Union(NativeUnionFields::from(&union_fields))
+                Union(LogicalUnionFields::from(&union_fields))
             }
-            DataType::Dictionary(_, data_type) => data_type.as_ref().clone().into(),
             DataType::Decimal128(p, s) | DataType::Decimal256(p, s) => Decimal(p, s),
             DataType::Map(field, _) => Map(Arc::new(field.as_ref().into())),
+            DataType::Dictionary(_, data_type) => data_type.as_ref().clone().into(),
             DataType::RunEndEncoded(_, field) => field.data_type().clone().into(),
         }
     }
 }
 
-impl From<&Field> for NativeField {
-    fn from(value: &Field) -> Self {
-        Self {
-            name: value.name().clone(),
-            native_type: value.data_type().clone().into(),
-            nullable: value.is_nullable(),
-        }
+impl NativeType {
+    #[inline]
+    pub fn is_numeric(&self) -> bool {
+        use NativeType::*;
+        matches!(
+            self,
+            UInt8
+                | UInt16
+                | UInt32
+                | UInt64
+                | Int8
+                | Int16
+                | Int32
+                | Int64
+                | Float16
+                | Float32
+                | Float64
+                | Decimal(_, _)
+        )
     }
-}
 
-impl From<&Fields> for NativeFields {
-    fn from(value: &Fields) -> Self {
-        value
-            .iter()
-            .map(|field| Arc::new(NativeField::from(field.as_ref())))
-            .collect()
+    #[inline]
+    pub fn is_integer(&self) -> bool {
+        use NativeType::*;
+        matches!(
+            self,
+            UInt8 | UInt16 | UInt32 | UInt64 | Int8 | Int16 | Int32 | Int64
+        )
     }
-}
 
-impl FromIterator<NativeFieldRef> for NativeFields {
-    fn from_iter<T: IntoIterator<Item = NativeFieldRef>>(iter: T) -> Self {
-        Self(iter.into_iter().collect())
+    #[inline]
+    pub fn is_timestamp(&self) -> bool {
+        matches!(self, NativeType::Timestamp(_, _))
     }
-}
 
-impl From<&UnionFields> for NativeUnionFields {
-    fn from(value: &UnionFields) -> Self {
-        value
-            .iter()
-            .map(|(i, field)| (i, Arc::new(NativeField::from(field.as_ref()))))
-            .collect()
+    #[inline]
+    pub fn is_date(&self) -> bool {
+        matches!(self, NativeType::Date)
     }
-}
 
-impl FromIterator<(i8, NativeFieldRef)> for NativeUnionFields {
-    fn from_iter<T: IntoIterator<Item = (i8, NativeFieldRef)>>(iter: T) -> Self {
-        Self(iter.into_iter().collect())
+    #[inline]
+    pub fn is_time(&self) -> bool {
+        matches!(self, NativeType::Time(_))
+    }
+
+    #[inline]
+    pub fn is_interval(&self) -> bool {
+        matches!(self, NativeType::Interval(_))
+    }
+
+    #[inline]
+    pub fn is_duration(&self) -> bool {
+        matches!(self, NativeType::Duration(_))
     }
 }

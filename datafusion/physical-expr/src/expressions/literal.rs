@@ -18,10 +18,10 @@
 //! Literal expressions for physical operations
 
 use std::any::Any;
-use std::hash::{Hash, Hasher};
+use std::hash::Hash;
 use std::sync::Arc;
 
-use crate::physical_expr::{down_cast_any_ref, PhysicalExpr};
+use crate::physical_expr::PhysicalExpr;
 
 use arrow::{
     datatypes::{DataType, Schema},
@@ -92,11 +92,6 @@ impl PhysicalExpr for Literal {
         Ok(self)
     }
 
-    fn dyn_hash(&self, state: &mut dyn Hasher) {
-        let mut s = state;
-        self.hash(&mut s);
-    }
-
     fn get_properties(&self, _children: &[ExprProperties]) -> Result<ExprProperties> {
         Ok(ExprProperties {
             sort_properties: SortProperties::Singleton,
@@ -104,16 +99,8 @@ impl PhysicalExpr for Literal {
                 self.scalar.value().clone(),
                 self.scalar.value().clone(),
             )?,
+            preserves_lex_ordering: true,
         })
-    }
-}
-
-impl PartialEq<dyn Any> for Literal {
-    fn eq(&self, other: &dyn Any) -> bool {
-        down_cast_any_ref(other)
-            .downcast_ref::<Self>()
-            .map(|x| self == x)
-            .unwrap_or(false)
     }
 }
 
@@ -135,7 +122,7 @@ mod tests {
 
     #[test]
     fn literal_i32() -> Result<()> {
-        // create an arbitrary record bacth
+        // create an arbitrary record batch
         let schema = Schema::new(vec![Field::new("a", DataType::Int32, true)]);
         let a = Int32Array::from(vec![Some(1), None, Some(3), Some(4), Some(5)]);
         let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(a)])?;

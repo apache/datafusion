@@ -45,6 +45,7 @@
 /// #
 /// # use datafusion_functions_window_common::field::WindowUDFFieldArgs;
 /// # use datafusion_functions_window::get_or_init_udwf;
+/// # use datafusion_functions_window_common::partition::PartitionEvaluatorArgs;
 /// #
 /// /// Defines the `simple_udwf()` user-defined window function.
 /// get_or_init_udwf!(
@@ -80,6 +81,7 @@
 /// #      }
 /// #      fn partition_evaluator(
 /// #          &self,
+/// #         _partition_evaluator_args: PartitionEvaluatorArgs,
 /// #      ) -> datafusion_common::Result<Box<dyn PartitionEvaluator>> {
 /// #          unimplemented!()
 /// #      }
@@ -97,21 +99,16 @@ macro_rules! get_or_init_udwf {
 
     ($UDWF:ident, $OUT_FN_NAME:ident, $DOC:expr, $CTOR:path) => {
         paste::paste! {
-            #[doc = concat!(" Singleton instance of [`", stringify!($OUT_FN_NAME), "`], ensures the user-defined")]
-            #[doc = concat!(" window function is only created once.")]
-            #[allow(non_upper_case_globals)]
-            static [<STATIC_ $UDWF>]: std::sync::OnceLock<std::sync::Arc<datafusion_expr::WindowUDF>> =
-                std::sync::OnceLock::new();
-
             #[doc = concat!(" Returns a [`WindowUDF`](datafusion_expr::WindowUDF) for [`", stringify!($OUT_FN_NAME), "`].")]
             #[doc = ""]
             #[doc = concat!(" ", $DOC)]
             pub fn [<$OUT_FN_NAME _udwf>]() -> std::sync::Arc<datafusion_expr::WindowUDF> {
-                [<STATIC_ $UDWF>]
-                    .get_or_init(|| {
+                // Singleton instance of UDWF, ensures it is only created once.
+                static INSTANCE: std::sync::LazyLock<std::sync::Arc<datafusion_expr::WindowUDF>> =
+                    std::sync::LazyLock::new(|| {
                         std::sync::Arc::new(datafusion_expr::WindowUDF::from($CTOR()))
-                    })
-                    .clone()
+                    });
+                std::sync::Arc::clone(&INSTANCE)
             }
         }
     };
@@ -145,6 +142,8 @@ macro_rules! get_or_init_udwf {
 /// # use datafusion_expr::{PartitionEvaluator, Signature, Volatility, WindowUDFImpl};
 /// # use datafusion_functions_window::{create_udwf_expr, get_or_init_udwf};
 /// # use datafusion_functions_window_common::field::WindowUDFFieldArgs;
+/// # use datafusion_functions_window_common::partition::PartitionEvaluatorArgs;
+///
 /// # get_or_init_udwf!(
 /// #     RowNumber,
 /// #     row_number,
@@ -193,6 +192,7 @@ macro_rules! get_or_init_udwf {
 /// #     }
 /// #     fn partition_evaluator(
 /// #         &self,
+/// #         _partition_evaluator_args: PartitionEvaluatorArgs,
 /// #     ) -> datafusion_common::Result<Box<dyn PartitionEvaluator>> {
 /// #         unimplemented!()
 /// #     }
@@ -216,6 +216,7 @@ macro_rules! get_or_init_udwf {
 /// # use datafusion_common::arrow::datatypes::Field;
 /// # use datafusion_common::ScalarValue;
 /// # use datafusion_expr::{col, lit};
+/// # use datafusion_functions_window_common::partition::PartitionEvaluatorArgs;
 /// #
 /// # get_or_init_udwf!(Lead, lead, "user-defined window function");
 /// #
@@ -278,6 +279,7 @@ macro_rules! get_or_init_udwf {
 /// #     }
 /// #     fn partition_evaluator(
 /// #         &self,
+/// #         partition_evaluator_args: PartitionEvaluatorArgs,
 /// #     ) -> datafusion_common::Result<Box<dyn PartitionEvaluator>> {
 /// #         unimplemented!()
 /// #     }
@@ -296,7 +298,7 @@ macro_rules! create_udwf_expr {
     ($UDWF:ident, $OUT_FN_NAME:ident, $DOC:expr) => {
         paste::paste! {
             #[doc = " Create a [`WindowFunction`](datafusion_expr::Expr::WindowFunction) expression for"]
-            #[doc = concat!(" [`", stringify!($UDWF), "`] user-defined window function.")]
+            #[doc = concat!(" `", stringify!($UDWF), "` user-defined window function.")]
             #[doc = ""]
             #[doc = concat!(" ", $DOC)]
             pub fn $OUT_FN_NAME() -> datafusion_expr::Expr {
@@ -309,7 +311,7 @@ macro_rules! create_udwf_expr {
     ($UDWF:ident, $OUT_FN_NAME:ident, [$($PARAM:ident),+], $DOC:expr) => {
         paste::paste! {
             #[doc = " Create a [`WindowFunction`](datafusion_expr::Expr::WindowFunction) expression for"]
-            #[doc = concat!(" [`", stringify!($UDWF), "`] user-defined window function.")]
+            #[doc = concat!(" `", stringify!($UDWF), "` user-defined window function.")]
             #[doc = ""]
             #[doc = concat!(" ", $DOC)]
             pub fn $OUT_FN_NAME(
@@ -355,6 +357,7 @@ macro_rules! create_udwf_expr {
 /// #
 /// # use datafusion_functions_window_common::field::WindowUDFFieldArgs;
 /// # use datafusion_functions_window::{define_udwf_and_expr, get_or_init_udwf, create_udwf_expr};
+/// # use datafusion_functions_window_common::partition::PartitionEvaluatorArgs;
 /// #
 /// /// 1. Defines the `simple_udwf()` user-defined window function.
 /// ///
@@ -397,6 +400,7 @@ macro_rules! create_udwf_expr {
 /// #      }
 /// #      fn partition_evaluator(
 /// #          &self,
+/// #          partition_evaluator_args: PartitionEvaluatorArgs,
 /// #      ) -> datafusion_common::Result<Box<dyn PartitionEvaluator>> {
 /// #          unimplemented!()
 /// #      }
@@ -415,6 +419,7 @@ macro_rules! create_udwf_expr {
 /// # use datafusion_expr::{PartitionEvaluator, Signature, Volatility, WindowUDFImpl};
 /// # use datafusion_functions_window::{create_udwf_expr, define_udwf_and_expr, get_or_init_udwf};
 /// # use datafusion_functions_window_common::field::WindowUDFFieldArgs;
+/// # use datafusion_functions_window_common::partition::PartitionEvaluatorArgs;
 /// #
 /// /// 1. Defines the `row_number_udwf()` user-defined window function.
 /// ///
@@ -459,6 +464,7 @@ macro_rules! create_udwf_expr {
 /// #     }
 /// #     fn partition_evaluator(
 /// #         &self,
+/// #         _partition_evaluator_args: PartitionEvaluatorArgs,
 /// #     ) -> datafusion_common::Result<Box<dyn PartitionEvaluator>> {
 /// #         unimplemented!()
 /// #     }
@@ -484,6 +490,7 @@ macro_rules! create_udwf_expr {
 /// # use datafusion_common::arrow::datatypes::Field;
 /// # use datafusion_common::ScalarValue;
 /// # use datafusion_expr::{col, lit};
+/// # use datafusion_functions_window_common::partition::PartitionEvaluatorArgs;
 /// #
 /// /// 1. Defines the `lead_udwf()` user-defined window function.
 /// ///
@@ -543,6 +550,7 @@ macro_rules! create_udwf_expr {
 /// #     }
 /// #     fn partition_evaluator(
 /// #         &self,
+/// #         _partition_evaluator_args: PartitionEvaluatorArgs,
 /// #     ) -> datafusion_common::Result<Box<dyn PartitionEvaluator>> {
 /// #         unimplemented!()
 /// #     }
@@ -570,6 +578,7 @@ macro_rules! create_udwf_expr {
 /// # use datafusion_common::arrow::datatypes::Field;
 /// # use datafusion_common::ScalarValue;
 /// # use datafusion_expr::{col, lit};
+/// # use datafusion_functions_window_common::partition::PartitionEvaluatorArgs;
 /// #
 /// /// 1. Defines the `lead_udwf()` user-defined window function.
 /// ///
@@ -630,6 +639,7 @@ macro_rules! create_udwf_expr {
 /// #     }
 /// #     fn partition_evaluator(
 /// #         &self,
+/// #         _partition_evaluator_args: PartitionEvaluatorArgs,
 /// #     ) -> datafusion_common::Result<Box<dyn PartitionEvaluator>> {
 /// #         unimplemented!()
 /// #     }

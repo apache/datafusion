@@ -19,15 +19,16 @@
 //! and producing batches in parallel for the right partitions
 
 use super::utils::{
-    adjust_right_output_partitioning, BuildProbeJoinMetrics, OnceAsync, OnceFut,
+    adjust_right_output_partitioning, reorder_output_after_swap, BatchSplitter,
+    BatchTransformer, BuildProbeJoinMetrics, NoopBatchTransformer, OnceAsync, OnceFut,
     StatefulStreamResult,
 };
 use crate::coalesce_partitions::CoalescePartitionsExec;
+use crate::execution_plan::{boundedness_from_children, EmissionType};
 use crate::metrics::{ExecutionPlanMetricsSet, MetricsSet};
 use crate::{
-    execution_mode_from_children, handle_state, ColumnStatistics, DisplayAs,
-    DisplayFormatType, Distribution, ExecutionMode, ExecutionPlan,
-    ExecutionPlanProperties, PlanProperties, RecordBatchStream,
+    handle_state, ColumnStatistics, DisplayAs, DisplayFormatType, Distribution,
+    ExecutionPlan, ExecutionPlanProperties, PlanProperties, RecordBatchStream,
     SendableRecordBatchStream, Statistics,
 };
 use arrow::compute::concat_batches;
@@ -45,11 +46,31 @@ use datafusion_physical_expr::equivalence::join_equivalence_properties;
 use async_trait::async_trait;
 use futures::{ready, Stream, StreamExt, TryStreamExt};
 
-/// Data of the left side
-type JoinLeftData = (RecordBatch, MemoryReservation);
+/// Data of the left side that is buffered into memory
+#[derive(Debug)]
+struct JoinLeftData {
+    /// Single RecordBatch with all rows from the left side
+    merged_batch: RecordBatch,
+    /// Track memory reservation for merged_batch. Relies on drop
+    /// semantics to release reservation when JoinLeftData is dropped.
+    _reservation: MemoryReservation,
+}
 
-/// executes partitions in parallel and combines them into a set of
-/// partitions by combining all values from the left with all values on the right
+#[allow(rustdoc::private_intra_doc_links)]
+/// Cross Join Execution Plan
+///
+/// This operator is used when there are no predicates between two tables and
+/// returns the Cartesian product of the two tables.
+///
+/// Buffers the left input into memory and then streams batches from each
+/// partition on the right input combining them with the buffered left input
+/// to generate the output.
+///
+/// # Clone / Shared State
+///
+/// Note this structure includes a [`OnceAsync`] that is used to coordinate the
+/// loading of the left side with the processing in each output stream.
+/// Therefore it can not be [`Clone`]
 #[derive(Debug)]
 pub struct CrossJoinExec {
     /// left (build) side which gets loaded in memory
@@ -58,10 +79,16 @@ pub struct CrossJoinExec {
     pub right: Arc<dyn ExecutionPlan>,
     /// The schema once the join is applied
     schema: SchemaRef,
-    /// Build-side data
+    /// Buffered copy of left (build) side in memory.
+    ///
+    /// This structure is *shared* across all output streams.
+    ///
+    /// Each output stream waits on the `OnceAsync` to signal the completion of
+    /// the left side loading.
     left_fut: OnceAsync<JoinLeftData>,
     /// Execution plan metrics
     metrics: ExecutionPlanMetricsSet,
+    /// Properties such as schema, equivalence properties, ordering, partitioning, etc.
     cache: PlanProperties,
 }
 
@@ -86,6 +113,7 @@ impl CrossJoinExec {
 
         let schema = Arc::new(Schema::new(all_columns).with_metadata(metadata));
         let cache = Self::compute_properties(&left, &right, Arc::clone(&schema));
+
         CrossJoinExec {
             left,
             right,
@@ -133,14 +161,25 @@ impl CrossJoinExec {
             left.schema().fields.len(),
         );
 
-        // Determine the execution mode:
-        let mut mode = execution_mode_from_children([left, right]);
-        if mode.is_unbounded() {
-            // If any of the inputs is unbounded, cross join breaks the pipeline.
-            mode = ExecutionMode::PipelineBreaking;
-        }
+        PlanProperties::new(
+            eq_properties,
+            output_partitioning,
+            EmissionType::Final,
+            boundedness_from_children([left, right]),
+        )
+    }
 
-        PlanProperties::new(eq_properties, output_partitioning, mode)
+    /// Returns a new `ExecutionPlan` that computes the same join as this one,
+    /// with the left and right inputs swapped using the  specified
+    /// `partition_mode`.
+    pub fn swap_inputs(&self) -> Result<Arc<dyn ExecutionPlan>> {
+        let new_join =
+            CrossJoinExec::new(Arc::clone(&self.right), Arc::clone(&self.left));
+        reorder_output_after_swap(
+            Arc::new(new_join),
+            &self.left.schema(),
+            &self.right.schema(),
+        )
     }
 }
 
@@ -162,23 +201,29 @@ async fn load_left_input(
 
     // Load all batches and count the rows
     let (batches, _metrics, reservation) = stream
-        .try_fold((Vec::new(), metrics, reservation), |mut acc, batch| async {
-            let batch_size = batch.get_array_memory_size();
-            // Reserve memory for incoming batch
-            acc.2.try_grow(batch_size)?;
-            // Update metrics
-            acc.1.build_mem_used.add(batch_size);
-            acc.1.build_input_batches.add(1);
-            acc.1.build_input_rows.add(batch.num_rows());
-            // Push batch to output
-            acc.0.push(batch);
-            Ok(acc)
-        })
+        .try_fold(
+            (Vec::new(), metrics, reservation),
+            |(mut batches, metrics, mut reservation), batch| async {
+                let batch_size = batch.get_array_memory_size();
+                // Reserve memory for incoming batch
+                reservation.try_grow(batch_size)?;
+                // Update metrics
+                metrics.build_mem_used.add(batch_size);
+                metrics.build_input_batches.add(1);
+                metrics.build_input_rows.add(batch.num_rows());
+                // Push batch to output
+                batches.push(batch);
+                Ok((batches, metrics, reservation))
+            },
+        )
         .await?;
 
     let merged_batch = concat_batches(&left_schema, &batches)?;
 
-    Ok((merged_batch, reservation))
+    Ok(JoinLeftData {
+        merged_batch,
+        _reservation: reservation,
+    })
 }
 
 impl DisplayAs for CrossJoinExec {
@@ -246,6 +291,10 @@ impl ExecutionPlan for CrossJoinExec {
         let reservation =
             MemoryConsumer::new("CrossJoinExec").register(context.memory_pool());
 
+        let batch_size = context.session_config().batch_size();
+        let enforce_batch_size_in_joins =
+            context.session_config().enforce_batch_size_in_joins();
+
         let left_fut = self.left_fut.once(|| {
             load_left_input(
                 Arc::clone(&self.left),
@@ -255,15 +304,29 @@ impl ExecutionPlan for CrossJoinExec {
             )
         });
 
-        Ok(Box::pin(CrossJoinStream {
-            schema: Arc::clone(&self.schema),
-            left_fut,
-            right: stream,
-            left_index: 0,
-            join_metrics,
-            state: CrossJoinStreamState::WaitBuildSide,
-            left_data: RecordBatch::new_empty(self.left().schema()),
-        }))
+        if enforce_batch_size_in_joins {
+            Ok(Box::pin(CrossJoinStream {
+                schema: Arc::clone(&self.schema),
+                left_fut,
+                right: stream,
+                left_index: 0,
+                join_metrics,
+                state: CrossJoinStreamState::WaitBuildSide,
+                left_data: RecordBatch::new_empty(self.left().schema()),
+                batch_transformer: BatchSplitter::new(batch_size),
+            }))
+        } else {
+            Ok(Box::pin(CrossJoinStream {
+                schema: Arc::clone(&self.schema),
+                left_fut,
+                right: stream,
+                left_index: 0,
+                join_metrics,
+                state: CrossJoinStreamState::WaitBuildSide,
+                left_data: RecordBatch::new_empty(self.left().schema()),
+                batch_transformer: NoopBatchTransformer::new(),
+            }))
+        }
     }
 
     fn statistics(&self) -> Result<Statistics> {
@@ -319,7 +382,7 @@ fn stats_cartesian_product(
 }
 
 /// A stream that issues [RecordBatch]es as they arrive from the right  of the join.
-struct CrossJoinStream {
+struct CrossJoinStream<T> {
     /// Input schema
     schema: Arc<Schema>,
     /// Future for data from left side
@@ -332,11 +395,13 @@ struct CrossJoinStream {
     join_metrics: BuildProbeJoinMetrics,
     /// State of the stream
     state: CrossJoinStreamState,
-    /// Left data
+    /// Left data (copy of the entire buffered left side)
     left_data: RecordBatch,
+    /// Batch transformer
+    batch_transformer: T,
 }
 
-impl RecordBatchStream for CrossJoinStream {
+impl<T: BatchTransformer + Unpin + Send> RecordBatchStream for CrossJoinStream<T> {
     fn schema(&self) -> SchemaRef {
         Arc::clone(&self.schema)
     }
@@ -390,24 +455,24 @@ fn build_batch(
 }
 
 #[async_trait]
-impl Stream for CrossJoinStream {
+impl<T: BatchTransformer + Unpin + Send> Stream for CrossJoinStream<T> {
     type Item = Result<RecordBatch>;
 
     fn poll_next(
         mut self: std::pin::Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<Option<Self::Item>> {
+    ) -> Poll<Option<Self::Item>> {
         self.poll_next_impl(cx)
     }
 }
 
-impl CrossJoinStream {
+impl<T: BatchTransformer> CrossJoinStream<T> {
     /// Separate implementation function that unpins the [`CrossJoinStream`] so
     /// that partial borrows work correctly
     fn poll_next_impl(
         &mut self,
         cx: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<Option<Result<RecordBatch>>> {
+    ) -> Poll<Option<Result<RecordBatch>>> {
         loop {
             return match self.state {
                 CrossJoinStreamState::WaitBuildSide => {
@@ -430,16 +495,17 @@ impl CrossJoinStream {
         cx: &mut std::task::Context<'_>,
     ) -> Poll<Result<StatefulStreamResult<Option<RecordBatch>>>> {
         let build_timer = self.join_metrics.build_time.timer();
-        let (left_data, _) = match ready!(self.left_fut.get(cx)) {
+        let left_data = match ready!(self.left_fut.get(cx)) {
             Ok(left_data) => left_data,
             Err(e) => return Poll::Ready(Err(e)),
         };
         build_timer.done();
 
+        let left_data = left_data.merged_batch.clone();
         let result = if left_data.num_rows() == 0 {
             StatefulStreamResult::Ready(None)
         } else {
-            self.left_data = left_data.clone();
+            self.left_data = left_data;
             self.state = CrossJoinStreamState::FetchProbeBatch;
             StatefulStreamResult::Continue
         };
@@ -470,21 +536,33 @@ impl CrossJoinStream {
     fn build_batches(&mut self) -> Result<StatefulStreamResult<Option<RecordBatch>>> {
         let right_batch = self.state.try_as_record_batch()?;
         if self.left_index < self.left_data.num_rows() {
-            let join_timer = self.join_metrics.join_time.timer();
-            let result =
-                build_batch(self.left_index, right_batch, &self.left_data, &self.schema);
-            join_timer.done();
+            match self.batch_transformer.next() {
+                None => {
+                    let join_timer = self.join_metrics.join_time.timer();
+                    let result = build_batch(
+                        self.left_index,
+                        right_batch,
+                        &self.left_data,
+                        &self.schema,
+                    );
+                    join_timer.done();
 
-            if let Ok(ref batch) = result {
-                self.join_metrics.output_batches.add(1);
-                self.join_metrics.output_rows.add(batch.num_rows());
+                    self.batch_transformer.set_batch(result?);
+                }
+                Some((batch, last)) => {
+                    if last {
+                        self.left_index += 1;
+                    }
+
+                    self.join_metrics.output_batches.add(1);
+                    self.join_metrics.output_rows.add(batch.num_rows());
+                    return Ok(StatefulStreamResult::Ready(Some(batch)));
+                }
             }
-            self.left_index += 1;
-            result.map(|r| StatefulStreamResult::Ready(Some(r)))
         } else {
             self.state = CrossJoinStreamState::FetchProbeBatch;
-            Ok(StatefulStreamResult::Continue)
         }
+        Ok(StatefulStreamResult::Continue)
     }
 }
 

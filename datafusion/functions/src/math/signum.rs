@@ -18,17 +18,27 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use arrow::array::{ArrayRef, Float32Array, Float64Array};
-use arrow::datatypes::DataType;
+use arrow::array::{ArrayRef, AsArray};
 use arrow::datatypes::DataType::{Float32, Float64};
+use arrow::datatypes::{DataType, Float32Type, Float64Type};
 
-use datafusion_common::{exec_err, DataFusionError, Result};
+use datafusion_common::{exec_err, Result};
 use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
-use datafusion_expr::ColumnarValue;
-use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
+use datafusion_expr::{
+    ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
+};
+use datafusion_macros::user_doc;
 
 use crate::utils::make_scalar_function;
 
+#[user_doc(
+    doc_section(label = "Math Functions"),
+    description = r#"Returns the sign of a number.
+Negative numbers return `-1`.
+Zero and positive numbers return `1`."#,
+    syntax_example = "signum(numeric_expression)",
+    standard_argument(name = "numeric_expression", prefix = "Numeric")
+)]
 #[derive(Debug)]
 pub struct SignumFunc {
     signature: Signature,
@@ -78,45 +88,49 @@ impl ScalarUDFImpl for SignumFunc {
         Ok(input[0].sort_properties)
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         make_scalar_function(signum, vec![])(args)
+    }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        self.doc()
     }
 }
 
 /// signum SQL function
 pub fn signum(args: &[ArrayRef]) -> Result<ArrayRef> {
     match args[0].data_type() {
-        Float64 => Ok(Arc::new(make_function_scalar_inputs_return_type!(
-            &args[0],
-            "signum",
-            Float64Array,
-            Float64Array,
-            {
-                |x: f64| {
-                    if x == 0_f64 {
-                        0_f64
-                    } else {
-                        x.signum()
-                    }
-                }
-            }
-        )) as ArrayRef),
+        Float64 => Ok(Arc::new(
+            args[0]
+                .as_primitive::<Float64Type>()
+                .unary::<_, Float64Type>(
+                    |x: f64| {
+                        if x == 0_f64 {
+                            0_f64
+                        } else {
+                            x.signum()
+                        }
+                    },
+                ),
+        ) as ArrayRef),
 
-        Float32 => Ok(Arc::new(make_function_scalar_inputs_return_type!(
-            &args[0],
-            "signum",
-            Float32Array,
-            Float32Array,
-            {
-                |x: f32| {
-                    if x == 0_f32 {
-                        0_f32
-                    } else {
-                        x.signum()
-                    }
-                }
-            }
-        )) as ArrayRef),
+        Float32 => Ok(Arc::new(
+            args[0]
+                .as_primitive::<Float32Type>()
+                .unary::<_, Float32Type>(
+                    |x: f32| {
+                        if x == 0_f32 {
+                            0_f32
+                        } else {
+                            x.signum()
+                        }
+                    },
+                ),
+        ) as ArrayRef),
 
         other => exec_err!("Unsupported data type {other:?} for function signum"),
     }
@@ -135,7 +149,7 @@ mod test {
 
     #[test]
     fn test_signum_f32() {
-        let args = [ColumnarValue::Array(Arc::new(Float32Array::from(vec![
+        let array = Arc::new(Float32Array::from(vec![
             -1.0,
             -0.0,
             0.0,
@@ -145,10 +159,11 @@ mod test {
             f32::NAN,
             f32::INFINITY,
             f32::NEG_INFINITY,
-        ])))];
-
+        ]));
+        let batch_size = array.len();
+        #[allow(deprecated)] // TODO: migrate to invoke_with_args
         let result = SignumFunc::new()
-            .invoke(&args)
+            .invoke_batch(&[ColumnarValue::Array(array)], batch_size)
             .expect("failed to initialize function signum");
 
         match result {
@@ -175,7 +190,7 @@ mod test {
 
     #[test]
     fn test_signum_f64() {
-        let args = [ColumnarValue::Array(Arc::new(Float64Array::from(vec![
+        let array = Arc::new(Float64Array::from(vec![
             -1.0,
             -0.0,
             0.0,
@@ -185,10 +200,11 @@ mod test {
             f64::NAN,
             f64::INFINITY,
             f64::NEG_INFINITY,
-        ])))];
-
+        ]));
+        let batch_size = array.len();
+        #[allow(deprecated)] // TODO: migrate to invoke_with_args
         let result = SignumFunc::new()
-            .invoke(&args)
+            .invoke_batch(&[ColumnarValue::Array(array)], batch_size)
             .expect("failed to initialize function signum");
 
         match result {

@@ -15,17 +15,20 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use datafusion_common::DFSchemaRef;
-use std::cmp::Ordering;
+use arrow::datatypes::DataType;
+use datafusion_common::{DFSchema, DFSchemaRef};
 use std::fmt::{self, Display};
+use std::sync::{Arc, LazyLock};
+
+use crate::{expr_vec_fmt, Expr, LogicalPlan};
 
 /// Various types of Statements.
 ///
 /// # Transactions:
 ///
 /// While DataFusion does not offer support transactions, it provides
-/// [`LogicalPlan`](crate::LogicalPlan) support to assist building
-/// database systems using DataFusion
+/// [`LogicalPlan`] support to assist building database systems
+/// using DataFusion
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Hash)]
 pub enum Statement {
     // Begin a transaction
@@ -34,16 +37,24 @@ pub enum Statement {
     TransactionEnd(TransactionEnd),
     /// Set a Variable
     SetVariable(SetVariable),
+    /// Prepare a statement and find any bind parameters
+    /// (e.g. `?`). This is used to implement SQL-prepared statements.
+    Prepare(Prepare),
+    /// Execute a prepared statement. This is used to implement SQL 'EXECUTE'.
+    Execute(Execute),
+    /// Deallocate a prepared statement.
+    /// This is used to implement SQL 'DEALLOCATE'.
+    Deallocate(Deallocate),
 }
 
 impl Statement {
     /// Get a reference to the logical plan's schema
     pub fn schema(&self) -> &DFSchemaRef {
-        match self {
-            Statement::TransactionStart(TransactionStart { schema, .. }) => schema,
-            Statement::TransactionEnd(TransactionEnd { schema, .. }) => schema,
-            Statement::SetVariable(SetVariable { schema, .. }) => schema,
-        }
+        // Statements have an unchanging empty schema.
+        static STATEMENT_EMPTY_SCHEMA: LazyLock<DFSchemaRef> =
+            LazyLock::new(|| Arc::new(DFSchema::empty()));
+
+        &STATEMENT_EMPTY_SCHEMA
     }
 
     /// Return a descriptive string describing the type of this
@@ -53,6 +64,17 @@ impl Statement {
             Statement::TransactionStart(_) => "TransactionStart",
             Statement::TransactionEnd(_) => "TransactionEnd",
             Statement::SetVariable(_) => "SetVariable",
+            Statement::Prepare(_) => "Prepare",
+            Statement::Execute(_) => "Execute",
+            Statement::Deallocate(_) => "Deallocate",
+        }
+    }
+
+    /// Returns input LogicalPlans in the current `Statement`.
+    pub(super) fn inputs(&self) -> Vec<&LogicalPlan> {
+        match self {
+            Statement::Prepare(Prepare { input, .. }) => vec![input.as_ref()],
+            _ => vec![],
         }
     }
 
@@ -61,9 +83,9 @@ impl Statement {
     /// children.
     ///
     /// See [crate::LogicalPlan::display] for an example
-    pub fn display(&self) -> impl fmt::Display + '_ {
+    pub fn display(&self) -> impl Display + '_ {
         struct Wrapper<'a>(&'a Statement);
-        impl<'a> Display for Wrapper<'a> {
+        impl Display for Wrapper<'_> {
             fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
                 match self.0 {
                     Statement::TransactionStart(TransactionStart {
@@ -84,6 +106,24 @@ impl Statement {
                         variable, value, ..
                     }) => {
                         write!(f, "SetVariable: set {variable:?} to {value:?}")
+                    }
+                    Statement::Prepare(Prepare {
+                        name, data_types, ..
+                    }) => {
+                        write!(f, "Prepare: {name:?} {data_types:?} ")
+                    }
+                    Statement::Execute(Execute {
+                        name, parameters, ..
+                    }) => {
+                        write!(
+                            f,
+                            "Execute: {} params=[{}]",
+                            name,
+                            expr_vec_fmt!(parameters)
+                        )
+                    }
+                    Statement::Deallocate(Deallocate { name }) => {
+                        write!(f, "Deallocate: {}", name)
                     }
                 }
             }
@@ -116,67 +156,57 @@ pub enum TransactionIsolationLevel {
 }
 
 /// Indicator that the following statements should be committed or rolled back atomically
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, PartialOrd, Eq, Hash)]
 pub struct TransactionStart {
     /// indicates if transaction is allowed to write
     pub access_mode: TransactionAccessMode,
     // indicates ANSI isolation level
     pub isolation_level: TransactionIsolationLevel,
-    /// Empty schema
-    pub schema: DFSchemaRef,
-}
-
-// Manual implementation needed because of `schema` field. Comparison excludes this field.
-impl PartialOrd for TransactionStart {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        match self.access_mode.partial_cmp(&other.access_mode) {
-            Some(Ordering::Equal) => {
-                self.isolation_level.partial_cmp(&other.isolation_level)
-            }
-            cmp => cmp,
-        }
-    }
 }
 
 /// Indicator that any current transaction should be terminated
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, PartialOrd, Eq, Hash)]
 pub struct TransactionEnd {
     /// whether the transaction committed or aborted
     pub conclusion: TransactionConclusion,
     /// if specified a new transaction is immediately started with same characteristics
     pub chain: bool,
-    /// Empty schema
-    pub schema: DFSchemaRef,
-}
-
-// Manual implementation needed because of `schema` field. Comparison excludes this field.
-impl PartialOrd for TransactionEnd {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        match self.conclusion.partial_cmp(&other.conclusion) {
-            Some(Ordering::Equal) => self.chain.partial_cmp(&other.chain),
-            cmp => cmp,
-        }
-    }
 }
 
 /// Set a Variable's value -- value in
 /// [`ConfigOptions`](datafusion_common::config::ConfigOptions)
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, PartialOrd, Eq, Hash)]
 pub struct SetVariable {
     /// The variable name
     pub variable: String,
     /// The value to set
     pub value: String,
-    /// Dummy schema
-    pub schema: DFSchemaRef,
 }
 
-// Manual implementation needed because of `schema` field. Comparison excludes this field.
-impl PartialOrd for SetVariable {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        match self.variable.partial_cmp(&other.value) {
-            Some(Ordering::Equal) => self.value.partial_cmp(&other.value),
-            cmp => cmp,
-        }
-    }
+/// Prepare a statement but do not execute it. Prepare statements can have 0 or more
+/// `Expr::Placeholder` expressions that are filled in during execution
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Hash)]
+pub struct Prepare {
+    /// The name of the statement
+    pub name: String,
+    /// Data types of the parameters ([`Expr::Placeholder`])
+    pub data_types: Vec<DataType>,
+    /// The logical plan of the statements
+    pub input: Arc<LogicalPlan>,
+}
+
+/// Execute a prepared statement.
+#[derive(Debug, Clone, PartialEq, PartialOrd, Eq, Hash)]
+pub struct Execute {
+    /// The name of the prepared statement to execute
+    pub name: String,
+    /// The execute parameters
+    pub parameters: Vec<Expr>,
+}
+
+/// Deallocate a prepared statement.
+#[derive(Debug, Clone, PartialEq, PartialOrd, Eq, Hash)]
+pub struct Deallocate {
+    /// The name of the prepared statement to deallocate
+    pub name: String,
 }

@@ -16,6 +16,7 @@
 // under the License.
 
 use datafusion::prelude::SessionConfig;
+use datafusion_common::utils::get_available_parallelism;
 use structopt::StructOpt;
 
 // Common benchmark options (don't use doc comments otherwise this doc
@@ -37,11 +38,6 @@ pub struct CommonOpt {
     /// Activate debug mode to see more details
     #[structopt(short, long)]
     pub debug: bool,
-
-    /// If true, will use StringView/BinaryViewArray instead of String/BinaryArray
-    /// when reading ParquetFiles
-    #[structopt(long)]
-    pub force_view_types: bool,
 }
 
 impl CommonOpt {
@@ -53,7 +49,9 @@ impl CommonOpt {
     /// Modify the existing config appropriately
     pub fn update_config(&self, config: SessionConfig) -> SessionConfig {
         config
-            .with_target_partitions(self.partitions.unwrap_or(num_cpus::get()))
+            .with_target_partitions(
+                self.partitions.unwrap_or(get_available_parallelism()),
+            )
             .with_batch_size(self.batch_size)
     }
 }

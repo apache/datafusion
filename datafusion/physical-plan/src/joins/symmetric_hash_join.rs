@@ -27,12 +27,13 @@
 
 use std::any::Any;
 use std::fmt::{self, Debug};
+use std::mem::{size_of, size_of_val};
 use std::sync::Arc;
 use std::task::{Context, Poll};
 use std::vec;
 
 use crate::common::SharedMemoryReservation;
-use crate::handle_state;
+use crate::execution_plan::{boundedness_from_children, emission_type_from_children};
 use crate::joins::hash_join::{equal_rows_arr, update_hash};
 use crate::joins::stream_join_utils::{
     calculate_filter_expr_intervals, combine_two_batches,
@@ -42,12 +43,11 @@ use crate::joins::stream_join_utils::{
 };
 use crate::joins::utils::{
     apply_join_filter_to_indices, build_batch_from_indices, build_join_schema,
-    check_join_is_valid, symmetric_join_output_partitioning, ColumnIndex, JoinFilter,
-    JoinHashMapType, JoinOn, JoinOnRef, StatefulStreamResult,
+    check_join_is_valid, symmetric_join_output_partitioning, BatchSplitter,
+    BatchTransformer, ColumnIndex, JoinFilter, JoinHashMapType, JoinOn, JoinOnRef,
+    NoopBatchTransformer, StatefulStreamResult,
 };
 use crate::{
-    execution_mode_from_children,
-    expressions::PhysicalSortExpr,
     joins::StreamJoinPartitionMode,
     metrics::{ExecutionPlanMetricsSet, MetricsSet},
     DisplayAs, DisplayFormatType, Distribution, ExecutionPlan, ExecutionPlanProperties,
@@ -61,20 +61,20 @@ use arrow::array::{
 use arrow::compute::concat_batches;
 use arrow::datatypes::{Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
+use arrow_buffer::ArrowNativeType;
 use datafusion_common::hash_utils::create_hashes;
 use datafusion_common::utils::bisect;
-use datafusion_common::{internal_err, plan_err, JoinSide, JoinType, Result};
+use datafusion_common::{internal_err, plan_err, HashSet, JoinSide, JoinType, Result};
 use datafusion_execution::memory_pool::MemoryConsumer;
 use datafusion_execution::TaskContext;
 use datafusion_expr::interval_arithmetic::Interval;
 use datafusion_physical_expr::equivalence::join_equivalence_properties;
 use datafusion_physical_expr::intervals::cp_solver::ExprIntervalGraph;
-use datafusion_physical_expr::{PhysicalExprRef, PhysicalSortRequirement};
+use datafusion_physical_expr::PhysicalExprRef;
 
 use ahash::RandomState;
-use datafusion_physical_expr_common::sort_expr::LexRequirement;
+use datafusion_physical_expr_common::sort_expr::{LexOrdering, LexRequirement};
 use futures::{ready, Stream, StreamExt};
-use hashbrown::HashSet;
 use parking_lot::Mutex;
 
 const HASHMAP_SHRINK_SCALE_FACTOR: usize = 4;
@@ -164,7 +164,7 @@ const HASHMAP_SHRINK_SCALE_FACTOR: usize = 4;
 /// making the smallest value in 'left_sorted' 1231 and any rows below (since ascending)
 /// than that can be dropped from the inner buffer.
 /// ```
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct SymmetricHashJoinExec {
     /// Left side stream
     pub(crate) left: Arc<dyn ExecutionPlan>,
@@ -185,9 +185,9 @@ pub struct SymmetricHashJoinExec {
     /// If null_equals_null is true, null == null else null != null
     pub(crate) null_equals_null: bool,
     /// Left side sort expression(s)
-    pub(crate) left_sort_exprs: Option<Vec<PhysicalSortExpr>>,
+    pub(crate) left_sort_exprs: Option<LexOrdering>,
     /// Right side sort expression(s)
-    pub(crate) right_sort_exprs: Option<Vec<PhysicalSortExpr>>,
+    pub(crate) right_sort_exprs: Option<LexOrdering>,
     /// Partition Mode
     mode: StreamJoinPartitionMode,
     /// Cache holding plan properties like equivalences, output partitioning etc.
@@ -209,8 +209,8 @@ impl SymmetricHashJoinExec {
         filter: Option<JoinFilter>,
         join_type: &JoinType,
         null_equals_null: bool,
-        left_sort_exprs: Option<Vec<PhysicalSortExpr>>,
-        right_sort_exprs: Option<Vec<PhysicalSortExpr>>,
+        left_sort_exprs: Option<LexOrdering>,
+        right_sort_exprs: Option<LexOrdering>,
         mode: StreamJoinPartitionMode,
     ) -> Result<Self> {
         let left_schema = left.schema();
@@ -275,10 +275,12 @@ impl SymmetricHashJoinExec {
         let output_partitioning =
             symmetric_join_output_partitioning(left, right, &join_type);
 
-        // Determine execution mode:
-        let mode = execution_mode_from_children([left, right]);
-
-        PlanProperties::new(eq_properties, output_partitioning, mode)
+        PlanProperties::new(
+            eq_properties,
+            output_partitioning,
+            emission_type_from_children([left, right]),
+            boundedness_from_children([left, right]),
+        )
     }
 
     /// left stream
@@ -317,13 +319,13 @@ impl SymmetricHashJoinExec {
     }
 
     /// Get left_sort_exprs
-    pub fn left_sort_exprs(&self) -> Option<&[PhysicalSortExpr]> {
-        self.left_sort_exprs.as_deref()
+    pub fn left_sort_exprs(&self) -> Option<&LexOrdering> {
+        self.left_sort_exprs.as_ref()
     }
 
     /// Get right_sort_exprs
-    pub fn right_sort_exprs(&self) -> Option<&[PhysicalSortExpr]> {
-        self.right_sort_exprs.as_deref()
+    pub fn right_sort_exprs(&self) -> Option<&LexOrdering> {
+        self.right_sort_exprs.as_ref()
     }
 
     /// Check if order information covers every column in the filter expression.
@@ -415,10 +417,12 @@ impl ExecutionPlan for SymmetricHashJoinExec {
         vec![
             self.left_sort_exprs
                 .as_ref()
-                .map(PhysicalSortRequirement::from_sort_exprs),
+                .cloned()
+                .map(LexRequirement::from),
             self.right_sort_exprs
                 .as_ref()
-                .map(PhysicalSortRequirement::from_sort_exprs),
+                .cloned()
+                .map(LexRequirement::from),
         ]
     }
 
@@ -465,23 +469,27 @@ impl ExecutionPlan for SymmetricHashJoinExec {
                  consider using RepartitionExec"
             );
         }
-        // If `filter_state` and `filter` are both present, then calculate sorted filter expressions
-        // for both sides, and build an expression graph.
-        let (left_sorted_filter_expr, right_sorted_filter_expr, graph) =
-            match (&self.left_sort_exprs, &self.right_sort_exprs, &self.filter) {
-                (Some(left_sort_exprs), Some(right_sort_exprs), Some(filter)) => {
-                    let (left, right, graph) = prepare_sorted_exprs(
-                        filter,
-                        &self.left,
-                        &self.right,
-                        left_sort_exprs,
-                        right_sort_exprs,
-                    )?;
-                    (Some(left), Some(right), Some(graph))
-                }
-                // If `filter_state` or `filter` is not present, then return None for all three values:
-                _ => (None, None, None),
-            };
+        // If `filter_state` and `filter` are both present, then calculate sorted
+        // filter expressions for both sides, and build an expression graph.
+        let (left_sorted_filter_expr, right_sorted_filter_expr, graph) = match (
+            self.left_sort_exprs(),
+            self.right_sort_exprs(),
+            &self.filter,
+        ) {
+            (Some(left_sort_exprs), Some(right_sort_exprs), Some(filter)) => {
+                let (left, right, graph) = prepare_sorted_exprs(
+                    filter,
+                    &self.left,
+                    &self.right,
+                    left_sort_exprs,
+                    right_sort_exprs,
+                )?;
+                (Some(left), Some(right), Some(graph))
+            }
+            // If `filter_state` or `filter` is not present, then return None
+            // for all three values:
+            _ => (None, None, None),
+        };
 
         let (on_left, on_right) = self.on.iter().cloned().unzip();
 
@@ -494,6 +502,10 @@ impl ExecutionPlan for SymmetricHashJoinExec {
 
         let right_stream = self.right.execute(partition, Arc::clone(&context))?;
 
+        let batch_size = context.session_config().batch_size();
+        let enforce_batch_size_in_joins =
+            context.session_config().enforce_batch_size_in_joins();
+
         let reservation = Arc::new(Mutex::new(
             MemoryConsumer::new(format!("SymmetricHashJoinStream[{partition}]"))
                 .register(context.memory_pool()),
@@ -502,29 +514,52 @@ impl ExecutionPlan for SymmetricHashJoinExec {
             reservation.lock().try_grow(g.size())?;
         }
 
-        Ok(Box::pin(SymmetricHashJoinStream {
-            left_stream,
-            right_stream,
-            schema: self.schema(),
-            filter: self.filter.clone(),
-            join_type: self.join_type,
-            random_state: self.random_state.clone(),
-            left: left_side_joiner,
-            right: right_side_joiner,
-            column_indices: self.column_indices.clone(),
-            metrics: StreamJoinMetrics::new(partition, &self.metrics),
-            graph,
-            left_sorted_filter_expr,
-            right_sorted_filter_expr,
-            null_equals_null: self.null_equals_null,
-            state: SHJStreamState::PullRight,
-            reservation,
-        }))
+        if enforce_batch_size_in_joins {
+            Ok(Box::pin(SymmetricHashJoinStream {
+                left_stream,
+                right_stream,
+                schema: self.schema(),
+                filter: self.filter.clone(),
+                join_type: self.join_type,
+                random_state: self.random_state.clone(),
+                left: left_side_joiner,
+                right: right_side_joiner,
+                column_indices: self.column_indices.clone(),
+                metrics: StreamJoinMetrics::new(partition, &self.metrics),
+                graph,
+                left_sorted_filter_expr,
+                right_sorted_filter_expr,
+                null_equals_null: self.null_equals_null,
+                state: SHJStreamState::PullRight,
+                reservation,
+                batch_transformer: BatchSplitter::new(batch_size),
+            }))
+        } else {
+            Ok(Box::pin(SymmetricHashJoinStream {
+                left_stream,
+                right_stream,
+                schema: self.schema(),
+                filter: self.filter.clone(),
+                join_type: self.join_type,
+                random_state: self.random_state.clone(),
+                left: left_side_joiner,
+                right: right_side_joiner,
+                column_indices: self.column_indices.clone(),
+                metrics: StreamJoinMetrics::new(partition, &self.metrics),
+                graph,
+                left_sorted_filter_expr,
+                right_sorted_filter_expr,
+                null_equals_null: self.null_equals_null,
+                state: SHJStreamState::PullRight,
+                reservation,
+                batch_transformer: NoopBatchTransformer::new(),
+            }))
+        }
     }
 }
 
 /// A stream that issues [RecordBatch]es as they arrive from the right  of the join.
-struct SymmetricHashJoinStream {
+struct SymmetricHashJoinStream<T> {
     /// Input streams
     left_stream: SendableRecordBatchStream,
     right_stream: SendableRecordBatchStream,
@@ -556,20 +591,24 @@ struct SymmetricHashJoinStream {
     reservation: SharedMemoryReservation,
     /// State machine for input execution
     state: SHJStreamState,
+    /// Transforms the output batch before returning.
+    batch_transformer: T,
 }
 
-impl RecordBatchStream for SymmetricHashJoinStream {
+impl<T: BatchTransformer + Unpin + Send> RecordBatchStream
+    for SymmetricHashJoinStream<T>
+{
     fn schema(&self) -> SchemaRef {
         Arc::clone(&self.schema)
     }
 }
 
-impl Stream for SymmetricHashJoinStream {
+impl<T: BatchTransformer + Unpin + Send> Stream for SymmetricHashJoinStream<T> {
     type Item = Result<RecordBatch>;
 
     fn poll_next(
         mut self: std::pin::Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
+        cx: &mut Context<'_>,
     ) -> Poll<Option<Self::Item>> {
         self.poll_next_impl(cx)
     }
@@ -634,7 +673,11 @@ fn need_to_produce_result_in_final(build_side: JoinSide, join_type: JoinType) ->
     if build_side == JoinSide::Left {
         matches!(
             join_type,
-            JoinType::Left | JoinType::LeftAnti | JoinType::Full | JoinType::LeftSemi
+            JoinType::Left
+                | JoinType::LeftAnti
+                | JoinType::Full
+                | JoinType::LeftSemi
+                | JoinType::LeftMark
         )
     } else {
         matches!(
@@ -673,6 +716,20 @@ where
 {
     // Store the result in a tuple
     let result = match (build_side, join_type) {
+        (JoinSide::Left, JoinType::LeftMark) => {
+            let build_indices = (0..prune_length)
+                .map(L::Native::from_usize)
+                .collect::<PrimitiveArray<L>>();
+            let probe_indices = (0..prune_length)
+                .map(|idx| {
+                    // For mark join we output a dummy index 0 to indicate the row had a match
+                    visited_rows
+                        .contains(&(idx + deleted_offset))
+                        .then_some(R::Native::from_usize(0).unwrap())
+                })
+                .collect();
+            (build_indices, probe_indices)
+        }
         // In the case of `Left` or `Right` join, or `Full` join, get the anti indices
         (JoinSide::Left, JoinType::Left | JoinType::LeftAnti)
         | (JoinSide::Right, JoinType::Right | JoinType::RightAnti)
@@ -836,6 +893,7 @@ pub(crate) fn join_with_probe_batch(
         JoinType::LeftAnti
             | JoinType::RightAnti
             | JoinType::LeftSemi
+            | JoinType::LeftMark
             | JoinType::RightSemi
     ) {
         Ok(None)
@@ -969,15 +1027,15 @@ pub struct OneSideHashJoiner {
 impl OneSideHashJoiner {
     pub fn size(&self) -> usize {
         let mut size = 0;
-        size += std::mem::size_of_val(self);
-        size += std::mem::size_of_val(&self.build_side);
+        size += size_of_val(self);
+        size += size_of_val(&self.build_side);
         size += self.input_buffer.get_array_memory_size();
-        size += std::mem::size_of_val(&self.on);
+        size += size_of_val(&self.on);
         size += self.hashmap.size();
-        size += self.hashes_buffer.capacity() * std::mem::size_of::<u64>();
-        size += self.visited_rows.capacity() * std::mem::size_of::<usize>();
-        size += std::mem::size_of_val(&self.offset);
-        size += std::mem::size_of_val(&self.deleted_offset);
+        size += self.hashes_buffer.capacity() * size_of::<u64>();
+        size += self.visited_rows.capacity() * size_of::<usize>();
+        size += size_of_val(&self.offset);
+        size += size_of_val(&self.deleted_offset);
         size
     }
     pub fn new(
@@ -1140,7 +1198,7 @@ impl OneSideHashJoiner {
 /// - Transition to `BothExhausted { final_result: true }`:
 ///   - Occurs in `prepare_for_final_results_after_exhaustion` when both streams are
 ///     exhausted, indicating completion of processing and availability of final results.
-impl SymmetricHashJoinStream {
+impl<T: BatchTransformer> SymmetricHashJoinStream<T> {
     /// Implements the main polling logic for the join stream.
     ///
     /// This method continuously checks the state of the join stream and
@@ -1159,26 +1217,45 @@ impl SymmetricHashJoinStream {
         cx: &mut Context<'_>,
     ) -> Poll<Option<Result<RecordBatch>>> {
         loop {
-            return match self.state() {
-                SHJStreamState::PullRight => {
-                    handle_state!(ready!(self.fetch_next_from_right_stream(cx)))
+            match self.batch_transformer.next() {
+                None => {
+                    let result = match self.state() {
+                        SHJStreamState::PullRight => {
+                            ready!(self.fetch_next_from_right_stream(cx))
+                        }
+                        SHJStreamState::PullLeft => {
+                            ready!(self.fetch_next_from_left_stream(cx))
+                        }
+                        SHJStreamState::RightExhausted => {
+                            ready!(self.handle_right_stream_end(cx))
+                        }
+                        SHJStreamState::LeftExhausted => {
+                            ready!(self.handle_left_stream_end(cx))
+                        }
+                        SHJStreamState::BothExhausted {
+                            final_result: false,
+                        } => self.prepare_for_final_results_after_exhaustion(),
+                        SHJStreamState::BothExhausted { final_result: true } => {
+                            return Poll::Ready(None);
+                        }
+                    };
+
+                    match result? {
+                        StatefulStreamResult::Ready(None) => {
+                            return Poll::Ready(None);
+                        }
+                        StatefulStreamResult::Ready(Some(batch)) => {
+                            self.batch_transformer.set_batch(batch);
+                        }
+                        _ => {}
+                    }
                 }
-                SHJStreamState::PullLeft => {
-                    handle_state!(ready!(self.fetch_next_from_left_stream(cx)))
+                Some((batch, _)) => {
+                    self.metrics.output_batches.add(1);
+                    self.metrics.output_rows.add(batch.num_rows());
+                    return Poll::Ready(Some(Ok(batch)));
                 }
-                SHJStreamState::RightExhausted => {
-                    handle_state!(ready!(self.handle_right_stream_end(cx)))
-                }
-                SHJStreamState::LeftExhausted => {
-                    handle_state!(ready!(self.handle_left_stream_end(cx)))
-                }
-                SHJStreamState::BothExhausted {
-                    final_result: false,
-                } => {
-                    handle_state!(self.prepare_for_final_results_after_exhaustion())
-                }
-                SHJStreamState::BothExhausted { final_result: true } => Poll::Ready(None),
-            };
+            }
         }
     }
     /// Asynchronously pulls the next batch from the right stream.
@@ -1384,11 +1461,8 @@ impl SymmetricHashJoinStream {
         // Combine the left and right results:
         let result = combine_two_batches(&self.schema, left_result, right_result)?;
 
-        // Update the metrics and return the result:
-        if let Some(batch) = &result {
-            // Update the metrics:
-            self.metrics.output_batches.add(1);
-            self.metrics.output_rows.add(batch.num_rows());
+        // Return the result:
+        if result.is_some() {
             return Ok(StatefulStreamResult::Ready(result));
         }
         Ok(StatefulStreamResult::Continue)
@@ -1412,18 +1486,18 @@ impl SymmetricHashJoinStream {
 
     fn size(&self) -> usize {
         let mut size = 0;
-        size += std::mem::size_of_val(&self.schema);
-        size += std::mem::size_of_val(&self.filter);
-        size += std::mem::size_of_val(&self.join_type);
+        size += size_of_val(&self.schema);
+        size += size_of_val(&self.filter);
+        size += size_of_val(&self.join_type);
         size += self.left.size();
         size += self.right.size();
-        size += std::mem::size_of_val(&self.column_indices);
+        size += size_of_val(&self.column_indices);
         size += self.graph.as_ref().map(|g| g.size()).unwrap_or(0);
-        size += std::mem::size_of_val(&self.left_sorted_filter_expr);
-        size += std::mem::size_of_val(&self.right_sorted_filter_expr);
-        size += std::mem::size_of_val(&self.random_state);
-        size += std::mem::size_of_val(&self.null_equals_null);
-        size += std::mem::size_of_val(&self.metrics);
+        size += size_of_val(&self.left_sorted_filter_expr);
+        size += size_of_val(&self.right_sorted_filter_expr);
+        size += size_of_val(&self.random_state);
+        size += size_of_val(&self.null_equals_null);
+        size += size_of_val(&self.metrics);
         size
     }
 
@@ -1523,11 +1597,6 @@ impl SymmetricHashJoinStream {
         let capacity = self.size();
         self.metrics.stream_memory_usage.set(capacity);
         self.reservation.lock().try_resize(capacity)?;
-        // Update the metrics if we have a batch; otherwise, continue the loop.
-        if let Some(batch) = &result {
-            self.metrics.output_batches.add(1);
-            self.metrics.output_rows.add(batch.num_rows());
-        }
         Ok(result)
     }
 }
@@ -1579,6 +1648,7 @@ mod tests {
     use datafusion_execution::config::SessionConfig;
     use datafusion_expr::Operator;
     use datafusion_physical_expr::expressions::{binary, col, lit, Column};
+    use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
 
     use once_cell::sync::Lazy;
     use rstest::*;
@@ -1660,6 +1730,7 @@ mod tests {
             JoinType::RightSemi,
             JoinType::LeftSemi,
             JoinType::LeftAnti,
+            JoinType::LeftMark,
             JoinType::RightAnti,
             JoinType::Full
         )]
@@ -1678,7 +1749,7 @@ mod tests {
         let left_schema = &left_partition[0].schema();
         let right_schema = &right_partition[0].schema();
 
-        let left_sorted = vec![PhysicalSortExpr {
+        let left_sorted = LexOrdering::new(vec![PhysicalSortExpr {
             expr: binary(
                 col("la1", left_schema)?,
                 Operator::Plus,
@@ -1686,11 +1757,11 @@ mod tests {
                 left_schema,
             )?,
             options: SortOptions::default(),
-        }];
-        let right_sorted = vec![PhysicalSortExpr {
+        }]);
+        let right_sorted = LexOrdering::new(vec![PhysicalSortExpr {
             expr: col("ra1", right_schema)?,
             options: SortOptions::default(),
-        }];
+        }]);
         let (left, right) = create_memory_table(
             left_partition,
             right_partition,
@@ -1716,15 +1787,15 @@ mod tests {
         let filter_expr = complicated_filter(&intermediate_schema)?;
         let column_indices = vec![
             ColumnIndex {
-                index: 0,
+                index: left_schema.index_of("la1")?,
                 side: JoinSide::Left,
             },
             ColumnIndex {
-                index: 4,
+                index: left_schema.index_of("la2")?,
                 side: JoinSide::Left,
             },
             ColumnIndex {
-                index: 0,
+                index: right_schema.index_of("ra1")?,
                 side: JoinSide::Right,
             },
         ];
@@ -1744,6 +1815,7 @@ mod tests {
             JoinType::RightSemi,
             JoinType::LeftSemi,
             JoinType::LeftAnti,
+            JoinType::LeftMark,
             JoinType::RightAnti,
             JoinType::Full
         )]
@@ -1756,14 +1828,14 @@ mod tests {
         let left_schema = &left_partition[0].schema();
         let right_schema = &right_partition[0].schema();
 
-        let left_sorted = vec![PhysicalSortExpr {
+        let left_sorted = LexOrdering::new(vec![PhysicalSortExpr {
             expr: col("la1", left_schema)?,
             options: SortOptions::default(),
-        }];
-        let right_sorted = vec![PhysicalSortExpr {
+        }]);
+        let right_sorted = LexOrdering::new(vec![PhysicalSortExpr {
             expr: col("ra1", right_schema)?,
             options: SortOptions::default(),
-        }];
+        }]);
         let (left, right) = create_memory_table(
             left_partition,
             right_partition,
@@ -1771,10 +1843,7 @@ mod tests {
             vec![right_sorted],
         )?;
 
-        let on = vec![(
-            Arc::new(Column::new_with_schema("lc1", left_schema)?) as _,
-            Arc::new(Column::new_with_schema("rc1", right_schema)?) as _,
-        )];
+        let on = vec![(col("lc1", left_schema)?, col("rc1", right_schema)?)];
 
         let intermediate_schema = Schema::new(vec![
             Field::new("left", DataType::Int32, true),
@@ -1811,6 +1880,7 @@ mod tests {
             JoinType::RightSemi,
             JoinType::LeftSemi,
             JoinType::LeftAnti,
+            JoinType::LeftMark,
             JoinType::RightAnti,
             JoinType::Full
         )]
@@ -1825,10 +1895,7 @@ mod tests {
         let (left, right) =
             create_memory_table(left_partition, right_partition, vec![], vec![])?;
 
-        let on = vec![(
-            Arc::new(Column::new_with_schema("lc1", left_schema)?) as _,
-            Arc::new(Column::new_with_schema("rc1", right_schema)?) as _,
-        )];
+        let on = vec![(col("lc1", left_schema)?, col("rc1", right_schema)?)];
 
         let intermediate_schema = Schema::new(vec![
             Field::new("left", DataType::Int32, true),
@@ -1865,6 +1932,7 @@ mod tests {
             JoinType::RightSemi,
             JoinType::LeftSemi,
             JoinType::LeftAnti,
+            JoinType::LeftMark,
             JoinType::RightAnti,
             JoinType::Full
         )]
@@ -1877,10 +1945,7 @@ mod tests {
         let (left, right) =
             create_memory_table(left_partition, right_partition, vec![], vec![])?;
 
-        let on = vec![(
-            Arc::new(Column::new_with_schema("lc1", left_schema)?) as _,
-            Arc::new(Column::new_with_schema("rc1", right_schema)?) as _,
-        )];
+        let on = vec![(col("lc1", left_schema)?, col("rc1", right_schema)?)];
         experiment(left, right, None, join_type, on, task_ctx).await?;
         Ok(())
     }
@@ -1895,6 +1960,7 @@ mod tests {
             JoinType::RightSemi,
             JoinType::LeftSemi,
             JoinType::LeftAnti,
+            JoinType::LeftMark,
             JoinType::RightAnti,
             JoinType::Full
         )]
@@ -1905,20 +1971,20 @@ mod tests {
         let (left_partition, right_partition) = get_or_create_table((11, 21), 8)?;
         let left_schema = &left_partition[0].schema();
         let right_schema = &right_partition[0].schema();
-        let left_sorted = vec![PhysicalSortExpr {
+        let left_sorted = LexOrdering::new(vec![PhysicalSortExpr {
             expr: col("la1_des", left_schema)?,
             options: SortOptions {
                 descending: true,
                 nulls_first: true,
             },
-        }];
-        let right_sorted = vec![PhysicalSortExpr {
+        }]);
+        let right_sorted = LexOrdering::new(vec![PhysicalSortExpr {
             expr: col("ra1_des", right_schema)?,
             options: SortOptions {
                 descending: true,
                 nulls_first: true,
             },
-        }];
+        }]);
         let (left, right) = create_memory_table(
             left_partition,
             right_partition,
@@ -1926,10 +1992,7 @@ mod tests {
             vec![right_sorted],
         )?;
 
-        let on = vec![(
-            Arc::new(Column::new_with_schema("lc1", left_schema)?) as _,
-            Arc::new(Column::new_with_schema("rc1", right_schema)?) as _,
-        )];
+        let on = vec![(col("lc1", left_schema)?, col("rc1", right_schema)?)];
 
         let intermediate_schema = Schema::new(vec![
             Field::new("left", DataType::Int32, true),
@@ -1966,20 +2029,20 @@ mod tests {
         let (left_partition, right_partition) = get_or_create_table((10, 11), 8)?;
         let left_schema = &left_partition[0].schema();
         let right_schema = &right_partition[0].schema();
-        let left_sorted = vec![PhysicalSortExpr {
+        let left_sorted = LexOrdering::new(vec![PhysicalSortExpr {
             expr: col("l_asc_null_first", left_schema)?,
             options: SortOptions {
                 descending: false,
                 nulls_first: true,
             },
-        }];
-        let right_sorted = vec![PhysicalSortExpr {
+        }]);
+        let right_sorted = LexOrdering::new(vec![PhysicalSortExpr {
             expr: col("r_asc_null_first", right_schema)?,
             options: SortOptions {
                 descending: false,
                 nulls_first: true,
             },
-        }];
+        }]);
         let (left, right) = create_memory_table(
             left_partition,
             right_partition,
@@ -1987,10 +2050,7 @@ mod tests {
             vec![right_sorted],
         )?;
 
-        let on = vec![(
-            Arc::new(Column::new_with_schema("lc1", left_schema)?) as _,
-            Arc::new(Column::new_with_schema("rc1", right_schema)?) as _,
-        )];
+        let on = vec![(col("lc1", left_schema)?, col("rc1", right_schema)?)];
 
         let intermediate_schema = Schema::new(vec![
             Field::new("left", DataType::Int32, true),
@@ -2027,20 +2087,20 @@ mod tests {
 
         let left_schema = &left_partition[0].schema();
         let right_schema = &right_partition[0].schema();
-        let left_sorted = vec![PhysicalSortExpr {
+        let left_sorted = LexOrdering::new(vec![PhysicalSortExpr {
             expr: col("l_asc_null_last", left_schema)?,
             options: SortOptions {
                 descending: false,
                 nulls_first: false,
             },
-        }];
-        let right_sorted = vec![PhysicalSortExpr {
+        }]);
+        let right_sorted = LexOrdering::new(vec![PhysicalSortExpr {
             expr: col("r_asc_null_last", right_schema)?,
             options: SortOptions {
                 descending: false,
                 nulls_first: false,
             },
-        }];
+        }]);
         let (left, right) = create_memory_table(
             left_partition,
             right_partition,
@@ -2048,10 +2108,7 @@ mod tests {
             vec![right_sorted],
         )?;
 
-        let on = vec![(
-            Arc::new(Column::new_with_schema("lc1", left_schema)?) as _,
-            Arc::new(Column::new_with_schema("rc1", right_schema)?) as _,
-        )];
+        let on = vec![(col("lc1", left_schema)?, col("rc1", right_schema)?)];
 
         let intermediate_schema = Schema::new(vec![
             Field::new("left", DataType::Int32, true),
@@ -2090,20 +2147,20 @@ mod tests {
 
         let left_schema = &left_partition[0].schema();
         let right_schema = &right_partition[0].schema();
-        let left_sorted = vec![PhysicalSortExpr {
+        let left_sorted = LexOrdering::new(vec![PhysicalSortExpr {
             expr: col("l_desc_null_first", left_schema)?,
             options: SortOptions {
                 descending: true,
                 nulls_first: true,
             },
-        }];
-        let right_sorted = vec![PhysicalSortExpr {
+        }]);
+        let right_sorted = LexOrdering::new(vec![PhysicalSortExpr {
             expr: col("r_desc_null_first", right_schema)?,
             options: SortOptions {
                 descending: true,
                 nulls_first: true,
             },
-        }];
+        }]);
         let (left, right) = create_memory_table(
             left_partition,
             right_partition,
@@ -2111,10 +2168,7 @@ mod tests {
             vec![right_sorted],
         )?;
 
-        let on = vec![(
-            Arc::new(Column::new_with_schema("lc1", left_schema)?) as _,
-            Arc::new(Column::new_with_schema("rc1", right_schema)?) as _,
-        )];
+        let on = vec![(col("lc1", left_schema)?, col("rc1", right_schema)?)];
 
         let intermediate_schema = Schema::new(vec![
             Field::new("left", DataType::Int32, true),
@@ -2154,15 +2208,15 @@ mod tests {
 
         let left_schema = &left_partition[0].schema();
         let right_schema = &right_partition[0].schema();
-        let left_sorted = vec![PhysicalSortExpr {
+        let left_sorted = LexOrdering::new(vec![PhysicalSortExpr {
             expr: col("la1", left_schema)?,
             options: SortOptions::default(),
-        }];
+        }]);
 
-        let right_sorted = vec![PhysicalSortExpr {
+        let right_sorted = LexOrdering::new(vec![PhysicalSortExpr {
             expr: col("ra1", right_schema)?,
             options: SortOptions::default(),
-        }];
+        }]);
         let (left, right) = create_memory_table(
             left_partition,
             right_partition,
@@ -2170,10 +2224,7 @@ mod tests {
             vec![right_sorted],
         )?;
 
-        let on = vec![(
-            Arc::new(Column::new_with_schema("lc1", left_schema)?) as _,
-            Arc::new(Column::new_with_schema("rc1", right_schema)?) as _,
-        )];
+        let on = vec![(col("lc1", left_schema)?, col("rc1", right_schema)?)];
 
         let intermediate_schema = Schema::new(vec![
             Field::new("0", DataType::Int32, true),
@@ -2215,20 +2266,20 @@ mod tests {
         let left_schema = &left_partition[0].schema();
         let right_schema = &right_partition[0].schema();
         let left_sorted = vec![
-            vec![PhysicalSortExpr {
+            LexOrdering::new(vec![PhysicalSortExpr {
                 expr: col("la1", left_schema)?,
                 options: SortOptions::default(),
-            }],
-            vec![PhysicalSortExpr {
+            }]),
+            LexOrdering::new(vec![PhysicalSortExpr {
                 expr: col("la2", left_schema)?,
                 options: SortOptions::default(),
-            }],
+            }]),
         ];
 
-        let right_sorted = vec![PhysicalSortExpr {
+        let right_sorted = LexOrdering::new(vec![PhysicalSortExpr {
             expr: col("ra1", right_schema)?,
             options: SortOptions::default(),
-        }];
+        }]);
 
         let (left, right) = create_memory_table(
             left_partition,
@@ -2237,10 +2288,7 @@ mod tests {
             vec![right_sorted],
         )?;
 
-        let on = vec![(
-            Arc::new(Column::new_with_schema("lc1", left_schema)?) as _,
-            Arc::new(Column::new_with_schema("rc1", right_schema)?) as _,
-        )];
+        let on = vec![(col("lc1", left_schema)?, col("rc1", right_schema)?)];
 
         let intermediate_schema = Schema::new(vec![
             Field::new("0", DataType::Int32, true),
@@ -2278,6 +2326,7 @@ mod tests {
             JoinType::RightSemi,
             JoinType::LeftSemi,
             JoinType::LeftAnti,
+            JoinType::LeftMark,
             JoinType::RightAnti,
             JoinType::Full
         )]
@@ -2296,24 +2345,21 @@ mod tests {
 
         let left_schema = &left_partition[0].schema();
         let right_schema = &right_partition[0].schema();
-        let on = vec![(
-            Arc::new(Column::new_with_schema("lc1", left_schema)?) as _,
-            Arc::new(Column::new_with_schema("rc1", right_schema)?) as _,
-        )];
-        let left_sorted = vec![PhysicalSortExpr {
+        let on = vec![(col("lc1", left_schema)?, col("rc1", right_schema)?)];
+        let left_sorted = LexOrdering::new(vec![PhysicalSortExpr {
             expr: col("lt1", left_schema)?,
             options: SortOptions {
                 descending: false,
                 nulls_first: true,
             },
-        }];
-        let right_sorted = vec![PhysicalSortExpr {
+        }]);
+        let right_sorted = LexOrdering::new(vec![PhysicalSortExpr {
             expr: col("rt1", right_schema)?,
             options: SortOptions {
                 descending: false,
                 nulls_first: true,
             },
-        }];
+        }]);
         let (left, right) = create_memory_table(
             left_partition,
             right_partition,
@@ -2363,6 +2409,7 @@ mod tests {
             JoinType::RightSemi,
             JoinType::LeftSemi,
             JoinType::LeftAnti,
+            JoinType::LeftMark,
             JoinType::RightAnti,
             JoinType::Full
         )]
@@ -2380,24 +2427,21 @@ mod tests {
 
         let left_schema = &left_partition[0].schema();
         let right_schema = &right_partition[0].schema();
-        let on = vec![(
-            Arc::new(Column::new_with_schema("lc1", left_schema)?) as _,
-            Arc::new(Column::new_with_schema("rc1", right_schema)?) as _,
-        )];
-        let left_sorted = vec![PhysicalSortExpr {
+        let on = vec![(col("lc1", left_schema)?, col("rc1", right_schema)?)];
+        let left_sorted = LexOrdering::new(vec![PhysicalSortExpr {
             expr: col("li1", left_schema)?,
             options: SortOptions {
                 descending: false,
                 nulls_first: true,
             },
-        }];
-        let right_sorted = vec![PhysicalSortExpr {
+        }]);
+        let right_sorted = LexOrdering::new(vec![PhysicalSortExpr {
             expr: col("ri1", right_schema)?,
             options: SortOptions {
                 descending: false,
                 nulls_first: true,
             },
-        }];
+        }]);
         let (left, right) = create_memory_table(
             left_partition,
             right_partition,
@@ -2440,6 +2484,7 @@ mod tests {
             JoinType::RightSemi,
             JoinType::LeftSemi,
             JoinType::LeftAnti,
+            JoinType::LeftMark,
             JoinType::RightAnti,
             JoinType::Full
         )]
@@ -2458,14 +2503,14 @@ mod tests {
 
         let left_schema = &left_partition[0].schema();
         let right_schema = &right_partition[0].schema();
-        let left_sorted = vec![PhysicalSortExpr {
+        let left_sorted = LexOrdering::new(vec![PhysicalSortExpr {
             expr: col("l_float", left_schema)?,
             options: SortOptions::default(),
-        }];
-        let right_sorted = vec![PhysicalSortExpr {
+        }]);
+        let right_sorted = LexOrdering::new(vec![PhysicalSortExpr {
             expr: col("r_float", right_schema)?,
             options: SortOptions::default(),
-        }];
+        }]);
         let (left, right) = create_memory_table(
             left_partition,
             right_partition,
@@ -2473,10 +2518,7 @@ mod tests {
             vec![right_sorted],
         )?;
 
-        let on = vec![(
-            Arc::new(Column::new_with_schema("lc1", left_schema)?) as _,
-            Arc::new(Column::new_with_schema("rc1", right_schema)?) as _,
-        )];
+        let on = vec![(col("lc1", left_schema)?, col("rc1", right_schema)?)];
 
         let intermediate_schema = Schema::new(vec![
             Field::new("left", DataType::Float64, true),

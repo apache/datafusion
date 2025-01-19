@@ -34,25 +34,19 @@ use crate::{
     function::{AccumulatorArgs, StateFieldsArgs},
     utils::AggregateOrderSensitivity,
     Accumulator, AggregateUDFImpl, Expr, GroupsAccumulator, ReversedUDAF, Signature,
-    Volatility,
 };
 
 macro_rules! create_func {
     ($UDAF:ty, $AGGREGATE_UDF_FN:ident) => {
         paste::paste! {
-            /// Singleton instance of [$UDAF], ensures the UDAF is only created once
-            /// named STATIC_$(UDAF). For example `STATIC_FirstValue`
-            #[allow(non_upper_case_globals)]
-            static [< STATIC_ $UDAF >]: std::sync::OnceLock<std::sync::Arc<crate::AggregateUDF>> =
-                std::sync::OnceLock::new();
-
             #[doc = concat!("AggregateFunction that returns a [AggregateUDF](crate::AggregateUDF) for [`", stringify!($UDAF), "`]")]
             pub fn $AGGREGATE_UDF_FN() -> std::sync::Arc<crate::AggregateUDF> {
-                [< STATIC_ $UDAF >]
-                    .get_or_init(|| {
+                // Singleton instance of [$UDAF], ensures the UDAF is only created once
+                static INSTANCE: std::sync::LazyLock<std::sync::Arc<crate::AggregateUDF>> =
+                    std::sync::LazyLock::new(|| {
                         std::sync::Arc::new(crate::AggregateUDF::from(<$UDAF>::default()))
-                    })
-                    .clone()
+                    });
+                std::sync::Arc::clone(&INSTANCE)
             }
         }
     }
@@ -106,7 +100,7 @@ pub struct Sum {
 impl Sum {
     pub fn new() -> Self {
         Self {
-            signature: Signature::user_defined(Volatility::Immutable),
+            signature: Signature::user_defined(Immutable),
         }
     }
 }
@@ -236,13 +230,13 @@ impl Count {
     pub fn new() -> Self {
         Self {
             aliases: vec!["count".to_string()],
-            signature: Signature::variadic_any(Volatility::Immutable),
+            signature: Signature::variadic_any(Immutable),
         }
     }
 }
 
 impl AggregateUDFImpl for Count {
-    fn as_any(&self) -> &dyn std::any::Any {
+    fn as_any(&self) -> &dyn Any {
         self
     }
 
@@ -256,6 +250,10 @@ impl AggregateUDFImpl for Count {
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
         Ok(DataType::Int64)
+    }
+
+    fn is_nullable(&self) -> bool {
+        false
     }
 
     fn state_fields(&self, _args: StateFieldsArgs) -> Result<Vec<Field>> {
@@ -318,13 +316,13 @@ impl Default for Min {
 impl Min {
     pub fn new() -> Self {
         Self {
-            signature: Signature::variadic_any(Volatility::Immutable),
+            signature: Signature::variadic_any(Immutable),
         }
     }
 }
 
 impl AggregateUDFImpl for Min {
-    fn as_any(&self) -> &dyn std::any::Any {
+    fn as_any(&self) -> &dyn Any {
         self
     }
 
@@ -403,13 +401,13 @@ impl Default for Max {
 impl Max {
     pub fn new() -> Self {
         Self {
-            signature: Signature::variadic_any(Volatility::Immutable),
+            signature: Signature::variadic_any(Immutable),
         }
     }
 }
 
 impl AggregateUDFImpl for Max {
-    fn as_any(&self) -> &dyn std::any::Any {
+    fn as_any(&self) -> &dyn Any {
         self
     }
 

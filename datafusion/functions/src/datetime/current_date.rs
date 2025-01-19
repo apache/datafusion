@@ -23,8 +23,20 @@ use chrono::{Datelike, NaiveDate};
 
 use datafusion_common::{internal_err, Result, ScalarValue};
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyInfo};
-use datafusion_expr::{ColumnarValue, Expr, ScalarUDFImpl, Signature, Volatility};
+use datafusion_expr::{
+    ColumnarValue, Documentation, Expr, ScalarUDFImpl, Signature, Volatility,
+};
+use datafusion_macros::user_doc;
 
+#[user_doc(
+    doc_section(label = "Time and Date Functions"),
+    description = r#"
+Returns the current UTC date.
+
+The `current_date()` return value is determined at query time and will return the same date, no matter when in the query plan the function executes.
+"#,
+    syntax_example = "current_date()"
+)]
 #[derive(Debug)]
 pub struct CurrentDateFunc {
     signature: Signature,
@@ -40,7 +52,7 @@ impl Default for CurrentDateFunc {
 impl CurrentDateFunc {
     pub fn new() -> Self {
         Self {
-            signature: Signature::uniform(0, vec![], Volatility::Stable),
+            signature: Signature::nullary(Volatility::Stable),
             aliases: vec![String::from("today")],
         }
     }
@@ -69,7 +81,11 @@ impl ScalarUDFImpl for CurrentDateFunc {
         Ok(Date32)
     }
 
-    fn invoke(&self, _args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        _args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         internal_err!(
             "invoke should not be called on a simplified current_date() function"
         )
@@ -94,5 +110,9 @@ impl ScalarUDFImpl for CurrentDateFunc {
         Ok(ExprSimplifyResult::Simplified(Expr::from(
             ScalarValue::Date32(days),
         )))
+    }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        self.doc()
     }
 }

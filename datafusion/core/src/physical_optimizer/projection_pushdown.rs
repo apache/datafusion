@@ -51,10 +51,11 @@ use datafusion_physical_expr::{
     utils::collect_columns, Partitioning, PhysicalExpr, PhysicalExprRef,
     PhysicalSortExpr, PhysicalSortRequirement,
 };
+use datafusion_physical_plan::joins::utils::{JoinOn, JoinOnRef};
 use datafusion_physical_plan::streaming::StreamingTableExec;
 use datafusion_physical_plan::union::UnionExec;
 
-use datafusion_physical_expr_common::sort_expr::LexRequirement;
+use datafusion_physical_expr_common::sort_expr::{LexOrdering, LexRequirement};
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use itertools::Itertools;
 
@@ -101,7 +102,7 @@ pub fn remove_unnecessary_projections(
         // If the projection does not cause any change on the input, we can
         // safely remove it:
         if is_projection_removable(projection) {
-            return Ok(Transformed::yes(projection.input().clone()));
+            return Ok(Transformed::yes(Arc::clone(projection.input())));
         }
         // If it does, check if we can push it under its child(ren):
         let input = projection.input().as_any();
@@ -137,14 +138,11 @@ pub fn remove_unnecessary_projections(
         } else if let Some(union) = input.downcast_ref::<UnionExec>() {
             try_pushdown_through_union(projection, union)?
         } else if let Some(hash_join) = input.downcast_ref::<HashJoinExec>() {
-            try_pushdown_through_hash_join(projection, hash_join)?.map_or_else(
-                || try_embed_projection(projection, hash_join),
-                |e| Ok(Some(e)),
-            )?
+            try_pushdown_through_hash_join(projection, hash_join)?
         } else if let Some(cross_join) = input.downcast_ref::<CrossJoinExec>() {
             try_swapping_with_cross_join(projection, cross_join)?
         } else if let Some(nl_join) = input.downcast_ref::<NestedLoopJoinExec>() {
-            try_swapping_with_nested_loop_join(projection, nl_join)?
+            try_pushdown_through_nested_loop_join(projection, nl_join)?
         } else if let Some(sm_join) = input.downcast_ref::<SortMergeJoinExec>() {
             try_swapping_with_sort_merge_join(projection, sm_join)?
         } else if let Some(sym_join) = input.downcast_ref::<SymmetricHashJoinExec>() {
@@ -246,7 +244,7 @@ fn try_swapping_with_streaming_table(
 
     let mut lex_orderings = vec![];
     for lex_ordering in streaming_table.projected_output_ordering().into_iter() {
-        let mut orderings = vec![];
+        let mut orderings = LexOrdering::default();
         for order in lex_ordering {
             let Some(new_ordering) = update_expr(&order.expr, projection.expr(), false)?
             else {
@@ -261,7 +259,7 @@ fn try_swapping_with_streaming_table(
     }
 
     StreamingTableExec::try_new(
-        streaming_table.partition_schema().clone(),
+        Arc::clone(streaming_table.partition_schema()),
         streaming_table.partitions().clone(),
         Some(new_projections.as_ref()),
         lex_orderings,
@@ -297,7 +295,7 @@ fn try_unifying_projections(
     // beneficial as caching mechanism for non-trivial computations.
     // See discussion in: https://github.com/apache/datafusion/issues/8296
     if column_ref_map.iter().any(|(column, count)| {
-        *count > 1 && !is_expr_trivial(&child.expr()[column.index()].0.clone())
+        *count > 1 && !is_expr_trivial(&Arc::clone(&child.expr()[column.index()].0))
     }) {
         return Ok(None);
     }
@@ -312,7 +310,7 @@ fn try_unifying_projections(
         projected_exprs.push((expr, alias.clone()));
     }
 
-    ProjectionExec::try_new(projected_exprs, child.input().clone())
+    ProjectionExec::try_new(projected_exprs, Arc::clone(child.input()))
         .map(|e| Some(Arc::new(e) as _))
 }
 
@@ -467,7 +465,7 @@ fn try_swapping_with_sort(
         return Ok(None);
     }
 
-    let mut updated_exprs = vec![];
+    let mut updated_exprs = LexOrdering::default();
     for sort in sort.expr() {
         let Some(new_expr) = update_expr(&sort.expr, projection.expr(), false)? else {
             return Ok(None);
@@ -497,7 +495,7 @@ fn try_swapping_with_sort_preserving_merge(
         return Ok(None);
     }
 
-    let mut updated_exprs = vec![];
+    let mut updated_exprs = LexOrdering::default();
     for sort in spm.expr() {
         let Some(updated_expr) = update_expr(&sort.expr, projection.expr(), false)?
         else {
@@ -544,6 +542,12 @@ trait EmbeddedProjection: ExecutionPlan + Sized {
 }
 
 impl EmbeddedProjection for HashJoinExec {
+    fn with_projection(&self, projection: Option<Vec<usize>>) -> Result<Self> {
+        self.with_projection(projection)
+    }
+}
+
+impl EmbeddedProjection for NestedLoopJoinExec {
     fn with_projection(&self, projection: Option<Vec<usize>>) -> Result<Self> {
         self.with_projection(projection)
     }
@@ -603,7 +607,7 @@ fn try_embed_projection<Exec: EmbeddedProjection + 'static>(
     // Old projection may contain some alias or expression such as `a + 1` and `CAST('true' AS BOOLEAN)`, but our projection_exprs in hash join just contain column, so we need to create the new projection to keep the original projection.
     let new_projection = Arc::new(ProjectionExec::try_new(
         new_projection_exprs,
-        new_execution_plan.clone(),
+        Arc::clone(&new_execution_plan) as _,
     )?);
     if is_projection_removable(&new_projection) {
         Ok(Some(new_execution_plan))
@@ -615,15 +619,124 @@ fn try_embed_projection<Exec: EmbeddedProjection + 'static>(
 /// Collect all column indices from the given projection expressions.
 fn collect_column_indices(exprs: &[(Arc<dyn PhysicalExpr>, String)]) -> Vec<usize> {
     // Collect indices and remove duplicates.
-    let mut indexs = exprs
+    let mut indices = exprs
         .iter()
         .flat_map(|(expr, _)| collect_columns(expr))
         .map(|x| x.index())
         .collect::<std::collections::HashSet<_>>()
         .into_iter()
         .collect::<Vec<_>>();
-    indexs.sort();
-    indexs
+    indices.sort();
+    indices
+}
+
+struct JoinData {
+    projected_left_child: ProjectionExec,
+    projected_right_child: ProjectionExec,
+    join_filter: Option<JoinFilter>,
+    join_on: JoinOn,
+}
+
+fn try_pushdown_through_join(
+    projection: &ProjectionExec,
+    join_left: &Arc<dyn ExecutionPlan>,
+    join_right: &Arc<dyn ExecutionPlan>,
+    join_on: JoinOnRef,
+    schema: SchemaRef,
+    filter: Option<&JoinFilter>,
+) -> Result<Option<JoinData>> {
+    // Convert projected expressions to columns. We can not proceed if this is not possible.
+    let Some(projection_as_columns) = physical_to_column_exprs(projection.expr()) else {
+        return Ok(None);
+    };
+
+    let (far_right_left_col_ind, far_left_right_col_ind) =
+        join_table_borders(join_left.schema().fields().len(), &projection_as_columns);
+
+    if !join_allows_pushdown(
+        &projection_as_columns,
+        &schema,
+        far_right_left_col_ind,
+        far_left_right_col_ind,
+    ) {
+        return Ok(None);
+    }
+
+    let new_filter = if let Some(filter) = filter {
+        match update_join_filter(
+            &projection_as_columns[0..=far_right_left_col_ind as _],
+            &projection_as_columns[far_left_right_col_ind as _..],
+            filter,
+            join_left.schema().fields().len(),
+        ) {
+            Some(updated_filter) => Some(updated_filter),
+            None => return Ok(None),
+        }
+    } else {
+        None
+    };
+
+    let Some(new_on) = update_join_on(
+        &projection_as_columns[0..=far_right_left_col_ind as _],
+        &projection_as_columns[far_left_right_col_ind as _..],
+        join_on,
+        join_left.schema().fields().len(),
+    ) else {
+        return Ok(None);
+    };
+
+    let (new_left, new_right) = new_join_children(
+        &projection_as_columns,
+        far_right_left_col_ind,
+        far_left_right_col_ind,
+        join_left,
+        join_right,
+    )?;
+
+    Ok(Some(JoinData {
+        projected_left_child: new_left,
+        projected_right_child: new_right,
+        join_filter: new_filter,
+        join_on: new_on,
+    }))
+}
+
+/// Tries to push `projection` down through `nested_loop_join`. If possible, performs the
+/// pushdown and returns a new [`NestedLoopJoinExec`] as the top plan which has projections
+/// as its children. Otherwise, returns `None`.
+fn try_pushdown_through_nested_loop_join(
+    projection: &ProjectionExec,
+    nl_join: &NestedLoopJoinExec,
+) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+    // TODO: currently if there is projection in NestedLoopJoinExec, we can't push down projection to left or right input. Maybe we can pushdown the mixed projection later.
+    if nl_join.contains_projection() {
+        return Ok(None);
+    }
+
+    if let Some(JoinData {
+        projected_left_child,
+        projected_right_child,
+        join_filter,
+        ..
+    }) = try_pushdown_through_join(
+        projection,
+        nl_join.left(),
+        nl_join.right(),
+        &[],
+        nl_join.schema(),
+        nl_join.filter(),
+    )? {
+        Ok(Some(Arc::new(NestedLoopJoinExec::try_new(
+            Arc::new(projected_left_child),
+            Arc::new(projected_right_child),
+            join_filter,
+            nl_join.join_type(),
+            // Returned early if projection is not None
+            None,
+        )?)))
+    } else {
+        try_embed_projection(projection, nl_join)
+    }
 }
 
 /// Tries to push `projection` down through `hash_join`. If possible, performs the
@@ -634,71 +747,37 @@ fn try_pushdown_through_hash_join(
     hash_join: &HashJoinExec,
 ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
     // TODO: currently if there is projection in HashJoinExec, we can't push down projection to left or right input. Maybe we can pushdown the mixed projection later.
-    if hash_join.contain_projection() {
+    if hash_join.contains_projection() {
         return Ok(None);
     }
 
-    // Convert projected expressions to columns. We can not proceed if this is
-    // not possible.
-    let Some(projection_as_columns) = physical_to_column_exprs(projection.expr()) else {
-        return Ok(None);
-    };
-
-    let (far_right_left_col_ind, far_left_right_col_ind) = join_table_borders(
-        hash_join.left().schema().fields().len(),
-        &projection_as_columns,
-    );
-
-    if !join_allows_pushdown(
-        &projection_as_columns,
-        &hash_join.schema(),
-        far_right_left_col_ind,
-        far_left_right_col_ind,
-    ) {
-        return Ok(None);
-    }
-
-    let Some(new_on) = update_join_on(
-        &projection_as_columns[0..=far_right_left_col_ind as _],
-        &projection_as_columns[far_left_right_col_ind as _..],
-        hash_join.on(),
-        hash_join.left().schema().fields().len(),
-    ) else {
-        return Ok(None);
-    };
-
-    let new_filter = if let Some(filter) = hash_join.filter() {
-        match update_join_filter(
-            &projection_as_columns[0..=far_right_left_col_ind as _],
-            &projection_as_columns[far_left_right_col_ind as _..],
-            filter,
-            hash_join.left().schema().fields().len(),
-        ) {
-            Some(updated_filter) => Some(updated_filter),
-            None => return Ok(None),
-        }
-    } else {
-        None
-    };
-
-    let (new_left, new_right) = new_join_children(
-        &projection_as_columns,
-        far_right_left_col_ind,
-        far_left_right_col_ind,
+    if let Some(JoinData {
+        projected_left_child,
+        projected_right_child,
+        join_filter,
+        join_on,
+    }) = try_pushdown_through_join(
+        projection,
         hash_join.left(),
         hash_join.right(),
-    )?;
-
-    Ok(Some(Arc::new(HashJoinExec::try_new(
-        Arc::new(new_left),
-        Arc::new(new_right),
-        new_on,
-        new_filter,
-        hash_join.join_type(),
-        hash_join.projection.clone(),
-        *hash_join.partition_mode(),
-        hash_join.null_equals_null,
-    )?)))
+        hash_join.on(),
+        hash_join.schema(),
+        hash_join.filter(),
+    )? {
+        Ok(Some(Arc::new(HashJoinExec::try_new(
+            Arc::new(projected_left_child),
+            Arc::new(projected_right_child),
+            join_on,
+            join_filter,
+            hash_join.join_type(),
+            // Returned early if projection is not None
+            None,
+            *hash_join.partition_mode(),
+            hash_join.null_equals_null,
+        )?)))
+    } else {
+        try_embed_projection(projection, hash_join)
+    }
 }
 
 /// Tries to swap the projection with its input [`CrossJoinExec`]. If it can be done,
@@ -739,62 +818,6 @@ fn try_swapping_with_cross_join(
         Arc::new(new_left),
         Arc::new(new_right),
     ))))
-}
-
-/// Tries to swap the projection with its input [`NestedLoopJoinExec`]. If it can be done,
-/// it returns the new swapped version having the [`NestedLoopJoinExec`] as the top plan.
-/// Otherwise, it returns None.
-fn try_swapping_with_nested_loop_join(
-    projection: &ProjectionExec,
-    nl_join: &NestedLoopJoinExec,
-) -> Result<Option<Arc<dyn ExecutionPlan>>> {
-    // Convert projected PhysicalExpr's to columns. If not possible, we cannot proceed.
-    let Some(projection_as_columns) = physical_to_column_exprs(projection.expr()) else {
-        return Ok(None);
-    };
-
-    let (far_right_left_col_ind, far_left_right_col_ind) = join_table_borders(
-        nl_join.left().schema().fields().len(),
-        &projection_as_columns,
-    );
-
-    if !join_allows_pushdown(
-        &projection_as_columns,
-        &nl_join.schema(),
-        far_right_left_col_ind,
-        far_left_right_col_ind,
-    ) {
-        return Ok(None);
-    }
-
-    let new_filter = if let Some(filter) = nl_join.filter() {
-        match update_join_filter(
-            &projection_as_columns[0..=far_right_left_col_ind as _],
-            &projection_as_columns[far_left_right_col_ind as _..],
-            filter,
-            nl_join.left().schema().fields().len(),
-        ) {
-            Some(updated_filter) => Some(updated_filter),
-            None => return Ok(None),
-        }
-    } else {
-        None
-    };
-
-    let (new_left, new_right) = new_join_children(
-        &projection_as_columns,
-        far_right_left_col_ind,
-        far_left_right_col_ind,
-        nl_join.left(),
-        nl_join.right(),
-    )?;
-
-    Ok(Some(Arc::new(NestedLoopJoinExec::try_new(
-        Arc::new(new_left),
-        Arc::new(new_right),
-        new_filter,
-        nl_join.join_type(),
-    )?)))
 }
 
 /// Tries to swap the projection with its input [`SortMergeJoinExec`]. If it can be done,
@@ -915,8 +938,14 @@ fn try_swapping_with_sym_hash_join(
         new_filter,
         sym_join.join_type(),
         sym_join.null_equals_null(),
-        sym_join.right().output_ordering().map(|p| p.to_vec()),
-        sym_join.left().output_ordering().map(|p| p.to_vec()),
+        sym_join
+            .right()
+            .output_ordering()
+            .map(|p| LexOrdering::new(p.to_vec())),
+        sym_join
+            .left()
+            .output_ordering()
+            .map(|p| LexOrdering::new(p.to_vec())),
         sym_join.partition_mode(),
     )?)))
 }
@@ -999,8 +1028,7 @@ fn update_expr(
 
     let mut state = RewriteState::Unchanged;
 
-    let new_expr = expr
-        .clone()
+    let new_expr = Arc::clone(expr)
         .transform_up(|expr: Arc<dyn PhysicalExpr>| {
             if state == RewriteState::RewrittenInvalid {
                 return Ok(Transformed::no(expr));
@@ -1012,7 +1040,9 @@ fn update_expr(
             if sync_with_child {
                 state = RewriteState::RewrittenValid;
                 // Update the index of `column`:
-                Ok(Transformed::yes(projected_exprs[column.index()].0.clone()))
+                Ok(Transformed::yes(Arc::clone(
+                    &projected_exprs[column.index()].0,
+                )))
             } else {
                 // default to invalid, in case we can't find the relevant column
                 state = RewriteState::RewrittenInvalid;
@@ -1049,7 +1079,7 @@ fn make_with_child(
     projection: &ProjectionExec,
     child: &Arc<dyn ExecutionPlan>,
 ) -> Result<Arc<dyn ExecutionPlan>> {
-    ProjectionExec::try_new(projection.expr().to_vec(), child.clone())
+    ProjectionExec::try_new(projection.expr().to_vec(), Arc::clone(child))
         .map(|e| Arc::new(e) as _)
 }
 
@@ -1149,8 +1179,7 @@ fn new_columns_for_join_on(
         .iter()
         .filter_map(|on| {
             // Rewrite all columns in `on`
-            (*on)
-                .clone()
+            Arc::clone(*on)
                 .transform(|expr| {
                     if let Some(column) = expr.as_any().downcast_ref::<Column>() {
                         // Find the column in the projection expressions
@@ -1213,7 +1242,7 @@ fn update_join_filter(
         == join_filter.column_indices().len())
     .then(|| {
         JoinFilter::new(
-            join_filter.expression().clone(),
+            Arc::clone(join_filter.expression()),
             join_filter
                 .column_indices()
                 .iter()
@@ -1296,7 +1325,7 @@ fn new_join_children(
                 )
             })
             .collect_vec(),
-        left_child.clone(),
+        Arc::clone(left_child),
     )?;
     let left_size = left_child.schema().fields().len() as i32;
     let new_right = ProjectionExec::try_new(
@@ -1314,7 +1343,7 @@ fn new_join_children(
                 )
             })
             .collect_vec(),
-        right_child.clone(),
+        Arc::clone(right_child),
     )?;
 
     Ok((new_left, new_right))
@@ -1339,7 +1368,7 @@ mod tests {
         ColumnarValue, Operator, ScalarUDF, ScalarUDFImpl, Signature, Volatility,
     };
     use datafusion_physical_expr::expressions::{
-        BinaryExpr, CaseExpr, CastExpr, NegativeExpr,
+        binary, col, BinaryExpr, CaseExpr, CastExpr, NegativeExpr,
     };
     use datafusion_physical_expr::ScalarFunctionExpr;
     use datafusion_physical_plan::joins::PartitionMode;
@@ -1376,7 +1405,11 @@ mod tests {
             Ok(DataType::Int32)
         }
 
-        fn invoke(&self, _args: &[ColumnarValue]) -> Result<ColumnarValue> {
+        fn invoke_batch(
+            &self,
+            _args: &[ColumnarValue],
+            _number_rows: usize,
+        ) -> Result<ColumnarValue> {
             unimplemented!("DummyUDF::invoke")
         }
     }
@@ -1863,7 +1896,7 @@ mod tests {
             }) as _],
             Some(&vec![0_usize, 2, 4, 3]),
             vec![
-                vec![
+                LexOrdering::new(vec![
                     PhysicalSortExpr {
                         expr: Arc::new(Column::new("e", 2)),
                         options: SortOptions::default(),
@@ -1872,11 +1905,11 @@ mod tests {
                         expr: Arc::new(Column::new("a", 0)),
                         options: SortOptions::default(),
                     },
-                ],
-                vec![PhysicalSortExpr {
+                ]),
+                LexOrdering::new(vec![PhysicalSortExpr {
                     expr: Arc::new(Column::new("d", 3)),
                     options: SortOptions::default(),
-                }],
+                }]),
             ]
             .into_iter(),
             true,
@@ -1923,7 +1956,7 @@ mod tests {
         assert_eq!(
             result.projected_output_ordering().into_iter().collect_vec(),
             vec![
-                vec![
+                LexOrdering::new(vec![
                     PhysicalSortExpr {
                         expr: Arc::new(Column::new("e", 1)),
                         options: SortOptions::default(),
@@ -1932,11 +1965,11 @@ mod tests {
                         expr: Arc::new(Column::new("a", 2)),
                         options: SortOptions::default(),
                     },
-                ],
-                vec![PhysicalSortExpr {
+                ]),
+                LexOrdering::new(vec![PhysicalSortExpr {
                     expr: Arc::new(Column::new("d", 0)),
                     options: SortOptions::default(),
-                }],
+                }]),
             ]
         );
         assert!(result.is_infinite());
@@ -2393,6 +2426,73 @@ mod tests {
     }
 
     #[test]
+    fn test_nested_loop_join_after_projection() -> Result<()> {
+        let left_csv = create_simple_csv_exec();
+        let right_csv = create_simple_csv_exec();
+
+        let col_left_a = col("a", &left_csv.schema())?;
+        let col_right_b = col("b", &right_csv.schema())?;
+        let col_left_c = col("c", &left_csv.schema())?;
+        // left_a < right_b
+        let filter_expr =
+            binary(col_left_a, Operator::Lt, col_right_b, &Schema::empty())?;
+        let filter_column_indices = vec![
+            ColumnIndex {
+                index: 0,
+                side: JoinSide::Left,
+            },
+            ColumnIndex {
+                index: 1,
+                side: JoinSide::Right,
+            },
+            ColumnIndex {
+                index: 2,
+                side: JoinSide::Right,
+            },
+        ];
+        let filter_schema = Schema::new(vec![
+            Field::new("a", DataType::Int32, true),
+            Field::new("b", DataType::Int32, true),
+            Field::new("c", DataType::Int32, true),
+        ]);
+
+        let join: Arc<dyn ExecutionPlan> = Arc::new(NestedLoopJoinExec::try_new(
+            left_csv,
+            right_csv,
+            Some(JoinFilter::new(
+                filter_expr,
+                filter_column_indices,
+                filter_schema,
+            )),
+            &JoinType::Inner,
+            None,
+        )?);
+
+        let projection: Arc<dyn ExecutionPlan> = Arc::new(ProjectionExec::try_new(
+            vec![(col_left_c, "c".to_string())],
+            Arc::clone(&join),
+        )?);
+        let initial = get_plan_string(&projection);
+        let expected_initial = [
+            "ProjectionExec: expr=[c@2 as c]",
+            "  NestedLoopJoinExec: join_type=Inner, filter=a@0 < b@1",
+            "    CsvExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], has_header=false",
+            "    CsvExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], has_header=false",
+            ];
+        assert_eq!(initial, expected_initial);
+
+        let after_optimize =
+            ProjectionPushdown::new().optimize(projection, &ConfigOptions::new())?;
+        let expected = [
+            "NestedLoopJoinExec: join_type=Inner, filter=a@0 < b@1, projection=[c@2]",
+            "  CsvExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], has_header=false",
+            "  CsvExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], has_header=false",
+        ];
+        assert_eq!(get_plan_string(&after_optimize), expected);
+        Ok(())
+    }
+
+    #[test]
     fn test_hash_join_after_projection() -> Result<()> {
         // sql like
         // SELECT t1.c as c_from_left, t1.b as b_from_left, t1.a as a_from_left, t2.c as c_from_right FROM t1 JOIN t2 ON t1.b = t2.c WHERE t1.b - (1 + t2.a) <= t2.a + t1.c
@@ -2553,7 +2653,7 @@ mod tests {
     fn test_sort_after_projection() -> Result<()> {
         let csv = create_simple_csv_exec();
         let sort_req: Arc<dyn ExecutionPlan> = Arc::new(SortExec::new(
-            vec![
+            LexOrdering::new(vec![
                 PhysicalSortExpr {
                     expr: Arc::new(Column::new("b", 1)),
                     options: SortOptions::default(),
@@ -2566,7 +2666,7 @@ mod tests {
                     )),
                     options: SortOptions::default(),
                 },
-            ],
+            ]),
             csv.clone(),
         ));
         let projection: Arc<dyn ExecutionPlan> = Arc::new(ProjectionExec::try_new(
@@ -2581,7 +2681,7 @@ mod tests {
         let initial = get_plan_string(&projection);
         let expected_initial = [
             "ProjectionExec: expr=[c@2 as c, a@0 as new_a, b@1 as b]",
-            "  SortExec: expr=[b@1 ASC,c@2 + a@0 ASC], preserve_partitioning=[false]",
+            "  SortExec: expr=[b@1 ASC, c@2 + a@0 ASC], preserve_partitioning=[false]",
             "    CsvExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], has_header=false"
             ];
         assert_eq!(initial, expected_initial);
@@ -2590,7 +2690,7 @@ mod tests {
             ProjectionPushdown::new().optimize(projection, &ConfigOptions::new())?;
 
         let expected = [
-            "SortExec: expr=[b@2 ASC,c@0 + new_a@1 ASC], preserve_partitioning=[false]",
+            "SortExec: expr=[b@2 ASC, c@0 + new_a@1 ASC], preserve_partitioning=[false]",
             "  ProjectionExec: expr=[c@2 as c, a@0 as new_a, b@1 as b]",
             "    CsvExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], has_header=false"
         ];
@@ -2603,7 +2703,7 @@ mod tests {
     fn test_sort_preserving_after_projection() -> Result<()> {
         let csv = create_simple_csv_exec();
         let sort_req: Arc<dyn ExecutionPlan> = Arc::new(SortPreservingMergeExec::new(
-            vec![
+            LexOrdering::new(vec![
                 PhysicalSortExpr {
                     expr: Arc::new(Column::new("b", 1)),
                     options: SortOptions::default(),
@@ -2616,7 +2716,7 @@ mod tests {
                     )),
                     options: SortOptions::default(),
                 },
-            ],
+            ]),
             csv.clone(),
         ));
         let projection: Arc<dyn ExecutionPlan> = Arc::new(ProjectionExec::try_new(
@@ -2631,7 +2731,7 @@ mod tests {
         let initial = get_plan_string(&projection);
         let expected_initial = [
             "ProjectionExec: expr=[c@2 as c, a@0 as new_a, b@1 as b]",
-            "  SortPreservingMergeExec: [b@1 ASC,c@2 + a@0 ASC]",
+            "  SortPreservingMergeExec: [b@1 ASC, c@2 + a@0 ASC]",
             "    CsvExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], has_header=false"
             ];
         assert_eq!(initial, expected_initial);
@@ -2640,7 +2740,7 @@ mod tests {
             ProjectionPushdown::new().optimize(projection, &ConfigOptions::new())?;
 
         let expected = [
-            "SortPreservingMergeExec: [b@2 ASC,c@0 + new_a@1 ASC]",
+            "SortPreservingMergeExec: [b@2 ASC, c@0 + new_a@1 ASC]",
             "  ProjectionExec: expr=[c@2 as c, a@0 as new_a, b@1 as b]",
             "    CsvExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], has_header=false"
         ];

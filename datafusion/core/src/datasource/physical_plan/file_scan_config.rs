@@ -19,7 +19,8 @@
 //! file sources.
 
 use std::{
-    borrow::Cow, collections::HashMap, fmt::Debug, marker::PhantomData, sync::Arc, vec,
+    borrow::Cow, collections::HashMap, fmt::Debug, marker::PhantomData, mem::size_of,
+    sync::Arc, vec,
 };
 
 use super::{get_projected_output_ordering, statistics::MinMaxStatistics};
@@ -32,8 +33,10 @@ use arrow::datatypes::{ArrowNativeType, UInt16Type};
 use arrow_array::{ArrayRef, DictionaryArray, RecordBatch, RecordBatchOptions};
 use arrow_schema::{DataType, Field, Schema, SchemaRef};
 use datafusion_common::stats::Precision;
-use datafusion_common::{exec_err, ColumnStatistics, DataFusionError, Statistics};
-use datafusion_physical_expr::{LexOrdering, PhysicalSortExpr};
+use datafusion_common::{
+    exec_err, ColumnStatistics, Constraints, DataFusionError, Statistics,
+};
+use datafusion_physical_expr::LexOrdering;
 
 use log::warn;
 
@@ -113,6 +116,8 @@ pub struct FileScanConfig {
     /// concurrently, however files *within* a partition will be read
     /// sequentially, one after the next.
     pub file_groups: Vec<Vec<PartitionedFile>>,
+    /// Table constraints
+    pub constraints: Constraints,
     /// Estimated overall statistics of the files, taking `filters` into account.
     /// Defaults to [`Statistics::new_unknown`].
     pub statistics: Statistics,
@@ -145,12 +150,19 @@ impl FileScanConfig {
             object_store_url,
             file_schema,
             file_groups: vec![],
+            constraints: Constraints::empty(),
             statistics,
             projection: None,
             limit: None,
             table_partition_cols: vec![],
             output_ordering: vec![],
         }
+    }
+
+    /// Set the table constraints of the files
+    pub fn with_constraints(mut self, constraints: Constraints) -> Self {
+        self.constraints = constraints;
+        self
     }
 
     /// Set the statistics of the files
@@ -209,30 +221,31 @@ impl FileScanConfig {
         self
     }
 
-    /// Project the schema and the statistics on the given column indices
-    pub fn project(&self) -> (SchemaRef, Statistics, Vec<LexOrdering>) {
+    /// Project the schema, constraints, and the statistics on the given column indices
+    pub fn project(&self) -> (SchemaRef, Constraints, Statistics, Vec<LexOrdering>) {
         if self.projection.is_none() && self.table_partition_cols.is_empty() {
             return (
                 Arc::clone(&self.file_schema),
+                self.constraints.clone(),
                 self.statistics.clone(),
                 self.output_ordering.clone(),
             );
         }
 
-        let proj_iter: Box<dyn Iterator<Item = usize>> = match &self.projection {
-            Some(proj) => Box::new(proj.iter().copied()),
-            None => Box::new(
-                0..(self.file_schema.fields().len() + self.table_partition_cols.len()),
-            ),
+        let proj_indices = if let Some(proj) = &self.projection {
+            proj
+        } else {
+            let len = self.file_schema.fields().len() + self.table_partition_cols.len();
+            &(0..len).collect::<Vec<_>>()
         };
 
         let mut table_fields = vec![];
         let mut table_cols_stats = vec![];
-        for idx in proj_iter {
-            if idx < self.file_schema.fields().len() {
-                let field = self.file_schema.field(idx);
+        for idx in proj_indices {
+            if *idx < self.file_schema.fields().len() {
+                let field = self.file_schema.field(*idx);
                 table_fields.push(field.clone());
-                table_cols_stats.push(self.statistics.column_statistics[idx].clone())
+                table_cols_stats.push(self.statistics.column_statistics[*idx].clone())
             } else {
                 let partition_idx = idx - self.file_schema.fields().len();
                 table_fields.push(self.table_partition_cols[partition_idx].to_owned());
@@ -248,14 +261,25 @@ impl FileScanConfig {
             column_statistics: table_cols_stats,
         };
 
-        let projected_schema = Arc::new(
-            Schema::new(table_fields).with_metadata(self.file_schema.metadata().clone()),
-        );
+        let projected_schema = Arc::new(Schema::new_with_metadata(
+            table_fields,
+            self.file_schema.metadata().clone(),
+        ));
+
+        let projected_constraints = self
+            .constraints
+            .project(proj_indices)
+            .unwrap_or_else(Constraints::empty);
 
         let projected_output_ordering =
             get_projected_output_ordering(self, &projected_schema);
 
-        (projected_schema, table_stats, projected_output_ordering)
+        (
+            projected_schema,
+            projected_constraints,
+            table_stats,
+            projected_output_ordering,
+        )
     }
 
     #[cfg_attr(not(feature = "avro"), allow(unused))] // Only used by avro
@@ -281,7 +305,12 @@ impl FileScanConfig {
 
         fields.map_or_else(
             || Arc::clone(&self.file_schema),
-            |f| Arc::new(Schema::new(f).with_metadata(self.file_schema.metadata.clone())),
+            |f| {
+                Arc::new(Schema::new_with_metadata(
+                    f,
+                    self.file_schema.metadata.clone(),
+                ))
+            },
         )
     }
 
@@ -300,7 +329,7 @@ impl FileScanConfig {
     pub fn split_groups_by_statistics(
         table_schema: &SchemaRef,
         file_groups: &[Vec<PartitionedFile>],
-        sort_order: &[PhysicalSortExpr],
+        sort_order: &LexOrdering,
     ) -> Result<Vec<Vec<PartitionedFile>>> {
         let flattened_files = file_groups.iter().flatten().collect::<Vec<_>>();
         // First Fit:
@@ -491,7 +520,7 @@ impl<T> ZeroBufferGenerator<T>
 where
     T: ArrowNativeType,
 {
-    const SIZE: usize = std::mem::size_of::<T>();
+    const SIZE: usize = size_of::<T>();
 
     fn get_buffer(&mut self, n_vals: usize) -> Buffer {
         match &mut self.cache {
@@ -628,7 +657,7 @@ mod tests {
             )]),
         );
 
-        let (proj_schema, proj_statistics, _) = conf.project();
+        let (proj_schema, _, proj_statistics, _) = conf.project();
         assert_eq!(proj_schema.fields().len(), file_schema.fields().len() + 1);
         assert_eq!(
             proj_schema.field(file_schema.fields().len()).name(),
@@ -668,7 +697,7 @@ mod tests {
         );
 
         // verify the proj_schema includes the last column and exactly the same the field it is defined
-        let (proj_schema, _proj_statistics, _) = conf.project();
+        let (proj_schema, _, _, _) = conf.project();
         assert_eq!(proj_schema.fields().len(), file_schema.fields().len() + 1);
         assert_eq!(
             *proj_schema.field(file_schema.fields().len()),
@@ -701,7 +730,7 @@ mod tests {
             )]),
         );
 
-        let (proj_schema, proj_statistics, _) = conf.project();
+        let (proj_schema, _, proj_statistics, _) = conf.project();
         assert_eq!(
             columns(&proj_schema),
             vec!["date".to_owned(), "c1".to_owned()]
@@ -1105,17 +1134,18 @@ mod tests {
                     ))))
                     .collect::<Vec<_>>(),
             ));
-            let sort_order = case
-                .sort
-                .into_iter()
-                .map(|expr| {
-                    crate::physical_planner::create_physical_sort_expr(
-                        &expr,
-                        &DFSchema::try_from(table_schema.as_ref().clone())?,
-                        &ExecutionProps::default(),
-                    )
-                })
-                .collect::<Result<Vec<_>>>()?;
+            let sort_order = LexOrdering::from(
+                case.sort
+                    .into_iter()
+                    .map(|expr| {
+                        crate::physical_planner::create_physical_sort_expr(
+                            &expr,
+                            &DFSchema::try_from(table_schema.as_ref().clone())?,
+                            &ExecutionProps::default(),
+                        )
+                    })
+                    .collect::<Result<Vec<_>>>()?,
+            );
 
             let partitioned_files =
                 case.files.into_iter().map(From::from).collect::<Vec<_>>();
@@ -1156,7 +1186,7 @@ mod tests {
                         })
                         .collect::<Vec<_>>()
                 })
-                .map_err(|e| e.to_string().leak() as &'static str);
+                .map_err(|e| e.strip_backtrace().leak() as &'static str);
 
             assert_eq!(results_by_name, case.expected_result, "{}", case.name);
         }
@@ -1200,6 +1230,7 @@ mod tests {
                             .collect::<Vec<_>>(),
                     }),
                     extensions: None,
+                    metadata_size_hint: None,
                 }
             }
         }

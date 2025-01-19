@@ -15,10 +15,11 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use super::NativeType;
+use crate::error::Result;
+use arrow_schema::DataType;
 use core::fmt;
 use std::{cmp::Ordering, hash::Hash, sync::Arc};
-
-use super::NativeType;
 
 /// Signature that uniquely identifies a type among other types.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -63,7 +64,7 @@ pub type LogicalTypeRef = Arc<dyn LogicalType>;
 ///
 /// impl LogicalType for JSON {
 ///     fn native(&self) -> &NativeType {
-///         &NativeType::Utf8
+///         &NativeType::String
 ///     }
 ///
 ///    fn signature(&self) -> TypeSignature<'_> {
@@ -75,12 +76,21 @@ pub type LogicalTypeRef = Arc<dyn LogicalType>;
 /// }
 /// ```
 pub trait LogicalType: Sync + Send {
+    /// Get the native backing type of this logical type.
     fn native(&self) -> &NativeType;
+    /// Get the unique type signature for this logical type. Logical types with identical
+    /// signatures are considered equal.
     fn signature(&self) -> TypeSignature<'_>;
+
+    /// Get the default physical type to cast `origin` to in order to obtain a physical type
+    /// that is logically compatible with this logical type.
+    fn default_cast_for(&self, origin: &DataType) -> Result<DataType> {
+        self.native().default_cast_for(origin)
+    }
 }
 
 impl fmt::Debug for dyn LogicalType {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_tuple("LogicalType")
             .field(&self.signature())
             .field(&self.native())
@@ -88,9 +98,15 @@ impl fmt::Debug for dyn LogicalType {
     }
 }
 
+impl std::fmt::Display for dyn LogicalType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{self:?}")
+    }
+}
+
 impl PartialEq for dyn LogicalType {
     fn eq(&self, other: &Self) -> bool {
-        self.native().eq(other.native()) && self.signature().eq(&other.signature())
+        self.signature().eq(&other.signature())
     }
 }
 

@@ -279,8 +279,88 @@ pub fn get_data_dir(
     }
 }
 
+#[macro_export]
+macro_rules! create_array {
+    (Boolean, $values: expr) => {
+        std::sync::Arc::new(arrow::array::BooleanArray::from($values))
+    };
+    (Int8, $values: expr) => {
+        std::sync::Arc::new(arrow::array::Int8Array::from($values))
+    };
+    (Int16, $values: expr) => {
+        std::sync::Arc::new(arrow::array::Int16Array::from($values))
+    };
+    (Int32, $values: expr) => {
+        std::sync::Arc::new(arrow::array::Int32Array::from($values))
+    };
+    (Int64, $values: expr) => {
+        std::sync::Arc::new(arrow::array::Int64Array::from($values))
+    };
+    (UInt8, $values: expr) => {
+        std::sync::Arc::new(arrow::array::UInt8Array::from($values))
+    };
+    (UInt16, $values: expr) => {
+        std::sync::Arc::new(arrow::array::UInt16Array::from($values))
+    };
+    (UInt32, $values: expr) => {
+        std::sync::Arc::new(arrow::array::UInt32Array::from($values))
+    };
+    (UInt64, $values: expr) => {
+        std::sync::Arc::new(arrow::array::UInt64Array::from($values))
+    };
+    (Float16, $values: expr) => {
+        std::sync::Arc::new(arrow::array::Float16Array::from($values))
+    };
+    (Float32, $values: expr) => {
+        std::sync::Arc::new(arrow::array::Float32Array::from($values))
+    };
+    (Float64, $values: expr) => {
+        std::sync::Arc::new(arrow::array::Float64Array::from($values))
+    };
+    (Utf8, $values: expr) => {
+        std::sync::Arc::new(arrow::array::StringArray::from($values))
+    };
+}
+
+/// Creates a record batch from literal slice of values, suitable for rapid
+/// testing and development.
+///
+/// Example:
+/// ```
+/// use datafusion_common::{record_batch, create_array};
+/// let batch = record_batch!(
+///     ("a", Int32, vec![1, 2, 3]),
+///     ("b", Float64, vec![Some(4.0), None, Some(5.0)]),
+///     ("c", Utf8, vec!["alpha", "beta", "gamma"])
+/// );
+/// ```
+#[macro_export]
+macro_rules! record_batch {
+    ($(($name: expr, $type: ident, $values: expr)),*) => {
+        {
+            let schema = std::sync::Arc::new(arrow_schema::Schema::new(vec![
+                $(
+                    arrow_schema::Field::new($name, arrow_schema::DataType::$type, true),
+                )*
+            ]));
+
+            let batch = arrow_array::RecordBatch::try_new(
+                schema,
+                vec![$(
+                    $crate::create_array!($type, $values),
+                )*]
+            );
+
+            batch
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use crate::cast::{as_float64_array, as_int32_array, as_string_array};
+    use crate::error::Result;
+
     use super::*;
     use std::env;
 
@@ -332,5 +412,45 @@ mod tests {
 
         let res = parquet_test_data();
         assert!(PathBuf::from(res).is_dir());
+    }
+
+    #[test]
+    fn test_create_record_batch() -> Result<()> {
+        use arrow_array::Array;
+
+        let batch = record_batch!(
+            ("a", Int32, vec![1, 2, 3, 4]),
+            ("b", Float64, vec![Some(4.0), None, Some(5.0), None]),
+            ("c", Utf8, vec!["alpha", "beta", "gamma", "delta"])
+        )?;
+
+        assert_eq!(3, batch.num_columns());
+        assert_eq!(4, batch.num_rows());
+
+        let values: Vec<_> = as_int32_array(batch.column(0))?
+            .values()
+            .iter()
+            .map(|v| v.to_owned())
+            .collect();
+        assert_eq!(values, vec![1, 2, 3, 4]);
+
+        let values: Vec<_> = as_float64_array(batch.column(1))?
+            .values()
+            .iter()
+            .map(|v| v.to_owned())
+            .collect();
+        assert_eq!(values, vec![4.0, 0.0, 5.0, 0.0]);
+
+        let nulls: Vec<_> = as_float64_array(batch.column(1))?
+            .nulls()
+            .unwrap()
+            .iter()
+            .collect();
+        assert_eq!(nulls, vec![true, false, true, false]);
+
+        let values: Vec<_> = as_string_array(batch.column(2))?.iter().flatten().collect();
+        assert_eq!(values, vec!["alpha", "beta", "gamma", "delta"]);
+
+        Ok(())
     }
 }

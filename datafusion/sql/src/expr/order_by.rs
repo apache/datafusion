@@ -23,7 +23,7 @@ use datafusion_expr::expr::Sort;
 use datafusion_expr::{Expr, SortExpr};
 use sqlparser::ast::{Expr as SQLExpr, OrderByExpr, Value};
 
-impl<'a, S: ContextProvider> SqlToRel<'a, S> {
+impl<S: ContextProvider> SqlToRel<'_, S> {
     /// Convert sql [OrderByExpr] to `Vec<Expr>`.
     ///
     /// `input_schema` and `additional_schema` are used to resolve column references in the order-by expressions.
@@ -102,7 +102,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             expr_vec.push(Sort::new(
                 expr,
                 asc,
-                // when asc is true, by default nulls last to be consistent with postgres
+                // When asc is true, by default nulls last to be consistent with postgres
                 // postgres rule: https://www.postgresql.org/docs/current/queries-order.html
                 nulls_first.unwrap_or(!asc),
             ))

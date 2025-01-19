@@ -23,8 +23,10 @@ use datafusion_common::tree_node::Transformed;
 use datafusion_common::Result;
 use datafusion_expr::logical_plan::LogicalPlan;
 use datafusion_expr::{Aggregate, Expr, Sort, SortExpr};
-use indexmap::IndexSet;
 use std::hash::{Hash, Hasher};
+
+use indexmap::IndexSet;
+
 /// Optimization rule that eliminate duplicated expr.
 #[derive(Default, Debug)]
 pub struct EliminateDuplicatedExpr;
