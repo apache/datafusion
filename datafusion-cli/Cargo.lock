@@ -1436,6 +1436,7 @@ version = "44.0.0"
 dependencies = [
  "ahash",
  "arrow",
+ "arrow-buffer",
  "arrow-schema",
  "datafusion-common",
  "datafusion-doc",
