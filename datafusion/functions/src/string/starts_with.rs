@@ -104,19 +104,35 @@ impl ScalarUDFImpl for StartsWithFunc {
         args: Vec<Expr>,
         _info: &dyn SimplifyInfo,
     ) -> Result<ExprSimplifyResult> {
-        if let Expr::Literal(ScalarValue::Utf8(Some(pattern))) = &args[1] {
+        if let Expr::Literal(scalar_value) = &args[1] {
             // Convert starts_with(col, 'prefix') to col LIKE 'prefix%' with proper escaping
             // Example: starts_with(col, 'ja%') -> col LIKE 'ja\%%'
             //   1. 'ja%'         (input pattern)
             //   2. 'ja\%'        (escape special char '%')
             //   3. 'ja\%%'       (add suffix for starts_with)
-            let escaped_pattern = pattern.replace("%", "\\%");
-            let like_pattern = format!("{}%", escaped_pattern);
+            let like_expr = match scalar_value {
+                ScalarValue::Utf8(Some(pattern)) => {
+                    let escaped_pattern = pattern.replace("%", "\\%");
+                    let like_pattern = format!("{}%", escaped_pattern);
+                    Expr::Literal(ScalarValue::Utf8(Some(like_pattern)))
+                }
+                ScalarValue::LargeUtf8(Some(pattern)) => {
+                    let escaped_pattern = pattern.replace("%", "\\%");
+                    let like_pattern = format!("{}%", escaped_pattern);
+                    Expr::Literal(ScalarValue::LargeUtf8(Some(like_pattern)))
+                }
+                ScalarValue::Utf8View(Some(pattern)) => {
+                    let escaped_pattern = pattern.replace("%", "\\%");
+                    let like_pattern = format!("{}%", escaped_pattern);
+                    Expr::Literal(ScalarValue::Utf8View(Some(like_pattern)))
+                }
+                _ => return Ok(ExprSimplifyResult::Original(args)),
+            };
 
             return Ok(ExprSimplifyResult::Simplified(Expr::Like(Like {
                 negated: false,
                 expr: Box::new(args[0].clone()),
-                pattern: Box::new(Expr::Literal(ScalarValue::Utf8(Some(like_pattern)))),
+                pattern: Box::new(like_expr),
                 escape_char: None,
                 case_insensitive: false,
             })));
