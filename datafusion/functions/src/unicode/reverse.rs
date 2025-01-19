@@ -119,12 +119,21 @@ fn reverse_impl<'a, T: OffsetSizeTrait, V: StringArrayType<'a>>(
 ) -> Result<ArrayRef> {
     let mut builder = GenericStringBuilder::<T>::with_capacity(string_array.len(), 1024);
 
-    let mut reversed = String::new();
+    let mut string_buf = String::new();
     for string in string_array.iter() {
         if let Some(s) = string {
-            reversed.extend(s.chars().rev());
-            builder.append_value(&reversed);
-            reversed.clear();
+            if s.is_ascii() {
+                // SAFETY: Since the original string was ASCII, reversing the bytes still results in valid UTF-8.
+                let reversed = unsafe {
+                    // reverse bytes directly since ASCII characters are single bytes
+                    String::from_utf8_unchecked(s.bytes().rev().collect::<Vec<u8>>())
+                };
+                builder.append_value(&reversed);
+            } else {
+                string_buf.extend(s.chars().rev());
+                builder.append_value(&string_buf);
+                string_buf.clear();
+            }
         } else {
             builder.append_null();
         }
