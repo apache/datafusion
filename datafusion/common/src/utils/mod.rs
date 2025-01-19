@@ -889,7 +889,8 @@ pub fn get_available_parallelism() -> usize {
 mod tests {
     use super::*;
     use crate::ScalarValue::Null;
-    use arrow::array::Float64Array;
+    use arrow::{array::Float64Array, util::pretty::pretty_format_columns};
+    use arrow_array::Int32Array;
     use sqlparser::tokenizer::Span;
 
     #[test]
@@ -1200,5 +1201,14 @@ mod tests {
         let expected = vec![vec![1, 4], vec![2, 5], vec![3, 6]];
         assert_eq!(expected, transposed);
         Ok(())
+    }
+
+    #[test]
+    fn test132() {
+        let a = Arc::new(Int32Array::from(vec![3; 200])) as ArrayRef;
+        println!(
+            "display {}",
+            pretty_format_columns("ColumnarValue(ArrayRef)", &[a]).unwrap()
+        )
     }
 }

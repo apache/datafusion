@@ -21,7 +21,7 @@ use arrow::array::{
 use arrow::datatypes::DataType;
 use datafusion_common::cast::{as_map_array, as_struct_array};
 use datafusion_common::{
-    exec_err, internal_err, plan_datafusion_err, plan_err, Result, ScalarValue,
+    exec_err, internal_err, plan_datafusion_err, Result, ScalarValue,
 };
 use datafusion_expr::{ColumnarValue, Documentation, Expr, ReturnInfo, ReturnTypeArgs};
 use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
@@ -154,15 +154,7 @@ impl ScalarUDFImpl for GetFieldFunc {
             );
         }
 
-        let name = &args.arguments[1];
-        if name.is_empty() {
-            return exec_err!(
-                "get_field function requires the argument field_name to be a string"
-            );
-        }
-
-        let data_type = &args.arg_types[0];
-        match (data_type, name) {
+        match (&args.arg_types[0], args.arguments[1].as_ref()) {
             (DataType::Map(fields, _), _) => {
                 match fields.data_type() {
                     DataType::Struct(fields) if fields.len() == 2 => {
@@ -173,21 +165,25 @@ impl ScalarUDFImpl for GetFieldFunc {
                         let value_field = fields.get(1).expect("fields should have exactly two members");
                         Ok(ReturnInfo::new_nullable(value_field.data_type().clone()))
                     },
-                    _ => plan_err!("Map fields must contain a Struct with exactly 2 fields"),
+                    _ => exec_err!("Map fields must contain a Struct with exactly 2 fields"),
                 }
             }
-            (DataType::Struct(fields), s) => {
-                if s.is_empty() {
-                    plan_err!(
-                        "Struct based indexed access requires a non empty string"
-                    )
-                } else {
-                    let field = fields.iter().find(|f| f.name() == s);
-                    field.ok_or(plan_datafusion_err!("Field {s} not found in struct")).map(|f| ReturnInfo::new_nullable(f.data_type().to_owned()))
-                }
+            (DataType::Struct(fields), Some(ScalarValue::Utf8(Some(s)))) if !s.is_empty() => {
+                let field = fields.iter().find(|f| f.name() == s);
+                field.ok_or(plan_datafusion_err!("Field {s} not found in struct")).map(|f| ReturnInfo::new_nullable(f.data_type().to_owned()))
+            }
+            (DataType::Struct(_), Some(ScalarValue::Utf8(Some(_)))) => {
+                exec_err!(
+                    "Struct based indexed access requires a non-empty string"
+                )
+            }
+            (DataType::Struct(_), _) => {
+                exec_err!(
+                    "Struct based indexed access requires a constant string"
+                )
             }
             (DataType::Null, _) => Ok(ReturnInfo::new_nullable(DataType::Null)),
-            (other, _) => plan_err!("The expression to get an indexed field is only valid for `Struct`, `Map` or `Null` types, got {other}"),
+            (other, _) => exec_err!("The expression to get an indexed field is only valid for `Struct`, `Map` or `Null` types, got {other}"),
         }
     }
 

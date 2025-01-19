@@ -19,9 +19,9 @@
 
 use arrow::datatypes::DataType;
 use arrow::error::ArrowError;
-use datafusion_common::DataFusionError;
+use datafusion_common::{exec_datafusion_err, DataFusionError};
 use datafusion_common::{
-    arrow_datafusion_err, internal_err, plan_datafusion_err, plan_err, Result,
+    arrow_datafusion_err, internal_err, exec_err, Result,
     ScalarValue,
 };
 use std::any::Any;
@@ -119,27 +119,33 @@ impl ScalarUDFImpl for ArrowCastFunc {
         let nullable = args.nullables.iter().any(|&nullable| nullable);
 
         if args.arguments.len() != 2 {
-            return plan_err!(
+            return exec_err!(
                 "{} needs 2 arguments, {} provided",
                 self.name(),
                 args.arguments.len()
             );
         }
 
-        let val = &args.arguments[1];
-        if val.is_empty() {
-            return plan_err!(
-                "{} requires its second argument to be a constant string",
-                self.name()
-            );
-        };
-
-        match val.parse::<DataType>() {
-            Ok(data_type) => Ok(ReturnInfo::new(data_type, nullable)),
-            // If the data type cannot be parsed, return a Plan error to signal an
-            // error in the input rather than a more general ArrowError
-            Err(ArrowError::ParseError(e)) => Err(plan_datafusion_err!("{e}")),
-            Err(e) => Err(arrow_datafusion_err!(e)),
+        match args.arguments[1].as_ref() {
+            Some(ScalarValue::Utf8(Some(casted_type))) if !casted_type.is_empty() => {
+                match casted_type.parse::<DataType>() {
+                    Ok(data_type) => Ok(ReturnInfo::new(data_type, nullable)),
+                    Err(ArrowError::ParseError(e)) => Err(exec_datafusion_err!("{e}")),
+                    Err(e) => Err(arrow_datafusion_err!(e)),
+                }
+            }
+            Some(ScalarValue::Utf8(Some(_))) => {
+                exec_err!(
+                    "{} requires its second argument to be a non-empty constant string",
+                    self.name()
+                )
+            }
+            _ => {
+                exec_err!(
+                    "{} requires its second argument to be a constant string",
+                    self.name()
+                )
+            }
         }
     }
 
@@ -185,10 +191,10 @@ impl ScalarUDFImpl for ArrowCastFunc {
 /// Returns the requested type from the arguments
 fn data_type_from_args(args: &[Expr]) -> Result<DataType> {
     if args.len() != 2 {
-        return plan_err!("arrow_cast needs 2 arguments, {} provided", args.len());
+        return exec_err!("arrow_cast needs 2 arguments, {} provided", args.len());
     }
     let Expr::Literal(ScalarValue::Utf8(Some(val))) = &args[1] else {
-        return plan_err!(
+        return exec_err!(
             "arrow_cast requires its second argument to be a constant string, got {:?}",
             &args[1]
         );
@@ -197,7 +203,7 @@ fn data_type_from_args(args: &[Expr]) -> Result<DataType> {
     val.parse().map_err(|e| match e {
         // If the data type cannot be parsed, return a Plan error to signal an
         // error in the input rather than a more general ArrowError
-        ArrowError::ParseError(e) => plan_datafusion_err!("{e}"),
+        ArrowError::ParseError(e) => exec_datafusion_err!("{e}"),
         e => arrow_datafusion_err!(e),
     })
 }

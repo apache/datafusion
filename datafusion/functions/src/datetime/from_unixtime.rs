@@ -86,10 +86,20 @@ impl ScalarUDFImpl for FromUnixtimeFunc {
         if args.arguments.len() == 1 {
             Ok(ReturnInfo::new_nullable(Timestamp(Second, None)))
         } else {
-            Ok(ReturnInfo::new_nullable(Timestamp(
-                Second,
-                Some(Arc::from(args.arguments[1].to_string())),
-            )))
+            match &args.arguments[1] {
+                Some(ScalarValue::Utf8(Some(v))) if !v.is_empty() => {
+                    Ok(ReturnInfo::new_nullable(Timestamp(
+                        Second,
+                        Some(Arc::from(v.to_string())),
+                    )))
+                }
+                Some(ScalarValue::Utf8(Some(_))) => {
+                    exec_err!("{} requires its second argument to be a non-empty constant string", self.name())
+                }
+                _ => {
+                    exec_err!("{} requires its second argument to be a constant string", self.name())
+                }
+            }
         }
     }
 

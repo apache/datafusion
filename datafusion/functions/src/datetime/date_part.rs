@@ -140,10 +140,18 @@ impl ScalarUDFImpl for DatePartFunc {
     }
 
     fn return_type_from_args(&self, args: ReturnTypeArgs) -> Result<ReturnInfo> {
-        if is_epoch(&args.arguments[0]) {
-            Ok(ReturnInfo::new_nullable(DataType::Float64))
-        } else {
-            Ok(ReturnInfo::new_nullable(DataType::Int32))
+        match args.arguments[0].as_ref() {
+            Some(ScalarValue::Utf8(Some(part))) if !part.is_empty() => {
+                if is_epoch(part) {
+                    Ok(ReturnInfo::new_nullable(DataType::Float64))
+                } else {
+                    Ok(ReturnInfo::new_nullable(DataType::Int32))
+                }
+            }
+            Some(ScalarValue::Utf8(Some(_))) => {
+                exec_err!("{} requires non-empty string", self.name())
+            }
+            _ => exec_err!("{} requires constant string", self.name()),
         }
     }
 

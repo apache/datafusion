@@ -24,7 +24,7 @@ use crate::{
     ColumnarValue, Documentation, Expr, ScalarFunctionImplementation, Signature,
 };
 use arrow::datatypes::DataType;
-use datafusion_common::{not_impl_err, ExprSchema, Result};
+use datafusion_common::{not_impl_err, ExprSchema, Result, ScalarValue};
 use datafusion_expr_common::interval_arithmetic::Interval;
 use std::any::Any;
 use std::cmp::Ordering;
@@ -353,7 +353,7 @@ pub struct ReturnTypeArgs<'a> {
     /// The data types of the arguments to the function
     pub arg_types: &'a [DataType],
     /// The Utf8 arguments to the function, if the expression is not Utf8, it will be empty string
-    pub arguments: &'a [String],
+    pub arguments: &'a [Option<&'a ScalarValue>],
     pub nullables: &'a [bool],
 }
 

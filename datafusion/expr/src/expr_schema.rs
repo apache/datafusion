@@ -30,7 +30,7 @@ use arrow::compute::can_cast_types;
 use arrow::datatypes::{DataType, Field};
 use datafusion_common::{
     not_impl_err, plan_datafusion_err, plan_err, Column, DataFusionError, ExprSchema,
-    Result, ScalarValue, TableReference,
+    Result, TableReference,
 };
 use datafusion_functions_window_common::field::WindowUDFFieldArgs;
 use std::collections::HashMap;
@@ -421,10 +421,8 @@ impl ExprSchemable for Expr {
                 let arguments = args
                     .iter()
                     .map(|e| match e {
-                        Expr::Literal(ScalarValue::Utf8(s)) => {
-                            s.clone().unwrap_or_default()
-                        }
-                        _ => "".to_string(),
+                        Expr::Literal(sv) => Some(sv),
+                        _ => None,
                     })
                     .collect::<Vec<_>>();
                 let args = ReturnTypeArgs {

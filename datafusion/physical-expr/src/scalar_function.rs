@@ -106,18 +106,14 @@ impl ScalarFunctionExpr {
             .map(|e| e.nullable(schema))
             .collect::<Result<Vec<_>>>()?;
 
-        let arguments: Vec<String> = args
+        let arguments = args
             .iter()
             .map(|e| {
                 e.as_any()
                     .downcast_ref::<Literal>()
-                    .map(|literal| match literal.value() {
-                        ScalarValue::Utf8(Some(s)) => s.clone(),
-                        _ => String::new(),
-                    })
-                    .unwrap_or_else(String::new)
+                    .map(|literal| literal.value())
             })
-            .collect();
+            .collect::<Vec<_>>();
         let ret_args = ReturnTypeArgs {
             arg_types: &arg_types,
             arguments: &arguments,

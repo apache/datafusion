@@ -173,7 +173,20 @@ impl ScalarUDFImpl for NamedStructFunc {
             );
         }
 
-        let names = args.arguments.iter().step_by(2).collect::<Vec<_>>();
+        let names = args
+            .arguments
+            .iter()
+            .step_by(2)
+            .map(|x| match x {
+                Some(ScalarValue::Utf8(Some(name))) if !name.is_empty() => Ok(name),
+                Some(ScalarValue::Utf8(Some(_))) => {
+                    exec_err!("{} requires field name as non-empty string", self.name())
+                }
+                _ => {
+                    exec_err!("{} requires field name as constant string", self.name())
+                }
+            })
+            .collect::<Result<Vec<_>>>()?;
         let types = args.arg_types.iter().skip(1).step_by(2).collect::<Vec<_>>();
 
         let return_fields = names
