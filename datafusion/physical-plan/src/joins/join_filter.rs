@@ -76,7 +76,7 @@ impl JoinFilter {
     }
 
     /// Intermediate batch schema
-    pub fn schema(&self) -> &Arc<Schema> {
+    pub fn schema(&self) -> &SchemaRef {
         &self.schema
     }
 
