@@ -35,7 +35,7 @@ use arrow::buffer::Buffer;
 use arrow_ipc::reader::FileDecoder;
 use arrow_schema::SchemaRef;
 use datafusion_common::config::ConfigOptions;
-use datafusion_common::Statistics;
+use datafusion_common::{Constraints, Statistics};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::{EquivalenceProperties, LexOrdering};
 use datafusion_physical_plan::execution_plan::{Boundedness, EmissionType};
@@ -60,11 +60,16 @@ pub struct ArrowExec {
 impl ArrowExec {
     /// Create a new Arrow reader execution plan provided base configurations
     pub fn new(base_config: FileScanConfig) -> Self {
-        let (projected_schema, projected_statistics, projected_output_ordering) =
-            base_config.project();
+        let (
+            projected_schema,
+            projected_constraints,
+            projected_statistics,
+            projected_output_ordering,
+        ) = base_config.project();
         let cache = Self::compute_properties(
             Arc::clone(&projected_schema),
             &projected_output_ordering,
+            projected_constraints,
             &base_config,
         );
         Self {
@@ -88,12 +93,14 @@ impl ArrowExec {
     /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
     fn compute_properties(
         schema: SchemaRef,
-        projected_output_ordering: &[LexOrdering],
+        output_ordering: &[LexOrdering],
+        constraints: Constraints,
         file_scan_config: &FileScanConfig,
     ) -> PlanProperties {
         // Equivalence Properties
         let eq_properties =
-            EquivalenceProperties::new_with_orderings(schema, projected_output_ordering);
+            EquivalenceProperties::new_with_orderings(schema, output_ordering)
+                .with_constraints(constraints);
 
         PlanProperties::new(
             eq_properties,

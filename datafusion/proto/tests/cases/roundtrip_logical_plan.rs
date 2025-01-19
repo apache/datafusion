@@ -1815,6 +1815,8 @@ fn round_trip_datatype() {
     }
 }
 
+// TODO file a ticket about handling deprecated dict_id attributes
+#[allow(deprecated)]
 #[test]
 fn roundtrip_dict_id() -> Result<()> {
     let dict_id = 42;

@@ -28,7 +28,7 @@ use tokio::task::JoinSet;
 use datafusion_common::config::ConfigOptions;
 pub use datafusion_common::hash_utils;
 pub use datafusion_common::utils::project_schema;
-use datafusion_common::{exec_err, Result};
+use datafusion_common::{exec_err, Constraints, Result};
 pub use datafusion_common::{internal_err, ColumnStatistics, Statistics};
 use datafusion_execution::TaskContext;
 pub use datafusion_execution::{RecordBatchStream, SendableRecordBatchStream};
@@ -722,6 +722,12 @@ impl PlanProperties {
     /// Overwrite emission type with its new value.
     pub fn with_emission_type(mut self, emission_type: EmissionType) -> Self {
         self.emission_type = emission_type;
+        self
+    }
+
+    /// Overwrite constraints with its new value.
+    pub fn with_constraints(mut self, constraints: Constraints) -> Self {
+        self.eq_properties = self.eq_properties.with_constraints(constraints);
         self
     }
 

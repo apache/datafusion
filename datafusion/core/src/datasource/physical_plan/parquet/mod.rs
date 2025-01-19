@@ -40,6 +40,7 @@ use crate::{
 };
 
 use arrow::datatypes::SchemaRef;
+use datafusion_common::Constraints;
 use datafusion_physical_expr::{EquivalenceProperties, LexOrdering, PhysicalExpr};
 use datafusion_physical_plan::execution_plan::{Boundedness, EmissionType};
 
@@ -444,12 +445,17 @@ impl ParquetExecBuilder {
             })
             .map(Arc::new);
 
-        let (projected_schema, projected_statistics, projected_output_ordering) =
-            base_config.project();
+        let (
+            projected_schema,
+            projected_constraints,
+            projected_statistics,
+            projected_output_ordering,
+        ) = base_config.project();
 
         let cache = ParquetExec::compute_properties(
             projected_schema,
             &projected_output_ordering,
+            projected_constraints,
             &base_config,
         );
         ParquetExec {
@@ -653,10 +659,12 @@ impl ParquetExec {
     fn compute_properties(
         schema: SchemaRef,
         orderings: &[LexOrdering],
+        constraints: Constraints,
         file_config: &FileScanConfig,
     ) -> PlanProperties {
         PlanProperties::new(
-            EquivalenceProperties::new_with_orderings(schema, orderings),
+            EquivalenceProperties::new_with_orderings(schema, orderings)
+                .with_constraints(constraints),
             Self::output_partitioning_helper(file_config), // Output Partitioning
             EmissionType::Incremental,
             Boundedness::Bounded,

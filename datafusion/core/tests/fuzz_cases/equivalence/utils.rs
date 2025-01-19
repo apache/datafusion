@@ -444,7 +444,7 @@ pub fn generate_table_for_orderings(
 
     assert!(!orderings.is_empty());
     // Sort the inner vectors by their lengths (longest first)
-    orderings.sort_by_key(|v| std::cmp::Reverse(v.inner.len()));
+    orderings.sort_by_key(|v| std::cmp::Reverse(v.len()));
 
     let arrays = schema
         .fields

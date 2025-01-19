@@ -1136,6 +1136,8 @@ pub struct FileSinkConfig {
     pub keep_partition_by_columns: bool,
     #[prost(enumeration = "InsertOp", tag = "10")]
     pub insert_op: i32,
+    #[prost(string, tag = "11")]
+    pub file_extension: ::prost::alloc::string::String,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct JsonSink {
@@ -1506,6 +1508,8 @@ pub struct FileScanExecConf {
     pub object_store_url: ::prost::alloc::string::String,
     #[prost(message, repeated, tag = "9")]
     pub output_ordering: ::prost::alloc::vec::Vec<PhysicalSortExprNodeCollection>,
+    #[prost(message, optional, tag = "11")]
+    pub constraints: ::core::option::Option<super::datafusion_common::Constraints>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ParquetScanExecNode {
@@ -1786,6 +1790,8 @@ pub struct NestedLoopJoinExecNode {
     pub join_type: i32,
     #[prost(message, optional, tag = "4")]
     pub filter: ::core::option::Option<JoinFilter>,
+    #[prost(uint32, repeated, tag = "5")]
+    pub projection: ::prost::alloc::vec::Vec<u32>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct CoalesceBatchesExecNode {
