@@ -433,6 +433,11 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
     }
 }
 
+/// [`ExecutionPlan`] Invariant Level
+///
+/// What set of assertions ([Invariant]s)  holds for a particular `ExecutionPlan`
+///
+/// [Invariant]: https://en.wikipedia.org/wiki/Invariant_(mathematics)#Invariants_in_computer_science
 #[derive(Clone, Copy)]
 pub enum InvariantLevel {
     /// Invariants that are always true for the [`ExecutionPlan`] node

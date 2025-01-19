@@ -2034,7 +2034,7 @@ impl<'a> OptimizationInvariantChecker<'a> {
     ) -> Result<()> {
         // if the rule is not permitted to change the schema, confirm that it did not change.
         if self.rule.schema_check() && plan.schema() != previous_schema {
-            internal_err!("PhysicalOptimizer rule '{}' failed, due to generate a different schema, original schema: {:?}, new schema: {:?}",
+            internal_err!("PhysicalOptimizer rule '{}' failed. Schema mismatch. Expected original schema: {:?}, got new schema: {:?}",
                 self.rule.name(),
                 previous_schema,
                 plan.schema()
@@ -2055,7 +2055,9 @@ impl<'n> TreeNodeVisitor<'n> for OptimizationInvariantChecker<'_> {
     fn f_down(&mut self, node: &'n Self::Node) -> Result<TreeNodeRecursion> {
         // Checks for the more permissive `InvariantLevel::Always`.
         // Plans are not guarenteed to be executable after each physical optimizer run.
-        node.check_invariants(InvariantLevel::Always).map_err(|e| e.context(format!("Invariant for ExecutionPlan node '{}' failed for PhysicalOptimizer rule '{}'", node.name(), self.rule.name())))?;
+        node.check_invariants(InvariantLevel::Always).map_err(|e|
+            e.context(format!("Invariant for ExecutionPlan node '{}' failed for PhysicalOptimizer rule '{}'", node.name(), self.rule.name()))
+        )?;
         Ok(TreeNodeRecursion::Continue)
     }
 }
@@ -2989,7 +2991,7 @@ digraph {
         let expected_err = OptimizationInvariantChecker::new(&rule)
             .check(&ok_plan, different_schema)
             .unwrap_err();
-        assert!(expected_err.to_string().contains("PhysicalOptimizer rule 'OptimizerRuleWithSchemaCheck' failed, due to generate a different schema"));
+        assert!(expected_err.to_string().contains("PhysicalOptimizer rule 'OptimizerRuleWithSchemaCheck' failed. Schema mismatch. Expected original schema"));
 
         // Test: should fail when extension node fails it's own invariant check
         let failing_node: Arc<dyn ExecutionPlan> = Arc::new(InvariantFailsExtensionNode);
