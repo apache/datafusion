@@ -168,22 +168,16 @@ impl ScalarUDFImpl for GetFieldFunc {
                     _ => exec_err!("Map fields must contain a Struct with exactly 2 fields"),
                 }
             }
-            (DataType::Struct(fields), Some(sv)) => {
-                sv.try_as_str().flatten().map_or_else(||  exec_err!("Field name must be a constant string"),
-                |field_name| {
-                    if field_name.is_empty() {
-                        exec_err!("Field name must be a non-empty string")
-                    } else {
-                        let field = fields.iter().find(|f| f.name() == field_name);
-                        field.ok_or(plan_datafusion_err!("Field {field_name} not found in struct")).map(|f| ReturnInfo::new_nullable(f.data_type().to_owned()))
-                    }
+            (DataType::Struct(fields),sv) => {
+                sv.and_then(|sv| sv.try_as_str().flatten().filter(|s| !s.is_empty()))
+                .map_or_else(
+                    || exec_err!("Field name must be a non-empty string"),
+                    |field_name| {
+                    fields.iter().find(|f| f.name() == field_name)
+                    .ok_or(plan_datafusion_err!("Field {field_name} not found in struct"))
+                    .map(|f| ReturnInfo::new_nullable(f.data_type().to_owned()))
                 })
-            }
-            (DataType::Struct(_), _) => {
-                exec_err!(
-                    "Struct based indexed access requires a constant string"
-                )
-            }
+            },
             (DataType::Null, _) => Ok(ReturnInfo::new_nullable(DataType::Null)),
             (other, _) => exec_err!("The expression to get an indexed field is only valid for `Struct`, `Map` or `Null` types, got {other}"),
         }
