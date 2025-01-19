@@ -168,14 +168,16 @@ impl ScalarUDFImpl for GetFieldFunc {
                     _ => exec_err!("Map fields must contain a Struct with exactly 2 fields"),
                 }
             }
-            (DataType::Struct(fields), Some(ScalarValue::Utf8(Some(s)))) if !s.is_empty() => {
-                let field = fields.iter().find(|f| f.name() == s);
-                field.ok_or(plan_datafusion_err!("Field {s} not found in struct")).map(|f| ReturnInfo::new_nullable(f.data_type().to_owned()))
-            }
-            (DataType::Struct(_), Some(ScalarValue::Utf8(Some(_)))) => {
-                exec_err!(
-                    "Struct based indexed access requires a non-empty string"
-                )
+            (DataType::Struct(fields), Some(sv)) => {
+                sv.try_as_str().flatten().map_or_else(||  exec_err!("Field name must be a constant string"),
+                |field_name| {
+                    if field_name.is_empty() {
+                        exec_err!("Field name must be a non-empty string")
+                    } else {
+                        let field = fields.iter().find(|f| f.name() == field_name);
+                        field.ok_or(plan_datafusion_err!("Field {field_name} not found in struct")).map(|f| ReturnInfo::new_nullable(f.data_type().to_owned()))
+                    }
+                })
             }
             (DataType::Struct(_), _) => {
                 exec_err!(

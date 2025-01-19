@@ -125,27 +125,26 @@ impl ScalarUDFImpl for ArrowCastFunc {
             );
         }
 
-        match args.arguments[1].as_ref() {
-            Some(ScalarValue::Utf8(Some(casted_type))) if !casted_type.is_empty() => {
+        args.arguments[1].map_or_else(|| exec_err!(
+            "{} requires its second argument to be a constant string",
+            self.name()
+        ), |sv| sv.try_as_str().flatten().map_or_else(|| exec_err!(
+            "{} requires its second argument to be a constant string",
+            self.name()
+        ), |casted_type| {
+            if casted_type.is_empty() {
+                exec_err!(
+                    "{} requires its second argument to be a non-empty constant string",
+                    self.name()
+                )
+            } else {
                 match casted_type.parse::<DataType>() {
                     Ok(data_type) => Ok(ReturnInfo::new(data_type, nullable)),
                     Err(ArrowError::ParseError(e)) => Err(exec_datafusion_err!("{e}")),
                     Err(e) => Err(arrow_datafusion_err!(e)),
                 }
             }
-            Some(ScalarValue::Utf8(Some(_))) => {
-                exec_err!(
-                    "{} requires its second argument to be a non-empty constant string",
-                    self.name()
-                )
-            }
-            _ => {
-                exec_err!(
-                    "{} requires its second argument to be a constant string",
-                    self.name()
-                )
-            }
-        }
+        }))
     }
 
     fn invoke_batch(

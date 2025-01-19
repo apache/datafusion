@@ -178,20 +178,35 @@ impl ScalarUDFImpl for NamedStructFunc {
             .iter()
             .enumerate()
             .step_by(2)
-            .map(|(i, x)| match x {
-                Some(ScalarValue::Utf8(Some(name))) if !name.is_empty() => Ok(name),
-                Some(ScalarValue::Utf8(Some(_))) => {
-                    exec_err!(
+            .map(|(i, sv)| {
+                sv.map_or_else(
+                    || {
+                        exec_err!(
+                    "{} requires {i}-th (0-indexed) field name as constant string",
+                    self.name()
+                )
+                    },
+                    |sv| {
+                        sv.try_as_str().flatten().map_or_else(
+                            || {
+                                exec_err!(
+                    "{} requires {i}-th (0-indexed) field name as constant string",
+                    self.name()
+                )
+                            },
+                            |name| {
+                                if name.is_empty() {
+                                    exec_err!(
                         "{} requires {i}-th (0-indexed) field name as non-empty string",
                         self.name()
                     )
-                }
-                _ => {
-                    exec_err!(
-                        "{} requires {i}-th (0-indexed) field name as constant string",
-                        self.name()
-                    )
-                }
+                                } else {
+                                    Ok(name)
+                                }
+                            },
+                        )
+                    },
+                )
             })
             .collect::<Result<Vec<_>>>()?;
         let types = args.arg_types.iter().skip(1).step_by(2).collect::<Vec<_>>();

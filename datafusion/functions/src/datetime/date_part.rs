@@ -140,19 +140,17 @@ impl ScalarUDFImpl for DatePartFunc {
     }
 
     fn return_type_from_args(&self, args: ReturnTypeArgs) -> Result<ReturnInfo> {
-        match args.arguments[0].as_ref() {
-            Some(ScalarValue::Utf8(Some(part))) if !part.is_empty() => {
-                if is_epoch(part) {
-                    Ok(ReturnInfo::new_nullable(DataType::Float64))
-                } else {
-                    Ok(ReturnInfo::new_nullable(DataType::Int32))
-                }
-            }
-            Some(ScalarValue::Utf8(Some(_))) => {
+        args.arguments[0].map_or_else(|| exec_err!("{} requires constant string", self.name()), 
+        |sv| sv.try_as_str().flatten().map_or_else(|| exec_err!("{} requires constant string", self.name()),
+        |part| {
+            if part.is_empty() {
                 exec_err!("{} requires non-empty string", self.name())
+            } else if is_epoch(part) {
+                Ok(ReturnInfo::new_nullable(DataType::Float64))
+            } else {
+                Ok(ReturnInfo::new_nullable(DataType::Int32))
             }
-            _ => exec_err!("{} requires constant string", self.name()),
-        }
+        }))
     }
 
     fn invoke_batch(
