@@ -519,12 +519,8 @@ impl CaseExpr {
         // NOCOMMIT are these ok? This seems like an important assertion.
         debug_assert_eq!(None, self.else_expr);
 
-        println!("{when:?}");
-        println!("{then:?}");
-
         let divisor = then.right().evaluate(batch)?;
         let zero = ColumnarValue::Scalar(ScalarValue::new_zero(&divisor.data_type())?);
-        println!("{divisor:?}");
         // NOCOMMIT should I manually launch the lt_eq? That could prevent the funny to_array below.
         // NOCOMMIT instead of nullif we could replace `inf` with null?
         match apply_cmp(&divisor, &zero, lt_eq)? {
@@ -539,6 +535,7 @@ impl CaseExpr {
                 )
             }
             ColumnarValue::Scalar(mask) => {
+                println!("scalarasdf {mask:?}");
                 if mask.is_null() {
                     // Always null, return null
                     return Ok(ColumnarValue::Scalar(return_type.try_into()?));
@@ -965,6 +962,29 @@ mod tests {
         let result = as_int32_array(&result).expect("failed to downcast to Int32Array");
 
         let expected = &Int32Array::from(vec![Some(25), None, None, Some(5)]);
+
+        assert_eq!(expected, result);
+        Ok(())
+    }
+
+    #[test]
+    fn case_without_expr_divide_by_zero_always_divide() -> Result<()> {
+        let batch = case_test_batch1()?;
+        let schema = batch.schema();
+
+        // CASE WHEN 2 > 0 THEN a / 2 ELSE null END
+        let result = case_div_0_test(
+            &batch,
+            lit(2i32),
+            lit(0i32),
+            col("a", &schema)?,
+            lit(2i32),
+            None,
+            EvalMethod::NoExpression,
+        )?;
+        let result = as_int32_array(&result).expect("failed to downcast to Int32Array");
+
+        let expected = &Int32Array::from(vec![Some(0), Some(0), None, Some(2)]);
 
         assert_eq!(expected, result);
         Ok(())
