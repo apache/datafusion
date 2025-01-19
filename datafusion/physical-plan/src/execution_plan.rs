@@ -116,6 +116,7 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
     /// A default set of invariants is provided in the default implementation.
     /// Extension nodes can provide their own invariants.
     fn check_node_invariants(&self) -> Result<()> {
+        // TODO
         Ok(())
     }
 
