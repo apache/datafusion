@@ -125,7 +125,7 @@ done
 set -- "${POSITIONAL_ARGS[@]}" # restore positional parameters
 COMMAND=${1:-"${COMMAND}"}
 ARG2=$2
-ARG3=$3
+ARGS=${*:1}
 
 # Do what is requested
 main() {
@@ -296,7 +296,7 @@ main() {
             echo "Done"
             ;;
         compare)
-            compare_benchmarks "$ARG2" "$ARG3"
+            compare_benchmarks ${ARGS[@]}
             ;;
         venv)
             setup_venv
@@ -544,13 +544,13 @@ data_imdb() {
             
             # Extract the dataset
             tar -xzvf "${imdb_temp_gz}" -C "${imdb_dir}"
-            $CARGO_COMMAND --bin imdb -- convert --input ${imdb_dir} --output ${imdb_dir} --format parquet
+            $CARGO_COMMAND --bin imdb -- convert --input "${imdb_dir}" --output "${imdb_dir}" --format parquet
         else 
             echo "IMDB.tgz already exists."
 
             # Extract the dataset
             tar -xzvf "${imdb_temp_gz}" -C "${imdb_dir}"
-            $CARGO_COMMAND --bin imdb -- convert --input ${imdb_dir} --output ${imdb_dir} --format parquet
+            $CARGO_COMMAND --bin imdb -- convert --input "${imdb_dir}" --output "${imdb_dir}" --format parquet
         fi
         echo "IMDB dataset downloaded and extracted."
     else
@@ -715,35 +715,32 @@ run_sort_tpch() {
 
 
 compare_benchmarks() {
-    BASE_RESULTS_DIR="${SCRIPT_DIR}/results"
-    BRANCH1="$1"
-    BRANCH2="$2"
-    if [ -z "$BRANCH1" ] ; then
-        echo "<branch1> not specified. Available branches:"
-        ls -1 "${BASE_RESULTS_DIR}"
-        exit 1
+    RESULTS_DIR="${SCRIPT_DIR}/results"
+
+    if [ "$#" -lt 3 ]; then
+      echo "Missing $((3 - $#)) arguments. Available branches:"
+      ls -1 "${RESULTS_DIR}"
+      exit 1
     fi
 
-    if [ -z "$BRANCH2" ] ; then
-        echo "<branch2> not specified"
-        ls -1 "${BASE_RESULTS_DIR}"
-        exit 1
-    fi
+    BASE_BRANCH=$2
+    BRANCHES=("${@:3}")
+    echo "Comparing $BRANCHES to $BASE_BRANCH"
 
-    echo "Comparing ${BRANCH1} and ${BRANCH2}"
-    for RESULTS_FILE1 in "${BASE_RESULTS_DIR}/${BRANCH1}"/*.json ; do
-	BENCH=$(basename "${RESULTS_FILE1}")
-        RESULTS_FILE2="${BASE_RESULTS_DIR}/${BRANCH2}/${BENCH}"
-        if test -f "${RESULTS_FILE2}" ; then
-            echo "--------------------"
-            echo "Benchmark ${BENCH}"
-            echo "--------------------"
-            PATH=$VIRTUAL_ENV/bin:$PATH python3 "${SCRIPT_DIR}"/compare.py "${RESULTS_FILE1}" "${RESULTS_FILE2}"
+    for BASE_FILE in "$RESULTS_DIR/$BASE_BRANCH"/*.json ; do
+        BENCH=$(basename "${BASE_FILE}")
+        AVAILABLE_FILES=()
+        for OTHER in "${BRANCHES[@]}"; do
+          if [ -f "${RESULTS_DIR}/${OTHER}/${BENCH}" ]; then
+            AVAILABLE_FILES+=("$RESULTS_DIR/$OTHER/$BENCH")
+          fi
+        done
+        if [ ${#AVAILABLE_FILES[@]} -eq 0 ]; then
+          echo "Note: Skipping ${BASE_FILE} as no other result available for comparison."
         else
-            echo "Note: Skipping ${RESULTS_FILE1} as ${RESULTS_FILE2} does not exist"
+           PATH=$VIRTUAL_ENV/bin:$PATH python3 "${SCRIPT_DIR}"/compare.py "${BASE_FILE}" ${AVAILABLE_FILES[@]}
         fi
     done
-
 }
 
 setup_venv() {
