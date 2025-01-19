@@ -115,8 +115,7 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
     ///
     /// A default set of invariants is provided in the default implementation.
     /// Extension nodes can provide their own invariants.
-    fn check_node_invariants(&self) -> Result<()> {
-        // TODO
+    fn check_invariants(&self, _check: InvariantLevel) -> Result<()> {
         Ok(())
     }
 
@@ -432,6 +431,17 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
     fn cardinality_effect(&self) -> CardinalityEffect {
         CardinalityEffect::Unknown
     }
+}
+
+#[derive(Clone, Copy)]
+pub enum InvariantLevel {
+    /// Invariants that are always true for the [`ExecutionPlan`] node
+    /// such as the number of expected children.
+    Always,
+    /// Invariants that must hold true for the [`ExecutionPlan`] node
+    /// to be "executable", such as ordering and/or distribution requirements
+    /// being fulfilled.
+    Executable,
 }
 
 /// Extension trait provides an easy API to fetch various properties of
