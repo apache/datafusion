@@ -18,12 +18,14 @@
 //! This module contains computation kernels that are specific to
 //! datafusion and not (yet) targeted to  port upstream to arrow
 use arrow::array::*;
+use arrow::buffer::{MutableBuffer, NullBuffer};
 use arrow::compute::kernels::bitwise::{
     bitwise_and, bitwise_and_scalar, bitwise_or, bitwise_or_scalar, bitwise_shift_left,
     bitwise_shift_left_scalar, bitwise_shift_right, bitwise_shift_right_scalar,
     bitwise_xor, bitwise_xor_scalar,
 };
-use arrow::datatypes::DataType;
+use arrow::datatypes::{i256, DataType};
+use arrow_buffer::{ArrowNativeType, NullBufferBuilder};
 use datafusion_common::plan_err;
 use datafusion_common::{Result, ScalarValue};
 
@@ -163,4 +165,178 @@ pub fn concat_elements_utf8view(
         }
     }
     Ok(result.finish())
+}
+
+// NOCOMMIT I've just crammed these here. Gotta be a better place for them.
+
+// NOCOMMIT steal the dispatch logic from arrow-arith-numeric if we're going to go this way.
+
+trait ExtraFloat: Sized {
+    fn div_if_greater_than_zero(self, rhs: Self) -> Option<Self>;
+}
+
+trait ExtraInt: Sized {
+    fn div_if_greater_than_zero(self, rhs: Self) -> Result<Option<Self>, ArrowError>;
+}
+
+macro_rules! extra_float {
+    ($t:tt) => {
+        impl ExtraFloat for $t {
+            #[inline]
+            fn div_if_greater_than_zero(self, rhs: Self) -> Option<Self> {
+                if rhs > Self::ZERO {
+                    Some(self / rhs)
+                } else {
+                    None
+                }
+            }
+        }
+    };
+}
+extra_float!(f32);
+extra_float!(f64);
+
+macro_rules! extra_int {
+    ($t:tt) => {
+        impl ExtraInt for $t {
+            #[inline]
+            fn div_if_greater_than_zero(
+                self,
+                rhs: Self,
+            ) -> Result<Option<Self>, ArrowError> {
+                if rhs > Self::ZERO {
+                    Ok(Some(self.checked_div(rhs).ok_or_else(|| {
+                        ArrowError::ArithmeticOverflow(format!(
+                            "Overflow happened on: {:?} / {:?}",
+                            self, rhs
+                        ))
+                    })?))
+                } else {
+                    Ok(None)
+                }
+            }
+        }
+    };
+}
+extra_int!(i8);
+extra_int!(i16);
+extra_int!(i32);
+extra_int!(i64);
+extra_int!(i128);
+extra_int!(i256);
+extra_int!(u8);
+extra_int!(u16);
+extra_int!(u32);
+extra_int!(u64);
+
+// NOCOMMIT the try_op dance where we turn these into unary functions
+
+///// Copies of arity.rs kernel dispatch methods that handle Option in results.
+///// NOCOMMIT are there fast? how can we tell?
+fn binary_optional<A: ArrayAccessor, B: ArrayAccessor, F, O>(
+    a: A,
+    b: B,
+    op: F,
+) -> Result<PrimitiveArray<O>, ArrowError>
+where
+    O: ArrowPrimitiveType,
+    F: Fn(A::Item, B::Item) -> Option<O::Native>,
+{
+    if a.len() != b.len() {
+        return Err(ArrowError::ComputeError(
+            "Cannot perform a binary operation on arrays of different length".to_string(),
+        ));
+    }
+    if a.is_empty() {
+        return Ok(PrimitiveArray::from(ArrayData::new_empty(&O::DATA_TYPE)));
+    }
+    let len = a.len();
+
+    if a.null_count() == 0 && b.null_count() == 0 {
+        binary_optional_no_nulls(len, a, b, op)
+    } else {
+        todo!();
+    }
+}
+
+#[inline(never)]
+fn binary_optional_no_nulls<A: ArrayAccessor, B: ArrayAccessor, F, O>(
+    len: usize,
+    a: A,
+    b: B,
+    op: F,
+) -> Result<PrimitiveArray<O>, ArrowError>
+where
+    O: ArrowPrimitiveType,
+    F: Fn(A::Item, B::Item) -> Option<O::Native>,
+{
+    let mut nulls = NullBufferBuilder::new(len);
+    let mut buffer = MutableBuffer::new(len * O::Native::get_byte_width());
+    for idx in 0..len {
+        if let Some(result) =
+            unsafe { op(a.value_unchecked(idx), b.value_unchecked(idx)) }
+        {
+            unsafe {
+                buffer.push_unchecked(result);
+            }
+            nulls.append_non_null();
+        } else {
+            nulls.append_null();
+        }
+    }
+    Ok(PrimitiveArray::new(buffer.into(), nulls.finish()))
+}
+
+fn try_binary_optional<A: ArrayAccessor, B: ArrayAccessor, F, O>(
+    a: A,
+    b: B,
+    op: F,
+) -> Result<PrimitiveArray<O>, ArrowError>
+where
+    O: ArrowPrimitiveType,
+    F: Fn(A::Item, B::Item) -> Result<Option<O::Native>, ArrowError>,
+{
+    if a.len() != b.len() {
+        return Err(ArrowError::ComputeError(
+            "Cannot perform a binary operation on arrays of different length".to_string(),
+        ));
+    }
+    if a.is_empty() {
+        return Ok(PrimitiveArray::from(ArrayData::new_empty(&O::DATA_TYPE)));
+    }
+    let len = a.len();
+
+    if a.null_count() == 0 && b.null_count() == 0 {
+        try_binary_optional_no_nulls(len, a, b, op)
+    } else {
+        todo!();
+    }
+}
+
+#[inline(never)]
+fn try_binary_optional_no_nulls<A: ArrayAccessor, B: ArrayAccessor, F, O>(
+    len: usize,
+    a: A,
+    b: B,
+    op: F,
+) -> Result<PrimitiveArray<O>, ArrowError>
+where
+    O: ArrowPrimitiveType,
+    F: Fn(A::Item, B::Item) -> Result<Option<O::Native>, ArrowError>,
+{
+    let mut nulls = NullBufferBuilder::new(len);
+    let mut buffer = MutableBuffer::new(len * O::Native::get_byte_width());
+    for idx in 0..len {
+        if let Some(result) =
+            unsafe { op(a.value_unchecked(idx), b.value_unchecked(idx))? }
+        {
+            unsafe {
+                buffer.push_unchecked(result);
+            }
+            nulls.append_non_null();
+        } else {
+            nulls.append_null();
+        }
+    }
+    Ok(PrimitiveArray::new(buffer.into(), nulls.finish()))
 }
