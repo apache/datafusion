@@ -104,75 +104,106 @@ class BenchmarkRun:
 
 def compare(
     baseline_path: Path,
-    comparison_path: Path,
+    comparison_paths: list[Path],
     noise_threshold: float,
 ) -> None:
     baseline = BenchmarkRun.load_from_file(baseline_path)
-    comparison = BenchmarkRun.load_from_file(comparison_path)
+    comparisons = list(map(lambda x: BenchmarkRun.load_from_file(x), comparison_paths))
 
     console = Console()
 
-    # use basename as the column names
     baseline_header = baseline_path.parent.stem
-    comparison_header = comparison_path.parent.stem
 
     table = Table(show_header=True, header_style="bold magenta")
     table.add_column("Query", style="dim", width=12)
     table.add_column(baseline_header, justify="right", style="dim")
-    table.add_column(comparison_header, justify="right", style="dim")
-    table.add_column("Change", justify="right", style="dim")
+    for comparison_path in comparison_paths:
+        comparison_header = comparison_path.parent.stem
+        table.add_column(comparison_header, justify="right", style="dim")
+        table.add_column("Change on " + comparison_header, justify="right", style="dim")
 
-    faster_count = 0
-    slower_count = 0
-    no_change_count = 0
-    total_baseline_time = 0
-    total_comparison_time = 0
-
-    for baseline_result, comparison_result in zip(baseline.queries, comparison.queries):
-        assert baseline_result.query == comparison_result.query
-
-        total_baseline_time += baseline_result.execution_time
-        total_comparison_time += comparison_result.execution_time
-
-        change = comparison_result.execution_time / baseline_result.execution_time
-
-        if (1.0 - noise_threshold) <= change <= (1.0 + noise_threshold):
-            change_text = "no change"
-            no_change_count += 1
-        elif change < 1.0:
-            change_text = f"+{(1 / change):.2f}x faster"
-            faster_count += 1
+    def to_change_text(ratio: float) -> str:
+        if (1.0 - noise_threshold) <= ratio <= (1.0 + noise_threshold):
+            return "no change"
+        elif ratio < 1.0:
+            return f"+{(1 / ratio):.2f}x faster"
         else:
-            change_text = f"{change:.2f}x slower"
-            slower_count += 1
+            return f"{ratio:.2f}x slower"
+
+    for baseline_result, comparison_results in zip(
+        baseline.queries, zip(*[run.queries for run in comparisons])
+    ):
+        for result in comparison_results:
+            assert baseline_result.query == result.query
+
+        execution_time_texts = list(
+            map(lambda x: f"{x.execution_time:.2f}ms", comparison_results)
+        )
+
+        changes = map(
+            lambda x: x.execution_time / baseline_result.execution_time,
+            comparison_results,
+        )
+        change_texts = list(map(to_change_text, changes))
 
         table.add_row(
-            f"Q{baseline_result.query}",
-            f"{baseline_result.execution_time:.2f}ms",
-            f"{comparison_result.execution_time:.2f}ms",
-            change_text,
+            *(
+                [f"Q{baseline_result.query}", f"{baseline_result.execution_time:.2f}ms"]
+                + [
+                    x
+                    for i in range(len(change_texts))
+                    for x in (execution_time_texts[i], change_texts[i])
+                ]
+            )
         )
 
     console.print(table)
-
-    # Calculate averages
-    avg_baseline_time = total_baseline_time / len(baseline.queries)
-    avg_comparison_time = total_comparison_time / len(comparison.queries)
 
     # Summary table
     summary_table = Table(show_header=True, header_style="bold magenta")
     summary_table.add_column("Benchmark Summary", justify="left", style="dim")
     summary_table.add_column("", justify="right", style="dim")
 
-    summary_table.add_row(f"Total Time ({baseline_header})", f"{total_baseline_time:.2f}ms")
-    summary_table.add_row(f"Total Time ({comparison_header})", f"{total_comparison_time:.2f}ms")
-    summary_table.add_row(f"Average Time ({baseline_header})", f"{avg_baseline_time:.2f}ms")
-    summary_table.add_row(f"Average Time ({comparison_header})", f"{avg_comparison_time:.2f}ms")
-    summary_table.add_row("Queries Faster", str(faster_count))
-    summary_table.add_row("Queries Slower", str(slower_count))
-    summary_table.add_row("Queries with No Change", str(no_change_count))
+    # baseline info
+    total_baseline_time = sum(map(lambda x: x.execution_time, baseline.queries))
+    avg_baseline_time = total_baseline_time / len(baseline.queries)
+
+    summary_table.add_row(
+        f"Total Time ({baseline_header})", f"{total_baseline_time:.2f}ms"
+    )
+    summary_table.add_row(
+        f"Average Time ({baseline_header})", f"{avg_baseline_time:.2f}ms"
+    )
+
+    # info for each comparison
+    for path, result in zip(comparison_paths, comparisons):
+        header = path.parent.stem
+
+        total_time = sum(map(lambda x: x.execution_time, result.queries))
+        average_time = total_time / len(result.queries)
+
+        time_ratios = list(
+            map(
+                lambda x: x[0].execution_time / x[1].execution_time - 1,
+                zip(baseline.queries, result.queries),
+            )
+        )
+
+        faster_count = len(list(filter(lambda x: x > noise_threshold, time_ratios)))
+        slower_count = len(list(filter(lambda x: x < -noise_threshold, time_ratios)))
+        no_change_count = len(time_ratios) - faster_count - slower_count
+
+        summary_table.add_row(f"Total Time ({header})", f"{total_time:.2f}ms")
+        summary_table.add_row(f"Average Time ({header})", f"{average_time:.2f}ms")
+
+        summary_table.add_row(f"Queries Faster ({header})", str(faster_count))
+        summary_table.add_row(f"Queries Slower ({header})", str(slower_count))
+        summary_table.add_row(
+            f"Queries with No Change ({header})", str(no_change_count)
+        )
 
     console.print(summary_table)
+
 
 def main() -> None:
     parser = ArgumentParser()
@@ -183,8 +214,9 @@ def main() -> None:
         help="Path to the baseline summary file.",
     )
     compare_parser.add_argument(
-        "comparison_path",
+        "comparison_paths",
         type=Path,
+        nargs="+",
         help="Path to the comparison summary file.",
     )
     compare_parser.add_argument(
@@ -196,8 +228,7 @@ def main() -> None:
 
     options = parser.parse_args()
 
-    compare(options.baseline_path, options.comparison_path, options.noise_threshold)
-
+    compare(options.baseline_path, options.comparison_paths, options.noise_threshold)
 
 
 if __name__ == "__main__":
