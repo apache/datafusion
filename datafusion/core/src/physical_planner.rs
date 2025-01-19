@@ -36,7 +36,6 @@ use crate::logical_expr::{
     UserDefinedLogicalNode,
 };
 use crate::physical_expr::{create_physical_expr, create_physical_exprs};
-use crate::physical_optimizer::sanity_checker::check_plan_sanity;
 use crate::physical_plan::aggregates::{AggregateExec, AggregateMode, PhysicalGroupBy};
 use crate::physical_plan::analyze::AnalyzeExec;
 use crate::physical_plan::empty::EmptyExec;
@@ -65,7 +64,6 @@ use arrow::compute::SortOptions;
 use arrow::datatypes::{Schema, SchemaRef};
 use arrow_array::builder::StringBuilder;
 use arrow_array::RecordBatch;
-use datafusion_common::config::OptimizerOptions;
 use datafusion_common::display::ToStringifiedPlan;
 use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion, TreeNodeVisitor};
 use datafusion_common::{
@@ -1878,7 +1876,6 @@ impl DefaultPhysicalPlanner {
         );
 
         let mut new_plan = Arc::clone(&plan);
-        let mut input_plan_is_valid = true;
         for optimizer in optimizers {
             let before_schema = new_plan.schema();
             new_plan = optimizer
@@ -1888,12 +1885,8 @@ impl DefaultPhysicalPlanner {
                 })?;
 
             // confirm optimizer change did not violate invariants
-            let mut validator = InvariantChecker::new(
-                &session_state.config_options().optimizer,
-                optimizer,
-            );
-            validator.check(&new_plan, before_schema, input_plan_is_valid)?;
-            input_plan_is_valid = optimizer.executable_check(input_plan_is_valid);
+            let mut validator = InvariantChecker::new(optimizer);
+            validator.check(&new_plan, before_schema)?;
 
             trace!(
                 "Optimized physical plan by {}:\n{}\n",
@@ -2009,32 +2002,26 @@ fn tuple_err<T, R>(value: (Result<T>, Result<R>)) -> Result<(T, R)> {
     }
 }
 
-/// Confirms that a given [`PhysicalOptimizerRule`] run conforms
-/// to the invariants per rule, and per [`ExecutionPlan`] invariants.
+/// Confirms that a given [`PhysicalOptimizerRule`] run
+/// did not violate the [`ExecutionPlan`] invariants.
 struct InvariantChecker<'a> {
-    options: &'a OptimizerOptions,
     rule: &'a Arc<dyn PhysicalOptimizerRule + Send + Sync>,
 }
 
 impl<'a> InvariantChecker<'a> {
     /// Create an [`InvariantChecker`].
-    pub fn new(
-        options: &'a OptimizerOptions,
-        rule: &'a Arc<dyn PhysicalOptimizerRule + Send + Sync>,
-    ) -> Self {
-        Self { options, rule }
+    pub fn new(rule: &'a Arc<dyn PhysicalOptimizerRule + Send + Sync>) -> Self {
+        Self { rule }
     }
 
     /// Checks that the plan change is permitted, returning an Error if not.
     ///
-    /// In debug mode, this recursively walks the entire physical plan and
-    /// performs additional checks using Datafusions's [`check_plan_sanity`]
-    /// and any user defined [`ExecutionPlan::check_node_invariants`] extensions.
+    /// In debug mode, this recursively walks the entire physical plan
+    /// and performs [`ExecutionPlan::check_node_invariants`].
     pub fn check(
         &mut self,
         plan: &Arc<dyn ExecutionPlan>,
         previous_schema: Arc<Schema>,
-        input_plan_is_valid: bool,
     ) -> Result<()> {
         // if the rule is not permitted to change the schema, confirm that it did not change.
         if self.rule.schema_check() && plan.schema() != previous_schema {
@@ -2045,11 +2032,9 @@ impl<'a> InvariantChecker<'a> {
             )?
         }
 
-        // if the rule requires that the new plan is executable, confirm that it is.
+        // check invariants per ExecutionPlan extension
         #[cfg(debug_assertions)]
-        if self.rule.executable_check(input_plan_is_valid) {
-            plan.visit(self)?;
-        }
+        plan.visit(self)?;
 
         Ok(())
     }
@@ -2059,17 +2044,7 @@ impl<'n> TreeNodeVisitor<'n> for InvariantChecker<'_> {
     type Node = Arc<dyn ExecutionPlan>;
 
     fn f_down(&mut self, node: &'n Self::Node) -> Result<TreeNodeRecursion> {
-        // Datafusion's defined physical plan invariants
-        check_plan_sanity(Arc::clone(node), self.options).map_err(|e| {
-            e.context(format!(
-                "SanityCheckPlan failed for PhysicalOptimizer rule '{}'",
-                self.rule.name()
-            ))
-        })?;
-
-        // user defined invariants per ExecutionPlan extension
         node.check_node_invariants().map_err(|e| e.context(format!("Invariant for ExecutionPlan node '{}' failed for PhysicalOptimizer rule '{}'", node.name(), self.rule.name())))?;
-
         Ok(TreeNodeRecursion::Continue)
     }
 }
@@ -2965,20 +2940,20 @@ digraph {
 
         // Test: check should pass with same schema
         let equal_schema = ok_plan.schema();
-        InvariantChecker.check(&ok_plan, &rule, equal_schema)?;
+        InvariantChecker::new(&rule).check(&ok_plan, equal_schema)?;
 
         // Test: should fail with schema changed
         let different_schema =
             Arc::new(Schema::new(vec![Field::new("a", DataType::Boolean, false)]));
-        let expected_err = InvariantChecker
-            .check(&ok_plan, &rule, different_schema)
+        let expected_err = InvariantChecker::new(&rule)
+            .check(&ok_plan, different_schema)
             .unwrap_err();
         assert!(expected_err.to_string().contains("PhysicalOptimizer rule 'OptimizerRuleWithSchemaCheck' failed, due to generate a different schema"));
 
         // Test: should fail when extension node fails it's own invariant check
         let failing_node: Arc<dyn ExecutionPlan> = Arc::new(InvariantFailsExtensionNode);
-        let expected_err = InvariantChecker
-            .check(&failing_node, &rule, ok_plan.schema())
+        let expected_err = InvariantChecker::new(&rule)
+            .check(&failing_node, ok_plan.schema())
             .unwrap_err();
         assert!(expected_err
             .to_string()
@@ -2990,8 +2965,8 @@ digraph {
             Arc::clone(&child).with_new_children(vec![Arc::clone(&failing_node)])?,
             Arc::clone(&child),
         ])?;
-        let expected_err = InvariantChecker
-            .check(&invalid_plan, &rule, ok_plan.schema())
+        let expected_err = InvariantChecker::new(&rule)
+            .check(&invalid_plan, ok_plan.schema())
             .unwrap_err();
         assert!(expected_err
             .to_string()
