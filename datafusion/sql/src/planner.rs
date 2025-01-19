@@ -430,7 +430,10 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             SQLDataType::UnsignedBigInt(_) | SQLDataType::UnsignedInt8(_) => Ok(DataType::UInt64),
             SQLDataType::Float(_) => Ok(DataType::Float32),
             SQLDataType::Real | SQLDataType::Float4 => Ok(DataType::Float32),
-            SQLDataType::Double | SQLDataType::DoublePrecision | SQLDataType::Float8 => Ok(DataType::Float64),
+            SQLDataType::Double(ExactNumberInfo::None) | SQLDataType::DoublePrecision | SQLDataType::Float8 => Ok(DataType::Float64),
+            SQLDataType::Double(ExactNumberInfo::Precision(_)|ExactNumberInfo::PrecisionAndScale(_, _)) => {
+                not_impl_err!("Unsupported SQL type (precision/scale not supported) {sql_type}")
+            }
             SQLDataType::Char(_)
             | SQLDataType::Text
             | SQLDataType::String(_) => Ok(DataType::Utf8),
@@ -566,7 +569,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             | SQLDataType::MediumText
             | SQLDataType::LongText
             | SQLDataType::Bit(_)
-            |SQLDataType::BitVarying(_)
+            | SQLDataType::BitVarying(_)
+            // BIG Query UDFs
+            | SQLDataType::AnyType
             => not_impl_err!(
                 "Unsupported SQL type {sql_type:?}"
             ),

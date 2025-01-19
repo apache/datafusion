@@ -523,9 +523,9 @@ impl Unparser<'_> {
         }
         let array = self.expr_to_sql(&args[0])?;
         let index = self.expr_to_sql(&args[1])?;
-        Ok(ast::Expr::Subscript {
-            expr: Box::new(array),
-            subscript: Box::new(Subscript::Index { index }),
+        Ok(ast::Expr::CompoundFieldAccess {
+            root: Box::new(array),
+            access_chain: vec![ast::AccessExpr::Subscript(Subscript::Index { index })],
         })
     }
 
@@ -1633,6 +1633,7 @@ mod tests {
     use datafusion_functions_nested::expr_fn::{array_element, make_array};
     use datafusion_functions_nested::map::map;
     use datafusion_functions_window::row_number::row_number_udwf;
+    use sqlparser::ast::ExactNumberInfo;
 
     use crate::unparser::dialect::{
         CharacterLengthStyle, CustomDialect, CustomDialectBuilder, DateFieldExtractStyle,
@@ -2123,7 +2124,7 @@ mod tests {
     #[test]
     fn custom_dialect_float64_ast_dtype() -> Result<()> {
         for (float64_ast_dtype, identifier) in [
-            (ast::DataType::Double, "DOUBLE"),
+            (ast::DataType::Double(ExactNumberInfo::None), "DOUBLE"),
             (ast::DataType::DoublePrecision, "DOUBLE PRECISION"),
         ] {
             let dialect = CustomDialectBuilder::new()

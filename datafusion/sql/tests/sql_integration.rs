@@ -3671,7 +3671,7 @@ fn test_non_prepare_statement_should_infer_types() {
 
 #[test]
 #[should_panic(
-    expected = "value: SQL(ParserError(\"Expected: [NOT] NULL or TRUE|FALSE or [NOT] DISTINCT FROM after IS, found: $1\""
+    expected = "Expected: [NOT] NULL | TRUE | FALSE | DISTINCT | [form] NORMALIZED FROM after IS, found: $1"
 )]
 fn test_prepare_statement_to_plan_panic_is_param() {
     let sql = "PREPARE my_plan(INT) AS SELECT id, age  FROM person WHERE age is $1";

@@ -83,7 +83,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         }
     }
 
-    pub(super) fn sql_compound_identifier_to_expr(
+    pub(crate) fn sql_compound_identifier_to_expr(
         &self,
         ids: Vec<Ident>,
         schema: &DFSchema,
