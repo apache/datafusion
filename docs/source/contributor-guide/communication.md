@@ -72,7 +72,7 @@ Discord server.
 
 There are plenty of opportunities to work with DataFusion advertised on the
 #hiring channel on the [Arrow Rust Discord Server][discord-link].
-Please feel free to post links to DataFusion related jobs there. 
+Please feel free to post links to DataFusion related jobs there.
 
 ## Mailing Lists
 
