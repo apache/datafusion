@@ -545,6 +545,11 @@
    How to update protobuf/gen dependencies
   </a>
  </li>
+ <li class="toc-h2 nav-item toc-entry">
+  <a class="reference internal nav-link" href="#how-to-add-edit-documentation-for-udfs">
+   How to add/edit documentation for UDFs
+  </a>
+ </li>
 </ul>
 
 </nav>
@@ -721,6 +726,14 @@ taplo<span class="w"> </span><span class="m">0</span>.9.0
 <p>This is necessary after modifying the protobuf definitions or altering the dependencies of <a class="reference internal" href="#./gen"><span class="xref myst">gen</span></a>, and requires a
 valid installation of <a class="reference external" href="https://github.com/protocolbuffers/protobuf#protocol-compiler-installation">protoc</a> (see <a class="reference external" href="https://datafusion.apache.org/contributor-guide/getting_started.html#protoc-installation">installation instructions</a> for details).</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>./regen.sh
+</pre></div>
+</div>
+</section>
+<section id="how-to-add-edit-documentation-for-udfs">
+<h2>How to add/edit documentation for UDFs<a class="headerlink" href="#how-to-add-edit-documentation-for-udfs" title="Link to this heading">¶</a></h2>
+<p>Documentations for the UDF documentations are generated from code (related <a class="reference external" href="https://github.com/apache/datafusion/issues/12740">github issue</a>). To generate markdown run <code class="docutils literal notranslate"><span class="pre">./update_function_docs.sh</span></code>.</p>
+<p>This is necessary after adding new UDF implementation or modifying existing implementation which requires to update documentation.</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>./dev/update_function_docs.sh
 </pre></div>
 </div>
 </section>
