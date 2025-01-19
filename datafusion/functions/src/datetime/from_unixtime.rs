@@ -86,22 +86,27 @@ impl ScalarUDFImpl for FromUnixtimeFunc {
         if args.arguments.len() == 1 {
             Ok(ReturnInfo::new_nullable(Timestamp(Second, None)))
         } else {
-            args.arguments[1].map_or_else(|| exec_err!(
-                "{} requires its second argument to be a constant string",
-                self.name()
-            ), |sv| sv.try_as_str().flatten().map_or_else(|| exec_err!(
-                "{} requires its second argument to be a constant string",
-                self.name()
-            ), |tz| {
-                if tz.is_empty() {
-                    exec_err!(
-                        "{} requires its second argument to be a non-empty constant string",
-                        self.name()
-                    )
-                } else {
-                    Ok(ReturnInfo::new_nullable(Timestamp(Second, Some(Arc::from(tz.to_string())))))
-                }
-            }))
+            args.arguments[1]
+                .and_then(|sv| {
+                    sv.try_as_str()
+                        .flatten()
+                        .filter(|s| !s.is_empty())
+                        .map(|tz| {
+                            ReturnInfo::new_nullable(Timestamp(
+                                Second,
+                                Some(Arc::from(tz.to_string())),
+                            ))
+                        })
+                })
+                .map_or_else(
+                    || {
+                        exec_err!(
+                            "{} requires its second argument to be a constant string",
+                            self.name()
+                        )
+                    },
+                    Ok,
+                )
         }
     }
 
