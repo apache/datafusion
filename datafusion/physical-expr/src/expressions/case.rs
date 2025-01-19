@@ -875,30 +875,15 @@ mod tests {
         let schema = batch.schema();
 
         // CASE WHEN a > 0 THEN 25.0 / cast(a, float64) ELSE float64(null) END
-        let when1 = binary(col("a", &schema)?, Operator::Gt, lit(0i32), &batch.schema())?;
-        let then1 = binary(
+        let result = case_div_0_test(
+            &batch,
+            col("a", &schema)?,
+            lit(0i32),
             lit(25.0f64),
-            Operator::Divide,
             cast(col("a", &schema)?, &batch.schema(), Float64)?,
-            &batch.schema(),
-        )?;
-
-        let expr = generate_case_when_with_type_coercion(
             None,
-            vec![(when1, then1)],
-            None,
-            schema.as_ref(),
+            EvalMethod::DivideGtZero,
         )?;
-        let case = expr
-            .as_any()
-            .downcast_ref::<CaseExpr>()
-            .expect("expected case expression");
-        assert_eq!(case.eval_method, EvalMethod::DivideGtZero);
-        let result = expr
-            .evaluate(&batch)?
-            .into_array(batch.num_rows())
-            .expect("Failed to convert to array");
-        println!("DSAFADFF {result:?}");
         let result =
             as_float64_array(&result).expect("failed to downcast to Float64Array");
 
@@ -914,30 +899,15 @@ mod tests {
         let schema = batch.schema();
 
         // CASE WHEN a > 0 THEN 25.0 / cast(a, float64) ELSE float64(0.0) END
-        let when1 = binary(col("a", &schema)?, Operator::Gt, lit(0i32), &batch.schema())?;
-        let then1 = binary(
+        let result = case_div_0_test(
+            &batch,
+            col("a", &schema)?,
+            lit(0i32),
             lit(25.0f64),
-            Operator::Divide,
             cast(col("a", &schema)?, &batch.schema(), Float64)?,
-            &batch.schema(),
-        )?;
-
-        let expr = generate_case_when_with_type_coercion(
-            None,
-            vec![(when1, then1)],
             Some(lit(0.0f64)),
-            schema.as_ref(),
+            EvalMethod::ExpressionOrExpression,
         )?;
-        let case = expr
-            .as_any()
-            .downcast_ref::<CaseExpr>()
-            .expect("expected case expression");
-        assert_eq!(case.eval_method, EvalMethod::ExpressionOrExpression);
-        let result = expr
-            .evaluate(&batch)?
-            .into_array(batch.num_rows())
-            .expect("Failed to convert to array");
-        println!("DSAFADFF {result:?}");
         let result =
             as_float64_array(&result).expect("failed to downcast to Float64Array");
 
@@ -948,35 +918,50 @@ mod tests {
         Ok(())
     }
 
+    fn case_div_0_test(
+        batch: &RecordBatch,
+        guard: Arc<dyn PhysicalExpr>,
+        zero: Arc<dyn PhysicalExpr>,
+        numerator: Arc<dyn PhysicalExpr>,
+        denominator: Arc<dyn PhysicalExpr>,
+        else_: Option<Arc<dyn PhysicalExpr>>,
+        expected_eval_method: EvalMethod,
+    ) -> Result<ArrayRef> {
+        let when1 = binary(guard, Operator::Gt, zero, &batch.schema())?;
+        let then1 = binary(numerator, Operator::Divide, denominator, &batch.schema())?;
+
+        let expr = generate_case_when_with_type_coercion(
+            None,
+            vec![(when1, then1)],
+            else_,
+            batch.schema().as_ref(),
+        )?;
+        let case = expr
+            .as_any()
+            .downcast_ref::<CaseExpr>()
+            .expect("expected case expression");
+        assert_eq!(case.eval_method, expected_eval_method);
+        Ok(expr
+            .evaluate(batch)?
+            .into_array(batch.num_rows())
+            .expect("Failed to convert to array"))
+    }
+
     #[test]
     fn case_without_expr_divide_by_zero_no_cast() -> Result<()> {
         let batch = case_test_batch1()?;
         let schema = batch.schema();
 
         // CASE WHEN a > 0 THEN 25 / a ELSE null END
-        let when1 = binary(col("a", &schema)?, Operator::Gt, lit(0i32), &batch.schema())?;
-        let then1 = binary(
-            lit(25i32),
-            Operator::Divide,
+        let result = case_div_0_test(
+            &batch,
             col("a", &schema)?,
-            &batch.schema(),
-        )?;
-
-        let expr = generate_case_when_with_type_coercion(
+            lit(0i32),
+            lit(25i32),
+            col("a", &schema)?,
             None,
-            vec![(when1, then1)],
-            None,
-            schema.as_ref(),
+            EvalMethod::DivideGtZero,
         )?;
-        let case = expr
-            .as_any()
-            .downcast_ref::<CaseExpr>()
-            .expect("expected case expression");
-        assert_eq!(case.eval_method, EvalMethod::DivideGtZero);
-        let result = expr
-            .evaluate(&batch)?
-            .into_array(batch.num_rows())
-            .expect("Failed to convert to array");
         let result = as_int32_array(&result).expect("failed to downcast to Int32Array");
 
         let expected = &Int32Array::from(vec![Some(25), None, None, Some(5)]);
@@ -990,34 +975,18 @@ mod tests {
         let batch = case_test_batch3_floats()?;
         let schema = batch.schema();
 
-        // NOCOMMIT dedupe these tests some.
         // CASE WHEN y > 0 THEN x / y ELSE null END
-        let when1 = binary(col("y", &schema)?, Operator::Gt, lit(0i32), &batch.schema())?;
-        let then1 = binary(
-            col("x", &schema)?,
-            Operator::Divide,
+        let result = case_div_0_test(
+            &batch,
             col("y", &schema)?,
-            &batch.schema(),
-        )?;
-
-        let expr = generate_case_when_with_type_coercion(
+            lit(0i32),
+            col("x", &schema)?,
+            col("y", &schema)?,
             None,
-            vec![(when1, then1)],
-            None,
-            schema.as_ref(),
+            EvalMethod::DivideGtZero,
         )?;
-        let case = expr
-            .as_any()
-            .downcast_ref::<CaseExpr>()
-            .expect("expected case expression");
-        assert_eq!(case.eval_method, EvalMethod::DivideGtZero);
-        let result = expr
-            .evaluate(&batch)?
-            .into_array(batch.num_rows())
-            .expect("Failed to convert to array");
         let result =
             as_float64_array(&result).expect("failed to downcast to Float64Array");
-
         let expected =
             &Float64Array::from(vec![Some(68.85714285714286), None, None, Some(1.0)]);
 
@@ -1032,34 +1001,15 @@ mod tests {
 
         // CASE WHEN a > 0 THEN x / y ELSE NULL END
         // which hits an infinity
-        let when1 = binary(
+        let result = case_div_0_test(
+            &batch,
             col("a", &schema)?,
-            Operator::Gt,
             lit(0.0f64),
-            &batch.schema(),
-        )?;
-        let then1 = binary(
             col("x", &schema)?,
-            Operator::Divide,
             col("y", &schema)?,
-            &batch.schema(),
-        )?;
-
-        let expr = generate_case_when_with_type_coercion(
             None,
-            vec![(when1, then1)],
-            None,
-            schema.as_ref(),
+            EvalMethod::NoExpression,
         )?;
-        let case = expr
-            .as_any()
-            .downcast_ref::<CaseExpr>()
-            .expect("expected case expression");
-        assert_eq!(case.eval_method, EvalMethod::NoExpression);
-        let result = expr
-            .evaluate(&batch)?
-            .into_array(batch.num_rows())
-            .expect("Failed to convert to array");
         let result =
             as_float64_array(&result).expect("failed to downcast to Float64Array");
 
@@ -1081,26 +1031,16 @@ mod tests {
 
         // CASE WHEN a > 0 THEN x / y ELSE NULL END
         // which hits an error
-        let when1 = binary(col("a", &schema)?, Operator::Gt, lit(0i32), &batch.schema())?;
-        let then1 = binary(
+        let result = case_div_0_test(
+            &batch,
+            col("a", &schema)?,
+            lit(0i32),
             col("x", &schema)?,
-            Operator::Divide,
             col("y", &schema)?,
-            &batch.schema(),
-        )?;
-
-        let expr = generate_case_when_with_type_coercion(
             None,
-            vec![(when1, then1)],
-            None,
-            schema.as_ref(),
-        )?;
-        let case = expr
-            .as_any()
-            .downcast_ref::<CaseExpr>()
-            .expect("expected case expression");
-        assert_eq!(case.eval_method, EvalMethod::NoExpression);
-        let err = expr.evaluate(&batch).unwrap_err();
+            EvalMethod::NoExpression,
+        );
+        let err = result.unwrap_err();
         assert!(matches!(
             err,
             DataFusionError::ArrowError(ArrowError::DivideByZero, None)
