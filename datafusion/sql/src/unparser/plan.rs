@@ -1089,7 +1089,7 @@ impl Unparser<'_> {
         &self,
         join_conditions: &[(Expr, Expr)],
     ) -> Option<ast::JoinConstraint> {
-        let mut idents = Vec::with_capacity(join_conditions.len());
+        let mut object_names = Vec::with_capacity(join_conditions.len());
         for (left, right) in join_conditions {
             match (left, right) {
                 (
@@ -1102,14 +1102,18 @@ impl Unparser<'_> {
                         name: right_name,
                     }),
                 ) if left_name == right_name => {
-                    idents.push(self.new_ident_quoted_if_needs(left_name.to_string()));
+                    // For example, if the join condition `t1.id = t2.id`
+                    // this is represented as two columns like `[t1.id, t2.id]`
+                    // This code forms `id` (without relation name)
+                    let ident = self.new_ident_quoted_if_needs(left_name.to_string());
+                    object_names.push(ast::ObjectName(vec![ident]));
                 }
                 // USING is only valid with matching column names; arbitrary expressions
                 // are not allowed
                 _ => return None,
             }
         }
-        Some(ast::JoinConstraint::Using(idents))
+        Some(ast::JoinConstraint::Using(object_names))
     }
 
     /// Convert a join constraint and associated conditions and filter to a SQL AST node

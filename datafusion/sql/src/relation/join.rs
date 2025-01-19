@@ -16,7 +16,7 @@
 // under the License.
 
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
-use datafusion_common::{not_impl_err, Column, Result};
+use datafusion_common::{not_impl_datafusion_err, not_impl_err, Column, Result};
 use datafusion_expr::{JoinType, LogicalPlan, LogicalPlanBuilder};
 use sqlparser::ast::{Join, JoinConstraint, JoinOperator, TableFactor, TableWithJoins};
 use std::collections::HashSet;
@@ -123,11 +123,21 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     .join_on(right, join_type, Some(expr))?
                     .build()
             }
-            JoinConstraint::Using(idents) => {
-                let keys: Vec<Column> = idents
+            JoinConstraint::Using(object_names) => {
+                let keys = object_names
                     .into_iter()
-                    .map(|x| Column::from_name(self.ident_normalizer.normalize(x)))
-                    .collect();
+                    .map(|object_name| {
+                        let idents = object_name
+                            .0
+                            .into_iter()
+                            .map(|id| self.ident_normalizer.normalize(id))
+                            .collect::<Vec<_>>();
+                        Column::from_idents(idents).ok_or_else(|| {
+                            not_impl_datafusion_err!("Invalid identifier in USING clause")
+                        })
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+
                 LogicalPlanBuilder::from(left)
                     .join_using(right, join_type, keys)?
                     .build()

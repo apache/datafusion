@@ -71,7 +71,11 @@ impl Column {
         }
     }
 
-    fn from_idents(idents: &mut Vec<String>) -> Option<Self> {
+    /// Create a Column from multiple normalized identifiers
+    ///
+    /// For example, `foo.bar` would be represented as a two element vector
+    /// `["foo", "bar"]`
+    pub fn from_idents(mut idents: Vec<String>) -> Option<Self> {
         let (relation, name) = match idents.len() {
             1 => (None, idents.remove(0)),
             2 => (
@@ -109,7 +113,7 @@ impl Column {
     /// where `"foo.BAR"` would be parsed to a reference to column named `foo.BAR`
     pub fn from_qualified_name(flat_name: impl Into<String>) -> Self {
         let flat_name = flat_name.into();
-        Self::from_idents(&mut parse_identifiers_normalized(&flat_name, false)).unwrap_or(
+        Self::from_idents(parse_identifiers_normalized(&flat_name, false)).unwrap_or(
             Self {
                 relation: None,
                 name: flat_name,
@@ -120,7 +124,7 @@ impl Column {
     /// Deserialize a fully qualified name string into a column preserving column text case
     pub fn from_qualified_name_ignore_case(flat_name: impl Into<String>) -> Self {
         let flat_name = flat_name.into();
-        Self::from_idents(&mut parse_identifiers_normalized(&flat_name, true)).unwrap_or(
+        Self::from_idents(parse_identifiers_normalized(&flat_name, true)).unwrap_or(
             Self {
                 relation: None,
                 name: flat_name,

@@ -25,27 +25,10 @@ select
 Interval(MonthDayNano) Interval(MonthDayNano)
 
 
-## This is incredibly confusing but document it in tests:
-#
-# years is parsed as a column name
-# year is parsed as part of the interval type.
-#
-# postgres=# select interval '5' year;
-#  interval
-# ----------
-#  5 years
-# (1 row)
-#
-# postgres=# select interval '5' years;
-#   years
-# ----------
-#  00:00:05
-# (1 row)
 query ?
 select interval '5' years
 ----
-5.000000000 secs
-
+60 mons
 
 # check all different kinds of intervals
 query ?
@@ -61,7 +44,7 @@ select interval '5' month
 query ?
 select interval '5' months
 ----
-5.000000000 secs
+5 mons
 
 query ?
 select interval '5' week
@@ -83,7 +66,7 @@ select interval '5' hour
 query ?
 select interval '5' hours
 ----
-5.000000000 secs
+5 hours
 
 query ?
 select interval '5' minute

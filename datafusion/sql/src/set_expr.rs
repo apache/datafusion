@@ -88,6 +88,9 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             (SetOperator::Except, false) => {
                 LogicalPlanBuilder::except(left_plan, right_plan, false)
             }
+            (SetOperator::Minus, _) => {
+                not_impl_err!("MINUS Set Operator not implemented")
+            }
         }
     }
 }
