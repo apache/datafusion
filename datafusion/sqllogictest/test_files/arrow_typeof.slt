@@ -95,7 +95,7 @@ SELECT arrow_cast('1', 'Int16')
 query error
 SELECT arrow_cast('1')
 
-query error DataFusion error: Error during planning: arrow_cast requires its second argument to be a constant string
+query error DataFusion error: Execution error: arrow_cast requires its second argument to be a constant string
 SELECT arrow_cast('1', 43)
 
 query error Error unrecognized word: unknown
