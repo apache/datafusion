@@ -124,48 +124,54 @@ impl ScalarUDFImpl for ConcatWsFunc {
 
         // Scalar
         if array_len.is_none() {
-            let sep = match &args[0] {
-                ColumnarValue::Scalar(ScalarValue::Utf8(Some(s)))
-                | ColumnarValue::Scalar(ScalarValue::Utf8View(Some(s)))
-                | ColumnarValue::Scalar(ScalarValue::LargeUtf8(Some(s))) => s,
-                ColumnarValue::Scalar(ScalarValue::Utf8(None))
-                | ColumnarValue::Scalar(ScalarValue::Utf8View(None))
-                | ColumnarValue::Scalar(ScalarValue::LargeUtf8(None)) => {
+            let ColumnarValue::Scalar(scalar) = &args[0] else {
+                // loop above checks for all args being scalar
+                unreachable!()
+            };
+            let sep = match scalar.try_as_str() {
+                Some(Some(s)) => s,
+                Some(None) => {
+                    // null literal string
                     return Ok(ColumnarValue::Scalar(ScalarValue::Utf8(None)));
                 }
-                _ => unreachable!(),
+                None => return internal_err!("Expected string literal, got {scalar:?}"),
             };
 
             let mut result = String::new();
-            let iter = &mut args[1..].iter();
+            // iterator over Option<str>
+            let iter = &mut args[1..].iter().map(|arg| {
+                let ColumnarValue::Scalar(scalar) = arg else {
+                    // loop above checks for all args being scalar
+                    unreachable!()
+                };
+                scalar.try_as_str()
+            });
 
-            for arg in iter.by_ref() {
-                match arg {
-                    ColumnarValue::Scalar(ScalarValue::Utf8(Some(s)))
-                    | ColumnarValue::Scalar(ScalarValue::Utf8View(Some(s)))
-                    | ColumnarValue::Scalar(ScalarValue::LargeUtf8(Some(s))) => {
+            // append first non null arg
+            for scalar in iter.by_ref() {
+                match scalar {
+                    Some(Some(s)) => {
                         result.push_str(s);
                         break;
                     }
-                    ColumnarValue::Scalar(ScalarValue::Utf8(None))
-                    | ColumnarValue::Scalar(ScalarValue::Utf8View(None))
-                    | ColumnarValue::Scalar(ScalarValue::LargeUtf8(None)) => {}
-                    _ => unreachable!(),
+                    Some(None) => {} // null literal string
+                    None => {
+                        return internal_err!("Expected string literal, got {scalar:?}")
+                    }
                 }
             }
 
-            for arg in iter.by_ref() {
-                match arg {
-                    ColumnarValue::Scalar(ScalarValue::Utf8(Some(s)))
-                    | ColumnarValue::Scalar(ScalarValue::Utf8View(Some(s)))
-                    | ColumnarValue::Scalar(ScalarValue::LargeUtf8(Some(s))) => {
+            // handle subsequent non null args
+            for scalar in iter.by_ref() {
+                match scalar {
+                    Some(Some(s)) => {
                         result.push_str(sep);
                         result.push_str(s);
                     }
-                    ColumnarValue::Scalar(ScalarValue::Utf8(None))
-                    | ColumnarValue::Scalar(ScalarValue::Utf8View(None))
-                    | ColumnarValue::Scalar(ScalarValue::LargeUtf8(None)) => {}
-                    _ => unreachable!(),
+                    Some(None) => {} // null literal string
+                    None => {
+                        return internal_err!("Expected string literal, got {scalar:?}")
+                    }
                 }
             }
 

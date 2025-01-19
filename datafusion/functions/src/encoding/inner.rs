@@ -546,12 +546,10 @@ fn encode(args: &[ColumnarValue]) -> Result<ColumnarValue> {
         );
     }
     let encoding = match &args[1] {
-        ColumnarValue::Scalar(scalar) => match scalar {
-            ScalarValue::Utf8(Some(method)) | ScalarValue::Utf8View(Some(method)) | ScalarValue::LargeUtf8(Some(method)) => {
-                method.parse::<Encoding>()
-            }
+        ColumnarValue::Scalar(scalar) => match scalar.try_as_str() {
+            Some(Some(method)) => method.parse::<Encoding>(),
             _ => not_impl_err!(
-                "Second argument to encode must be a constant: Encode using dynamically decided method is not yet supported"
+                "Second argument to encode must be non null constant string: Encode using dynamically decided method is not yet supported. Got {scalar:?}"
             ),
         },
         ColumnarValue::Array(_) => not_impl_err!(
@@ -572,12 +570,10 @@ fn decode(args: &[ColumnarValue]) -> Result<ColumnarValue> {
         );
     }
     let encoding = match &args[1] {
-        ColumnarValue::Scalar(scalar) => match scalar {
-            ScalarValue::Utf8(Some(method)) | ScalarValue::Utf8View(Some(method)) | ScalarValue::LargeUtf8(Some(method)) => {
-                method.parse::<Encoding>()
-            }
+        ColumnarValue::Scalar(scalar) => match scalar.try_as_str() {
+            Some(Some(method))=> method.parse::<Encoding>(),
             _ => not_impl_err!(
-                "Second argument to decode must be a utf8 constant: Decode using dynamically decided method is not yet supported"
+                "Second argument to decode must be a non null constant string: Decode using dynamically decided method is not yet supported. Got {scalar:?}"
             ),
         },
         ColumnarValue::Array(_) => not_impl_err!(
