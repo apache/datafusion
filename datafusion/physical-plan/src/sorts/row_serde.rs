@@ -575,4 +575,109 @@ mod tests {
 
         Ok(())
     }
+    #[test]
+    fn test_compression() -> Result<(), DataFusionError> {
+        use super::*;
+
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Utf8, false),
+        ]));
+
+        let converter = Arc::new(RowConverter::new(vec![
+            SortField::new(DataType::Int32),
+            SortField::new(DataType::Utf8),
+        ])?);
+
+        let uncompressed_file = NamedTempFile::new()?;
+        let compressed_file = NamedTempFile::new()?;
+
+        let mut numbers = Vec::new();
+        let mut strings = Vec::new();
+        for i in 0..1000 {
+            numbers.push(i);
+            strings.push(format!("test_string_{}", i % 10));
+        }
+
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(Int32Array::from(numbers)),
+                Arc::new(StringArray::from(strings)),
+            ],
+        )?;
+
+        let mut uncompressed_writer = RowWriter::new(
+            uncompressed_file.path(),
+            Some(CompressionType::UNCOMPRESSED),
+        )?;
+        let rows = converter.convert_columns(batch.columns())?;
+        uncompressed_writer.write_rows(&rows)?;
+        uncompressed_writer.finish()?;
+
+        let mut compressed_writer =
+            RowWriter::new(compressed_file.path(), Some(CompressionType::GZIP))?;
+        compressed_writer.write_rows(&rows)?;
+        compressed_writer.finish()?;
+
+        let uncompressed_size = std::fs::metadata(uncompressed_file.path())?.len();
+        let compressed_size = std::fs::metadata(compressed_file.path())?.len();
+
+        assert!(
+            compressed_size < uncompressed_size,
+            "Compressed size ({}) should be less than uncompressed size ({})",
+            compressed_size,
+            uncompressed_size
+        );
+
+        let row_reader = RowReader::new(
+            compressed_file.path(),
+            Some(CompressionType::GZIP),
+            Arc::clone(&converter),
+        )?;
+
+        let mut read_batches = Vec::new();
+        for rows in row_reader {
+            let rows = rows?;
+            let columns = converter.convert_rows(&rows)?;
+            let batch = RecordBatch::try_new(Arc::clone(&schema), columns)?;
+            read_batches.push(batch);
+        }
+
+        let read_batch = concat_batches(&schema, &read_batches)?;
+
+        assert_eq!(read_batch.num_rows(), 1000);
+
+        let read_numbers = read_batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .unwrap();
+
+        let read_strings = read_batch
+            .column(1)
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .unwrap();
+
+        for i in 0..1000 {
+            assert_eq!(read_numbers.value(i), i as i32);
+            assert_eq!(read_strings.value(i), format!("test_string_{}", i % 10));
+        }
+
+        let mut random_reader = RowReader::new(
+            compressed_file.path(),
+            Some(CompressionType::GZIP),
+            Arc::clone(&converter),
+        )?;
+
+        if let Some(first_block) = random_reader.next() {
+            let rows = first_block?;
+            let columns = converter.convert_rows(&rows)?;
+            let batch = RecordBatch::try_new(Arc::clone(&schema), columns)?;
+            assert!(batch.num_rows() > 0);
+        }
+
+        Ok(())
+    }
 }
