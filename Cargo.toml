@@ -188,3 +188,7 @@ large_futures = "warn"
 [workspace.lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ["cfg(tarpaulin)"] }
 unused_qualifications = "deny"
+
+# https://github.com/apache/datafusion-sqlparser-rs/commit/5da702fc19f9dc73559d9a6f0408729f1121444a
+[patch.crates-io]
+sqlparser = {  git = "https://github.com/sqlparser-rs/sqlparser-rs.git", rev="5da702fc19f9dc73559d9a6f0408729f1121444a" }

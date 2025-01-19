@@ -84,3 +84,7 @@ debug = false
 debug-assertions = false
 strip = "debuginfo"
 incremental = false
+
+# https://github.com/apache/datafusion-sqlparser-rs/commit/5da702fc19f9dc73559d9a6f0408729f1121444a
+[patch.crates-io]
+sqlparser = {  git = "https://github.com/sqlparser-rs/sqlparser-rs.git", rev="5da702fc19f9dc73559d9a6f0408729f1121444a" }
