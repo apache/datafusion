@@ -97,7 +97,10 @@ impl ScalarUDFImpl for FromUnixtimeFunc {
                     exec_err!("{} requires its second argument to be a non-empty constant string", self.name())
                 }
                 _ => {
-                    exec_err!("{} requires its second argument to be a constant string", self.name())
+                    exec_err!(
+                        "{} requires its second argument to be a constant string",
+                        self.name()
+                    )
                 }
             }
         }

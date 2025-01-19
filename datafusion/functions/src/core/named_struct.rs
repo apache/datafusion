@@ -181,10 +181,16 @@ impl ScalarUDFImpl for NamedStructFunc {
             .map(|(i, x)| match x {
                 Some(ScalarValue::Utf8(Some(name))) if !name.is_empty() => Ok(name),
                 Some(ScalarValue::Utf8(Some(_))) => {
-                    exec_err!("{} requires {i}-th (0-indexed) field name as non-empty string", self.name())
+                    exec_err!(
+                        "{} requires {i}-th (0-indexed) field name as non-empty string",
+                        self.name()
+                    )
                 }
                 _ => {
-                    exec_err!("{} requires {i}-th (0-indexed) field name as constant string", self.name())
+                    exec_err!(
+                        "{} requires {i}-th (0-indexed) field name as constant string",
+                        self.name()
+                    )
                 }
             })
             .collect::<Result<Vec<_>>>()?;

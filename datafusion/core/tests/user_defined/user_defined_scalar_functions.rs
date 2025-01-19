@@ -824,7 +824,10 @@ impl ScalarUDFImpl for TakeUDF {
         }
 
         let take_idx = if let Some(take_idx) = args.arguments.get(2) {
-            let take_idx = take_idx.parse::<usize>().unwrap();
+            // This is for test only, safe to unwrap
+            let take_idx = take_idx.unwrap()
+                .try_as_str().unwrap().unwrap()
+                .parse::<usize>().unwrap();
 
             if take_idx == 0 || take_idx == 1 {
                 take_idx

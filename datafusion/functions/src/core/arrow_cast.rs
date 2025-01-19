@@ -19,11 +19,10 @@
 
 use arrow::datatypes::DataType;
 use arrow::error::ArrowError;
-use datafusion_common::{exec_datafusion_err, DataFusionError};
 use datafusion_common::{
-    arrow_datafusion_err, internal_err, exec_err, Result,
-    ScalarValue,
+    arrow_datafusion_err, exec_err, internal_err, Result, ScalarValue,
 };
+use datafusion_common::{exec_datafusion_err, DataFusionError};
 use std::any::Any;
 
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyInfo};
