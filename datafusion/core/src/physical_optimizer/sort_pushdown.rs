@@ -33,7 +33,7 @@ use arrow_schema::SchemaRef;
 use datafusion_common::tree_node::{
     ConcreteTreeNode, Transformed, TreeNode, TreeNodeRecursion,
 };
-use datafusion_common::{exec_err, plan_err, HashSet, JoinSide, Result};
+use datafusion_common::{plan_err, HashSet, JoinSide, Result};
 use datafusion_expr::JoinType;
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::utils::collect_columns;
@@ -106,14 +106,8 @@ fn pushdown_sorts_helper(
         if !satisfy_parent {
             // Make sure this `SortExec` satisfies parent requirements:
             let sort_reqs = requirements.data.ordering_requirement.unwrap_or_default();
-            let fetch = requirements.data.fetch;
-            if fetch.ne(&sort_fetch) {
-                return exec_err!(
-                    "Fetch values are not equal: {:?} != {:?}",
-                    fetch,
-                    sort_fetch
-                );
-            }
+            // It's possible current plan (`SortExec`) has a fetch value.
+            let fetch = requirements.data.fetch.or(sort_fetch);
             requirements = requirements.children.swap_remove(0);
             requirements = add_sort_above(requirements, sort_reqs, fetch);
         };
