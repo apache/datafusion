@@ -725,7 +725,7 @@ compare_benchmarks() {
 
     BASE_BRANCH=$2
     BRANCHES=("${@:3}")
-    echo "Comparing $BRANCHES to $BASE_BRANCH"
+    echo "Comparing ${BRANCHES[*]} to $BASE_BRANCH"
 
     for BASE_FILE in "$RESULTS_DIR/$BASE_BRANCH"/*.json ; do
         BENCH=$(basename "${BASE_FILE}")
