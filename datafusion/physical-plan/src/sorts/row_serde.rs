@@ -575,6 +575,7 @@ mod tests {
 
         Ok(())
     }
+    #[cfg(feature = "compress")]
     #[test]
     fn test_compression() -> Result<(), DataFusionError> {
         use super::*;

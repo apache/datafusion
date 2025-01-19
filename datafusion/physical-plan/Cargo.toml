@@ -32,7 +32,6 @@ rust-version = { workspace = true }
 workspace = true
 
 [features]
-default = ["compress"]
 force_hash_collisions = []
 compress = ["flate2"]
 
