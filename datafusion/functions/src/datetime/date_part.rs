@@ -140,6 +140,9 @@ impl ScalarUDFImpl for DatePartFunc {
     }
 
     fn return_type_from_args(&self, args: ReturnTypeArgs) -> Result<ReturnInfo> {
+        // Length check handled in the signature
+        debug_assert_eq!(args.arguments.len(), 2);
+
         args.arguments[0]
             .and_then(|sv| {
                 sv.try_as_str()

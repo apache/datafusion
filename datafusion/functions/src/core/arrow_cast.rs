@@ -117,48 +117,24 @@ impl ScalarUDFImpl for ArrowCastFunc {
     fn return_type_from_args(&self, args: ReturnTypeArgs) -> Result<ReturnInfo> {
         let nullable = args.nullables.iter().any(|&nullable| nullable);
 
-        if args.arguments.len() != 2 {
-            return exec_err!(
-                "{} needs 2 arguments, {} provided",
-                self.name(),
-                args.arguments.len()
-            );
-        }
+        // Length check handled in the signature
+        debug_assert_eq!(args.arguments.len(), 2);
 
-        args.arguments[1].map_or_else(
-            || {
-                exec_err!(
-                    "{} requires its second argument to be a constant string",
-                    self.name()
-                )
-            },
-            |sv| {
-                sv.try_as_str().flatten().map_or_else(
-                    || {
-                        exec_err!(
-                            "{} requires its second argument to be a constant string",
-                            self.name()
-                        )
-                    },
-                    |casted_type| {
-                        if casted_type.is_empty() {
-                            exec_err!(
-                    "{} requires its second argument to be a non-empty constant string",
-                    self.name()
-                )
-                        } else {
-                            match casted_type.parse::<DataType>() {
-                                Ok(data_type) => Ok(ReturnInfo::new(data_type, nullable)),
-                                Err(ArrowError::ParseError(e)) => {
-                                    Err(exec_datafusion_err!("{e}"))
-                                }
-                                Err(e) => Err(arrow_datafusion_err!(e)),
-                            }
-                        }
-                    },
-                )
-            },
-        )
+        args.arguments[1]
+            .and_then(|sv| sv.try_as_str().flatten().filter(|s| !s.is_empty()))
+            .map_or_else(
+                || {
+                    exec_err!(
+                        "{} requires its second argument to be a non-empty constant string",
+                        self.name()
+                    )
+                },
+                |casted_type| match casted_type.parse::<DataType>() {
+                    Ok(data_type) => Ok(ReturnInfo::new(data_type, nullable)),
+                    Err(ArrowError::ParseError(e)) => Err(exec_datafusion_err!("{e}")),
+                    Err(e) => Err(arrow_datafusion_err!(e)),
+                },
+            )
     }
 
     fn invoke_batch(

@@ -147,12 +147,8 @@ impl ScalarUDFImpl for GetFieldFunc {
     }
 
     fn return_type_from_args(&self, args: ReturnTypeArgs) -> Result<ReturnInfo> {
-        if args.arguments.len() != 2 {
-            return exec_err!(
-                "get_field function requires 2 arguments, got {}",
-                args.arguments.len()
-            );
-        }
+        // Length check handled in the signature
+        debug_assert_eq!(args.arguments.len(), 2);
 
         match (&args.arg_types[0], args.arguments[1].as_ref()) {
             (DataType::Map(fields, _), _) => {
