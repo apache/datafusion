@@ -516,6 +516,9 @@ impl CaseExpr {
         let when = when_then.0.as_any().downcast_ref::<BinaryExpr>().unwrap();
         let then = when_then.1.as_any().downcast_ref::<BinaryExpr>().unwrap();
 
+        // NOCOMMIT are these ok? This seems like an important assertion.
+        debug_assert_eq!(None, self.else_expr);
+
         println!("{when:?}");
         println!("{then:?}");
 
@@ -900,6 +903,46 @@ mod tests {
             as_float64_array(&result).expect("failed to downcast to Float64Array");
 
         let expected = &Float64Array::from(vec![Some(25.0), None, None, Some(5.0)]);
+
+        assert_eq!(expected, result);
+        Ok(())
+    }
+
+    #[test]
+    fn case_without_expr_divide_by_zero_else() -> Result<()> {
+        let batch = case_test_batch1()?;
+        let schema = batch.schema();
+
+        // CASE WHEN a > 0 THEN 25.0 / cast(a, float64) ELSE float64(0.0) END
+        let when1 = binary(col("a", &schema)?, Operator::Gt, lit(0i32), &batch.schema())?;
+        let then1 = binary(
+            lit(25.0f64),
+            Operator::Divide,
+            cast(col("a", &schema)?, &batch.schema(), Float64)?,
+            &batch.schema(),
+        )?;
+
+        let expr = generate_case_when_with_type_coercion(
+            None,
+            vec![(when1, then1)],
+            Some(lit(0.0f64)),
+            schema.as_ref(),
+        )?;
+        let case = expr
+            .as_any()
+            .downcast_ref::<CaseExpr>()
+            .expect("expected case expression");
+        assert_eq!(case.eval_method, EvalMethod::ExpressionOrExpression);
+        let result = expr
+            .evaluate(&batch)?
+            .into_array(batch.num_rows())
+            .expect("Failed to convert to array");
+        println!("DSAFADFF {result:?}");
+        let result =
+            as_float64_array(&result).expect("failed to downcast to Float64Array");
+
+        let expected =
+            &Float64Array::from(vec![Some(25.0), Some(0.0), Some(0.0), Some(5.0)]);
 
         assert_eq!(expected, result);
         Ok(())
