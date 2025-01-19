@@ -38,7 +38,7 @@ impl JoinFilter {
     pub fn new(
         expression: Arc<dyn PhysicalExpr>,
         column_indices: Vec<ColumnIndex>,
-        schema: Arc<Schema>,
+        schema: SchemaRef,
     ) -> JoinFilter {
         JoinFilter {
             expression,
