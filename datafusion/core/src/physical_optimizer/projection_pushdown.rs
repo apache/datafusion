@@ -1255,7 +1255,7 @@ fn update_join_filter(
                     side: col_idx.side,
                 })
                 .collect(),
-            Arc::<arrow_schema::Schema>::clone(join_filter.schema()),
+            Arc::clone(join_filter.schema()),
         )
     })
 }
