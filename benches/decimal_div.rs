@@ -19,7 +19,7 @@ use arrow::compute::cast;
 use arrow_array::builder::Decimal128Builder;
 use arrow_schema::DataType;
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
-use datafusion_comet_spark_expr::scalar_funcs::spark_decimal_div;
+use datafusion_comet_spark_expr::spark_decimal_div;
 use datafusion_expr::ColumnarValue;
 use std::sync::Arc;
 

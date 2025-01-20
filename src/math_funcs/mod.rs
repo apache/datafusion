@@ -15,12 +15,21 @@
 // specific language governing permissions and limitations
 // under the License.
 
-mod chr;
-mod prediction;
-mod string_space;
-mod substring;
+mod ceil;
+mod div;
+mod floor;
+pub(crate) mod hex;
+pub mod internal;
+mod negative;
+mod round;
+pub(crate) mod unhex;
+mod utils;
 
-pub use chr::SparkChrFunc;
-pub use prediction::*;
-pub use string_space::StringSpaceExpr;
-pub use substring::SubstringExpr;
+pub use ceil::spark_ceil;
+pub use div::spark_decimal_div;
+pub use floor::spark_floor;
+pub use hex::spark_hex;
+pub use internal::*;
+pub use negative::{create_negate_expr, NegativeExpr};
+pub use round::spark_round;
+pub use unhex::spark_unhex;

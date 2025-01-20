@@ -15,12 +15,12 @@
 // specific language governing permissions and limitations
 // under the License.
 
-mod chr;
-mod prediction;
-mod string_space;
-mod substring;
+mod checkoverflow;
+mod make_decimal;
+mod normalize_nan;
+mod unscaled_value;
 
-pub use chr::SparkChrFunc;
-pub use prediction::*;
-pub use string_space::StringSpaceExpr;
-pub use substring::SubstringExpr;
+pub use checkoverflow::CheckOverflow;
+pub use make_decimal::spark_make_decimal;
+pub use normalize_nan::NormalizeNaNAndZero;
+pub use unscaled_value::spark_unscaled_value;

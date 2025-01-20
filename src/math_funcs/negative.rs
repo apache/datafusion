@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use super::arithmetic_overflow_error;
+use crate::arithmetic_overflow_error;
 use crate::SparkError;
 use arrow::{compute::kernels::numeric::neg_wrapping, datatypes::IntervalDayTimeType};
 use arrow_array::RecordBatch;
