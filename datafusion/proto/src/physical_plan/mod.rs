@@ -17,7 +17,7 @@
 
 use std::fmt::Debug;
 use std::sync::Arc;
-
+use arrow::array::RecordBatch;
 use datafusion::physical_expr::aggregate::AggregateExprBuilder;
 use prost::bytes::BufMut;
 use prost::Message;
@@ -63,6 +63,7 @@ use datafusion::physical_plan::windows::{BoundedWindowAggExec, WindowAggExec};
 use datafusion::physical_plan::{
     ExecutionPlan, InputOrderMode, PhysicalExpr, WindowExpr,
 };
+use datafusion::physical_plan::memory::MemoryExec;
 use datafusion_common::{internal_err, not_impl_err, DataFusionError, Result};
 use datafusion_expr::{AggregateUDF, ScalarUDF, WindowUDF};
 
@@ -1149,6 +1150,29 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                     into_required!(unnest.options)?,
                 )))
             }
+            PhysicalPlanType::Memory(memory) => {
+                let partitions: Vec<Vec<RecordBatch>> = memory
+                    .partitions
+                    .iter()
+                    .map(|partition| {
+                        partition
+                            .batches
+                            .iter()
+                            .map(|batch| batch.clone())
+                            .collect::<Vec<_>>()
+                    })
+                    .collect::<Vec<Vec<RecordBatch>>>();
+
+                let schema = Arc::new(convert_required!(memory.schema)?);
+
+                let projection = if !memory.projection.is_empty() {
+                    Some(memory.projection.iter().map(|i| *i as usize).collect::<Vec<_>>())
+                } else {
+                    None
+                };
+
+                let exec = MemoryExec::try_new(partitions, schema, projection)?;
+                Ok(Arc::new(exec))            }
         }
     }
 
@@ -1769,6 +1793,58 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                 physical_plan_type: Some(PhysicalPlanType::Interleave(
                     protobuf::InterleaveExecNode { inputs },
                 )),
+            });
+        }
+
+        if let Some(exec) = plan.downcast_ref::<MemoryExec>() {
+            // Convert schema
+            let schema = exec.schema().as_ref().try_into()?;
+            let projected_schema = exec.projected_schema().as_ref().try_into()?;
+
+            // Convert partitions
+            let partitions = exec
+                .partitions()
+                .iter()
+                .map(|partition| {
+                    Ok(protobuf::RecordBatchData {
+                        batches: partition
+                            .iter()
+                            .map(|batch| batch.try_into())
+                            .collect::<Result<Vec<_>>>()?,
+                    })
+                })
+                .collect::<Result<Vec<_>>>()?;
+
+            // Convert sort information
+            let sort_information = exec
+                .sort_information()
+                .iter()
+                .map(|exprs| protobuf::PhysicalSortExprNodeCollection {
+                    physical_sort_expr_nodes: exprs
+                        .iter()
+                        .map(|expr| {
+                            Ok(protobuf::PhysicalSortExprNode {
+                                expr: Some(Box::new(serialize_physical_expr(&expr.expr, extension_codec)?)),
+                                asc: !expr.options.descending,
+                                nulls_first: expr.options.nulls_first,
+                            })
+                        })
+                        .collect::<Result<Vec<_>>>()?
+                })
+                .collect();
+
+
+            return Ok(protobuf::PhysicalPlanNode {
+                physical_plan_type: Some(PhysicalPlanType::Memory(
+                    protobuf::MemoryExecNode {
+                        schema: Some(schema),
+                        projected_schema: Some(projected_schema),
+                        partitions,
+                        projection,
+                        sort_information,
+                        show_sizes: exec.show_sizes(),
+                    },
+                ))
             });
         }
 

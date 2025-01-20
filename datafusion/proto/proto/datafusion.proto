@@ -725,6 +725,7 @@ message PhysicalPlanNode {
     CsvSinkExecNode csv_sink = 28;
     ParquetSinkExecNode parquet_sink = 29;
     UnnestExecNode unnest = 30;
+    MemoryExecNode memory = 31;
   }
 }
 
@@ -796,6 +797,19 @@ message UnnestExecNode {
   repeated ListUnnest list_type_columns = 3;
   repeated uint64 struct_type_columns = 4;
   UnnestOptions options = 5;
+}
+
+message MemoryExecNode {
+  repeated RecordBatchData partitions = 1;
+  datafusion_common.Schema schema = 2;
+  datafusion_common.Schema projected_schema = 3;
+  repeated uint32 projection = 4;
+  repeated PhysicalSortExprNodeCollection sort_information = 5;
+  bool show_sizes = 6;
+}
+
+message RecordBatchData {
+  repeated bytes batches = 1;
 }
 
 message ListUnnest {

@@ -1043,7 +1043,7 @@ pub mod table_reference {
 pub struct PhysicalPlanNode {
     #[prost(
         oneof = "physical_plan_node::PhysicalPlanType",
-        tags = "1, 2, 3, 4, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30"
+        tags = "1, 2, 3, 4, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31"
     )]
     pub physical_plan_type: ::core::option::Option<physical_plan_node::PhysicalPlanType>,
 }
@@ -1111,6 +1111,8 @@ pub mod physical_plan_node {
         ParquetSink(::prost::alloc::boxed::Box<super::ParquetSinkExecNode>),
         #[prost(message, tag = "30")]
         Unnest(::prost::alloc::boxed::Box<super::UnnestExecNode>),
+        #[prost(message, tag = "31")]
+        Memory(super::MemoryExecNode),
     }
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -1211,6 +1213,26 @@ pub struct UnnestExecNode {
     pub struct_type_columns: ::prost::alloc::vec::Vec<u64>,
     #[prost(message, optional, tag = "5")]
     pub options: ::core::option::Option<UnnestOptions>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct MemoryExecNode {
+    #[prost(message, repeated, tag = "1")]
+    pub partitions: ::prost::alloc::vec::Vec<RecordBatchData>,
+    #[prost(message, optional, tag = "2")]
+    pub schema: ::core::option::Option<super::datafusion_common::Schema>,
+    #[prost(message, optional, tag = "3")]
+    pub projected_schema: ::core::option::Option<super::datafusion_common::Schema>,
+    #[prost(uint32, repeated, tag = "4")]
+    pub projection: ::prost::alloc::vec::Vec<u32>,
+    #[prost(message, repeated, tag = "5")]
+    pub sort_information: ::prost::alloc::vec::Vec<PhysicalSortExprNodeCollection>,
+    #[prost(bool, tag = "6")]
+    pub show_sizes: bool,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct RecordBatchData {
+    #[prost(bytes = "vec", repeated, tag = "1")]
+    pub batches: ::prost::alloc::vec::Vec<::prost::alloc::vec::Vec<u8>>,
 }
 #[derive(Clone, Copy, PartialEq, ::prost::Message)]
 pub struct ListUnnest {
