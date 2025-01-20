@@ -1090,7 +1090,7 @@ impl DefaultPhysicalPlanner {
                         Some(join_utils::JoinFilter::new(
                             filter_expr,
                             column_indices,
-                            filter_schema,
+                            Arc::new(filter_schema),
                         ))
                     }
                     _ => None,
