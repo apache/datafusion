@@ -226,8 +226,8 @@ impl JoinLeftData {
 ///                                                                         │                           │
 ///            ┌───────┐                                                    │          ┌───────┐        │
 ///            │ Row 6 │        3) update_hash for batch 1 with offset 5    │          │ Row 1 │    5   │
-///   Batch 3  │       │           - hashmap.insert(Row 2, idx 5)           │ Batch 1  │       │        │
-///            │ Row 7 │           - hashmap.insert(Row 1, idx 6)           │          │ Row 2 │    6   │
+///   Batch 3  │       │           - hashmap.insert(Row 2, idx 6)           │ Batch 1  │       │        │
+///            │ Row 7 │           - hashmap.insert(Row 1, idx 5)           │          │ Row 2 │    6   │
 ///            └───────┘                                                    │          └───────┘        │
 ///                                                                         │                           │
 ///                                                                         └───────────────────────────┘
