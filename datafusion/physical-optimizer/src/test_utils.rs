@@ -156,7 +156,7 @@ pub fn bounded_window_exec_with_partition(
     Arc::new(
         BoundedWindowAggExec::try_new(
             vec![window_expr],
-            input.clone(),
+            Arc::clone(&input),
             vec![],
             InputOrderMode::Sorted,
         )
