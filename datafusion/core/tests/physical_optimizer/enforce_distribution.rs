@@ -5,7 +5,7 @@ use datafusion::datasource::file_format::file_compression_type::FileCompressionT
 use datafusion::datasource::listing::PartitionedFile;
 use datafusion::datasource::object_store::ObjectStoreUrl;
 use datafusion::datasource::physical_plan::{CsvExec, FileScanConfig, ParquetExec};
-use datafusion::physical_plan::enforce_sorting::EnforceSorting;
+use datafusion_physical_optimizer::enforce_sorting::EnforceSorting;
 use datafusion_physical_plan::coalesce_batches::CoalesceBatchesExec;
 use datafusion_physical_plan::expressions::col;
 use datafusion_physical_plan::filter::FilterExec;
