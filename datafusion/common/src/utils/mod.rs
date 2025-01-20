@@ -889,8 +889,7 @@ pub fn get_available_parallelism() -> usize {
 mod tests {
     use super::*;
     use crate::ScalarValue::Null;
-    use arrow::{array::Float64Array, util::pretty::pretty_format_columns};
-    use arrow_array::Int32Array;
+    use arrow::array::Float64Array;
     use sqlparser::tokenizer::Span;
 
     #[test]
