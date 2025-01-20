@@ -24,6 +24,7 @@ use std::sync::Arc;
 use std::task::Poll;
 use std::{any::Any, vec};
 
+use super::with_hash_stream::{HashCoalescerBuilder, HashExprStream};
 use super::utils::{
     asymmetric_join_output_partitioning, get_final_indices_from_shared_bitmap,
     reorder_output_after_swap, swap_join_projection,
@@ -32,10 +33,10 @@ use super::{
     utils::{OnceAsync, OnceFut},
     PartitionMode, SharedBitmapBuilder,
 };
+use crate::coalesce_partitions::CoalescePartitionsExec;
 use crate::execution_plan::{boundedness_from_children, EmissionType};
 use crate::ExecutionPlanProperties;
 use crate::{
-    coalesce_partitions::CoalescePartitionsExec,
     common::can_project,
     handle_state,
     hash_utils::create_hashes,
@@ -882,16 +883,30 @@ async fn collect_left_input(
 ) -> Result<JoinLeftData> {
     let schema = left.schema();
 
-    let (left_input, left_input_partition) = if let Some(partition) = partition {
-        (left, partition)
-    } else if left.output_partitioning().partition_count() != 1 {
-        (Arc::new(CoalescePartitionsExec::new(left)) as _, 0)
-    } else {
-        (left, 0)
-    };
+    let stream = match partition {
+        Some(partition) => {
+            let stream = left.execute(partition, Arc::clone(&context))?;
 
-    // Depending on partition argument load single partition or whole left side in memory
-    let stream = left_input.execute(left_input_partition, Arc::clone(&context))?;
+            Box::pin(HashExprStream::new(
+                on_left.clone(),
+                random_state.clone(),
+                stream,
+            ))
+        }
+        None => {
+            let mut hcb = HashCoalescerBuilder::new(left.output_partitioning().partition_count());
+            for partition in 0..left.output_partitioning().partition_count() {
+                let stream = left.execute(partition, Arc::clone(&context))?;
+                let stream = Box::pin(HashExprStream::new(
+                    on_left.clone(),
+                    random_state.clone(),
+                    stream,
+                ));
+                hcb.run_input(stream);
+            }
+            hcb.build()
+        }
+    };
 
     // This operation performs 2 steps at once:
     // 1. creates a [JoinHashMap] of all batches from the stream
@@ -899,15 +914,15 @@ async fn collect_left_input(
     let initial = (Vec::new(), 0, metrics, reservation);
     let (batches, num_rows, metrics, mut reservation) = stream
         .try_fold(initial, |mut acc, batch| async {
-            let batch_size = get_record_batch_memory_size(&batch);
+            let batch_size = get_record_batch_memory_size(&batch.batch);
             // Reserve memory for incoming batch
             acc.3.try_grow(batch_size)?;
             // Update metrics
             acc.2.build_mem_used.add(batch_size);
             acc.2.build_input_batches.add(1);
-            acc.2.build_input_rows.add(batch.num_rows());
+            acc.2.build_input_rows.add(batch.batch.num_rows());
             // Update row count
-            acc.1 += batch.num_rows();
+            acc.1 += batch.batch.num_rows();
             // Push batch to output
             acc.0.push(batch);
             Ok(acc)
@@ -924,28 +939,22 @@ async fn collect_left_input(
     metrics.build_mem_used.add(estimated_hashtable_size);
 
     let mut hashmap = JoinHashMap::with_capacity(num_rows);
-    let mut hashes_buffer = Vec::new();
     let mut offset = 0;
 
     // Updating hashmap starting from the last batch
-    let batches_iter = batches.iter().rev();
-    for batch in batches_iter.clone() {
-        hashes_buffer.clear();
-        hashes_buffer.resize(batch.num_rows(), 0);
-        update_hash(
-            &on_left,
-            batch,
+    for batch in batches.iter().rev() {
+        update_hash2(
+            &batch.hashes,
             &mut hashmap,
             offset,
-            &random_state,
-            &mut hashes_buffer,
             0,
             true,
         )?;
-        offset += batch.num_rows();
+        offset += batch.batch.num_rows();
     }
     // Merge all batches into a single batch, so we can directly index into the arrays
-    let single_batch = concat_batches(&schema, batches_iter)?;
+    let record_batches = batches.iter().map(|b| &b.batch);
+    let single_batch = concat_batches(&schema, record_batches)?;
 
     // Reserve additional memory for visited indices bitmap and create shared builder
     let visited_indices_bitmap = if with_visited_indices_bitmap {
@@ -1010,7 +1019,7 @@ where
     let hash_values = create_hashes(&keys_values, random_state, hashes_buffer)?;
 
     // For usual JoinHashmap, the implementation is void.
-    hash_map.extend_zero(batch.num_rows());
+    hash_map.extend_zero(hash_values.len());
 
     // Updating JoinHashMap from hash values iterator
     let hash_values_iter = hash_values
@@ -1026,6 +1035,36 @@ where
 
     Ok(())
 }
+
+
+pub fn update_hash2<T>(
+    hash_values: &Vec<u64>,
+    hash_map: &mut T,
+    offset: usize,
+    deleted_offset: usize,
+    fifo_hashmap: bool,
+) -> Result<()>
+where
+    T: JoinHashMapType,
+{
+    // For usual JoinHashmap, the implementation is void.
+    hash_map.extend_zero(hash_values.len());
+
+    // Updating JoinHashMap from hash values iterator
+    let hash_values_iter = hash_values
+        .iter()
+        .enumerate()
+        .map(|(i, val)| (i + offset, val));
+
+    if fifo_hashmap {
+        hash_map.update_from_iter(hash_values_iter.rev(), deleted_offset);
+    } else {
+        hash_map.update_from_iter(hash_values_iter, deleted_offset);
+    }
+
+    Ok(())
+}
+
 
 /// Represents build-side of hash join.
 enum BuildSide {
@@ -1587,6 +1626,7 @@ impl Stream for HashJoinStream {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::coalesce_partitions::CoalescePartitionsExec;
     use crate::{
         common, expressions::Column, memory::MemoryExec, repartition::RepartitionExec,
         test::build_table_i32, test::exec::MockExec,
