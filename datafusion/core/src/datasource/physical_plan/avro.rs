@@ -28,15 +28,18 @@ use crate::error::Result;
 
 use arrow::datatypes::SchemaRef;
 
+use datafusion_common::Statistics;
+use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
 use object_store::ObjectStore;
 
-// TODO projected_constraints
 /// AvroConfig holds the extra configuration that is necessary for opening avro files
 #[derive(Clone, Default)]
 pub struct AvroConfig {
     schema: Option<SchemaRef>,
     batch_size: Option<usize>,
     projection: Option<Vec<String>>,
+    metrics: ExecutionPlanMetricsSet,
+    projected_statistics: Option<Statistics>,
 }
 
 impl AvroConfig {
@@ -95,11 +98,27 @@ impl FileSource for AvroConfig {
         conf.schema = Some(schema);
         Arc::new(conf)
     }
+    fn with_statistics(&self, statistics: Statistics) -> Arc<dyn FileSource> {
+        let mut conf = self.clone();
+        conf.projected_statistics = Some(statistics);
+        Arc::new(conf)
+    }
 
     fn with_projection(&self, config: &FileScanConfig) -> Arc<dyn FileSource> {
         let mut conf = self.clone();
         conf.projection = config.projected_file_column_names();
         Arc::new(conf)
+    }
+
+    fn metrics(&self) -> &ExecutionPlanMetricsSet {
+        &self.metrics
+    }
+
+    fn statistics(&self) -> Result<Statistics> {
+        let statistics = &self.projected_statistics;
+        Ok(statistics
+            .clone()
+            .expect("projected_statistics must be set"))
     }
 }
 

@@ -26,6 +26,7 @@ use crate::{DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties};
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::{Constraints, Statistics};
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
+use datafusion_physical_expr::Partitioning;
 
 /// Common behaviors in Data Sources for both from Files and Memory.
 /// See `DataSourceExec` for physical plan implementation
@@ -40,7 +41,7 @@ pub trait DataSource: Send + Sync {
     fn repartitioned(
         &self,
         _target_partitions: usize,
-        _config: &ConfigOptions,
+        _repartition_file_min_size: usize,
         _exec: DataSourceExec,
     ) -> datafusion_common::Result<Option<Arc<dyn ExecutionPlan>>> {
         Ok(None)
@@ -107,8 +108,11 @@ impl ExecutionPlan for DataSourceExec {
         target_partitions: usize,
         config: &ConfigOptions,
     ) -> datafusion_common::Result<Option<Arc<dyn ExecutionPlan>>> {
-        self.source
-            .repartitioned(target_partitions, config, self.clone())
+        self.source.repartitioned(
+            target_partitions,
+            config.optimizer.repartition_file_min_size,
+            self.clone(),
+        )
     }
 
     fn execute(
@@ -130,7 +134,7 @@ impl ExecutionPlan for DataSourceExec {
     fn with_fetch(&self, limit: Option<usize>) -> Option<Arc<dyn ExecutionPlan>> {
         let mut source = Arc::clone(&self.source);
         source = source.with_fetch(limit)?;
-        let cache = source.properties().clone();
+        let cache = self.cache.clone();
 
         Some(Arc::new(Self { source, cache }))
     }
@@ -161,6 +165,12 @@ impl DataSourceExec {
     /// Assign constraints
     pub fn with_constraints(mut self, constraints: Constraints) -> Self {
         self.cache = self.cache.with_constraints(constraints);
+        self
+    }
+
+    /// Assign output partitioning
+    pub fn with_partitioning(mut self, partitioning: Partitioning) -> Self {
+        self.cache = self.cache.with_partitioning(partitioning);
         self
     }
 }

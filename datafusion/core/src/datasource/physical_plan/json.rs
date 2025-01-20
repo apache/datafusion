@@ -35,6 +35,8 @@ use crate::physical_plan::{ExecutionPlan, ExecutionPlanProperties};
 use arrow::json::ReaderBuilder;
 use arrow::{datatypes::SchemaRef, json};
 use datafusion_execution::TaskContext;
+use datafusion_common::Statistics;
+use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
 
 use futures::{StreamExt, TryStreamExt};
 use object_store::buffered::BufWriter;
@@ -71,6 +73,8 @@ impl JsonOpener {
 #[derive(Clone, Default)]
 pub struct JsonConfig {
     batch_size: Option<usize>,
+    metrics: ExecutionPlanMetricsSet,
+    projected_statistics: Option<Statistics>,
 }
 
 impl JsonConfig {
@@ -108,11 +112,27 @@ impl FileSource for JsonConfig {
     }
 
     fn with_schema(&self, _schema: SchemaRef) -> Arc<dyn FileSource> {
-        Arc::new(Self { ..*self })
+        Arc::new(Self { ..self.clone() })
+    }
+    fn with_statistics(&self, statistics: Statistics) -> Arc<dyn FileSource> {
+        let mut conf = self.clone();
+        conf.projected_statistics = Some(statistics);
+        Arc::new(conf)
     }
 
     fn with_projection(&self, _config: &FileScanConfig) -> Arc<dyn FileSource> {
-        Arc::new(Self { ..*self })
+        Arc::new(Self { ..self.clone() })
+    }
+
+    fn metrics(&self) -> &ExecutionPlanMetricsSet {
+        &self.metrics
+    }
+
+    fn statistics(&self) -> Result<Statistics> {
+        let statistics = &self.projected_statistics;
+        Ok(statistics
+            .clone()
+            .expect("projected_statistics must be set to call"))
     }
 }
 

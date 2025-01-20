@@ -173,7 +173,10 @@ impl FileFormat for ArrowFormat {
         conf: FileScanConfig,
         _filters: Option<&Arc<dyn PhysicalExpr>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        Ok(FileSourceConfig::new_exec(conf, Arc::new(ArrowConfig {})))
+        Ok(FileSourceConfig::new_exec(
+            conf,
+            Arc::new(ArrowConfig::default()),
+        ))
     }
 
     async fn create_writer_physical_plan(

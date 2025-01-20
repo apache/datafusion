@@ -31,13 +31,12 @@ use crate::datasource::physical_plan::{
 };
 
 use arrow_schema::SchemaRef;
-use datafusion_common::config::ConfigOptions;
 use datafusion_common::{Constraints, Statistics};
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_physical_expr::{EquivalenceProperties, Partitioning};
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use datafusion_physical_plan::execution_plan::{Boundedness, EmissionType};
-use datafusion_physical_plan::metrics::{ExecutionPlanMetricsSet, MetricBuilder};
+use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
 use datafusion_physical_plan::source::{DataSource, DataSourceExec};
 use datafusion_physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties,
@@ -63,6 +62,12 @@ pub trait FileSource: Send + Sync {
     fn with_schema(&self, schema: SchemaRef) -> Arc<dyn FileSource>;
     /// Initialize new instance with projection information
     fn with_projection(&self, config: &FileScanConfig) -> Arc<dyn FileSource>;
+    /// Initialize new instance with projected statistics
+    fn with_statistics(&self, statistics: Statistics) -> Arc<dyn FileSource>;
+    /// Return execution plan metrics
+    fn metrics(&self) -> &ExecutionPlanMetricsSet;
+    /// Return projected statistics
+    fn statistics(&self) -> datafusion_common::Result<Statistics>;
 }
 
 /// Holds generic file configuration, and common behaviors for file sources.
@@ -72,9 +77,6 @@ pub trait FileSource: Send + Sync {
 pub struct FileSourceConfig {
     source: Arc<dyn FileSource>,
     base_config: FileScanConfig,
-    metrics: ExecutionPlanMetricsSet,
-    projected_statistics: Statistics,
-    cache: PlanProperties,
 }
 
 impl FileSourceConfig {
@@ -87,36 +89,19 @@ impl FileSourceConfig {
         Arc::new(DataSourceExec::new(source))
     }
 
-    /// Initialize a new `FileSourceConfig` instance with metrics, cache, and statistics.
+    /// Initialize a new `FileSourceConfig` instance.
     pub fn new(base_config: FileScanConfig, file_source: Arc<dyn FileSource>) -> Self {
         let (
-            projected_schema,
-            constraints,
+            _projected_schema,
+            _constraints,
             projected_statistics,
-            projected_output_ordering,
+            _projected_output_ordering,
         ) = base_config.project();
-        let cache = Self::compute_properties(
-            Arc::clone(&projected_schema),
-            &projected_output_ordering,
-            constraints,
-            &base_config,
-        );
-        let mut metrics = ExecutionPlanMetricsSet::new();
-
-        #[cfg(feature = "parquet")]
-        if let Some(parquet_config) = file_source.as_any().downcast_ref::<ParquetConfig>()
-        {
-            metrics = parquet_config.metrics();
-            let _predicate_creation_errors = MetricBuilder::new(&metrics)
-                .global_counter("num_predicate_creation_errors");
-        };
+        let file_source = file_source.with_statistics(projected_statistics);
 
         Self {
             source: file_source,
             base_config,
-            metrics,
-            projected_statistics,
-            cache,
         }
     }
 
@@ -152,11 +137,6 @@ impl FileSourceConfig {
         &self.source
     }
 
-    /// Returns the `PlanProperties` of the plan
-    pub(crate) fn cache(&self) -> PlanProperties {
-        self.cache.clone()
-    }
-
     fn compute_properties(
         schema: SchemaRef,
         orderings: &[LexOrdering],
@@ -181,9 +161,6 @@ impl FileSourceConfig {
 
     fn with_file_groups(mut self, file_groups: Vec<Vec<PartitionedFile>>) -> Self {
         self.base_config.file_groups = file_groups;
-        // Changing file groups may invalidate output partitioning. Update it also
-        let output_partitioning = Self::output_partitioning_helper(&self.base_config);
-        self.cache = self.cache.with_partitioning(output_partitioning);
         self
     }
 
@@ -214,7 +191,7 @@ impl DataSource for FileSourceConfig {
             source.create_file_opener(object_store, &self.base_config, partition)?;
 
         let stream =
-            FileStream::new(&self.base_config, partition, opener, &self.metrics)?;
+            FileStream::new(&self.base_config, partition, opener, source.metrics())?;
         Ok(Box::pin(stream))
     }
 
@@ -268,54 +245,36 @@ impl DataSource for FileSourceConfig {
     fn repartitioned(
         &self,
         target_partitions: usize,
-        config: &ConfigOptions,
+        repartition_file_min_size: usize,
         exec: DataSourceExec,
     ) -> datafusion_common::Result<Option<Arc<dyn ExecutionPlan>>> {
         if !self.supports_repartition() {
             return Ok(None);
         }
-        let repartition_file_min_size = config.optimizer.repartition_file_min_size;
 
         let repartitioned_file_groups_option = FileGroupPartitioner::new()
             .with_target_partitions(target_partitions)
             .with_repartition_file_min_size(repartition_file_min_size)
-            .with_preserve_order_within_groups(self.cache().output_ordering().is_some())
+            .with_preserve_order_within_groups(
+                exec.properties().output_ordering().is_some(),
+            )
             .repartition_file_groups(&self.base_config.file_groups);
 
         if let Some(repartitioned_file_groups) = repartitioned_file_groups_option {
-            let plan = Arc::new(exec.with_source(Arc::new(
-                self.clone().with_file_groups(repartitioned_file_groups),
-            )));
-            return Ok(Some(plan));
+            let source = self.clone().with_file_groups(repartitioned_file_groups);
+            let output_partitioning =
+                Self::output_partitioning_helper(&source.base_config);
+            let plan = exec
+                .with_source(Arc::new(source))
+                // Changing file groups may invalidate output partitioning. Update it also
+                .with_partitioning(output_partitioning);
+            return Ok(Some(Arc::new(plan)));
         }
         Ok(None)
     }
 
     fn statistics(&self) -> datafusion_common::Result<Statistics> {
-        #[cfg(not(feature = "parquet"))]
-        let stats = self.projected_statistics.clone();
-
-        #[cfg(feature = "parquet")]
-        let stats = if let Some(parquet_config) =
-            self.source.as_any().downcast_ref::<ParquetConfig>()
-        {
-            // When filters are pushed down, we have no way of knowing the exact statistics.
-            // Note that pruning predicate is also a kind of filter pushdown.
-            // (bloom filters use `pruning_predicate` too)
-            if parquet_config.pruning_predicate().is_some()
-                || parquet_config.page_pruning_predicate().is_some()
-                || (parquet_config.predicate().is_some()
-                    && parquet_config.pushdown_filters())
-            {
-                self.projected_statistics.clone().to_inexact()
-            } else {
-                self.projected_statistics.clone()
-            }
-        } else {
-            self.projected_statistics.clone()
-        };
-
-        Ok(stats)
+        self.source.statistics()
     }
 
     fn with_fetch(&self, limit: Option<usize>) -> Option<Arc<dyn DataSource>> {
@@ -323,9 +282,6 @@ impl DataSource for FileSourceConfig {
         Some(Arc::new(Self {
             source: Arc::clone(&self.source),
             base_config: config,
-            metrics: self.metrics.clone(),
-            projected_statistics: self.projected_statistics.clone(),
-            cache: self.cache(),
         }))
     }
 
@@ -334,10 +290,17 @@ impl DataSource for FileSourceConfig {
     }
 
     fn metrics(&self) -> ExecutionPlanMetricsSet {
-        self.metrics.clone()
+        self.source.metrics().clone()
     }
 
     fn properties(&self) -> PlanProperties {
-        self.cache()
+        let (projected_schema, constraints, _, projected_output_ordering) =
+            self.base_config.project();
+        Self::compute_properties(
+            Arc::clone(&projected_schema),
+            &projected_output_ordering,
+            constraints,
+            &self.base_config,
+        )
     }
 }

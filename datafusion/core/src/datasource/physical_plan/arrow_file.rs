@@ -29,6 +29,9 @@ use crate::error::Result;
 use arrow::buffer::Buffer;
 use arrow_ipc::reader::FileDecoder;
 use arrow_schema::SchemaRef;
+use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
+
+use datafusion_common::Statistics;
 use futures::StreamExt;
 use itertools::Itertools;
 use object_store::{GetOptions, GetRange, GetResultPayload, ObjectStore};
@@ -36,7 +39,10 @@ use object_store::{GetOptions, GetRange, GetResultPayload, ObjectStore};
 /// Arrow configuration struct that is given to DataSourceExec
 /// Does not hold anything special, since [`FileScanConfig`] is sufficient for arrow
 #[derive(Clone, Default)]
-pub struct ArrowConfig {}
+pub struct ArrowConfig {
+    metrics: ExecutionPlanMetricsSet,
+    projected_statistics: Option<Statistics>,
+}
 
 impl FileSource for ArrowConfig {
     fn create_file_opener(
@@ -56,15 +62,31 @@ impl FileSource for ArrowConfig {
     }
 
     fn with_batch_size(&self, _batch_size: usize) -> Arc<dyn FileSource> {
-        Arc::new(ArrowConfig::default())
+        Arc::new(Self { ..self.clone() })
     }
 
     fn with_schema(&self, _schema: SchemaRef) -> Arc<dyn FileSource> {
-        Arc::new(ArrowConfig::default())
+        Arc::new(Self { ..self.clone() })
+    }
+    fn with_statistics(&self, statistics: Statistics) -> Arc<dyn FileSource> {
+        let mut conf = self.clone();
+        conf.projected_statistics = Some(statistics);
+        Arc::new(conf)
     }
 
     fn with_projection(&self, _config: &FileScanConfig) -> Arc<dyn FileSource> {
-        Arc::new(ArrowConfig::default())
+        Arc::new(Self { ..self.clone() })
+    }
+
+    fn metrics(&self) -> &ExecutionPlanMetricsSet {
+        &self.metrics
+    }
+
+    fn statistics(&self) -> Result<Statistics> {
+        let statistics = &self.projected_statistics;
+        Ok(statistics
+            .clone()
+            .expect("projected_statistics must be set"))
     }
 }
 

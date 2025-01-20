@@ -34,7 +34,9 @@ use crate::physical_plan::{ExecutionPlan, ExecutionPlanProperties};
 
 use arrow::csv;
 use arrow::datatypes::SchemaRef;
+use datafusion_common::Statistics;
 use datafusion_execution::TaskContext;
+use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
 
 use futures::{StreamExt, TryStreamExt};
 use object_store::buffered::BufWriter;
@@ -73,7 +75,7 @@ use tokio::task::JoinSet;
 /// ));
 /// let exec = FileSourceConfig::new_exec(file_scan_config, source_config);
 /// ```
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct CsvConfig {
     batch_size: Option<usize>,
     file_schema: Option<SchemaRef>,
@@ -84,21 +86,18 @@ pub struct CsvConfig {
     terminator: Option<u8>,
     escape: Option<u8>,
     comment: Option<u8>,
+    metrics: ExecutionPlanMetricsSet,
+    projected_statistics: Option<Statistics>,
 }
 
 impl CsvConfig {
     /// Returns a [`CsvConfig`]
     pub fn new(has_header: bool, delimiter: u8, quote: u8) -> Self {
         Self {
-            batch_size: None,
-            file_schema: None,
-            file_projection: None,
             has_header,
             delimiter,
             quote,
-            terminator: None,
-            escape: None,
-            comment: None,
+            ..Self::default()
         }
     }
 
@@ -240,10 +239,26 @@ impl FileSource for CsvConfig {
         Arc::new(conf)
     }
 
+    fn with_statistics(&self, statistics: Statistics) -> Arc<dyn FileSource> {
+        let mut conf = self.clone();
+        conf.projected_statistics = Some(statistics);
+        Arc::new(conf)
+    }
+
     fn with_projection(&self, config: &FileScanConfig) -> Arc<dyn FileSource> {
         let mut conf = self.clone();
         conf.file_projection = config.file_column_projection_indices();
         Arc::new(conf)
+    }
+
+    fn metrics(&self) -> &ExecutionPlanMetricsSet {
+        &self.metrics
+    }
+    fn statistics(&self) -> Result<Statistics> {
+        let statistics = &self.projected_statistics;
+        Ok(statistics
+            .clone()
+            .expect("projected_statistics must be set"))
     }
 }
 

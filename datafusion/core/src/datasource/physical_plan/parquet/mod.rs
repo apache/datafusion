@@ -51,6 +51,7 @@ use crate::datasource::schema_adapter::{
     DefaultSchemaAdapterFactory, SchemaAdapterFactory,
 };
 pub use access_plan::{ParquetAccessPlan, RowGroupAccess};
+use datafusion_common::Statistics;
 pub use metrics::ParquetFileMetrics;
 use opener::ParquetOpener;
 pub use reader::{DefaultParquetFileReaderFactory, ParquetFileReaderFactory};
@@ -292,6 +293,7 @@ pub struct ParquetConfig {
     batch_size: Option<usize>,
     /// Optional hint for the size of the parquet metadata
     metadata_size_hint: Option<usize>,
+    projected_statistics: Option<Statistics>,
 }
 
 impl ParquetConfig {
@@ -467,11 +469,6 @@ impl ParquetConfig {
         self.table_parquet_options.global.pushdown_filters
     }
 
-    /// Return metrics
-    pub(crate) fn metrics(&self) -> ExecutionPlanMetricsSet {
-        self.metrics.clone()
-    }
-
     /// If true, the `RowFilter` made by `pushdown_filters` may try to
     /// minimize the cost of filter evaluation by reordering the
     /// predicate [`Expr`]s. If false, the predicates are applied in
@@ -561,7 +558,7 @@ impl FileSource for ParquetConfig {
             page_pruning_predicate: self.page_pruning_predicate.clone(),
             table_schema: Arc::clone(&base_config.file_schema),
             metadata_size_hint: self.metadata_size_hint,
-            metrics: self.metrics(),
+            metrics: self.metrics().clone(),
             parquet_file_reader_factory,
             pushdown_filters: self.pushdown_filters(),
             reorder_filters: self.reorder_filters(),
@@ -585,8 +582,36 @@ impl FileSource for ParquetConfig {
         Arc::new(Self { ..self.clone() })
     }
 
+    fn with_statistics(&self, statistics: Statistics) -> Arc<dyn FileSource> {
+        let mut conf = self.clone();
+        conf.projected_statistics = Some(statistics);
+        Arc::new(conf)
+    }
+
     fn with_projection(&self, _config: &FileScanConfig) -> Arc<dyn FileSource> {
         Arc::new(Self { ..self.clone() })
+    }
+
+    fn metrics(&self) -> &ExecutionPlanMetricsSet {
+        &self.metrics
+    }
+
+    fn statistics(&self) -> Result<Statistics> {
+        let statistics = &self.projected_statistics;
+        let statistics = statistics
+            .clone()
+            .expect("projected_statistics must be set");
+        // When filters are pushed down, we have no way of knowing the exact statistics.
+        // Note that pruning predicate is also a kind of filter pushdown.
+        // (bloom filters use `pruning_predicate` too)
+        if self.pruning_predicate().is_some()
+            || self.page_pruning_predicate().is_some()
+            || (self.predicate().is_some() && self.pushdown_filters())
+        {
+            Ok(statistics.to_inexact())
+        } else {
+            Ok(statistics)
+        }
     }
 }
 
