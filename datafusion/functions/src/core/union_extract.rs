@@ -27,7 +27,7 @@ use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
 use datafusion_macros::user_doc;
 
 #[user_doc(
-    doc_section(include = "true", label = "Union Functions"),
+    doc_section(label = "Union Functions"),
     description = "Returns the value of the given field when selected, or NULL otherwise.",
     syntax_example = "union_extract(union, field_name)",
     sql_example = r#"```sql
