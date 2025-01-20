@@ -118,9 +118,9 @@ impl ScalarUDFImpl for ArrowCastFunc {
         let nullable = args.nullables.iter().any(|&nullable| nullable);
 
         // Length check handled in the signature
-        debug_assert_eq!(args.arguments.len(), 2);
+        debug_assert_eq!(args.scalar_arguments.len(), 2);
 
-        args.arguments[1]
+        args.scalar_arguments[1]
             .and_then(|sv| sv.try_as_str().flatten().filter(|s| !s.is_empty()))
             .map_or_else(
                 || {

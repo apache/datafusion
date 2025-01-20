@@ -823,7 +823,7 @@ impl ScalarUDFImpl for TakeUDF {
             return plan_err!("Expected 3 arguments, got {}.", args.arg_types.len());
         }
 
-        let take_idx = if let Some(take_idx) = args.arguments.get(2) {
+        let take_idx = if let Some(take_idx) = args.scalar_arguments.get(2) {
             // This is for test only, safe to unwrap
             let take_idx = take_idx
                 .unwrap()
@@ -841,7 +841,7 @@ impl ScalarUDFImpl for TakeUDF {
         } else {
             return plan_err!(
                 "The third argument must be a literal of type int64, but got {:?}",
-                args.arguments.get(2)
+                args.scalar_arguments.get(2)
             );
         };
 

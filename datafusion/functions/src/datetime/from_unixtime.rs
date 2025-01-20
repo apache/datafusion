@@ -84,12 +84,12 @@ impl ScalarUDFImpl for FromUnixtimeFunc {
 
     fn return_type_from_args(&self, args: ReturnTypeArgs) -> Result<ReturnInfo> {
         // Length check handled in the signature
-        debug_assert!(matches!(args.arguments.len(), 1 | 2));
+        debug_assert!(matches!(args.scalar_arguments.len(), 1 | 2));
 
-        if args.arguments.len() == 1 {
+        if args.scalar_arguments.len() == 1 {
             Ok(ReturnInfo::new_nullable(Timestamp(Second, None)))
         } else {
-            args.arguments[1]
+            args.scalar_arguments[1]
                 .and_then(|sv| {
                     sv.try_as_str()
                         .flatten()

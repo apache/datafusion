@@ -160,21 +160,21 @@ impl ScalarUDFImpl for NamedStructFunc {
 
     fn return_type_from_args(&self, args: ReturnTypeArgs) -> Result<ReturnInfo> {
         // do not accept 0 arguments.
-        if args.arguments.is_empty() {
+        if args.scalar_arguments.is_empty() {
             return exec_err!(
                 "named_struct requires at least one pair of arguments, got 0 instead"
             );
         }
 
-        if args.arguments.len() % 2 != 0 {
+        if args.scalar_arguments.len() % 2 != 0 {
             return exec_err!(
                 "named_struct requires an even number of arguments, got {} instead",
-                args.arguments.len()
+                args.scalar_arguments.len()
             );
         }
 
         let names = args
-            .arguments
+            .scalar_arguments
             .iter()
             .enumerate()
             .step_by(2)

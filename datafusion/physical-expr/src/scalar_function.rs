@@ -116,7 +116,7 @@ impl ScalarFunctionExpr {
             .collect::<Vec<_>>();
         let ret_args = ReturnTypeArgs {
             arg_types: &arg_types,
-            arguments: &arguments,
+            scalar_arguments: &arguments,
             nullables: &nullables,
         };
         let (return_type, nullable) = fun.return_type_from_args(ret_args)?.into_parts();

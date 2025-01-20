@@ -348,15 +348,30 @@ pub struct ScalarFunctionArgs<'a> {
     pub return_type: &'a DataType,
 }
 
+/// Information about arguments passed to the function
+///
+/// This structure contains metadata about how the function was called
+/// such as the type of the arguments, any scalar arguments and if the
+/// arguments can (ever) be null
+///
+/// See [`ScalarUDFImpl::return_type_from_args`] for more information
 #[derive(Debug)]
 pub struct ReturnTypeArgs<'a> {
     /// The data types of the arguments to the function
     pub arg_types: &'a [DataType],
-    /// The Utf8 arguments to the function, if the expression is not Utf8, it will be empty string
-    pub arguments: &'a [Option<&'a ScalarValue>],
+    /// Is argument `i` to the function a scalar (constant)
+    ///
+    /// If argument `i` is not a scalar, it will be None
+    ///
+    /// For example, if a function is called like `my_function(column_a, 5)`
+    /// this field will be `[None, Some(ScalarValue::Int32(Some(5)))]`
+    pub scalar_arguments: &'a [Option<&'a ScalarValue>],
     pub nullables: &'a [bool],
 }
 
+/// Return metadata for this function.
+///
+/// See [`ScalarUDFImpl::return_type_from_args`] for more information
 #[derive(Debug)]
 pub struct ReturnInfo {
     return_type: DataType,

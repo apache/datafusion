@@ -148,9 +148,9 @@ impl ScalarUDFImpl for GetFieldFunc {
 
     fn return_type_from_args(&self, args: ReturnTypeArgs) -> Result<ReturnInfo> {
         // Length check handled in the signature
-        debug_assert_eq!(args.arguments.len(), 2);
+        debug_assert_eq!(args.scalar_arguments.len(), 2);
 
-        match (&args.arg_types[0], args.arguments[1].as_ref()) {
+        match (&args.arg_types[0], args.scalar_arguments[1].as_ref()) {
             (DataType::Map(fields, _), _) => {
                 match fields.data_type() {
                     DataType::Struct(fields) if fields.len() == 2 => {

@@ -427,7 +427,7 @@ impl ExprSchemable for Expr {
                     .collect::<Vec<_>>();
                 let args = ReturnTypeArgs {
                     arg_types: &new_data_types,
-                    arguments: &arguments,
+                    scalar_arguments: &arguments,
                     nullables: &nullables,
                 };
 
