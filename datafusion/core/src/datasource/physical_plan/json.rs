@@ -34,8 +34,8 @@ use crate::physical_plan::{ExecutionPlan, ExecutionPlanProperties};
 
 use arrow::json::ReaderBuilder;
 use arrow::{datatypes::SchemaRef, json};
-use datafusion_execution::TaskContext;
 use datafusion_common::Statistics;
+use datafusion_execution::TaskContext;
 use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
 
 use futures::{StreamExt, TryStreamExt};
