@@ -663,7 +663,9 @@ mod tests {
     use crate::prelude::{SessionConfig, SessionContext};
     use crate::test::{csv_exec_ordered, csv_exec_sorted, stream_exec_ordered};
     use datafusion_physical_optimizer::test_utils::{
-        aggregate_exec, bounded_window_exec, check_integrity, coalesce_batches_exec,
+        aggregate_exec, aggregate_exec_monotonic, aggregate_exec_non_monotonic,
+        bounded_window_exec, bounded_window_exec_non_monotonic,
+        bounded_window_exec_with_partition, check_integrity, coalesce_batches_exec,
         coalesce_partitions_exec, filter_exec, global_limit_exec, hash_join_exec,
         limit_exec, local_limit_exec, memory_exec, repartition_exec, sort_exec,
         sort_expr, sort_expr_options, sort_merge_join_exec, sort_preserving_merge_exec,

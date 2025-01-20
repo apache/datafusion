@@ -278,6 +278,10 @@ impl AggregateUDFImpl for Count {
     fn reverse_expr(&self) -> ReversedUDAF {
         ReversedUDAF::Identical
     }
+
+    fn is_monotonic(&self) -> Option<bool> {
+        Some(true)
+    }
 }
 
 create_func!(Min, min_udaf);
@@ -363,6 +367,9 @@ impl AggregateUDFImpl for Min {
     fn is_descending(&self) -> Option<bool> {
         Some(false)
     }
+    fn is_monotonic(&self) -> Option<bool> {
+        Some(false)
+    }
 }
 
 create_func!(Max, max_udaf);
@@ -446,6 +453,9 @@ impl AggregateUDFImpl for Max {
         ReversedUDAF::Identical
     }
     fn is_descending(&self) -> Option<bool> {
+        Some(true)
+    }
+    fn is_monotonic(&self) -> Option<bool> {
         Some(true)
     }
 }

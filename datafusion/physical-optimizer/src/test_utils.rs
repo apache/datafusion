@@ -25,7 +25,7 @@ use std::fmt::Formatter;
 use arrow_schema::{Schema, SchemaRef, SortOptions};
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::{JoinType, Result};
-use datafusion_expr::test::function_stub::count_udaf;
+use datafusion_expr::test::function_stub::{avg_udaf, count_udaf};
 use datafusion_expr::{WindowFrame, WindowFunctionDefinition};
 use datafusion_physical_expr::expressions::col;
 use datafusion_physical_expr::PhysicalExpr;
@@ -48,6 +48,7 @@ use datafusion_physical_plan::windows::{create_window_expr, BoundedWindowAggExec
 use datafusion_physical_plan::{InputOrderMode, Partitioning};
 
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
+use datafusion_physical_expr::aggregate::AggregateExprBuilder;
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, LexRequirement};
 use datafusion_physical_plan::ExecutionPlan;
 
@@ -125,14 +126,57 @@ pub fn bounded_window_exec(
     sort_exprs: impl IntoIterator<Item = PhysicalSortExpr>,
     input: Arc<dyn ExecutionPlan>,
 ) -> Arc<dyn ExecutionPlan> {
+    bounded_window_exec_with_partition(col_name, sort_exprs, &[], input, false)
+}
+
+pub fn bounded_window_exec_with_partition(
+    col_name: &str,
+    sort_exprs: impl IntoIterator<Item = PhysicalSortExpr>,
+    partition_by: &[Arc<dyn PhysicalExpr>],
+    input: Arc<dyn ExecutionPlan>,
+    should_reverse: bool,
+) -> Arc<dyn ExecutionPlan> {
+    let sort_exprs: LexOrdering = sort_exprs.into_iter().collect();
+    let schema = input.schema();
+    let mut window_expr = create_window_expr(
+        &WindowFunctionDefinition::AggregateUDF(count_udaf()),
+        "count".to_owned(),
+        &[col(col_name, &schema).unwrap()],
+        partition_by,
+        sort_exprs.as_ref(),
+        Arc::new(WindowFrame::new(Some(false))),
+        schema.as_ref(),
+        false,
+    )
+    .unwrap();
+    if should_reverse {
+        window_expr = window_expr.get_reverse_expr().unwrap();
+    }
+
+    Arc::new(
+        BoundedWindowAggExec::try_new(
+            vec![window_expr],
+            input.clone(),
+            vec![],
+            InputOrderMode::Sorted,
+        )
+        .unwrap(),
+    )
+}
+
+pub fn bounded_window_exec_non_monotonic(
+    col_name: &str,
+    sort_exprs: impl IntoIterator<Item = PhysicalSortExpr>,
+    input: Arc<dyn ExecutionPlan>,
+) -> Arc<dyn ExecutionPlan> {
     let sort_exprs: LexOrdering = sort_exprs.into_iter().collect();
     let schema = input.schema();
 
     Arc::new(
         BoundedWindowAggExec::try_new(
             vec![create_window_expr(
-                &WindowFunctionDefinition::AggregateUDF(count_udaf()),
-                "count".to_owned(),
+                &WindowFunctionDefinition::AggregateUDF(avg_udaf()),
+                "avg".to_owned(),
                 &[col(col_name, &schema).unwrap()],
                 &[],
                 sort_exprs.as_ref(),
@@ -200,6 +244,56 @@ pub fn aggregate_exec(input: Arc<dyn ExecutionPlan>) -> Arc<dyn ExecutionPlan> {
             PhysicalGroupBy::default(),
             vec![],
             vec![],
+            input,
+            schema,
+        )
+        .unwrap(),
+    )
+}
+
+pub fn aggregate_exec_monotonic(input: Arc<dyn ExecutionPlan>) -> Arc<dyn ExecutionPlan> {
+    let schema = input.schema();
+    let aggregate_expr =
+        vec![
+            AggregateExprBuilder::new(count_udaf(), vec![col("d", &schema).unwrap()])
+                .schema(Arc::clone(&schema))
+                .alias("count")
+                .build()
+                .map(Arc::new)
+                .unwrap(),
+        ];
+    Arc::new(
+        AggregateExec::try_new(
+            AggregateMode::Final,
+            PhysicalGroupBy::default(),
+            aggregate_expr,
+            vec![None],
+            input,
+            schema,
+        )
+        .unwrap(),
+    )
+}
+
+pub fn aggregate_exec_non_monotonic(
+    input: Arc<dyn ExecutionPlan>,
+) -> Arc<dyn ExecutionPlan> {
+    let schema = input.schema();
+    let aggregate_expr =
+        vec![
+            AggregateExprBuilder::new(avg_udaf(), vec![col("d", &schema).unwrap()])
+                .schema(Arc::clone(&schema))
+                .alias("avg")
+                .build()
+                .map(Arc::new)
+                .unwrap(),
+        ];
+    Arc::new(
+        AggregateExec::try_new(
+            AggregateMode::Final,
+            PhysicalGroupBy::default(),
+            aggregate_expr,
+            vec![None],
             input,
             schema,
         )
