@@ -163,14 +163,18 @@ impl MemTable {
             }
         }
 
-        let mut exec = MemorySourceConfig::try_new_exec(&data, Arc::clone(&schema), None)?;
+        let mut exec = DataSourceExec::new(Arc::new(MemorySourceConfig::try_new(
+            &data,
+            Arc::clone(&schema),
+            None,
+        )?));
         if let Some(cons) = constraints {
             exec = exec.with_constraints(cons.clone());
         }
 
         if let Some(num_partitions) = output_partitions {
             let exec = RepartitionExec::try_new(
-                exec,
+                Arc::new(exec),
                 Partitioning::RoundRobinBatch(num_partitions),
             )?;
 

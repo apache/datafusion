@@ -2497,8 +2497,8 @@ mod tests {
         let expected_initial = [
             "ProjectionExec: expr=[c@2 as c]",
             "  NestedLoopJoinExec: join_type=Inner, filter=a@0 < b@1",
-            "    CsvExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], has_header=false",
-            "    CsvExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], has_header=false",
+            "    DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=csv, has_header=false",
+            "    DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=csv, has_header=false",
             ];
         assert_eq!(initial, expected_initial);
 
@@ -2506,8 +2506,8 @@ mod tests {
             ProjectionPushdown::new().optimize(projection, &ConfigOptions::new())?;
         let expected = [
             "NestedLoopJoinExec: join_type=Inner, filter=a@0 < b@1, projection=[c@2]",
-            "  CsvExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], has_header=false",
-            "  CsvExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], has_header=false",
+            "  DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=csv, has_header=false",
+            "  DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=csv, has_header=false",
         ];
         assert_eq!(get_plan_string(&after_optimize), expected);
         Ok(())

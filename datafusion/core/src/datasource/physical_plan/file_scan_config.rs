@@ -254,9 +254,8 @@ impl FileScanConfig {
         self.new_lines_in_values
     }
 
-    // TODO: merge project constraints
     /// Project the schema, constraints, and the statistics on the given column indices
-    pub fn project(&self) -> (SchemaRef, Statistics, Vec<LexOrdering>) {
+    pub fn project(&self) -> (SchemaRef, Constraints, Statistics, Vec<LexOrdering>) {
         if self.projection.is_none() && self.table_partition_cols.is_empty() {
             return (
                 Arc::clone(&self.file_schema),

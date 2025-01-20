@@ -24,7 +24,7 @@ use crate::metrics::{ExecutionPlanMetricsSet, MetricsSet};
 use crate::{DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties};
 
 use datafusion_common::config::ConfigOptions;
-use datafusion_common::Statistics;
+use datafusion_common::{Constraints, Statistics};
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 
 /// Common behaviors in Data Sources for both from Files and Memory.
@@ -155,6 +155,12 @@ impl DataSourceExec {
     pub fn with_source(mut self, source: Arc<dyn DataSource>) -> Self {
         self.cache = source.properties();
         self.source = source;
+        self
+    }
+
+    /// Assign constraints
+    pub fn with_constraints(mut self, constraints: Constraints) -> Self {
+        self.cache = self.cache.with_constraints(constraints);
         self
     }
 }

@@ -661,7 +661,9 @@ mod tests {
     use crate::physical_optimizer::test_utils::{parquet_exec, parquet_exec_sorted};
     use crate::physical_plan::{displayable, get_plan_string, Partitioning};
     use crate::prelude::{SessionConfig, SessionContext};
-    use crate::test::{data_source_exec_csv_ordered, data_source_exec_csv_sorted, stream_exec_ordered};
+    use crate::test::{
+        data_source_exec_csv_ordered, data_source_exec_csv_sorted, stream_exec_ordered,
+    };
     use datafusion_physical_optimizer::test_utils::{
         aggregate_exec, bounded_window_exec, check_integrity, coalesce_batches_exec,
         coalesce_partitions_exec, filter_exec, global_limit_exec, hash_join_exec,

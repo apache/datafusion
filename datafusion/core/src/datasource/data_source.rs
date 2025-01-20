@@ -32,7 +32,7 @@ use crate::datasource::physical_plan::{
 
 use arrow_schema::SchemaRef;
 use datafusion_common::config::ConfigOptions;
-use datafusion_common::Statistics;
+use datafusion_common::{Constraints, Statistics};
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_physical_expr::{EquivalenceProperties, Partitioning};
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
@@ -89,11 +89,16 @@ impl FileSourceConfig {
 
     /// Initialize a new `FileSourceConfig` instance with metrics, cache, and statistics.
     pub fn new(base_config: FileScanConfig, file_source: Arc<dyn FileSource>) -> Self {
-        let (projected_schema, projected_statistics, projected_output_ordering) =
-            base_config.project();
+        let (
+            projected_schema,
+            constraints,
+            projected_statistics,
+            projected_output_ordering,
+        ) = base_config.project();
         let cache = Self::compute_properties(
             Arc::clone(&projected_schema),
             &projected_output_ordering,
+            constraints,
             &base_config,
         );
         let mut metrics = ExecutionPlanMetricsSet::new();
@@ -155,10 +160,12 @@ impl FileSourceConfig {
     fn compute_properties(
         schema: SchemaRef,
         orderings: &[LexOrdering],
+        constraints: Constraints,
         file_scan_config: &FileScanConfig,
     ) -> PlanProperties {
         // Equivalence Properties
-        let eq_properties = EquivalenceProperties::new_with_orderings(schema, orderings);
+        let eq_properties = EquivalenceProperties::new_with_orderings(schema, orderings)
+            .with_constraints(constraints);
 
         PlanProperties::new(
             eq_properties,

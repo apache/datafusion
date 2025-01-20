@@ -1423,10 +1423,6 @@ pub(crate) mod tests {
     use crate::physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
     use crate::physical_plan::sorts::sort::SortExec;
     use crate::physical_plan::{displayable, DisplayAs, DisplayFormatType, Statistics};
-    use datafusion_physical_optimizer::output_requirements::OutputRequirements;
-    use datafusion_physical_optimizer::test_utils::{
-        check_integrity, coalesce_partitions_exec, repartition_exec,
-    };
 
     use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
     use datafusion_common::ScalarValue;
@@ -1437,6 +1433,9 @@ pub(crate) mod tests {
     };
     use datafusion_physical_expr_common::sort_expr::LexRequirement;
     use datafusion_physical_optimizer::output_requirements::OutputRequirements;
+    use datafusion_physical_optimizer::test_utils::{
+        check_integrity, coalesce_partitions_exec, repartition_exec,
+    };
     use datafusion_physical_plan::source::DataSourceExec;
     use datafusion_physical_plan::PlanProperties;
 

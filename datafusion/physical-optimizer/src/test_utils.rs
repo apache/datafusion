@@ -39,7 +39,7 @@ use datafusion_physical_plan::filter::FilterExec;
 use datafusion_physical_plan::joins::utils::{JoinFilter, JoinOn};
 use datafusion_physical_plan::joins::{HashJoinExec, PartitionMode, SortMergeJoinExec};
 use datafusion_physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
-use datafusion_physical_plan::memory::MemoryExec;
+use datafusion_physical_plan::memory::MemorySourceConfig;
 use datafusion_physical_plan::repartition::RepartitionExec;
 use datafusion_physical_plan::sorts::sort::SortExec;
 use datafusion_physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
@@ -98,7 +98,7 @@ pub fn coalesce_partitions_exec(input: Arc<dyn ExecutionPlan>) -> Arc<dyn Execut
 }
 
 pub fn memory_exec(schema: &SchemaRef) -> Arc<dyn ExecutionPlan> {
-    Arc::new(MemoryExec::try_new(&[vec![]], Arc::clone(schema), None).unwrap())
+    MemorySourceConfig::try_new_exec(&[vec![]], Arc::clone(schema), None).unwrap()
 }
 
 pub fn hash_join_exec(

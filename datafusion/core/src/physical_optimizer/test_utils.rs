@@ -25,11 +25,11 @@ use crate::datasource::data_source::FileSourceConfig;
 use crate::datasource::listing::PartitionedFile;
 use crate::datasource::physical_plan::{FileScanConfig, ParquetConfig};
 use crate::physical_plan::ExecutionPlan;
-use crate::physical_plan::DataSourceExec;
 
 use arrow_schema::SchemaRef;
 use datafusion_execution::object_store::ObjectStoreUrl;
 use datafusion_physical_expr::PhysicalSortExpr;
+use datafusion_physical_plan::source::DataSourceExec;
 
 /// Create a non sorted parquet exec
 pub fn parquet_exec(schema: &SchemaRef) -> Arc<DataSourceExec> {
