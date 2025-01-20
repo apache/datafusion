@@ -185,13 +185,11 @@ impl PhysicalOptimizerRule for EnforceSorting {
                 )
             })
             .data()?;
-
         // Execute a top-down traversal to exploit sort push-down opportunities
         // missed by the bottom-up traversal:
         let mut sort_pushdown = SortPushDown::new_default(updated_plan.plan);
         assign_initial_requirements(&mut sort_pushdown);
         let adjusted = pushdown_sorts(sort_pushdown)?;
-
         adjusted
             .plan
             .transform_up(|plan| Ok(Transformed::yes(replace_with_partial_sort(plan)?)))
@@ -399,7 +397,10 @@ fn analyze_immediate_sort_removal(
             {
                 // Replace the sort with a sort-preserving merge:
                 let expr = sort_exec.expr().to_vec();
-                Arc::new(SortPreservingMergeExec::new(expr, sort_input.clone())) as _
+                Arc::new(
+                    SortPreservingMergeExec::new(expr, Arc::clone(sort_input))
+                        .with_fetch(sort_exec.fetch()),
+                ) as _
             } else {
                 // Remove the sort:
                 node.children = node.children.swap_remove(0).children;
@@ -617,9 +618,13 @@ fn remove_corresponding_sort_from_sub_plan(
     {
         // If there is existing ordering, to preserve ordering use
         // `SortPreservingMergeExec` instead of a `CoalescePartitionsExec`.
-        let plan = node.plan.clone();
+        let plan = Arc::clone(&node.plan);
+        let fetch = plan.fetch();
         let plan = if let Some(ordering) = plan.output_ordering() {
-            Arc::new(SortPreservingMergeExec::new(ordering.to_vec(), plan)) as _
+            Arc::new(
+                SortPreservingMergeExec::new(ordering.to_vec(), plan)
+                    .with_fetch(fetch),
+            ) as _
         } else {
             Arc::new(CoalescePartitionsExec::new(plan)) as _
         };
