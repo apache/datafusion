@@ -317,7 +317,14 @@ fn simplify_concat_ws(delimiter: &Expr, args: &[Expr]) -> Result<ExprSimplifyRes
             match delimiter {
                 // when the delimiter is an empty string,
                 // we can use `concat` to replace `concat_ws`
-                Some(delimiter) if delimiter.is_empty() => simplify_concat(args.to_vec()),
+                Some(delimiter) if delimiter.is_empty() => {
+                    match simplify_concat(args.to_vec())? {
+                        ExprSimplifyResult::Original(_) => {
+                            Ok(ExprSimplifyResult::Original(args.to_vec()))
+                        }
+                        expr => Ok(expr),
+                    }
+                }
                 Some(delimiter) => {
                     let mut new_args = Vec::with_capacity(args.len());
                     new_args.push(lit(delimiter));
