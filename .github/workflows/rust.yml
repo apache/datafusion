@@ -286,17 +286,17 @@ jobs:
         uses: ./.github/actions/setup-builder
         with:
           rust-version: stable
-      - name: Install clang dependencu=y
+      - name: Install emscripten dependency
         shell: bash
         run: |
           RETRY=("ci/scripts/retry" timeout 120)
           "${RETRY[@]}" apt-get update
-          "${RETRY[@]}" apt-get install -y clang build-essential libc6-dev
+          "${RETRY[@]}" apt-get install -y emscripten
       - name: Install wasm-pack
         run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
       - name: Build with wasm-pack
         working-directory: ./datafusion/wasmtest
-        run: wasm-pack build --dev
+        run: CC=emcc AR=emar wasm-pack build --dev
 
   # verify that the benchmark queries return the correct results
   verify-benchmark-results:
