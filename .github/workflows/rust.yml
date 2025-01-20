@@ -291,7 +291,7 @@ jobs:
         run: |
           RETRY=("ci/scripts/retry" timeout 120)
           "${RETRY[@]}" apt-get update
-          "${RETRY[@]}" apt-get install -y clang
+          "${RETRY[@]}" apt-get install -y clang build-essential
       - name: Install wasm-pack
         run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
       - name: Build with wasm-pack
