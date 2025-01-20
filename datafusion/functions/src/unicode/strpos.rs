@@ -28,6 +28,7 @@ use datafusion_expr::{
     ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
 };
 use datafusion_macros::user_doc;
+use stringzilla::sz;
 
 #[user_doc(
     doc_section(label = "String Functions"),
@@ -163,28 +164,29 @@ where
         .zip(substring_iter)
         .map(|(string, substring)| match (string, substring) {
             (Some(string), Some(substring)) => {
-                // If only ASCII characters are present, we can use the slide window method to find
-                // the sub vector in the main vector. This is faster than string.find() method.
                 if ascii_only {
-                    // If the substring is empty, the result is 1.
-                    if substring.is_empty() {
-                        T::Native::from_usize(1)
-                    } else {
-                        T::Native::from_usize(
+                    T::Native::from_usize(
+                        // If the substring is empty, the result is 1.
+                        if substring.is_empty() {
+                            1
+                        }
+                        // sz::find seems to under perform this on some arch's when string is small
+                        else if string.len() < 64 {
                             string
                                 .as_bytes()
                                 .windows(substring.len())
                                 .position(|w| w == substring.as_bytes())
                                 .map(|x| x + 1)
-                                .unwrap_or(0),
-                        )
-                    }
+                                .unwrap_or(0)
+                        } else {
+                            sz::find(string, substring).map(|x| x + 1).unwrap_or(0)
+                        },
+                    )
                 } else {
                     // The `find` method returns the byte index of the substring.
                     // We count the number of chars up to that byte index.
                     T::Native::from_usize(
-                        string
-                            .find(substring)
+                        sz::find(string, substring)
                             .map(|x| string[..x].chars().count() + 1)
                             .unwrap_or(0),
                     )

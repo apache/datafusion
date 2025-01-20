@@ -16,8 +16,7 @@
 // under the License.
 
 use crate::utils::make_scalar_function;
-use arrow::array::{Array, ArrayRef, AsArray};
-use arrow::compute::contains as arrow_contains;
+use arrow::array::{Array, ArrayRef, AsArray, BooleanArray, StringArrayType};
 use arrow::datatypes::DataType;
 use arrow::datatypes::DataType::{Boolean, LargeUtf8, Utf8, Utf8View};
 use datafusion_common::exec_err;
@@ -27,8 +26,10 @@ use datafusion_expr::{
     ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
 };
 use datafusion_macros::user_doc;
+use memchr::memmem;
 use std::any::Any;
 use std::sync::Arc;
+use stringzilla::sz;
 
 #[user_doc(
     doc_section(label = "String Functions"),
@@ -94,31 +95,57 @@ impl ScalarUDFImpl for ContainsFunc {
     }
 }
 
-/// use `arrow::compute::contains` to do the calculation for contains
 pub fn contains(args: &[ArrayRef]) -> Result<ArrayRef, DataFusionError> {
     match (args[0].data_type(), args[1].data_type()) {
         (Utf8View, Utf8View) => {
             let mod_str = args[0].as_string_view();
             let match_str = args[1].as_string_view();
-            let res = arrow_contains(mod_str, match_str)?;
+            let res = contains_impl(mod_str, match_str);
             Ok(Arc::new(res) as ArrayRef)
         }
         (Utf8, Utf8) => {
             let mod_str = args[0].as_string::<i32>();
             let match_str = args[1].as_string::<i32>();
-            let res = arrow_contains(mod_str, match_str)?;
+            let res = contains_impl(mod_str, match_str);
             Ok(Arc::new(res) as ArrayRef)
         }
         (LargeUtf8, LargeUtf8) => {
             let mod_str = args[0].as_string::<i64>();
             let match_str = args[1].as_string::<i64>();
-            let res = arrow_contains(mod_str, match_str)?;
+            let res = contains_impl(mod_str, match_str);
             Ok(Arc::new(res) as ArrayRef)
         }
         other => {
             exec_err!("Unsupported data type {other:?} for function `contains`.")
         }
     }
+}
+
+fn contains_impl<'a, V: StringArrayType<'a, Item = &'a str>>(
+    strings: V,
+    substrings: V,
+) -> BooleanArray {
+    let string_iter = strings.iter();
+    let substring_iter = substrings.iter();
+
+    string_iter
+        .zip(substring_iter)
+        .map(|(string, substring)| match (string, substring) {
+            (Some(string), Some(substring)) => {
+                // empty string always matches
+                if substring.is_empty() {
+                    Some(true)
+                }
+                // sz::find seems to under perform this on some arch's when string is small
+                else if string.len() < 64 {
+                    Some(memmem::find(string.as_bytes(), substring.as_bytes()).is_some())
+                } else {
+                    Some(sz::find(string, substring).is_some())
+                }
+            }
+            _ => None,
+        })
+        .collect::<BooleanArray>()
 }
 
 #[cfg(test)]
@@ -135,6 +162,7 @@ mod test {
         let array = ColumnarValue::Array(Arc::new(StringArray::from(vec![
             Some("xxx?()"),
             Some("yyy?()"),
+            None,
         ])));
         let scalar = ColumnarValue::Scalar(ScalarValue::Utf8(Some("x?(".to_string())));
         #[allow(deprecated)] // TODO migrate UDF to invoke
@@ -142,6 +170,7 @@ mod test {
         let expect = ColumnarValue::Array(Arc::new(BooleanArray::from(vec![
             Some(true),
             Some(false),
+            None,
         ])));
         assert_eq!(
             *actual.into_array(2).unwrap(),

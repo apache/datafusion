@@ -104,18 +104,18 @@ fn random_substring(chars: Chars) -> String {
 
 fn criterion_benchmark(c: &mut Criterion) {
     // All benches are single batch run with 8192 rows
-    let strpos = datafusion_functions::unicode::strpos();
+    let contains = datafusion_functions::string::contains();
 
     let n_rows = 8192;
     for str_len in [8, 32, 128, 1024, 4096] {
         // StringArray ASCII only
         let args_string_ascii = gen_string_array(n_rows, str_len, 0.1, 0.0, false);
         c.bench_function(
-            &format!("strpos_StringArray_ascii_str_len_{}", str_len),
+            &format!("contains_StringArray_ascii_str_len_{}", str_len),
             |b| {
                 b.iter(|| {
                     // TODO use invoke_with_args
-                    black_box(strpos.invoke_batch(&args_string_ascii, n_rows))
+                    black_box(contains.invoke_batch(&args_string_ascii, n_rows))
                 })
             },
         );
@@ -123,11 +123,11 @@ fn criterion_benchmark(c: &mut Criterion) {
         // StringArray UTF8
         let args_string_utf8 = gen_string_array(n_rows, str_len, 0.1, 0.5, false);
         c.bench_function(
-            &format!("strpos_StringArray_utf8_str_len_{}", str_len),
+            &format!("contains_StringArray_utf8_str_len_{}", str_len),
             |b| {
                 b.iter(|| {
                     // TODO use invoke_with_args
-                    black_box(strpos.invoke_batch(&args_string_utf8, n_rows))
+                    black_box(contains.invoke_batch(&args_string_utf8, n_rows))
                 })
             },
         );
@@ -135,11 +135,11 @@ fn criterion_benchmark(c: &mut Criterion) {
         // StringViewArray ASCII only
         let args_string_view_ascii = gen_string_array(n_rows, str_len, 0.1, 0.0, true);
         c.bench_function(
-            &format!("strpos_StringViewArray_ascii_str_len_{}", str_len),
+            &format!("contains_StringViewArray_ascii_str_len_{}", str_len),
             |b| {
                 b.iter(|| {
                     // TODO use invoke_with_args
-                    black_box(strpos.invoke_batch(&args_string_view_ascii, n_rows))
+                    black_box(contains.invoke_batch(&args_string_view_ascii, n_rows))
                 })
             },
         );
@@ -147,11 +147,11 @@ fn criterion_benchmark(c: &mut Criterion) {
         // StringViewArray UTF8
         let args_string_view_utf8 = gen_string_array(n_rows, str_len, 0.1, 0.5, true);
         c.bench_function(
-            &format!("strpos_StringViewArray_utf8_str_len_{}", str_len),
+            &format!("contains_StringViewArray_utf8_str_len_{}", str_len),
             |b| {
                 b.iter(|| {
                     // TODO use invoke_with_args
-                    black_box(strpos.invoke_batch(&args_string_view_utf8, n_rows))
+                    black_box(contains.invoke_batch(&args_string_view_utf8, n_rows))
                 })
             },
         );

@@ -54,9 +54,9 @@ math_expressions = []
 # enable regular expressions
 regex_expressions = ["regex"]
 # enable string functions
-string_expressions = ["uuid"]
+string_expressions = ["uuid", "stringzilla", "memchr"]
 # enable unicode functions
-unicode_expressions = ["hashbrown", "unicode-segmentation"]
+unicode_expressions = ["hashbrown", "unicode-segmentation", "stringzilla", "memchr"]
 
 [lib]
 name = "datafusion_functions"
@@ -82,9 +82,11 @@ hex = { version = "0.4", optional = true }
 itertools = { workspace = true }
 log = { workspace = true }
 md-5 = { version = "^0.10.0", optional = true }
+memchr = { version = "2.7.4", optional = true }
 rand = { workspace = true }
 regex = { workspace = true, optional = true }
 sha2 = { version = "^0.10.1", optional = true }
+stringzilla = { version = "3", optional = true }
 unicode-segmentation = { version = "^1.7.1", optional = true }
 uuid = { version = "1.7", features = ["v4"], optional = true }
 
@@ -223,3 +225,8 @@ required-features = ["unicode_expressions"]
 harness = false
 name = "find_in_set"
 required-features = ["unicode_expressions"]
+
+[[bench]]
+harness = false
+name = "contains"
+required-features = ["string_expressions"]
