@@ -286,6 +286,12 @@ jobs:
         uses: ./.github/actions/setup-builder
         with:
           rust-version: stable
+      - name: Install clang dependencu=y
+        shell: bash
+        run: |
+          RETRY=("ci/scripts/retry" timeout 120)
+          "${RETRY[@]}" apt-get update
+          "${RETRY[@]}" apt-get install -y clang
       - name: Install wasm-pack
         run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
       - name: Build with wasm-pack
