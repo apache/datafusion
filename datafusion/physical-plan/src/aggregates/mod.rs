@@ -2470,25 +2470,21 @@ mod tests {
                     "labels".to_string(),
                     DataType::Struct(
                         vec![
-                            Field::new_dict(
+                            Field::new(
                                 "a".to_string(),
                                 DataType::Dictionary(
                                     Box::new(DataType::Int32),
                                     Box::new(DataType::Utf8),
                                 ),
                                 true,
-                                0,
-                                false,
                             ),
-                            Field::new_dict(
+                            Field::new(
                                 "b".to_string(),
                                 DataType::Dictionary(
                                     Box::new(DataType::Int32),
                                     Box::new(DataType::Utf8),
                                 ),
                                 true,
-                                0,
-                                false,
                             ),
                         ]
                         .into(),
@@ -2500,15 +2496,13 @@ mod tests {
             vec![
                 Arc::new(StructArray::from(vec![
                     (
-                        Arc::new(Field::new_dict(
+                        Arc::new(Field::new(
                             "a".to_string(),
                             DataType::Dictionary(
                                 Box::new(DataType::Int32),
                                 Box::new(DataType::Utf8),
                             ),
                             true,
-                            0,
-                            false,
                         )),
                         Arc::new(
                             vec![Some("a"), None, Some("a")]
@@ -2517,15 +2511,13 @@ mod tests {
                         ) as ArrayRef,
                     ),
                     (
-                        Arc::new(Field::new_dict(
+                        Arc::new(Field::new(
                             "b".to_string(),
                             DataType::Dictionary(
                                 Box::new(DataType::Int32),
                                 Box::new(DataType::Utf8),
                             ),
                             true,
-                            0,
-                            false,
                         )),
                         Arc::new(
                             vec![Some("b"), Some("c"), Some("b")]

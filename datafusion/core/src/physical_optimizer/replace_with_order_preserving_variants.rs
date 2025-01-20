@@ -133,10 +133,7 @@ fn plan_with_order_preserving_variants(
         if let Some(ordering) = child.output_ordering() {
             // When the input of a `CoalescePartitionsExec` has an ordering,
             // replace it with a `SortPreservingMergeExec` if appropriate:
-            let spm = SortPreservingMergeExec::new(
-                LexOrdering::new(ordering.inner.clone()),
-                Arc::clone(child),
-            );
+            let spm = SortPreservingMergeExec::new(ordering.clone(), Arc::clone(child));
             sort_input.plan = Arc::new(spm) as _;
             sort_input.children[0].data = true;
             return Ok(sort_input);

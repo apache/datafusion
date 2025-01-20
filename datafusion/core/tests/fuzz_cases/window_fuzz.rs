@@ -615,7 +615,7 @@ async fn run_window_test(
             options: SortOptions::default(),
         })
     }
-    for order_by_expr in &orderby_exprs.inner {
+    for order_by_expr in &orderby_exprs {
         if !sort_keys.contains(order_by_expr) {
             sort_keys.push(order_by_expr.clone())
         }

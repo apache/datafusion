@@ -1105,7 +1105,11 @@ pub(crate) mod tests {
             Arc::new(BinaryExpr::new(left_filter, Operator::And, right_filter))
                 as Arc<dyn PhysicalExpr>;
 
-        JoinFilter::new(filter_expression, column_indices, intermediate_schema)
+        JoinFilter::new(
+            filter_expression,
+            column_indices,
+            Arc::new(intermediate_schema),
+        )
     }
 
     pub(crate) async fn multi_partitioned_join_collect(
@@ -1515,7 +1519,11 @@ pub(crate) mod tests {
             Arc::new(BinaryExpr::new(left_filter, Operator::And, right_filter))
                 as Arc<dyn PhysicalExpr>;
 
-        JoinFilter::new(filter_expression, column_indices, intermediate_schema)
+        JoinFilter::new(
+            filter_expression,
+            column_indices,
+            Arc::new(intermediate_schema),
+        )
     }
 
     fn generate_columns(num_columns: usize, num_rows: usize) -> Vec<Vec<i32>> {

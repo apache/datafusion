@@ -637,7 +637,7 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                             })
                             .collect::<Result<Vec<_>>>()?;
 
-                        Ok(JoinFilter::new(expression, column_indices, schema))
+                        Ok(JoinFilter::new(expression, column_indices, Arc::new(schema)))
                     })
                     .map_or(Ok(None), |v: Result<JoinFilter>| v.map(Some))?;
 
@@ -751,7 +751,7 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                             })
                             .collect::<Result<_>>()?;
 
-                        Ok(JoinFilter::new(expression, column_indices, schema))
+                        Ok(JoinFilter::new(expression, column_indices, Arc::new(schema)))
                     })
                     .map_or(Ok(None), |v: Result<JoinFilter>| v.map(Some))?;
 
@@ -1004,7 +1004,7 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                             })
                             .collect::<Result<Vec<_>>>()?;
 
-                        Ok(JoinFilter::new(expression, column_indices, schema))
+                        Ok(JoinFilter::new(expression, column_indices, Arc::new(schema)))
                     })
                     .map_or(Ok(None), |v: Result<JoinFilter>| v.map(Some))?;
 
@@ -1328,7 +1328,7 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                             }
                         })
                         .collect();
-                    let schema = f.schema().try_into()?;
+                    let schema = f.schema().as_ref().try_into()?;
                     Ok(protobuf::JoinFilter {
                         expression: Some(expression),
                         column_indices,
@@ -1400,7 +1400,7 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                             }
                         })
                         .collect();
-                    let schema = f.schema().try_into()?;
+                    let schema = f.schema().as_ref().try_into()?;
                     Ok(protobuf::JoinFilter {
                         expression: Some(expression),
                         column_indices,
@@ -1875,7 +1875,7 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                             }
                         })
                         .collect();
-                    let schema = f.schema().try_into()?;
+                    let schema = f.schema().as_ref().try_into()?;
                     Ok(protobuf::JoinFilter {
                         expression: Some(expression),
                         column_indices,

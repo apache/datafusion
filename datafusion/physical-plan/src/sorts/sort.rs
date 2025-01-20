@@ -282,7 +282,7 @@ impl ExternalSorter {
             in_mem_batches: vec![],
             in_mem_batches_sorted: true,
             spills: vec![],
-            expr: expr.inner.into(),
+            expr: expr.into(),
             metrics,
             fetch,
             reservation,

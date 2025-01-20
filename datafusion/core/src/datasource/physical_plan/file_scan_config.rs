@@ -1167,9 +1167,8 @@ mod tests {
                     ))))
                     .collect::<Vec<_>>(),
             ));
-            let sort_order = LexOrdering {
-                inner: case
-                    .sort
+            let sort_order = LexOrdering::from(
+                case.sort
                     .into_iter()
                     .map(|expr| {
                         crate::physical_planner::create_physical_sort_expr(
@@ -1179,7 +1178,7 @@ mod tests {
                         )
                     })
                     .collect::<Result<Vec<_>>>()?,
-            };
+            );
 
             let partitioned_files =
                 case.files.into_iter().map(From::from).collect::<Vec<_>>();

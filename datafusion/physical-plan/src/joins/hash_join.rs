@@ -226,8 +226,8 @@ impl JoinLeftData {
 ///                                                                         │                           │
 ///            ┌───────┐                                                    │          ┌───────┐        │
 ///            │ Row 6 │        3) update_hash for batch 1 with offset 5    │          │ Row 1 │    5   │
-///   Batch 3  │       │           - hashmap.insert(Row 2, idx 5)           │ Batch 1  │       │        │
-///            │ Row 7 │           - hashmap.insert(Row 1, idx 6)           │          │ Row 2 │    6   │
+///   Batch 3  │       │           - hashmap.insert(Row 2, idx 6)           │ Batch 1  │       │        │
+///            │ Row 7 │           - hashmap.insert(Row 1, idx 5)           │          │ Row 2 │    6   │
 ///            └───────┘                                                    │          └───────┘        │
 ///                                                                         │                           │
 ///                                                                         └───────────────────────────┘
@@ -2577,7 +2577,7 @@ mod tests {
         let filter = JoinFilter::new(
             filter_expression,
             column_indices.clone(),
-            intermediate_schema.clone(),
+            Arc::new(intermediate_schema.clone()),
         );
 
         let join = join_with_filter(
@@ -2612,8 +2612,11 @@ mod tests {
             Operator::Gt,
             Arc::new(Literal::new(ScalarValue::Int32(Some(10)))),
         )) as Arc<dyn PhysicalExpr>;
-        let filter =
-            JoinFilter::new(filter_expression, column_indices, intermediate_schema);
+        let filter = JoinFilter::new(
+            filter_expression,
+            column_indices,
+            Arc::new(intermediate_schema),
+        );
 
         let join = join_with_filter(left, right, on, filter, &JoinType::LeftSemi, false)?;
 
@@ -2701,7 +2704,7 @@ mod tests {
         let filter = JoinFilter::new(
             filter_expression,
             column_indices.clone(),
-            intermediate_schema.clone(),
+            Arc::new(intermediate_schema.clone()),
         );
 
         let join = join_with_filter(
@@ -2739,8 +2742,11 @@ mod tests {
             Arc::new(Literal::new(ScalarValue::Int32(Some(11)))),
         )) as Arc<dyn PhysicalExpr>;
 
-        let filter =
-            JoinFilter::new(filter_expression, column_indices, intermediate_schema);
+        let filter = JoinFilter::new(
+            filter_expression,
+            column_indices,
+            Arc::new(intermediate_schema.clone()),
+        );
 
         let join =
             join_with_filter(left, right, on, filter, &JoinType::RightSemi, false)?;
@@ -2823,7 +2829,7 @@ mod tests {
         let filter = JoinFilter::new(
             filter_expression,
             column_indices.clone(),
-            intermediate_schema.clone(),
+            Arc::new(intermediate_schema.clone()),
         );
 
         let join = join_with_filter(
@@ -2862,8 +2868,11 @@ mod tests {
             Arc::new(Literal::new(ScalarValue::Int32(Some(8)))),
         )) as Arc<dyn PhysicalExpr>;
 
-        let filter =
-            JoinFilter::new(filter_expression, column_indices, intermediate_schema);
+        let filter = JoinFilter::new(
+            filter_expression,
+            column_indices,
+            Arc::new(intermediate_schema),
+        );
 
         let join = join_with_filter(left, right, on, filter, &JoinType::LeftAnti, false)?;
 
@@ -2952,7 +2961,7 @@ mod tests {
         let filter = JoinFilter::new(
             filter_expression,
             column_indices,
-            intermediate_schema.clone(),
+            Arc::new(intermediate_schema.clone()),
         );
 
         let join = join_with_filter(
@@ -2996,8 +3005,11 @@ mod tests {
             Arc::new(Literal::new(ScalarValue::Int32(Some(8)))),
         )) as Arc<dyn PhysicalExpr>;
 
-        let filter =
-            JoinFilter::new(filter_expression, column_indices, intermediate_schema);
+        let filter = JoinFilter::new(
+            filter_expression,
+            column_indices,
+            Arc::new(intermediate_schema),
+        );
 
         let join =
             join_with_filter(left, right, on, filter, &JoinType::RightAnti, false)?;
@@ -3360,7 +3372,11 @@ mod tests {
             Arc::new(Column::new("c", 1)),
         )) as Arc<dyn PhysicalExpr>;
 
-        JoinFilter::new(filter_expression, column_indices, intermediate_schema)
+        JoinFilter::new(
+            filter_expression,
+            column_indices,
+            Arc::new(intermediate_schema),
+        )
     }
 
     #[apply(batch_sizes)]

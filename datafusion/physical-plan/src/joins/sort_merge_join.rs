@@ -1759,10 +1759,8 @@ impl SortMergeJoinStream {
             if !filter_columns.is_empty() {
                 if let Some(f) = &self.filter {
                     // Construct batch with only filter columns
-                    let filter_batch = RecordBatch::try_new(
-                        Arc::new(f.schema().clone()),
-                        filter_columns,
-                    )?;
+                    let filter_batch =
+                        RecordBatch::try_new(Arc::clone(f.schema()), filter_columns)?;
 
                     let filter_result = f
                         .expression()
@@ -3182,10 +3180,10 @@ mod tests {
                     side: JoinSide::Right,
                 },
             ],
-            Schema::new(vec![
+            Arc::new(Schema::new(vec![
                 Field::new("c1", DataType::Int32, true),
                 Field::new("c2", DataType::Int32, true),
-            ]),
+            ])),
         );
         let (_, batches) =
             join_collect_with_filter(left, right, on, filter, RightAnti).await?;

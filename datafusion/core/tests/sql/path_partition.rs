@@ -227,10 +227,11 @@ async fn parquet_distinct_partition_col() -> Result<()> {
     assert_eq!(min_limit, resulting_limit);
 
     let s = ScalarValue::try_from_array(results[0].column(1), 0)?;
-    let month = match extract_as_utf(&s) {
-        Some(month) => month,
-        s => panic!("Expected month as Dict(_, Utf8) found {s:?}"),
-    };
+    assert!(
+        matches!(s.data_type(), DataType::Dictionary(_, v) if v.as_ref() == &DataType::Utf8),
+        "Expected month as Dict(_, Utf8) found {s:?}"
+    );
+    let month = s.try_as_str().flatten().unwrap();
 
     let sql_on_partition_boundary = format!(
         "SELECT month from t where month = '{}' LIMIT {}",
@@ -248,15 +249,6 @@ async fn parquet_distinct_partition_col() -> Result<()> {
     let partition_row_count = max_limit - 1;
     assert_eq!(partition_row_count, resulting_limit);
     Ok(())
-}
-
-fn extract_as_utf(v: &ScalarValue) -> Option<String> {
-    if let ScalarValue::Dictionary(_, v) = v {
-        if let ScalarValue::Utf8(v) = v.as_ref() {
-            return v.clone();
-        }
-    }
-    None
 }
 
 #[tokio::test]
