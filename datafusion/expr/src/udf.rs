@@ -366,6 +366,7 @@ pub struct ReturnTypeArgs<'a> {
     /// For example, if a function is called like `my_function(column_a, 5)`
     /// this field will be `[None, Some(ScalarValue::Int32(Some(5)))]`
     pub scalar_arguments: &'a [Option<&'a ScalarValue>],
+    /// Can argument `i` (ever) null?
     pub nullables: &'a [bool],
 }
 
