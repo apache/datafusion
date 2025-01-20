@@ -25,12 +25,17 @@ use datafusion::error::Result;
 use datafusion::prelude::{CsvReadOptions, SessionContext};
 
 use arrow_schema::{DataType, Field, Schema, SchemaRef};
+use datafusion::datasource::file_format::file_compression_type::FileCompressionType;
+use datafusion::datasource::physical_plan::CsvExec;
 use datafusion::datasource::{
     listing::PartitionedFile,
     physical_plan::{FileScanConfig, ParquetExec},
 };
 use datafusion_execution::object_store::ObjectStoreUrl;
-use datafusion_physical_expr_common::sort_expr::LexOrdering;
+use datafusion_execution::{SendableRecordBatchStream, TaskContext};
+use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
+use datafusion_physical_plan::streaming::{PartitionStream, StreamingTableExec};
+use datafusion_physical_plan::ExecutionPlan;
 
 /// create a single parquet file that is sorted
 pub(crate) fn parquet_exec_with_sort(
@@ -173,4 +178,119 @@ impl QueryCase {
         }
         Ok(())
     }
+}
+
+/// Create a non sorted parquet exec
+pub fn parquet_exec(schema: &SchemaRef) -> Arc<ParquetExec> {
+    ParquetExec::builder(
+        FileScanConfig::new(ObjectStoreUrl::parse("test:///").unwrap(), schema.clone())
+            .with_file(PartitionedFile::new("x".to_string(), 100)),
+    )
+    .build_arc()
+}
+
+// Created a sorted parquet exec
+pub fn parquet_exec_sorted(
+    schema: &SchemaRef,
+    sort_exprs: impl IntoIterator<Item = PhysicalSortExpr>,
+) -> Arc<dyn ExecutionPlan> {
+    let sort_exprs = sort_exprs.into_iter().collect();
+
+    ParquetExec::builder(
+        FileScanConfig::new(ObjectStoreUrl::parse("test:///").unwrap(), schema.clone())
+            .with_file(PartitionedFile::new("x".to_string(), 100))
+            .with_output_ordering(vec![sort_exprs]),
+    )
+    .build_arc()
+}
+
+/// Created a sorted Csv exec
+pub fn csv_exec_sorted(
+    schema: &SchemaRef,
+    sort_exprs: impl IntoIterator<Item = PhysicalSortExpr>,
+) -> Arc<dyn ExecutionPlan> {
+    let sort_exprs = sort_exprs.into_iter().collect();
+
+    Arc::new(
+        CsvExec::builder(
+            FileScanConfig::new(
+                ObjectStoreUrl::parse("test:///").unwrap(),
+                schema.clone(),
+            )
+            .with_file(PartitionedFile::new("x".to_string(), 100))
+            .with_output_ordering(vec![sort_exprs]),
+        )
+        .with_has_header(false)
+        .with_delimeter(0)
+        .with_quote(0)
+        .with_escape(None)
+        .with_comment(None)
+        .with_newlines_in_values(false)
+        .with_file_compression_type(FileCompressionType::UNCOMPRESSED)
+        .build(),
+    )
+}
+
+// construct a stream partition for test purposes
+#[derive(Debug)]
+pub(crate) struct TestStreamPartition {
+    pub schema: SchemaRef,
+}
+
+impl PartitionStream for TestStreamPartition {
+    fn schema(&self) -> &SchemaRef {
+        &self.schema
+    }
+    fn execute(&self, _ctx: Arc<TaskContext>) -> SendableRecordBatchStream {
+        unreachable!()
+    }
+}
+
+/// Create an unbounded stream exec
+pub fn stream_exec_ordered(
+    schema: &SchemaRef,
+    sort_exprs: impl IntoIterator<Item = PhysicalSortExpr>,
+) -> Arc<dyn ExecutionPlan> {
+    let sort_exprs = sort_exprs.into_iter().collect();
+
+    Arc::new(
+        StreamingTableExec::try_new(
+            schema.clone(),
+            vec![Arc::new(TestStreamPartition {
+                schema: schema.clone(),
+            }) as _],
+            None,
+            vec![sort_exprs],
+            true,
+            None,
+        )
+        .unwrap(),
+    )
+}
+
+/// Create a csv exec for tests
+pub fn csv_exec_ordered(
+    schema: &SchemaRef,
+    sort_exprs: impl IntoIterator<Item = PhysicalSortExpr>,
+) -> Arc<dyn ExecutionPlan> {
+    let sort_exprs = sort_exprs.into_iter().collect();
+
+    Arc::new(
+        CsvExec::builder(
+            FileScanConfig::new(
+                ObjectStoreUrl::parse("test:///").unwrap(),
+                schema.clone(),
+            )
+            .with_file(PartitionedFile::new("file_path".to_string(), 100))
+            .with_output_ordering(vec![sort_exprs]),
+        )
+        .with_has_header(true)
+        .with_delimeter(0)
+        .with_quote(b'"')
+        .with_escape(None)
+        .with_comment(None)
+        .with_newlines_in_values(false)
+        .with_file_compression_type(FileCompressionType::UNCOMPRESSED)
+        .build(),
+    )
 }
