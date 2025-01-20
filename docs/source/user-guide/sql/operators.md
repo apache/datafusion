@@ -207,6 +207,45 @@ Greater Than or Equal To
 +----------------------+
 ```
 
+(op_spaceship)=
+
+### `<=>`
+
+Three-way comparision operator. A NULL-safe operator that returns true if both operands are equal or both are NULL, false otherwise.
+
+```sql
+> SELECT NULL <=> NULL;
++--------------------------------+
+| NULL IS NOT DISTINCT FROM NULL |
++--------------------------------+
+| true                           |
++--------------------------------+
+```
+```sql
+> SELECT 1 <=> NULL;
++------------------------------------+
+| Int64(1) IS NOT DISTINCT FROM NULL |
++------------------------------------+
+| false                              |
++------------------------------------+
+```
+```sql
+> SELECT 1 <=> 2;
++----------------------------------------+
+| Int64(1) IS NOT DISTINCT FROM Int64(2) |
++----------------------------------------+
+| false                                  |
++----------------------------------------+
+```
+```sql
+> SELECT 1 <=> 1;
++----------------------------------------+
+| Int64(1) IS NOT DISTINCT FROM Int64(1) |
++----------------------------------------+
+| true                                   |
++----------------------------------------+
+```
+
 ### `IS DISTINCT FROM`
 
 Guarantees the result of a comparison is `true` or `false` and not an empty set
