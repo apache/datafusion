@@ -31,6 +31,9 @@ use datafusion_expr_common::columnar_value::ColumnarValue;
 use datafusion_expr_common::interval_arithmetic::Interval;
 use datafusion_expr_common::sort_properties::ExprProperties;
 
+/// Shared [`PhysicalExpr`].
+pub type PhysicalExprRef = Arc<dyn PhysicalExpr>;
+
 /// [`PhysicalExpr`]s represent expressions such as `A + 1` or `CAST(c1 AS int)`.
 ///
 /// `PhysicalExpr` knows its type, nullability and can be evaluated directly on
@@ -52,7 +55,7 @@ use datafusion_expr_common::sort_properties::ExprProperties;
 /// [`Expr`]: https://docs.rs/datafusion/latest/datafusion/logical_expr/enum.Expr.html
 /// [`create_physical_expr`]: https://docs.rs/datafusion/latest/datafusion/physical_expr/fn.create_physical_expr.html
 /// [`Column`]: https://docs.rs/datafusion/latest/datafusion/physical_expr/expressions/struct.Column.html
-pub trait PhysicalExpr: Send + Sync + Display + Debug + PartialEq<dyn Any> {
+pub trait PhysicalExpr: Send + Sync + Display + Debug + DynEq + DynHash {
     /// Returns the physical expression as [`Any`] so that it can be
     /// downcast to a specific implementation.
     fn as_any(&self) -> &dyn Any;
@@ -141,38 +144,6 @@ pub trait PhysicalExpr: Send + Sync + Display + Debug + PartialEq<dyn Any> {
         Ok(Some(vec![]))
     }
 
-    /// Update the hash `state` with this expression requirements from
-    /// [`Hash`].
-    ///
-    /// This method is required to support hashing [`PhysicalExpr`]s.  To
-    /// implement it, typically the type implementing
-    /// [`PhysicalExpr`] implements [`Hash`] and
-    /// then the following boiler plate is used:
-    ///
-    /// # Example:
-    /// ```
-    /// // User defined expression that derives Hash
-    /// #[derive(Hash, Debug, PartialEq, Eq)]
-    /// struct MyExpr {
-    ///   val: u64
-    /// }
-    ///
-    /// // impl PhysicalExpr {
-    /// // ...
-    /// # impl MyExpr {
-    ///   // Boiler plate to call the derived Hash impl
-    ///   fn dyn_hash(&self, state: &mut dyn std::hash::Hasher) {
-    ///     use std::hash::Hash;
-    ///     let mut s = state;
-    ///     self.hash(&mut s);
-    ///   }
-    /// // }
-    /// # }
-    /// ```
-    /// Note: [`PhysicalExpr`] is not constrained by [`Hash`]
-    /// directly because it must remain object safe.
-    fn dyn_hash(&self, _state: &mut dyn Hasher);
-
     /// Calculates the properties of this [`PhysicalExpr`] based on its
     /// children's properties (i.e. order and range), recursively aggregating
     /// the information from its children. In cases where the [`PhysicalExpr`]
@@ -180,6 +151,40 @@ pub trait PhysicalExpr: Send + Sync + Display + Debug + PartialEq<dyn Any> {
     /// be specified externally, as the function defaults to unknown properties.
     fn get_properties(&self, _children: &[ExprProperties]) -> Result<ExprProperties> {
         Ok(ExprProperties::new_unknown())
+    }
+}
+
+/// [`PhysicalExpr`] can't be constrained by [`Eq`] directly because it must remain object
+/// safe. To ease implementation blanket implementation is provided for [`Eq`] types.
+pub trait DynEq {
+    fn dyn_eq(&self, other: &dyn Any) -> bool;
+}
+
+impl<T: Eq + Any> DynEq for T {
+    fn dyn_eq(&self, other: &dyn Any) -> bool {
+        other.downcast_ref::<Self>() == Some(self)
+    }
+}
+
+impl PartialEq for dyn PhysicalExpr {
+    fn eq(&self, other: &Self) -> bool {
+        self.dyn_eq(other.as_any())
+    }
+}
+
+impl Eq for dyn PhysicalExpr {}
+
+/// [`PhysicalExpr`] can't be constrained by [`Hash`] directly because it must remain
+/// object safe. To ease implementation blanket implementation is provided for [`Hash`]
+/// types.
+pub trait DynHash {
+    fn dyn_hash(&self, _state: &mut dyn Hasher);
+}
+
+impl<T: Hash + Any> DynHash for T {
+    fn dyn_hash(&self, mut state: &mut dyn Hasher) {
+        self.type_id().hash(&mut state);
+        self.hash(&mut state)
     }
 }
 
@@ -210,6 +215,7 @@ pub fn with_new_children_if_necessary(
     }
 }
 
+#[deprecated(since = "44.0.0")]
 pub fn down_cast_any_ref(any: &dyn Any) -> &dyn Any {
     if any.is::<Arc<dyn PhysicalExpr>>() {
         any.downcast_ref::<Arc<dyn PhysicalExpr>>()
@@ -227,11 +233,24 @@ pub fn down_cast_any_ref(any: &dyn Any) -> &dyn Any {
 /// Returns [`Display`] able a list of [`PhysicalExpr`]
 ///
 /// Example output: `[a + 1, b]`
-pub fn format_physical_expr_list(exprs: &[Arc<dyn PhysicalExpr>]) -> impl Display + '_ {
-    struct DisplayWrapper<'a>(&'a [Arc<dyn PhysicalExpr>]);
-    impl<'a> Display for DisplayWrapper<'a> {
+pub fn format_physical_expr_list<T>(exprs: T) -> impl Display
+where
+    T: IntoIterator,
+    T::Item: Display,
+    T::IntoIter: Clone,
+{
+    struct DisplayWrapper<I>(I)
+    where
+        I: Iterator + Clone,
+        I::Item: Display;
+
+    impl<I> Display for DisplayWrapper<I>
+    where
+        I: Iterator + Clone,
+        I::Item: Display,
+    {
         fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-            let mut iter = self.0.iter();
+            let mut iter = self.0.clone();
             write!(f, "[")?;
             if let Some(expr) = iter.next() {
                 write!(f, "{}", expr)?;
@@ -243,5 +262,6 @@ pub fn format_physical_expr_list(exprs: &[Arc<dyn PhysicalExpr>]) -> impl Displa
             Ok(())
         }
     }
-    DisplayWrapper(exprs)
+
+    DisplayWrapper(exprs.into_iter())
 }

@@ -36,7 +36,10 @@ use datafusion_common::{
     exec_err, internal_datafusion_err, plan_err, DataFusionError, Result,
 };
 use datafusion_expr::Expr;
-use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
+use datafusion_expr::{
+    ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
+};
+use datafusion_macros::user_doc;
 use std::any::Any;
 use std::sync::Arc;
 
@@ -77,10 +80,37 @@ make_udf_expr_and_func!(
     array_any_value_udf
 );
 
+#[user_doc(
+    doc_section(label = "Array Functions"),
+    description = "Extracts the element with the index n from the array.",
+    syntax_example = "array_element(array, index)",
+    sql_example = r#"```sql
+> select array_element([1, 2, 3, 4], 3);
++-----------------------------------------+
+| array_element(List([1,2,3,4]),Int64(3)) |
++-----------------------------------------+
+| 3                                       |
++-----------------------------------------+
+```"#,
+    argument(
+        name = "array",
+        description = "Array expression. Can be a constant, column, or function, and any combination of array operators."
+    ),
+    argument(
+        name = "index",
+        description = "Index to extract the element from the array."
+    )
+)]
 #[derive(Debug)]
-pub(super) struct ArrayElement {
+pub struct ArrayElement {
     signature: Signature,
     aliases: Vec<String>,
+}
+
+impl Default for ArrayElement {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl ArrayElement {
@@ -140,12 +170,20 @@ impl ScalarUDFImpl for ArrayElement {
         }
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         make_scalar_function(array_element_inner)(args)
     }
 
     fn aliases(&self) -> &[String] {
         &self.aliases
+    }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        self.doc()
     }
 }
 
@@ -254,6 +292,35 @@ pub fn array_slice(array: Expr, begin: Expr, end: Expr, stride: Option<Expr>) ->
     array_slice_udf().call(args)
 }
 
+#[user_doc(
+    doc_section(label = "Array Functions"),
+    description = "Returns a slice of the array based on 1-indexed start and end positions.",
+    syntax_example = "array_slice(array, begin, end)",
+    sql_example = r#"```sql
+> select array_slice([1, 2, 3, 4, 5, 6, 7, 8], 3, 6);
++--------------------------------------------------------+
+| array_slice(List([1,2,3,4,5,6,7,8]),Int64(3),Int64(6)) |
++--------------------------------------------------------+
+| [3, 4, 5, 6]                                           |
++--------------------------------------------------------+
+```"#,
+    argument(
+        name = "array",
+        description = "Array expression. Can be a constant, column, or function, and any combination of array operators."
+    ),
+    argument(
+        name = "begin",
+        description = "Index of the first element. If negative, it counts backward from the end of the array."
+    ),
+    argument(
+        name = "end",
+        description = "Index of the last element. If negative, it counts backward from the end of the array."
+    ),
+    argument(
+        name = "stride",
+        description = "Stride of the array slice. The default is 1."
+    )
+)]
 #[derive(Debug)]
 pub(super) struct ArraySlice {
     signature: Signature,
@@ -307,12 +374,20 @@ impl ScalarUDFImpl for ArraySlice {
         Ok(arg_types[0].clone())
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         make_scalar_function(array_slice_inner)(args)
     }
 
     fn aliases(&self) -> &[String] {
         &self.aliases
+    }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        self.doc()
     }
 }
 
@@ -535,13 +610,30 @@ where
     let data = mutable.freeze();
 
     Ok(Arc::new(GenericListArray::<O>::try_new(
-        Arc::new(Field::new("item", array.value_type(), true)),
+        Arc::new(Field::new_list_field(array.value_type(), true)),
         OffsetBuffer::<O>::new(offsets.into()),
         arrow_array::make_array(data),
         None,
     )?))
 }
 
+#[user_doc(
+    doc_section(label = "Array Functions"),
+    description = "Returns the array without the first element.",
+    syntax_example = "array_pop_front(array)",
+    sql_example = r#"```sql
+> select array_pop_front([1, 2, 3]);
++-------------------------------+
+| array_pop_front(List([1,2,3])) |
++-------------------------------+
+| [2, 3]                        |
++-------------------------------+
+```"#,
+    argument(
+        name = "array",
+        description = "Array expression. Can be a constant, column, or function, and any combination of array operators."
+    )
+)]
 #[derive(Debug)]
 pub(super) struct ArrayPopFront {
     signature: Signature,
@@ -573,12 +665,20 @@ impl ScalarUDFImpl for ArrayPopFront {
         Ok(arg_types[0].clone())
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         make_scalar_function(array_pop_front_inner)(args)
     }
 
     fn aliases(&self) -> &[String] {
         &self.aliases
+    }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        self.doc()
     }
 }
 
@@ -617,6 +717,23 @@ where
     general_array_slice::<O>(array, &from_array, &to_array, None)
 }
 
+#[user_doc(
+    doc_section(label = "Array Functions"),
+    description = "Returns the array without the last element.",
+    syntax_example = "array_pop_back(array)",
+    sql_example = r#"```sql
+> select array_pop_back([1, 2, 3]);
++-------------------------------+
+| array_pop_back(List([1,2,3])) |
++-------------------------------+
+| [1, 2]                        |
++-------------------------------+
+```"#,
+    argument(
+        name = "array",
+        description = "Array expression. Can be a constant, column, or function, and any combination of array operators."
+    )
+)]
 #[derive(Debug)]
 pub(super) struct ArrayPopBack {
     signature: Signature,
@@ -648,12 +765,20 @@ impl ScalarUDFImpl for ArrayPopBack {
         Ok(arg_types[0].clone())
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         make_scalar_function(array_pop_back_inner)(args)
     }
 
     fn aliases(&self) -> &[String] {
         &self.aliases
+    }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        self.doc()
     }
 }
 
@@ -696,6 +821,23 @@ where
     general_array_slice::<O>(array, &from_array, &to_array, None)
 }
 
+#[user_doc(
+    doc_section(label = "Array Functions"),
+    description = "Returns the first non-null element in the array.",
+    syntax_example = "array_any_value(array)",
+    sql_example = r#"```sql
+> select array_any_value([NULL, 1, 2, 3]);
++-------------------------------+
+| array_any_value(List([NULL,1,2,3])) |
++-------------------------------------+
+| 1                                   |
++-------------------------------------+
+```"#,
+    argument(
+        name = "array",
+        description = "Array expression. Can be a constant, column, or function, and any combination of array operators."
+    )
+)]
 #[derive(Debug)]
 pub(super) struct ArrayAnyValue {
     signature: Signature,
@@ -732,11 +874,19 @@ impl ScalarUDFImpl for ArrayAnyValue {
         }
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         make_scalar_function(array_any_value_inner)(args)
     }
     fn aliases(&self) -> &[String] {
         &self.aliases
+    }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        self.doc()
     }
 }
 
@@ -806,4 +956,87 @@ where
 
     let data = mutable.freeze();
     Ok(arrow::array::make_array(data))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::array_element_udf;
+    use arrow_schema::{DataType, Field};
+    use datafusion_common::{Column, DFSchema, ScalarValue};
+    use datafusion_expr::expr::ScalarFunction;
+    use datafusion_expr::{cast, Expr, ExprSchemable};
+    use std::collections::HashMap;
+
+    // Regression test for https://github.com/apache/datafusion/issues/13755
+    #[test]
+    fn test_array_element_return_type_fixed_size_list() {
+        let fixed_size_list_type = DataType::FixedSizeList(
+            Field::new("some_arbitrary_test_field", DataType::Int32, false).into(),
+            13,
+        );
+        let array_type = DataType::List(
+            Field::new_list_field(fixed_size_list_type.clone(), true).into(),
+        );
+        let index_type = DataType::Int64;
+
+        let schema = DFSchema::from_unqualified_fields(
+            vec![
+                Field::new("my_array", array_type.clone(), false),
+                Field::new("my_index", index_type.clone(), false),
+            ]
+            .into(),
+            HashMap::default(),
+        )
+        .unwrap();
+
+        let udf = array_element_udf();
+
+        // ScalarUDFImpl::return_type
+        assert_eq!(
+            udf.return_type(&[array_type.clone(), index_type.clone()])
+                .unwrap(),
+            fixed_size_list_type
+        );
+
+        // ScalarUDFImpl::return_type_from_exprs with typed exprs
+        assert_eq!(
+            udf.return_type_from_exprs(
+                &[
+                    cast(Expr::from(ScalarValue::Null), array_type.clone()),
+                    cast(Expr::from(ScalarValue::Null), index_type.clone()),
+                ],
+                &schema,
+                &[array_type.clone(), index_type.clone()]
+            )
+            .unwrap(),
+            fixed_size_list_type
+        );
+
+        // ScalarUDFImpl::return_type_from_exprs with exprs not carrying type
+        assert_eq!(
+            udf.return_type_from_exprs(
+                &[
+                    Expr::Column(Column::new_unqualified("my_array")),
+                    Expr::Column(Column::new_unqualified("my_index")),
+                ],
+                &schema,
+                &[array_type.clone(), index_type.clone()]
+            )
+            .unwrap(),
+            fixed_size_list_type
+        );
+
+        // Via ExprSchemable::get_type (e.g. SimplifyInfo)
+        let udf_expr = Expr::ScalarFunction(ScalarFunction {
+            func: array_element_udf(),
+            args: vec![
+                Expr::Column(Column::new_unqualified("my_array")),
+                Expr::Column(Column::new_unqualified("my_index")),
+            ],
+        });
+        assert_eq!(
+            ExprSchemable::get_type(&udf_expr, &schema).unwrap(),
+            fixed_size_list_type
+        );
+    }
 }

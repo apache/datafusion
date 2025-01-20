@@ -16,16 +16,16 @@
 // under the License.
 
 use std::any::Any;
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
 use arrow::array::ArrayRef;
 use arrow::datatypes::DataType;
 
 use crate::utils::make_scalar_function;
 use datafusion_common::{internal_err, Result};
-use datafusion_expr::scalar_doc_sections::DOC_SECTION_STRING;
 use datafusion_expr::{ColumnarValue, Documentation};
 use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
+use datafusion_macros::user_doc;
 
 /// Returns true if string starts with prefix.
 /// starts_with('alphabet', 'alph') = 't'
@@ -34,6 +34,21 @@ pub fn starts_with(args: &[ArrayRef]) -> Result<ArrayRef> {
     Ok(Arc::new(result) as ArrayRef)
 }
 
+#[user_doc(
+    doc_section(label = "String Functions"),
+    description = "Tests if a string starts with a substring.",
+    syntax_example = "starts_with(str, substr)",
+    sql_example = r#"```sql
+> select starts_with('datafusion','data');
++----------------------------------------------+
+| starts_with(Utf8("datafusion"),Utf8("data")) |
++----------------------------------------------+
+| true                                         |
++----------------------------------------------+
+```"#,
+    standard_argument(name = "str", prefix = "String"),
+    argument(name = "substr", description = "Substring to test for.")
+)]
 #[derive(Debug)]
 pub struct StartsWithFunc {
     signature: Signature,
@@ -70,7 +85,11 @@ impl ScalarUDFImpl for StartsWithFunc {
         Ok(DataType::Boolean)
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         match args[0].data_type() {
             DataType::Utf8View | DataType::Utf8 | DataType::LargeUtf8 => {
                 make_scalar_function(starts_with, vec![])(args)
@@ -80,33 +99,8 @@ impl ScalarUDFImpl for StartsWithFunc {
     }
 
     fn documentation(&self) -> Option<&Documentation> {
-        Some(get_starts_with_doc())
+        self.doc()
     }
-}
-
-static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
-
-fn get_starts_with_doc() -> &'static Documentation {
-    DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_STRING)
-            .with_description("Tests if a string starts with a substring.")
-            .with_syntax_example("starts_with(str, substr)")
-            .with_sql_example(
-                r#"```sql
-> select starts_with('datafusion','data');
-+----------------------------------------------+
-| starts_with(Utf8("datafusion"),Utf8("data")) |
-+----------------------------------------------+
-| true                                         |
-+----------------------------------------------+
-```"#,
-            )
-            .with_standard_argument("str", "String")
-            .with_argument("substr", "Substring to test for.")
-            .build()
-            .unwrap()
-    })
 }
 
 #[cfg(test)]
@@ -155,7 +149,7 @@ mod tests {
         for (args, expected) in test_cases {
             test_function!(
                 StartsWithFunc::new(),
-                &args,
+                args,
                 Ok(expected),
                 bool,
                 Boolean,

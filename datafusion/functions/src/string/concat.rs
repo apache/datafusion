@@ -17,19 +17,41 @@
 
 use arrow::array::{as_largestring_array, Array};
 use arrow::datatypes::DataType;
+use datafusion_expr::sort_properties::ExprProperties;
 use std::any::Any;
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
-use crate::string::common::*;
 use crate::string::concat;
+use crate::strings::{
+    ColumnarValueRef, LargeStringArrayBuilder, StringArrayBuilder, StringViewArrayBuilder,
+};
 use datafusion_common::cast::{as_string_array, as_string_view_array};
 use datafusion_common::{internal_err, plan_err, Result, ScalarValue};
 use datafusion_expr::expr::ScalarFunction;
-use datafusion_expr::scalar_doc_sections::DOC_SECTION_STRING;
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyInfo};
 use datafusion_expr::{lit, ColumnarValue, Documentation, Expr, Volatility};
 use datafusion_expr::{ScalarUDFImpl, Signature};
+use datafusion_macros::user_doc;
 
+#[user_doc(
+    doc_section(label = "String Functions"),
+    description = "Concatenates multiple strings together.",
+    syntax_example = "concat(str[, ..., str_n])",
+    sql_example = r#"```sql
+> select concat('data', 'f', 'us', 'ion');
++-------------------------------------------------------+
+| concat(Utf8("data"),Utf8("f"),Utf8("us"),Utf8("ion")) |
++-------------------------------------------------------+
+| datafusion                                            |
++-------------------------------------------------------+
+```"#,
+    standard_argument(name = "str", prefix = "String"),
+    argument(
+        name = "str_n",
+        description = "Subsequent string expressions to concatenate."
+    ),
+    related_udf(name = "concat_ws")
+)]
 #[derive(Debug)]
 pub struct ConcatFunc {
     signature: Signature,
@@ -46,7 +68,7 @@ impl ConcatFunc {
         use DataType::*;
         Self {
             signature: Signature::variadic(
-                vec![Utf8, Utf8View, LargeUtf8],
+                vec![Utf8View, Utf8, LargeUtf8],
                 Volatility::Immutable,
             ),
         }
@@ -83,13 +105,17 @@ impl ScalarUDFImpl for ConcatFunc {
 
     /// Concatenates the text representations of all the arguments. NULL arguments are ignored.
     /// concat('abcde', 2, NULL, 22) = 'abcde222'
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         let mut return_datatype = DataType::Utf8;
         args.iter().for_each(|col| {
-            if col.data_type() == &DataType::Utf8View {
+            if *col.data_type() == DataType::Utf8View {
                 return_datatype = col.data_type().clone();
             }
-            if col.data_type() == &DataType::LargeUtf8
+            if *col.data_type() == DataType::LargeUtf8
                 && return_datatype != DataType::Utf8View
             {
                 return_datatype = col.data_type().clone();
@@ -108,10 +134,17 @@ impl ScalarUDFImpl for ConcatFunc {
         if array_len.is_none() {
             let mut result = String::new();
             for arg in args {
-                if let ColumnarValue::Scalar(scalar) = arg {
-                    if let ScalarValue::Utf8(Some(v)) = scalar.value() {
-                        result.push_str(v);
-                    }
+                let ColumnarValue::Scalar(scalar) = arg else {
+                    return internal_err!("concat expected scalar value, got {arg:?}");
+                };
+
+                match scalar.value().try_as_str() {
+                    Some(Some(v)) => result.push_str(v),
+                    Some(None) => {} // null literal
+                    None => plan_err!(
+                        "Concat function does not support scalar type {:?}",
+                        scalar
+                    )?,
                 }
             }
 
@@ -161,7 +194,7 @@ impl ScalarUDFImpl for ConcatFunc {
                                 ColumnarValueRef::NonNullableArray(string_array)
                             };
                             columns.push(column);
-                        },
+                        }
                         DataType::LargeUtf8 => {
                             let string_array = as_largestring_array(array);
 
@@ -172,7 +205,7 @@ impl ScalarUDFImpl for ConcatFunc {
                                 ColumnarValueRef::NonNullableLargeStringArray(string_array)
                             };
                             columns.push(column);
-                        },
+                        }
                         DataType::Utf8View => {
                             let string_array = as_string_view_array(array)?;
 
@@ -183,7 +216,7 @@ impl ScalarUDFImpl for ConcatFunc {
                                 ColumnarValueRef::NonNullableStringViewArray(string_array)
                             };
                             columns.push(column);
-                        },
+                        }
                         other => {
                             return plan_err!("Input was {other} which is not a supported datatype for concat function")
                         }
@@ -250,62 +283,66 @@ impl ScalarUDFImpl for ConcatFunc {
     }
 
     fn documentation(&self) -> Option<&Documentation> {
-        Some(get_concat_doc())
+        self.doc()
     }
-}
 
-static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
-
-fn get_concat_doc() -> &'static Documentation {
-    DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_STRING)
-            .with_description("Concatenates multiple strings together.")
-            .with_syntax_example("concat(str[, ..., str_n])")
-            .with_sql_example(
-                r#"```sql
-> select concat('data', 'f', 'us', 'ion');
-+-------------------------------------------------------+
-| concat(Utf8("data"),Utf8("f"),Utf8("us"),Utf8("ion")) |
-+-------------------------------------------------------+
-| datafusion                                            |
-+-------------------------------------------------------+
-```"#,
-            )
-            .with_standard_argument("str", "String")
-            .with_argument("str_n", "Subsequent string expressions to concatenate.")
-            .with_related_udf("concat_ws")
-            .build()
-            .unwrap()
-    })
+    fn preserves_lex_ordering(&self, _inputs: &[ExprProperties]) -> Result<bool> {
+        Ok(true)
+    }
 }
 
 pub fn simplify_concat(args: Vec<Expr>) -> Result<ExprSimplifyResult> {
     let mut new_args = Vec::with_capacity(args.len());
     let mut contiguous_scalar = "".to_string();
 
+    let return_type = {
+        let data_types: Vec<_> = args
+            .iter()
+            .filter_map(|expr| match expr {
+                Expr::Literal(l) => Some(l.data_type().clone()),
+                _ => None,
+            })
+            .collect();
+        ConcatFunc::new().return_type(&data_types)
+    }?;
+
     for arg in args.clone() {
         match arg {
             Expr::Literal(scalar) => match scalar.value() {
+                ScalarValue::Utf8(None) => {}
+                ScalarValue::LargeUtf8(None) => {}
+                ScalarValue::Utf8View(None) => {}
 
-            // filter out `null` args
-            ScalarValue::Utf8(None) | ScalarValue::LargeUtf8(None) | ScalarValue::Utf8View(None) => {}
-            // All literals have been converted to Utf8 or LargeUtf8 in type_coercion.
-            // Concatenate it with the `contiguous_scalar`.
-                ScalarValue::Utf8(Some(v)) | ScalarValue::LargeUtf8(Some(v)) | ScalarValue::Utf8View(Some(v))
-             => contiguous_scalar += v,
-            x => {
-                return internal_err!(
-                    "The scalar {x} should be casted to string type during the type coercion."
-                )
-            }
+                // filter out `null` args
+                // All literals have been converted to Utf8 or LargeUtf8 in type_coercion.
+                // Concatenate it with the `contiguous_scalar`.
+                ScalarValue::Utf8(Some(v)) => {
+                    contiguous_scalar += v;
+                }
+                ScalarValue::LargeUtf8(Some(v)) => {
+                    contiguous_scalar += v;
+                }
+                ScalarValue::Utf8View(Some(v)) => {
+                    contiguous_scalar += v;
+                }
+
+                x => {
+                    return internal_err!(
+                        "The scalar {x} should be casted to string type during the type coercion."
+                    )
+                }
             }
             // If the arg is not a literal, we should first push the current `contiguous_scalar`
             // to the `new_args` (if it is not empty) and reset it to empty string.
             // Then pushing this arg to the `new_args`.
             arg => {
                 if !contiguous_scalar.is_empty() {
-                    new_args.push(lit(contiguous_scalar));
+                    match return_type {
+                        DataType::Utf8 => new_args.push(lit(contiguous_scalar)),
+                        DataType::LargeUtf8 => new_args.push(lit(ScalarValue::LargeUtf8(Some(contiguous_scalar)))),
+                        DataType::Utf8View => new_args.push(lit(ScalarValue::Utf8View(Some(contiguous_scalar)))),
+                        _ => unreachable!(),
+                    }
                     contiguous_scalar = "".to_string();
                 }
                 new_args.push(arg);
@@ -314,7 +351,16 @@ pub fn simplify_concat(args: Vec<Expr>) -> Result<ExprSimplifyResult> {
     }
 
     if !contiguous_scalar.is_empty() {
-        new_args.push(lit(contiguous_scalar));
+        match return_type {
+            DataType::Utf8 => new_args.push(lit(contiguous_scalar)),
+            DataType::LargeUtf8 => {
+                new_args.push(lit(ScalarValue::LargeUtf8(Some(contiguous_scalar))))
+            }
+            DataType::Utf8View => {
+                new_args.push(lit(ScalarValue::Utf8View(Some(contiguous_scalar))))
+            }
+            _ => unreachable!(),
+        }
     }
 
     if !args.eq(&new_args) {
@@ -341,7 +387,7 @@ mod tests {
     fn test_functions() -> Result<()> {
         test_function!(
             ConcatFunc::new(),
-            &[
+            vec![
                 ColumnarValue::from(ScalarValue::from("aa")),
                 ColumnarValue::from(ScalarValue::from("bb")),
                 ColumnarValue::from(ScalarValue::from("cc")),
@@ -353,7 +399,7 @@ mod tests {
         );
         test_function!(
             ConcatFunc::new(),
-            &[
+            vec![
                 ColumnarValue::from(ScalarValue::from("aa")),
                 ColumnarValue::from(ScalarValue::Utf8(None)),
                 ColumnarValue::from(ScalarValue::from("cc")),
@@ -365,7 +411,7 @@ mod tests {
         );
         test_function!(
             ConcatFunc::new(),
-            &[ColumnarValue::from(ScalarValue::Utf8(None))],
+            vec![ColumnarValue::from(ScalarValue::Utf8(None))],
             Ok(Some("")),
             &str,
             Utf8,
@@ -373,7 +419,7 @@ mod tests {
         );
         test_function!(
             ConcatFunc::new(),
-            &[
+            vec![
                 ColumnarValue::from(ScalarValue::from("aa")),
                 ColumnarValue::from(ScalarValue::Utf8View(None)),
                 ColumnarValue::from(ScalarValue::LargeUtf8(None)),
@@ -386,7 +432,7 @@ mod tests {
         );
         test_function!(
             ConcatFunc::new(),
-            &[
+            vec![
                 ColumnarValue::from(ScalarValue::from("aa")),
                 ColumnarValue::from(ScalarValue::LargeUtf8(None)),
                 ColumnarValue::from(ScalarValue::from("cc")),
@@ -395,6 +441,17 @@ mod tests {
             &str,
             LargeUtf8,
             LargeStringArray
+        );
+        test_function!(
+            ConcatFunc::new(),
+            vec![
+                ColumnarValue::from(ScalarValue::Utf8View(Some("aa".to_string()))),
+                ColumnarValue::from(ScalarValue::Utf8(Some("cc".to_string()))),
+            ],
+            Ok(Some("aacc")),
+            &str,
+            Utf8View,
+            StringViewArray
         );
 
         Ok(())
@@ -410,11 +467,19 @@ mod tests {
             None,
             Some("z"),
         ])));
-        let args = &[c0, c1, c2];
+        let c3 = ColumnarValue::from(ScalarValue::Utf8View(Some(",".to_string())));
+        let c4 = ColumnarValue::Array(Arc::new(StringViewArray::from(vec![
+            Some("a"),
+            None,
+            Some("b"),
+        ])));
+        let args = &[c0, c1, c2, c3, c4];
 
-        let result = ConcatFunc::new().invoke(args)?;
+        #[allow(deprecated)] // TODO migrate UDF invoke to invoke_batch
+        let result = ConcatFunc::new().invoke_batch(args, 3)?;
         let expected =
-            Arc::new(StringArray::from(vec!["foo,x", "bar,", "baz,z"])) as ArrayRef;
+            Arc::new(StringViewArray::from(vec!["foo,x,a", "bar,,", "baz,z,b"]))
+                as ArrayRef;
         match &result {
             ColumnarValue::Array(array) => {
                 assert_eq!(&expected, array);

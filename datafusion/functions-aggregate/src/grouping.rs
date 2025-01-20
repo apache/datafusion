@@ -26,7 +26,10 @@ use datafusion_common::{not_impl_err, Result};
 use datafusion_expr::function::AccumulatorArgs;
 use datafusion_expr::function::StateFieldsArgs;
 use datafusion_expr::utils::format_state_name;
-use datafusion_expr::{Accumulator, AggregateUDFImpl, Signature, Volatility};
+use datafusion_expr::{
+    Accumulator, AggregateUDFImpl, Documentation, Signature, Volatility,
+};
+use datafusion_macros::user_doc;
 
 make_udaf_expr_and_func!(
     Grouping,
@@ -36,12 +39,33 @@ make_udaf_expr_and_func!(
     grouping_udaf
 );
 
+#[user_doc(
+    doc_section(label = "General Functions"),
+    description = "Returns 1 if the data is aggregated across the specified column, or 0 if it is not aggregated in the result set.",
+    syntax_example = "grouping(expression)",
+    sql_example = r#"```sql
+> SELECT column_name, GROUPING(column_name) AS group_column
+  FROM table_name
+  GROUP BY GROUPING SETS ((column_name), ());
++-------------+-------------+
+| column_name | group_column |
++-------------+-------------+
+| value1      | 0           |
+| value2      | 0           |
+| NULL        | 1           |
++-------------+-------------+
+```"#,
+    argument(
+        name = "expression",
+        description = "Expression to evaluate whether data is aggregated across the specified column. Can be a constant, column, or function."
+    )
+)]
 pub struct Grouping {
     signature: Signature,
 }
 
 impl fmt::Debug for Grouping {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         f.debug_struct("Grouping")
             .field("name", &self.name())
             .field("signature", &self.signature)
@@ -59,7 +83,7 @@ impl Grouping {
     /// Create a new GROUPING aggregate function.
     pub fn new() -> Self {
         Self {
-            signature: Signature::any(1, Volatility::Immutable),
+            signature: Signature::variadic_any(Volatility::Immutable),
         }
     }
 }
@@ -93,5 +117,9 @@ impl AggregateUDFImpl for Grouping {
         not_impl_err!(
             "physical plan is not yet implemented for GROUPING aggregate function"
         )
+    }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        self.doc()
     }
 }

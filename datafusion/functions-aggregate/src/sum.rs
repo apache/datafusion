@@ -21,6 +21,7 @@ use ahash::RandomState;
 use datafusion_expr::utils::AggregateOrderSensitivity;
 use std::any::Any;
 use std::collections::HashSet;
+use std::mem::{size_of, size_of_val};
 
 use arrow::array::Array;
 use arrow::array::ArrowNativeTypeOp;
@@ -37,10 +38,12 @@ use datafusion_expr::function::AccumulatorArgs;
 use datafusion_expr::function::StateFieldsArgs;
 use datafusion_expr::utils::format_state_name;
 use datafusion_expr::{
-    Accumulator, AggregateUDFImpl, GroupsAccumulator, ReversedUDAF, Signature, Volatility,
+    Accumulator, AggregateUDFImpl, Documentation, GroupsAccumulator, ReversedUDAF,
+    Signature, Volatility,
 };
 use datafusion_functions_aggregate_common::aggregate::groups_accumulator::prim_op::PrimitiveGroupsAccumulator;
 use datafusion_functions_aggregate_common::utils::Hashable;
+use datafusion_macros::user_doc;
 
 make_udaf_expr_and_func!(
     Sum,
@@ -75,6 +78,20 @@ macro_rules! downcast_sum {
     };
 }
 
+#[user_doc(
+    doc_section(label = "General Functions"),
+    description = "Returns the sum of all values in the specified column.",
+    syntax_example = "sum(expression)",
+    sql_example = r#"```sql
+> SELECT sum(column_name) FROM table_name;
++-----------------------+
+| sum(column_name)       |
++-----------------------+
+| 12345                 |
++-----------------------+
+```"#,
+    standard_argument(name = "expression",)
+)]
 #[derive(Debug)]
 pub struct Sum {
     signature: Signature,
@@ -179,7 +196,7 @@ impl AggregateUDFImpl for Sum {
             Ok(vec![Field::new_list(
                 format_state_name(args.name, "sum distinct"),
                 // See COMMENTS.md to understand why nullable is set to true
-                Field::new("item", args.return_type.clone(), true),
+                Field::new_list_field(args.return_type.clone(), true),
                 false,
             )])
         } else {
@@ -233,6 +250,10 @@ impl AggregateUDFImpl for Sum {
     fn order_sensitivity(&self) -> AggregateOrderSensitivity {
         AggregateOrderSensitivity::Insensitive
     }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        self.doc()
+    }
 }
 
 /// This accumulator computes SUM incrementally
@@ -279,7 +300,7 @@ impl<T: ArrowNumericType> Accumulator for SumAccumulator<T> {
     }
 
     fn size(&self) -> usize {
-        std::mem::size_of_val(self)
+        size_of_val(self)
     }
 }
 
@@ -339,7 +360,7 @@ impl<T: ArrowNumericType> Accumulator for SlidingSumAccumulator<T> {
     }
 
     fn size(&self) -> usize {
-        std::mem::size_of_val(self)
+        size_of_val(self)
     }
 
     fn retract_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
@@ -433,7 +454,6 @@ impl<T: ArrowPrimitiveType> Accumulator for DistinctSumAccumulator<T> {
     }
 
     fn size(&self) -> usize {
-        std::mem::size_of_val(self)
-            + self.values.capacity() * std::mem::size_of::<T::Native>()
+        size_of_val(self) + self.values.capacity() * size_of::<T::Native>()
     }
 }

@@ -17,7 +17,8 @@
 
 //! Common unit test utility methods
 
-use std::any::Any;
+#![allow(missing_docs)]
+
 use std::fs::File;
 use std::io::prelude::*;
 use std::io::{BufReader, BufWriter};
@@ -40,13 +41,10 @@ use crate::test_util::{aggr_test_schema, arrow_test_data};
 use arrow::array::{self, Array, ArrayRef, Decimal128Builder, Int32Array};
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
-use datafusion_common::{DataFusionError, Statistics};
+use datafusion_common::DataFusionError;
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
-use datafusion_physical_expr::{EquivalenceProperties, Partitioning, PhysicalSortExpr};
+use datafusion_physical_expr::PhysicalSortExpr;
 use datafusion_physical_plan::streaming::{PartitionStream, StreamingTableExec};
-use datafusion_physical_plan::{
-    DisplayAs, DisplayFormatType, ExecutionMode, PlanProperties,
-};
 
 #[cfg(feature = "compression")]
 use bzip2::write::BzEncoder;
@@ -69,7 +67,7 @@ pub fn create_table_dual() -> Arc<dyn TableProvider> {
     let batch = RecordBatch::try_new(
         dual_schema.clone(),
         vec![
-            Arc::new(array::Int32Array::from(vec![1])),
+            Arc::new(Int32Array::from(vec![1])),
             Arc::new(array::StringArray::from(vec!["a"])),
         ],
     )
@@ -103,6 +101,28 @@ pub fn scan_partitioned_csv(partitions: usize, work_dir: &Path) -> Result<Arc<Cs
             .with_file_compression_type(FileCompressionType::UNCOMPRESSED)
             .build(),
     ))
+}
+
+/// Auto finish the wrapped BzEncoder on drop
+#[cfg(feature = "compression")]
+struct AutoFinishBzEncoder<W: Write>(BzEncoder<W>);
+
+#[cfg(feature = "compression")]
+impl<W: Write> Write for AutoFinishBzEncoder<W> {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.0.write(buf)
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.0.flush()
+    }
+}
+
+#[cfg(feature = "compression")]
+impl<W: Write> Drop for AutoFinishBzEncoder<W> {
+    fn drop(&mut self) {
+        let _ = self.0.try_finish();
+    }
 }
 
 /// Returns file groups [`Vec<Vec<PartitionedFile>>`] for scanning `partitions` of `filename`
@@ -146,9 +166,10 @@ pub fn partitioned_file_groups(
                 Box::new(encoder)
             }
             #[cfg(feature = "compression")]
-            FileCompressionType::BZIP2 => {
-                Box::new(BzEncoder::new(file, BzCompression::default()))
-            }
+            FileCompressionType::BZIP2 => Box::new(AutoFinishBzEncoder(BzEncoder::new(
+                file,
+                BzCompression::default(),
+            ))),
             #[cfg(not(feature = "compression"))]
             FileCompressionType::GZIP
             | FileCompressionType::BZIP2
@@ -182,8 +203,8 @@ pub fn partitioned_file_groups(
         }
     }
 
-    // Must drop the stream before creating ObjectMeta below as drop
-    // triggers finish for ZstdEncoder which writes additional data
+    // Must drop the stream before creating ObjectMeta below as drop triggers
+    // finish for ZstdEncoder/BzEncoder which writes additional data
     for mut w in writers.into_iter() {
         w.flush().unwrap();
     }
@@ -358,97 +379,6 @@ pub fn csv_exec_ordered(
         .with_file_compression_type(FileCompressionType::UNCOMPRESSED)
         .build(),
     )
-}
-
-/// A mock execution plan that simply returns the provided statistics
-#[derive(Debug, Clone)]
-pub struct StatisticsExec {
-    stats: Statistics,
-    schema: Arc<Schema>,
-    cache: PlanProperties,
-}
-
-impl StatisticsExec {
-    pub fn new(stats: Statistics, schema: Schema) -> Self {
-        assert_eq!(
-            stats.column_statistics.len(), schema.fields().len(),
-            "if defined, the column statistics vector length should be the number of fields"
-        );
-        let cache = Self::compute_properties(Arc::new(schema.clone()));
-        Self {
-            stats,
-            schema: Arc::new(schema),
-            cache,
-        }
-    }
-
-    /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
-    fn compute_properties(schema: SchemaRef) -> PlanProperties {
-        let eq_properties = EquivalenceProperties::new(schema);
-        PlanProperties::new(
-            eq_properties,
-            // Output Partitioning
-            Partitioning::UnknownPartitioning(2),
-            // Execution Mode
-            ExecutionMode::Bounded,
-        )
-    }
-}
-
-impl DisplayAs for StatisticsExec {
-    fn fmt_as(
-        &self,
-        t: DisplayFormatType,
-        f: &mut std::fmt::Formatter,
-    ) -> std::fmt::Result {
-        match t {
-            DisplayFormatType::Default | DisplayFormatType::Verbose => {
-                write!(
-                    f,
-                    "StatisticsExec: col_count={}, row_count={:?}",
-                    self.schema.fields().len(),
-                    self.stats.num_rows,
-                )
-            }
-        }
-    }
-}
-
-impl ExecutionPlan for StatisticsExec {
-    fn name(&self) -> &'static str {
-        Self::static_name()
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
-    fn properties(&self) -> &PlanProperties {
-        &self.cache
-    }
-
-    fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
-        vec![]
-    }
-
-    fn with_new_children(
-        self: Arc<Self>,
-        _: Vec<Arc<dyn ExecutionPlan>>,
-    ) -> Result<Arc<dyn ExecutionPlan>> {
-        Ok(self)
-    }
-
-    fn execute(
-        &self,
-        _partition: usize,
-        _context: Arc<TaskContext>,
-    ) -> Result<SendableRecordBatchStream> {
-        unimplemented!("This plan only serves for testing statistics")
-    }
-
-    fn statistics(&self) -> Result<Statistics> {
-        Ok(self.stats.clone())
-    }
 }
 
 pub mod object_store;

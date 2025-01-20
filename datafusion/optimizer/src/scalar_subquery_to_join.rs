@@ -134,7 +134,7 @@ impl OptimizerRule for ScalarSubqueryToJoin {
                     return Ok(Transformed::no(LogicalPlan::Projection(projection)));
                 }
 
-                let mut all_subqueryies = vec![];
+                let mut all_subqueries = vec![];
                 let mut expr_to_rewrite_expr_map = HashMap::new();
                 let mut subquery_to_expr_map = HashMap::new();
                 for expr in projection.expr.iter() {
@@ -143,15 +143,15 @@ impl OptimizerRule for ScalarSubqueryToJoin {
                     for (subquery, _) in &subqueries {
                         subquery_to_expr_map.insert(subquery.clone(), expr.clone());
                     }
-                    all_subqueryies.extend(subqueries);
+                    all_subqueries.extend(subqueries);
                     expr_to_rewrite_expr_map.insert(expr, rewrite_exprs);
                 }
-                if all_subqueryies.is_empty() {
+                if all_subqueries.is_empty() {
                     return internal_err!("Expected subqueries not found in projection");
                 }
                 // iterate through all subqueries in predicate, turning each into a left join
                 let mut cur_input = projection.input.as_ref().clone();
-                for (subquery, alias) in all_subqueryies {
+                for (subquery, alias) in all_subqueries {
                     if let Some((optimized_subquery, expr_check_map)) =
                         build_join(&subquery, &cur_input, &alias)?
                     {
@@ -318,8 +318,7 @@ fn build_join(
     // alias the join filter
     let join_filter_opt =
         conjunction(pull_up.join_filters).map_or(Ok(None), |filter| {
-            replace_qualified_name(filter, &all_correlated_cols, subquery_alias)
-                .map(Option::Some)
+            replace_qualified_name(filter, &all_correlated_cols, subquery_alias).map(Some)
         })?;
 
     // join our sub query into the main plan
@@ -625,11 +624,21 @@ mod tests {
             .project(vec![col("customer.c_custkey")])?
             .build()?;
 
-        let expected = "check_analyzed_plan\
-        \ncaused by\
-        \nError during planning: Correlated column is not allowed in predicate: outer_ref(customer.c_custkey) != orders.o_custkey";
+        // Unsupported predicate, subquery should not be decorrelated
+        let expected = "Projection: customer.c_custkey [c_custkey:Int64]\
+            \n  Filter: customer.c_custkey = (<subquery>) [c_custkey:Int64, c_name:Utf8]\
+            \n    Subquery: [max(orders.o_custkey):Int64;N]\
+            \n      Projection: max(orders.o_custkey) [max(orders.o_custkey):Int64;N]\
+            \n        Aggregate: groupBy=[[]], aggr=[[max(orders.o_custkey)]] [max(orders.o_custkey):Int64;N]\
+            \n          Filter: outer_ref(customer.c_custkey) != orders.o_custkey [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]\
+            \n            TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]\
+            \n    TableScan: customer [c_custkey:Int64, c_name:Utf8]";
 
-        assert_analyzer_check_err(vec![], plan, expected);
+        assert_multi_rules_optimized_plan_eq_display_indent(
+            vec![Arc::new(ScalarSubqueryToJoin::new())],
+            plan,
+            expected,
+        );
         Ok(())
     }
 
@@ -652,11 +661,21 @@ mod tests {
             .project(vec![col("customer.c_custkey")])?
             .build()?;
 
-        let expected = "check_analyzed_plan\
-        \ncaused by\
-        \nError during planning: Correlated column is not allowed in predicate: outer_ref(customer.c_custkey) < orders.o_custkey";
+        // Unsupported predicate, subquery should not be decorrelated
+        let expected = "Projection: customer.c_custkey [c_custkey:Int64]\
+            \n  Filter: customer.c_custkey = (<subquery>) [c_custkey:Int64, c_name:Utf8]\
+            \n    Subquery: [max(orders.o_custkey):Int64;N]\
+            \n      Projection: max(orders.o_custkey) [max(orders.o_custkey):Int64;N]\
+            \n        Aggregate: groupBy=[[]], aggr=[[max(orders.o_custkey)]] [max(orders.o_custkey):Int64;N]\
+            \n          Filter: outer_ref(customer.c_custkey) < orders.o_custkey [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]\
+            \n            TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]\
+            \n    TableScan: customer [c_custkey:Int64, c_name:Utf8]";
 
-        assert_analyzer_check_err(vec![], plan, expected);
+        assert_multi_rules_optimized_plan_eq_display_indent(
+            vec![Arc::new(ScalarSubqueryToJoin::new())],
+            plan,
+            expected,
+        );
         Ok(())
     }
 
@@ -680,11 +699,21 @@ mod tests {
             .project(vec![col("customer.c_custkey")])?
             .build()?;
 
-        let expected = "check_analyzed_plan\
-        \ncaused by\
-        \nError during planning: Correlated column is not allowed in predicate: outer_ref(customer.c_custkey) = orders.o_custkey OR orders.o_orderkey = Int32(1)";
+        // Unsupported predicate, subquery should not be decorrelated
+        let expected = "Projection: customer.c_custkey [c_custkey:Int64]\
+            \n  Filter: customer.c_custkey = (<subquery>) [c_custkey:Int64, c_name:Utf8]\
+            \n    Subquery: [max(orders.o_custkey):Int64;N]\
+            \n      Projection: max(orders.o_custkey) [max(orders.o_custkey):Int64;N]\
+            \n        Aggregate: groupBy=[[]], aggr=[[max(orders.o_custkey)]] [max(orders.o_custkey):Int64;N]\
+            \n          Filter: outer_ref(customer.c_custkey) = orders.o_custkey OR orders.o_orderkey = Int32(1) [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]\
+            \n            TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]\
+            \n    TableScan: customer [c_custkey:Int64, c_name:Utf8]";
 
-        assert_analyzer_check_err(vec![], plan, expected);
+        assert_multi_rules_optimized_plan_eq_display_indent(
+            vec![Arc::new(ScalarSubqueryToJoin::new())],
+            plan,
+            expected,
+        );
         Ok(())
     }
 
@@ -702,7 +731,7 @@ mod tests {
             .project(vec![col("customer.c_custkey")])?
             .build()?;
 
-        let expected = "check_analyzed_plan\
+        let expected = "Invalid (non-executable) plan after Analyzer\
         \ncaused by\
         \nError during planning: Scalar subquery should only return one column";
         assert_analyzer_check_err(vec![], plan, expected);
@@ -764,7 +793,7 @@ mod tests {
             .project(vec![col("customer.c_custkey")])?
             .build()?;
 
-        let expected = "check_analyzed_plan\
+        let expected = "Invalid (non-executable) plan after Analyzer\
         \ncaused by\
         \nError during planning: Scalar subquery should only return one column";
         assert_analyzer_check_err(vec![], plan, expected);
@@ -850,7 +879,7 @@ mod tests {
         Ok(())
     }
 
-    /// Test for correlated scalar subquery filter with disjustions
+    /// Test for correlated scalar subquery filter with disjunctions
     #[test]
     fn scalar_subquery_disjunction() -> Result<()> {
         let sq = Arc::new(

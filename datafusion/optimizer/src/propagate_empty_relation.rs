@@ -72,19 +72,6 @@ impl OptimizerRule for PropagateEmptyRelation {
                 }
                 Ok(Transformed::no(plan))
             }
-            LogicalPlan::CrossJoin(ref join) => {
-                let (left_empty, right_empty) = binary_plan_children_is_empty(&plan)?;
-                if left_empty || right_empty {
-                    return Ok(Transformed::yes(LogicalPlan::EmptyRelation(
-                        EmptyRelation {
-                            produce_one_row: false,
-                            schema: Arc::clone(plan.schema()),
-                        },
-                    )));
-                }
-                Ok(Transformed::no(LogicalPlan::CrossJoin(join.clone())))
-            }
-
             LogicalPlan::Join(ref join) => {
                 // TODO: For Join, more join type need to be careful:
                 // For LeftOut/Full Join, if the right side is empty, the Join can be eliminated with a Projection with left side

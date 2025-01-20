@@ -17,26 +17,45 @@
 
 use std::any::Any;
 use std::fmt::Write;
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
 use arrow::array::{
     Array, ArrayRef, AsArray, GenericStringArray, GenericStringBuilder, Int64Array,
-    OffsetSizeTrait, StringViewArray,
+    OffsetSizeTrait, StringArrayType, StringViewArray,
 };
 use arrow::datatypes::DataType;
 use unicode_segmentation::UnicodeSegmentation;
 use DataType::{LargeUtf8, Utf8, Utf8View};
 
-use crate::string::common::StringArrayType;
 use crate::utils::{make_scalar_function, utf8_to_str_type};
 use datafusion_common::cast::as_int64_array;
 use datafusion_common::{exec_err, Result};
-use datafusion_expr::scalar_doc_sections::DOC_SECTION_STRING;
 use datafusion_expr::TypeSignature::Exact;
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
 };
+use datafusion_macros::user_doc;
 
+#[user_doc(
+    doc_section(label = "String Functions"),
+    description = "Pads the left side of a string with another string to a specified string length.",
+    syntax_example = "lpad(str, n[, padding_str])",
+    sql_example = r#"```sql
+> select lpad('Dolly', 10, 'hello');
++---------------------------------------------+
+| lpad(Utf8("Dolly"),Int64(10),Utf8("hello")) |
++---------------------------------------------+
+| helloDolly                                  |
++---------------------------------------------+
+```"#,
+    standard_argument(name = "str", prefix = "String"),
+    argument(name = "n", description = "String length to pad to."),
+    argument(
+        name = "padding_str",
+        description = "Optional string expression to pad with. Can be a constant, column, or function, and any combination of string operators. _Default is a space._"
+    ),
+    related_udf(name = "rpad")
+)]
 #[derive(Debug)]
 pub struct LPadFunc {
     signature: Signature,
@@ -90,7 +109,11 @@ impl ScalarUDFImpl for LPadFunc {
         utf8_to_str_type(&arg_types[0], "lpad")
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         match args[0].data_type() {
             Utf8 | Utf8View => make_scalar_function(lpad::<i32>, vec![])(args),
             LargeUtf8 => make_scalar_function(lpad::<i64>, vec![])(args),
@@ -99,33 +122,8 @@ impl ScalarUDFImpl for LPadFunc {
     }
 
     fn documentation(&self) -> Option<&Documentation> {
-        Some(get_lpad_doc())
+        self.doc()
     }
-}
-
-static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
-
-fn get_lpad_doc() -> &'static Documentation {
-    DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_STRING)
-            .with_description("Pads the left side of a string with another string to a specified string length.")
-            .with_syntax_example("lpad(str, n[, padding_str])")
-            .with_sql_example(r#"```sql
-> select lpad('Dolly', 10, 'hello');
-+---------------------------------------------+
-| lpad(Utf8("Dolly"),Int64(10),Utf8("hello")) |
-+---------------------------------------------+
-| helloDolly                                  |
-+---------------------------------------------+
-```"#)
-            .with_standard_argument("str", "String")
-            .with_argument("n", "String length to pad to.")
-            .with_argument("padding_str", "Optional string expression to pad with. Can be a constant, column, or function, and any combination of string operators. _Default is a space._")
-            .with_related_udf("rpad")
-            .build()
-            .unwrap()
-    })
 }
 
 /// Extends the string to length 'length' by prepending the characters fill (a space by default).
@@ -162,7 +160,7 @@ pub fn lpad<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
             length_array,
             &args[2],
         ),
-        (_, _) => unreachable!(),
+        (_, _) => unreachable!("lpad"),
     }
 }
 
@@ -295,7 +293,7 @@ mod tests {
         ($INPUT:expr, $LENGTH:expr, $EXPECTED:expr) => {
             test_function!(
                 LPadFunc::new(),
-                &[
+                vec![
                     ColumnarValue::from(ScalarValue::Utf8($INPUT)),
                     ColumnarValue::from($LENGTH)
                 ],
@@ -307,7 +305,7 @@ mod tests {
 
             test_function!(
                 LPadFunc::new(),
-                &[
+                vec![
                     ColumnarValue::from(ScalarValue::LargeUtf8($INPUT)),
                     ColumnarValue::from($LENGTH)
                 ],
@@ -319,7 +317,7 @@ mod tests {
 
             test_function!(
                 LPadFunc::new(),
-                &[
+                vec![
                     ColumnarValue::from(ScalarValue::Utf8View($INPUT)),
                     ColumnarValue::from($LENGTH)
                 ],
@@ -334,7 +332,7 @@ mod tests {
             // utf8, utf8
             test_function!(
                 LPadFunc::new(),
-                &[
+                vec![
                     ColumnarValue::from(ScalarValue::Utf8($INPUT)),
                     ColumnarValue::from($LENGTH),
                     ColumnarValue::from(ScalarValue::Utf8($REPLACE))
@@ -347,7 +345,7 @@ mod tests {
             // utf8, largeutf8
             test_function!(
                 LPadFunc::new(),
-                &[
+                vec![
                     ColumnarValue::from(ScalarValue::Utf8($INPUT)),
                     ColumnarValue::from($LENGTH),
                     ColumnarValue::from(ScalarValue::LargeUtf8($REPLACE))
@@ -360,7 +358,7 @@ mod tests {
             // utf8, utf8view
             test_function!(
                 LPadFunc::new(),
-                &[
+                vec![
                     ColumnarValue::from(ScalarValue::Utf8($INPUT)),
                     ColumnarValue::from($LENGTH),
                     ColumnarValue::from(ScalarValue::Utf8View($REPLACE))
@@ -374,7 +372,7 @@ mod tests {
             // largeutf8, utf8
             test_function!(
                 LPadFunc::new(),
-                &[
+                vec![
                     ColumnarValue::from(ScalarValue::LargeUtf8($INPUT)),
                     ColumnarValue::from($LENGTH),
                     ColumnarValue::from(ScalarValue::Utf8($REPLACE))
@@ -387,7 +385,7 @@ mod tests {
             // largeutf8, largeutf8
             test_function!(
                 LPadFunc::new(),
-                &[
+                vec![
                     ColumnarValue::from(ScalarValue::LargeUtf8($INPUT)),
                     ColumnarValue::from($LENGTH),
                     ColumnarValue::from(ScalarValue::LargeUtf8($REPLACE))
@@ -400,7 +398,7 @@ mod tests {
             // largeutf8, utf8view
             test_function!(
                 LPadFunc::new(),
-                &[
+                vec![
                     ColumnarValue::from(ScalarValue::LargeUtf8($INPUT)),
                     ColumnarValue::from($LENGTH),
                     ColumnarValue::from(ScalarValue::Utf8View($REPLACE))
@@ -414,7 +412,7 @@ mod tests {
             // utf8view, utf8
             test_function!(
                 LPadFunc::new(),
-                &[
+                vec![
                     ColumnarValue::from(ScalarValue::Utf8View($INPUT)),
                     ColumnarValue::from($LENGTH),
                     ColumnarValue::from(ScalarValue::Utf8($REPLACE))
@@ -427,7 +425,7 @@ mod tests {
             // utf8view, largeutf8
             test_function!(
                 LPadFunc::new(),
-                &[
+                vec![
                     ColumnarValue::from(ScalarValue::Utf8View($INPUT)),
                     ColumnarValue::from($LENGTH),
                     ColumnarValue::from(ScalarValue::LargeUtf8($REPLACE))
@@ -440,7 +438,7 @@ mod tests {
             // utf8view, utf8view
             test_function!(
                 LPadFunc::new(),
-                &[
+                vec![
                     ColumnarValue::from(ScalarValue::Utf8View($INPUT)),
                     ColumnarValue::from($LENGTH),
                     ColumnarValue::from(ScalarValue::Utf8View($REPLACE))

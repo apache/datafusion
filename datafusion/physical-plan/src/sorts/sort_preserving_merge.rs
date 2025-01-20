@@ -15,13 +15,12 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Defines the sort preserving merge plan
+//! [`SortPreservingMergeExec`] merges multiple sorted streams into one sorted stream.
 
 use std::any::Any;
 use std::sync::Arc;
 
 use crate::common::spawn_buffered;
-use crate::expressions::PhysicalSortExpr;
 use crate::limit::LimitStream;
 use crate::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
 use crate::sorts::streaming_merge::StreamingMergeBuilder;
@@ -33,17 +32,28 @@ use crate::{
 use datafusion_common::{internal_err, Result};
 use datafusion_execution::memory_pool::MemoryConsumer;
 use datafusion_execution::TaskContext;
-use datafusion_physical_expr::PhysicalSortRequirement;
 
-use datafusion_physical_expr_common::sort_expr::LexRequirement;
+use datafusion_physical_expr_common::sort_expr::{LexOrdering, LexRequirement};
 use log::{debug, trace};
 
 /// Sort preserving merge execution plan
 ///
-/// This takes an input execution plan and a list of sort expressions, and
-/// provided each partition of the input plan is sorted with respect to
-/// these sort expressions, this operator will yield a single partition
-/// that is also sorted with respect to them
+/// # Overview
+///
+/// This operator implements a K-way merge. It is used to merge multiple sorted
+/// streams into a single sorted stream and is highly optimized.
+///
+/// ## Inputs:
+///
+/// 1. A list of sort expressions
+/// 2. An input plan, where each partition is sorted with respect to
+///    these sort expressions.
+///
+/// ## Output:
+///
+/// 1. A single partition that is also sorted with respect to the expressions
+///
+/// ## Diagram
 ///
 /// ```text
 /// ┌─────────────────────────┐
@@ -57,12 +67,12 @@ use log::{debug, trace};
 /// ┌─────────────────────────┐  │  └───────────────────┘    └─┬─────┴───────────────────────┘
 /// │ ╔═══╦═══╗               │  │
 /// │ ║ B ║ E ║     ...       │──┘                             │
-/// │ ╚═══╩═══╝               │              Note Stable Sort: the merged stream
-/// └─────────────────────────┘                places equal rows from stream 1
+/// │ ╚═══╩═══╝               │              Stable sort if `enable_round_robin_repartition=false`:
+/// └─────────────────────────┘              the merged stream places equal rows from stream 1
 ///   Stream 2
 ///
 ///
-///  Input Streams                                             Output stream
+///  Input Partitions                                          Output Partition
 ///    (sorted)                                                  (sorted)
 /// ```
 ///
@@ -70,23 +80,27 @@ use log::{debug, trace};
 ///
 /// If any of the input partitions return an error, the error is propagated to
 /// the output and inputs are not polled again.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct SortPreservingMergeExec {
-    /// Input plan
+    /// Input plan with sorted partitions
     input: Arc<dyn ExecutionPlan>,
     /// Sort expressions
-    expr: Vec<PhysicalSortExpr>,
+    expr: LexOrdering,
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
     /// Optional number of rows to fetch. Stops producing rows after this fetch
     fetch: Option<usize>,
     /// Cache holding plan properties like equivalences, output partitioning etc.
     cache: PlanProperties,
+    /// Use round-robin selection of tied winners of loser tree
+    ///
+    /// See [`Self::with_round_robin_repartition`] for more information.
+    enable_round_robin_repartition: bool,
 }
 
 impl SortPreservingMergeExec {
     /// Create a new sort execution plan
-    pub fn new(expr: Vec<PhysicalSortExpr>, input: Arc<dyn ExecutionPlan>) -> Self {
+    pub fn new(expr: LexOrdering, input: Arc<dyn ExecutionPlan>) -> Self {
         let cache = Self::compute_properties(&input, expr.clone());
         Self {
             input,
@@ -94,11 +108,30 @@ impl SortPreservingMergeExec {
             metrics: ExecutionPlanMetricsSet::new(),
             fetch: None,
             cache,
+            enable_round_robin_repartition: true,
         }
     }
+
     /// Sets the number of rows to fetch
     pub fn with_fetch(mut self, fetch: Option<usize>) -> Self {
         self.fetch = fetch;
+        self
+    }
+
+    /// Sets the selection strategy of tied winners of the loser tree algorithm
+    ///
+    /// If true (the default) equal output rows are placed in the merged stream
+    /// in round robin fashion. This approach consumes input streams at more
+    /// even rates when there are many rows with the same sort key.
+    ///
+    /// If false, equal output rows are always placed in the merged stream in
+    /// the order of the inputs, resulting in potentially slower execution but a
+    /// stable output order.
+    pub fn with_round_robin_repartition(
+        mut self,
+        enable_round_robin_repartition: bool,
+    ) -> Self {
+        self.enable_round_robin_repartition = enable_round_robin_repartition;
         self
     }
 
@@ -108,8 +141,8 @@ impl SortPreservingMergeExec {
     }
 
     /// Sort expressions
-    pub fn expr(&self) -> &[PhysicalSortExpr] {
-        &self.expr
+    pub fn expr(&self) -> &LexOrdering {
+        self.expr.as_ref()
     }
 
     /// Fetch
@@ -117,10 +150,11 @@ impl SortPreservingMergeExec {
         self.fetch
     }
 
-    /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
+    /// Creates the cache object that stores the plan properties
+    /// such as schema, equivalence properties, ordering, partitioning, etc.
     fn compute_properties(
         input: &Arc<dyn ExecutionPlan>,
-        ordering: Vec<PhysicalSortExpr>,
+        ordering: LexOrdering,
     ) -> PlanProperties {
         let mut eq_properties = input.equivalence_properties().clone();
         eq_properties.clear_per_partition_constants();
@@ -128,7 +162,8 @@ impl SortPreservingMergeExec {
         PlanProperties::new(
             eq_properties,                        // Equivalence Properties
             Partitioning::UnknownPartitioning(1), // Output Partitioning
-            input.execution_mode(),               // Execution Mode
+            input.pipeline_behavior(),            // Pipeline Behavior
+            input.boundedness(),                  // Boundedness
         )
     }
 }
@@ -141,11 +176,7 @@ impl DisplayAs for SortPreservingMergeExec {
     ) -> std::fmt::Result {
         match t {
             DisplayFormatType::Default | DisplayFormatType::Verbose => {
-                write!(
-                    f,
-                    "SortPreservingMergeExec: [{}]",
-                    PhysicalSortExpr::format_list(&self.expr)
-                )?;
+                write!(f, "SortPreservingMergeExec: [{}]", self.expr)?;
                 if let Some(fetch) = self.fetch {
                     write!(f, ", fetch={fetch}")?;
                 };
@@ -182,6 +213,7 @@ impl ExecutionPlan for SortPreservingMergeExec {
             metrics: self.metrics.clone(),
             fetch: limit,
             cache: self.cache.clone(),
+            enable_round_robin_repartition: true,
         }))
     }
 
@@ -194,7 +226,7 @@ impl ExecutionPlan for SortPreservingMergeExec {
     }
 
     fn required_input_ordering(&self) -> Vec<Option<LexRequirement>> {
-        vec![Some(PhysicalSortRequirement::from_sort_exprs(&self.expr))]
+        vec![Some(LexRequirement::from(self.expr.clone()))]
     }
 
     fn maintains_input_order(&self) -> Vec<bool> {
@@ -276,11 +308,12 @@ impl ExecutionPlan for SortPreservingMergeExec {
                 let result = StreamingMergeBuilder::new()
                     .with_streams(receivers)
                     .with_schema(schema)
-                    .with_expressions(&self.expr)
+                    .with_expressions(self.expr.as_ref())
                     .with_metrics(BaselineMetrics::new(&self.metrics, partition))
                     .with_batch_size(context.session_config().batch_size())
                     .with_fetch(self.fetch)
                     .with_reservation(reservation)
+                    .with_round_robin_tie_breaker(self.enable_round_robin_repartition)
                     .build()?;
 
                 debug!("Got stream result from SortPreservingMergeStream::new_from_receivers");
@@ -312,31 +345,111 @@ mod tests {
     use std::time::Duration;
 
     use super::*;
+    use crate::coalesce_batches::CoalesceBatchesExec;
     use crate::coalesce_partitions::CoalescePartitionsExec;
+    use crate::execution_plan::{Boundedness, EmissionType};
     use crate::expressions::col;
     use crate::memory::MemoryExec;
     use crate::metrics::{MetricValue, Timestamp};
+    use crate::repartition::RepartitionExec;
     use crate::sorts::sort::SortExec;
     use crate::stream::RecordBatchReceiverStream;
     use crate::test::exec::{assert_strong_count_converges_to_zero, BlockingExec};
     use crate::test::{self, assert_is_pending, make_partition};
-    use crate::{collect, common, ExecutionMode};
+    use crate::{collect, common};
 
     use arrow::array::{ArrayRef, Int32Array, StringArray, TimestampNanosecondArray};
     use arrow::compute::SortOptions;
     use arrow::datatypes::{DataType, Field, Schema};
     use arrow::record_batch::RecordBatch;
+    use arrow_array::Int64Array;
     use arrow_schema::SchemaRef;
     use datafusion_common::{assert_batches_eq, assert_contains, DataFusionError};
     use datafusion_common_runtime::SpawnedTask;
     use datafusion_execution::config::SessionConfig;
+    use datafusion_execution::runtime_env::RuntimeEnvBuilder;
     use datafusion_execution::RecordBatchStream;
     use datafusion_physical_expr::expressions::Column;
     use datafusion_physical_expr::EquivalenceProperties;
     use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 
+    use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
     use futures::{FutureExt, Stream, StreamExt};
     use tokio::time::timeout;
+
+    // The number in the function is highly related to the memory limit we are testing
+    // any change of the constant should be aware of
+    fn generate_task_ctx_for_round_robin_tie_breaker() -> Result<Arc<TaskContext>> {
+        let runtime = RuntimeEnvBuilder::new()
+            .with_memory_limit(20_000_000, 1.0)
+            .build_arc()?;
+        let config = SessionConfig::new();
+        let task_ctx = TaskContext::default()
+            .with_runtime(runtime)
+            .with_session_config(config);
+        Ok(Arc::new(task_ctx))
+    }
+    // The number in the function is highly related to the memory limit we are testing,
+    // any change of the constant should be aware of
+    fn generate_spm_for_round_robin_tie_breaker(
+        enable_round_robin_repartition: bool,
+    ) -> Result<Arc<SortPreservingMergeExec>> {
+        let target_batch_size = 12500;
+        let row_size = 12500;
+        let a: ArrayRef = Arc::new(Int32Array::from(vec![1; row_size]));
+        let b: ArrayRef = Arc::new(StringArray::from_iter(vec![Some("a"); row_size]));
+        let c: ArrayRef = Arc::new(Int64Array::from_iter(vec![0; row_size]));
+        let rb = RecordBatch::try_from_iter(vec![("a", a), ("b", b), ("c", c)]).unwrap();
+
+        let rbs = (0..1024).map(|_| rb.clone()).collect::<Vec<_>>();
+
+        let schema = rb.schema();
+        let sort = LexOrdering::new(vec![
+            PhysicalSortExpr {
+                expr: col("b", &schema).unwrap(),
+                options: Default::default(),
+            },
+            PhysicalSortExpr {
+                expr: col("c", &schema).unwrap(),
+                options: Default::default(),
+            },
+        ]);
+
+        let exec = MemoryExec::try_new(&[rbs], schema, None).unwrap();
+        let repartition_exec =
+            RepartitionExec::try_new(Arc::new(exec), Partitioning::RoundRobinBatch(2))?;
+        let coalesce_batches_exec =
+            CoalesceBatchesExec::new(Arc::new(repartition_exec), target_batch_size);
+        let spm = SortPreservingMergeExec::new(sort, Arc::new(coalesce_batches_exec))
+            .with_round_robin_repartition(enable_round_robin_repartition);
+        Ok(Arc::new(spm))
+    }
+
+    /// This test verifies that memory usage stays within limits when the tie breaker is enabled.
+    /// Any errors here could indicate unintended changes in tie breaker logic.
+    ///
+    /// Note: If you adjust constants in this test, ensure that memory usage differs
+    /// based on whether the tie breaker is enabled or disabled.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_round_robin_tie_breaker_success() -> Result<()> {
+        let task_ctx = generate_task_ctx_for_round_robin_tie_breaker()?;
+        let spm = generate_spm_for_round_robin_tie_breaker(true)?;
+        let _collected = collect(spm, task_ctx).await.unwrap();
+        Ok(())
+    }
+
+    /// This test verifies that memory usage stays within limits when the tie breaker is enabled.
+    /// Any errors here could indicate unintended changes in tie breaker logic.
+    ///
+    /// Note: If you adjust constants in this test, ensure that memory usage differs
+    /// based on whether the tie breaker is enabled or disabled.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_round_robin_tie_breaker_fail() -> Result<()> {
+        let task_ctx = generate_task_ctx_for_round_robin_tie_breaker()?;
+        let spm = generate_spm_for_round_robin_tie_breaker(false)?;
+        let _err = collect(spm, task_ctx).await.unwrap_err();
+        Ok(())
+    }
 
     #[tokio::test]
     async fn test_merge_interleave() {
@@ -393,7 +506,7 @@ mod tests {
         let batch = RecordBatch::try_from_iter(vec![("a", a)]).unwrap();
 
         let schema = batch.schema();
-        let sort = vec![]; // no sort expressions
+        let sort = LexOrdering::default(); // no sort expressions
         let exec = MemoryExec::try_new(&[vec![batch.clone()], vec![batch]], schema, None)
             .unwrap();
         let merge = Arc::new(SortPreservingMergeExec::new(sort, Arc::new(exec)));
@@ -572,7 +685,7 @@ mod tests {
         context: Arc<TaskContext>,
     ) {
         let schema = partitions[0][0].schema();
-        let sort = vec![
+        let sort = LexOrdering::new(vec![
             PhysicalSortExpr {
                 expr: col("b", &schema).unwrap(),
                 options: Default::default(),
@@ -581,7 +694,7 @@ mod tests {
                 expr: col("c", &schema).unwrap(),
                 options: Default::default(),
             },
-        ];
+        ]);
         let exec = MemoryExec::try_new(partitions, schema, None).unwrap();
         let merge = Arc::new(SortPreservingMergeExec::new(sort, Arc::new(exec)));
 
@@ -591,7 +704,7 @@ mod tests {
 
     async fn sorted_merge(
         input: Arc<dyn ExecutionPlan>,
-        sort: Vec<PhysicalSortExpr>,
+        sort: LexOrdering,
         context: Arc<TaskContext>,
     ) -> RecordBatch {
         let merge = Arc::new(SortPreservingMergeExec::new(sort, input));
@@ -602,7 +715,7 @@ mod tests {
 
     async fn partition_sort(
         input: Arc<dyn ExecutionPlan>,
-        sort: Vec<PhysicalSortExpr>,
+        sort: LexOrdering,
         context: Arc<TaskContext>,
     ) -> RecordBatch {
         let sort_exec =
@@ -612,7 +725,7 @@ mod tests {
 
     async fn basic_sort(
         src: Arc<dyn ExecutionPlan>,
-        sort: Vec<PhysicalSortExpr>,
+        sort: LexOrdering,
         context: Arc<TaskContext>,
     ) -> RecordBatch {
         let merge = Arc::new(CoalescePartitionsExec::new(src));
@@ -629,13 +742,13 @@ mod tests {
         let csv = test::scan_partitioned(partitions);
         let schema = csv.schema();
 
-        let sort = vec![PhysicalSortExpr {
+        let sort = LexOrdering::new(vec![PhysicalSortExpr {
             expr: col("i", &schema).unwrap(),
             options: SortOptions {
                 descending: true,
                 nulls_first: true,
             },
-        }];
+        }]);
 
         let basic =
             basic_sort(Arc::clone(&csv), sort.clone(), Arc::clone(&task_ctx)).await;
@@ -658,7 +771,7 @@ mod tests {
 
     // Split the provided record batch into multiple batch_size record batches
     fn split_batch(sorted: &RecordBatch, batch_size: usize) -> Vec<RecordBatch> {
-        let batches = (sorted.num_rows() + batch_size - 1) / batch_size;
+        let batches = sorted.num_rows().div_ceil(batch_size);
 
         // Split the sorted RecordBatch into multiple
         (0..batches)
@@ -680,7 +793,7 @@ mod tests {
     }
 
     async fn sorted_partitioned_input(
-        sort: Vec<PhysicalSortExpr>,
+        sort: LexOrdering,
         sizes: &[usize],
         context: Arc<TaskContext>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
@@ -699,10 +812,10 @@ mod tests {
     async fn test_partition_sort_streaming_input() -> Result<()> {
         let task_ctx = Arc::new(TaskContext::default());
         let schema = make_partition(11).schema();
-        let sort = vec![PhysicalSortExpr {
+        let sort = LexOrdering::new(vec![PhysicalSortExpr {
             expr: col("i", &schema).unwrap(),
             options: Default::default(),
-        }];
+        }]);
 
         let input =
             sorted_partitioned_input(sort.clone(), &[10, 3, 11], Arc::clone(&task_ctx))
@@ -729,10 +842,10 @@ mod tests {
     #[tokio::test]
     async fn test_partition_sort_streaming_input_output() -> Result<()> {
         let schema = make_partition(11).schema();
-        let sort = vec![PhysicalSortExpr {
+        let sort = LexOrdering::new(vec![PhysicalSortExpr {
             expr: col("i", &schema).unwrap(),
             options: Default::default(),
-        }];
+        }]);
 
         // Test streaming with default batch size
         let task_ctx = Arc::new(TaskContext::default());
@@ -804,7 +917,7 @@ mod tests {
         let b2 = RecordBatch::try_from_iter(vec![("a", a), ("b", b), ("c", c)]).unwrap();
         let schema = b1.schema();
 
-        let sort = vec![
+        let sort = LexOrdering::new(vec![
             PhysicalSortExpr {
                 expr: col("b", &schema).unwrap(),
                 options: SortOptions {
@@ -819,7 +932,7 @@ mod tests {
                     nulls_first: false,
                 },
             },
-        ];
+        ]);
         let exec = MemoryExec::try_new(&[vec![b1], vec![b2]], schema, None).unwrap();
         let merge = Arc::new(SortPreservingMergeExec::new(sort, Arc::new(exec)));
 
@@ -855,13 +968,13 @@ mod tests {
         let batch = RecordBatch::try_from_iter(vec![("a", a), ("b", b)]).unwrap();
         let schema = batch.schema();
 
-        let sort = vec![PhysicalSortExpr {
+        let sort = LexOrdering::new(vec![PhysicalSortExpr {
             expr: col("b", &schema).unwrap(),
             options: SortOptions {
                 descending: false,
                 nulls_first: true,
             },
-        }];
+        }]);
         let exec = MemoryExec::try_new(&[vec![batch]], schema, None).unwrap();
         let merge = Arc::new(
             SortPreservingMergeExec::new(sort, Arc::new(exec)).with_fetch(Some(2)),
@@ -891,13 +1004,13 @@ mod tests {
         let batch = RecordBatch::try_from_iter(vec![("a", a), ("b", b)]).unwrap();
         let schema = batch.schema();
 
-        let sort = vec![PhysicalSortExpr {
+        let sort = LexOrdering::new(vec![PhysicalSortExpr {
             expr: col("b", &schema).unwrap(),
             options: SortOptions {
                 descending: false,
                 nulls_first: true,
             },
-        }];
+        }]);
         let exec = MemoryExec::try_new(&[vec![batch]], schema, None).unwrap();
         let merge = Arc::new(SortPreservingMergeExec::new(sort, Arc::new(exec)));
 
@@ -924,10 +1037,10 @@ mod tests {
     async fn test_async() -> Result<()> {
         let task_ctx = Arc::new(TaskContext::default());
         let schema = make_partition(11).schema();
-        let sort = vec![PhysicalSortExpr {
+        let sort = LexOrdering::new(vec![PhysicalSortExpr {
             expr: col("i", &schema).unwrap(),
             options: SortOptions::default(),
-        }];
+        }]);
 
         let batches =
             sorted_partitioned_input(sort.clone(), &[5, 7, 3], Arc::clone(&task_ctx))
@@ -946,7 +1059,7 @@ mod tests {
                 while let Some(batch) = stream.next().await {
                     sender.send(batch).await.unwrap();
                     // This causes the MergeStream to wait for more input
-                    tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
+                    tokio::time::sleep(Duration::from_millis(10)).await;
                 }
 
                 Ok(())
@@ -963,7 +1076,7 @@ mod tests {
         let merge_stream = StreamingMergeBuilder::new()
             .with_streams(streams)
             .with_schema(batches.schema())
-            .with_expressions(sort.as_slice())
+            .with_expressions(sort.as_ref())
             .with_metrics(BaselineMetrics::new(&metrics, 0))
             .with_batch_size(task_ctx.session_config().batch_size())
             .with_fetch(fetch)
@@ -1003,10 +1116,10 @@ mod tests {
         let b2 = RecordBatch::try_from_iter(vec![("a", a), ("b", b)]).unwrap();
 
         let schema = b1.schema();
-        let sort = vec![PhysicalSortExpr {
+        let sort = LexOrdering::new(vec![PhysicalSortExpr {
             expr: col("b", &schema).unwrap(),
             options: Default::default(),
-        }];
+        }]);
         let exec = MemoryExec::try_new(&[vec![b1], vec![b2]], schema, None).unwrap();
         let merge = Arc::new(SortPreservingMergeExec::new(sort, Arc::new(exec)));
 
@@ -1062,10 +1175,10 @@ mod tests {
         let blocking_exec = Arc::new(BlockingExec::new(Arc::clone(&schema), 2));
         let refs = blocking_exec.refs();
         let sort_preserving_merge_exec = Arc::new(SortPreservingMergeExec::new(
-            vec![PhysicalSortExpr {
+            LexOrdering::new(vec![PhysicalSortExpr {
                 expr: col("a", &schema)?,
                 options: SortOptions::default(),
-            }],
+            }]),
             blocking_exec,
         ));
 
@@ -1110,13 +1223,13 @@ mod tests {
 
         let schema = partitions[0][0].schema();
 
-        let sort = vec![PhysicalSortExpr {
+        let sort = LexOrdering::new(vec![PhysicalSortExpr {
             expr: col("value", &schema).unwrap(),
             options: SortOptions {
                 descending: false,
                 nulls_first: true,
             },
-        }];
+        }]);
 
         let exec = MemoryExec::try_new(&partitions, schema, None).unwrap();
         let merge = Arc::new(SortPreservingMergeExec::new(sort, Arc::new(exec)));
@@ -1179,9 +1292,15 @@ mod tests {
             eq_properties.add_new_orderings(vec![columns
                 .iter()
                 .map(|expr| PhysicalSortExpr::new_default(Arc::clone(expr)))
-                .collect::<Vec<_>>()]);
-            let mode = ExecutionMode::Unbounded;
-            PlanProperties::new(eq_properties, Partitioning::Hash(columns, 3), mode)
+                .collect::<LexOrdering>()]);
+            PlanProperties::new(
+                eq_properties,
+                Partitioning::Hash(columns, 3),
+                EmissionType::Incremental,
+                Boundedness::Unbounded {
+                    requires_infinite_memory: false,
+                },
+            )
         }
     }
 
@@ -1288,9 +1407,9 @@ mod tests {
             congestion_cleared: Arc::new(Mutex::new(false)),
         };
         let spm = SortPreservingMergeExec::new(
-            vec![PhysicalSortExpr::new_default(Arc::new(Column::new(
+            LexOrdering::new(vec![PhysicalSortExpr::new_default(Arc::new(Column::new(
                 "c1", 0,
-            )))],
+            )))]),
             Arc::new(source),
         );
         let spm_task = SpawnedTask::spawn(collect(Arc::new(spm), task_ctx));

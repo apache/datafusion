@@ -15,27 +15,46 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::string::common::StringArrayType;
 use crate::utils::{make_scalar_function, utf8_to_str_type};
 use arrow::array::{
     ArrayRef, AsArray, GenericStringArray, GenericStringBuilder, Int64Array,
-    OffsetSizeTrait, StringViewArray,
+    OffsetSizeTrait, StringArrayType, StringViewArray,
 };
 use arrow::datatypes::DataType;
 use datafusion_common::cast::as_int64_array;
 use datafusion_common::DataFusionError;
 use datafusion_common::{exec_err, Result};
-use datafusion_expr::scalar_doc_sections::DOC_SECTION_STRING;
 use datafusion_expr::TypeSignature::Exact;
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
 };
+use datafusion_macros::user_doc;
 use std::any::Any;
 use std::fmt::Write;
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 use unicode_segmentation::UnicodeSegmentation;
 use DataType::{LargeUtf8, Utf8, Utf8View};
 
+#[user_doc(
+    doc_section(label = "String Functions"),
+    description = "Pads the right side of a string with another string to a specified string length.",
+    syntax_example = "rpad(str, n[, padding_str])",
+    sql_example = r#"```sql
+>  select rpad('datafusion', 20, '_-');
++-----------------------------------------------+
+| rpad(Utf8("datafusion"),Int64(20),Utf8("_-")) |
++-----------------------------------------------+
+| datafusion_-_-_-_-_-                          |
++-----------------------------------------------+
+```"#,
+    standard_argument(name = "str", prefix = "String"),
+    argument(name = "n", description = "String length to pad to."),
+    argument(
+        name = "padding_str",
+        description = "String expression to pad with. Can be a constant, column, or function, and any combination of string operators. _Default is a space._"
+    ),
+    related_udf(name = "lpad")
+)]
 #[derive(Debug)]
 pub struct RPadFunc {
     signature: Signature,
@@ -89,7 +108,11 @@ impl ScalarUDFImpl for RPadFunc {
         utf8_to_str_type(&arg_types[0], "rpad")
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         match (
             args.len(),
             args[0].data_type(),
@@ -118,37 +141,8 @@ impl ScalarUDFImpl for RPadFunc {
     }
 
     fn documentation(&self) -> Option<&Documentation> {
-        Some(get_rpad_doc())
+        self.doc()
     }
-}
-
-static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
-
-fn get_rpad_doc() -> &'static Documentation {
-    DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_STRING)
-            .with_description("Pads the right side of a string with another string to a specified string length.")
-            .with_syntax_example("rpad(str, n[, padding_str])")
-            .with_sql_example(r#"```sql
->  select rpad('datafusion', 20, '_-');
-+-----------------------------------------------+
-| rpad(Utf8("datafusion"),Int64(20),Utf8("_-")) |
-+-----------------------------------------------+
-| datafusion_-_-_-_-_-                          |
-+-----------------------------------------------+
-```"#)
-            .with_standard_argument(
-                "str",
-                "String",
-            )
-            .with_argument("n", "String length to pad to.")
-            .with_argument("padding_str",
-                           "String expression to pad with. Can be a constant, column, or function, and any combination of string operators. _Default is a space._")
-            .with_related_udf("lpad")
-            .build()
-            .unwrap()
-    })
 }
 
 pub fn rpad<StringArrayLen: OffsetSizeTrait, FillArrayLen: OffsetSizeTrait>(
@@ -316,7 +310,7 @@ mod tests {
     fn test_functions() -> Result<()> {
         test_function!(
             RPadFunc::new(),
-            &[
+            vec![
                 ColumnarValue::from(ScalarValue::from("josé")),
                 ColumnarValue::from(ScalarValue::from(5i64)),
             ],
@@ -327,7 +321,7 @@ mod tests {
         );
         test_function!(
             RPadFunc::new(),
-            &[
+            vec![
                 ColumnarValue::from(ScalarValue::from("hi")),
                 ColumnarValue::from(ScalarValue::from(5i64)),
             ],
@@ -338,7 +332,7 @@ mod tests {
         );
         test_function!(
             RPadFunc::new(),
-            &[
+            vec![
                 ColumnarValue::from(ScalarValue::from("hi")),
                 ColumnarValue::from(ScalarValue::from(0i64)),
             ],
@@ -349,7 +343,7 @@ mod tests {
         );
         test_function!(
             RPadFunc::new(),
-            &[
+            vec![
                 ColumnarValue::from(ScalarValue::from("hi")),
                 ColumnarValue::from(ScalarValue::Int64(None)),
             ],
@@ -360,7 +354,7 @@ mod tests {
         );
         test_function!(
             RPadFunc::new(),
-            &[
+            vec![
                 ColumnarValue::from(ScalarValue::Utf8(None)),
                 ColumnarValue::from(ScalarValue::from(5i64)),
             ],
@@ -371,7 +365,7 @@ mod tests {
         );
         test_function!(
             RPadFunc::new(),
-            &[
+            vec![
                 ColumnarValue::from(ScalarValue::from("hi")),
                 ColumnarValue::from(ScalarValue::from(5i64)),
                 ColumnarValue::from(ScalarValue::from("xy")),
@@ -383,7 +377,7 @@ mod tests {
         );
         test_function!(
             RPadFunc::new(),
-            &[
+            vec![
                 ColumnarValue::from(ScalarValue::from("hi")),
                 ColumnarValue::from(ScalarValue::from(21i64)),
                 ColumnarValue::from(ScalarValue::from("abcdef")),
@@ -395,7 +389,7 @@ mod tests {
         );
         test_function!(
             RPadFunc::new(),
-            &[
+            vec![
                 ColumnarValue::from(ScalarValue::from("hi")),
                 ColumnarValue::from(ScalarValue::from(5i64)),
                 ColumnarValue::from(ScalarValue::from(" ")),
@@ -407,7 +401,7 @@ mod tests {
         );
         test_function!(
             RPadFunc::new(),
-            &[
+            vec![
                 ColumnarValue::from(ScalarValue::from("hi")),
                 ColumnarValue::from(ScalarValue::from(5i64)),
                 ColumnarValue::from(ScalarValue::from("")),
@@ -419,7 +413,7 @@ mod tests {
         );
         test_function!(
             RPadFunc::new(),
-            &[
+            vec![
                 ColumnarValue::from(ScalarValue::Utf8(None)),
                 ColumnarValue::from(ScalarValue::from(5i64)),
                 ColumnarValue::from(ScalarValue::from("xy")),
@@ -431,7 +425,7 @@ mod tests {
         );
         test_function!(
             RPadFunc::new(),
-            &[
+            vec![
                 ColumnarValue::from(ScalarValue::from("hi")),
                 ColumnarValue::from(ScalarValue::Int64(None)),
                 ColumnarValue::from(ScalarValue::from("xy")),
@@ -443,7 +437,7 @@ mod tests {
         );
         test_function!(
             RPadFunc::new(),
-            &[
+            vec![
                 ColumnarValue::from(ScalarValue::from("hi")),
                 ColumnarValue::from(ScalarValue::from(5i64)),
                 ColumnarValue::from(ScalarValue::Utf8(None)),
@@ -455,7 +449,7 @@ mod tests {
         );
         test_function!(
             RPadFunc::new(),
-            &[
+            vec![
                 ColumnarValue::from(ScalarValue::from("josé")),
                 ColumnarValue::from(ScalarValue::from(10i64)),
                 ColumnarValue::from(ScalarValue::from("xy")),
@@ -467,7 +461,7 @@ mod tests {
         );
         test_function!(
             RPadFunc::new(),
-            &[
+            vec![
                 ColumnarValue::from(ScalarValue::from("josé")),
                 ColumnarValue::from(ScalarValue::from(10i64)),
                 ColumnarValue::from(ScalarValue::from("éñ")),

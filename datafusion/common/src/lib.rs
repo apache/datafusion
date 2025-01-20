@@ -14,6 +14,7 @@
 // KIND, either express or implied.  See the License for the
 // specific language governing permissions and limitations
 // under the License.
+
 // Make cheap clones clear: https://github.com/apache/datafusion/issues/11143
 #![deny(clippy::clone_on_ref_ptr)]
 
@@ -31,6 +32,7 @@ mod unnest;
 pub mod alias;
 pub mod cast;
 pub mod config;
+pub mod cse;
 pub mod display;
 pub mod error;
 pub mod file_options;
@@ -65,13 +67,14 @@ pub use functional_dependencies::{
     get_target_functional_dependencies, Constraint, Constraints, Dependency,
     FunctionalDependence, FunctionalDependencies,
 };
+use hashbrown::hash_map::DefaultHashBuilder;
 pub use join_type::{JoinConstraint, JoinSide, JoinType};
 pub use param_value::ParamValues;
 pub use scalar::{ScalarType, ScalarValue};
 pub use schema_reference::SchemaReference;
 pub use stats::{ColumnStatistics, Statistics};
 pub use table_reference::{ResolvedTableReference, TableReference};
-pub use unnest::UnnestOptions;
+pub use unnest::{RecursionUnnestOption, UnnestOptions};
 pub use utils::project_schema;
 
 // These are hidden from docs purely to avoid polluting the public view of what this crate exports.
@@ -85,6 +88,10 @@ pub use error::{
     _not_impl_datafusion_err, _plan_datafusion_err, _resources_datafusion_err,
     _substrait_datafusion_err,
 };
+
+// The HashMap and HashSet implementations that should be used as the uniform defaults
+pub type HashMap<K, V, S = DefaultHashBuilder> = hashbrown::HashMap<K, V, S>;
+pub type HashSet<T, S = DefaultHashBuilder> = hashbrown::HashSet<T, S>;
 
 /// Downcast an Arrow Array to a concrete type, return an `DataFusionError::Internal` if the cast is
 /// not possible. In normal usage of DataFusion the downcast should always succeed.

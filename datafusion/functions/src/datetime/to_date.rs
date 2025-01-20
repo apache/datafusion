@@ -17,18 +17,52 @@
 
 use crate::datetime::common::*;
 use arrow::datatypes::DataType;
-use arrow::datatypes::DataType::Date32;
+use arrow::datatypes::DataType::*;
 use arrow::error::ArrowError::ParseError;
 use arrow::{array::types::Date32Type, compute::kernels::cast_utils::Parser};
 use datafusion_common::error::DataFusionError;
 use datafusion_common::{arrow_err, exec_err, internal_datafusion_err, Result};
-use datafusion_expr::scalar_doc_sections::DOC_SECTION_DATETIME;
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
 };
+use datafusion_macros::user_doc;
 use std::any::Any;
-use std::sync::OnceLock;
 
+#[user_doc(
+    doc_section(label = "Time and Date Functions"),
+    description = r"Converts a value to a date (`YYYY-MM-DD`).
+Supports strings, integer and double types as input.
+Strings are parsed as YYYY-MM-DD (e.g. '2023-07-20') if no [Chrono format](https://docs.rs/chrono/latest/chrono/format/strftime/index.html)s are provided.
+Integers and doubles are interpreted as days since the unix epoch (`1970-01-01T00:00:00Z`).
+Returns the corresponding date.
+
+Note: `to_date` returns Date32, which represents its values as the number of days since unix epoch(`1970-01-01`) stored as signed 32 bit value. The largest supported date value is `9999-12-31`.",
+    syntax_example = "to_date('2017-05-31', '%Y-%m-%d')",
+    sql_example = r#"```sql
+> select to_date('2023-01-31');
++-------------------------------+
+| to_date(Utf8("2023-01-31")) |
++-------------------------------+
+| 2023-01-31                    |
++-------------------------------+
+> select to_date('2023/01/31', '%Y-%m-%d', '%Y/%m/%d');
++---------------------------------------------------------------------+
+| to_date(Utf8("2023/01/31"),Utf8("%Y-%m-%d"),Utf8("%Y/%m/%d")) |
++---------------------------------------------------------------------+
+| 2023-01-31                                                          |
++---------------------------------------------------------------------+
+```
+
+Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/to_date.rs)
+"#,
+    standard_argument(name = "expression", prefix = "String"),
+    argument(
+        name = "format_n",
+        description = r"Optional [Chrono format](https://docs.rs/chrono/latest/chrono/format/strftime/index.html) strings to use to parse the expression. Formats will be tried in the order
+  they appear with the first successful one being returned. If none of the formats successfully parse the expression
+  an error will be returned."
+    )
+)]
 #[derive(Debug)]
 pub struct ToDateFunc {
     signature: Signature,
@@ -79,50 +113,6 @@ impl ToDateFunc {
     }
 }
 
-static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
-
-fn get_to_date_doc() -> &'static Documentation {
-    DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_DATETIME)
-            .with_description(r#"Converts a value to a date (`YYYY-MM-DD`).
-Supports strings, integer and double types as input.
-Strings are parsed as YYYY-MM-DD (e.g. '2023-07-20') if no [Chrono format](https://docs.rs/chrono/latest/chrono/format/strftime/index.html)s are provided.
-Integers and doubles are interpreted as days since the unix epoch (`1970-01-01T00:00:00Z`).
-Returns the corresponding date.
-
-Note: `to_date` returns Date32, which represents its values as the number of days since unix epoch(`1970-01-01`) stored as signed 32 bit value. The largest supported date value is `9999-12-31`.
-"#)
-            .with_syntax_example("to_date('2017-05-31', '%Y-%m-%d')")
-            .with_sql_example(r#"```sql
-> select to_date('2023-01-31');
-+-----------------------------+
-| to_date(Utf8("2023-01-31")) |
-+-----------------------------+
-| 2023-01-31                  |
-+-----------------------------+
-> select to_date('2023/01/31', '%Y-%m-%d', '%Y/%m/%d');
-+---------------------------------------------------------------+
-| to_date(Utf8("2023/01/31"),Utf8("%Y-%m-%d"),Utf8("%Y/%m/%d")) |
-+---------------------------------------------------------------+
-| 2023-01-31                                                    |
-+---------------------------------------------------------------+
-```
-
-Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/to_date.rs)
-"#)
-            .with_standard_argument("expression", "String")
-            .with_argument(
-                "format_n",
-                "Optional [Chrono format](https://docs.rs/chrono/latest/chrono/format/strftime/index.html) strings to use to parse the expression. Formats will be tried in the order
-  they appear with the first successful one being returned. If none of the formats successfully parse the expression
-  an error will be returned.",
-            )
-            .build()
-            .unwrap()
-    })
-}
-
 impl ScalarUDFImpl for ToDateFunc {
     fn as_any(&self) -> &dyn Any {
         self
@@ -140,7 +130,11 @@ impl ScalarUDFImpl for ToDateFunc {
         Ok(Date32)
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         if args.is_empty() {
             return exec_err!("to_date function requires 1 or more arguments, got 0");
         }
@@ -151,13 +145,10 @@ impl ScalarUDFImpl for ToDateFunc {
         }
 
         match args[0].data_type() {
-            DataType::Int32
-            | DataType::Int64
-            | DataType::Null
-            | DataType::Float64
-            | DataType::Date32
-            | DataType::Date64 => args[0].cast_to(&DataType::Date32, None),
-            DataType::Utf8 => self.to_date(args),
+            Int32 | Int64 | Null | Float64 | Date32 | Date64 => {
+                args[0].cast_to(&Date32, None)
+            }
+            Utf8View | LargeUtf8 | Utf8 => self.to_date(args),
             other => {
                 exec_err!("Unsupported data type {:?} for function to_date", other)
             }
@@ -165,15 +156,17 @@ impl ScalarUDFImpl for ToDateFunc {
     }
 
     fn documentation(&self) -> Option<&Documentation> {
-        Some(get_to_date_doc())
+        self.doc()
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use arrow::array::{Array, Date32Array, GenericStringArray, StringViewArray};
     use arrow::{compute::kernels::cast_utils::Parser, datatypes::Date32Type};
     use datafusion_common::ScalarValue;
     use datafusion_expr::{ColumnarValue, ScalarUDFImpl};
+    use std::sync::Arc;
 
     use super::ToDateFunc;
 
@@ -204,9 +197,19 @@ mod tests {
         ];
 
         for tc in &test_cases {
-            let date_scalar = ScalarValue::Utf8(Some(tc.date_str.to_string()));
+            test_scalar(ScalarValue::Utf8(Some(tc.date_str.to_string())), tc);
+            test_scalar(ScalarValue::LargeUtf8(Some(tc.date_str.to_string())), tc);
+            test_scalar(ScalarValue::Utf8View(Some(tc.date_str.to_string())), tc);
+
+            test_array::<GenericStringArray<i32>>(tc);
+            test_array::<GenericStringArray<i64>>(tc);
+            test_array::<StringViewArray>(tc);
+        }
+
+        fn test_scalar(sv: ScalarValue, tc: &TestCase) {
+            #[allow(deprecated)] // TODO migrate UDF to invoke from invoke_batch
             let to_date_result =
-                ToDateFunc::new().invoke(&[ColumnarValue::from(date_scalar)]);
+                ToDateFunc::new().invoke_batch(&[ColumnarValue::from(sv)], 1);
 
             match to_date_result {
                 Ok(ColumnarValue::Scalar(scalar)) => match scalar.into_value() {
@@ -222,6 +225,35 @@ mod tests {
                     _ => panic!("Could not convert '{}' to Date", tc.date_str),
                 },
                 _ => unreachable!(),
+            }
+        }
+
+        fn test_array<A>(tc: &TestCase)
+        where
+            A: From<Vec<&'static str>> + Array + 'static,
+        {
+            let date_array = A::from(vec![tc.date_str]);
+            let batch_len = date_array.len();
+            #[allow(deprecated)] // TODO migrate UDF to invoke from invoke_batch
+            let to_date_result = ToDateFunc::new()
+                .invoke_batch(&[ColumnarValue::Array(Arc::new(date_array))], batch_len);
+
+            match to_date_result {
+                Ok(ColumnarValue::Array(a)) => {
+                    assert_eq!(a.len(), 1);
+
+                    let expected = Date32Type::parse_formatted(tc.date_str, "%Y-%m-%d");
+                    let mut builder = Date32Array::builder(4);
+                    builder.append_value(expected.unwrap());
+
+                    assert_eq!(
+                        &builder.finish() as &dyn Array,
+                        a.as_ref(),
+                        "{}: to_date created wrong value",
+                        tc.name
+                    );
+                }
+                _ => panic!("Could not convert '{}' to Date", tc.date_str),
             }
         }
     }
@@ -275,14 +307,29 @@ mod tests {
         ];
 
         for tc in &test_cases {
-            let formatted_date_scalar =
-                ScalarValue::Utf8(Some(tc.formatted_date.to_string()));
+            test_scalar(ScalarValue::Utf8(Some(tc.formatted_date.to_string())), tc);
+            test_scalar(
+                ScalarValue::LargeUtf8(Some(tc.formatted_date.to_string())),
+                tc,
+            );
+            test_scalar(
+                ScalarValue::Utf8View(Some(tc.formatted_date.to_string())),
+                tc,
+            );
+
+            test_array::<GenericStringArray<i32>>(tc);
+            test_array::<GenericStringArray<i64>>(tc);
+            test_array::<StringViewArray>(tc);
+        }
+
+        fn test_scalar(sv: ScalarValue, tc: &TestCase) {
             let format_scalar = ScalarValue::Utf8(Some(tc.format_str.to_string()));
 
-            let to_date_result = ToDateFunc::new().invoke(&[
-                ColumnarValue::from(formatted_date_scalar),
-                ColumnarValue::from(format_scalar),
-            ]);
+            #[allow(deprecated)] // TODO migrate UDF to invoke from invoke_batch
+            let to_date_result = ToDateFunc::new().invoke_batch(
+                &[ColumnarValue::from(sv), ColumnarValue::from(format_scalar)],
+                1,
+            );
 
             match to_date_result {
                 Ok(ColumnarValue::Scalar(scalar)) => match scalar.into_value() {
@@ -299,6 +346,46 @@ mod tests {
                 _ => unreachable!(),
             }
         }
+
+        fn test_array<A>(tc: &TestCase)
+        where
+            A: From<Vec<&'static str>> + Array + 'static,
+        {
+            let date_array = A::from(vec![tc.formatted_date]);
+            let format_array = A::from(vec![tc.format_str]);
+            let batch_len = date_array.len();
+
+            #[allow(deprecated)] // TODO migrate UDF to invoke from invoke_batch
+            let to_date_result = ToDateFunc::new().invoke_batch(
+                &[
+                    ColumnarValue::Array(Arc::new(date_array)),
+                    ColumnarValue::Array(Arc::new(format_array)),
+                ],
+                batch_len,
+            );
+
+            match to_date_result {
+                Ok(ColumnarValue::Array(a)) => {
+                    assert_eq!(a.len(), 1);
+
+                    let expected = Date32Type::parse_formatted(tc.date_str, "%Y-%m-%d");
+                    let mut builder = Date32Array::builder(4);
+                    builder.append_value(expected.unwrap());
+
+                    assert_eq!(
+                        &builder.finish() as &dyn Array, a.as_ref(),
+                        "{}: to_date created wrong value for date '{}' with format string '{}'",
+                        tc.name,
+                        tc.formatted_date,
+                        tc.format_str
+                    );
+                }
+                _ => panic!(
+                    "Could not convert '{}' with format string '{}'to Date: {:?}",
+                    tc.formatted_date, tc.format_str, to_date_result
+                ),
+            }
+        }
     }
 
     #[test]
@@ -307,11 +394,15 @@ mod tests {
         let format1_scalar = ScalarValue::Utf8(Some("%Y-%m-%d".into()));
         let format2_scalar = ScalarValue::Utf8(Some("%Y/%m/%d".into()));
 
-        let to_date_result = ToDateFunc::new().invoke(&[
-            ColumnarValue::from(formatted_date_scalar),
-            ColumnarValue::from(format1_scalar),
-            ColumnarValue::from(format2_scalar),
-        ]);
+        #[allow(deprecated)] // TODO migrate UDF to invoke from invoke_batch
+        let to_date_result = ToDateFunc::new().invoke_batch(
+            &[
+                ColumnarValue::from(formatted_date_scalar),
+                ColumnarValue::from(format1_scalar),
+                ColumnarValue::from(format2_scalar),
+            ],
+            1,
+        );
 
         match to_date_result {
             Ok(ColumnarValue::Scalar(scalar)) => match scalar.into_value() {
@@ -338,8 +429,9 @@ mod tests {
         for date_str in test_cases {
             let formatted_date_scalar = ScalarValue::Utf8(Some(date_str.into()));
 
-            let to_date_result =
-                ToDateFunc::new().invoke(&[ColumnarValue::from(formatted_date_scalar)]);
+            #[allow(deprecated)] // TODO migrate UDF to invoke from invoke_batch
+            let to_date_result = ToDateFunc::new()
+                .invoke_batch(&[ColumnarValue::from(formatted_date_scalar)], 1);
 
             match to_date_result {
                 Ok(ColumnarValue::Scalar(scalar)) => match scalar.into_value() {
@@ -360,8 +452,9 @@ mod tests {
         let date_str = "20241231";
         let date_scalar = ScalarValue::Utf8(Some(date_str.into()));
 
+        #[allow(deprecated)] // TODO migrate UDF to invoke from invoke_batch
         let to_date_result =
-            ToDateFunc::new().invoke(&[ColumnarValue::from(date_scalar)]);
+            ToDateFunc::new().invoke_batch(&[ColumnarValue::from(date_scalar)], 1);
 
         match to_date_result {
             Ok(ColumnarValue::Scalar(scalar)) => match scalar.into_value() {
@@ -384,13 +477,14 @@ mod tests {
         let date_str = "202412311";
         let date_scalar = ScalarValue::Utf8(Some(date_str.into()));
 
+        #[allow(deprecated)] // TODO migrate UDF to invoke from invoke_batch
         let to_date_result =
-            ToDateFunc::new().invoke(&[ColumnarValue::from(date_scalar)]);
+            ToDateFunc::new().invoke_batch(&[ColumnarValue::from(date_scalar)], 1);
 
         if let Ok(ColumnarValue::Scalar(scalar)) = to_date_result {
             if let ScalarValue::Date32(_) = scalar.value() {
                 panic!(
-                    "Conversion of {} succeded, but should have failed, ",
+                    "Conversion of {} succeeded, but should have failed, ",
                     date_str
                 )
             }

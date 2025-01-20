@@ -24,7 +24,7 @@ use std::vec;
 use crate::aggregates::group_values::{new_group_values, GroupValues};
 use crate::aggregates::order::GroupOrderingFull;
 use crate::aggregates::{
-    evaluate_group_by, evaluate_many, evaluate_optional, group_schema, AggregateMode,
+    create_schema, evaluate_group_by, evaluate_many, evaluate_optional, AggregateMode,
     PhysicalGroupBy,
 };
 use crate::metrics::{BaselineMetrics, MetricBuilder, RecordOutput};
@@ -48,13 +48,13 @@ use datafusion_expr::{EmitTo, GroupsAccumulator};
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::{GroupsAccumulatorAdapter, PhysicalSortExpr};
 
+use super::order::GroupOrdering;
+use super::AggregateExec;
 use datafusion_physical_expr::aggregate::AggregateFunctionExpr;
+use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use futures::ready;
 use futures::stream::{Stream, StreamExt};
 use log::debug;
-
-use super::order::GroupOrdering;
-use super::AggregateExec;
 
 #[derive(Debug, Clone)]
 /// This object tracks the aggregation phase (input/output)
@@ -80,7 +80,7 @@ struct SpillState {
     // the execution.
     // ========================================================================
     /// Sorting expression for spilling batches
-    spill_expr: Vec<PhysicalSortExpr>,
+    spill_expr: LexOrdering,
 
     /// Schema for spilling batches
     spill_schema: SchemaRef,
@@ -102,6 +102,19 @@ struct SpillState {
 
     /// true when streaming merge is in progress
     is_stream_merging: bool,
+
+    // ========================================================================
+    // METRICS:
+    // ========================================================================
+    /// Peak memory used for buffered data.
+    /// Calculated as sum of peak memory values across partitions
+    peak_mem_used: metrics::Gauge,
+    /// count of spill files during the execution of the operator
+    spill_count: metrics::Count,
+    /// total spilled bytes during the execution of the operator
+    spilled_bytes: metrics::Count,
+    /// total spilled rows during the execution of the operator
+    spilled_rows: metrics::Count,
 }
 
 /// Tracks if the aggregate should skip partial aggregations
@@ -124,7 +137,7 @@ struct SkipAggregationProbe {
     // ========================================================================
     // STATES:
     // Fields changes during execution. Can be buffer, or state flags that
-    // influence the exeuction in parent `GroupedHashAggregateStream`
+    // influence the execution in parent `GroupedHashAggregateStream`
     // ========================================================================
     /// Number of processed input rows (updated during probing)
     input_rows: usize,
@@ -138,6 +151,9 @@ struct SkipAggregationProbe {
     /// make any effect (set either while probing or on probing completion)
     is_locked: bool,
 
+    // ========================================================================
+    // METRICS:
+    // ========================================================================
     /// Number of rows where state was output without aggregation.
     ///
     /// * If 0, all input rows were aggregated (should_skip was always false)
@@ -473,7 +489,32 @@ impl GroupedHashAggregateStream {
             .map(create_group_accumulator)
             .collect::<Result<_>>()?;
 
-        let group_schema = group_schema(&agg.input().schema(), &agg_group_by)?;
+        let group_schema = agg_group_by.group_schema(&agg.input().schema())?;
+
+        // fix https://github.com/apache/datafusion/issues/13949
+        // Builds a **partial aggregation** schema by combining the group columns and
+        // the accumulator state columns produced by each aggregate expression.
+        //
+        // # Why Partial Aggregation Schema Is Needed
+        //
+        // In a multi-stage (partial/final) aggregation strategy, each partial-aggregate
+        // operator produces *intermediate* states (e.g., partial sums, counts) rather
+        // than final scalar values. These extra columns do **not** exist in the original
+        // input schema (which may be something like `[colA, colB, ...]`). Instead,
+        // each aggregator adds its own internal state columns (e.g., `[acc_state_1, acc_state_2, ...]`).
+        //
+        // Therefore, when we spill these intermediate states or pass them to another
+        // aggregation operator, we must use a schema that includes both the group
+        // columns **and** the partial-state columns.
+        let partial_agg_schema = create_schema(
+            &agg.input().schema(),
+            &agg_group_by,
+            &aggregate_exprs,
+            AggregateMode::Partial,
+        )?;
+
+        let partial_agg_schema = Arc::new(partial_agg_schema);
+
         let spill_expr = group_schema
             .fields
             .into_iter()
@@ -495,10 +536,10 @@ impl GroupedHashAggregateStream {
         let group_ordering = GroupOrdering::try_new(
             &group_schema,
             &agg.input_order_mode,
-            ordering.as_slice(),
+            ordering.as_ref(),
         )?;
 
-        let group_values = new_group_values(group_schema)?;
+        let group_values = new_group_values(group_schema, &group_ordering)?;
         timer.done();
 
         let exec_state = ExecutionState::ReadingInput;
@@ -506,10 +547,15 @@ impl GroupedHashAggregateStream {
         let spill_state = SpillState {
             spills: vec![],
             spill_expr,
-            spill_schema: Arc::clone(&agg_schema),
+            spill_schema: partial_agg_schema,
             is_stream_merging: false,
             merging_aggregate_arguments,
             merging_group_by: PhysicalGroupBy::new_single(agg_group_by.expr.clone()),
+            peak_mem_used: MetricBuilder::new(&agg.metrics)
+                .gauge("peak_mem_used", partition),
+            spill_count: MetricBuilder::new(&agg.metrics).spill_count(partition),
+            spilled_bytes: MetricBuilder::new(&agg.metrics).spilled_bytes(partition),
+            spilled_rows: MetricBuilder::new(&agg.metrics).spilled_rows(partition),
         };
 
         // Skip aggregation is supported if:
@@ -570,7 +616,7 @@ impl GroupedHashAggregateStream {
 /// that is supported by the aggregate, or a
 /// [`GroupsAccumulatorAdapter`] if not.
 pub(crate) fn create_group_accumulator(
-    agg_expr: &AggregateFunctionExpr,
+    agg_expr: &Arc<AggregateFunctionExpr>,
 ) -> Result<Box<dyn GroupsAccumulator>> {
     if agg_expr.groups_accumulator_supported() {
         agg_expr.create_groups_accumulator()
@@ -580,7 +626,7 @@ pub(crate) fn create_group_accumulator(
             "Creating GroupsAccumulatorAdapter for {}: {agg_expr:?}",
             agg_expr.name()
         );
-        let agg_expr_captured = agg_expr.clone();
+        let agg_expr_captured = Arc::clone(agg_expr);
         let factory = move || agg_expr_captured.create_accumulator();
         Ok(Box::new(GroupsAccumulatorAdapter::new(factory)))
     }
@@ -633,9 +679,13 @@ impl Stream for GroupedHashAggregateStream {
                             }
 
                             if let Some(to_emit) = self.group_ordering.emit_to() {
-                                let batch = extract_ok!(self.emit(to_emit, false));
-                                self.exec_state = ExecutionState::ProducingOutput(batch);
                                 timer.done();
+                                if let Some(batch) =
+                                    extract_ok!(self.emit(to_emit, false))
+                                {
+                                    self.exec_state =
+                                        ExecutionState::ProducingOutput(batch);
+                                };
                                 // make sure the exec_state just set is not overwritten below
                                 break 'reading_input;
                             }
@@ -672,9 +722,13 @@ impl Stream for GroupedHashAggregateStream {
                             }
 
                             if let Some(to_emit) = self.group_ordering.emit_to() {
-                                let batch = extract_ok!(self.emit(to_emit, false));
-                                self.exec_state = ExecutionState::ProducingOutput(batch);
                                 timer.done();
+                                if let Some(batch) =
+                                    extract_ok!(self.emit(to_emit, false))
+                                {
+                                    self.exec_state =
+                                        ExecutionState::ProducingOutput(batch);
+                                };
                                 // make sure the exec_state just set is not overwritten below
                                 break 'reading_input;
                             }
@@ -747,6 +801,9 @@ impl Stream for GroupedHashAggregateStream {
                         let output = batch.slice(0, size);
                         (ExecutionState::ProducingOutput(remaining), output)
                     };
+                    // Empty record batches should not be emitted.
+                    // They need to be treated as  [`Option<RecordBatch>`]es and handled separately
+                    debug_assert!(output_batch.num_rows() > 0);
                     return Poll::Ready(Some(Ok(
                         output_batch.record_output(&self.baseline_metrics)
                     )));
@@ -838,14 +895,13 @@ impl GroupedHashAggregateStream {
                         )?;
                     }
                     _ => {
+                        if opt_filter.is_some() {
+                            return internal_err!("aggregate filter should be applied in partial stage, there should be no filter in final stage");
+                        }
+
                         // if aggregation is over intermediate states,
                         // use merge
-                        acc.merge_batch(
-                            values,
-                            group_indices,
-                            opt_filter,
-                            total_num_groups,
-                        )?;
+                        acc.merge_batch(values, group_indices, None, total_num_groups)?;
                     }
                 }
             }
@@ -865,23 +921,31 @@ impl GroupedHashAggregateStream {
 
     fn update_memory_reservation(&mut self) -> Result<()> {
         let acc = self.accumulators.iter().map(|x| x.size()).sum::<usize>();
-        self.reservation.try_resize(
+        let reservation_result = self.reservation.try_resize(
             acc + self.group_values.size()
                 + self.group_ordering.size()
                 + self.current_group_indices.allocated_size(),
-        )
+        );
+
+        if reservation_result.is_ok() {
+            self.spill_state
+                .peak_mem_used
+                .set_max(self.reservation.size());
+        }
+
+        reservation_result
     }
 
     /// Create an output RecordBatch with the group keys and
     /// accumulator states/values specified in emit_to
-    fn emit(&mut self, emit_to: EmitTo, spilling: bool) -> Result<RecordBatch> {
+    fn emit(&mut self, emit_to: EmitTo, spilling: bool) -> Result<Option<RecordBatch>> {
         let schema = if spilling {
             Arc::clone(&self.spill_state.spill_schema)
         } else {
             self.schema()
         };
         if self.group_values.is_empty() {
-            return Ok(RecordBatch::new_empty(schema));
+            return Ok(None);
         }
 
         let mut output = self.group_values.emit(emit_to)?;
@@ -909,7 +973,8 @@ impl GroupedHashAggregateStream {
         // over the target memory size after emission, we can emit again rather than returning Err.
         let _ = self.update_memory_reservation();
         let batch = RecordBatch::try_new(schema, output)?;
-        Ok(batch)
+        debug_assert!(batch.num_rows() > 0);
+        Ok(Some(batch))
     }
 
     /// Optimistically, [`Self::group_aggregate_batch`] allows to exceed the memory target slightly
@@ -924,9 +989,6 @@ impl GroupedHashAggregateStream {
             && self.update_memory_reservation().is_err()
         {
             assert_ne!(self.mode, AggregateMode::Partial);
-            // Use input batch (Partial mode) schema for spilling because
-            // the spilled data will be merged and re-evaluated later.
-            self.spill_state.spill_schema = batch.schema();
             self.spill()?;
             self.clear_shrink(batch);
         }
@@ -935,8 +997,10 @@ impl GroupedHashAggregateStream {
 
     /// Emit all rows, sort them, and store them on disk.
     fn spill(&mut self) -> Result<()> {
-        let emit = self.emit(EmitTo::All, true)?;
-        let sorted = sort_batch(&emit, &self.spill_state.spill_expr, None)?;
+        let Some(emit) = self.emit(EmitTo::All, true)? else {
+            return Ok(());
+        };
+        let sorted = sort_batch(&emit, self.spill_state.spill_expr.as_ref(), None)?;
         let spillfile = self.runtime.disk_manager.create_tmp_file("HashAggSpill")?;
         // TODO: slice large `sorted` and write to multiple files in parallel
         spill_record_batch_by_size(
@@ -946,6 +1010,14 @@ impl GroupedHashAggregateStream {
             self.batch_size,
         )?;
         self.spill_state.spills.push(spillfile);
+
+        // Update metrics
+        self.spill_state.spill_count.add(1);
+        self.spill_state
+            .spilled_bytes
+            .add(sorted.get_array_memory_size());
+        self.spill_state.spilled_rows.add(sorted.num_rows());
+
         Ok(())
     }
 
@@ -972,8 +1044,9 @@ impl GroupedHashAggregateStream {
         {
             assert_eq!(self.mode, AggregateMode::Partial);
             let n = self.group_values.len() / self.batch_size * self.batch_size;
-            let batch = self.emit(EmitTo::First(n), false)?;
-            self.exec_state = ExecutionState::ProducingOutput(batch);
+            if let Some(batch) = self.emit(EmitTo::First(n), false)? {
+                self.exec_state = ExecutionState::ProducingOutput(batch);
+            };
         }
         Ok(())
     }
@@ -983,7 +1056,9 @@ impl GroupedHashAggregateStream {
     /// Conduct a streaming merge sort between the batch and spilled data. Since the stream is fully
     /// sorted, set `self.group_ordering` to Full, then later we can read with [`EmitTo::First`].
     fn update_merged_stream(&mut self) -> Result<()> {
-        let batch = self.emit(EmitTo::All, true)?;
+        let Some(batch) = self.emit(EmitTo::All, true)? else {
+            return Ok(());
+        };
         // clear up memory for streaming_merge
         self.clear_all();
         self.update_memory_reservation()?;
@@ -993,7 +1068,7 @@ impl GroupedHashAggregateStream {
         streams.push(Box::pin(RecordBatchStreamAdapter::new(
             Arc::clone(&schema),
             futures::stream::once(futures::future::lazy(move |_| {
-                sort_batch(&batch, &expr, None)
+                sort_batch(&batch, expr.as_ref(), None)
             })),
         )));
         for spill in self.spill_state.spills.drain(..) {
@@ -1004,7 +1079,7 @@ impl GroupedHashAggregateStream {
         self.input = StreamingMergeBuilder::new()
             .with_streams(streams)
             .with_schema(schema)
-            .with_expressions(&self.spill_state.spill_expr)
+            .with_expressions(self.spill_state.spill_expr.as_ref())
             .with_metrics(self.baseline_metrics.clone())
             .with_batch_size(self.batch_size)
             .with_reservation(self.reservation.new_empty())
@@ -1031,7 +1106,7 @@ impl GroupedHashAggregateStream {
         let timer = elapsed_compute.timer();
         self.exec_state = if self.spill_state.spills.is_empty() {
             let batch = self.emit(EmitTo::All, false)?;
-            ExecutionState::ProducingOutput(batch)
+            batch.map_or(ExecutionState::Done, ExecutionState::ProducingOutput)
         } else {
             // If spill files exist, stream-merge them.
             self.update_merged_stream()?;
@@ -1060,8 +1135,9 @@ impl GroupedHashAggregateStream {
     fn switch_to_skip_aggregation(&mut self) -> Result<()> {
         if let Some(probe) = self.skip_aggregation_probe.as_mut() {
             if probe.should_skip() {
-                let batch = self.emit(EmitTo::All, false)?;
-                self.exec_state = ExecutionState::ProducingOutput(batch);
+                if let Some(batch) = self.emit(EmitTo::All, false)? {
+                    self.exec_state = ExecutionState::ProducingOutput(batch);
+                };
             }
         }
 

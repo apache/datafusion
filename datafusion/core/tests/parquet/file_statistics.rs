@@ -28,7 +28,6 @@ use datafusion::execution::context::SessionState;
 use datafusion::prelude::SessionContext;
 use datafusion_common::stats::Precision;
 use datafusion_execution::cache::cache_manager::CacheManagerConfig;
-use datafusion_execution::cache::cache_unit;
 use datafusion_execution::cache::cache_unit::{
     DefaultFileStatisticsCache, DefaultListFilesCache,
 };
@@ -211,8 +210,8 @@ fn get_cache_runtime_state() -> (
     SessionState,
 ) {
     let cache_config = CacheManagerConfig::default();
-    let file_static_cache = Arc::new(cache_unit::DefaultFileStatisticsCache::default());
-    let list_file_cache = Arc::new(cache_unit::DefaultListFilesCache::default());
+    let file_static_cache = Arc::new(DefaultFileStatisticsCache::default());
+    let list_file_cache = Arc::new(DefaultListFilesCache::default());
 
     let cache_config = cache_config
         .with_files_statistics_cache(Some(file_static_cache.clone()))

@@ -26,7 +26,11 @@ use datafusion_common::cast::{
     as_generic_list_array, as_large_list_array, as_list_array,
 };
 use datafusion_common::{exec_err, Result};
-use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
+use datafusion_expr::{
+    ArrayFunctionSignature, ColumnarValue, Documentation, ScalarUDFImpl, Signature,
+    TypeSignature, Volatility,
+};
+use datafusion_macros::user_doc;
 use std::any::Any;
 use std::sync::Arc;
 
@@ -38,15 +42,45 @@ make_udf_expr_and_func!(
     flatten_udf
 );
 
+#[user_doc(
+    doc_section(label = "Array Functions"),
+    description = "Converts an array of arrays to a flat array.\n\n- Applies to any depth of nested arrays\n- Does not change arrays that are already flat\n\nThe flattened array contains all the elements from all source arrays.",
+    syntax_example = "flatten(array)",
+    sql_example = r#"```sql
+> select flatten([[1, 2], [3, 4]]);
++------------------------------+
+| flatten(List([1,2], [3,4]))  |
++------------------------------+
+| [1, 2, 3, 4]                 |
++------------------------------+
+```"#,
+    argument(
+        name = "array",
+        description = "Array expression. Can be a constant, column, or function, and any combination of array operators."
+    )
+)]
 #[derive(Debug)]
-pub(super) struct Flatten {
+pub struct Flatten {
     signature: Signature,
     aliases: Vec<String>,
 }
+
+impl Default for Flatten {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Flatten {
     pub fn new() -> Self {
         Self {
-            signature: Signature::array(Volatility::Immutable),
+            signature: Signature {
+                // TODO (https://github.com/apache/datafusion/issues/13757) flatten should be single-step, not recursive
+                type_signature: TypeSignature::ArraySignature(
+                    ArrayFunctionSignature::RecursiveArray,
+                ),
+                volatility: Volatility::Immutable,
+            },
             aliases: vec![],
         }
     }
@@ -88,12 +122,20 @@ impl ScalarUDFImpl for Flatten {
         Ok(data_type)
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         make_scalar_function(flatten_inner)(args)
     }
 
     fn aliases(&self) -> &[String] {
         &self.aliases
+    }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        self.doc()
     }
 }
 

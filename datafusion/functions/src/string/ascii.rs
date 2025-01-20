@@ -20,12 +20,33 @@ use arrow::array::{ArrayAccessor, ArrayIter, ArrayRef, AsArray, Int32Array};
 use arrow::datatypes::DataType;
 use arrow::error::ArrowError;
 use datafusion_common::{internal_err, Result};
-use datafusion_expr::scalar_doc_sections::DOC_SECTION_STRING;
 use datafusion_expr::{ColumnarValue, Documentation};
 use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
+use datafusion_macros::user_doc;
 use std::any::Any;
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
+#[user_doc(
+    doc_section(label = "String Functions"),
+    description = "Returns the Unicode character code of the first character in a string.",
+    syntax_example = "ascii(str)",
+    sql_example = r#"```sql
+> select ascii('abc');
++--------------------+
+| ascii(Utf8("abc")) |
++--------------------+
+| 97                 |
++--------------------+
+> select ascii('🚀');
++-------------------+
+| ascii(Utf8("🚀")) |
++-------------------+
+| 128640            |
++-------------------+
+```"#,
+    standard_argument(name = "str", prefix = "String"),
+    related_udf(name = "chr")
+)]
 #[derive(Debug)]
 pub struct AsciiFunc {
     signature: Signature,
@@ -64,46 +85,17 @@ impl ScalarUDFImpl for AsciiFunc {
         Ok(Int32)
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         make_scalar_function(ascii, vec![])(args)
     }
 
     fn documentation(&self) -> Option<&Documentation> {
-        Some(get_ascii_doc())
+        self.doc()
     }
-}
-
-static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
-
-fn get_ascii_doc() -> &'static Documentation {
-    DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_STRING)
-            .with_description(
-                "Returns the Unicode character code of the first character in a string.",
-            )
-            .with_syntax_example("ascii(str)")
-            .with_sql_example(
-                r#"```sql
-> select ascii('abc');
-+--------------------+
-| ascii(Utf8("abc")) |
-+--------------------+
-| 97                 |
-+--------------------+
-> select ascii('🚀');
-+-------------------+
-| ascii(Utf8("🚀")) |
-+-------------------+
-| 128640            |
-+-------------------+
-```"#,
-            )
-            .with_standard_argument("str", "String")
-            .with_related_udf("chr")
-            .build()
-            .unwrap()
-    })
 }
 
 fn calculate_ascii<'a, V>(array: V) -> Result<ArrayRef, ArrowError>
@@ -155,7 +147,7 @@ mod tests {
         ($INPUT:expr, $EXPECTED:expr) => {
             test_function!(
                 AsciiFunc::new(),
-                &[ColumnarValue::from(ScalarValue::Utf8($INPUT))],
+                vec![ColumnarValue::from(ScalarValue::Utf8($INPUT))],
                 $EXPECTED,
                 i32,
                 Int32,
@@ -164,7 +156,7 @@ mod tests {
 
             test_function!(
                 AsciiFunc::new(),
-                &[ColumnarValue::from(ScalarValue::LargeUtf8($INPUT))],
+                vec![ColumnarValue::from(ScalarValue::LargeUtf8($INPUT))],
                 $EXPECTED,
                 i32,
                 Int32,
@@ -173,7 +165,7 @@ mod tests {
 
             test_function!(
                 AsciiFunc::new(),
-                &[ColumnarValue::from(ScalarValue::Utf8View($INPUT))],
+                vec![ColumnarValue::from(ScalarValue::Utf8View($INPUT))],
                 $EXPECTED,
                 i32,
                 Int32,

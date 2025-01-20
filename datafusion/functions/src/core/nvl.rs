@@ -20,9 +20,39 @@ use arrow::compute::is_not_null;
 use arrow::compute::kernels::zip::zip;
 use arrow::datatypes::DataType;
 use datafusion_common::{internal_err, Result};
-use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
+use datafusion_expr::{
+    ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
+};
+use datafusion_macros::user_doc;
 use std::sync::Arc;
-
+#[user_doc(
+    doc_section(label = "Conditional Functions"),
+    description = "Returns _expression2_ if _expression1_ is NULL otherwise it returns _expression1_.",
+    syntax_example = "nvl(expression1, expression2)",
+    sql_example = r#"```sql
+> select nvl(null, 'a');
++---------------------+
+| nvl(NULL,Utf8("a")) |
++---------------------+
+| a                   |
++---------------------+\
+> select nvl('b', 'a');
++--------------------------+
+| nvl(Utf8("b"),Utf8("a")) |
++--------------------------+
+| b                        |
++--------------------------+
+```
+"#,
+    argument(
+        name = "expression1",
+        description = "Expression to return if not null. Can be a constant, column, or function, and any combination of operators."
+    ),
+    argument(
+        name = "expression2",
+        description = "Expression to return if expr1 is null. Can be a constant, column, or function, and any combination of operators."
+    )
+)]
 #[derive(Debug)]
 pub struct NVLFunc {
     signature: Signature,
@@ -44,6 +74,7 @@ static SUPPORTED_NVL_TYPES: &[DataType] = &[
     DataType::Int64,
     DataType::Float32,
     DataType::Float64,
+    DataType::Utf8View,
     DataType::Utf8,
     DataType::LargeUtf8,
 ];
@@ -84,12 +115,20 @@ impl ScalarUDFImpl for NVLFunc {
         Ok(arg_types[0].clone())
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         nvl_func(args)
     }
 
     fn aliases(&self) -> &[String] {
         &self.aliases
+    }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        self.doc()
     }
 }
 
@@ -169,7 +208,7 @@ mod tests {
 
     #[test]
     // Ensure that arrays with no nulls can also invoke nvl() correctly
-    fn nvl_int32_nonulls() -> Result<()> {
+    fn nvl_int32_non_nulls() -> Result<()> {
         let a = Int32Array::from(vec![1, 3, 10, 7, 8, 1, 2, 4, 5]);
         let a = ColumnarValue::Array(Arc::new(a));
 

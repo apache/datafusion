@@ -115,7 +115,7 @@ pub enum DataFusionError {
     Execution(String),
     /// [`JoinError`] during execution of the query.
     ///
-    /// This error can unoccur for unjoined tasks, such as execution shutdown.
+    /// This error can't occur for unjoined tasks, such as execution shutdown.
     ExecutionJoin(JoinError),
     /// Error when resources (such as memory of scratch disk space) are exhausted.
     ///
@@ -167,6 +167,18 @@ impl Display for SchemaError {
                 valid_fields,
             } => {
                 write!(f, "No field named {}", field.quoted_flat_name())?;
+                let lower_valid_fields = valid_fields
+                    .iter()
+                    .map(|column| column.flat_name().to_lowercase())
+                    .collect::<Vec<String>>();
+                if lower_valid_fields.contains(&field.flat_name().to_lowercase()) {
+                    write!(
+                        f,
+                        ". Column names are case sensitive. You can use double quotes to refer to the \"{}\" column \
+                        or set the datafusion.sql_parser.enable_ident_normalization configuration",
+                        field.quoted_flat_name()
+                    )?;
+                }
                 if !valid_fields.is_empty() {
                     write!(
                         f,
@@ -598,9 +610,9 @@ macro_rules! arrow_err {
 #[macro_export]
 macro_rules! schema_datafusion_err {
     ($ERR:expr) => {
-        DataFusionError::SchemaError(
+        $crate::error::DataFusionError::SchemaError(
             $ERR,
-            Box::new(Some(DataFusionError::get_back_trace())),
+            Box::new(Some($crate::error::DataFusionError::get_back_trace())),
         )
     };
 }
@@ -609,9 +621,9 @@ macro_rules! schema_datafusion_err {
 #[macro_export]
 macro_rules! schema_err {
     ($ERR:expr) => {
-        Err(DataFusionError::SchemaError(
+        Err($crate::error::DataFusionError::SchemaError(
             $ERR,
-            Box::new(Some(DataFusionError::get_back_trace())),
+            Box::new(Some($crate::error::DataFusionError::get_back_trace())),
         ))
     };
 }

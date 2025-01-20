@@ -17,18 +17,26 @@
 
 //! Options related to how parquet files should be written
 
+use base64::Engine;
+use std::sync::Arc;
+
 use crate::{
     config::{ParquetOptions, TableParquetOptions},
-    DataFusionError, Result,
+    DataFusionError, Result, _internal_datafusion_err,
 };
 
+use arrow_schema::Schema;
+#[allow(deprecated)]
 use parquet::{
+    arrow::ARROW_SCHEMA_META_KEY,
     basic::{BrotliLevel, GzipLevel, ZstdLevel},
-    file::properties::{
-        EnabledStatistics, WriterProperties, WriterPropertiesBuilder, WriterVersion,
-        DEFAULT_MAX_STATISTICS_SIZE, DEFAULT_STATISTICS_ENABLED,
+    file::{
+        metadata::KeyValue,
+        properties::{
+            EnabledStatistics, WriterProperties, WriterPropertiesBuilder, WriterVersion,
+            DEFAULT_MAX_STATISTICS_SIZE, DEFAULT_STATISTICS_ENABLED,
+        },
     },
-    format::KeyValue,
     schema::types::ColumnPath,
 };
 
@@ -48,6 +56,17 @@ impl ParquetWriterOptions {
 impl ParquetWriterOptions {
     pub fn writer_options(&self) -> &WriterProperties {
         &self.writer_options
+    }
+}
+
+impl TableParquetOptions {
+    /// Add the arrow schema to the parquet kv_metadata.
+    /// If already exists, then overwrites.
+    pub fn arrow_schema(&mut self, schema: &Arc<Schema>) {
+        self.key_value_metadata.insert(
+            ARROW_SCHEMA_META_KEY.into(),
+            Some(encode_arrow_schema(schema)),
+        );
     }
 }
 
@@ -79,6 +98,14 @@ impl TryFrom<&TableParquetOptions> for WriterPropertiesBuilder {
 
         let mut builder = global.into_writer_properties_builder()?;
 
+        // check that the arrow schema is present in the kv_metadata, if configured to do so
+        if !global.skip_arrow_metadata
+            && !key_value_metadata.contains_key(ARROW_SCHEMA_META_KEY)
+        {
+            return Err(_internal_datafusion_err!("arrow schema was not added to the kv_metadata, even though it is required by configuration settings"));
+        }
+
+        // add kv_meta, if any
         if !key_value_metadata.is_empty() {
             builder = builder.set_key_value_metadata(Some(
                 key_value_metadata
@@ -131,8 +158,10 @@ impl TryFrom<&TableParquetOptions> for WriterPropertiesBuilder {
             }
 
             if let Some(max_statistics_size) = options.max_statistics_size {
-                builder =
-                    builder.set_column_max_statistics_size(path, max_statistics_size);
+                builder = {
+                    #[allow(deprecated)]
+                    builder.set_column_max_statistics_size(path, max_statistics_size)
+                }
             }
         }
 
@@ -140,11 +169,38 @@ impl TryFrom<&TableParquetOptions> for WriterPropertiesBuilder {
     }
 }
 
+/// Encodes the Arrow schema into the IPC format, and base64 encodes it
+///
+/// TODO: use extern parquet's private method, once publicly available.
+/// Refer to <https://github.com/apache/arrow-rs/pull/6916>
+fn encode_arrow_schema(schema: &Arc<Schema>) -> String {
+    let options = arrow_ipc::writer::IpcWriteOptions::default();
+    let mut dictionary_tracker = arrow_ipc::writer::DictionaryTracker::new(true);
+    let data_gen = arrow_ipc::writer::IpcDataGenerator::default();
+    let mut serialized_schema = data_gen.schema_to_bytes_with_dictionary_tracker(
+        schema,
+        &mut dictionary_tracker,
+        &options,
+    );
+
+    // manually prepending the length to the schema as arrow uses the legacy IPC format
+    // TODO: change after addressing ARROW-9777
+    let schema_len = serialized_schema.ipc_message.len();
+    let mut len_prefix_schema = Vec::with_capacity(schema_len + 8);
+    len_prefix_schema.append(&mut vec![255u8, 255, 255, 255]);
+    len_prefix_schema.append((schema_len as u32).to_le_bytes().to_vec().as_mut());
+    len_prefix_schema.append(&mut serialized_schema.ipc_message);
+
+    base64::prelude::BASE64_STANDARD.encode(&len_prefix_schema)
+}
+
 impl ParquetOptions {
     /// Convert the global session options, [`ParquetOptions`], into a single write action's [`WriterPropertiesBuilder`].
     ///
     /// The returned [`WriterPropertiesBuilder`] can then be further modified with additional options
     /// applied per column; a customization which is not applicable for [`ParquetOptions`].
+    ///
+    /// Note that this method does not include the key_value_metadata from [`TableParquetOptions`].
     pub fn into_writer_properties_builder(&self) -> Result<WriterPropertiesBuilder> {
         let ParquetOptions {
             data_pagesize_limit,
@@ -176,6 +232,8 @@ impl ParquetOptions {
             maximum_buffered_record_batches_per_stream: _,
             bloom_filter_on_read: _, // reads not used for writer props
             schema_force_view_types: _,
+            binary_as_string: _, // not used for writer props
+            skip_arrow_metadata: _,
         } = self;
 
         let mut builder = WriterProperties::builder()
@@ -189,14 +247,18 @@ impl ParquetOptions {
                     .and_then(|s| parse_statistics_string(s).ok())
                     .unwrap_or(DEFAULT_STATISTICS_ENABLED),
             )
-            .set_max_statistics_size(
-                max_statistics_size.unwrap_or(DEFAULT_MAX_STATISTICS_SIZE),
-            )
             .set_max_row_group_size(*max_row_group_size)
             .set_created_by(created_by.clone())
             .set_column_index_truncate_length(*column_index_truncate_length)
             .set_data_page_row_count_limit(*data_page_row_count_limit)
             .set_bloom_filter_enabled(*bloom_filter_on_write);
+
+        builder = {
+            #[allow(deprecated)]
+            builder.set_max_statistics_size(
+                max_statistics_size.unwrap_or(DEFAULT_MAX_STATISTICS_SIZE),
+            )
+        };
 
         if let Some(bloom_filter_fpp) = bloom_filter_fpp {
             builder = builder.set_bloom_filter_fpp(*bloom_filter_fpp);
@@ -442,6 +504,8 @@ mod tests {
                 .maximum_buffered_record_batches_per_stream,
             bloom_filter_on_read: defaults.bloom_filter_on_read,
             schema_force_view_types: defaults.schema_force_view_types,
+            binary_as_string: defaults.binary_as_string,
+            skip_arrow_metadata: defaults.skip_arrow_metadata,
         }
     }
 
@@ -471,6 +535,7 @@ mod tests {
             ),
             bloom_filter_fpp: bloom_filter_default_props.map(|p| p.fpp),
             bloom_filter_ndv: bloom_filter_default_props.map(|p| p.ndv),
+            #[allow(deprecated)]
             max_statistics_size: Some(props.max_statistics_size(&col)),
         }
     }
@@ -543,10 +608,47 @@ mod tests {
                     .maximum_buffered_record_batches_per_stream,
                 bloom_filter_on_read: global_options_defaults.bloom_filter_on_read,
                 schema_force_view_types: global_options_defaults.schema_force_view_types,
+                binary_as_string: global_options_defaults.binary_as_string,
+                skip_arrow_metadata: global_options_defaults.skip_arrow_metadata,
             },
             column_specific_options,
             key_value_metadata,
         }
+    }
+
+    #[test]
+    fn table_parquet_opts_to_writer_props_skip_arrow_metadata() {
+        // TableParquetOptions, all props set to default
+        let mut table_parquet_opts = TableParquetOptions::default();
+        assert!(
+            !table_parquet_opts.global.skip_arrow_metadata,
+            "default false, to not skip the arrow schema requirement"
+        );
+
+        // see errors without the schema added, using default settings
+        let should_error = WriterPropertiesBuilder::try_from(&table_parquet_opts);
+        assert!(
+            should_error.is_err(),
+            "should error without the required arrow schema in kv_metadata",
+        );
+
+        // succeeds if we permit skipping the arrow schema
+        table_parquet_opts = table_parquet_opts.with_skip_arrow_metadata(true);
+        let should_succeed = WriterPropertiesBuilder::try_from(&table_parquet_opts);
+        assert!(
+            should_succeed.is_ok(),
+            "should work with the arrow schema skipped by config",
+        );
+
+        // Set the arrow schema back to required
+        table_parquet_opts = table_parquet_opts.with_skip_arrow_metadata(false);
+        // add the arrow schema to the kv_meta
+        table_parquet_opts.arrow_schema(&Arc::new(Schema::empty()));
+        let should_succeed = WriterPropertiesBuilder::try_from(&table_parquet_opts);
+        assert!(
+            should_succeed.is_ok(),
+            "should work with the arrow schema included in TableParquetOptions",
+        );
     }
 
     #[test]
@@ -555,7 +657,7 @@ mod tests {
         let parquet_options = parquet_options_with_non_defaults();
 
         // TableParquetOptions, using ParquetOptions for global settings
-        let key = "foo".to_string();
+        let key = ARROW_SCHEMA_META_KEY.to_string();
         let value = Some("bar".into());
         let table_parquet_opts = TableParquetOptions {
             global: parquet_options.clone(),
@@ -582,13 +684,17 @@ mod tests {
     #[test]
     fn test_defaults_match() {
         // ensure the global settings are the same
-        let default_table_writer_opts = TableParquetOptions::default();
+        let mut default_table_writer_opts = TableParquetOptions::default();
         let default_parquet_opts = ParquetOptions::default();
         assert_eq!(
             default_table_writer_opts.global,
             default_parquet_opts,
             "should have matching defaults for TableParquetOptions.global and ParquetOptions",
         );
+
+        // selectively skip the arrow_schema metadata, since the WriterProperties default has an empty kv_meta (no arrow schema)
+        default_table_writer_opts =
+            default_table_writer_opts.with_skip_arrow_metadata(true);
 
         // WriterProperties::default, a.k.a. using extern parquet's defaults
         let default_writer_props = WriterProperties::new();
@@ -637,6 +743,7 @@ mod tests {
             session_config_from_writer_props(&default_writer_props);
         from_extern_parquet.global.created_by = same_created_by;
         from_extern_parquet.global.compression = Some("zstd(3)".into());
+        from_extern_parquet.global.skip_arrow_metadata = true;
 
         assert_eq!(
             default_table_writer_opts,
@@ -650,6 +757,7 @@ mod tests {
         // the TableParquetOptions::default, with only the bloom filter turned on
         let mut default_table_writer_opts = TableParquetOptions::default();
         default_table_writer_opts.global.bloom_filter_on_write = true;
+        default_table_writer_opts.arrow_schema(&Arc::new(Schema::empty())); // add the required arrow schema
         let from_datafusion_defaults =
             WriterPropertiesBuilder::try_from(&default_table_writer_opts)
                 .unwrap()
@@ -678,6 +786,7 @@ mod tests {
         let mut default_table_writer_opts = TableParquetOptions::default();
         default_table_writer_opts.global.bloom_filter_on_write = true;
         default_table_writer_opts.global.bloom_filter_fpp = Some(0.42);
+        default_table_writer_opts.arrow_schema(&Arc::new(Schema::empty())); // add the required arrow schema
         let from_datafusion_defaults =
             WriterPropertiesBuilder::try_from(&default_table_writer_opts)
                 .unwrap()
@@ -710,6 +819,7 @@ mod tests {
         let mut default_table_writer_opts = TableParquetOptions::default();
         default_table_writer_opts.global.bloom_filter_on_write = true;
         default_table_writer_opts.global.bloom_filter_ndv = Some(42);
+        default_table_writer_opts.arrow_schema(&Arc::new(Schema::empty())); // add the required arrow schema
         let from_datafusion_defaults =
             WriterPropertiesBuilder::try_from(&default_table_writer_opts)
                 .unwrap()

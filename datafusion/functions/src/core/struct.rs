@@ -18,8 +18,9 @@
 use arrow::array::{ArrayRef, StructArray};
 use arrow::datatypes::{DataType, Field, Fields};
 use datafusion_common::{exec_err, Result};
-use datafusion_expr::ColumnarValue;
+use datafusion_expr::{ColumnarValue, Documentation};
 use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
+use datafusion_macros::user_doc;
 use std::any::Any;
 use std::sync::Arc;
 
@@ -54,9 +55,50 @@ fn struct_expr(args: &[ColumnarValue]) -> Result<ColumnarValue> {
     Ok(ColumnarValue::Array(array_struct(arrays.as_slice())?))
 }
 
+#[user_doc(
+    doc_section(label = "Struct Functions"),
+    description = "Returns an Arrow struct using the specified input expressions optionally named.
+Fields in the returned struct use the optional name or the `cN` naming convention.
+For example: `c0`, `c1`, `c2`, etc.",
+    syntax_example = "struct(expression1[, ..., expression_n])",
+    sql_example = r#"For example, this query converts two columns `a` and `b` to a single column with
+a struct type of fields `field_a` and `c1`:
+```sql
+> select * from t;
++---+---+
+| a | b |
++---+---+
+| 1 | 2 |
+| 3 | 4 |
++---+---+
+
+-- use default names `c0`, `c1`
+> select struct(a, b) from t;
++-----------------+
+| struct(t.a,t.b) |
++-----------------+
+| {c0: 1, c1: 2}  |
+| {c0: 3, c1: 4}  |
++-----------------+
+
+-- name the first field `field_a`
+select struct(a as field_a, b) from t;
++--------------------------------------------------+
+| named_struct(Utf8("field_a"),t.a,Utf8("c1"),t.b) |
++--------------------------------------------------+
+| {field_a: 1, c1: 2}                              |
+| {field_a: 3, c1: 4}                              |
++--------------------------------------------------+
+```"#,
+    argument(
+        name = "expression1, expression_n",
+        description = "Expression to include in the output struct. Can be a constant, column, or function, any combination of arithmetic or string operators."
+    )
+)]
 #[derive(Debug)]
 pub struct StructFunc {
     signature: Signature,
+    aliases: Vec<String>,
 }
 
 impl Default for StructFunc {
@@ -69,6 +111,7 @@ impl StructFunc {
     pub fn new() -> Self {
         Self {
             signature: Signature::variadic_any(Volatility::Immutable),
+            aliases: vec![String::from("row")],
         }
     }
 }
@@ -79,6 +122,10 @@ impl ScalarUDFImpl for StructFunc {
     }
     fn name(&self) -> &str {
         "struct"
+    }
+
+    fn aliases(&self) -> &[String] {
+        &self.aliases
     }
 
     fn signature(&self) -> &Signature {
@@ -94,7 +141,15 @@ impl ScalarUDFImpl for StructFunc {
         Ok(DataType::Struct(Fields::from(return_fields)))
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         struct_expr(args)
+    }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        self.doc()
     }
 }

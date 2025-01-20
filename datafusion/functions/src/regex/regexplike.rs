@@ -15,42 +15,28 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Regx expressions
-use arrow::array::{Array, ArrayRef, GenericStringArray, OffsetSizeTrait};
+//! Regex expressions
+
+use arrow::array::{Array, ArrayRef, AsArray, GenericStringArray};
 use arrow::compute::kernels::regexp;
 use arrow::datatypes::DataType;
+use arrow::datatypes::DataType::{LargeUtf8, Utf8, Utf8View};
 use datafusion_common::exec_err;
 use datafusion_common::ScalarValue;
 use datafusion_common::{arrow_datafusion_err, plan_err};
-use datafusion_common::{
-    cast::as_generic_string_array, internal_err, DataFusionError, Result,
-};
-use datafusion_expr::scalar_doc_sections::DOC_SECTION_REGEX;
+use datafusion_common::{internal_err, DataFusionError, Result};
 use datafusion_expr::{ColumnarValue, Documentation, TypeSignature};
 use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
+use datafusion_macros::user_doc;
+
 use std::any::Any;
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
-#[derive(Debug)]
-pub struct RegexpLikeFunc {
-    signature: Signature,
-}
-
-impl Default for RegexpLikeFunc {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
-
-fn get_regexp_like_doc() -> &'static Documentation {
-    DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_REGEX)
-            .with_description("Returns true if a [regular expression](https://docs.rs/regex/latest/regex/#syntax) has at least one match in a string, false otherwise.")
-            .with_syntax_example("regexp_like(str, regexp[, flags])")
-            .with_sql_example(r#"```sql
+#[user_doc(
+    doc_section(label = "Regular Expression Functions"),
+    description = "Returns true if a [regular expression](https://docs.rs/regex/latest/regex/#syntax) has at least one match in a string, false otherwise.",
+    syntax_example = "regexp_like(str, regexp[, flags])",
+    sql_example = r#"```sql
 select regexp_like('Köln', '[a-zA-Z]ö[a-zA-Z]{2}');
 +--------------------------------------------------------+
 | regexp_like(Utf8("Köln"),Utf8("[a-zA-Z]ö[a-zA-Z]{2}")) |
@@ -65,32 +51,35 @@ SELECT regexp_like('aBc', '(b|d)', 'i');
 +--------------------------------------------------+
 ```
 Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/regexp.rs)
-"#)
-            .with_standard_argument("str", "String")
-            .with_standard_argument("regexp","Regular")
-            .with_argument("flags",
-                           r#"Optional regular expression flags that control the behavior of the regular expression. The following flags are supported:
+"#,
+    standard_argument(name = "str", prefix = "String"),
+    standard_argument(name = "regexp", prefix = "Regular"),
+    argument(
+        name = "flags",
+        description = r#"Optional regular expression flags that control the behavior of the regular expression. The following flags are supported:
   - **i**: case-insensitive: letters match both upper and lower case
   - **m**: multi-line mode: ^ and $ match begin/end of line
   - **s**: allow . to match \n
   - **R**: enables CRLF mode: when multi-line mode is enabled, \r\n is used
-  - **U**: swap the meaning of x* and x*?"#)
-            .build()
-            .unwrap()
-    })
+  - **U**: swap the meaning of x* and x*?"#
+    )
+)]
+#[derive(Debug)]
+pub struct RegexpLikeFunc {
+    signature: Signature,
+}
+
+impl Default for RegexpLikeFunc {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl RegexpLikeFunc {
     pub fn new() -> Self {
-        use DataType::*;
         Self {
             signature: Signature::one_of(
-                vec![
-                    TypeSignature::Exact(vec![Utf8, Utf8]),
-                    TypeSignature::Exact(vec![LargeUtf8, LargeUtf8]),
-                    TypeSignature::Exact(vec![Utf8, Utf8, Utf8]),
-                    TypeSignature::Exact(vec![LargeUtf8, LargeUtf8, LargeUtf8]),
-                ],
+                vec![TypeSignature::String(2), TypeSignature::String(3)],
                 Volatility::Immutable,
             ),
         }
@@ -120,7 +109,12 @@ impl ScalarUDFImpl for RegexpLikeFunc {
             _ => Boolean,
         })
     }
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         let len = args
             .iter()
             .fold(Option::<usize>::None, |acc, arg| match arg {
@@ -132,10 +126,10 @@ impl ScalarUDFImpl for RegexpLikeFunc {
         let inferred_length = len.unwrap_or(1);
         let args = args
             .iter()
-            .map(|arg| arg.clone().into_array(inferred_length))
+            .map(|arg| arg.to_array(inferred_length))
             .collect::<Result<Vec<_>>>()?;
 
-        let result = regexp_like_func(&args);
+        let result = regexp_like(&args);
         if is_scalar {
             // If all inputs are scalar, keeps output as scalar
             let result = result.and_then(|arr| ScalarValue::try_from_array(&arr, 0));
@@ -146,18 +140,10 @@ impl ScalarUDFImpl for RegexpLikeFunc {
     }
 
     fn documentation(&self) -> Option<&Documentation> {
-        Some(get_regexp_like_doc())
+        self.doc()
     }
 }
-fn regexp_like_func(args: &[ArrayRef]) -> Result<ArrayRef> {
-    match args[0].data_type() {
-        DataType::Utf8 => regexp_like::<i32>(args),
-        DataType::LargeUtf8 => regexp_like::<i64>(args),
-        other => {
-            internal_err!("Unsupported data type {other:?} for function regexp_like")
-        }
-    }
-}
+
 /// Tests a string using a regular expression returning true if at
 /// least one match, false otherwise.
 ///
@@ -200,47 +186,141 @@ fn regexp_like_func(args: &[ArrayRef]) -> Result<ArrayRef> {
 /// # Ok(())
 /// # }
 /// ```
-pub fn regexp_like<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
+pub fn regexp_like(args: &[ArrayRef]) -> Result<ArrayRef> {
     match args.len() {
-        2 => {
-            let values = as_generic_string_array::<T>(&args[0])?;
-            let regex = as_generic_string_array::<T>(&args[1])?;
-            let flags: Option<&GenericStringArray<T>> = None;
-            let array = regexp::regexp_is_match(values, regex, flags)
-                .map_err(|e| arrow_datafusion_err!(e))?;
-
-            Ok(Arc::new(array) as ArrayRef)
-        }
+        2 => handle_regexp_like(&args[0], &args[1], None),
         3 => {
-            let values = as_generic_string_array::<T>(&args[0])?;
-            let regex = as_generic_string_array::<T>(&args[1])?;
-            let flags = as_generic_string_array::<T>(&args[2])?;
+            let flags = match args[2].data_type() {
+                Utf8 => args[2].as_string::<i32>(),
+                LargeUtf8 => {
+                    let large_string_array = args[2].as_string::<i64>();
+                    let string_vec: Vec<Option<&str>> = (0..large_string_array.len()).map(|i| {
+                        if large_string_array.is_null(i) {
+                            None
+                        } else {
+                            Some(large_string_array.value(i))
+                        }
+                    })
+                    .collect();
+
+                    &GenericStringArray::<i32>::from(string_vec)
+                },
+                _ => {
+                    let string_view_array = args[2].as_string_view();
+                    let string_vec: Vec<Option<String>> = (0..string_view_array.len()).map(|i| {
+                        if string_view_array.is_null(i) {
+                            None
+                        } else {
+                            Some(string_view_array.value(i).to_string())
+                        }
+                    })
+                    .collect();
+                    &GenericStringArray::<i32>::from(string_vec)
+                },
+            };
 
             if flags.iter().any(|s| s == Some("g")) {
                 return plan_err!("regexp_like() does not support the \"global\" option");
             }
 
-            let array = regexp::regexp_is_match(values, regex, Some(flags))
-                .map_err(|e| arrow_datafusion_err!(e))?;
-
-            Ok(Arc::new(array) as ArrayRef)
-        }
+            handle_regexp_like(&args[0], &args[1], Some(flags))
+        },
         other => exec_err!(
-            "regexp_like was called with {other} arguments. It requires at least 2 and at most 3."
+            "`regexp_like` was called with {other} arguments. It requires at least 2 and at most 3."
         ),
     }
 }
+
+fn handle_regexp_like(
+    values: &ArrayRef,
+    patterns: &ArrayRef,
+    flags: Option<&GenericStringArray<i32>>,
+) -> Result<ArrayRef> {
+    let array = match (values.data_type(), patterns.data_type()) {
+        (Utf8View, Utf8) => {
+            let value = values.as_string_view();
+            let pattern = patterns.as_string::<i32>();
+
+            regexp::regexp_is_match(value, pattern, flags)
+                .map_err(|e| arrow_datafusion_err!(e))?
+        }
+        (Utf8View, Utf8View) => {
+            let value = values.as_string_view();
+            let pattern = patterns.as_string_view();
+
+            regexp::regexp_is_match(value, pattern, flags)
+                .map_err(|e| arrow_datafusion_err!(e))?
+        }
+        (Utf8View, LargeUtf8) => {
+            let value = values.as_string_view();
+            let pattern = patterns.as_string::<i64>();
+
+            regexp::regexp_is_match(value, pattern, flags)
+                .map_err(|e| arrow_datafusion_err!(e))?
+        }
+        (Utf8, Utf8) => {
+            let value = values.as_string::<i32>();
+            let pattern = patterns.as_string::<i32>();
+
+            regexp::regexp_is_match(value, pattern, flags)
+                .map_err(|e| arrow_datafusion_err!(e))?
+        }
+        (Utf8, Utf8View) => {
+            let value = values.as_string::<i32>();
+            let pattern = patterns.as_string_view();
+
+            regexp::regexp_is_match(value, pattern, flags)
+                .map_err(|e| arrow_datafusion_err!(e))?
+        }
+        (Utf8, LargeUtf8) => {
+            let value = values.as_string_view();
+            let pattern = patterns.as_string::<i64>();
+
+            regexp::regexp_is_match(value, pattern, flags)
+                .map_err(|e| arrow_datafusion_err!(e))?
+        }
+        (LargeUtf8, Utf8) => {
+            let value = values.as_string::<i64>();
+            let pattern = patterns.as_string::<i32>();
+
+            regexp::regexp_is_match(value, pattern, flags)
+                .map_err(|e| arrow_datafusion_err!(e))?
+        }
+        (LargeUtf8, Utf8View) => {
+            let value = values.as_string::<i64>();
+            let pattern = patterns.as_string_view();
+
+            regexp::regexp_is_match(value, pattern, flags)
+                .map_err(|e| arrow_datafusion_err!(e))?
+        }
+        (LargeUtf8, LargeUtf8) => {
+            let value = values.as_string::<i64>();
+            let pattern = patterns.as_string::<i64>();
+
+            regexp::regexp_is_match(value, pattern, flags)
+                .map_err(|e| arrow_datafusion_err!(e))?
+        }
+        other => {
+            return internal_err!(
+                "Unsupported data type {other:?} for function `regexp_like`"
+            )
+        }
+    };
+
+    Ok(Arc::new(array) as ArrayRef)
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
 
-    use arrow::array::BooleanBuilder;
     use arrow::array::StringArray;
+    use arrow::array::{BooleanBuilder, StringViewArray};
 
     use crate::regex::regexplike::regexp_like;
 
     #[test]
-    fn test_case_sensitive_regexp_like() {
+    fn test_case_sensitive_regexp_like_utf8() {
         let values = StringArray::from(vec!["abc"; 5]);
 
         let patterns =
@@ -254,13 +334,33 @@ mod tests {
         expected_builder.append_value(false);
         let expected = expected_builder.finish();
 
-        let re = regexp_like::<i32>(&[Arc::new(values), Arc::new(patterns)]).unwrap();
+        let re = regexp_like(&[Arc::new(values), Arc::new(patterns)]).unwrap();
 
         assert_eq!(re.as_ref(), &expected);
     }
 
     #[test]
-    fn test_case_insensitive_regexp_like() {
+    fn test_case_sensitive_regexp_like_utf8view() {
+        let values = StringViewArray::from(vec!["abc"; 5]);
+
+        let patterns =
+            StringArray::from(vec!["^(a)", "^(A)", "(b|d)", "(B|D)", "^(b|c)"]);
+
+        let mut expected_builder: BooleanBuilder = BooleanBuilder::new();
+        expected_builder.append_value(true);
+        expected_builder.append_value(false);
+        expected_builder.append_value(true);
+        expected_builder.append_value(false);
+        expected_builder.append_value(false);
+        let expected = expected_builder.finish();
+
+        let re = regexp_like(&[Arc::new(values), Arc::new(patterns)]).unwrap();
+
+        assert_eq!(re.as_ref(), &expected);
+    }
+
+    #[test]
+    fn test_case_insensitive_regexp_like_utf8() {
         let values = StringArray::from(vec!["abc"; 5]);
         let patterns =
             StringArray::from(vec!["^(a)", "^(A)", "(b|d)", "(B|D)", "^(b|c)"]);
@@ -274,9 +374,29 @@ mod tests {
         expected_builder.append_value(false);
         let expected = expected_builder.finish();
 
-        let re =
-            regexp_like::<i32>(&[Arc::new(values), Arc::new(patterns), Arc::new(flags)])
-                .unwrap();
+        let re = regexp_like(&[Arc::new(values), Arc::new(patterns), Arc::new(flags)])
+            .unwrap();
+
+        assert_eq!(re.as_ref(), &expected);
+    }
+
+    #[test]
+    fn test_case_insensitive_regexp_like_utf8view() {
+        let values = StringViewArray::from(vec!["abc"; 5]);
+        let patterns =
+            StringViewArray::from(vec!["^(a)", "^(A)", "(b|d)", "(B|D)", "^(b|c)"]);
+        let flags = StringArray::from(vec!["i"; 5]);
+
+        let mut expected_builder: BooleanBuilder = BooleanBuilder::new();
+        expected_builder.append_value(true);
+        expected_builder.append_value(true);
+        expected_builder.append_value(true);
+        expected_builder.append_value(true);
+        expected_builder.append_value(false);
+        let expected = expected_builder.finish();
+
+        let re = regexp_like(&[Arc::new(values), Arc::new(patterns), Arc::new(flags)])
+            .unwrap();
 
         assert_eq!(re.as_ref(), &expected);
     }
@@ -288,7 +408,7 @@ mod tests {
         let flags = StringArray::from(vec!["g"]);
 
         let re_err =
-            regexp_like::<i32>(&[Arc::new(values), Arc::new(patterns), Arc::new(flags)])
+            regexp_like(&[Arc::new(values), Arc::new(patterns), Arc::new(flags)])
                 .expect_err("unsupported flag should have failed");
 
         assert_eq!(

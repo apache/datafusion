@@ -15,8 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use datafusion::common::{plan_err, DataFusionError};
-use std::collections::HashMap;
+use datafusion::common::{plan_err, DataFusionError, HashMap};
 use substrait::proto::extensions::simple_extension_declaration::{
     ExtensionFunction, ExtensionType, ExtensionTypeVariation, MappingType,
 };

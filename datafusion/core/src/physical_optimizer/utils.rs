@@ -27,7 +27,8 @@ use crate::physical_plan::union::UnionExec;
 use crate::physical_plan::windows::{BoundedWindowAggExec, WindowAggExec};
 use crate::physical_plan::{ExecutionPlan, ExecutionPlanProperties};
 
-use datafusion_physical_expr::{LexRequirement, PhysicalSortRequirement};
+use datafusion_physical_expr::LexRequirement;
+use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use datafusion_physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
 use datafusion_physical_plan::tree_node::PlanContext;
 
@@ -38,14 +39,14 @@ pub fn add_sort_above<T: Clone + Default>(
     sort_requirements: LexRequirement,
     fetch: Option<usize>,
 ) -> PlanContext<T> {
-    let mut sort_expr = PhysicalSortRequirement::to_sort_exprs(sort_requirements);
+    let mut sort_expr = LexOrdering::from(sort_requirements);
     sort_expr.retain(|sort_expr| {
         !node
             .plan
             .equivalence_properties()
             .is_expr_constant(&sort_expr.expr)
     });
-    let mut new_sort = SortExec::new(sort_expr, node.plan.clone()).with_fetch(fetch);
+    let mut new_sort = SortExec::new(sort_expr, Arc::clone(&node.plan)).with_fetch(fetch);
     if node.plan.output_partitioning().partition_count() > 1 {
         new_sort = new_sort.with_preserve_partitioning(true);
     }

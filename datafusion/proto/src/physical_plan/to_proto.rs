@@ -13,22 +13,21 @@
 // "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
 // KIND, either express or implied.  See the License for the
 // specific language governing permissions and limitations
-// under the License.language governing permissions and
-// limitations under the License.
+// under the License.
 
 use std::sync::Arc;
 
 #[cfg(feature = "parquet")]
 use datafusion::datasource::file_format::parquet::ParquetSink;
-use datafusion::physical_expr::window::{NthValueKind, SlidingAggregateWindowExpr};
-use datafusion::physical_expr::{PhysicalSortExpr, ScalarFunctionExpr};
+use datafusion::datasource::physical_plan::FileSink;
+use datafusion::physical_expr::window::{SlidingAggregateWindowExpr, StandardWindowExpr};
+use datafusion::physical_expr::{LexOrdering, PhysicalSortExpr, ScalarFunctionExpr};
 use datafusion::physical_plan::expressions::{
-    BinaryExpr, CaseExpr, CastExpr, Column, CumeDist, InListExpr, IsNotNullExpr,
-    IsNullExpr, Literal, NegativeExpr, NotExpr, NthValue, Ntile, Rank, RankType,
-    TryCastExpr, WindowShift,
+    BinaryExpr, CaseExpr, CastExpr, Column, InListExpr, IsNotNullExpr, IsNullExpr,
+    Literal, NegativeExpr, NotExpr, TryCastExpr, UnKnownColumn,
 };
 use datafusion::physical_plan::udaf::AggregateFunctionExpr;
-use datafusion::physical_plan::windows::{BuiltInWindowExpr, PlainAggregateWindowExpr};
+use datafusion::physical_plan::windows::{PlainAggregateWindowExpr, WindowUDFExpr};
 use datafusion::physical_plan::{Partitioning, PhysicalExpr, WindowExpr};
 use datafusion::{
     datasource::{
@@ -49,11 +48,14 @@ use crate::protobuf::{
 use super::PhysicalExtensionCodec;
 
 pub fn serialize_physical_aggr_expr(
-    aggr_expr: AggregateFunctionExpr,
+    aggr_expr: Arc<AggregateFunctionExpr>,
     codec: &dyn PhysicalExtensionCodec,
 ) -> Result<protobuf::PhysicalExprNode> {
     let expressions = serialize_physical_exprs(&aggr_expr.expressions(), codec)?;
-    let ordering_req = aggr_expr.order_bys().unwrap_or(&[]).to_vec();
+    let ordering_req = match aggr_expr.order_bys() {
+        Some(order) => order.clone(),
+        None => LexOrdering::default(),
+    };
     let ordering_req = serialize_physical_sort_exprs(ordering_req, codec)?;
 
     let name = aggr_expr.fun().name().to_string();
@@ -67,7 +69,7 @@ pub fn serialize_physical_aggr_expr(
                 ordering_req,
                 distinct: aggr_expr.is_distinct(),
                 ignore_nulls: aggr_expr.ignore_nulls(),
-                fun_definition: (!buf.is_empty()).then_some(buf)
+                fun_definition: (!buf.is_empty()).then_some(buf),
             },
         )),
     })
@@ -100,74 +102,10 @@ pub fn serialize_physical_window_expr(
     codec: &dyn PhysicalExtensionCodec,
 ) -> Result<protobuf::PhysicalWindowExprNode> {
     let expr = window_expr.as_any();
-    let mut args = window_expr.expressions().to_vec();
+    let args = window_expr.expressions().to_vec();
     let window_frame = window_expr.get_window_frame();
 
-    let (window_function, fun_definition) = if let Some(built_in_window_expr) =
-        expr.downcast_ref::<BuiltInWindowExpr>()
-    {
-        let expr = built_in_window_expr.get_built_in_func_expr();
-        let built_in_fn_expr = expr.as_any();
-
-        let builtin_fn = if let Some(rank_expr) = built_in_fn_expr.downcast_ref::<Rank>()
-        {
-            match rank_expr.get_type() {
-                RankType::Basic => protobuf::BuiltInWindowFunction::Rank,
-                RankType::Dense => protobuf::BuiltInWindowFunction::DenseRank,
-                RankType::Percent => protobuf::BuiltInWindowFunction::PercentRank,
-            }
-        } else if built_in_fn_expr.downcast_ref::<CumeDist>().is_some() {
-            protobuf::BuiltInWindowFunction::CumeDist
-        } else if let Some(ntile_expr) = built_in_fn_expr.downcast_ref::<Ntile>() {
-            args.insert(
-                0,
-                Arc::new(Literal::from(datafusion_common::ScalarValue::Int64(Some(
-                    ntile_expr.get_n() as i64,
-                )))),
-            );
-            protobuf::BuiltInWindowFunction::Ntile
-        } else if let Some(window_shift_expr) =
-            built_in_fn_expr.downcast_ref::<WindowShift>()
-        {
-            args.insert(
-                1,
-                Arc::new(Literal::from(datafusion_common::ScalarValue::Int64(Some(
-                    window_shift_expr.get_shift_offset(),
-                )))),
-            );
-            args.insert(
-                2,
-                Arc::new(Literal::from(window_shift_expr.get_default_value())),
-            );
-
-            if window_shift_expr.get_shift_offset() >= 0 {
-                protobuf::BuiltInWindowFunction::Lag
-            } else {
-                protobuf::BuiltInWindowFunction::Lead
-            }
-        } else if let Some(nth_value_expr) = built_in_fn_expr.downcast_ref::<NthValue>() {
-            match nth_value_expr.get_kind() {
-                NthValueKind::First => protobuf::BuiltInWindowFunction::FirstValue,
-                NthValueKind::Last => protobuf::BuiltInWindowFunction::LastValue,
-                NthValueKind::Nth(n) => {
-                    args.insert(
-                        1,
-                        Arc::new(Literal::from(datafusion_common::ScalarValue::Int64(
-                            Some(n),
-                        ))),
-                    );
-                    protobuf::BuiltInWindowFunction::NthValue
-                }
-            }
-        } else {
-            return not_impl_err!("BuiltIn function not supported: {expr:?}");
-        };
-
-        (
-            physical_window_expr_node::WindowFunction::BuiltInFunction(builtin_fn as i32),
-            None,
-        )
-    } else if let Some(plain_aggr_window_expr) =
+    let (window_function, fun_definition) = if let Some(plain_aggr_window_expr) =
         expr.downcast_ref::<PlainAggregateWindowExpr>()
     {
         serialize_physical_window_aggr_expr(
@@ -183,6 +121,25 @@ pub fn serialize_physical_window_expr(
             window_frame,
             codec,
         )?
+    } else if let Some(udf_window_expr) = expr.downcast_ref::<StandardWindowExpr>() {
+        if let Some(expr) = udf_window_expr
+            .get_standard_func_expr()
+            .as_any()
+            .downcast_ref::<WindowUDFExpr>()
+        {
+            let mut buf = Vec::new();
+            codec.try_encode_udwf(expr.fun(), &mut buf)?;
+            (
+                physical_window_expr_node::WindowFunction::UserDefinedWindowFunction(
+                    expr.fun().name().to_string(),
+                ),
+                (!buf.is_empty()).then_some(buf),
+            )
+        } else {
+            return not_impl_err!(
+                "User-defined window function not supported: {window_expr:?}"
+            );
+        }
     } else {
         return not_impl_err!("WindowExpr not supported: {window_expr:?}");
     };
@@ -261,6 +218,14 @@ pub fn serialize_physical_expr(
                 protobuf::PhysicalColumn {
                     name: expr.name().to_string(),
                     index: expr.index() as u32,
+                },
+            )),
+        })
+    } else if let Some(expr) = expr.downcast_ref::<UnKnownColumn>() {
+        Ok(protobuf::PhysicalExprNode {
+            expr_type: Some(protobuf::physical_expr_node::ExprType::UnknownColumn(
+                protobuf::UnknownColumn {
+                    name: expr.name().to_string(),
                 },
             )),
         })
@@ -383,6 +348,7 @@ pub fn serialize_physical_expr(
                     args: serialize_physical_exprs(expr.args(), codec)?,
                     fun_definition: (!buf.is_empty()).then_some(buf),
                     return_type: Some(expr.return_type().try_into()?),
+                    nullable: expr.nullable(),
                 },
             )),
         })
@@ -563,6 +529,7 @@ pub fn serialize_file_scan_config(
                 physical_sort_expr_nodes: e,
             })
             .collect::<Vec<_>>(),
+        constraints: Some(conf.constraints.clone().into()),
     })
 }
 
@@ -644,6 +611,7 @@ impl TryFrom<&FileSinkConfig> for protobuf::FileSinkConfig {
             table_partition_cols,
             keep_partition_by_columns: conf.keep_partition_by_columns,
             insert_op: conf.insert_op as i32,
+            file_extension: conf.file_extension.to_string(),
         })
     }
 }

@@ -20,14 +20,16 @@
 use std::collections::VecDeque;
 use std::fmt;
 
+use sqlparser::ast::ExprWithAlias;
+use sqlparser::tokenizer::TokenWithSpan;
 use sqlparser::{
     ast::{
-        ColumnDef, ColumnOptionDef, Expr, ObjectName, OrderByExpr, Query,
+        ColumnDef, ColumnOptionDef, ObjectName, OrderByExpr, Query,
         Statement as SQLStatement, TableConstraint, Value,
     },
     dialect::{keywords::Keyword, Dialect, GenericDialect},
     parser::{Parser, ParserError},
-    tokenizer::{Token, TokenWithLocation, Tokenizer, Word},
+    tokenizer::{Token, Tokenizer, Word},
 };
 
 // Use `Parser::expected` instead, if possible
@@ -141,7 +143,7 @@ pub enum CopyToSource {
     /// `COPY <table> TO ...`
     Relation(ObjectName),
     /// COPY (...query...) TO ...
-    Query(Query),
+    Query(Box<Query>),
 }
 
 impl fmt::Display for CopyToSource {
@@ -194,6 +196,8 @@ pub struct CreateExternalTable {
     pub order_exprs: Vec<LexOrdering>,
     /// Option to not error if table already exists
     pub if_not_exists: bool,
+    /// Whether the table is a temporary table
+    pub temporary: bool,
     /// Infinite streams?
     pub unbounded: bool,
     /// Table(provider) specific options
@@ -326,7 +330,7 @@ impl<'a> DFParser<'a> {
     pub fn parse_sql_into_expr_with_dialect(
         sql: &str,
         dialect: &dyn Dialect,
-    ) -> Result<Expr, ParserError> {
+    ) -> Result<ExprWithAlias, ParserError> {
         let mut parser = DFParser::new_with_dialect(sql, dialect)?;
         parser.parse_expr()
     }
@@ -335,7 +339,7 @@ impl<'a> DFParser<'a> {
     fn expected<T>(
         &self,
         expected: &str,
-        found: TokenWithLocation,
+        found: TokenWithSpan,
     ) -> Result<T, ParserError> {
         parser_err!(format!("Expected {expected}, found: {found}"))
     }
@@ -375,7 +379,7 @@ impl<'a> DFParser<'a> {
         }
     }
 
-    pub fn parse_expr(&mut self) -> Result<Expr, ParserError> {
+    pub fn parse_expr(&mut self) -> Result<ExprWithAlias, ParserError> {
         if let Token::Word(w) = self.parser.peek_token().token {
             match w.keyword {
                 Keyword::CREATE | Keyword::COPY | Keyword::EXPLAIN => {
@@ -385,7 +389,7 @@ impl<'a> DFParser<'a> {
             }
         }
 
-        self.parser.parse_expr()
+        self.parser.parse_expr_with_alias()
     }
 
     /// Parse a SQL `COPY TO` statement
@@ -699,6 +703,10 @@ impl<'a> DFParser<'a> {
         &mut self,
         unbounded: bool,
     ) -> Result<Statement, ParserError> {
+        let temporary = self
+            .parser
+            .parse_one_of_keywords(&[Keyword::TEMP, Keyword::TEMPORARY])
+            .is_some();
         self.parser.expect_keyword(Keyword::TABLE)?;
         let if_not_exists =
             self.parser
@@ -761,10 +769,10 @@ impl<'a> DFParser<'a> {
                         // Note that mixing both names and definitions is not allowed
                         let peeked = self.parser.peek_nth_token(2);
                         if peeked == Token::Comma || peeked == Token::RParen {
-                            // list of column names
+                            // List of column names
                             builder.table_partition_cols = Some(self.parse_partitions()?)
                         } else {
-                            // list of column defs
+                            // List of column defs
                             let (cols, cons) = self.parse_columns()?;
                             builder.table_partition_cols = Some(
                                 cols.iter().map(|col| col.name.to_string()).collect(),
@@ -820,6 +828,7 @@ impl<'a> DFParser<'a> {
             table_partition_cols: builder.table_partition_cols.unwrap_or(vec![]),
             order_exprs: builder.order_exprs,
             if_not_exists,
+            temporary,
             unbounded,
             options: builder.options.unwrap_or(Vec::new()),
             constraints,
@@ -850,7 +859,7 @@ impl<'a> DFParser<'a> {
             options.push((key, value));
             let comma = self.parser.consume_token(&Token::Comma);
             if self.parser.consume_token(&Token::RParen) {
-                // allow a trailing comma, even though it's not in standard
+                // Allow a trailing comma, even though it's not in standard
                 break;
             } else if !comma {
                 return self.expected(
@@ -868,6 +877,7 @@ mod tests {
     use super::*;
     use sqlparser::ast::Expr::Identifier;
     use sqlparser::ast::{BinaryOperator, DataType, Expr, Ident};
+    use sqlparser::tokenizer::Span;
 
     fn expect_parse_ok(sql: &str, expected: Statement) -> Result<(), ParserError> {
         let statements = DFParser::parse_sql(sql)?;
@@ -903,6 +913,7 @@ mod tests {
             name: Ident {
                 value: name.into(),
                 quote_style: None,
+                span: Span::empty(),
             },
             data_type,
             collation: None,
@@ -924,6 +935,7 @@ mod tests {
             table_partition_cols: vec![],
             order_exprs: vec![],
             if_not_exists: false,
+            temporary: false,
             unbounded: false,
             options: vec![],
             constraints: vec![],
@@ -940,6 +952,7 @@ mod tests {
             table_partition_cols: vec![],
             order_exprs: vec![],
             if_not_exists: false,
+            temporary: false,
             unbounded: false,
             options: vec![],
             constraints: vec![],
@@ -957,6 +970,7 @@ mod tests {
             table_partition_cols: vec![],
             order_exprs: vec![],
             if_not_exists: false,
+            temporary: false,
             unbounded: false,
             options: vec![],
             constraints: vec![],
@@ -974,6 +988,7 @@ mod tests {
             table_partition_cols: vec![],
             order_exprs: vec![],
             if_not_exists: false,
+            temporary: false,
             unbounded: false,
             options: vec![(
                 "format.delimiter".into(),
@@ -994,6 +1009,7 @@ mod tests {
             table_partition_cols: vec!["p1".to_string(), "p2".to_string()],
             order_exprs: vec![],
             if_not_exists: false,
+            temporary: false,
             unbounded: false,
             options: vec![],
             constraints: vec![],
@@ -1021,6 +1037,7 @@ mod tests {
                 table_partition_cols: vec![],
                 order_exprs: vec![],
                 if_not_exists: false,
+                temporary: false,
                 unbounded: false,
                 options: vec![(
                     "format.compression".into(),
@@ -1041,6 +1058,7 @@ mod tests {
             table_partition_cols: vec![],
             order_exprs: vec![],
             if_not_exists: false,
+            temporary: false,
             unbounded: false,
             options: vec![],
             constraints: vec![],
@@ -1057,6 +1075,7 @@ mod tests {
             table_partition_cols: vec![],
             order_exprs: vec![],
             if_not_exists: false,
+            temporary: false,
             unbounded: false,
             options: vec![],
             constraints: vec![],
@@ -1073,6 +1092,7 @@ mod tests {
             table_partition_cols: vec![],
             order_exprs: vec![],
             if_not_exists: false,
+            temporary: false,
             unbounded: false,
             options: vec![],
             constraints: vec![],
@@ -1090,6 +1110,7 @@ mod tests {
             table_partition_cols: vec![],
             order_exprs: vec![],
             if_not_exists: true,
+            temporary: false,
             unbounded: false,
             options: vec![],
             constraints: vec![],
@@ -1110,6 +1131,7 @@ mod tests {
             table_partition_cols: vec!["p1".to_string()],
             order_exprs: vec![],
             if_not_exists: false,
+            temporary: false,
             unbounded: false,
             options: vec![],
             constraints: vec![],
@@ -1140,6 +1162,7 @@ mod tests {
             table_partition_cols: vec![],
             order_exprs: vec![],
             if_not_exists: false,
+            temporary: false,
             unbounded: false,
             options: vec![("k1".into(), Value::SingleQuotedString("v1".into()))],
             constraints: vec![],
@@ -1157,6 +1180,7 @@ mod tests {
             table_partition_cols: vec![],
             order_exprs: vec![],
             if_not_exists: false,
+            temporary: false,
             unbounded: false,
             options: vec![
                 ("k1".into(), Value::SingleQuotedString("v1".into())),
@@ -1198,12 +1222,14 @@ mod tests {
                     expr: Identifier(Ident {
                         value: "c1".to_owned(),
                         quote_style: None,
+                        span: Span::empty(),
                     }),
                     asc,
                     nulls_first,
                     with_fill: None,
                 }]],
                 if_not_exists: false,
+                temporary: false,
                 unbounded: false,
                 options: vec![],
                 constraints: vec![],
@@ -1228,6 +1254,7 @@ mod tests {
                     expr: Identifier(Ident {
                         value: "c1".to_owned(),
                         quote_style: None,
+                        span: Span::empty(),
                     }),
                     asc: Some(true),
                     nulls_first: None,
@@ -1237,6 +1264,7 @@ mod tests {
                     expr: Identifier(Ident {
                         value: "c2".to_owned(),
                         quote_style: None,
+                        span: Span::empty(),
                     }),
                     asc: Some(false),
                     nulls_first: Some(true),
@@ -1244,6 +1272,7 @@ mod tests {
                 },
             ]],
             if_not_exists: false,
+            temporary: false,
             unbounded: false,
             options: vec![],
             constraints: vec![],
@@ -1267,11 +1296,13 @@ mod tests {
                     left: Box::new(Identifier(Ident {
                         value: "c1".to_owned(),
                         quote_style: None,
+                        span: Span::empty(),
                     })),
                     op: BinaryOperator::Minus,
                     right: Box::new(Identifier(Ident {
                         value: "c2".to_owned(),
                         quote_style: None,
+                        span: Span::empty(),
                     })),
                 },
                 asc: Some(true),
@@ -1279,6 +1310,7 @@ mod tests {
                 with_fill: None,
             }]],
             if_not_exists: false,
+            temporary: false,
             unbounded: false,
             options: vec![],
             constraints: vec![],
@@ -1311,11 +1343,13 @@ mod tests {
                     left: Box::new(Identifier(Ident {
                         value: "c1".to_owned(),
                         quote_style: None,
+                        span: Span::empty(),
                     })),
                     op: BinaryOperator::Minus,
                     right: Box::new(Identifier(Ident {
                         value: "c2".to_owned(),
                         quote_style: None,
+                        span: Span::empty(),
                     })),
                 },
                 asc: Some(true),
@@ -1323,6 +1357,7 @@ mod tests {
                 with_fill: None,
             }]],
             if_not_exists: true,
+            temporary: false,
             unbounded: true,
             options: vec![
                 (
@@ -1420,7 +1455,7 @@ mod tests {
         };
 
         let query = if let SQLStatement::Query(query) = statement {
-            *query
+            query
         } else {
             panic!("Expected query, got {statement:?}");
         };

@@ -18,6 +18,7 @@
 //! [`CovarianceSample`]: covariance sample aggregations.
 
 use std::fmt::Debug;
+use std::mem::size_of_val;
 
 use arrow::{
     array::{ArrayRef, Float64Array, UInt64Array},
@@ -33,9 +34,10 @@ use datafusion_expr::{
     function::{AccumulatorArgs, StateFieldsArgs},
     type_coercion::aggregates::NUMERICS,
     utils::format_state_name,
-    Accumulator, AggregateUDFImpl, Signature, Volatility,
+    Accumulator, AggregateUDFImpl, Documentation, Signature, Volatility,
 };
 use datafusion_functions_aggregate_common::stats::StatsType;
+use datafusion_macros::user_doc;
 
 make_udaf_expr_and_func!(
     CovarianceSample,
@@ -53,6 +55,21 @@ make_udaf_expr_and_func!(
     covar_pop_udaf
 );
 
+#[user_doc(
+    doc_section(label = "Statistical Functions"),
+    description = "Returns the sample covariance of a set of number pairs.",
+    syntax_example = "covar_samp(expression1, expression2)",
+    sql_example = r#"```sql
+> SELECT covar_samp(column1, column2) FROM table_name;
++-----------------------------------+
+| covar_samp(column1, column2)      |
++-----------------------------------+
+| 8.25                              |
++-----------------------------------+
+```"#,
+    standard_argument(name = "expression1", prefix = "First"),
+    standard_argument(name = "expression2", prefix = "Second")
+)]
 pub struct CovarianceSample {
     signature: Signature,
     aliases: Vec<String>,
@@ -124,8 +141,27 @@ impl AggregateUDFImpl for CovarianceSample {
     fn aliases(&self) -> &[String] {
         &self.aliases
     }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        self.doc()
+    }
 }
 
+#[user_doc(
+    doc_section(label = "Statistical Functions"),
+    description = "Returns the sample covariance of a set of number pairs.",
+    syntax_example = "covar_samp(expression1, expression2)",
+    sql_example = r#"```sql
+> SELECT covar_samp(column1, column2) FROM table_name;
++-----------------------------------+
+| covar_samp(column1, column2)      |
++-----------------------------------+
+| 8.25                              |
++-----------------------------------+
+```"#,
+    standard_argument(name = "expression1", prefix = "First"),
+    standard_argument(name = "expression2", prefix = "Second")
+)]
 pub struct CovariancePopulation {
     signature: Signature,
 }
@@ -193,6 +229,10 @@ impl AggregateUDFImpl for CovariancePopulation {
             StatsType::Population,
         )?))
     }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        self.doc()
+    }
 }
 
 /// An accumulator to compute covariance
@@ -206,7 +246,7 @@ impl AggregateUDFImpl for CovariancePopulation {
 /// Journal of the American Statistical Association. 69 (348): 859–866. doi:10.2307/2286154. JSTOR 2286154.
 ///
 /// Though it is not covered in the original paper but is based on the same idea, as a result the algorithm is online,
-/// parallelizable and numerically stable.
+/// parallelize and numerically stable.
 
 #[derive(Debug)]
 pub struct CovarianceAccumulator {
@@ -388,6 +428,6 @@ impl Accumulator for CovarianceAccumulator {
     }
 
     fn size(&self) -> usize {
-        std::mem::size_of_val(self)
+        size_of_val(self)
     }
 }

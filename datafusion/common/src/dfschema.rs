@@ -315,7 +315,6 @@ impl DFSchema {
                 None => self_unqualified_names.contains(field.name().as_str()),
             };
             if !duplicated_field {
-                // self.inner.fields.push(field.clone());
                 schema_builder.push(Arc::clone(field));
                 qualifiers.push(qualifier.cloned());
             }
@@ -403,33 +402,6 @@ impl DFSchema {
             self.field_with_qualified_name(qualifier, name)
         } else {
             self.field_with_unqualified_name(name)
-        }
-    }
-
-    /// Check whether the column reference is ambiguous
-    pub fn check_ambiguous_name(
-        &self,
-        qualifier: Option<&TableReference>,
-        name: &str,
-    ) -> Result<()> {
-        let count = self
-            .iter()
-            .filter(|(field_q, f)| match (field_q, qualifier) {
-                (Some(q1), Some(q2)) => q1.resolved_eq(q2) && f.name() == name,
-                (None, None) => f.name() == name,
-                _ => false,
-            })
-            .take(2)
-            .count();
-        if count > 1 {
-            _schema_err!(SchemaError::AmbiguousReference {
-                field: Column {
-                    relation: None,
-                    name: name.to_string(),
-                },
-            })
-        } else {
-            Ok(())
         }
     }
 
@@ -684,9 +656,26 @@ impl DFSchema {
             (othertype, DataType::Dictionary(_, v1)) => v1.as_ref() == othertype,
             (DataType::List(f1), DataType::List(f2))
             | (DataType::LargeList(f1), DataType::LargeList(f2))
-            | (DataType::FixedSizeList(f1, _), DataType::FixedSizeList(f2, _))
-            | (DataType::Map(f1, _), DataType::Map(f2, _)) => {
-                Self::field_is_logically_equal(f1, f2)
+            | (DataType::FixedSizeList(f1, _), DataType::FixedSizeList(f2, _)) => {
+                // Don't compare the names of the technical inner field
+                // Usually "item" but that's not mandated
+                Self::datatype_is_logically_equal(f1.data_type(), f2.data_type())
+            }
+            (DataType::Map(f1, _), DataType::Map(f2, _)) => {
+                // Don't compare the names of the technical inner fields
+                // Usually "entries", "key", "value" but that's not mandated
+                match (f1.data_type(), f2.data_type()) {
+                    (DataType::Struct(f1_inner), DataType::Struct(f2_inner)) => {
+                        f1_inner.len() == f2_inner.len()
+                            && f1_inner.iter().zip(f2_inner.iter()).all(|(f1, f2)| {
+                                Self::datatype_is_logically_equal(
+                                    f1.data_type(),
+                                    f2.data_type(),
+                                )
+                            })
+                    }
+                    _ => panic!("Map type should have an inner struct field"),
+                }
             }
             (DataType::Struct(fields1), DataType::Struct(fields2)) => {
                 let iter1 = fields1.iter();
@@ -714,7 +703,7 @@ impl DFSchema {
     /// name and type), ignoring both metadata and nullability.
     ///
     /// request to upstream: <https://github.com/apache/arrow-rs/issues/3199>
-    fn datatype_is_semantically_equal(dt1: &DataType, dt2: &DataType) -> bool {
+    pub fn datatype_is_semantically_equal(dt1: &DataType, dt2: &DataType) -> bool {
         // check nested fields
         match (dt1, dt2) {
             (DataType::Dictionary(k1, v1), DataType::Dictionary(k2, v2)) => {
@@ -723,9 +712,26 @@ impl DFSchema {
             }
             (DataType::List(f1), DataType::List(f2))
             | (DataType::LargeList(f1), DataType::LargeList(f2))
-            | (DataType::FixedSizeList(f1, _), DataType::FixedSizeList(f2, _))
-            | (DataType::Map(f1, _), DataType::Map(f2, _)) => {
-                Self::field_is_semantically_equal(f1, f2)
+            | (DataType::FixedSizeList(f1, _), DataType::FixedSizeList(f2, _)) => {
+                // Don't compare the names of the technical inner field
+                // Usually "item" but that's not mandated
+                Self::datatype_is_semantically_equal(f1.data_type(), f2.data_type())
+            }
+            (DataType::Map(f1, _), DataType::Map(f2, _)) => {
+                // Don't compare the names of the technical inner fields
+                // Usually "entries", "key", "value" but that's not mandated
+                match (f1.data_type(), f2.data_type()) {
+                    (DataType::Struct(f1_inner), DataType::Struct(f2_inner)) => {
+                        f1_inner.len() == f2_inner.len()
+                            && f1_inner.iter().zip(f2_inner.iter()).all(|(f1, f2)| {
+                                Self::datatype_is_semantically_equal(
+                                    f1.data_type(),
+                                    f2.data_type(),
+                                )
+                            })
+                    }
+                    _ => panic!("Map type should have an inner struct field"),
+                }
             }
             (DataType::Struct(fields1), DataType::Struct(fields2)) => {
                 let iter1 = fields1.iter();
@@ -949,7 +955,7 @@ pub trait ExprSchema: std::fmt::Debug {
     /// Returns the column's optional metadata.
     fn metadata(&self, col: &Column) -> Result<&HashMap<String, String>>;
 
-    /// Return the coulmn's datatype and nullability
+    /// Return the column's datatype and nullability
     fn data_type_and_nullable(&self, col: &Column) -> Result<(&DataType, bool)>;
 }
 
@@ -1062,10 +1068,12 @@ mod tests {
         let schema = DFSchema::try_from_qualified_schema("t1", &test_schema_1())?;
         // lookup with unqualified name "t1.c0"
         let err = schema.index_of_column(&col).unwrap_err();
-        assert_eq!(
-            err.strip_backtrace(),
-            "Schema error: No field named \"t1.c0\". Valid fields are t1.c0, t1.c1."
-        );
+        let expected = "Schema error: No field named \"t1.c0\". \
+            Column names are case sensitive. \
+            You can use double quotes to refer to the \"\"t1.c0\"\" column \
+            or set the datafusion.sql_parser.enable_ident_normalization configuration. \
+            Valid fields are t1.c0, t1.c1.";
+        assert_eq!(err.strip_backtrace(), expected);
         Ok(())
     }
 
@@ -1082,10 +1090,9 @@ mod tests {
 
         // lookup with unqualified name "t1.c0"
         let err = schema.index_of_column(&col).unwrap_err();
-        assert_eq!(
-            err.strip_backtrace(),
-            "Schema error: No field named \"t1.c0\". Valid fields are t1.\"CapitalColumn\", t1.\"field.with.period\"."
-        );
+        let expected = "Schema error: No field named \"t1.c0\". \
+            Valid fields are t1.\"CapitalColumn\", t1.\"field.with.period\".";
+        assert_eq!(err.strip_backtrace(), expected);
         Ok(())
     }
 
@@ -1255,12 +1262,14 @@ mod tests {
 
         let col = Column::from_qualified_name("t1.c0");
         let err = schema.index_of_column(&col).unwrap_err();
-        assert_eq!(err.strip_backtrace(), "Schema error: No field named t1.c0.");
+        let expected = "Schema error: No field named t1.c0.";
+        assert_eq!(err.strip_backtrace(), expected);
 
         // the same check without qualifier
         let col = Column::from_name("c0");
         let err = schema.index_of_column(&col).err().unwrap();
-        assert_eq!(err.strip_backtrace(), "Schema error: No field named c0.");
+        let expected = "Schema error: No field named c0.";
+        assert_eq!(err.strip_backtrace(), expected);
     }
 
     #[test]
@@ -1358,6 +1367,286 @@ mod tests {
         }
 
         Ok(())
+    }
+
+    #[test]
+    fn test_datatype_is_logically_equal() {
+        assert!(DFSchema::datatype_is_logically_equal(
+            &DataType::Int8,
+            &DataType::Int8
+        ));
+
+        assert!(!DFSchema::datatype_is_logically_equal(
+            &DataType::Int8,
+            &DataType::Int16
+        ));
+
+        // Test lists
+
+        // Succeeds if both have the same element type, disregards names and nullability
+        assert!(DFSchema::datatype_is_logically_equal(
+            &DataType::List(Field::new_list_field(DataType::Int8, true).into()),
+            &DataType::List(Field::new("element", DataType::Int8, false).into())
+        ));
+
+        // Fails if element type is different
+        assert!(!DFSchema::datatype_is_logically_equal(
+            &DataType::List(Field::new_list_field(DataType::Int8, true).into()),
+            &DataType::List(Field::new_list_field(DataType::Int16, true).into())
+        ));
+
+        // Test maps
+        let map_field = DataType::Map(
+            Field::new(
+                "entries",
+                DataType::Struct(Fields::from(vec![
+                    Field::new("key", DataType::Int8, false),
+                    Field::new("value", DataType::Int8, true),
+                ])),
+                true,
+            )
+            .into(),
+            true,
+        );
+
+        // Succeeds if both maps have the same key and value types, disregards names and nullability
+        assert!(DFSchema::datatype_is_logically_equal(
+            &map_field,
+            &DataType::Map(
+                Field::new(
+                    "pairs",
+                    DataType::Struct(Fields::from(vec![
+                        Field::new("one", DataType::Int8, false),
+                        Field::new("two", DataType::Int8, false)
+                    ])),
+                    true
+                )
+                .into(),
+                true
+            )
+        ));
+        // Fails if value type is different
+        assert!(!DFSchema::datatype_is_logically_equal(
+            &map_field,
+            &DataType::Map(
+                Field::new(
+                    "entries",
+                    DataType::Struct(Fields::from(vec![
+                        Field::new("key", DataType::Int8, false),
+                        Field::new("value", DataType::Int16, true)
+                    ])),
+                    true
+                )
+                .into(),
+                true
+            )
+        ));
+
+        // Fails if key type is different
+        assert!(!DFSchema::datatype_is_logically_equal(
+            &map_field,
+            &DataType::Map(
+                Field::new(
+                    "entries",
+                    DataType::Struct(Fields::from(vec![
+                        Field::new("key", DataType::Int16, false),
+                        Field::new("value", DataType::Int8, true)
+                    ])),
+                    true
+                )
+                .into(),
+                true
+            )
+        ));
+
+        // Test structs
+
+        let struct_field = DataType::Struct(Fields::from(vec![
+            Field::new("a", DataType::Int8, true),
+            Field::new("b", DataType::Int8, true),
+        ]));
+
+        // Succeeds if both have same names and datatypes, ignores nullability
+        assert!(DFSchema::datatype_is_logically_equal(
+            &struct_field,
+            &DataType::Struct(Fields::from(vec![
+                Field::new("a", DataType::Int8, false),
+                Field::new("b", DataType::Int8, true),
+            ]))
+        ));
+
+        // Fails if field names are different
+        assert!(!DFSchema::datatype_is_logically_equal(
+            &struct_field,
+            &DataType::Struct(Fields::from(vec![
+                Field::new("x", DataType::Int8, true),
+                Field::new("y", DataType::Int8, true),
+            ]))
+        ));
+
+        // Fails if types are different
+        assert!(!DFSchema::datatype_is_logically_equal(
+            &struct_field,
+            &DataType::Struct(Fields::from(vec![
+                Field::new("a", DataType::Int16, true),
+                Field::new("b", DataType::Int8, true),
+            ]))
+        ));
+
+        // Fails if more or less fields
+        assert!(!DFSchema::datatype_is_logically_equal(
+            &struct_field,
+            &DataType::Struct(Fields::from(vec![Field::new("a", DataType::Int8, true),]))
+        ));
+    }
+
+    #[test]
+    fn test_datatype_is_logically_equivalent_to_dictionary() {
+        // Dictionary is logically equal to its value type
+        assert!(DFSchema::datatype_is_logically_equal(
+            &DataType::Utf8,
+            &DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8))
+        ));
+    }
+
+    #[test]
+    fn test_datatype_is_semantically_equal() {
+        assert!(DFSchema::datatype_is_semantically_equal(
+            &DataType::Int8,
+            &DataType::Int8
+        ));
+
+        assert!(!DFSchema::datatype_is_semantically_equal(
+            &DataType::Int8,
+            &DataType::Int16
+        ));
+
+        // Test lists
+
+        // Succeeds if both have the same element type, disregards names and nullability
+        assert!(DFSchema::datatype_is_semantically_equal(
+            &DataType::List(Field::new_list_field(DataType::Int8, true).into()),
+            &DataType::List(Field::new("element", DataType::Int8, false).into())
+        ));
+
+        // Fails if element type is different
+        assert!(!DFSchema::datatype_is_semantically_equal(
+            &DataType::List(Field::new_list_field(DataType::Int8, true).into()),
+            &DataType::List(Field::new_list_field(DataType::Int16, true).into())
+        ));
+
+        // Test maps
+        let map_field = DataType::Map(
+            Field::new(
+                "entries",
+                DataType::Struct(Fields::from(vec![
+                    Field::new("key", DataType::Int8, false),
+                    Field::new("value", DataType::Int8, true),
+                ])),
+                true,
+            )
+            .into(),
+            true,
+        );
+
+        // Succeeds if both maps have the same key and value types, disregards names and nullability
+        assert!(DFSchema::datatype_is_semantically_equal(
+            &map_field,
+            &DataType::Map(
+                Field::new(
+                    "pairs",
+                    DataType::Struct(Fields::from(vec![
+                        Field::new("one", DataType::Int8, false),
+                        Field::new("two", DataType::Int8, false)
+                    ])),
+                    true
+                )
+                .into(),
+                true
+            )
+        ));
+        // Fails if value type is different
+        assert!(!DFSchema::datatype_is_semantically_equal(
+            &map_field,
+            &DataType::Map(
+                Field::new(
+                    "entries",
+                    DataType::Struct(Fields::from(vec![
+                        Field::new("key", DataType::Int8, false),
+                        Field::new("value", DataType::Int16, true)
+                    ])),
+                    true
+                )
+                .into(),
+                true
+            )
+        ));
+
+        // Fails if key type is different
+        assert!(!DFSchema::datatype_is_semantically_equal(
+            &map_field,
+            &DataType::Map(
+                Field::new(
+                    "entries",
+                    DataType::Struct(Fields::from(vec![
+                        Field::new("key", DataType::Int16, false),
+                        Field::new("value", DataType::Int8, true)
+                    ])),
+                    true
+                )
+                .into(),
+                true
+            )
+        ));
+
+        // Test structs
+
+        let struct_field = DataType::Struct(Fields::from(vec![
+            Field::new("a", DataType::Int8, true),
+            Field::new("b", DataType::Int8, true),
+        ]));
+
+        // Succeeds if both have same names and datatypes, ignores nullability
+        assert!(DFSchema::datatype_is_logically_equal(
+            &struct_field,
+            &DataType::Struct(Fields::from(vec![
+                Field::new("a", DataType::Int8, false),
+                Field::new("b", DataType::Int8, true),
+            ]))
+        ));
+
+        // Fails if field names are different
+        assert!(!DFSchema::datatype_is_logically_equal(
+            &struct_field,
+            &DataType::Struct(Fields::from(vec![
+                Field::new("x", DataType::Int8, true),
+                Field::new("y", DataType::Int8, true),
+            ]))
+        ));
+
+        // Fails if types are different
+        assert!(!DFSchema::datatype_is_logically_equal(
+            &struct_field,
+            &DataType::Struct(Fields::from(vec![
+                Field::new("a", DataType::Int16, true),
+                Field::new("b", DataType::Int8, true),
+            ]))
+        ));
+
+        // Fails if more or less fields
+        assert!(!DFSchema::datatype_is_logically_equal(
+            &struct_field,
+            &DataType::Struct(Fields::from(vec![Field::new("a", DataType::Int8, true),]))
+        ));
+    }
+
+    #[test]
+    fn test_datatype_is_not_semantically_equivalent_to_dictionary() {
+        // Dictionary is not semantically equal to its value type
+        assert!(!DFSchema::datatype_is_semantically_equal(
+            &DataType::Utf8,
+            &DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8))
+        ));
     }
 
     fn test_schema_2() -> Schema {

@@ -84,28 +84,52 @@ fn criterion_benchmark(c: &mut Criterion) {
         let args_string_ascii = gen_string_array(n_rows, str_len, 0.1, 0.0, false);
         c.bench_function(
             &format!("character_length_StringArray_ascii_str_len_{}", str_len),
-            |b| b.iter(|| black_box(character_length.invoke(&args_string_ascii))),
+            |b| {
+                b.iter(|| {
+                    // TODO use invoke_with_args
+                    black_box(character_length.invoke_batch(&args_string_ascii, n_rows))
+                })
+            },
         );
 
         // StringArray UTF8
         let args_string_utf8 = gen_string_array(n_rows, str_len, 0.1, 0.5, false);
         c.bench_function(
             &format!("character_length_StringArray_utf8_str_len_{}", str_len),
-            |b| b.iter(|| black_box(character_length.invoke(&args_string_utf8))),
+            |b| {
+                b.iter(|| {
+                    // TODO use invoke_with_args
+                    black_box(character_length.invoke_batch(&args_string_utf8, n_rows))
+                })
+            },
         );
 
         // StringViewArray ASCII only
         let args_string_view_ascii = gen_string_array(n_rows, str_len, 0.1, 0.0, true);
         c.bench_function(
             &format!("character_length_StringViewArray_ascii_str_len_{}", str_len),
-            |b| b.iter(|| black_box(character_length.invoke(&args_string_view_ascii))),
+            |b| {
+                b.iter(|| {
+                    // TODO use invoke_with_args
+                    black_box(
+                        character_length.invoke_batch(&args_string_view_ascii, n_rows),
+                    )
+                })
+            },
         );
 
         // StringViewArray UTF8
         let args_string_view_utf8 = gen_string_array(n_rows, str_len, 0.1, 0.5, true);
         c.bench_function(
             &format!("character_length_StringViewArray_utf8_str_len_{}", str_len),
-            |b| b.iter(|| black_box(character_length.invoke(&args_string_view_utf8))),
+            |b| {
+                b.iter(|| {
+                    // TODO use invoke_with_args
+                    black_box(
+                        character_length.invoke_batch(&args_string_view_utf8, n_rows),
+                    )
+                })
+            },
         );
     }
 }

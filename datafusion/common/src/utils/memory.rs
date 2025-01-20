@@ -15,9 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! This module provides a function to estimate the memory size of a HashTable prior to alloaction
+//! This module provides a function to estimate the memory size of a HashTable prior to allocation
 
 use crate::{DataFusionError, Result};
+use std::mem::size_of;
 
 /// Estimates the memory size required for a hash table prior to allocation.
 ///
@@ -78,7 +79,7 @@ pub fn estimate_memory_size<T>(num_elements: usize, fixed_size: usize) -> Result
     // For the majority of cases hashbrown overestimates the bucket quantity
     // to keep ~1/8 of them empty. We take this factor into account by
     // multiplying the number of elements with a fixed ratio of 8/7 (~1.14).
-    // This formula leads to overallocation for small tables (< 8 elements)
+    // This formula leads to over-allocation for small tables (< 8 elements)
     // but should be fine overall.
     num_elements
         .checked_mul(8)
@@ -87,7 +88,7 @@ pub fn estimate_memory_size<T>(num_elements: usize, fixed_size: usize) -> Result
             // + size of entry * number of buckets
             // + 1 byte for each bucket
             // + fixed size of collection (HashSet/HashTable)
-            std::mem::size_of::<T>()
+            size_of::<T>()
                 .checked_mul(estimated_buckets)?
                 .checked_add(estimated_buckets)?
                 .checked_add(fixed_size)
@@ -101,14 +102,14 @@ pub fn estimate_memory_size<T>(num_elements: usize, fixed_size: usize) -> Result
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashSet;
+    use std::{collections::HashSet, mem::size_of};
 
     use super::estimate_memory_size;
 
     #[test]
     fn test_estimate_memory() {
         // size (bytes): 48
-        let fixed_size = std::mem::size_of::<HashSet<u32>>();
+        let fixed_size = size_of::<HashSet<u32>>();
 
         // estimated buckets: 16 = (8 * 8 / 7).next_power_of_two()
         let num_elements = 8;
@@ -126,7 +127,7 @@ mod tests {
     #[test]
     fn test_estimate_memory_overflow() {
         let num_elements = usize::MAX;
-        let fixed_size = std::mem::size_of::<HashSet<u32>>();
+        let fixed_size = size_of::<HashSet<u32>>();
         let estimated = estimate_memory_size::<u32>(num_elements, fixed_size);
 
         assert!(estimated.is_err());

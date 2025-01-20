@@ -32,7 +32,7 @@ use aws_credential_types::provider::ProvideCredentials;
 use object_store::aws::{AmazonS3Builder, AwsCredential};
 use object_store::gcp::GoogleCloudStorageBuilder;
 use object_store::http::HttpBuilder;
-use object_store::{CredentialProvider, ObjectStore};
+use object_store::{ClientOptions, CredentialProvider, ObjectStore};
 use url::Url;
 
 pub async fn get_s3_object_store_builder(
@@ -437,6 +437,7 @@ pub(crate) async fn get_object_store(
         }
         "http" | "https" => Arc::new(
             HttpBuilder::new()
+                .with_client_options(ClientOptions::new().with_allow_http(true))
                 .with_url(url.origin().ascii_serialization())
                 .build()?,
         ),
@@ -471,12 +472,13 @@ mod tests {
 
     #[tokio::test]
     async fn s3_object_store_builder() -> Result<()> {
-        let access_key_id = "fake_access_key_id";
-        let secret_access_key = "fake_secret_access_key";
+        // "fake" is uppercase to ensure the values are not lowercased when parsed
+        let access_key_id = "FAKE_access_key_id";
+        let secret_access_key = "FAKE_secret_access_key";
         let region = "fake_us-east-2";
         let endpoint = "endpoint33";
-        let session_token = "fake_session_token";
-        let location = "s3://bucket/path/file.parquet";
+        let session_token = "FAKE_session_token";
+        let location = "s3://bucket/path/FAKE/file.parquet";
 
         let table_url = ListingTableUrl::parse(location)?;
         let scheme = table_url.scheme();
@@ -495,7 +497,7 @@ mod tests {
 
         if let LogicalPlan::Ddl(DdlStatement::CreateExternalTable(cmd)) = &mut plan {
             ctx.register_table_options_extension_from_scheme(scheme);
-            let mut table_options = ctx.state().default_table_options().clone();
+            let mut table_options = ctx.state().default_table_options();
             table_options.alter_with_string_hash_map(&cmd.options)?;
             let aws_options = table_options.extensions.get::<AwsOptions>().unwrap();
             let builder =
@@ -540,7 +542,7 @@ mod tests {
 
         if let LogicalPlan::Ddl(DdlStatement::CreateExternalTable(cmd)) = &mut plan {
             ctx.register_table_options_extension_from_scheme(scheme);
-            let mut table_options = ctx.state().default_table_options().clone();
+            let mut table_options = ctx.state().default_table_options();
             table_options.alter_with_string_hash_map(&cmd.options)?;
             let aws_options = table_options.extensions.get::<AwsOptions>().unwrap();
             let err = get_s3_object_store_builder(table_url.as_ref(), aws_options)
@@ -566,7 +568,7 @@ mod tests {
 
         if let LogicalPlan::Ddl(DdlStatement::CreateExternalTable(cmd)) = &mut plan {
             ctx.register_table_options_extension_from_scheme(scheme);
-            let mut table_options = ctx.state().default_table_options().clone();
+            let mut table_options = ctx.state().default_table_options();
             table_options.alter_with_string_hash_map(&cmd.options)?;
             let aws_options = table_options.extensions.get::<AwsOptions>().unwrap();
             // ensure this isn't an error
@@ -594,7 +596,7 @@ mod tests {
 
         if let LogicalPlan::Ddl(DdlStatement::CreateExternalTable(cmd)) = &mut plan {
             ctx.register_table_options_extension_from_scheme(scheme);
-            let mut table_options = ctx.state().default_table_options().clone();
+            let mut table_options = ctx.state().default_table_options();
             table_options.alter_with_string_hash_map(&cmd.options)?;
             let aws_options = table_options.extensions.get::<AwsOptions>().unwrap();
             let builder = get_oss_object_store_builder(table_url.as_ref(), aws_options)?;
@@ -631,7 +633,7 @@ mod tests {
 
         if let LogicalPlan::Ddl(DdlStatement::CreateExternalTable(cmd)) = &mut plan {
             ctx.register_table_options_extension_from_scheme(scheme);
-            let mut table_options = ctx.state().default_table_options().clone();
+            let mut table_options = ctx.state().default_table_options();
             table_options.alter_with_string_hash_map(&cmd.options)?;
             let gcp_options = table_options.extensions.get::<GcpOptions>().unwrap();
             let builder = get_gcs_object_store_builder(table_url.as_ref(), gcp_options)?;

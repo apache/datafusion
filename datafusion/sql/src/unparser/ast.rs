@@ -15,18 +15,13 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! This file contains builders to create SQL ASTs. They are purposefully
-//! not exported as they will eventually be move to the SQLparser package.
-//!
-//!
-//! See <https://github.com/apache/datafusion/issues/8661>
-
 use core::fmt;
 
 use sqlparser::ast;
+use sqlparser::ast::helpers::attached_token::AttachedToken;
 
 #[derive(Clone)]
-pub(super) struct QueryBuilder {
+pub struct QueryBuilder {
     with: Option<ast::With>,
     body: Option<Box<ast::SetExpr>>,
     order_by: Vec<ast::OrderByExpr>,
@@ -127,7 +122,7 @@ impl Default for QueryBuilder {
 }
 
 #[derive(Clone)]
-pub(super) struct SelectBuilder {
+pub struct SelectBuilder {
     distinct: Option<ast::Distinct>,
     top: Option<ast::Top>,
     projection: Vec<ast::SelectItem>,
@@ -182,7 +177,28 @@ impl SelectBuilder {
         self
     }
     pub fn selection(&mut self, value: Option<ast::Expr>) -> &mut Self {
-        self.selection = value;
+        // With filter pushdown optimization, the LogicalPlan can have filters defined as part of `TableScan` and `Filter` nodes.
+        // To avoid overwriting one of the filters, we combine the existing filter with the additional filter.
+        // Example:                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+        // |  Projection: customer.c_phone AS cntrycode, customer.c_acctbal                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+        // |   Filter: CAST(customer.c_acctbal AS Decimal128(38, 6)) > (<subquery>)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+        // |     Subquery:
+        // |     ..                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+        // |     TableScan: customer, full_filters=[customer.c_mktsegment = Utf8("BUILDING")]
+        match (&self.selection, value) {
+            (Some(existing_selection), Some(new_selection)) => {
+                self.selection = Some(ast::Expr::BinaryOp {
+                    left: Box::new(existing_selection.clone()),
+                    op: ast::BinaryOperator::And,
+                    right: Box::new(new_selection),
+                });
+            }
+            (None, Some(new_selection)) => {
+                self.selection = Some(new_selection);
+            }
+            (_, None) => (),
+        }
+
         self
     }
     pub fn group_by(&mut self, value: ast::GroupByExpr) -> &mut Self {
@@ -220,6 +236,7 @@ impl SelectBuilder {
     pub fn build(&self) -> Result<ast::Select, BuilderError> {
         Ok(ast::Select {
             distinct: self.distinct.clone(),
+            top_before_distinct: false,
             top: self.top.clone(),
             projection: self.projection.clone(),
             into: self.into.clone(),
@@ -246,6 +263,7 @@ impl SelectBuilder {
             connect_by: None,
             window_before_qualify: false,
             prewhere: None,
+            select_token: AttachedToken::empty(),
         })
     }
     fn create_empty() -> Self {
@@ -275,7 +293,7 @@ impl Default for SelectBuilder {
 }
 
 #[derive(Clone)]
-pub(super) struct TableWithJoinsBuilder {
+pub struct TableWithJoinsBuilder {
     relation: Option<RelationBuilder>,
     joins: Vec<ast::Join>,
 }
@@ -322,7 +340,7 @@ impl Default for TableWithJoinsBuilder {
 }
 
 #[derive(Clone)]
-pub(super) struct RelationBuilder {
+pub struct RelationBuilder {
     relation: Option<TableFactorBuilder>,
 }
 
@@ -331,6 +349,7 @@ pub(super) struct RelationBuilder {
 enum TableFactorBuilder {
     Table(TableRelationBuilder),
     Derived(DerivedRelationBuilder),
+    Unnest(UnnestRelationBuilder),
     Empty,
 }
 
@@ -347,6 +366,12 @@ impl RelationBuilder {
         self.relation = Some(TableFactorBuilder::Derived(value));
         self
     }
+
+    pub fn unnest(&mut self, value: UnnestRelationBuilder) -> &mut Self {
+        self.relation = Some(TableFactorBuilder::Unnest(value));
+        self
+    }
+
     pub fn empty(&mut self) -> &mut Self {
         self.relation = Some(TableFactorBuilder::Empty);
         self
@@ -360,6 +385,9 @@ impl RelationBuilder {
             Some(TableFactorBuilder::Derived(ref mut rel_builder)) => {
                 rel_builder.alias = value;
             }
+            Some(TableFactorBuilder::Unnest(ref mut rel_builder)) => {
+                rel_builder.alias = value;
+            }
             Some(TableFactorBuilder::Empty) => (),
             None => (),
         }
@@ -369,6 +397,7 @@ impl RelationBuilder {
         Ok(match self.relation {
             Some(TableFactorBuilder::Table(ref value)) => Some(value.build()?),
             Some(TableFactorBuilder::Derived(ref value)) => Some(value.build()?),
+            Some(TableFactorBuilder::Unnest(ref value)) => Some(value.build()?),
             Some(TableFactorBuilder::Empty) => None,
             None => return Err(Into::into(UninitializedFieldError::from("relation"))),
         })
@@ -386,7 +415,7 @@ impl Default for RelationBuilder {
 }
 
 #[derive(Clone)]
-pub(super) struct TableRelationBuilder {
+pub struct TableRelationBuilder {
     name: Option<ast::ObjectName>,
     alias: Option<ast::TableAlias>,
     args: Option<Vec<ast::FunctionArg>>,
@@ -436,6 +465,7 @@ impl TableRelationBuilder {
             version: self.version.clone(),
             partitions: self.partitions.clone(),
             with_ordinality: false,
+            json_path: None,
         })
     }
     fn create_empty() -> Self {
@@ -455,7 +485,7 @@ impl Default for TableRelationBuilder {
     }
 }
 #[derive(Clone)]
-pub(super) struct DerivedRelationBuilder {
+pub struct DerivedRelationBuilder {
     lateral: Option<bool>,
     subquery: Option<Box<ast::Query>>,
     alias: Option<ast::TableAlias>,
@@ -504,10 +534,72 @@ impl Default for DerivedRelationBuilder {
     }
 }
 
+#[derive(Clone)]
+pub struct UnnestRelationBuilder {
+    pub alias: Option<ast::TableAlias>,
+    pub array_exprs: Vec<ast::Expr>,
+    with_offset: bool,
+    with_offset_alias: Option<ast::Ident>,
+    with_ordinality: bool,
+}
+
+#[allow(dead_code)]
+impl UnnestRelationBuilder {
+    pub fn alias(&mut self, value: Option<ast::TableAlias>) -> &mut Self {
+        self.alias = value;
+        self
+    }
+    pub fn array_exprs(&mut self, value: Vec<ast::Expr>) -> &mut Self {
+        self.array_exprs = value;
+        self
+    }
+
+    pub fn with_offset(&mut self, value: bool) -> &mut Self {
+        self.with_offset = value;
+        self
+    }
+
+    pub fn with_offset_alias(&mut self, value: Option<ast::Ident>) -> &mut Self {
+        self.with_offset_alias = value;
+        self
+    }
+
+    pub fn with_ordinality(&mut self, value: bool) -> &mut Self {
+        self.with_ordinality = value;
+        self
+    }
+
+    pub fn build(&self) -> Result<ast::TableFactor, BuilderError> {
+        Ok(ast::TableFactor::UNNEST {
+            alias: self.alias.clone(),
+            array_exprs: self.array_exprs.clone(),
+            with_offset: self.with_offset,
+            with_offset_alias: self.with_offset_alias.clone(),
+            with_ordinality: self.with_ordinality,
+        })
+    }
+
+    fn create_empty() -> Self {
+        Self {
+            alias: Default::default(),
+            array_exprs: Default::default(),
+            with_offset: Default::default(),
+            with_offset_alias: Default::default(),
+            with_ordinality: Default::default(),
+        }
+    }
+}
+
+impl Default for UnnestRelationBuilder {
+    fn default() -> Self {
+        Self::create_empty()
+    }
+}
+
 /// Runtime error when a `build()` method is called and one or more required fields
 /// do not have a value.
 #[derive(Debug, Clone)]
-pub(super) struct UninitializedFieldError(&'static str);
+pub struct UninitializedFieldError(&'static str);
 
 impl UninitializedFieldError {
     /// Create a new `UninitializedFieldError` for the specified field name.

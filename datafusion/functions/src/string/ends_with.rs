@@ -16,17 +16,38 @@
 // under the License.
 
 use std::any::Any;
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
 use arrow::array::ArrayRef;
 use arrow::datatypes::DataType;
 
 use crate::utils::make_scalar_function;
 use datafusion_common::{internal_err, Result};
-use datafusion_expr::scalar_doc_sections::DOC_SECTION_STRING;
 use datafusion_expr::{ColumnarValue, Documentation, Volatility};
 use datafusion_expr::{ScalarUDFImpl, Signature};
+use datafusion_macros::user_doc;
 
+#[user_doc(
+    doc_section(label = "String Functions"),
+    description = "Tests if a string ends with a substring.",
+    syntax_example = "ends_with(str, substr)",
+    sql_example = r#"```sql
+>  select ends_with('datafusion', 'soin');
++--------------------------------------------+
+| ends_with(Utf8("datafusion"),Utf8("soin")) |
++--------------------------------------------+
+| false                                      |
++--------------------------------------------+
+> select ends_with('datafusion', 'sion');
++--------------------------------------------+
+| ends_with(Utf8("datafusion"),Utf8("sion")) |
++--------------------------------------------+
+| true                                       |
++--------------------------------------------+
+```"#,
+    standard_argument(name = "str", prefix = "String"),
+    argument(name = "substr", description = "Substring to test for.")
+)]
 #[derive(Debug)]
 pub struct EndsWithFunc {
     signature: Signature,
@@ -63,7 +84,11 @@ impl ScalarUDFImpl for EndsWithFunc {
         Ok(DataType::Boolean)
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         match args[0].data_type() {
             DataType::Utf8View | DataType::Utf8 | DataType::LargeUtf8 => {
                 make_scalar_function(ends_with, vec![])(args)
@@ -75,39 +100,8 @@ impl ScalarUDFImpl for EndsWithFunc {
     }
 
     fn documentation(&self) -> Option<&Documentation> {
-        Some(get_ends_with_doc())
+        self.doc()
     }
-}
-
-static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
-
-fn get_ends_with_doc() -> &'static Documentation {
-    DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_STRING)
-            .with_description("Tests if a string ends with a substring.")
-            .with_syntax_example("ends_with(str, substr)")
-            .with_sql_example(
-                r#"```sql
->  select ends_with('datafusion', 'soin');
-+--------------------------------------------+
-| ends_with(Utf8("datafusion"),Utf8("soin")) |
-+--------------------------------------------+
-| false                                      |
-+--------------------------------------------+
-> select ends_with('datafusion', 'sion');
-+--------------------------------------------+
-| ends_with(Utf8("datafusion"),Utf8("sion")) |
-+--------------------------------------------+
-| true                                       |
-+--------------------------------------------+
-```"#,
-            )
-            .with_standard_argument("str", "String")
-            .with_argument("substr", "Substring to test for.")
-            .build()
-            .unwrap()
-    })
 }
 
 /// Returns true if string ends with suffix.
@@ -134,7 +128,7 @@ mod tests {
     fn test_functions() -> Result<()> {
         test_function!(
             EndsWithFunc::new(),
-            &[
+            vec![
                 ColumnarValue::from(ScalarValue::from("alphabet")),
                 ColumnarValue::from(ScalarValue::from("alph")),
             ],
@@ -145,7 +139,7 @@ mod tests {
         );
         test_function!(
             EndsWithFunc::new(),
-            &[
+            vec![
                 ColumnarValue::from(ScalarValue::from("alphabet")),
                 ColumnarValue::from(ScalarValue::from("bet")),
             ],
@@ -156,7 +150,7 @@ mod tests {
         );
         test_function!(
             EndsWithFunc::new(),
-            &[
+            vec![
                 ColumnarValue::from(ScalarValue::Utf8(None)),
                 ColumnarValue::from(ScalarValue::from("alph")),
             ],
@@ -167,7 +161,7 @@ mod tests {
         );
         test_function!(
             EndsWithFunc::new(),
-            &[
+            vec![
                 ColumnarValue::from(ScalarValue::from("alphabet")),
                 ColumnarValue::from(ScalarValue::Utf8(None)),
             ],

@@ -21,13 +21,13 @@ use async_trait::async_trait;
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::catalog::Session;
-use datafusion::datasource::function::TableFunctionImpl;
 use datafusion::datasource::TableProvider;
 use datafusion::error::Result;
 use datafusion::execution::context::ExecutionProps;
 use datafusion::physical_plan::memory::MemoryExec;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::prelude::SessionContext;
+use datafusion_catalog::TableFunctionImpl;
 use datafusion_common::{plan_err, ScalarValue};
 use datafusion_expr::simplify::SimplifyContext;
 use datafusion_expr::{Expr, Scalar, TableType};
@@ -144,7 +144,7 @@ impl TableFunctionImpl for LocalCsvTableFunc {
         let limit = exprs
             .get(1)
             .map(|expr| {
-                // try to simpify the expression, so 1+2 becomes 3, for example
+                // try to simplify the expression, so 1+2 becomes 3, for example
                 let execution_props = ExecutionProps::new();
                 let info = SimplifyContext::new(&execution_props);
                 let expr = ExprSimplifier::new(info).simplify(expr.clone())?;
@@ -181,8 +181,8 @@ fn read_csv_batches(csv_path: impl AsRef<Path>) -> Result<(SchemaRef, Vec<Record
         .with_header(true)
         .build(file)?;
     let mut batches = vec![];
-    for bacth in reader {
-        batches.push(bacth?);
+    for batch in reader {
+        batches.push(batch?);
     }
     let schema = Arc::new(schema);
     Ok((schema, batches))

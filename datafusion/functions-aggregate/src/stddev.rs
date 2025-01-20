@@ -19,6 +19,7 @@
 
 use std::any::Any;
 use std::fmt::{Debug, Formatter};
+use std::mem::align_of_val;
 use std::sync::Arc;
 
 use arrow::array::Float64Array;
@@ -29,9 +30,11 @@ use datafusion_common::{plan_err, ScalarValue};
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::utils::format_state_name;
 use datafusion_expr::{
-    Accumulator, AggregateUDFImpl, GroupsAccumulator, Signature, Volatility,
+    Accumulator, AggregateUDFImpl, Documentation, GroupsAccumulator, Signature,
+    Volatility,
 };
 use datafusion_functions_aggregate_common::stats::StatsType;
+use datafusion_macros::user_doc;
 
 use crate::variance::{VarianceAccumulator, VarianceGroupsAccumulator};
 
@@ -43,6 +46,20 @@ make_udaf_expr_and_func!(
     stddev_udaf
 );
 
+#[user_doc(
+    doc_section(label = "Statistical Functions"),
+    description = "Returns the standard deviation of a set of numbers.",
+    syntax_example = "stddev(expression)",
+    sql_example = r#"```sql
+> SELECT stddev(column_name) FROM table_name;
++----------------------+
+| stddev(column_name)   |
++----------------------+
+| 12.34                |
++----------------------+
+```"#,
+    standard_argument(name = "expression",)
+)]
 /// STDDEV and STDDEV_SAMP (standard deviation) aggregate expression
 pub struct Stddev {
     signature: Signature,
@@ -68,10 +85,7 @@ impl Stddev {
     /// Create a new STDDEV aggregate function
     pub fn new() -> Self {
         Self {
-            signature: Signature::coercible(
-                vec![DataType::Float64],
-                Volatility::Immutable,
-            ),
+            signature: Signature::numeric(1, Volatility::Immutable),
             alias: vec!["stddev_samp".to_string()],
         }
     }
@@ -132,6 +146,10 @@ impl AggregateUDFImpl for Stddev {
     ) -> Result<Box<dyn GroupsAccumulator>> {
         Ok(Box::new(StddevGroupsAccumulator::new(StatsType::Sample)))
     }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        self.doc()
+    }
 }
 
 make_udaf_expr_and_func!(
@@ -142,6 +160,20 @@ make_udaf_expr_and_func!(
     stddev_pop_udaf
 );
 
+#[user_doc(
+    doc_section(label = "Statistical Functions"),
+    description = "Returns the population standard deviation of a set of numbers.",
+    syntax_example = "stddev_pop(expression)",
+    sql_example = r#"```sql
+> SELECT stddev_pop(column_name) FROM table_name;
++--------------------------+
+| stddev_pop(column_name)   |
++--------------------------+
+| 10.56                    |
++--------------------------+
+```"#,
+    standard_argument(name = "expression",)
+)]
 /// STDDEV_POP population aggregate expression
 pub struct StddevPop {
     signature: Signature,
@@ -228,6 +260,10 @@ impl AggregateUDFImpl for StddevPop {
             StatsType::Population,
         )))
     }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        self.doc()
+    }
 }
 
 /// An accumulator to compute the average
@@ -285,8 +321,7 @@ impl Accumulator for StddevAccumulator {
     }
 
     fn size(&self) -> usize {
-        std::mem::align_of_val(self) - std::mem::align_of_val(&self.variance)
-            + self.variance.size()
+        align_of_val(self) - align_of_val(&self.variance) + self.variance.size()
     }
 
     fn supports_retract_batch(&self) -> bool {
@@ -352,6 +387,7 @@ mod tests {
     use datafusion_expr::AggregateUDF;
     use datafusion_functions_aggregate_common::utils::get_accum_scalar_values_as_arrays;
     use datafusion_physical_expr::expressions::col;
+    use datafusion_physical_expr_common::sort_expr::LexOrdering;
     use std::sync::Arc;
 
     #[test]
@@ -403,7 +439,7 @@ mod tests {
             return_type: &DataType::Float64,
             schema,
             ignore_nulls: false,
-            ordering_req: &[],
+            ordering_req: &LexOrdering::default(),
             name: "a",
             is_distinct: false,
             is_reversed: false,
@@ -414,7 +450,7 @@ mod tests {
             return_type: &DataType::Float64,
             schema,
             ignore_nulls: false,
-            ordering_req: &[],
+            ordering_req: &LexOrdering::default(),
             name: "a",
             is_distinct: false,
             is_reversed: false,

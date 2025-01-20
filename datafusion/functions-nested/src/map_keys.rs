@@ -22,9 +22,10 @@ use arrow_array::{Array, ArrayRef, ListArray};
 use arrow_schema::{DataType, Field};
 use datafusion_common::{cast::as_map_array, exec_err, Result};
 use datafusion_expr::{
-    ArrayFunctionSignature, ColumnarValue, ScalarUDFImpl, Signature, TypeSignature,
-    Volatility,
+    ArrayFunctionSignature, ColumnarValue, Documentation, ScalarUDFImpl, Signature,
+    TypeSignature, Volatility,
 };
+use datafusion_macros::user_doc;
 use std::any::Any;
 use std::sync::Arc;
 
@@ -36,9 +37,33 @@ make_udf_expr_and_func!(
     map_keys_udf
 );
 
+#[user_doc(
+    doc_section(label = "Map Functions"),
+    description = "Returns a list of all keys in the map.",
+    syntax_example = "map_keys(map)",
+    sql_example = r#"```sql
+SELECT map_keys(MAP {'a': 1, 'b': NULL, 'c': 3});
+----
+[a, b, c]
+
+SELECT map_keys(map([100, 5], [42, 43]));
+----
+[100, 5]
+```"#,
+    argument(
+        name = "map",
+        description = "Map expression. Can be a constant, column, or function, and any combination of map operators."
+    )
+)]
 #[derive(Debug)]
-pub(crate) struct MapKeysFunc {
+pub struct MapKeysFunc {
     signature: Signature,
+}
+
+impl Default for MapKeysFunc {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl MapKeysFunc {
@@ -65,21 +90,28 @@ impl ScalarUDFImpl for MapKeysFunc {
         &self.signature
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> datafusion_common::Result<DataType> {
+    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
         if arg_types.len() != 1 {
             return exec_err!("map_keys expects single argument");
         }
         let map_type = &arg_types[0];
         let map_fields = get_map_entry_field(map_type)?;
-        Ok(DataType::List(Arc::new(Field::new(
-            "item",
+        Ok(DataType::List(Arc::new(Field::new_list_field(
             map_fields.first().unwrap().data_type().clone(),
             false,
         ))))
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> datafusion_common::Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         make_scalar_function(map_keys_inner)(args)
+    }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        self.doc()
     }
 }
 
@@ -94,7 +126,7 @@ fn map_keys_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
     };
 
     Ok(Arc::new(ListArray::new(
-        Arc::new(Field::new("item", map_array.key_type().clone(), false)),
+        Arc::new(Field::new_list_field(map_array.key_type().clone(), false)),
         map_array.offsets().clone(),
         Arc::clone(map_array.keys()),
         None,

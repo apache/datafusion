@@ -18,6 +18,7 @@
 //! Defines physical expressions that can evaluated at runtime during query execution
 
 use std::any::Any;
+use std::mem::size_of_val;
 
 use arrow::array::ArrayRef;
 use arrow::array::BooleanArray;
@@ -32,10 +33,12 @@ use datafusion_common::{DataFusionError, Result, ScalarValue};
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::utils::{format_state_name, AggregateOrderSensitivity};
 use datafusion_expr::{
-    Accumulator, AggregateUDFImpl, GroupsAccumulator, ReversedUDAF, Signature, Volatility,
+    Accumulator, AggregateUDFImpl, Documentation, GroupsAccumulator, ReversedUDAF,
+    Signature, Volatility,
 };
 
 use datafusion_functions_aggregate_common::aggregate::groups_accumulator::bool_op::BooleanGroupsAccumulator;
+use datafusion_macros::user_doc;
 
 // returns the new value after bool_and/bool_or with the new values, taking nullability into account
 macro_rules! typed_bool_and_or_batch {
@@ -88,6 +91,20 @@ make_udaf_expr_and_func!(
     bool_or_udaf
 );
 
+#[user_doc(
+    doc_section(label = "General Functions"),
+    description = "Returns true if all non-null input values are true, otherwise false.",
+    syntax_example = "bool_and(expression)",
+    sql_example = r#"```sql
+> SELECT bool_and(column_name) FROM table_name;
++----------------------------+
+| bool_and(column_name)       |
++----------------------------+
+| true                        |
++----------------------------+
+```"#,
+    standard_argument(name = "expression", prefix = "The")
+)]
 /// BOOL_AND aggregate expression
 #[derive(Debug)]
 pub struct BoolAnd {
@@ -172,6 +189,10 @@ impl AggregateUDFImpl for BoolAnd {
     fn reverse_expr(&self) -> ReversedUDAF {
         ReversedUDAF::Identical
     }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        self.doc()
+    }
 }
 
 #[derive(Debug, Default)]
@@ -196,7 +217,7 @@ impl Accumulator for BoolAndAccumulator {
     }
 
     fn size(&self) -> usize {
-        std::mem::size_of_val(self)
+        size_of_val(self)
     }
 
     fn state(&mut self) -> Result<Vec<ScalarValue>> {
@@ -208,6 +229,20 @@ impl Accumulator for BoolAndAccumulator {
     }
 }
 
+#[user_doc(
+    doc_section(label = "General Functions"),
+    description = "Returns true if all non-null input values are true, otherwise false.",
+    syntax_example = "bool_and(expression)",
+    sql_example = r#"```sql
+> SELECT bool_and(column_name) FROM table_name;
++----------------------------+
+| bool_and(column_name)       |
++----------------------------+
+| true                        |
++----------------------------+
+```"#,
+    standard_argument(name = "expression", prefix = "The")
+)]
 /// BOOL_OR aggregate expression
 #[derive(Debug, Clone)]
 pub struct BoolOr {
@@ -293,6 +328,10 @@ impl AggregateUDFImpl for BoolOr {
     fn reverse_expr(&self) -> ReversedUDAF {
         ReversedUDAF::Identical
     }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        self.doc()
+    }
 }
 
 #[derive(Debug, Default)]
@@ -317,7 +356,7 @@ impl Accumulator for BoolOrAccumulator {
     }
 
     fn size(&self) -> usize {
-        std::mem::size_of_val(self)
+        size_of_val(self)
     }
 
     fn state(&mut self) -> Result<Vec<ScalarValue>> {

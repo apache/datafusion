@@ -15,62 +15,136 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::array::AsArray;
+use arrow::array::{AsArray, PrimitiveArray};
 use arrow::datatypes::{Float64Type, Int32Type};
 use datafusion::error::Result;
 use datafusion::prelude::*;
+use datafusion_common::assert_batches_eq;
 use futures::StreamExt;
 
-/// This example shows that it is possible to convert query results into Rust structs .
+/// This example shows how to convert query results into Rust structs by using
+/// the Arrow APIs to convert the results into Rust native types.
+///
+/// This is a bit tricky initially as the results are returned as columns stored
+/// as [ArrayRef]
+///
+/// [ArrayRef]: arrow::array::ArrayRef
 #[tokio::main]
 async fn main() -> Result<()> {
-    let data_list = Data::new().await?;
-    println!("{data_list:#?}");
+    // Run a query that returns two columns of data
+    let ctx = SessionContext::new();
+    let testdata = datafusion::test_util::parquet_test_data();
+    ctx.register_parquet(
+        "alltypes_plain",
+        &format!("{testdata}/alltypes_plain.parquet"),
+        ParquetReadOptions::default(),
+    )
+    .await?;
+    let df = ctx
+        .sql("SELECT int_col, double_col FROM alltypes_plain")
+        .await?;
+
+    // print out the results showing we have an int32 and a float64 column
+    let results = df.clone().collect().await?;
+    assert_batches_eq!(
+        [
+            "+---------+------------+",
+            "| int_col | double_col |",
+            "+---------+------------+",
+            "| 0       | 0.0        |",
+            "| 1       | 10.1       |",
+            "| 0       | 0.0        |",
+            "| 1       | 10.1       |",
+            "| 0       | 0.0        |",
+            "| 1       | 10.1       |",
+            "| 0       | 0.0        |",
+            "| 1       | 10.1       |",
+            "+---------+------------+",
+        ],
+        &results
+    );
+
+    // We will now convert the query results into a Rust struct
+    let mut stream = df.execute_stream().await?;
+    let mut list = vec![];
+
+    // DataFusion produces data in chunks called `RecordBatch`es which are
+    // typically 8000 rows each. This loop processes each `RecordBatch` as it is
+    // produced by the query plan and adds it to the list
+    while let Some(b) = stream.next().await.transpose()? {
+        // Each `RecordBatch` has one or more columns. Each column is stored as
+        // an `ArrayRef`. To interact with data using Rust native types we need to
+        // convert these `ArrayRef`s into concrete array types using APIs from
+        // the arrow crate.
+
+        // In this case, we know that each batch has two columns of the  Arrow
+        // types Int32 and Float64, so first we cast the two columns to the
+        // appropriate Arrow PrimitiveArray (this is a fast / zero-copy cast).:
+        let int_col: &PrimitiveArray<Int32Type> = b.column(0).as_primitive();
+        let float_col: &PrimitiveArray<Float64Type> = b.column(1).as_primitive();
+
+        // With PrimitiveArrays, we can access to the values as native Rust
+        // types i32 and f64, and forming the desired `Data` structs
+        for (i, f) in int_col.values().iter().zip(float_col.values()) {
+            list.push(Data {
+                int_col: *i,
+                double_col: *f,
+            })
+        }
+    }
+
+    // Finally, we have the results in the list of Rust structs
+    let res = format!("{list:#?}");
+    assert_eq!(
+        res,
+        r#"[
+    Data {
+        int_col: 0,
+        double_col: 0.0,
+    },
+    Data {
+        int_col: 1,
+        double_col: 10.1,
+    },
+    Data {
+        int_col: 0,
+        double_col: 0.0,
+    },
+    Data {
+        int_col: 1,
+        double_col: 10.1,
+    },
+    Data {
+        int_col: 0,
+        double_col: 0.0,
+    },
+    Data {
+        int_col: 1,
+        double_col: 10.1,
+    },
+    Data {
+        int_col: 0,
+        double_col: 0.0,
+    },
+    Data {
+        int_col: 1,
+        double_col: 10.1,
+    },
+]"#
+    );
+
+    // Use the fields in the struct to avoid clippy complaints
+    let int_sum = list.iter().fold(0, |acc, x| acc + x.int_col);
+    let double_sum = list.iter().fold(0.0, |acc, x| acc + x.double_col);
+    assert_eq!(int_sum, 4);
+    assert_eq!(double_sum, 40.4);
+
     Ok(())
 }
 
+/// This is target struct where we want the query results.
 #[derive(Debug)]
 struct Data {
-    #[allow(dead_code)]
     int_col: i32,
-    #[allow(dead_code)]
     double_col: f64,
-}
-
-impl Data {
-    pub async fn new() -> Result<Vec<Self>> {
-        // this group is almost the same as the one you find it in parquet_sql.rs
-        let ctx = SessionContext::new();
-
-        let testdata = datafusion::test_util::parquet_test_data();
-
-        ctx.register_parquet(
-            "alltypes_plain",
-            &format!("{testdata}/alltypes_plain.parquet"),
-            ParquetReadOptions::default(),
-        )
-        .await?;
-
-        let df = ctx
-            .sql("SELECT int_col, double_col FROM alltypes_plain")
-            .await?;
-
-        df.clone().show().await?;
-
-        let mut stream = df.execute_stream().await?;
-        let mut list = vec![];
-        while let Some(b) = stream.next().await.transpose()? {
-            let int_col = b.column(0).as_primitive::<Int32Type>();
-            let float_col = b.column(1).as_primitive::<Float64Type>();
-
-            for (i, f) in int_col.values().iter().zip(float_col.values()) {
-                list.push(Data {
-                    int_col: *i,
-                    double_col: *f,
-                })
-            }
-        }
-
-        Ok(list)
-    }
 }

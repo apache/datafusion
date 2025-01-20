@@ -107,19 +107,34 @@ fn criterion_benchmark(c: &mut Criterion) {
         let args = create_args_without_count::<i32>(size, len, true, true);
         group.bench_function(
             format!("substr_string_view [size={}, strlen={}]", size, len),
-            |b| b.iter(|| black_box(substr.invoke(&args))),
+            |b| {
+                b.iter(|| {
+                    // TODO use invoke_with_args
+                    black_box(substr.invoke_batch(&args, size))
+                })
+            },
         );
 
         let args = create_args_without_count::<i32>(size, len, false, false);
         group.bench_function(
             format!("substr_string [size={}, strlen={}]", size, len),
-            |b| b.iter(|| black_box(substr.invoke(&args))),
+            |b| {
+                b.iter(|| {
+                    // TODO use invoke_with_args
+                    black_box(substr.invoke_batch(&args, size))
+                })
+            },
         );
 
         let args = create_args_without_count::<i64>(size, len, true, false);
         group.bench_function(
             format!("substr_large_string [size={}, strlen={}]", size, len),
-            |b| b.iter(|| black_box(substr.invoke(&args))),
+            |b| {
+                b.iter(|| {
+                    // TODO use invoke_with_args
+                    black_box(substr.invoke_batch(&args, size))
+                })
+            },
         );
 
         group.finish();
@@ -137,7 +152,12 @@ fn criterion_benchmark(c: &mut Criterion) {
                 "substr_string_view [size={}, count={}, strlen={}]",
                 size, count, len,
             ),
-            |b| b.iter(|| black_box(substr.invoke(&args))),
+            |b| {
+                b.iter(|| {
+                    // TODO use invoke_with_args
+                    black_box(substr.invoke_batch(&args, size))
+                })
+            },
         );
 
         let args = create_args_with_count::<i32>(size, len, count, false);
@@ -146,7 +166,12 @@ fn criterion_benchmark(c: &mut Criterion) {
                 "substr_string [size={}, count={}, strlen={}]",
                 size, count, len,
             ),
-            |b| b.iter(|| black_box(substr.invoke(&args))),
+            |b| {
+                b.iter(|| {
+                    // TODO use invoke_with_args
+                    black_box(substr.invoke_batch(&args, size))
+                })
+            },
         );
 
         let args = create_args_with_count::<i64>(size, len, count, false);
@@ -155,7 +180,12 @@ fn criterion_benchmark(c: &mut Criterion) {
                 "substr_large_string [size={}, count={}, strlen={}]",
                 size, count, len,
             ),
-            |b| b.iter(|| black_box(substr.invoke(&args))),
+            |b| {
+                b.iter(|| {
+                    // TODO use invoke_with_args
+                    black_box(substr.invoke_batch(&args, size))
+                })
+            },
         );
 
         group.finish();
@@ -173,7 +203,12 @@ fn criterion_benchmark(c: &mut Criterion) {
                 "substr_string_view [size={}, count={}, strlen={}]",
                 size, count, len,
             ),
-            |b| b.iter(|| black_box(substr.invoke(&args))),
+            |b| {
+                b.iter(|| {
+                    // TODO use invoke_with_args
+                    black_box(substr.invoke_batch(&args, size))
+                })
+            },
         );
 
         let args = create_args_with_count::<i32>(size, len, count, false);
@@ -182,7 +217,12 @@ fn criterion_benchmark(c: &mut Criterion) {
                 "substr_string [size={}, count={}, strlen={}]",
                 size, count, len,
             ),
-            |b| b.iter(|| black_box(substr.invoke(&args))),
+            |b| {
+                b.iter(|| {
+                    // TODO use invoke_with_args
+                    black_box(substr.invoke_batch(&args, size))
+                })
+            },
         );
 
         let args = create_args_with_count::<i64>(size, len, count, false);
@@ -191,7 +231,12 @@ fn criterion_benchmark(c: &mut Criterion) {
                 "substr_large_string [size={}, count={}, strlen={}]",
                 size, count, len,
             ),
-            |b| b.iter(|| black_box(substr.invoke(&args))),
+            |b| {
+                b.iter(|| {
+                    // TODO use invoke_with_args
+                    black_box(substr.invoke_batch(&args, size))
+                })
+            },
         );
 
         group.finish();

@@ -28,10 +28,10 @@ use arrow::array::{
 use arrow::buffer::{NullBuffer, OffsetBuffer, ScalarBuffer};
 use arrow::datatypes::DataType;
 use datafusion_common::hash_utils::create_hashes;
-use datafusion_common::utils::proxy::{RawTableAllocExt, VecAllocExt};
+use datafusion_common::utils::proxy::{HashTableAllocExt, VecAllocExt};
 use std::any::type_name;
 use std::fmt::Debug;
-use std::mem;
+use std::mem::{size_of, swap};
 use std::ops::Range;
 use std::sync::Arc;
 
@@ -104,8 +104,9 @@ impl<O: OffsetSizeTrait> ArrowBytesSet<O> {
 /// `Binary`, and `LargeBinary`) values that can produce the set of keys on
 /// output as `GenericBinaryArray` without copies.
 ///
-/// Equivalent to `HashSet<String, V>` but with better performance for arrow
-/// data.
+/// Equivalent to `HashSet<String, V>` but with better performance if you need
+/// to emit the keys as an Arrow `StringArray` / `BinaryArray`. For other
+/// purposes it is the same as a `HashMap<String, V>`
 ///
 /// # Generic Arguments
 ///
@@ -214,7 +215,7 @@ where
     /// Should the output be String or Binary?
     output_type: OutputType,
     /// Underlying hash set for each distinct value
-    map: hashbrown::raw::RawTable<Entry<O, V>>,
+    map: hashbrown::hash_table::HashTable<Entry<O, V>>,
     /// Total size of the map in bytes
     map_size: usize,
     /// In progress arrow `Buffer` containing all values
@@ -245,7 +246,7 @@ where
     pub fn new(output_type: OutputType) -> Self {
         Self {
             output_type,
-            map: hashbrown::raw::RawTable::with_capacity(INITIAL_MAP_CAPACITY),
+            map: hashbrown::hash_table::HashTable::with_capacity(INITIAL_MAP_CAPACITY),
             map_size: 0,
             buffer: BufferBuilder::new(INITIAL_BUFFER_CAPACITY),
             offsets: vec![O::default()], // first offset is always 0
@@ -259,7 +260,7 @@ where
     /// the same output type
     pub fn take(&mut self) -> Self {
         let mut new_self = Self::new(self.output_type);
-        mem::swap(self, &mut new_self);
+        swap(self, &mut new_self);
         new_self
     }
 
@@ -348,7 +349,7 @@ where
         let batch_hashes = &mut self.hashes_buffer;
         batch_hashes.clear();
         batch_hashes.resize(values.len(), 0);
-        create_hashes(&[values.clone()], &self.random_state, batch_hashes)
+        create_hashes(&[Arc::clone(values)], &self.random_state, batch_hashes)
             // hash is supported for all types and create_hashes only
             // returns errors for unsupported types
             .unwrap();
@@ -386,7 +387,7 @@ where
                 let inline = value.iter().fold(0usize, |acc, &x| acc << 8 | x as usize);
 
                 // is value is already present in the set?
-                let entry = self.map.get_mut(hash, |header| {
+                let entry = self.map.find_mut(hash, |header| {
                     // compare value if hashes match
                     if header.len != value_len {
                         return false;
@@ -424,7 +425,7 @@ where
             // value is not "small"
             else {
                 // Check if the value is already present in the set
-                let entry = self.map.get_mut(hash, |header| {
+                let entry = self.map.find_mut(hash, |header| {
                     // compare value if hashes match
                     if header.len != value_len {
                         return false;
@@ -544,7 +545,7 @@ where
     /// this set, not including `self`
     pub fn size(&self) -> usize {
         self.map_size
-            + self.buffer.capacity() * mem::size_of::<u8>()
+            + self.buffer.capacity() * size_of::<u8>()
             + self.offsets.allocated_size()
             + self.hashes_buffer.allocated_size()
     }
@@ -574,7 +575,7 @@ where
 }
 
 /// Maximum size of a value that can be inlined in the hash table
-const SHORT_VALUE_LEN: usize = mem::size_of::<usize>();
+const SHORT_VALUE_LEN: usize = size_of::<usize>();
 
 /// Entry in the hash table -- see [`ArrowBytesMap`] for more details
 #[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]

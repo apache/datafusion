@@ -16,6 +16,7 @@
 // under the License.
 
 use datafusion::execution::SessionStateDefaults;
+use datafusion_common::{not_impl_err, HashSet, Result};
 use datafusion_expr::{
     aggregate_doc_sections, scalar_doc_sections, window_doc_sections, AggregateUDF,
     DocSection, Documentation, ScalarUDF, WindowUDF,
@@ -24,7 +25,12 @@ use itertools::Itertools;
 use std::env::args;
 use std::fmt::Write as _;
 
-fn main() {
+/// Print documentation for all functions of a given type to stdout
+///
+/// Usage: `cargo run --bin print_functions_docs -- <type>`
+///
+/// Called from `dev/update_function_docs.sh`
+fn main() -> Result<()> {
     let args: Vec<String> = args().collect();
 
     if args.len() != 2 {
@@ -42,12 +48,13 @@ fn main() {
         _ => {
             panic!("Unknown function type: {}", function_type)
         }
-    };
+    }?;
 
     println!("{docs}");
+    Ok(())
 }
 
-fn print_aggregate_docs() -> String {
+fn print_aggregate_docs() -> Result<String> {
     let mut providers: Vec<Box<dyn DocProvider>> = vec![];
 
     for f in SessionStateDefaults::default_aggregate_functions() {
@@ -57,7 +64,7 @@ fn print_aggregate_docs() -> String {
     print_docs(providers, aggregate_doc_sections::doc_sections())
 }
 
-fn print_scalar_docs() -> String {
+fn print_scalar_docs() -> Result<String> {
     let mut providers: Vec<Box<dyn DocProvider>> = vec![];
 
     for f in SessionStateDefaults::default_scalar_functions() {
@@ -67,7 +74,7 @@ fn print_scalar_docs() -> String {
     print_docs(providers, scalar_doc_sections::doc_sections())
 }
 
-fn print_window_docs() -> String {
+fn print_window_docs() -> Result<String> {
     let mut providers: Vec<Box<dyn DocProvider>> = vec![];
 
     for f in SessionStateDefaults::default_window_functions() {
@@ -77,15 +84,42 @@ fn print_window_docs() -> String {
     print_docs(providers, window_doc_sections::doc_sections())
 }
 
+// Temporary method useful to semi automate
+// the migration of UDF documentation generation from code based
+// to attribute based
+// To be removed
+#[allow(dead_code)]
+fn save_doc_code_text(documentation: &Documentation, name: &str) {
+    let attr_text = documentation.to_doc_attribute();
+
+    let file_path = format!("{}.txt", name);
+    if std::path::Path::new(&file_path).exists() {
+        std::fs::remove_file(&file_path).unwrap();
+    }
+
+    // Open the file in append mode, create it if it doesn't exist
+    let mut file = std::fs::OpenOptions::new()
+        .append(true) // Open in append mode
+        .create(true) // Create the file if it doesn't exist
+        .open(file_path)
+        .unwrap();
+
+    use std::io::Write;
+    file.write_all(attr_text.as_bytes()).unwrap();
+}
+
 fn print_docs(
     providers: Vec<Box<dyn DocProvider>>,
     doc_sections: Vec<DocSection>,
-) -> String {
+) -> Result<String> {
     let mut docs = "".to_string();
+
+    // Ensure that all providers have documentation
+    let mut providers_with_no_docs = HashSet::new();
 
     // doc sections only includes sections that have 'include' == true
     for doc_section in doc_sections {
-        // make sure there is a function that is in this doc section
+        // make sure there is at least one function that is in this doc section
         if !&providers.iter().any(|f| {
             if let Some(documentation) = f.get_documentation() {
                 documentation.doc_section == doc_section
@@ -96,19 +130,21 @@ fn print_docs(
             continue;
         }
 
+        // filter out functions that are not in this doc section
         let providers: Vec<&Box<dyn DocProvider>> = providers
             .iter()
             .filter(|&f| {
                 if let Some(documentation) = f.get_documentation() {
                     documentation.doc_section == doc_section
                 } else {
+                    providers_with_no_docs.insert(f.get_name());
                     false
                 }
             })
             .collect::<Vec<_>>();
 
         // write out section header
-        let _ = writeln!(docs, "## {} ", doc_section.label);
+        let _ = writeln!(docs, "\n## {} \n", doc_section.label);
 
         if let Some(description) = doc_section.description {
             let _ = writeln!(docs, "{description}");
@@ -146,6 +182,9 @@ fn print_docs(
                 unreachable!()
             };
 
+            // Temporary for doc gen migration, see `save_doc_code_text` comments
+            // save_doc_code_text(documentation, &name);
+
             // first, the name, description and syntax example
             let _ = write!(
                 docs,
@@ -182,6 +221,13 @@ fn print_docs(
                 );
             }
 
+            if let Some(alt_syntax) = &documentation.alternative_syntax {
+                let _ = writeln!(docs, "#### Alternative Syntax\n");
+                for syntax in alt_syntax {
+                    let _ = writeln!(docs, "```sql\n{}\n```", syntax);
+                }
+            }
+
             // next, aliases
             if !f.get_aliases().is_empty() {
                 let _ = writeln!(docs, "#### Aliases");
@@ -202,9 +248,20 @@ fn print_docs(
         }
     }
 
-    docs
+    // If there are any functions that do not have documentation, print them out
+    // eventually make this an error: https://github.com/apache/datafusion/issues/12872
+    if !providers_with_no_docs.is_empty() {
+        eprintln!("INFO: The following functions do not have documentation:");
+        for f in &providers_with_no_docs {
+            eprintln!("  - {f}");
+        }
+        not_impl_err!("Some functions do not have documentation. Please implement `documentation` for: {providers_with_no_docs:?}")
+    } else {
+        Ok(docs)
+    }
 }
 
+/// Trait for accessing name / aliases / documentation for differnet functions
 trait DocProvider {
     fn get_name(&self) -> String;
     fn get_aliases(&self) -> Vec<String>;

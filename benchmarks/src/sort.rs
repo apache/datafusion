@@ -18,17 +18,17 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use crate::{AccessLogOpt, BenchmarkRun, CommonOpt};
+use crate::util::{AccessLogOpt, BenchmarkRun, CommonOpt};
 
 use arrow::util::pretty;
 use datafusion::common::Result;
-use datafusion::physical_expr::PhysicalSortExpr;
+use datafusion::physical_expr::{LexOrdering, PhysicalSortExpr};
 use datafusion::physical_plan::collect;
 use datafusion::physical_plan::sorts::sort::SortExec;
 use datafusion::prelude::{SessionConfig, SessionContext};
 use datafusion::test_util::parquet::TestParquetFile;
 use datafusion_common::instant::Instant;
-
+use datafusion_common::utils::get_available_parallelism;
 use structopt::StructOpt;
 
 /// Test performance of sorting large datasets
@@ -70,31 +70,28 @@ impl RunOpt {
         let sort_cases = vec![
             (
                 "sort utf8",
-                vec![PhysicalSortExpr {
+                LexOrdering::new(vec![PhysicalSortExpr {
                     expr: col("request_method", &schema)?,
                     options: Default::default(),
-                }],
+                }]),
             ),
             (
                 "sort int",
-                vec![PhysicalSortExpr {
-                    expr: col("request_bytes", &schema)?,
+                LexOrdering::new(vec![PhysicalSortExpr {
+                    expr: col("response_bytes", &schema)?,
                     options: Default::default(),
-                }],
+                }]),
             ),
             (
                 "sort decimal",
-                vec![
-                    // sort decimal
-                    PhysicalSortExpr {
-                        expr: col("decimal_price", &schema)?,
-                        options: Default::default(),
-                    },
-                ],
+                LexOrdering::new(vec![PhysicalSortExpr {
+                    expr: col("decimal_price", &schema)?,
+                    options: Default::default(),
+                }]),
             ),
             (
                 "sort integer tuple",
-                vec![
+                LexOrdering::new(vec![
                     PhysicalSortExpr {
                         expr: col("request_bytes", &schema)?,
                         options: Default::default(),
@@ -103,11 +100,11 @@ impl RunOpt {
                         expr: col("response_bytes", &schema)?,
                         options: Default::default(),
                     },
-                ],
+                ]),
             ),
             (
                 "sort utf8 tuple",
-                vec![
+                LexOrdering::new(vec![
                     // sort utf8 tuple
                     PhysicalSortExpr {
                         expr: col("service", &schema)?,
@@ -125,11 +122,11 @@ impl RunOpt {
                         expr: col("image", &schema)?,
                         options: Default::default(),
                     },
-                ],
+                ]),
             ),
             (
                 "sort mixed tuple",
-                vec![
+                LexOrdering::new(vec![
                     PhysicalSortExpr {
                         expr: col("service", &schema)?,
                         options: Default::default(),
@@ -142,7 +139,7 @@ impl RunOpt {
                         expr: col("decimal_price", &schema)?,
                         options: Default::default(),
                     },
-                ],
+                ]),
             ),
         ];
         for (title, expr) in sort_cases {
@@ -150,7 +147,9 @@ impl RunOpt {
             rundata.start_new_case(title);
             for i in 0..self.common.iterations {
                 let config = SessionConfig::new().with_target_partitions(
-                    self.common.partitions.unwrap_or(num_cpus::get()),
+                    self.common
+                        .partitions
+                        .unwrap_or(get_available_parallelism()),
                 );
                 let ctx = SessionContext::new_with_config(config);
                 let (rows, elapsed) =
@@ -170,13 +169,13 @@ impl RunOpt {
 
 async fn exec_sort(
     ctx: &SessionContext,
-    expr: &[PhysicalSortExpr],
+    expr: &LexOrdering,
     test_file: &TestParquetFile,
     debug: bool,
 ) -> Result<(usize, std::time::Duration)> {
     let start = Instant::now();
     let scan = test_file.create_scan(ctx, None).await?;
-    let exec = Arc::new(SortExec::new(expr.to_owned(), scan));
+    let exec = Arc::new(SortExec::new(expr.clone(), scan));
     let task_ctx = ctx.task_ctx();
     let result = collect(exec, task_ctx).await?;
     let elapsed = start.elapsed();

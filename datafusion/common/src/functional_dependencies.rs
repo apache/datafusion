@@ -18,16 +18,12 @@
 //! FunctionalDependencies keeps track of functional dependencies
 //! inside DFSchema.
 
-use std::collections::HashSet;
 use std::fmt::{Display, Formatter};
 use std::ops::Deref;
 use std::vec::IntoIter;
 
-use crate::error::_plan_err;
 use crate::utils::{merge_and_order_indices, set_difference};
-use crate::{DFSchema, DFSchemaRef, DataFusionError, JoinType, Result};
-
-use sqlparser::ast::TableConstraint;
+use crate::{DFSchema, HashSet, JoinType};
 
 /// This object defines a constraint on a table.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Hash)]
@@ -60,77 +56,44 @@ impl Constraints {
         Self { inner: constraints }
     }
 
-    /// Convert each `TableConstraint` to corresponding `Constraint`
-    pub fn new_from_table_constraints(
-        constraints: &[TableConstraint],
-        df_schema: &DFSchemaRef,
-    ) -> Result<Self> {
-        let constraints = constraints
-            .iter()
-            .map(|c: &TableConstraint| match c {
-                TableConstraint::Unique { name, columns, .. } => {
-                    let field_names = df_schema.field_names();
-                    // Get unique constraint indices in the schema:
-                    let indices = columns
-                        .iter()
-                        .map(|u| {
-                            let idx = field_names
-                                .iter()
-                                .position(|item| *item == u.value)
-                                .ok_or_else(|| {
-                                    let name = name
-                                        .as_ref()
-                                        .map(|name| format!("with name '{name}' "))
-                                        .unwrap_or("".to_string());
-                                    DataFusionError::Execution(
-                                        format!("Column for unique constraint {}not found in schema: {}", name,u.value)
-                                    )
-                                })?;
-                            Ok(idx)
-                        })
-                        .collect::<Result<Vec<_>>>()?;
-                    Ok(Constraint::Unique(indices))
-                }
-                TableConstraint::PrimaryKey { columns, .. } => {
-                    let field_names = df_schema.field_names();
-                    // Get primary key indices in the schema:
-                    let indices = columns
-                        .iter()
-                        .map(|pk| {
-                            let idx = field_names
-                                .iter()
-                                .position(|item| *item == pk.value)
-                                .ok_or_else(|| {
-                                    DataFusionError::Execution(format!(
-                                        "Column for primary key not found in schema: {}",
-                                        pk.value
-                                    ))
-                                })?;
-                            Ok(idx)
-                        })
-                        .collect::<Result<Vec<_>>>()?;
-                    Ok(Constraint::PrimaryKey(indices))
-                }
-                TableConstraint::ForeignKey { .. } => {
-                    _plan_err!("Foreign key constraints are not currently supported")
-                }
-                TableConstraint::Check { .. } => {
-                    _plan_err!("Check constraints are not currently supported")
-                }
-                TableConstraint::Index { .. } => {
-                    _plan_err!("Indexes are not currently supported")
-                }
-                TableConstraint::FulltextOrSpatial { .. } => {
-                    _plan_err!("Indexes are not currently supported")
-                }
-            })
-            .collect::<Result<Vec<_>>>()?;
-        Ok(Constraints::new_unverified(constraints))
-    }
-
     /// Check whether constraints is empty
     pub fn is_empty(&self) -> bool {
         self.inner.is_empty()
+    }
+
+    /// Projects constraints using the given projection indices.
+    /// Returns None if any of the constraint columns are not included in the projection.
+    pub fn project(&self, proj_indices: &[usize]) -> Option<Self> {
+        let projected = self
+            .inner
+            .iter()
+            .filter_map(|constraint| {
+                match constraint {
+                    Constraint::PrimaryKey(indices) => {
+                        let new_indices =
+                            update_elements_with_matching_indices(indices, proj_indices);
+                        // Only keep constraint if all columns are preserved
+                        (new_indices.len() == indices.len())
+                            .then_some(Constraint::PrimaryKey(new_indices))
+                    }
+                    Constraint::Unique(indices) => {
+                        let new_indices =
+                            update_elements_with_matching_indices(indices, proj_indices);
+                        // Only keep constraint if all columns are preserved
+                        (new_indices.len() == indices.len())
+                            .then_some(Constraint::Unique(new_indices))
+                    }
+                }
+            })
+            .collect::<Vec<_>>();
+
+        (!projected.is_empty()).then_some(Constraints::new_unverified(projected))
+    }
+}
+
+impl Default for Constraints {
+    fn default() -> Self {
+        Constraints::empty()
     }
 }
 
@@ -145,13 +108,13 @@ impl IntoIterator for Constraints {
 
 impl Display for Constraints {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        let pk: Vec<String> = self.inner.iter().map(|c| format!("{:?}", c)).collect();
+        let pk = self
+            .inner
+            .iter()
+            .map(|c| format!("{:?}", c))
+            .collect::<Vec<_>>();
         let pk = pk.join(", ");
-        if !pk.is_empty() {
-            write!(f, " constraints=[{pk}]")
-        } else {
-            write!(f, "")
-        }
+        write!(f, "constraints=[{pk}]")
     }
 }
 
@@ -405,7 +368,7 @@ impl FunctionalDependencies {
                 left_func_dependencies.extend(right_func_dependencies);
                 left_func_dependencies
             }
-            JoinType::LeftSemi | JoinType::LeftAnti => {
+            JoinType::LeftSemi | JoinType::LeftAnti | JoinType::LeftMark => {
                 // These joins preserve functional dependencies of the left side:
                 left_func_dependencies
             }
@@ -669,6 +632,24 @@ mod tests {
         assert_eq!(iter.next(), Some(&Constraint::PrimaryKey(vec![10])));
         assert_eq!(iter.next(), Some(&Constraint::Unique(vec![20])));
         assert_eq!(iter.next(), None);
+    }
+
+    #[test]
+    fn test_project_constraints() {
+        let constraints = Constraints::new_unverified(vec![
+            Constraint::PrimaryKey(vec![1, 2]),
+            Constraint::Unique(vec![0, 3]),
+        ]);
+
+        // Project keeping columns 1,2,3
+        let projected = constraints.project(&[1, 2, 3]).unwrap();
+        assert_eq!(
+            projected,
+            Constraints::new_unverified(vec![Constraint::PrimaryKey(vec![0, 1])])
+        );
+
+        // Project keeping only column 0 - should return None as no constraints are preserved
+        assert!(constraints.project(&[0]).is_none());
     }
 
     #[test]
