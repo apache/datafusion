@@ -221,6 +221,7 @@ Three-way comparision operator. A NULL-safe operator that returns true if both o
 | true                           |
 +--------------------------------+
 ```
+
 ```sql
 > SELECT 1 <=> NULL;
 +------------------------------------+
@@ -229,6 +230,7 @@ Three-way comparision operator. A NULL-safe operator that returns true if both o
 | false                              |
 +------------------------------------+
 ```
+
 ```sql
 > SELECT 1 <=> 2;
 +----------------------------------------+
@@ -237,6 +239,7 @@ Three-way comparision operator. A NULL-safe operator that returns true if both o
 | false                                  |
 +----------------------------------------+
 ```
+
 ```sql
 > SELECT 1 <=> 1;
 +----------------------------------------+
