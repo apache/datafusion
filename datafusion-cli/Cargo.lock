@@ -1423,9 +1423,11 @@ dependencies = [
  "itertools 0.14.0",
  "log",
  "md-5",
+ "memchr",
  "rand",
  "regex",
  "sha2",
+ "stringzilla",
  "unicode-segmentation",
  "uuid",
 ]
@@ -3820,6 +3822,15 @@ name = "static_assertions"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a2eb9349b6444b326872e140eb1cf5e7c522154d69e7a0ffb0fb81c06b37543f"
+
+[[package]]
+name = "stringzilla"
+version = "3.11.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4598188f7b3275ed061e8636d3af52730761ef3310c3779c56d2eb5d0a855707"
+dependencies = [
+ "cc",
+]
 
 [[package]]
 name = "strsim"
