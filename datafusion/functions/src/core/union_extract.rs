@@ -43,7 +43,10 @@ use datafusion_macros::user_doc;
 +--------------+----------------------------------+----------------------------------+
 ```"#,
     standard_argument(name = "union", prefix = "Union"),
-    argument(name = "field_name", description = "String expression to operate on. Must be a constant.")
+    argument(
+        name = "field_name",
+        description = "String expression to operate on. Must be a constant."
+    )
 )]
 #[derive(Debug)]
 pub struct UnionExtractFun {
