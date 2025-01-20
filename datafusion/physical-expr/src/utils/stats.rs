@@ -178,13 +178,17 @@ impl ExprStatisticGraph {
 
 /// Creates a new [`Unknown`] statistics instance with a given range.
 /// This builder is moved here due to original package visibility limitations.
-pub fn new_unknown_with_range(range: Interval) -> StatisticsV2 {
-    Unknown {
-        mean: None,
-        median: None,
-        variance: None,
-        range,
-    }
+pub fn new_unknown_from_interval(range: &Interval) -> datafusion_common::Result<StatisticsV2> {
+    // Note: to avoid code duplication for mean/median/variance computation, we wrap 
+    // existing range in temporary uniform distribution and compute all these properties.
+    let fake_uniform = Uniform {interval: range.clone() };
+    
+    Ok(Unknown {
+        mean: fake_uniform.mean()?,
+        median: fake_uniform.median()?,
+        variance: fake_uniform.variance()?,
+        range: range.clone(),
+    })
 }
 
 /// Creates a new [`Unknown`] distribution, and tries to compute
@@ -344,6 +348,8 @@ pub fn compute_variance(
     }
 }
 
+/// Computes range based on input statistics, where it is possible to compute.
+/// Otherwise, returns an unbounded interval.
 pub fn compute_range(op: &Operator, left_stat: &StatisticsV2, right_stat: &StatisticsV2)
     -> datafusion_common::Result<Interval> {
     if !left_stat.is_valid() || !right_stat.is_valid() {

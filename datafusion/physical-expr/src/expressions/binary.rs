@@ -24,7 +24,7 @@ use crate::intervals::cp_solver::{propagate_arithmetic, propagate_comparison};
 use crate::PhysicalExpr;
 
 use crate::expressions::binary::kernels::concat_elements_utf8view;
-use crate::utils::stats::{new_bernoulli_from_binary_expr, new_unknown_from_binary_expr};
+use crate::utils::stats::{new_bernoulli_from_binary_expr, new_unknown_from_binary_expr, new_unknown_from_interval};
 use arrow::array::*;
 use arrow::compute::kernels::boolean::{and_kleene, not, or_kleene};
 use arrow::compute::kernels::cmp::*;
@@ -41,7 +41,7 @@ use datafusion_expr::type_coercion::binary::get_result_type;
 use datafusion_expr::{ColumnarValue, Operator};
 use datafusion_physical_expr_common::datum::{apply, apply_cmp, apply_cmp_for_nested};
 use datafusion_physical_expr_common::stats::StatisticsV2;
-use datafusion_physical_expr_common::stats::StatisticsV2::{Bernoulli, Gaussian};
+use datafusion_physical_expr_common::stats::StatisticsV2::{Bernoulli, Gaussian, Uniform, Unknown};
 use kernels::{
     bitwise_and_dyn, bitwise_and_dyn_scalar, bitwise_or_dyn, bitwise_or_dyn_scalar,
     bitwise_shift_left_dyn, bitwise_shift_left_dyn_scalar, bitwise_shift_right_dyn,
@@ -567,10 +567,33 @@ impl PhysicalExpr for BinaryExpr {
 
     fn propagate_statistics(
         &self,
-        _parent_stat: &StatisticsV2,
-        _children_stat: &[&StatisticsV2],
+        parent_stat: &StatisticsV2,
+        children_stat: &[&StatisticsV2],
     ) -> Result<Option<Vec<StatisticsV2>>> {
-        todo!()
+        let (left_stat, right_stat) = (children_stat[0], children_stat[1]);
+        match parent_stat { 
+            Uniform {interval} | Unknown {range: interval, ..} => {
+                match (left_stat, right_stat) {
+                    (Uniform { interval: left }, Uniform { interval: right })
+                    | (Uniform { interval: left }, Unknown { range: right, .. })
+                    | (Unknown { range: left, .. }, Uniform { interval: right })
+                    | (Unknown { range: left, .. }, Unknown { range: right, .. })
+                    => {
+                        let propagated = self.propagate_constraints(interval, &[left, right])?;
+                        if let Some(propagated) = propagated {
+                            Ok(Some(vec![
+                                new_unknown_from_interval(&propagated[0])?,
+                                new_unknown_from_interval(&propagated[1])?,
+                            ]))
+                        } else {
+                            Ok(None)
+                        }
+                    },
+                    (_, _) => Ok(None)
+                }
+            }
+            _ => Ok(None)
+        }
     }
 
     /// For each operator, [`BinaryExpr`] has distinct rules.
@@ -823,8 +846,6 @@ mod tests {
     use datafusion_expr::type_coercion::binary::get_input_types;
     use datafusion_physical_expr_common::stats::StatisticsV2::Uniform;
 
-    // TODO: remove
-    //region tests
     /// Performs a binary operation, applying any type coercion necessary
     fn binary_op(
         left: Arc<dyn PhysicalExpr>,
@@ -4469,7 +4490,6 @@ mod tests {
         )
         .unwrap();
     }
-    //endregion
 
     //region evaluate_statistics test
 
