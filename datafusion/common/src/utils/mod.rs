@@ -1202,13 +1202,4 @@ mod tests {
         assert_eq!(expected, transposed);
         Ok(())
     }
-
-    #[test]
-    fn test132() {
-        let a = Arc::new(Int32Array::from(vec![3; 200])) as ArrayRef;
-        println!(
-            "display {}",
-            pretty_format_columns("ColumnarValue(ArrayRef)", &[a]).unwrap()
-        )
-    }
 }
