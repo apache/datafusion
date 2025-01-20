@@ -4351,40 +4351,16 @@ union_extract(union, field_name)
 - **field_name**: Literal string, name of the field to extract
 
 ```
-❯ select my_union from table_with_union;
-+----------+
-| my_union |
-+----------+
-| {a=1}    |
-| {b=3.0}  |
-| {a=4}    |
-| {b=}     |
-| {a=}     |
-+----------+
-
-❯ select union_extract(my_union, 'a');
-+------------------------------+
-| union_extract(my_union, 'a') |
-+------------------------------+
-| 1                            |
-|                              |
-| 4                            |
-|                              |
-|                              |
-+------------------------------+
-
-❯ select union_extract(my_union, 'b');
-+------------------------------+
-| union_extract(my_union, 'b') |
-+------------------------------+
-|                              |
-| 3.0                          |
-|                              |
-|                              |
-|                              |
-+------------------------------+
-
-
+❯ select union_column, union_extract(union_column, 'a'), union_extract(union_column, 'b') from table_with_union;
++--------------+----------------------------------+----------------------------------+
+| union_column | union_extract(union_column, 'a') | union_extract(union_column, 'b') |
++--------------+----------------------------------+----------------------------------+
+| {a=1}        | 1                                |                                  |
+| {b=3.0}      |                                  | 3.0                              |
+| {a=4}        | 4                                |                                  |
+| {b=}         |                                  |                                  |
+| {a=}         |                                  |                                  |
++--------------+----------------------------------+----------------------------------+
 ```
 
 ## Other Functions
