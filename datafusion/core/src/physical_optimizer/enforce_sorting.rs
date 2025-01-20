@@ -186,13 +186,11 @@ impl PhysicalOptimizerRule for EnforceSorting {
                 )
             })
             .data()?;
-
         // Execute a top-down traversal to exploit sort push-down opportunities
         // missed by the bottom-up traversal:
         let mut sort_pushdown = SortPushDown::new_default(updated_plan.plan);
         assign_initial_requirements(&mut sort_pushdown);
         let adjusted = pushdown_sorts(sort_pushdown)?;
-
         adjusted
             .plan
             .transform_up(|plan| Ok(Transformed::yes(replace_with_partial_sort(plan)?)))
