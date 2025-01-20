@@ -4347,10 +4347,12 @@ union_extract(union, field_name)
 
 #### Arguments
 
-- **union**: Union expression to extract the field from
-- **field_name**: Literal string, name of the field to extract
+- **union**: Union expression to operate on. Can be a constant, column, or function, and any combination of operators.
+- **field_name**: String expression to operate on. Must be a constant.
 
-```
+#### Example
+
+```sql
 ❯ select union_column, union_extract(union_column, 'a'), union_extract(union_column, 'b') from table_with_union;
 +--------------+----------------------------------+----------------------------------+
 | union_column | union_extract(union_column, 'a') | union_extract(union_column, 'b') |
