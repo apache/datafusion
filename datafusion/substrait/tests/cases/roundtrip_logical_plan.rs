@@ -1339,11 +1339,15 @@ fn count_read_best_effort_filters(rel: &Rel, count: &mut u32) -> Result<()> {
             Ok(())
         }
         Some(RelType::Join(join)) => {
-            match count_read_best_effort_filters(join.left.as_ref().unwrap().as_ref(), count) {
+            match count_read_best_effort_filters(
+                join.left.as_ref().unwrap().as_ref(),
+                count,
+            ) {
                 Err(e) => Err(e),
-                Ok(_) => {
-                    count_read_best_effort_filters(join.right.as_ref().unwrap().as_ref(), count)
-                }
+                Ok(_) => count_read_best_effort_filters(
+                    join.right.as_ref().unwrap().as_ref(),
+                    count,
+                ),
             }
         }
         Some(RelType::Project(p)) => {
@@ -1390,17 +1394,25 @@ fn count_read_best_effort_filters(rel: &Rel, count: &mut u32) -> Result<()> {
     }
 }
 
-async fn assert_read_best_effort_filter_count(proto: Box<Plan>, expected_count: u32) -> Result<()> {
-    let mut count : u32 = 0;
+async fn assert_read_best_effort_filter_count(
+    proto: Box<Plan>,
+    expected_count: u32,
+) -> Result<()> {
+    let mut count: u32 = 0;
     for relation in &proto.relations {
         match relation.rel_type.as_ref() {
             Some(rt) => match rt {
-                plan_rel::RelType::Rel(rel) => match count_read_best_effort_filters(rel, &mut count) {
-                    Err(e) => return Err(e),
-                    Ok(_) => continue,
-                },
+                plan_rel::RelType::Rel(rel) => {
+                    match count_read_best_effort_filters(rel, &mut count) {
+                        Err(e) => return Err(e),
+                        Ok(_) => continue,
+                    }
+                }
                 plan_rel::RelType::Root(root) => {
-                    match count_read_best_effort_filters(root.input.as_ref().unwrap(), &mut count) {
+                    match count_read_best_effort_filters(
+                        root.input.as_ref().unwrap(),
+                        &mut count,
+                    ) {
                         Err(e) => return Err(e),
                         Ok(_) => continue,
                     }
@@ -1585,7 +1597,10 @@ async fn roundtrip_verify_post_join_filter(sql: &str) -> Result<()> {
     verify_post_join_filter_value(proto).await
 }
 
-async fn roundtrip_verify_read_best_effort_filter_count(sql: &str, expected_count: u32) -> Result<()> {
+async fn roundtrip_verify_read_best_effort_filter_count(
+    sql: &str,
+    expected_count: u32,
+) -> Result<()> {
     let ctx = create_context().await?;
     let proto = roundtrip_with_ctx(sql, ctx).await?;
 

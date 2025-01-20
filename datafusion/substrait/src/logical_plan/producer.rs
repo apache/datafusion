@@ -561,12 +561,19 @@ pub fn from_table_scan(
     let base_schema = to_substrait_named_struct(&table_schema)?;
 
     let best_effort_filter_option = if scan.filters.len() > 0 {
-        let table_schema_qualified = Arc::new(DFSchema::try_from_qualified_schema(scan.table_name.clone(), &(scan.source.schema())).unwrap());
+        let table_schema_qualified = Arc::new(
+            DFSchema::try_from_qualified_schema(
+                scan.table_name.clone(),
+                &(scan.source.schema()),
+            )
+            .unwrap(),
+        );
         let mut combined_expr = scan.filters[0].clone();
         for i in 1..scan.filters.len() {
             combined_expr = combined_expr.and(scan.filters[i].clone());
         }
-        let best_effort_filter_expr = producer.handle_expr(&combined_expr, &table_schema_qualified)?;
+        let best_effort_filter_expr =
+            producer.handle_expr(&combined_expr, &table_schema_qualified)?;
         Some(Box::new(best_effort_filter_expr))
     } else {
         None
