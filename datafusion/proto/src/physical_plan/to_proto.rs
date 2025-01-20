@@ -529,6 +529,7 @@ pub fn serialize_file_scan_config(
                 physical_sort_expr_nodes: e,
             })
             .collect::<Vec<_>>(),
+        constraints: Some(conf.constraints.clone().into()),
     })
 }
 

@@ -1090,7 +1090,7 @@ impl DefaultPhysicalPlanner {
                         Some(join_utils::JoinFilter::new(
                             filter_expr,
                             column_indices,
-                            filter_schema,
+                            Arc::new(filter_schema),
                         ))
                     }
                     _ => None,
@@ -1110,6 +1110,7 @@ impl DefaultPhysicalPlanner {
                             physical_right,
                             join_filter,
                             join_type,
+                            None,
                         )?)
                     }
                 } else if session_state.config().target_partitions() > 1

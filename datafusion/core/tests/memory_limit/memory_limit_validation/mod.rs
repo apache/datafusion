@@ -15,7 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
-mod combine_partial_final_agg;
-mod limited_distinct_aggregation;
-mod sanity_checker;
-pub(crate) mod test_util;
+//! Validates query's actual memory usage is consistent with the specified memory
+//! limit.
+
+mod sort_mem_validation;
+mod utils;

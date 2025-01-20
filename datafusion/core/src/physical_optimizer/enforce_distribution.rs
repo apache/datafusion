@@ -1416,9 +1416,6 @@ pub(crate) mod tests {
     use crate::datasource::object_store::ObjectStoreUrl;
     use crate::datasource::physical_plan::{CsvExec, FileScanConfig, ParquetExec};
     use crate::physical_optimizer::enforce_sorting::EnforceSorting;
-    use crate::physical_optimizer::test_utils::{
-        check_integrity, coalesce_partitions_exec, repartition_exec,
-    };
     use crate::physical_plan::coalesce_batches::CoalesceBatchesExec;
     use crate::physical_plan::expressions::col;
     use crate::physical_plan::filter::FilterExec;
@@ -1427,6 +1424,9 @@ pub(crate) mod tests {
     use crate::physical_plan::sorts::sort::SortExec;
     use crate::physical_plan::{displayable, DisplayAs, DisplayFormatType, Statistics};
     use datafusion_physical_optimizer::output_requirements::OutputRequirements;
+    use datafusion_physical_optimizer::test_utils::{
+        check_integrity, coalesce_partitions_exec, repartition_exec,
+    };
 
     use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
     use datafusion_common::ScalarValue;
