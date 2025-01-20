@@ -19,65 +19,29 @@
 ## UNION DataType Tests
 ##########
 
-
 query ?I
 select union_column, union_extract(union_column, 'int') from union_table;
 ----
 {int=1} 1
 {int=2} 2
 
-
-
 query error DataFusion error: Execution error: field bool not found on union
 select union_extract(union_column, 'bool') from union_table;
 
-
-
-query error
+query error DataFusion error: Error during planning: union_extract does not support zero arguments
 select union_extract() from union_table;
-----
-DataFusion error: Error during planning: union_extract does not support zero arguments. No function matches the given name and argument types 'union_extract()'. You might need to add explicit type casts.
-	Candidate functions:
-	union_extract(Any, Any)
 
-
-
-query error
+query error DataFusion error: Error during planning: The function expected 2 arguments but received 1
 select union_extract(union_column) from union_table;
-----
-DataFusion error: Error during planning: The function expected 2 arguments but received 1 No function matches the given name and argument types 'union_extract(Union([(3, Field { name: "int", data_type: Int32, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} })], Sparse))'. You might need to add explicit type casts.
-	Candidate functions:
-	union_extract(Any, Any)
 
-
-
-query error
+query error DataFusion error: Error during planning: The function expected 2 arguments but received 1
 select union_extract('a') from union_table;
-----
-DataFusion error: Error during planning: The function expected 2 arguments but received 1 No function matches the given name and argument types 'union_extract(Utf8)'. You might need to add explicit type casts.
-	Candidate functions:
-	union_extract(Any, Any)
 
-
-
-
-query error
+query error DataFusion error: Execution error: union_extract first argument must be a union, got Utf8 instead
 select union_extract('a', union_column) from union_table;
-----
-DataFusion error: Execution error: union_extract first argument must be a union, got Utf8 instead
 
-
-
-query error
+query error DataFusion error: Execution error: union_extract second argument must be a non\-null string literal, got Int64 instead
 select union_extract(union_column, 1) from union_table;
-----
-DataFusion error: Execution error: union_extract second argument must be a non-null string literal, got Int64 instead
 
-
-
-query error
+query error DataFusion error: Error during planning: The function expected 2 arguments but received 3
 select union_extract(union_column, 'a', 'b') from union_table;
-----
-DataFusion error: Error during planning: The function expected 2 arguments but received 3 No function matches the given name and argument types 'union_extract(Union([(3, Field { name: "int", data_type: Int32, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} })], Sparse), Utf8, Utf8)'. You might need to add explicit type casts.
-	Candidate functions:
-	union_extract(Any, Any)
