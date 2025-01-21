@@ -212,7 +212,7 @@ Greater Than or Equal To
 
 ### `<=>`
 
-Three-way comparision operator. A NULL-safe operator that returns true if both operands are equal or both are NULL, false otherwise.
+Three-way comparison operator. A NULL-safe operator that returns true if both operands are equal or both are NULL, false otherwise.
 
 ```sql
 > SELECT NULL <=> NULL;
