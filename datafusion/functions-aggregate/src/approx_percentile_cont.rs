@@ -124,6 +124,19 @@ impl ApproxPercentileCont {
         args: AccumulatorArgs,
     ) -> Result<ApproxPercentileAccumulator> {
         let percentile = validate_input_percentile_expr(&args.exprs[1])?;
+
+        let is_descending = args
+            .ordering_req
+            .first()
+            .map(|sort_expr| sort_expr.options.descending)
+            .unwrap_or(false);
+
+        let percentile = if is_descending {
+            1.0 - percentile
+        } else {
+            percentile
+        };
+
         let tdigest_max_size = if args.exprs.len() == 3 {
             Some(validate_input_max_size_expr(&args.exprs[2])?)
         } else {
