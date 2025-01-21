@@ -360,14 +360,14 @@ async fn test_fn_approx_median() -> Result<()> {
 
 #[tokio::test]
 async fn test_fn_approx_percentile_cont() -> Result<()> {
-    let expr = approx_percentile_cont(col("b"), lit(0.5), None);
+    let expr = approx_percentile_cont(vec![col("b").sort(true, false)], lit(0.5), None);
 
     let expected = [
-        "+---------------------------------------------+",
-        "| approx_percentile_cont(test.b,Float64(0.5)) |",
-        "+---------------------------------------------+",
-        "| 10                                          |",
-        "+---------------------------------------------+",
+        "+-----------------------------------------------------------------------------+",
+        "| approx_percentile_cont(test.b,Float64(0.5)) WITHIN GROUP [b ASC NULLS LAST] |",
+        "+-----------------------------------------------------------------------------+",
+        "| 10                                                                          |",
+        "+-----------------------------------------------------------------------------+",
     ];
 
     let df = create_test_table().await?;
@@ -381,27 +381,27 @@ async fn test_fn_approx_percentile_cont() -> Result<()> {
         None::<&str>,
         "arg_2".to_string(),
     ));
-    let expr = approx_percentile_cont(col("b"), alias_expr, None);
+    let expr = approx_percentile_cont(vec![col("b").sort(true, false)], alias_expr, None);
     let df = create_test_table().await?;
     let expected = [
-        "+--------------------------------------+",
-        "| approx_percentile_cont(test.b,arg_2) |",
-        "+--------------------------------------+",
-        "| 10                                   |",
-        "+--------------------------------------+",
+        "+----------------------------------------------------------------------+",
+        "| approx_percentile_cont(test.b,arg_2) WITHIN GROUP [b ASC NULLS LAST] |",
+        "+----------------------------------------------------------------------+",
+        "| 10                                                                   |",
+        "+----------------------------------------------------------------------+",
     ];
     let batches = df.aggregate(vec![], vec![expr]).unwrap().collect().await?;
 
     assert_batches_eq!(expected, &batches);
 
     // with number of centroids set
-    let expr = approx_percentile_cont(col("b"), lit(0.5), Some(lit(2)));
+    let expr = approx_percentile_cont(vec![col("b").sort(true, false)], lit(0.5), Some(lit(2)));
     let expected = [
-        "+------------------------------------------------------+",
-        "| approx_percentile_cont(test.b,Float64(0.5),Int32(2)) |",
-        "+------------------------------------------------------+",
-        "| 30                                                   |",
-        "+------------------------------------------------------+",
+        "+--------------------------------------------------------------------------------------+",
+        "| approx_percentile_cont(test.b,Float64(0.5),Int32(2)) WITHIN GROUP [b ASC NULLS LAST] |",
+        "+--------------------------------------------------------------------------------------+",
+        "| 30                                                                                   |",
+        "+--------------------------------------------------------------------------------------+",
     ];
 
     let df = create_test_table().await?;

@@ -36,6 +36,7 @@ use datafusion_common::{
     DataFusionError, Result, ScalarValue,
 };
 use datafusion_expr::aggregate_doc_sections::DOC_SECTION_APPROXIMATE;
+use datafusion_expr::expr::{AggregateFunction, Sort};
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::type_coercion::aggregates::{INTEGERS, NUMERICS};
 use datafusion_expr::utils::format_state_name;
@@ -52,16 +53,30 @@ create_func!(ApproxPercentileCont, approx_percentile_cont_udaf);
 
 /// Computes the approximate percentile continuous of a set of numbers
 pub fn approx_percentile_cont(
-    expression: Expr,
+    within_group: Vec<Sort>,
     percentile: Expr,
     centroids: Option<Expr>,
 ) -> Expr {
+    let expr = within_group
+        .first()
+        .map(|sort| sort.expr.clone())
+        .unwrap_or_default();
+
     let args = if let Some(centroids) = centroids {
-        vec![expression, percentile, centroids]
+        vec![expr, percentile, centroids]
     } else {
-        vec![expression, percentile]
+        vec![expr, percentile]
     };
-    approx_percentile_cont_udaf().call(args)
+
+    Expr::AggregateFunction(AggregateFunction::new_udf(
+        approx_percentile_cont_udaf(),
+        args,
+        false,
+        None,
+        None,
+        None,
+        Some(within_group),
+    ))
 }
 
 pub struct ApproxPercentileCont {
