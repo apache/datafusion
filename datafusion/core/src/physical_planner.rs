@@ -82,8 +82,8 @@ use datafusion_expr::{
 use datafusion_physical_expr::aggregate::{AggregateExprBuilder, AggregateFunctionExpr};
 use datafusion_physical_expr::expressions::Literal;
 use datafusion_physical_expr::LexOrdering;
-use datafusion_physical_plan::execution_plan::InvariantLevel;
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
+use datafusion_physical_plan::execution_plan::InvariantLevel;
 use datafusion_physical_plan::memory::MemorySourceConfig;
 use datafusion_physical_plan::placeholder_row::PlaceholderRowExec;
 use datafusion_physical_plan::unnest::ListUnnest;
