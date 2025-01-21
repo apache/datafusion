@@ -20,7 +20,7 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use crate::datasource::data_source::FileSource;
+use crate::datasource::data_source::{FileSource, FileType};
 use crate::datasource::physical_plan::{
     FileMeta, FileOpenFuture, FileOpener, FileScanConfig,
 };
@@ -87,6 +87,10 @@ impl FileSource for ArrowConfig {
         Ok(statistics
             .clone()
             .expect("projected_statistics must be set"))
+    }
+
+    fn file_type(&self) -> FileType {
+        FileType::Arrow
     }
 }
 

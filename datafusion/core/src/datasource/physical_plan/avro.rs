@@ -23,7 +23,7 @@ use std::sync::Arc;
 use super::{FileOpener, FileScanConfig};
 #[cfg(feature = "avro")]
 use crate::datasource::avro_to_arrow::Reader as AvroReader;
-use crate::datasource::data_source::FileSource;
+use crate::datasource::data_source::{FileSource, FileType};
 use crate::error::Result;
 
 use arrow::datatypes::SchemaRef;
@@ -119,6 +119,10 @@ impl FileSource for AvroConfig {
         Ok(statistics
             .clone()
             .expect("projected_statistics must be set"))
+    }
+
+    fn file_type(&self) -> FileType {
+        FileType::Avro
     }
 }
 

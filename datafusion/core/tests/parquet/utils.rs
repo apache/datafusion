@@ -18,7 +18,6 @@
 //! Utilities for parquet tests
 
 use datafusion::datasource::data_source::FileSourceConfig;
-use datafusion::datasource::physical_plan::ParquetConfig;
 use datafusion_physical_plan::metrics::MetricsSet;
 use datafusion_physical_plan::source::DataSourceExec;
 use datafusion_physical_plan::{accept, ExecutionPlan, ExecutionPlanVisitor};
@@ -52,12 +51,7 @@ impl ExecutionPlanVisitor for MetricsFinder {
             let source = exec.source();
             if let Some(file_config) = source.as_any().downcast_ref::<FileSourceConfig>()
             {
-                if file_config
-                    .file_source()
-                    .as_any()
-                    .downcast_ref::<ParquetConfig>()
-                    .is_some()
-                {
+                if file_config.file_source().file_type().is_parquet() {
                     self.metrics = exec.metrics();
                 }
             }

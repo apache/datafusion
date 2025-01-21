@@ -23,11 +23,8 @@ use std::fmt::Formatter;
 use std::sync::Arc;
 
 use crate::datasource::listing::PartitionedFile;
-#[cfg(feature = "parquet")]
-use crate::datasource::physical_plan::ParquetConfig;
 use crate::datasource::physical_plan::{
-    ArrowConfig, AvroConfig, CsvConfig, FileGroupPartitioner, FileOpener, FileScanConfig,
-    FileStream, JsonConfig,
+    FileGroupPartitioner, FileOpener, FileScanConfig, FileStream,
 };
 
 use arrow_schema::SchemaRef;
@@ -39,7 +36,6 @@ use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
 use datafusion_physical_plan::source::{DataSource, DataSourceExec};
 use datafusion_physical_plan::{DisplayAs, DisplayFormatType};
 
-use itertools::Itertools;
 use object_store::ObjectStore;
 
 /// Common behaviors that every `FileSourceConfig` needs to implement.
@@ -65,6 +61,53 @@ pub trait FileSource: Send + Sync {
     fn metrics(&self) -> &ExecutionPlanMetricsSet;
     /// Return projected statistics
     fn statistics(&self) -> datafusion_common::Result<Statistics>;
+    /// Returns the file type such as Arrow, Avro, Parquet, ...
+    fn file_type(&self) -> FileType;
+    /// Format FileType specific information
+    fn fmt_extra(&self, _t: DisplayFormatType, _f: &mut Formatter) -> fmt::Result {
+        Ok(())
+    }
+}
+
+/// Determines file types
+pub enum FileType {
+    /// Arrow File
+    Arrow,
+    /// Avro File
+    Avro,
+    /// CSV File
+    Csv,
+    /// JSON File
+    Json,
+    /// Parquet File
+    Parquet,
+}
+
+impl FileType {
+    fn to_str(&self) -> &str {
+        match self {
+            FileType::Arrow => "arrow",
+            FileType::Avro => "avro",
+            FileType::Csv => "csv",
+            FileType::Json => "json",
+            FileType::Parquet => "parquet",
+        }
+    }
+
+    /// Is the file type avro?
+    pub fn is_avro(&self) -> bool {
+        matches!(self, FileType::Avro)
+    }
+
+    /// Is the file type csv?
+    pub fn is_csv(&self) -> bool {
+        matches!(self, FileType::Csv)
+    }
+
+    /// Is the file type parquet?
+    pub fn is_parquet(&self) -> bool {
+        matches!(self, FileType::Parquet)
+    }
 }
 
 /// Holds generic file configuration, and common behaviors for file sources.
@@ -77,6 +120,7 @@ pub struct FileSourceConfig {
 }
 
 impl FileSourceConfig {
+    // TODO: This function should be moved into DataSourceExec once FileScanConfig and FileSourceConfig moved out of datafusion/core
     /// Returns a new [`DataSourceExec`] from file configurations
     pub fn new_exec(
         base_config: FileScanConfig,
@@ -103,25 +147,9 @@ impl FileSourceConfig {
     }
 
     /// Write the data_type based on file_source
-    fn fmt_file_source(&self, f: &mut Formatter) -> fmt::Result {
-        let file_source = self.source.as_any();
-        let data_type = [
-            ("avro", file_source.downcast_ref::<AvroConfig>().is_some()),
-            ("arrow", file_source.downcast_ref::<ArrowConfig>().is_some()),
-            ("csv", file_source.downcast_ref::<CsvConfig>().is_some()),
-            ("json", file_source.downcast_ref::<JsonConfig>().is_some()),
-            #[cfg(feature = "parquet")]
-            (
-                "parquet",
-                file_source.downcast_ref::<ParquetConfig>().is_some(),
-            ),
-        ]
-        .iter()
-        .find(|(_, is_some)| *is_some)
-        .map(|(name, _)| *name)
-        .unwrap_or("unknown");
-
-        write!(f, ", file_type={}", data_type)
+    fn fmt_file_source(&self, t: DisplayFormatType, f: &mut Formatter) -> fmt::Result {
+        write!(f, ", file_type={}", self.source.file_type().to_str())?;
+        self.source.fmt_extra(t, f)
     }
 
     /// Returns the base_config
@@ -142,7 +170,7 @@ impl FileSourceConfig {
     fn supports_repartition(&self) -> bool {
         !(self.base_config.file_compression_type.is_compressed()
             || self.base_config.new_lines_in_values
-            || self.source.as_any().downcast_ref::<AvroConfig>().is_some())
+            || self.source.file_type().is_avro())
     }
 }
 
@@ -176,43 +204,7 @@ impl DataSource for FileSourceConfig {
 
     fn fmt_as(&self, t: DisplayFormatType, f: &mut Formatter) -> fmt::Result {
         self.base_config.fmt_as(t, f)?;
-        self.fmt_file_source(f)?;
-
-        if let Some(csv_conf) = self.source.as_any().downcast_ref::<CsvConfig>() {
-            return write!(f, ", has_header={}", csv_conf.has_header);
-        }
-
-        #[cfg(feature = "parquet")]
-        if let Some(parquet_conf) = self.source.as_any().downcast_ref::<ParquetConfig>() {
-            return match t {
-                DisplayFormatType::Default | DisplayFormatType::Verbose => {
-                    let predicate_string = parquet_conf
-                        .predicate()
-                        .map(|p| format!(", predicate={p}"))
-                        .unwrap_or_default();
-
-                    let pruning_predicate_string = parquet_conf
-                        .pruning_predicate()
-                        .map(|pre| {
-                            let mut guarantees = pre
-                                .literal_guarantees()
-                                .iter()
-                                .map(|item| format!("{}", item))
-                                .collect_vec();
-                            guarantees.sort();
-                            format!(
-                                ", pruning_predicate={}, required_guarantees=[{}]",
-                                pre.predicate_expr(),
-                                guarantees.join(", ")
-                            )
-                        })
-                        .unwrap_or_default();
-
-                    write!(f, "{}{}", predicate_string, pruning_predicate_string)
-                }
-            };
-        }
-        Ok(())
+        self.fmt_file_source(t, f)
     }
 
     /// Redistribute files across partitions according to their size

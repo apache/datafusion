@@ -18,9 +18,10 @@
 //! [`ParquetConfig`] FileSourceConfig for reading Parquet files
 
 use std::any::Any;
+use std::fmt::Formatter;
 use std::sync::Arc;
 
-use crate::datasource::data_source::FileSource;
+use crate::datasource::data_source::{FileSource, FileType};
 use crate::datasource::physical_plan::{
     parquet::page_filter::PagePruningAccessPlanFilter, FileOpener, FileScanConfig,
 };
@@ -34,7 +35,9 @@ use crate::{
 use arrow::datatypes::SchemaRef;
 use arrow_schema::Schema;
 use datafusion_physical_expr::PhysicalExpr;
+use datafusion_physical_plan::DisplayFormatType;
 
+use itertools::Itertools;
 use log::debug;
 use object_store::ObjectStore;
 
@@ -611,6 +614,40 @@ impl FileSource for ParquetConfig {
             Ok(statistics.to_inexact())
         } else {
             Ok(statistics)
+        }
+    }
+
+    fn file_type(&self) -> FileType {
+        FileType::Parquet
+    }
+
+    fn fmt_extra(&self, t: DisplayFormatType, f: &mut Formatter) -> std::fmt::Result {
+        match t {
+            DisplayFormatType::Default | DisplayFormatType::Verbose => {
+                let predicate_string = self
+                    .predicate()
+                    .map(|p| format!(", predicate={p}"))
+                    .unwrap_or_default();
+
+                let pruning_predicate_string = self
+                    .pruning_predicate()
+                    .map(|pre| {
+                        let mut guarantees = pre
+                            .literal_guarantees()
+                            .iter()
+                            .map(|item| format!("{}", item))
+                            .collect_vec();
+                        guarantees.sort();
+                        format!(
+                            ", pruning_predicate={}, required_guarantees=[{}]",
+                            pre.predicate_expr(),
+                            guarantees.join(", ")
+                        )
+                    })
+                    .unwrap_or_default();
+
+                write!(f, "{}{}", predicate_string, pruning_predicate_string)
+            }
         }
     }
 }

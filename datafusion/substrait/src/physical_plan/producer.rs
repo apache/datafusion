@@ -24,7 +24,6 @@ use crate::variation_const::{
 
 use datafusion::arrow::datatypes::DataType;
 use datafusion::datasource::data_source::FileSourceConfig;
-use datafusion::datasource::physical_plan::ParquetConfig;
 use datafusion::error::{DataFusionError, Result};
 use datafusion::physical_plan::source::DataSourceExec;
 use datafusion::physical_plan::{displayable, ExecutionPlan};
@@ -55,11 +54,7 @@ pub fn to_substrait_rel(
     if let Some(data_source) = plan.as_any().downcast_ref::<DataSourceExec>() {
         let source = data_source.source();
         if let Some(file_config) = source.as_any().downcast_ref::<FileSourceConfig>() {
-            let is_parquet = file_config
-                .file_source()
-                .as_any()
-                .downcast_ref::<ParquetConfig>()
-                .is_some();
+            let is_parquet = file_config.file_source().file_type().is_parquet();
             if is_parquet {
                 let base_config = file_config.base_config();
                 let mut substrait_files = vec![];

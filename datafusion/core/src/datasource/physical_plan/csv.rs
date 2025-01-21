@@ -18,12 +18,13 @@
 //! Execution plan for reading CSV files
 
 use std::any::Any;
+use std::fmt;
 use std::io::{Read, Seek, SeekFrom};
 use std::sync::Arc;
 use std::task::Poll;
 
 use super::{calculate_range, FileScanConfig, RangeCalculation};
-use crate::datasource::data_source::FileSource;
+use crate::datasource::data_source::{FileSource, FileType};
 use crate::datasource::file_format::file_compression_type::FileCompressionType;
 use crate::datasource::file_format::{deserialize_stream, DecoderDeserializer};
 use crate::datasource::listing::{FileRange, ListingTableUrl};
@@ -37,6 +38,7 @@ use arrow::datatypes::SchemaRef;
 use datafusion_common::Statistics;
 use datafusion_execution::TaskContext;
 use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
+use datafusion_physical_plan::DisplayFormatType;
 
 use futures::{StreamExt, TryStreamExt};
 use object_store::buffered::BufWriter;
@@ -259,6 +261,12 @@ impl FileSource for CsvConfig {
         Ok(statistics
             .clone()
             .expect("projected_statistics must be set"))
+    }
+    fn file_type(&self) -> FileType {
+        FileType::Csv
+    }
+    fn fmt_extra(&self, _t: DisplayFormatType, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, ", has_header={}", self.has_header)
     }
 }
 

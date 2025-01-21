@@ -23,7 +23,7 @@ use std::sync::Arc;
 use std::task::Poll;
 
 use super::{calculate_range, FileScanConfig, RangeCalculation};
-use crate::datasource::data_source::FileSource;
+use crate::datasource::data_source::{FileSource, FileType};
 use crate::datasource::file_format::file_compression_type::FileCompressionType;
 use crate::datasource::file_format::{deserialize_stream, DecoderDeserializer};
 use crate::datasource::listing::ListingTableUrl;
@@ -133,6 +133,10 @@ impl FileSource for JsonConfig {
         Ok(statistics
             .clone()
             .expect("projected_statistics must be set to call"))
+    }
+
+    fn file_type(&self) -> FileType {
+        FileType::Json
     }
 }
 

@@ -20,7 +20,6 @@ use std::sync::Arc;
 use datafusion::datasource::data_source::FileSourceConfig;
 use datafusion::datasource::file_format::parquet::ParquetFormat;
 use datafusion::datasource::listing::{ListingOptions, PartitionedFile};
-use datafusion::datasource::physical_plan::ParquetConfig;
 use datafusion::execution::context::SessionContext;
 use datafusion::physical_plan::metrics::MetricValue;
 use datafusion::physical_plan::source::DataSourceExec;
@@ -101,12 +100,7 @@ impl ExecutionPlanVisitor for ParquetExecVisitor {
             let source = data_source.source();
             if let Some(file_config) = source.as_any().downcast_ref::<FileSourceConfig>()
             {
-                if file_config
-                    .file_source()
-                    .as_any()
-                    .downcast_ref::<ParquetConfig>()
-                    .is_some()
-                {
+                if file_config.file_source().file_type().is_parquet() {
                     self.file_groups =
                         Some(file_config.base_config().file_groups.clone());
 
