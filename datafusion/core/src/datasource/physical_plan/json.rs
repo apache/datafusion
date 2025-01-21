@@ -22,11 +22,13 @@ use std::io::{BufReader, Read, Seek, SeekFrom};
 use std::sync::Arc;
 use std::task::Poll;
 
-use super::{calculate_range, FileScanConfig, RangeCalculation};
+use super::{
+    calculate_range, FileGroupPartitioner, FileScanConfig, FileStream, RangeCalculation,
+};
 use crate::datasource::data_source::{FileSource, FileType};
 use crate::datasource::file_format::file_compression_type::FileCompressionType;
 use crate::datasource::file_format::{deserialize_stream, DecoderDeserializer};
-use crate::datasource::listing::ListingTableUrl;
+use crate::datasource::listing::{ListingTableUrl, PartitionedFile};
 use crate::datasource::physical_plan::file_stream::{FileOpenFuture, FileOpener};
 use crate::datasource::physical_plan::FileMeta;
 use crate::error::{DataFusionError, Result};
@@ -34,15 +36,210 @@ use crate::physical_plan::{ExecutionPlan, ExecutionPlanProperties};
 
 use arrow::json::ReaderBuilder;
 use arrow::{datatypes::SchemaRef, json};
-use datafusion_common::Statistics;
-use datafusion_execution::TaskContext;
-use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
+use datafusion_common::{Constraints, Statistics};
+use datafusion_execution::{SendableRecordBatchStream, TaskContext};
+use datafusion_physical_expr::{EquivalenceProperties, Partitioning};
+use datafusion_physical_expr_common::sort_expr::LexOrdering;
+use datafusion_physical_plan::execution_plan::{Boundedness, EmissionType};
+use datafusion_physical_plan::metrics::{ExecutionPlanMetricsSet, MetricsSet};
+use datafusion_physical_plan::{DisplayAs, DisplayFormatType, PlanProperties};
 
 use futures::{StreamExt, TryStreamExt};
 use object_store::buffered::BufWriter;
 use object_store::{GetOptions, GetResultPayload, ObjectStore};
 use tokio::io::AsyncWriteExt;
 use tokio::task::JoinSet;
+
+/// Execution plan for scanning NdJson data source
+#[derive(Debug, Clone)]
+#[deprecated(since = "46.0.0", note = "use DataSourceExec instead")]
+pub struct NdJsonExec {
+    base_config: FileScanConfig,
+    projected_statistics: Statistics,
+    /// Execution metrics
+    metrics: ExecutionPlanMetricsSet,
+    file_compression_type: FileCompressionType,
+    cache: PlanProperties,
+}
+
+#[allow(unused, deprecated)]
+impl NdJsonExec {
+    /// Create a new JSON reader execution plan provided base configurations
+    pub fn new(
+        base_config: FileScanConfig,
+        file_compression_type: FileCompressionType,
+    ) -> Self {
+        let (
+            projected_schema,
+            projected_constraints,
+            projected_statistics,
+            projected_output_ordering,
+        ) = base_config.project();
+        let cache = Self::compute_properties(
+            projected_schema,
+            &projected_output_ordering,
+            projected_constraints,
+            &base_config,
+        );
+        Self {
+            base_config,
+            projected_statistics,
+            metrics: ExecutionPlanMetricsSet::new(),
+            file_compression_type,
+            cache,
+        }
+    }
+    /// Ref to the base configs
+    pub fn base_config(&self) -> &FileScanConfig {
+        &self.base_config
+    }
+
+    /// Ref to file compression type
+    pub fn file_compression_type(&self) -> &FileCompressionType {
+        &self.file_compression_type
+    }
+
+    fn output_partitioning_helper(file_scan_config: &FileScanConfig) -> Partitioning {
+        Partitioning::UnknownPartitioning(file_scan_config.file_groups.len())
+    }
+
+    /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
+    fn compute_properties(
+        schema: SchemaRef,
+        orderings: &[LexOrdering],
+        constraints: Constraints,
+        file_scan_config: &FileScanConfig,
+    ) -> PlanProperties {
+        // Equivalence Properties
+        let eq_properties = EquivalenceProperties::new_with_orderings(schema, orderings)
+            .with_constraints(constraints);
+
+        PlanProperties::new(
+            eq_properties,
+            Self::output_partitioning_helper(file_scan_config), // Output Partitioning
+            EmissionType::Incremental,
+            Boundedness::Bounded,
+        )
+    }
+
+    fn with_file_groups(mut self, file_groups: Vec<Vec<PartitionedFile>>) -> Self {
+        self.base_config.file_groups = file_groups;
+        // Changing file groups may invalidate output partitioning. Update it also
+        let output_partitioning = Self::output_partitioning_helper(&self.base_config);
+        self.cache = self.cache.with_partitioning(output_partitioning);
+        self
+    }
+}
+
+#[allow(unused, deprecated)]
+impl DisplayAs for NdJsonExec {
+    fn fmt_as(
+        &self,
+        t: DisplayFormatType,
+        f: &mut std::fmt::Formatter,
+    ) -> std::fmt::Result {
+        write!(f, "JsonExec: ")?;
+        self.base_config.fmt_as(t, f)
+    }
+}
+
+#[allow(unused, deprecated)]
+impl ExecutionPlan for NdJsonExec {
+    fn name(&self) -> &'static str {
+        "NdJsonExec"
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+    fn properties(&self) -> &PlanProperties {
+        &self.cache
+    }
+
+    fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
+        Vec::new()
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        _: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        Ok(self)
+    }
+
+    fn repartitioned(
+        &self,
+        target_partitions: usize,
+        config: &datafusion_common::config::ConfigOptions,
+    ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+        if self.file_compression_type.is_compressed() {
+            return Ok(None);
+        }
+        let repartition_file_min_size = config.optimizer.repartition_file_min_size;
+        let preserve_order_within_groups = self.properties().output_ordering().is_some();
+        let file_groups = &self.base_config.file_groups;
+
+        let repartitioned_file_groups_option = FileGroupPartitioner::new()
+            .with_target_partitions(target_partitions)
+            .with_preserve_order_within_groups(preserve_order_within_groups)
+            .with_repartition_file_min_size(repartition_file_min_size)
+            .repartition_file_groups(file_groups);
+
+        if let Some(repartitioned_file_groups) = repartitioned_file_groups_option {
+            let mut new_plan = self.clone();
+            new_plan = new_plan.with_file_groups(repartitioned_file_groups);
+            return Ok(Some(Arc::new(new_plan)));
+        }
+
+        Ok(None)
+    }
+
+    fn execute(
+        &self,
+        partition: usize,
+        context: Arc<TaskContext>,
+    ) -> Result<SendableRecordBatchStream> {
+        let batch_size = context.session_config().batch_size();
+
+        let object_store = context
+            .runtime_env()
+            .object_store(&self.base_config.object_store_url)?;
+        let opener = JsonOpener {
+            batch_size,
+            projected_schema: self.base_config.projected_file_schema(),
+            file_compression_type: self.file_compression_type.to_owned(),
+            object_store,
+        };
+
+        let stream = FileStream::new(
+            &self.base_config,
+            partition,
+            Arc::new(opener),
+            &self.metrics,
+        )?;
+
+        Ok(Box::pin(stream) as SendableRecordBatchStream)
+    }
+
+    fn statistics(&self) -> Result<Statistics> {
+        Ok(self.projected_statistics.clone())
+    }
+
+    fn metrics(&self) -> Option<MetricsSet> {
+        Some(self.metrics.clone_inner())
+    }
+    fn with_fetch(&self, limit: Option<usize>) -> Option<Arc<dyn ExecutionPlan>> {
+        let new_config = self.base_config.clone().with_limit(limit);
+
+        Some(Arc::new(Self {
+            base_config: new_config,
+            projected_statistics: self.projected_statistics.clone(),
+            metrics: self.metrics.clone(),
+            file_compression_type: self.file_compression_type,
+            cache: self.cache.clone(),
+        }))
+    }
+}
 
 /// A [`FileOpener`] that opens a JSON file and yields a [`FileOpenFuture`]
 pub struct JsonOpener {

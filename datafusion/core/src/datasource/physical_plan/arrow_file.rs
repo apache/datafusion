@@ -21,20 +21,210 @@ use std::any::Any;
 use std::sync::Arc;
 
 use crate::datasource::data_source::{FileSource, FileType};
+use crate::datasource::listing::PartitionedFile;
 use crate::datasource::physical_plan::{
-    FileMeta, FileOpenFuture, FileOpener, FileScanConfig,
+    FileGroupPartitioner, FileMeta, FileOpenFuture, FileOpener, FileScanConfig,
 };
 use crate::error::Result;
 
 use arrow::buffer::Buffer;
 use arrow_ipc::reader::FileDecoder;
 use arrow_schema::SchemaRef;
-use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
+use datafusion_common::config::ConfigOptions;
+use datafusion_common::{Constraints, Statistics};
+use datafusion_execution::{SendableRecordBatchStream, TaskContext};
+use datafusion_physical_expr::{EquivalenceProperties, Partitioning};
+use datafusion_physical_expr_common::sort_expr::LexOrdering;
+use datafusion_physical_plan::execution_plan::{Boundedness, EmissionType};
+use datafusion_physical_plan::metrics::{ExecutionPlanMetricsSet, MetricsSet};
+use datafusion_physical_plan::{
+    DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties,
+};
 
-use datafusion_common::Statistics;
 use futures::StreamExt;
 use itertools::Itertools;
 use object_store::{GetOptions, GetRange, GetResultPayload, ObjectStore};
+
+/// Execution plan for scanning Arrow data source
+#[derive(Debug, Clone)]
+#[deprecated(since = "46.0.0", note = "use DataSourceExec instead")]
+pub struct ArrowExec {
+    base_config: FileScanConfig,
+    projected_statistics: Statistics,
+    projected_schema: SchemaRef,
+    projected_output_ordering: Vec<LexOrdering>,
+    /// Execution metrics
+    metrics: ExecutionPlanMetricsSet,
+    cache: PlanProperties,
+}
+
+#[allow(unused, deprecated)]
+impl ArrowExec {
+    /// Create a new Arrow reader execution plan provided base configurations
+    pub fn new(base_config: FileScanConfig) -> Self {
+        let (
+            projected_schema,
+            projected_constraints,
+            projected_statistics,
+            projected_output_ordering,
+        ) = base_config.project();
+        let cache = Self::compute_properties(
+            Arc::clone(&projected_schema),
+            &projected_output_ordering,
+            projected_constraints,
+            &base_config,
+        );
+        Self {
+            base_config,
+            projected_schema,
+            projected_statistics,
+            projected_output_ordering,
+            metrics: ExecutionPlanMetricsSet::new(),
+            cache,
+        }
+    }
+    /// Ref to the base configs
+    pub fn base_config(&self) -> &FileScanConfig {
+        &self.base_config
+    }
+
+    fn output_partitioning_helper(file_scan_config: &FileScanConfig) -> Partitioning {
+        Partitioning::UnknownPartitioning(file_scan_config.file_groups.len())
+    }
+
+    /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
+    fn compute_properties(
+        schema: SchemaRef,
+        output_ordering: &[LexOrdering],
+        constraints: Constraints,
+        file_scan_config: &FileScanConfig,
+    ) -> PlanProperties {
+        // Equivalence Properties
+        let eq_properties =
+            EquivalenceProperties::new_with_orderings(schema, output_ordering)
+                .with_constraints(constraints);
+
+        PlanProperties::new(
+            eq_properties,
+            Self::output_partitioning_helper(file_scan_config), // Output Partitioning
+            EmissionType::Incremental,
+            Boundedness::Bounded,
+        )
+    }
+
+    fn with_file_groups(mut self, file_groups: Vec<Vec<PartitionedFile>>) -> Self {
+        self.base_config.file_groups = file_groups;
+        // Changing file groups may invalidate output partitioning. Update it also
+        let output_partitioning = Self::output_partitioning_helper(&self.base_config);
+        self.cache = self.cache.with_partitioning(output_partitioning);
+        self
+    }
+}
+
+#[allow(unused, deprecated)]
+impl DisplayAs for ArrowExec {
+    fn fmt_as(
+        &self,
+        t: DisplayFormatType,
+        f: &mut std::fmt::Formatter,
+    ) -> std::fmt::Result {
+        write!(f, "ArrowExec: ")?;
+        self.base_config.fmt_as(t, f)
+    }
+}
+
+#[allow(unused, deprecated)]
+impl ExecutionPlan for ArrowExec {
+    fn name(&self) -> &'static str {
+        "ArrowExec"
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn properties(&self) -> &PlanProperties {
+        &self.cache
+    }
+    fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
+        Vec::new()
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        _: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        Ok(self)
+    }
+
+    /// Redistribute files across partitions according to their size
+    /// See comments on [`FileGroupPartitioner`] for more detail.
+    fn repartitioned(
+        &self,
+        target_partitions: usize,
+        config: &ConfigOptions,
+    ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+        let repartition_file_min_size = config.optimizer.repartition_file_min_size;
+        let repartitioned_file_groups_option = FileGroupPartitioner::new()
+            .with_target_partitions(target_partitions)
+            .with_repartition_file_min_size(repartition_file_min_size)
+            .with_preserve_order_within_groups(
+                self.properties().output_ordering().is_some(),
+            )
+            .repartition_file_groups(&self.base_config.file_groups);
+
+        if let Some(repartitioned_file_groups) = repartitioned_file_groups_option {
+            let mut new_plan = self.clone();
+            new_plan = new_plan.with_file_groups(repartitioned_file_groups);
+            return Ok(Some(Arc::new(new_plan)));
+        }
+        Ok(None)
+    }
+    fn execute(
+        &self,
+        partition: usize,
+        context: Arc<TaskContext>,
+    ) -> Result<SendableRecordBatchStream> {
+        use super::file_stream::FileStream;
+        let object_store = context
+            .runtime_env()
+            .object_store(&self.base_config.object_store_url)?;
+
+        let opener = ArrowOpener {
+            object_store,
+            projection: self.base_config.file_column_projection_indices(),
+        };
+        let stream = FileStream::new(
+            &self.base_config,
+            partition,
+            Arc::new(opener),
+            &self.metrics,
+        )?;
+        Ok(Box::pin(stream))
+    }
+    fn metrics(&self) -> Option<MetricsSet> {
+        Some(self.metrics.clone_inner())
+    }
+    fn statistics(&self) -> Result<Statistics> {
+        Ok(self.projected_statistics.clone())
+    }
+    fn fetch(&self) -> Option<usize> {
+        self.base_config.limit
+    }
+
+    fn with_fetch(&self, limit: Option<usize>) -> Option<Arc<dyn ExecutionPlan>> {
+        let new_config = self.base_config.clone().with_limit(limit);
+
+        Some(Arc::new(Self {
+            base_config: new_config,
+            projected_statistics: self.projected_statistics.clone(),
+            projected_schema: Arc::clone(&self.projected_schema),
+            projected_output_ordering: self.projected_output_ordering.clone(),
+            metrics: self.metrics.clone(),
+            cache: self.cache.clone(),
+        }))
+    }
+}
 
 /// Arrow configuration struct that is given to DataSourceExec
 /// Does not hold anything special, since [`FileScanConfig`] is sufficient for arrow

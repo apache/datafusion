@@ -18,6 +18,7 @@
 //! Execution plan for reading line-delimited Avro files
 
 use std::any::Any;
+use std::fmt::Formatter;
 use std::sync::Arc;
 
 use super::{FileOpener, FileScanConfig};
@@ -27,10 +28,176 @@ use crate::datasource::data_source::{FileSource, FileType};
 use crate::error::Result;
 
 use arrow::datatypes::SchemaRef;
+use datafusion_common::{Constraints, Statistics};
+use datafusion_execution::{SendableRecordBatchStream, TaskContext};
+use datafusion_physical_expr::{EquivalenceProperties, Partitioning};
+use datafusion_physical_expr_common::sort_expr::LexOrdering;
+use datafusion_physical_plan::execution_plan::{Boundedness, EmissionType};
+use datafusion_physical_plan::metrics::{ExecutionPlanMetricsSet, MetricsSet};
+use datafusion_physical_plan::{
+    DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties,
+};
 
-use datafusion_common::Statistics;
-use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
 use object_store::ObjectStore;
+
+/// Execution plan for scanning Avro data source
+#[derive(Debug, Clone)]
+#[deprecated(since = "46.0.0", note = "use DataSourceExec instead")]
+pub struct AvroExec {
+    base_config: FileScanConfig,
+    projected_statistics: Statistics,
+    projected_schema: SchemaRef,
+    projected_output_ordering: Vec<LexOrdering>,
+    /// Execution metrics
+    metrics: ExecutionPlanMetricsSet,
+    cache: PlanProperties,
+}
+
+#[allow(unused, deprecated)]
+impl AvroExec {
+    /// Create a new Avro reader execution plan provided base configurations
+    pub fn new(base_config: FileScanConfig) -> Self {
+        let (
+            projected_schema,
+            projected_constraints,
+            projected_statistics,
+            projected_output_ordering,
+        ) = base_config.project();
+        let cache = Self::compute_properties(
+            Arc::clone(&projected_schema),
+            &projected_output_ordering,
+            projected_constraints,
+            &base_config,
+        );
+        Self {
+            base_config,
+            projected_schema,
+            projected_statistics,
+            projected_output_ordering,
+            metrics: ExecutionPlanMetricsSet::new(),
+            cache,
+        }
+    }
+
+    /// Ref to the base configs
+    pub fn base_config(&self) -> &FileScanConfig {
+        &self.base_config
+    }
+
+    /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
+    fn compute_properties(
+        schema: SchemaRef,
+        orderings: &[LexOrdering],
+        constraints: Constraints,
+        file_scan_config: &FileScanConfig,
+    ) -> PlanProperties {
+        // Equivalence Properties
+        let eq_properties = EquivalenceProperties::new_with_orderings(schema, orderings)
+            .with_constraints(constraints);
+        let n_partitions = file_scan_config.file_groups.len();
+
+        PlanProperties::new(
+            eq_properties,
+            Partitioning::UnknownPartitioning(n_partitions), // Output Partitioning
+            EmissionType::Incremental,
+            Boundedness::Bounded,
+        )
+    }
+}
+
+#[allow(unused, deprecated)]
+impl DisplayAs for AvroExec {
+    fn fmt_as(&self, t: DisplayFormatType, f: &mut Formatter) -> std::fmt::Result {
+        write!(f, "AvroExec: ")?;
+        self.base_config.fmt_as(t, f)
+    }
+}
+
+#[allow(unused, deprecated)]
+impl ExecutionPlan for AvroExec {
+    fn name(&self) -> &'static str {
+        "AvroExec"
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn properties(&self) -> &PlanProperties {
+        &self.cache
+    }
+    fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
+        Vec::new()
+    }
+    fn with_new_children(
+        self: Arc<Self>,
+        _: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        Ok(self)
+    }
+    #[cfg(not(feature = "avro"))]
+    fn execute(
+        &self,
+        _partition: usize,
+        _context: Arc<TaskContext>,
+    ) -> Result<SendableRecordBatchStream> {
+        Err(crate::error::DataFusionError::NotImplemented(
+            "Cannot execute avro plan without avro feature enabled".to_string(),
+        ))
+    }
+    #[cfg(feature = "avro")]
+    fn execute(
+        &self,
+        partition: usize,
+        context: Arc<TaskContext>,
+    ) -> Result<SendableRecordBatchStream> {
+        use super::file_stream::FileStream;
+        let object_store = context
+            .runtime_env()
+            .object_store(&self.base_config.object_store_url)?;
+
+        let config = Arc::new(private::DeprecatedAvroConfig {
+            schema: Arc::clone(&self.base_config.file_schema),
+            batch_size: context.session_config().batch_size(),
+            projection: self.base_config.projected_file_column_names(),
+            object_store,
+        });
+        let opener = private::DeprecatedAvroOpener { config };
+
+        let stream = FileStream::new(
+            &self.base_config,
+            partition,
+            Arc::new(opener),
+            &self.metrics,
+        )?;
+        Ok(Box::pin(stream))
+    }
+
+    fn statistics(&self) -> Result<Statistics> {
+        Ok(self.projected_statistics.clone())
+    }
+
+    fn metrics(&self) -> Option<MetricsSet> {
+        Some(self.metrics.clone_inner())
+    }
+
+    fn fetch(&self) -> Option<usize> {
+        self.base_config.limit
+    }
+
+    fn with_fetch(&self, limit: Option<usize>) -> Option<Arc<dyn ExecutionPlan>> {
+        let new_config = self.base_config.clone().with_limit(limit);
+
+        Some(Arc::new(Self {
+            base_config: new_config,
+            projected_statistics: self.projected_statistics.clone(),
+            projected_schema: Arc::clone(&self.projected_schema),
+            projected_output_ordering: self.projected_output_ordering.clone(),
+            metrics: self.metrics.clone(),
+            cache: self.cache.clone(),
+        }))
+    }
+}
 
 /// AvroConfig holds the extra configuration that is necessary for opening avro files
 #[derive(Clone, Default)]
@@ -134,7 +301,48 @@ mod private {
 
     use bytes::Buf;
     use futures::StreamExt;
-    use object_store::GetResultPayload;
+    use object_store::{GetResultPayload, ObjectStore};
+
+    pub struct DeprecatedAvroConfig {
+        pub schema: SchemaRef,
+        pub batch_size: usize,
+        pub projection: Option<Vec<String>>,
+        pub object_store: Arc<dyn ObjectStore>,
+    }
+
+    impl DeprecatedAvroConfig {
+        fn open<R: std::io::Read>(&self, reader: R) -> Result<AvroReader<'static, R>> {
+            AvroReader::try_new(
+                reader,
+                Arc::clone(&self.schema),
+                self.batch_size,
+                self.projection.clone(),
+            )
+        }
+    }
+
+    pub struct DeprecatedAvroOpener {
+        pub config: Arc<DeprecatedAvroConfig>,
+    }
+    impl FileOpener for DeprecatedAvroOpener {
+        fn open(&self, file_meta: FileMeta) -> Result<FileOpenFuture> {
+            let config = Arc::clone(&self.config);
+            Ok(Box::pin(async move {
+                let r = config.object_store.get(file_meta.location()).await?;
+                match r.payload {
+                    GetResultPayload::File(file, _) => {
+                        let reader = config.open(file)?;
+                        Ok(futures::stream::iter(reader).boxed())
+                    }
+                    GetResultPayload::Stream(_) => {
+                        let bytes = r.bytes().await?;
+                        let reader = config.open(bytes.reader())?;
+                        Ok(futures::stream::iter(reader).boxed())
+                    }
+                }
+            }))
+        }
+    }
 
     pub struct AvroOpener {
         pub config: Arc<AvroConfig>,
