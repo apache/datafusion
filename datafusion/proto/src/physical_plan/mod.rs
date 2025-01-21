@@ -625,7 +625,7 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                             })
                             .collect::<Result<Vec<_>>>()?;
 
-                        Ok(JoinFilter::new(expression, column_indices, schema))
+                        Ok(JoinFilter::new(expression, column_indices, Arc::new(schema)))
                     })
                     .map_or(Ok(None), |v: Result<JoinFilter>| v.map(Some))?;
 
@@ -739,7 +739,7 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                             })
                             .collect::<Result<_>>()?;
 
-                        Ok(JoinFilter::new(expression, column_indices, schema))
+                        Ok(JoinFilter::new(expression, column_indices, Arc::new(schema)))
                     })
                     .map_or(Ok(None), |v: Result<JoinFilter>| v.map(Some))?;
 
@@ -992,15 +992,27 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                             })
                             .collect::<Result<Vec<_>>>()?;
 
-                        Ok(JoinFilter::new(expression, column_indices, schema))
+                        Ok(JoinFilter::new(expression, column_indices, Arc::new(schema)))
                     })
                     .map_or(Ok(None), |v: Result<JoinFilter>| v.map(Some))?;
+
+                let projection = if !join.projection.is_empty() {
+                    Some(
+                        join.projection
+                            .iter()
+                            .map(|i| *i as usize)
+                            .collect::<Vec<_>>(),
+                    )
+                } else {
+                    None
+                };
 
                 Ok(Arc::new(NestedLoopJoinExec::try_new(
                     left,
                     right,
                     filter,
                     &join_type.into(),
+                    projection,
                 )?))
             }
             PhysicalPlanType::Analyze(analyze) => {
@@ -1043,7 +1055,6 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                 Ok(Arc::new(DataSinkExec::new(
                     input,
                     Arc::new(data_sink),
-                    sink_schema,
                     sort_order,
                 )))
             }
@@ -1073,7 +1084,6 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                 Ok(Arc::new(DataSinkExec::new(
                     input,
                     Arc::new(data_sink),
-                    sink_schema,
                     sort_order,
                 )))
             }
@@ -1110,7 +1120,6 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                     Ok(Arc::new(DataSinkExec::new(
                         input,
                         Arc::new(data_sink),
-                        sink_schema,
                         sort_order,
                     )))
                 }
@@ -1307,7 +1316,7 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                             }
                         })
                         .collect();
-                    let schema = f.schema().try_into()?;
+                    let schema = f.schema().as_ref().try_into()?;
                     Ok(protobuf::JoinFilter {
                         expression: Some(expression),
                         column_indices,
@@ -1379,7 +1388,7 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                             }
                         })
                         .collect();
-                    let schema = f.schema().try_into()?;
+                    let schema = f.schema().as_ref().try_into()?;
                     Ok(protobuf::JoinFilter {
                         expression: Some(expression),
                         column_indices,
@@ -1824,7 +1833,7 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                             }
                         })
                         .collect();
-                    let schema = f.schema().try_into()?;
+                    let schema = f.schema().as_ref().try_into()?;
                     Ok(protobuf::JoinFilter {
                         expression: Some(expression),
                         column_indices,
@@ -1840,6 +1849,9 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                         right: Some(Box::new(right)),
                         join_type: join_type.into(),
                         filter,
+                        projection: exec.projection().map_or_else(Vec::new, |v| {
+                            v.iter().map(|x| *x as u32).collect::<Vec<u32>>()
+                        }),
                     },
                 ))),
             });

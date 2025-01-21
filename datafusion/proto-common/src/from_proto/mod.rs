@@ -321,6 +321,8 @@ impl TryFrom<&protobuf::Field> for Field {
     fn try_from(field: &protobuf::Field) -> Result<Self, Self::Error> {
         let datatype = field.arrow_type.as_deref().required("arrow_type")?;
         let field = if field.dict_id != 0 {
+            // https://github.com/apache/datafusion/issues/14173
+            #[allow(deprecated)]
             Self::new_dict(
                 field.name.as_str(),
                 datatype,
@@ -434,7 +436,12 @@ impl TryFrom<&protobuf::ScalarValue> for ScalarValue {
 
                     let id = dict_batch.id();
 
-                    let fields_using_this_dictionary = schema.fields_with_dict_id(id);
+                    let fields_using_this_dictionary = {
+                        // See https://github.com/apache/datafusion/issues/14173
+                        #[allow(deprecated)]
+                        schema.fields_with_dict_id(id)
+                    };
+
                     let first_field = fields_using_this_dictionary.first().ok_or_else(|| {
                         Error::General("dictionary id not found in schema while deserializing ScalarValue::List".to_string())
                     })?;
@@ -783,6 +790,40 @@ impl From<protobuf::JoinSide> for JoinSide {
     }
 }
 
+impl From<&protobuf::Constraint> for Constraint {
+    fn from(value: &protobuf::Constraint) -> Self {
+        match &value.constraint_mode {
+            Some(protobuf::constraint::ConstraintMode::PrimaryKey(elem)) => {
+                Constraint::PrimaryKey(
+                    elem.indices.iter().map(|&item| item as usize).collect(),
+                )
+            }
+            Some(protobuf::constraint::ConstraintMode::Unique(elem)) => {
+                Constraint::Unique(
+                    elem.indices.iter().map(|&item| item as usize).collect(),
+                )
+            }
+            None => panic!("constraint_mode not set"),
+        }
+    }
+}
+
+impl TryFrom<&protobuf::Constraints> for Constraints {
+    type Error = DataFusionError;
+
+    fn try_from(
+        constraints: &protobuf::Constraints,
+    ) -> datafusion_common::Result<Self, Self::Error> {
+        Ok(Constraints::new_unverified(
+            constraints
+                .constraints
+                .iter()
+                .map(|item| item.into())
+                .collect(),
+        ))
+    }
+}
+
 impl TryFrom<&protobuf::Statistics> for Statistics {
     type Error = DataFusionError;
 
@@ -962,6 +1003,7 @@ impl TryFrom<&protobuf::ParquetOptions> for ParquetOptions {
             maximum_buffered_record_batches_per_stream: value.maximum_buffered_record_batches_per_stream as usize,
             schema_force_view_types: value.schema_force_view_types,
             binary_as_string: value.binary_as_string,
+            skip_arrow_metadata: value.skip_arrow_metadata,
         })
     }
 }

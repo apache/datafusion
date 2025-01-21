@@ -121,6 +121,7 @@ Here are some active projects using DataFusion:
 - [Spice.ai](https://github.com/spiceai/spiceai) Unified SQL query interface & materialization engine
 - [Synnada](https://synnada.ai/) Streaming-first framework for data products
 - [VegaFusion](https://vegafusion.io/) Server-side acceleration for the [Vega](https://vega.github.io/) visualization grammar
+- [Telemetry](https://telemetry.sh/) Structured logging made easy
 
 Here are some less active projects that used DataFusion:
 

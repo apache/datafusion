@@ -17,9 +17,11 @@
 
 //! DataFusion Join implementations
 
+use arrow_buffer::BooleanBufferBuilder;
 pub use cross_join::CrossJoinExec;
 pub use hash_join::HashJoinExec;
 pub use nested_loop_join::NestedLoopJoinExec;
+use parking_lot::Mutex;
 // Note: SortMergeJoin is not used in plans yet
 pub use sort_merge_join::SortMergeJoinExec;
 pub use symmetric_hash_join::SymmetricHashJoinExec;
@@ -56,3 +58,6 @@ pub enum StreamJoinPartitionMode {
     /// Both sides will collected into one partition
     SinglePartition,
 }
+
+/// Shared bitmap for visited left-side indices
+type SharedBitmapBuilder = Mutex<BooleanBufferBuilder>;

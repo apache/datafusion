@@ -1767,7 +1767,7 @@ logical_plan
 01)Projection: count(*) AS global_count
 02)--Aggregate: groupBy=[[]], aggr=[[count(Int64(1)) AS count(*)]]
 03)----SubqueryAlias: a
-04)------Projection: 
+04)------Projection:
 05)--------Aggregate: groupBy=[[aggregate_test_100.c1]], aggr=[[]]
 06)----------Projection: aggregate_test_100.c1
 07)------------Filter: aggregate_test_100.c13 != Utf8("C2GT5KVyOPZpgKVl110TyZO0NcJ434")
@@ -4625,6 +4625,38 @@ NULL 1
 statement ok
 DROP TABLE t;
 
+
+# Test for ignore nulls in nth_VALUE without null values
+statement ok
+CREATE TABLE t AS VALUES  (3, 3), (4, 4), (5, 5), (6, 6);
+
+query I
+SELECT column1 FROM t ORDER BY column2;
+----
+3
+4
+5
+6
+
+query I
+SELECT nth_VALUE(column1, 1) OVER(ORDER BY column2) FROM t;
+----
+3
+3
+3
+3
+
+query I
+SELECT nth_VALUE(column1, 1) IGNORE NULLS OVER(ORDER BY column2) FROM t;
+----
+3
+3
+3
+3
+
+statement ok
+DROP TABLE t;
+
 # Test for ignore nulls with ORDER BY in nth_VALUE
 statement ok
 CREATE TABLE t AS VALUES  (3, 3), (4, 4), (null::bigint, 1), (null::bigint, 2), (5, 5), (6, 6);
@@ -4927,7 +4959,7 @@ statement ok
 INSERT INTO t VALUES (1,1), (1,2),(1,3),(2,1),(2,2);
 
 query II
-SELECT v1, NTH_VALUE(v2, null) OVER (PARTITION BY v1 ORDER BY v2) FROM t;
+SELECT v1, NTH_VALUE(v2, null) OVER (PARTITION BY v1 ORDER BY v2) FROM t ORDER BY v1;
 ----
 1 NULL
 1 NULL
@@ -4936,7 +4968,7 @@ SELECT v1, NTH_VALUE(v2, null) OVER (PARTITION BY v1 ORDER BY v2) FROM t;
 2 NULL
 
 query II
-SELECT v1, NTH_VALUE(v2, v2*null) OVER (PARTITION BY v1 ORDER BY v2) FROM t;
+SELECT v1, NTH_VALUE(v2, v2*null) OVER (PARTITION BY v1 ORDER BY v2) FROM t ORDER BY v1;
 ----
 1 NULL
 1 NULL
@@ -4945,7 +4977,7 @@ SELECT v1, NTH_VALUE(v2, v2*null) OVER (PARTITION BY v1 ORDER BY v2) FROM t;
 2 NULL
 
 query II
-SELECT v1, NTH_VALUE(v2, 0) OVER (PARTITION BY v1 ORDER BY v2) FROM t;
+SELECT v1, NTH_VALUE(v2, 0) OVER (PARTITION BY v1 ORDER BY v2) FROM t ORDER BY v1;
 ----
 1 NULL
 1 NULL
@@ -5055,7 +5087,7 @@ select b, row_number() over (order by a) from (select TRUE as a, 1 as b);
 
 # test window functions on boolean columns
 statement count 0
-create table t1 (id int, bool_col boolean) as values 
+create table t1 (id int, bool_col boolean) as values
     (1, true),
     (2, false),
     (3, true),
@@ -5110,7 +5142,7 @@ select ntile(2) over (order by bool_col) from t1;
 2
 
 query IIIRRI
-select 
+select
     row_number() over (order by bool_col) as row_num,
     rank() over (order by bool_col) as rank,
     dense_rank() over (order by bool_col) as dense_rank,
@@ -5124,6 +5156,299 @@ order by id;
 1 1 1 0.5 0 1
 4 3 2 1 0.666666666667 2
 2 1 1 0.5 0 1
+
+statement ok
+drop table t1;
+
+# test filters that will be pushed into windows
+statement count 0
+create table t1 (c1 int, c2 int) as values
+  (1, 1),
+  (1, 10),
+  (2, 1),
+  (2, 10),
+  (3, 1),
+  (3, 10);
+
+# base query
+query III
+select c1, c2, rank() over (partition by c1 order by c2) as rank
+from t1
+order by c1;
+----
+1 1 1
+1 10 2
+2 1 1
+2 10 2
+3 1 1
+3 10 2
+
+# push filter since it uses a partition column
+query TT
+explain select c1, c2, rank
+from (
+  select c1, c2, rank() over (partition by c1 order by c2) as rank
+  from t1
+)
+where c1 = 2 or c1 = 3
+order by c1, c2, rank;
+----
+logical_plan
+01)Sort: t1.c1 ASC NULLS LAST, t1.c2 ASC NULLS LAST, rank ASC NULLS LAST
+02)--Projection: t1.c1, t1.c2, rank() PARTITION BY [t1.c1] ORDER BY [t1.c2 ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS rank
+03)----WindowAggr: windowExpr=[[rank() PARTITION BY [t1.c1] ORDER BY [t1.c2 ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
+04)------Filter: t1.c1 = Int32(2) OR t1.c1 = Int32(3)
+05)--------TableScan: t1 projection=[c1, c2]
+physical_plan
+01)SortPreservingMergeExec: [c1@0 ASC NULLS LAST, c2@1 ASC NULLS LAST, rank@2 ASC NULLS LAST]
+02)--ProjectionExec: expr=[c1@0 as c1, c2@1 as c2, rank() PARTITION BY [t1.c1] ORDER BY [t1.c2 ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@2 as rank]
+03)----BoundedWindowAggExec: wdw=[rank() PARTITION BY [t1.c1] ORDER BY [t1.c2 ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Ok(Field { name: "rank() PARTITION BY [t1.c1] ORDER BY [t1.c2 ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW", data_type: UInt64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(Int32(NULL)), end_bound: CurrentRow, is_causal: false }], mode=[Sorted]
+04)------SortExec: expr=[c1@0 ASC NULLS LAST, c2@1 ASC NULLS LAST], preserve_partitioning=[true]
+05)--------CoalesceBatchesExec: target_batch_size=1
+06)----------RepartitionExec: partitioning=Hash([c1@0], 2), input_partitions=2
+07)------------CoalesceBatchesExec: target_batch_size=1
+08)--------------FilterExec: c1@0 = 2 OR c1@0 = 3
+09)----------------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
+10)------------------MemoryExec: partitions=1, partition_sizes=[1]
+
+query III
+select c1, c2, rank
+from (
+  select c1, c2, rank() over (partition by c1 order by c2) as rank
+  from t1
+)
+where c1 = 2 or c1 = 3
+order by c1, c2, rank;
+----
+2 1 1
+2 10 2
+3 1 1
+3 10 2
+
+# do not push filter since it does not use a partition column
+query TT
+explain select c1, c2, rank
+from (
+  select c1, c2, rank() over (partition by c1 order by c2) as rank
+  from t1
+)
+where c2 >= 10
+order by c1, c2, rank;
+----
+logical_plan
+01)Sort: t1.c1 ASC NULLS LAST, t1.c2 ASC NULLS LAST, rank ASC NULLS LAST
+02)--Projection: t1.c1, t1.c2, rank() PARTITION BY [t1.c1] ORDER BY [t1.c2 ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS rank
+03)----Filter: t1.c2 >= Int32(10)
+04)------WindowAggr: windowExpr=[[rank() PARTITION BY [t1.c1] ORDER BY [t1.c2 ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
+05)--------TableScan: t1 projection=[c1, c2]
+physical_plan
+01)SortPreservingMergeExec: [c1@0 ASC NULLS LAST, c2@1 ASC NULLS LAST, rank@2 ASC NULLS LAST]
+02)--ProjectionExec: expr=[c1@0 as c1, c2@1 as c2, rank() PARTITION BY [t1.c1] ORDER BY [t1.c2 ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@2 as rank]
+03)----CoalesceBatchesExec: target_batch_size=1
+04)------FilterExec: c2@1 >= 10
+05)--------BoundedWindowAggExec: wdw=[rank() PARTITION BY [t1.c1] ORDER BY [t1.c2 ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Ok(Field { name: "rank() PARTITION BY [t1.c1] ORDER BY [t1.c2 ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW", data_type: UInt64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(Int32(NULL)), end_bound: CurrentRow, is_causal: false }], mode=[Sorted]
+06)----------SortExec: expr=[c1@0 ASC NULLS LAST, c2@1 ASC NULLS LAST], preserve_partitioning=[true]
+07)------------CoalesceBatchesExec: target_batch_size=1
+08)--------------RepartitionExec: partitioning=Hash([c1@0], 2), input_partitions=2
+09)----------------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
+10)------------------MemoryExec: partitions=1, partition_sizes=[1]
+
+query III
+select c1, c2, rank
+from (
+  select c1, c2, rank() over (partition by c1 order by c2) as rank
+  from t1
+)
+where c2 >= 10
+order by c1, c2, rank;
+----
+1 10 2
+2 10 2
+3 10 2
+
+# push partial multi column filter (conjunction)
+query TT
+explain select c1, c2, rank
+from (
+  select c1, c2, rank() over (partition by c1 order by c2) as rank
+  from t1
+)
+where c1 = 1 and c2 = 10
+order by c1, c2, rank;
+----
+logical_plan
+01)Sort: t1.c1 ASC NULLS LAST, t1.c2 ASC NULLS LAST, rank ASC NULLS LAST
+02)--Projection: t1.c1, t1.c2, rank() PARTITION BY [t1.c1] ORDER BY [t1.c2 ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS rank
+03)----Filter: t1.c2 = Int32(10)
+04)------WindowAggr: windowExpr=[[rank() PARTITION BY [t1.c1] ORDER BY [t1.c2 ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
+05)--------Filter: t1.c1 = Int32(1)
+06)----------TableScan: t1 projection=[c1, c2]
+physical_plan
+01)SortPreservingMergeExec: [c1@0 ASC NULLS LAST, c2@1 ASC NULLS LAST, rank@2 ASC NULLS LAST]
+02)--ProjectionExec: expr=[c1@0 as c1, c2@1 as c2, rank() PARTITION BY [t1.c1] ORDER BY [t1.c2 ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@2 as rank]
+03)----CoalesceBatchesExec: target_batch_size=1
+04)------FilterExec: c2@1 = 10
+05)--------BoundedWindowAggExec: wdw=[rank() PARTITION BY [t1.c1] ORDER BY [t1.c2 ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Ok(Field { name: "rank() PARTITION BY [t1.c1] ORDER BY [t1.c2 ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW", data_type: UInt64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(Int32(NULL)), end_bound: CurrentRow, is_causal: false }], mode=[Sorted]
+06)----------SortExec: expr=[c2@1 ASC NULLS LAST], preserve_partitioning=[true]
+07)------------CoalesceBatchesExec: target_batch_size=1
+08)--------------RepartitionExec: partitioning=Hash([c1@0], 2), input_partitions=2
+09)----------------CoalesceBatchesExec: target_batch_size=1
+10)------------------FilterExec: c1@0 = 1
+11)--------------------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
+12)----------------------MemoryExec: partitions=1, partition_sizes=[1]
+
+query III
+select c1, c2, rank
+from (
+  select c1, c2, rank() over (partition by c1 order by c2) as rank
+  from t1
+)
+where c1 = 1 and c2 = 10
+order by c1, c2, rank;
+----
+1 10 2
+
+# do not push multi column filter (disjunction)
+query TT
+explain select c1, c2, rank
+from (
+  select c1, c2, rank() over (partition by c1 order by c2) as rank
+  from t1
+)
+where c1 = 1 or c2 = 10
+order by c1, c2, rank;
+----
+logical_plan
+01)Sort: t1.c1 ASC NULLS LAST, t1.c2 ASC NULLS LAST, rank ASC NULLS LAST
+02)--Projection: t1.c1, t1.c2, rank() PARTITION BY [t1.c1] ORDER BY [t1.c2 ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS rank
+03)----Filter: t1.c1 = Int32(1) OR t1.c2 = Int32(10)
+04)------WindowAggr: windowExpr=[[rank() PARTITION BY [t1.c1] ORDER BY [t1.c2 ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
+05)--------TableScan: t1 projection=[c1, c2]
+physical_plan
+01)SortPreservingMergeExec: [c1@0 ASC NULLS LAST, c2@1 ASC NULLS LAST, rank@2 ASC NULLS LAST]
+02)--ProjectionExec: expr=[c1@0 as c1, c2@1 as c2, rank() PARTITION BY [t1.c1] ORDER BY [t1.c2 ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@2 as rank]
+03)----CoalesceBatchesExec: target_batch_size=1
+04)------FilterExec: c1@0 = 1 OR c2@1 = 10
+05)--------BoundedWindowAggExec: wdw=[rank() PARTITION BY [t1.c1] ORDER BY [t1.c2 ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Ok(Field { name: "rank() PARTITION BY [t1.c1] ORDER BY [t1.c2 ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW", data_type: UInt64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(Int32(NULL)), end_bound: CurrentRow, is_causal: false }], mode=[Sorted]
+06)----------SortExec: expr=[c1@0 ASC NULLS LAST, c2@1 ASC NULLS LAST], preserve_partitioning=[true]
+07)------------CoalesceBatchesExec: target_batch_size=1
+08)--------------RepartitionExec: partitioning=Hash([c1@0], 2), input_partitions=2
+09)----------------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
+10)------------------MemoryExec: partitions=1, partition_sizes=[1]
+
+query III
+select c1, c2, rank
+from (
+  select c1, c2, rank() over (partition by c1 order by c2) as rank
+  from t1
+)
+where c1 = 1 or c2 = 10
+order by c1, c2, rank;
+----
+1 1 1
+1 10 2
+2 10 2
+3 10 2
+
+# multiple window functions with a filter in a common key -> filter will be pushed past both windows
+query TT
+explain select c1, c2, rank1, rank2
+from (
+  select c1, c2, rank() over (partition by c1 order by c2) as rank1, 
+    rank() over (partition by c2, c1 order by c1) as rank2
+  from t1
+)
+where c1 > 1
+order by c1, c2, rank1, rank2;
+----
+logical_plan
+01)Sort: t1.c1 ASC NULLS LAST, t1.c2 ASC NULLS LAST, rank1 ASC NULLS LAST, rank2 ASC NULLS LAST
+02)--Projection: t1.c1, t1.c2, rank() PARTITION BY [t1.c1] ORDER BY [t1.c2 ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS rank1, rank() PARTITION BY [t1.c2, t1.c1] ORDER BY [t1.c1 ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS rank2
+03)----WindowAggr: windowExpr=[[rank() PARTITION BY [t1.c2, t1.c1] ORDER BY [t1.c1 ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
+04)------WindowAggr: windowExpr=[[rank() PARTITION BY [t1.c1] ORDER BY [t1.c2 ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
+05)--------Filter: t1.c1 > Int32(1)
+06)----------TableScan: t1 projection=[c1, c2]
+physical_plan
+01)SortPreservingMergeExec: [c1@0 ASC NULLS LAST, c2@1 ASC NULLS LAST, rank1@2 ASC NULLS LAST, rank2@3 ASC NULLS LAST]
+02)--SortExec: expr=[c1@0 ASC NULLS LAST, c2@1 ASC NULLS LAST, rank1@2 ASC NULLS LAST, rank2@3 ASC NULLS LAST], preserve_partitioning=[true]
+03)----ProjectionExec: expr=[c1@0 as c1, c2@1 as c2, rank() PARTITION BY [t1.c1] ORDER BY [t1.c2 ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@2 as rank1, rank() PARTITION BY [t1.c2, t1.c1] ORDER BY [t1.c1 ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@3 as rank2]
+04)------BoundedWindowAggExec: wdw=[rank() PARTITION BY [t1.c2, t1.c1] ORDER BY [t1.c1 ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Ok(Field { name: "rank() PARTITION BY [t1.c2, t1.c1] ORDER BY [t1.c1 ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW", data_type: UInt64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(Int32(NULL)), end_bound: CurrentRow, is_causal: false }], mode=[Sorted]
+05)--------SortExec: expr=[c2@1 ASC NULLS LAST, c1@0 ASC NULLS LAST], preserve_partitioning=[true]
+06)----------CoalesceBatchesExec: target_batch_size=1
+07)------------RepartitionExec: partitioning=Hash([c2@1, c1@0], 2), input_partitions=2
+08)--------------BoundedWindowAggExec: wdw=[rank() PARTITION BY [t1.c1] ORDER BY [t1.c2 ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Ok(Field { name: "rank() PARTITION BY [t1.c1] ORDER BY [t1.c2 ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW", data_type: UInt64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(Int32(NULL)), end_bound: CurrentRow, is_causal: false }], mode=[Sorted]
+09)----------------SortExec: expr=[c1@0 ASC NULLS LAST, c2@1 ASC NULLS LAST], preserve_partitioning=[true]
+10)------------------CoalesceBatchesExec: target_batch_size=1
+11)--------------------RepartitionExec: partitioning=Hash([c1@0], 2), input_partitions=2
+12)----------------------CoalesceBatchesExec: target_batch_size=1
+13)------------------------FilterExec: c1@0 > 1
+14)--------------------------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
+15)----------------------------MemoryExec: partitions=1, partition_sizes=[1]
+
+query IIII
+select c1, c2, rank1, rank2
+from (
+  select c1, c2, rank() over (partition by c1 order by c2) as rank1, 
+    rank() over (partition by c2, c1 order by c1) as rank2
+  from t1
+)
+where c1 > 1
+order by c1, c2, rank1, rank2;
+----
+2 1 1 1
+2 10 2 1
+3 1 1 1
+3 10 2 1
+
+# multiple window functions with a filter whose key only appears in one window -> filter will be
+# pushed past only one function (in this case, since that window appears above in the plan)
+query TT
+explain select c1, c2, rank1, rank2
+from (
+  select c1, c2, rank() over (partition by c1 order by c2) as rank1, 
+    rank() over (partition by c2, c1 order by c1) as rank2
+  from t1
+)
+where c2 > 1
+order by c1, c2, rank1, rank2;
+----
+logical_plan
+01)Sort: t1.c1 ASC NULLS LAST, t1.c2 ASC NULLS LAST, rank1 ASC NULLS LAST, rank2 ASC NULLS LAST
+02)--Projection: t1.c1, t1.c2, rank() PARTITION BY [t1.c1] ORDER BY [t1.c2 ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS rank1, rank() PARTITION BY [t1.c2, t1.c1] ORDER BY [t1.c1 ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS rank2
+03)----WindowAggr: windowExpr=[[rank() PARTITION BY [t1.c2, t1.c1] ORDER BY [t1.c1 ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
+04)------Filter: t1.c2 > Int32(1)
+05)--------WindowAggr: windowExpr=[[rank() PARTITION BY [t1.c1] ORDER BY [t1.c2 ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
+06)----------TableScan: t1 projection=[c1, c2]
+physical_plan
+01)SortPreservingMergeExec: [c1@0 ASC NULLS LAST, c2@1 ASC NULLS LAST, rank1@2 ASC NULLS LAST, rank2@3 ASC NULLS LAST]
+02)--SortExec: expr=[c1@0 ASC NULLS LAST, c2@1 ASC NULLS LAST, rank1@2 ASC NULLS LAST, rank2@3 ASC NULLS LAST], preserve_partitioning=[true]
+03)----ProjectionExec: expr=[c1@0 as c1, c2@1 as c2, rank() PARTITION BY [t1.c1] ORDER BY [t1.c2 ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@2 as rank1, rank() PARTITION BY [t1.c2, t1.c1] ORDER BY [t1.c1 ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@3 as rank2]
+04)------BoundedWindowAggExec: wdw=[rank() PARTITION BY [t1.c2, t1.c1] ORDER BY [t1.c1 ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Ok(Field { name: "rank() PARTITION BY [t1.c2, t1.c1] ORDER BY [t1.c1 ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW", data_type: UInt64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(Int32(NULL)), end_bound: CurrentRow, is_causal: false }], mode=[Sorted]
+05)--------SortExec: expr=[c2@1 ASC NULLS LAST, c1@0 ASC NULLS LAST], preserve_partitioning=[true]
+06)----------CoalesceBatchesExec: target_batch_size=1
+07)------------RepartitionExec: partitioning=Hash([c2@1, c1@0], 2), input_partitions=2
+08)--------------CoalesceBatchesExec: target_batch_size=1
+09)----------------FilterExec: c2@1 > 1
+10)------------------BoundedWindowAggExec: wdw=[rank() PARTITION BY [t1.c1] ORDER BY [t1.c2 ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Ok(Field { name: "rank() PARTITION BY [t1.c1] ORDER BY [t1.c2 ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW", data_type: UInt64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(Int32(NULL)), end_bound: CurrentRow, is_causal: false }], mode=[Sorted]
+11)--------------------SortExec: expr=[c1@0 ASC NULLS LAST, c2@1 ASC NULLS LAST], preserve_partitioning=[true]
+12)----------------------CoalesceBatchesExec: target_batch_size=1
+13)------------------------RepartitionExec: partitioning=Hash([c1@0], 2), input_partitions=2
+14)--------------------------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
+15)----------------------------MemoryExec: partitions=1, partition_sizes=[1]
+
+query IIII
+select c1, c2, rank1, rank2
+from (
+  select c1, c2, rank() over (partition by c1 order by c2) as rank1, 
+    rank() over (partition by c2, c1 order by c1) as rank2
+  from t1
+)
+where c2 > 1
+order by c1, c2, rank1, rank2;
+----
+1 10 2 1
+2 10 2 1
+3 10 2 1
 
 statement ok
 drop table t1;

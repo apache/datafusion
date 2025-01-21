@@ -25,17 +25,20 @@ keywords = ["arrow", "datafusion", "query", "sql"]
 license = "Apache-2.0"
 homepage = "https://datafusion.apache.org"
 repository = "https://github.com/apache/datafusion"
-# Specify MSRV here as `cargo msrv` doesn't support workspace version
 rust-version = "1.80.1"
 readme = "README.md"
 
 [dependencies]
-arrow = { version = "53.0.0" }
+arrow = { version = "54.0.0" }
 async-trait = "0.1.73"
-aws-config = "1.5.5"
-aws-sdk-sso = "1.43.0"
-aws-sdk-ssooidc = "1.44.0"
-aws-sdk-sts = "1.43.0"
+## 1.5.13 requires a hiher MSRV 1.81 so lock until DataFusion MSRV catches up
+aws-config = "=1.5.10"
+## 1.53.0 requires a higher MSRV 1.81 so lock until DataFusion MSRV catches up
+aws-sdk-sso = "=1.50.0"
+## 1.54.0 requires a higher MSRV 1.81 so lock until DataFusion MSRV catches up
+aws-sdk-ssooidc = "=1.51.0"
+## 1.54.1 requires a higher MSRV 1.81 so lock until DataFusion MSRV catches up
+aws-sdk-sts = "=1.51.0"
 # end pin aws-sdk crates
 aws-credential-types = "1.2.0"
 clap = { version = "4.5.16", features = ["derive", "cargo"] }
@@ -59,15 +62,15 @@ home = "=0.5.9"
 mimalloc = { version = "0.1", default-features = false }
 object_store = { version = "0.11.0", features = ["aws", "gcp", "http"] }
 parking_lot = { version = "0.12" }
-parquet = { version = "53.0.0", default-features = false }
+parquet = { version = "54.0.0", default-features = false }
 regex = "1.8"
 rustyline = "14.0"
 tokio = { version = "1.24", features = ["macros", "rt", "rt-multi-thread", "sync", "parking_lot", "signal"] }
-url = "2.2"
+url = "2.5.4"
 
 [dev-dependencies]
 assert_cmd = "2.0"
-ctor = "0.2.0"
+ctor = "0.2.9"
 predicates = "3.0"
 rstest = "0.22"
 

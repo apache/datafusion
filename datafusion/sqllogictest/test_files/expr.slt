@@ -107,7 +107,7 @@ SELECT
     STRUCT(true, false),
     STRUCT('str1', 'str2')
 ----
-{c0: 1, c1: 2, c2: 3, c3: 4, c4: 5} {c0: } {c0: 2} {c0: 1, c1: } {c0: true, c1: false} {c0: str1, c1: str2}
+{c0: 1, c1: 2, c2: 3, c3: 4, c4: 5} {c0: NULL} {c0: 2} {c0: 1, c1: NULL} {c0: true, c1: false} {c0: str1, c1: str2}
 
 # test binary_bitwise_shift
 query IIII
@@ -1565,6 +1565,62 @@ select NULL < column1 from (VALUES (true), (false)) as t;
 NULL
 NULL
 
+#### comparisons_with_spaceship_operator
+
+# Basic comparisons
+query B
+select 1 <=> 1;
+----
+true
+
+query B
+select 1 <=> 2;
+----
+false
+
+# NULL handling
+query B
+select NULL <=> NULL;
+----
+true
+
+query B
+select 1 <=> NULL;
+----
+false
+
+query B
+select NULL <=> 1;
+----
+false
+
+# Table comparisons
+query B
+select column1 <=> column2 from (VALUES (1, 1), (2, 3), (NULL, NULL)) as t;
+----
+true
+false 
+true
+
+# Sanity test - comparing <=> with equivalent expression
+query B
+SELECT 
+  (column1 <=> column2) = 
+  (IFNULL(column1, false) = IFNULL(column2, false)) AS comparison_result
+FROM (VALUES 
+  (1, 1),      -- equal values
+  (1, 2),      -- different values
+  (NULL, NULL), -- both NULL
+  (1, NULL),    -- first not NULL, second NULL
+  (NULL, 1)     -- first NULL, second not NULL
+) AS t(column1, column2);
+----
+true
+true
+true
+true
+true
+
 #### binary_mathematical_operator_with_null_lt
 
 # 1. Integer and NULL
@@ -1783,7 +1839,7 @@ select struct(time,load1,load2,host) from t1;
 {c0: 2018-05-22T19:53:26, c1: 1.1, c2: 101.0, c3: host1}
 {c0: 2018-05-22T19:53:26, c1: 2.2, c2: 202.0, c3: host2}
 {c0: 2018-05-22T19:53:26, c1: 3.3, c2: 303.0, c3: host3}
-{c0: 2018-05-22T19:53:26, c1: 1.1, c2: 101.0, c3: }
+{c0: 2018-05-22T19:53:26, c1: 1.1, c2: 101.0, c3: NULL}
 
 # can have an aggregate function with an inner coalesce
 query TR
@@ -1963,3 +2019,20 @@ drop table t;
 
 statement ok
 set datafusion.sql_parser.dialect = 'Generic';
+
+# test between expression with null
+query I
+select 1 where null between null and null;
+----
+
+query T
+select 'A' where null between null and null;
+----
+
+query I
+select 1 where null between null and 2;
+----
+
+query T
+select 'A' where null between 2 and null;
+---

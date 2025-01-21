@@ -35,8 +35,8 @@ use datafusion_common::tree_node::{
 };
 use datafusion_common::utils::get_at_indices;
 use datafusion_common::{
-    internal_err, plan_datafusion_err, plan_err, Column, DFSchema, DFSchemaRef,
-    DataFusionError, HashMap, Result, TableReference,
+    internal_err, plan_datafusion_err, plan_err, Column, DFSchema, DFSchemaRef, HashMap,
+    Result, TableReference,
 };
 
 use indexmap::IndexSet;
@@ -379,14 +379,12 @@ fn get_exprs_except_skipped(
     }
 }
 
-/// Resolves an `Expr::Wildcard` to a collection of `Expr::Column`'s.
-pub fn expand_wildcard(
-    schema: &DFSchema,
-    plan: &LogicalPlan,
-    wildcard_options: Option<&WildcardOptions>,
-) -> Result<Vec<Expr>> {
+/// For each column specified in the USING JOIN condition, the JOIN plan outputs it twice
+/// (once for each join side), but an unqualified wildcard should include it only once.
+/// This function returns the columns that should be excluded.
+fn exclude_using_columns(plan: &LogicalPlan) -> Result<HashSet<Column>> {
     let using_columns = plan.using_columns()?;
-    let mut columns_to_skip = using_columns
+    let excluded = using_columns
         .into_iter()
         // For each USING JOIN condition, only expand to one of each join column in projection
         .flat_map(|cols| {
@@ -395,18 +393,26 @@ pub fn expand_wildcard(
             // qualified column
             cols.sort();
             let mut out_column_names: HashSet<String> = HashSet::new();
-            cols.into_iter()
-                .filter_map(|c| {
-                    if out_column_names.contains(&c.name) {
-                        Some(c)
-                    } else {
-                        out_column_names.insert(c.name);
-                        None
-                    }
-                })
-                .collect::<Vec<_>>()
+            cols.into_iter().filter_map(move |c| {
+                if out_column_names.contains(&c.name) {
+                    Some(c)
+                } else {
+                    out_column_names.insert(c.name);
+                    None
+                }
+            })
         })
         .collect::<HashSet<_>>();
+    Ok(excluded)
+}
+
+/// Resolves an `Expr::Wildcard` to a collection of `Expr::Column`'s.
+pub fn expand_wildcard(
+    schema: &DFSchema,
+    plan: &LogicalPlan,
+    wildcard_options: Option<&WildcardOptions>,
+) -> Result<Vec<Expr>> {
+    let mut columns_to_skip = exclude_using_columns(plan)?;
     let excluded_columns = if let Some(WildcardOptions {
         exclude: opt_exclude,
         except: opt_except,
@@ -705,27 +711,20 @@ pub fn exprlist_to_fields<'a>(
         .map(|e| match e {
             Expr::Wildcard { qualifier, options } => match qualifier {
                 None => {
-                    let excluded: Vec<String> = get_excluded_columns(
+                    let mut excluded = exclude_using_columns(plan)?;
+                    excluded.extend(get_excluded_columns(
                         options.exclude.as_ref(),
                         options.except.as_ref(),
                         wildcard_schema,
                         None,
-                    )?
-                    .into_iter()
-                    .map(|c| c.flat_name())
-                    .collect();
-                    Ok::<_, DataFusionError>(
-                        wildcard_schema
-                            .field_names()
-                            .iter()
-                            .enumerate()
-                            .filter(|(_, s)| !excluded.contains(s))
-                            .map(|(i, _)| wildcard_schema.qualified_field(i))
-                            .map(|(qualifier, f)| {
-                                (qualifier.cloned(), Arc::new(f.to_owned()))
-                            })
-                            .collect::<Vec<_>>(),
-                    )
+                    )?);
+                    Ok(wildcard_schema
+                        .iter()
+                        .filter(|(q, f)| {
+                            !excluded.contains(&Column::new(q.cloned(), f.name()))
+                        })
+                        .map(|(q, f)| (q.cloned(), Arc::clone(f)))
+                        .collect::<Vec<_>>())
                 }
                 Some(qualifier) => {
                     let excluded: Vec<String> = get_excluded_columns(

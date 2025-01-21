@@ -391,8 +391,11 @@ impl SessionContext {
             current_catalog_list,
             Arc::clone(&factory) as Arc<dyn UrlTableFactory>,
         ));
+
+        let session_id = self.session_id.clone();
         let ctx: SessionContext = self
             .into_state_builder()
+            .with_session_id(session_id)
             .with_catalog_list(catalog_list)
             .build()
             .into();
@@ -1044,7 +1047,7 @@ impl SessionContext {
         Ok(table)
     }
 
-    async fn find_and_deregister<'a>(
+    async fn find_and_deregister(
         &self,
         table_ref: impl Into<TableReference>,
         table_type: TableType,
@@ -1376,6 +1379,29 @@ impl SessionContext {
         Ok(())
     }
 
+    fn register_type_check<P: DataFilePaths>(
+        &self,
+        table_paths: P,
+        extension: impl AsRef<str>,
+    ) -> Result<()> {
+        let table_paths = table_paths.to_urls()?;
+        if table_paths.is_empty() {
+            return exec_err!("No table paths were provided");
+        }
+
+        // check if the file extension matches the expected extension
+        let extension = extension.as_ref();
+        for path in &table_paths {
+            let file_path = path.as_str();
+            if !file_path.ends_with(extension) && !path.is_collection() {
+                return exec_err!(
+                    "File path '{file_path}' does not match the expected extension '{extension}'"
+                );
+            }
+        }
+        Ok(())
+    }
+
     /// Registers an Arrow file as a table that can be referenced from
     /// SQL statements executed against this context.
     pub async fn register_arrow(
@@ -1478,10 +1504,7 @@ impl SessionContext {
     /// provided reference.
     ///
     /// [`register_table`]: SessionContext::register_table
-    pub async fn table<'a>(
-        &self,
-        table_ref: impl Into<TableReference>,
-    ) -> Result<DataFrame> {
+    pub async fn table(&self, table_ref: impl Into<TableReference>) -> Result<DataFrame> {
         let table_ref: TableReference = table_ref.into();
         let provider = self.table_provider(table_ref.clone()).await?;
         let plan = LogicalPlanBuilder::scan(
@@ -1508,7 +1531,7 @@ impl SessionContext {
     }
 
     /// Return a [`TableProvider`] for the specified table.
-    pub async fn table_provider<'a>(
+    pub async fn table_provider(
         &self,
         table_ref: impl Into<TableReference>,
     ) -> Result<Arc<dyn TableProvider>> {
@@ -2220,6 +2243,16 @@ mod tests {
             "+-----------------------------+",
         ];
         assert_batches_eq!(expected, &result);
+        Ok(())
+    }
+    #[test]
+    fn preserve_session_context_id() -> Result<()> {
+        let ctx = SessionContext::new();
+        // it does make sense to preserve session id in this case
+        // as  `enable_url_table()` can be seen as additional configuration
+        // option on ctx.
+        // some systems like datafusion ballista relies on stable session_id
+        assert_eq!(ctx.session_id(), ctx.enable_url_table().session_id());
         Ok(())
     }
 

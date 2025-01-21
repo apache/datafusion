@@ -1799,7 +1799,8 @@ mod tests {
                 side: JoinSide::Right,
             },
         ];
-        let filter = JoinFilter::new(filter_expr, column_indices, intermediate_schema);
+        let filter =
+            JoinFilter::new(filter_expr, column_indices, Arc::new(intermediate_schema));
 
         experiment(left, right, Some(filter), join_type, on, task_ctx).await?;
         Ok(())
@@ -1864,7 +1865,8 @@ mod tests {
                 side: JoinSide::Right,
             },
         ];
-        let filter = JoinFilter::new(filter_expr, column_indices, intermediate_schema);
+        let filter =
+            JoinFilter::new(filter_expr, column_indices, Arc::new(intermediate_schema));
 
         experiment(left, right, Some(filter), join_type, on, task_ctx).await?;
         Ok(())
@@ -1916,7 +1918,8 @@ mod tests {
                 side: JoinSide::Right,
             },
         ];
-        let filter = JoinFilter::new(filter_expr, column_indices, intermediate_schema);
+        let filter =
+            JoinFilter::new(filter_expr, column_indices, Arc::new(intermediate_schema));
 
         experiment(left, right, Some(filter), join_type, on, task_ctx).await?;
         Ok(())
@@ -2013,7 +2016,8 @@ mod tests {
                 side: JoinSide::Right,
             },
         ];
-        let filter = JoinFilter::new(filter_expr, column_indices, intermediate_schema);
+        let filter =
+            JoinFilter::new(filter_expr, column_indices, Arc::new(intermediate_schema));
 
         experiment(left, right, Some(filter), join_type, on, task_ctx).await?;
         Ok(())
@@ -2071,7 +2075,8 @@ mod tests {
                 side: JoinSide::Right,
             },
         ];
-        let filter = JoinFilter::new(filter_expr, column_indices, intermediate_schema);
+        let filter =
+            JoinFilter::new(filter_expr, column_indices, Arc::new(intermediate_schema));
         experiment(left, right, Some(filter), join_type, on, task_ctx).await?;
         Ok(())
     }
@@ -2129,7 +2134,8 @@ mod tests {
                 side: JoinSide::Right,
             },
         ];
-        let filter = JoinFilter::new(filter_expr, column_indices, intermediate_schema);
+        let filter =
+            JoinFilter::new(filter_expr, column_indices, Arc::new(intermediate_schema));
 
         experiment(left, right, Some(filter), join_type, on, task_ctx).await?;
         Ok(())
@@ -2189,7 +2195,8 @@ mod tests {
                 side: JoinSide::Right,
             },
         ];
-        let filter = JoinFilter::new(filter_expr, column_indices, intermediate_schema);
+        let filter =
+            JoinFilter::new(filter_expr, column_indices, Arc::new(intermediate_schema));
 
         experiment(left, right, Some(filter), join_type, on, task_ctx).await?;
         Ok(())
@@ -2246,7 +2253,8 @@ mod tests {
                 side: JoinSide::Right,
             },
         ];
-        let filter = JoinFilter::new(filter_expr, column_indices, intermediate_schema);
+        let filter =
+            JoinFilter::new(filter_expr, column_indices, Arc::new(intermediate_schema));
 
         experiment(left, right, Some(filter), join_type, on, task_ctx).await?;
         Ok(())
@@ -2310,7 +2318,8 @@ mod tests {
                 side: JoinSide::Right,
             },
         ];
-        let filter = JoinFilter::new(filter_expr, column_indices, intermediate_schema);
+        let filter =
+            JoinFilter::new(filter_expr, column_indices, Arc::new(intermediate_schema));
 
         experiment(left, right, Some(filter), join_type, on, task_ctx).await?;
         Ok(())
@@ -2394,7 +2403,8 @@ mod tests {
                 side: JoinSide::Right,
             },
         ];
-        let filter = JoinFilter::new(filter_expr, column_indices, intermediate_schema);
+        let filter =
+            JoinFilter::new(filter_expr, column_indices, Arc::new(intermediate_schema));
         experiment(left, right, Some(filter), join_type, on, task_ctx).await?;
         Ok(())
     }
@@ -2468,7 +2478,8 @@ mod tests {
                 side: JoinSide::Right,
             },
         ];
-        let filter = JoinFilter::new(filter_expr, column_indices, intermediate_schema);
+        let filter =
+            JoinFilter::new(filter_expr, column_indices, Arc::new(intermediate_schema));
         experiment(left, right, Some(filter), join_type, on, task_ctx).await?;
 
         Ok(())
@@ -2539,7 +2550,8 @@ mod tests {
                 side: JoinSide::Right,
             },
         ];
-        let filter = JoinFilter::new(filter_expr, column_indices, intermediate_schema);
+        let filter =
+            JoinFilter::new(filter_expr, column_indices, Arc::new(intermediate_schema));
 
         experiment(left, right, Some(filter), join_type, on, task_ctx).await?;
         Ok(())

@@ -19,7 +19,7 @@
 name = "datafusion"
 description = "DataFusion is an in-memory query engine that uses Apache Arrow as the memory model"
 keywords = ["arrow", "query", "sql"]
-include = ["benches/*.rs", "src/**/*.rs", "Cargo.toml"]
+include = ["benches/*.rs", "src/**/*.rs", "Cargo.toml", "LICENSE.txt", "NOTICE.txt"]
 readme = "../../README.md"
 version = { workspace = true }
 edition = { workspace = true }
@@ -27,10 +27,7 @@ homepage = { workspace = true }
 repository = { workspace = true }
 license = { workspace = true }
 authors = { workspace = true }
-# Specify MSRV here as `cargo msrv` doesn't support workspace version and fails with
-# "Unable to find key 'package.rust-version' (or 'package.metadata.msrv') in 'arrow-datafusion/Cargo.toml'"
-# https://github.com/foresterre/cargo-msrv/issues/590
-rust-version = "1.80.1"
+rust-version = { workspace = true }
 
 [lints]
 workspace = true
@@ -83,6 +80,7 @@ unicode_expressions = [
     "datafusion-sql/unicode_expressions",
     "datafusion-functions/unicode_expressions",
 ]
+extended_tests = []
 
 [dependencies]
 apache-avro = { version = "0.17", optional = true }
@@ -144,6 +142,7 @@ async-trait = { workspace = true }
 criterion = { version = "0.5", features = ["async_tokio"] }
 ctor = { workspace = true }
 datafusion-functions-window-common = { workspace = true }
+datafusion-physical-optimizer = { workspace = true }
 doc-comment = { workspace = true }
 env_logger = { workspace = true }
 paste = "^1.0"
@@ -152,6 +151,7 @@ rand_distr = "0.4.3"
 regex = { workspace = true }
 rstest = { workspace = true }
 serde_json = { workspace = true }
+sysinfo = "0.33.1"
 test-utils = { path = "../../test-utils" }
 tokio = { workspace = true, features = ["rt-multi-thread", "parking_lot", "fs"] }
 

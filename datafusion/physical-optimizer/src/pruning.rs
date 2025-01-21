@@ -1190,6 +1190,8 @@ fn is_compare_op(op: Operator) -> bool {
             | Operator::LtEq
             | Operator::Gt
             | Operator::GtEq
+            | Operator::LikeMatch
+            | Operator::NotLikeMatch
     )
 }
 
@@ -1482,6 +1484,21 @@ fn build_predicate_expression(
                 *bin_expr.op(),
                 Arc::clone(bin_expr.right()),
             )
+        } else if let Some(like_expr) = expr_any.downcast_ref::<phys_expr::LikeExpr>() {
+            if like_expr.case_insensitive() {
+                return unhandled_hook.handle(expr);
+            }
+            let op = match (like_expr.negated(), like_expr.case_insensitive()) {
+                (false, false) => Operator::LikeMatch,
+                (true, false) => Operator::NotLikeMatch,
+                (false, true) => Operator::ILikeMatch,
+                (true, true) => Operator::NotILikeMatch,
+            };
+            (
+                Arc::clone(like_expr.expr()),
+                op,
+                Arc::clone(like_expr.pattern()),
+            )
         } else {
             return unhandled_hook.handle(expr);
         }
@@ -1562,6 +1579,11 @@ fn build_statistics_expr(
                 )),
             ))
         }
+        Operator::LikeMatch => build_like_match(expr_builder).ok_or_else(|| {
+            plan_datafusion_err!(
+                "LIKE expression with wildcard at the beginning is not supported"
+            )
+        })?,
         Operator::Gt => {
             // column > literal => (min, max) > literal => max > literal
             Arc::new(phys_expr::BinaryExpr::new(
@@ -1605,7 +1627,126 @@ fn build_statistics_expr(
     Ok(statistics_expr)
 }
 
+/// Convert `column LIKE literal` where P is a constant prefix of the literal
+/// to a range check on the column: `P <= column && column < P'`, where P' is the
+/// lowest string after all P* strings.
+fn build_like_match(
+    expr_builder: &mut PruningExpressionBuilder,
+) -> Option<Arc<dyn PhysicalExpr>> {
+    // column LIKE literal => (min, max) LIKE literal split at % => min <= split literal && split literal <= max
+    // column LIKE 'foo%' => min <= 'foo' && 'foo' <= max
+    // column LIKE '%foo' => min <= '' && '' <= max => true
+    // column LIKE '%foo%' => min <= '' && '' <= max => true
+    // column LIKE 'foo' => min <= 'foo' && 'foo' <= max
+
+    /// returns the string literal of the scalar value if it is a string
+    fn unpack_string(s: &ScalarValue) -> Option<&str> {
+        s.try_as_str().flatten()
+    }
+
+    fn extract_string_literal(expr: &Arc<dyn PhysicalExpr>) -> Option<&str> {
+        if let Some(lit) = expr.as_any().downcast_ref::<phys_expr::Literal>() {
+            let s = unpack_string(lit.value())?;
+            return Some(s);
+        }
+        None
+    }
+
+    // TODO Handle ILIKE perhaps by making the min lowercase and max uppercase
+    //  this may involve building the physical expressions that call lower() and upper()
+    let min_column_expr = expr_builder.min_column_expr().ok()?;
+    let max_column_expr = expr_builder.max_column_expr().ok()?;
+    let scalar_expr = expr_builder.scalar_expr();
+    // check that the scalar is a string literal
+    let s = extract_string_literal(scalar_expr)?;
+    // ANSI SQL specifies two wildcards: % and _. % matches zero or more characters, _ matches exactly one character.
+    let first_wildcard_index = s.find(['%', '_']);
+    if first_wildcard_index == Some(0) {
+        // there's no filtering we could possibly do, return an error and have this be handled by the unhandled hook
+        return None;
+    }
+    let (lower_bound, upper_bound) = if let Some(wildcard_index) = first_wildcard_index {
+        let prefix = &s[..wildcard_index];
+        let lower_bound_lit = Arc::new(phys_expr::Literal::new(ScalarValue::Utf8(Some(
+            prefix.to_string(),
+        ))));
+        let upper_bound_lit = Arc::new(phys_expr::Literal::new(ScalarValue::Utf8(Some(
+            increment_utf8(prefix)?,
+        ))));
+        (lower_bound_lit, upper_bound_lit)
+    } else {
+        // the like expression is a literal and can be converted into a comparison
+        let bound = Arc::new(phys_expr::Literal::new(ScalarValue::Utf8(Some(
+            s.to_string(),
+        ))));
+        (Arc::clone(&bound), bound)
+    };
+    let lower_bound_expr = Arc::new(phys_expr::BinaryExpr::new(
+        lower_bound,
+        Operator::LtEq,
+        Arc::clone(&max_column_expr),
+    ));
+    let upper_bound_expr = Arc::new(phys_expr::BinaryExpr::new(
+        Arc::clone(&min_column_expr),
+        Operator::LtEq,
+        upper_bound,
+    ));
+    let combined = Arc::new(phys_expr::BinaryExpr::new(
+        upper_bound_expr,
+        Operator::And,
+        lower_bound_expr,
+    ));
+    Some(combined)
+}
+
+/// Increment a UTF8 string by one, returning `None` if it can't be incremented.
+/// This makes it so that the returned string will always compare greater than the input string
+/// or any other string with the same prefix.
+/// This is necessary since the statistics may have been truncated: if we have a min statistic
+/// of "fo" that may have originally been "foz" or anything else with the prefix "fo".
+/// E.g. `increment_utf8("foo") >= "foo"` and `increment_utf8("foo") >= "fooz"`
+/// In this example `increment_utf8("foo") == "fop"
+fn increment_utf8(data: &str) -> Option<String> {
+    // Helper function to check if a character is valid to use
+    fn is_valid_unicode(c: char) -> bool {
+        let cp = c as u32;
+
+        // Filter out non-characters (https://www.unicode.org/versions/corrigendum9.html)
+        if [0xFFFE, 0xFFFF].contains(&cp) || (0xFDD0..=0xFDEF).contains(&cp) {
+            return false;
+        }
+
+        // Filter out private use area
+        if cp >= 0x110000 {
+            return false;
+        }
+
+        true
+    }
+
+    // Convert string to vector of code points
+    let mut code_points: Vec<char> = data.chars().collect();
+
+    // Work backwards through code points
+    for idx in (0..code_points.len()).rev() {
+        let original = code_points[idx] as u32;
+
+        // Try incrementing the code point
+        if let Some(next_char) = char::from_u32(original + 1) {
+            if is_valid_unicode(next_char) {
+                code_points[idx] = next_char;
+                // truncate the string to the current index
+                code_points.truncate(idx + 1);
+                return Some(code_points.into_iter().collect());
+            }
+        }
+    }
+
+    None
+}
+
 /// Wrap the statistics expression in a check that skips the expression if the column is all nulls.
+///
 /// This is important not only as an optimization but also because statistics may not be
 /// accurate for columns that are all nulls.
 /// For example, for an `int` column `x` with all nulls, the min/max/null_count statistics
@@ -3460,6 +3601,425 @@ mod tests {
             &statistics,
             expected_ret,
         );
+    }
+
+    #[test]
+    fn test_increment_utf8() {
+        // Basic ASCII
+        assert_eq!(increment_utf8("abc").unwrap(), "abd");
+        assert_eq!(increment_utf8("abz").unwrap(), "ab{");
+
+        // Test around ASCII 127 (DEL)
+        assert_eq!(increment_utf8("~").unwrap(), "\u{7f}"); // 126 -> 127
+        assert_eq!(increment_utf8("\u{7f}").unwrap(), "\u{80}"); // 127 -> 128
+
+        // Test 2-byte UTF-8 sequences
+        assert_eq!(increment_utf8("ß").unwrap(), "à"); // U+00DF -> U+00E0
+
+        // Test 3-byte UTF-8 sequences
+        assert_eq!(increment_utf8("℣").unwrap(), "ℤ"); // U+2123 -> U+2124
+
+        // Test at UTF-8 boundaries
+        assert_eq!(increment_utf8("\u{7FF}").unwrap(), "\u{800}"); // 2-byte to 3-byte boundary
+        assert_eq!(increment_utf8("\u{FFFF}").unwrap(), "\u{10000}"); // 3-byte to 4-byte boundary
+
+        // Test that if we can't increment we return None
+        assert!(increment_utf8("").is_none());
+        assert!(increment_utf8("\u{10FFFF}").is_none()); // U+10FFFF is the max code point
+
+        // Test that if we can't increment the last character we do the previous one and truncate
+        assert_eq!(increment_utf8("a\u{10FFFF}").unwrap(), "b");
+
+        // Test surrogate pair range (0xD800..=0xDFFF)
+        assert_eq!(increment_utf8("a\u{D7FF}").unwrap(), "b");
+        assert!(increment_utf8("\u{D7FF}").is_none());
+
+        // Test non-characters range (0xFDD0..=0xFDEF)
+        assert_eq!(increment_utf8("a\u{FDCF}").unwrap(), "b");
+        assert!(increment_utf8("\u{FDCF}").is_none());
+
+        // Test private use area limit (>= 0x110000)
+        assert_eq!(increment_utf8("a\u{10FFFF}").unwrap(), "b");
+        assert!(increment_utf8("\u{10FFFF}").is_none()); // Can't increment past max valid codepoint
+    }
+
+    /// Creates a setup for chunk pruning, modeling a utf8 column "s1"
+    /// with 5 different containers (e.g. RowGroups). They have [min,
+    /// max]:
+    /// s1 ["A", "Z"]
+    /// s1 ["A", "L"]
+    /// s1 ["N", "Z"]
+    /// s1 [NULL, NULL]
+    /// s1 ["A", NULL]
+    /// s1 ["", "A"]
+    /// s1 ["", ""]
+    /// s1 ["AB", "A\u{10ffff}"]
+    /// s1 ["A\u{10ffff}\u{10ffff}\u{10ffff}", "A\u{10ffff}\u{10ffff}"]
+    fn utf8_setup() -> (SchemaRef, TestStatistics) {
+        let schema = Arc::new(Schema::new(vec![Field::new("s1", DataType::Utf8, true)]));
+
+        let statistics = TestStatistics::new().with(
+            "s1",
+            ContainerStats::new_utf8(
+                vec![
+                    Some("A"),
+                    Some("A"),
+                    Some("N"),
+                    Some("M"),
+                    None,
+                    Some("A"),
+                    Some(""),
+                    Some(""),
+                    Some("AB"),
+                    Some("A\u{10ffff}\u{10ffff}"),
+                ], // min
+                vec![
+                    Some("Z"),
+                    Some("L"),
+                    Some("Z"),
+                    Some("M"),
+                    None,
+                    None,
+                    Some("A"),
+                    Some(""),
+                    Some("A\u{10ffff}\u{10ffff}\u{10ffff}"),
+                    Some("A\u{10ffff}\u{10ffff}"),
+                ], // max
+            ),
+        );
+        (schema, statistics)
+    }
+
+    #[test]
+    fn prune_utf8_eq() {
+        let (schema, statistics) = utf8_setup();
+
+        let expr = col("s1").eq(lit("A"));
+        #[rustfmt::skip]
+        let expected_ret = &[
+            // s1 ["A", "Z"] ==> some rows could pass (must keep)
+            true,
+            // s1 ["A", "L"] ==> some rows could pass (must keep)
+            true,
+            // s1 ["N", "Z"] ==> no rows can pass (not keep)
+            false,
+            // s1 ["M", "M"] ==> no rows can pass (not keep)
+            false,
+            // s1 [NULL, NULL]  ==> unknown (must keep)
+            true,
+            // s1 ["A", NULL]  ==> unknown (must keep)
+            true,
+            // s1 ["", "A"]  ==> some rows could pass (must keep)
+            true,
+            // s1 ["", ""]  ==> no rows can pass (not keep)
+            false,
+            // s1 ["AB", "A\u{10ffff}\u{10ffff}\u{10ffff}"]  ==> no rows can pass (not keep)
+            false,
+            // s1 ["A\u{10ffff}\u{10ffff}", "A\u{10ffff}\u{10ffff}"]  ==> no rows can pass (not keep)
+            false,
+        ];
+        prune_with_expr(expr, &schema, &statistics, expected_ret);
+
+        let expr = col("s1").eq(lit(""));
+        #[rustfmt::skip]
+        let expected_ret = &[
+            // s1 ["A", "Z"] ==> no rows can pass (not keep)
+            false,
+            // s1 ["A", "L"] ==> no rows can pass (not keep)
+            false,
+            // s1 ["N", "Z"] ==> no rows can pass (not keep)
+            false,
+            // s1 ["M", "M"] ==> no rows can pass (not keep)
+            false,
+            // s1 [NULL, NULL]  ==> unknown (must keep)
+            true,
+            // s1 ["A", NULL]  ==> no rows can pass (not keep)
+            false,
+            // s1 ["", "A"]  ==> some rows could pass (must keep)
+            true,
+            // s1 ["", ""]  ==> all rows must pass (must keep)
+            true,
+            // s1 ["AB", "A\u{10ffff}\u{10ffff}\u{10ffff}"]  ==> no rows can pass (not keep)
+            false,
+            // s1 ["A\u{10ffff}\u{10ffff}", "A\u{10ffff}\u{10ffff}"]  ==> no rows can pass (not keep)
+            false,
+        ];
+        prune_with_expr(expr, &schema, &statistics, expected_ret);
+    }
+
+    #[test]
+    fn prune_utf8_not_eq() {
+        let (schema, statistics) = utf8_setup();
+
+        let expr = col("s1").not_eq(lit("A"));
+        #[rustfmt::skip]
+        let expected_ret = &[
+            // s1 ["A", "Z"] ==> some rows could pass (must keep)
+            true,
+            // s1 ["A", "L"] ==> some rows could pass (must keep)
+            true,
+            // s1 ["N", "Z"] ==> all rows must pass (must keep)
+            true,
+            // s1 ["M", "M"] ==> all rows must pass (must keep)
+            true,
+            // s1 [NULL, NULL]  ==> unknown (must keep)
+            true,
+            // s1 ["A", NULL]  ==> unknown (must keep)
+            true,
+            // s1 ["", "A"]  ==> some rows could pass (must keep)
+            true,
+            // s1 ["", ""]  ==> all rows must pass (must keep)
+            true,
+            // s1 ["AB", "A\u{10ffff}\u{10ffff}"]  ==> all rows must pass (must keep)
+            true,
+            // s1 ["A\u{10ffff}\u{10ffff}", "A\u{10ffff}\u{10ffff}"]  ==> all rows must pass (must keep)
+            true,
+        ];
+        prune_with_expr(expr, &schema, &statistics, expected_ret);
+
+        let expr = col("s1").not_eq(lit(""));
+        #[rustfmt::skip]
+        let expected_ret = &[
+            // s1 ["A", "Z"] ==> all rows must pass (must keep)
+            true,
+            // s1 ["A", "L"] ==> all rows must pass (must keep)
+            true,
+            // s1 ["N", "Z"] ==> all rows must pass (must keep)
+            true,
+            // s1 ["M", "M"] ==> all rows must pass (must keep)
+            true,
+            // s1 [NULL, NULL]  ==> unknown (must keep)
+            true,
+            // s1 ["A", NULL]  ==> unknown (must keep)
+            true,
+            // s1 ["", "A"]  ==> some rows could pass (must keep)
+            true,
+            // s1 ["", ""]  ==> no rows can pass (not keep)
+            false,
+            // s1 ["AB", "A\u{10ffff}\u{10ffff}\u{10ffff}"]  ==> all rows must pass (must keep)
+            true,
+            // s1 ["A\u{10ffff}\u{10ffff}", "A\u{10ffff}\u{10ffff}"]  ==> all rows must pass (must keep)
+            true,
+        ];
+        prune_with_expr(expr, &schema, &statistics, expected_ret);
+    }
+
+    #[test]
+    fn prune_utf8_like_one() {
+        let (schema, statistics) = utf8_setup();
+
+        let expr = col("s1").like(lit("A_"));
+        #[rustfmt::skip]
+        let expected_ret = &[
+            // s1 ["A", "Z"] ==> some rows could pass (must keep)
+            true,
+            // s1 ["A", "L"] ==> some rows could pass (must keep)
+            true,
+            // s1 ["N", "Z"] ==> no rows can pass (not keep)
+            false,
+            // s1 ["M", "M"] ==> no rows can pass (not keep)
+            false,
+            // s1 [NULL, NULL]  ==> unknown (must keep)
+            true,
+            // s1 ["A", NULL]  ==> unknown (must keep)
+            true,
+            // s1 ["", "A"]  ==> some rows could pass (must keep)
+            true,
+            // s1 ["", ""]  ==> no rows can pass (not keep)
+            false,
+            // s1 ["AB", "A\u{10ffff}\u{10ffff}\u{10ffff}"]  ==> some rows could pass (must keep)
+            true,
+            // s1 ["A\u{10ffff}\u{10ffff}", "A\u{10ffff}\u{10ffff}"]  ==> some rows could pass (must keep)
+            true,
+        ];
+        prune_with_expr(expr, &schema, &statistics, expected_ret);
+
+        let expr = col("s1").like(lit("_A_"));
+        #[rustfmt::skip]
+        let expected_ret = &[
+            // s1 ["A", "Z"] ==> some rows could pass (must keep)
+            true,
+            // s1 ["A", "L"] ==> some rows could pass (must keep)
+            true,
+            // s1 ["N", "Z"] ==> some rows could pass (must keep)
+            true,
+            // s1 ["M", "M"] ==> some rows could pass (must keep)
+            true,
+            // s1 [NULL, NULL]  ==> unknown (must keep)
+            true,
+            // s1 ["A", NULL]  ==> unknown (must keep)
+            true,
+            // s1 ["", "A"]  ==> some rows could pass (must keep)
+            true,
+            // s1 ["", ""]  ==> some rows could pass (must keep)
+            true,
+            // s1 ["AB", "A\u{10ffff}\u{10ffff}\u{10ffff}"]  ==> some rows could pass (must keep)
+            true,
+            // s1 ["A\u{10ffff}\u{10ffff}", "A\u{10ffff}\u{10ffff}"]  ==> some rows could pass (must keep)
+            true,
+        ];
+        prune_with_expr(expr, &schema, &statistics, expected_ret);
+
+        let expr = col("s1").like(lit("_"));
+        #[rustfmt::skip]
+        let expected_ret = &[
+            // s1 ["A", "Z"] ==> all rows must pass (must keep)
+            true,
+            // s1 ["A", "L"] ==> all rows must pass (must keep)
+            true,
+            // s1 ["N", "Z"] ==> all rows must pass (must keep)
+            true,
+            // s1 ["M", "M"] ==> all rows must pass (must keep)
+            true,
+            // s1 [NULL, NULL]  ==> unknown (must keep)
+            true,
+            // s1 ["A", NULL]  ==> unknown (must keep)
+            true,
+            // s1 ["", "A"]  ==> all rows must pass (must keep)
+            true,
+            // s1 ["", ""]  ==> all rows must pass (must keep)
+            true,
+            // s1 ["AB", "A\u{10ffff}\u{10ffff}\u{10ffff}"]  ==> all rows must pass (must keep)
+            true,
+            // s1 ["A\u{10ffff}\u{10ffff}", "A\u{10ffff}\u{10ffff}"]  ==> all rows must pass (must keep)
+            true,
+        ];
+        prune_with_expr(expr, &schema, &statistics, expected_ret);
+
+        let expr = col("s1").like(lit(""));
+        #[rustfmt::skip]
+        let expected_ret = &[
+            // s1 ["A", "Z"] ==> no rows can pass (not keep)
+            false,
+            // s1 ["A", "L"] ==> no rows can pass (not keep)
+            false,
+            // s1 ["N", "Z"] ==> no rows can pass (not keep)
+            false,
+            // s1 ["M", "M"] ==> no rows can pass (not keep)
+            false,
+            // s1 [NULL, NULL]  ==> unknown (must keep)
+            true,
+            // s1 ["A", NULL]  ==> no rows can pass (not keep)
+            false,
+            // s1 ["", "A"]  ==> some rows could pass (must keep)
+            true,
+            // s1 ["", ""]  ==> all rows must pass (must keep)
+            true,
+            // s1 ["AB", "A\u{10ffff}\u{10ffff}\u{10ffff}"]  ==> no rows can pass (not keep)
+            false,
+            // s1 ["A\u{10ffff}\u{10ffff}", "A\u{10ffff}\u{10ffff}"]  ==> no rows can pass (not keep)
+            false,
+        ];
+        prune_with_expr(expr, &schema, &statistics, expected_ret);
+    }
+
+    #[test]
+    fn prune_utf8_like_many() {
+        let (schema, statistics) = utf8_setup();
+
+        let expr = col("s1").like(lit("A%"));
+        #[rustfmt::skip]
+        let expected_ret = &[
+            // s1 ["A", "Z"] ==> some rows could pass (must keep)
+            true,
+            // s1 ["A", "L"] ==> some rows could pass (must keep)
+            true,
+            // s1 ["N", "Z"] ==> no rows can pass (not keep)
+            false,
+            // s1 ["M", "M"] ==> no rows can pass (not keep)
+            false,
+            // s1 [NULL, NULL]  ==> unknown (must keep)
+            true,
+            // s1 ["A", NULL]  ==> unknown (must keep)
+            true,
+            // s1 ["", "A"]  ==> some rows could pass (must keep)
+            true,
+            // s1 ["", ""]  ==> no rows can pass (not keep)
+            false,
+            // s1 ["AB", "A\u{10ffff}\u{10ffff}\u{10ffff}"]  ==> some rows could pass (must keep)
+            true,
+            // s1 ["A\u{10ffff}\u{10ffff}", "A\u{10ffff}\u{10ffff}"]  ==> some rows could pass (must keep)
+            true,
+        ];
+        prune_with_expr(expr, &schema, &statistics, expected_ret);
+
+        let expr = col("s1").like(lit("%A%"));
+        #[rustfmt::skip]
+        let expected_ret = &[
+            // s1 ["A", "Z"] ==> some rows could pass (must keep)
+            true,
+            // s1 ["A", "L"] ==> some rows could pass (must keep)
+            true,
+            // s1 ["N", "Z"] ==> some rows could pass (must keep)
+            true,
+            // s1 ["M", "M"] ==> some rows could pass (must keep)
+            true,
+            // s1 [NULL, NULL]  ==> unknown (must keep)
+            true,
+            // s1 ["A", NULL]  ==> unknown (must keep)
+            true,
+            // s1 ["", "A"]  ==> some rows could pass (must keep)
+            true,
+            // s1 ["", ""]  ==> some rows could pass (must keep)
+            true,
+            // s1 ["AB", "A\u{10ffff}\u{10ffff}\u{10ffff}"]  ==> some rows could pass (must keep)
+            true,
+            // s1 ["A\u{10ffff}\u{10ffff}", "A\u{10ffff}\u{10ffff}"]  ==> some rows could pass (must keep)
+            true,
+        ];
+        prune_with_expr(expr, &schema, &statistics, expected_ret);
+
+        let expr = col("s1").like(lit("%"));
+        #[rustfmt::skip]
+        let expected_ret = &[
+            // s1 ["A", "Z"] ==> all rows must pass (must keep)
+            true,
+            // s1 ["A", "L"] ==> all rows must pass (must keep)
+            true,
+            // s1 ["N", "Z"] ==> all rows must pass (must keep)
+            true,
+            // s1 ["M", "M"] ==> all rows must pass (must keep)
+            true,
+            // s1 [NULL, NULL]  ==> unknown (must keep)
+            true,
+            // s1 ["A", NULL]  ==> unknown (must keep)
+            true,
+            // s1 ["", "A"]  ==> all rows must pass (must keep)
+            true,
+            // s1 ["", ""]  ==> all rows must pass (must keep)
+            true,
+            // s1 ["AB", "A\u{10ffff}\u{10ffff}\u{10ffff}"]  ==> all rows must pass (must keep)
+            true,
+            // s1 ["A\u{10ffff}\u{10ffff}", "A\u{10ffff}\u{10ffff}"]  ==> all rows must pass (must keep)
+            true,
+        ];
+        prune_with_expr(expr, &schema, &statistics, expected_ret);
+
+        let expr = col("s1").like(lit(""));
+        #[rustfmt::skip]
+        let expected_ret = &[
+            // s1 ["A", "Z"] ==> no rows can pass (not keep)
+            false,
+            // s1 ["A", "L"] ==> no rows can pass (not keep)
+            false,
+            // s1 ["N", "Z"] ==> no rows can pass (not keep)
+            false,
+            // s1 ["M", "M"] ==> no rows can pass (not keep)
+            false,
+            // s1 [NULL, NULL]  ==> unknown (must keep)
+            true,
+            // s1 ["A", NULL]  ==> no rows can pass (not keep)
+            false,
+            // s1 ["", "A"]  ==> some rows could pass (must keep)
+            true,
+            // s1 ["", ""]  ==> all rows must pass (must keep)
+            true,
+            // s1 ["AB", "A\u{10ffff}\u{10ffff}\u{10ffff}"]  ==> no rows can pass (not keep)
+            false,
+            // s1 ["A\u{10ffff}\u{10ffff}", "A\u{10ffff}\u{10ffff}"]  ==> no rows can pass (not keep)
+            false,
+        ];
+        prune_with_expr(expr, &schema, &statistics, expected_ret);
     }
 
     #[test]

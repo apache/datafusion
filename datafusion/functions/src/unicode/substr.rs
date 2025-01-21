@@ -18,11 +18,11 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use crate::strings::{make_and_append_view, StringArrayType};
+use crate::strings::make_and_append_view;
 use crate::utils::{make_scalar_function, utf8_to_str_type};
 use arrow::array::{
     Array, ArrayIter, ArrayRef, AsArray, GenericStringBuilder, Int64Array,
-    OffsetSizeTrait, StringViewArray,
+    OffsetSizeTrait, StringArrayType, StringViewArray,
 };
 use arrow::datatypes::DataType;
 use arrow_buffer::{NullBufferBuilder, ScalarBuffer};

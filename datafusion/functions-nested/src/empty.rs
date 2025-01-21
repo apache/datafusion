@@ -56,9 +56,15 @@ make_udf_expr_and_func!(
     )
 )]
 #[derive(Debug)]
-pub(super) struct ArrayEmpty {
+pub struct ArrayEmpty {
     signature: Signature,
     aliases: Vec<String>,
+}
+
+impl Default for ArrayEmpty {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 impl ArrayEmpty {
     pub fn new() -> Self {

@@ -71,7 +71,8 @@ pub use datafusion_expr_common::columnar_value::ColumnarValue;
 pub use datafusion_expr_common::groups_accumulator::{EmitTo, GroupsAccumulator};
 pub use datafusion_expr_common::operator::Operator;
 pub use datafusion_expr_common::signature::{
-    ArrayFunctionSignature, Signature, TypeSignature, Volatility, TIMEZONE_WILDCARD,
+    ArrayFunctionSignature, Signature, TypeSignature, TypeSignatureClass, Volatility,
+    TIMEZONE_WILDCARD,
 };
 pub use datafusion_expr_common::type_coercion::binary;
 pub use expr::{
@@ -92,7 +93,10 @@ pub use table_source::{TableProviderFilterPushDown, TableSource, TableType};
 pub use udaf::{
     aggregate_doc_sections, AggregateUDF, AggregateUDFImpl, ReversedUDAF, StatisticsArgs,
 };
-pub use udf::{scalar_doc_sections, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl};
+pub use udf::{
+    scalar_doc_sections, ReturnInfo, ReturnTypeArgs, ScalarFunctionArgs, ScalarUDF,
+    ScalarUDFImpl,
+};
 pub use udwf::{window_doc_sections, ReversedUDWF, WindowUDF, WindowUDFImpl};
 pub use window_frame::{WindowFrame, WindowFrameBound, WindowFrameUnits};
 

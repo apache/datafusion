@@ -114,19 +114,26 @@ impl ListingTableConfig {
         }
     }
 
-    fn infer_file_extension(path: &str) -> Result<String> {
+    ///Returns a tupe of (file_extension, optional compression_extension)
+    ///
+    /// For example a path ending with blah.test.csv.gz returns `("csv", Some("gz"))`
+    /// For example a path ending with blah.test.csv returns `("csv", None)`
+    fn infer_file_extension_and_compression_type(
+        path: &str,
+    ) -> Result<(String, Option<String>)> {
         let mut exts = path.rsplit('.');
 
-        let mut splitted = exts.next().unwrap_or("");
+        let splitted = exts.next().unwrap_or("");
 
         let file_compression_type = FileCompressionType::from_str(splitted)
             .unwrap_or(FileCompressionType::UNCOMPRESSED);
 
         if file_compression_type.is_compressed() {
-            splitted = exts.next().unwrap_or("");
+            let splitted2 = exts.next().unwrap_or("");
+            Ok((splitted2.to_string(), Some(splitted.to_string())))
+        } else {
+            Ok((splitted.to_string(), None))
         }
-
-        Ok(splitted.to_string())
     }
 
     /// Infer `ListingOptions` based on `table_path` suffix.
@@ -147,18 +154,33 @@ impl ListingTableConfig {
             .await
             .ok_or_else(|| DataFusionError::Internal("No files for table".into()))??;
 
-        let file_extension =
-            ListingTableConfig::infer_file_extension(file.location.as_ref())?;
+        let (file_extension, maybe_compression_type) =
+            ListingTableConfig::infer_file_extension_and_compression_type(
+                file.location.as_ref(),
+            )?;
+
+        let mut format_options = HashMap::new();
+        if let Some(ref compression_type) = maybe_compression_type {
+            format_options
+                .insert("format.compression".to_string(), compression_type.clone());
+        }
 
         let file_format = state
             .get_file_format_factory(&file_extension)
             .ok_or(config_datafusion_err!(
                 "No file_format found with extension {file_extension}"
             ))?
-            .create(state, &HashMap::new())?;
+            .create(state, &format_options)?;
+
+        let listing_file_extension =
+            if let Some(compression_type) = maybe_compression_type {
+                format!("{}.{}", &file_extension, &compression_type)
+            } else {
+                file_extension
+            };
 
         let listing_options = ListingOptions::new(file_format)
-            .with_file_extension(file_extension)
+            .with_file_extension(listing_file_extension)
             .with_target_partitions(state.config().target_partitions());
 
         Ok(Self {
@@ -913,6 +935,7 @@ impl TableProvider for ListingTable {
                 session_state,
                 FileScanConfig::new(object_store_url, Arc::clone(&self.file_schema))
                     .with_file_groups(partitioned_file_lists)
+                    .with_constraints(self.constraints.clone())
                     .with_statistics(statistics)
                     .with_projection(projection.cloned())
                     .with_limit(limit)
@@ -1028,21 +1051,22 @@ impl TableProvider for ListingTable {
             table_partition_cols: self.options.table_partition_cols.clone(),
             insert_op,
             keep_partition_by_columns,
+            file_extension: self.options().format.get_ext(),
         };
 
         let order_requirements = if !self.options().file_sort_order.is_empty() {
             // Multiple sort orders in outer vec are equivalent, so we pass only the first one
-            let ordering = self
-                .try_create_output_ordering()?
-                .first()
-                .ok_or(DataFusionError::Internal(
-                    "Expected ListingTable to have a sort order, but none found!".into(),
-                ))?
-                .clone();
+            let orderings = self.try_create_output_ordering()?;
+            let Some(ordering) = orderings.first() else {
+                return internal_err!(
+                    "Expected ListingTable to have a sort order, but none found!"
+                );
+            };
             // Converts Vec<Vec<SortExpr>> into type required by execution plan to specify its required input ordering
             Some(LexRequirement::new(
                 ordering
                     .into_iter()
+                    .cloned()
                     .map(PhysicalSortRequirement::from)
                     .collect::<Vec<_>>(),
             ))
@@ -1126,8 +1150,8 @@ impl ListingTable {
     /// This method first checks if the statistics for the given file are already cached.
     /// If they are, it returns the cached statistics.
     /// If they are not, it infers the statistics from the file and stores them in the cache.
-    async fn do_collect_statistics<'a>(
-        &'a self,
+    async fn do_collect_statistics(
+        &self,
         ctx: &SessionState,
         store: &Arc<dyn ObjectStore>,
         part_file: &PartitionedFile,
@@ -1290,15 +1314,15 @@ mod tests {
             // ok with one column
             (
                 vec![vec![col("string_col").sort(true, false)]],
-                Ok(vec![LexOrdering {
-                        inner: vec![PhysicalSortExpr {
+                Ok(vec![LexOrdering::new(
+                        vec![PhysicalSortExpr {
                             expr: physical_col("string_col", &schema).unwrap(),
                             options: SortOptions {
                                 descending: false,
                                 nulls_first: false,
                             },
                         }],
-                    }
+                )
                 ])
             ),
             // ok with two columns, different options
@@ -1307,8 +1331,8 @@ mod tests {
                     col("string_col").sort(true, false),
                     col("int_col").sort(false, true),
                 ]],
-                Ok(vec![LexOrdering {
-                        inner: vec![
+                Ok(vec![LexOrdering::new(
+                        vec![
                             PhysicalSortExpr::new_default(physical_col("string_col", &schema).unwrap())
                                         .asc()
                                         .nulls_last(),
@@ -1316,7 +1340,7 @@ mod tests {
                                         .desc()
                                         .nulls_first()
                         ],
-                    }
+                )
                 ])
             ),
         ];
@@ -2191,6 +2215,25 @@ mod tests {
             "+-----+-----+---+",
         ];
         assert_batches_eq!(expected, &batches);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_infer_options_compressed_csv() -> Result<()> {
+        let testdata = crate::test_util::arrow_test_data();
+        let filename = format!("{}/csv/aggregate_test_100.csv.gz", testdata);
+        let table_path = ListingTableUrl::parse(filename).unwrap();
+
+        let ctx = SessionContext::new();
+
+        let config = ListingTableConfig::new(table_path);
+        let config_with_opts = config.infer_options(&ctx.state()).await?;
+        let config_with_schema = config_with_opts.infer_schema(&ctx.state()).await?;
+
+        let schema = config_with_schema.file_schema.unwrap();
+
+        assert_eq!(schema.fields.len(), 13);
 
         Ok(())
     }

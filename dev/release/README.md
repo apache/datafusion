@@ -274,13 +274,16 @@ Verify that the Cargo.toml in the tarball contains the correct version
 (cd datafusion/physical-expr-common && cargo publish)
 (cd datafusion/functions-aggregate-common && cargo publish)
 (cd datafusion/functions-window-common && cargo publish)
+(cd datafusion/doc && cargo publish)
+(cd datafusion/macros && cargo publish)
 (cd datafusion/expr && cargo publish)
 (cd datafusion/execution && cargo publish)
-(cd datafusion/physical-expr && cargo publish)
 (cd datafusion/functions && cargo publish)
+(cd datafusion/physical-expr && cargo publish)
 (cd datafusion/functions-aggregate && cargo publish)
 (cd datafusion/functions-window && cargo publish)
 (cd datafusion/functions-nested && cargo publish)
+(cd datafusion/functions-table && cargo publish)
 (cd datafusion/sql && cargo publish)
 (cd datafusion/optimizer && cargo publish)
 (cd datafusion/common-runtime && cargo publish)
@@ -292,12 +295,7 @@ Verify that the Cargo.toml in the tarball contains the correct version
 (cd datafusion/proto && cargo publish)
 (cd datafusion/substrait && cargo publish)
 (cd datafusion/ffi && cargo publish)
-```
-
-The CLI needs a `--no-verify` argument because `build.rs` generates source into the `src` directory.
-
-```shell
-(cd datafusion-cli && cargo publish --no-verify)
+(cd datafusion-cli && cargo publish)
 ```
 
 ### Publish datafusion-cli on Homebrew

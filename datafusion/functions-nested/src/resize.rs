@@ -22,7 +22,7 @@ use arrow::array::{Capacities, MutableArrayData};
 use arrow_array::{
     new_null_array, Array, ArrayRef, GenericListArray, Int64Array, OffsetSizeTrait,
 };
-use arrow_buffer::{ArrowNativeType, BooleanBufferBuilder, NullBuffer, OffsetBuffer};
+use arrow_buffer::{ArrowNativeType, NullBufferBuilder, OffsetBuffer};
 use arrow_schema::DataType::{FixedSizeList, LargeList, List};
 use arrow_schema::{DataType, FieldRef};
 use datafusion_common::cast::{as_int64_array, as_large_list_array, as_list_array};
@@ -65,9 +65,15 @@ make_udf_expr_and_func!(
     )
 )]
 #[derive(Debug)]
-pub(super) struct ArrayResize {
+pub struct ArrayResize {
     signature: Signature,
     aliases: Vec<String>,
+}
+
+impl Default for ArrayResize {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl ArrayResize {
@@ -192,15 +198,15 @@ fn general_list_resize<O: OffsetSizeTrait + TryInto<i64>>(
         capacity,
     );
 
-    let mut null_builder = BooleanBufferBuilder::new(array.len());
+    let mut null_builder = NullBufferBuilder::new(array.len());
 
     for (row_index, offset_window) in array.offsets().windows(2).enumerate() {
         if array.is_null(row_index) {
-            null_builder.append(false);
+            null_builder.append_null();
             offsets.push(offsets[row_index]);
             continue;
         }
-        null_builder.append(true);
+        null_builder.append_non_null();
 
         let count = count_array.value(row_index).to_usize().ok_or_else(|| {
             internal_datafusion_err!("array_resize: failed to convert size to usize")
@@ -228,12 +234,11 @@ fn general_list_resize<O: OffsetSizeTrait + TryInto<i64>>(
     }
 
     let data = mutable.freeze();
-    let null_bit_buffer: NullBuffer = null_builder.finish().into();
 
     Ok(Arc::new(GenericListArray::<O>::try_new(
         Arc::clone(field),
         OffsetBuffer::<O>::new(offsets.into()),
         arrow_array::make_array(data),
-        Some(null_bit_buffer),
+        null_builder.finish(),
     )?))
 }
