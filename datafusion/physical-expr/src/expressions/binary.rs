@@ -4491,7 +4491,7 @@ mod tests {
         .unwrap();
     }
 
-    //region evaluate_statistics test
+    //region evaluate_statistics and propagate_statistics test
 
     fn binary_expr(
         left: Arc<dyn PhysicalExpr>,
@@ -4504,8 +4504,9 @@ mod tests {
     }
 
     // TODO: generate the test case(s) with the macros
+    /// Test for Uniform-Uniform, Unknown-Uniform, Uniform-Unknown and Unknown-Unknown evaluation.
     #[test]
-    fn test_evaluate_statistics_uniform_uniform() -> Result<()> {
+    fn test_evaluate_statistics_combination_of_range_holders() -> Result<()> {
         let schema = &Schema::new(vec![
             Field::new("a", DataType::Float64, false),
         ]);
@@ -4514,6 +4515,48 @@ mod tests {
 
         let left_interval = Interval::make(Some(0.0), Some(12.0))?;
         let right_interval = Interval::make(Some(12.0), Some(36.0))?;
+        let (left_mean, right_mean) = (ScalarValue::Float64(Some(6.0)), ScalarValue::Float64(Some(24.0)));
+        let (left_med, right_med) = (ScalarValue::Float64(Some(6.0)), ScalarValue::Float64(Some(24.0)));
+
+        for children in [vec![Uniform { interval: left_interval.clone() }, Uniform { interval: right_interval.clone() }],
+            vec![Unknown { mean: Some(left_mean.clone()), median: Some(left_med.clone()), variance: None, range: left_interval.clone()},
+                 Uniform { interval: right_interval.clone() }],
+            vec![Uniform { interval: right_interval.clone(), },
+                 Unknown { mean: Some(right_mean.clone()), median: Some(right_med.clone()), variance: None, range: right_interval.clone()}],
+            vec![Unknown { mean: Some(left_mean.clone()), median: Some(left_med.clone()), variance: None, range: left_interval.clone()},
+             Unknown { mean: Some(right_mean.clone()), median: Some(right_med.clone()), variance: None, range: right_interval.clone()}]] {
+
+            let ref_view: Vec<&StatisticsV2> = children.iter().collect();
+
+            let ops = vec![
+                Operator::Plus, Operator::Minus, Operator::Multiply, Operator::Divide
+            ];
+           // Eq, NotEq, Gt, GtEq, Lt, LtEq];
+
+            for op in ops {
+                let expr = binary_expr(Arc::clone(&a), op, Arc::clone(&b), schema)?;
+                // TODO: to think, if maybe we want to handcraft the expected value...
+                assert_eq!(
+                    expr.evaluate_statistics(&ref_view)?,
+                    new_unknown_from_binary_expr(&op, ref_view[0], ref_view[1])?
+                );
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_propagate_statistics_uniform_uniform() -> Result<()> {
+        let schema = &Schema::new(vec![
+            Field::new("a", DataType::Float64, false),
+        ]);
+        let a: Arc<dyn PhysicalExpr> = Arc::new(Column::new("a", 0));
+        let b = lit(ScalarValue::Float64(Some(12.0)));
+
+        let left_interval = Interval::make(Some(0.0), Some(12.0))?;
+        let right_interval = Interval::make(Some(12.0), Some(36.0))?;
+
+        let parent = Uniform { interval: Interval::CERTAINLY_TRUE};
         let children = &vec![
             Uniform { interval: left_interval.clone() },
             Uniform { interval: right_interval.clone() }
@@ -4529,8 +4572,11 @@ mod tests {
             let expr = binary_expr(Arc::clone(&a), op, Arc::clone(&b), schema)?;
             // TODO: to think, if maybe we want to handcraft the expected value...
             assert_eq!(
-                expr.evaluate_statistics(&ref_view)?,
-                new_unknown_from_binary_expr(&op, ref_view[0], ref_view[1])?
+                expr.propagate_statistics(&parent, &ref_view)?,
+                Some(vec![
+                    new_unknown_from_interval(&left_interval)?,
+                    new_unknown_from_interval(&right_interval)?
+                ])
             );
         }
         Ok(())

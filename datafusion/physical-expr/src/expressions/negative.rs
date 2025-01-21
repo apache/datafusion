@@ -28,13 +28,15 @@ use arrow::{
     datatypes::{DataType, Schema},
     record_batch::RecordBatch,
 };
-use datafusion_common::{plan_err, Result};
+use datafusion_common::{internal_err, plan_err, Result, ScalarValue};
 use datafusion_expr::interval_arithmetic::Interval;
 use datafusion_expr::sort_properties::ExprProperties;
 use datafusion_expr::{
     type_coercion::{is_interval, is_null, is_signed_numeric, is_timestamp},
     ColumnarValue,
 };
+use datafusion_physical_expr_common::stats::StatisticsV2;
+use datafusion_physical_expr_common::stats::StatisticsV2::{Bernoulli, Exponential, Gaussian, Uniform, Unknown};
 
 /// Negative expression
 #[derive(Debug, Eq)]
@@ -140,6 +142,50 @@ impl PhysicalExpr for NegativeExpr {
             .map(|result| vec![result]))
     }
 
+    fn evaluate_statistics(&self, stats: &[&StatisticsV2]) -> Result<StatisticsV2> {
+        assert_eq!(stats.len(), 1);
+
+        if !stats[0].is_valid() {
+            return internal_err!(
+                "Cannot evaluate statistics for negative expression with invalid statistics: {:?}",
+                stats[0]);
+        }
+        match stats[0] {
+            Uniform { interval }  => {
+                Ok(Uniform {
+                    interval: self.evaluate_bounds(&[interval])?
+                })
+            },
+            Unknown { range, .. } => {
+                if let (Some(mean), Some(median), Some(variance)
+                ) = (stats[0].mean()?, stats[0].median()?, stats[0].variance()?) {
+                    Ok(Unknown {
+                        mean: Some(mean.arithmetic_negate()?),
+                        median: Some(median.arithmetic_negate()?),
+                        variance: Some(median.arithmetic_negate()?),
+                        range: self.evaluate_bounds(&[range])?
+                    })
+                } else {
+                    Ok(Unknown {
+                        mean: None,
+                        median: None,
+                        variance: None,
+                        range: self.evaluate_bounds(&[range])?
+                    })
+                }
+            },
+            Bernoulli {p} => {
+                Ok(Bernoulli { p: ScalarValue::new_one(&DataType::Float64)?.sub_checked(p)? })
+            },
+            Exponential { .. } | Gaussian { .. } => Ok(Unknown {
+                mean: None,
+                median: None,
+                variance: None,
+                range: Interval::UNCERTAIN
+            }),
+        }
+    }
+    
     /// The ordering of a [`NegativeExpr`] is simply the reverse of its child.
     fn get_properties(&self, children: &[ExprProperties]) -> Result<ExprProperties> {
         Ok(ExprProperties {
@@ -230,6 +276,76 @@ mod tests {
             negative_expr.evaluate_bounds(&[&child_interval])?,
             negative_expr_interval
         );
+        Ok(())
+    }
+    
+    #[test]
+    fn test_evaluate_statistics() -> Result<()> {
+        let negative_expr = NegativeExpr::new(Arc::new(Column::new("a", 0)));
+
+        // Uniform
+        assert_eq!(
+            negative_expr.evaluate_statistics(&[&Uniform {
+                interval: Interval::make(Some(-2.), Some(3.))?,
+            }])?,
+            Uniform {
+                interval: Interval::make(Some(-3.), Some(2.))?,
+            }
+        );
+
+        // Bernoulli
+        assert_eq!(
+            negative_expr.evaluate_statistics(
+                &[&Bernoulli { p: ScalarValue::Float64(Some(0.75)) }]
+            )?,
+            Bernoulli {p: ScalarValue::Float64(Some(0.25))}
+        );
+
+
+        // Exponential
+        assert_eq!(
+            negative_expr.evaluate_statistics(&[&Exponential {
+                rate: ScalarValue::Float64(Some(1.)),
+                offset: ScalarValue::Float64(Some(1.)),
+            }])?,
+            Unknown {
+                mean: None,
+                median: None,
+                variance: None,
+                range: Interval::UNCERTAIN
+            }
+        );
+
+        // Gaussian
+        assert_eq!(
+            negative_expr.evaluate_statistics(&[&Gaussian {
+                mean: ScalarValue::Int32(Some(15)),
+                variance: ScalarValue::Int32(Some(225)),
+            }])?,
+            Unknown {
+                mean: None,
+                median: None,
+                variance: None,
+                range: Interval::UNCERTAIN
+            }
+        );
+
+        // Unknown
+        assert_eq!(
+            negative_expr.evaluate_statistics(&[&Unknown {
+                mean: Some(ScalarValue::Int32(Some(15))),
+                median: Some(ScalarValue::Int32(Some(15))),
+                variance: Some(ScalarValue::Int32(Some(15))),
+                range: Interval::make(Some(10), Some(20))?,
+            }])?,
+            Unknown {
+                mean: Some(ScalarValue::Int32(Some(-15))),
+                median: Some(ScalarValue::Int32(Some(-15))),
+                variance: Some(ScalarValue::Int32(Some(-15))),
+                range: Interval::make(Some(-20), Some(-10))?,
+            }
+        );
+
         Ok(())
     }
 

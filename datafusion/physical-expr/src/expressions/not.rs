@@ -25,9 +25,13 @@ use std::sync::Arc;
 use crate::PhysicalExpr;
 use arrow::datatypes::{DataType, Schema};
 use arrow::record_batch::RecordBatch;
-use datafusion_common::{cast::as_boolean_array, Result, ScalarValue};
+use datafusion_common::{cast::as_boolean_array, internal_err, Result, ScalarValue};
 use datafusion_expr::interval_arithmetic::Interval;
 use datafusion_expr::ColumnarValue;
+use datafusion_physical_expr_common::stats::StatisticsV2;
+use datafusion_physical_expr_common::stats::StatisticsV2::{
+    Bernoulli, Exponential, Gaussian, Uniform, Unknown,
+};
 
 /// Not expression
 #[derive(Debug, Eq)]
@@ -112,8 +116,63 @@ impl PhysicalExpr for NotExpr {
     ) -> Result<Arc<dyn PhysicalExpr>> {
         Ok(Arc::new(NotExpr::new(Arc::clone(&children[0]))))
     }
+
     fn evaluate_bounds(&self, children: &[&Interval]) -> Result<Interval> {
         children[0].not()
+    }
+
+    fn evaluate_statistics(&self, stats: &[&StatisticsV2]) -> Result<StatisticsV2> {
+        assert_eq!(stats.len(), 1);
+
+        if !stats[0].is_valid() {
+            return internal_err!(
+                "Cannot evaluate statistics for NOT expression with invalid statistics: {:?}",
+                stats[0]);
+        }
+        match stats[0] {
+            Uniform { interval }  => {
+                if interval.lower().data_type().eq(&DataType::Boolean)
+                    && interval.lower().data_type().eq(&DataType::Boolean) {
+                    Ok(Uniform {
+                        interval: interval.not()?,
+                    })
+                } else {
+                    Ok(Unknown {
+                        mean: None,
+                        median: None,
+                        variance: None,
+                        range: Interval::UNCERTAIN
+                    })
+                }
+            },
+            Unknown { range, .. } => {
+                if range.lower().data_type().eq(&DataType::Boolean)
+                    && range.lower().data_type().eq(&DataType::Boolean) {
+                    Ok(Unknown {
+                        mean: None,
+                        median: None,
+                        variance: None,
+                        range: range.not()?
+                    })
+                } else {
+                    Ok(Unknown {
+                        mean: None,
+                        median: None,
+                        variance: None,
+                        range: Interval::UNCERTAIN
+                    })
+                }
+            }
+            // Note: NOT Exponential distribution is mirrored on X axis and in fact,
+            //  it is a plot of logarithmic function, which is Unknown.
+            // Note: NOT Gaussian distribution is mirrored on X axis and is Unknown
+            Exponential { .. } | Gaussian { .. } |  Bernoulli { .. } => Ok(Unknown {
+                mean: None,
+                median: None,
+                variance: None,
+                range: Interval::UNCERTAIN
+            }),
+        }
     }
 }
 
@@ -125,7 +184,7 @@ pub fn not(arg: Arc<dyn PhysicalExpr>) -> Result<Arc<dyn PhysicalExpr>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::expressions::col;
+    use crate::expressions::{col, Column};
     use arrow::{array::BooleanArray, datatypes::*};
     use std::sync::LazyLock;
 
@@ -187,6 +246,94 @@ mod tests {
             expected_interval
         );
         Ok(())
+    }
+
+    #[test]
+    fn test_evaluate_statistics() -> Result<()> {
+        let _schema = &Schema::new(vec![
+            Field::new("a", DataType::Boolean, false),
+        ]);
+        let a: Arc<dyn PhysicalExpr> = Arc::new(Column::new("a", 0));
+        let expr = not(a)?;
+
+        // Uniform with boolean bounds
+        assert_eq!(
+            expr.evaluate_statistics(&[&Uniform {interval: Interval::CERTAINLY_FALSE}])?,
+            Uniform {interval: Interval::CERTAINLY_TRUE}
+        );
+        assert_eq!(
+            expr.evaluate_statistics(&[&Uniform {interval: Interval::CERTAINLY_FALSE}])?,
+            Uniform {interval: Interval::CERTAINLY_TRUE}
+        );
+
+        // Uniform with non-boolean bounds
+        assert_eq!(
+            expr.evaluate_statistics(&[&Uniform {
+                interval: Interval::make_unbounded(&DataType::Float64)?}])?,
+            uncertain_unknown()
+        );
+
+        // Exponential
+        assert_eq!(
+            expr.evaluate_statistics(&[&Exponential {
+                rate: ScalarValue::new_one(&DataType::Float64)?,
+                offset: ScalarValue::new_one(&DataType::Float64)?
+            }])?,
+            uncertain_unknown()
+        );
+
+        // Gaussian
+        assert_eq!(
+            expr.evaluate_statistics(&[&Gaussian {
+                mean: ScalarValue::new_one(&DataType::Float64)?,
+                variance: ScalarValue::new_one(&DataType::Float64)?
+            }])?,
+            uncertain_unknown()
+        );
+
+        // Bernoulli
+        assert_eq!(
+            expr.evaluate_statistics(&[&Bernoulli { p: ScalarValue::Float64(Some(0.25)) }])?,
+            uncertain_unknown()
+        );
+
+        // Unknown with boolean interval as range
+        assert_eq!(
+            expr.evaluate_statistics(&[&Unknown {
+                mean: Some(ScalarValue::Boolean(Some(true))),
+                median: Some(ScalarValue::Boolean(Some(true))),
+                variance: Some(ScalarValue::Boolean(Some(true))),
+                range: Interval::CERTAINLY_TRUE
+            }])?,
+            Unknown {
+                mean: None,
+                median: None,
+                variance: None,
+                range: Interval::CERTAINLY_FALSE
+            }
+        );
+
+        // Unknown with non-boolean interval as range
+        assert_eq!(
+            expr.evaluate_statistics(&[&Unknown {
+                mean: None,
+                median: None,
+                variance: None,
+                range: Interval::make_unbounded(&DataType::Float64)?
+            }])?,
+           uncertain_unknown()
+        );
+
+        Ok(())
+    }
+
+    fn uncertain_unknown() -> StatisticsV2 {
+        Unknown {
+            mean: None,
+            median: None,
+            variance: None,
+            range: Interval::UNCERTAIN
+        }
     }
 
     fn schema() -> SchemaRef {

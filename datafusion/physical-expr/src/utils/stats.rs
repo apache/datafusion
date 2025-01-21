@@ -177,6 +177,7 @@ impl ExprStatisticGraph {
 }
 
 /// Creates a new [`Unknown`] statistics instance with a given range.
+/// It makes its best to infer mean, median and variance, if it is possible.
 /// This builder is moved here due to original package visibility limitations.
 pub fn new_unknown_from_interval(range: &Interval) -> datafusion_common::Result<StatisticsV2> {
     // Note: to avoid code duplication for mean/median/variance computation, we wrap 
@@ -344,7 +345,7 @@ pub fn compute_variance(
                 Ok(None)
             }
         },
-        (_, _) => todo!()
+        (_, _) => Ok(None)
     }
 }
 

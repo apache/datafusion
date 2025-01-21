@@ -81,6 +81,12 @@ impl StatisticsV2 {
                         return false;
                     }
                     v.gt(&ScalarValue::new_zero(&v.data_type()).unwrap())
+                }  else if range.lower().is_null() && range.upper().is_null() {
+                    // in case of unbounded interval with None-s everywhere it is valid.
+                    // It is happened. because we tried our best to evaluate and propagate
+                    // distributions through the expression tree, but didn't manage to infer
+                    // the precise distribution for the given expression.
+                    true
                 } else {
                     false
                 }
@@ -145,7 +151,8 @@ impl StatisticsV2 {
                 Ok(None)
             }
             Exponential { rate, .. } => {
-                // TODO: move, if possible, to a constant
+                // Note: better to move it to constant with lazy_static! { ... },
+                // but it does not present in the project.
                 let ln_two = ScalarValue::Float64(Some(2_f64.ln()));
                 if let Ok(median) = ln_two.div(rate) {
                     return Ok(Some(median));
@@ -202,6 +209,7 @@ impl StatisticsV2 {
 
     /// Extract the range of given statistic distribution:
     /// - [`Uniform`]'s range is its interval
+    /// - [`Bernoulli`]'s range is always [0, 1], but we return [`Interval::UNCERTAIN`]
     /// - [`Unknown`]'s range is unbounded by default, but
     pub fn range(&self) -> Option<&Interval> {
         match &self {
