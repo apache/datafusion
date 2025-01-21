@@ -290,7 +290,7 @@ pub enum Expr {
     /// Represents the call of a scalar function with a set of arguments.
     ScalarFunction(ScalarFunction),
     /// Calls an aggregate function with arguments, and optional
-    /// `ORDER BY`, `FILTER`, `DISTINCT` and `NULL TREATMENT`.
+    /// `ORDER BY`, `FILTER`, `DISTINCT`, `NULL TREATMENT`, and `WITHIN GROUP`.
     ///
     /// See also [`ExprFunctionExt`] to set these fields.
     ///
@@ -705,7 +705,7 @@ pub struct AggregateFunction {
     /// Optional ordering
     pub order_by: Option<Vec<Sort>>,
     pub null_treatment: Option<NullTreatment>,
-    /// Optional within group for ordered-set aggregate functions
+    /// Optional WITHIN GROUP for ordered-set aggregate functions
     pub within_group: Option<Vec<Sort>>,
 }
 
@@ -873,6 +873,8 @@ pub struct AggregateUDF {
     pub filter: Option<Box<Expr>>,
     /// Optional ORDER BY applied prior to aggregating
     pub order_by: Option<Vec<Expr>>,
+    /// Optional WITHIN GROUP for ordered-set aggregate functions
+    pub within_group: Option<Vec<Expr>>,
 }
 
 impl AggregateUDF {
@@ -882,12 +884,14 @@ impl AggregateUDF {
         args: Vec<Expr>,
         filter: Option<Box<Expr>>,
         order_by: Option<Vec<Expr>>,
+        within_group: Option<Vec<Expr>>,
     ) -> Self {
         Self {
             fun,
             args,
             filter,
             order_by,
+            within_group,
         }
     }
 }
@@ -1762,6 +1766,7 @@ impl HashNode for Expr {
                 filter: _filter,
                 order_by: _order_by,
                 null_treatment,
+                within_group: _within_group,
             }) => {
                 func.hash(state);
                 distinct.hash(state);
@@ -1874,6 +1879,7 @@ impl<'a> Display for SchemaDisplay<'a> {
                 filter,
                 order_by,
                 null_treatment,
+                within_group,
             }) => {
                 write!(
                     f,
@@ -1893,6 +1899,10 @@ impl<'a> Display for SchemaDisplay<'a> {
 
                 if let Some(order_by) = order_by {
                     write!(f, " ORDER BY [{}]", schema_name_from_sorts(order_by)?)?;
+                };
+
+                if let Some(within_group) = within_group {
+                    write!(f, " WITHIN GROUP [{}]", schema_name_from_sorts(within_group)?)?;
                 };
 
                 Ok(())

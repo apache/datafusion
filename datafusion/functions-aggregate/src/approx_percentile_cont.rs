@@ -271,6 +271,10 @@ impl AggregateUDFImpl for ApproxPercentileCont {
         Ok(arg_types[0].clone())
     }
 
+    fn supports_null_handling_clause(&self) -> Option<bool> {
+        Some(false)
+    }
+
     fn documentation(&self) -> Option<&Documentation> {
         Some(get_approx_percentile_cont_doc())
     }

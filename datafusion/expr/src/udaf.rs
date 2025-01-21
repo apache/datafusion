@@ -152,6 +152,7 @@ impl AggregateUDF {
             None,
             None,
             None,
+            None,
         ))
     }
 
@@ -274,6 +275,11 @@ impl AggregateUDF {
     /// See [`AggregateUDFImpl::default_value`] for more details.
     pub fn default_value(&self, data_type: &DataType) -> Result<ScalarValue> {
         self.inner.default_value(data_type)
+    }
+
+    /// See [`AggregateUDFImpl::supports_null_handling_clause`] for more details.
+    pub fn supports_null_handling_clause(&self) -> Option<bool> {
+        self.inner.supports_null_handling_clause()
     }
 
     /// Returns the documentation for this Aggregate UDF.
@@ -630,6 +636,13 @@ pub trait AggregateUDFImpl: Debug + Send + Sync {
     /// while `count` returns 0 if input is Null
     fn default_value(&self, data_type: &DataType) -> Result<ScalarValue> {
         ScalarValue::try_from(data_type)
+    }
+
+    /// If this function supports `[IGNORE NULLS | RESPECT NULLS]` clause, return true
+    /// If the function does not, return false
+    /// Otherwise return None (the default)
+    fn supports_null_handling_clause(&self) -> Option<bool> {
+        None
     }
 
     /// Returns the documentation for this Aggregate UDF.

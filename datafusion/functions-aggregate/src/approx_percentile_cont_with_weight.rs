@@ -156,6 +156,10 @@ impl AggregateUDFImpl for ApproxPercentileContWithWeight {
         self.approx_percentile_cont.state_fields(args)
     }
 
+    fn supports_null_handling_clause(&self) -> Option<bool> {
+        Some(false)
+    }
+
     fn documentation(&self) -> Option<&Documentation> {
         Some(get_approx_percentile_cont_with_weight_doc())
     }

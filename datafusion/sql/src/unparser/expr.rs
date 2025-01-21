@@ -274,6 +274,14 @@ impl Unparser<'_> {
                     Some(filter) => Some(Box::new(self.expr_to_sql_inner(filter)?)),
                     None => None,
                 };
+
+                let within_group = agg.within_group
+                    .as_ref()
+                    .unwrap_or(&Vec::new())
+                    .iter()
+                    .map(|sort_expr| self.sort_to_sql(sort_expr))
+                    .collect::<Result<Vec<_>>>()?;
+
                 Ok(ast::Expr::Function(Function {
                     name: ObjectName(vec![Ident {
                         value: func_name.to_string(),
@@ -289,7 +297,7 @@ impl Unparser<'_> {
                     filter,
                     null_treatment: None,
                     over: None,
-                    within_group: vec![],
+                    within_group,
                     parameters: ast::FunctionArguments::None,
                 }))
             }
