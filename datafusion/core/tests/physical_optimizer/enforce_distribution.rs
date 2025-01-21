@@ -23,6 +23,10 @@ use datafusion::datasource::listing::PartitionedFile;
 use datafusion::datasource::object_store::ObjectStoreUrl;
 use datafusion::datasource::physical_plan::{CsvExec, FileScanConfig, ParquetExec};
 use datafusion_physical_optimizer::enforce_sorting::EnforceSorting;
+use datafusion_physical_optimizer::output_requirements::OutputRequirements;
+use datafusion_physical_optimizer::test_utils::{
+    check_integrity, coalesce_partitions_exec, repartition_exec,
+};
 use datafusion_physical_plan::coalesce_batches::CoalesceBatchesExec;
 use datafusion_physical_plan::expressions::col;
 use datafusion_physical_plan::filter::FilterExec;
@@ -30,10 +34,6 @@ use datafusion_physical_plan::joins::utils::JoinOn;
 use datafusion_physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
 use datafusion_physical_plan::sorts::sort::SortExec;
 use datafusion_physical_plan::{displayable, DisplayAs, DisplayFormatType, Statistics};
-use datafusion_physical_optimizer::output_requirements::OutputRequirements;
-use datafusion_physical_optimizer::test_utils::{
-    check_integrity, coalesce_partitions_exec, repartition_exec,
-};
 
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion_common::ScalarValue;
@@ -174,9 +174,7 @@ fn parquet_exec_multiple() -> Arc<ParquetExec> {
 }
 
 /// Created a sorted parquet exec with multiple files
-fn parquet_exec_multiple_sorted(
-    output_ordering: Vec<LexOrdering>,
-) -> Arc<ParquetExec> {
+fn parquet_exec_multiple_sorted(output_ordering: Vec<LexOrdering>) -> Arc<ParquetExec> {
     ParquetExec::builder(
         FileScanConfig::new(ObjectStoreUrl::parse("test:///").unwrap(), schema())
             .with_file_groups(vec![
@@ -254,8 +252,7 @@ fn aggregate_exec_with_alias(
     let schema = schema();
     let mut group_by_expr: Vec<(Arc<dyn PhysicalExpr>, String)> = vec![];
     for (column, alias) in alias_pairs.iter() {
-        group_by_expr
-            .push((col(column, &input.schema()).unwrap(), alias.to_string()));
+        group_by_expr.push((col(column, &input.schema()).unwrap(), alias.to_string()));
     }
     let group_by = PhysicalGroupBy::new_single(group_by_expr.clone());
 
@@ -604,8 +601,7 @@ fn multi_hash_joins() -> Result<()> {
             | JoinType::LeftMark => {
                 // Join on (a == c)
                 let top_join_on = vec![(
-                    Arc::new(Column::new_with_schema("a", &join.schema()).unwrap())
-                        as _,
+                    Arc::new(Column::new_with_schema("a", &join.schema()).unwrap()) as _,
                     Arc::new(Column::new_with_schema("c", &schema()).unwrap()) as _,
                 )];
                 let top_join = hash_join_exec(
@@ -666,8 +662,7 @@ fn multi_hash_joins() -> Result<()> {
                 // This time we use (b1 == c) for top join
                 // Join on (b1 == c)
                 let top_join_on = vec![(
-                    Arc::new(Column::new_with_schema("b1", &join.schema()).unwrap())
-                        as _,
+                    Arc::new(Column::new_with_schema("b1", &join.schema()).unwrap()) as _,
                     Arc::new(Column::new_with_schema("c", &schema()).unwrap()) as _,
                 )];
 
@@ -818,13 +813,11 @@ fn multi_joins_after_multi_alias() -> Result<()> {
     let join = hash_join_exec(left, right.clone(), &join_on, &JoinType::Inner);
 
     // Projection(c as c1)
-    let alias_pairs: Vec<(String, String)> =
-        vec![("c".to_string(), "c1".to_string())];
+    let alias_pairs: Vec<(String, String)> = vec![("c".to_string(), "c1".to_string())];
     let projection = projection_exec_with_alias(join, alias_pairs);
 
     // Projection(c1 as a)
-    let alias_pairs: Vec<(String, String)> =
-        vec![("c1".to_string(), "a".to_string())];
+    let alias_pairs: Vec<(String, String)> = vec![("c1".to_string(), "a".to_string())];
     let projection2 = projection_exec_with_alias(projection, alias_pairs);
 
     // Join on (a == c)
@@ -1013,30 +1006,24 @@ fn multi_hash_join_key_ordering() -> Result<()> {
     let top_join_on = vec![
         (
             Arc::new(
-                Column::new_with_schema("B", &bottom_left_projection.schema())
-                    .unwrap(),
+                Column::new_with_schema("B", &bottom_left_projection.schema()).unwrap(),
             ) as _,
-            Arc::new(
-                Column::new_with_schema("b1", &bottom_right_join.schema()).unwrap(),
-            ) as _,
+            Arc::new(Column::new_with_schema("b1", &bottom_right_join.schema()).unwrap())
+                as _,
         ),
         (
             Arc::new(
-                Column::new_with_schema("C", &bottom_left_projection.schema())
-                    .unwrap(),
+                Column::new_with_schema("C", &bottom_left_projection.schema()).unwrap(),
             ) as _,
-            Arc::new(
-                Column::new_with_schema("c", &bottom_right_join.schema()).unwrap(),
-            ) as _,
+            Arc::new(Column::new_with_schema("c", &bottom_right_join.schema()).unwrap())
+                as _,
         ),
         (
             Arc::new(
-                Column::new_with_schema("AA", &bottom_left_projection.schema())
-                    .unwrap(),
+                Column::new_with_schema("AA", &bottom_left_projection.schema()).unwrap(),
             ) as _,
-            Arc::new(
-                Column::new_with_schema("a1", &bottom_right_join.schema()).unwrap(),
-            ) as _,
+            Arc::new(Column::new_with_schema("a1", &bottom_right_join.schema()).unwrap())
+                as _,
         ),
     ];
 
@@ -1152,30 +1139,24 @@ fn reorder_join_keys_to_left_input() -> Result<()> {
     let top_join_on = vec![
         (
             Arc::new(
-                Column::new_with_schema("B", &bottom_left_projection.schema())
-                    .unwrap(),
+                Column::new_with_schema("B", &bottom_left_projection.schema()).unwrap(),
             ) as _,
-            Arc::new(
-                Column::new_with_schema("b1", &bottom_right_join.schema()).unwrap(),
-            ) as _,
+            Arc::new(Column::new_with_schema("b1", &bottom_right_join.schema()).unwrap())
+                as _,
         ),
         (
             Arc::new(
-                Column::new_with_schema("C", &bottom_left_projection.schema())
-                    .unwrap(),
+                Column::new_with_schema("C", &bottom_left_projection.schema()).unwrap(),
             ) as _,
-            Arc::new(
-                Column::new_with_schema("c", &bottom_right_join.schema()).unwrap(),
-            ) as _,
+            Arc::new(Column::new_with_schema("c", &bottom_right_join.schema()).unwrap())
+                as _,
         ),
         (
             Arc::new(
-                Column::new_with_schema("AA", &bottom_left_projection.schema())
-                    .unwrap(),
+                Column::new_with_schema("AA", &bottom_left_projection.schema()).unwrap(),
             ) as _,
-            Arc::new(
-                Column::new_with_schema("a1", &bottom_right_join.schema()).unwrap(),
-            ) as _,
+            Arc::new(Column::new_with_schema("a1", &bottom_right_join.schema()).unwrap())
+                as _,
         ),
     ];
 
@@ -1292,30 +1273,24 @@ fn reorder_join_keys_to_right_input() -> Result<()> {
     let top_join_on = vec![
         (
             Arc::new(
-                Column::new_with_schema("B", &bottom_left_projection.schema())
-                    .unwrap(),
+                Column::new_with_schema("B", &bottom_left_projection.schema()).unwrap(),
             ) as _,
-            Arc::new(
-                Column::new_with_schema("b1", &bottom_right_join.schema()).unwrap(),
-            ) as _,
+            Arc::new(Column::new_with_schema("b1", &bottom_right_join.schema()).unwrap())
+                as _,
         ),
         (
             Arc::new(
-                Column::new_with_schema("C", &bottom_left_projection.schema())
-                    .unwrap(),
+                Column::new_with_schema("C", &bottom_left_projection.schema()).unwrap(),
             ) as _,
-            Arc::new(
-                Column::new_with_schema("c", &bottom_right_join.schema()).unwrap(),
-            ) as _,
+            Arc::new(Column::new_with_schema("c", &bottom_right_join.schema()).unwrap())
+                as _,
         ),
         (
             Arc::new(
-                Column::new_with_schema("AA", &bottom_left_projection.schema())
-                    .unwrap(),
+                Column::new_with_schema("AA", &bottom_left_projection.schema()).unwrap(),
             ) as _,
-            Arc::new(
-                Column::new_with_schema("a1", &bottom_right_join.schema()).unwrap(),
-            ) as _,
+            Arc::new(Column::new_with_schema("a1", &bottom_right_join.schema()).unwrap())
+                as _,
         ),
     ];
 
@@ -1401,20 +1376,15 @@ fn multi_smj_joins() -> Result<()> {
     for join_type in join_types {
         let join =
             sort_merge_join_exec(left.clone(), right.clone(), &join_on, &join_type);
-        let join_plan =
-            format!("SortMergeJoin: join_type={join_type}, on=[(a@0, b1@1)]");
+        let join_plan = format!("SortMergeJoin: join_type={join_type}, on=[(a@0, b1@1)]");
 
         // Top join on (a == c)
         let top_join_on = vec![(
             Arc::new(Column::new_with_schema("a", &join.schema()).unwrap()) as _,
             Arc::new(Column::new_with_schema("c", &schema()).unwrap()) as _,
         )];
-        let top_join = sort_merge_join_exec(
-            join.clone(),
-            parquet_exec(),
-            &top_join_on,
-            &join_type,
-        );
+        let top_join =
+            sort_merge_join_exec(join.clone(), parquet_exec(), &top_join_on, &join_type);
         let top_join_plan =
             format!("SortMergeJoin: join_type={join_type}, on=[(a@0, c@2)]");
 
@@ -1529,16 +1499,11 @@ fn multi_smj_joins() -> Result<()> {
                 // This time we use (b1 == c) for top join
                 // Join on (b1 == c)
                 let top_join_on = vec![(
-                    Arc::new(Column::new_with_schema("b1", &join.schema()).unwrap())
-                        as _,
+                    Arc::new(Column::new_with_schema("b1", &join.schema()).unwrap()) as _,
                     Arc::new(Column::new_with_schema("c", &schema()).unwrap()) as _,
                 )];
-                let top_join = sort_merge_join_exec(
-                    join,
-                    parquet_exec(),
-                    &top_join_on,
-                    &join_type,
-                );
+                let top_join =
+                    sort_merge_join_exec(join, parquet_exec(), &top_join_on, &join_type);
                 let top_join_plan =
                     format!("SortMergeJoin: join_type={join_type}, on=[(b1@6, c@2)]");
 
@@ -1630,12 +1595,7 @@ fn multi_smj_joins() -> Result<()> {
                     // this match arm cannot be reached
                     _ => unreachable!()
                 };
-                assert_optimized!(
-                    expected_first_sort_enforcement,
-                    top_join,
-                    false,
-                    true
-                );
+                assert_optimized!(expected_first_sort_enforcement, top_join, false, true);
             }
             _ => {}
         }
@@ -2525,8 +2485,7 @@ fn parallelization_compressed_csv() -> Result<()> {
 #[test]
 fn parallelization_two_partitions() -> Result<()> {
     let alias = vec![("a".to_string(), "a".to_string())];
-    let plan_parquet =
-        aggregate_exec_with_alias(parquet_exec_multiple(), alias.clone());
+    let plan_parquet = aggregate_exec_with_alias(parquet_exec_multiple(), alias.clone());
     let plan_csv = aggregate_exec_with_alias(csv_exec_multiple(), alias);
 
     let expected_parquet = [
@@ -2551,8 +2510,7 @@ fn parallelization_two_partitions() -> Result<()> {
 #[test]
 fn parallelization_two_partitions_into_four() -> Result<()> {
     let alias = vec![("a".to_string(), "a".to_string())];
-    let plan_parquet =
-        aggregate_exec_with_alias(parquet_exec_multiple(), alias.clone());
+    let plan_parquet = aggregate_exec_with_alias(parquet_exec_multiple(), alias.clone());
     let plan_csv = aggregate_exec_with_alias(csv_exec_multiple(), alias);
 
     let expected_parquet = [
@@ -2658,10 +2616,8 @@ fn parallelization_ignores_limit() -> Result<()> {
         limit_exec(filter_exec(limit_exec(parquet_exec()))),
         alias.clone(),
     );
-    let plan_csv = aggregate_exec_with_alias(
-        limit_exec(filter_exec(limit_exec(csv_exec()))),
-        alias,
-    );
+    let plan_csv =
+        aggregate_exec_with_alias(limit_exec(filter_exec(limit_exec(csv_exec()))), alias);
 
     let expected_parquet = &[
         "AggregateExec: mode=FinalPartitioned, gby=[a@0 as a], aggr=[]",
@@ -2742,10 +2698,8 @@ fn parallelization_prior_to_sort_preserving_merge() -> Result<()> {
         sort_key.clone(),
         parquet_exec_with_sort(vec![sort_key.clone()]),
     );
-    let plan_csv = sort_preserving_merge_exec(
-        sort_key.clone(),
-        csv_exec_with_sort(vec![sort_key]),
-    );
+    let plan_csv =
+        sort_preserving_merge_exec(sort_key.clone(), csv_exec_with_sort(vec![sort_key]));
 
     // parallelization is not beneficial for SortPreservingMerge
     let expected_parquet = &[
@@ -2807,10 +2761,8 @@ fn parallelization_does_not_benefit() -> Result<()> {
         parquet_exec_with_sort(vec![sort_key.clone()]),
         sort_key.clone(),
     );
-    let plan_csv = sort_required_exec_with_req(
-        csv_exec_with_sort(vec![sort_key.clone()]),
-        sort_key,
-    );
+    let plan_csv =
+        sort_required_exec_with_req(csv_exec_with_sort(vec![sort_key.clone()]), sort_key);
 
     // no parallelization, because SortRequiredExec doesn't benefit from increased parallelism
     let expected_parquet = &[
@@ -2841,10 +2793,8 @@ fn parallelization_ignores_transitively_with_projection_parquet() -> Result<()> 
         ("a".to_string(), "a2".to_string()),
         ("c".to_string(), "c2".to_string()),
     ];
-    let proj_parquet = projection_exec_with_alias(
-        parquet_exec_with_sort(vec![sort_key]),
-        alias_pairs,
-    );
+    let proj_parquet =
+        projection_exec_with_alias(parquet_exec_with_sort(vec![sort_key]), alias_pairs);
     let sort_key_after_projection = LexOrdering::new(vec![PhysicalSortExpr {
         expr: col("c2", &proj_parquet.schema()).unwrap(),
         options: SortOptions::default(),
