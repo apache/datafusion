@@ -466,6 +466,11 @@ SELECT concat_ws('|','a',NULL,NULL)
 a
 
 query T
+SELECT concat_ws('','a','b','c')
+----
+abc
+
+query T
 SELECT initcap('')
 ----
 (empty)
