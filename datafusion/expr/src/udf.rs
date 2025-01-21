@@ -24,7 +24,7 @@ use crate::{
     ColumnarValue, Documentation, Expr, ScalarFunctionImplementation, Signature,
 };
 use arrow::datatypes::DataType;
-use datafusion_common::{not_impl_err, ExprSchema, Result};
+use datafusion_common::{not_impl_err, ExprSchema, Result, ScalarValue};
 use datafusion_expr_common::interval_arithmetic::Interval;
 use std::any::Any;
 use std::cmp::Ordering;
@@ -182,6 +182,7 @@ impl ScalarUDF {
     ///
     ///
     /// See [`ScalarUDFImpl::return_type_from_exprs`] for more details.
+    #[allow(deprecated)]
     pub fn return_type_from_exprs(
         &self,
         args: &[Expr],
@@ -190,6 +191,10 @@ impl ScalarUDF {
     ) -> Result<DataType> {
         // If the implementation provides a return_type_from_exprs, use it
         self.inner.return_type_from_exprs(args, schema, arg_types)
+    }
+
+    pub fn return_type_from_args(&self, args: ReturnTypeArgs) -> Result<ReturnInfo> {
+        self.inner.return_type_from_args(args)
     }
 
     /// Do the function rewrite
@@ -209,6 +214,7 @@ impl ScalarUDF {
         self.inner.invoke(args)
     }
 
+    #[allow(deprecated)]
     pub fn is_nullable(&self, args: &[Expr], schema: &dyn ExprSchema) -> bool {
         self.inner.is_nullable(args, schema)
     }
@@ -342,6 +348,72 @@ pub struct ScalarFunctionArgs<'a> {
     pub return_type: &'a DataType,
 }
 
+/// Information about arguments passed to the function
+///
+/// This structure contains metadata about how the function was called
+/// such as the type of the arguments, any scalar arguments and if the
+/// arguments can (ever) be null
+///
+/// See [`ScalarUDFImpl::return_type_from_args`] for more information
+#[derive(Debug)]
+pub struct ReturnTypeArgs<'a> {
+    /// The data types of the arguments to the function
+    pub arg_types: &'a [DataType],
+    /// Is argument `i` to the function a scalar (constant)
+    ///
+    /// If argument `i` is not a scalar, it will be None
+    ///
+    /// For example, if a function is called like `my_function(column_a, 5)`
+    /// this field will be `[None, Some(ScalarValue::Int32(Some(5)))]`
+    pub scalar_arguments: &'a [Option<&'a ScalarValue>],
+    /// Can argument `i` (ever) null?
+    pub nullables: &'a [bool],
+}
+
+/// Return metadata for this function.
+///
+/// See [`ScalarUDFImpl::return_type_from_args`] for more information
+#[derive(Debug)]
+pub struct ReturnInfo {
+    return_type: DataType,
+    nullable: bool,
+}
+
+impl ReturnInfo {
+    pub fn new(return_type: DataType, nullable: bool) -> Self {
+        Self {
+            return_type,
+            nullable,
+        }
+    }
+
+    pub fn new_nullable(return_type: DataType) -> Self {
+        Self {
+            return_type,
+            nullable: true,
+        }
+    }
+
+    pub fn new_non_nullable(return_type: DataType) -> Self {
+        Self {
+            return_type,
+            nullable: false,
+        }
+    }
+
+    pub fn return_type(&self) -> &DataType {
+        &self.return_type
+    }
+
+    pub fn nullable(&self) -> bool {
+        self.nullable
+    }
+
+    pub fn into_parts(self) -> (DataType, bool) {
+        (self.return_type, self.nullable)
+    }
+}
+
 /// Trait for implementing user defined scalar functions.
 ///
 /// This trait exposes the full API for implementing user defined functions and
@@ -449,12 +521,22 @@ pub trait ScalarUDFImpl: Debug + Send + Sync {
     ///
     /// # Notes
     ///
-    /// If you provide an implementation for [`Self::return_type_from_exprs`],
+    /// If you provide an implementation for [`Self::return_type_from_args`],
     /// DataFusion will not call `return_type` (this function). In this case it
     /// is recommended to return [`DataFusionError::Internal`].
     ///
     /// [`DataFusionError::Internal`]: datafusion_common::DataFusionError::Internal
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType>;
+
+    #[deprecated(since = "45.0.0", note = "Use `return_type_from_args` instead")]
+    fn return_type_from_exprs(
+        &self,
+        _args: &[Expr],
+        _schema: &dyn ExprSchema,
+        arg_types: &[DataType],
+    ) -> Result<DataType> {
+        self.return_type(arg_types)
+    }
 
     /// What [`DataType`] will be returned by this function, given the
     /// arguments?
@@ -481,15 +563,15 @@ pub trait ScalarUDFImpl: Debug + Send + Sync {
     /// This function must consistently return the same type for the same
     /// logical input even if the input is simplified (e.g. it must return the same
     /// value for `('foo' | 'bar')` as it does for ('foobar').
-    fn return_type_from_exprs(
-        &self,
-        _args: &[Expr],
-        _schema: &dyn ExprSchema,
-        arg_types: &[DataType],
-    ) -> Result<DataType> {
-        self.return_type(arg_types)
+    fn return_type_from_args(&self, args: ReturnTypeArgs) -> Result<ReturnInfo> {
+        let return_type = self.return_type(args.arg_types)?;
+        Ok(ReturnInfo::new_nullable(return_type))
     }
 
+    #[deprecated(
+        since = "45.0.0",
+        note = "Use `return_type_from_args` instead. if you use `is_nullable` that returns non-nullable with `return_type`, you would need to switch to `return_type_from_args`, you might have error"
+    )]
     fn is_nullable(&self, _args: &[Expr], _schema: &dyn ExprSchema) -> bool {
         true
     }
@@ -787,6 +869,7 @@ impl ScalarUDFImpl for AliasedScalarUDFImpl {
         &self.aliases
     }
 
+    #[allow(deprecated)]
     fn return_type_from_exprs(
         &self,
         args: &[Expr],
@@ -794,6 +877,10 @@ impl ScalarUDFImpl for AliasedScalarUDFImpl {
         arg_types: &[DataType],
     ) -> Result<DataType> {
         self.inner.return_type_from_exprs(args, schema, arg_types)
+    }
+
+    fn return_type_from_args(&self, args: ReturnTypeArgs) -> Result<ReturnInfo> {
+        self.inner.return_type_from_args(args)
     }
 
     fn invoke_batch(

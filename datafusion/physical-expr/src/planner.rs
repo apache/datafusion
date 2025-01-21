@@ -17,7 +17,7 @@
 
 use std::sync::Arc;
 
-use crate::scalar_function;
+use crate::ScalarFunctionExpr;
 use crate::{
     expressions::{self, binary, like, similar_to, Column, Literal},
     PhysicalExpr,
@@ -302,13 +302,11 @@ pub fn create_physical_expr(
             let physical_args =
                 create_physical_exprs(args, input_dfschema, execution_props)?;
 
-            scalar_function::create_physical_expr(
-                Arc::clone(func).as_ref(),
-                &physical_args,
+            Ok(Arc::new(ScalarFunctionExpr::try_new(
+                Arc::clone(func),
+                physical_args,
                 input_schema,
-                args,
-                input_dfschema,
-            )
+            )?))
         }
         Expr::Between(Between {
             expr,

@@ -345,34 +345,37 @@ impl CaseExpr {
         let when_expr = &self.when_then_expr[0].0;
         let then_expr = &self.when_then_expr[0].1;
 
-        let when_expr_value = when_expr.evaluate(batch)?;
-        let when_expr_value = match when_expr_value {
+        match when_expr.evaluate(batch)? {
+            // WHEN true --> column
+            ColumnarValue::Scalar(ScalarValue::Boolean(Some(true))) => {
+                then_expr.evaluate(batch)
+            }
+            // WHEN [false | null] --> NULL
             ColumnarValue::Scalar(_) => {
-                ColumnarValue::Array(when_expr_value.into_array(batch.num_rows())?)
+                // return scalar NULL value
+                ScalarValue::try_from(self.data_type(&batch.schema())?)
+                    .map(ColumnarValue::Scalar)
             }
-            other => other,
-        };
-
-        if let ColumnarValue::Array(bit_mask) = when_expr_value {
-            let bit_mask = bit_mask
-                .as_any()
-                .downcast_ref::<BooleanArray>()
-                .expect("predicate should evaluate to a boolean array");
-            // invert the bitmask
-            let bit_mask = match bit_mask.null_count() {
-                0 => not(bit_mask)?,
-                _ => not(&prep_null_mask_filter(bit_mask))?,
-            };
-            match then_expr.evaluate(batch)? {
-                ColumnarValue::Array(array) => {
-                    Ok(ColumnarValue::Array(nullif(&array, &bit_mask)?))
-                }
-                ColumnarValue::Scalar(_) => {
-                    internal_err!("expression did not evaluate to an array")
+            // WHEN column --> column
+            ColumnarValue::Array(bit_mask) => {
+                let bit_mask = bit_mask
+                    .as_any()
+                    .downcast_ref::<BooleanArray>()
+                    .expect("predicate should evaluate to a boolean array");
+                // invert the bitmask
+                let bit_mask = match bit_mask.null_count() {
+                    0 => not(bit_mask)?,
+                    _ => not(&prep_null_mask_filter(bit_mask))?,
+                };
+                match then_expr.evaluate(batch)? {
+                    ColumnarValue::Array(array) => {
+                        Ok(ColumnarValue::Array(nullif(&array, &bit_mask)?))
+                    }
+                    ColumnarValue::Scalar(_) => {
+                        internal_err!("expression did not evaluate to an array")
+                    }
                 }
             }
-        } else {
-            internal_err!("predicate did not evaluate to an array")
         }
     }
 

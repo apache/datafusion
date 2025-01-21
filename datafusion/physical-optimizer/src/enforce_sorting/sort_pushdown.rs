@@ -64,7 +64,9 @@ pub fn assign_initial_requirements(node: &mut SortPushDown) {
     for (child, requirement) in node.children.iter_mut().zip(reqs) {
         child.data = ParentRequirements {
             ordering_requirement: requirement,
-            fetch: None,
+            // If the parent has a fetch value, assign it to the children
+            // Or use the fetch value of the child.
+            fetch: child.plan.fetch(),
         };
     }
 }
@@ -96,6 +98,7 @@ fn pushdown_sorts_helper(
         .ordering_satisfy_requirement(&parent_reqs);
 
     if is_sort(plan) {
+        let sort_fetch = plan.fetch();
         let required_ordering = plan
             .output_ordering()
             .cloned()
@@ -104,7 +107,8 @@ fn pushdown_sorts_helper(
         if !satisfy_parent {
             // Make sure this `SortExec` satisfies parent requirements:
             let sort_reqs = requirements.data.ordering_requirement.unwrap_or_default();
-            let fetch = requirements.data.fetch;
+            // It's possible current plan (`SortExec`) has a fetch value.
+            let fetch = requirements.data.fetch.or(sort_fetch);
             requirements = requirements.children.swap_remove(0);
             requirements = add_sort_above(requirements, sort_reqs, fetch);
         };
@@ -114,7 +118,7 @@ fn pushdown_sorts_helper(
         if let Some(adjusted) =
             pushdown_requirement_to_children(&child.plan, &required_ordering)?
         {
-            let fetch = child.plan.fetch();
+            let fetch = sort_fetch.or_else(|| child.plan.fetch());
             for (grand_child, order) in child.children.iter_mut().zip(adjusted) {
                 grand_child.data = ParentRequirements {
                     ordering_requirement: order,
