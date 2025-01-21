@@ -560,7 +560,7 @@ pub fn from_table_scan(
     let table_schema = scan.source.schema().to_dfschema_ref()?;
     let base_schema = to_substrait_named_struct(&table_schema)?;
 
-    let best_effort_filter_option = if scan.filters.len() > 0 {
+    let best_effort_filter_option = if !scan.filters.is_empty() {
         let table_schema_qualified = Arc::new(
             DFSchema::try_from_qualified_schema(
                 scan.table_name.clone(),
