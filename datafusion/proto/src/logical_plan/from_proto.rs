@@ -546,6 +546,10 @@ pub fn parse_expr(
                     _ => Some(parse_sorts(&pb.order_by, registry, codec)?),
                 },
                 None,
+                match pb.within_group.len() {
+                    0 => None,
+                    _ => Some(parse_sorts(&pb.within_group, registry, codec)?),
+                },
             )))
         }
 

@@ -719,6 +719,8 @@ pub struct AggregateUdfExprNode {
     pub order_by: ::prost::alloc::vec::Vec<SortExprNode>,
     #[prost(bytes = "vec", optional, tag = "6")]
     pub fun_definition: ::core::option::Option<::prost::alloc::vec::Vec<u8>>,
+    #[prost(message, repeated, tag = "7")]
+    pub within_group: ::prost::alloc::vec::Vec<SortExprNode>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ScalarUdfExprNode {

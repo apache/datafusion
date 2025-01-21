@@ -596,6 +596,9 @@ impl serde::Serialize for AggregateUdfExprNode {
         if self.fun_definition.is_some() {
             len += 1;
         }
+        if !self.within_group.is_empty() {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("datafusion.AggregateUDFExprNode", len)?;
         if !self.fun_name.is_empty() {
             struct_ser.serialize_field("funName", &self.fun_name)?;
@@ -617,6 +620,9 @@ impl serde::Serialize for AggregateUdfExprNode {
             #[allow(clippy::needless_borrows_for_generic_args)]
             struct_ser.serialize_field("funDefinition", pbjson::private::base64::encode(&v).as_str())?;
         }
+        if !self.within_group.is_empty() {
+            struct_ser.serialize_field("withinGroup", &self.within_group)?;
+        }
         struct_ser.end()
     }
 }
@@ -636,6 +642,8 @@ impl<'de> serde::Deserialize<'de> for AggregateUdfExprNode {
             "orderBy",
             "fun_definition",
             "funDefinition",
+            "within_group",
+            "withinGroup",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -646,6 +654,7 @@ impl<'de> serde::Deserialize<'de> for AggregateUdfExprNode {
             Filter,
             OrderBy,
             FunDefinition,
+            WithinGroup,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -673,6 +682,7 @@ impl<'de> serde::Deserialize<'de> for AggregateUdfExprNode {
                             "filter" => Ok(GeneratedField::Filter),
                             "orderBy" | "order_by" => Ok(GeneratedField::OrderBy),
                             "funDefinition" | "fun_definition" => Ok(GeneratedField::FunDefinition),
+                            "withinGroup" | "within_group" => Ok(GeneratedField::WithinGroup),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -698,6 +708,7 @@ impl<'de> serde::Deserialize<'de> for AggregateUdfExprNode {
                 let mut filter__ = None;
                 let mut order_by__ = None;
                 let mut fun_definition__ = None;
+                let mut within_group__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::FunName => {
@@ -738,6 +749,12 @@ impl<'de> serde::Deserialize<'de> for AggregateUdfExprNode {
                                 map_.next_value::<::std::option::Option<::pbjson::private::BytesDeserialize<_>>>()?.map(|x| x.0)
                             ;
                         }
+                        GeneratedField::WithinGroup => {
+                            if within_group__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("withinGroup"));
+                            }
+                            within_group__ = Some(map_.next_value()?);
+                        }
                     }
                 }
                 Ok(AggregateUdfExprNode {
@@ -747,6 +764,7 @@ impl<'de> serde::Deserialize<'de> for AggregateUdfExprNode {
                     filter: filter__,
                     order_by: order_by__.unwrap_or_default(),
                     fun_definition: fun_definition__,
+                    within_group: within_group__.unwrap_or_default(),
                 })
             }
         }

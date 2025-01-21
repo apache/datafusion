@@ -499,6 +499,7 @@ message AggregateUDFExprNode {
   LogicalExprNode filter = 3;
   repeated SortExprNode order_by = 4;
   optional bytes fun_definition = 6;
+  repeated SortExprNode within_group = 7;
 }
 
 message ScalarUDFExprNode {

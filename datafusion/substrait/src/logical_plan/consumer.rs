@@ -739,7 +739,17 @@ pub async fn from_substrait_rel(
                                 }
                                 _ => false,
                             };
-                            let order_by = if !f.sorts.is_empty() {
+
+                            let Some(function_name) = extensions.functions.get(&f.function_reference) else {
+                                return plan_err!(
+                                    "Aggregate function not registered: function anchor = {:?}",
+                                    f.function_reference
+                                );
+                            };
+
+                            let function_name = substrait_fun_name(function_name);
+
+                            let sorts = if !f.sorts.is_empty() {
                                 Some(
                                     from_substrait_sorts(
                                         state,
@@ -753,13 +763,20 @@ pub async fn from_substrait_rel(
                                 None
                             };
 
+                            let (within_group, order_by) = match state.ordered_set_udaf(function_name) {
+                                Ok(_) => (sorts, None),
+                                Err(_) => (None, sorts),
+                            };
+
                             from_substrait_agg_func(
                                 state,
+                                function_name,
                                 f,
                                 input.schema(),
                                 extensions,
                                 filter,
                                 order_by,
+                                within_group,
                                 distinct,
                             )
                             .await
@@ -1502,24 +1519,18 @@ pub async fn from_substrait_func_args(
 /// Convert Substrait AggregateFunction to DataFusion Expr
 pub async fn from_substrait_agg_func(
     state: &dyn SubstraitPlanningState,
+    function_name: &str,
     f: &AggregateFunction,
     input_schema: &DFSchema,
     extensions: &Extensions,
     filter: Option<Box<Expr>>,
     order_by: Option<Vec<SortExpr>>,
+    within_group: Option<Vec<SortExpr>>,
     distinct: bool,
 ) -> Result<Arc<Expr>> {
     let args =
         from_substrait_func_args(state, &f.arguments, input_schema, extensions).await?;
 
-    let Some(function_name) = extensions.functions.get(&f.function_reference) else {
-        return plan_err!(
-            "Aggregate function not registered: function anchor = {:?}",
-            f.function_reference
-        );
-    };
-
-    let function_name = substrait_fun_name(function_name);
     // try udaf first, then built-in aggr fn.
     if let Ok(fun) = state.udaf(function_name) {
         // deal with situation that count(*) got no arguments
@@ -1530,7 +1541,15 @@ pub async fn from_substrait_agg_func(
         };
 
         Ok(Arc::new(Expr::AggregateFunction(
-            expr::AggregateFunction::new_udf(fun, args, distinct, filter, order_by, None),
+            expr::AggregateFunction::new_udf(
+                fun,
+                args,
+                distinct,
+                filter,
+                order_by,
+                None,
+                within_group,
+            ),
         )))
     } else {
         not_impl_err!(
