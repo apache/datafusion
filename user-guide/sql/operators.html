@@ -615,6 +615,15 @@
     </a>
    </li>
    <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#op-spaceship">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       &lt;=&gt;
+      </span>
+     </code>
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
     <a class="reference internal nav-link" href="#is-distinct-from">
      <code class="docutils literal notranslate">
       <span class="pre">
@@ -684,7 +693,7 @@
     </a>
    </li>
    <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#id16">
+    <a class="reference internal nav-link" href="#id17">
      <code class="docutils literal notranslate">
       <span class="pre">
        ~~
@@ -693,7 +702,7 @@
     </a>
    </li>
    <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#id17">
+    <a class="reference internal nav-link" href="#id18">
      <code class="docutils literal notranslate">
       <span class="pre">
        ~~*
@@ -702,7 +711,7 @@
     </a>
    </li>
    <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#id18">
+    <a class="reference internal nav-link" href="#id19">
      <code class="docutils literal notranslate">
       <span class="pre">
        !~~
@@ -711,7 +720,7 @@
     </a>
    </li>
    <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#id19">
+    <a class="reference internal nav-link" href="#id20">
      <code class="docutils literal notranslate">
       <span class="pre">
        !~~*
@@ -959,6 +968,7 @@
 <li><p><a class="reference internal" href="#op-le">&lt;= (less than or equal to)</a></p></li>
 <li><p><a class="reference internal" href="#op-gt">&gt; (greater than)</a></p></li>
 <li><p><a class="reference internal" href="#op-ge">&gt;= (greater than or equal to)</a></p></li>
+<li><p><a class="reference internal" href="#op-spaceship">&lt;=&gt; (three-way comparison, alias for IS NOT DISTINCT FROM)</a></p></li>
 <li><p><a class="reference internal" href="#is-distinct-from">IS DISTINCT FROM</a></p></li>
 <li><p><a class="reference internal" href="#is-not-distinct-from">IS NOT DISTINCT FROM</a></p></li>
 <li><p><a class="reference internal" href="#op-re-match">~ (regex match)</a></p></li>
@@ -1038,6 +1048,42 @@
 </pre></div>
 </div>
 </section>
+<section id="op-spaceship">
+<span id="id12"></span><h3><code class="docutils literal notranslate"><span class="pre">&lt;=&gt;</span></code><a class="headerlink" href="#op-spaceship" title="Link to this heading">¶</a></h3>
+<p>Three-way comparison operator. A NULL-safe operator that returns true if both operands are equal or both are NULL, false otherwise.</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span><span class="w"> </span><span class="k">SELECT</span><span class="w"> </span><span class="k">NULL</span><span class="w"> </span><span class="o">&lt;=&gt;</span><span class="w"> </span><span class="k">NULL</span><span class="p">;</span>
+<span class="o">+</span><span class="c1">--------------------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="k">NULL</span><span class="w"> </span><span class="k">IS</span><span class="w"> </span><span class="k">NOT</span><span class="w"> </span><span class="k">DISTINCT</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="k">NULL</span><span class="w"> </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">--------------------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="k">true</span><span class="w">                           </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">--------------------------------+</span>
+</pre></div>
+</div>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span><span class="w"> </span><span class="k">SELECT</span><span class="w"> </span><span class="mi">1</span><span class="w"> </span><span class="o">&lt;=&gt;</span><span class="w"> </span><span class="k">NULL</span><span class="p">;</span>
+<span class="o">+</span><span class="c1">------------------------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="n">Int64</span><span class="p">(</span><span class="mi">1</span><span class="p">)</span><span class="w"> </span><span class="k">IS</span><span class="w"> </span><span class="k">NOT</span><span class="w"> </span><span class="k">DISTINCT</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="k">NULL</span><span class="w"> </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">------------------------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="k">false</span><span class="w">                              </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">------------------------------------+</span>
+</pre></div>
+</div>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span><span class="w"> </span><span class="k">SELECT</span><span class="w"> </span><span class="mi">1</span><span class="w"> </span><span class="o">&lt;=&gt;</span><span class="w"> </span><span class="mi">2</span><span class="p">;</span>
+<span class="o">+</span><span class="c1">----------------------------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="n">Int64</span><span class="p">(</span><span class="mi">1</span><span class="p">)</span><span class="w"> </span><span class="k">IS</span><span class="w"> </span><span class="k">NOT</span><span class="w"> </span><span class="k">DISTINCT</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">Int64</span><span class="p">(</span><span class="mi">2</span><span class="p">)</span><span class="w"> </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">----------------------------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="k">false</span><span class="w">                                  </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">----------------------------------------+</span>
+</pre></div>
+</div>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span><span class="w"> </span><span class="k">SELECT</span><span class="w"> </span><span class="mi">1</span><span class="w"> </span><span class="o">&lt;=&gt;</span><span class="w"> </span><span class="mi">1</span><span class="p">;</span>
+<span class="o">+</span><span class="c1">----------------------------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="n">Int64</span><span class="p">(</span><span class="mi">1</span><span class="p">)</span><span class="w"> </span><span class="k">IS</span><span class="w"> </span><span class="k">NOT</span><span class="w"> </span><span class="k">DISTINCT</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">Int64</span><span class="p">(</span><span class="mi">1</span><span class="p">)</span><span class="w"> </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">----------------------------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="k">true</span><span class="w">                                   </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">----------------------------------------+</span>
+</pre></div>
+</div>
+</section>
 <section id="is-distinct-from">
 <h3><code class="docutils literal notranslate"><span class="pre">IS</span> <span class="pre">DISTINCT</span> <span class="pre">FROM</span></code><a class="headerlink" href="#is-distinct-from" title="Link to this heading">¶</a></h3>
 <p>Guarantees the result of a comparison is <code class="docutils literal notranslate"><span class="pre">true</span></code> or <code class="docutils literal notranslate"><span class="pre">false</span></code> and not an empty set</p>
@@ -1063,7 +1109,7 @@
 </div>
 </section>
 <section id="op-re-match">
-<span id="id12"></span><h3><code class="docutils literal notranslate"><span class="pre">~</span></code><a class="headerlink" href="#op-re-match" title="Link to this heading">¶</a></h3>
+<span id="id13"></span><h3><code class="docutils literal notranslate"><span class="pre">~</span></code><a class="headerlink" href="#op-re-match" title="Link to this heading">¶</a></h3>
 <p>Regex Match</p>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span><span class="w"> </span><span class="k">SELECT</span><span class="w"> </span><span class="s1">&#39;datafusion&#39;</span><span class="w"> </span><span class="o">~</span><span class="w"> </span><span class="s1">&#39;^datafusion(-cli)*&#39;</span><span class="p">;</span>
 <span class="o">+</span><span class="c1">-------------------------------------------------+</span>
@@ -1075,7 +1121,7 @@
 </div>
 </section>
 <section id="op-re-match-i">
-<span id="id13"></span><h3><code class="docutils literal notranslate"><span class="pre">~*</span></code><a class="headerlink" href="#op-re-match-i" title="Link to this heading">¶</a></h3>
+<span id="id14"></span><h3><code class="docutils literal notranslate"><span class="pre">~*</span></code><a class="headerlink" href="#op-re-match-i" title="Link to this heading">¶</a></h3>
 <p>Regex Case-Insensitive Match</p>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span><span class="w"> </span><span class="k">SELECT</span><span class="w"> </span><span class="s1">&#39;datafusion&#39;</span><span class="w"> </span><span class="o">~*</span><span class="w"> </span><span class="s1">&#39;^DATAFUSION(-cli)*&#39;</span><span class="p">;</span>
 <span class="o">+</span><span class="c1">--------------------------------------------------+</span>
@@ -1087,7 +1133,7 @@
 </div>
 </section>
 <section id="op-re-not-match">
-<span id="id14"></span><h3><code class="docutils literal notranslate"><span class="pre">!~</span></code><a class="headerlink" href="#op-re-not-match" title="Link to this heading">¶</a></h3>
+<span id="id15"></span><h3><code class="docutils literal notranslate"><span class="pre">!~</span></code><a class="headerlink" href="#op-re-not-match" title="Link to this heading">¶</a></h3>
 <p>Not Regex Match</p>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span><span class="w"> </span><span class="k">SELECT</span><span class="w"> </span><span class="s1">&#39;datafusion&#39;</span><span class="w"> </span><span class="o">!~</span><span class="w"> </span><span class="s1">&#39;^DATAFUSION(-cli)*&#39;</span><span class="p">;</span>
 <span class="o">+</span><span class="c1">--------------------------------------------------+</span>
@@ -1099,7 +1145,7 @@
 </div>
 </section>
 <section id="op-re-not-match-i">
-<span id="id15"></span><h3><code class="docutils literal notranslate"><span class="pre">!~*</span></code><a class="headerlink" href="#op-re-not-match-i" title="Link to this heading">¶</a></h3>
+<span id="id16"></span><h3><code class="docutils literal notranslate"><span class="pre">!~*</span></code><a class="headerlink" href="#op-re-not-match-i" title="Link to this heading">¶</a></h3>
 <p>Not Regex Case-Insensitive Match</p>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span><span class="w"> </span><span class="k">SELECT</span><span class="w"> </span><span class="s1">&#39;datafusion&#39;</span><span class="w"> </span><span class="o">!~*</span><span class="w"> </span><span class="s1">&#39;^DATAFUSION(-cli)+&#39;</span><span class="p">;</span>
 <span class="o">+</span><span class="c1">---------------------------------------------------+</span>
@@ -1110,8 +1156,8 @@
 </pre></div>
 </div>
 </section>
-<section id="id16">
-<h3><code class="docutils literal notranslate"><span class="pre">~~</span></code><a class="headerlink" href="#id16" title="Link to this heading">¶</a></h3>
+<section id="id17">
+<h3><code class="docutils literal notranslate"><span class="pre">~~</span></code><a class="headerlink" href="#id17" title="Link to this heading">¶</a></h3>
 <p>Like Match</p>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span><span class="w"> </span><span class="s1">&#39;datafusion&#39;</span><span class="w"> </span><span class="o">~~</span><span class="w"> </span><span class="s1">&#39;dat_f%n&#39;</span><span class="p">;</span>
 <span class="o">+</span><span class="c1">---------------------------------------+</span>
@@ -1122,8 +1168,8 @@
 </pre></div>
 </div>
 </section>
-<section id="id17">
-<h3><code class="docutils literal notranslate"><span class="pre">~~*</span></code><a class="headerlink" href="#id17" title="Link to this heading">¶</a></h3>
+<section id="id18">
+<h3><code class="docutils literal notranslate"><span class="pre">~~*</span></code><a class="headerlink" href="#id18" title="Link to this heading">¶</a></h3>
 <p>Case-Insensitive Like Match</p>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span><span class="w"> </span><span class="s1">&#39;datafusion&#39;</span><span class="w"> </span><span class="o">~~*</span><span class="w"> </span><span class="s1">&#39;Dat_F%n&#39;</span><span class="p">;</span>
 <span class="o">+</span><span class="c1">----------------------------------------+</span>
@@ -1134,8 +1180,8 @@
 </pre></div>
 </div>
 </section>
-<section id="id18">
-<h3><code class="docutils literal notranslate"><span class="pre">!~~</span></code><a class="headerlink" href="#id18" title="Link to this heading">¶</a></h3>
+<section id="id19">
+<h3><code class="docutils literal notranslate"><span class="pre">!~~</span></code><a class="headerlink" href="#id19" title="Link to this heading">¶</a></h3>
 <p>Not Like Match</p>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span><span class="w"> </span><span class="s1">&#39;datafusion&#39;</span><span class="w"> </span><span class="o">!~~</span><span class="w"> </span><span class="s1">&#39;Dat_F%n&#39;</span><span class="p">;</span>
 <span class="o">+</span><span class="c1">----------------------------------------+</span>
@@ -1146,8 +1192,8 @@
 </pre></div>
 </div>
 </section>
-<section id="id19">
-<h3><code class="docutils literal notranslate"><span class="pre">!~~*</span></code><a class="headerlink" href="#id19" title="Link to this heading">¶</a></h3>
+<section id="id20">
+<h3><code class="docutils literal notranslate"><span class="pre">!~~*</span></code><a class="headerlink" href="#id20" title="Link to this heading">¶</a></h3>
 <p>Not Case-Insensitive Like Match</p>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span><span class="w"> </span><span class="s1">&#39;datafusion&#39;</span><span class="w"> </span><span class="o">!~~*</span><span class="w"> </span><span class="s1">&#39;Dat%F_n&#39;</span><span class="p">;</span>
 <span class="o">+</span><span class="c1">-----------------------------------------+</span>
@@ -1200,7 +1246,7 @@
 <li><p><a class="reference internal" href="#op-shift-l">&lt;&lt; (bitwise shift left)</a></p></li>
 </ul>
 <section id="op-bit-and">
-<span id="id20"></span><h3><code class="docutils literal notranslate"><span class="pre">&amp;</span></code><a class="headerlink" href="#op-bit-and" title="Link to this heading">¶</a></h3>
+<span id="id21"></span><h3><code class="docutils literal notranslate"><span class="pre">&amp;</span></code><a class="headerlink" href="#op-bit-and" title="Link to this heading">¶</a></h3>
 <p>Bitwise And</p>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span><span class="w"> </span><span class="k">SELECT</span><span class="w"> </span><span class="mi">5</span><span class="w"> </span><span class="o">&amp;</span><span class="w"> </span><span class="mi">3</span><span class="p">;</span>
 <span class="o">+</span><span class="c1">---------------------+</span>
@@ -1212,7 +1258,7 @@
 </div>
 </section>
 <section id="op-bit-or">
-<span id="id21"></span><h3><code class="docutils literal notranslate"><span class="pre">|</span></code><a class="headerlink" href="#op-bit-or" title="Link to this heading">¶</a></h3>
+<span id="id22"></span><h3><code class="docutils literal notranslate"><span class="pre">|</span></code><a class="headerlink" href="#op-bit-or" title="Link to this heading">¶</a></h3>
 <p>Bitwise Or</p>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span><span class="w"> </span><span class="k">SELECT</span><span class="w"> </span><span class="mi">5</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="mi">3</span><span class="p">;</span>
 <span class="o">+</span><span class="c1">---------------------+</span>
@@ -1224,7 +1270,7 @@
 </div>
 </section>
 <section id="op-bit-xor">
-<span id="id22"></span><h3><code class="docutils literal notranslate"><span class="pre">#</span></code><a class="headerlink" href="#op-bit-xor" title="Link to this heading">¶</a></h3>
+<span id="id23"></span><h3><code class="docutils literal notranslate"><span class="pre">#</span></code><a class="headerlink" href="#op-bit-xor" title="Link to this heading">¶</a></h3>
 <p>Bitwise Xor (interchangeable with <code class="docutils literal notranslate"><span class="pre">^</span></code>)</p>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span><span class="w"> </span><span class="k">SELECT</span><span class="w"> </span><span class="mi">5</span><span class="w"> </span><span class="o">#</span><span class="w"> </span><span class="mi">3</span><span class="p">;</span>
 <span class="o">+</span><span class="c1">---------------------+</span>
@@ -1236,7 +1282,7 @@
 </div>
 </section>
 <section id="op-shift-r">
-<span id="id23"></span><h3><code class="docutils literal notranslate"><span class="pre">&gt;&gt;</span></code><a class="headerlink" href="#op-shift-r" title="Link to this heading">¶</a></h3>
+<span id="id24"></span><h3><code class="docutils literal notranslate"><span class="pre">&gt;&gt;</span></code><a class="headerlink" href="#op-shift-r" title="Link to this heading">¶</a></h3>
 <p>Bitwise Shift Right</p>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span><span class="w"> </span><span class="k">SELECT</span><span class="w"> </span><span class="mi">5</span><span class="w"> </span><span class="o">&gt;&gt;</span><span class="w"> </span><span class="mi">3</span><span class="p">;</span>
 <span class="o">+</span><span class="c1">----------------------+</span>
@@ -1248,7 +1294,7 @@
 </div>
 </section>
 <section id="op-shift-l">
-<span id="id24"></span><h3><code class="docutils literal notranslate"><span class="pre">&lt;&lt;</span></code><a class="headerlink" href="#op-shift-l" title="Link to this heading">¶</a></h3>
+<span id="id25"></span><h3><code class="docutils literal notranslate"><span class="pre">&lt;&lt;</span></code><a class="headerlink" href="#op-shift-l" title="Link to this heading">¶</a></h3>
 <p>Bitwise Shift Left</p>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span><span class="w"> </span><span class="k">SELECT</span><span class="w"> </span><span class="mi">5</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="mi">3</span><span class="p">;</span>
 <span class="o">+</span><span class="c1">----------------------+</span>
@@ -1268,7 +1314,7 @@
 <li><p><a class="reference internal" href="#op-arr-contained-by">&lt;&#64; (array is contained by)</a></p></li>
 </ul>
 <section id="op-str-cat">
-<span id="id25"></span><h3><code class="docutils literal notranslate"><span class="pre">||</span></code><a class="headerlink" href="#op-str-cat" title="Link to this heading">¶</a></h3>
+<span id="id26"></span><h3><code class="docutils literal notranslate"><span class="pre">||</span></code><a class="headerlink" href="#op-str-cat" title="Link to this heading">¶</a></h3>
 <p>String Concatenation</p>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span><span class="w"> </span><span class="k">SELECT</span><span class="w"> </span><span class="s1">&#39;Hello, &#39;</span><span class="w"> </span><span class="o">||</span><span class="w"> </span><span class="s1">&#39;DataFusion!&#39;</span><span class="p">;</span>
 <span class="o">+</span><span class="c1">----------------------------------------+</span>
@@ -1280,7 +1326,7 @@
 </div>
 </section>
 <section id="op-arr-contains">
-<span id="id26"></span><h3><code class="docutils literal notranslate"><span class="pre">&#64;&gt;</span></code><a class="headerlink" href="#op-arr-contains" title="Link to this heading">¶</a></h3>
+<span id="id27"></span><h3><code class="docutils literal notranslate"><span class="pre">&#64;&gt;</span></code><a class="headerlink" href="#op-arr-contains" title="Link to this heading">¶</a></h3>
 <p>Array Contains</p>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span><span class="w"> </span><span class="k">SELECT</span><span class="w"> </span><span class="n">make_array</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span><span class="mi">2</span><span class="p">,</span><span class="mi">3</span><span class="p">)</span><span class="w"> </span><span class="o">@&gt;</span><span class="w"> </span><span class="n">make_array</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span><span class="mi">3</span><span class="p">);</span>
 <span class="o">+</span><span class="c1">-------------------------------------------------------------------------+</span>
@@ -1292,7 +1338,7 @@
 </div>
 </section>
 <section id="op-arr-contained-by">
-<span id="id27"></span><h3><code class="docutils literal notranslate"><span class="pre">&lt;&#64;</span></code><a class="headerlink" href="#op-arr-contained-by" title="Link to this heading">¶</a></h3>
+<span id="id28"></span><h3><code class="docutils literal notranslate"><span class="pre">&lt;&#64;</span></code><a class="headerlink" href="#op-arr-contained-by" title="Link to this heading">¶</a></h3>
 <p>Array Is Contained By</p>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span><span class="w"> </span><span class="k">SELECT</span><span class="w"> </span><span class="n">make_array</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span><span class="mi">3</span><span class="p">)</span><span class="w"> </span><span class="o">&lt;@</span><span class="w"> </span><span class="n">make_array</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span><span class="mi">2</span><span class="p">,</span><span class="mi">3</span><span class="p">);</span>
 <span class="o">+</span><span class="c1">-------------------------------------------------------------------------+</span>
