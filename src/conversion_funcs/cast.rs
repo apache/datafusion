@@ -37,7 +37,7 @@ use arrow::{
 };
 use arrow_array::builder::StringBuilder;
 use arrow_array::{DictionaryArray, StringArray, StructArray};
-use arrow_schema::{DataType, Field, Schema};
+use arrow_schema::{DataType, Schema};
 use chrono::{NaiveDate, NaiveDateTime, TimeZone, Timelike};
 use datafusion_common::{
     cast::as_generic_string_array, internal_err, Result as DataFusionResult, ScalarValue,
@@ -49,6 +49,7 @@ use num::{
     ToPrimitive,
 };
 use regex::Regex;
+use std::collections::HashMap;
 use std::str::FromStr;
 use std::{
     any::Any,
@@ -803,11 +804,15 @@ pub struct SparkCastOptions {
     pub eval_mode: EvalMode,
     /// When cast from/to timezone related types, we need timezone, which will be resolved with
     /// session local timezone by an analyzer in Spark.
+    // TODO we should change timezone to Tz to avoid repeated parsing
     pub timezone: String,
     /// Allow casts that are supported but not guaranteed to be 100% compatible
     pub allow_incompat: bool,
     /// Support casting unsigned ints to signed ints (used by Parquet SchemaAdapter)
     pub allow_cast_unsigned_ints: bool,
+    /// We also use the cast logic for adapting Parquet schemas, so this flag is used
+    /// for that use case
+    pub is_adapting_schema: bool,
 }
 
 impl SparkCastOptions {
@@ -817,6 +822,7 @@ impl SparkCastOptions {
             timezone: timezone.to_string(),
             allow_incompat,
             allow_cast_unsigned_ints: false,
+            is_adapting_schema: false,
         }
     }
 
@@ -826,6 +832,7 @@ impl SparkCastOptions {
             timezone: "".to_string(),
             allow_incompat,
             allow_cast_unsigned_ints: false,
+            is_adapting_schema: false,
         }
     }
 }
@@ -952,7 +959,9 @@ fn cast_array(
         {
             Ok(cast_with_options(&array, to_type, &CAST_OPTIONS)?)
         }
-        _ if is_datafusion_spark_compatible(from_type, to_type, cast_options.allow_incompat) => {
+        _ if cast_options.is_adapting_schema
+            || is_datafusion_spark_compatible(from_type, to_type, cast_options.allow_incompat) =>
+        {
             // use DataFusion cast only when we know that it is compatible with Spark
             Ok(cast_with_options(&array, to_type, &CAST_OPTIONS)?)
         }
@@ -1058,17 +1067,28 @@ fn cast_struct_to_struct(
     cast_options: &SparkCastOptions,
 ) -> DataFusionResult<ArrayRef> {
     match (from_type, to_type) {
-        (DataType::Struct(_), DataType::Struct(to_fields)) => {
-            let mut cast_fields: Vec<(Arc<Field>, ArrayRef)> = Vec::with_capacity(to_fields.len());
+        (DataType::Struct(from_fields), DataType::Struct(to_fields)) => {
+            // TODO some of this logic may be specific to converting Parquet to Spark
+            let mut field_name_to_index_map = HashMap::new();
+            for (i, field) in from_fields.iter().enumerate() {
+                field_name_to_index_map.insert(field.name(), i);
+            }
+            assert_eq!(field_name_to_index_map.len(), from_fields.len());
+            let mut cast_fields: Vec<ArrayRef> = Vec::with_capacity(to_fields.len());
             for i in 0..to_fields.len() {
+                let from_index = field_name_to_index_map[to_fields[i].name()];
                 let cast_field = cast_array(
-                    Arc::clone(array.column(i)),
+                    Arc::clone(array.column(from_index)),
                     to_fields[i].data_type(),
                     cast_options,
                 )?;
-                cast_fields.push((Arc::clone(&to_fields[i]), cast_field));
+                cast_fields.push(cast_field);
             }
-            Ok(Arc::new(StructArray::from(cast_fields)))
+            Ok(Arc::new(StructArray::new(
+                to_fields.clone(),
+                cast_fields,
+                array.nulls().cloned(),
+            )))
         }
         _ => unreachable!(),
     }
