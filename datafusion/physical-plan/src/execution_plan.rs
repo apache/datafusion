@@ -110,6 +110,15 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
     /// trait, which is implemented for all `ExecutionPlan`s.
     fn properties(&self) -> &PlanProperties;
 
+    /// Returns an error if this individual node does not conform to its invariants.
+    /// These invariants are typically only checked in debug mode.
+    ///
+    /// A default set of invariants is provided in the default implementation.
+    /// Extension nodes can provide their own invariants.
+    fn check_invariants(&self, _check: InvariantLevel) -> Result<()> {
+        Ok(())
+    }
+
     /// Specifies the data distribution requirements for all the
     /// children for this `ExecutionPlan`, By default it's [[Distribution::UnspecifiedDistribution]] for each child,
     fn required_input_distribution(&self) -> Vec<Distribution> {
@@ -422,6 +431,22 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
     fn cardinality_effect(&self) -> CardinalityEffect {
         CardinalityEffect::Unknown
     }
+}
+
+/// [`ExecutionPlan`] Invariant Level
+///
+/// What set of assertions ([Invariant]s)  holds for a particular `ExecutionPlan`
+///
+/// [Invariant]: https://en.wikipedia.org/wiki/Invariant_(mathematics)#Invariants_in_computer_science
+#[derive(Clone, Copy)]
+pub enum InvariantLevel {
+    /// Invariants that are always true for the [`ExecutionPlan`] node
+    /// such as the number of expected children.
+    Always,
+    /// Invariants that must hold true for the [`ExecutionPlan`] node
+    /// to be "executable", such as ordering and/or distribution requirements
+    /// being fulfilled.
+    Executable,
 }
 
 /// Extension trait provides an easy API to fetch various properties of
