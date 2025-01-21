@@ -162,7 +162,7 @@ impl ExecutionPlan for DataSourceExec {
 
 impl DataSourceExec {
     pub fn new(source: Arc<dyn DataSource>) -> Self {
-        let cache = Self::compute_properties(source.clone());
+        let cache = Self::compute_properties(Arc::clone(&source));
         Self { source, cache }
     }
 
@@ -173,7 +173,7 @@ impl DataSourceExec {
     }
 
     pub fn with_source(mut self, source: Arc<dyn DataSource>) -> Self {
-        self.cache = Self::compute_properties(source.clone());
+        self.cache = Self::compute_properties(Arc::clone(&source));
         self.source = source;
         self
     }
