@@ -423,7 +423,7 @@ impl ParquetExec {
     fn bloom_filter_on_read(&self) -> bool {
         self.table_parquet_options.global.bloom_filter_on_read
     }
-    /// Return the value described in [`Self::with_enable_page_index`]
+    /// Return the value described in [`ParquetConfig::with_enable_page_index`]
     fn enable_page_index(&self) -> bool {
         self.table_parquet_options.global.enable_page_index
     }
