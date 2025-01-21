@@ -39,14 +39,14 @@ use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 
 use datafusion_common::tree_node::{TransformedResult, TreeNode};
-use datafusion_common::Result;
-use datafusion_expr::{JoinType, Operator};
-use datafusion_physical_expr::expressions::{self, col, Column};
-use datafusion_physical_expr::PhysicalSortExpr;
-use datafusion_physical_optimizer::test_utils::check_integrity;
-use datafusion_physical_optimizer::enforce_sorting::replace_with_order_preserving_variants::{replace_with_order_preserving_variants, OrderPreservationContext};
+    use datafusion_common::Result;
+    use datafusion_expr::{JoinType, Operator};
+    use datafusion_physical_expr::expressions::{self, col, Column};
+    use datafusion_physical_expr::PhysicalSortExpr;
+    use datafusion_physical_optimizer::test_utils::check_integrity;
+    use datafusion_physical_optimizer::enforce_sorting::replace_with_order_preserving_variants::{replace_with_order_preserving_variants, OrderPreservationContext};
 
-use crate::physical_optimizer::test_util::stream_exec_ordered;
+use crate::physical_optimizer::test_util::stream_exec_ordered_with_projection;
 
 use object_store::memory::InMemory;
 use object_store::ObjectStore;
@@ -190,7 +190,7 @@ async fn test_replace_multiple_input_repartition_1(
     let schema = create_test_schema()?;
     let sort_exprs = vec![sort_expr("a", &schema)];
     let source = if source_unbounded {
-        stream_exec_ordered(&schema, sort_exprs)
+        stream_exec_ordered_with_projection(&schema, sort_exprs)
     } else {
         memory_exec_sorted(&schema, sort_exprs)
     };
@@ -259,7 +259,7 @@ async fn test_with_inter_children_change_only(
     let schema = create_test_schema()?;
     let sort_exprs = vec![sort_expr_default("a", &schema)];
     let source = if source_unbounded {
-        stream_exec_ordered(&schema, sort_exprs)
+        stream_exec_ordered_with_projection(&schema, sort_exprs)
     } else {
         memory_exec_sorted(&schema, sort_exprs)
     };
@@ -362,7 +362,7 @@ async fn test_replace_multiple_input_repartition_2(
     let schema = create_test_schema()?;
     let sort_exprs = vec![sort_expr("a", &schema)];
     let source = if source_unbounded {
-        stream_exec_ordered(&schema, sort_exprs)
+        stream_exec_ordered_with_projection(&schema, sort_exprs)
     } else {
         memory_exec_sorted(&schema, sort_exprs)
     };
@@ -438,7 +438,7 @@ async fn test_replace_multiple_input_repartition_with_extra_steps(
     let schema = create_test_schema()?;
     let sort_exprs = vec![sort_expr("a", &schema)];
     let source = if source_unbounded {
-        stream_exec_ordered(&schema, sort_exprs)
+        stream_exec_ordered_with_projection(&schema, sort_exprs)
     } else {
         memory_exec_sorted(&schema, sort_exprs)
     };
@@ -520,7 +520,7 @@ async fn test_replace_multiple_input_repartition_with_extra_steps_2(
     let schema = create_test_schema()?;
     let sort_exprs = vec![sort_expr("a", &schema)];
     let source = if source_unbounded {
-        stream_exec_ordered(&schema, sort_exprs)
+        stream_exec_ordered_with_projection(&schema, sort_exprs)
     } else {
         memory_exec_sorted(&schema, sort_exprs)
     };
@@ -608,7 +608,7 @@ async fn test_not_replacing_when_no_need_to_preserve_sorting(
     let schema = create_test_schema()?;
     let sort_exprs = vec![sort_expr("a", &schema)];
     let source = if source_unbounded {
-        stream_exec_ordered(&schema, sort_exprs)
+        stream_exec_ordered_with_projection(&schema, sort_exprs)
     } else {
         memory_exec_sorted(&schema, sort_exprs)
     };
@@ -681,7 +681,7 @@ async fn test_with_multiple_replacable_repartitions(
     let schema = create_test_schema()?;
     let sort_exprs = vec![sort_expr("a", &schema)];
     let source = if source_unbounded {
-        stream_exec_ordered(&schema, sort_exprs)
+        stream_exec_ordered_with_projection(&schema, sort_exprs)
     } else {
         memory_exec_sorted(&schema, sort_exprs)
     };
@@ -769,7 +769,7 @@ async fn test_not_replace_with_different_orderings(
     let schema = create_test_schema()?;
     let sort_exprs = vec![sort_expr("a", &schema)];
     let source = if source_unbounded {
-        stream_exec_ordered(&schema, sort_exprs)
+        stream_exec_ordered_with_projection(&schema, sort_exprs)
     } else {
         memory_exec_sorted(&schema, sort_exprs)
     };
@@ -841,7 +841,7 @@ async fn test_with_lost_ordering(
     let schema = create_test_schema()?;
     let sort_exprs = vec![sort_expr("a", &schema)];
     let source = if source_unbounded {
-        stream_exec_ordered(&schema, sort_exprs)
+        stream_exec_ordered_with_projection(&schema, sort_exprs)
     } else {
         memory_exec_sorted(&schema, sort_exprs)
     };
@@ -911,7 +911,7 @@ async fn test_with_lost_and_kept_ordering(
     let schema = create_test_schema()?;
     let sort_exprs = vec![sort_expr("a", &schema)];
     let source = if source_unbounded {
-        stream_exec_ordered(&schema, sort_exprs)
+        stream_exec_ordered_with_projection(&schema, sort_exprs)
     } else {
         memory_exec_sorted(&schema, sort_exprs)
     };
@@ -1017,7 +1017,7 @@ async fn test_with_multiple_child_trees(
 
     let left_sort_exprs = vec![sort_expr("a", &schema)];
     let left_source = if source_unbounded {
-        stream_exec_ordered(&schema, left_sort_exprs)
+        stream_exec_ordered_with_projection(&schema, left_sort_exprs)
     } else {
         memory_exec_sorted(&schema, left_sort_exprs)
     };
@@ -1028,7 +1028,7 @@ async fn test_with_multiple_child_trees(
 
     let right_sort_exprs = vec![sort_expr("a", &schema)];
     let right_source = if source_unbounded {
-        stream_exec_ordered(&schema, right_sort_exprs)
+        stream_exec_ordered_with_projection(&schema, right_sort_exprs)
     } else {
         memory_exec_sorted(&schema, right_sort_exprs)
     };
