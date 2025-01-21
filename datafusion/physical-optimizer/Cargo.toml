@@ -34,7 +34,6 @@ workspace = true
 [features]
 recursive_protection = ["dep:recursive"]
 
-
 [dependencies]
 arrow = { workspace = true }
 arrow-schema = { workspace = true }
