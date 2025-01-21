@@ -20,8 +20,10 @@
 use arrow::array::{Array, ArrayRef, NullArray};
 use arrow::compute::{kernels, CastOptions};
 use arrow::datatypes::DataType;
+use arrow::util::pretty::pretty_format_columns;
 use datafusion_common::format::DEFAULT_CAST_OPTIONS;
 use datafusion_common::{internal_err, Result, ScalarValue};
+use std::fmt;
 use std::sync::Arc;
 
 /// The result of evaluating an expression.
@@ -215,6 +217,28 @@ impl ColumnarValue {
                 scalar.cast_to_with_options(cast_type, &cast_options)?,
             )),
         }
+    }
+}
+
+// Implement Display trait for ColumnarValue
+//
+// # Panics
+//
+// Panics if there is an error when creating a visual representation via `arrow::util::pretty::pretty_format_columns`
+impl fmt::Display for ColumnarValue {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        let formatted = match self {
+            ColumnarValue::Array(array) => {
+                pretty_format_columns("ColumnarValue(ArrayRef)", &[Arc::clone(array)])
+                    .unwrap()
+            }
+            ColumnarValue::Scalar(_) => pretty_format_columns(
+                "ColumnarValue(ScalarValue)",
+                &[self.to_array(1).unwrap()],
+            )
+            .unwrap(),
+        };
+        write!(f, "{}", formatted)
     }
 }
 
