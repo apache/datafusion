@@ -20,13 +20,14 @@ use std::fmt;
 use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
 
+use crate::execution_plan::{Boundedness, EmissionType};
 use crate::metrics::{ExecutionPlanMetricsSet, MetricsSet};
 use crate::{DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties};
 
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::{Constraints, Statistics};
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
-use datafusion_physical_expr::Partitioning;
+use datafusion_physical_expr::{EquivalenceProperties, Partitioning};
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
 
 /// Common behaviors in Data Sources for both from Files and Memory.
@@ -49,6 +50,7 @@ pub trait DataSource: Send + Sync {
     }
 
     fn output_partitioning(&self) -> Partitioning;
+    fn eq_properties(&self) -> EquivalenceProperties;
     fn statistics(&self) -> datafusion_common::Result<Statistics>;
     fn with_fetch(&self, _limit: Option<usize>) -> Option<Arc<dyn DataSource>> {
         None
@@ -59,7 +61,6 @@ pub trait DataSource: Send + Sync {
     fn metrics(&self) -> ExecutionPlanMetricsSet {
         ExecutionPlanMetricsSet::new()
     }
-    fn properties(&self) -> PlanProperties;
 }
 
 impl Debug for dyn DataSource {
@@ -161,7 +162,7 @@ impl ExecutionPlan for DataSourceExec {
 
 impl DataSourceExec {
     pub fn new(source: Arc<dyn DataSource>) -> Self {
-        let cache = source.properties().clone();
+        let cache = Self::compute_properties(source.clone());
         Self { source, cache }
     }
 
@@ -172,7 +173,7 @@ impl DataSourceExec {
     }
 
     pub fn with_source(mut self, source: Arc<dyn DataSource>) -> Self {
-        self.cache = source.properties();
+        self.cache = Self::compute_properties(source.clone());
         self.source = source;
         self
     }
@@ -187,5 +188,14 @@ impl DataSourceExec {
     pub fn with_partitioning(mut self, partitioning: Partitioning) -> Self {
         self.cache = self.cache.with_partitioning(partitioning);
         self
+    }
+
+    fn compute_properties(source: Arc<dyn DataSource>) -> PlanProperties {
+        PlanProperties::new(
+            source.eq_properties(),
+            source.output_partitioning(),
+            EmissionType::Incremental,
+            Boundedness::Bounded,
+        )
     }
 }

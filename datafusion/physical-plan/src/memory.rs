@@ -35,9 +35,7 @@ use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use arrow_array::RecordBatchOptions;
 use arrow_schema::Schema;
-use datafusion_common::{
-    internal_err, plan_err, project_schema, Constraints, Result, ScalarValue,
-};
+use datafusion_common::{internal_err, plan_err, project_schema, Result, ScalarValue};
 use datafusion_execution::memory_pool::MemoryReservation;
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::equivalence::ProjectionMapping;
@@ -57,8 +55,6 @@ pub struct MemorySourceConfig {
     projected_schema: SchemaRef,
     /// Optional projection
     projection: Option<Vec<usize>>,
-    /// Plan Properties
-    cache: PlanProperties,
     /// Sort information: one or more equivalent orderings
     sort_information: Vec<LexOrdering>,
     /// if partition sizes should be displayed
@@ -96,7 +92,8 @@ impl DataSource for MemorySourceConfig {
                     })
                     .unwrap_or_default();
 
-                let constraints = self.cache.equivalence_properties().constraints();
+                let eq_properties = self.eq_properties();
+                let constraints = eq_properties.constraints();
                 let constraints = if constraints.is_empty() {
                     String::new()
                 } else {
@@ -121,7 +118,14 @@ impl DataSource for MemorySourceConfig {
     }
 
     fn output_partitioning(&self) -> Partitioning {
-        self.cache.output_partitioning().clone()
+        Partitioning::UnknownPartitioning(self.partitions.len())
+    }
+
+    fn eq_properties(&self) -> EquivalenceProperties {
+        EquivalenceProperties::new_with_orderings(
+            Arc::clone(&self.projected_schema),
+            self.sort_information.as_slice(),
+        )
     }
 
     fn statistics(&self) -> Result<Statistics> {
@@ -130,10 +134,6 @@ impl DataSource for MemorySourceConfig {
             &self.schema,
             self.projection.clone(),
         ))
-    }
-
-    fn properties(&self) -> PlanProperties {
-        self.cache.clone()
     }
 }
 
@@ -146,20 +146,12 @@ impl MemorySourceConfig {
         projection: Option<Vec<usize>>,
     ) -> Result<Self> {
         let projected_schema = project_schema(&schema, projection.as_ref())?;
-        let constraints = Constraints::empty();
-        let cache = Self::compute_properties(
-            Arc::clone(&projected_schema),
-            &[],
-            constraints,
-            partitions,
-        );
         Ok(Self {
             partitions: partitions.to_vec(),
             schema,
             projected_schema,
             projection,
             sort_information: vec![],
-            cache,
             show_sizes: true,
         })
     }
@@ -253,38 +245,21 @@ impl MemorySourceConfig {
         }
 
         let partitions = vec![batches];
-        let cache = Self::compute_properties(
-            Arc::clone(&schema),
-            &[],
-            Constraints::empty(),
-            &partitions,
-        );
         let source = Self {
             partitions,
             schema: Arc::clone(&schema),
             projected_schema: Arc::clone(&schema),
             projection: None,
             sort_information: vec![],
-            cache,
             show_sizes: true,
         };
         Ok(Arc::new(DataSourceExec::new(Arc::new(source))))
-    }
-
-    pub fn with_constraints(mut self, constraints: Constraints) -> Self {
-        self.cache = self.cache.with_constraints(constraints);
-        self
     }
 
     /// Set `show_sizes` to determine whether to display partition sizes
     pub fn with_show_sizes(mut self, show_sizes: bool) -> Self {
         self.show_sizes = show_sizes;
         self
-    }
-
-    /// Ref to constraints
-    pub fn constraints(&self) -> &Constraints {
-        self.cache.equivalence_properties().constraints()
     }
 
     /// Ref to partitions
@@ -366,41 +341,18 @@ impl MemorySourceConfig {
             let projection_mapping =
                 ProjectionMapping::try_new(&proj_exprs, &self.original_schema())?;
             sort_information = base_eqp
-                .project(&projection_mapping, Arc::clone(self.properties().schema()))
+                .project(&projection_mapping, Arc::clone(&self.projected_schema))
                 .into_oeq_class()
                 .into_inner();
         }
 
         self.sort_information = sort_information;
-        // We need to update equivalence properties when updating sort information.
-        let eq_properties = EquivalenceProperties::new_with_orderings(
-            Arc::clone(self.properties().schema()),
-            &self.sort_information,
-        );
-        self.cache = self.cache.with_eq_properties(eq_properties);
-
         Ok(self)
     }
 
     /// Arc clone of ref to original schema
     pub fn original_schema(&self) -> SchemaRef {
         Arc::clone(&self.schema)
-    }
-
-    /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
-    fn compute_properties(
-        schema: SchemaRef,
-        orderings: &[LexOrdering],
-        constraints: Constraints,
-        partitions: &[Vec<RecordBatch>],
-    ) -> PlanProperties {
-        PlanProperties::new(
-            EquivalenceProperties::new_with_orderings(schema, orderings)
-                .with_constraints(constraints),
-            Partitioning::UnknownPartitioning(partitions.len()),
-            EmissionType::Incremental,
-            Boundedness::Bounded,
-        )
     }
 }
 

@@ -35,10 +35,9 @@ use datafusion_common::Statistics;
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_physical_expr::{EquivalenceProperties, Partitioning};
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
-use datafusion_physical_plan::execution_plan::{Boundedness, EmissionType};
 use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
 use datafusion_physical_plan::source::{DataSource, DataSourceExec};
-use datafusion_physical_plan::{DisplayAs, DisplayFormatType, PlanProperties};
+use datafusion_physical_plan::{DisplayAs, DisplayFormatType};
 
 use itertools::Itertools;
 use object_store::ObjectStore;
@@ -133,21 +132,6 @@ impl FileSourceConfig {
     /// Returns the file_source
     pub fn file_source(&self) -> &Arc<dyn FileSource> {
         &self.source
-    }
-
-    fn compute_properties(&self) -> PlanProperties {
-        let (schema, constraints, _, orderings) = self.base_config.project();
-        // Equivalence Properties
-        let eq_properties =
-            EquivalenceProperties::new_with_orderings(schema, orderings.as_slice())
-                .with_constraints(constraints);
-
-        PlanProperties::new(
-            eq_properties,
-            self.output_partitioning(),
-            EmissionType::Incremental,
-            Boundedness::Bounded,
-        )
     }
 
     fn with_file_groups(mut self, file_groups: Vec<Vec<PartitionedFile>>) -> Self {
@@ -260,6 +244,12 @@ impl DataSource for FileSourceConfig {
         Partitioning::UnknownPartitioning(self.base_config.file_groups.len())
     }
 
+    fn eq_properties(&self) -> EquivalenceProperties {
+        let (schema, constraints, _, orderings) = self.base_config.project();
+        EquivalenceProperties::new_with_orderings(schema, orderings.as_slice())
+            .with_constraints(constraints)
+    }
+
     fn statistics(&self) -> datafusion_common::Result<Statistics> {
         self.source.statistics()
     }
@@ -278,9 +268,5 @@ impl DataSource for FileSourceConfig {
 
     fn metrics(&self) -> ExecutionPlanMetricsSet {
         self.source.metrics().clone()
-    }
-
-    fn properties(&self) -> PlanProperties {
-        self.compute_properties()
     }
 }
