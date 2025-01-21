@@ -89,6 +89,7 @@ impl NdJsonExec {
             cache,
         }
     }
+
     /// Ref to the base configs
     pub fn base_config(&self) -> &FileScanConfig {
         &self.base_config
@@ -228,6 +229,11 @@ impl ExecutionPlan for NdJsonExec {
     fn metrics(&self) -> Option<MetricsSet> {
         Some(self.metrics.clone_inner())
     }
+
+    fn fetch(&self) -> Option<usize> {
+        self.base_config.limit
+    }
+
     fn with_fetch(&self, limit: Option<usize>) -> Option<Arc<dyn ExecutionPlan>> {
         let new_config = self.base_config.clone().with_limit(limit);
 

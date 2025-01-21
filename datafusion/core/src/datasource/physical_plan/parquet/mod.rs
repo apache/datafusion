@@ -236,6 +236,7 @@ impl ParquetExecBuilder {
         let metrics = ExecutionPlanMetricsSet::new();
         let predicate_creation_errors =
             MetricBuilder::new(&metrics).global_counter("num_predicate_creation_errors");
+
         let file_schema = &base_config.file_schema;
         let pruning_predicate = predicate
             .clone()
@@ -250,6 +251,7 @@ impl ParquetExecBuilder {
                 }
             })
             .filter(|p| !p.always_true());
+
         let page_pruning_predicate = predicate
             .as_ref()
             .map(|predicate_expr| {
