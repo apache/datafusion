@@ -1547,7 +1547,6 @@ mod tests {
         );
         let partition_count = parquet_exec
             .source()
-            .properties()
             .output_partitioning()
             .partition_count();
         assert_eq!(partition_count, 1);

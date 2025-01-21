@@ -31,16 +31,14 @@ use crate::datasource::physical_plan::{
 };
 
 use arrow_schema::SchemaRef;
-use datafusion_common::{Constraints, Statistics};
+use datafusion_common::Statistics;
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_physical_expr::{EquivalenceProperties, Partitioning};
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use datafusion_physical_plan::execution_plan::{Boundedness, EmissionType};
 use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
 use datafusion_physical_plan::source::{DataSource, DataSourceExec};
-use datafusion_physical_plan::{
-    DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties,
-};
+use datafusion_physical_plan::{DisplayAs, DisplayFormatType, PlanProperties};
 
 use itertools::Itertools;
 use object_store::ObjectStore;
@@ -137,26 +135,19 @@ impl FileSourceConfig {
         &self.source
     }
 
-    fn compute_properties(
-        schema: SchemaRef,
-        orderings: &[LexOrdering],
-        constraints: Constraints,
-        file_scan_config: &FileScanConfig,
-    ) -> PlanProperties {
+    fn compute_properties(&self) -> PlanProperties {
+        let (schema, constraints, _, orderings) = self.base_config.project();
         // Equivalence Properties
-        let eq_properties = EquivalenceProperties::new_with_orderings(schema, orderings)
-            .with_constraints(constraints);
+        let eq_properties =
+            EquivalenceProperties::new_with_orderings(schema, orderings.as_slice())
+                .with_constraints(constraints);
 
         PlanProperties::new(
             eq_properties,
-            Self::output_partitioning_helper(file_scan_config), // Output Partitioning
+            self.output_partitioning(),
             EmissionType::Incremental,
             Boundedness::Bounded,
         )
-    }
-
-    fn output_partitioning_helper(file_scan_config: &FileScanConfig) -> Partitioning {
-        Partitioning::UnknownPartitioning(file_scan_config.file_groups.len())
     }
 
     fn with_file_groups(mut self, file_groups: Vec<Vec<PartitionedFile>>) -> Self {
@@ -246,8 +237,8 @@ impl DataSource for FileSourceConfig {
         &self,
         target_partitions: usize,
         repartition_file_min_size: usize,
-        exec: DataSourceExec,
-    ) -> datafusion_common::Result<Option<Arc<dyn ExecutionPlan>>> {
+        output_ordering: Option<LexOrdering>,
+    ) -> datafusion_common::Result<Option<Arc<dyn DataSource>>> {
         if !self.supports_repartition() {
             return Ok(None);
         }
@@ -255,22 +246,18 @@ impl DataSource for FileSourceConfig {
         let repartitioned_file_groups_option = FileGroupPartitioner::new()
             .with_target_partitions(target_partitions)
             .with_repartition_file_min_size(repartition_file_min_size)
-            .with_preserve_order_within_groups(
-                exec.properties().output_ordering().is_some(),
-            )
+            .with_preserve_order_within_groups(output_ordering.is_some())
             .repartition_file_groups(&self.base_config.file_groups);
 
         if let Some(repartitioned_file_groups) = repartitioned_file_groups_option {
             let source = self.clone().with_file_groups(repartitioned_file_groups);
-            let output_partitioning =
-                Self::output_partitioning_helper(&source.base_config);
-            let plan = exec
-                .with_source(Arc::new(source))
-                // Changing file groups may invalidate output partitioning. Update it also
-                .with_partitioning(output_partitioning);
-            return Ok(Some(Arc::new(plan)));
+            return Ok(Some(Arc::new(source)));
         }
         Ok(None)
+    }
+
+    fn output_partitioning(&self) -> Partitioning {
+        Partitioning::UnknownPartitioning(self.base_config.file_groups.len())
     }
 
     fn statistics(&self) -> datafusion_common::Result<Statistics> {
@@ -294,13 +281,6 @@ impl DataSource for FileSourceConfig {
     }
 
     fn properties(&self) -> PlanProperties {
-        let (projected_schema, constraints, _, projected_output_ordering) =
-            self.base_config.project();
-        Self::compute_properties(
-            Arc::clone(&projected_schema),
-            &projected_output_ordering,
-            constraints,
-            &self.base_config,
-        )
+        self.compute_properties()
     }
 }

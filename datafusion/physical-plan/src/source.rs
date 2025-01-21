@@ -27,6 +27,7 @@ use datafusion_common::config::ConfigOptions;
 use datafusion_common::{Constraints, Statistics};
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_physical_expr::Partitioning;
+use datafusion_physical_expr_common::sort_expr::LexOrdering;
 
 /// Common behaviors in Data Sources for both from Files and Memory.
 /// See `DataSourceExec` for physical plan implementation
@@ -42,10 +43,12 @@ pub trait DataSource: Send + Sync {
         &self,
         _target_partitions: usize,
         _repartition_file_min_size: usize,
-        _exec: DataSourceExec,
-    ) -> datafusion_common::Result<Option<Arc<dyn ExecutionPlan>>> {
+        _output_ordering: Option<LexOrdering>,
+    ) -> datafusion_common::Result<Option<Arc<dyn DataSource>>> {
         Ok(None)
     }
+
+    fn output_partitioning(&self) -> Partitioning;
     fn statistics(&self) -> datafusion_common::Result<Statistics>;
     fn with_fetch(&self, _limit: Option<usize>) -> Option<Arc<dyn DataSource>> {
         None
@@ -108,11 +111,23 @@ impl ExecutionPlan for DataSourceExec {
         target_partitions: usize,
         config: &ConfigOptions,
     ) -> datafusion_common::Result<Option<Arc<dyn ExecutionPlan>>> {
-        self.source.repartitioned(
+        let source = self.source.repartitioned(
             target_partitions,
             config.optimizer.repartition_file_min_size,
-            self.clone(),
-        )
+            self.properties().eq_properties.output_ordering(),
+        )?;
+
+        if let Some(source) = source {
+            let output_partitioning = source.output_partitioning();
+            let plan = self
+                .clone()
+                .with_source(source)
+                // Changing file groups may invalidate output partitioning. Update it also
+                .with_partitioning(output_partitioning);
+            Ok(Some(Arc::new(plan)))
+        } else {
+            Ok(Some(Arc::new(self.clone())))
+        }
     }
 
     fn execute(

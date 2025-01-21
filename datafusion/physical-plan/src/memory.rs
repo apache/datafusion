@@ -120,6 +120,10 @@ impl DataSource for MemorySourceConfig {
         }
     }
 
+    fn output_partitioning(&self) -> Partitioning {
+        self.cache.output_partitioning().clone()
+    }
+
     fn statistics(&self) -> Result<Statistics> {
         Ok(common::compute_record_batch_statistics(
             &self.partitions,
