@@ -37,7 +37,7 @@
 
 pub mod replace_with_order_preserving_variants;
 pub mod sort_pushdown;
-mod utils;
+// mod utils;
 
 use std::sync::Arc;
 
@@ -57,7 +57,7 @@ use crate::enforce_sorting::replace_with_order_preserving_variants::{
 use crate::enforce_sorting::sort_pushdown::{
     assign_initial_requirements, pushdown_sorts, SortPushDown,
 };
-use crate::enforce_sorting::utils::{
+use crate::utils::{
     add_sort_above, add_sort_above_with_check, is_coalesce_partitions, is_limit,
     is_repartition, is_sort, is_sort_preserving_merge, is_union, is_window,
 };

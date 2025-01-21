@@ -22,10 +22,7 @@
 //!
 //! [`ExecutionPlan`]: crate::physical_plan::ExecutionPlan
 
-pub mod enforce_distribution;
 pub mod optimizer;
 pub mod projection_pushdown;
-
-mod utils;
 
 pub use datafusion_physical_optimizer::*;
