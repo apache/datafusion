@@ -278,7 +278,7 @@ impl PhysicalOptimizerRule for EnforceDistribution {
 /// 4) If the current plan is Projection, transform the requirements to the columns before the Projection and push down requirements
 /// 5) For other types of operators, by default, pushdown the parent requirements to children.
 ///
-fn adjust_input_keys_ordering(
+pub fn adjust_input_keys_ordering(
     mut requirements: PlanWithKeyRequirements,
 ) -> Result<Transformed<PlanWithKeyRequirements>> {
     let plan = Arc::clone(&requirements.plan);
@@ -427,7 +427,7 @@ fn adjust_input_keys_ordering(
     Ok(Transformed::yes(requirements))
 }
 
-fn reorder_partitioned_join_keys<F>(
+pub fn reorder_partitioned_join_keys<F>(
     mut join_plan: PlanWithKeyRequirements,
     on: &[(PhysicalExprRef, PhysicalExprRef)],
     sort_options: &[SortOptions],
@@ -465,7 +465,7 @@ where
     Ok(join_plan)
 }
 
-fn reorder_aggregate_keys(
+pub fn reorder_aggregate_keys(
     mut agg_node: PlanWithKeyRequirements,
     agg_exec: &AggregateExec,
 ) -> Result<PlanWithKeyRequirements> {
@@ -600,7 +600,7 @@ fn shift_right_required(
 /// The Bottom-Up approach will be useful in future if we plan to support storage partition-wised Joins.
 /// In that case, the datasources/tables might be pre-partitioned and we can't adjust the key ordering of the datasources
 /// and then can't apply the Top-Down reordering process.
-pub(crate) fn reorder_join_keys_to_inputs(
+pub fn reorder_join_keys_to_inputs(
     plan: Arc<dyn ExecutionPlan>,
 ) -> Result<Arc<dyn ExecutionPlan>> {
     let plan_any = plan.as_any();
@@ -1150,7 +1150,7 @@ fn get_repartition_requirement_status(
 /// operators to satisfy distribution requirements. Since this function
 /// takes care of such requirements, we should avoid manually adding data
 /// exchange operators in other places.
-fn ensure_distribution(
+pub fn ensure_distribution(
     dist_context: DistributionContext,
     config: &ConfigOptions,
 ) -> Result<Transformed<DistributionContext>> {

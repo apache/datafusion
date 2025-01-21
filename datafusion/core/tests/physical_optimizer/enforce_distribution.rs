@@ -16,12 +16,15 @@
 // under the License.
 
 use std::ops::Deref;
+use std::sync::Arc;
 
-use super::*;
+use datafusion::config::ConfigOptions;
 use datafusion::datasource::file_format::file_compression_type::FileCompressionType;
 use datafusion::datasource::listing::PartitionedFile;
 use datafusion::datasource::object_store::ObjectStoreUrl;
 use datafusion::datasource::physical_plan::{CsvExec, FileScanConfig, ParquetExec};
+
+use datafusion_physical_expr::PhysicalExpr;
 use datafusion_physical_optimizer::enforce_sorting::EnforceSorting;
 use datafusion_physical_optimizer::output_requirements::OutputRequirements;
 use datafusion_physical_optimizer::test_utils::{
@@ -31,22 +34,48 @@ use datafusion_physical_plan::coalesce_batches::CoalesceBatchesExec;
 use datafusion_physical_plan::expressions::col;
 use datafusion_physical_plan::filter::FilterExec;
 use datafusion_physical_plan::joins::utils::JoinOn;
+use datafusion_physical_plan::joins::{HashJoinExec, PartitionMode, SortMergeJoinExec};
 use datafusion_physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
 use datafusion_physical_plan::sorts::sort::SortExec;
+use datafusion_physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
+use datafusion_physical_plan::tree_node::PlanContext;
+use datafusion_physical_plan::union::UnionExec;
+
 use datafusion_physical_plan::{displayable, DisplayAs, DisplayFormatType, Statistics};
 
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion_common::ScalarValue;
-use datafusion_expr::Operator;
-use datafusion_physical_expr::expressions::{BinaryExpr, Literal};
+use datafusion_expr::{JoinType, Operator};
+use datafusion_physical_expr::expressions::{BinaryExpr, Column, Literal};
 use datafusion_physical_expr::{
     expressions::binary, expressions::lit, LexOrdering, PhysicalSortExpr,
 };
 use datafusion_physical_expr_common::sort_expr::LexRequirement;
+use datafusion_physical_optimizer::enforce_distribution::*;
+use datafusion_physical_optimizer::PhysicalOptimizerRule;
+use datafusion_physical_plan::aggregates::{
+    AggregateExec, AggregateMode, PhysicalGroupBy,
+};
+use datafusion_physical_plan::execution_plan::ExecutionPlan;
+use datafusion_physical_plan::projection::ProjectionExec;
 use datafusion_physical_plan::PlanProperties;
+use std::fmt::Debug;
+
+use datafusion_common::error::Result;
+
+use arrow::compute::SortOptions;
+use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
+
+use datafusion_physical_plan::ExecutionPlanProperties;
+
+type DistributionContext = PlanContext<bool>;
+
+/// Keeps track of parent required key orderings.
+type PlanWithKeyRequirements = PlanContext<Vec<Arc<dyn PhysicalExpr>>>;
 
 /// Models operators like BoundedWindowExec that require an input
 /// ordering but is easy to construct
+///
 #[derive(Debug)]
 struct SortRequiredExec {
     input: Arc<dyn ExecutionPlan>,
@@ -133,8 +162,8 @@ impl ExecutionPlan for SortRequiredExec {
     fn execute(
         &self,
         _partition: usize,
-        _context: Arc<crate::execution::context::TaskContext>,
-    ) -> Result<crate::physical_plan::SendableRecordBatchStream> {
+        _context: Arc<datafusion::execution::context::TaskContext>,
+    ) -> Result<datafusion_physical_plan::SendableRecordBatchStream> {
         unreachable!();
     }
 
@@ -340,7 +369,6 @@ fn filter_exec(input: Arc<dyn ExecutionPlan>) -> Arc<dyn ExecutionPlan> {
     ));
     Arc::new(FilterExec::try_new(predicate, input).unwrap())
 }
-
 fn sort_exec(
     sort_exprs: LexOrdering,
     input: Arc<dyn ExecutionPlan>,
