@@ -716,7 +716,7 @@ mod tests_statistical {
         Some(JoinFilter::new(
             expression,
             column_indices,
-            intermediate_schema,
+            Arc::new(intermediate_schema),
         ))
     }
 

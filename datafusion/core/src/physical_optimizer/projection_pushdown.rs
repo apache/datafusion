@@ -1255,7 +1255,7 @@ fn update_join_filter(
                     side: col_idx.side,
                 })
                 .collect(),
-            join_filter.schema().clone(),
+            Arc::clone(join_filter.schema()),
         )
     })
 }
@@ -2246,11 +2246,11 @@ mod tests {
                         side: JoinSide::Left,
                     },
                 ],
-                Schema::new(vec![
+                Arc::new(Schema::new(vec![
                     Field::new("b_left_inter", DataType::Int32, true),
                     Field::new("a_right_inter", DataType::Int32, true),
                     Field::new("c_left_inter", DataType::Int32, true),
-                ]),
+                ])),
             )),
             &JoinType::Inner,
             true,
@@ -2360,11 +2360,11 @@ mod tests {
                         side: JoinSide::Left,
                     },
                 ],
-                Schema::new(vec![
+                Arc::new(Schema::new(vec![
                     Field::new("b_left_inter", DataType::Int32, true),
                     Field::new("a_right_inter", DataType::Int32, true),
                     Field::new("c_left_inter", DataType::Int32, true),
-                ]),
+                ])),
             )),
             &JoinType::Inner,
             true,
@@ -2462,7 +2462,7 @@ mod tests {
             Some(JoinFilter::new(
                 filter_expr,
                 filter_column_indices,
-                filter_schema,
+                Arc::new(filter_schema),
             )),
             &JoinType::Inner,
             None,
@@ -2536,11 +2536,11 @@ mod tests {
                         side: JoinSide::Left,
                     },
                 ],
-                Schema::new(vec![
+                Arc::new(Schema::new(vec![
                     Field::new("b_left_inter", DataType::Int32, true),
                     Field::new("a_right_inter", DataType::Int32, true),
                     Field::new("c_left_inter", DataType::Int32, true),
-                ]),
+                ])),
             )),
             &JoinType::Inner,
             None,

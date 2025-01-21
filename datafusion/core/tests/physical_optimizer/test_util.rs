@@ -268,6 +268,29 @@ pub fn stream_exec_ordered(
     )
 }
 
+// Creates a stream exec source for the test purposes
+pub fn stream_exec_ordered_with_projection(
+    schema: &SchemaRef,
+    sort_exprs: impl IntoIterator<Item = PhysicalSortExpr>,
+) -> Arc<dyn ExecutionPlan> {
+    let sort_exprs = sort_exprs.into_iter().collect();
+    let projection: Vec<usize> = vec![0, 2, 3];
+
+    Arc::new(
+        StreamingTableExec::try_new(
+            schema.clone(),
+            vec![Arc::new(TestStreamPartition {
+                schema: schema.clone(),
+            }) as _],
+            Some(&projection),
+            vec![sort_exprs],
+            true,
+            None,
+        )
+        .unwrap(),
+    )
+}
+
 /// Create a csv exec for tests
 pub fn csv_exec_ordered(
     schema: &SchemaRef,

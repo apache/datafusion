@@ -36,8 +36,7 @@ use datafusion_physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
 
 use crate::assert_optimized;
 use crate::physical_optimizer::test_util::{
-    csv_exec_ordered, csv_exec_sorted, parquet_exec, parquet_exec_sorted,
-    stream_exec_ordered,
+    csv_exec_ordered, csv_exec_sorted, parquet_exec, parquet_exec_sorted, stream_exec_ordered,
 };
 use datafusion::physical_optimizer::enforce_distribution::EnforceDistribution;
 use datafusion_physical_expr::Partitioning;
