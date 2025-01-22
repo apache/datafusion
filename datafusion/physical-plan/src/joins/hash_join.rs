@@ -33,7 +33,6 @@ use super::{
     utils::{OnceAsync, OnceFut},
     PartitionMode, SharedBitmapBuilder,
 };
-use crate::coalesce_partitions::CoalescePartitionsExec;
 use crate::execution_plan::{boundedness_from_children, EmissionType};
 use crate::ExecutionPlanProperties;
 use crate::{

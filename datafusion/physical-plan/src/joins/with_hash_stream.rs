@@ -24,7 +24,7 @@ pub struct HashExprStream {
 pub struct WithHashedExpr {
     pub(crate) batch: RecordBatch,
     pub(crate) hashes: Vec<u64>,
-    pub(crate) exprs: Vec<ArrayRef>,
+    pub(crate) _exprs: Vec<ArrayRef>,
 }
 
 impl HashExprStream {
@@ -67,7 +67,7 @@ impl Stream for HashExprStream {
                 Poll::Ready(Some(Ok(WithHashedExpr {
                     batch,
                     hashes,
-                    exprs,
+                    _exprs: exprs,
                 })))
             }
             Some(Err(e)) => Poll::Ready(Some(Err(e))),
