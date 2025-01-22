@@ -1235,8 +1235,8 @@ async fn roundtrip_repartition_hash() -> Result<()> {
 }
 
 #[tokio::test]
-async fn roundtrip_read_best_effort_filter() -> Result<()> {
-    roundtrip_verify_read_best_effort_filter_count(
+async fn roundtrip_read_filter() -> Result<()> {
+    roundtrip_verify_read_filter_count(
         "SELECT data.a FROM data JOIN data2 ON data.a = data2.a where data.a < 5 AND data2.e > 1",
         2,
     )
@@ -1328,46 +1328,40 @@ async fn verify_post_join_filter_value(proto: Box<Plan>) -> Result<()> {
     Ok(())
 }
 
-fn count_read_best_effort_filters(rel: &Rel, count: &mut u32) -> Result<()> {
+fn count_read_filters(rel: &Rel, count: &mut u32) -> Result<()> {
     // search for target_rel and field value in proto
     match &rel.rel_type {
         Some(RelType::Read(read)) => {
-            // increment counter for best-effort filter if not None
-            if read.best_effort_filter.is_some() {
+            // increment counter for read filter if not None
+            if read.filter.is_some() {
                 *count += 1;
             }
             Ok(())
         }
         Some(RelType::Join(join)) => {
-            match count_read_best_effort_filters(
-                join.left.as_ref().unwrap().as_ref(),
-                count,
-            ) {
+            match count_read_filters(join.left.as_ref().unwrap().as_ref(), count) {
                 Err(e) => Err(e),
-                Ok(_) => count_read_best_effort_filters(
-                    join.right.as_ref().unwrap().as_ref(),
-                    count,
-                ),
+                Ok(_) => count_read_filters(join.right.as_ref().unwrap().as_ref(), count),
             }
         }
         Some(RelType::Project(p)) => {
-            count_read_best_effort_filters(p.input.as_ref().unwrap().as_ref(), count)
+            count_read_filters(p.input.as_ref().unwrap().as_ref(), count)
         }
         Some(RelType::Filter(filter)) => {
-            count_read_best_effort_filters(filter.input.as_ref().unwrap().as_ref(), count)
+            count_read_filters(filter.input.as_ref().unwrap().as_ref(), count)
         }
         Some(RelType::Fetch(fetch)) => {
-            count_read_best_effort_filters(fetch.input.as_ref().unwrap().as_ref(), count)
+            count_read_filters(fetch.input.as_ref().unwrap().as_ref(), count)
         }
         Some(RelType::Sort(sort)) => {
-            count_read_best_effort_filters(sort.input.as_ref().unwrap().as_ref(), count)
+            count_read_filters(sort.input.as_ref().unwrap().as_ref(), count)
         }
         Some(RelType::Aggregate(agg)) => {
-            count_read_best_effort_filters(agg.input.as_ref().unwrap().as_ref(), count)
+            count_read_filters(agg.input.as_ref().unwrap().as_ref(), count)
         }
         Some(RelType::Set(set)) => {
             for input in &set.inputs {
-                match count_read_best_effort_filters(input, count) {
+                match count_read_filters(input, count) {
                     Err(e) => return Err(e),
                     Ok(_) => continue,
                 }
@@ -1375,11 +1369,11 @@ fn count_read_best_effort_filters(rel: &Rel, count: &mut u32) -> Result<()> {
             Ok(())
         }
         Some(RelType::ExtensionSingle(ext)) => {
-            count_read_best_effort_filters(ext.input.as_ref().unwrap().as_ref(), count)
+            count_read_filters(ext.input.as_ref().unwrap().as_ref(), count)
         }
         Some(RelType::ExtensionMulti(ext)) => {
             for input in &ext.inputs {
-                match count_read_best_effort_filters(input, count) {
+                match count_read_filters(input, count) {
                     Err(e) => return Err(e),
                     Ok(_) => continue,
                 }
@@ -1388,31 +1382,25 @@ fn count_read_best_effort_filters(rel: &Rel, count: &mut u32) -> Result<()> {
         }
         Some(RelType::ExtensionLeaf(_)) => Ok(()),
         _ => not_impl_err!(
-            "Unexpected RelType: {:?} in read best-effort filter check",
+            "Unexpected RelType: {:?} in read filter check",
             rel.rel_type
         ),
     }
 }
 
-async fn assert_read_best_effort_filter_count(
-    proto: Box<Plan>,
-    expected_count: u32,
-) -> Result<()> {
+async fn assert_read_filter_count(proto: Box<Plan>, expected_count: u32) -> Result<()> {
     let mut count: u32 = 0;
     for relation in &proto.relations {
         match relation.rel_type.as_ref() {
             Some(rt) => match rt {
                 plan_rel::RelType::Rel(rel) => {
-                    match count_read_best_effort_filters(rel, &mut count) {
+                    match count_read_filters(rel, &mut count) {
                         Err(e) => return Err(e),
                         Ok(_) => continue,
                     }
                 }
                 plan_rel::RelType::Root(root) => {
-                    match count_read_best_effort_filters(
-                        root.input.as_ref().unwrap(),
-                        &mut count,
-                    ) {
+                    match count_read_filters(root.input.as_ref().unwrap(), &mut count) {
                         Err(e) => return Err(e),
                         Ok(_) => continue,
                     }
@@ -1597,15 +1585,15 @@ async fn roundtrip_verify_post_join_filter(sql: &str) -> Result<()> {
     verify_post_join_filter_value(proto).await
 }
 
-async fn roundtrip_verify_read_best_effort_filter_count(
+async fn roundtrip_verify_read_filter_count(
     sql: &str,
     expected_count: u32,
 ) -> Result<()> {
     let ctx = create_context().await?;
     let proto = roundtrip_with_ctx(sql, ctx).await?;
 
-    // verify that the count of best-effort filters in read relations is as expected
-    assert_read_best_effort_filter_count(proto, expected_count).await
+    // verify that the count of filters in read relations is as expected
+    assert_read_filter_count(proto, expected_count).await
 }
 
 async fn roundtrip_all_types(sql: &str) -> Result<()> {

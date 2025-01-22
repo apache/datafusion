@@ -561,7 +561,7 @@ pub fn from_table_scan(
     let table_schema = scan.source.schema().to_dfschema_ref()?;
     let base_schema = to_substrait_named_struct(&table_schema)?;
 
-    let best_effort_filter_option = if !scan.filters.is_empty() {
+    let filter_option = if !scan.filters.is_empty() {
         let table_schema_qualified = Arc::new(
             DFSchema::try_from_qualified_schema(
                 scan.table_name.clone(),
@@ -570,9 +570,9 @@ pub fn from_table_scan(
             .unwrap(),
         );
         let combined_expr = conjunction(scan.filters.clone()).unwrap();
-        let best_effort_filter_expr =
+        let filter_expr =
             producer.handle_expr(&combined_expr, &table_schema_qualified)?;
-        Some(Box::new(best_effort_filter_expr))
+        Some(Box::new(filter_expr))
     } else {
         None
     };
@@ -581,8 +581,8 @@ pub fn from_table_scan(
         rel_type: Some(RelType::Read(Box::new(ReadRel {
             common: None,
             base_schema: Some(base_schema),
-            filter: None,
-            best_effort_filter: best_effort_filter_option,
+            filter: filter_option,
+            best_effort_filter: None,
             projection,
             advanced_extension: None,
             read_type: Some(ReadType::NamedTable(NamedTable {
