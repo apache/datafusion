@@ -56,6 +56,7 @@ use datafusion::logical_expr::expr::{
     InSubquery, WindowFunction, WindowFunctionParams,
 };
 use datafusion::logical_expr::{expr, Between, JoinConstraint, LogicalPlan, Operator};
+use datafusion::logical_expr::utils::conjunction;
 use datafusion::prelude::Expr;
 use pbjson_types::Any as ProtoAny;
 use substrait::proto::exchange_rel::{ExchangeKind, RoundRobin, ScatterFields};
@@ -568,10 +569,7 @@ pub fn from_table_scan(
             )
             .unwrap(),
         );
-        let mut combined_expr = scan.filters[0].clone();
-        for i in 1..scan.filters.len() {
-            combined_expr = combined_expr.and(scan.filters[i].clone());
-        }
+        let combined_expr = conjunction(scan.filters.clone()).unwrap();
         let best_effort_filter_expr =
             producer.handle_expr(&combined_expr, &table_schema_qualified)?;
         Some(Box::new(best_effort_filter_expr))
