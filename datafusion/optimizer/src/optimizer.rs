@@ -558,9 +558,9 @@ mod tests {
             }, \
             new schema: DFSchema { inner: Schema { \
             fields: [\
-              Field { name: \"a\", data_type: UInt32, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, \
-              Field { name: \"b\", data_type: UInt32, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, \
-              Field { name: \"c\", data_type: UInt32, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }\
+              Field { name: \"a\", data_type: UInt32, nullable: false, dict_is_ordered: false, metadata: {} }, \
+              Field { name: \"b\", data_type: UInt32, nullable: false, dict_is_ordered: false, metadata: {} }, \
+              Field { name: \"c\", data_type: UInt32, nullable: false, dict_is_ordered: false, metadata: {} }\
             ], \
             metadata: {} }, \
             field_qualifiers: [Some(Bare { table: \"test\" }), Some(Bare { table: \"test\" }), Some(Bare { table: \"test\" })], \

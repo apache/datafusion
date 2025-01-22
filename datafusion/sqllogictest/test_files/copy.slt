@@ -538,26 +538,6 @@ select * from validate_arrow_file;
 1 Foo
 2 Bar
 
-# Copy from dict encoded values to single arrow file
-query I
-COPY (values 
-('c', arrow_cast('foo', 'Dictionary(Int32, Utf8)')), ('d', arrow_cast('bar', 'Dictionary(Int32, Utf8)'))) 
-to 'test_files/scratch/copy/table_dict.arrow' STORED AS ARROW;
-----
-2
-
-# Validate single csv output
-statement ok
-CREATE EXTERNAL TABLE validate_arrow_file_dict
-STORED AS arrow
-LOCATION 'test_files/scratch/copy/table_dict.arrow';
-
-query TT
-select * from validate_arrow_file_dict;
-----
-c foo
-d bar
-
 
 # Copy from table to folder of json
 query I

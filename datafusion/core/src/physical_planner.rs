@@ -2277,7 +2277,6 @@ mod tests {
                 [Field { name: \"a\", \
                 data_type: Int32, \
                 nullable: false, \
-                dict_id: 0, \
                 dict_is_ordered: false, metadata: {} }], \
                 metadata: {} }, field_qualifiers: [None], \
                 functional_dependencies: FunctionalDependencies { deps: [] } }, \
@@ -2285,7 +2284,6 @@ mod tests {
                 [Field { name: \"b\", \
                 data_type: Int32, \
                 nullable: false, \
-                dict_id: 0, \
                 dict_is_ordered: false, metadata: {} }], \
                 metadata: {} }";
         match plan {
@@ -2333,7 +2331,7 @@ mod tests {
 
         assert_contains!(
             &e,
-            r#"Error during planning: Can not find compatible types to compare Boolean with [Struct([Field { name: "foo", data_type: Boolean, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }]), Utf8]"#
+            r#"Error during planning: Can not find compatible types to compare Boolean with [Struct([Field { name: "foo", data_type: Boolean, nullable: false, dict_is_ordered: false, metadata: {} }]), Utf8]"#
         );
 
         Ok(())

@@ -263,14 +263,14 @@ async fn test_fn_arrow_typeof() -> Result<()> {
     let expr = arrow_typeof(col("l"));
 
     let expected = [
-        "+------------------------------------------------------------------------------------------------------------------+",
-        "| arrow_typeof(test.l)                                                                                             |",
-        "+------------------------------------------------------------------------------------------------------------------+",
-        "| List(Field { name: \"item\", data_type: Int32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }) |",
-        "| List(Field { name: \"item\", data_type: Int32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }) |",
-        "| List(Field { name: \"item\", data_type: Int32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }) |",
-        "| List(Field { name: \"item\", data_type: Int32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }) |",
-        "+------------------------------------------------------------------------------------------------------------------+",
+        "+------------------------------------------------------------------------------------------------------+",
+        "| arrow_typeof(test.l)                                                                                 |",
+        "+------------------------------------------------------------------------------------------------------+",
+        "| List(Field { name: \"item\", data_type: Int32, nullable: true, dict_is_ordered: false, metadata: {} }) |",
+        "| List(Field { name: \"item\", data_type: Int32, nullable: true, dict_is_ordered: false, metadata: {} }) |",
+        "| List(Field { name: \"item\", data_type: Int32, nullable: true, dict_is_ordered: false, metadata: {} }) |",
+        "| List(Field { name: \"item\", data_type: Int32, nullable: true, dict_is_ordered: false, metadata: {} }) |",
+        "+------------------------------------------------------------------------------------------------------+",
     ];
 
     assert_fn_batches!(expr, expected);

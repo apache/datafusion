@@ -106,9 +106,7 @@ pub struct Field {
         ::prost::alloc::string::String,
         ::prost::alloc::string::String,
     >,
-    #[prost(int64, tag = "6")]
-    pub dict_id: i64,
-    #[prost(bool, tag = "7")]
+    #[prost(bool, tag = "6")]
     pub dict_ordered: bool,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
