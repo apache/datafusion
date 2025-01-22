@@ -40,16 +40,6 @@ pub mod sort_pushdown;
 
 use std::sync::Arc;
 
-use datafusion_common::plan_err;
-use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
-use datafusion_common::Result;
-use datafusion_physical_expr::{Distribution, Partitioning};
-use datafusion_physical_expr_common::sort_expr::{LexOrdering, LexRequirement};
-use datafusion_physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
-use datafusion_physical_plan::repartition::RepartitionExec;
-use datafusion_physical_plan::sorts::partial_sort::PartialSortExec;
-use datafusion_physical_plan::{ExecutionPlan, ExecutionPlanProperties, InputOrderMode};
-
 use crate::enforce_sorting::replace_with_order_preserving_variants::{
     replace_with_order_preserving_variants, OrderPreservationContext,
 };
@@ -61,14 +51,25 @@ use crate::utils::{
     is_repartition, is_sort, is_sort_preserving_merge, is_union, is_window,
 };
 use crate::PhysicalOptimizerRule;
+
 use datafusion_common::config::ConfigOptions;
+use datafusion_common::plan_err;
+use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
+use datafusion_common::Result;
+use datafusion_physical_expr::{Distribution, Partitioning};
+use datafusion_physical_expr_common::sort_expr::{LexOrdering, LexRequirement};
 use datafusion_physical_plan::coalesce_partitions::CoalescePartitionsExec;
+use datafusion_physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
+use datafusion_physical_plan::repartition::RepartitionExec;
+use datafusion_physical_plan::sorts::partial_sort::PartialSortExec;
 use datafusion_physical_plan::sorts::sort::SortExec;
 use datafusion_physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
 use datafusion_physical_plan::tree_node::PlanContext;
 use datafusion_physical_plan::windows::{
     get_best_fitting_window, BoundedWindowAggExec, WindowAggExec,
 };
+use datafusion_physical_plan::{ExecutionPlan, ExecutionPlanProperties, InputOrderMode};
+
 use itertools::izip;
 
 /// This rule inspects [`SortExec`]'s in the given physical plan and removes the
