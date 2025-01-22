@@ -613,7 +613,7 @@ impl Accumulator for LastValueAccumulator {
                 orderings,
                 &get_sort_options(self.ordering_req.as_ref()),
             )?
-            .is_lt()
+            .is_le()
             {
                 self.update_with_new_row(&row);
             }
@@ -652,7 +652,7 @@ impl Accumulator for LastValueAccumulator {
             // version in the new data:
             if !self.is_set
                 || self.requirement_satisfied
-                || compare_rows(&self.orderings, last_ordering, &sort_options)?.is_lt()
+                || compare_rows(&self.orderings, last_ordering, &sort_options)?.is_le()
             {
                 // Update with last value in the state. Note that we should exclude the
                 // is_set flag from the state. Otherwise, we will end up with a state
