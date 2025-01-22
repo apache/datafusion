@@ -17,9 +17,11 @@
 
 use std::sync::Arc;
 
-use datafusion::prelude::{SessionConfig, SessionContext};
+use arrow::array::{ArrayRef, Int32Array};
+use arrow::compute::SortOptions;
+use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+use arrow::record_batch::RecordBatch;
 use datafusion_execution::TaskContext;
-
 use datafusion_physical_plan::coalesce_batches::CoalesceBatchesExec;
 use datafusion_physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion_physical_plan::collect;
@@ -32,12 +34,6 @@ use datafusion_physical_plan::sorts::sort_preserving_merge::SortPreservingMergeE
 use datafusion_physical_plan::{
     displayable, get_plan_string, ExecutionPlan, Partitioning,
 };
-
-use arrow::array::{ArrayRef, Int32Array};
-use arrow::compute::SortOptions;
-use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
-use arrow::record_batch::RecordBatch;
-
 use datafusion_common::tree_node::{TransformedResult, TreeNode};
     use datafusion_common::Result;
     use datafusion_expr::{JoinType, Operator};
@@ -46,10 +42,8 @@ use datafusion_common::tree_node::{TransformedResult, TreeNode};
     use datafusion_physical_optimizer::test_utils::check_integrity;
     use datafusion_physical_optimizer::enforce_sorting::replace_with_order_preserving_variants::{replace_with_order_preserving_variants, OrderPreservationContext};
 
-use crate::physical_optimizer::test_util::stream_exec_ordered_with_projection;
-
-use object_store::memory::InMemory;
-use object_store::ObjectStore;
+use crate::test_util::stream_exec_ordered_with_projection;
+use datafusion_common::config::ConfigOptions;
 use rstest::rstest;
 use url::Url;
 
@@ -153,7 +147,8 @@ macro_rules! assert_optimized {
             let expected_optimized_lines: Vec<&str> = $EXPECTED_OPTIMIZED_PLAN_LINES.iter().map(|s| *s).collect();
 
             // Run the rule top-down
-            let config = SessionConfig::new().with_prefer_existing_sort($PREFER_EXISTING_SORT);
+            let mut config = ConfigOptions::new();
+            config.optimizer.prefer_existing_sort=$PREFER_EXISTING_SORT;
             let plan_with_pipeline_fixer = OrderPreservationContext::new_default(physical_plan);
             let parallel = plan_with_pipeline_fixer.transform_up(|plan_with_pipeline_fixer| replace_with_order_preserving_variants(plan_with_pipeline_fixer, false, false, config.options())).data().and_then(check_integrity)?;
             let optimized_physical_plan = parallel.plan;

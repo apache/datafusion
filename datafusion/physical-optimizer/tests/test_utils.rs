@@ -15,21 +15,23 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Collection of testing utility functions that are leveraged by the query optimizer rules
-
-use std::sync::Arc;
+//! Test utilities for physical optimizer tests
 
 use std::any::Any;
 use std::fmt::Formatter;
+use std::sync::Arc;
 
 use arrow_schema::{Schema, SchemaRef, SortOptions};
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::{JoinType, Result};
+use datafusion_execution::object_store::ObjectStoreUrl;
+use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_expr::test::function_stub::count_udaf;
 use datafusion_expr::{WindowFrame, WindowFunctionDefinition};
 use datafusion_physical_expr::expressions::col;
 use datafusion_physical_expr::PhysicalExpr;
-use datafusion_physical_expr::PhysicalSortExpr;
+use datafusion_physical_expr_common::sort_expr::LexRequirement;
+use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
 use datafusion_physical_plan::aggregates::{
     AggregateExec, AggregateMode, PhysicalGroupBy,
 };
@@ -43,18 +45,15 @@ use datafusion_physical_plan::memory::MemoryExec;
 use datafusion_physical_plan::repartition::RepartitionExec;
 use datafusion_physical_plan::sorts::sort::SortExec;
 use datafusion_physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
+use datafusion_physical_plan::streaming::{PartitionStream, StreamingTableExec};
+use datafusion_physical_plan::tree_node::PlanContext;
 use datafusion_physical_plan::union::UnionExec;
 use datafusion_physical_plan::windows::{create_window_expr, BoundedWindowAggExec};
-use datafusion_physical_plan::{InputOrderMode, Partitioning};
-
-use datafusion_execution::{SendableRecordBatchStream, TaskContext};
-use datafusion_physical_expr_common::sort_expr::{LexOrdering, LexRequirement};
 use datafusion_physical_plan::ExecutionPlan;
-
-use datafusion_physical_plan::tree_node::PlanContext;
 use datafusion_physical_plan::{
     displayable, DisplayAs, DisplayFormatType, PlanProperties,
 };
+use datafusion_physical_plan::{InputOrderMode, Partitioning};
 
 pub fn sort_merge_join_exec(
     left: Arc<dyn ExecutionPlan>,
@@ -333,4 +332,71 @@ pub fn check_integrity<T: Clone>(context: PlanContext<T>) -> Result<PlanContext<
             Ok(Transformed::no(node))
         })
         .data()
+}
+
+pub fn trim_plan_display(plan: &str) -> Vec<&str> {
+    plan.split('\n')
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+        .collect()
+}
+
+// construct a stream partition for test purposes
+#[derive(Debug)]
+pub(crate) struct TestStreamPartition {
+    pub schema: SchemaRef,
+}
+
+impl PartitionStream for TestStreamPartition {
+    fn schema(&self) -> &SchemaRef {
+        &self.schema
+    }
+    fn execute(&self, _ctx: Arc<TaskContext>) -> SendableRecordBatchStream {
+        unreachable!()
+    }
+}
+
+/// Create an unbounded stream exec
+pub fn stream_exec_ordered(
+    schema: &SchemaRef,
+    sort_exprs: impl IntoIterator<Item = PhysicalSortExpr>,
+) -> Arc<dyn ExecutionPlan> {
+    let sort_exprs = sort_exprs.into_iter().collect();
+
+    Arc::new(
+        StreamingTableExec::try_new(
+            schema.clone(),
+            vec![Arc::new(TestStreamPartition {
+                schema: schema.clone(),
+            }) as _],
+            None,
+            vec![sort_exprs],
+            true,
+            None,
+        )
+        .unwrap(),
+    )
+}
+
+// Creates a stream exec source for the test purposes
+pub fn stream_exec_ordered_with_projection(
+    schema: &SchemaRef,
+    sort_exprs: impl IntoIterator<Item = PhysicalSortExpr>,
+) -> Arc<dyn ExecutionPlan> {
+    let sort_exprs = sort_exprs.into_iter().collect();
+    let projection: Vec<usize> = vec![0, 2, 3];
+
+    Arc::new(
+        StreamingTableExec::try_new(
+            schema.clone(),
+            vec![Arc::new(TestStreamPartition {
+                schema: schema.clone(),
+            }) as _],
+            Some(&projection),
+            vec![sort_exprs],
+            true,
+            None,
+        )
+        .unwrap(),
+    )
 }

@@ -19,12 +19,16 @@
 //!
 //! Note these tests are not in the same module as the optimizer pass because
 //! they rely on `ParquetExec` which is in the core crate.
+
+//! Tests for [`CombinePartialFinalAggregate`] physical optimizer rule
+
+mod r#mod;
+
 use std::sync::Arc;
 
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion::datasource::listing::PartitionedFile;
 use datafusion::datasource::physical_plan::{FileScanConfig, ParquetExec};
-use datafusion::physical_optimizer::combine_partial_final_agg::CombinePartialFinalAggregate;
 use datafusion_common::config::ConfigOptions;
 use datafusion_execution::object_store::ObjectStoreUrl;
 use datafusion_functions_aggregate::count::count_udaf;
@@ -60,13 +64,6 @@ macro_rules! assert_optimized {
             expected_lines, actual_lines
         );
     };
-}
-
-fn trim_plan_display(plan: &str) -> Vec<&str> {
-    plan.split('\n')
-        .map(|s| s.trim())
-        .filter(|s| !s.is_empty())
-        .collect()
 }
 
 fn schema() -> SchemaRef {

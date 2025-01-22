@@ -19,7 +19,6 @@
 //!
 //! Note these tests are not in the same module as the optimizer pass because
 //! they rely on `ParquetExec` which is in the core crate.
-use super::test_util::{parquet_exec_with_sort, schema, trim_plan_display};
 
 use std::sync::Arc;
 
@@ -31,7 +30,7 @@ use arrow::{
     util::pretty::pretty_format_batches,
 };
 use arrow_schema::SchemaRef;
-use datafusion::{prelude::SessionContext, test_util::TestAggregate};
+use datafusion_common::config::ConfigOptions;
 use datafusion_common::Result;
 use datafusion_execution::config::SessionConfig;
 use datafusion_expr::Operator;
@@ -91,11 +90,10 @@ fn assert_plan_matches_expected(
     expected: &[&str],
 ) -> Result<()> {
     let expected_lines: Vec<&str> = expected.to_vec();
-    let session_ctx = SessionContext::new();
-    let state = session_ctx.state();
+    let config = ConfigOptions::new();
 
-    let optimized = LimitedDistinctAggregation::new()
-        .optimize(Arc::clone(plan), state.config_options())?;
+    let optimized =
+        LimitedDistinctAggregation::new().optimize(Arc::clone(plan), config)?;
 
     let optimized_result = displayable(optimized.as_ref()).indent(true).to_string();
     let actual_lines = trim_plan_display(&optimized_result);
