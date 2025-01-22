@@ -68,7 +68,7 @@ async fn query_make_date() -> Result<()> {
     let df = df.with_column("b", make_date(col("y"), col("m"), lit(22)))?;
     let df = df.select_columns(&["a", "b"])?;
 
-    let expected = vec![
+    let expected = [
         "+------------+------------+",
         "| a          | b          |",
         "+------------+------------+",
@@ -87,7 +87,7 @@ async fn query_make_date() -> Result<()> {
     // use sql to convert col 'y', 'm' & 'd' to a date
     let df = ctx.sql("select make_date(y, m, d) from t").await?;
 
-    let expected = vec![
+    let expected = [
         "+------------------------+",
         "| make_date(t.y,t.m,t.d) |",
         "+------------------------+",
@@ -104,7 +104,7 @@ async fn query_make_date() -> Result<()> {
     // use sql to convert col 'y' & 'm' with a static string day to a date
     let df = ctx.sql("select make_date(y, m, '22') from t").await?;
 
-    let expected = vec![
+    let expected = [
         "+-------------------------------+",
         "| make_date(t.y,t.m,Utf8(\"22\")) |",
         "+-------------------------------+",
@@ -121,7 +121,7 @@ async fn query_make_date() -> Result<()> {
     // math expressions work
     let df = ctx.sql("select make_date(y + 1, m, d) from t").await?;
 
-    let expected = vec![
+    let expected = [
         "+-----------------------------------+",
         "| make_date(t.y + Int64(1),t.m,t.d) |",
         "+-----------------------------------+",
@@ -140,7 +140,7 @@ async fn query_make_date() -> Result<()> {
         .sql("select make_date(2024::bigint, 01::bigint, 27::varchar(3))")
         .await?;
 
-    let expected = vec![
+    let expected = [
         "+-------------------------------------------+",
         "| make_date(Int64(2024),Int64(1),Int64(27)) |",
         "+-------------------------------------------+",
@@ -155,7 +155,7 @@ async fn query_make_date() -> Result<()> {
         .sql("select make_date(arrow_cast(2024, 'Int64'), arrow_cast(1, 'Int64'), arrow_cast(27, 'Int64'))")
         .await?;
 
-    let expected = vec![
+    let expected = [
         "+-------------------------------------------------------------------------------------------------------------------------+",
         "| make_date(arrow_cast(Int64(2024),Utf8(\"Int64\")),arrow_cast(Int64(1),Utf8(\"Int64\")),arrow_cast(Int64(27),Utf8(\"Int64\"))) |",
         "+-------------------------------------------------------------------------------------------------------------------------+",
@@ -215,7 +215,7 @@ async fn query_to_date() -> Result<()> {
     // use to_date function to convert col 'a' to timestamp type using the default parsing
     let df = df.with_column("a", to_date(vec![col("a")]))?;
 
-    let df = df.select_columns(&["a"])?;
+    let df = df.select_columns(&["a"])?.collect().await?;
 
     let expected = [
         "+------------+",
@@ -227,8 +227,8 @@ async fn query_to_date() -> Result<()> {
         "| 2020-01-02 |",
         "+------------+",
     ];
+    assert_batches_eq!(&expected, &df);
 
-    assert_batches_eq!(expected, &df.collect().await?);
     Ok(())
 }
 
