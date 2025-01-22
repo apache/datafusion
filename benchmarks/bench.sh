@@ -552,7 +552,7 @@ data_imdb() {
             else
                 # Existing file is partially installed, remove it and initiate a new download
                 echo "MISMATCH"
-                echo "Size less than expected: $(numfmt --to=iec-i --suffix=B ${OUTPUT_SIZE}) found, $(numfmt --to=iec-i --suffix=B ${expected_size}) required"
+                echo "Size less than expected: ${OUTPUT_SIZE} found, ${expected_size} required"
                 echo "Downloading IMDB dataset..."
                 rm -f "${imdb_temp_gz}"
 
@@ -563,8 +563,8 @@ data_imdb() {
                 DOWNLOADED_SIZE=$(wc -c "${imdb_temp_gz}" | awk '{print $1}')
                 if [ "${DOWNLOADED_SIZE}" != "${expected_size}" ]; then
                     echo "Error: Download size mismatch"
-                    echo "Expected: $(numfmt --to=iec-i --suffix=B ${expected_size})"
-                    echo "Got: $(numfmt --to=iec-i --suffix=B ${DOWNLOADED_SIZE})"
+                    echo "Expected: ${expected_size}"
+                    echo "Got: ${DOWNLADED_SIZE}"
                     echo "Please re-initiate the download"
                     return 1
                 fi
@@ -572,7 +572,7 @@ data_imdb() {
         else
             # No existing file found, initiate a new download
             echo "not found"
-            echo "Downloading IMDB dataset ($(numfmt --to=iec-i --suffix=B ${expected_size}) expected)..."
+            echo "Downloading IMDB dataset ${expected_size} expected)..."
             # Download the dataset
             curl -o "${imdb_temp_gz}" "${imdb_url}"
 
