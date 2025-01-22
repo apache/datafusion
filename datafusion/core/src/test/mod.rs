@@ -19,7 +19,6 @@
 
 #![allow(missing_docs)]
 
-use std::any::Any;
 use std::fs::File;
 use std::io::prelude::*;
 use std::io::{BufReader, BufWriter};
@@ -35,19 +34,13 @@ use crate::datasource::physical_plan::{CsvExec, FileScanConfig};
 use crate::datasource::{MemTable, TableProvider};
 use crate::error::Result;
 use crate::logical_expr::LogicalPlan;
-use crate::physical_plan::ExecutionPlan;
 use crate::test::object_store::local_unpartitioned_file;
 use crate::test_util::{aggr_test_schema, arrow_test_data};
 
 use arrow::array::{self, Array, ArrayRef, Decimal128Builder, Int32Array};
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
-use datafusion_common::{DataFusionError, Statistics};
-use datafusion_execution::{SendableRecordBatchStream, TaskContext};
-use datafusion_physical_expr::{EquivalenceProperties, Partitioning, PhysicalSortExpr};
-use datafusion_physical_plan::execution_plan::{Boundedness, EmissionType};
-use datafusion_physical_plan::streaming::{PartitionStream, StreamingTableExec};
-use datafusion_physical_plan::{DisplayAs, DisplayFormatType, PlanProperties};
+use datafusion_common::DataFusionError;
 
 #[cfg(feature = "compression")]
 use bzip2::write::BzEncoder;
@@ -291,186 +284,6 @@ fn make_decimal() -> RecordBatch {
         .unwrap();
     let schema = Schema::new(vec![Field::new("c1", array.data_type().clone(), true)]);
     RecordBatch::try_new(Arc::new(schema), vec![Arc::new(array)]).unwrap()
-}
-
-/// Created a sorted Csv exec
-pub fn csv_exec_sorted(
-    schema: &SchemaRef,
-    sort_exprs: impl IntoIterator<Item = PhysicalSortExpr>,
-) -> Arc<dyn ExecutionPlan> {
-    let sort_exprs = sort_exprs.into_iter().collect();
-
-    Arc::new(
-        CsvExec::builder(
-            FileScanConfig::new(
-                ObjectStoreUrl::parse("test:///").unwrap(),
-                schema.clone(),
-            )
-            .with_file(PartitionedFile::new("x".to_string(), 100))
-            .with_output_ordering(vec![sort_exprs]),
-        )
-        .with_has_header(false)
-        .with_delimeter(0)
-        .with_quote(0)
-        .with_escape(None)
-        .with_comment(None)
-        .with_newlines_in_values(false)
-        .with_file_compression_type(FileCompressionType::UNCOMPRESSED)
-        .build(),
-    )
-}
-
-// construct a stream partition for test purposes
-#[derive(Debug)]
-pub(crate) struct TestStreamPartition {
-    pub schema: SchemaRef,
-}
-
-impl PartitionStream for TestStreamPartition {
-    fn schema(&self) -> &SchemaRef {
-        &self.schema
-    }
-    fn execute(&self, _ctx: Arc<TaskContext>) -> SendableRecordBatchStream {
-        unreachable!()
-    }
-}
-
-/// Create an unbounded stream exec
-pub fn stream_exec_ordered(
-    schema: &SchemaRef,
-    sort_exprs: impl IntoIterator<Item = PhysicalSortExpr>,
-) -> Arc<dyn ExecutionPlan> {
-    let sort_exprs = sort_exprs.into_iter().collect();
-
-    Arc::new(
-        StreamingTableExec::try_new(
-            schema.clone(),
-            vec![Arc::new(TestStreamPartition {
-                schema: schema.clone(),
-            }) as _],
-            None,
-            vec![sort_exprs],
-            true,
-            None,
-        )
-        .unwrap(),
-    )
-}
-
-/// Create a csv exec for tests
-pub fn csv_exec_ordered(
-    schema: &SchemaRef,
-    sort_exprs: impl IntoIterator<Item = PhysicalSortExpr>,
-) -> Arc<dyn ExecutionPlan> {
-    let sort_exprs = sort_exprs.into_iter().collect();
-
-    Arc::new(
-        CsvExec::builder(
-            FileScanConfig::new(
-                ObjectStoreUrl::parse("test:///").unwrap(),
-                schema.clone(),
-            )
-            .with_file(PartitionedFile::new("file_path".to_string(), 100))
-            .with_output_ordering(vec![sort_exprs]),
-        )
-        .with_has_header(true)
-        .with_delimeter(0)
-        .with_quote(b'"')
-        .with_escape(None)
-        .with_comment(None)
-        .with_newlines_in_values(false)
-        .with_file_compression_type(FileCompressionType::UNCOMPRESSED)
-        .build(),
-    )
-}
-
-/// A mock execution plan that simply returns the provided statistics
-#[derive(Debug, Clone)]
-pub struct StatisticsExec {
-    stats: Statistics,
-    schema: Arc<Schema>,
-    cache: PlanProperties,
-}
-
-impl StatisticsExec {
-    pub fn new(stats: Statistics, schema: Schema) -> Self {
-        assert_eq!(
-            stats.column_statistics.len(), schema.fields().len(),
-            "if defined, the column statistics vector length should be the number of fields"
-        );
-        let cache = Self::compute_properties(Arc::new(schema.clone()));
-        Self {
-            stats,
-            schema: Arc::new(schema),
-            cache,
-        }
-    }
-
-    /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
-    fn compute_properties(schema: SchemaRef) -> PlanProperties {
-        PlanProperties::new(
-            EquivalenceProperties::new(schema),
-            Partitioning::UnknownPartitioning(2),
-            EmissionType::Incremental,
-            Boundedness::Bounded,
-        )
-    }
-}
-
-impl DisplayAs for StatisticsExec {
-    fn fmt_as(
-        &self,
-        t: DisplayFormatType,
-        f: &mut std::fmt::Formatter,
-    ) -> std::fmt::Result {
-        match t {
-            DisplayFormatType::Default | DisplayFormatType::Verbose => {
-                write!(
-                    f,
-                    "StatisticsExec: col_count={}, row_count={:?}",
-                    self.schema.fields().len(),
-                    self.stats.num_rows,
-                )
-            }
-        }
-    }
-}
-
-impl ExecutionPlan for StatisticsExec {
-    fn name(&self) -> &'static str {
-        Self::static_name()
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
-    fn properties(&self) -> &PlanProperties {
-        &self.cache
-    }
-
-    fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
-        vec![]
-    }
-
-    fn with_new_children(
-        self: Arc<Self>,
-        _: Vec<Arc<dyn ExecutionPlan>>,
-    ) -> Result<Arc<dyn ExecutionPlan>> {
-        Ok(self)
-    }
-
-    fn execute(
-        &self,
-        _partition: usize,
-        _context: Arc<TaskContext>,
-    ) -> Result<SendableRecordBatchStream> {
-        unimplemented!("This plan only serves for testing statistics")
-    }
-
-    fn statistics(&self) -> Result<Statistics> {
-        Ok(self.stats.clone())
-    }
 }
 
 pub mod object_store;

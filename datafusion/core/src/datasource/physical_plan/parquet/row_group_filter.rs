@@ -294,23 +294,9 @@ impl BloomFilterStatistics {
                 }
                 _ => true,
             },
-            // One more pattern matching since not all data types are supported
-            // inside of a Dictionary
-            ScalarValue::Dictionary(_, inner) => match inner.as_ref() {
-                ScalarValue::Int32(_)
-                | ScalarValue::Int64(_)
-                | ScalarValue::UInt32(_)
-                | ScalarValue::UInt64(_)
-                | ScalarValue::Float32(_)
-                | ScalarValue::Float64(_)
-                | ScalarValue::Utf8(_)
-                | ScalarValue::LargeUtf8(_)
-                | ScalarValue::Binary(_)
-                | ScalarValue::LargeBinary(_) => {
-                    BloomFilterStatistics::check_scalar(sbbf, inner, parquet_type)
-                }
-                _ => true,
-            },
+            ScalarValue::Dictionary(_, inner) => {
+                BloomFilterStatistics::check_scalar(sbbf, inner, parquet_type)
+            }
             _ => true,
         }
     }
@@ -456,8 +442,8 @@ mod tests {
     use datafusion_expr::{cast, col, lit, Expr};
     use datafusion_physical_expr::planner::logical2physical;
 
-    use parquet::arrow::arrow_to_parquet_schema;
     use parquet::arrow::async_reader::ParquetObjectReader;
+    use parquet::arrow::ArrowSchemaConverter;
     use parquet::basic::LogicalType;
     use parquet::data_type::{ByteArray, FixedLenByteArray};
     use parquet::file::metadata::ColumnChunkMetaData;
@@ -744,7 +730,7 @@ mod tests {
             Field::new("c1", DataType::Int32, false),
             Field::new("c2", DataType::Boolean, false),
         ]));
-        let schema_descr = arrow_to_parquet_schema(&schema).unwrap();
+        let schema_descr = ArrowSchemaConverter::new().convert(&schema).unwrap();
         let expr = col("c1").gt(lit(15)).and(col("c2").is_null());
         let expr = logical2physical(&expr, &schema);
         let pruning_predicate = PruningPredicate::try_new(expr, schema.clone()).unwrap();
@@ -773,7 +759,7 @@ mod tests {
             Field::new("c1", DataType::Int32, false),
             Field::new("c2", DataType::Boolean, false),
         ]));
-        let schema_descr = arrow_to_parquet_schema(&schema).unwrap();
+        let schema_descr = ArrowSchemaConverter::new().convert(&schema).unwrap();
         let expr = col("c1")
             .gt(lit(15))
             .and(col("c2").eq(lit(ScalarValue::Boolean(None))));

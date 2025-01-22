@@ -21,12 +21,17 @@
 pub mod aggregate_statistics;
 pub mod coalesce_batches;
 pub mod combine_partial_final_agg;
+pub mod enforce_sorting;
+pub mod join_selection;
 pub mod limit_pushdown;
 pub mod limited_distinct_aggregation;
 mod optimizer;
 pub mod output_requirements;
 pub mod pruning;
+pub mod sanity_checker;
+pub mod test_utils;
 pub mod topk_aggregation;
 pub mod update_aggr_exprs;
+pub mod utils;
 
 pub use optimizer::PhysicalOptimizerRule;

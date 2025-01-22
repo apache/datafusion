@@ -25,22 +25,22 @@
 
 use std::sync::Arc;
 
-use crate::config::ConfigOptions;
-use crate::error::Result;
-use crate::physical_plan::joins::utils::{ColumnIndex, JoinFilter};
-use crate::physical_plan::joins::{
+use crate::PhysicalOptimizerRule;
+
+use datafusion_common::config::ConfigOptions;
+use datafusion_common::error::Result;
+use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
+use datafusion_common::{internal_err, JoinSide, JoinType};
+use datafusion_expr_common::sort_properties::SortProperties;
+use datafusion_physical_expr::expressions::Column;
+use datafusion_physical_expr::LexOrdering;
+use datafusion_physical_plan::execution_plan::EmissionType;
+use datafusion_physical_plan::joins::utils::{ColumnIndex, JoinFilter};
+use datafusion_physical_plan::joins::{
     CrossJoinExec, HashJoinExec, NestedLoopJoinExec, PartitionMode,
     StreamJoinPartitionMode, SymmetricHashJoinExec,
 };
-use crate::physical_plan::{ExecutionPlan, ExecutionPlanProperties};
-
-use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
-use datafusion_common::{internal_err, JoinSide, JoinType};
-use datafusion_expr::sort_properties::SortProperties;
-use datafusion_physical_expr::expressions::Column;
-use datafusion_physical_expr_common::sort_expr::LexOrdering;
-use datafusion_physical_optimizer::PhysicalOptimizerRule;
-use datafusion_physical_plan::execution_plan::EmissionType;
+use datafusion_physical_plan::{ExecutionPlan, ExecutionPlanProperties};
 
 /// The [`JoinSelection`] rule tries to modify a given plan so that it can
 /// accommodate infinite sources and optimize joins in the plan according to
@@ -592,20 +592,17 @@ fn apply_subrules(
 #[cfg(test)]
 mod tests_statistical {
     use super::*;
-    use crate::{
-        physical_plan::{displayable, ColumnStatistics, Statistics},
-        test::StatisticsExec,
-    };
+    use util_tests::StatisticsExec;
 
-    use arrow::datatypes::{DataType, Field};
-    use arrow_schema::Schema;
-    use datafusion_common::{stats::Precision, JoinType, ScalarValue};
+    use arrow::datatypes::{DataType, Field, Schema};
+    use datafusion_common::{
+        stats::Precision, ColumnStatistics, JoinType, ScalarValue, Statistics,
+    };
     use datafusion_expr::Operator;
     use datafusion_physical_expr::expressions::col;
     use datafusion_physical_expr::expressions::BinaryExpr;
-    use datafusion_physical_expr::PhysicalExprRef;
-
-    use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
+    use datafusion_physical_expr::{PhysicalExpr, PhysicalExprRef};
+    use datafusion_physical_plan::displayable;
     use datafusion_physical_plan::projection::ProjectionExec;
     use rstest::rstest;
 
@@ -719,7 +716,7 @@ mod tests_statistical {
         Some(JoinFilter::new(
             expression,
             column_indices,
-            intermediate_schema,
+            Arc::new(intermediate_schema),
         ))
     }
 
@@ -878,32 +875,27 @@ mod tests_statistical {
         for join_type in join_types {
             let (big, small) = create_big_and_small();
 
-            let join = Arc::new(
-                HashJoinExec::try_new(
-                    Arc::clone(&big),
-                    Arc::clone(&small),
-                    vec![(
-                        Arc::new(
-                            Column::new_with_schema("big_col", &big.schema()).unwrap(),
-                        ),
-                        Arc::new(
-                            Column::new_with_schema("small_col", &small.schema())
-                                .unwrap(),
-                        ),
-                    )],
-                    None,
-                    &join_type,
-                    None,
-                    PartitionMode::Partitioned,
-                    false,
-                )
-                .unwrap(),
-            );
+            let join = HashJoinExec::try_new(
+                Arc::clone(&big),
+                Arc::clone(&small),
+                vec![(
+                    Arc::new(Column::new_with_schema("big_col", &big.schema()).unwrap()),
+                    Arc::new(
+                        Column::new_with_schema("small_col", &small.schema()).unwrap(),
+                    ),
+                )],
+                None,
+                &join_type,
+                None,
+                PartitionMode::Partitioned,
+                false,
+            )
+            .unwrap();
 
             let original_schema = join.schema();
 
             let optimized_join = JoinSelection::new()
-                .optimize(join.clone(), &ConfigOptions::new())
+                .optimize(Arc::new(join), &ConfigOptions::new())
                 .unwrap();
 
             let swapped_join = optimized_join
@@ -1063,6 +1055,7 @@ mod tests_statistical {
                 Arc::clone(&small),
                 nl_join_filter(),
                 &join_type,
+                None,
             )
             .unwrap(),
         );
@@ -1131,12 +1124,16 @@ mod tests_statistical {
                 Arc::clone(&small),
                 nl_join_filter(),
                 &join_type,
+                None,
             )
             .unwrap(),
         );
 
         let optimized_join = JoinSelection::new()
-            .optimize(join.clone(), &ConfigOptions::new())
+            .optimize(
+                Arc::<NestedLoopJoinExec>::clone(&join),
+                &ConfigOptions::new(),
+            )
             .unwrap();
 
         let swapped_join = optimized_join
@@ -1266,8 +1263,8 @@ mod tests_statistical {
             col("big_col", &big.schema()).unwrap(),
         )];
         check_join_partition_mode(
-            small.clone(),
-            big.clone(),
+            Arc::<StatisticsExec>::clone(&small),
+            Arc::<StatisticsExec>::clone(&big),
             join_on,
             false,
             PartitionMode::CollectLeft,
@@ -1279,7 +1276,7 @@ mod tests_statistical {
         )];
         check_join_partition_mode(
             big,
-            small.clone(),
+            Arc::<StatisticsExec>::clone(&small),
             join_on,
             true,
             PartitionMode::CollectLeft,
@@ -1290,8 +1287,8 @@ mod tests_statistical {
             col("empty_col", &empty.schema()).unwrap(),
         )];
         check_join_partition_mode(
-            small.clone(),
-            empty.clone(),
+            Arc::<StatisticsExec>::clone(&small),
+            Arc::<StatisticsExec>::clone(&empty),
             join_on,
             false,
             PartitionMode::CollectLeft,
@@ -1333,8 +1330,8 @@ mod tests_statistical {
                 as _,
         )];
         check_join_partition_mode(
-            big.clone(),
-            bigger.clone(),
+            Arc::<StatisticsExec>::clone(&big),
+            Arc::<StatisticsExec>::clone(&bigger),
             join_on,
             false,
             PartitionMode::Partitioned,
@@ -1347,7 +1344,7 @@ mod tests_statistical {
         )];
         check_join_partition_mode(
             bigger,
-            big.clone(),
+            Arc::<StatisticsExec>::clone(&big),
             join_on,
             true,
             PartitionMode::Partitioned,
@@ -1358,8 +1355,8 @@ mod tests_statistical {
             Arc::new(Column::new_with_schema("big_col", &big.schema()).unwrap()) as _,
         )];
         check_join_partition_mode(
-            empty.clone(),
-            big.clone(),
+            Arc::<StatisticsExec>::clone(&empty),
+            Arc::<StatisticsExec>::clone(&big),
             join_on,
             false,
             PartitionMode::Partitioned,
@@ -1423,13 +1420,258 @@ mod tests_statistical {
 
 #[cfg(test)]
 mod util_tests {
-    use std::sync::Arc;
+    use std::{
+        any::Any,
+        pin::Pin,
+        sync::Arc,
+        task::{Context, Poll},
+    };
 
-    use arrow_schema::{DataType, Field, Schema};
+    use arrow::{
+        array::RecordBatch,
+        datatypes::{DataType, Field, Schema, SchemaRef},
+    };
+    use datafusion_common::{Result, Statistics};
+    use datafusion_execution::{
+        RecordBatchStream, SendableRecordBatchStream, TaskContext,
+    };
     use datafusion_expr::Operator;
     use datafusion_physical_expr::expressions::{BinaryExpr, Column, NegativeExpr};
     use datafusion_physical_expr::intervals::utils::check_support;
-    use datafusion_physical_expr::PhysicalExpr;
+    use datafusion_physical_expr::{EquivalenceProperties, Partitioning, PhysicalExpr};
+    use datafusion_physical_plan::{
+        execution_plan::{Boundedness, EmissionType},
+        DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties,
+    };
+    use futures::Stream;
+
+    #[derive(Debug)]
+    struct UnboundedStream {
+        batch_produce: Option<usize>,
+        count: usize,
+        batch: RecordBatch,
+    }
+
+    impl Stream for UnboundedStream {
+        type Item = Result<RecordBatch>;
+
+        fn poll_next(
+            mut self: Pin<&mut Self>,
+            _cx: &mut Context<'_>,
+        ) -> Poll<Option<Self::Item>> {
+            if let Some(val) = self.batch_produce {
+                if val <= self.count {
+                    return Poll::Ready(None);
+                }
+            }
+            self.count += 1;
+            Poll::Ready(Some(Ok(self.batch.clone())))
+        }
+    }
+
+    impl RecordBatchStream for UnboundedStream {
+        fn schema(&self) -> SchemaRef {
+            self.batch.schema()
+        }
+    }
+
+    /// A mock execution plan that simply returns the provided data source characteristic
+    #[derive(Debug, Clone)]
+    pub struct UnboundedExec {
+        batch_produce: Option<usize>,
+        batch: RecordBatch,
+        cache: PlanProperties,
+    }
+
+    impl UnboundedExec {
+        /// Create new exec that clones the given record batch to its output.
+        ///
+        /// Set `batch_produce` to `Some(n)` to emit exactly `n` batches per partition.
+        pub fn new(
+            batch_produce: Option<usize>,
+            batch: RecordBatch,
+            partitions: usize,
+        ) -> Self {
+            let cache =
+                Self::compute_properties(batch.schema(), batch_produce, partitions);
+            Self {
+                batch_produce,
+                batch,
+                cache,
+            }
+        }
+
+        /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
+        fn compute_properties(
+            schema: SchemaRef,
+            batch_produce: Option<usize>,
+            n_partitions: usize,
+        ) -> PlanProperties {
+            let boundedness = if batch_produce.is_none() {
+                Boundedness::Unbounded {
+                    requires_infinite_memory: false,
+                }
+            } else {
+                Boundedness::Bounded
+            };
+            PlanProperties::new(
+                EquivalenceProperties::new(schema),
+                Partitioning::UnknownPartitioning(n_partitions),
+                EmissionType::Incremental,
+                boundedness,
+            )
+        }
+    }
+
+    impl DisplayAs for UnboundedExec {
+        fn fmt_as(
+            &self,
+            t: DisplayFormatType,
+            f: &mut std::fmt::Formatter,
+        ) -> std::fmt::Result {
+            match t {
+                DisplayFormatType::Default | DisplayFormatType::Verbose => {
+                    write!(
+                        f,
+                        "UnboundedExec: unbounded={}",
+                        self.batch_produce.is_none(),
+                    )
+                }
+            }
+        }
+    }
+
+    impl ExecutionPlan for UnboundedExec {
+        fn name(&self) -> &'static str {
+            Self::static_name()
+        }
+
+        fn as_any(&self) -> &dyn Any {
+            self
+        }
+
+        fn properties(&self) -> &PlanProperties {
+            &self.cache
+        }
+
+        fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
+            vec![]
+        }
+
+        fn with_new_children(
+            self: Arc<Self>,
+            _: Vec<Arc<dyn ExecutionPlan>>,
+        ) -> Result<Arc<dyn ExecutionPlan>> {
+            Ok(self)
+        }
+
+        fn execute(
+            &self,
+            _partition: usize,
+            _context: Arc<TaskContext>,
+        ) -> Result<SendableRecordBatchStream> {
+            Ok(Box::pin(UnboundedStream {
+                batch_produce: self.batch_produce,
+                count: 0,
+                batch: self.batch.clone(),
+            }))
+        }
+    }
+
+    #[derive(Eq, PartialEq, Debug)]
+    pub enum SourceType {
+        Unbounded,
+        Bounded,
+    }
+
+    /// A mock execution plan that simply returns the provided statistics
+    #[derive(Debug, Clone)]
+    pub struct StatisticsExec {
+        stats: Statistics,
+        schema: Arc<Schema>,
+        cache: PlanProperties,
+    }
+
+    impl StatisticsExec {
+        pub fn new(stats: Statistics, schema: Schema) -> Self {
+            assert_eq!(
+                stats.column_statistics.len(), schema.fields().len(),
+                "if defined, the column statistics vector length should be the number of fields"
+            );
+            let cache = Self::compute_properties(Arc::new(schema.clone()));
+            Self {
+                stats,
+                schema: Arc::new(schema),
+                cache,
+            }
+        }
+
+        /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
+        fn compute_properties(schema: SchemaRef) -> PlanProperties {
+            PlanProperties::new(
+                EquivalenceProperties::new(schema),
+                Partitioning::UnknownPartitioning(2),
+                EmissionType::Incremental,
+                Boundedness::Bounded,
+            )
+        }
+    }
+
+    impl DisplayAs for StatisticsExec {
+        fn fmt_as(
+            &self,
+            t: DisplayFormatType,
+            f: &mut std::fmt::Formatter,
+        ) -> std::fmt::Result {
+            match t {
+                DisplayFormatType::Default | DisplayFormatType::Verbose => {
+                    write!(
+                        f,
+                        "StatisticsExec: col_count={}, row_count={:?}",
+                        self.schema.fields().len(),
+                        self.stats.num_rows,
+                    )
+                }
+            }
+        }
+    }
+
+    impl ExecutionPlan for StatisticsExec {
+        fn name(&self) -> &'static str {
+            Self::static_name()
+        }
+
+        fn as_any(&self) -> &dyn Any {
+            self
+        }
+
+        fn properties(&self) -> &PlanProperties {
+            &self.cache
+        }
+
+        fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
+            vec![]
+        }
+
+        fn with_new_children(
+            self: Arc<Self>,
+            _: Vec<Arc<dyn ExecutionPlan>>,
+        ) -> Result<Arc<dyn ExecutionPlan>> {
+            Ok(self)
+        }
+
+        fn execute(
+            &self,
+            _partition: usize,
+            _context: Arc<TaskContext>,
+        ) -> Result<SendableRecordBatchStream> {
+            unimplemented!("This plan only serves for testing statistics")
+        }
+
+        fn statistics(&self) -> Result<Statistics> {
+            Ok(self.stats.clone())
+        }
+    }
 
     #[test]
     fn check_expr_supported() {
@@ -1463,12 +1705,10 @@ mod util_tests {
 #[cfg(test)]
 mod hash_join_tests {
     use super::*;
-    use crate::physical_optimizer::test_utils::SourceType;
-    use crate::test_util::UnboundedExec;
+    use util_tests::{SourceType, UnboundedExec};
 
-    use arrow::datatypes::{DataType, Field};
+    use arrow::datatypes::{DataType, Field, Schema};
     use arrow::record_batch::RecordBatch;
-    use arrow_schema::Schema;
     use datafusion_physical_expr::expressions::col;
     use datafusion_physical_plan::projection::ProjectionExec;
 
@@ -1849,7 +2089,7 @@ mod hash_join_tests {
                 .expect(
                     "A proj is required to swap columns back to their original order",
                 );
-            proj.input().clone()
+            Arc::<dyn ExecutionPlan>::clone(proj.input())
         } else {
             optimized_join_plan
         };

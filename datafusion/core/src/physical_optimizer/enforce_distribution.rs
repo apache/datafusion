@@ -26,10 +26,6 @@ use std::sync::Arc;
 
 use crate::config::ConfigOptions;
 use crate::error::Result;
-use crate::physical_optimizer::utils::{
-    add_sort_above_with_check, is_coalesce_partitions, is_repartition,
-    is_sort_preserving_merge,
-};
 use crate::physical_plan::aggregates::{AggregateExec, AggregateMode, PhysicalGroupBy};
 use crate::physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use crate::physical_plan::joins::{
@@ -54,6 +50,10 @@ use datafusion_physical_expr::{
 };
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use datafusion_physical_optimizer::output_requirements::OutputRequirementExec;
+use datafusion_physical_optimizer::utils::{
+    add_sort_above_with_check, is_coalesce_partitions, is_repartition,
+    is_sort_preserving_merge,
+};
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use datafusion_physical_plan::execution_plan::EmissionType;
 use datafusion_physical_plan::windows::{get_best_fitting_window, BoundedWindowAggExec};
@@ -1416,9 +1416,6 @@ pub(crate) mod tests {
     use crate::datasource::object_store::ObjectStoreUrl;
     use crate::datasource::physical_plan::{CsvExec, FileScanConfig, ParquetExec};
     use crate::physical_optimizer::enforce_sorting::EnforceSorting;
-    use crate::physical_optimizer::test_utils::{
-        check_integrity, coalesce_partitions_exec, repartition_exec,
-    };
     use crate::physical_plan::coalesce_batches::CoalesceBatchesExec;
     use crate::physical_plan::expressions::col;
     use crate::physical_plan::filter::FilterExec;
@@ -1427,6 +1424,9 @@ pub(crate) mod tests {
     use crate::physical_plan::sorts::sort::SortExec;
     use crate::physical_plan::{displayable, DisplayAs, DisplayFormatType, Statistics};
     use datafusion_physical_optimizer::output_requirements::OutputRequirements;
+    use datafusion_physical_optimizer::test_utils::{
+        check_integrity, coalesce_partitions_exec, repartition_exec,
+    };
 
     use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
     use datafusion_common::ScalarValue;

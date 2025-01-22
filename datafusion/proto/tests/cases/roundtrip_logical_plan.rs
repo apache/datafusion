@@ -376,6 +376,44 @@ async fn roundtrip_logical_plan_sort() -> Result<()> {
 }
 
 #[tokio::test]
+async fn roundtrip_logical_plan_dml() -> Result<()> {
+    let ctx = SessionContext::new();
+    let schema = Schema::new(vec![
+        Field::new("a", DataType::Int64, true),
+        Field::new("b", DataType::Decimal128(15, 2), true),
+    ]);
+
+    ctx.register_csv(
+        "t1",
+        "tests/testdata/test.csv",
+        CsvReadOptions::default().schema(&schema),
+    )
+    .await?;
+    let queries = [
+        "INSERT INTO T1 VALUES (1, null)",
+        "INSERT OVERWRITE T1 VALUES (1, null)",
+        "REPLACE INTO T1 VALUES (1, null)",
+        "INSERT OR REPLACE INTO T1 VALUES (1, null)",
+        "DELETE FROM T1",
+        "UPDATE T1 SET a = 1",
+        "CREATE TABLE T2 AS SELECT * FROM T1",
+    ];
+    for query in queries {
+        let plan = ctx.sql(query).await?.into_optimized_plan()?;
+        let bytes = logical_plan_to_bytes(&plan)?;
+        let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx)?;
+        assert_eq!(
+            format!("{plan}"),
+            format!("{logical_round_trip}"),
+            "failed query roundtrip: {}",
+            query
+        );
+    }
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn roundtrip_logical_plan_copy_to_sql_options() -> Result<()> {
     let ctx = SessionContext::new();
 
@@ -1777,6 +1815,8 @@ fn round_trip_datatype() {
     }
 }
 
+// See https://github.com/apache/datafusion/issues/14173 to remove deprecated dict_id
+#[allow(deprecated)]
 #[test]
 fn roundtrip_dict_id() -> Result<()> {
     let dict_id = 42;

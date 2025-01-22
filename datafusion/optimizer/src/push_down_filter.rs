@@ -29,6 +29,7 @@ use datafusion_common::tree_node::{
 use datafusion_common::{
     internal_err, plan_err, qualified_name, Column, DFSchema, Result,
 };
+use datafusion_expr::expr::WindowFunction;
 use datafusion_expr::expr_rewriter::replace_col;
 use datafusion_expr::logical_plan::{Join, JoinType, LogicalPlan, TableScan, Union};
 use datafusion_expr::utils::{
@@ -1001,23 +1002,34 @@ impl OptimizerRule for PushDownFilter {
                 // multiple window functions, each with potentially different partition keys.
                 // Therefore, we need to ensure that any potential partition key returned is used in
                 // ALL window functions. Otherwise, filters cannot be pushed by through that column.
+                let extract_partition_keys = |func: &WindowFunction| {
+                    func.partition_by
+                        .iter()
+                        .map(|c| Column::from_qualified_name(c.schema_name().to_string()))
+                        .collect::<HashSet<_>>()
+                };
                 let potential_partition_keys = window
                     .window_expr
                     .iter()
                     .map(|e| {
-                        if let Expr::WindowFunction(window_expression) = e {
-                            window_expression
-                                .partition_by
-                                .iter()
-                                .map(|c| {
-                                    Column::from_qualified_name(
-                                        c.schema_name().to_string(),
-                                    )
-                                })
-                                .collect::<HashSet<_>>()
-                        } else {
-                            // window functions expressions are only Expr::WindowFunction
-                            unreachable!()
+                        match e {
+                            Expr::WindowFunction(window_func) => {
+                                extract_partition_keys(window_func)
+                            }
+                            Expr::Alias(alias) => {
+                                if let Expr::WindowFunction(window_func) =
+                                    alias.expr.as_ref()
+                                {
+                                    extract_partition_keys(window_func)
+                                } else {
+                                    // window functions expressions are only Expr::WindowFunction
+                                    unreachable!()
+                                }
+                            }
+                            _ => {
+                                // window functions expressions are only Expr::WindowFunction
+                                unreachable!()
+                            }
                         }
                     })
                     // performs the set intersection of the partition keys of all window functions,
