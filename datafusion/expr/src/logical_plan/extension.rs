@@ -22,6 +22,9 @@ use std::cmp::Ordering;
 use std::hash::{Hash, Hasher};
 use std::{any::Any, collections::HashSet, fmt, sync::Arc};
 
+use super::invariants::Invariant;
+use super::InvariantLevel;
+
 /// This defines the interface for [`LogicalPlan`] nodes that can be
 /// used to extend DataFusion with custom relational operators.
 ///
@@ -53,6 +56,22 @@ pub trait UserDefinedLogicalNode: fmt::Debug + Send + Sync {
 
     /// Return the output schema of this logical plan node.
     fn schema(&self) -> &DFSchemaRef;
+
+    /// Return the list of invariants.
+    ///
+    /// Implementing this function enables the user to define the
+    /// invariants for a given logical plan extension.
+    fn invariants(&self) -> Vec<Invariant> {
+        vec![]
+    }
+
+    /// Perform check of invariants for the extension node.
+    fn check_invariants(&self, check: InvariantLevel, plan: &LogicalPlan) -> Result<()> {
+        self.invariants()
+            .into_iter()
+            .filter(|inv| check == inv.kind)
+            .try_for_each(|inv| inv.check(plan))
+    }
 
     /// Returns all expressions in the current logical plan node. This should
     /// not include expressions of any inputs (aka non-recursively).
@@ -244,6 +263,14 @@ pub trait UserDefinedLogicalNodeCore:
     /// Return the output schema of this logical plan node.
     fn schema(&self) -> &DFSchemaRef;
 
+    /// Return the list of invariants.
+    ///
+    /// Implementing this function enables the user to define the
+    /// invariants for a given logical plan extension.
+    fn invariants(&self) -> Vec<Invariant> {
+        vec![]
+    }
+
     /// Returns all expressions in the current logical plan node. This
     /// should not include expressions of any inputs (aka
     /// non-recursively). These expressions are used for optimizer
@@ -334,6 +361,10 @@ impl<T: UserDefinedLogicalNodeCore> UserDefinedLogicalNode for T {
 
     fn schema(&self) -> &DFSchemaRef {
         self.schema()
+    }
+
+    fn invariants(&self) -> Vec<Invariant> {
+        self.invariants()
     }
 
     fn expressions(&self) -> Vec<Expr> {

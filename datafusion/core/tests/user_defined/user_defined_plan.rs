@@ -59,6 +59,7 @@
 //!
 
 use std::fmt::Debug;
+use std::hash::Hash;
 use std::task::{Context, Poll};
 use std::{any::Any, collections::BTreeMap, fmt, sync::Arc};
 
@@ -93,7 +94,7 @@ use datafusion::{
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::ScalarValue;
-use datafusion_expr::{FetchType, Projection, SortExpr};
+use datafusion_expr::{FetchType, Invariant, InvariantLevel, Projection, SortExpr};
 use datafusion_optimizer::optimizer::ApplyOrder;
 use datafusion_optimizer::AnalyzerRule;
 use datafusion_physical_plan::execution_plan::{Boundedness, EmissionType};
@@ -295,7 +296,63 @@ async fn topk_plan() -> Result<()> {
     Ok(())
 }
 
+#[tokio::test]
+/// Run invariant checks on the logical plan extension [`TopKPlanNode`].
+async fn topk_invariants() -> Result<()> {
+    // Test: pass an InvariantLevel::Always
+    let pass = InvariantMock {
+        should_fail_invariant: false,
+        kind: InvariantLevel::Always,
+    };
+    let ctx = setup_table(make_topk_context_with_invariants(Some(pass))).await?;
+    run_and_compare_query(ctx, "Topk context").await?;
+
+    // Test: fail an InvariantLevel::Always
+    let fail = InvariantMock {
+        should_fail_invariant: true,
+        kind: InvariantLevel::Always,
+    };
+    let ctx = setup_table(make_topk_context_with_invariants(Some(fail))).await?;
+    matches!(
+        &*run_and_compare_query(ctx, "Topk context")
+            .await
+            .unwrap_err()
+            .message(),
+        "node fails check, such as improper inputs"
+    );
+
+    // Test: pass an InvariantLevel::Executable
+    let pass = InvariantMock {
+        should_fail_invariant: false,
+        kind: InvariantLevel::Executable,
+    };
+    let ctx = setup_table(make_topk_context_with_invariants(Some(pass))).await?;
+    run_and_compare_query(ctx, "Topk context").await?;
+
+    // Test: fail an InvariantLevel::Executable
+    let fail = InvariantMock {
+        should_fail_invariant: true,
+        kind: InvariantLevel::Executable,
+    };
+    let ctx = setup_table(make_topk_context_with_invariants(Some(fail))).await?;
+    matches!(
+        &*run_and_compare_query(ctx, "Topk context")
+            .await
+            .unwrap_err()
+            .message(),
+        "node fails check, such as improper inputs"
+    );
+
+    Ok(())
+}
+
 fn make_topk_context() -> SessionContext {
+    make_topk_context_with_invariants(None)
+}
+
+fn make_topk_context_with_invariants(
+    invariant_mock: Option<InvariantMock>,
+) -> SessionContext {
     let config = SessionConfig::new().with_target_partitions(48);
     let runtime = Arc::new(RuntimeEnv::default());
     let state = SessionStateBuilder::new()
@@ -303,7 +360,7 @@ fn make_topk_context() -> SessionContext {
         .with_runtime_env(runtime)
         .with_default_features()
         .with_query_planner(Arc::new(TopKQueryPlanner {}))
-        .with_optimizer_rule(Arc::new(TopKOptimizerRule {}))
+        .with_optimizer_rule(Arc::new(TopKOptimizerRule { invariant_mock }))
         .with_analyzer_rule(Arc::new(MyAnalyzerRule {}))
         .build();
     SessionContext::new_with_state(state)
@@ -336,7 +393,10 @@ impl QueryPlanner for TopKQueryPlanner {
 }
 
 #[derive(Default, Debug)]
-struct TopKOptimizerRule {}
+struct TopKOptimizerRule {
+    /// A testing-only hashable fixture.
+    invariant_mock: Option<InvariantMock>,
+}
 
 impl OptimizerRule for TopKOptimizerRule {
     fn name(&self) -> &str {
@@ -380,6 +440,7 @@ impl OptimizerRule for TopKOptimizerRule {
                         k: fetch,
                         input: input.as_ref().clone(),
                         expr: expr[0].clone(),
+                        invariant_mock: self.invariant_mock.clone(),
                     }),
                 })));
             }
@@ -396,6 +457,10 @@ struct TopKPlanNode {
     /// The sort expression (this example only supports a single sort
     /// expr)
     expr: SortExpr,
+
+    /// A testing-only hashable fixture.
+    /// For actual use, define the [`Invariant`] in the [`UserDefinedLogicalNodeCore::invariants`].
+    invariant_mock: Option<InvariantMock>,
 }
 
 impl Debug for TopKPlanNode {
@@ -404,6 +469,20 @@ impl Debug for TopKPlanNode {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         UserDefinedLogicalNodeCore::fmt_for_explain(self, f)
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Hash)]
+struct InvariantMock {
+    should_fail_invariant: bool,
+    kind: InvariantLevel,
+}
+
+fn invariant_helper_mock_ok(_: &LogicalPlan) -> Result<()> {
+    Ok(())
+}
+
+fn invariant_helper_mock_fails(_: &LogicalPlan) -> Result<()> {
+    internal_err!("node fails check, such as improper inputs")
 }
 
 impl UserDefinedLogicalNodeCore for TopKPlanNode {
@@ -418,6 +497,26 @@ impl UserDefinedLogicalNodeCore for TopKPlanNode {
     /// Schema for TopK is the same as the input
     fn schema(&self) -> &DFSchemaRef {
         self.input.schema()
+    }
+
+    fn invariants(&self) -> Vec<Invariant> {
+        if let Some(InvariantMock {
+            should_fail_invariant,
+            kind,
+        }) = self.invariant_mock.clone()
+        {
+            if should_fail_invariant {
+                return vec![Invariant {
+                    kind,
+                    fun: Arc::new(invariant_helper_mock_fails),
+                }];
+            }
+            return vec![Invariant {
+                kind,
+                fun: Arc::new(invariant_helper_mock_ok),
+            }];
+        }
+        vec![] // same as default impl
     }
 
     fn expressions(&self) -> Vec<Expr> {
@@ -440,6 +539,7 @@ impl UserDefinedLogicalNodeCore for TopKPlanNode {
             k: self.k,
             input: inputs.swap_remove(0),
             expr: self.expr.with_expr(exprs.swap_remove(0)),
+            invariant_mock: self.invariant_mock.clone(),
         })
     }
 
