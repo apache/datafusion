@@ -19,53 +19,47 @@ use std::fmt::Debug;
 use std::ops::Deref;
 use std::sync::Arc;
 
+use crate::physical_optimizer::parquet_exec_with_sort;
+use arrow::compute::SortOptions;
 use datafusion::config::ConfigOptions;
 use datafusion::datasource::file_format::file_compression_type::FileCompressionType;
 use datafusion::datasource::listing::PartitionedFile;
 use datafusion::datasource::object_store::ObjectStoreUrl;
 use datafusion::datasource::physical_plan::{CsvExec, FileScanConfig, ParquetExec};
-use datafusion_physical_expr::PhysicalExpr;
-use datafusion_physical_optimizer::enforce_sorting::EnforceSorting;
-use datafusion_physical_optimizer::output_requirements::OutputRequirements;
-use datafusion_physical_optimizer::test_utils::{
-    check_integrity, coalesce_partitions_exec, repartition_exec,
-};
-use datafusion_physical_plan::coalesce_batches::CoalesceBatchesExec;
-use datafusion_physical_plan::expressions::col;
-use datafusion_physical_plan::filter::FilterExec;
-use datafusion_physical_plan::joins::utils::JoinOn;
-use datafusion_physical_plan::joins::{HashJoinExec, PartitionMode, SortMergeJoinExec};
-use datafusion_physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
-use datafusion_physical_plan::sorts::sort::SortExec;
-use datafusion_physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
-use datafusion_physical_plan::tree_node::PlanContext;
-use datafusion_physical_plan::union::UnionExec;
-use datafusion_physical_plan::{displayable, DisplayAs, DisplayFormatType, Statistics};
-use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+use datafusion_common::error::Result;
+use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::ScalarValue;
 use datafusion_expr::{JoinType, Operator};
 use datafusion_physical_expr::expressions::{BinaryExpr, Column, Literal};
+use datafusion_physical_expr::PhysicalExpr;
 use datafusion_physical_expr::{
     expressions::binary, expressions::lit, LexOrdering, PhysicalSortExpr,
 };
 use datafusion_physical_expr_common::sort_expr::LexRequirement;
 use datafusion_physical_optimizer::enforce_distribution::*;
+use datafusion_physical_optimizer::enforce_sorting::EnforceSorting;
+use datafusion_physical_optimizer::output_requirements::OutputRequirements;
+use datafusion_physical_optimizer::test_utils::{
+    check_integrity, coalesce_partitions_exec, repartition_exec, schema,
+    sort_merge_join_exec, sort_preserving_merge_exec,
+};
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use datafusion_physical_plan::aggregates::{
     AggregateExec, AggregateMode, PhysicalGroupBy,
 };
+use datafusion_physical_plan::coalesce_batches::CoalesceBatchesExec;
 use datafusion_physical_plan::execution_plan::ExecutionPlan;
+use datafusion_physical_plan::expressions::col;
+use datafusion_physical_plan::filter::FilterExec;
+use datafusion_physical_plan::joins::utils::JoinOn;
+use datafusion_physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
 use datafusion_physical_plan::projection::ProjectionExec;
-use datafusion_physical_plan::PlanProperties;
-use datafusion_common::error::Result;
-use arrow::compute::SortOptions;
-use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
+use datafusion_physical_plan::sorts::sort::SortExec;
+use datafusion_physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
+use datafusion_physical_plan::union::UnionExec;
 use datafusion_physical_plan::ExecutionPlanProperties;
-
-type DistributionContext = PlanContext<bool>;
-
-/// Keeps track of parent required key orderings.
-type PlanWithKeyRequirements = PlanContext<Vec<Arc<dyn PhysicalExpr>>>;
+use datafusion_physical_plan::PlanProperties;
+use datafusion_physical_plan::{displayable, DisplayAs, DisplayFormatType, Statistics};
 
 /// Models operators like BoundedWindowExec that require an input
 /// ordering but is easy to construct
@@ -298,39 +292,14 @@ fn hash_join_exec(
     join_on: &JoinOn,
     join_type: &JoinType,
 ) -> Arc<dyn ExecutionPlan> {
-    Arc::new(
-        HashJoinExec::try_new(
-            left,
-            right,
-            join_on.clone(),
-            None,
-            join_type,
-            None,
-            PartitionMode::Partitioned,
-            false,
-        )
-        .unwrap(),
+    datafusion_physical_optimizer::test_utils::hash_join_exec(
+        left,
+        right,
+        join_on.clone(),
+        None,
+        join_type,
     )
-}
-
-fn sort_merge_join_exec(
-    left: Arc<dyn ExecutionPlan>,
-    right: Arc<dyn ExecutionPlan>,
-    join_on: &JoinOn,
-    join_type: &JoinType,
-) -> Arc<dyn ExecutionPlan> {
-    Arc::new(
-        SortMergeJoinExec::try_new(
-            left,
-            right,
-            join_on.clone(),
-            None,
-            *join_type,
-            vec![SortOptions::default(); join_on.len()],
-            false,
-        )
-        .unwrap(),
-    )
+    .unwrap()
 }
 
 fn filter_exec(input: Arc<dyn ExecutionPlan>) -> Arc<dyn ExecutionPlan> {
@@ -341,6 +310,7 @@ fn filter_exec(input: Arc<dyn ExecutionPlan>) -> Arc<dyn ExecutionPlan> {
     ));
     Arc::new(FilterExec::try_new(predicate, input).unwrap())
 }
+
 fn sort_exec(
     sort_exprs: LexOrdering,
     input: Arc<dyn ExecutionPlan>,
@@ -349,13 +319,6 @@ fn sort_exec(
     let new_sort = SortExec::new(sort_exprs, input)
         .with_preserve_partitioning(preserve_partitioning);
     Arc::new(new_sort)
-}
-
-fn sort_preserving_merge_exec(
-    sort_exprs: LexOrdering,
-    input: Arc<dyn ExecutionPlan>,
-) -> Arc<dyn ExecutionPlan> {
-    Arc::new(SortPreservingMergeExec::new(sort_exprs, input))
 }
 
 fn limit_exec(input: Arc<dyn ExecutionPlan>) -> Arc<dyn ExecutionPlan> {

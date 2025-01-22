@@ -236,6 +236,15 @@ impl PhysicalOptimizerRule for EnforceDistribution {
     }
 }
 
+#[derive(Debug, Clone)]
+struct JoinKeyPairs {
+    left_keys: Vec<Arc<dyn PhysicalExpr>>,
+    right_keys: Vec<Arc<dyn PhysicalExpr>>,
+}
+
+/// Keeps track of parent required key orderings.
+pub type PlanWithKeyRequirements = PlanContext<Vec<Arc<dyn PhysicalExpr>>>;
+
 /// When the physical planner creates the Joins, the ordering of join keys is from the original query.
 /// That might not match with the output partitioning of the join node's children
 /// A Top-Down process will use this method to adjust children's output partitioning based on the parent key reordering requirements:
@@ -1366,7 +1375,7 @@ pub fn ensure_distribution(
 /// `SortPreservingMergeExec`, `CoalescePartitionsExec`) and their ancestors.
 /// Using this information, we can optimize distribution of the plan if/when
 /// necessary.
-type DistributionContext = PlanContext<bool>;
+pub type DistributionContext = PlanContext<bool>;
 
 fn update_children(mut dist_context: DistributionContext) -> Result<DistributionContext> {
     for child_context in dist_context.children.iter_mut() {
@@ -1400,12 +1409,3 @@ fn update_children(mut dist_context: DistributionContext) -> Result<Distribution
     dist_context.data = false;
     Ok(dist_context)
 }
-
-#[derive(Debug, Clone)]
-struct JoinKeyPairs {
-    left_keys: Vec<Arc<dyn PhysicalExpr>>,
-    right_keys: Vec<Arc<dyn PhysicalExpr>>,
-}
-
-/// Keeps track of parent required key orderings.
-type PlanWithKeyRequirements = PlanContext<Vec<Arc<dyn PhysicalExpr>>>;

@@ -17,8 +17,11 @@
 
 //! Physical Optimizer integration tests
 
+mod combine_partial_final_agg;
+mod enforce_distribution;
 mod enforce_sorting;
 mod limited_distinct_aggregation;
+mod replace_with_order_preserving_variants;
 mod sanity_checker;
 
 use arrow_schema::SchemaRef;

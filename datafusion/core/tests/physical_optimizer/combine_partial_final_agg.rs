@@ -24,11 +24,11 @@
 
 use std::sync::Arc;
 
+use crate::physical_optimizer::parquet_exec;
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
-use datafusion::datasource::listing::PartitionedFile;
-use datafusion::datasource::physical_plan::{FileScanConfig, ParquetExec};
+use datafusion::physical_optimizer::combine_partial_final_agg::CombinePartialFinalAggregate;
+use datafusion::physical_optimizer::test_utils::trim_plan_display;
 use datafusion_common::config::ConfigOptions;
-use datafusion_execution::object_store::ObjectStoreUrl;
 use datafusion_functions_aggregate::count::count_udaf;
 use datafusion_functions_aggregate::sum::sum_udaf;
 use datafusion_physical_expr::aggregate::{AggregateExprBuilder, AggregateFunctionExpr};

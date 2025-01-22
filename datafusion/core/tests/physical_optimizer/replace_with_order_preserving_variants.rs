@@ -17,6 +17,7 @@
 
 use std::sync::Arc;
 
+use datafusion::prelude::SessionContext;
 use arrow::array::{ArrayRef, Int32Array};
 use arrow::compute::SortOptions;
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
@@ -43,6 +44,8 @@ use datafusion_common::tree_node::{TransformedResult, TreeNode};
     use datafusion_physical_optimizer::enforce_sorting::replace_with_order_preserving_variants::{replace_with_order_preserving_variants, OrderPreservationContext};
 
 use datafusion_common::config::ConfigOptions;
+use object_store::memory::InMemory;
+use object_store::ObjectStore;
 use rstest::rstest;
 use url::Url;
 
@@ -149,7 +152,7 @@ macro_rules! assert_optimized {
             let mut config = ConfigOptions::new();
             config.optimizer.prefer_existing_sort=$PREFER_EXISTING_SORT;
             let plan_with_pipeline_fixer = OrderPreservationContext::new_default(physical_plan);
-            let parallel = plan_with_pipeline_fixer.transform_up(|plan_with_pipeline_fixer| replace_with_order_preserving_variants(plan_with_pipeline_fixer, false, false, config.options())).data().and_then(check_integrity)?;
+            let parallel = plan_with_pipeline_fixer.transform_up(|plan_with_pipeline_fixer| replace_with_order_preserving_variants(plan_with_pipeline_fixer, false, false, &config)).data().and_then(check_integrity)?;
             let optimized_physical_plan = parallel.plan;
 
             // Get string representation of the plan
