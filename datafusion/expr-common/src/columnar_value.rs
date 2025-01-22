@@ -245,6 +245,7 @@ impl fmt::Display for ColumnarValue {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use arrow::array::Int32Array;
 
     #[test]
     fn values_to_arrays() {
@@ -353,6 +354,35 @@ mod tests {
 
     /// Makes an array of length `len` with all elements set to `val`
     fn make_array(val: i32, len: usize) -> ArrayRef {
-        Arc::new(arrow::array::Int32Array::from(vec![val; len]))
+        Arc::new(Int32Array::from(vec![val; len]))
+    }
+
+    #[test]
+    fn test_display_scalar() {
+        let column = ColumnarValue::from(ScalarValue::from("foo"));
+        assert_eq!(
+            column.to_string(),
+            "+----------------------------+\n\
+| ColumnarValue(ScalarValue) |\n\
++----------------------------+\n\
+| foo                        |\n\
++----------------------------+"
+        );
+    }
+
+    #[test]
+    fn test_display_array() {
+        let array: ArrayRef = Arc::new(Int32Array::from_iter_values(vec![1, 2, 3]));
+        let column = ColumnarValue::from(array);
+        assert_eq!(
+            column.to_string(),
+            "+-------------------------+\n\
+| ColumnarValue(ArrayRef) |\n\
++-------------------------+\n\
+| 1                       |\n\
+| 2                       |\n\
+| 3                       |\n\
++-------------------------+"
+        );
     }
 }
