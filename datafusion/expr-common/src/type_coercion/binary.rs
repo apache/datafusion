@@ -779,9 +779,7 @@ pub fn binary_numeric_coercion(
         // integral types, we choose the narrowest possible integral type that
         // accommodates all values of both types. Note that to avoid information
         // loss when combining UInt64 with signed integers we use Decimal128(20, 0).
-        (Decimal128(20, 0), _)
-        | (_, Decimal128(20, 0))
-        | (UInt64, Int64 | Int32 | Int16 | Int8)
+        (UInt64, Int64 | Int32 | Int16 | Int8)
         | (Int64 | Int32 | Int16 | Int8, UInt64) => Some(Decimal128(20, 0)),
         (Int64, _)
         | (_, Int64)
@@ -925,10 +923,10 @@ fn coerce_numeric_type_to_decimal(numeric_type: &DataType) -> Option<DataType> {
     // This conversion rule is from spark
     // https://github.com/apache/spark/blob/1c81ad20296d34f137238dadd67cc6ae405944eb/sql/catalyst/src/main/scala/org/apache/spark/sql/types/DecimalType.scala#L127
     match numeric_type {
-        Int8 => Some(Decimal128(3, 0)),
-        Int16 => Some(Decimal128(5, 0)),
-        Int32 => Some(Decimal128(10, 0)),
-        Int64 => Some(Decimal128(20, 0)),
+        Int8 | UInt8 => Some(Decimal128(3, 0)),
+        Int16 | UInt16 => Some(Decimal128(5, 0)),
+        Int32 | UInt32 => Some(Decimal128(10, 0)),
+        Int64 | UInt64 => Some(Decimal128(20, 0)),
         // TODO if we convert the floating-point data to the decimal type, it maybe overflow.
         Float32 => Some(Decimal128(14, 7)),
         Float64 => Some(Decimal128(30, 15)),
