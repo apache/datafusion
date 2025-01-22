@@ -781,6 +781,7 @@ pub fn binary_numeric_coercion(
         // loss when combining UInt64 with signed integers we use Decimal128(20, 0).
         (UInt64, Int64 | Int32 | Int16 | Int8)
         | (Int64 | Int32 | Int16 | Int8, UInt64) => Some(Decimal128(20, 0)),
+        (UInt64, _) | (_, UInt64) => Some(UInt64),
         (Int64, _)
         | (_, Int64)
         | (UInt32, Int8)
@@ -1982,6 +1983,12 @@ mod tests {
             DataType::UInt8,
             Operator::Gt,
             DataType::UInt32
+        );
+        test_coercion_binary_rule!(
+            DataType::UInt64,
+            DataType::UInt8,
+            Operator::Eq,
+            DataType::UInt64
         );
         test_coercion_binary_rule!(
             DataType::UInt64,
