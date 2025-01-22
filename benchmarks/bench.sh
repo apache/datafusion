@@ -548,7 +548,7 @@ data_imdb() {
             #Checking the size of the existing file
             if [ "${OUTPUT_SIZE}" = "${expected_size}" ]; then
                 # Existing file is of the expected size, no need for download
-                echo "OK ($(numfmt --to=iec-i --suffix=B ${OUTPUT_SIZE}))"
+                echo "OK ${OUTPUT_SIZE}"
             else
                 # Existing file is partially installed, remove it and initiate a new download
                 echo "MISMATCH"
