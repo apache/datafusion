@@ -61,8 +61,8 @@ pub enum InvariantLevel {
     Executable,
 }
 
-/// Apply the [`InvariantLevel::Always`] check at the root plan node only.
-pub fn assert_always_invariants(plan: &LogicalPlan) -> Result<()> {
+/// Apply the [`InvariantLevel::Always`] check at the current plan node only.
+pub fn assert_always_invariants_at_current_node(plan: &LogicalPlan) -> Result<()> {
     // Refer to <https://datafusion.apache.org/contributor-guide/specification/invariants.html#relation-name-tuples-in-logical-fields-and-logical-columns-are-unique>
     assert_unique_field_names(plan)?;
 
@@ -73,7 +73,7 @@ pub fn assert_always_invariants(plan: &LogicalPlan) -> Result<()> {
 /// as well as the less stringent [`InvariantLevel::Always`] checks.
 pub fn assert_executable_invariants(plan: &LogicalPlan) -> Result<()> {
     // Always invariants
-    assert_always_invariants(plan)?;
+    assert_always_invariants_at_current_node(plan)?;
     assert_valid_extension_nodes(plan, InvariantLevel::Always)?;
 
     // Executable invariants

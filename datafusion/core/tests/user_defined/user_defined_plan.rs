@@ -346,6 +346,62 @@ async fn topk_invariants() -> Result<()> {
     Ok(())
 }
 
+#[tokio::test]
+async fn topk_invariants_after_invalid_mutation() -> Result<()> {
+    // CONTROL
+    // Build a valid topK plan.
+    let config = SessionConfig::new().with_target_partitions(48);
+    let runtime = Arc::new(RuntimeEnv::default());
+    let state = SessionStateBuilder::new()
+        .with_config(config)
+        .with_runtime_env(runtime)
+        .with_default_features()
+        .with_query_planner(Arc::new(TopKQueryPlanner {}))
+        // 1. adds a valid TopKPlanNode
+        .with_optimizer_rule(Arc::new(TopKOptimizerRule {
+            invariant_mock: Some(InvariantMock {
+                should_fail_invariant: false,
+                kind: InvariantLevel::Always,
+            }),
+        }))
+        .with_analyzer_rule(Arc::new(MyAnalyzerRule {}))
+        .build();
+    let ctx = setup_table(SessionContext::new_with_state(state)).await?;
+    run_and_compare_query(ctx, "Topk context").await?;
+
+    // Test
+    // Build a valid topK plan.
+    // Then have an invalid mutation in an optimizer run.
+    let config = SessionConfig::new().with_target_partitions(48);
+    let runtime = Arc::new(RuntimeEnv::default());
+    let state = SessionStateBuilder::new()
+        .with_config(config)
+        .with_runtime_env(runtime)
+        .with_default_features()
+        .with_query_planner(Arc::new(TopKQueryPlanner {}))
+        // 1. adds a valid TopKPlanNode
+        .with_optimizer_rule(Arc::new(TopKOptimizerRule {
+            invariant_mock: Some(InvariantMock {
+                should_fail_invariant: false,
+                kind: InvariantLevel::Always,
+            }),
+        }))
+        // 2. break the TopKPlanNode
+        .with_optimizer_rule(Arc::new(OptimizerMakeExtensionNodeInvalid {}))
+        .with_analyzer_rule(Arc::new(MyAnalyzerRule {}))
+        .build();
+    let ctx = setup_table(SessionContext::new_with_state(state)).await?;
+    matches!(
+        &*run_and_compare_query(ctx, "Topk context")
+            .await
+            .unwrap_err()
+            .message(),
+        "node fails check, such as improper inputs"
+    );
+
+    Ok(())
+}
+
 fn make_topk_context() -> SessionContext {
     make_topk_context_with_invariants(None)
 }
@@ -364,6 +420,49 @@ fn make_topk_context_with_invariants(
         .with_analyzer_rule(Arc::new(MyAnalyzerRule {}))
         .build();
     SessionContext::new_with_state(state)
+}
+
+#[derive(Debug)]
+struct OptimizerMakeExtensionNodeInvalid;
+
+impl OptimizerRule for OptimizerMakeExtensionNodeInvalid {
+    fn name(&self) -> &str {
+        "OptimizerMakeExtensionNodeInvalid"
+    }
+
+    fn apply_order(&self) -> Option<ApplyOrder> {
+        Some(ApplyOrder::TopDown)
+    }
+
+    fn supports_rewrite(&self) -> bool {
+        true
+    }
+
+    // Example rewrite pass which impacts validity of the extension node.
+    fn rewrite(
+        &self,
+        plan: LogicalPlan,
+        _config: &dyn OptimizerConfig,
+    ) -> Result<Transformed<LogicalPlan>, DataFusionError> {
+        if let LogicalPlan::Extension(Extension { node }) = &plan {
+            if let Some(prev) = node.as_any().downcast_ref::<TopKPlanNode>() {
+                return Ok(Transformed::yes(LogicalPlan::Extension(Extension {
+                    node: Arc::new(TopKPlanNode {
+                        k: prev.k,
+                        input: prev.input.clone(),
+                        expr: prev.expr.clone(),
+                        // In a real use case, this rewriter could have change the number of inputs, etc
+                        invariant_mock: Some(InvariantMock {
+                            should_fail_invariant: true,
+                            kind: InvariantLevel::Always,
+                        }),
+                    }),
+                })));
+            }
+        };
+
+        Ok(Transformed::no(plan))
+    }
 }
 
 // ------ The implementation of the TopK code follows -----
