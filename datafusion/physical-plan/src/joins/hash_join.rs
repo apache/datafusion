@@ -684,7 +684,7 @@ impl ExecutionPlan for HashJoinExec {
     fn required_input_distribution(&self) -> Vec<Distribution> {
         match self.mode {
             PartitionMode::CollectLeft => vec![
-                Distribution::SinglePartition,
+                Distribution::UnspecifiedDistribution,
                 Distribution::UnspecifiedDistribution,
             ],
             PartitionMode::Partitioned => {
