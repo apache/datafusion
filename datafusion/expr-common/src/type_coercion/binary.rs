@@ -917,7 +917,7 @@ pub fn get_wider_type(lhs: &DataType, rhs: &DataType) -> Result<DataType> {
 }
 
 /// Convert the numeric data type to the decimal data type.
-/// Now, we just support the signed integer type and floating-point type.
+/// We support signed and unsigned integer types and floating-point type.
 fn coerce_numeric_type_to_decimal(numeric_type: &DataType) -> Option<DataType> {
     use arrow::datatypes::DataType::*;
     // This conversion rule is from spark
@@ -935,16 +935,16 @@ fn coerce_numeric_type_to_decimal(numeric_type: &DataType) -> Option<DataType> {
 }
 
 /// Convert the numeric data type to the decimal data type.
-/// Now, we just support the signed integer type and floating-point type.
+/// We support signed and unsigned integer types and floating-point type.
 fn coerce_numeric_type_to_decimal256(numeric_type: &DataType) -> Option<DataType> {
     use arrow::datatypes::DataType::*;
     // This conversion rule is from spark
     // https://github.com/apache/spark/blob/1c81ad20296d34f137238dadd67cc6ae405944eb/sql/catalyst/src/main/scala/org/apache/spark/sql/types/DecimalType.scala#L127
     match numeric_type {
-        Int8 => Some(Decimal256(3, 0)),
-        Int16 => Some(Decimal256(5, 0)),
-        Int32 => Some(Decimal256(10, 0)),
-        Int64 => Some(Decimal256(20, 0)),
+        Int8 | UInt8 => Some(Decimal256(3, 0)),
+        Int16 | UInt16 => Some(Decimal256(5, 0)),
+        Int32 | UInt32 => Some(Decimal256(10, 0)),
+        Int64 | UInt64 => Some(Decimal256(20, 0)),
         // TODO if we convert the floating-point data to the decimal type, it maybe overflow.
         Float32 => Some(Decimal256(14, 7)),
         Float64 => Some(Decimal256(30, 15)),
