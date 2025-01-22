@@ -44,6 +44,7 @@ datafusion-expr-common = { workspace = true, default-features = true }
 datafusion-physical-expr = { workspace = true }
 datafusion-physical-expr-common = { workspace = true }
 datafusion-physical-plan = { workspace = true }
+datafusion-functions-aggregate = { workspace = true }
 futures = { workspace = true }
 itertools = { workspace = true }
 log = { workspace = true }
@@ -52,7 +53,6 @@ url = { workspace = true }
 
 [dev-dependencies]
 datafusion-expr = { workspace = true }
-datafusion-functions-aggregate = { workspace = true }
 datafusion-functions-nested = { workspace = true }
 rstest = { workspace = true }
 tokio = { workspace = true }
