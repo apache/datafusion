@@ -55,8 +55,8 @@ use datafusion::logical_expr::expr::{
     AggregateFunctionParams, Alias, BinaryExpr, Case, Cast, GroupingSet, InList,
     InSubquery, WindowFunction, WindowFunctionParams,
 };
-use datafusion::logical_expr::{expr, Between, JoinConstraint, LogicalPlan, Operator};
 use datafusion::logical_expr::utils::conjunction;
+use datafusion::logical_expr::{expr, Between, JoinConstraint, LogicalPlan, Operator};
 use datafusion::prelude::Expr;
 use pbjson_types::Any as ProtoAny;
 use substrait::proto::exchange_rel::{ExchangeKind, RoundRobin, ScatterFields};
