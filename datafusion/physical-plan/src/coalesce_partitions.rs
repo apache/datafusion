@@ -28,6 +28,7 @@ use super::{
     Statistics,
 };
 
+use crate::projection_utils::make_with_child;
 use crate::{DisplayFormatType, ExecutionPlan, Partitioning};
 
 use crate::execution_plan::CardinalityEffect;
@@ -183,6 +184,22 @@ impl ExecutionPlan for CoalescePartitionsExec {
 
     fn cardinality_effect(&self) -> CardinalityEffect {
         CardinalityEffect::Equal
+    }
+
+    /// Tries to swap `projection` with its input, which is known to be a
+    /// [`CoalescePartitionsExec`]. If possible, performs the swap and returns
+    /// [`CoalescePartitionsExec`] as the top plan. Otherwise, returns `None`.
+    fn try_swapping_with_projection(
+        &self,
+        projection: &crate::projection::ProjectionExec,
+    ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+        // If the projection does not narrow the schema, we should not try to push it down:
+        if projection.expr().len() >= projection.input().schema().fields().len() {
+            return Ok(None);
+        }
+        // CoalescePartitionsExec always has a single child, so zero indexing is safe.
+        make_with_child(projection, projection.input().children()[0])
+            .map(|e| Some(Arc::new(CoalescePartitionsExec::new(e)) as _))
     }
 }
 

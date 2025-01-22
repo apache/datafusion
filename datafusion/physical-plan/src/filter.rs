@@ -26,7 +26,9 @@ use super::{
 };
 use crate::common::can_project;
 use crate::projection::ProjectionExec;
-use crate::projection_utils::{make_with_child, update_expr};
+use crate::projection_utils::{
+    make_with_child, try_embed_projection, update_expr, EmbeddedProjection,
+};
 use crate::{
     metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet},
     DisplayFormatType, ExecutionPlan,
@@ -419,12 +421,23 @@ impl ExecutionPlan for FilterExec {
             return Ok(None);
         };
 
-        FilterExec::try_new(new_predicate, make_with_child(projection, self.input())?)
-            .and_then(|e| {
-                let selectivity = self.default_selectivity();
-                e.with_default_selectivity(selectivity)
-            })
-            .map(|e| Some(Arc::new(e) as _))
+        match FilterExec::try_new(
+            new_predicate,
+            make_with_child(projection, self.input())?,
+        )
+        .and_then(|e| {
+            let selectivity = self.default_selectivity();
+            e.with_default_selectivity(selectivity)
+        }) {
+            Ok(filter) => Ok(Some(Arc::new(filter) as _)),
+            Err(_) => try_embed_projection(projection, self),
+        }
+    }
+}
+
+impl EmbeddedProjection for FilterExec {
+    fn with_projection(&self, projection: Option<Vec<usize>>) -> Result<Self> {
+        self.with_projection(projection)
     }
 }
 
