@@ -82,15 +82,15 @@ CREATE TABLE group_median_table (
     col_f64 DOUBLE,
     col_f64_nan DOUBLE
 ) as VALUES
-( "group0", -128, -32768, -2147483648, arrow_cast(-9223372036854775808,'Int64'), 0,   0,     0,          arrow_cast(0,'UInt64'),   1.1, 1.1, 1.1 ),
-( "group0", -128, -32768, -2147483648, arrow_cast(-9223372036854775808,'Int64'), 0,   0,     0,          arrow_cast(0,'UInt64'),   4.4, 4.4, arrow_cast('NAN','Float64') ),
-( "group0", 100,  100,    100,         arrow_cast(100,'Int64'),                  100, 100,   100,        arrow_cast(100,'UInt64'), 3.3, 3.3, arrow_cast('NAN','Float64') ),
-( "group0", 127,  32767,  2147483647,  arrow_cast(9223372036854775807,'Int64'),  255, 65535, 4294967295, 18446744073709551615,     2.2, 2.2, arrow_cast('NAN','Float64') ),
-( "group1", -128, -32768, -2147483648, arrow_cast(-9223372036854775808,'Int64'), 0,   0,     0,          arrow_cast(0,'UInt64'),   1.1, 1.1, 1.1 ),
-( "group1", -128, -32768, -2147483648, arrow_cast(-9223372036854775808,'Int64'), 0,   0,     0,          arrow_cast(0,'UInt64'),   4.4, 4.4, arrow_cast('NAN','Float64') ),
-( "group1", 100,  100,    100,         arrow_cast(100,'Int64'),                  101, 100,   100,        arrow_cast(100,'UInt64'), 3.3, 3.3, arrow_cast('NAN','Float64') ),
-( "group1", 125,  32766,  2147483646,  arrow_cast(9223372036854775806,'Int64'),  100, 101,   4294967294, arrow_cast(100,'UInt64'), 3.2, 5.5, arrow_cast('NAN','Float64') ),
-( "group1", 127,  32767,  2147483647,  arrow_cast(9223372036854775807,'Int64'),  255, 65535, 4294967295, 18446744073709551615,     2.2, 2.2, arrow_cast('NAN','Float64') )
+( 'group0', -128, -32768, -2147483648, arrow_cast(-9223372036854775808,'Int64'), 0,   0,     0,          arrow_cast(0,'UInt64'),   1.1, 1.1, 1.1 ),
+( 'group0', -128, -32768, -2147483648, arrow_cast(-9223372036854775808,'Int64'), 0,   0,     0,          arrow_cast(0,'UInt64'),   4.4, 4.4, 1.1 ),
+( 'group0', 100,  100,    100,         arrow_cast(100,'Int64'),                  100, 100,   100,        arrow_cast(100,'UInt64'), 3.3, 3.3, arrow_cast('NAN','Float64') ),
+( 'group0', 127,  32767,  2147483647,  arrow_cast(9223372036854775807,'Int64'),  255, 65535, 4294967295, 18446744073709551615,     2.2, 2.2, arrow_cast('NAN','Float64') ),
+( 'group1', -128, -32768, -2147483648, arrow_cast(-9223372036854775808,'Int64'), 0,   0,     0,          arrow_cast(0,'UInt64'),   1.1, 1.1, 1.1 ),
+( 'group1', -128, -32768, -2147483648, arrow_cast(-9223372036854775808,'Int64'), 0,   0,     0,          arrow_cast(0,'UInt64'),   4.4, 4.4, arrow_cast('NAN','Float64') ),
+( 'group1', 100,  100,    100,         arrow_cast(100,'Int64'),                  101, 100,   100,        arrow_cast(100,'UInt64'), 3.3, 3.3, arrow_cast('NAN','Float64') ),
+( 'group1', 125,  32766,  2147483646,  arrow_cast(9223372036854775806,'Int64'),  100, 101,   4294967294, arrow_cast(100,'UInt64'), 3.2, 5.5, arrow_cast('NAN','Float64') ),
+( 'group1', 127,  32767,  2147483647,  arrow_cast(9223372036854775807,'Int64'),  255, 65535, 4294967295, 18446744073709551615,     2.2, 2.2, arrow_cast('NAN','Float64') )
 
 #######
 # Error tests
@@ -6228,3 +6228,84 @@ physical_plan
 14)--------------PlaceholderRowExec
 15)------------ProjectionExec: expr=[1 as id, 2 as foo]
 16)--------------PlaceholderRowExec
+
+#######
+# Group median test
+#######
+
+# group median i8
+query TI rowsort
+SELECT col_group, median(col_i8) FROM group_median_table GROUP BY col_group
+----
+group0 -14
+group1 100
+
+# group median i16
+query TI
+SELECT col_group, median(col_i16) FROM group_median_table GROUP BY col_group
+----
+group0 -16334
+group1 100
+
+# group median i32
+query TI
+SELECT col_group, median(col_i32) FROM group_median_table GROUP BY col_group
+----
+group0 -1073741774
+group1 100
+
+# group median i64
+query TI
+SELECT col_group, median(col_i64) FROM group_median_table GROUP BY col_group
+----
+group0 -4611686018427387854
+group1 100
+
+# group median u8
+query TI rowsort
+SELECT col_group, median(col_u8) FROM group_median_table GROUP BY col_group
+----
+group0 50
+group1 100
+
+# group median u16
+query TI
+SELECT col_group, median(col_u16) FROM group_median_table GROUP BY col_group
+----
+group0 50
+group1 100
+
+# group median u32
+query TI
+SELECT col_group, median(col_u32) FROM group_median_table GROUP BY col_group
+----
+group0 50
+group1 100
+
+# group median u64
+query TI
+SELECT col_group, median(col_u64) FROM group_median_table GROUP BY col_group
+----
+group0 50
+group1 100
+
+# group median f32
+query TR
+SELECT col_group, median(col_f32) FROM group_median_table GROUP BY col_group
+----
+group0 2.75
+group1 3.2
+
+# group median f64
+query TR
+SELECT col_group, median(col_f64) FROM group_median_table GROUP BY col_group
+----
+group0 2.75
+group1 3.3
+
+# group median f64_nan
+query TR
+SELECT col_group, median(col_f64_nan) FROM group_median_table GROUP BY col_group
+----
+group0 NaN
+group1 NaN
