@@ -27,10 +27,12 @@ use datafusion::prelude::SessionContext;
 use datafusion_common::Result;
 use datafusion_execution::config::SessionConfig;
 use datafusion_expr::Operator;
-use datafusion_physical_expr::{expressions, expressions::col, PhysicalSortExpr};
 use datafusion_physical_expr::expressions::cast;
+use datafusion_physical_expr::{expressions, expressions::col, PhysicalSortExpr};
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
-use datafusion_physical_optimizer::test_utils::{assert_plan_matches_expected, build_group_by, mock_data, schema, TestAggregate};
+use datafusion_physical_optimizer::test_utils::{
+    assert_plan_matches_expected, build_group_by, mock_data, schema, TestAggregate,
+};
 use datafusion_physical_plan::{
     aggregates::{AggregateExec, AggregateMode},
     collect,
@@ -265,8 +267,6 @@ fn test_has_order_by() -> Result<()> {
     assert_plan_matches_expected(&plan, &expected)?;
     Ok(())
 }
-
-
 
 #[test]
 fn test_no_group_by() -> Result<()> {

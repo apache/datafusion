@@ -43,10 +43,10 @@ use datafusion_execution::object_store::ObjectStoreUrl;
 use datafusion::datasource::listing::PartitionedFile;
 use datafusion::datasource::file_format::file_compression_type::FileCompressionType;
 
-use rstest::rstest;
 use datafusion_physical_optimizer::enforce_distribution::EnforceDistribution;
 use datafusion_physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
 use datafusion_physical_plan::sorts::sort::SortExec;
+use rstest::rstest;
 
 /// Create a csv exec for tests
 fn csv_exec_ordered(
@@ -1240,8 +1240,6 @@ async fn test_not_replaced_with_partial_sort_for_bounded_input() -> Result<()> {
     Ok(())
 }
 
-
-
 /// Runs the sort enforcement optimizer and asserts the plan
 /// against the original and expected plans
 ///
@@ -1606,7 +1604,7 @@ async fn test_remove_unnecessary_sort6() -> Result<()> {
             LexOrdering::new(vec![sort_expr("non_nullable_col", &schema)]),
             source,
         )
-            .with_fetch(Some(2)),
+        .with_fetch(Some(2)),
     );
     let physical_plan = sort_exec(
         vec![
@@ -1647,7 +1645,7 @@ async fn test_remove_unnecessary_sort7() -> Result<()> {
             LexOrdering::new(vec![sort_expr("non_nullable_col", &schema)]),
             input,
         )
-            .with_fetch(Some(2)),
+        .with_fetch(Some(2)),
     ) as Arc<dyn ExecutionPlan>;
 
     let expected_input = [

@@ -147,4 +147,4 @@ fn take_optimizable_value_from_statistics(
     value.map(|val| (val, agg_expr.name().to_string()))
 }
 
-// Tests are in tests/cases/aggregate_statistics.rs
+// See tests in datafusion/core/tests/physical_optimizer

@@ -15,21 +15,24 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::sync::Arc;
 use arrow_schema::{DataType, Field, Schema, SchemaRef, SortOptions};
 use datafusion::datasource::stream::{FileStreamProvider, StreamConfig, StreamTable};
 use datafusion::prelude::{CsvReadOptions, SessionContext};
 use datafusion_common::{JoinType, Result};
+use std::sync::Arc;
 
 use async_trait::async_trait;
 use datafusion_common::config::ConfigOptions;
 use datafusion_physical_expr::expressions::col;
 use datafusion_physical_expr::Partitioning;
-use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use datafusion_physical_optimizer::sanity_checker::SanityCheckPlan;
-use datafusion_physical_optimizer::test_utils::{bounded_window_exec, global_limit_exec, local_limit_exec, memory_exec, repartition_exec, sort_exec, sort_expr_options, sort_merge_join_exec};
-use datafusion_physical_plan::{displayable, ExecutionPlan};
+use datafusion_physical_optimizer::test_utils::{
+    bounded_window_exec, global_limit_exec, local_limit_exec, memory_exec,
+    repartition_exec, sort_exec, sort_expr_options, sort_merge_join_exec,
+};
+use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use datafusion_physical_plan::repartition::RepartitionExec;
+use datafusion_physical_plan::{displayable, ExecutionPlan};
 
 async fn register_current_csv(
     ctx: &SessionContext,
@@ -369,7 +372,6 @@ async fn test_analyzer() -> Result<()> {
     case.run().await?;
     Ok(())
 }
-
 
 fn create_test_schema() -> SchemaRef {
     Arc::new(Schema::new(vec![Field::new("c9", DataType::Int32, true)]))
