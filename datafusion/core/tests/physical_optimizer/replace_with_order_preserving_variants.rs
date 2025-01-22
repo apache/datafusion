@@ -39,13 +39,45 @@ use datafusion_common::tree_node::{TransformedResult, TreeNode};
     use datafusion_expr::{JoinType, Operator};
     use datafusion_physical_expr::expressions::{self, col, Column};
     use datafusion_physical_expr::PhysicalSortExpr;
-    use datafusion_physical_optimizer::test_utils::check_integrity;
+    use datafusion_physical_optimizer::test_utils::{check_integrity, stream_exec_ordered_with_projection};
     use datafusion_physical_optimizer::enforce_sorting::replace_with_order_preserving_variants::{replace_with_order_preserving_variants, OrderPreservationContext};
 
-use crate::test_util::stream_exec_ordered_with_projection;
 use datafusion_common::config::ConfigOptions;
 use rstest::rstest;
 use url::Url;
+
+/// Runs the `replace_with_order_preserving_variants` sub-rule and asserts
+/// the plan against the original and expected plans.
+///
+/// # Parameters
+///
+/// * `$EXPECTED_PLAN_LINES`: Expected input plan.
+/// * `EXPECTED_OPTIMIZED_PLAN_LINES`: Optimized plan when the flag
+///   `prefer_existing_sort` is `false`.
+/// * `EXPECTED_PREFER_SORT_ON_OPTIMIZED_PLAN_LINES`: Optimized plan when
+///   the flag `prefer_existing_sort` is `true`.
+/// * `$PLAN`: The plan to optimize.
+macro_rules! assert_optimized_prefer_sort_on_off {
+    ($EXPECTED_PLAN_LINES: expr, $EXPECTED_OPTIMIZED_PLAN_LINES: expr, $EXPECTED_PREFER_SORT_ON_OPTIMIZED_PLAN_LINES: expr, $PLAN: expr, $PREFER_EXISTING_SORT: expr, $SOURCE_UNBOUNDED: expr) => {
+        if $PREFER_EXISTING_SORT {
+            assert_optimized!(
+                $EXPECTED_PLAN_LINES,
+                $EXPECTED_PREFER_SORT_ON_OPTIMIZED_PLAN_LINES,
+                $PLAN,
+                $PREFER_EXISTING_SORT,
+                $SOURCE_UNBOUNDED
+            );
+        } else {
+            assert_optimized!(
+                $EXPECTED_PLAN_LINES,
+                $EXPECTED_OPTIMIZED_PLAN_LINES,
+                $PLAN,
+                $PREFER_EXISTING_SORT,
+                $SOURCE_UNBOUNDED
+            );
+        }
+    };
+}
 
 /// Runs the `replace_with_order_preserving_variants` sub-rule and asserts
 /// the plan against the original and expected plans for both bounded and
@@ -79,39 +111,6 @@ macro_rules! assert_optimized_in_all_boundedness_situations {
                 $EXPECTED_BOUNDED_PLAN_LINES,
                 $EXPECTED_BOUNDED_OPTIMIZED_PLAN_LINES,
                 $EXPECTED_BOUNDED_PREFER_SORT_ON_OPTIMIZED_PLAN_LINES,
-                $PLAN,
-                $PREFER_EXISTING_SORT,
-                $SOURCE_UNBOUNDED
-            );
-        }
-    };
-}
-
-/// Runs the `replace_with_order_preserving_variants` sub-rule and asserts
-/// the plan against the original and expected plans.
-///
-/// # Parameters
-///
-/// * `$EXPECTED_PLAN_LINES`: Expected input plan.
-/// * `EXPECTED_OPTIMIZED_PLAN_LINES`: Optimized plan when the flag
-///   `prefer_existing_sort` is `false`.
-/// * `EXPECTED_PREFER_SORT_ON_OPTIMIZED_PLAN_LINES`: Optimized plan when
-///   the flag `prefer_existing_sort` is `true`.
-/// * `$PLAN`: The plan to optimize.
-macro_rules! assert_optimized_prefer_sort_on_off {
-    ($EXPECTED_PLAN_LINES: expr, $EXPECTED_OPTIMIZED_PLAN_LINES: expr, $EXPECTED_PREFER_SORT_ON_OPTIMIZED_PLAN_LINES: expr, $PLAN: expr, $PREFER_EXISTING_SORT: expr, $SOURCE_UNBOUNDED: expr) => {
-        if $PREFER_EXISTING_SORT {
-            assert_optimized!(
-                $EXPECTED_PLAN_LINES,
-                $EXPECTED_PREFER_SORT_ON_OPTIMIZED_PLAN_LINES,
-                $PLAN,
-                $PREFER_EXISTING_SORT,
-                $SOURCE_UNBOUNDED
-            );
-        } else {
-            assert_optimized!(
-                $EXPECTED_PLAN_LINES,
-                $EXPECTED_OPTIMIZED_PLAN_LINES,
                 $PLAN,
                 $PREFER_EXISTING_SORT,
                 $SOURCE_UNBOUNDED

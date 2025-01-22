@@ -15,6 +15,12 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use async_trait::async_trait;
+use datafusion::datasource::stream::{FileStreamProvider, StreamConfig, StreamTable};
+use datafusion::prelude::{CsvReadOptions, SessionContext};
+use datafusion_common::Result;
+use std::sync::Arc;
+
 async fn register_current_csv(
     ctx: &SessionContext,
     table_name: &str,
@@ -127,4 +133,227 @@ impl QueryCase {
         }
         Ok(())
     }
+}
+
+#[tokio::test]
+async fn test_hash_left_join_swap() -> Result<()> {
+    let test1 = BinaryTestCase {
+        source_types: (SourceType::Unbounded, SourceType::Bounded),
+        expect_fail: false,
+    };
+
+    let test2 = BinaryTestCase {
+        source_types: (SourceType::Bounded, SourceType::Unbounded),
+        // Left join for bounded build side and unbounded probe side can generate
+        // both incremental matched rows and final non-matched rows.
+        expect_fail: false,
+    };
+    let test3 = BinaryTestCase {
+        source_types: (SourceType::Bounded, SourceType::Bounded),
+        expect_fail: false,
+    };
+    let case = QueryCase {
+        sql: "SELECT t2.c1 FROM left as t1 LEFT JOIN right as t2 ON t1.c1 = t2.c1"
+            .to_string(),
+        cases: vec![Arc::new(test1), Arc::new(test2), Arc::new(test3)],
+        error_operator: "operator: HashJoinExec".to_string(),
+    };
+
+    case.run().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_hash_right_join_swap() -> Result<()> {
+    let test1 = BinaryTestCase {
+        source_types: (SourceType::Unbounded, SourceType::Bounded),
+        expect_fail: true,
+    };
+    let test2 = BinaryTestCase {
+        source_types: (SourceType::Bounded, SourceType::Unbounded),
+        expect_fail: false,
+    };
+    let test3 = BinaryTestCase {
+        source_types: (SourceType::Bounded, SourceType::Bounded),
+        expect_fail: false,
+    };
+    let case = QueryCase {
+        sql: "SELECT t2.c1 FROM left as t1 RIGHT JOIN right as t2 ON t1.c1 = t2.c1"
+            .to_string(),
+        cases: vec![Arc::new(test1), Arc::new(test2), Arc::new(test3)],
+        error_operator: "operator: HashJoinExec".to_string(),
+    };
+
+    case.run().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_hash_inner_join_swap() -> Result<()> {
+    let test1 = BinaryTestCase {
+        source_types: (SourceType::Unbounded, SourceType::Bounded),
+        expect_fail: false,
+    };
+    let test2 = BinaryTestCase {
+        source_types: (SourceType::Bounded, SourceType::Unbounded),
+        expect_fail: false,
+    };
+    let test3 = BinaryTestCase {
+        source_types: (SourceType::Bounded, SourceType::Bounded),
+        expect_fail: false,
+    };
+    let case = QueryCase {
+        sql: "SELECT t2.c1 FROM left as t1 JOIN right as t2 ON t1.c1 = t2.c1".to_string(),
+        cases: vec![Arc::new(test1), Arc::new(test2), Arc::new(test3)],
+        error_operator: "Join Error".to_string(),
+    };
+
+    case.run().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_hash_full_outer_join_swap() -> Result<()> {
+    let test1 = BinaryTestCase {
+        source_types: (SourceType::Unbounded, SourceType::Bounded),
+        expect_fail: true,
+    };
+    let test2 = BinaryTestCase {
+        source_types: (SourceType::Bounded, SourceType::Unbounded),
+        // Full join for bounded build side and unbounded probe side can generate
+        // both incremental matched rows and final non-matched rows.
+        expect_fail: false,
+    };
+    let test3 = BinaryTestCase {
+        source_types: (SourceType::Bounded, SourceType::Bounded),
+        expect_fail: false,
+    };
+    let case = QueryCase {
+        sql: "SELECT t2.c1 FROM left as t1 FULL JOIN right as t2 ON t1.c1 = t2.c1"
+            .to_string(),
+        cases: vec![Arc::new(test1), Arc::new(test2), Arc::new(test3)],
+        error_operator: "operator: HashJoinExec".to_string(),
+    };
+
+    case.run().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_aggregate() -> Result<()> {
+    let test1 = UnaryTestCase {
+        source_type: SourceType::Bounded,
+        expect_fail: false,
+    };
+    let test2 = UnaryTestCase {
+        source_type: SourceType::Unbounded,
+        expect_fail: true,
+    };
+    let case = QueryCase {
+        sql: "SELECT c1, MIN(c4) FROM test GROUP BY c1".to_string(),
+        cases: vec![Arc::new(test1), Arc::new(test2)],
+        error_operator: "operator: AggregateExec".to_string(),
+    };
+
+    case.run().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_window_agg_hash_partition() -> Result<()> {
+    let test1 = UnaryTestCase {
+        source_type: SourceType::Bounded,
+        expect_fail: false,
+    };
+    let test2 = UnaryTestCase {
+        source_type: SourceType::Unbounded,
+        expect_fail: true,
+    };
+    let case = QueryCase {
+        sql: "SELECT
+                c9,
+                SUM(c9) OVER(PARTITION BY c1 ORDER BY c9 ASC ROWS BETWEEN 1 PRECEDING AND UNBOUNDED FOLLOWING) as sum1
+              FROM test
+              LIMIT 5".to_string(),
+        cases: vec![Arc::new(test1), Arc::new(test2)],
+        error_operator: "operator: SortExec".to_string()
+    };
+
+    case.run().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_window_agg_single_partition() -> Result<()> {
+    let test1 = UnaryTestCase {
+        source_type: SourceType::Bounded,
+        expect_fail: false,
+    };
+    let test2 = UnaryTestCase {
+        source_type: SourceType::Unbounded,
+        expect_fail: true,
+    };
+    let case = QueryCase {
+        sql: "SELECT
+                    c9,
+                    SUM(c9) OVER(ORDER BY c9 ASC ROWS BETWEEN 1 PRECEDING AND UNBOUNDED FOLLOWING) as sum1
+              FROM test".to_string(),
+        cases: vec![Arc::new(test1), Arc::new(test2)],
+        error_operator: "operator: SortExec".to_string()
+    };
+    case.run().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_hash_cross_join() -> Result<()> {
+    let test1 = BinaryTestCase {
+        source_types: (SourceType::Unbounded, SourceType::Bounded),
+        expect_fail: true,
+    };
+    let test2 = BinaryTestCase {
+        source_types: (SourceType::Unbounded, SourceType::Unbounded),
+        expect_fail: true,
+    };
+    let test3 = BinaryTestCase {
+        source_types: (SourceType::Bounded, SourceType::Unbounded),
+        expect_fail: true,
+    };
+    let test4 = BinaryTestCase {
+        source_types: (SourceType::Bounded, SourceType::Bounded),
+        expect_fail: false,
+    };
+    let case = QueryCase {
+        sql: "SELECT t2.c1 FROM left as t1 CROSS JOIN right as t2".to_string(),
+        cases: vec![
+            Arc::new(test1),
+            Arc::new(test2),
+            Arc::new(test3),
+            Arc::new(test4),
+        ],
+        error_operator: "operator: CrossJoinExec".to_string(),
+    };
+
+    case.run().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_analyzer() -> Result<()> {
+    let test1 = UnaryTestCase {
+        source_type: SourceType::Bounded,
+        expect_fail: false,
+    };
+    let test2 = UnaryTestCase {
+        source_type: SourceType::Unbounded,
+        expect_fail: false,
+    };
+    let case = QueryCase {
+        sql: "EXPLAIN ANALYZE SELECT * FROM test".to_string(),
+        cases: vec![Arc::new(test1), Arc::new(test2)],
+        error_operator: "Analyze Error".to_string(),
+    };
+
+    case.run().await?;
+    Ok(())
 }

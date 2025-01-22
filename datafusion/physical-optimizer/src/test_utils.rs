@@ -17,19 +17,21 @@
 
 //! Test utilities for physical optimizer tests
 
-use std::any::Any;
-use std::fmt::Formatter;
-use std::sync::Arc;
-
-use arrow_schema::{Schema, SchemaRef, SortOptions};
+use crate::limited_distinct_aggregation::LimitedDistinctAggregation;
+use crate::PhysicalOptimizerRule;
+use arrow::array::Int32Array;
+use arrow::record_batch::RecordBatch;
+use arrow_schema::{DataType, Field, Schema, SchemaRef, SortOptions};
+use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
+use datafusion_common::utils::expr::COUNT_STAR_EXPANSION;
 use datafusion_common::{JoinType, Result};
-use datafusion_execution::object_store::ObjectStoreUrl;
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_expr::test::function_stub::count_udaf;
 use datafusion_expr::{WindowFrame, WindowFunctionDefinition};
+use datafusion_physical_expr::aggregate::{AggregateExprBuilder, AggregateFunctionExpr};
 use datafusion_physical_expr::expressions::col;
-use datafusion_physical_expr::PhysicalExpr;
+use datafusion_physical_expr::{expressions, PhysicalExpr};
 use datafusion_physical_expr_common::sort_expr::LexRequirement;
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
 use datafusion_physical_plan::aggregates::{
@@ -54,6 +56,44 @@ use datafusion_physical_plan::{
     displayable, DisplayAs, DisplayFormatType, PlanProperties,
 };
 use datafusion_physical_plan::{InputOrderMode, Partitioning};
+use std::any::Any;
+use std::fmt::Formatter;
+use std::sync::Arc;
+
+pub fn schema() -> SchemaRef {
+    Arc::new(Schema::new(vec![
+        Field::new("a", DataType::Int64, true),
+        Field::new("b", DataType::Int64, true),
+        Field::new("c", DataType::Int64, true),
+        Field::new("d", DataType::Int32, true),
+        Field::new("e", DataType::Boolean, true),
+    ]))
+}
+
+pub fn create_test_schema() -> Result<SchemaRef> {
+    let nullable_column = Field::new("nullable_col", DataType::Int32, true);
+    let non_nullable_column = Field::new("non_nullable_col", DataType::Int32, false);
+    let schema = Arc::new(Schema::new(vec![nullable_column, non_nullable_column]));
+    Ok(schema)
+}
+
+pub fn create_test_schema2() -> Result<SchemaRef> {
+    let col_a = Field::new("col_a", DataType::Int32, true);
+    let col_b = Field::new("col_b", DataType::Int32, true);
+    let schema = Arc::new(Schema::new(vec![col_a, col_b]));
+    Ok(schema)
+}
+
+// Generate a schema which consists of 5 columns (a, b, c, d, e)
+pub fn create_test_schema3() -> Result<SchemaRef> {
+    let a = Field::new("a", DataType::Int32, true);
+    let b = Field::new("b", DataType::Int32, false);
+    let c = Field::new("c", DataType::Int32, true);
+    let d = Field::new("d", DataType::Int32, false);
+    let e = Field::new("e", DataType::Int32, false);
+    let schema = Arc::new(Schema::new(vec![a, b, c, d, e]));
+    Ok(schema)
+}
 
 pub fn sort_merge_join_exec(
     left: Arc<dyn ExecutionPlan>,
@@ -365,9 +405,9 @@ pub fn stream_exec_ordered(
 
     Arc::new(
         StreamingTableExec::try_new(
-            schema.clone(),
+            Arc::clone(schema),
             vec![Arc::new(TestStreamPartition {
-                schema: schema.clone(),
+                schema: Arc::clone(schema),
             }) as _],
             None,
             vec![sort_exprs],
@@ -388,9 +428,9 @@ pub fn stream_exec_ordered_with_projection(
 
     Arc::new(
         StreamingTableExec::try_new(
-            schema.clone(),
+            Arc::clone(schema),
             vec![Arc::new(TestStreamPartition {
-                schema: schema.clone(),
+                schema: Arc::clone(schema),
             }) as _],
             Some(&projection),
             vec![sort_exprs],
@@ -399,4 +439,123 @@ pub fn stream_exec_ordered_with_projection(
         )
         .unwrap(),
     )
+}
+
+pub fn mock_data() -> Result<Arc<MemoryExec>> {
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("a", DataType::Int32, true),
+        Field::new("b", DataType::Int32, true),
+    ]));
+
+    let batch = RecordBatch::try_new(
+        Arc::clone(&schema),
+        vec![
+            Arc::new(Int32Array::from(vec![
+                Some(1),
+                Some(2),
+                None,
+                Some(1),
+                Some(4),
+                Some(5),
+            ])),
+            Arc::new(Int32Array::from(vec![
+                Some(1),
+                None,
+                Some(6),
+                Some(2),
+                Some(8),
+                Some(9),
+            ])),
+        ],
+    )?;
+
+    Ok(Arc::new(MemoryExec::try_new(
+        &[vec![batch]],
+        Arc::clone(&schema),
+        None,
+    )?))
+}
+
+pub fn build_group_by(input_schema: &SchemaRef, columns: Vec<String>) -> PhysicalGroupBy {
+    let mut group_by_expr: Vec<(Arc<dyn PhysicalExpr>, String)> = vec![];
+    for column in columns.iter() {
+        group_by_expr.push((col(column, input_schema).unwrap(), column.to_string()));
+    }
+    PhysicalGroupBy::new_single(group_by_expr.clone())
+}
+
+pub fn assert_plan_matches_expected(
+    plan: &Arc<dyn ExecutionPlan>,
+    expected: &[&str],
+) -> Result<()> {
+    let expected_lines: Vec<&str> = expected.to_vec();
+    let config = ConfigOptions::new();
+
+    let optimized =
+        LimitedDistinctAggregation::new().optimize(Arc::clone(plan), &config)?;
+
+    let optimized_result = displayable(optimized.as_ref()).indent(true).to_string();
+    let actual_lines = trim_plan_display(&optimized_result);
+
+    assert_eq!(
+        &expected_lines, &actual_lines,
+        "\n\nexpected:\n\n{:#?}\nactual:\n\n{:#?}\n\n",
+        expected_lines, actual_lines
+    );
+
+    Ok(())
+}
+
+/// Describe the type of aggregate being tested
+pub enum TestAggregate {
+    /// Testing COUNT(*) type aggregates
+    CountStar,
+
+    /// Testing for COUNT(column) aggregate
+    ColumnA(Arc<Schema>),
+}
+
+impl TestAggregate {
+    /// Create a new COUNT(*) aggregate
+    pub fn new_count_star() -> Self {
+        Self::CountStar
+    }
+
+    /// Create a new COUNT(column) aggregate
+    pub fn new_count_column(schema: &Arc<Schema>) -> Self {
+        Self::ColumnA(Arc::clone(schema))
+    }
+
+    /// Return appropriate expr depending if COUNT is for col or table (*)
+    pub fn count_expr(&self, schema: &Schema) -> AggregateFunctionExpr {
+        AggregateExprBuilder::new(count_udaf(), vec![self.column()])
+            .schema(Arc::new(schema.clone()))
+            .alias(self.column_name())
+            .build()
+            .unwrap()
+    }
+
+    /// what argument would this aggregate need in the plan?
+    fn column(&self) -> Arc<dyn PhysicalExpr> {
+        match self {
+            Self::CountStar => expressions::lit(COUNT_STAR_EXPANSION),
+            Self::ColumnA(s) => col("a", s).unwrap(),
+        }
+    }
+
+    /// What name would this aggregate produce in a plan?
+    pub fn column_name(&self) -> &'static str {
+        match self {
+            Self::CountStar => "COUNT(*)",
+            Self::ColumnA(_) => "COUNT(a)",
+        }
+    }
+
+    /// What is the expected count?
+    pub fn expected_count(&self) -> i64 {
+        match self {
+            TestAggregate::CountStar => 3,
+            TestAggregate::ColumnA(_) => 2,
+        }
+    }
 }

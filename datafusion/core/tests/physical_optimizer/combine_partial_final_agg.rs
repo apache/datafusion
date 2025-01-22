@@ -22,8 +22,6 @@
 
 //! Tests for [`CombinePartialFinalAggregate`] physical optimizer rule
 
-mod r#mod;
-
 use std::sync::Arc;
 
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
@@ -72,14 +70,6 @@ fn schema() -> SchemaRef {
         Field::new("b", DataType::Int64, true),
         Field::new("c", DataType::Int64, true),
     ]))
-}
-
-fn parquet_exec(schema: &SchemaRef) -> Arc<ParquetExec> {
-    ParquetExec::builder(
-        FileScanConfig::new(ObjectStoreUrl::parse("test:///").unwrap(), schema.clone())
-            .with_file(PartitionedFile::new("x".to_string(), 100)),
-    )
-    .build_arc()
 }
 
 fn partial_aggregate_exec(

@@ -19,12 +19,10 @@ use datafusion_physical_plan::displayable;
 use std::sync::Arc;
 
 use arrow::compute::SortOptions;
-use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion_common::Result;
 use datafusion_expr::JoinType;
 use datafusion_physical_expr::expressions::{col, Column, NotExpr};
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
-use datafusion_physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
 
 use datafusion_physical_expr::Partitioning;
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
@@ -33,12 +31,100 @@ use datafusion_physical_optimizer::enforce_sorting::replace_with_order_preservin
 use datafusion_physical_optimizer::enforce_sorting::sort_pushdown::{SortPushDown, assign_initial_requirements, pushdown_sorts};
 use datafusion_physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion_physical_plan::repartition::RepartitionExec;
-use datafusion_physical_plan::sorts::sort::SortExec;
 use datafusion_physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
 use datafusion_physical_plan::{get_plan_string, ExecutionPlan};
 use rstest::rstest;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{TreeNode, TransformedResult};
+use datafusion_physical_optimizer::test_utils::{check_integrity,bounded_window_exec, coalesce_partitions_exec, create_test_schema, create_test_schema2, create_test_schema3, filter_exec, global_limit_exec, hash_join_exec, limit_exec, local_limit_exec, memory_exec, repartition_exec, sort_exec, sort_expr, sort_expr_options, sort_merge_join_exec, sort_preserving_merge_exec, spr_repartition_exec, stream_exec_ordered, union_exec};
+use crate::physical_optimizer::{csv_exec_ordered, csv_exec_sorted, parquet_exec, parquet_exec_sorted};
+
+/// Runs the sort enforcement optimizer and asserts the plan
+/// against the original and expected plans
+///
+/// `$EXPECTED_PLAN_LINES`: input plan
+/// `$EXPECTED_OPTIMIZED_PLAN_LINES`: optimized plan
+/// `$PLAN`: the plan to optimized
+/// `REPARTITION_SORTS`: Flag to set `config.options.optimizer.repartition_sorts` option.
+///
+macro_rules! assert_optimized {
+    ($EXPECTED_PLAN_LINES: expr, $EXPECTED_OPTIMIZED_PLAN_LINES: expr, $PLAN: expr, $REPARTITION_SORTS: expr) => {
+        let mut config = ConfigOptions::new();
+        config.optimizer.repartition_sorts = $REPARTITION_SORTS;
+
+        // This file has 4 rules that use tree node, apply these rules as in the
+        // EnforceSorting::optimize implementation
+        // After these operations tree nodes should be in a consistent state.
+        // This code block makes sure that these rules doesn't violate tree node integrity.
+        {
+            let plan_requirements = PlanWithCorrespondingSort::new_default($PLAN.clone());
+            let adjusted = plan_requirements
+                .transform_up(ensure_sorting)
+                .data()
+                .and_then(check_integrity)?;
+            // TODO: End state payloads will be checked here.
+
+            let new_plan = if config.optimizer.repartition_sorts {
+                let plan_with_coalesce_partitions =
+                    PlanWithCorrespondingCoalescePartitions::new_default(adjusted.plan);
+                let parallel = plan_with_coalesce_partitions
+                    .transform_up(parallelize_sorts)
+                    .data()
+                    .and_then(check_integrity)?;
+                // TODO: End state payloads will be checked here.
+                parallel.plan
+            } else {
+                adjusted.plan
+            };
+
+            let plan_with_pipeline_fixer = OrderPreservationContext::new_default(new_plan);
+            let updated_plan = plan_with_pipeline_fixer
+                .transform_up(|plan_with_pipeline_fixer| {
+                    replace_with_order_preserving_variants(
+                        plan_with_pipeline_fixer,
+                        false,
+                        true,
+                       &config,
+                    )
+                })
+                .data()
+                .and_then(check_integrity)?;
+            // TODO: End state payloads will be checked here.
+
+            let mut sort_pushdown = SortPushDown::new_default(updated_plan.plan);
+            assign_initial_requirements(&mut sort_pushdown);
+            check_integrity(pushdown_sorts(sort_pushdown)?)?;
+            // TODO: End state payloads will be checked here.
+        }
+
+        let physical_plan = $PLAN;
+        let formatted = displayable(physical_plan.as_ref()).indent(true).to_string();
+        let actual: Vec<&str> = formatted.trim().lines().collect();
+
+        let expected_plan_lines: Vec<&str> = $EXPECTED_PLAN_LINES
+            .iter().map(|s| *s).collect();
+
+        assert_eq!(
+            expected_plan_lines, actual,
+            "\n**Original Plan Mismatch\n\nexpected:\n\n{expected_plan_lines:#?}\nactual:\n\n{actual:#?}\n\n"
+        );
+
+        let expected_optimized_lines: Vec<&str> = $EXPECTED_OPTIMIZED_PLAN_LINES
+            .iter().map(|s| *s).collect();
+
+        // Run the actual optimizer
+        let optimized_physical_plan =
+            EnforceSorting::new().optimize(physical_plan,&config)?;
+
+        // Get string representation of the plan
+        let actual = get_plan_string(&optimized_physical_plan);
+        assert_eq!(
+            expected_optimized_lines, actual,
+            "\n**Optimized Plan Mismatch\n\nexpected:\n\n{expected_optimized_lines:#?}\nactual:\n\n{actual:#?}\n\n"
+        );
+
+    };
+}
 
 #[tokio::test]
 async fn test_remove_unnecessary_sort5() -> Result<()> {
@@ -814,5 +900,264 @@ async fn test_sort_merge_join_complex_order_by() -> Result<()> {
         "      ParquetExec: file_groups={1 group: [[x]]}, projection=[col_a, col_b]"];
     assert_optimized!(expected_input, expected_optimized, physical_plan, true);
 
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_multilayer_coalesce_partitions() -> Result<()> {
+    let schema = create_test_schema()?;
+
+    let source1 = parquet_exec(&schema);
+    let repartition = repartition_exec(source1);
+    let coalesce = Arc::new(CoalescePartitionsExec::new(repartition)) as _;
+    // Add dummy layer propagating Sort above, to test whether sort can be removed from multi layer before
+    let filter = filter_exec(
+        Arc::new(NotExpr::new(
+            col("non_nullable_col", schema.as_ref()).unwrap(),
+        )),
+        coalesce,
+    );
+    let sort_exprs = vec![sort_expr("nullable_col", &schema)];
+    let physical_plan = sort_exec(sort_exprs, filter);
+
+    // CoalescePartitionsExec and SortExec are not directly consecutive. In this case
+    // we should be able to parallelize Sorting also (given that executors in between don't require)
+    // single partition.
+    let expected_input = ["SortExec: expr=[nullable_col@0 ASC], preserve_partitioning=[false]",
+        "  FilterExec: NOT non_nullable_col@1",
+        "    CoalescePartitionsExec",
+        "      RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
+        "        ParquetExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col]"];
+    let expected_optimized = ["SortPreservingMergeExec: [nullable_col@0 ASC]",
+        "  SortExec: expr=[nullable_col@0 ASC], preserve_partitioning=[true]",
+        "    FilterExec: NOT non_nullable_col@1",
+        "      RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
+        "        ParquetExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col]"];
+    assert_optimized!(expected_input, expected_optimized, physical_plan, true);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_with_lost_ordering_bounded() -> Result<()> {
+    let schema = create_test_schema3()?;
+    let sort_exprs = vec![sort_expr("a", &schema)];
+    let source = csv_exec_sorted(&schema, sort_exprs);
+    let repartition_rr = repartition_exec(source);
+    let repartition_hash = Arc::new(RepartitionExec::try_new(
+        repartition_rr,
+        Partitioning::Hash(vec![col("c", &schema).unwrap()], 10),
+    )?) as _;
+    let coalesce_partitions = coalesce_partitions_exec(repartition_hash);
+    let physical_plan = sort_exec(vec![sort_expr("a", &schema)], coalesce_partitions);
+
+    let expected_input = ["SortExec: expr=[a@0 ASC], preserve_partitioning=[false]",
+        "  CoalescePartitionsExec",
+        "    RepartitionExec: partitioning=Hash([c@2], 10), input_partitions=10",
+        "      RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
+        "        CsvExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[a@0 ASC], has_header=false"];
+    let expected_optimized = ["SortPreservingMergeExec: [a@0 ASC]",
+        "  SortExec: expr=[a@0 ASC], preserve_partitioning=[true]",
+        "    RepartitionExec: partitioning=Hash([c@2], 10), input_partitions=10",
+        "      RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
+        "        CsvExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[a@0 ASC], has_header=false"];
+    assert_optimized!(expected_input, expected_optimized, physical_plan, true);
+
+    Ok(())
+}
+
+#[rstest]
+#[tokio::test]
+async fn test_with_lost_ordering_unbounded_bounded(
+    #[values(false, true)] source_unbounded: bool,
+) -> Result<()> {
+    let schema = create_test_schema3()?;
+    let sort_exprs = vec![sort_expr("a", &schema)];
+    // create either bounded or unbounded source
+    let source = if source_unbounded {
+        stream_exec_ordered(&schema, sort_exprs)
+    } else {
+        csv_exec_ordered(&schema, sort_exprs)
+    };
+    let repartition_rr = repartition_exec(source);
+    let repartition_hash = Arc::new(RepartitionExec::try_new(
+        repartition_rr,
+        Partitioning::Hash(vec![col("c", &schema).unwrap()], 10),
+    )?) as _;
+    let coalesce_partitions = coalesce_partitions_exec(repartition_hash);
+    let physical_plan = sort_exec(vec![sort_expr("a", &schema)], coalesce_partitions);
+
+    // Expected inputs unbounded and bounded
+    let expected_input_unbounded = vec![
+        "SortExec: expr=[a@0 ASC], preserve_partitioning=[false]",
+        "  CoalescePartitionsExec",
+        "    RepartitionExec: partitioning=Hash([c@2], 10), input_partitions=10",
+        "      RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
+        "        StreamingTableExec: partition_sizes=1, projection=[a, b, c, d, e], infinite_source=true, output_ordering=[a@0 ASC]",
+    ];
+    let expected_input_bounded = vec![
+        "SortExec: expr=[a@0 ASC], preserve_partitioning=[false]",
+        "  CoalescePartitionsExec",
+        "    RepartitionExec: partitioning=Hash([c@2], 10), input_partitions=10",
+        "      RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
+        "        CsvExec: file_groups={1 group: [[file_path]]}, projection=[a, b, c, d, e], output_ordering=[a@0 ASC], has_header=true",
+    ];
+
+    // Expected unbounded result (same for with and without flag)
+    let expected_optimized_unbounded = vec![
+        "SortPreservingMergeExec: [a@0 ASC]",
+        "  RepartitionExec: partitioning=Hash([c@2], 10), input_partitions=10, preserve_order=true, sort_exprs=a@0 ASC",
+        "    RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
+        "      StreamingTableExec: partition_sizes=1, projection=[a, b, c, d, e], infinite_source=true, output_ordering=[a@0 ASC]",
+    ];
+
+    // Expected bounded results with and without flag
+    let expected_optimized_bounded = vec![
+        "SortExec: expr=[a@0 ASC], preserve_partitioning=[false]",
+        "  CoalescePartitionsExec",
+        "    RepartitionExec: partitioning=Hash([c@2], 10), input_partitions=10",
+        "      RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
+        "        CsvExec: file_groups={1 group: [[file_path]]}, projection=[a, b, c, d, e], output_ordering=[a@0 ASC], has_header=true",
+    ];
+    let expected_optimized_bounded_parallelize_sort = vec![
+        "SortPreservingMergeExec: [a@0 ASC]",
+        "  SortExec: expr=[a@0 ASC], preserve_partitioning=[true]",
+        "    RepartitionExec: partitioning=Hash([c@2], 10), input_partitions=10",
+        "      RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
+        "        CsvExec: file_groups={1 group: [[file_path]]}, projection=[a, b, c, d, e], output_ordering=[a@0 ASC], has_header=true",
+    ];
+    let (expected_input, expected_optimized, expected_optimized_sort_parallelize) =
+        if source_unbounded {
+            (
+                expected_input_unbounded,
+                expected_optimized_unbounded.clone(),
+                expected_optimized_unbounded,
+            )
+        } else {
+            (
+                expected_input_bounded,
+                expected_optimized_bounded,
+                expected_optimized_bounded_parallelize_sort,
+            )
+        };
+    assert_optimized!(
+        expected_input,
+        expected_optimized,
+        physical_plan.clone(),
+        false
+    );
+    assert_optimized!(
+        expected_input,
+        expected_optimized_sort_parallelize,
+        physical_plan,
+        true
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_do_not_pushdown_through_spm() -> Result<()> {
+    let schema = create_test_schema3()?;
+    let sort_exprs = vec![sort_expr("a", &schema), sort_expr("b", &schema)];
+    let source = csv_exec_sorted(&schema, sort_exprs.clone());
+    let repartition_rr = repartition_exec(source);
+    let spm = sort_preserving_merge_exec(sort_exprs, repartition_rr);
+    let physical_plan = sort_exec(vec![sort_expr("b", &schema)], spm);
+
+    let expected_input = ["SortExec: expr=[b@1 ASC], preserve_partitioning=[false]",
+        "  SortPreservingMergeExec: [a@0 ASC, b@1 ASC]",
+        "    RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
+        "      CsvExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[a@0 ASC, b@1 ASC], has_header=false",];
+    let expected_optimized = ["SortExec: expr=[b@1 ASC], preserve_partitioning=[false]",
+        "  SortPreservingMergeExec: [a@0 ASC, b@1 ASC]",
+        "    RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
+        "      CsvExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[a@0 ASC, b@1 ASC], has_header=false",];
+    assert_optimized!(expected_input, expected_optimized, physical_plan, false);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_pushdown_through_spm() -> Result<()> {
+    let schema = create_test_schema3()?;
+    let sort_exprs = vec![sort_expr("a", &schema), sort_expr("b", &schema)];
+    let source = csv_exec_sorted(&schema, sort_exprs.clone());
+    let repartition_rr = repartition_exec(source);
+    let spm = sort_preserving_merge_exec(sort_exprs, repartition_rr);
+    let physical_plan = sort_exec(
+        vec![
+            sort_expr("a", &schema),
+            sort_expr("b", &schema),
+            sort_expr("c", &schema),
+        ],
+        spm,
+    );
+
+    let expected_input = ["SortExec: expr=[a@0 ASC, b@1 ASC, c@2 ASC], preserve_partitioning=[false]",
+        "  SortPreservingMergeExec: [a@0 ASC, b@1 ASC]",
+        "    RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
+        "      CsvExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[a@0 ASC, b@1 ASC], has_header=false",];
+    let expected_optimized = ["SortPreservingMergeExec: [a@0 ASC, b@1 ASC]",
+        "  SortExec: expr=[a@0 ASC, b@1 ASC, c@2 ASC], preserve_partitioning=[true]",
+        "    RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
+        "      CsvExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[a@0 ASC, b@1 ASC], has_header=false",];
+    assert_optimized!(expected_input, expected_optimized, physical_plan, false);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_window_multi_layer_requirement() -> Result<()> {
+    let schema = create_test_schema3()?;
+    let sort_exprs = vec![sort_expr("a", &schema), sort_expr("b", &schema)];
+    let source = csv_exec_sorted(&schema, vec![]);
+    let sort = sort_exec(sort_exprs.clone(), source);
+    let repartition = repartition_exec(sort);
+    let repartition = spr_repartition_exec(repartition);
+    let spm = sort_preserving_merge_exec(sort_exprs.clone(), repartition);
+
+    let physical_plan = bounded_window_exec("a", sort_exprs, spm);
+
+    let expected_input = [
+        "BoundedWindowAggExec: wdw=[count: Ok(Field { name: \"count\", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(NULL), end_bound: CurrentRow, is_causal: false }], mode=[Sorted]",
+        "  SortPreservingMergeExec: [a@0 ASC, b@1 ASC]",
+        "    RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=10, preserve_order=true, sort_exprs=a@0 ASC, b@1 ASC",
+        "      RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
+        "        SortExec: expr=[a@0 ASC, b@1 ASC], preserve_partitioning=[false]",
+        "          CsvExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], has_header=false",
+    ];
+    let expected_optimized = [
+        "BoundedWindowAggExec: wdw=[count: Ok(Field { name: \"count\", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(NULL), end_bound: CurrentRow, is_causal: false }], mode=[Sorted]",
+        "  SortExec: expr=[a@0 ASC, b@1 ASC], preserve_partitioning=[false]",
+        "    CoalescePartitionsExec",
+        "      RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=10",
+        "        RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
+        "          CsvExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], has_header=false",
+    ];
+    assert_optimized!(expected_input, expected_optimized, physical_plan, false);
+
+    Ok(())
+}
+#[tokio::test]
+async fn test_not_replaced_with_partial_sort_for_bounded_input() -> Result<()> {
+    let schema = create_test_schema3()?;
+    let input_sort_exprs = vec![sort_expr("b", &schema), sort_expr("c", &schema)];
+    let parquet_input = parquet_exec_sorted(&schema, input_sort_exprs);
+
+    let physical_plan = sort_exec(
+        vec![
+            sort_expr("a", &schema),
+            sort_expr("b", &schema),
+            sort_expr("c", &schema),
+        ],
+        parquet_input,
+    );
+    let expected_input = [
+        "SortExec: expr=[a@0 ASC, b@1 ASC, c@2 ASC], preserve_partitioning=[false]",
+        "  ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[b@1 ASC, c@2 ASC]"
+    ];
+    let expected_no_change = expected_input;
+    assert_optimized!(expected_input, expected_no_change, physical_plan, false);
     Ok(())
 }

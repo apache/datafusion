@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::fmt::Debug;
 use std::ops::Deref;
 use std::sync::Arc;
 
@@ -23,7 +24,6 @@ use datafusion::datasource::file_format::file_compression_type::FileCompressionT
 use datafusion::datasource::listing::PartitionedFile;
 use datafusion::datasource::object_store::ObjectStoreUrl;
 use datafusion::datasource::physical_plan::{CsvExec, FileScanConfig, ParquetExec};
-
 use datafusion_physical_expr::PhysicalExpr;
 use datafusion_physical_optimizer::enforce_sorting::EnforceSorting;
 use datafusion_physical_optimizer::output_requirements::OutputRequirements;
@@ -40,9 +40,7 @@ use datafusion_physical_plan::sorts::sort::SortExec;
 use datafusion_physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
 use datafusion_physical_plan::tree_node::PlanContext;
 use datafusion_physical_plan::union::UnionExec;
-
 use datafusion_physical_plan::{displayable, DisplayAs, DisplayFormatType, Statistics};
-
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion_common::ScalarValue;
 use datafusion_expr::{JoinType, Operator};
@@ -59,13 +57,9 @@ use datafusion_physical_plan::aggregates::{
 use datafusion_physical_plan::execution_plan::ExecutionPlan;
 use datafusion_physical_plan::projection::ProjectionExec;
 use datafusion_physical_plan::PlanProperties;
-use std::fmt::Debug;
-
 use datafusion_common::error::Result;
-
 use arrow::compute::SortOptions;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
-
 use datafusion_physical_plan::ExecutionPlanProperties;
 
 type DistributionContext = PlanContext<bool>;
@@ -172,30 +166,8 @@ impl ExecutionPlan for SortRequiredExec {
     }
 }
 
-pub(crate) fn schema() -> SchemaRef {
-    Arc::new(Schema::new(vec![
-        Field::new("a", DataType::Int64, true),
-        Field::new("b", DataType::Int64, true),
-        Field::new("c", DataType::Int64, true),
-        Field::new("d", DataType::Int32, true),
-        Field::new("e", DataType::Boolean, true),
-    ]))
-}
-
 fn parquet_exec() -> Arc<ParquetExec> {
     parquet_exec_with_sort(vec![])
-}
-
-/// create a single parquet file that is sorted
-pub(crate) fn parquet_exec_with_sort(
-    output_ordering: Vec<LexOrdering>,
-) -> Arc<ParquetExec> {
-    ParquetExec::builder(
-        FileScanConfig::new(ObjectStoreUrl::parse("test:///").unwrap(), schema())
-            .with_file(PartitionedFile::new("x".to_string(), 100))
-            .with_output_ordering(output_ordering),
-    )
-    .build_arc()
 }
 
 fn parquet_exec_multiple() -> Arc<ParquetExec> {
