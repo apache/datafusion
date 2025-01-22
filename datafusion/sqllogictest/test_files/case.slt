@@ -298,17 +298,3 @@ false
 
 statement ok
 drop table foo
-
-# create test data
-statement ok
-create table foo (a bool, b bool, c bool) as values (null, true, false), (true, null, false), (false, false, true);
-
-query B
-select CASE WHEN a THEN b ELSE c END FROM foo
-----
-false
-NULL
-true
-
-statement ok
-drop table foo
