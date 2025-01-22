@@ -20,7 +20,7 @@ use std::sync::Arc;
 
 use arrow_schema::SchemaRef;
 
-use crate::enforce_sorting::utils::{
+use crate::utils::{
     add_sort_above, is_sort, is_sort_preserving_merge, is_union, is_window,
 };
 use datafusion_common::tree_node::{

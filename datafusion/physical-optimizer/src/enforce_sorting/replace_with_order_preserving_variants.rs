@@ -21,7 +21,7 @@
 
 use std::sync::Arc;
 
-use super::utils::{
+use crate::utils::{
     is_coalesce_partitions, is_repartition, is_sort, is_sort_preserving_merge,
 };
 
