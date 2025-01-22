@@ -19,9 +19,11 @@ use crate::utils::make_scalar_function;
 use arrow::array::{ArrayAccessor, ArrayIter, ArrayRef, AsArray, Int32Array};
 use arrow::datatypes::DataType;
 use arrow::error::ArrowError;
+use datafusion_common::types::logical_string;
 use datafusion_common::{internal_err, Result};
 use datafusion_expr::{ColumnarValue, Documentation};
 use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
+use datafusion_expr_common::signature::TypeSignatureClass;
 use datafusion_macros::user_doc;
 use std::any::Any;
 use std::sync::Arc;
@@ -61,7 +63,10 @@ impl Default for AsciiFunc {
 impl AsciiFunc {
     pub fn new() -> Self {
         Self {
-            signature: Signature::string(1, Volatility::Immutable),
+            signature: Signature::coercible(
+                vec![TypeSignatureClass::Native(logical_string())],
+                Volatility::Immutable,
+            ),
         }
     }
 }
@@ -143,7 +148,7 @@ mod tests {
     use datafusion_common::{Result, ScalarValue};
     use datafusion_expr::{ColumnarValue, ScalarUDFImpl};
 
-    macro_rules! test_ascii {
+    macro_rules! test_ascii_string {
         ($INPUT:expr, $EXPECTED:expr) => {
             test_function!(
                 AsciiFunc::new(),
@@ -174,12 +179,92 @@ mod tests {
         };
     }
 
+    macro_rules! test_ascii_int {
+        ($INPUT:expr, $EXPECTED:expr) => {
+            test_function!(
+                AsciiFunc::new(),
+                vec![ColumnarValue::Scalar(ScalarValue::Int8($INPUT))],
+                $EXPECTED,
+                i32,
+                Int32,
+                Int32Array
+            );
+
+            test_function!(
+                AsciiFunc::new(),
+                vec![ColumnarValue::Scalar(ScalarValue::Int16($INPUT))],
+                $EXPECTED,
+                i32,
+                Int32,
+                Int32Array
+            );
+
+            test_function!(
+                AsciiFunc::new(),
+                vec![ColumnarValue::Scalar(ScalarValue::Int32($INPUT))],
+                $EXPECTED,
+                i32,
+                Int32,
+                Int32Array
+            );
+
+            test_function!(
+                AsciiFunc::new(),
+                vec![ColumnarValue::Scalar(ScalarValue::Int64($INPUT))],
+                $EXPECTED,
+                i32,
+                Int32,
+                Int32Array
+            );
+
+            test_function!(
+                AsciiFunc::new(),
+                vec![ColumnarValue::Scalar(ScalarValue::UInt8($INPUT))],
+                $EXPECTED,
+                i32,
+                Int32,
+                Int32Array
+            );
+
+            test_function!(
+                AsciiFunc::new(),
+                vec![ColumnarValue::Scalar(ScalarValue::UInt16($INPUT))],
+                $EXPECTED,
+                i32,
+                Int32,
+                Int32Array
+            );
+
+            test_function!(
+                AsciiFunc::new(),
+                vec![ColumnarValue::Scalar(ScalarValue::UInt32($INPUT))],
+                $EXPECTED,
+                i32,
+                Int32,
+                Int32Array
+            );
+
+            test_function!(
+                AsciiFunc::new(),
+                vec![ColumnarValue::Scalar(ScalarValue::UInt64($INPUT))],
+                $EXPECTED,
+                i32,
+                Int32,
+                Int32Array
+            );
+        };
+    }
+
     #[test]
     fn test_functions() -> Result<()> {
-        test_ascii!(Some(String::from("x")), Ok(Some(120)));
-        test_ascii!(Some(String::from("a")), Ok(Some(97)));
-        test_ascii!(Some(String::from("")), Ok(Some(0)));
-        test_ascii!(None, Ok(None));
+        test_ascii_string!(Some(String::from("x")), Ok(Some(120)));
+        test_ascii_string!(Some(String::from("a")), Ok(Some(97)));
+        test_ascii_string!(Some(String::from("")), Ok(Some(0)));
+        test_ascii_string!(None, Ok(None));
+
+        test_ascii_int!(Some(2), Ok(Some(50)));
+        test_ascii_int!(None, Ok(None));
+
         Ok(())
     }
 }
