@@ -465,10 +465,16 @@ SELECT concat_ws('|','a',NULL,NULL)
 ----
 a
 
+statement ok
+create table foo (a varchar, b varchar) as values ('a', 'b');
+
 query T
-SELECT concat_ws('','a','b','c')
+SELECT concat_ws('',a,b,'c') from foo
 ----
 abc
+
+statement ok
+drop table foo
 
 query T
 SELECT initcap('')
