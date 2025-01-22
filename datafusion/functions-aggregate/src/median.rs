@@ -397,7 +397,7 @@ impl<T: ArrowNumericType + Send> GroupsAccumulator for MedianGroupsAccumulator<T
 
         // Build the result list array
         let result_list_array = ListArray::new(
-            Arc::new(Field::new_list_field(self.data_type.clone(), false)),
+            Arc::new(Field::new_list_field(self.data_type.clone(), true)),
             offsets,
             Arc::new(group_values_array),
             None,
@@ -449,7 +449,7 @@ impl<T: ArrowNumericType + Send> GroupsAccumulator for MedianGroupsAccumulator<T
         let nulls = filtered_null_mask(opt_filter, input_array);
 
         let converted_list_array = ListArray::new(
-            Arc::new(Field::new_list_field(self.data_type.clone(), false)),
+            Arc::new(Field::new_list_field(self.data_type.clone(), true)),
             offsets,
             Arc::new(values),
             nulls,
