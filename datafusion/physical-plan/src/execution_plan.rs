@@ -46,6 +46,7 @@ pub use crate::display::{DefaultDisplay, DisplayAs, DisplayFormatType, VerboseDi
 pub use crate::metrics::Metric;
 use crate::metrics::MetricsSet;
 pub use crate::ordering::InputOrderMode;
+use crate::projection::ProjectionExec;
 use crate::repartition::RepartitionExec;
 use crate::sorts::sort_preserving_merge::SortPreservingMergeExec;
 pub use crate::stream::EmptyRecordBatchStream;
@@ -430,6 +431,17 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
     /// Gets the effect on cardinality, if known
     fn cardinality_effect(&self) -> CardinalityEffect {
         CardinalityEffect::Unknown
+    }
+
+    // If try_swapping_with_projection is not implemented we conservatively
+    // assume that pushing the projection down may hurt.
+    // When adding new operators, consider adding them here if you
+    // think pushing projections under them is beneficial.
+    fn try_swapping_with_projection(
+        &self,
+        _projection: &ProjectionExec,
+    ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+        Ok(None)
     }
 }
 

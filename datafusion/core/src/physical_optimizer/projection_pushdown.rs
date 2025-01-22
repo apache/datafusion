@@ -23,8 +23,6 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use super::output_requirements::OutputRequirementExec;
-use crate::datasource::physical_plan::CsvExec;
 use crate::error::Result;
 use crate::physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use crate::physical_plan::filter::FilterExec;
@@ -33,12 +31,10 @@ use crate::physical_plan::joins::{
     CrossJoinExec, HashJoinExec, NestedLoopJoinExec, SortMergeJoinExec,
     SymmetricHashJoinExec,
 };
-use crate::physical_plan::memory::MemoryExec;
+
 use crate::physical_plan::projection::ProjectionExec;
-use crate::physical_plan::repartition::RepartitionExec;
-use crate::physical_plan::sorts::sort::SortExec;
-use crate::physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
-use crate::physical_plan::{Distribution, ExecutionPlan, ExecutionPlanProperties};
+
+use crate::physical_plan::{ExecutionPlan, ExecutionPlanProperties};
 
 use arrow_schema::SchemaRef;
 use datafusion_common::config::ConfigOptions;
@@ -47,15 +43,10 @@ use datafusion_common::tree_node::{
 };
 use datafusion_common::{internal_err, JoinSide};
 use datafusion_physical_expr::expressions::{Column, Literal};
-use datafusion_physical_expr::{
-    utils::collect_columns, Partitioning, PhysicalExpr, PhysicalExprRef,
-    PhysicalSortExpr, PhysicalSortRequirement,
-};
+use datafusion_physical_expr::{utils::collect_columns, PhysicalExpr, PhysicalExprRef};
 use datafusion_physical_plan::joins::utils::{JoinOn, JoinOnRef};
-use datafusion_physical_plan::streaming::StreamingTableExec;
-use datafusion_physical_plan::union::UnionExec;
 
-use datafusion_physical_expr_common::sort_expr::{LexOrdering, LexRequirement};
+use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use itertools::Itertools;
 
@@ -106,11 +97,7 @@ pub fn remove_unnecessary_projections(
         }
         // If it does, check if we can push it under its child(ren):
         let input = projection.input().as_any();
-        if let Some(csv) = input.downcast_ref::<CsvExec>() {
-            try_swapping_with_csv(projection, csv)
-        } else if let Some(memory) = input.downcast_ref::<MemoryExec>() {
-            try_swapping_with_memory(projection, memory)?
-        } else if let Some(child_projection) = input.downcast_ref::<ProjectionExec>() {
+        if let Some(child_projection) = input.downcast_ref::<ProjectionExec>() {
             let maybe_unified = try_unifying_projections(projection, child_projection)?;
             return if let Some(new_plan) = maybe_unified {
                 // To unify 3 or more sequential projections:
@@ -120,23 +107,15 @@ pub fn remove_unnecessary_projections(
             } else {
                 Ok(Transformed::no(plan))
             };
-        } else if let Some(output_req) = input.downcast_ref::<OutputRequirementExec>() {
-            try_swapping_with_output_req(projection, output_req)?
         } else if input.is::<CoalescePartitionsExec>() {
             try_swapping_with_coalesce_partitions(projection)?
         } else if let Some(filter) = input.downcast_ref::<FilterExec>() {
-            try_swapping_with_filter(projection, filter)?.map_or_else(
-                || try_embed_projection(projection, filter),
-                |e| Ok(Some(e)),
-            )?
-        } else if let Some(repartition) = input.downcast_ref::<RepartitionExec>() {
-            try_swapping_with_repartition(projection, repartition)?
-        } else if let Some(sort) = input.downcast_ref::<SortExec>() {
-            try_swapping_with_sort(projection, sort)?
-        } else if let Some(spm) = input.downcast_ref::<SortPreservingMergeExec>() {
-            try_swapping_with_sort_preserving_merge(projection, spm)?
-        } else if let Some(union) = input.downcast_ref::<UnionExec>() {
-            try_pushdown_through_union(projection, union)?
+            filter
+                .try_swapping_with_projection(projection)?
+                .map_or_else(
+                    || try_embed_projection(projection, filter),
+                    |e| Ok(Some(e)),
+                )?
         } else if let Some(hash_join) = input.downcast_ref::<HashJoinExec>() {
             try_pushdown_through_hash_join(projection, hash_join)?
         } else if let Some(cross_join) = input.downcast_ref::<CrossJoinExec>() {
@@ -147,126 +126,16 @@ pub fn remove_unnecessary_projections(
             try_swapping_with_sort_merge_join(projection, sm_join)?
         } else if let Some(sym_join) = input.downcast_ref::<SymmetricHashJoinExec>() {
             try_swapping_with_sym_hash_join(projection, sym_join)?
-        } else if let Some(ste) = input.downcast_ref::<StreamingTableExec>() {
-            try_swapping_with_streaming_table(projection, ste)?
         } else {
-            // If the input plan of the projection is not one of the above, we
-            // conservatively assume that pushing the projection down may hurt.
-            // When adding new operators, consider adding them here if you
-            // think pushing projections under them is beneficial.
-            None
+            projection
+                .input()
+                .try_swapping_with_projection(projection)?
         }
     } else {
         return Ok(Transformed::no(plan));
     };
 
     Ok(maybe_modified.map_or(Transformed::no(plan), Transformed::yes))
-}
-
-/// Tries to embed `projection` to its input (`csv`). If possible, returns
-/// [`CsvExec`] as the top plan. Otherwise, returns `None`.
-fn try_swapping_with_csv(
-    projection: &ProjectionExec,
-    csv: &CsvExec,
-) -> Option<Arc<dyn ExecutionPlan>> {
-    // If there is any non-column or alias-carrier expression, Projection should not be removed.
-    // This process can be moved into CsvExec, but it would be an overlap of their responsibility.
-    all_alias_free_columns(projection.expr()).then(|| {
-        let mut file_scan = csv.base_config().clone();
-        let new_projections = new_projections_for_columns(
-            projection,
-            &file_scan
-                .projection
-                .unwrap_or((0..csv.schema().fields().len()).collect()),
-        );
-        file_scan.projection = Some(new_projections);
-
-        Arc::new(
-            CsvExec::builder(file_scan)
-                .with_has_header(csv.has_header())
-                .with_delimeter(csv.delimiter())
-                .with_quote(csv.quote())
-                .with_escape(csv.escape())
-                .with_comment(csv.comment())
-                .with_newlines_in_values(csv.newlines_in_values())
-                .with_file_compression_type(csv.file_compression_type)
-                .build(),
-        ) as _
-    })
-}
-
-/// Tries to embed `projection` to its input (`memory`). If possible, returns
-/// [`MemoryExec`] as the top plan. Otherwise, returns `None`.
-fn try_swapping_with_memory(
-    projection: &ProjectionExec,
-    memory: &MemoryExec,
-) -> Result<Option<Arc<dyn ExecutionPlan>>> {
-    // If there is any non-column or alias-carrier expression, Projection should not be removed.
-    // This process can be moved into MemoryExec, but it would be an overlap of their responsibility.
-    all_alias_free_columns(projection.expr())
-        .then(|| {
-            let all_projections = (0..memory.schema().fields().len()).collect();
-            let new_projections = new_projections_for_columns(
-                projection,
-                memory.projection().as_ref().unwrap_or(&all_projections),
-            );
-
-            MemoryExec::try_new(
-                memory.partitions(),
-                memory.original_schema(),
-                Some(new_projections),
-            )
-            .map(|e| Arc::new(e) as _)
-        })
-        .transpose()
-}
-
-/// Tries to embed `projection` to its input (`streaming table`).
-/// If possible, returns [`StreamingTableExec`] as the top plan. Otherwise,
-/// returns `None`.
-fn try_swapping_with_streaming_table(
-    projection: &ProjectionExec,
-    streaming_table: &StreamingTableExec,
-) -> Result<Option<Arc<dyn ExecutionPlan>>> {
-    if !all_alias_free_columns(projection.expr()) {
-        return Ok(None);
-    }
-
-    let streaming_table_projections = streaming_table
-        .projection()
-        .as_ref()
-        .map(|i| i.as_ref().to_vec());
-    let new_projections = new_projections_for_columns(
-        projection,
-        &streaming_table_projections
-            .unwrap_or((0..streaming_table.schema().fields().len()).collect()),
-    );
-
-    let mut lex_orderings = vec![];
-    for lex_ordering in streaming_table.projected_output_ordering().into_iter() {
-        let mut orderings = LexOrdering::default();
-        for order in lex_ordering {
-            let Some(new_ordering) = update_expr(&order.expr, projection.expr(), false)?
-            else {
-                return Ok(None);
-            };
-            orderings.push(PhysicalSortExpr {
-                expr: new_ordering,
-                options: order.options,
-            });
-        }
-        lex_orderings.push(orderings);
-    }
-
-    StreamingTableExec::try_new(
-        Arc::clone(streaming_table.partition_schema()),
-        streaming_table.partitions().clone(),
-        Some(new_projections.as_ref()),
-        lex_orderings,
-        streaming_table.is_infinite(),
-        streaming_table.limit(),
-    )
-    .map(|e| Some(Arc::new(e) as _))
 }
 
 /// Unifies `projection` with its input (which is also a [`ProjectionExec`]).
@@ -321,57 +190,6 @@ fn is_expr_trivial(expr: &Arc<dyn PhysicalExpr>) -> bool {
         || expr.as_any().downcast_ref::<Literal>().is_some()
 }
 
-/// Tries to swap `projection` with its input (`output_req`). If possible,
-/// performs the swap and returns [`OutputRequirementExec`] as the top plan.
-/// Otherwise, returns `None`.
-fn try_swapping_with_output_req(
-    projection: &ProjectionExec,
-    output_req: &OutputRequirementExec,
-) -> Result<Option<Arc<dyn ExecutionPlan>>> {
-    // If the projection does not narrow the schema, we should not try to push it down:
-    if projection.expr().len() >= projection.input().schema().fields().len() {
-        return Ok(None);
-    }
-
-    let mut updated_sort_reqs = LexRequirement::new(vec![]);
-    // None or empty_vec can be treated in the same way.
-    if let Some(reqs) = &output_req.required_input_ordering()[0] {
-        for req in &reqs.inner {
-            let Some(new_expr) = update_expr(&req.expr, projection.expr(), false)? else {
-                return Ok(None);
-            };
-            updated_sort_reqs.push(PhysicalSortRequirement {
-                expr: new_expr,
-                options: req.options,
-            });
-        }
-    }
-
-    let dist_req = match &output_req.required_input_distribution()[0] {
-        Distribution::HashPartitioned(exprs) => {
-            let mut updated_exprs = vec![];
-            for expr in exprs {
-                let Some(new_expr) = update_expr(expr, projection.expr(), false)? else {
-                    return Ok(None);
-                };
-                updated_exprs.push(new_expr);
-            }
-            Distribution::HashPartitioned(updated_exprs)
-        }
-        dist => dist.clone(),
-    };
-
-    make_with_child(projection, &output_req.input())
-        .map(|input| {
-            OutputRequirementExec::new(
-                input,
-                (!updated_sort_reqs.is_empty()).then_some(updated_sort_reqs),
-                dist_req,
-            )
-        })
-        .map(|e| Some(Arc::new(e) as _))
-}
-
 /// Tries to swap `projection` with its input, which is known to be a
 /// [`CoalescePartitionsExec`]. If possible, performs the swap and returns
 /// [`CoalescePartitionsExec`] as the top plan. Otherwise, returns `None`.
@@ -385,156 +203,6 @@ fn try_swapping_with_coalesce_partitions(
     // CoalescePartitionsExec always has a single child, so zero indexing is safe.
     make_with_child(projection, projection.input().children()[0])
         .map(|e| Some(Arc::new(CoalescePartitionsExec::new(e)) as _))
-}
-
-/// Tries to swap `projection` with its input (`filter`). If possible, performs
-/// the swap and returns [`FilterExec`] as the top plan. Otherwise, returns `None`.
-fn try_swapping_with_filter(
-    projection: &ProjectionExec,
-    filter: &FilterExec,
-) -> Result<Option<Arc<dyn ExecutionPlan>>> {
-    // If the projection does not narrow the schema, we should not try to push it down:
-    if projection.expr().len() >= projection.input().schema().fields().len() {
-        return Ok(None);
-    }
-    // Each column in the predicate expression must exist after the projection.
-    let Some(new_predicate) = update_expr(filter.predicate(), projection.expr(), false)?
-    else {
-        return Ok(None);
-    };
-
-    FilterExec::try_new(new_predicate, make_with_child(projection, filter.input())?)
-        .and_then(|e| {
-            let selectivity = filter.default_selectivity();
-            e.with_default_selectivity(selectivity)
-        })
-        .map(|e| Some(Arc::new(e) as _))
-}
-
-/// Tries to swap the projection with its input [`RepartitionExec`]. If it can be done,
-/// it returns the new swapped version having the [`RepartitionExec`] as the top plan.
-/// Otherwise, it returns None.
-fn try_swapping_with_repartition(
-    projection: &ProjectionExec,
-    repartition: &RepartitionExec,
-) -> Result<Option<Arc<dyn ExecutionPlan>>> {
-    // If the projection does not narrow the schema, we should not try to push it down.
-    if projection.expr().len() >= projection.input().schema().fields().len() {
-        return Ok(None);
-    }
-
-    // If pushdown is not beneficial or applicable, break it.
-    if projection.benefits_from_input_partitioning()[0] || !all_columns(projection.expr())
-    {
-        return Ok(None);
-    }
-
-    let new_projection = make_with_child(projection, repartition.input())?;
-
-    let new_partitioning = match repartition.partitioning() {
-        Partitioning::Hash(partitions, size) => {
-            let mut new_partitions = vec![];
-            for partition in partitions {
-                let Some(new_partition) =
-                    update_expr(partition, projection.expr(), false)?
-                else {
-                    return Ok(None);
-                };
-                new_partitions.push(new_partition);
-            }
-            Partitioning::Hash(new_partitions, *size)
-        }
-        others => others.clone(),
-    };
-
-    Ok(Some(Arc::new(RepartitionExec::try_new(
-        new_projection,
-        new_partitioning,
-    )?)))
-}
-
-/// Tries to swap the projection with its input [`SortExec`]. If it can be done,
-/// it returns the new swapped version having the [`SortExec`] as the top plan.
-/// Otherwise, it returns None.
-fn try_swapping_with_sort(
-    projection: &ProjectionExec,
-    sort: &SortExec,
-) -> Result<Option<Arc<dyn ExecutionPlan>>> {
-    // If the projection does not narrow the schema, we should not try to push it down.
-    if projection.expr().len() >= projection.input().schema().fields().len() {
-        return Ok(None);
-    }
-
-    let mut updated_exprs = LexOrdering::default();
-    for sort in sort.expr() {
-        let Some(new_expr) = update_expr(&sort.expr, projection.expr(), false)? else {
-            return Ok(None);
-        };
-        updated_exprs.push(PhysicalSortExpr {
-            expr: new_expr,
-            options: sort.options,
-        });
-    }
-
-    Ok(Some(Arc::new(
-        SortExec::new(updated_exprs, make_with_child(projection, sort.input())?)
-            .with_fetch(sort.fetch())
-            .with_preserve_partitioning(sort.preserve_partitioning()),
-    )))
-}
-
-/// Tries to swap the projection with its input [`SortPreservingMergeExec`].
-/// If this is possible, it returns the new [`SortPreservingMergeExec`] whose
-/// child is a projection. Otherwise, it returns None.
-fn try_swapping_with_sort_preserving_merge(
-    projection: &ProjectionExec,
-    spm: &SortPreservingMergeExec,
-) -> Result<Option<Arc<dyn ExecutionPlan>>> {
-    // If the projection does not narrow the schema, we should not try to push it down.
-    if projection.expr().len() >= projection.input().schema().fields().len() {
-        return Ok(None);
-    }
-
-    let mut updated_exprs = LexOrdering::default();
-    for sort in spm.expr() {
-        let Some(updated_expr) = update_expr(&sort.expr, projection.expr(), false)?
-        else {
-            return Ok(None);
-        };
-        updated_exprs.push(PhysicalSortExpr {
-            expr: updated_expr,
-            options: sort.options,
-        });
-    }
-
-    Ok(Some(Arc::new(
-        SortPreservingMergeExec::new(
-            updated_exprs,
-            make_with_child(projection, spm.input())?,
-        )
-        .with_fetch(spm.fetch()),
-    )))
-}
-
-/// Tries to push `projection` down through `union`. If possible, performs the
-/// pushdown and returns a new [`UnionExec`] as the top plan which has projections
-/// as its children. Otherwise, returns `None`.
-fn try_pushdown_through_union(
-    projection: &ProjectionExec,
-    union: &UnionExec,
-) -> Result<Option<Arc<dyn ExecutionPlan>>> {
-    // If the projection doesn't narrow the schema, we shouldn't try to push it down.
-    if projection.expr().len() >= projection.input().schema().fields().len() {
-        return Ok(None);
-    }
-
-    let new_children = union
-        .children()
-        .into_iter()
-        .map(|child| make_with_child(projection, child))
-        .collect::<Result<Vec<_>>>()?;
-
-    Ok(Some(Arc::new(UnionExec::new(new_children))))
 }
 
 trait EmbeddedProjection: ExecutionPlan + Sized {
@@ -964,35 +632,6 @@ fn is_projection_removable(projection: &ProjectionExec) -> bool {
     }) && exprs.len() == projection.input().schema().fields().len()
 }
 
-/// Given the expression set of a projection, checks if the projection causes
-/// any renaming or constructs a non-`Column` physical expression.
-fn all_alias_free_columns(exprs: &[(Arc<dyn PhysicalExpr>, String)]) -> bool {
-    exprs.iter().all(|(expr, alias)| {
-        expr.as_any()
-            .downcast_ref::<Column>()
-            .map(|column| column.name() == alias)
-            .unwrap_or(false)
-    })
-}
-
-/// Updates a source provider's projected columns according to the given
-/// projection operator's expressions. To use this function safely, one must
-/// ensure that all expressions are `Column` expressions without aliases.
-fn new_projections_for_columns(
-    projection: &ProjectionExec,
-    source: &[usize],
-) -> Vec<usize> {
-    projection
-        .expr()
-        .iter()
-        .filter_map(|(expr, _)| {
-            expr.as_any()
-                .downcast_ref::<Column>()
-                .map(|expr| source[expr.index()])
-        })
-        .collect()
-}
-
 /// The function operates in two modes:
 ///
 /// 1) When `sync_with_child` is `true`:
@@ -1081,11 +720,6 @@ fn make_with_child(
 ) -> Result<Arc<dyn ExecutionPlan>> {
     ProjectionExec::try_new(projection.expr().to_vec(), Arc::clone(child))
         .map(|e| Arc::new(e) as _)
-}
-
-/// Returns `true` if all the expressions in the argument are `Column`s.
-fn all_columns(exprs: &[(Arc<dyn PhysicalExpr>, String)]) -> bool {
-    exprs.iter().all(|(expr, _)| expr.as_any().is::<Column>())
 }
 
 /// Downcasts all the expressions in `exprs` to `Column`s. If any of the given
@@ -1353,6 +987,20 @@ fn new_join_children(
 mod tests {
     use super::*;
     use std::any::Any;
+
+    use crate::datasource::physical_plan::CsvExec;
+    use crate::physical_plan::memory::MemoryExec;
+    use crate::physical_plan::repartition::RepartitionExec;
+    use crate::physical_plan::sorts::sort::SortExec;
+    use crate::physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
+    use datafusion_physical_expr::{
+        Distribution, Partitioning, PhysicalExpr, PhysicalSortExpr,
+        PhysicalSortRequirement,
+    };
+    use datafusion_physical_expr_common::sort_expr::{LexOrdering, LexRequirement};
+    use datafusion_physical_optimizer::output_requirements::OutputRequirementExec;
+    use datafusion_physical_plan::streaming::StreamingTableExec;
+    use datafusion_physical_plan::union::UnionExec;
 
     use crate::datasource::file_format::file_compression_type::FileCompressionType;
     use crate::datasource::listing::PartitionedFile;

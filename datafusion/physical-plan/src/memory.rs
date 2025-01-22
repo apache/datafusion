@@ -29,6 +29,8 @@ use super::{
     Statistics,
 };
 use crate::execution_plan::{Boundedness, EmissionType};
+use crate::projection::ProjectionExec;
+use crate::projection_utils::{all_alias_free_columns, new_projections_for_columns};
 
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
@@ -165,6 +167,30 @@ impl ExecutionPlan for MemoryExec {
             &self.schema,
             self.projection.clone(),
         ))
+    }
+
+    fn try_swapping_with_projection(
+        &self,
+        projection: &ProjectionExec,
+    ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+        // If there is any non-column or alias-carrier expression, Projection should not be removed.
+        // This process can be moved into MemoryExec, but it would be an overlap of their responsibility.
+        all_alias_free_columns(projection.expr())
+            .then(|| {
+                let all_projections = (0..self.schema().fields().len()).collect();
+                let new_projections = new_projections_for_columns(
+                    projection,
+                    self.projection().as_ref().unwrap_or(&all_projections),
+                );
+
+                MemoryExec::try_new(
+                    self.partitions(),
+                    self.original_schema(),
+                    Some(new_projections),
+                )
+                .map(|e| Arc::new(e) as _)
+            })
+            .transpose()
     }
 }
 

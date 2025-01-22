@@ -25,6 +25,8 @@ use super::{
     RecordBatchStream, SendableRecordBatchStream, Statistics,
 };
 use crate::common::can_project;
+use crate::projection::ProjectionExec;
+use crate::projection_utils::{make_with_child, update_expr};
 use crate::{
     metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet},
     DisplayFormatType, ExecutionPlan,
@@ -398,6 +400,31 @@ impl ExecutionPlan for FilterExec {
 
     fn cardinality_effect(&self) -> CardinalityEffect {
         CardinalityEffect::LowerEqual
+    }
+
+    /// Tries to swap `projection` with its input (`filter`). If possible, performs
+    /// the swap and returns [`FilterExec`] as the top plan. Otherwise, returns `None`.
+    fn try_swapping_with_projection(
+        &self,
+        projection: &ProjectionExec,
+    ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+        // If the projection does not narrow the schema, we should not try to push it down:
+        if projection.expr().len() >= projection.input().schema().fields().len() {
+            return Ok(None);
+        }
+        // Each column in the predicate expression must exist after the projection.
+        let Some(new_predicate) =
+            update_expr(self.predicate(), projection.expr(), false)?
+        else {
+            return Ok(None);
+        };
+
+        FilterExec::try_new(new_predicate, make_with_child(projection, self.input())?)
+            .and_then(|e| {
+                let selectivity = self.default_selectivity();
+                e.with_default_selectivity(selectivity)
+            })
+            .map(|e| Some(Arc::new(e) as _))
     }
 }
 
