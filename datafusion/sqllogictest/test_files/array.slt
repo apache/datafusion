@@ -2750,6 +2750,15 @@ select
 ----
 [[1], [1], [1], [1], [1]] [[1.1, 2.2, 3.3], [1.1, 2.2, 3.3], [1.1, 2.2, 3.3]] [[NULL, NULL], [NULL, NULL], [NULL, NULL]] [[[1, 2], [3, 4]], [[1, 2], [3, 4]]]
 
+# array_repeat scalar function with count of different integer types
+query ???
+Select
+  array_repeat(1, arrow_cast(2,'Int8')),
+  array_repeat(2, arrow_cast(2,'Int16')),
+  array_repeat(3, arrow_cast(2,'Int32'));
+----
+[1, 1] [2, 2] [3, 3]
+
 # array_repeat with columns #1
 
 statement ok

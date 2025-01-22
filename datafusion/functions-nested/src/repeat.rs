@@ -20,6 +20,7 @@
 use crate::utils::make_scalar_function;
 use arrow::array::{Capacities, MutableArrayData};
 use arrow::compute;
+use arrow::compute::cast;
 use arrow_array::{
     new_null_array, Array, ArrayRef, GenericListArray, Int64Array, ListArray,
     OffsetSizeTrait,
@@ -136,7 +137,17 @@ pub fn array_repeat_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
     }
 
     let element = &args[0];
-    let count_array = as_int64_array(&args[1])?;
+    let count_array = &args[1];
+
+    let count_array = match count_array.data_type() {
+        DataType::Int8 | DataType::Int16 | DataType::Int32 => {
+            &cast(count_array, &DataType::Int64)?
+        }
+        DataType::Int64 => count_array,
+        _ => return exec_err!("count must be an integer type"),
+    };
+
+    let count_array = as_int64_array(&count_array)?;
 
     match element.data_type() {
         List(_) => {
