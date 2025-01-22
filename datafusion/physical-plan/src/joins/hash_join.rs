@@ -952,7 +952,7 @@ async fn collect_left_input(
         offset += batch.batch.num_rows();
     }
     // Merge all batches into a single batch, so we can directly index into the arrays
-    let record_batches = batches.iter().map(|b| &b.batch);
+    let record_batches = batches.iter().rev().map(|b| &b.batch);
     let single_batch = concat_batches(&schema, record_batches)?;
 
     // Reserve additional memory for visited indices bitmap and create shared builder
