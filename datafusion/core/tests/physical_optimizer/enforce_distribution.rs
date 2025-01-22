@@ -20,6 +20,7 @@ use std::ops::Deref;
 use std::sync::Arc;
 
 use crate::physical_optimizer::parquet_exec_with_sort;
+
 use arrow::compute::SortOptions;
 use datafusion::config::ConfigOptions;
 use datafusion::datasource::file_format::file_compression_type::FileCompressionType;
@@ -39,6 +40,7 @@ use datafusion_physical_expr_common::sort_expr::LexRequirement;
 use datafusion_physical_optimizer::enforce_distribution::*;
 use datafusion_physical_optimizer::enforce_sorting::EnforceSorting;
 use datafusion_physical_optimizer::output_requirements::OutputRequirements;
+use datafusion_physical_optimizer::test_utils::trim_plan_display;
 use datafusion_physical_optimizer::test_utils::{
     check_integrity, coalesce_partitions_exec, repartition_exec, schema,
     sort_merge_join_exec, sort_preserving_merge_exec,
@@ -63,7 +65,6 @@ use datafusion_physical_plan::{displayable, DisplayAs, DisplayFormatType, Statis
 
 /// Models operators like BoundedWindowExec that require an input
 /// ordering but is easy to construct
-///
 #[derive(Debug)]
 struct SortRequiredExec {
     input: Arc<dyn ExecutionPlan>,
@@ -338,13 +339,6 @@ fn sort_required_exec_with_req(
     sort_exprs: LexOrdering,
 ) -> Arc<dyn ExecutionPlan> {
     Arc::new(SortRequiredExec::new_with_requirement(input, sort_exprs))
-}
-
-pub(crate) fn trim_plan_display(plan: &str) -> Vec<&str> {
-    plan.split('\n')
-        .map(|s| s.trim())
-        .filter(|s| !s.is_empty())
-        .collect()
 }
 
 fn ensure_distribution_helper(

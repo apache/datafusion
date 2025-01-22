@@ -15,11 +15,13 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use async_trait::async_trait;
+use std::sync::Arc;
+
 use datafusion::datasource::stream::{FileStreamProvider, StreamConfig, StreamTable};
 use datafusion::prelude::{CsvReadOptions, SessionContext};
 use datafusion_common::Result;
-use std::sync::Arc;
+
+use async_trait::async_trait;
 
 async fn register_current_csv(
     ctx: &SessionContext,
@@ -75,6 +77,7 @@ impl SqlTestCase for UnaryTestCase {
         self.expect_fail
     }
 }
+
 /// [BinaryTestCase] is designed for binary input [ExecutionPlan]s.
 pub struct BinaryTestCase {
     pub source_types: (SourceType, SourceType),
@@ -117,6 +120,7 @@ impl QueryCase {
         }
         Ok(())
     }
+
     async fn run_case(&self, ctx: SessionContext, error: Option<&String>) -> Result<()> {
         let dataframe = ctx.sql(self.sql.as_str()).await?;
         let plan = dataframe.create_physical_plan().await;

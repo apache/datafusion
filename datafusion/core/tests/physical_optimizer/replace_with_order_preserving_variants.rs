@@ -36,14 +36,14 @@ use datafusion_physical_plan::{
     displayable, get_plan_string, ExecutionPlan, Partitioning,
 };
 use datafusion_common::tree_node::{TransformedResult, TreeNode};
-    use datafusion_common::Result;
-    use datafusion_expr::{JoinType, Operator};
-    use datafusion_physical_expr::expressions::{self, col, Column};
-    use datafusion_physical_expr::PhysicalSortExpr;
-    use datafusion_physical_optimizer::test_utils::{check_integrity, stream_exec_ordered_with_projection};
-    use datafusion_physical_optimizer::enforce_sorting::replace_with_order_preserving_variants::{replace_with_order_preserving_variants, OrderPreservationContext};
-
+use datafusion_common::Result;
+use datafusion_expr::{JoinType, Operator};
+use datafusion_physical_expr::expressions::{self, col, Column};
+use datafusion_physical_expr::PhysicalSortExpr;
+use datafusion_physical_optimizer::test_utils::{check_integrity, stream_exec_ordered_with_projection};
+use datafusion_physical_optimizer::enforce_sorting::replace_with_order_preserving_variants::{replace_with_order_preserving_variants, OrderPreservationContext};
 use datafusion_common::config::ConfigOptions;
+
 use object_store::memory::InMemory;
 use object_store::ObjectStore;
 use rstest::rstest;
@@ -1117,9 +1117,6 @@ async fn test_with_multiple_child_trees(
     );
     Ok(())
 }
-
-// End test cases
-// Start test helpers
 
 fn sort_expr(name: &str, schema: &Schema) -> PhysicalSortExpr {
     let sort_opts = SortOptions {

@@ -20,6 +20,7 @@
 use std::sync::Arc;
 
 use crate::physical_optimizer::parquet_exec_with_sort;
+
 use arrow::{compute::SortOptions, util::pretty::pretty_format_batches};
 use datafusion::prelude::SessionContext;
 use datafusion_common::Result;

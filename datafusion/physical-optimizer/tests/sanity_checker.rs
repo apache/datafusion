@@ -16,9 +16,8 @@
 // under the License.
 
 //! Tests for [`SanityCheckPlan`] physical optimizer rule
-//!
-//! Note these tests are not in the same module as the optimizer pass because
-//! they rely on `ParquetExec` which is in the core crate.
+
+use std::sync::Arc;
 
 use arrow::compute::SortOptions;
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
@@ -35,7 +34,6 @@ use datafusion_physical_optimizer::{sanity_checker::*, PhysicalOptimizerRule};
 use datafusion_physical_plan::displayable;
 use datafusion_physical_plan::repartition::RepartitionExec;
 use datafusion_physical_plan::ExecutionPlan;
-use std::sync::Arc;
 
 fn create_test_schema() -> SchemaRef {
     Arc::new(Schema::new(vec![Field::new("c9", DataType::Int32, true)]))

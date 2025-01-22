@@ -20,11 +20,10 @@
 //! Note these tests are not in the same module as the optimizer pass because
 //! they rely on `ParquetExec` which is in the core crate.
 
-//! Tests for [`CombinePartialFinalAggregate`] physical optimizer rule
-
 use std::sync::Arc;
 
 use crate::physical_optimizer::parquet_exec;
+
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion::physical_optimizer::combine_partial_final_agg::CombinePartialFinalAggregate;
 use datafusion::physical_optimizer::test_utils::trim_plan_display;

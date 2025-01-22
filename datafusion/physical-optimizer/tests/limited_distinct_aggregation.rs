@@ -16,9 +16,8 @@
 // under the License.
 
 //! Tests for [`LimitedDistinctAggregation`] physical optimizer rule
-//!
-//! Note these tests are not in the same module as the optimizer pass because
-//! they rely on `ParquetExec` which is in the core crate.
+
+use std::sync::Arc;
 
 use arrow_schema::DataType;
 use datafusion_common::Result;
@@ -33,7 +32,6 @@ use datafusion_physical_plan::{
     limit::LocalLimitExec,
     ExecutionPlan,
 };
-use std::sync::Arc;
 
 #[test]
 fn test_no_group_by() -> Result<()> {

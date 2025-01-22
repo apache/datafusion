@@ -22,9 +22,7 @@ use datafusion_common::Result;
 use datafusion_physical_expr::expressions::{col, NotExpr};
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use datafusion_physical_plan::displayable;
-
 use datafusion_physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
-
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use datafusion_physical_optimizer::enforce_sorting::{EnforceSorting,PlanWithCorrespondingCoalescePartitions,PlanWithCorrespondingSort,parallelize_sorts,ensure_sorting};
 use datafusion_physical_optimizer::enforce_sorting::replace_with_order_preserving_variants::{replace_with_order_preserving_variants,OrderPreservationContext};
@@ -44,7 +42,6 @@ use datafusion_physical_optimizer::test_utils::{check_integrity,aggregate_exec, 
 /// `$EXPECTED_OPTIMIZED_PLAN_LINES`: optimized plan
 /// `$PLAN`: the plan to optimized
 /// `REPARTITION_SORTS`: Flag to set `config.options.optimizer.repartition_sorts` option.
-///
 macro_rules! assert_optimized {
     ($EXPECTED_PLAN_LINES: expr, $EXPECTED_OPTIMIZED_PLAN_LINES: expr, $PLAN: expr, $REPARTITION_SORTS: expr) => {
         let mut config = ConfigOptions::new();

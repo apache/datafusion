@@ -15,17 +15,19 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use datafusion_physical_plan::displayable;
 use std::sync::Arc;
 
+use crate::physical_optimizer::parquet_exec;
+
+use datafusion_physical_plan::displayable;
 use arrow::compute::SortOptions;
+use arrow_schema::SchemaRef;
 use datafusion_common::Result;
 use datafusion_expr::JoinType;
 use datafusion_physical_expr::expressions::{col, Column, NotExpr};
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
-
 use datafusion_physical_expr::Partitioning;
-use datafusion_physical_expr_common::sort_expr::LexOrdering;
+use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
 use datafusion_physical_optimizer::enforce_sorting::{EnforceSorting,PlanWithCorrespondingCoalescePartitions,PlanWithCorrespondingSort,parallelize_sorts,ensure_sorting};
 use datafusion_physical_optimizer::enforce_sorting::replace_with_order_preserving_variants::{replace_with_order_preserving_variants,OrderPreservationContext};
 use datafusion_physical_optimizer::enforce_sorting::sort_pushdown::{SortPushDown, assign_initial_requirements, pushdown_sorts};
@@ -33,11 +35,84 @@ use datafusion_physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion_physical_plan::repartition::RepartitionExec;
 use datafusion_physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
 use datafusion_physical_plan::{get_plan_string, ExecutionPlan};
-use rstest::rstest;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{TreeNode, TransformedResult};
 use datafusion_physical_optimizer::test_utils::{check_integrity,bounded_window_exec, coalesce_partitions_exec, create_test_schema, create_test_schema2, create_test_schema3, filter_exec, global_limit_exec, hash_join_exec, limit_exec, local_limit_exec, memory_exec, repartition_exec, sort_exec, sort_expr, sort_expr_options, sort_merge_join_exec, sort_preserving_merge_exec, spr_repartition_exec, stream_exec_ordered, union_exec};
-use crate::physical_optimizer::{csv_exec_ordered, csv_exec_sorted, parquet_exec, parquet_exec_sorted};
+use datafusion::datasource::physical_plan::{CsvExec, FileScanConfig, ParquetExec};
+use datafusion_execution::object_store::ObjectStoreUrl;
+use datafusion::datasource::listing::PartitionedFile;
+use datafusion::datasource::file_format::file_compression_type::FileCompressionType;
+
+use rstest::rstest;
+
+/// Create a csv exec for tests
+fn csv_exec_ordered(
+    schema: &SchemaRef,
+    sort_exprs: impl IntoIterator<Item = PhysicalSortExpr>,
+) -> Arc<dyn ExecutionPlan> {
+    let sort_exprs = sort_exprs.into_iter().collect();
+
+    Arc::new(
+        CsvExec::builder(
+            FileScanConfig::new(
+                ObjectStoreUrl::parse("test:///").unwrap(),
+                schema.clone(),
+            )
+            .with_file(PartitionedFile::new("file_path".to_string(), 100))
+            .with_output_ordering(vec![sort_exprs]),
+        )
+        .with_has_header(true)
+        .with_delimeter(0)
+        .with_quote(b'"')
+        .with_escape(None)
+        .with_comment(None)
+        .with_newlines_in_values(false)
+        .with_file_compression_type(FileCompressionType::UNCOMPRESSED)
+        .build(),
+    )
+}
+
+/// Created a sorted parquet exec
+pub fn parquet_exec_sorted(
+    schema: &SchemaRef,
+    sort_exprs: impl IntoIterator<Item = PhysicalSortExpr>,
+) -> Arc<dyn ExecutionPlan> {
+    let sort_exprs = sort_exprs.into_iter().collect();
+
+    ParquetExec::builder(
+        FileScanConfig::new(ObjectStoreUrl::parse("test:///").unwrap(), schema.clone())
+            .with_file(PartitionedFile::new("x".to_string(), 100))
+            .with_output_ordering(vec![sort_exprs]),
+    )
+    .build_arc()
+}
+
+/// Create a sorted Csv exec
+fn csv_exec_sorted(
+    schema: &SchemaRef,
+    sort_exprs: impl IntoIterator<Item = PhysicalSortExpr>,
+) -> Arc<dyn ExecutionPlan> {
+    let sort_exprs = sort_exprs.into_iter().collect();
+
+    Arc::new(
+        CsvExec::builder(
+            FileScanConfig::new(
+                ObjectStoreUrl::parse("test:///").unwrap(),
+                schema.clone(),
+            )
+            .with_file(PartitionedFile::new("x".to_string(), 100))
+            .with_output_ordering(vec![sort_exprs]),
+        )
+        .with_has_header(false)
+        .with_delimeter(0)
+        .with_quote(0)
+        .with_escape(None)
+        .with_comment(None)
+        .with_newlines_in_values(false)
+        .with_file_compression_type(FileCompressionType::UNCOMPRESSED)
+        .build(),
+    )
+}
 
 /// Runs the sort enforcement optimizer and asserts the plan
 /// against the original and expected plans
