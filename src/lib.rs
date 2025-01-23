@@ -22,9 +22,7 @@
 mod error;
 
 mod kernels;
-mod schema_adapter;
 mod static_invoke;
-pub use schema_adapter::SparkSchemaAdapterFactory;
 pub use static_invoke::*;
 
 mod struct_funcs;
