@@ -236,6 +236,11 @@ config_namespace! {
         /// specified. The Arrow type system does not have a notion of maximum
         /// string length and thus DataFusion can not enforce such limits.
         pub support_varchar_with_length: bool, default = true
+
+        /// When set to true, the source locations relative to the original SQL
+        /// query (i.e. [`Span`](sqlparser::tokenizer::Span)) will be collected
+        /// and recorded in the logical plan nodes.
+        pub collect_spans: bool, default = false
     }
 }
 

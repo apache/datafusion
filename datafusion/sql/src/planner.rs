@@ -22,7 +22,8 @@ use std::vec;
 
 use arrow_schema::*;
 use datafusion_common::{
-    field_not_found, internal_err, plan_datafusion_err, DFSchemaRef, SchemaError,
+    field_not_found, internal_err, plan_datafusion_err, DFSchemaRef, Diagnostic,
+    SchemaError,
 };
 use sqlparser::ast::TimezoneInfo;
 use sqlparser::ast::{ArrayElemTypeDef, ExactNumberInfo};
@@ -42,12 +43,13 @@ use crate::utils::make_decimal_type;
 pub use datafusion_expr::planner::ContextProvider;
 
 /// SQL parser options
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub struct ParserOptions {
     pub parse_float_as_decimal: bool,
     pub enable_ident_normalization: bool,
     pub support_varchar_with_length: bool,
     pub enable_options_value_normalization: bool,
+    pub collect_spans: bool,
 }
 
 impl Default for ParserOptions {
@@ -57,6 +59,7 @@ impl Default for ParserOptions {
             enable_ident_normalization: true,
             support_varchar_with_length: true,
             enable_options_value_normalization: false,
+            collect_spans: false,
         }
     }
 }
@@ -366,7 +369,23 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     }
                 }
                 .map_err(|_: DataFusionError| {
+                    let diagnostic = if let Some(relation) = &col.relation {
+                        Diagnostic::new().with_error(
+                            format!(
+                                "column '{}' not found in '{}'",
+                                &col.name,
+                                relation.to_string()
+                            ),
+                            col.spans().first_or_empty(),
+                        )
+                    } else {
+                        Diagnostic::new().with_error(
+                            format!("column '{}' not found", &col.name),
+                            col.spans().first_or_empty(),
+                        )
+                    };
                     field_not_found(col.relation.clone(), col.name.as_str(), schema)
+                        .with_diagnostic(diagnostic)
                 }),
                 _ => internal_err!("Not a column"),
             })

@@ -579,6 +579,7 @@ impl SessionState {
             enable_options_value_normalization: sql_parser_options
                 .enable_options_value_normalization,
             support_varchar_with_length: sql_parser_options.support_varchar_with_length,
+            collect_spans: sql_parser_options.collect_spans,
         }
     }
 

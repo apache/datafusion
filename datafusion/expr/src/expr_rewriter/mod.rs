@@ -157,10 +157,7 @@ pub fn unnormalize_col(expr: Expr) -> Expr {
     expr.transform(|expr| {
         Ok({
             if let Expr::Column(c) = expr {
-                let col = Column {
-                    relation: None,
-                    name: c.name,
-                };
+                let col = Column::new_unqualified(c.name);
                 Transformed::yes(Expr::Column(col))
             } else {
                 Transformed::no(expr)
@@ -181,7 +178,7 @@ pub fn create_col_from_scalar_expr(
             Some::<TableReference>(subqry_alias.into()),
             name,
         )),
-        Expr::Column(Column { relation: _, name }) => Ok(Column::new(
+        Expr::Column(Column { relation: _, name, spans }) => Ok(Column::new(
             Some::<TableReference>(subqry_alias.into()),
             name,
         )),

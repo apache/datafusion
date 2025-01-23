@@ -502,10 +502,9 @@ impl DFSchema {
                     Ok((fields_without_qualifier[0].0, fields_without_qualifier[0].1))
                 } else {
                     _schema_err!(SchemaError::AmbiguousReference {
-                        field: Column {
-                            relation: None,
-                            name: name.to_string(),
-                        },
+                        field: Column::new_unqualified(
+                            name.to_string(),
+                        ),
                     })
                 }
             }
