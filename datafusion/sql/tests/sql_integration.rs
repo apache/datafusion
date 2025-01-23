@@ -94,6 +94,7 @@ fn parse_decimals() {
                 enable_ident_normalization: false,
                 support_varchar_with_length: false,
                 enable_options_value_normalization: false,
+                collect_spans: false,
             },
         );
     }
@@ -149,6 +150,7 @@ fn parse_ident_normalization() {
                 enable_ident_normalization,
                 support_varchar_with_length: false,
                 enable_options_value_normalization: false,
+                collect_spans: false,
             },
         );
         if plan.is_ok() {

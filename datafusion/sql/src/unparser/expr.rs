@@ -1618,7 +1618,7 @@ mod tests {
     use arrow::datatypes::{Field, Schema};
     use arrow_schema::DataType::Int8;
     use ast::ObjectName;
-    use datafusion_common::TableReference;
+    use datafusion_common::{Spans, TableReference};
     use datafusion_expr::expr::WildcardOptions;
     use datafusion_expr::{
         case, cast, col, cube, exists, grouping_set, interval_datetime_lit,
@@ -1699,6 +1699,7 @@ mod tests {
                 Expr::Column(Column {
                     relation: Some(TableReference::partial("a", "b")),
                     name: "c".to_string(),
+                    spans: Spans::new(),
                 })
                 .gt(lit(4)),
                 r#"(b.c > 4)"#,
@@ -2030,6 +2031,7 @@ mod tests {
                     expr: Box::new(Expr::Column(Column {
                         relation: Some(TableReference::partial("schema", "table")),
                         name: "array_col".to_string(),
+                        spans: Spans::new(),
                     })),
                 }),
                 r#"UNNEST("table".array_col)"#,
