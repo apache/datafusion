@@ -281,7 +281,7 @@ fn i64string_batch<'a>(
     .unwrap()
 }
 
-/// Run the TopK test, sorting the input batches with the specified ftch
+/// Run the TopK test, sorting the input batches with the specified fetch
 /// (limit) and compares the results to the expected values.
 async fn run_limit_test(fetch: usize, data: &SortedData) {
     let input = data.batches();
@@ -341,7 +341,7 @@ async fn run_limit_test(fetch: usize, data: &SortedData) {
 
 /// Return random ASCII String with len
 fn get_random_string(len: usize) -> String {
-    rand::thread_rng()
+    thread_rng()
         .sample_iter(rand::distributions::Alphanumeric)
         .take(len)
         .map(char::from)

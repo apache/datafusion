@@ -123,10 +123,10 @@ impl FileCompressionType {
     }
 
     /// Given a `Stream`, create a `Stream` which data are compressed with `FileCompressionType`.
-    pub fn convert_to_compress_stream(
+    pub fn convert_to_compress_stream<'a>(
         &self,
-        s: BoxStream<'static, Result<Bytes>>,
-    ) -> Result<BoxStream<'static, Result<Bytes>>> {
+        s: BoxStream<'a, Result<Bytes>>,
+    ) -> Result<BoxStream<'a, Result<Bytes>>> {
         Ok(match self.variant {
             #[cfg(feature = "compression")]
             GZIP => ReaderStream::new(AsyncGzEncoder::new(StreamReader::new(s)))
@@ -180,10 +180,10 @@ impl FileCompressionType {
     }
 
     /// Given a `Stream`, create a `Stream` which data are decompressed with `FileCompressionType`.
-    pub fn convert_stream(
+    pub fn convert_stream<'a>(
         &self,
-        s: BoxStream<'static, Result<Bytes>>,
-    ) -> Result<BoxStream<'static, Result<Bytes>>> {
+        s: BoxStream<'a, Result<Bytes>>,
+    ) -> Result<BoxStream<'a, Result<Bytes>>> {
         Ok(match self.variant {
             #[cfg(feature = "compression")]
             GZIP => {

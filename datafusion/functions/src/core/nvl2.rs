@@ -21,11 +21,44 @@ use arrow::compute::kernels::zip::zip;
 use arrow::datatypes::DataType;
 use datafusion_common::{exec_err, internal_err, Result};
 use datafusion_expr::{
-    type_coercion::binary::comparison_coercion, ColumnarValue, ScalarUDFImpl, Signature,
-    Volatility,
+    type_coercion::binary::comparison_coercion, ColumnarValue, Documentation,
+    ScalarUDFImpl, Signature, Volatility,
 };
+use datafusion_macros::user_doc;
 use std::sync::Arc;
 
+#[user_doc(
+    doc_section(label = "Conditional Functions"),
+    description = "Returns _expression2_ if _expression1_ is not NULL; otherwise it returns _expression3_.",
+    syntax_example = "nvl2(expression1, expression2, expression3)",
+    sql_example = r#"```sql
+> select nvl2(null, 'a', 'b');
++--------------------------------+
+| nvl2(NULL,Utf8("a"),Utf8("b")) |
++--------------------------------+
+| b                              |
++--------------------------------+
+> select nvl2('data', 'a', 'b');
++----------------------------------------+
+| nvl2(Utf8("data"),Utf8("a"),Utf8("b")) |
++----------------------------------------+
+| a                                      |
++----------------------------------------+
+```
+"#,
+    argument(
+        name = "expression1",
+        description = "Expression to test for null. Can be a constant, column, or function, and any combination of operators."
+    ),
+    argument(
+        name = "expression2",
+        description = "Expression to return if expr1 is not null. Can be a constant, column, or function, and any combination of operators."
+    ),
+    argument(
+        name = "expression3",
+        description = "Expression to return if expr1 is null. Can be a constant, column, or function, and any combination of operators."
+    )
+)]
 #[derive(Debug)]
 pub struct NVL2Func {
     signature: Signature,
@@ -62,7 +95,11 @@ impl ScalarUDFImpl for NVL2Func {
         Ok(arg_types[1].clone())
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         nvl2_func(args)
     }
 
@@ -89,6 +126,10 @@ impl ScalarUDFImpl for NVL2Func {
             },
         )?;
         Ok(vec![new_type; arg_types.len()])
+    }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        self.doc()
     }
 }
 

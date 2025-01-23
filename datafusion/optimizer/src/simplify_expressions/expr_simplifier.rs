@@ -34,13 +34,13 @@ use datafusion_common::{
 use datafusion_common::{internal_err, DFSchema, DataFusionError, Result, ScalarValue};
 use datafusion_expr::simplify::ExprSimplifyResult;
 use datafusion_expr::{
-    and, lit, or, BinaryExpr, Case, ColumnarValue, Expr, Like, Operator, Volatility,
-    WindowFunctionDefinition,
+    and, lit, or, BinaryExpr, Case, ColumnarValue, Expr, Like, Operator, Scalar,
+    Volatility, WindowFunctionDefinition,
 };
 use datafusion_expr::{expr::ScalarFunction, interval_arithmetic::NullableInterval};
 use datafusion_expr::{
     expr::{InList, InSubquery, WindowFunction},
-    Scalar,
+    utils::{iter_conjunction, iter_conjunction_owned},
 };
 use datafusion_physical_expr::{create_physical_expr, execution_props::ExecutionProps};
 
@@ -48,6 +48,8 @@ use crate::analyzer::type_coercion::TypeCoercionRewriter;
 use crate::simplify_expressions::guarantees::GuaranteeRewriter;
 use crate::simplify_expressions::regex::simplify_regex_expr;
 use crate::simplify_expressions::SimplifyInfo;
+use indexmap::IndexSet;
+use regex::Regex;
 
 use super::inlist_simplifier::ShortenInListSimplifier;
 use super::utils::*;
@@ -487,7 +489,7 @@ enum ConstSimplifyResult {
     SimplifyRuntimeError(DataFusionError, Expr),
 }
 
-impl<'a> TreeNodeRewriter for ConstEvaluator<'a> {
+impl TreeNodeRewriter for ConstEvaluator<'_> {
     type Node = Expr;
 
     fn f_down(&mut self, expr: Expr) -> Result<Transformed<Expr>> {
@@ -709,7 +711,7 @@ impl<'a, S> Simplifier<'a, S> {
     }
 }
 
-impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
+impl<S: SimplifyInfo> TreeNodeRewriter for Simplifier<'_, S> {
     type Node = Expr;
 
     /// rewrite the expression simplifying any constant expressions
@@ -854,6 +856,27 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
                 op: Or,
                 right,
             }) if is_op_with(And, &left, &right) => Transformed::yes(*right),
+            // Eliminate common factors in conjunctions e.g
+            // (A AND B) OR (A AND C) -> A AND (B OR C)
+            Expr::BinaryExpr(BinaryExpr {
+                left,
+                op: Or,
+                right,
+            }) if has_common_conjunction(&left, &right) => {
+                let lhs: IndexSet<Expr> = iter_conjunction_owned(*left).collect();
+                let (common, rhs): (Vec<_>, Vec<_>) = iter_conjunction_owned(*right)
+                    .partition(|e| lhs.contains(e) && !e.is_volatile());
+
+                let new_rhs = rhs.into_iter().reduce(and);
+                let new_lhs = lhs.into_iter().filter(|e| !common.contains(e)).reduce(and);
+                let common_conjunction = common.into_iter().reduce(and).unwrap();
+
+                let new_expr = match (new_lhs, new_rhs) {
+                    (Some(lhs), Some(rhs)) => and(common_conjunction, or(lhs, rhs)),
+                    (_, _) => common_conjunction,
+                };
+                Transformed::yes(new_expr)
+            }
 
             //
             // Rules for AND
@@ -1024,7 +1047,9 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
                 && !info.get_data_type(&left)?.is_floating()
                 && is_one(&right) =>
             {
-                Transformed::yes(lit(0))
+                Transformed::yes(Expr::from(ScalarValue::new_zero(
+                    &info.get_data_type(&left)?,
+                )?))
             }
 
             //
@@ -1447,19 +1472,70 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
             }) => Transformed::yes(simplify_regex_expr(left, op, right)?),
 
             // Rules for Like
-            Expr::Like(Like {
-                expr,
-                pattern,
-                negated,
-                escape_char: _,
-                case_insensitive: _,
-            }) if !is_null(&expr)
-                && matches!(
-                    pattern.as_ref(),
-                    Expr::Literal(Scalar{ value: ScalarValue::Utf8(Some(pattern_str)), ..}) if pattern_str == "%"
-                ) =>
-            {
-                Transformed::yes(lit(!negated))
+            Expr::Like(like) => {
+                // `\` is implicit escape, see https://github.com/apache/datafusion/issues/13291
+                let escape_char = like.escape_char.unwrap_or('\\');
+                match as_string_scalar(&like.pattern) {
+                    Some((data_type, pattern_str)) => {
+                        match pattern_str {
+                            None => return Ok(Transformed::yes(lit_bool_null())),
+                            Some(pattern_str) if pattern_str == "%" => {
+                                // exp LIKE '%' is
+                                //   - when exp is not NULL, it's true
+                                //   - when exp is NULL, it's NULL
+                                // exp NOT LIKE '%' is
+                                //   - when exp is not NULL, it's false
+                                //   - when exp is NULL, it's NULL
+                                let result_for_non_null = lit(!like.negated);
+                                Transformed::yes(if !info.nullable(&like.expr)? {
+                                    result_for_non_null
+                                } else {
+                                    Expr::Case(Case {
+                                        expr: Some(Box::new(Expr::IsNotNull(like.expr))),
+                                        when_then_expr: vec![(
+                                            Box::new(lit(true)),
+                                            Box::new(result_for_non_null),
+                                        )],
+                                        else_expr: None,
+                                    })
+                                })
+                            }
+                            Some(pattern_str)
+                                if pattern_str.contains("%%")
+                                    && !pattern_str.contains(escape_char) =>
+                            {
+                                // Repeated occurrences of wildcard are redundant so remove them
+                                // exp LIKE '%%'  --> exp LIKE '%'
+                                let simplified_pattern = Regex::new("%%+")
+                                    .unwrap()
+                                    .replace_all(pattern_str, "%")
+                                    .to_string();
+                                Transformed::yes(Expr::Like(Like {
+                                    pattern: Box::new(to_string_scalar(
+                                        data_type,
+                                        Some(simplified_pattern),
+                                    )),
+                                    ..like
+                                }))
+                            }
+                            Some(pattern_str)
+                                if !pattern_str
+                                    .contains(['%', '_', escape_char].as_ref()) =>
+                            {
+                                // If the pattern does not contain any wildcards, we can simplify the like expression to an equality expression
+                                // TODO: handle escape characters
+                                Transformed::yes(Expr::BinaryExpr(BinaryExpr {
+                                    left: like.expr.clone(),
+                                    op: if like.negated { NotEq } else { Eq },
+                                    right: like.pattern.clone(),
+                                }))
+                            }
+
+                            Some(_pattern_str) => Transformed::no(Expr::Like(like)),
+                        }
+                    }
+                    None => Transformed::no(Expr::Like(like)),
+                }
             }
 
             // a is not null/unknown --> true (if a is not nullable)
@@ -1512,7 +1588,7 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
             // i.e. `a = 1 OR a = 2 OR a = 3` -> `a IN (1, 2, 3)`
             Expr::BinaryExpr(BinaryExpr {
                 left,
-                op: Operator::Or,
+                op: Or,
                 right,
             }) if are_inlist_and_eq(left.as_ref(), right.as_ref()) => {
                 let lhs = to_inlist(*left).unwrap();
@@ -1552,7 +1628,7 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
             //     8. `a in (1,2,3,4) AND a not in (5,6,7,8) -> a in (1,2,3,4)`
             Expr::BinaryExpr(BinaryExpr {
                 left,
-                op: Operator::And,
+                op: And,
                 right,
             }) if are_inlist_and_eq_and_match_neg(
                 left.as_ref(),
@@ -1572,7 +1648,7 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
 
             Expr::BinaryExpr(BinaryExpr {
                 left,
-                op: Operator::And,
+                op: And,
                 right,
             }) if are_inlist_and_eq_and_match_neg(
                 left.as_ref(),
@@ -1592,7 +1668,7 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
 
             Expr::BinaryExpr(BinaryExpr {
                 left,
-                op: Operator::And,
+                op: And,
                 right,
             }) if are_inlist_and_eq_and_match_neg(
                 left.as_ref(),
@@ -1612,7 +1688,7 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
 
             Expr::BinaryExpr(BinaryExpr {
                 left,
-                op: Operator::And,
+                op: And,
                 right,
             }) if are_inlist_and_eq_and_match_neg(
                 left.as_ref(),
@@ -1632,7 +1708,7 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
 
             Expr::BinaryExpr(BinaryExpr {
                 left,
-                op: Operator::Or,
+                op: Or,
                 right,
             }) if are_inlist_and_eq_and_match_neg(
                 left.as_ref(),
@@ -1654,6 +1730,32 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
             expr => Transformed::no(expr),
         })
     }
+}
+
+fn as_string_scalar(expr: &Expr) -> Option<(DataType, &Option<String>)> {
+    match expr {
+        Expr::Literal(scalar) => match scalar.value() {
+            ScalarValue::Utf8(s) => Some((DataType::Utf8, s)),
+            ScalarValue::LargeUtf8(s) => Some((DataType::LargeUtf8, s)),
+            ScalarValue::Utf8View(s) => Some((DataType::Utf8View, s)),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+fn to_string_scalar(data_type: DataType, value: Option<String>) -> Expr {
+    match data_type {
+        DataType::Utf8 => Expr::from(ScalarValue::Utf8(value)),
+        DataType::LargeUtf8 => Expr::from(ScalarValue::LargeUtf8(value)),
+        DataType::Utf8View => Expr::from(ScalarValue::Utf8View(value)),
+        _ => unreachable!(),
+    }
+}
+
+fn has_common_conjunction(lhs: &Expr, rhs: &Expr) -> bool {
+    let lhs_set: HashSet<&Expr> = iter_conjunction(lhs).collect();
+    iter_conjunction(rhs).any(|e| lhs_set.contains(&e) && !e.is_volatile())
 }
 
 // TODO: We might not need this after defer pattern for Box is stabilized. https://github.com/rust-lang/rust/issues/87121
@@ -1783,6 +1885,8 @@ fn inlist_except(mut l1: InList, l2: &InList) -> Result<Expr> {
 
 #[cfg(test)]
 mod tests {
+    use crate::simplify_expressions::SimplifyContext;
+    use crate::test::test_table_scan_with_name;
     use datafusion_common::{assert_contains, DFSchemaRef, ToDFSchema};
     use datafusion_expr::{
         function::{
@@ -1793,14 +1897,12 @@ mod tests {
         *,
     };
     use datafusion_functions_window_common::field::WindowUDFFieldArgs;
+    use datafusion_functions_window_common::partition::PartitionEvaluatorArgs;
     use std::{
         collections::HashMap,
         ops::{BitAnd, BitOr, BitXor},
         sync::Arc,
     };
-
-    use crate::simplify_expressions::SimplifyContext;
-    use crate::test::test_table_scan_with_name;
 
     use super::*;
 
@@ -2165,11 +2267,11 @@ mod tests {
 
     #[test]
     fn test_simplify_modulo_by_one_non_null() {
-        let expr = col("c2_non_null") % lit(1);
-        let expected = lit(0);
+        let expr = col("c3_non_null") % lit(1);
+        let expected = lit(0_i64);
         assert_eq!(simplify(expr), expected);
         let expr =
-            col("c2_non_null") % lit(ScalarValue::Decimal128(Some(10000000000), 31, 10));
+            col("c3_non_null") % lit(ScalarValue::Decimal128(Some(10000000000), 31, 10));
         assert_eq!(simplify(expr), expected);
     }
 
@@ -2747,16 +2849,31 @@ mod tests {
         assert_no_change(regex_match(col("c1"), lit("f_o")));
 
         // empty cases
-        assert_change(regex_match(col("c1"), lit("")), lit(true));
-        assert_change(regex_not_match(col("c1"), lit("")), lit(false));
-        assert_change(regex_imatch(col("c1"), lit("")), lit(true));
-        assert_change(regex_not_imatch(col("c1"), lit("")), lit(false));
+        assert_change(
+            regex_match(col("c1"), lit("")),
+            if_not_null(col("c1"), true),
+        );
+        assert_change(
+            regex_not_match(col("c1"), lit("")),
+            if_not_null(col("c1"), false),
+        );
+        assert_change(
+            regex_imatch(col("c1"), lit("")),
+            if_not_null(col("c1"), true),
+        );
+        assert_change(
+            regex_not_imatch(col("c1"), lit("")),
+            if_not_null(col("c1"), false),
+        );
 
         // single character
-        assert_change(regex_match(col("c1"), lit("x")), like(col("c1"), "%x%"));
+        assert_change(regex_match(col("c1"), lit("x")), col("c1").like(lit("%x%")));
 
         // single word
-        assert_change(regex_match(col("c1"), lit("foo")), like(col("c1"), "%foo%"));
+        assert_change(
+            regex_match(col("c1"), lit("foo")),
+            col("c1").like(lit("%foo%")),
+        );
 
         // regular expressions that match an exact literal
         assert_change(regex_match(col("c1"), lit("^$")), col("c1").eq(lit("")));
@@ -2843,44 +2960,55 @@ mod tests {
         assert_no_change(regex_match(col("c1"), lit("$foo^")));
 
         // regular expressions that match a partial literal
-        assert_change(regex_match(col("c1"), lit("^foo")), like(col("c1"), "foo%"));
-        assert_change(regex_match(col("c1"), lit("foo$")), like(col("c1"), "%foo"));
+        assert_change(
+            regex_match(col("c1"), lit("^foo")),
+            col("c1").like(lit("foo%")),
+        );
+        assert_change(
+            regex_match(col("c1"), lit("foo$")),
+            col("c1").like(lit("%foo")),
+        );
         assert_change(
             regex_match(col("c1"), lit("^foo|bar$")),
-            like(col("c1"), "foo%").or(like(col("c1"), "%bar")),
+            col("c1").like(lit("foo%")).or(col("c1").like(lit("%bar"))),
         );
 
         // OR-chain
         assert_change(
             regex_match(col("c1"), lit("foo|bar|baz")),
-            like(col("c1"), "%foo%")
-                .or(like(col("c1"), "%bar%"))
-                .or(like(col("c1"), "%baz%")),
+            col("c1")
+                .like(lit("%foo%"))
+                .or(col("c1").like(lit("%bar%")))
+                .or(col("c1").like(lit("%baz%"))),
         );
         assert_change(
             regex_match(col("c1"), lit("foo|x|baz")),
-            like(col("c1"), "%foo%")
-                .or(like(col("c1"), "%x%"))
-                .or(like(col("c1"), "%baz%")),
+            col("c1")
+                .like(lit("%foo%"))
+                .or(col("c1").like(lit("%x%")))
+                .or(col("c1").like(lit("%baz%"))),
         );
         assert_change(
             regex_not_match(col("c1"), lit("foo|bar|baz")),
-            not_like(col("c1"), "%foo%")
-                .and(not_like(col("c1"), "%bar%"))
-                .and(not_like(col("c1"), "%baz%")),
+            col("c1")
+                .not_like(lit("%foo%"))
+                .and(col("c1").not_like(lit("%bar%")))
+                .and(col("c1").not_like(lit("%baz%"))),
         );
         // both anchored expressions (translated to equality) and unanchored
         assert_change(
             regex_match(col("c1"), lit("foo|^x$|baz")),
-            like(col("c1"), "%foo%")
+            col("c1")
+                .like(lit("%foo%"))
                 .or(col("c1").eq(lit("x")))
-                .or(like(col("c1"), "%baz%")),
+                .or(col("c1").like(lit("%baz%"))),
         );
         assert_change(
             regex_not_match(col("c1"), lit("foo|^bar$|baz")),
-            not_like(col("c1"), "%foo%")
+            col("c1")
+                .not_like(lit("%foo%"))
                 .and(col("c1").not_eq(lit("bar")))
-                .and(not_like(col("c1"), "%baz%")),
+                .and(col("c1").not_like(lit("%baz%"))),
         );
         // Too many patterns (MAX_REGEX_ALTERNATIONS_EXPANSION)
         assert_no_change(regex_match(col("c1"), lit("foo|bar|baz|blarg|bozo|etc")));
@@ -2927,46 +3055,6 @@ mod tests {
             left: Box::new(left),
             op: Operator::RegexNotIMatch,
             right: Box::new(right),
-        })
-    }
-
-    fn like(expr: Expr, pattern: &str) -> Expr {
-        Expr::Like(Like {
-            negated: false,
-            expr: Box::new(expr),
-            pattern: Box::new(lit(pattern)),
-            escape_char: None,
-            case_insensitive: false,
-        })
-    }
-
-    fn not_like(expr: Expr, pattern: &str) -> Expr {
-        Expr::Like(Like {
-            negated: true,
-            expr: Box::new(expr),
-            pattern: Box::new(lit(pattern)),
-            escape_char: None,
-            case_insensitive: false,
-        })
-    }
-
-    fn ilike(expr: Expr, pattern: &str) -> Expr {
-        Expr::Like(Like {
-            negated: false,
-            expr: Box::new(expr),
-            pattern: Box::new(lit(pattern)),
-            escape_char: None,
-            case_insensitive: true,
-        })
-    }
-
-    fn not_ilike(expr: Expr, pattern: &str) -> Expr {
-        Expr::Like(Like {
-            negated: true,
-            expr: Box::new(expr),
-            pattern: Box::new(lit(pattern)),
-            escape_char: None,
-            case_insensitive: true,
         })
     }
 
@@ -3575,33 +3663,122 @@ mod tests {
     }
 
     #[test]
-    fn test_like_and_ilke() {
-        // test non-null values
-        let expr = like(col("c1"), "%");
-        assert_eq!(simplify(expr), lit(true));
-
-        let expr = not_like(col("c1"), "%");
-        assert_eq!(simplify(expr), lit(false));
-
-        let expr = ilike(col("c1"), "%");
-        assert_eq!(simplify(expr), lit(true));
-
-        let expr = not_ilike(col("c1"), "%");
-        assert_eq!(simplify(expr), lit(false));
-
-        // test null values
+    fn test_like_and_ilike() {
         let null = lit(ScalarValue::Utf8(None));
-        let expr = like(null.clone(), "%");
+
+        // expr [NOT] [I]LIKE NULL
+        let expr = col("c1").like(null.clone());
         assert_eq!(simplify(expr), lit_bool_null());
 
-        let expr = not_like(null.clone(), "%");
+        let expr = col("c1").not_like(null.clone());
         assert_eq!(simplify(expr), lit_bool_null());
 
-        let expr = ilike(null.clone(), "%");
+        let expr = col("c1").ilike(null.clone());
         assert_eq!(simplify(expr), lit_bool_null());
 
-        let expr = not_ilike(null, "%");
+        let expr = col("c1").not_ilike(null.clone());
         assert_eq!(simplify(expr), lit_bool_null());
+
+        // expr [NOT] [I]LIKE '%'
+        let expr = col("c1").like(lit("%"));
+        assert_eq!(simplify(expr), if_not_null(col("c1"), true));
+
+        let expr = col("c1").not_like(lit("%"));
+        assert_eq!(simplify(expr), if_not_null(col("c1"), false));
+
+        let expr = col("c1").ilike(lit("%"));
+        assert_eq!(simplify(expr), if_not_null(col("c1"), true));
+
+        let expr = col("c1").not_ilike(lit("%"));
+        assert_eq!(simplify(expr), if_not_null(col("c1"), false));
+
+        // expr [NOT] [I]LIKE '%%'
+        let expr = col("c1").like(lit("%%"));
+        assert_eq!(simplify(expr), if_not_null(col("c1"), true));
+
+        let expr = col("c1").not_like(lit("%%"));
+        assert_eq!(simplify(expr), if_not_null(col("c1"), false));
+
+        let expr = col("c1").ilike(lit("%%"));
+        assert_eq!(simplify(expr), if_not_null(col("c1"), true));
+
+        let expr = col("c1").not_ilike(lit("%%"));
+        assert_eq!(simplify(expr), if_not_null(col("c1"), false));
+
+        // not_null_expr [NOT] [I]LIKE '%'
+        let expr = col("c1_non_null").like(lit("%"));
+        assert_eq!(simplify(expr), lit(true));
+
+        let expr = col("c1_non_null").not_like(lit("%"));
+        assert_eq!(simplify(expr), lit(false));
+
+        let expr = col("c1_non_null").ilike(lit("%"));
+        assert_eq!(simplify(expr), lit(true));
+
+        let expr = col("c1_non_null").not_ilike(lit("%"));
+        assert_eq!(simplify(expr), lit(false));
+
+        // not_null_expr [NOT] [I]LIKE '%%'
+        let expr = col("c1_non_null").like(lit("%%"));
+        assert_eq!(simplify(expr), lit(true));
+
+        let expr = col("c1_non_null").not_like(lit("%%"));
+        assert_eq!(simplify(expr), lit(false));
+
+        let expr = col("c1_non_null").ilike(lit("%%"));
+        assert_eq!(simplify(expr), lit(true));
+
+        let expr = col("c1_non_null").not_ilike(lit("%%"));
+        assert_eq!(simplify(expr), lit(false));
+
+        // null_constant [NOT] [I]LIKE '%'
+        let expr = null.clone().like(lit("%"));
+        assert_eq!(simplify(expr), lit_bool_null());
+
+        let expr = null.clone().not_like(lit("%"));
+        assert_eq!(simplify(expr), lit_bool_null());
+
+        let expr = null.clone().ilike(lit("%"));
+        assert_eq!(simplify(expr), lit_bool_null());
+
+        let expr = null.clone().not_ilike(lit("%"));
+        assert_eq!(simplify(expr), lit_bool_null());
+
+        // null_constant [NOT] [I]LIKE '%%'
+        let expr = null.clone().like(lit("%%"));
+        assert_eq!(simplify(expr), lit_bool_null());
+
+        let expr = null.clone().not_like(lit("%%"));
+        assert_eq!(simplify(expr), lit_bool_null());
+
+        let expr = null.clone().ilike(lit("%%"));
+        assert_eq!(simplify(expr), lit_bool_null());
+
+        let expr = null.clone().not_ilike(lit("%%"));
+        assert_eq!(simplify(expr), lit_bool_null());
+
+        // null_constant [NOT] [I]LIKE 'a%'
+        let expr = null.clone().like(lit("a%"));
+        assert_eq!(simplify(expr), lit_bool_null());
+
+        let expr = null.clone().not_like(lit("a%"));
+        assert_eq!(simplify(expr), lit_bool_null());
+
+        let expr = null.clone().ilike(lit("a%"));
+        assert_eq!(simplify(expr), lit_bool_null());
+
+        let expr = null.clone().not_ilike(lit("a%"));
+        assert_eq!(simplify(expr), lit_bool_null());
+
+        // expr [NOT] [I]LIKE with pattern without wildcards
+        let expr = col("c1").like(lit("a"));
+        assert_eq!(simplify(expr), col("c1").eq(lit("a")));
+        let expr = col("c1").not_like(lit("a"));
+        assert_eq!(simplify(expr), col("c1").not_eq(lit("a")));
+        let expr = col("c1").like(lit("a_"));
+        assert_eq!(simplify(expr), col("c1").like(lit("a_")));
+        let expr = col("c1").not_like(lit("a_"));
+        assert_eq!(simplify(expr), col("c1").not_like(lit("a_")));
     }
 
     #[test]
@@ -3743,11 +3920,52 @@ mod tests {
         assert_eq!(expr, expected);
         assert_eq!(num_iter, 2);
     }
+
+    fn boolean_test_schema() -> DFSchemaRef {
+        Schema::new(vec![
+            Field::new("A", DataType::Boolean, false),
+            Field::new("B", DataType::Boolean, false),
+            Field::new("C", DataType::Boolean, false),
+            Field::new("D", DataType::Boolean, false),
+        ])
+        .to_dfschema_ref()
+        .unwrap()
+    }
+
+    #[test]
+    fn simplify_common_factor_conjunction_in_disjunction() {
+        let props = ExecutionProps::new();
+        let schema = boolean_test_schema();
+        let simplifier =
+            ExprSimplifier::new(SimplifyContext::new(&props).with_schema(schema));
+
+        let a = || col("A");
+        let b = || col("B");
+        let c = || col("C");
+        let d = || col("D");
+
+        // (A AND B) OR (A AND C) -> A AND (B OR C)
+        let expr = a().and(b()).or(a().and(c()));
+        let expected = a().and(b().or(c()));
+
+        assert_eq!(expected, simplifier.simplify(expr).unwrap());
+
+        // (A AND B) OR (A AND C) OR (A AND D) -> A AND (B OR C OR D)
+        let expr = a().and(b()).or(a().and(c())).or(a().and(d()));
+        let expected = a().and(b().or(c()).or(d()));
+        assert_eq!(expected, simplifier.simplify(expr).unwrap());
+
+        // A OR (B AND C AND A) -> A
+        let expr = a().or(b().and(c().and(a())));
+        let expected = a();
+        assert_eq!(expected, simplifier.simplify(expr).unwrap());
+    }
+
     #[test]
     fn test_simplify_udaf() {
         let udaf = AggregateUDF::new_from_impl(SimplifyMockUdaf::new_with_simplify());
         let aggregate_function_expr =
-            Expr::AggregateFunction(datafusion_expr::expr::AggregateFunction::new_udf(
+            Expr::AggregateFunction(expr::AggregateFunction::new_udf(
                 udaf.into(),
                 vec![],
                 false,
@@ -3761,7 +3979,7 @@ mod tests {
 
         let udaf = AggregateUDF::new_from_impl(SimplifyMockUdaf::new_without_simplify());
         let aggregate_function_expr =
-            Expr::AggregateFunction(datafusion_expr::expr::AggregateFunction::new_udf(
+            Expr::AggregateFunction(expr::AggregateFunction::new_udf(
                 udaf.into(),
                 vec![],
                 false,
@@ -3811,7 +4029,7 @@ mod tests {
 
         fn accumulator(
             &self,
-            _acc_args: function::AccumulatorArgs,
+            _acc_args: AccumulatorArgs,
         ) -> Result<Box<dyn Accumulator>> {
             unimplemented!("not needed for tests")
         }
@@ -3841,9 +4059,8 @@ mod tests {
         let udwf = WindowFunctionDefinition::WindowUDF(
             WindowUDF::new_from_impl(SimplifyMockUdwf::new_with_simplify()).into(),
         );
-        let window_function_expr = Expr::WindowFunction(
-            datafusion_expr::expr::WindowFunction::new(udwf, vec![]),
-        );
+        let window_function_expr =
+            Expr::WindowFunction(WindowFunction::new(udwf, vec![]));
 
         let expected = col("result_column");
         assert_eq!(simplify(window_function_expr), expected);
@@ -3851,9 +4068,8 @@ mod tests {
         let udwf = WindowFunctionDefinition::WindowUDF(
             WindowUDF::new_from_impl(SimplifyMockUdwf::new_without_simplify()).into(),
         );
-        let window_function_expr = Expr::WindowFunction(
-            datafusion_expr::expr::WindowFunction::new(udwf, vec![]),
-        );
+        let window_function_expr =
+            Expr::WindowFunction(WindowFunction::new(udwf, vec![]));
 
         let expected = window_function_expr.clone();
         assert_eq!(simplify(window_function_expr), expected);
@@ -3898,12 +4114,89 @@ mod tests {
             }
         }
 
-        fn partition_evaluator(&self) -> Result<Box<dyn PartitionEvaluator>> {
+        fn partition_evaluator(
+            &self,
+            _partition_evaluator_args: PartitionEvaluatorArgs,
+        ) -> Result<Box<dyn PartitionEvaluator>> {
             unimplemented!("not needed for tests")
         }
 
         fn field(&self, _field_args: WindowUDFFieldArgs) -> Result<Field> {
             unimplemented!("not needed for tests")
         }
+    }
+    #[derive(Debug)]
+    struct VolatileUdf {
+        signature: Signature,
+    }
+
+    impl VolatileUdf {
+        pub fn new() -> Self {
+            Self {
+                signature: Signature::exact(vec![], Volatility::Volatile),
+            }
+        }
+    }
+    impl ScalarUDFImpl for VolatileUdf {
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
+
+        fn name(&self) -> &str {
+            "VolatileUdf"
+        }
+
+        fn signature(&self) -> &Signature {
+            &self.signature
+        }
+
+        fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+            Ok(DataType::Int16)
+        }
+    }
+
+    #[test]
+    fn test_optimize_volatile_conditions() {
+        let fun = Arc::new(ScalarUDF::new_from_impl(VolatileUdf::new()));
+        let rand = Expr::ScalarFunction(ScalarFunction::new_udf(fun, vec![]));
+        {
+            let expr = rand
+                .clone()
+                .eq(lit(0))
+                .or(col("column1").eq(lit(2)).and(rand.clone().eq(lit(0))));
+
+            assert_eq!(simplify(expr.clone()), expr);
+        }
+
+        {
+            let expr = col("column1")
+                .eq(lit(2))
+                .or(col("column1").eq(lit(2)).and(rand.clone().eq(lit(0))));
+
+            assert_eq!(simplify(expr), col("column1").eq(lit(2)));
+        }
+
+        {
+            let expr = (col("column1").eq(lit(2)).and(rand.clone().eq(lit(0)))).or(col(
+                "column1",
+            )
+            .eq(lit(2))
+            .and(rand.clone().eq(lit(0))));
+
+            assert_eq!(
+                simplify(expr),
+                col("column1")
+                    .eq(lit(2))
+                    .and((rand.clone().eq(lit(0))).or(rand.clone().eq(lit(0))))
+            );
+        }
+    }
+
+    fn if_not_null(expr: Expr, then: bool) -> Expr {
+        Expr::Case(Case {
+            expr: Some(expr.is_not_null().into()),
+            when_then_expr: vec![(lit(true).into(), lit(then).into())],
+            else_expr: None,
+        })
     }
 }

@@ -17,18 +17,19 @@
 
 //! [`ArrowCastFunc`]: Implementation of the `arrow_cast`
 
-use std::any::Any;
-
 use arrow::datatypes::DataType;
 use datafusion_common::{
     arrow_datafusion_err, internal_err, plan_datafusion_err, plan_err, DataFusionError,
     ExprSchema, Result, ScalarValue,
 };
+use std::any::Any;
 
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyInfo};
 use datafusion_expr::{
-    ColumnarValue, Expr, ExprSchemable, ScalarUDFImpl, Signature, Volatility,
+    ColumnarValue, Documentation, Expr, ExprSchemable, ScalarUDFImpl, Signature,
+    Volatility,
 };
+use datafusion_macros::user_doc;
 
 /// Implements casting to arbitrary arrow types (rather than SQL types)
 ///
@@ -51,6 +52,31 @@ use datafusion_expr::{
 /// ```sql
 /// select arrow_cast(column_x, 'Float64')
 /// ```
+#[user_doc(
+    doc_section(label = "Other Functions"),
+    description = "Casts a value to a specific Arrow data type.",
+    syntax_example = "arrow_cast(expression, datatype)",
+    sql_example = r#"```sql
+> select arrow_cast(-5, 'Int8') as a,
+  arrow_cast('foo', 'Dictionary(Int32, Utf8)') as b,
+  arrow_cast('bar', 'LargeUtf8') as c,
+  arrow_cast('2023-01-02T12:53:02', 'Timestamp(Microsecond, Some("+08:00"))') as d
+  ;
++----+-----+-----+---------------------------+
+| a  | b   | c   | d                         |
++----+-----+-----+---------------------------+
+| -5 | foo | bar | 2023-01-02T12:53:02+08:00 |
++----+-----+-----+---------------------------+
+```"#,
+    argument(
+        name = "expression",
+        description = "Expression to cast. The expression can be a constant, column, or function, and any combination of operators."
+    ),
+    argument(
+        name = "datatype",
+        description = "[Arrow data type](https://docs.rs/arrow/latest/arrow/datatypes/enum.DataType.html) name to cast to, as a string. The format is the same as that returned by [`arrow_typeof`]"
+    )
+)]
 #[derive(Debug)]
 pub struct ArrowCastFunc {
     signature: Signature,
@@ -102,7 +128,11 @@ impl ScalarUDFImpl for ArrowCastFunc {
         data_type_from_args(args)
     }
 
-    fn invoke(&self, _args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        _args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         internal_err!("arrow_cast should have been simplified to cast")
     }
 
@@ -130,6 +160,10 @@ impl ScalarUDFImpl for ArrowCastFunc {
         };
         // return the newly written argument to DataFusion
         Ok(ExprSimplifyResult::Simplified(new_expr))
+    }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        self.doc()
     }
 }
 

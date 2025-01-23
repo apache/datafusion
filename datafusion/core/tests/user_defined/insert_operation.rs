@@ -26,7 +26,10 @@ use datafusion::{
 use datafusion_catalog::{Session, TableProvider};
 use datafusion_expr::{dml::InsertOp, Expr, TableType};
 use datafusion_physical_expr::{EquivalenceProperties, Partitioning};
-use datafusion_physical_plan::{DisplayAs, ExecutionMode, ExecutionPlan, PlanProperties};
+use datafusion_physical_plan::{
+    execution_plan::{Boundedness, EmissionType},
+    DisplayAs, ExecutionPlan, PlanProperties,
+};
 
 #[tokio::test]
 async fn insert_operation_is_passed_correctly_to_table_provider() {
@@ -122,15 +125,14 @@ struct TestInsertExec {
 
 impl TestInsertExec {
     fn new(op: InsertOp) -> Self {
-        let eq_properties = EquivalenceProperties::new(make_count_schema());
-        let plan_properties = PlanProperties::new(
-            eq_properties,
-            Partitioning::UnknownPartitioning(1),
-            ExecutionMode::Bounded,
-        );
         Self {
             op,
-            plan_properties,
+            plan_properties: PlanProperties::new(
+                EquivalenceProperties::new(make_count_schema()),
+                Partitioning::UnknownPartitioning(1),
+                EmissionType::Incremental,
+                Boundedness::Bounded,
+            ),
         }
     }
 }

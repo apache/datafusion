@@ -59,6 +59,9 @@ message LogicalPlanNode {
     DistinctOnNode distinct_on = 28;
     CopyToNode copy_to = 29;
     UnnestNode unnest = 30;
+    RecursiveQueryNode recursive_query = 31;
+    CteWorkTableScanNode cte_work_table_scan = 32;
+    DmlNode dml = 33;
   }
 }
 
@@ -163,6 +166,7 @@ message CreateExternalTableNode {
   datafusion_common.DfSchema schema = 4;
   repeated string table_partition_cols = 5;
   bool if_not_exists = 6;
+  bool temporary = 14;
   string definition = 7;
   repeated SortExprNodeCollection order_exprs = 10;
   bool unbounded = 11;
@@ -200,6 +204,7 @@ message CreateViewNode {
   TableReference name = 5;
   LogicalPlanNode input = 2;
   bool or_replace = 3;
+  bool temporary = 6;
   string definition = 4;
 }
 
@@ -260,9 +265,25 @@ message CopyToNode {
   repeated string partition_by = 7;
 }
 
+message DmlNode{
+   enum Type {
+    UPDATE = 0;
+    DELETE = 1;
+    CTAS = 2;
+    INSERT_APPEND = 3;
+    INSERT_OVERWRITE = 4;
+    INSERT_REPLACE = 5;
+    
+  }
+  Type dml_type = 1;
+  LogicalPlanNode input = 2;
+  TableReference table_name = 3;
+  datafusion_common.DfSchema schema = 4;
+}
+
 message UnnestNode {
   LogicalPlanNode input = 1;
-  repeated ColumnUnnestExec exec_columns = 2;
+  repeated datafusion_common.Column exec_columns = 2;
   repeated ColumnUnnestListItem list_type_columns = 3;
   repeated uint64 struct_type_columns = 4;
   repeated uint64 dependency_indices = 5;
@@ -283,17 +304,15 @@ message ColumnUnnestListRecursion {
   uint32 depth = 2;
 }
 
-message ColumnUnnestExec {
-  datafusion_common.Column column = 1;
-  oneof UnnestType {
-    ColumnUnnestListRecursions list = 2;
-    datafusion_common.EmptyMessage struct = 3;
-    datafusion_common.EmptyMessage inferred = 4;
-  }
-}
-
 message UnnestOptions {
   bool preserve_nulls = 1;
+  repeated RecursionUnnestOption recursions = 2;
+}
+
+message RecursionUnnestOption {
+  datafusion_common.Column output_column = 1;
+  datafusion_common.Column input_column = 2;
+  uint32 depth = 3;
 }
 
 message UnionNode {
@@ -505,28 +524,13 @@ message ScalarUDFExprNode {
   optional bytes fun_definition = 3;
 }
 
-enum BuiltInWindowFunction {
-  UNSPECIFIED = 0; // https://protobuf.dev/programming-guides/dos-donts/#unspecified-enum
-  // ROW_NUMBER = 0;
-  RANK = 1;
-  DENSE_RANK = 2;
-  PERCENT_RANK = 3;
-  CUME_DIST = 4;
-  NTILE = 5;
-  LAG = 6;
-  LEAD = 7;
-  FIRST_VALUE = 8;
-  LAST_VALUE = 9;
-  NTH_VALUE = 10;
-}
-
 message WindowExprNode {
   oneof window_function {
-    BuiltInWindowFunction built_in_function = 2;
+    // BuiltInWindowFunction built_in_function = 2;
     string udaf = 3;
     string udwf = 9;
   }
-  LogicalExprNode expr = 4;
+  repeated LogicalExprNode exprs = 4;
   repeated LogicalExprNode partition_by = 5;
   repeated SortExprNode order_by = 6;
   // repeated LogicalExprNode filter = 7;
@@ -655,6 +659,7 @@ message PlanType {
     datafusion_common.EmptyMessage FinalPhysicalPlan = 6;
     datafusion_common.EmptyMessage FinalPhysicalPlanWithStats = 10;
     datafusion_common.EmptyMessage FinalPhysicalPlanWithSchema = 12;
+    datafusion_common.EmptyMessage PhysicalPlanError = 13;
   }
 }
 
@@ -739,7 +744,8 @@ message FileSinkConfig {
   datafusion_common.Schema output_schema = 4;
   repeated PartitionColumn table_partition_cols = 5;
   bool keep_partition_by_columns = 9;
-  InsertOp insert_op = 10; 
+  InsertOp insert_op = 10;
+  string file_extension = 11;
 }
 
 enum InsertOp {
@@ -840,6 +846,8 @@ message PhysicalExprNode {
     PhysicalLikeExprNode like_expr = 18;
 
     PhysicalExtensionExprNode extension = 19;
+
+    UnknownColumn unknown_column = 20;
   }
 }
 
@@ -848,6 +856,7 @@ message PhysicalScalarUdfNode {
   repeated PhysicalExprNode args = 2;
   optional bytes fun_definition = 3;
   datafusion_common.ArrowType return_type = 4;
+  bool nullable = 5;
 }
 
 message PhysicalAggregateExprNode {
@@ -863,8 +872,9 @@ message PhysicalAggregateExprNode {
 
 message PhysicalWindowExprNode {
   oneof window_function {
-    BuiltInWindowFunction built_in_function = 2;
+    // BuiltInWindowFunction built_in_function = 2;
     string user_defined_aggr_function = 3;
+    string user_defined_window_function = 10;
   }
   repeated PhysicalExprNode args = 4;
   repeated PhysicalExprNode partition_by = 5;
@@ -973,9 +983,6 @@ message PhysicalSortExprNodeCollection {
 }
 
 message FileScanExecConf {
-  // Was repeated ConfigOption options = 10;
-  reserved 10;
-
   repeated FileGroup file_groups = 1;
   datafusion_common.Schema schema = 2;
   repeated uint32 projection = 4;
@@ -984,6 +991,11 @@ message FileScanExecConf {
   repeated string table_partition_cols = 7;
   string object_store_url = 8;
   repeated PhysicalSortExprNodeCollection output_ordering = 9;
+
+  // Was repeated ConfigOption options = 10;
+  reserved 10;
+
+  datafusion_common.Constraints constraints = 11;
 }
 
 message ParquetScanExecNode {
@@ -1076,6 +1088,10 @@ message CrossJoinExecNode {
 message PhysicalColumn {
   string name = 1;
   uint32 index = 2;
+}
+
+message UnknownColumn {
+  string name = 1;
 }
 
 message JoinOn {
@@ -1182,6 +1198,7 @@ message NestedLoopJoinExecNode {
   PhysicalPlanNode right = 2;
   datafusion_common.JoinType join_type = 3;
   JoinFilter filter = 4;
+  repeated uint32 projection = 5;
 }
 
 message CoalesceBatchesExecNode {
@@ -1247,4 +1264,16 @@ message PartitionStats {
   int64 num_batches = 2;
   int64 num_bytes = 3;
   repeated datafusion_common.ColumnStats column_stats = 4;
+}
+
+message RecursiveQueryNode {
+  string name = 1;
+  LogicalPlanNode static_term = 2;
+  LogicalPlanNode recursive_term = 3;
+  bool is_distinct = 4;
+}
+
+message CteWorkTableScanNode {
+    string name = 1;
+    datafusion_common.Schema schema = 2;
 }

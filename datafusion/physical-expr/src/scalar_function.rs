@@ -31,21 +31,22 @@
 
 use std::any::Any;
 use std::fmt::{self, Debug, Formatter};
-use std::hash::{Hash, Hasher};
+use std::hash::Hash;
 use std::sync::Arc;
 
-use crate::physical_expr::{down_cast_any_ref, physical_exprs_equal};
 use crate::PhysicalExpr;
 
 use arrow::datatypes::{DataType, Schema};
 use arrow::record_batch::RecordBatch;
-use datafusion_common::{internal_err, DFSchema, Result};
+use arrow_array::Array;
+use datafusion_common::{internal_err, DFSchema, Result, ScalarValue};
 use datafusion_expr::interval_arithmetic::Interval;
 use datafusion_expr::sort_properties::ExprProperties;
 use datafusion_expr::type_coercion::functions::data_types_with_scalar_udf;
-use datafusion_expr::{expr_vec_fmt, ColumnarValue, Expr, ScalarUDF};
+use datafusion_expr::{expr_vec_fmt, ColumnarValue, Expr, ScalarFunctionArgs, ScalarUDF};
 
 /// Physical expression of a scalar function
+#[derive(Eq, PartialEq, Hash)]
 pub struct ScalarFunctionExpr {
     fun: Arc<ScalarUDF>,
     name: String,
@@ -133,22 +134,36 @@ impl PhysicalExpr for ScalarFunctionExpr {
     }
 
     fn evaluate(&self, batch: &RecordBatch) -> Result<ColumnarValue> {
-        let inputs = self
+        let args = self
             .args
             .iter()
             .map(|e| e.evaluate(batch))
             .collect::<Result<Vec<_>>>()?;
 
+        let input_empty = args.is_empty();
+        let input_all_scalar = args
+            .iter()
+            .all(|arg| matches!(arg, ColumnarValue::Scalar(_)));
+
         // evaluate the function
-        let output = match self.args.is_empty() {
-            true => self.fun.invoke_no_args(batch.num_rows()),
-            false => self.fun.invoke(&inputs),
-        }?;
+        let output = self.fun.invoke_with_args(ScalarFunctionArgs {
+            args,
+            number_rows: batch.num_rows(),
+            return_type: &self.return_type,
+        })?;
 
         if let ColumnarValue::Array(array) = &output {
             if array.len() != batch.num_rows() {
-                return internal_err!("UDF returned a different number of rows than expected. Expected: {}, Got: {}",
-                        batch.num_rows(), array.len());
+                // If the arguments are a non-empty slice of scalar values, we can assume that
+                // returning a one-element array is equivalent to returning a scalar.
+                let preserve_scalar =
+                    array.len() == 1 && !input_empty && input_all_scalar;
+                return if preserve_scalar {
+                    ScalarValue::try_from_array(array, 0).map(ColumnarValue::from)
+                } else {
+                    internal_err!("UDF {} returned a different number of rows than expected. Expected: {}, Got: {}",
+                            self.name, batch.num_rows(), array.len())
+                };
             }
         }
         Ok(output)
@@ -185,16 +200,9 @@ impl PhysicalExpr for ScalarFunctionExpr {
         self.fun.propagate_constraints(interval, children)
     }
 
-    fn dyn_hash(&self, state: &mut dyn Hasher) {
-        let mut s = state;
-        self.name.hash(&mut s);
-        self.args.hash(&mut s);
-        self.return_type.hash(&mut s);
-        // Add `self.fun` when hash is available
-    }
-
     fn get_properties(&self, children: &[ExprProperties]) -> Result<ExprProperties> {
         let sort_properties = self.fun.output_ordering(children)?;
+        let preserves_lex_ordering = self.fun.preserves_lex_ordering(children)?;
         let children_range = children
             .iter()
             .map(|props| &props.range)
@@ -204,21 +212,8 @@ impl PhysicalExpr for ScalarFunctionExpr {
         Ok(ExprProperties {
             sort_properties,
             range,
+            preserves_lex_ordering,
         })
-    }
-}
-
-impl PartialEq<dyn Any> for ScalarFunctionExpr {
-    /// Comparing name, args and return_type
-    fn eq(&self, other: &dyn Any) -> bool {
-        down_cast_any_ref(other)
-            .downcast_ref::<Self>()
-            .map(|x| {
-                self.name == x.name
-                    && physical_exprs_equal(&self.args, &x.args)
-                    && self.return_type == x.return_type
-            })
-            .unwrap_or(false)
     }
 }
 
@@ -238,7 +233,7 @@ pub fn create_physical_expr(
     // verify that input data types is consistent with function's `TypeSignature`
     data_types_with_scalar_udf(&input_expr_types, fun)?;
 
-    // Since we have arg_types, we dont need args and schema.
+    // Since we have arg_types, we don't need args and schema.
     let return_type =
         fun.return_type_from_exprs(args, input_dfschema, &input_expr_types)?;
 

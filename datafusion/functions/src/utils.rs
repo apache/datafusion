@@ -105,9 +105,9 @@ where
                     Hint::AcceptsSingular => 1,
                     Hint::Pad => inferred_length,
                 };
-                arg.clone().into_array(expansion_len)
+                arg.to_array(expansion_len)
             })
-            .collect::<datafusion_common::Result<Vec<_>>>()?;
+            .collect::<Result<Vec<_>>>()?;
 
         let result = (inner)(&args);
         if is_scalar {
@@ -134,25 +134,27 @@ pub mod test {
             let func = $FUNC;
 
             let type_array = $ARGS.iter().map(|arg| arg.data_type().clone()).collect::<Vec<_>>();
+            let cardinality = $ARGS
+                .iter()
+                .fold(Option::<usize>::None, |acc, arg| match arg {
+                    ColumnarValue::Scalar(_) => acc,
+                    ColumnarValue::Array(a) => Some(a.len()),
+                })
+                .unwrap_or(1);
             let return_type = func.return_type(&type_array);
 
             match expected {
                 Ok(expected) => {
                     assert_eq!(return_type.is_ok(), true);
-                    assert_eq!(return_type.unwrap(), $EXPECTED_DATA_TYPE);
+                    let return_type = return_type.unwrap();
+                    assert_eq!(return_type, $EXPECTED_DATA_TYPE);
 
-                    let result = func.invoke($ARGS);
+                    let result = func.invoke_with_args(datafusion_expr::ScalarFunctionArgs{args: $ARGS, number_rows: cardinality, return_type: &return_type});
                     assert_eq!(result.is_ok(), true, "function returned an error: {}", result.unwrap_err());
 
-                    let len = $ARGS
-                        .iter()
-                        .fold(Option::<usize>::None, |acc, arg| match arg {
-                            ColumnarValue::Scalar(_) => acc,
-                            ColumnarValue::Array(a) => Some(a.len()),
-                        });
-                    let inferred_length = len.unwrap_or(1);
-                    let result = result.unwrap().clone().into_array(inferred_length).expect("Failed to convert to array");
+                    let result = result.unwrap().to_array(cardinality).expect("Failed to convert to array");
                     let result = result.as_any().downcast_ref::<$ARRAY_TYPE>().expect("Failed to convert to type");
+                    assert_eq!(result.data_type(), &$EXPECTED_DATA_TYPE);
 
                     // value is correct
                     match expected {
@@ -169,7 +171,7 @@ pub mod test {
                     }
                     else {
                         // invoke is expected error - cannot use .expect_err() due to Debug not being implemented
-                        match func.invoke($ARGS) {
+                        match func.invoke_with_args(datafusion_expr::ScalarFunctionArgs{args: $ARGS, number_rows: cardinality, return_type: &return_type.unwrap()}) {
                             Ok(_) => assert!(false, "expected error"),
                             Err(error) => {
                                 assert!(expected_error.strip_backtrace().starts_with(&error.strip_backtrace()));

@@ -33,7 +33,7 @@ async fn join_change_in_planner() -> Result<()> {
         Field::new("a2", DataType::UInt32, false),
     ]));
     // Specify the ordering:
-    let file_sort_order = vec![[datafusion_expr::col("a1")]
+    let file_sort_order = vec![[col("a1")]
         .into_iter()
         .map(|e| {
             let ascending = true;
@@ -101,7 +101,7 @@ async fn join_no_order_on_filter() -> Result<()> {
         Field::new("a3", DataType::UInt32, false),
     ]));
     // Specify the ordering:
-    let file_sort_order = vec![[datafusion_expr::col("a1")]
+    let file_sort_order = vec![[col("a1")]
         .into_iter()
         .map(|e| {
             let ascending = true;

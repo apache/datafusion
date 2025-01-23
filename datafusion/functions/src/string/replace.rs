@@ -16,7 +16,7 @@
 // under the License.
 
 use std::any::Any;
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
 use arrow::array::{ArrayRef, GenericStringArray, OffsetSizeTrait, StringArray};
 use arrow::datatypes::DataType;
@@ -24,10 +24,28 @@ use arrow::datatypes::DataType;
 use crate::utils::{make_scalar_function, utf8_to_str_type};
 use datafusion_common::cast::{as_generic_string_array, as_string_view_array};
 use datafusion_common::{exec_err, Result};
-use datafusion_expr::scalar_doc_sections::DOC_SECTION_STRING;
 use datafusion_expr::{ColumnarValue, Documentation, Volatility};
 use datafusion_expr::{ScalarUDFImpl, Signature};
-
+use datafusion_macros::user_doc;
+#[user_doc(
+    doc_section(label = "String Functions"),
+    description = "Replaces all occurrences of a specified substring in a string with a new substring.",
+    syntax_example = "replace(str, substr, replacement)",
+    sql_example = r#"```sql
+> select replace('ABabbaBA', 'ab', 'cd');
++-------------------------------------------------+
+| replace(Utf8("ABabbaBA"),Utf8("ab"),Utf8("cd")) |
++-------------------------------------------------+
+| ABcdbaBA                                        |
++-------------------------------------------------+
+```"#,
+    standard_argument(name = "str", prefix = "String"),
+    standard_argument(
+        name = "substr",
+        prefix = "Substring expression to replace in the input string. Substring"
+    ),
+    standard_argument(name = "replacement", prefix = "Replacement substring")
+)]
 #[derive(Debug)]
 pub struct ReplaceFunc {
     signature: Signature,
@@ -64,7 +82,11 @@ impl ScalarUDFImpl for ReplaceFunc {
         utf8_to_str_type(&arg_types[0], "replace")
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         match args[0].data_type() {
             DataType::Utf8 => make_scalar_function(replace::<i32>, vec![])(args),
             DataType::LargeUtf8 => make_scalar_function(replace::<i64>, vec![])(args),
@@ -76,32 +98,8 @@ impl ScalarUDFImpl for ReplaceFunc {
     }
 
     fn documentation(&self) -> Option<&Documentation> {
-        Some(get_replace_doc())
+        self.doc()
     }
-}
-
-static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
-
-fn get_replace_doc() -> &'static Documentation {
-    DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_STRING)
-            .with_description("Replaces all occurrences of a specified substring in a string with a new substring.")
-            .with_syntax_example("replace(str, substr, replacement)")
-            .with_sql_example(r#"```sql
-> select replace('ABabbaBA', 'ab', 'cd');
-+-------------------------------------------------+
-| replace(Utf8("ABabbaBA"),Utf8("ab"),Utf8("cd")) |
-+-------------------------------------------------+
-| ABcdbaBA                                        |
-+-------------------------------------------------+
-```"#)
-            .with_standard_argument("str", "String")
-            .with_standard_argument("substr", "Substring expression to replace in the input string. Substring expression")
-            .with_standard_argument("replacement", "Replacement substring")
-            .build()
-            .unwrap()
-    })
 }
 
 fn replace_view(args: &[ArrayRef]) -> Result<ArrayRef> {
@@ -154,7 +152,7 @@ mod tests {
     fn test_functions() -> Result<()> {
         test_function!(
             ReplaceFunc::new(),
-            &[
+            vec![
                 ColumnarValue::from(ScalarValue::Utf8(Some(String::from("aabbdqcbb")))),
                 ColumnarValue::from(ScalarValue::Utf8(Some(String::from("bb")))),
                 ColumnarValue::from(ScalarValue::Utf8(Some(String::from("ccc")))),
@@ -167,7 +165,7 @@ mod tests {
 
         test_function!(
             ReplaceFunc::new(),
-            &[
+            vec![
                 ColumnarValue::from(ScalarValue::LargeUtf8(Some(String::from("aabbb")))),
                 ColumnarValue::from(ScalarValue::LargeUtf8(Some(String::from("bbb")))),
                 ColumnarValue::from(ScalarValue::LargeUtf8(Some(String::from("cc")))),
@@ -180,7 +178,7 @@ mod tests {
 
         test_function!(
             ReplaceFunc::new(),
-            &[
+            vec![
                 ColumnarValue::from(ScalarValue::Utf8View(Some(String::from("aabbbcw")))),
                 ColumnarValue::from(ScalarValue::Utf8View(Some(String::from("bb")))),
                 ColumnarValue::from(ScalarValue::Utf8View(Some(String::from("cc")))),

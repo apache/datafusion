@@ -14,6 +14,7 @@
 // KIND, either express or implied.  See the License for the
 // specific language governing permissions and limitations
 // under the License.
+
 extern crate wasm_bindgen;
 
 use datafusion_common::{DFSchema, ScalarValue};
@@ -25,7 +26,6 @@ use datafusion_sql::sqlparser::dialect::GenericDialect;
 use datafusion_sql::sqlparser::parser::Parser;
 use std::sync::Arc;
 use wasm_bindgen::prelude::*;
-
 pub fn set_panic_hook() {
     // When the `console_error_panic_hook` feature is enabled, we can call the
     // `set_panic_hook` function at least once during initialization, and then
@@ -76,7 +76,14 @@ pub fn basic_parse() {
 #[cfg(test)]
 mod test {
     use super::*;
-    use datafusion::execution::context::SessionContext;
+    use datafusion::{
+        arrow::{
+            array::{ArrayRef, Int32Array, RecordBatch, StringArray},
+            datatypes::{DataType, Field, Schema},
+        },
+        datasource::MemTable,
+        execution::context::SessionContext,
+    };
     use datafusion_execution::{
         config::SessionConfig, disk_manager::DiskManagerConfig,
         runtime_env::RuntimeEnvBuilder,
@@ -94,19 +101,21 @@ mod test {
         basic_parse();
     }
 
-    #[wasm_bindgen_test(unsupported = tokio::test)]
-    async fn basic_execute() {
-        let sql = "SELECT 2 + 2;";
-
-        // Execute SQL (using datafusion)
+    fn get_ctx() -> Arc<SessionContext> {
         let rt = RuntimeEnvBuilder::new()
             .with_disk_manager(DiskManagerConfig::Disabled)
             .build_arc()
             .unwrap();
         let session_config = SessionConfig::new().with_target_partitions(1);
-        let session_context =
-            Arc::new(SessionContext::new_with_config_rt(session_config, rt));
+        Arc::new(SessionContext::new_with_config_rt(session_config, rt))
+    }
+    #[wasm_bindgen_test(unsupported = tokio::test)]
+    async fn basic_execute() {
+        let sql = "SELECT 2 + 2;";
 
+        // Execute SQL (using datafusion)
+
+        let session_context = get_ctx();
         let statement = DFParser::parse_sql(sql).unwrap().pop_back().unwrap();
 
         let logical_plan = session_context
@@ -121,6 +130,50 @@ mod test {
         let physical_plan = data_frame.create_physical_plan().await.unwrap();
 
         let task_ctx = session_context.task_ctx();
+        let _ = collect(physical_plan, task_ctx).await.unwrap();
+    }
+
+    #[wasm_bindgen_test(unsupported = tokio::test)]
+    async fn basic_df_function_execute() {
+        let sql = "SELECT abs(-1.0);";
+        let statement = DFParser::parse_sql(sql).unwrap().pop_back().unwrap();
+        let ctx = get_ctx();
+        let logical_plan = ctx.state().statement_to_plan(statement).await.unwrap();
+        let data_frame = ctx.execute_logical_plan(logical_plan).await.unwrap();
+        let physical_plan = data_frame.create_physical_plan().await.unwrap();
+
+        let task_ctx = ctx.task_ctx();
+        let _ = collect(physical_plan, task_ctx).await.unwrap();
+    }
+
+    #[wasm_bindgen_test(unsupported = tokio::test)]
+    async fn test_basic_aggregate() {
+        let sql =
+            "SELECT FIRST_VALUE(value) OVER (ORDER BY id) as first_val FROM test_table;";
+
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int32, false),
+            Field::new("value", DataType::Utf8, false),
+        ]));
+
+        let data: Vec<ArrayRef> = vec![
+            Arc::new(Int32Array::from(vec![1])),
+            Arc::new(StringArray::from(vec!["a"])),
+        ];
+
+        let batch = RecordBatch::try_new(schema.clone(), data).unwrap();
+        let table = MemTable::try_new(schema.clone(), vec![vec![batch]]).unwrap();
+
+        let ctx = get_ctx();
+        ctx.register_table("test_table", Arc::new(table)).unwrap();
+
+        let statement = DFParser::parse_sql(sql).unwrap().pop_back().unwrap();
+
+        let logical_plan = ctx.state().statement_to_plan(statement).await.unwrap();
+        let data_frame = ctx.execute_logical_plan(logical_plan).await.unwrap();
+        let physical_plan = data_frame.create_physical_plan().await.unwrap();
+
+        let task_ctx = ctx.task_ctx();
         let _ = collect(physical_plan, task_ctx).await.unwrap();
     }
 }

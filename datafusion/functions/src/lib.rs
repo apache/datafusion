@@ -14,6 +14,7 @@
 // KIND, either express or implied.  See the License for the
 // specific language governing permissions and limitations
 // under the License.
+
 // Make cheap clones clear: https://github.com/apache/datafusion/issues/11143
 #![deny(clippy::clone_on_ref_ptr)]
 
@@ -134,6 +135,8 @@ make_stub_package!(unicode, "unicode_expressions");
 
 #[cfg(any(feature = "datetime_expressions", feature = "unicode_expressions"))]
 pub mod planner;
+
+pub mod strings;
 
 mod utils;
 

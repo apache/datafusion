@@ -23,6 +23,7 @@
 use std::collections::HashSet;
 use std::fmt::Debug;
 use std::hash::Hash;
+use std::mem::size_of_val;
 use std::sync::Arc;
 
 use ahash::RandomState;
@@ -32,8 +33,8 @@ use arrow::array::PrimitiveArray;
 use arrow::datatypes::DataType;
 
 use datafusion_common::cast::{as_list_array, as_primitive_array};
-use datafusion_common::utils::array_into_list_array_nullable;
 use datafusion_common::utils::memory::estimate_memory_size;
+use datafusion_common::utils::SingleRowListArrayBuilder;
 use datafusion_common::ScalarValue;
 use datafusion_expr_common::accumulator::Accumulator;
 
@@ -72,8 +73,7 @@ where
             PrimitiveArray::<T>::from_iter_values(self.values.iter().cloned())
                 .with_data_type(self.data_type.clone()),
         );
-        let list = Arc::new(array_into_list_array_nullable(arr));
-        Ok(vec![ScalarValue::List(list)])
+        Ok(vec![SingleRowListArrayBuilder::new(arr).build_list_scalar()])
     }
 
     fn update_batch(&mut self, values: &[ArrayRef]) -> datafusion_common::Result<()> {
@@ -117,8 +117,7 @@ where
 
     fn size(&self) -> usize {
         let num_elements = self.values.len();
-        let fixed_size =
-            std::mem::size_of_val(self) + std::mem::size_of_val(&self.values);
+        let fixed_size = size_of_val(self) + size_of_val(&self.values);
 
         estimate_memory_size::<T::Native>(num_elements, fixed_size).unwrap()
     }
@@ -160,8 +159,7 @@ where
         let arr = Arc::new(PrimitiveArray::<T>::from_iter_values(
             self.values.iter().map(|v| v.0),
         )) as ArrayRef;
-        let list = Arc::new(array_into_list_array_nullable(arr));
-        Ok(vec![ScalarValue::List(list)])
+        Ok(vec![SingleRowListArrayBuilder::new(arr).build_list_scalar()])
     }
 
     fn update_batch(&mut self, values: &[ArrayRef]) -> datafusion_common::Result<()> {
@@ -206,8 +204,7 @@ where
 
     fn size(&self) -> usize {
         let num_elements = self.values.len();
-        let fixed_size =
-            std::mem::size_of_val(self) + std::mem::size_of_val(&self.values);
+        let fixed_size = size_of_val(self) + size_of_val(&self.values);
 
         estimate_memory_size::<T::Native>(num_elements, fixed_size).unwrap()
     }

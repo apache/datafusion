@@ -25,40 +25,40 @@ use arrow::array::Array;
 use arrow::record_batch::RecordBatch;
 use arrow::{array::ArrayRef, datatypes::Field};
 
-use datafusion_common::ScalarValue;
-use datafusion_common::{DataFusionError, Result};
-use datafusion_expr::{Accumulator, WindowFrame};
-
 use crate::aggregate::AggregateFunctionExpr;
 use crate::window::window_expr::AggregateWindowExpr;
 use crate::window::{
     PartitionBatches, PartitionWindowAggStates, SlidingAggregateWindowExpr, WindowExpr,
 };
-use crate::{expressions::PhysicalSortExpr, reverse_order_bys, PhysicalExpr};
+use crate::{reverse_order_bys, PhysicalExpr};
+use datafusion_common::ScalarValue;
+use datafusion_common::{DataFusionError, Result};
+use datafusion_expr::{Accumulator, WindowFrame};
+use datafusion_physical_expr_common::sort_expr::LexOrdering;
 
 /// A window expr that takes the form of an aggregate function.
 ///
 /// See comments on [`WindowExpr`] for more details.
 #[derive(Debug)]
 pub struct PlainAggregateWindowExpr {
-    aggregate: AggregateFunctionExpr,
+    aggregate: Arc<AggregateFunctionExpr>,
     partition_by: Vec<Arc<dyn PhysicalExpr>>,
-    order_by: Vec<PhysicalSortExpr>,
+    order_by: LexOrdering,
     window_frame: Arc<WindowFrame>,
 }
 
 impl PlainAggregateWindowExpr {
     /// Create a new aggregate window function expression
     pub fn new(
-        aggregate: AggregateFunctionExpr,
+        aggregate: Arc<AggregateFunctionExpr>,
         partition_by: &[Arc<dyn PhysicalExpr>],
-        order_by: &[PhysicalSortExpr],
+        order_by: &LexOrdering,
         window_frame: Arc<WindowFrame>,
     ) -> Self {
         Self {
             aggregate,
             partition_by: partition_by.to_vec(),
-            order_by: order_by.to_vec(),
+            order_by: order_by.clone(),
             window_frame,
         }
     }
@@ -124,8 +124,8 @@ impl WindowExpr for PlainAggregateWindowExpr {
         &self.partition_by
     }
 
-    fn order_by(&self) -> &[PhysicalSortExpr] {
-        &self.order_by
+    fn order_by(&self) -> &LexOrdering {
+        self.order_by.as_ref()
     }
 
     fn get_window_frame(&self) -> &Arc<WindowFrame> {
@@ -137,16 +137,16 @@ impl WindowExpr for PlainAggregateWindowExpr {
             let reverse_window_frame = self.window_frame.reverse();
             if reverse_window_frame.start_bound.is_unbounded() {
                 Arc::new(PlainAggregateWindowExpr::new(
-                    reverse_expr,
+                    Arc::new(reverse_expr),
                     &self.partition_by.clone(),
-                    &reverse_order_bys(&self.order_by),
+                    reverse_order_bys(self.order_by.as_ref()).as_ref(),
                     Arc::new(self.window_frame.reverse()),
                 )) as _
             } else {
                 Arc::new(SlidingAggregateWindowExpr::new(
-                    reverse_expr,
+                    Arc::new(reverse_expr),
                     &self.partition_by.clone(),
-                    &reverse_order_bys(&self.order_by),
+                    reverse_order_bys(self.order_by.as_ref()).as_ref(),
                     Arc::new(self.window_frame.reverse()),
                 )) as _
             }

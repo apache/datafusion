@@ -17,19 +17,19 @@
 
 //! [`Optimizer`] and [`OptimizerRule`]
 
-use std::collections::HashSet;
 use std::fmt::Debug;
 use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
 use datafusion_expr::registry::FunctionRegistry;
+use datafusion_expr::{assert_expected_schema, InvariantLevel};
 use log::{debug, warn};
 
 use datafusion_common::alias::AliasGenerator;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::instant::Instant;
-use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRewriter};
-use datafusion_common::{internal_err, DFSchema, DataFusionError, Result};
+use datafusion_common::tree_node::{Transformed, TreeNodeRewriter};
+use datafusion_common::{internal_err, DFSchema, DataFusionError, HashSet, Result};
 use datafusion_expr::logical_plan::LogicalPlan;
 
 use crate::common_subexpr_eliminate::CommonSubexprEliminate;
@@ -51,7 +51,6 @@ use crate::propagate_empty_relation::PropagateEmptyRelation;
 use crate::push_down_filter::PushDownFilter;
 use crate::push_down_limit::PushDownLimit;
 use crate::replace_distinct_aggregate::ReplaceDistinctWithAggregate;
-use crate::rewrite_disjunctive_predicate::RewriteDisjunctivePredicate;
 use crate::scalar_subquery_to_join::ScalarSubqueryToJoin;
 use crate::simplify_expressions::SimplifyExpressions;
 use crate::single_distinct_to_groupby::SingleDistinctToGroupBy;
@@ -70,7 +69,6 @@ use crate::utils::log_plan;
 ///
 /// [`AnalyzerRule`]: crate::analyzer::AnalyzerRule
 /// [`SessionState::add_optimizer_rule`]: https://docs.rs/datafusion/latest/datafusion/execution/session_state/struct.SessionState.html#method.add_optimizer_rule
-
 pub trait OptimizerRule: Debug {
     /// Try and rewrite `plan` to an optimized form, returning None if the plan
     /// cannot be optimized by this rule.
@@ -251,11 +249,6 @@ impl Optimizer {
             Arc::new(DecorrelatePredicateSubquery::new()),
             Arc::new(ScalarSubqueryToJoin::new()),
             Arc::new(ExtractEquijoinPredicate::new()),
-            // simplify expressions does not simplify expressions in subqueries, so we
-            // run it again after running the optimizations that potentially converted
-            // subqueries to joins
-            Arc::new(SimplifyExpressions::new()),
-            Arc::new(RewriteDisjunctivePredicate::new()),
             Arc::new(EliminateDuplicatedExpr::new()),
             Arc::new(EliminateFilter::new()),
             Arc::new(EliminateCrossJoin::new()),
@@ -309,7 +302,7 @@ impl<'a> Rewriter<'a> {
     }
 }
 
-impl<'a> TreeNodeRewriter for Rewriter<'a> {
+impl TreeNodeRewriter for Rewriter<'_> {
     type Node = LogicalPlan;
 
     fn f_down(&mut self, node: LogicalPlan) -> Result<Transformed<LogicalPlan>> {
@@ -363,12 +356,18 @@ impl Optimizer {
     where
         F: FnMut(&LogicalPlan, &dyn OptimizerRule),
     {
+        // verify LP is valid, before the first LP optimizer pass.
+        plan.check_invariants(InvariantLevel::Executable)
+            .map_err(|e| e.context("Invalid input plan before LP Optimizers"))?;
+
         let start_time = Instant::now();
         let options = config.options();
         let mut new_plan = plan;
 
         let mut previous_plans = HashSet::with_capacity(16);
         previous_plans.insert(LogicalPlanSignature::new(&new_plan));
+
+        let starting_schema = Arc::clone(new_plan.schema());
 
         let mut i = 0;
         while i < options.optimizer.max_passes {
@@ -386,17 +385,22 @@ impl Optimizer {
 
                 let result = match rule.apply_order() {
                     // optimizer handles recursion
-                    Some(apply_order) => new_plan.rewrite(&mut Rewriter::new(
-                        apply_order,
-                        rule.as_ref(),
-                        config,
-                    )),
+                    Some(apply_order) => new_plan.rewrite_with_subqueries(
+                        &mut Rewriter::new(apply_order, rule.as_ref(), config),
+                    ),
                     // rule handles recursion itself
                     None => optimize_plan_node(new_plan, rule.as_ref(), config),
                 }
-                // verify the rule didn't change the schema
                 .and_then(|tnr| {
-                    assert_schema_is_the_same(rule.name(), &starting_schema, &tnr.data)?;
+                    // run checks optimizer invariant checks, per optimizer rule applied
+                    assert_valid_optimization(&tnr.data, &starting_schema)
+                        .map_err(|e| e.context(format!("Check optimizer-specific invariants after optimizer rule: {}", rule.name())))?;
+
+                    // run LP invariant checks only in debug mode for performance reasons
+                    #[cfg(debug_assertions)]
+                    tnr.data.check_invariants(InvariantLevel::Executable)
+                        .map_err(|e| e.context(format!("Invalid (non-executable) plan after Optimizer rule: {}", rule.name())))?;
+
                     Ok(tnr)
                 });
 
@@ -455,35 +459,38 @@ impl Optimizer {
             }
             i += 1;
         }
+
+        // verify that the optimizer passes only mutated what was permitted.
+        assert_valid_optimization(&new_plan, &starting_schema).map_err(|e| {
+            e.context("Check optimizer-specific invariants after all passes")
+        })?;
+
+        // verify LP is valid, after the last optimizer pass.
+        new_plan
+            .check_invariants(InvariantLevel::Executable)
+            .map_err(|e| {
+                e.context("Invalid (non-executable) plan after LP Optimizers")
+            })?;
+
         log_plan("Final optimized plan", &new_plan);
         debug!("Optimizer took {} ms", start_time.elapsed().as_millis());
         Ok(new_plan)
     }
 }
 
-/// Returns an error if `new_plan`'s schema is different than `prev_schema`
+/// These are invariants which should hold true before and after [`LogicalPlan`] optimization.
 ///
-/// It ignores metadata and nullability.
-pub(crate) fn assert_schema_is_the_same(
-    rule_name: &str,
-    prev_schema: &DFSchema,
-    new_plan: &LogicalPlan,
+/// This differs from [`LogicalPlan::check_invariants`], which addresses if a singular
+/// LogicalPlan is valid. Instead this address if the optimization was valid based upon permitted changes.
+fn assert_valid_optimization(
+    plan: &LogicalPlan,
+    prev_schema: &Arc<DFSchema>,
 ) -> Result<()> {
-    let equivalent = new_plan.schema().equivalent_names_and_types(prev_schema);
+    // verify invariant: optimizer passes should not change the schema
+    // Refer to <https://datafusion.apache.org/contributor-guide/specification/invariants.html#logical-schema-is-invariant-under-logical-optimization>
+    assert_expected_schema(prev_schema, plan)?;
 
-    if !equivalent {
-        let e = DataFusionError::Internal(format!(
-            "Failed due to a difference in schemas, original schema: {:?}, new schema: {:?}",
-            prev_schema,
-            new_plan.schema()
-        ));
-        Err(DataFusionError::Context(
-            String::from(rule_name),
-            Box::new(e),
-        ))
-    } else {
-        Ok(())
-    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -537,9 +544,11 @@ mod tests {
             schema: Arc::new(DFSchema::empty()),
         });
         let err = opt.optimize(plan, &config, &observe).unwrap_err();
-        assert_eq!(
+        assert!(err.strip_backtrace().starts_with(
             "Optimizer rule 'get table_scan rule' failed\n\
-            caused by\nget table_scan rule\ncaused by\n\
+            caused by\n\
+            Check optimizer-specific invariants after optimizer rule: get table_scan rule\n\
+            caused by\n\
             Internal error: Failed due to a difference in schemas, \
             original schema: DFSchema { inner: Schema { \
             fields: [], \
@@ -555,10 +564,8 @@ mod tests {
             ], \
             metadata: {} }, \
             field_qualifiers: [Some(Bare { table: \"test\" }), Some(Bare { table: \"test\" }), Some(Bare { table: \"test\" })], \
-            functional_dependencies: FunctionalDependencies { deps: [] } }.\n\
-            This was likely caused by a bug in DataFusion's code and we would welcome that you file an bug report in our issue tracker",
-            err.strip_backtrace()
-        );
+            functional_dependencies: FunctionalDependencies { deps: [] } }",
+        ));
     }
 
     #[test]

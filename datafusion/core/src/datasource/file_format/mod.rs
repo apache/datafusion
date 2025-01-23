@@ -32,9 +32,10 @@ pub mod parquet;
 pub mod write;
 
 use std::any::Any;
-use std::collections::HashMap;
-use std::fmt::{self, Display};
+use std::collections::{HashMap, VecDeque};
+use std::fmt::{self, Debug, Display};
 use std::sync::Arc;
+use std::task::Poll;
 
 use crate::arrow::datatypes::SchemaRef;
 use crate::datasource::physical_plan::{FileScanConfig, FileSinkConfig};
@@ -42,17 +43,20 @@ use crate::error::Result;
 use crate::execution::context::SessionState;
 use crate::physical_plan::{ExecutionPlan, Statistics};
 
-use arrow_schema::{DataType, Field, Schema};
+use arrow_array::RecordBatch;
+use arrow_schema::{ArrowError, DataType, Field, FieldRef, Schema};
 use datafusion_common::file_options::file_type::FileType;
 use datafusion_common::{internal_err, not_impl_err, GetExt};
 use datafusion_expr::Expr;
 use datafusion_physical_expr::PhysicalExpr;
 
 use async_trait::async_trait;
+use bytes::{Buf, Bytes};
 use datafusion_physical_expr_common::sort_expr::LexRequirement;
 use file_compression_type::FileCompressionType;
+use futures::stream::BoxStream;
+use futures::{ready, Stream, StreamExt};
 use object_store::{ObjectMeta, ObjectStore};
-use std::fmt::Debug;
 
 /// Factory for creating [`FileFormat`] instances based on session and command level options
 ///
@@ -79,7 +83,7 @@ pub trait FileFormatFactory: Sync + Send + GetExt + Debug {
 ///
 /// [`TableProvider`]: crate::catalog::TableProvider
 #[async_trait]
-pub trait FileFormat: Send + Sync + fmt::Debug {
+pub trait FileFormat: Send + Sync + Debug {
     /// Returns the table provider as [`Any`](std::any::Any) so that it can be
     /// downcast to a specific implementation.
     fn as_any(&self) -> &dyn Any;
@@ -168,6 +172,165 @@ pub enum FilePushdownSupport {
     Supported,
 }
 
+/// Possible outputs of a [`BatchDeserializer`].
+#[derive(Debug, PartialEq)]
+pub enum DeserializerOutput {
+    /// A successfully deserialized [`RecordBatch`].
+    RecordBatch(RecordBatch),
+    /// The deserializer requires more data to make progress.
+    RequiresMoreData,
+    /// The input data has been exhausted.
+    InputExhausted,
+}
+
+/// Trait defining a scheme for deserializing byte streams into structured data.
+/// Implementors of this trait are responsible for converting raw bytes into
+/// `RecordBatch` objects.
+pub trait BatchDeserializer<T>: Send + Debug {
+    /// Feeds a message for deserialization, updating the internal state of
+    /// this `BatchDeserializer`. Note that one can call this function multiple
+    /// times before calling `next`, which will queue multiple messages for
+    /// deserialization. Returns the number of bytes consumed.
+    fn digest(&mut self, message: T) -> usize;
+
+    /// Attempts to deserialize any pending messages and returns a
+    /// `DeserializerOutput` to indicate progress.
+    fn next(&mut self) -> Result<DeserializerOutput, ArrowError>;
+
+    /// Informs the deserializer that no more messages will be provided for
+    /// deserialization.
+    fn finish(&mut self);
+}
+
+/// A general interface for decoders such as [`arrow::json::reader::Decoder`] and
+/// [`arrow::csv::reader::Decoder`]. Defines an interface similar to
+/// [`Decoder::decode`] and [`Decoder::flush`] methods, but also includes
+/// a method to check if the decoder can flush early. Intended to be used in
+/// conjunction with [`DecoderDeserializer`].
+///
+/// [`arrow::json::reader::Decoder`]: ::arrow::json::reader::Decoder
+/// [`arrow::csv::reader::Decoder`]: ::arrow::csv::reader::Decoder
+/// [`Decoder::decode`]: ::arrow::json::reader::Decoder::decode
+/// [`Decoder::flush`]: ::arrow::json::reader::Decoder::flush
+pub(crate) trait Decoder: Send + Debug {
+    /// See [`arrow::json::reader::Decoder::decode`].
+    ///
+    /// [`arrow::json::reader::Decoder::decode`]: ::arrow::json::reader::Decoder::decode
+    fn decode(&mut self, buf: &[u8]) -> Result<usize, ArrowError>;
+
+    /// See [`arrow::json::reader::Decoder::flush`].
+    ///
+    /// [`arrow::json::reader::Decoder::flush`]: ::arrow::json::reader::Decoder::flush
+    fn flush(&mut self) -> Result<Option<RecordBatch>, ArrowError>;
+
+    /// Whether the decoder can flush early in its current state.
+    fn can_flush_early(&self) -> bool;
+}
+
+impl<T: Decoder> Debug for DecoderDeserializer<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Deserializer")
+            .field("buffered_queue", &self.buffered_queue)
+            .field("finalized", &self.finalized)
+            .finish()
+    }
+}
+
+impl<T: Decoder> BatchDeserializer<Bytes> for DecoderDeserializer<T> {
+    fn digest(&mut self, message: Bytes) -> usize {
+        if message.is_empty() {
+            return 0;
+        }
+
+        let consumed = message.len();
+        self.buffered_queue.push_back(message);
+        consumed
+    }
+
+    fn next(&mut self) -> Result<DeserializerOutput, ArrowError> {
+        while let Some(buffered) = self.buffered_queue.front_mut() {
+            let decoded = self.decoder.decode(buffered)?;
+            buffered.advance(decoded);
+
+            if buffered.is_empty() {
+                self.buffered_queue.pop_front();
+            }
+
+            // Flush when the stream ends or batch size is reached
+            // Certain implementations can flush early
+            if decoded == 0 || self.decoder.can_flush_early() {
+                return match self.decoder.flush() {
+                    Ok(Some(batch)) => Ok(DeserializerOutput::RecordBatch(batch)),
+                    Ok(None) => continue,
+                    Err(e) => Err(e),
+                };
+            }
+        }
+        if self.finalized {
+            Ok(DeserializerOutput::InputExhausted)
+        } else {
+            Ok(DeserializerOutput::RequiresMoreData)
+        }
+    }
+
+    fn finish(&mut self) {
+        self.finalized = true;
+        // Ensure the decoder is flushed:
+        self.buffered_queue.push_back(Bytes::new());
+    }
+}
+
+/// A generic, decoder-based deserialization scheme for processing encoded data.
+///
+/// This struct is responsible for converting a stream of bytes, which represent
+/// encoded data, into a stream of `RecordBatch` objects, following the specified
+/// schema and formatting options. It also handles any buffering necessary to satisfy
+/// the `Decoder` interface.
+pub(crate) struct DecoderDeserializer<T: Decoder> {
+    /// The underlying decoder used for deserialization
+    pub(crate) decoder: T,
+    /// The buffer used to store the remaining bytes to be decoded
+    pub(crate) buffered_queue: VecDeque<Bytes>,
+    /// Whether the input stream has been fully consumed
+    pub(crate) finalized: bool,
+}
+
+impl<T: Decoder> DecoderDeserializer<T> {
+    /// Creates a new `DecoderDeserializer` with the provided decoder.
+    pub(crate) fn new(decoder: T) -> Self {
+        DecoderDeserializer {
+            decoder,
+            buffered_queue: VecDeque::new(),
+            finalized: false,
+        }
+    }
+}
+
+/// Deserializes a stream of bytes into a stream of [`RecordBatch`] objects using the
+/// provided deserializer.
+///
+/// Returns a boxed stream of `Result<RecordBatch, ArrowError>`. The stream yields [`RecordBatch`]
+/// objects as they are produced by the deserializer, or an [`ArrowError`] if an error
+/// occurs while polling the input or deserializing.
+pub(crate) fn deserialize_stream<'a>(
+    mut input: impl Stream<Item = Result<Bytes>> + Unpin + Send + 'a,
+    mut deserializer: impl BatchDeserializer<Bytes> + 'a,
+) -> BoxStream<'a, Result<RecordBatch, ArrowError>> {
+    futures::stream::poll_fn(move |cx| loop {
+        match ready!(input.poll_next_unpin(cx)).transpose()? {
+            Some(b) => _ = deserializer.digest(b),
+            None => deserializer.finish(),
+        };
+
+        return match deserializer.next()? {
+            DeserializerOutput::RecordBatch(rb) => Poll::Ready(Some(Ok(rb))),
+            DeserializerOutput::InputExhausted => Poll::Ready(None),
+            DeserializerOutput::RequiresMoreData => continue,
+        };
+    })
+    .boxed()
+}
+
 /// A container of [FileFormatFactory] which also implements [FileType].
 /// This enables converting a dyn FileFormat to a dyn FileType.
 /// The former trait is a superset of the latter trait, which includes execution time
@@ -224,32 +387,38 @@ pub fn format_as_file_type(
 /// downcasted to a [DefaultFileType].
 pub fn file_type_to_format(
     file_type: &Arc<dyn FileType>,
-) -> datafusion_common::Result<Arc<dyn FileFormatFactory>> {
+) -> Result<Arc<dyn FileFormatFactory>> {
     match file_type
         .as_ref()
         .as_any()
         .downcast_ref::<DefaultFileType>()
     {
-        Some(source) => Ok(source.file_format_factory.clone()),
+        Some(source) => Ok(Arc::clone(&source.file_format_factory)),
         _ => internal_err!("FileType was not DefaultFileType"),
     }
 }
 
+/// Create a new field with the specified data type, copying the other
+/// properties from the input field
+fn field_with_new_type(field: &FieldRef, new_type: DataType) -> FieldRef {
+    Arc::new(field.as_ref().clone().with_data_type(new_type))
+}
+
 /// Transform a schema to use view types for Utf8 and Binary
+///
+/// See [parquet::ParquetFormat::force_view_types] for details
 pub fn transform_schema_to_view(schema: &Schema) -> Schema {
     let transformed_fields: Vec<Arc<Field>> = schema
         .fields
         .iter()
         .map(|field| match field.data_type() {
-            DataType::Utf8 | DataType::LargeUtf8 => Arc::new(
-                Field::new(field.name(), DataType::Utf8View, field.is_nullable())
-                    .with_metadata(field.metadata().to_owned()),
-            ),
-            DataType::Binary | DataType::LargeBinary => Arc::new(
-                Field::new(field.name(), DataType::BinaryView, field.is_nullable())
-                    .with_metadata(field.metadata().to_owned()),
-            ),
-            _ => field.clone(),
+            DataType::Utf8 | DataType::LargeUtf8 => {
+                field_with_new_type(field, DataType::Utf8View)
+            }
+            DataType::Binary | DataType::LargeBinary => {
+                field_with_new_type(field, DataType::BinaryView)
+            }
+            _ => Arc::clone(field),
         })
         .collect();
     Schema::new_with_metadata(transformed_fields, schema.metadata.clone())
@@ -274,6 +443,7 @@ pub(crate) fn coerce_file_schema_to_view_type(
             (f.name(), dt)
         })
         .collect();
+
     if !transform {
         return None;
     }
@@ -283,15 +453,14 @@ pub(crate) fn coerce_file_schema_to_view_type(
         .iter()
         .map(
             |field| match (table_fields.get(field.name()), field.data_type()) {
-                (Some(DataType::Utf8View), DataType::Utf8)
-                | (Some(DataType::Utf8View), DataType::LargeUtf8) => Arc::new(
-                    Field::new(field.name(), DataType::Utf8View, field.is_nullable()),
-                ),
-                (Some(DataType::BinaryView), DataType::Binary)
-                | (Some(DataType::BinaryView), DataType::LargeBinary) => Arc::new(
-                    Field::new(field.name(), DataType::BinaryView, field.is_nullable()),
-                ),
-                _ => field.clone(),
+                (Some(DataType::Utf8View), DataType::Utf8 | DataType::LargeUtf8) => {
+                    field_with_new_type(field, DataType::Utf8View)
+                }
+                (
+                    Some(DataType::BinaryView),
+                    DataType::Binary | DataType::LargeBinary,
+                ) => field_with_new_type(field, DataType::BinaryView),
+                _ => Arc::clone(field),
             },
         )
         .collect();
@@ -300,6 +469,78 @@ pub(crate) fn coerce_file_schema_to_view_type(
         transformed_fields,
         file_schema.metadata.clone(),
     ))
+}
+
+/// Transform a schema so that any binary types are strings
+pub fn transform_binary_to_string(schema: &Schema) -> Schema {
+    let transformed_fields: Vec<Arc<Field>> = schema
+        .fields
+        .iter()
+        .map(|field| match field.data_type() {
+            DataType::Binary => field_with_new_type(field, DataType::Utf8),
+            DataType::LargeBinary => field_with_new_type(field, DataType::LargeUtf8),
+            DataType::BinaryView => field_with_new_type(field, DataType::Utf8View),
+            _ => Arc::clone(field),
+        })
+        .collect();
+    Schema::new_with_metadata(transformed_fields, schema.metadata.clone())
+}
+
+/// If the table schema uses a string type, coerce the file schema to use a string type.
+///
+/// See [parquet::ParquetFormat::binary_as_string] for details
+pub(crate) fn coerce_file_schema_to_string_type(
+    table_schema: &Schema,
+    file_schema: &Schema,
+) -> Option<Schema> {
+    let mut transform = false;
+    let table_fields: HashMap<_, _> = table_schema
+        .fields
+        .iter()
+        .map(|f| (f.name(), f.data_type()))
+        .collect();
+    let transformed_fields: Vec<Arc<Field>> = file_schema
+        .fields
+        .iter()
+        .map(
+            |field| match (table_fields.get(field.name()), field.data_type()) {
+                // table schema uses string type, coerce the file schema to use string type
+                (
+                    Some(DataType::Utf8),
+                    DataType::Binary | DataType::LargeBinary | DataType::BinaryView,
+                ) => {
+                    transform = true;
+                    field_with_new_type(field, DataType::Utf8)
+                }
+                // table schema uses large string type, coerce the file schema to use large string type
+                (
+                    Some(DataType::LargeUtf8),
+                    DataType::Binary | DataType::LargeBinary | DataType::BinaryView,
+                ) => {
+                    transform = true;
+                    field_with_new_type(field, DataType::LargeUtf8)
+                }
+                // table schema uses string view type, coerce the file schema to use view type
+                (
+                    Some(DataType::Utf8View),
+                    DataType::Binary | DataType::LargeBinary | DataType::BinaryView,
+                ) => {
+                    transform = true;
+                    field_with_new_type(field, DataType::Utf8View)
+                }
+                _ => Arc::clone(field),
+            },
+        )
+        .collect();
+
+    if !transform {
+        None
+    } else {
+        Some(Schema::new_with_metadata(
+            transformed_fields,
+            file_schema.metadata.clone(),
+        ))
+    }
 }
 
 #[cfg(test)]
@@ -332,7 +573,9 @@ pub(crate) mod test_util {
         let store = Arc::new(LocalFileSystem::new()) as _;
         let meta = local_unpartitioned_file(format!("{store_root}/{file_name}"));
 
-        let file_schema = format.infer_schema(state, &store, &[meta.clone()]).await?;
+        let file_schema = format
+            .infer_schema(state, &store, std::slice::from_ref(&meta))
+            .await?;
 
         let statistics = format
             .infer_stats(state, &store, file_schema.clone(), &meta)
@@ -344,6 +587,7 @@ pub(crate) mod test_util {
             range: None,
             statistics: None,
             extensions: None,
+            metadata_size_hint: None,
         }]];
 
         let exec = format
@@ -369,8 +613,8 @@ pub(crate) mod test_util {
         iterations_detected: Arc<Mutex<usize>>,
     }
 
-    impl std::fmt::Display for VariableStream {
-        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    impl Display for VariableStream {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
             write!(f, "VariableStream")
         }
     }

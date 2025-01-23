@@ -20,11 +20,12 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use super::{DisplayAs, ExecutionMode, ExecutionPlanProperties, PlanProperties};
+use super::{DisplayAs, ExecutionPlanProperties, PlanProperties};
 use crate::aggregates::{
     no_grouping::AggregateStream, row_hash::GroupedHashAggregateStream,
     topk_stream::GroupedTopKAggregateStream,
 };
+use crate::execution_plan::{CardinalityEffect, EmissionType};
 use crate::metrics::{ExecutionPlanMetricsSet, MetricsSet};
 use crate::projection::get_field_metadata;
 use crate::windows::get_ordered_partition_by_indices;
@@ -38,20 +39,19 @@ use arrow::datatypes::{Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use arrow_array::{UInt16Array, UInt32Array, UInt64Array, UInt8Array};
 use datafusion_common::stats::Precision;
-use datafusion_common::{internal_err, not_impl_err, Result};
+use datafusion_common::{internal_err, not_impl_err, Constraint, Constraints, Result};
 use datafusion_execution::TaskContext;
 use datafusion_expr::{Accumulator, Aggregate};
+use datafusion_physical_expr::aggregate::AggregateFunctionExpr;
 use datafusion_physical_expr::{
-    equivalence::{collapse_lex_req, ProjectionMapping},
-    expressions::Column,
-    physical_exprs_contains, EquivalenceProperties, LexOrdering, LexRequirement,
-    PhysicalExpr, PhysicalSortRequirement,
+    equivalence::ProjectionMapping, expressions::Column, physical_exprs_contains,
+    EquivalenceProperties, LexOrdering, LexRequirement, PhysicalExpr,
+    PhysicalSortRequirement,
 };
 
-use datafusion_physical_expr::aggregate::AggregateFunctionExpr;
 use itertools::Itertools;
 
-pub mod group_values;
+pub(crate) mod group_values;
 mod no_grouping;
 pub mod order;
 mod row_hash;
@@ -250,6 +250,10 @@ impl PhysicalGroupBy {
         }
     }
 
+    pub fn group_schema(&self, schema: &Schema) -> Result<SchemaRef> {
+        Ok(Arc::new(Schema::new(self.group_fields(schema)?)))
+    }
+
     /// Returns the fields that are used as the grouping keys.
     fn group_fields(&self, input_schema: &Schema) -> Result<Vec<Field>> {
         let mut fields = Vec::with_capacity(self.num_group_exprs());
@@ -343,14 +347,14 @@ impl From<StreamType> for SendableRecordBatchStream {
 }
 
 /// Hash aggregate execution plan
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct AggregateExec {
     /// Aggregation mode (full, partial)
     mode: AggregateMode,
     /// Group by expressions
     group_by: PhysicalGroupBy,
     /// Aggregate expressions
-    aggr_expr: Vec<AggregateFunctionExpr>,
+    aggr_expr: Vec<Arc<AggregateFunctionExpr>>,
     /// FILTER (WHERE clause) expression for each aggregate expression
     filter_expr: Vec<Option<Arc<dyn PhysicalExpr>>>,
     /// Set if the output of this aggregation is truncated by a upstream sort/limit clause
@@ -377,7 +381,10 @@ impl AggregateExec {
     /// Function used in `OptimizeAggregateOrder` optimizer rule,
     /// where we need parts of the new value, others cloned from the old one
     /// Rewrites aggregate exec with new aggregate expressions.
-    pub fn with_new_aggr_exprs(&self, aggr_expr: Vec<AggregateFunctionExpr>) -> Self {
+    pub fn with_new_aggr_exprs(
+        &self,
+        aggr_expr: Vec<Arc<AggregateFunctionExpr>>,
+    ) -> Self {
         Self {
             aggr_expr,
             // clone the rest of the fields
@@ -403,7 +410,7 @@ impl AggregateExec {
     pub fn try_new(
         mode: AggregateMode,
         group_by: PhysicalGroupBy,
-        aggr_expr: Vec<AggregateFunctionExpr>,
+        aggr_expr: Vec<Arc<AggregateFunctionExpr>>,
         filter_expr: Vec<Option<Arc<dyn PhysicalExpr>>>,
         input: Arc<dyn ExecutionPlan>,
         input_schema: SchemaRef,
@@ -434,7 +441,7 @@ impl AggregateExec {
     fn try_new_with_schema(
         mode: AggregateMode,
         group_by: PhysicalGroupBy,
-        mut aggr_expr: Vec<AggregateFunctionExpr>,
+        mut aggr_expr: Vec<Arc<AggregateFunctionExpr>>,
         filter_expr: Vec<Option<Arc<dyn PhysicalExpr>>>,
         input: Arc<dyn ExecutionPlan>,
         input_schema: SchemaRef,
@@ -469,7 +476,7 @@ impl AggregateExec {
             &mode,
         )?;
         new_requirement.inner.extend(req);
-        new_requirement = collapse_lex_req(new_requirement);
+        new_requirement = new_requirement.collapse();
 
         // If our aggregation has grouping sets then our base grouping exprs will
         // be expanded based on the flags in `group_by.groups` where for each
@@ -493,7 +500,7 @@ impl AggregateExec {
         };
 
         // construct a map from the input expression to the output expression of the Aggregation group by
-        let projection_mapping =
+        let group_expr_mapping =
             ProjectionMapping::try_new(&group_by.expr, &input.schema())?;
 
         let required_input_ordering =
@@ -502,7 +509,7 @@ impl AggregateExec {
         let cache = Self::compute_properties(
             &input,
             Arc::clone(&schema),
-            &projection_mapping,
+            &group_expr_mapping,
             &mode,
             &input_order_mode,
         );
@@ -544,7 +551,7 @@ impl AggregateExec {
     }
 
     /// Aggregate expressions
-    pub fn aggr_expr(&self) -> &[AggregateFunctionExpr] {
+    pub fn aggr_expr(&self) -> &[Arc<AggregateFunctionExpr>] {
         &self.aggr_expr
     }
 
@@ -638,14 +645,33 @@ impl AggregateExec {
     pub fn compute_properties(
         input: &Arc<dyn ExecutionPlan>,
         schema: SchemaRef,
-        projection_mapping: &ProjectionMapping,
+        group_expr_mapping: &ProjectionMapping,
         mode: &AggregateMode,
         input_order_mode: &InputOrderMode,
     ) -> PlanProperties {
         // Construct equivalence properties:
-        let eq_properties = input
+        let mut eq_properties = input
             .equivalence_properties()
-            .project(projection_mapping, schema);
+            .project(group_expr_mapping, schema);
+
+        // Group by expression will be a distinct value after the aggregation.
+        // Add it into the constraint set.
+        let mut constraints = eq_properties.constraints().to_vec();
+        let new_constraint = Constraint::Unique(
+            group_expr_mapping
+                .map
+                .iter()
+                .filter_map(|(_, target_col)| {
+                    target_col
+                        .as_any()
+                        .downcast_ref::<Column>()
+                        .map(|c| c.index())
+                })
+                .collect(),
+        );
+        constraints.push(new_constraint);
+        eq_properties =
+            eq_properties.with_constraints(Constraints::new_unverified(constraints));
 
         // Get output partitioning:
         let input_partitioning = input.output_partitioning().clone();
@@ -654,21 +680,24 @@ impl AggregateExec {
             // but needs to respect aliases (e.g. mapping in the GROUP BY
             // expression).
             let input_eq_properties = input.equivalence_properties();
-            input_partitioning.project(projection_mapping, input_eq_properties)
+            input_partitioning.project(group_expr_mapping, input_eq_properties)
         } else {
             input_partitioning.clone()
         };
 
-        // Determine execution mode:
-        let mut exec_mode = input.execution_mode();
-        if exec_mode == ExecutionMode::Unbounded
-            && *input_order_mode == InputOrderMode::Linear
-        {
-            // Cannot run without breaking the pipeline
-            exec_mode = ExecutionMode::PipelineBreaking;
-        }
+        // TODO: Emission type and boundedness information can be enhanced here
+        let emission_type = if *input_order_mode == InputOrderMode::Linear {
+            EmissionType::Final
+        } else {
+            input.pipeline_behavior()
+        };
 
-        PlanProperties::new(eq_properties, output_partitioning, exec_mode)
+        PlanProperties::new(
+            eq_properties,
+            output_partitioning,
+            emission_type,
+            input.boundedness(),
+        )
     }
 
     pub fn input_order_mode(&self) -> &InputOrderMode {
@@ -785,6 +814,19 @@ impl ExecutionPlan for AggregateExec {
         vec![self.required_input_ordering.clone()]
     }
 
+    /// The output ordering of [`AggregateExec`] is determined by its `group_by`
+    /// columns. Although this method is not explicitly used by any optimizer
+    /// rules yet, overriding the default implementation ensures that it
+    /// accurately reflects the actual behavior.
+    ///
+    /// If the [`InputOrderMode`] is `Linear`, the `group_by` columns don't have
+    /// an ordering, which means the results do not either. However, in the
+    /// `Ordered` and `PartiallyOrdered` cases, the `group_by` columns do have
+    /// an ordering, which is preserved in the output.
+    fn maintains_input_order(&self) -> Vec<bool> {
+        vec![self.input_order_mode != InputOrderMode::Linear]
+    }
+
     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
         vec![&self.input]
     }
@@ -866,12 +908,16 @@ impl ExecutionPlan for AggregateExec {
             }
         }
     }
+
+    fn cardinality_effect(&self) -> CardinalityEffect {
+        CardinalityEffect::LowerEqual
+    }
 }
 
 fn create_schema(
     input_schema: &Schema,
     group_by: &PhysicalGroupBy,
-    aggr_expr: &[AggregateFunctionExpr],
+    aggr_expr: &[Arc<AggregateFunctionExpr>],
     mode: AggregateMode,
 ) -> Result<Schema> {
     let mut fields = Vec::with_capacity(group_by.num_output_exprs() + aggr_expr.len());
@@ -901,10 +947,6 @@ fn create_schema(
     ))
 }
 
-fn group_schema(input_schema: &Schema, group_by: &PhysicalGroupBy) -> Result<SchemaRef> {
-    Ok(Arc::new(Schema::new(group_by.group_fields(input_schema)?)))
-}
-
 /// Determines the lexical ordering requirement for an aggregate expression.
 ///
 /// # Parameters
@@ -929,10 +971,10 @@ fn get_aggregate_expr_req(
     // necessary, or the aggregation is performing a "second stage" calculation,
     // then ignore the ordering requirement.
     if !aggr_expr.order_sensitivity().hard_requires() || !agg_mode.is_first_stage() {
-        return vec![];
+        return LexOrdering::default();
     }
 
-    let mut req = aggr_expr.order_bys().unwrap_or_default().to_vec();
+    let mut req = aggr_expr.order_bys().cloned().unwrap_or_default();
 
     // In non-first stage modes, we accumulate data (using `merge_batch`) from
     // different partitions (i.e. merge partial results). During this merge, we
@@ -975,7 +1017,7 @@ fn finer_ordering(
     agg_mode: &AggregateMode,
 ) -> Option<LexOrdering> {
     let aggr_req = get_aggregate_expr_req(aggr_expr, group_by, agg_mode);
-    eq_properties.get_finer_ordering(existing_req, &aggr_req)
+    eq_properties.get_finer_ordering(existing_req, aggr_req.as_ref())
 }
 
 /// Concatenates the given slices.
@@ -1001,17 +1043,17 @@ pub fn concat_slices<T: Clone>(lhs: &[T], rhs: &[T]) -> Vec<T> {
 /// A `LexRequirement` instance, which is the requirement that satisfies all the
 /// aggregate requirements. Returns an error in case of conflicting requirements.
 pub fn get_finer_aggregate_exprs_requirement(
-    aggr_exprs: &mut [AggregateFunctionExpr],
+    aggr_exprs: &mut [Arc<AggregateFunctionExpr>],
     group_by: &PhysicalGroupBy,
     eq_properties: &EquivalenceProperties,
     agg_mode: &AggregateMode,
 ) -> Result<LexRequirement> {
-    let mut requirement = vec![];
+    let mut requirement = LexOrdering::default();
     for aggr_expr in aggr_exprs.iter_mut() {
         if let Some(finer_ordering) =
             finer_ordering(&requirement, aggr_expr, group_by, eq_properties, agg_mode)
         {
-            if eq_properties.ordering_satisfy(&finer_ordering) {
+            if eq_properties.ordering_satisfy(finer_ordering.as_ref()) {
                 // Requirement is satisfied by existing ordering
                 requirement = finer_ordering;
                 continue;
@@ -1025,11 +1067,11 @@ pub fn get_finer_aggregate_exprs_requirement(
                 eq_properties,
                 agg_mode,
             ) {
-                if eq_properties.ordering_satisfy(&finer_ordering) {
+                if eq_properties.ordering_satisfy(finer_ordering.as_ref()) {
                     // Reverse requirement is satisfied by exiting ordering.
                     // Hence reverse the aggregator
                     requirement = finer_ordering;
-                    *aggr_expr = reverse_aggr_expr;
+                    *aggr_expr = Arc::new(reverse_aggr_expr);
                     continue;
                 }
             }
@@ -1053,7 +1095,7 @@ pub fn get_finer_aggregate_exprs_requirement(
                 // There is a requirement that both satisfies existing requirement and reverse
                 // aggregate requirement. Use updated requirement
                 requirement = finer_ordering;
-                *aggr_expr = reverse_aggr_expr;
+                *aggr_expr = Arc::new(reverse_aggr_expr);
                 continue;
             }
         }
@@ -1066,7 +1108,7 @@ pub fn get_finer_aggregate_exprs_requirement(
         );
     }
 
-    Ok(PhysicalSortRequirement::from_sort_exprs(&requirement))
+    Ok(LexRequirement::from(requirement))
 }
 
 /// Returns physical expressions for arguments to evaluate against a batch.
@@ -1075,7 +1117,7 @@ pub fn get_finer_aggregate_exprs_requirement(
 /// * Partial: AggregateFunctionExpr::expressions
 /// * Final: columns of `AggregateFunctionExpr::state_fields()`
 pub fn aggregate_expressions(
-    aggr_expr: &[AggregateFunctionExpr],
+    aggr_expr: &[Arc<AggregateFunctionExpr>],
     mode: &AggregateMode,
     col_idx_base: usize,
 ) -> Result<Vec<Vec<Arc<dyn PhysicalExpr>>>> {
@@ -1130,7 +1172,7 @@ fn merge_expressions(
 pub type AccumulatorItem = Box<dyn Accumulator>;
 
 pub fn create_accumulators(
-    aggr_expr: &[AggregateFunctionExpr],
+    aggr_expr: &[Arc<AggregateFunctionExpr>],
 ) -> Result<Vec<AccumulatorItem>> {
     aggr_expr
         .iter()
@@ -1290,8 +1332,10 @@ mod tests {
     use crate::coalesce_batches::CoalesceBatchesExec;
     use crate::coalesce_partitions::CoalescePartitionsExec;
     use crate::common;
+    use crate::execution_plan::Boundedness;
     use crate::expressions::col;
     use crate::memory::MemoryExec;
+    use crate::metrics::MetricValue;
     use crate::test::assert_is_pending;
     use crate::test::exec::{assert_strong_count_converges_to_zero, BlockingExec};
     use crate::RecordBatchStream;
@@ -1421,7 +1465,7 @@ mod tests {
 
     fn new_spill_ctx(batch_size: usize, max_memory: usize) -> Arc<TaskContext> {
         let session_config = SessionConfig::new().with_batch_size(batch_size);
-        let runtime = RuntimeEnvBuilder::default()
+        let runtime = RuntimeEnvBuilder::new()
             .with_memory_pool(Arc::new(FairSpillPool::new(max_memory)))
             .build_arc()
             .unwrap();
@@ -1453,10 +1497,12 @@ mod tests {
             ],
         );
 
-        let aggregates = vec![AggregateExprBuilder::new(count_udaf(), vec![lit(1i8)])
-            .schema(Arc::clone(&input_schema))
-            .alias("COUNT(1)")
-            .build()?];
+        let aggregates = vec![Arc::new(
+            AggregateExprBuilder::new(count_udaf(), vec![lit(1i8)])
+                .schema(Arc::clone(&input_schema))
+                .alias("COUNT(1)")
+                .build()?,
+        )];
 
         let task_ctx = if spill {
             // adjust the max memory size to have the partial aggregate result for spill mode.
@@ -1475,7 +1521,7 @@ mod tests {
         )?);
 
         let result =
-            common::collect(partial_aggregate.execute(0, Arc::clone(&task_ctx))?).await?;
+            collect(partial_aggregate.execute(0, Arc::clone(&task_ctx))?).await?;
 
         let expected = if spill {
             // In spill mode, we test with the limited memory, if the mem usage exceeds,
@@ -1547,8 +1593,7 @@ mod tests {
             input_schema,
         )?);
 
-        let result =
-            common::collect(merged_aggregate.execute(0, Arc::clone(&task_ctx))?).await?;
+        let result = collect(merged_aggregate.execute(0, Arc::clone(&task_ctx))?).await?;
         let batch = concat_batches(&result[0].schema(), &result)?;
         assert_eq!(batch.num_columns(), 4);
         assert_eq!(batch.num_rows(), 12);
@@ -1591,13 +1636,12 @@ mod tests {
             vec![vec![false]],
         );
 
-        let aggregates: Vec<AggregateFunctionExpr> =
-            vec![
-                AggregateExprBuilder::new(avg_udaf(), vec![col("b", &input_schema)?])
-                    .schema(Arc::clone(&input_schema))
-                    .alias("AVG(b)")
-                    .build()?,
-            ];
+        let aggregates: Vec<Arc<AggregateFunctionExpr>> = vec![Arc::new(
+            AggregateExprBuilder::new(avg_udaf(), vec![col("b", &input_schema)?])
+                .schema(Arc::clone(&input_schema))
+                .alias("AVG(b)")
+                .build()?,
+        )];
 
         let task_ctx = if spill {
             // set to an appropriate value to trigger spill
@@ -1616,7 +1660,7 @@ mod tests {
         )?);
 
         let result =
-            common::collect(partial_aggregate.execute(0, Arc::clone(&task_ctx))?).await?;
+            collect(partial_aggregate.execute(0, Arc::clone(&task_ctx))?).await?;
 
         let expected = if spill {
             vec![
@@ -1662,7 +1706,7 @@ mod tests {
         } else {
             Arc::clone(&task_ctx)
         };
-        let result = common::collect(merged_aggregate.execute(0, task_ctx)?).await?;
+        let result = collect(merged_aggregate.execute(0, task_ctx)?).await?;
         let batch = concat_batches(&result[0].schema(), &result)?;
         assert_eq!(batch.num_columns(), 2);
         assert_eq!(batch.num_rows(), 3);
@@ -1681,12 +1725,24 @@ mod tests {
 
         let metrics = merged_aggregate.metrics().unwrap();
         let output_rows = metrics.output_rows().unwrap();
+        let spill_count = metrics.spill_count().unwrap();
+        let spilled_bytes = metrics.spilled_bytes().unwrap();
+        let spilled_rows = metrics.spilled_rows().unwrap();
+
         if spill {
             // When spilling, the output rows metrics become partial output size + final output size
             // This is because final aggregation starts while partial aggregation is still emitting
             assert_eq!(8, output_rows);
+
+            assert!(spill_count > 0);
+            assert!(spilled_bytes > 0);
+            assert!(spilled_rows > 0);
         } else {
             assert_eq!(3, output_rows);
+
+            assert_eq!(0, spill_count);
+            assert_eq!(0, spilled_bytes);
+            assert_eq!(0, spilled_rows);
         }
 
         Ok(())
@@ -1710,13 +1766,11 @@ mod tests {
 
         /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
         fn compute_properties(schema: SchemaRef) -> PlanProperties {
-            let eq_properties = EquivalenceProperties::new(schema);
             PlanProperties::new(
-                eq_properties,
-                // Output Partitioning
+                EquivalenceProperties::new(schema),
                 Partitioning::UnknownPartitioning(1),
-                // Execution Mode
-                ExecutionMode::Bounded,
+                EmissionType::Incremental,
+                Boundedness::Bounded,
             )
         }
     }
@@ -1894,7 +1948,7 @@ mod tests {
         let input: Arc<dyn ExecutionPlan> = Arc::new(TestYieldingExec::new(true));
         let input_schema = input.schema();
 
-        let runtime = RuntimeEnvBuilder::default()
+        let runtime = RuntimeEnvBuilder::new()
             .with_memory_limit(1, 1.0)
             .build_arc()?;
         let task_ctx = TaskContext::default().with_runtime(runtime);
@@ -1908,17 +1962,16 @@ mod tests {
         );
 
         // something that allocates within the aggregator
-        let aggregates_v0: Vec<AggregateFunctionExpr> =
-            vec![test_median_agg_expr(Arc::clone(&input_schema))?];
+        let aggregates_v0: Vec<Arc<AggregateFunctionExpr>> =
+            vec![Arc::new(test_median_agg_expr(Arc::clone(&input_schema))?)];
 
         // use fast-path in `row_hash.rs`.
-        let aggregates_v2: Vec<AggregateFunctionExpr> =
-            vec![
-                AggregateExprBuilder::new(avg_udaf(), vec![col("b", &input_schema)?])
-                    .schema(Arc::clone(&input_schema))
-                    .alias("AVG(b)")
-                    .build()?,
-            ];
+        let aggregates_v2: Vec<Arc<AggregateFunctionExpr>> = vec![Arc::new(
+            AggregateExprBuilder::new(avg_udaf(), vec![col("b", &input_schema)?])
+                .schema(Arc::clone(&input_schema))
+                .alias("AVG(b)")
+                .build()?,
+        )];
 
         for (version, groups, aggregates) in [
             (0, groups_none, aggregates_v0),
@@ -1951,7 +2004,7 @@ mod tests {
             }
 
             let stream: SendableRecordBatchStream = stream.into();
-            let err = common::collect(stream).await.unwrap_err();
+            let err = collect(stream).await.unwrap_err();
 
             // error root cause traversal is a bit complicated, see #4172.
             let err = err.find_root();
@@ -1972,13 +2025,12 @@ mod tests {
 
         let groups = PhysicalGroupBy::default();
 
-        let aggregates: Vec<AggregateFunctionExpr> =
-            vec![
-                AggregateExprBuilder::new(avg_udaf(), vec![col("a", &schema)?])
-                    .schema(Arc::clone(&schema))
-                    .alias("AVG(a)")
-                    .build()?,
-            ];
+        let aggregates: Vec<Arc<AggregateFunctionExpr>> = vec![Arc::new(
+            AggregateExprBuilder::new(avg_udaf(), vec![col("a", &schema)?])
+                .schema(Arc::clone(&schema))
+                .alias("AVG(a)")
+                .build()?,
+        )];
 
         let blocking_exec = Arc::new(BlockingExec::new(Arc::clone(&schema), 1));
         let refs = blocking_exec.refs();
@@ -2012,13 +2064,12 @@ mod tests {
         let groups =
             PhysicalGroupBy::new_single(vec![(col("a", &schema)?, "a".to_string())]);
 
-        let aggregates: Vec<AggregateFunctionExpr> =
-            vec![
-                AggregateExprBuilder::new(avg_udaf(), vec![col("b", &schema)?])
-                    .schema(Arc::clone(&schema))
-                    .alias("AVG(b)")
-                    .build()?,
-            ];
+        let aggregates: Vec<Arc<AggregateFunctionExpr>> = vec![Arc::new(
+            AggregateExprBuilder::new(avg_udaf(), vec![col("b", &schema)?])
+                .schema(Arc::clone(&schema))
+                .alias("AVG(b)")
+                .build()?,
+        )];
 
         let blocking_exec = Arc::new(BlockingExec::new(Arc::clone(&schema), 1));
         let refs = blocking_exec.refs();
@@ -2063,7 +2114,7 @@ mod tests {
     fn test_first_value_agg_expr(
         schema: &Schema,
         sort_options: SortOptions,
-    ) -> Result<AggregateFunctionExpr> {
+    ) -> Result<Arc<AggregateFunctionExpr>> {
         let ordering_req = [PhysicalSortExpr {
             expr: col("b", schema)?,
             options: sort_options,
@@ -2071,27 +2122,29 @@ mod tests {
         let args = [col("b", schema)?];
 
         AggregateExprBuilder::new(first_value_udaf(), args.to_vec())
-            .order_by(ordering_req.to_vec())
+            .order_by(LexOrdering::new(ordering_req.to_vec()))
             .schema(Arc::new(schema.clone()))
             .alias(String::from("first_value(b) ORDER BY [b ASC NULLS LAST]"))
             .build()
+            .map(Arc::new)
     }
 
     // LAST_VALUE(b ORDER BY b <SortOptions>)
     fn test_last_value_agg_expr(
         schema: &Schema,
         sort_options: SortOptions,
-    ) -> Result<AggregateFunctionExpr> {
+    ) -> Result<Arc<AggregateFunctionExpr>> {
         let ordering_req = [PhysicalSortExpr {
             expr: col("b", schema)?,
             options: sort_options,
         }];
         let args = [col("b", schema)?];
         AggregateExprBuilder::new(last_value_udaf(), args.to_vec())
-            .order_by(ordering_req.to_vec())
+            .order_by(LexOrdering::new(ordering_req.to_vec()))
             .schema(Arc::new(schema.clone()))
             .alias(String::from("last_value(b) ORDER BY [b ASC NULLS LAST]"))
             .build()
+            .map(Arc::new)
     }
 
     // This function either constructs the physical plan below,
@@ -2136,7 +2189,7 @@ mod tests {
             descending: false,
             nulls_first: false,
         };
-        let aggregates: Vec<AggregateFunctionExpr> = if is_first_acc {
+        let aggregates: Vec<Arc<AggregateFunctionExpr>> = if is_first_acc {
             vec![test_first_value_agg_expr(&schema, sort_options)?]
         } else {
             vec![test_last_value_agg_expr(&schema, sort_options)?]
@@ -2253,7 +2306,7 @@ mod tests {
             ]),
         ];
 
-        let common_requirement = vec![
+        let common_requirement = LexOrdering::new(vec![
             PhysicalSortExpr {
                 expr: Arc::clone(col_a),
                 options: options1,
@@ -2262,16 +2315,17 @@ mod tests {
                 expr: Arc::clone(col_c),
                 options: options1,
             },
-        ];
+        ]);
         let mut aggr_exprs = order_by_exprs
             .into_iter()
             .map(|order_by_expr| {
                 let ordering_req = order_by_expr.unwrap_or_default();
                 AggregateExprBuilder::new(array_agg_udaf(), vec![Arc::clone(col_a)])
                     .alias("a")
-                    .order_by(ordering_req.to_vec())
+                    .order_by(LexOrdering::new(ordering_req.to_vec()))
                     .schema(Arc::clone(&test_schema))
                     .build()
+                    .map(Arc::new)
                     .unwrap()
             })
             .collect::<Vec<_>>();
@@ -2282,7 +2336,7 @@ mod tests {
             &eq_properties,
             &AggregateMode::Partial,
         )?;
-        let res = PhysicalSortRequirement::to_sort_exprs(res);
+        let res = LexOrdering::from(res);
         assert_eq!(res, common_requirement);
         Ok(())
     }
@@ -2301,7 +2355,7 @@ mod tests {
         };
         let groups = PhysicalGroupBy::new_single(vec![(col_a, "a".to_string())]);
 
-        let aggregates: Vec<AggregateFunctionExpr> = vec![
+        let aggregates: Vec<Arc<AggregateFunctionExpr>> = vec![
             test_first_value_agg_expr(&schema, option_desc)?,
             test_last_value_agg_expr(&schema, option_desc)?,
         ];
@@ -2359,11 +2413,12 @@ mod tests {
             ],
         );
 
-        let aggregates: Vec<AggregateFunctionExpr> =
+        let aggregates: Vec<Arc<AggregateFunctionExpr>> =
             vec![AggregateExprBuilder::new(count_udaf(), vec![lit(1)])
                 .schema(Arc::clone(&schema))
                 .alias("1")
-                .build()?];
+                .build()
+                .map(Arc::new)?];
 
         let input_batches = (0..4)
             .map(|_| {
@@ -2415,25 +2470,21 @@ mod tests {
                     "labels".to_string(),
                     DataType::Struct(
                         vec![
-                            Field::new_dict(
+                            Field::new(
                                 "a".to_string(),
                                 DataType::Dictionary(
                                     Box::new(DataType::Int32),
                                     Box::new(DataType::Utf8),
                                 ),
                                 true,
-                                0,
-                                false,
                             ),
-                            Field::new_dict(
+                            Field::new(
                                 "b".to_string(),
                                 DataType::Dictionary(
                                     Box::new(DataType::Int32),
                                     Box::new(DataType::Utf8),
                                 ),
                                 true,
-                                0,
-                                false,
                             ),
                         ]
                         .into(),
@@ -2445,15 +2496,13 @@ mod tests {
             vec![
                 Arc::new(StructArray::from(vec![
                     (
-                        Arc::new(Field::new_dict(
+                        Arc::new(Field::new(
                             "a".to_string(),
                             DataType::Dictionary(
                                 Box::new(DataType::Int32),
                                 Box::new(DataType::Utf8),
                             ),
                             true,
-                            0,
-                            false,
                         )),
                         Arc::new(
                             vec![Some("a"), None, Some("a")]
@@ -2462,15 +2511,13 @@ mod tests {
                         ) as ArrayRef,
                     ),
                     (
-                        Arc::new(Field::new_dict(
+                        Arc::new(Field::new(
                             "b".to_string(),
                             DataType::Dictionary(
                                 Box::new(DataType::Int32),
                                 Box::new(DataType::Utf8),
                             ),
                             true,
-                            0,
-                            false,
                         )),
                         Arc::new(
                             vec![Some("b"), Some("c"), Some("b")]
@@ -2495,11 +2542,12 @@ mod tests {
         )
         .schema(Arc::clone(&batch.schema()))
         .alias(String::from("SUM(value)"))
-        .build()?];
+        .build()
+        .map(Arc::new)?];
 
         let input = Arc::new(MemoryExec::try_new(
             &[vec![batch.clone()]],
-            Arc::<arrow_schema::Schema>::clone(&batch.schema()),
+            Arc::<Schema>::clone(&batch.schema()),
             None,
         )?);
         let aggregate_exec = Arc::new(AggregateExec::try_new(
@@ -2543,7 +2591,8 @@ mod tests {
                 AggregateExprBuilder::new(count_udaf(), vec![col("val", &schema)?])
                     .schema(Arc::clone(&schema))
                     .alias(String::from("COUNT(val)"))
-                    .build()?,
+                    .build()
+                    .map(Arc::new)?,
             ];
 
         let input_data = vec![
@@ -2624,7 +2673,8 @@ mod tests {
                 AggregateExprBuilder::new(count_udaf(), vec![col("val", &schema)?])
                     .schema(Arc::clone(&schema))
                     .alias(String::from("COUNT(val)"))
-                    .build()?,
+                    .build()
+                    .map(Arc::new)?,
             ];
 
         let input_data = vec![
@@ -2711,7 +2761,8 @@ mod tests {
                 AggregateExprBuilder::new(count_udaf(), vec![col("a", &input_schema)?])
                     .schema(Arc::clone(&input_schema))
                     .alias("COUNT(a)")
-                    .build()?,
+                    .build()
+                    .map(Arc::new)?,
             ];
 
         let grouping_set = PhysicalGroupBy::new(
@@ -2741,6 +2792,139 @@ mod tests {
             Field::new("COUNT(a)", DataType::Int64, false),
         ]);
         assert_eq!(aggr_schema, expected_schema);
+        Ok(())
+    }
+
+    // test for https://github.com/apache/datafusion/issues/13949
+    async fn run_test_with_spill_pool_if_necessary(
+        pool_size: usize,
+        expect_spill: bool,
+    ) -> Result<()> {
+        fn create_record_batch(
+            schema: &Arc<Schema>,
+            data: (Vec<u32>, Vec<f64>),
+        ) -> Result<RecordBatch> {
+            Ok(RecordBatch::try_new(
+                Arc::clone(schema),
+                vec![
+                    Arc::new(UInt32Array::from(data.0)),
+                    Arc::new(Float64Array::from(data.1)),
+                ],
+            )?)
+        }
+
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::UInt32, false),
+            Field::new("b", DataType::Float64, false),
+        ]));
+
+        let batches = vec![
+            create_record_batch(&schema, (vec![2, 3, 4, 4], vec![1.0, 2.0, 3.0, 4.0]))?,
+            create_record_batch(&schema, (vec![2, 3, 4, 4], vec![1.0, 2.0, 3.0, 4.0]))?,
+        ];
+        let plan: Arc<dyn ExecutionPlan> =
+            Arc::new(MemoryExec::try_new(&[batches], Arc::clone(&schema), None)?);
+
+        let grouping_set = PhysicalGroupBy::new(
+            vec![(col("a", &schema)?, "a".to_string())],
+            vec![],
+            vec![vec![false]],
+        );
+
+        // Test with MIN for simple intermediate state (min) and AVG for multiple intermediate states (partial sum, partial count).
+        let aggregates: Vec<Arc<AggregateFunctionExpr>> = vec![
+            Arc::new(
+                AggregateExprBuilder::new(
+                    datafusion_functions_aggregate::min_max::min_udaf(),
+                    vec![col("b", &schema)?],
+                )
+                .schema(Arc::clone(&schema))
+                .alias("MIN(b)")
+                .build()?,
+            ),
+            Arc::new(
+                AggregateExprBuilder::new(avg_udaf(), vec![col("b", &schema)?])
+                    .schema(Arc::clone(&schema))
+                    .alias("AVG(b)")
+                    .build()?,
+            ),
+        ];
+
+        let single_aggregate = Arc::new(AggregateExec::try_new(
+            AggregateMode::Single,
+            grouping_set,
+            aggregates,
+            vec![None, None],
+            plan,
+            Arc::clone(&schema),
+        )?);
+
+        let batch_size = 2;
+        let memory_pool = Arc::new(FairSpillPool::new(pool_size));
+        let task_ctx = Arc::new(
+            TaskContext::default()
+                .with_session_config(SessionConfig::new().with_batch_size(batch_size))
+                .with_runtime(Arc::new(
+                    RuntimeEnvBuilder::new()
+                        .with_memory_pool(memory_pool)
+                        .build()?,
+                )),
+        );
+
+        let result = collect(single_aggregate.execute(0, Arc::clone(&task_ctx))?).await?;
+
+        assert_spill_count_metric(expect_spill, single_aggregate);
+
+        #[rustfmt::skip]
+        assert_batches_sorted_eq!(
+            [
+                "+---+--------+--------+",
+                "| a | MIN(b) | AVG(b) |",
+                "+---+--------+--------+",
+                "| 2 | 1.0    | 1.0    |",
+                "| 3 | 2.0    | 2.0    |",
+                "| 4 | 3.0    | 3.5    |",
+                "+---+--------+--------+",
+            ],
+            &result
+        );
+
+        Ok(())
+    }
+
+    fn assert_spill_count_metric(
+        expect_spill: bool,
+        single_aggregate: Arc<AggregateExec>,
+    ) {
+        if let Some(metrics_set) = single_aggregate.metrics() {
+            let mut spill_count = 0;
+
+            // Inspect metrics for SpillCount
+            for metric in metrics_set.iter() {
+                if let MetricValue::SpillCount(count) = metric.value() {
+                    spill_count = count.value();
+                    break;
+                }
+            }
+
+            if expect_spill && spill_count == 0 {
+                panic!(
+                    "Expected spill but SpillCount metric not found or SpillCount was 0."
+                );
+            } else if !expect_spill && spill_count > 0 {
+                panic!("Expected no spill but found SpillCount metric with value greater than 0.");
+            }
+        } else {
+            panic!("No metrics returned from the operator; cannot verify spilling.");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_aggregate_with_spill_if_necessary() -> Result<()> {
+        // test with spill
+        run_test_with_spill_pool_if_necessary(2_000, true).await?;
+        // test without spill
+        run_test_with_spill_pool_if_necessary(20_000, false).await?;
         Ok(())
     }
 }

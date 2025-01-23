@@ -71,6 +71,7 @@ async fn route_data_access_ops_to_parquet_file_reader_factory() {
             range: None,
             statistics: None,
             extensions: Some(Arc::new(String::from(EXPECTED_USER_DEFINED_METADATA))),
+            metadata_size_hint: None,
         })
         .collect();
 

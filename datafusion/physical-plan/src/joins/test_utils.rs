@@ -47,21 +47,23 @@ use rand::prelude::StdRng;
 use rand::{Rng, SeedableRng};
 
 pub fn compare_batches(collected_1: &[RecordBatch], collected_2: &[RecordBatch]) {
+    let left_row_num: usize = collected_1.iter().map(|batch| batch.num_rows()).sum();
+    let right_row_num: usize = collected_2.iter().map(|batch| batch.num_rows()).sum();
+    if left_row_num == 0 && right_row_num == 0 {
+        return;
+    }
     // compare
     let first_formatted = pretty_format_batches(collected_1).unwrap().to_string();
     let second_formatted = pretty_format_batches(collected_2).unwrap().to_string();
 
-    let mut first_formatted_sorted: Vec<&str> = first_formatted.trim().lines().collect();
-    first_formatted_sorted.sort_unstable();
+    let mut first_lines: Vec<&str> = first_formatted.trim().lines().collect();
+    first_lines.sort_unstable();
 
-    let mut second_formatted_sorted: Vec<&str> =
-        second_formatted.trim().lines().collect();
-    second_formatted_sorted.sort_unstable();
+    let mut second_lines: Vec<&str> = second_formatted.trim().lines().collect();
+    second_lines.sort_unstable();
 
-    for (i, (first_line, second_line)) in first_formatted_sorted
-        .iter()
-        .zip(&second_formatted_sorted)
-        .enumerate()
+    for (i, (first_line, second_line)) in
+        first_lines.iter().zip(&second_lines).enumerate()
     {
         assert_eq!((i, first_line), (i, second_line));
     }
@@ -101,8 +103,10 @@ pub async fn partitioned_sym_join_with_filter(
         filter,
         join_type,
         null_equals_null,
-        left.output_ordering().map(|p| p.to_vec()),
-        right.output_ordering().map(|p| p.to_vec()),
+        left.output_ordering().map(|p| LexOrdering::new(p.to_vec())),
+        right
+            .output_ordering()
+            .map(|p| LexOrdering::new(p.to_vec())),
         StreamJoinPartitionMode::Partitioned,
     )?;
 
@@ -289,7 +293,7 @@ macro_rules! join_expr_tests {
                     ScalarValue::$SCALAR(Some(10 as $type)),
                     (Operator::Gt, Operator::Lt),
                 ),
-                // left_col - 1 > right_col + 5 AND left_col + 3 < right_col + 10
+                // left_col - 1 > right_col + 3 AND left_col + 3 < right_col + 15
                 1 => gen_conjunctive_numerical_expr(
                     left_col,
                     right_col,
@@ -300,9 +304,9 @@ macro_rules! join_expr_tests {
                         Operator::Plus,
                     ),
                     ScalarValue::$SCALAR(Some(1 as $type)),
-                    ScalarValue::$SCALAR(Some(5 as $type)),
                     ScalarValue::$SCALAR(Some(3 as $type)),
-                    ScalarValue::$SCALAR(Some(10 as $type)),
+                    ScalarValue::$SCALAR(Some(3 as $type)),
+                    ScalarValue::$SCALAR(Some(15 as $type)),
                     (Operator::Gt, Operator::Lt),
                 ),
                 // left_col - 1 > right_col + 5 AND left_col - 3 < right_col + 10
@@ -353,7 +357,8 @@ macro_rules! join_expr_tests {
                     ScalarValue::$SCALAR(Some(3 as $type)),
                     (Operator::Gt, Operator::Lt),
                 ),
-                // left_col - 2 >= right_col - 5 AND left_col - 7 <= right_col - 3
+                // left_col - 2 >= right_col + 5 AND left_col + 7 <= right_col - 3
+                // (filters all input rows)
                 5 => gen_conjunctive_numerical_expr(
                     left_col,
                     right_col,
@@ -369,7 +374,7 @@ macro_rules! join_expr_tests {
                     ScalarValue::$SCALAR(Some(3 as $type)),
                     (Operator::GtEq, Operator::LtEq),
                 ),
-                // left_col - 28 >= right_col - 11 AND left_col - 21 <= right_col - 39
+                // left_col + 28 >= right_col - 11 AND left_col + 21 <= right_col + 39
                 6 => gen_conjunctive_numerical_expr(
                     left_col,
                     right_col,
@@ -385,7 +390,7 @@ macro_rules! join_expr_tests {
                     ScalarValue::$SCALAR(Some(39 as $type)),
                     (Operator::Gt, Operator::LtEq),
                 ),
-                // left_col - 28 >= right_col - 11 AND left_col - 21 <= right_col + 39
+                // left_col + 28 >= right_col - 11 AND left_col - 21 <= right_col + 39
                 7 => gen_conjunctive_numerical_expr(
                     left_col,
                     right_col,
@@ -526,10 +531,10 @@ pub fn create_memory_table(
 ) -> Result<(Arc<dyn ExecutionPlan>, Arc<dyn ExecutionPlan>)> {
     let left_schema = left_partition[0].schema();
     let left = MemoryExec::try_new(&[left_partition], left_schema, None)?
-        .with_sort_information(left_sorted);
+        .try_with_sort_information(left_sorted)?;
     let right_schema = right_partition[0].schema();
     let right = MemoryExec::try_new(&[right_partition], right_schema, None)?
-        .with_sort_information(right_sorted);
+        .try_with_sort_information(right_sorted)?;
     Ok((Arc::new(left), Arc::new(right)))
 }
 

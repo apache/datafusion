@@ -35,7 +35,7 @@ use datafusion::datasource::physical_plan::{AvroExec, CsvExec};
 use datafusion::execution::runtime_env::RuntimeEnv;
 use datafusion::execution::FunctionRegistry;
 use datafusion::physical_expr::aggregate::AggregateFunctionExpr;
-use datafusion::physical_expr::{PhysicalExprRef, PhysicalSortRequirement};
+use datafusion::physical_expr::{LexOrdering, LexRequirement, PhysicalExprRef};
 use datafusion::physical_plan::aggregates::AggregateMode;
 use datafusion::physical_plan::aggregates::{AggregateExec, PhysicalGroupBy};
 use datafusion::physical_plan::analyze::AnalyzeExec;
@@ -64,7 +64,7 @@ use datafusion::physical_plan::{
     ExecutionPlan, InputOrderMode, PhysicalExpr, WindowExpr,
 };
 use datafusion_common::{internal_err, not_impl_err, DataFusionError, Result};
-use datafusion_expr::{AggregateUDF, ScalarUDF};
+use datafusion_expr::{AggregateUDF, ScalarUDF, WindowUDF};
 
 use crate::common::{byte_to_string, str_to_byte};
 use crate::physical_plan::from_proto::{
@@ -488,7 +488,7 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                     })
                     .collect::<Result<Vec<_>, _>>()?;
 
-                let physical_aggr_expr: Vec<AggregateFunctionExpr> = hash_agg
+                let physical_aggr_expr: Vec<Arc<AggregateFunctionExpr>> = hash_agg
                     .aggr_expr
                     .iter()
                     .zip(hash_agg.aggr_expr_name.iter())
@@ -501,8 +501,9 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                             ExprType::AggregateExpr(agg_node) => {
                                 let input_phy_expr: Vec<Arc<dyn PhysicalExpr>> = agg_node.expr.iter()
                                     .map(|e| parse_physical_expr(e, registry, &physical_schema, extension_codec)).collect::<Result<Vec<_>>>()?;
-                                let ordering_req: Vec<PhysicalSortExpr> = agg_node.ordering_req.iter()
-                                    .map(|e| parse_physical_sort_expr(e, registry, &physical_schema, extension_codec)).collect::<Result<Vec<_>>>()?;
+                                let ordering_req: LexOrdering = agg_node.ordering_req.iter()
+                                    .map(|e| parse_physical_sort_expr(e, registry, &physical_schema, extension_codec))
+                                    .collect::<Result<LexOrdering>>()?;
                                 agg_node.aggregate_function.as_ref().map(|func| {
                                     match func {
                                         AggregateFunction::UserDefinedAggrFunction(udaf_name) => {
@@ -518,6 +519,7 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                                                 .with_distinct(agg_node.distinct)
                                                 .order_by(ordering_req)
                                                 .build()
+                                                .map(Arc::new)
                                         }
                                     }
                                 }).transpose()?.ok_or_else(|| {
@@ -623,7 +625,7 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                             })
                             .collect::<Result<Vec<_>>>()?;
 
-                        Ok(JoinFilter::new(expression, column_indices, schema))
+                        Ok(JoinFilter::new(expression, column_indices, Arc::new(schema)))
                     })
                     .map_or(Ok(None), |v: Result<JoinFilter>| v.map(Some))?;
 
@@ -737,7 +739,7 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                             })
                             .collect::<Result<_>>()?;
 
-                        Ok(JoinFilter::new(expression, column_indices, schema))
+                        Ok(JoinFilter::new(expression, column_indices, Arc::new(schema)))
                     })
                     .map_or(Ok(None), |v: Result<JoinFilter>| v.map(Some))?;
 
@@ -850,7 +852,7 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                                 "physical_plan::from_proto() Unexpected expr {self:?}"
                             ))
                         })?;
-                        if let protobuf::physical_expr_node::ExprType::Sort(sort_expr) = expr {
+                        if let ExprType::Sort(sort_expr) = expr {
                             let expr = sort_expr
                                 .expr
                                 .as_ref()
@@ -873,7 +875,7 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                             )
                         }
                     })
-                    .collect::<Result<Vec<_>, _>>()?;
+                    .collect::<Result<LexOrdering, _>>()?;
                 let fetch = if sort.fetch < 0 {
                     None
                 } else {
@@ -897,7 +899,7 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                                 "physical_plan::from_proto() Unexpected expr {self:?}"
                             ))
                         })?;
-                        if let protobuf::physical_expr_node::ExprType::Sort(sort_expr) = expr {
+                        if let ExprType::Sort(sort_expr) = expr {
                             let expr = sort_expr
                                 .expr
                                 .as_ref()
@@ -920,7 +922,7 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                             )
                         }
                     })
-                    .collect::<Result<Vec<_>, _>>()?;
+                    .collect::<Result<LexOrdering, _>>()?;
                 let fetch = if sort.fetch < 0 {
                     None
                 } else {
@@ -990,15 +992,27 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                             })
                             .collect::<Result<Vec<_>>>()?;
 
-                        Ok(JoinFilter::new(expression, column_indices, schema))
+                        Ok(JoinFilter::new(expression, column_indices, Arc::new(schema)))
                     })
                     .map_or(Ok(None), |v: Result<JoinFilter>| v.map(Some))?;
+
+                let projection = if !join.projection.is_empty() {
+                    Some(
+                        join.projection
+                            .iter()
+                            .map(|i| *i as usize)
+                            .collect::<Vec<_>>(),
+                    )
+                } else {
+                    None
+                };
 
                 Ok(Arc::new(NestedLoopJoinExec::try_new(
                     left,
                     right,
                     filter,
                     &join_type.into(),
+                    projection,
                 )?))
             }
             PhysicalPlanType::Analyze(analyze) => {
@@ -1035,13 +1049,12 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                             &sink_schema,
                             extension_codec,
                         )
-                        .map(|item| PhysicalSortRequirement::from_sort_exprs(&item))
+                        .map(LexRequirement::from)
                     })
                     .transpose()?;
                 Ok(Arc::new(DataSinkExec::new(
                     input,
                     Arc::new(data_sink),
-                    sink_schema,
                     sort_order,
                 )))
             }
@@ -1065,13 +1078,12 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                             &sink_schema,
                             extension_codec,
                         )
-                        .map(|item| PhysicalSortRequirement::from_sort_exprs(&item))
+                        .map(LexRequirement::from)
                     })
                     .transpose()?;
                 Ok(Arc::new(DataSinkExec::new(
                     input,
                     Arc::new(data_sink),
-                    sink_schema,
                     sort_order,
                 )))
             }
@@ -1102,13 +1114,12 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                                 &sink_schema,
                                 extension_codec,
                             )
-                            .map(|item| PhysicalSortRequirement::from_sort_exprs(&item))
+                            .map(LexRequirement::from)
                         })
                         .transpose()?;
                     Ok(Arc::new(DataSinkExec::new(
                         input,
                         Arc::new(data_sink),
-                        sink_schema,
                         sort_order,
                     )))
                 }
@@ -1305,7 +1316,7 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                             }
                         })
                         .collect();
-                    let schema = f.schema().try_into()?;
+                    let schema = f.schema().as_ref().try_into()?;
                     Ok(protobuf::JoinFilter {
                         expression: Some(expression),
                         column_indices,
@@ -1377,7 +1388,7 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                             }
                         })
                         .collect();
-                    let schema = f.schema().try_into()?;
+                    let schema = f.schema().as_ref().try_into()?;
                     Ok(protobuf::JoinFilter {
                         expression: Some(expression),
                         column_indices,
@@ -1712,9 +1723,7 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                         nulls_first: expr.options.nulls_first,
                     });
                     Ok(protobuf::PhysicalExprNode {
-                        expr_type: Some(protobuf::physical_expr_node::ExprType::Sort(
-                            sort_expr,
-                        )),
+                        expr_type: Some(ExprType::Sort(sort_expr)),
                     })
                 })
                 .collect::<Result<Vec<_>>>()?;
@@ -1781,9 +1790,7 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                         nulls_first: expr.options.nulls_first,
                     });
                     Ok(protobuf::PhysicalExprNode {
-                        expr_type: Some(protobuf::physical_expr_node::ExprType::Sort(
-                            sort_expr,
-                        )),
+                        expr_type: Some(ExprType::Sort(sort_expr)),
                     })
                 })
                 .collect::<Result<Vec<_>>>()?;
@@ -1826,7 +1833,7 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                             }
                         })
                         .collect();
-                    let schema = f.schema().try_into()?;
+                    let schema = f.schema().as_ref().try_into()?;
                     Ok(protobuf::JoinFilter {
                         expression: Some(expression),
                         column_indices,
@@ -1842,6 +1849,9 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                         right: Some(Box::new(right)),
                         join_type: join_type.into(),
                         filter,
+                        projection: exec.projection().map_or_else(Vec::new, |v| {
+                            v.iter().map(|x| *x as u32).collect::<Vec<u32>>()
+                        }),
                     },
                 ))),
             });
@@ -2119,6 +2129,14 @@ pub trait PhysicalExtensionCodec: Debug + Send + Sync {
     }
 
     fn try_encode_udaf(&self, _node: &AggregateUDF, _buf: &mut Vec<u8>) -> Result<()> {
+        Ok(())
+    }
+
+    fn try_decode_udwf(&self, name: &str, _buf: &[u8]) -> Result<Arc<WindowUDF>> {
+        not_impl_err!("PhysicalExtensionCodec is not provided for window function {name}")
+    }
+
+    fn try_encode_udwf(&self, _node: &WindowUDF, _buf: &mut Vec<u8>) -> Result<()> {
         Ok(())
     }
 }

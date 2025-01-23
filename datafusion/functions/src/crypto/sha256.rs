@@ -19,9 +19,26 @@
 use super::basic::{sha256, utf8_or_binary_to_binary_type};
 use arrow::datatypes::DataType;
 use datafusion_common::Result;
-use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
+use datafusion_expr::{
+    ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
+};
+use datafusion_macros::user_doc;
 use std::any::Any;
 
+#[user_doc(
+    doc_section(label = "Hashing Functions"),
+    description = "Computes the SHA-256 hash of a binary string.",
+    syntax_example = "sha256(expression)",
+    sql_example = r#"```sql
+> select sha256('foo');
++--------------------------------------+
+| sha256(Utf8("foo"))                  |
++--------------------------------------+
+| <sha256_hash_result>                 |
++--------------------------------------+
+```"#,
+    standard_argument(name = "expression", prefix = "String")
+)]
 #[derive(Debug)]
 pub struct SHA256Func {
     signature: Signature,
@@ -38,7 +55,7 @@ impl SHA256Func {
         Self {
             signature: Signature::uniform(
                 1,
-                vec![Utf8, LargeUtf8, Binary, LargeBinary],
+                vec![Utf8View, Utf8, LargeUtf8, Binary, LargeBinary],
                 Volatility::Immutable,
             ),
         }
@@ -60,7 +77,16 @@ impl ScalarUDFImpl for SHA256Func {
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
         utf8_or_binary_to_binary_type(&arg_types[0], self.name())
     }
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         sha256(args)
+    }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        self.doc()
     }
 }

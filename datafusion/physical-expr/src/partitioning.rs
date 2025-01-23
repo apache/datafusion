@@ -97,7 +97,7 @@ use std::sync::Arc;
 /// # Additional Examples
 ///
 /// A simple `FileScanExec` might produce one output stream (partition) for each
-/// file (note the actual DataFusion file scaners can read individual files in
+/// file (note the actual DataFusion file scanners can read individual files in
 /// parallel, potentially producing multiple partitions per file)
 ///
 /// Plans such as `SortPreservingMerge` produce a single output stream
@@ -121,8 +121,8 @@ pub enum Partitioning {
     UnknownPartitioning(usize),
 }
 
-impl fmt::Display for Partitioning {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+impl Display for Partitioning {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             Partitioning::RoundRobinBatch(size) => write!(f, "RoundRobinBatch({size})"),
             Partitioning::Hash(phy_exprs, size) => {

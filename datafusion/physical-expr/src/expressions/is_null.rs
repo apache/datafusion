@@ -17,25 +17,36 @@
 
 //! IS NULL expression
 
-use std::hash::{Hash, Hasher};
+use std::hash::Hash;
 use std::{any::Any, sync::Arc};
 
+use crate::PhysicalExpr;
 use arrow::{
     datatypes::{DataType, Schema},
     record_batch::RecordBatch,
 };
-
-use crate::physical_expr::down_cast_any_ref;
-use crate::PhysicalExpr;
 use datafusion_common::Result;
 use datafusion_common::ScalarValue;
 use datafusion_expr::ColumnarValue;
 
 /// IS NULL expression
-#[derive(Debug, Hash)]
+#[derive(Debug, Eq)]
 pub struct IsNullExpr {
     /// Input expression
     arg: Arc<dyn PhysicalExpr>,
+}
+
+// Manually derive PartialEq and Hash to work around https://github.com/rust-lang/rust/issues/78808
+impl PartialEq for IsNullExpr {
+    fn eq(&self, other: &Self) -> bool {
+        self.arg.eq(&other.arg)
+    }
+}
+
+impl Hash for IsNullExpr {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.arg.hash(state);
+    }
 }
 
 impl IsNullExpr {
@@ -91,20 +102,6 @@ impl PhysicalExpr for IsNullExpr {
         children: Vec<Arc<dyn PhysicalExpr>>,
     ) -> Result<Arc<dyn PhysicalExpr>> {
         Ok(Arc::new(IsNullExpr::new(Arc::clone(&children[0]))))
-    }
-
-    fn dyn_hash(&self, state: &mut dyn Hasher) {
-        let mut s = state;
-        self.hash(&mut s);
-    }
-}
-
-impl PartialEq<dyn Any> for IsNullExpr {
-    fn eq(&self, other: &dyn Any) -> bool {
-        down_cast_any_ref(other)
-            .downcast_ref::<Self>()
-            .map(|x| self.arg.eq(&x.arg))
-            .unwrap_or(false)
     }
 }
 

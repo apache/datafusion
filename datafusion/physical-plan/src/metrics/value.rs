@@ -37,7 +37,7 @@ use parking_lot::Mutex;
 #[derive(Debug, Clone)]
 pub struct Count {
     /// value of the metric counter
-    value: std::sync::Arc<AtomicUsize>,
+    value: Arc<AtomicUsize>,
 }
 
 impl PartialEq for Count {
@@ -86,7 +86,7 @@ impl Count {
 #[derive(Debug, Clone)]
 pub struct Gauge {
     /// value of the metric gauge
-    value: std::sync::Arc<AtomicUsize>,
+    value: Arc<AtomicUsize>,
 }
 
 impl PartialEq for Gauge {
@@ -168,7 +168,7 @@ impl PartialEq for Time {
 
 impl Display for Time {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        let duration = std::time::Duration::from_nanos(self.value() as u64);
+        let duration = Duration::from_nanos(self.value() as u64);
         write!(f, "{duration:?}")
     }
 }
@@ -313,7 +313,7 @@ pub struct ScopedTimerGuard<'a> {
     start: Option<Instant>,
 }
 
-impl<'a> ScopedTimerGuard<'a> {
+impl ScopedTimerGuard<'_> {
     /// Stop the timer timing and record the time taken
     pub fn stop(&mut self) {
         if let Some(start) = self.start.take() {
@@ -332,7 +332,7 @@ impl<'a> ScopedTimerGuard<'a> {
     }
 }
 
-impl<'a> Drop for ScopedTimerGuard<'a> {
+impl Drop for ScopedTimerGuard<'_> {
     fn drop(&mut self) {
         self.stop()
     }

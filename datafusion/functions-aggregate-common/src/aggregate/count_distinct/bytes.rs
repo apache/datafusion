@@ -19,13 +19,13 @@
 
 use arrow::array::{ArrayRef, OffsetSizeTrait};
 use datafusion_common::cast::as_list_array;
-use datafusion_common::utils::array_into_list_array_nullable;
+use datafusion_common::utils::SingleRowListArrayBuilder;
 use datafusion_common::ScalarValue;
 use datafusion_expr_common::accumulator::Accumulator;
 use datafusion_physical_expr_common::binary_map::{ArrowBytesSet, OutputType};
 use datafusion_physical_expr_common::binary_view_map::ArrowBytesViewSet;
 use std::fmt::Debug;
-use std::sync::Arc;
+use std::mem::size_of_val;
 
 /// Specialized implementation of
 /// `COUNT DISTINCT` for [`StringArray`] [`LargeStringArray`],
@@ -48,8 +48,7 @@ impl<O: OffsetSizeTrait> Accumulator for BytesDistinctCountAccumulator<O> {
     fn state(&mut self) -> datafusion_common::Result<Vec<ScalarValue>> {
         let set = self.0.take();
         let arr = set.into_state();
-        let list = Arc::new(array_into_list_array_nullable(arr));
-        Ok(vec![ScalarValue::List(list)])
+        Ok(vec![SingleRowListArrayBuilder::new(arr).build_list_scalar()])
     }
 
     fn update_batch(&mut self, values: &[ArrayRef]) -> datafusion_common::Result<()> {
@@ -86,7 +85,7 @@ impl<O: OffsetSizeTrait> Accumulator for BytesDistinctCountAccumulator<O> {
     }
 
     fn size(&self) -> usize {
-        std::mem::size_of_val(self) + self.0.size()
+        size_of_val(self) + self.0.size()
     }
 }
 
@@ -108,8 +107,7 @@ impl Accumulator for BytesViewDistinctCountAccumulator {
     fn state(&mut self) -> datafusion_common::Result<Vec<ScalarValue>> {
         let set = self.0.take();
         let arr = set.into_state();
-        let list = Arc::new(array_into_list_array_nullable(arr));
-        Ok(vec![ScalarValue::List(list)])
+        Ok(vec![SingleRowListArrayBuilder::new(arr).build_list_scalar()])
     }
 
     fn update_batch(&mut self, values: &[ArrayRef]) -> datafusion_common::Result<()> {
@@ -146,6 +144,6 @@ impl Accumulator for BytesViewDistinctCountAccumulator {
     }
 
     fn size(&self) -> usize {
-        std::mem::size_of_val(self) + self.0.size()
+        size_of_val(self) + self.0.size()
     }
 }

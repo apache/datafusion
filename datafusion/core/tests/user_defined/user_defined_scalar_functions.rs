@@ -19,6 +19,7 @@ use std::any::Any;
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::sync::Arc;
 
+use arrow::array::as_string_array;
 use arrow::compute::kernels::numeric::add;
 use arrow_array::builder::BooleanBuilder;
 use arrow_array::cast::AsArray;
@@ -26,10 +27,6 @@ use arrow_array::{
     Array, ArrayRef, Float32Array, Float64Array, Int32Array, RecordBatch, StringArray,
 };
 use arrow_schema::{DataType, Field, Schema};
-use parking_lot::Mutex;
-use regex::Regex;
-use sqlparser::ast::Ident;
-
 use datafusion::execution::context::{FunctionFactory, RegisterFunction, SessionState};
 use datafusion::prelude::*;
 use datafusion::{execution::registry::FunctionRegistry, test_util};
@@ -37,7 +34,8 @@ use datafusion_common::cast::{as_float64_array, as_int32_array};
 use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::{
     assert_batches_eq, assert_batches_sorted_eq, assert_contains, exec_err, internal_err,
-    not_impl_err, plan_err, DFSchema, DataFusionError, ExprSchema, Result, ScalarValue,
+    not_impl_err, plan_err, DFSchema, DataFusionError, ExprSchema, HashMap, Result,
+    ScalarValue,
 };
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyInfo};
 use datafusion_expr::{
@@ -46,6 +44,10 @@ use datafusion_expr::{
     Volatility,
 };
 use datafusion_functions_nested::range::range_udf;
+use parking_lot::Mutex;
+use regex::Regex;
+use sqlparser::ast::Ident;
+use sqlparser::tokenizer::Span;
 
 /// test that casting happens on udfs.
 /// c11 is f32, but `custom_sqrt` requires f64. Casting happens but the logical plan and
@@ -207,11 +209,11 @@ impl ScalarUDFImpl for Simple0ArgsScalarUDF {
         Ok(self.return_type.clone())
     }
 
-    fn invoke(&self, _args: &[ColumnarValue]) -> Result<ColumnarValue> {
-        not_impl_err!("{} function does not accept arguments", self.name())
-    }
-
-    fn invoke_no_args(&self, _number_rows: usize) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        _args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         Ok(ColumnarValue::from(ScalarValue::Int32(Some(100))))
     }
 }
@@ -249,7 +251,7 @@ async fn test_row_mismatch_error_in_scalar_udf() -> Result<()> {
             .err()
             .unwrap()
             .to_string(),
-        "UDF returned a different number of rows than expected"
+        "Internal error: UDF buggy_func returned a different number of rows than expected. Expected: 2, Got: 1"
     );
     Ok(())
 }
@@ -483,6 +485,183 @@ async fn test_user_defined_functions_with_alias() -> Result<()> {
     Ok(())
 }
 
+/// Volatile UDF that should append a different value to each row
+#[derive(Debug)]
+struct AddIndexToStringVolatileScalarUDF {
+    name: String,
+    signature: Signature,
+    return_type: DataType,
+}
+
+impl AddIndexToStringVolatileScalarUDF {
+    fn new() -> Self {
+        Self {
+            name: "add_index_to_string".to_string(),
+            signature: Signature::exact(vec![DataType::Utf8], Volatility::Volatile),
+            return_type: DataType::Utf8,
+        }
+    }
+}
+
+impl ScalarUDFImpl for AddIndexToStringVolatileScalarUDF {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    fn signature(&self) -> &Signature {
+        &self.signature
+    }
+
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        Ok(self.return_type.clone())
+    }
+
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        number_rows: usize,
+    ) -> Result<ColumnarValue> {
+        let answer = match &args[0] {
+            // When called with static arguments, the result is returned as an array.
+            ColumnarValue::Scalar(scalar) => match scalar.value() {
+                ScalarValue::Utf8(Some(value)) => {
+                    let mut answer = vec![];
+                    for index in 1..=number_rows {
+                        // When calling a function with immutable arguments, the result is returned with ")".
+                        // Example: SELECT add_index_to_string('const_value') FROM table;
+                        answer.push(index.to_string() + ") " + value);
+                    }
+                    answer
+                }
+                _ => return exec_err!("Unexpected scalar value"),
+            },
+            // The result is returned as an array when called with dynamic arguments.
+            ColumnarValue::Array(array) => {
+                let string_array = as_string_array(array);
+                let mut counter = HashMap::<&str, u64>::new();
+                string_array
+                    .iter()
+                    .map(|value| {
+                        let value = value.expect("Unexpected null");
+                        let index = counter.get(value).unwrap_or(&0) + 1;
+                        counter.insert(value, index);
+
+                        // When calling a function with mutable arguments, the result is returned with ".".
+                        // Example: SELECT add_index_to_string(table.value) FROM table;
+                        index.to_string() + ". " + value
+                    })
+                    .collect()
+            }
+        };
+        Ok(ColumnarValue::Array(Arc::new(StringArray::from(answer))))
+    }
+}
+
+#[tokio::test]
+async fn volatile_scalar_udf_with_params() -> Result<()> {
+    {
+        let schema = Schema::new(vec![Field::new("a", DataType::Utf8, false)]);
+
+        let batch = RecordBatch::try_new(
+            Arc::new(schema.clone()),
+            vec![Arc::new(StringArray::from(vec![
+                "test_1", "test_1", "test_1", "test_2", "test_2", "test_1", "test_2",
+            ]))],
+        )?;
+        let ctx = SessionContext::new();
+
+        ctx.register_batch("t", batch)?;
+
+        let get_new_str_udf = AddIndexToStringVolatileScalarUDF::new();
+
+        ctx.register_udf(ScalarUDF::from(get_new_str_udf));
+
+        let result =
+            plan_and_collect(&ctx, "select add_index_to_string(t.a) AS str from t") // with dynamic function parameters
+                .await?;
+        let expected = [
+            "+-----------+",
+            "| str       |",
+            "+-----------+",
+            "| 1. test_1 |",
+            "| 2. test_1 |",
+            "| 3. test_1 |",
+            "| 1. test_2 |",
+            "| 2. test_2 |",
+            "| 4. test_1 |",
+            "| 3. test_2 |",
+            "+-----------+",
+        ];
+        assert_batches_eq!(expected, &result);
+
+        let result =
+            plan_and_collect(&ctx, "select add_index_to_string('test') AS str from t") // with fixed function parameters
+                .await?;
+        let expected = [
+            "+---------+",
+            "| str     |",
+            "+---------+",
+            "| 1) test |",
+            "| 2) test |",
+            "| 3) test |",
+            "| 4) test |",
+            "| 5) test |",
+            "| 6) test |",
+            "| 7) test |",
+            "+---------+",
+        ];
+        assert_batches_eq!(expected, &result);
+
+        let result =
+            plan_and_collect(&ctx, "select add_index_to_string('test_value') as str") // with fixed function parameters
+                .await?;
+        let expected = [
+            "+---------------+",
+            "| str           |",
+            "+---------------+",
+            "| 1) test_value |",
+            "+---------------+",
+        ];
+        assert_batches_eq!(expected, &result);
+    }
+    {
+        let schema = Schema::new(vec![Field::new("a", DataType::Utf8, false)]);
+
+        let batch = RecordBatch::try_new(
+            Arc::new(schema.clone()),
+            vec![Arc::new(StringArray::from(vec![
+                "test_1", "test_1", "test_1",
+            ]))],
+        )?;
+        let ctx = SessionContext::new();
+
+        ctx.register_batch("t", batch)?;
+
+        let get_new_str_udf = AddIndexToStringVolatileScalarUDF::new();
+
+        ctx.register_udf(ScalarUDF::from(get_new_str_udf));
+
+        let result =
+            plan_and_collect(&ctx, "select add_index_to_string(t.a) AS str from t")
+                .await?;
+        let expected = [
+            "+-----------+", //
+            "| str       |", //
+            "+-----------+", //
+            "| 1. test_1 |", //
+            "| 2. test_1 |", //
+            "| 3. test_1 |", //
+            "+-----------+",
+        ];
+        assert_batches_eq!(expected, &result);
+    }
+    Ok(())
+}
+
 #[derive(Debug)]
 struct CastToI64UDF {
     signature: Signature,
@@ -539,7 +718,11 @@ impl ScalarUDFImpl for CastToI64UDF {
         Ok(ExprSimplifyResult::Simplified(new_expr))
     }
 
-    fn invoke(&self, _args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        _args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         unimplemented!("Function should have been simplified prior to evaluation")
     }
 }
@@ -669,7 +852,11 @@ impl ScalarUDFImpl for TakeUDF {
     }
 
     // The actual implementation
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         let take_idx = match &args[2] {
             ColumnarValue::Scalar(scalar) => match scalar.value() {
                 ScalarValue::Int64(Some(v)) if v < &2 => *v as usize,
@@ -760,11 +947,11 @@ struct ScalarFunctionWrapper {
     name: String,
     expr: Expr,
     signature: Signature,
-    return_type: arrow_schema::DataType,
+    return_type: DataType,
 }
 
 impl ScalarUDFImpl for ScalarFunctionWrapper {
-    fn as_any(&self) -> &dyn std::any::Any {
+    fn as_any(&self) -> &dyn Any {
         self
     }
 
@@ -772,21 +959,19 @@ impl ScalarUDFImpl for ScalarFunctionWrapper {
         &self.name
     }
 
-    fn signature(&self) -> &datafusion_expr::Signature {
+    fn signature(&self) -> &Signature {
         &self.signature
     }
 
-    fn return_type(
-        &self,
-        _arg_types: &[arrow_schema::DataType],
-    ) -> Result<arrow_schema::DataType> {
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
         Ok(self.return_type.clone())
     }
 
-    fn invoke(
+    fn invoke_batch(
         &self,
-        _args: &[datafusion_expr::ColumnarValue],
-    ) -> Result<datafusion_expr::ColumnarValue> {
+        _args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         internal_err!("This function should not get invoked!")
     }
 
@@ -866,10 +1051,7 @@ impl TryFrom<CreateFunction> for ScalarFunctionWrapper {
                     .into_iter()
                     .map(|a| a.data_type)
                     .collect(),
-                definition
-                    .params
-                    .behavior
-                    .unwrap_or(datafusion_expr::Volatility::Volatile),
+                definition.params.behavior.unwrap_or(Volatility::Volatile),
             ),
         })
     }
@@ -1012,6 +1194,7 @@ async fn create_scalar_function_from_sql_statement_postgres_syntax() -> Result<(
             name: Some(Ident {
                 value: "name".into(),
                 quote_style: None,
+                span: Span::empty(),
             }),
             data_type: DataType::Utf8,
             default_expr: None,
@@ -1021,6 +1204,7 @@ async fn create_scalar_function_from_sql_statement_postgres_syntax() -> Result<(
             language: Some(Ident {
                 value: "plrust".into(),
                 quote_style: None,
+                span: Span::empty(),
             }),
             behavior: None,
             function_body: Some(lit(body)),
@@ -1073,7 +1257,11 @@ impl ScalarUDFImpl for MyRegexUdf {
         }
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         match args {
             [ColumnarValue::Scalar(scalar)] => match scalar.value() {
                 ScalarValue::Utf8(value) => Ok(ColumnarValue::from(
@@ -1175,7 +1363,7 @@ fn custom_sqrt(args: &[ColumnarValue]) -> Result<ColumnarValue> {
 }
 
 async fn register_aggregate_csv(ctx: &SessionContext) -> Result<()> {
-    let testdata = datafusion::test_util::arrow_test_data();
+    let testdata = test_util::arrow_test_data();
     let schema = test_util::aggr_test_schema();
     ctx.register_csv(
         "aggregate_test_100",
@@ -1187,7 +1375,7 @@ async fn register_aggregate_csv(ctx: &SessionContext) -> Result<()> {
 }
 
 async fn register_alltypes_parquet(ctx: &SessionContext) -> Result<()> {
-    let testdata = datafusion::test_util::parquet_test_data();
+    let testdata = test_util::parquet_test_data();
     ctx.register_parquet(
         "alltypes_plain",
         &format!("{testdata}/alltypes_plain.parquet"),

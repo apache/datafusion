@@ -20,11 +20,11 @@
 use arrow::datatypes::i256;
 use arrow_array::cast::AsArray;
 use arrow_array::{downcast_primitive, ArrayRef, ArrowPrimitiveType, PrimitiveArray};
-use arrow_buffer::{IntervalDayTime, IntervalMonthDayNano};
+use arrow_buffer::{IntervalDayTime, IntervalMonthDayNano, ScalarBuffer};
 use arrow_schema::DataType;
 use datafusion_common::DataFusionError;
 use datafusion_common::Result;
-use datafusion_physical_expr::aggregate::utils::adjust_output_array;
+
 use half::f16;
 use std::cmp::Ordering;
 use std::fmt::{Debug, Display, Formatter};
@@ -151,10 +151,11 @@ where
     }
 
     fn drain(&mut self) -> (ArrayRef, Vec<usize>) {
+        let nulls = None;
         let (vals, map_idxs) = self.heap.drain();
-        let vals = Arc::new(PrimitiveArray::<VAL>::from_iter_values(vals));
-        let vals = adjust_output_array(&self.data_type, vals).expect("Type is incorrect");
-        (vals, map_idxs)
+        let arr = PrimitiveArray::<VAL>::new(ScalarBuffer::from(vals), nulls)
+            .with_data_type(self.data_type.clone());
+        (Arc::new(arr), map_idxs)
     }
 }
 
@@ -366,7 +367,7 @@ impl<VAL: ValueType> TopKHeap<VAL> {
 impl<VAL: ValueType> Display for TopKHeap<VAL> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         let mut output = String::new();
-        if self.heap.first().is_some() {
+        if !self.heap.is_empty() {
             self._tree_print(0, String::new(), true, &mut output);
         }
         write!(f, "{}", output)

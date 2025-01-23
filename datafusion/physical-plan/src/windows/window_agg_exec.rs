@@ -23,16 +23,16 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 
 use super::utils::create_schema;
-use crate::expressions::PhysicalSortExpr;
+use crate::execution_plan::EmissionType;
 use crate::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
 use crate::windows::{
     calc_requirements, get_ordered_partition_by_indices, get_partition_by_sort_exprs,
     window_equivalence_properties,
 };
 use crate::{
-    ColumnStatistics, DisplayAs, DisplayFormatType, Distribution, ExecutionMode,
-    ExecutionPlan, ExecutionPlanProperties, PhysicalExpr, PlanProperties,
-    RecordBatchStream, SendableRecordBatchStream, Statistics, WindowExpr,
+    ColumnStatistics, DisplayAs, DisplayFormatType, Distribution, ExecutionPlan,
+    ExecutionPlanProperties, PhysicalExpr, PlanProperties, RecordBatchStream,
+    SendableRecordBatchStream, Statistics, WindowExpr,
 };
 use arrow::array::ArrayRef;
 use arrow::compute::{concat, concat_batches};
@@ -43,11 +43,11 @@ use datafusion_common::stats::Precision;
 use datafusion_common::utils::{evaluate_partition_ranges, transpose};
 use datafusion_common::{internal_err, Result};
 use datafusion_execution::TaskContext;
-use datafusion_physical_expr_common::sort_expr::LexRequirement;
+use datafusion_physical_expr_common::sort_expr::{LexOrdering, LexRequirement};
 use futures::{ready, Stream, StreamExt};
 
 /// Window execution plan
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct WindowAggExec {
     /// Input plan
     pub(crate) input: Arc<dyn ExecutionPlan>,
@@ -105,7 +105,7 @@ impl WindowAggExec {
     // We are sure that partition by columns are always at the beginning of sort_keys
     // Hence returned `PhysicalSortExpr` corresponding to `PARTITION BY` columns can be used safely
     // to calculate partition separation points
-    pub fn partition_by_sort_keys(&self) -> Result<Vec<PhysicalSortExpr>> {
+    pub fn partition_by_sort_keys(&self) -> Result<LexOrdering> {
         let partition_by = self.window_expr()[0].partition_by();
         get_partition_by_sort_exprs(
             &self.input,
@@ -128,16 +128,14 @@ impl WindowAggExec {
         // would be either 1 or more than 1 depending on the presence of repartitioning.
         let output_partitioning = input.output_partitioning().clone();
 
-        // Determine execution mode:
-        let mode = match input.execution_mode() {
-            ExecutionMode::Bounded => ExecutionMode::Bounded,
-            ExecutionMode::Unbounded | ExecutionMode::PipelineBreaking => {
-                ExecutionMode::PipelineBreaking
-            }
-        };
-
         // Construct properties cache:
-        PlanProperties::new(eq_properties, output_partitioning, mode)
+        PlanProperties::new(
+            eq_properties,
+            output_partitioning,
+            // TODO: Emission type and boundedness information can be enhanced here
+            EmissionType::Final,
+            input.boundedness(),
+        )
     }
 }
 
@@ -195,13 +193,13 @@ impl ExecutionPlan for WindowAggExec {
         let partition_bys = self.window_expr()[0].partition_by();
         let order_keys = self.window_expr()[0].order_by();
         if self.ordered_partition_by_indices.len() < partition_bys.len() {
-            vec![calc_requirements(partition_bys, order_keys)]
+            vec![calc_requirements(partition_bys, order_keys.iter())]
         } else {
             let partition_bys = self
                 .ordered_partition_by_indices
                 .iter()
                 .map(|idx| &partition_bys[*idx]);
-            vec![calc_requirements(partition_bys, order_keys)]
+            vec![calc_requirements(partition_bys, order_keys.iter())]
         }
     }
 
@@ -282,7 +280,7 @@ pub struct WindowAggStream {
     batches: Vec<RecordBatch>,
     finished: bool,
     window_expr: Vec<Arc<dyn WindowExpr>>,
-    partition_by_sort_keys: Vec<PhysicalSortExpr>,
+    partition_by_sort_keys: LexOrdering,
     baseline_metrics: BaselineMetrics,
     ordered_partition_by_indices: Vec<usize>,
 }
@@ -294,7 +292,7 @@ impl WindowAggStream {
         window_expr: Vec<Arc<dyn WindowExpr>>,
         input: SendableRecordBatchStream,
         baseline_metrics: BaselineMetrics,
-        partition_by_sort_keys: Vec<PhysicalSortExpr>,
+        partition_by_sort_keys: LexOrdering,
         ordered_partition_by_indices: Vec<usize>,
     ) -> Result<Self> {
         // In WindowAggExec all partition by columns should be ordered.
@@ -313,12 +311,13 @@ impl WindowAggStream {
         })
     }
 
-    fn compute_aggregates(&self) -> Result<RecordBatch> {
+    fn compute_aggregates(&self) -> Result<Option<RecordBatch>> {
         // record compute time on drop
         let _timer = self.baseline_metrics.elapsed_compute().timer();
+
         let batch = concat_batches(&self.input.schema(), &self.batches)?;
         if batch.num_rows() == 0 {
-            return Ok(RecordBatch::new_empty(Arc::clone(&self.schema)));
+            return Ok(None);
         }
 
         let partition_by_sort_keys = self
@@ -351,10 +350,10 @@ impl WindowAggStream {
         let mut batch_columns = batch.columns().to_vec();
         // calculate window cols
         batch_columns.extend_from_slice(&columns);
-        Ok(RecordBatch::try_new(
+        Ok(Some(RecordBatch::try_new(
             Arc::clone(&self.schema),
             batch_columns,
-        )?)
+        )?))
     }
 }
 
@@ -381,18 +380,23 @@ impl WindowAggStream {
         }
 
         loop {
-            let result = match ready!(self.input.poll_next_unpin(cx)) {
+            return Poll::Ready(Some(match ready!(self.input.poll_next_unpin(cx)) {
                 Some(Ok(batch)) => {
                     self.batches.push(batch);
                     continue;
                 }
                 Some(Err(e)) => Err(e),
-                None => self.compute_aggregates(),
-            };
-
-            self.finished = true;
-
-            return Poll::Ready(Some(result));
+                None => {
+                    let Some(result) = self.compute_aggregates()? else {
+                        return Poll::Ready(None);
+                    };
+                    self.finished = true;
+                    // Empty record batches should not be emitted.
+                    // They need to be treated as  [`Option<RecordBatch>`]es and handled separately
+                    debug_assert!(result.num_rows() > 0);
+                    Ok(result)
+                }
+            }));
         }
     }
 }

@@ -29,13 +29,12 @@ use crate::error::{DataFusionError, Result};
 use crate::execution::context::{ExecutionProps, SessionState};
 use crate::logical_expr::utils::generate_sort_key;
 use crate::logical_expr::{
-    Aggregate, EmptyRelation, Join, Projection, Sort, TableScan, Unnest, Window,
+    Aggregate, EmptyRelation, Join, Projection, Sort, TableScan, Unnest, Values, Window,
 };
 use crate::logical_expr::{
     Expr, LogicalPlan, Partitioning as LogicalPartitioning, PlanType, Repartition,
     UserDefinedLogicalNode,
 };
-use crate::logical_expr::{Limit, Values};
 use crate::physical_expr::{create_physical_expr, create_physical_exprs};
 use crate::physical_plan::aggregates::{AggregateExec, AggregateMode, PhysicalGroupBy};
 use crate::physical_plan::analyze::AnalyzeExec;
@@ -55,7 +54,6 @@ use crate::physical_plan::repartition::RepartitionExec;
 use crate::physical_plan::sorts::sort::SortExec;
 use crate::physical_plan::union::UnionExec;
 use crate::physical_plan::unnest::UnnestExec;
-use crate::physical_plan::values::ValuesExec;
 use crate::physical_plan::windows::{BoundedWindowAggExec, WindowAggExec};
 use crate::physical_plan::{
     displayable, windows, ExecutionPlan, ExecutionPlanProperties, InputOrderMode,
@@ -78,8 +76,8 @@ use datafusion_expr::expr::{
 use datafusion_expr::expr_rewriter::unnormalize_cols;
 use datafusion_expr::logical_plan::builder::wrap_projection_for_join_if_necessary;
 use datafusion_expr::{
-    DescribeTable, DmlStatement, Extension, Filter, RecursiveQuery, SortExpr,
-    StringifiedPlan, WindowFrame, WindowFrameBound, WriteOp,
+    DescribeTable, DmlStatement, Extension, FetchType, Filter, JoinType, RecursiveQuery,
+    SkipType, SortExpr, StringifiedPlan, WindowFrame, WindowFrameBound, WriteOp,
 };
 use datafusion_physical_expr::aggregate::{AggregateExprBuilder, AggregateFunctionExpr};
 use datafusion_physical_expr::expressions::Literal;
@@ -328,7 +326,7 @@ impl DefaultPhysicalPlanner {
         // Spawning tasks which will traverse leaf up to the root.
         let tasks = flat_tree_leaf_indices
             .into_iter()
-            .map(|index| self.task_helper(index, flat_tree.clone(), session_state));
+            .map(|index| self.task_helper(index, Arc::clone(&flat_tree), session_state));
         let mut outputs = futures::stream::iter(tasks)
             .buffer_unordered(max_concurrency)
             .try_collect::<Vec<_>>()
@@ -467,7 +465,8 @@ impl DefaultPhysicalPlanner {
                             .collect::<Result<Vec<Arc<dyn PhysicalExpr>>>>()
                     })
                     .collect::<Result<Vec<_>>>()?;
-                let value_exec = ValuesExec::try_new(SchemaRef::new(exec_schema), exprs)?;
+                let value_exec =
+                    MemoryExec::try_new_as_values(SchemaRef::new(exec_schema), exprs)?;
                 Arc::new(value_exec)
             }
             LogicalPlan::EmptyRelation(EmptyRelation {
@@ -487,7 +486,7 @@ impl DefaultPhysicalPlanner {
                 output_schema,
             }) => {
                 let output_schema: Schema = output_schema.as_ref().into();
-                self.plan_describe(schema.clone(), Arc::new(output_schema))?
+                self.plan_describe(Arc::clone(schema), Arc::new(output_schema))?
             }
 
             // 1 Child
@@ -522,6 +521,9 @@ impl DefaultPhysicalPlanner {
                         return Err(DataFusionError::Configuration(format!("provided value for 'execution.keep_partition_by_columns' was not recognized: \"{}\"", value))),
                 };
 
+                let sink_format = file_type_to_format(file_type)?
+                    .create(session_state, source_option_tuples)?;
+
                 // Set file sink related options
                 let config = FileSinkConfig {
                     object_store_url,
@@ -531,10 +533,8 @@ impl DefaultPhysicalPlanner {
                     table_partition_cols,
                     insert_op: InsertOp::Append,
                     keep_partition_by_columns,
+                    file_extension: sink_format.get_ext(),
                 };
-
-                let sink_format = file_type_to_format(file_type)?
-                    .create(session_state, source_option_tuples)?;
 
                 sink_format
                     .create_writer_physical_plan(input_exec, session_state, config, None)
@@ -650,15 +650,51 @@ impl DefaultPhysicalPlanner {
                 aggr_expr,
                 ..
             }) => {
+                let options = session_state.config().options();
                 // Initially need to perform the aggregate and then merge the partitions
                 let input_exec = children.one()?;
                 let physical_input_schema = input_exec.schema();
                 let logical_input_schema = input.as_ref().schema();
-                let physical_input_schema_from_logical: Arc<Schema> =
-                    logical_input_schema.as_ref().clone().into();
+                let physical_input_schema_from_logical = logical_input_schema.inner();
 
-                if physical_input_schema != physical_input_schema_from_logical {
-                    return internal_err!("Physical input schema should be the same as the one converted from logical input schema.");
+                if !options.execution.skip_physical_aggregate_schema_check
+                    && &physical_input_schema != physical_input_schema_from_logical
+                {
+                    let mut differences = Vec::new();
+                    if physical_input_schema.fields().len()
+                        != physical_input_schema_from_logical.fields().len()
+                    {
+                        differences.push(format!(
+                            "Different number of fields: (physical) {} vs (logical) {}",
+                            physical_input_schema.fields().len(),
+                            physical_input_schema_from_logical.fields().len()
+                        ));
+                    }
+                    for (i, (physical_field, logical_field)) in physical_input_schema
+                        .fields()
+                        .iter()
+                        .zip(physical_input_schema_from_logical.fields())
+                        .enumerate()
+                    {
+                        if physical_field.name() != logical_field.name() {
+                            differences.push(format!(
+                                "field name at index {}: (physical) {} vs (logical) {}",
+                                i,
+                                physical_field.name(),
+                                logical_field.name()
+                            ));
+                        }
+                        if physical_field.data_type() != logical_field.data_type() {
+                            differences.push(format!("field data type at index {} [{}]: (physical) {} vs (logical) {}", i, physical_field.name(), physical_field.data_type(), logical_field.data_type()));
+                        }
+                        if physical_field.is_nullable() != logical_field.is_nullable() {
+                            differences.push(format!("field nullability at index {} [{}]: (physical) {} vs (logical) {}", i, physical_field.name(), physical_field.is_nullable(), logical_field.is_nullable()));
+                        }
+                    }
+                    return internal_err!("Physical input schema should be the same as the one converted from logical input schema. Differences: {}", differences
+                        .iter()
+                        .map(|s| format!("\n\t- {}", s))
+                        .join(""));
                 }
 
                 let groups = self.create_grouping_physical_expr(
@@ -689,7 +725,7 @@ impl DefaultPhysicalPlanner {
                     aggregates,
                     filters.clone(),
                     input_exec,
-                    physical_input_schema.clone(),
+                    Arc::clone(&physical_input_schema),
                 )?);
 
                 let can_repartition = !groups.is_empty()
@@ -720,7 +756,7 @@ impl DefaultPhysicalPlanner {
                     updated_aggregates,
                     filters,
                     initial_aggr,
-                    physical_input_schema.clone(),
+                    Arc::clone(&physical_input_schema),
                 )?)
             }
             LogicalPlan::Projection(Projection { input, expr, .. }) => self
@@ -796,8 +832,20 @@ impl DefaultPhysicalPlanner {
             }
             LogicalPlan::Subquery(_) => todo!(),
             LogicalPlan::SubqueryAlias(_) => children.one()?,
-            LogicalPlan::Limit(Limit { skip, fetch, .. }) => {
+            LogicalPlan::Limit(limit) => {
                 let input = children.one()?;
+                let SkipType::Literal(skip) = limit.get_skip_type()? else {
+                    return not_impl_err!(
+                        "Unsupported OFFSET expression: {:?}",
+                        limit.skip
+                    );
+                };
+                let FetchType::Literal(fetch) = limit.get_fetch_type()? else {
+                    return not_impl_err!(
+                        "Unsupported LIMIT expression: {:?}",
+                        limit.fetch
+                    );
+                };
 
                 // GlobalLimitExec requires a single partition for input
                 let input = if input.output_partitioning().partition_count() == 1 {
@@ -806,13 +854,13 @@ impl DefaultPhysicalPlanner {
                     // Apply a LocalLimitExec to each partition. The optimizer will also insert
                     // a CoalescePartitionsExec between the GlobalLimitExec and LocalLimitExec
                     if let Some(fetch) = fetch {
-                        Arc::new(LocalLimitExec::new(input, *fetch + skip))
+                        Arc::new(LocalLimitExec::new(input, fetch + skip))
                     } else {
                         input
                     }
                 };
 
-                Arc::new(GlobalLimitExec::new(input, *skip, *fetch))
+                Arc::new(GlobalLimitExec::new(input, skip, fetch))
             }
             LogicalPlan::Unnest(Unnest {
                 list_type_columns,
@@ -880,8 +928,8 @@ impl DefaultPhysicalPlanner {
                     let right = Arc::new(right);
                     let new_join = LogicalPlan::Join(Join::try_new_with_project_input(
                         node,
-                        left.clone(),
-                        right.clone(),
+                        Arc::clone(&left),
+                        Arc::clone(&right),
                         column_on,
                     )?);
 
@@ -1014,14 +1062,21 @@ impl DefaultPhysicalPlanner {
                             })
                             .collect();
 
+                        let metadata: HashMap<_, _> = left_df_schema
+                            .metadata()
+                            .clone()
+                            .into_iter()
+                            .chain(right_df_schema.metadata().clone())
+                            .collect();
+
                         // Construct intermediate schemas used for filtering data and
                         // convert logical expression to physical according to filter schema
                         let filter_df_schema = DFSchema::new_with_metadata(
                             filter_df_fields,
-                            HashMap::new(),
+                            metadata.clone(),
                         )?;
                         let filter_schema =
-                            Schema::new_with_metadata(filter_fields, HashMap::new());
+                            Schema::new_with_metadata(filter_fields, metadata);
                         let filter_expr = create_physical_expr(
                             expr,
                             &filter_df_schema,
@@ -1035,7 +1090,7 @@ impl DefaultPhysicalPlanner {
                         Some(join_utils::JoinFilter::new(
                             filter_expr,
                             column_indices,
-                            filter_schema,
+                            Arc::new(filter_schema),
                         ))
                     }
                     _ => None,
@@ -1045,14 +1100,19 @@ impl DefaultPhysicalPlanner {
                     session_state.config_options().optimizer.prefer_hash_join;
 
                 let join: Arc<dyn ExecutionPlan> = if join_on.is_empty() {
-                    // there is no equal join condition, use the nested loop join
-                    // TODO optimize the plan, and use the config of `target_partitions` and `repartition_joins`
-                    Arc::new(NestedLoopJoinExec::try_new(
-                        physical_left,
-                        physical_right,
-                        join_filter,
-                        join_type,
-                    )?)
+                    if join_filter.is_none() && matches!(join_type, JoinType::Inner) {
+                        // cross join if there is no join conditions and no join filter set
+                        Arc::new(CrossJoinExec::new(physical_left, physical_right))
+                    } else {
+                        // there is no equal join condition, use the nested loop join
+                        Arc::new(NestedLoopJoinExec::try_new(
+                            physical_left,
+                            physical_right,
+                            join_filter,
+                            join_type,
+                            None,
+                        )?)
+                    }
                 } else if session_state.config().target_partitions() > 1
                     && session_state.config().repartition_joins()
                     && !prefer_hash_join
@@ -1112,10 +1172,6 @@ impl DefaultPhysicalPlanner {
                     join
                 }
             }
-            LogicalPlan::CrossJoin(_) => {
-                let [left, right] = children.two()?;
-                Arc::new(CrossJoinExec::new(left, right))
-            }
             LogicalPlan::RecursiveQuery(RecursiveQuery {
                 name, is_distinct, ..
             }) => {
@@ -1174,12 +1230,6 @@ impl DefaultPhysicalPlanner {
                 // DataFusion is a read-only query engine, but also a library, so consumers may implement this
                 let name = statement.name();
                 return not_impl_err!("Unsupported logical plan: Statement({name})");
-            }
-            LogicalPlan::Prepare(_) => {
-                // There is no default plan for "PREPARE" -- it must be
-                // handled at a higher level (so that the appropriate
-                // statement can be prepared)
-                return not_impl_err!("Unsupported logical plan: Prepare");
             }
             LogicalPlan::Dml(dml) => {
                 // DataFusion is a read-only query engine, but also a library, so consumers may implement this
@@ -1498,7 +1548,7 @@ pub fn create_window_expr_with_name(
                 name,
                 &physical_args,
                 &partition_by,
-                &order_by,
+                order_by.as_ref(),
                 window_frame,
                 physical_schema,
                 ignore_nulls,
@@ -1523,11 +1573,11 @@ pub fn create_window_expr(
 }
 
 type AggregateExprWithOptionalArgs = (
-    AggregateFunctionExpr,
+    Arc<AggregateFunctionExpr>,
     // The filter clause, if any
     Option<Arc<dyn PhysicalExpr>>,
     // Ordering requirements, if any
-    Option<Vec<PhysicalSortExpr>>,
+    Option<LexOrdering>,
 );
 
 /// Create an aggregate expression with a name from a logical expression
@@ -1577,17 +1627,18 @@ pub fn create_aggregate_expr_with_name_and_maybe_filter(
                     None => None,
                 };
 
-                let ordering_reqs: Vec<PhysicalSortExpr> =
-                    physical_sort_exprs.clone().unwrap_or(vec![]);
+                let ordering_reqs: LexOrdering =
+                    physical_sort_exprs.clone().unwrap_or_default();
 
                 let agg_expr =
                     AggregateExprBuilder::new(func.to_owned(), physical_args.to_vec())
-                        .order_by(ordering_reqs.to_vec())
+                        .order_by(ordering_reqs)
                         .schema(Arc::new(physical_input_schema.to_owned()))
                         .alias(name)
                         .with_ignore_nulls(ignore_nulls)
                         .with_distinct(*distinct)
-                        .build()?;
+                        .build()
+                        .map(Arc::new)?;
 
                 (agg_expr, filter, physical_sort_exprs)
             };
@@ -1650,7 +1701,7 @@ pub fn create_physical_sort_exprs(
     exprs
         .iter()
         .map(|expr| create_physical_sort_expr(expr, input_dfschema, execution_props))
-        .collect::<Result<Vec<_>>>()
+        .collect::<Result<LexOrdering>>()
 }
 
 impl DefaultPhysicalPlanner {
@@ -1773,8 +1824,12 @@ impl DefaultPhysicalPlanner {
                             Err(e) => return Err(e),
                         }
                     }
-                    Err(e) => stringified_plans
-                        .push(StringifiedPlan::new(InitialPhysicalPlan, e.to_string())),
+                    Err(err) => {
+                        stringified_plans.push(StringifiedPlan::new(
+                            PhysicalPlanError,
+                            err.strip_backtrace(),
+                        ));
+                    }
                 }
             }
 
@@ -1964,7 +2019,7 @@ mod tests {
     use crate::datasource::file_format::options::CsvReadOptions;
     use crate::datasource::MemTable;
     use crate::physical_plan::{
-        expressions, DisplayAs, DisplayFormatType, ExecutionMode, PlanProperties,
+        expressions, DisplayAs, DisplayFormatType, PlanProperties,
         SendableRecordBatchStream,
     };
     use crate::prelude::{SessionConfig, SessionContext};
@@ -1979,6 +2034,7 @@ mod tests {
     use datafusion_expr::{col, lit, LogicalPlanBuilder, UserDefinedLogicalNodeCore};
     use datafusion_functions_aggregate::expr_fn::sum;
     use datafusion_physical_expr::EquivalenceProperties;
+    use datafusion_physical_plan::execution_plan::{Boundedness, EmissionType};
 
     fn make_session_state() -> SessionState {
         let runtime = Arc::new(RuntimeEnv::default());
@@ -2566,13 +2622,11 @@ mod tests {
 
         /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
         fn compute_properties(schema: SchemaRef) -> PlanProperties {
-            let eq_properties = EquivalenceProperties::new(schema);
             PlanProperties::new(
-                eq_properties,
-                // Output Partitioning
+                EquivalenceProperties::new(schema),
                 Partitioning::UnknownPartitioning(1),
-                // Execution Mode
-                ExecutionMode::Bounded,
+                EmissionType::Incremental,
+                Boundedness::Bounded,
             )
         }
     }

@@ -322,6 +322,7 @@ impl TryFrom<&protobuf::Field> for Field {
     fn try_from(field: &protobuf::Field) -> Result<Self, Self::Error> {
         let datatype = field.arrow_type.as_deref().required("arrow_type")?;
         let field = if field.dict_id != 0 {
+            #[allow(deprecated)]
             Self::new_dict(
                 field.name.as_str(),
                 datatype,
@@ -445,7 +446,11 @@ impl TryFrom<&protobuf::ScalarValue> for Scalar {
 
                     let id = dict_batch.id();
 
-                    let fields_using_this_dictionary = schema.fields_with_dict_id(id);
+                    let fields_using_this_dictionary = {
+                        #[allow(deprecated)]
+                        schema.fields_with_dict_id(id)
+                    };
+
                     let first_field = fields_using_this_dictionary.first().ok_or_else(|| {
                         Error::General("dictionary id not found in schema while deserializing ScalarValue::List".to_string())
                     })?;
@@ -806,7 +811,42 @@ impl From<protobuf::JoinSide> for JoinSide {
         match t {
             protobuf::JoinSide::LeftSide => JoinSide::Left,
             protobuf::JoinSide::RightSide => JoinSide::Right,
+            protobuf::JoinSide::None => JoinSide::None,
         }
+    }
+}
+
+impl From<&protobuf::Constraint> for Constraint {
+    fn from(value: &protobuf::Constraint) -> Self {
+        match &value.constraint_mode {
+            Some(protobuf::constraint::ConstraintMode::PrimaryKey(elem)) => {
+                Constraint::PrimaryKey(
+                    elem.indices.iter().map(|&item| item as usize).collect(),
+                )
+            }
+            Some(protobuf::constraint::ConstraintMode::Unique(elem)) => {
+                Constraint::Unique(
+                    elem.indices.iter().map(|&item| item as usize).collect(),
+                )
+            }
+            None => panic!("constraint_mode not set"),
+        }
+    }
+}
+
+impl TryFrom<&protobuf::Constraints> for Constraints {
+    type Error = DataFusionError;
+
+    fn try_from(
+        constraints: &protobuf::Constraints,
+    ) -> datafusion_common::Result<Self, Self::Error> {
+        Ok(Constraints::new_unverified(
+            constraints
+                .constraints
+                .iter()
+                .map(|item| item.into())
+                .collect(),
+        ))
     }
 }
 
@@ -896,7 +936,7 @@ impl TryFrom<&protobuf::CsvOptions> for CsvOptions {
             double_quote: proto_opts.has_header.first().map(|h| *h != 0),
             newlines_in_values: proto_opts.newlines_in_values.first().map(|h| *h != 0),
             compression: proto_opts.compression().into(),
-            schema_infer_max_rec: proto_opts.schema_infer_max_rec as usize,
+            schema_infer_max_rec: proto_opts.schema_infer_max_rec.map(|h| h as usize),
             date_format: (!proto_opts.date_format.is_empty())
                 .then(|| proto_opts.date_format.clone()),
             datetime_format: (!proto_opts.datetime_format.is_empty())
@@ -909,6 +949,8 @@ impl TryFrom<&protobuf::CsvOptions> for CsvOptions {
                 .then(|| proto_opts.time_format.clone()),
             null_value: (!proto_opts.null_value.is_empty())
                 .then(|| proto_opts.null_value.clone()),
+            null_regex: (!proto_opts.null_regex.is_empty())
+                .then(|| proto_opts.null_regex.clone()),
             comment: proto_opts.comment.first().copied(),
         })
     }
@@ -925,7 +967,7 @@ impl TryFrom<&protobuf::ParquetOptions> for ParquetOptions {
             pruning: value.pruning,
             skip_metadata: value.skip_metadata,
             metadata_size_hint: value
-                .metadata_size_hint_opt.clone()
+                .metadata_size_hint_opt
                 .map(|opt| match opt {
                     protobuf::parquet_options::MetadataSizeHintOpt::MetadataSizeHint(v) => Some(v as usize),
                 })
@@ -986,6 +1028,8 @@ impl TryFrom<&protobuf::ParquetOptions> for ParquetOptions {
             maximum_parallel_row_group_writers: value.maximum_parallel_row_group_writers as usize,
             maximum_buffered_record_batches_per_stream: value.maximum_buffered_record_batches_per_stream as usize,
             schema_force_view_types: value.schema_force_view_types,
+            binary_as_string: value.binary_as_string,
+            skip_arrow_metadata: value.skip_arrow_metadata,
         })
     }
 }
@@ -1007,7 +1051,7 @@ impl TryFrom<&protobuf::ParquetColumnOptions> for ParquetColumnOptions {
                 })
                 .unwrap_or(None),
             max_statistics_size: value
-                .max_statistics_size_opt.clone()
+                .max_statistics_size_opt
                 .map(|opt| match opt {
                     protobuf::parquet_column_options::MaxStatisticsSizeOpt::MaxStatisticsSize(v) => Some(v as usize),
                 })
@@ -1018,18 +1062,18 @@ impl TryFrom<&protobuf::ParquetColumnOptions> for ParquetColumnOptions {
                     protobuf::parquet_column_options::EncodingOpt::Encoding(v) => Some(v),
                 })
                 .unwrap_or(None),
-            bloom_filter_enabled: value.bloom_filter_enabled_opt.clone().map(|opt| match opt {
+            bloom_filter_enabled: value.bloom_filter_enabled_opt.map(|opt| match opt {
                 protobuf::parquet_column_options::BloomFilterEnabledOpt::BloomFilterEnabled(v) => Some(v),
             })
                 .unwrap_or(None),
             bloom_filter_fpp: value
-                .bloom_filter_fpp_opt.clone()
+                .bloom_filter_fpp_opt
                 .map(|opt| match opt {
                     protobuf::parquet_column_options::BloomFilterFppOpt::BloomFilterFpp(v) => Some(v),
                 })
                 .unwrap_or(None),
             bloom_filter_ndv: value
-                .bloom_filter_ndv_opt.clone()
+                .bloom_filter_ndv_opt
                 .map(|opt| match opt {
                     protobuf::parquet_column_options::BloomFilterNdvOpt::BloomFilterNdv(v) => Some(v),
                 })
@@ -1076,7 +1120,7 @@ impl TryFrom<&protobuf::JsonOptions> for JsonOptions {
         let compression: protobuf::CompressionTypeVariant = proto_opts.compression();
         Ok(JsonOptions {
             compression: compression.into(),
-            schema_infer_max_rec: proto_opts.schema_infer_max_rec as usize,
+            schema_infer_max_rec: proto_opts.schema_infer_max_rec.map(|h| h as usize),
         })
     }
 }

@@ -65,26 +65,23 @@ macro_rules! export_functions {
     };
 }
 
-/// Creates a singleton `ScalarUDF` of the `$UDF` function named `$GNAME` and a
-/// function named `$NAME` which returns that singleton.
+/// Creates a singleton `ScalarUDF` of the `$UDF` function and a function
+/// named `$NAME` which returns that singleton.
 ///
 /// This is used to ensure creating the list of `ScalarUDF` only happens once.
 macro_rules! make_udf_function {
-    ($UDF:ty, $GNAME:ident, $NAME:ident) => {
-        /// Singleton instance of the function
-        static $GNAME: std::sync::OnceLock<std::sync::Arc<datafusion_expr::ScalarUDF>> =
-            std::sync::OnceLock::new();
-
-        #[doc = "Return a [`ScalarUDF`](datafusion_expr::ScalarUDF) implementation "]
-        #[doc = stringify!($UDF)]
+    ($UDF:ty, $NAME:ident) => {
+        #[doc = concat!("Return a [`ScalarUDF`](datafusion_expr::ScalarUDF) implementation of ", stringify!($NAME))]
         pub fn $NAME() -> std::sync::Arc<datafusion_expr::ScalarUDF> {
-            $GNAME
-                .get_or_init(|| {
-                    std::sync::Arc::new(datafusion_expr::ScalarUDF::new_from_impl(
-                        <$UDF>::new(),
-                    ))
-                })
-                .clone()
+            // Singleton instance of the function
+            static INSTANCE: std::sync::LazyLock<
+                std::sync::Arc<datafusion_expr::ScalarUDF>,
+            > = std::sync::LazyLock::new(|| {
+                std::sync::Arc::new(datafusion_expr::ScalarUDF::new_from_impl(
+                    <$UDF>::new(),
+                ))
+            });
+            std::sync::Arc::clone(&INSTANCE)
         }
     };
 }
@@ -112,23 +109,22 @@ macro_rules! make_stub_package {
     };
 }
 
-/// Invokes a function on each element of an array and returns the result as a new array
+/// Downcast a named argument to a specific array type, returning an internal error
+/// if the cast fails
 ///
 /// $ARG: ArrayRef
-/// $NAME: name of the function (for error messages)
-/// $ARGS_TYPE: the type of array to cast the argument to
-/// $RETURN_TYPE: the type of array to return
-/// $FUNC: the function to apply to each element of $ARG
-macro_rules! make_function_scalar_inputs_return_type {
-    ($ARG: expr, $NAME:expr, $ARG_TYPE:ident, $RETURN_TYPE:ident, $FUNC: block) => {{
-        let arg = downcast_arg!($ARG, $NAME, $ARG_TYPE);
-
-        arg.iter()
-            .map(|a| match a {
-                Some(a) => Some($FUNC(a)),
-                _ => None,
-            })
-            .collect::<$RETURN_TYPE>()
+/// $NAME: name of the argument (for error messages)
+/// $ARRAY_TYPE: the type of array to cast the argument to
+#[macro_export]
+macro_rules! downcast_named_arg {
+    ($ARG:expr, $NAME:expr, $ARRAY_TYPE:ident) => {{
+        $ARG.as_any().downcast_ref::<$ARRAY_TYPE>().ok_or_else(|| {
+            internal_datafusion_err!(
+                "could not cast {} to {}",
+                $NAME,
+                std::any::type_name::<$ARRAY_TYPE>()
+            )
+        })?
     }};
 }
 
@@ -136,17 +132,11 @@ macro_rules! make_function_scalar_inputs_return_type {
 /// if the cast fails
 ///
 /// $ARG: ArrayRef
-/// $NAME: name of the argument (for error messages)
 /// $ARRAY_TYPE: the type of array to cast the argument to
+#[macro_export]
 macro_rules! downcast_arg {
-    ($ARG:expr, $NAME:expr, $ARRAY_TYPE:ident) => {{
-        $ARG.as_any().downcast_ref::<$ARRAY_TYPE>().ok_or_else(|| {
-            DataFusionError::Internal(format!(
-                "could not cast {} to {}",
-                $NAME,
-                std::any::type_name::<$ARRAY_TYPE>()
-            ))
-        })?
+    ($ARG:expr, $ARRAY_TYPE:ident) => {{
+        downcast_named_arg!($ARG, "", $ARRAY_TYPE)
     }};
 }
 
@@ -156,24 +146,26 @@ macro_rules! downcast_arg {
 /// applies a unary floating function to the argument, and returns a value of the same type.
 ///
 /// $UDF: the name of the UDF struct that implements `ScalarUDFImpl`
-/// $GNAME: a singleton instance of the UDF
 /// $NAME: the name of the function
 /// $UNARY_FUNC: the unary function to apply to the argument
 /// $OUTPUT_ORDERING: the output ordering calculation method of the function
+/// $GET_DOC: the function to get the documentation of the UDF
 macro_rules! make_math_unary_udf {
-    ($UDF:ident, $GNAME:ident, $NAME:ident, $UNARY_FUNC:ident, $OUTPUT_ORDERING:expr, $EVALUATE_BOUNDS:expr) => {
-        make_udf_function!($NAME::$UDF, $GNAME, $NAME);
+    ($UDF:ident, $NAME:ident, $UNARY_FUNC:ident, $OUTPUT_ORDERING:expr, $EVALUATE_BOUNDS:expr, $GET_DOC:expr) => {
+        make_udf_function!($NAME::$UDF, $NAME);
 
         mod $NAME {
             use std::any::Any;
             use std::sync::Arc;
 
-            use arrow::array::{ArrayRef, Float32Array, Float64Array};
-            use arrow::datatypes::DataType;
-            use datafusion_common::{exec_err, DataFusionError, Result};
+            use arrow::array::{ArrayRef, AsArray};
+            use arrow::datatypes::{DataType, Float32Type, Float64Type};
+            use datafusion_common::{exec_err, Result};
             use datafusion_expr::interval_arithmetic::Interval;
             use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
-            use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
+            use datafusion_expr::{
+                ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
+            };
 
             #[derive(Debug)]
             pub struct $UDF {
@@ -226,28 +218,23 @@ macro_rules! make_math_unary_udf {
                     $EVALUATE_BOUNDS(inputs)
                 }
 
-                fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+                fn invoke_batch(
+                    &self,
+                    args: &[ColumnarValue],
+                    _number_rows: usize,
+                ) -> Result<ColumnarValue> {
                     let args = ColumnarValue::values_to_arrays(args)?;
-
                     let arr: ArrayRef = match args[0].data_type() {
-                        DataType::Float64 => {
-                            Arc::new(make_function_scalar_inputs_return_type!(
-                                &args[0],
-                                self.name(),
-                                Float64Array,
-                                Float64Array,
-                                { f64::$UNARY_FUNC }
-                            ))
-                        }
-                        DataType::Float32 => {
-                            Arc::new(make_function_scalar_inputs_return_type!(
-                                &args[0],
-                                self.name(),
-                                Float32Array,
-                                Float32Array,
-                                { f32::$UNARY_FUNC }
-                            ))
-                        }
+                        DataType::Float64 => Arc::new(
+                            args[0]
+                                .as_primitive::<Float64Type>()
+                                .unary::<_, Float64Type>(|x: f64| f64::$UNARY_FUNC(x)),
+                        ) as ArrayRef,
+                        DataType::Float32 => Arc::new(
+                            args[0]
+                                .as_primitive::<Float32Type>()
+                                .unary::<_, Float32Type>(|x: f32| f32::$UNARY_FUNC(x)),
+                        ) as ArrayRef,
                         other => {
                             return exec_err!(
                                 "Unsupported data type {other:?} for function {}",
@@ -255,7 +242,12 @@ macro_rules! make_math_unary_udf {
                             )
                         }
                     };
+
                     Ok(ColumnarValue::Array(arr))
+                }
+
+                fn documentation(&self) -> Option<&Documentation> {
+                    Some($GET_DOC())
                 }
             }
         }
@@ -268,24 +260,26 @@ macro_rules! make_math_unary_udf {
 /// applies a binary floating function to the argument, and returns a value of the same type.
 ///
 /// $UDF: the name of the UDF struct that implements `ScalarUDFImpl`
-/// $GNAME: a singleton instance of the UDF
 /// $NAME: the name of the function
 /// $BINARY_FUNC: the binary function to apply to the argument
 /// $OUTPUT_ORDERING: the output ordering calculation method of the function
+/// $GET_DOC: the function to get the documentation of the UDF
 macro_rules! make_math_binary_udf {
-    ($UDF:ident, $GNAME:ident, $NAME:ident, $BINARY_FUNC:ident, $OUTPUT_ORDERING:expr) => {
-        make_udf_function!($NAME::$UDF, $GNAME, $NAME);
+    ($UDF:ident, $NAME:ident, $BINARY_FUNC:ident, $OUTPUT_ORDERING:expr, $GET_DOC:expr) => {
+        make_udf_function!($NAME::$UDF, $NAME);
 
         mod $NAME {
             use std::any::Any;
             use std::sync::Arc;
 
-            use arrow::array::{ArrayRef, Float32Array, Float64Array};
-            use arrow::datatypes::DataType;
-            use datafusion_common::{exec_err, DataFusionError, Result};
+            use arrow::array::{ArrayRef, AsArray};
+            use arrow::datatypes::{DataType, Float32Type, Float64Type};
+            use datafusion_common::{exec_err, Result};
             use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
             use datafusion_expr::TypeSignature;
-            use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
+            use datafusion_expr::{
+                ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
+            };
 
             #[derive(Debug)]
             pub struct $UDF {
@@ -336,27 +330,33 @@ macro_rules! make_math_binary_udf {
                     $OUTPUT_ORDERING(input)
                 }
 
-                fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+                fn invoke_batch(
+                    &self,
+                    args: &[ColumnarValue],
+                    _number_rows: usize,
+                ) -> Result<ColumnarValue> {
                     let args = ColumnarValue::values_to_arrays(args)?;
-
                     let arr: ArrayRef = match args[0].data_type() {
-                        DataType::Float64 => Arc::new(make_function_inputs2!(
-                            &args[0],
-                            &args[1],
-                            "y",
-                            "x",
-                            Float64Array,
-                            { f64::$BINARY_FUNC }
-                        )),
-
-                        DataType::Float32 => Arc::new(make_function_inputs2!(
-                            &args[0],
-                            &args[1],
-                            "y",
-                            "x",
-                            Float32Array,
-                            { f32::$BINARY_FUNC }
-                        )),
+                        DataType::Float64 => {
+                            let y = args[0].as_primitive::<Float64Type>();
+                            let x = args[1].as_primitive::<Float64Type>();
+                            let result = arrow::compute::binary::<_, _, _, Float64Type>(
+                                y,
+                                x,
+                                |y, x| f64::$BINARY_FUNC(y, x),
+                            )?;
+                            Arc::new(result) as _
+                        }
+                        DataType::Float32 => {
+                            let y = args[0].as_primitive::<Float32Type>();
+                            let x = args[1].as_primitive::<Float32Type>();
+                            let result = arrow::compute::binary::<_, _, _, Float32Type>(
+                                y,
+                                x,
+                                |y, x| f32::$BINARY_FUNC(y, x),
+                            )?;
+                            Arc::new(result) as _
+                        }
                         other => {
                             return exec_err!(
                                 "Unsupported data type {other:?} for function {}",
@@ -364,49 +364,14 @@ macro_rules! make_math_binary_udf {
                             )
                         }
                     };
+
                     Ok(ColumnarValue::Array(arr))
+                }
+
+                fn documentation(&self) -> Option<&Documentation> {
+                    Some($GET_DOC())
                 }
             }
         }
     };
-}
-
-macro_rules! make_function_scalar_inputs {
-    ($ARG: expr, $NAME:expr, $ARRAY_TYPE:ident, $FUNC: block) => {{
-        let arg = downcast_arg!($ARG, $NAME, $ARRAY_TYPE);
-
-        arg.iter()
-            .map(|a| match a {
-                Some(a) => Some($FUNC(a)),
-                _ => None,
-            })
-            .collect::<$ARRAY_TYPE>()
-    }};
-}
-
-macro_rules! make_function_inputs2 {
-    ($ARG1: expr, $ARG2: expr, $NAME1:expr, $NAME2: expr, $ARRAY_TYPE:ident, $FUNC: block) => {{
-        let arg1 = downcast_arg!($ARG1, $NAME1, $ARRAY_TYPE);
-        let arg2 = downcast_arg!($ARG2, $NAME2, $ARRAY_TYPE);
-
-        arg1.iter()
-            .zip(arg2.iter())
-            .map(|(a1, a2)| match (a1, a2) {
-                (Some(a1), Some(a2)) => Some($FUNC(a1, a2.try_into().ok()?)),
-                _ => None,
-            })
-            .collect::<$ARRAY_TYPE>()
-    }};
-    ($ARG1: expr, $ARG2: expr, $NAME1:expr, $NAME2: expr, $ARRAY_TYPE1:ident, $ARRAY_TYPE2:ident, $FUNC: block) => {{
-        let arg1 = downcast_arg!($ARG1, $NAME1, $ARRAY_TYPE1);
-        let arg2 = downcast_arg!($ARG2, $NAME2, $ARRAY_TYPE2);
-
-        arg1.iter()
-            .zip(arg2.iter())
-            .map(|(a1, a2)| match (a1, a2) {
-                (Some(a1), Some(a2)) => Some($FUNC(a1, a2.try_into().ok()?)),
-                _ => None,
-            })
-            .collect::<$ARRAY_TYPE1>()
-    }};
 }

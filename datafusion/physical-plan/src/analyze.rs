@@ -40,9 +40,9 @@ use futures::StreamExt;
 /// discards the results, and then prints out an annotated plan with metrics
 #[derive(Debug, Clone)]
 pub struct AnalyzeExec {
-    /// control how much extra to print
+    /// Control how much extra to print
     verbose: bool,
-    /// if statistics should be displayed
+    /// If statistics should be displayed
     show_statistics: bool,
     /// The input plan (the plan being analyzed)
     pub(crate) input: Arc<dyn ExecutionPlan>,
@@ -69,12 +69,12 @@ impl AnalyzeExec {
         }
     }
 
-    /// access to verbose
+    /// Access to verbose
     pub fn verbose(&self) -> bool {
         self.verbose
     }
 
-    /// access to show_statistics
+    /// Access to show_statistics
     pub fn show_statistics(&self) -> bool {
         self.show_statistics
     }
@@ -89,10 +89,12 @@ impl AnalyzeExec {
         input: &Arc<dyn ExecutionPlan>,
         schema: SchemaRef,
     ) -> PlanProperties {
-        let eq_properties = EquivalenceProperties::new(schema);
-        let output_partitioning = Partitioning::UnknownPartitioning(1);
-        let exec_mode = input.execution_mode();
-        PlanProperties::new(eq_properties, output_partitioning, exec_mode)
+        PlanProperties::new(
+            EquivalenceProperties::new(schema),
+            Partitioning::UnknownPartitioning(1),
+            input.pipeline_behavior(),
+            input.boundedness(),
+        )
     }
 }
 
@@ -171,7 +173,7 @@ impl ExecutionPlan for AnalyzeExec {
             );
         }
 
-        // Create future that computes thefinal output
+        // Create future that computes the final output
         let start = Instant::now();
         let captured_input = Arc::clone(&self.input);
         let captured_schema = Arc::clone(&self.schema);

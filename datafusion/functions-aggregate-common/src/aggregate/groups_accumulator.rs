@@ -23,14 +23,16 @@ pub mod bool_op;
 pub mod nulls;
 pub mod prim_op;
 
+use std::mem::{size_of, size_of_val};
+
+use arrow::array::new_empty_array;
 use arrow::{
     array::{ArrayRef, AsArray, BooleanArray, PrimitiveArray},
     compute,
+    compute::take_arrays,
     datatypes::UInt32Type,
 };
-use datafusion_common::{
-    arrow_datafusion_err, utils::take_arrays, DataFusionError, Result, ScalarValue,
-};
+use datafusion_common::{arrow_datafusion_err, DataFusionError, Result, ScalarValue};
 use datafusion_expr_common::accumulator::Accumulator;
 use datafusion_expr_common::groups_accumulator::{EmitTo, GroupsAccumulator};
 
@@ -77,7 +79,7 @@ use datafusion_expr_common::groups_accumulator::{EmitTo, GroupsAccumulator};
 ///
 ///  Logical group         Current Min/Max value for that group stored
 ///     number             as a ScalarValue which points to an
-///                        indivdually allocated String
+///                        individually allocated String
 ///
 ///```
 ///
@@ -122,9 +124,7 @@ impl AccumulatorState {
 
     /// Returns the amount of memory taken by this structure and its accumulator
     fn size(&self) -> usize {
-        self.accumulator.size()
-            + std::mem::size_of_val(self)
-            + self.indices.allocated_size()
+        self.accumulator.size() + size_of_val(self) + self.indices.allocated_size()
     }
 }
 
@@ -238,7 +238,7 @@ impl GroupsAccumulatorAdapter {
         // reorder the values and opt_filter by batch_indices so that
         // all values for each group are contiguous, then invoke the
         // accumulator once per group with values
-        let values = take_arrays(values, &batch_indices)?;
+        let values = take_arrays(values, &batch_indices, None)?;
         let opt_filter = get_filter_at_indices(opt_filter, &batch_indices)?;
 
         // invoke each accumulator with the appropriate rows, first
@@ -281,7 +281,7 @@ impl GroupsAccumulatorAdapter {
     /// See [`Self::allocation_bytes`] for rationale.
     fn free_allocation(&mut self, size: usize) {
         // use saturating sub to avoid errors if the accumulators
-        // report erronious sizes
+        // report erroneous sizes
         self.allocation_bytes = self.allocation_bytes.saturating_sub(size)
     }
 
@@ -405,6 +405,18 @@ impl GroupsAccumulator for GroupsAccumulatorAdapter {
     ) -> Result<Vec<ArrayRef>> {
         let num_rows = values[0].len();
 
+        // If there are no rows, return empty arrays
+        if num_rows == 0 {
+            // create empty accumulator to get the state types
+            let empty_state = (self.factory)()?.state()?;
+            let empty_arrays = empty_state
+                .into_iter()
+                .map(|state_val| new_empty_array(&state_val.data_type()))
+                .collect::<Vec<_>>();
+
+            return Ok(empty_arrays);
+        }
+
         // Each row has its respective group
         let mut results = vec![];
         for row_idx in 0..num_rows {
@@ -452,7 +464,7 @@ pub trait VecAllocExt {
 impl<T> VecAllocExt for Vec<T> {
     type T = T;
     fn allocated_size(&self) -> usize {
-        std::mem::size_of::<T>() * self.capacity()
+        size_of::<T>() * self.capacity()
     }
 }
 

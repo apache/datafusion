@@ -21,8 +21,9 @@ use std::any::Any;
 use std::fmt::Debug;
 use std::sync::Arc;
 
-use super::{DisplayAs, DisplayFormatType, ExecutionMode, PlanProperties};
+use super::{DisplayAs, DisplayFormatType, PlanProperties};
 use crate::display::{display_orderings, ProjectSchemaDisplay};
+use crate::execution_plan::{Boundedness, EmissionType};
 use crate::stream::RecordBatchStreamAdapter;
 use crate::{ExecutionPlan, Partitioning, SendableRecordBatchStream};
 
@@ -55,6 +56,7 @@ pub trait PartitionStream: Debug + Send + Sync {
 ///
 /// If your source can be represented as one or more [`PartitionStream`]s, you can
 /// use this struct to implement [`ExecutionPlan`].
+#[derive(Clone)]
 pub struct StreamingTableExec {
     partitions: Vec<Arc<dyn PartitionStream>>,
     projection: Option<Arc<[usize]>>,
@@ -144,26 +146,30 @@ impl StreamingTableExec {
         schema: SchemaRef,
         orderings: &[LexOrdering],
         partitions: &[Arc<dyn PartitionStream>],
-        is_infinite: bool,
+        infinite: bool,
     ) -> PlanProperties {
         // Calculate equivalence properties:
         let eq_properties = EquivalenceProperties::new_with_orderings(schema, orderings);
 
         // Get output partitioning:
         let output_partitioning = Partitioning::UnknownPartitioning(partitions.len());
-
-        // Determine execution mode:
-        let mode = if is_infinite {
-            ExecutionMode::Unbounded
+        let boundedness = if infinite {
+            Boundedness::Unbounded {
+                requires_infinite_memory: false,
+            }
         } else {
-            ExecutionMode::Bounded
+            Boundedness::Bounded
         };
-
-        PlanProperties::new(eq_properties, output_partitioning, mode)
+        PlanProperties::new(
+            eq_properties,
+            output_partitioning,
+            EmissionType::Incremental,
+            boundedness,
+        )
     }
 }
 
-impl std::fmt::Debug for StreamingTableExec {
+impl Debug for StreamingTableExec {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("LazyMemTableExec").finish_non_exhaustive()
     }
@@ -295,7 +301,7 @@ mod test {
     #[tokio::test]
     async fn test_no_limit() {
         let exec = TestBuilder::new()
-            // make 2 batches, each with 100 rows
+            // Make 2 batches, each with 100 rows
             .with_batches(vec![make_partition(100), make_partition(100)])
             .build();
 
@@ -306,9 +312,9 @@ mod test {
     #[tokio::test]
     async fn test_limit() {
         let exec = TestBuilder::new()
-            // make 2 batches, each with 100 rows
+            // Make 2 batches, each with 100 rows
             .with_batches(vec![make_partition(100), make_partition(100)])
-            // limit to only the first 75 rows back
+            // Limit to only the first 75 rows back
             .with_limit(Some(75))
             .build();
 

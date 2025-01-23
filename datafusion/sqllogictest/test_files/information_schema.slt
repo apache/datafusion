@@ -39,6 +39,8 @@ SELECT * from information_schema.tables;
 ----
 datafusion information_schema columns VIEW
 datafusion information_schema df_settings VIEW
+datafusion information_schema parameters VIEW
+datafusion information_schema routines VIEW
 datafusion information_schema schemata VIEW
 datafusion information_schema tables VIEW
 datafusion information_schema views VIEW
@@ -83,6 +85,8 @@ SELECT * from information_schema.tables;
 ----
 datafusion information_schema columns VIEW
 datafusion information_schema df_settings VIEW
+datafusion information_schema parameters VIEW
+datafusion information_schema routines VIEW
 datafusion information_schema schemata VIEW
 datafusion information_schema tables VIEW
 datafusion information_schema views VIEW
@@ -97,6 +101,8 @@ SELECT * from information_schema.tables;
 ----
 datafusion information_schema columns VIEW
 datafusion information_schema df_settings VIEW
+datafusion information_schema parameters VIEW
+datafusion information_schema routines VIEW
 datafusion information_schema schemata VIEW
 datafusion information_schema tables VIEW
 datafusion information_schema views VIEW
@@ -108,6 +114,8 @@ SELECT * from information_schema.tables WHERE tables.table_schema='information_s
 ----
 datafusion information_schema columns VIEW
 datafusion information_schema df_settings VIEW
+datafusion information_schema parameters VIEW
+datafusion information_schema routines VIEW
 datafusion information_schema schemata VIEW
 datafusion information_schema tables VIEW
 datafusion information_schema views VIEW
@@ -117,6 +125,8 @@ SELECT * from information_schema.tables WHERE information_schema.tables.table_sc
 ----
 datafusion information_schema columns VIEW
 datafusion information_schema df_settings VIEW
+datafusion information_schema parameters VIEW
+datafusion information_schema routines VIEW
 datafusion information_schema schemata VIEW
 datafusion information_schema tables VIEW
 datafusion information_schema views VIEW
@@ -126,6 +136,8 @@ SELECT * from information_schema.tables WHERE datafusion.information_schema.tabl
 ----
 datafusion information_schema columns VIEW
 datafusion information_schema df_settings VIEW
+datafusion information_schema parameters VIEW
+datafusion information_schema routines VIEW
 datafusion information_schema schemata VIEW
 datafusion information_schema tables VIEW
 datafusion information_schema views VIEW
@@ -173,12 +185,14 @@ datafusion.execution.batch_size 8192
 datafusion.execution.coalesce_batches true
 datafusion.execution.collect_statistics false
 datafusion.execution.enable_recursive_ctes true
+datafusion.execution.enforce_batch_size_in_joins false
 datafusion.execution.keep_partition_by_columns false
 datafusion.execution.listing_table_ignore_subdirectory true
 datafusion.execution.max_buffered_batches_per_output_file 2
 datafusion.execution.meta_fetch_concurrency 32
 datafusion.execution.minimum_parallel_output_files 4
 datafusion.execution.parquet.allow_single_file_parallelism true
+datafusion.execution.parquet.binary_as_string false
 datafusion.execution.parquet.bloom_filter_fpp NULL
 datafusion.execution.parquet.bloom_filter_ndv NULL
 datafusion.execution.parquet.bloom_filter_on_read true
@@ -200,7 +214,8 @@ datafusion.execution.parquet.metadata_size_hint NULL
 datafusion.execution.parquet.pruning true
 datafusion.execution.parquet.pushdown_filters false
 datafusion.execution.parquet.reorder_filters false
-datafusion.execution.parquet.schema_force_view_types false
+datafusion.execution.parquet.schema_force_view_types true
+datafusion.execution.parquet.skip_arrow_metadata false
 datafusion.execution.parquet.skip_metadata true
 datafusion.execution.parquet.statistics_enabled page
 datafusion.execution.parquet.write_batch_size 1024
@@ -208,6 +223,7 @@ datafusion.execution.parquet.writer_version 1.0
 datafusion.execution.planning_concurrency 13
 datafusion.execution.skip_partial_aggregation_probe_ratio_threshold 0.8
 datafusion.execution.skip_partial_aggregation_probe_rows_threshold 100000
+datafusion.execution.skip_physical_aggregate_schema_check false
 datafusion.execution.soft_max_rows_per_output_file 50000000
 datafusion.execution.sort_in_place_threshold_bytes 1048576
 datafusion.execution.sort_spill_reservation_bytes 10485760
@@ -243,7 +259,7 @@ datafusion.optimizer.skip_failed_rules false
 datafusion.optimizer.top_down_join_key_reordering true
 datafusion.sql_parser.dialect generic
 datafusion.sql_parser.enable_ident_normalization true
-datafusion.sql_parser.enable_options_value_normalization true
+datafusion.sql_parser.enable_options_value_normalization false
 datafusion.sql_parser.parse_float_as_decimal false
 datafusion.sql_parser.support_varchar_with_length true
 
@@ -263,12 +279,14 @@ datafusion.execution.batch_size 8192 Default batch size while creating new batch
 datafusion.execution.coalesce_batches true When set to true, record batches will be examined between each operator and small batches will be coalesced into larger batches. This is helpful when there are highly selective filters or joins that could produce tiny output batches. The target batch size is determined by the configuration setting
 datafusion.execution.collect_statistics false Should DataFusion collect statistics after listing files
 datafusion.execution.enable_recursive_ctes true Should DataFusion support recursive CTEs
+datafusion.execution.enforce_batch_size_in_joins false Should DataFusion enforce batch size in joins or not. By default, DataFusion will not enforce batch size in joins. Enforcing batch size in joins can reduce memory usage when joining large tables with a highly-selective join filter, but is also slightly slower.
 datafusion.execution.keep_partition_by_columns false Should DataFusion keep the columns used for partition_by in the output RecordBatches
 datafusion.execution.listing_table_ignore_subdirectory true Should sub directories be ignored when scanning directories for data files. Defaults to true (ignores subdirectories), consistent with Hive. Note that this setting does not affect reading partitioned tables (e.g. `/table/year=2021/month=01/data.parquet`).
 datafusion.execution.max_buffered_batches_per_output_file 2 This is the maximum number of RecordBatches buffered for each output file being worked. Higher values can potentially give faster write performance at the cost of higher peak memory consumption
 datafusion.execution.meta_fetch_concurrency 32 Number of files to read in parallel when inferring schema and statistics
 datafusion.execution.minimum_parallel_output_files 4 Guarantees a minimum level of output files running in parallel. RecordBatches will be distributed in round robin fashion to each parallel writer. Each writer is closed and a new file opened once soft_max_rows_per_output_file is reached.
 datafusion.execution.parquet.allow_single_file_parallelism true (writing) Controls whether DataFusion will attempt to speed up writing parquet files by serializing them in parallel. Each column in each row group in each output file are serialized in parallel leveraging a maximum possible core count of n_files*n_row_groups*n_columns.
+datafusion.execution.parquet.binary_as_string false (reading) If true, parquet reader will read columns of `Binary/LargeBinary` with `Utf8`, and `BinaryView` with `Utf8View`. Parquet files generated by some legacy writers do not correctly set the UTF8 flag for strings, causing string columns to be loaded as BLOB instead.
 datafusion.execution.parquet.bloom_filter_fpp NULL (writing) Sets bloom filter false positive probability. If NULL, uses default parquet writer setting
 datafusion.execution.parquet.bloom_filter_ndv NULL (writing) Sets bloom filter number of distinct values. If NULL, uses default parquet writer setting
 datafusion.execution.parquet.bloom_filter_on_read true (writing) Use any available bloom filters when reading parquet files
@@ -290,7 +308,8 @@ datafusion.execution.parquet.metadata_size_hint NULL (reading) If specified, the
 datafusion.execution.parquet.pruning true (reading) If true, the parquet reader attempts to skip entire row groups based on the predicate in the query and the metadata (min/max values) stored in the parquet file
 datafusion.execution.parquet.pushdown_filters false (reading) If true, filter expressions are be applied during the parquet decoding operation to reduce the number of rows decoded. This optimization is sometimes called "late materialization".
 datafusion.execution.parquet.reorder_filters false (reading) If true, filter expressions evaluated during the parquet decoding operation will be reordered heuristically to minimize the cost of evaluation. If false, the filters are applied in the same order as written in the query
-datafusion.execution.parquet.schema_force_view_types false (reading) If true, parquet reader will read columns of `Utf8/Utf8Large` with `Utf8View`, and `Binary/BinaryLarge` with `BinaryView`.
+datafusion.execution.parquet.schema_force_view_types true (reading) If true, parquet reader will read columns of `Utf8/Utf8Large` with `Utf8View`, and `Binary/BinaryLarge` with `BinaryView`.
+datafusion.execution.parquet.skip_arrow_metadata false (writing) Skip encoding the embedded arrow metadata in the KV_meta This is analogous to the `ArrowWriterOptions::with_skip_arrow_metadata`. Refer to <https://docs.rs/parquet/53.3.0/parquet/arrow/arrow_writer/struct.ArrowWriterOptions.html#method.with_skip_arrow_metadata>
 datafusion.execution.parquet.skip_metadata true (reading) If true, the parquet reader skip the optional embedded metadata that may be in the file Schema. This setting can help avoid schema conflicts when querying multiple parquet files with schemas containing compatible types but different metadata
 datafusion.execution.parquet.statistics_enabled page (writing) Sets if statistics are enabled for any column Valid values are: "none", "chunk", and "page" These values are not case sensitive. If NULL, uses default parquet writer setting
 datafusion.execution.parquet.write_batch_size 1024 (writing) Sets write_batch_size in bytes
@@ -298,6 +317,7 @@ datafusion.execution.parquet.writer_version 1.0 (writing) Sets parquet writer ve
 datafusion.execution.planning_concurrency 13 Fan-out during initial physical planning. This is mostly use to plan `UNION` children in parallel. Defaults to the number of CPU cores on the system
 datafusion.execution.skip_partial_aggregation_probe_ratio_threshold 0.8 Aggregation ratio (number of distinct groups / number of input rows) threshold for skipping partial aggregation. If the value is greater then partial aggregation will skip aggregation for further input
 datafusion.execution.skip_partial_aggregation_probe_rows_threshold 100000 Number of input rows partial aggregation partition should process, before aggregation ratio check and trying to switch to skipping aggregation mode
+datafusion.execution.skip_physical_aggregate_schema_check false When set to true, skips verifying that the schema produced by planning the input of `LogicalPlan::Aggregate` exactly matches the schema of the input plan. When set to false, if the schema does not match exactly (including nullability and metadata), a planning error will be raised. This is used to workaround bugs in the planner that are now caught by the new schema verification step.
 datafusion.execution.soft_max_rows_per_output_file 50000000 Target number of rows in output files when writing multiple. This is a soft max, so it can be exceeded slightly. There also will be one file smaller than the limit if the total number of rows written is not roughly divisible by the soft max
 datafusion.execution.sort_in_place_threshold_bytes 1048576 When sorting, below what size should data be concatenated and sorted in a single RecordBatch rather than sorted in batches and merged.
 datafusion.execution.sort_spill_reservation_bytes 10485760 Specifies the reserved memory for each spillable sort operation to facilitate an in-memory merge. When a sort operation spills to disk, the in-memory data must be sorted and merged before being written to a file. This setting reserves a specific amount of memory for that in-memory sort/merge process. Note: This setting is irrelevant if the sort operation cannot spill (i.e., if there's no `DiskManager` configured).
@@ -333,7 +353,7 @@ datafusion.optimizer.skip_failed_rules false When set to true, the logical plan 
 datafusion.optimizer.top_down_join_key_reordering true When set to true, the physical plan optimizer will run a top down process to reorder the join keys
 datafusion.sql_parser.dialect generic Configure the SQL dialect used by DataFusion's parser; supported values include: Generic, MySQL, PostgreSQL, Hive, SQLite, Snowflake, Redshift, MsSQL, ClickHouse, BigQuery, and Ansi.
 datafusion.sql_parser.enable_ident_normalization true When set to true, SQL parser will normalize ident (convert ident to lowercase when not quoted)
-datafusion.sql_parser.enable_options_value_normalization true When set to true, SQL parser will normalize options value (convert value to lowercase)
+datafusion.sql_parser.enable_options_value_normalization false When set to true, SQL parser will normalize options value (convert value to lowercase). Note that this option is ignored and will be removed in the future. All case-insensitive values are normalized automatically.
 datafusion.sql_parser.parse_float_as_decimal false When set to true, SQL parser will parse float as decimal type
 datafusion.sql_parser.support_varchar_with_length true If true, permit lengths for `VARCHAR` such as `VARCHAR(20)`, but ignore the length. If false, error if a `VARCHAR` with a length is specified. The Arrow type system does not have a notion of maximum string length and thus DataFusion can not enforce such limits.
 
@@ -442,6 +462,8 @@ SHOW TABLES
 ----
 datafusion information_schema columns VIEW
 datafusion information_schema df_settings VIEW
+datafusion information_schema parameters VIEW
+datafusion information_schema routines VIEW
 datafusion information_schema schemata VIEW
 datafusion information_schema tables VIEW
 datafusion information_schema views VIEW
@@ -463,10 +485,10 @@ set datafusion.catalog.information_schema = true;
 statement ok
 CREATE TABLE t AS SELECT 1::int as i;
 
-statement error Error during planning: SHOW COLUMNS with WHERE or LIKE is not supported
+statement error DataFusion error: This feature is not implemented: SHOW COLUMNS with WHERE or LIKE is not supported
 SHOW COLUMNS FROM t LIKE 'f';
 
-statement error Error during planning: SHOW COLUMNS with WHERE or LIKE is not supported
+statement error DataFusion error: This feature is not implemented: SHOW COLUMNS with WHERE or LIKE is not supported
 SHOW COLUMNS FROM t WHERE column_name = 'bar';
 
 query TTTTTT
@@ -597,3 +619,139 @@ query TTTT
 SHOW CREATE TABLE abc;
 ----
 datafusion public abc CREATE EXTERNAL TABLE abc STORED AS CSV LOCATION ../../testing/data/csv/aggregate_test_100.csv
+
+# string_agg has different arg_types but same return type. Test avoiding duplicate entries for the same function.
+query TTT
+select routine_name, data_type, function_type from information_schema.routines where routine_name = 'string_agg';
+----
+string_agg LargeUtf8 AGGREGATE
+
+# test every function type are included in the result
+query TTTTTTTBTTTT rowsort
+select * from information_schema.routines where routine_name = 'date_trunc' OR routine_name = 'string_agg' OR routine_name = 'rank' ORDER BY routine_name
+----
+datafusion public date_trunc datafusion public date_trunc FUNCTION true Timestamp(Microsecond, None) SCALAR Truncates a timestamp value to a specified precision. date_trunc(precision, expression)
+datafusion public date_trunc datafusion public date_trunc FUNCTION true Timestamp(Microsecond, Some("+TZ")) SCALAR Truncates a timestamp value to a specified precision. date_trunc(precision, expression)
+datafusion public date_trunc datafusion public date_trunc FUNCTION true Timestamp(Millisecond, None) SCALAR Truncates a timestamp value to a specified precision. date_trunc(precision, expression)
+datafusion public date_trunc datafusion public date_trunc FUNCTION true Timestamp(Millisecond, Some("+TZ")) SCALAR Truncates a timestamp value to a specified precision. date_trunc(precision, expression)
+datafusion public date_trunc datafusion public date_trunc FUNCTION true Timestamp(Nanosecond, None) SCALAR Truncates a timestamp value to a specified precision. date_trunc(precision, expression)
+datafusion public date_trunc datafusion public date_trunc FUNCTION true Timestamp(Nanosecond, Some("+TZ")) SCALAR Truncates a timestamp value to a specified precision. date_trunc(precision, expression)
+datafusion public date_trunc datafusion public date_trunc FUNCTION true Timestamp(Second, None) SCALAR Truncates a timestamp value to a specified precision. date_trunc(precision, expression)
+datafusion public date_trunc datafusion public date_trunc FUNCTION true Timestamp(Second, Some("+TZ")) SCALAR Truncates a timestamp value to a specified precision. date_trunc(precision, expression)
+datafusion public rank datafusion public rank FUNCTION true NULL WINDOW Returns the rank of the current row within its partition, allowing gaps between ranks. This function provides a ranking similar to `row_number`, but skips ranks for identical values. rank()
+datafusion public string_agg datafusion public string_agg FUNCTION true LargeUtf8 AGGREGATE Concatenates the values of string expressions and places separator values between them. string_agg(expression, delimiter)
+
+query B
+select is_deterministic from information_schema.routines where routine_name = 'now';
+----
+false
+
+# test every function type are included in the result
+query TTTITTTTBI
+select * from information_schema.parameters where specific_name = 'date_trunc' OR specific_name = 'string_agg' OR specific_name = 'rank' ORDER BY specific_name, rid;
+----
+datafusion public date_trunc 1 IN precision Utf8 NULL false 0
+datafusion public date_trunc 2 IN expression Timestamp(Nanosecond, None) NULL false 0
+datafusion public date_trunc 1 OUT NULL Timestamp(Nanosecond, None) NULL false 0
+datafusion public date_trunc 1 IN precision Utf8View NULL false 1
+datafusion public date_trunc 2 IN expression Timestamp(Nanosecond, None) NULL false 1
+datafusion public date_trunc 1 OUT NULL Timestamp(Nanosecond, None) NULL false 1
+datafusion public date_trunc 1 IN precision Utf8 NULL false 2
+datafusion public date_trunc 2 IN expression Timestamp(Nanosecond, Some("+TZ")) NULL false 2
+datafusion public date_trunc 1 OUT NULL Timestamp(Nanosecond, Some("+TZ")) NULL false 2
+datafusion public date_trunc 1 IN precision Utf8View NULL false 3
+datafusion public date_trunc 2 IN expression Timestamp(Nanosecond, Some("+TZ")) NULL false 3
+datafusion public date_trunc 1 OUT NULL Timestamp(Nanosecond, Some("+TZ")) NULL false 3
+datafusion public date_trunc 1 IN precision Utf8 NULL false 4
+datafusion public date_trunc 2 IN expression Timestamp(Microsecond, None) NULL false 4
+datafusion public date_trunc 1 OUT NULL Timestamp(Microsecond, None) NULL false 4
+datafusion public date_trunc 1 IN precision Utf8View NULL false 5
+datafusion public date_trunc 2 IN expression Timestamp(Microsecond, None) NULL false 5
+datafusion public date_trunc 1 OUT NULL Timestamp(Microsecond, None) NULL false 5
+datafusion public date_trunc 1 IN precision Utf8 NULL false 6
+datafusion public date_trunc 2 IN expression Timestamp(Microsecond, Some("+TZ")) NULL false 6
+datafusion public date_trunc 1 OUT NULL Timestamp(Microsecond, Some("+TZ")) NULL false 6
+datafusion public date_trunc 1 IN precision Utf8View NULL false 7
+datafusion public date_trunc 2 IN expression Timestamp(Microsecond, Some("+TZ")) NULL false 7
+datafusion public date_trunc 1 OUT NULL Timestamp(Microsecond, Some("+TZ")) NULL false 7
+datafusion public date_trunc 1 IN precision Utf8 NULL false 8
+datafusion public date_trunc 2 IN expression Timestamp(Millisecond, None) NULL false 8
+datafusion public date_trunc 1 OUT NULL Timestamp(Millisecond, None) NULL false 8
+datafusion public date_trunc 1 IN precision Utf8View NULL false 9
+datafusion public date_trunc 2 IN expression Timestamp(Millisecond, None) NULL false 9
+datafusion public date_trunc 1 OUT NULL Timestamp(Millisecond, None) NULL false 9
+datafusion public date_trunc 1 IN precision Utf8 NULL false 10
+datafusion public date_trunc 2 IN expression Timestamp(Millisecond, Some("+TZ")) NULL false 10
+datafusion public date_trunc 1 OUT NULL Timestamp(Millisecond, Some("+TZ")) NULL false 10
+datafusion public date_trunc 1 IN precision Utf8View NULL false 11
+datafusion public date_trunc 2 IN expression Timestamp(Millisecond, Some("+TZ")) NULL false 11
+datafusion public date_trunc 1 OUT NULL Timestamp(Millisecond, Some("+TZ")) NULL false 11
+datafusion public date_trunc 1 IN precision Utf8 NULL false 12
+datafusion public date_trunc 2 IN expression Timestamp(Second, None) NULL false 12
+datafusion public date_trunc 1 OUT NULL Timestamp(Second, None) NULL false 12
+datafusion public date_trunc 1 IN precision Utf8View NULL false 13
+datafusion public date_trunc 2 IN expression Timestamp(Second, None) NULL false 13
+datafusion public date_trunc 1 OUT NULL Timestamp(Second, None) NULL false 13
+datafusion public date_trunc 1 IN precision Utf8 NULL false 14
+datafusion public date_trunc 2 IN expression Timestamp(Second, Some("+TZ")) NULL false 14
+datafusion public date_trunc 1 OUT NULL Timestamp(Second, Some("+TZ")) NULL false 14
+datafusion public date_trunc 1 IN precision Utf8View NULL false 15
+datafusion public date_trunc 2 IN expression Timestamp(Second, Some("+TZ")) NULL false 15
+datafusion public date_trunc 1 OUT NULL Timestamp(Second, Some("+TZ")) NULL false 15
+datafusion public string_agg 1 IN expression LargeUtf8 NULL false 0
+datafusion public string_agg 2 IN delimiter Utf8 NULL false 0
+datafusion public string_agg 1 OUT NULL LargeUtf8 NULL false 0
+datafusion public string_agg 1 IN expression LargeUtf8 NULL false 1
+datafusion public string_agg 2 IN delimiter LargeUtf8 NULL false 1
+datafusion public string_agg 1 OUT NULL LargeUtf8 NULL false 1
+datafusion public string_agg 1 IN expression LargeUtf8 NULL false 2
+datafusion public string_agg 2 IN delimiter Null NULL false 2
+datafusion public string_agg 1 OUT NULL LargeUtf8 NULL false 2
+
+# test variable length arguments
+query TTTBI rowsort
+select specific_name, data_type, parameter_mode, is_variadic, rid from information_schema.parameters where specific_name = 'concat';
+----
+concat LargeUtf8 IN true 2
+concat LargeUtf8 OUT false 2
+concat Utf8 IN true 1
+concat Utf8 OUT false 1
+concat Utf8View IN true 0
+concat Utf8View OUT false 0
+
+# test ceorcion signature
+query TTITI rowsort
+select specific_name, data_type, ordinal_position, parameter_mode, rid from information_schema.parameters where specific_name = 'repeat';
+----
+repeat Int64 2 IN 0
+repeat Int64 2 IN 1
+repeat Int64 2 IN 2
+repeat LargeUtf8 1 IN 1
+repeat LargeUtf8 1 OUT 1
+repeat Utf8 1 IN 0
+repeat Utf8 1 OUT 0
+repeat Utf8 1 OUT 2
+repeat Utf8View 1 IN 2
+
+query TT??TTT rowsort
+show functions like 'date_trunc';
+----
+date_trunc Timestamp(Microsecond, None) [precision, expression] [Utf8, Timestamp(Microsecond, None)] SCALAR Truncates a timestamp value to a specified precision. date_trunc(precision, expression)
+date_trunc Timestamp(Microsecond, None) [precision, expression] [Utf8View, Timestamp(Microsecond, None)] SCALAR Truncates a timestamp value to a specified precision. date_trunc(precision, expression)
+date_trunc Timestamp(Microsecond, Some("+TZ")) [precision, expression] [Utf8, Timestamp(Microsecond, Some("+TZ"))] SCALAR Truncates a timestamp value to a specified precision. date_trunc(precision, expression)
+date_trunc Timestamp(Microsecond, Some("+TZ")) [precision, expression] [Utf8View, Timestamp(Microsecond, Some("+TZ"))] SCALAR Truncates a timestamp value to a specified precision. date_trunc(precision, expression)
+date_trunc Timestamp(Millisecond, None) [precision, expression] [Utf8, Timestamp(Millisecond, None)] SCALAR Truncates a timestamp value to a specified precision. date_trunc(precision, expression)
+date_trunc Timestamp(Millisecond, None) [precision, expression] [Utf8View, Timestamp(Millisecond, None)] SCALAR Truncates a timestamp value to a specified precision. date_trunc(precision, expression)
+date_trunc Timestamp(Millisecond, Some("+TZ")) [precision, expression] [Utf8, Timestamp(Millisecond, Some("+TZ"))] SCALAR Truncates a timestamp value to a specified precision. date_trunc(precision, expression)
+date_trunc Timestamp(Millisecond, Some("+TZ")) [precision, expression] [Utf8View, Timestamp(Millisecond, Some("+TZ"))] SCALAR Truncates a timestamp value to a specified precision. date_trunc(precision, expression)
+date_trunc Timestamp(Nanosecond, None) [precision, expression] [Utf8, Timestamp(Nanosecond, None)] SCALAR Truncates a timestamp value to a specified precision. date_trunc(precision, expression)
+date_trunc Timestamp(Nanosecond, None) [precision, expression] [Utf8View, Timestamp(Nanosecond, None)] SCALAR Truncates a timestamp value to a specified precision. date_trunc(precision, expression)
+date_trunc Timestamp(Nanosecond, Some("+TZ")) [precision, expression] [Utf8, Timestamp(Nanosecond, Some("+TZ"))] SCALAR Truncates a timestamp value to a specified precision. date_trunc(precision, expression)
+date_trunc Timestamp(Nanosecond, Some("+TZ")) [precision, expression] [Utf8View, Timestamp(Nanosecond, Some("+TZ"))] SCALAR Truncates a timestamp value to a specified precision. date_trunc(precision, expression)
+date_trunc Timestamp(Second, None) [precision, expression] [Utf8, Timestamp(Second, None)] SCALAR Truncates a timestamp value to a specified precision. date_trunc(precision, expression)
+date_trunc Timestamp(Second, None) [precision, expression] [Utf8View, Timestamp(Second, None)] SCALAR Truncates a timestamp value to a specified precision. date_trunc(precision, expression)
+date_trunc Timestamp(Second, Some("+TZ")) [precision, expression] [Utf8, Timestamp(Second, Some("+TZ"))] SCALAR Truncates a timestamp value to a specified precision. date_trunc(precision, expression)
+date_trunc Timestamp(Second, Some("+TZ")) [precision, expression] [Utf8View, Timestamp(Second, Some("+TZ"))] SCALAR Truncates a timestamp value to a specified precision. date_trunc(precision, expression)
+
+statement ok
+show functions

@@ -51,7 +51,8 @@ use std::{
     vec,
 };
 
-use super::listing::ListingTableUrl;
+use super::{file_format::write::demux::start_demuxer_task, listing::ListingTableUrl};
+use crate::datasource::file_format::write::demux::DemuxedStreamReceiver;
 use crate::error::Result;
 use crate::physical_plan::{DisplayAs, DisplayFormatType};
 use crate::{
@@ -63,12 +64,72 @@ use crate::{
 };
 
 use arrow::datatypes::{DataType, SchemaRef};
+use datafusion_common_runtime::SpawnedTask;
+use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::PhysicalSortExpr;
+use datafusion_physical_expr_common::sort_expr::LexOrdering;
+use datafusion_physical_plan::insert::DataSink;
 
+use async_trait::async_trait;
 use futures::StreamExt;
 use log::debug;
 use object_store::{path::Path, GetOptions, GetRange, ObjectMeta, ObjectStore};
+
+/// General behaviors for files that do `DataSink` operations
+#[async_trait]
+pub trait FileSink: DataSink {
+    /// Retrieves the file sink configuration.
+    fn config(&self) -> &FileSinkConfig;
+
+    /// Spawns writer tasks and joins them to perform file writing operations.
+    /// Is a critical part of `FileSink` trait, since it's the very last step for `write_all`.
+    ///
+    /// This function handles the process of writing data to files by:
+    /// 1. Spawning tasks for writing data to individual files.
+    /// 2. Coordinating the tasks using a demuxer to distribute data among files.
+    /// 3. Collecting results using `tokio::join`, ensuring that all tasks complete successfully.
+    ///
+    /// # Parameters
+    /// - `context`: The execution context (`TaskContext`) that provides resources
+    ///   like memory management and runtime environment.
+    /// - `demux_task`: A spawned task that handles demuxing, responsible for splitting
+    ///   an input [`SendableRecordBatchStream`] into dynamically determined partitions.
+    ///   See `start_demuxer_task()`
+    /// - `file_stream_rx`: A receiver that yields streams of record batches and their
+    ///   corresponding file paths for writing. See `start_demuxer_task()`
+    /// - `object_store`: A handle to the object store where the files are written.
+    ///
+    /// # Returns
+    /// - `Result<u64>`: Returns the total number of rows written across all files.
+    async fn spawn_writer_tasks_and_join(
+        &self,
+        context: &Arc<TaskContext>,
+        demux_task: SpawnedTask<Result<()>>,
+        file_stream_rx: DemuxedStreamReceiver,
+        object_store: Arc<dyn ObjectStore>,
+    ) -> Result<u64>;
+
+    /// File sink implementation of the [`DataSink::write_all`] method.
+    async fn write_all(
+        &self,
+        data: SendableRecordBatchStream,
+        context: &Arc<TaskContext>,
+    ) -> Result<u64> {
+        let config = self.config();
+        let object_store = context
+            .runtime_env()
+            .object_store(&config.object_store_url)?;
+        let (demux_task, file_stream_rx) = start_demuxer_task(config, data, context);
+        self.spawn_writer_tasks_and_join(
+            context,
+            demux_task,
+            file_stream_rx,
+            object_store,
+        )
+        .await
+    }
+}
 
 /// The base configurations to provide when creating a physical plan for
 /// writing to any given file format.
@@ -89,6 +150,8 @@ pub struct FileSinkConfig {
     pub insert_op: InsertOp,
     /// Controls whether partition columns are kept for the file
     pub keep_partition_by_columns: bool,
+    /// File extension without a dot(.)
+    pub file_extension: String,
 }
 
 impl FileSinkConfig {
@@ -110,7 +173,7 @@ impl Debug for FileScanConfig {
 
 impl DisplayAs for FileScanConfig {
     fn fmt_as(&self, t: DisplayFormatType, f: &mut Formatter) -> FmtResult {
-        let (schema, _, orderings) = self.project();
+        let (schema, _, _, orderings) = self.project();
 
         write!(f, "file_groups=")?;
         FileGroupsDisplay(&self.file_groups).fmt_as(t, f)?;
@@ -125,6 +188,10 @@ impl DisplayAs for FileScanConfig {
 
         display_orderings(f, &orderings)?;
 
+        if !self.constraints.is_empty() {
+            write!(f, ", {}", self.constraints)?;
+        }
+
         Ok(())
     }
 }
@@ -138,7 +205,7 @@ impl DisplayAs for FileScanConfig {
 #[derive(Debug)]
 struct FileGroupsDisplay<'a>(&'a [Vec<PartitionedFile>]);
 
-impl<'a> DisplayAs for FileGroupsDisplay<'a> {
+impl DisplayAs for FileGroupsDisplay<'_> {
     fn fmt_as(&self, t: DisplayFormatType, f: &mut Formatter) -> FmtResult {
         let n_groups = self.0.len();
         let groups = if n_groups == 1 { "group" } else { "groups" };
@@ -170,7 +237,7 @@ impl<'a> DisplayAs for FileGroupsDisplay<'a> {
 #[derive(Debug)]
 pub(crate) struct FileGroupDisplay<'a>(pub &'a [PartitionedFile]);
 
-impl<'a> DisplayAs for FileGroupDisplay<'a> {
+impl DisplayAs for FileGroupDisplay<'_> {
     fn fmt_as(&self, t: DisplayFormatType, f: &mut Formatter) -> FmtResult {
         write!(f, "[")?;
         match t {
@@ -247,6 +314,8 @@ pub struct FileMeta {
     pub range: Option<FileRange>,
     /// An optional field for user defined per object metadata
     pub extensions: Option<Arc<dyn std::any::Any + Send + Sync>>,
+    /// Size hint for the metadata of this file
+    pub metadata_size_hint: Option<usize>,
 }
 
 impl FileMeta {
@@ -262,6 +331,7 @@ impl From<ObjectMeta> for FileMeta {
             object_meta,
             range: None,
             extensions: None,
+            metadata_size_hint: None,
         }
     }
 }
@@ -328,11 +398,11 @@ impl From<ObjectMeta> for FileMeta {
 fn get_projected_output_ordering(
     base_config: &FileScanConfig,
     projected_schema: &SchemaRef,
-) -> Vec<Vec<PhysicalSortExpr>> {
+) -> Vec<LexOrdering> {
     let mut all_orderings = vec![];
     for output_ordering in &base_config.output_ordering {
-        let mut new_ordering = vec![];
-        for PhysicalSortExpr { expr, options } in output_ordering {
+        let mut new_ordering = LexOrdering::default();
+        for PhysicalSortExpr { expr, options } in output_ordering.iter() {
             if let Some(col) = expr.as_any().downcast_ref::<Column>() {
                 let name = col.name();
                 if let Some((idx, _)) = projected_schema.column_with_name(name) {
@@ -422,9 +492,11 @@ enum RangeCalculation {
 async fn calculate_range(
     file_meta: &FileMeta,
     store: &Arc<dyn ObjectStore>,
+    terminator: Option<u8>,
 ) -> Result<RangeCalculation> {
     let location = file_meta.location();
     let file_size = file_meta.object_meta.size;
+    let newline = terminator.unwrap_or(b'\n');
 
     match file_meta.range {
         None => Ok(RangeCalculation::Range(None)),
@@ -432,13 +504,13 @@ async fn calculate_range(
             let (start, end) = (start as usize, end as usize);
 
             let start_delta = if start != 0 {
-                find_first_newline(store, location, start - 1, file_size).await?
+                find_first_newline(store, location, start - 1, file_size, newline).await?
             } else {
                 0
             };
 
             let end_delta = if end != file_size {
-                find_first_newline(store, location, end - 1, file_size).await?
+                find_first_newline(store, location, end - 1, file_size, newline).await?
             } else {
                 0
             };
@@ -458,7 +530,7 @@ async fn calculate_range(
 /// within an object, such as a file, in an object store.
 ///
 /// This function scans the contents of the object starting from the specified `start` position
-/// up to the `end` position, looking for the first occurrence of a newline (`'\n'`) character.
+/// up to the `end` position, looking for the first occurrence of a newline character.
 /// It returns the position of the first newline relative to the start of the range.
 ///
 /// Returns a `Result` wrapping a `usize` that represents the position of the first newline character found within the specified range. If no newline is found, it returns the length of the scanned data, effectively indicating the end of the range.
@@ -470,6 +542,7 @@ async fn find_first_newline(
     location: &Path,
     start: usize,
     end: usize,
+    newline: u8,
 ) -> Result<usize> {
     let options = GetOptions {
         range: Some(GetRange::Bounded(start..end)),
@@ -482,7 +555,7 @@ async fn find_first_newline(
     let mut index = 0;
 
     while let Some(chunk) = result_stream.next().await.transpose()? {
-        if let Some(position) = chunk.iter().position(|&byte| byte == b'\n') {
+        if let Some(position) = chunk.iter().position(|&byte| byte == newline) {
             return Ok(index + position);
         }
 
@@ -763,7 +836,7 @@ mod tests {
     /// create a PartitionedFile for testing
     fn partitioned_file(path: &str) -> PartitionedFile {
         let object_meta = ObjectMeta {
-            location: object_store::path::Path::parse(path).unwrap(),
+            location: Path::parse(path).unwrap(),
             last_modified: Utc::now(),
             size: 42,
             e_tag: None,
@@ -776,6 +849,7 @@ mod tests {
             range: None,
             statistics: None,
             extensions: None,
+            metadata_size_hint: None,
         }
     }
 }

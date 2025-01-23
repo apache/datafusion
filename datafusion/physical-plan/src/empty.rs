@@ -20,11 +20,12 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use super::{
-    common, DisplayAs, ExecutionMode, PlanProperties, SendableRecordBatchStream,
-    Statistics,
+use super::{common, DisplayAs, PlanProperties, SendableRecordBatchStream, Statistics};
+use crate::{
+    execution_plan::{Boundedness, EmissionType},
+    memory::MemoryStream,
+    DisplayFormatType, ExecutionPlan, Partitioning,
 };
-use crate::{memory::MemoryStream, DisplayFormatType, ExecutionPlan, Partitioning};
 
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
@@ -35,7 +36,7 @@ use datafusion_physical_expr::EquivalenceProperties;
 use log::trace;
 
 /// Execution plan for empty relation with produce_one_row=false
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct EmptyExec {
     /// The schema for the produced row
     schema: SchemaRef,
@@ -74,14 +75,11 @@ impl EmptyExec {
 
     /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
     fn compute_properties(schema: SchemaRef, n_partitions: usize) -> PlanProperties {
-        let eq_properties = EquivalenceProperties::new(schema);
-        let output_partitioning = Self::output_partitioning_helper(n_partitions);
         PlanProperties::new(
-            eq_properties,
-            // Output Partitioning
-            output_partitioning,
-            // Execution Mode
-            ExecutionMode::Bounded,
+            EquivalenceProperties::new(schema),
+            Self::output_partitioning_helper(n_partitions),
+            EmissionType::Incremental,
+            Boundedness::Bounded,
         )
     }
 }
@@ -173,7 +171,7 @@ mod tests {
         let empty = EmptyExec::new(Arc::clone(&schema));
         assert_eq!(empty.schema(), schema);
 
-        // we should have no results
+        // We should have no results
         let iter = empty.execute(0, task_ctx)?;
         let batches = common::collect(iter).await?;
         assert!(batches.is_empty());

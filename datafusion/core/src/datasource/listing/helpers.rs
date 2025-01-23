@@ -17,14 +17,14 @@
 
 //! Helper functions for the table implementation
 
-use std::collections::HashMap;
 use std::mem;
 use std::sync::Arc;
 
 use super::ListingTableUrl;
 use super::PartitionedFile;
 use crate::execution::context::SessionState;
-use datafusion_common::{Result, ScalarValue};
+use datafusion_common::internal_err;
+use datafusion_common::{HashMap, Result, ScalarValue};
 use datafusion_expr::{BinaryExpr, Operator};
 
 use arrow::{
@@ -135,7 +135,7 @@ pub fn split_files(
     partitioned_files.sort_by(|a, b| a.path().cmp(b.path()));
 
     // effectively this is div with rounding up instead of truncating
-    let chunk_size = (partitioned_files.len() + n - 1) / n;
+    let chunk_size = partitioned_files.len().div_ceil(n);
     let mut chunks = Vec::with_capacity(n);
     let mut current_chunk = Vec::with_capacity(chunk_size);
     for file in partitioned_files.drain(..) {
@@ -171,7 +171,13 @@ impl Partition {
         trace!("Listing partition {}", self.path);
         let prefix = Some(&self.path).filter(|p| !p.as_ref().is_empty());
         let result = store.list_with_delimiter(prefix).await?;
-        self.files = Some(result.objects);
+        self.files = Some(
+            result
+                .objects
+                .into_iter()
+                .filter(|object_meta| object_meta.size > 0)
+                .collect(),
+        );
         Ok((self, result.common_prefixes))
     }
 }
@@ -285,25 +291,20 @@ async fn prune_partitions(
     let props = ExecutionProps::new();
 
     // Applies `filter` to `batch` returning `None` on error
-    let do_filter = |filter| -> Option<ArrayRef> {
-        let expr = create_physical_expr(filter, &df_schema, &props).ok()?;
-        expr.evaluate(&batch)
-            .ok()?
-            .into_array(partitions.len())
-            .ok()
+    let do_filter = |filter| -> Result<ArrayRef> {
+        let expr = create_physical_expr(filter, &df_schema, &props)?;
+        expr.evaluate(&batch)?.into_array(partitions.len())
     };
 
-    //.Compute the conjunction of the filters, ignoring errors
+    //.Compute the conjunction of the filters
     let mask = filters
         .iter()
-        .fold(None, |acc, filter| match (acc, do_filter(filter)) {
-            (Some(a), Some(b)) => Some(and(&a, b.as_boolean()).unwrap_or(a)),
-            (None, Some(r)) => Some(r.as_boolean().clone()),
-            (r, None) => r,
-        });
+        .map(|f| do_filter(f).map(|a| a.as_boolean().clone()))
+        .reduce(|a, b| Ok(and(&a?, &b?)?));
 
     let mask = match mask {
-        Some(mask) => mask,
+        Some(Ok(mask)) => mask,
+        Some(Err(err)) => return Err(err),
         None => return Ok(partitions),
     };
 
@@ -401,8 +402,8 @@ fn evaluate_partition_prefix<'a>(
 
 /// Discover the partitions on the given path and prune out files
 /// that belong to irrelevant partitions using `filters` expressions.
-/// `filters` might contain expressions that can be resolved only at the
-/// file level (e.g. Parquet row group pruning).
+/// `filters` should only contain expressions that can be evaluated
+/// using only the partition columns.
 pub async fn pruned_partition_list<'a>(
     ctx: &'a SessionState,
     store: &'a dyn ObjectStore,
@@ -413,10 +414,17 @@ pub async fn pruned_partition_list<'a>(
 ) -> Result<BoxStream<'a, Result<PartitionedFile>>> {
     // if no partition col => simply list all the files
     if partition_cols.is_empty() {
+        if !filters.is_empty() {
+            return internal_err!(
+                "Got partition filters for unpartitioned table {}",
+                table_path
+            );
+        }
         return Ok(Box::pin(
             table_path
                 .list_all_files(ctx, store, file_extension)
                 .await?
+                .try_filter(|object_meta| futures::future::ready(object_meta.size > 0))
                 .map_ok(|object_meta| object_meta.into()),
         ));
     }
@@ -467,6 +475,7 @@ pub async fn pruned_partition_list<'a>(
                     range: None,
                     statistics: None,
                     extensions: None,
+                    metadata_size_hint: None,
                 })
             }));
 
@@ -564,6 +573,7 @@ mod tests {
     async fn test_pruned_partition_list_empty() {
         let (store, state) = make_test_store_and_state(&[
             ("tablepath/mypartition=val1/notparquetfile", 100),
+            ("tablepath/mypartition=val1/ignoresemptyfile.parquet", 0),
             ("tablepath/file.parquet", 100),
         ]);
         let filter = Expr::eq(col("mypartition"), lit("val1"));
@@ -588,6 +598,7 @@ mod tests {
         let (store, state) = make_test_store_and_state(&[
             ("tablepath/mypartition=val1/file.parquet", 100),
             ("tablepath/mypartition=val2/file.parquet", 100),
+            ("tablepath/mypartition=val1/ignoresemptyfile.parquet", 0),
             ("tablepath/mypartition=val1/other=val3/file.parquet", 100),
         ]);
         let filter = Expr::eq(col("mypartition"), lit("val1"));
@@ -631,13 +642,11 @@ mod tests {
         ]);
         let filter1 = Expr::eq(col("part1"), lit("p1v2"));
         let filter2 = Expr::eq(col("part2"), lit("p2v1"));
-        // filter3 cannot be resolved at partition pruning
-        let filter3 = Expr::eq(col("part2"), col("other"));
         let pruned = pruned_partition_list(
             &state,
             store.as_ref(),
             &ListingTableUrl::parse("file:///tablepath/").unwrap(),
-            &[filter1, filter2, filter3],
+            &[filter1, filter2],
             ".parquet",
             &[
                 (String::from("part1"), DataType::Utf8),
@@ -668,6 +677,107 @@ mod tests {
         assert_eq!(
             &f2.partition_values,
             &[ScalarValue::from("p1v2"), ScalarValue::from("p2v1")]
+        );
+    }
+
+    /// Describe a partition as a (path, depth, files) tuple for easier assertions
+    fn describe_partition(partition: &Partition) -> (&str, usize, Vec<&str>) {
+        (
+            partition.path.as_ref(),
+            partition.depth,
+            partition
+                .files
+                .as_ref()
+                .map(|f| f.iter().map(|f| f.location.filename().unwrap()).collect())
+                .unwrap_or_default(),
+        )
+    }
+
+    #[tokio::test]
+    async fn test_list_partition() {
+        let (store, _) = make_test_store_and_state(&[
+            ("tablepath/part1=p1v1/file.parquet", 100),
+            ("tablepath/part1=p1v2/part2=p2v1/file1.parquet", 100),
+            ("tablepath/part1=p1v2/part2=p2v1/file2.parquet", 100),
+            ("tablepath/part1=p1v3/part2=p2v1/file3.parquet", 100),
+            ("tablepath/part1=p1v2/part2=p2v2/file4.parquet", 100),
+            ("tablepath/part1=p1v2/part2=p2v2/empty.parquet", 0),
+        ]);
+
+        let partitions = list_partitions(
+            store.as_ref(),
+            &ListingTableUrl::parse("file:///tablepath/").unwrap(),
+            0,
+            None,
+        )
+        .await
+        .expect("listing partitions failed");
+
+        assert_eq!(
+            &partitions
+                .iter()
+                .map(describe_partition)
+                .collect::<Vec<_>>(),
+            &vec![
+                ("tablepath", 0, vec![]),
+                ("tablepath/part1=p1v1", 1, vec![]),
+                ("tablepath/part1=p1v2", 1, vec![]),
+                ("tablepath/part1=p1v3", 1, vec![]),
+            ]
+        );
+
+        let partitions = list_partitions(
+            store.as_ref(),
+            &ListingTableUrl::parse("file:///tablepath/").unwrap(),
+            1,
+            None,
+        )
+        .await
+        .expect("listing partitions failed");
+
+        assert_eq!(
+            &partitions
+                .iter()
+                .map(describe_partition)
+                .collect::<Vec<_>>(),
+            &vec![
+                ("tablepath", 0, vec![]),
+                ("tablepath/part1=p1v1", 1, vec!["file.parquet"]),
+                ("tablepath/part1=p1v2", 1, vec![]),
+                ("tablepath/part1=p1v2/part2=p2v1", 2, vec![]),
+                ("tablepath/part1=p1v2/part2=p2v2", 2, vec![]),
+                ("tablepath/part1=p1v3", 1, vec![]),
+                ("tablepath/part1=p1v3/part2=p2v1", 2, vec![]),
+            ]
+        );
+
+        let partitions = list_partitions(
+            store.as_ref(),
+            &ListingTableUrl::parse("file:///tablepath/").unwrap(),
+            2,
+            None,
+        )
+        .await
+        .expect("listing partitions failed");
+
+        assert_eq!(
+            &partitions
+                .iter()
+                .map(describe_partition)
+                .collect::<Vec<_>>(),
+            &vec![
+                ("tablepath", 0, vec![]),
+                ("tablepath/part1=p1v1", 1, vec!["file.parquet"]),
+                ("tablepath/part1=p1v2", 1, vec![]),
+                ("tablepath/part1=p1v3", 1, vec![]),
+                (
+                    "tablepath/part1=p1v2/part2=p2v1",
+                    2,
+                    vec!["file1.parquet", "file2.parquet"]
+                ),
+                ("tablepath/part1=p1v2/part2=p2v2", 2, vec!["file4.parquet"]),
+                ("tablepath/part1=p1v3/part2=p2v1", 2, vec!["file3.parquet"]),
+            ]
         );
     }
 

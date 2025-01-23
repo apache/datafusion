@@ -31,9 +31,38 @@ use arrow::util::display::{ArrayFormatter, DurationFormat, FormatOptions};
 use datafusion_common::{exec_err, Result, ScalarValue};
 use datafusion_expr::TypeSignature::Exact;
 use datafusion_expr::{
-    ColumnarValue, ScalarUDFImpl, Signature, Volatility, TIMEZONE_WILDCARD,
+    ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility, TIMEZONE_WILDCARD,
 };
+use datafusion_macros::user_doc;
 
+#[user_doc(
+    doc_section(label = "Time and Date Functions"),
+    description = "Returns a string representation of a date, time, timestamp or duration based on a [Chrono format](https://docs.rs/chrono/latest/chrono/format/strftime/index.html). Unlike the PostgreSQL equivalent of this function numerical formatting is not supported.",
+    syntax_example = "to_char(expression, format)",
+    sql_example = r#"```sql
+> select to_char('2023-03-01'::date, '%d-%m-%Y');
++----------------------------------------------+
+| to_char(Utf8("2023-03-01"),Utf8("%d-%m-%Y")) |
++----------------------------------------------+
+| 01-03-2023                                   |
++----------------------------------------------+
+```
+
+Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/to_char.rs)
+"#,
+    argument(
+        name = "expression",
+        description = "Expression to operate on. Can be a constant, column, or function that results in a date, time, timestamp or duration."
+    ),
+    argument(
+        name = "format",
+        description = "A [Chrono format](https://docs.rs/chrono/latest/chrono/format/strftime/index.html) string to use to convert the expression."
+    ),
+    argument(
+        name = "day",
+        description = "Day to use when making the date. Can be a constant, column or function, and any combination of arithmetic operators."
+    )
+)]
 #[derive(Debug)]
 pub struct ToCharFunc {
     signature: Signature,
@@ -53,34 +82,34 @@ impl ToCharFunc {
                 vec![
                     Exact(vec![Date32, Utf8]),
                     Exact(vec![Date64, Utf8]),
+                    Exact(vec![Time64(Nanosecond), Utf8]),
+                    Exact(vec![Time64(Microsecond), Utf8]),
                     Exact(vec![Time32(Millisecond), Utf8]),
                     Exact(vec![Time32(Second), Utf8]),
-                    Exact(vec![Time64(Microsecond), Utf8]),
-                    Exact(vec![Time64(Nanosecond), Utf8]),
-                    Exact(vec![Timestamp(Second, None), Utf8]),
-                    Exact(vec![
-                        Timestamp(Second, Some(TIMEZONE_WILDCARD.into())),
-                        Utf8,
-                    ]),
-                    Exact(vec![Timestamp(Millisecond, None), Utf8]),
-                    Exact(vec![
-                        Timestamp(Millisecond, Some(TIMEZONE_WILDCARD.into())),
-                        Utf8,
-                    ]),
-                    Exact(vec![Timestamp(Microsecond, None), Utf8]),
-                    Exact(vec![
-                        Timestamp(Microsecond, Some(TIMEZONE_WILDCARD.into())),
-                        Utf8,
-                    ]),
-                    Exact(vec![Timestamp(Nanosecond, None), Utf8]),
                     Exact(vec![
                         Timestamp(Nanosecond, Some(TIMEZONE_WILDCARD.into())),
                         Utf8,
                     ]),
-                    Exact(vec![Duration(Second), Utf8]),
-                    Exact(vec![Duration(Millisecond), Utf8]),
-                    Exact(vec![Duration(Microsecond), Utf8]),
+                    Exact(vec![Timestamp(Nanosecond, None), Utf8]),
+                    Exact(vec![
+                        Timestamp(Microsecond, Some(TIMEZONE_WILDCARD.into())),
+                        Utf8,
+                    ]),
+                    Exact(vec![Timestamp(Microsecond, None), Utf8]),
+                    Exact(vec![
+                        Timestamp(Millisecond, Some(TIMEZONE_WILDCARD.into())),
+                        Utf8,
+                    ]),
+                    Exact(vec![Timestamp(Millisecond, None), Utf8]),
+                    Exact(vec![
+                        Timestamp(Second, Some(TIMEZONE_WILDCARD.into())),
+                        Utf8,
+                    ]),
+                    Exact(vec![Timestamp(Second, None), Utf8]),
                     Exact(vec![Duration(Nanosecond), Utf8]),
+                    Exact(vec![Duration(Microsecond), Utf8]),
+                    Exact(vec![Duration(Millisecond), Utf8]),
+                    Exact(vec![Duration(Second), Utf8]),
                 ],
                 Volatility::Immutable,
             ),
@@ -106,7 +135,11 @@ impl ScalarUDFImpl for ToCharFunc {
         Ok(Utf8)
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         if args.len() != 2 {
             return exec_err!(
                 "to_char function requires 2 arguments, got {}",
@@ -136,6 +169,9 @@ impl ScalarUDFImpl for ToCharFunc {
 
     fn aliases(&self) -> &[String] {
         &self.aliases
+    }
+    fn documentation(&self) -> Option<&Documentation> {
+        self.doc()
     }
 }
 
@@ -185,10 +221,7 @@ fn _to_char_scalar(
         if is_scalar_expression {
             return Ok(ColumnarValue::from(ScalarValue::Utf8(None)));
         } else {
-            return Ok(ColumnarValue::Array(new_null_array(
-                &DataType::Utf8,
-                array.len(),
-            )));
+            return Ok(ColumnarValue::Array(new_null_array(&Utf8, array.len())));
         }
     }
 
@@ -350,8 +383,12 @@ mod tests {
         ];
 
         for (value, format, expected) in scalar_data {
+            #[allow(deprecated)] // TODO migrate UDF to invoke from invoke_batch
             let result = ToCharFunc::new()
-                .invoke(&[ColumnarValue::from(value), ColumnarValue::from(format)])
+                .invoke_batch(
+                    &[ColumnarValue::from(value), ColumnarValue::from(format)],
+                    1,
+                )
                 .expect("that to_char parsed values without error");
 
             match result {
@@ -426,11 +463,16 @@ mod tests {
         ];
 
         for (value, format, expected) in scalar_array_data {
+            let batch_len = format.len();
+            #[allow(deprecated)] // TODO migrate UDF to invoke from invoke_batch
             let result = ToCharFunc::new()
-                .invoke(&[
-                    ColumnarValue::from(value),
-                    ColumnarValue::Array(Arc::new(format) as ArrayRef),
-                ])
+                .invoke_batch(
+                    &[
+                        ColumnarValue::from(value),
+                        ColumnarValue::Array(Arc::new(format) as ArrayRef),
+                    ],
+                    batch_len,
+                )
                 .expect("that to_char parsed values without error");
 
             match result {
@@ -553,11 +595,16 @@ mod tests {
         ];
 
         for (value, format, expected) in array_scalar_data {
+            let batch_len = value.len();
+            #[allow(deprecated)] // TODO migrate UDF to invoke from invoke_batch
             let result = ToCharFunc::new()
-                .invoke(&[
-                    ColumnarValue::Array(value as ArrayRef),
-                    ColumnarValue::from(format),
-                ])
+                .invoke_batch(
+                    &[
+                        ColumnarValue::Array(value as ArrayRef),
+                        ColumnarValue::from(format),
+                    ],
+                    batch_len,
+                )
                 .expect("that to_char parsed values without error");
 
             if let ColumnarValue::Array(result) = result {
@@ -569,11 +616,16 @@ mod tests {
         }
 
         for (value, format, expected) in array_array_data {
+            let batch_len = value.len();
+            #[allow(deprecated)] // TODO migrate UDF to invoke from invoke_batch
             let result = ToCharFunc::new()
-                .invoke(&[
-                    ColumnarValue::Array(value),
-                    ColumnarValue::Array(Arc::new(format) as ArrayRef),
-                ])
+                .invoke_batch(
+                    &[
+                        ColumnarValue::Array(value),
+                        ColumnarValue::Array(Arc::new(format) as ArrayRef),
+                    ],
+                    batch_len,
+                )
                 .expect("that to_char parsed values without error");
 
             if let ColumnarValue::Array(result) = result {
@@ -589,18 +641,23 @@ mod tests {
         //
 
         // invalid number of arguments
-        let result =
-            ToCharFunc::new().invoke(&[ColumnarValue::from(ScalarValue::Int32(Some(1)))]);
+        #[allow(deprecated)] // TODO migrate UDF to invoke from invoke_batch
+        let result = ToCharFunc::new()
+            .invoke_batch(&[ColumnarValue::from(ScalarValue::Int32(Some(1)))], 1);
         assert_eq!(
             result.err().unwrap().strip_backtrace(),
             "Execution error: to_char function requires 2 arguments, got 1"
         );
 
         // invalid type
-        let result = ToCharFunc::new().invoke(&[
-            ColumnarValue::from(ScalarValue::Int32(Some(1))),
-            ColumnarValue::from(ScalarValue::TimestampNanosecond(Some(1), None)),
-        ]);
+        #[allow(deprecated)] // TODO migrate UDF to invoke from invoke_batch
+        let result = ToCharFunc::new().invoke_batch(
+            &[
+                ColumnarValue::from(ScalarValue::Int32(Some(1))),
+                ColumnarValue::from(ScalarValue::TimestampNanosecond(Some(1), None)),
+            ],
+            1,
+        );
         assert_eq!(
             result.err().unwrap().strip_backtrace(),
             "Execution error: Format for `to_char` must be non-null Utf8, received Timestamp(Nanosecond, None)"

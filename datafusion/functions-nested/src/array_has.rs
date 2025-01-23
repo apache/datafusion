@@ -25,7 +25,10 @@ use arrow_buffer::BooleanBuffer;
 use datafusion_common::cast::as_generic_list_array;
 use datafusion_common::utils::string_utils::string_array_to_vec;
 use datafusion_common::{exec_err, Result, ScalarValue};
-use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
+use datafusion_expr::{
+    ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
+};
+use datafusion_macros::user_doc;
 use datafusion_physical_expr_common::datum::compare_with_eq;
 use itertools::Itertools;
 
@@ -54,6 +57,27 @@ make_udf_expr_and_func!(ArrayHasAny,
     array_has_any_udf // internal function name
 );
 
+#[user_doc(
+    doc_section(label = "Array Functions"),
+    description = "Returns true if the array contains the element.",
+    syntax_example = "array_has(array, element)",
+    sql_example = r#"```sql
+> select array_has([1, 2, 3], 2);
++-----------------------------+
+| array_has(List([1,2,3]), 2) |
++-----------------------------+
+| true                        |
++-----------------------------+
+```"#,
+    argument(
+        name = "array",
+        description = "Array expression. Can be a constant, column, or function, and any combination of array operators."
+    ),
+    argument(
+        name = "element",
+        description = "Scalar or Array expression. Can be a constant, column, or function, and any combination of array operators."
+    )
+)]
 #[derive(Debug)]
 pub struct ArrayHas {
     signature: Signature,
@@ -95,11 +119,15 @@ impl ScalarUDFImpl for ArrayHas {
         Ok(DataType::Boolean)
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         match &args[1] {
             ColumnarValue::Array(array_needle) => {
                 // the needle is already an array, convert the haystack to an array of the same length
-                let haystack = args[0].to_owned().into_array(array_needle.len())?;
+                let haystack = args[0].to_array(array_needle.len())?;
                 let array = array_has_inner_for_array(&haystack, array_needle)?;
                 Ok(ColumnarValue::Array(array))
             }
@@ -111,7 +139,7 @@ impl ScalarUDFImpl for ArrayHas {
                 }
 
                 // since the needle is a scalar, convert it to an array of size 1
-                let haystack = args[0].to_owned().into_array(1)?;
+                let haystack = args[0].to_array(1)?;
                 let needle = scalar_needle.to_array_of_size(1)?;
                 let needle = Scalar::new(needle);
                 let array = array_has_inner_for_scalar(&haystack, &needle)?;
@@ -128,6 +156,10 @@ impl ScalarUDFImpl for ArrayHas {
 
     fn aliases(&self) -> &[String] {
         &self.aliases
+    }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        self.doc()
     }
 }
 
@@ -245,6 +277,27 @@ fn array_has_any_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
     }
 }
 
+#[user_doc(
+    doc_section(label = "Array Functions"),
+    description = "Returns true if all elements of sub-array exist in array.",
+    syntax_example = "array_has_all(array, sub-array)",
+    sql_example = r#"```sql
+> select array_has_all([1, 2, 3, 4], [2, 3]);
++--------------------------------------------+
+| array_has_all(List([1,2,3,4]), List([2,3])) |
++--------------------------------------------+
+| true                                       |
++--------------------------------------------+
+```"#,
+    argument(
+        name = "array",
+        description = "Array expression. Can be a constant, column, or function, and any combination of array operators."
+    ),
+    argument(
+        name = "sub-array",
+        description = "Array expression. Can be a constant, column, or function, and any combination of array operators."
+    )
+)]
 #[derive(Debug)]
 pub struct ArrayHasAll {
     signature: Signature,
@@ -282,15 +335,44 @@ impl ScalarUDFImpl for ArrayHasAll {
         Ok(DataType::Boolean)
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         make_scalar_function(array_has_all_inner)(args)
     }
 
     fn aliases(&self) -> &[String] {
         &self.aliases
     }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        self.doc()
+    }
 }
 
+#[user_doc(
+    doc_section(label = "Array Functions"),
+    description = "Returns true if any elements exist in both arrays.",
+    syntax_example = "array_has_any(array, sub-array)",
+    sql_example = r#"```sql
+> select array_has_any([1, 2, 3], [3, 4]);
++------------------------------------------+
+| array_has_any(List([1,2,3]), List([3,4])) |
++------------------------------------------+
+| true                                     |
++------------------------------------------+
+```"#,
+    argument(
+        name = "array",
+        description = "Array expression. Can be a constant, column, or function, and any combination of array operators."
+    ),
+    argument(
+        name = "sub-array",
+        description = "Array expression. Can be a constant, column, or function, and any combination of array operators."
+    )
+)]
 #[derive(Debug)]
 pub struct ArrayHasAny {
     signature: Signature,
@@ -328,12 +410,20 @@ impl ScalarUDFImpl for ArrayHasAny {
         Ok(DataType::Boolean)
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         make_scalar_function(array_has_any_inner)(args)
     }
 
     fn aliases(&self) -> &[String] {
         &self.aliases
+    }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        self.doc()
     }
 }
 

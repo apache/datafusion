@@ -19,6 +19,7 @@
 //! user defined aggregate functions
 
 use std::hash::{DefaultHasher, Hash, Hasher};
+use std::mem::{size_of, size_of_val};
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc,
@@ -723,7 +724,7 @@ impl Accumulator for FirstSelector {
     }
 
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
-        // cast argumets to the appropriate type (DataFusion will type
+        // cast arguments to the appropriate type (DataFusion will type
         // check these based on the declared allowed input types)
         let v = as_primitive_array::<Float64Type>(&values[0])?;
         let t = as_primitive_array::<TimestampNanosecondType>(&values[1])?;
@@ -747,7 +748,7 @@ impl Accumulator for FirstSelector {
     }
 
     fn size(&self) -> usize {
-        std::mem::size_of_val(self)
+        size_of_val(self)
     }
 }
 
@@ -816,7 +817,7 @@ impl Accumulator for TestGroupsAccumulator {
     }
 
     fn size(&self) -> usize {
-        std::mem::size_of::<u64>()
+        size_of::<u64>()
     }
 
     fn state(&mut self) -> Result<Vec<ScalarValue>> {
@@ -864,6 +865,6 @@ impl GroupsAccumulator for TestGroupsAccumulator {
     }
 
     fn size(&self) -> usize {
-        std::mem::size_of::<u64>()
+        size_of::<u64>()
     }
 }

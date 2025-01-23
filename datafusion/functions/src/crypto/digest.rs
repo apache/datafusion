@@ -20,10 +20,37 @@ use super::basic::{digest, utf8_or_binary_to_binary_type};
 use arrow::datatypes::DataType;
 use datafusion_common::Result;
 use datafusion_expr::{
-    ColumnarValue, ScalarUDFImpl, Signature, TypeSignature::*, Volatility,
+    ColumnarValue, Documentation, ScalarUDFImpl, Signature, TypeSignature::*, Volatility,
 };
+use datafusion_macros::user_doc;
 use std::any::Any;
 
+#[user_doc(
+    doc_section(label = "Hashing Functions"),
+    description = "Computes the binary hash of an expression using the specified algorithm.",
+    syntax_example = "digest(expression, algorithm)",
+    sql_example = r#"```sql
+> select digest('foo', 'sha256');
++------------------------------------------+
+| digest(Utf8("foo"), Utf8("sha256"))      |
++------------------------------------------+
+| <binary_hash_result>                     |
++------------------------------------------+
+```"#,
+    standard_argument(name = "expression", prefix = "String"),
+    argument(
+        name = "algorithm",
+        description = "String expression specifying algorithm to use. Must be one of:       
+    - md5
+    - sha224
+    - sha256
+    - sha384
+    - sha512
+    - blake2s
+    - blake2b
+    - blake3"
+    )
+)]
 #[derive(Debug)]
 pub struct DigestFunc {
     signature: Signature,
@@ -40,6 +67,7 @@ impl DigestFunc {
         Self {
             signature: Signature::one_of(
                 vec![
+                    Exact(vec![Utf8View, Utf8View]),
                     Exact(vec![Utf8, Utf8]),
                     Exact(vec![LargeUtf8, Utf8]),
                     Exact(vec![Binary, Utf8]),
@@ -66,7 +94,15 @@ impl ScalarUDFImpl for DigestFunc {
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
         utf8_or_binary_to_binary_type(&arg_types[0], self.name())
     }
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         digest(args)
+    }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        self.doc()
     }
 }

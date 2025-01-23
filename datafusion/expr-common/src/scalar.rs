@@ -161,6 +161,10 @@ impl Scalar {
         &self.data_type
     }
 
+    pub fn is_null(&self) -> bool {
+        self.value.is_null()
+    }
+
     #[inline]
     pub fn to_array_of_size(&self, size: usize) -> Result<ArrayRef> {
         self.value.to_array_of_size_and_type(size, &self.data_type)

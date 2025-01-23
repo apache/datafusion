@@ -20,11 +20,10 @@
 
 use std::borrow::Cow;
 use std::collections::HashMap;
-
 use std::sync::Arc;
 
 use crate::datasource::listing::ListingTableUrl;
-
+use crate::datasource::physical_plan::FileSinkConfig;
 use crate::error::Result;
 use crate::physical_plan::SendableRecordBatchStream;
 
@@ -32,37 +31,51 @@ use arrow_array::builder::UInt64Builder;
 use arrow_array::cast::AsArray;
 use arrow_array::{downcast_dictionary_array, RecordBatch, StringArray, StructArray};
 use arrow_schema::{DataType, Schema};
-use chrono::NaiveDate;
 use datafusion_common::cast::{
     as_boolean_array, as_date32_array, as_date64_array, as_int32_array, as_int64_array,
     as_string_array, as_string_view_array,
 };
-use datafusion_common::{exec_datafusion_err, DataFusionError};
+use datafusion_common::{exec_datafusion_err, not_impl_err, DataFusionError};
 use datafusion_common_runtime::SpawnedTask;
 use datafusion_execution::TaskContext;
 
+use chrono::NaiveDate;
 use futures::StreamExt;
 use object_store::path::Path;
-
 use rand::distributions::DistString;
-
 use tokio::sync::mpsc::{self, Receiver, Sender, UnboundedReceiver, UnboundedSender};
 
 type RecordBatchReceiver = Receiver<RecordBatch>;
-type DemuxedStreamReceiver = UnboundedReceiver<(Path, RecordBatchReceiver)>;
+pub type DemuxedStreamReceiver = UnboundedReceiver<(Path, RecordBatchReceiver)>;
 
 /// Splits a single [SendableRecordBatchStream] into a dynamically determined
-/// number of partitions at execution time. The partitions are determined by
-/// factors known only at execution time, such as total number of rows and
-/// partition column values. The demuxer task communicates to the caller
-/// by sending channels over a channel. The inner channels send RecordBatches
-/// which should be contained within the same output file. The outer channel
-/// is used to send a dynamic number of inner channels, representing a dynamic
-/// number of total output files. The caller is also responsible to monitor
-/// the demux task for errors and abort accordingly. The single_file_output parameter
-/// overrides all other settings to force only a single file to be written.
-/// partition_by parameter will additionally split the input based on the unique
-/// values of a specific column `<https://github.com/apache/datafusion/issues/7744>``
+/// number of partitions at execution time.
+///
+/// The partitions are determined by factors known only at execution time, such
+/// as total number of rows and partition column values. The demuxer task
+/// communicates to the caller by sending channels over a channel. The inner
+/// channels send RecordBatches which should be contained within the same output
+/// file. The outer channel is used to send a dynamic number of inner channels,
+/// representing a dynamic number of total output files.
+///
+/// The caller is also responsible to monitor the demux task for errors and
+/// abort accordingly.
+///
+/// A path with an extension will force only a single file to
+/// be written with the extension from the path. Otherwise the default extension
+/// will be used and the output will be split into multiple files.
+///
+/// Examples of `base_output_path`
+///  * `tmp/dataset/` -> is a folder since it ends in `/`
+///  * `tmp/dataset` -> is still a folder since it does not end in `/` but has no valid file extension
+///  * `tmp/file.parquet` -> is a file since it does not end in `/` and has a valid file extension `.parquet`
+///  * `tmp/file.parquet/` -> is a folder since it ends in `/`
+///
+/// The `partition_by` parameter will additionally split the input based on the
+/// unique values of a specific column, see
+/// <https://github.com/apache/datafusion/issues/7744>
+///
+/// ```text
 ///                                                                              ┌───────────┐               ┌────────────┐    ┌─────────────┐
 ///                                                                     ┌──────▶ │  batch 1  ├────▶...──────▶│   Batch a  │    │ Output File1│
 ///                                                                     │        └───────────┘               └────────────┘    └─────────────┘
@@ -74,45 +87,47 @@ type DemuxedStreamReceiver = UnboundedReceiver<(Path, RecordBatchReceiver)>;
 ///                                                 └──────────┘        │        ┌───────────┐               ┌────────────┐    ┌─────────────┐
 ///                                                                     └──────▶ │  batch d  ├────▶...──────▶│   Batch n  │    │ Output FileN│
 ///                                                                              └───────────┘               └────────────┘    └─────────────┘
+/// ```
 pub(crate) fn start_demuxer_task(
-    input: SendableRecordBatchStream,
+    config: &FileSinkConfig,
+    data: SendableRecordBatchStream,
     context: &Arc<TaskContext>,
-    partition_by: Option<Vec<(String, DataType)>>,
-    base_output_path: ListingTableUrl,
-    file_extension: String,
-    keep_partition_by_columns: bool,
 ) -> (SpawnedTask<Result<()>>, DemuxedStreamReceiver) {
     let (tx, rx) = mpsc::unbounded_channel();
-    let context = context.clone();
-    let single_file_output = !base_output_path.is_collection();
-    let task = match partition_by {
-        Some(parts) => {
-            // There could be an arbitrarily large number of parallel hive style partitions being written to, so we cannot
-            // bound this channel without risking a deadlock.
-            SpawnedTask::spawn(async move {
-                hive_style_partitions_demuxer(
-                    tx,
-                    input,
-                    context,
-                    parts,
-                    base_output_path,
-                    file_extension,
-                    keep_partition_by_columns,
-                )
-                .await
-            })
-        }
-        None => SpawnedTask::spawn(async move {
+    let context = Arc::clone(context);
+    let file_extension = config.file_extension.clone();
+    let base_output_path = config.table_paths[0].clone();
+    let task = if config.table_partition_cols.is_empty() {
+        let single_file_output = !base_output_path.is_collection()
+            && base_output_path.file_extension().is_some();
+        SpawnedTask::spawn(async move {
             row_count_demuxer(
                 tx,
-                input,
+                data,
                 context,
                 base_output_path,
                 file_extension,
                 single_file_output,
             )
             .await
-        }),
+        })
+    } else {
+        // There could be an arbitrarily large number of parallel hive style partitions being written to, so we cannot
+        // bound this channel without risking a deadlock.
+        let partition_by = config.table_partition_cols.clone();
+        let keep_partition_by_columns = config.keep_partition_by_columns;
+        SpawnedTask::spawn(async move {
+            hive_style_partitions_demuxer(
+                tx,
+                data,
+                context,
+                partition_by,
+                base_output_path,
+                file_extension,
+                keep_partition_by_columns,
+            )
+            .await
+        })
     };
 
     (task, rx)
@@ -280,9 +295,8 @@ async fn hive_style_partitions_demuxer(
                 Some(part_tx) => part_tx,
                 None => {
                     // Create channel for previously unseen distinct partition key and notify consumer of new file
-                    let (part_tx, part_rx) = tokio::sync::mpsc::channel::<RecordBatch>(
-                        max_buffered_recordbatches,
-                    );
+                    let (part_tx, part_rx) =
+                        mpsc::channel::<RecordBatch>(max_buffered_recordbatches);
                     let file_path = compute_hive_style_file_path(
                         &part_key,
                         &partition_by,
@@ -421,10 +435,10 @@ fn compute_partition_keys_by_row<'a>(
                 )
             }
             _ => {
-                return Err(DataFusionError::NotImplemented(format!(
+                return not_impl_err!(
                 "it is not yet supported to write to hive partitions with datatype {}",
                 dtype
-            )))
+            )
             }
         }
 
@@ -461,7 +475,7 @@ fn remove_partition_by_columns(
         .zip(parted_batch.schema().fields())
         .filter_map(|(a, f)| {
             if !partition_names.contains(&f.name()) {
-                Some((a.clone(), (**f).clone()))
+                Some((Arc::clone(a), (**f).clone()))
             } else {
                 None
             }

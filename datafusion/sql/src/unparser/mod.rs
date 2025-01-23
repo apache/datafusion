@@ -17,17 +17,19 @@
 
 //! [`Unparser`] for converting `Expr` to SQL text
 
-mod ast;
+pub mod ast;
 mod expr;
 mod plan;
 mod rewrite;
 mod utils;
 
+use self::dialect::{DefaultDialect, Dialect};
+use crate::unparser::extension_unparser::UserDefinedLogicalNodeUnparser;
 pub use expr::expr_to_sql;
 pub use plan::plan_to_sql;
-
-use self::dialect::{DefaultDialect, Dialect};
+use std::sync::Arc;
 pub mod dialect;
+pub mod extension_unparser;
 
 /// Convert a DataFusion [`Expr`] to [`sqlparser::ast::Expr`]
 ///
@@ -55,6 +57,7 @@ pub mod dialect;
 pub struct Unparser<'a> {
     dialect: &'a dyn Dialect,
     pretty: bool,
+    extension_unparsers: Vec<Arc<dyn UserDefinedLogicalNodeUnparser>>,
 }
 
 impl<'a> Unparser<'a> {
@@ -62,6 +65,7 @@ impl<'a> Unparser<'a> {
         Self {
             dialect,
             pretty: false,
+            extension_unparsers: vec![],
         }
     }
 
@@ -105,13 +109,33 @@ impl<'a> Unparser<'a> {
         self.pretty = pretty;
         self
     }
+
+    /// Add a custom unparser for user defined logical nodes
+    ///
+    /// DataFusion allows user to define custom logical nodes. This method allows to add custom child unparsers for these nodes.
+    /// Implementation of [`UserDefinedLogicalNodeUnparser`] can be added to the root unparser to handle custom logical nodes.
+    ///
+    /// The child unparsers are called iteratively.
+    /// There are two methods in [`Unparser`] will be called:
+    /// - `extension_to_statement`: This method is called when the custom logical node is a custom statement.
+    ///     If multiple child unparsers return a non-None value, the last unparsing result will be returned.
+    /// - `extension_to_sql`: This method is called when the custom logical node is part of a statement.
+    ///    If multiple child unparsers are registered for the same custom logical node, all of them will be called in order.
+    pub fn with_extension_unparsers(
+        mut self,
+        extension_unparsers: Vec<Arc<dyn UserDefinedLogicalNodeUnparser>>,
+    ) -> Self {
+        self.extension_unparsers = extension_unparsers;
+        self
+    }
 }
 
-impl<'a> Default for Unparser<'a> {
+impl Default for Unparser<'_> {
     fn default() -> Self {
         Self {
             dialect: &DefaultDialect {},
             pretty: false,
+            extension_unparsers: vec![],
         }
     }
 }

@@ -16,7 +16,7 @@
 // under the License.
 
 use std::any::Any;
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
 use arrow::array::{ArrayRef, Int32Array, Int64Array, OffsetSizeTrait};
 use arrow::datatypes::DataType;
@@ -25,10 +25,31 @@ use crate::utils::{make_scalar_function, utf8_to_int_type};
 use datafusion_common::cast::{as_generic_string_array, as_string_view_array};
 use datafusion_common::utils::datafusion_strsim;
 use datafusion_common::{exec_err, Result};
-use datafusion_expr::scalar_doc_sections::DOC_SECTION_STRING;
 use datafusion_expr::{ColumnarValue, Documentation};
 use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
+use datafusion_macros::user_doc;
 
+#[user_doc(
+    doc_section(label = "String Functions"),
+    description = "Returns the [`Levenshtein distance`](https://en.wikipedia.org/wiki/Levenshtein_distance) between the two given strings.",
+    syntax_example = "levenshtein(str1, str2)",
+    sql_example = r#"```sql
+> select levenshtein('kitten', 'sitting');
++---------------------------------------------+
+| levenshtein(Utf8("kitten"),Utf8("sitting")) |
++---------------------------------------------+
+| 3                                           |
++---------------------------------------------+
+```"#,
+    argument(
+        name = "str1",
+        description = "String expression to compute Levenshtein distance with str2."
+    ),
+    argument(
+        name = "str2",
+        description = "String expression to compute Levenshtein distance with str1."
+    )
+)]
 #[derive(Debug)]
 pub struct LevenshteinFunc {
     signature: Signature,
@@ -65,7 +86,11 @@ impl ScalarUDFImpl for LevenshteinFunc {
         utf8_to_int_type(&arg_types[0], "levenshtein")
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         match args[0].data_type() {
             DataType::Utf8View | DataType::Utf8 => {
                 make_scalar_function(levenshtein::<i32>, vec![])(args)
@@ -78,31 +103,8 @@ impl ScalarUDFImpl for LevenshteinFunc {
     }
 
     fn documentation(&self) -> Option<&Documentation> {
-        Some(get_levenshtein_doc())
+        self.doc()
     }
-}
-
-static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
-
-fn get_levenshtein_doc() -> &'static Documentation {
-    DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_STRING)
-            .with_description("Returns the [`Levenshtein distance`](https://en.wikipedia.org/wiki/Levenshtein_distance) between the two given strings.")
-            .with_syntax_example("levenshtein(str1, str2)")
-            .with_sql_example(r#"```sql
-> select levenshtein('kitten', 'sitting');
-+---------------------------------------------+
-| levenshtein(Utf8("kitten"),Utf8("sitting")) |
-+---------------------------------------------+
-| 3                                           |
-+---------------------------------------------+
-```"#)
-            .with_argument("str1", "String expression to compute Levenshtein distance with str2.")
-            .with_argument("str2", "String expression to compute Levenshtein distance with str1.")
-            .build()
-            .unwrap()
-    })
 }
 
 ///Returns the Levenshtein distance between the two given strings.

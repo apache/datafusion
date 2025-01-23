@@ -19,9 +19,26 @@
 use super::basic::{sha512, utf8_or_binary_to_binary_type};
 use arrow::datatypes::DataType;
 use datafusion_common::Result;
-use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
+use datafusion_expr::{
+    ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
+};
+use datafusion_macros::user_doc;
 use std::any::Any;
 
+#[user_doc(
+    doc_section(label = "Hashing Functions"),
+    description = "Computes the SHA-512 hash of a binary string.",
+    syntax_example = "sha512(expression)",
+    sql_example = r#"```sql
+> select sha512('foo');
++-------------------------------------------+
+| sha512(Utf8("foo"))                       |
++-------------------------------------------+
+| <sha512_hash_result>                      |
++-------------------------------------------+
+```"#,
+    standard_argument(name = "expression", prefix = "String")
+)]
 #[derive(Debug)]
 pub struct SHA512Func {
     signature: Signature,
@@ -38,7 +55,7 @@ impl SHA512Func {
         Self {
             signature: Signature::uniform(
                 1,
-                vec![Utf8, LargeUtf8, Binary, LargeBinary],
+                vec![Utf8View, Utf8, LargeUtf8, Binary, LargeBinary],
                 Volatility::Immutable,
             ),
         }
@@ -60,7 +77,16 @@ impl ScalarUDFImpl for SHA512Func {
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
         utf8_or_binary_to_binary_type(&arg_types[0], self.name())
     }
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         sha512(args)
+    }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        self.doc()
     }
 }

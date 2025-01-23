@@ -19,7 +19,7 @@ extern crate criterion;
 
 use std::sync::Arc;
 
-use arrow::array::{ArrayRef, TimestampSecondArray};
+use arrow::array::{Array, ArrayRef, TimestampSecondArray};
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use datafusion_common::ScalarValue;
 use rand::rngs::ThreadRng;
@@ -40,13 +40,16 @@ fn timestamps(rng: &mut ThreadRng) -> TimestampSecondArray {
 fn criterion_benchmark(c: &mut Criterion) {
     c.bench_function("date_bin_1000", |b| {
         let mut rng = rand::thread_rng();
+        let timestamps_array = Arc::new(timestamps(&mut rng)) as ArrayRef;
+        let batch_len = timestamps_array.len();
         let interval = ColumnarValue::from(ScalarValue::new_interval_dt(0, 1_000_000));
-        let timestamps = ColumnarValue::Array(Arc::new(timestamps(&mut rng)) as ArrayRef);
+        let timestamps = ColumnarValue::Array(timestamps_array);
         let udf = date_bin();
 
         b.iter(|| {
+            // TODO use invoke_with_args
             black_box(
-                udf.invoke(&[interval.clone(), timestamps.clone()])
+                udf.invoke_batch(&[interval.clone(), timestamps.clone()], batch_len)
                     .expect("date_bin should work on valid values"),
             )
         })

@@ -23,11 +23,14 @@ use arrow::array::{
 use arrow::datatypes::DataType;
 
 use arrow_array::GenericListArray;
-use arrow_buffer::{BooleanBufferBuilder, NullBuffer, OffsetBuffer};
+use arrow_buffer::{NullBufferBuilder, OffsetBuffer};
 use arrow_schema::Field;
 use datafusion_common::cast::as_int64_array;
 use datafusion_common::{exec_err, Result};
-use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
+use datafusion_expr::{
+    ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
+};
+use datafusion_macros::user_doc;
 
 use crate::utils::compare_element_to_list;
 use crate::utils::make_scalar_function;
@@ -55,10 +58,35 @@ make_udf_expr_and_func!(ArrayReplaceAll,
     array_replace_all_udf
 );
 
+#[user_doc(
+    doc_section(label = "Array Functions"),
+    description = "Replaces the first occurrence of the specified element with another specified element.",
+    syntax_example = "array_replace(array, from, to)",
+    sql_example = r#"```sql
+> select array_replace([1, 2, 2, 3, 2, 1, 4], 2, 5);
++--------------------------------------------------------+
+| array_replace(List([1,2,2,3,2,1,4]),Int64(2),Int64(5)) |
++--------------------------------------------------------+
+| [1, 5, 2, 3, 2, 1, 4]                                  |
++--------------------------------------------------------+
+```"#,
+    argument(
+        name = "array",
+        description = "Array expression. Can be a constant, column, or function, and any combination of array operators."
+    ),
+    argument(name = "from", description = "Initial element."),
+    argument(name = "to", description = "Final element.")
+)]
 #[derive(Debug)]
-pub(super) struct ArrayReplace {
+pub struct ArrayReplace {
     signature: Signature,
     aliases: Vec<String>,
+}
+
+impl Default for ArrayReplace {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl ArrayReplace {
@@ -87,15 +115,43 @@ impl ScalarUDFImpl for ArrayReplace {
         Ok(args[0].clone())
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         make_scalar_function(array_replace_inner)(args)
     }
 
     fn aliases(&self) -> &[String] {
         &self.aliases
     }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        self.doc()
+    }
 }
 
+#[user_doc(
+    doc_section(label = "Array Functions"),
+    description = "Replaces the first `max` occurrences of the specified element with another specified element.",
+    syntax_example = "array_replace_n(array, from, to, max)",
+    sql_example = r#"```sql
+> select array_replace_n([1, 2, 2, 3, 2, 1, 4], 2, 5, 2);
++-------------------------------------------------------------------+
+| array_replace_n(List([1,2,2,3,2,1,4]),Int64(2),Int64(5),Int64(2)) |
++-------------------------------------------------------------------+
+| [1, 5, 5, 3, 2, 1, 4]                                             |
++-------------------------------------------------------------------+
+```"#,
+    argument(
+        name = "array",
+        description = "Array expression. Can be a constant, column, or function, and any combination of array operators."
+    ),
+    argument(name = "from", description = "Initial element."),
+    argument(name = "to", description = "Final element."),
+    argument(name = "max", description = "Number of first occurrences to replace.")
+)]
 #[derive(Debug)]
 pub(super) struct ArrayReplaceN {
     signature: Signature,
@@ -128,15 +184,42 @@ impl ScalarUDFImpl for ArrayReplaceN {
         Ok(args[0].clone())
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         make_scalar_function(array_replace_n_inner)(args)
     }
 
     fn aliases(&self) -> &[String] {
         &self.aliases
     }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        self.doc()
+    }
 }
 
+#[user_doc(
+    doc_section(label = "Array Functions"),
+    description = "Replaces all occurrences of the specified element with another specified element.",
+    syntax_example = "array_replace_all(array, from, to)",
+    sql_example = r#"```sql
+> select array_replace_all([1, 2, 2, 3, 2, 1, 4], 2, 5);
++------------------------------------------------------------+
+| array_replace_all(List([1,2,2,3,2,1,4]),Int64(2),Int64(5)) |
++------------------------------------------------------------+
+| [1, 5, 5, 3, 5, 1, 4]                                      |
++------------------------------------------------------------+
+```"#,
+    argument(
+        name = "array",
+        description = "Array expression. Can be a constant, column, or function, and any combination of array operators."
+    ),
+    argument(name = "from", description = "Initial element."),
+    argument(name = "to", description = "Final element.")
+)]
 #[derive(Debug)]
 pub(super) struct ArrayReplaceAll {
     signature: Signature,
@@ -169,12 +252,20 @@ impl ScalarUDFImpl for ArrayReplaceAll {
         Ok(args[0].clone())
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         make_scalar_function(array_replace_all_inner)(args)
     }
 
     fn aliases(&self) -> &[String] {
         &self.aliases
+    }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        self.doc()
     }
 }
 
@@ -215,12 +306,12 @@ fn general_replace<O: OffsetSizeTrait>(
         capacity,
     );
 
-    let mut valid = BooleanBufferBuilder::new(list_array.len());
+    let mut valid = NullBufferBuilder::new(list_array.len());
 
     for (row_index, offset_window) in list_array.offsets().windows(2).enumerate() {
         if list_array.is_null(row_index) {
             offsets.push(offsets[row_index]);
-            valid.append(false);
+            valid.append_null();
             continue;
         }
 
@@ -247,7 +338,7 @@ fn general_replace<O: OffsetSizeTrait>(
                 end.to_usize().unwrap(),
             );
             offsets.push(offsets[row_index] + (end - start));
-            valid.append(true);
+            valid.append_non_null();
             continue;
         }
 
@@ -276,16 +367,16 @@ fn general_replace<O: OffsetSizeTrait>(
         }
 
         offsets.push(offsets[row_index] + (end - start));
-        valid.append(true);
+        valid.append_non_null();
     }
 
     let data = mutable.freeze();
 
     Ok(Arc::new(GenericListArray::<O>::try_new(
-        Arc::new(Field::new("item", list_array.value_type(), true)),
+        Arc::new(Field::new_list_field(list_array.value_type(), true)),
         OffsetBuffer::<O>::new(offsets.into()),
         arrow_array::make_array(data),
-        Some(NullBuffer::new(valid.finish())),
+        valid.finish(),
     )?))
 }
 

@@ -22,17 +22,19 @@ use arrow::datatypes::DataType;
 
 use arrow_schema::{Field, Fields};
 use datafusion_common::cast::as_list_array;
-use datafusion_common::utils::{array_into_list_array_nullable, get_row_at_idx};
+use datafusion_common::utils::{get_row_at_idx, SingleRowListArrayBuilder};
 use datafusion_common::{exec_err, ScalarValue};
 use datafusion_common::{internal_err, Result};
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::utils::format_state_name;
-use datafusion_expr::AggregateUDFImpl;
 use datafusion_expr::{Accumulator, Signature, Volatility};
+use datafusion_expr::{AggregateUDFImpl, Documentation};
 use datafusion_functions_aggregate_common::merge_arrays::merge_ordered_arrays;
 use datafusion_functions_aggregate_common::utils::ordering_fields;
+use datafusion_macros::user_doc;
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
 use std::collections::{HashSet, VecDeque};
+use std::mem::{size_of, size_of_val};
 use std::sync::Arc;
 
 make_udaf_expr_and_func!(
@@ -43,6 +45,20 @@ make_udaf_expr_and_func!(
     array_agg_udaf
 );
 
+#[user_doc(
+    doc_section(label = "General Functions"),
+    description = "Returns an array created from the expression elements. If ordering is required, elements are inserted in the specified order.",
+    syntax_example = "array_agg(expression [ORDER BY expression])",
+    sql_example = r#"```sql
+> SELECT array_agg(column_name ORDER BY other_column) FROM table_name;
++-----------------------------------------------+
+| array_agg(column_name ORDER BY other_column)  |
++-----------------------------------------------+
+| [element1, element2, element3]                |
++-----------------------------------------------+
+```"#,
+    standard_argument(name = "expression",)
+)]
 #[derive(Debug)]
 /// ARRAY_AGG aggregate expression
 pub struct ArrayAgg {
@@ -75,8 +91,7 @@ impl AggregateUDFImpl for ArrayAgg {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        Ok(DataType::List(Arc::new(Field::new(
-            "item",
+        Ok(DataType::List(Arc::new(Field::new_list_field(
             arg_types[0].clone(),
             true,
         ))))
@@ -87,7 +102,7 @@ impl AggregateUDFImpl for ArrayAgg {
             return Ok(vec![Field::new_list(
                 format_state_name(args.name, "distinct_array_agg"),
                 // See COMMENTS.md to understand why nullable is set to true
-                Field::new("item", args.input_types[0].clone(), true),
+                Field::new_list_field(args.input_types[0].clone(), true),
                 true,
             )]);
         }
@@ -95,7 +110,7 @@ impl AggregateUDFImpl for ArrayAgg {
         let mut fields = vec![Field::new_list(
             format_state_name(args.name, "array_agg"),
             // See COMMENTS.md to understand why nullable is set to true
-            Field::new("item", args.input_types[0].clone(), true),
+            Field::new_list_field(args.input_types[0].clone(), true),
             true,
         )];
 
@@ -106,7 +121,7 @@ impl AggregateUDFImpl for ArrayAgg {
         let orderings = args.ordering_fields.to_vec();
         fields.push(Field::new_list(
             format_state_name(args.name, "array_agg_orderings"),
-            Field::new("item", DataType::Struct(Fields::from(orderings)), true),
+            Field::new_list_field(DataType::Struct(Fields::from(orderings)), true),
             false,
         ));
 
@@ -133,7 +148,7 @@ impl AggregateUDFImpl for ArrayAgg {
         OrderSensitiveArrayAggAccumulator::try_new(
             &data_type,
             &ordering_dtypes,
-            acc_args.ordering_req.to_vec(),
+            acc_args.ordering_req.clone(),
             acc_args.is_reversed,
         )
         .map(|acc| Box::new(acc) as _)
@@ -141,6 +156,10 @@ impl AggregateUDFImpl for ArrayAgg {
 
     fn reverse_expr(&self) -> datafusion_expr::ReversedUDAF {
         datafusion_expr::ReversedUDAF::Reversed(array_agg_udaf())
+    }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        self.doc()
     }
 }
 
@@ -209,21 +228,20 @@ impl Accumulator for ArrayAggAccumulator {
         }
 
         let concated_array = arrow::compute::concat(&element_arrays)?;
-        let list_array = array_into_list_array_nullable(concated_array);
 
-        Ok(ScalarValue::List(Arc::new(list_array)))
+        Ok(SingleRowListArrayBuilder::new(concated_array).build_list_scalar())
     }
 
     fn size(&self) -> usize {
-        std::mem::size_of_val(self)
-            + (std::mem::size_of::<ArrayRef>() * self.values.capacity())
+        size_of_val(self)
+            + (size_of::<ArrayRef>() * self.values.capacity())
             + self
                 .values
                 .iter()
                 .map(|arr| arr.get_array_memory_size())
                 .sum::<usize>()
             + self.datatype.size()
-            - std::mem::size_of_val(&self.datatype)
+            - size_of_val(&self.datatype)
     }
 }
 
@@ -288,10 +306,10 @@ impl Accumulator for DistinctArrayAggAccumulator {
     }
 
     fn size(&self) -> usize {
-        std::mem::size_of_val(self) + ScalarValue::size_of_hashset(&self.values)
-            - std::mem::size_of_val(&self.values)
+        size_of_val(self) + ScalarValue::size_of_hashset(&self.values)
+            - size_of_val(&self.values)
             + self.datatype.size()
-            - std::mem::size_of_val(&self.datatype)
+            - size_of_val(&self.datatype)
     }
 }
 
@@ -456,25 +474,23 @@ impl Accumulator for OrderSensitiveArrayAggAccumulator {
     }
 
     fn size(&self) -> usize {
-        let mut total = std::mem::size_of_val(self)
-            + ScalarValue::size_of_vec(&self.values)
-            - std::mem::size_of_val(&self.values);
+        let mut total = size_of_val(self) + ScalarValue::size_of_vec(&self.values)
+            - size_of_val(&self.values);
 
         // Add size of the `self.ordering_values`
-        total +=
-            std::mem::size_of::<Vec<ScalarValue>>() * self.ordering_values.capacity();
+        total += size_of::<Vec<ScalarValue>>() * self.ordering_values.capacity();
         for row in &self.ordering_values {
-            total += ScalarValue::size_of_vec(row) - std::mem::size_of_val(row);
+            total += ScalarValue::size_of_vec(row) - size_of_val(row);
         }
 
         // Add size of the `self.datatypes`
-        total += std::mem::size_of::<DataType>() * self.datatypes.capacity();
+        total += size_of::<DataType>() * self.datatypes.capacity();
         for dtype in &self.datatypes {
-            total += dtype.size() - std::mem::size_of_val(dtype);
+            total += dtype.size() - size_of_val(dtype);
         }
 
         // Add size of the `self.ordering_req`
-        total += std::mem::size_of::<PhysicalSortExpr>() * self.ordering_req.capacity();
+        total += size_of::<PhysicalSortExpr>() * self.ordering_req.capacity();
         // TODO: Calculate size of each `PhysicalSortExpr` more accurately.
         total
     }
@@ -482,7 +498,7 @@ impl Accumulator for OrderSensitiveArrayAggAccumulator {
 
 impl OrderSensitiveArrayAggAccumulator {
     fn evaluate_orderings(&self) -> Result<ScalarValue> {
-        let fields = ordering_fields(&self.ordering_req, &self.datatypes[1..]);
+        let fields = ordering_fields(self.ordering_req.as_ref(), &self.datatypes[1..]);
         let num_columns = fields.len();
         let struct_field = Fields::from(fields.clone());
 
@@ -503,9 +519,7 @@ impl OrderSensitiveArrayAggAccumulator {
 
         let ordering_array =
             StructArray::try_new(struct_field, column_wise_ordering_values, None)?;
-        Ok(ScalarValue::List(Arc::new(array_into_list_array_nullable(
-            Arc::new(ordering_array),
-        ))))
+        Ok(SingleRowListArrayBuilder::new(Arc::new(ordering_array)).build_list_scalar())
     }
 }
 

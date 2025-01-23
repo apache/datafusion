@@ -23,7 +23,7 @@
 //!
 //! The rules of type variations here are:
 //! - Default type reference is 0. It is used when the actual type is the same with the original type.
-//! - Extended variant type references start from 1, and ususlly increase by 1.
+//! - Extended variant type references start from 1, and usually increase by 1.
 //!
 //! TODO: Definitions here are not the final form. All the non-system-preferred variations will be defined
 //! using [simple extensions] as per the [spec of type_variations](https://substrait.io/types/type_variations/)
@@ -96,7 +96,7 @@ pub const INTERVAL_DAY_TIME_TYPE_REF: u32 = 2;
 /// [`ScalarValue::IntervalMonthDayNano`]: datafusion::common::ScalarValue::IntervalMonthDayNano
 #[deprecated(
     since = "41.0.0",
-    note = "Use Substrait `UserDefinedType` with name `INTERVAL_MONTH_DAY_NANO_TYPE_NAME` instead"
+    note = "Use Substrait `IntervalCompund` type instead"
 )]
 pub const INTERVAL_MONTH_DAY_NANO_TYPE_REF: u32 = 3;
 
@@ -104,4 +104,8 @@ pub const INTERVAL_MONTH_DAY_NANO_TYPE_REF: u32 = 3;
 ///
 /// [`DataType::Interval`]: datafusion::arrow::datatypes::DataType::Interval
 /// [`IntervalUnit::MonthDayNano`]: datafusion::arrow::datatypes::IntervalUnit::MonthDayNano
+#[deprecated(
+    since = "43.0.0",
+    note = "Use Substrait `IntervalCompund` type instead"
+)]
 pub const INTERVAL_MONTH_DAY_NANO_TYPE_NAME: &str = "interval-month-day-nano";
