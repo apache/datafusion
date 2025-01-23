@@ -33,9 +33,9 @@ use arrow::datatypes::*;
 use arrow_schema::ArrowError;
 use datafusion_common::cast::as_boolean_array;
 use datafusion_common::{internal_err, Result, ScalarValue};
+use datafusion_expr::binary::BinaryTypeCoercer;
 use datafusion_expr::interval_arithmetic::{apply_operator, Interval};
 use datafusion_expr::sort_properties::ExprProperties;
-use datafusion_expr::type_coercion::binary::get_result_type;
 use datafusion_expr::{ColumnarValue, Operator};
 use datafusion_physical_expr_common::datum::{apply, apply_cmp, apply_cmp_for_nested};
 
@@ -287,11 +287,12 @@ impl PhysicalExpr for BinaryExpr {
     }
 
     fn data_type(&self, input_schema: &Schema) -> Result<DataType> {
-        get_result_type(
+        BinaryTypeCoercer::new(
             &self.left.data_type(input_schema)?,
             &self.op,
             &self.right.data_type(input_schema)?,
         )
+        .get_result_type()
     }
 
     fn nullable(&self, input_schema: &Schema) -> Result<bool> {
@@ -741,7 +742,6 @@ mod tests {
     use super::*;
     use crate::expressions::{col, lit, try_cast, Column, Literal};
     use datafusion_common::plan_datafusion_err;
-    use datafusion_expr::type_coercion::binary::get_input_types;
 
     /// Performs a binary operation, applying any type coercion necessary
     fn binary_op(
@@ -752,7 +752,8 @@ mod tests {
     ) -> Result<Arc<dyn PhysicalExpr>> {
         let left_type = left.data_type(schema)?;
         let right_type = right.data_type(schema)?;
-        let (lhs, rhs) = get_input_types(&left_type, &op, &right_type)?;
+        let (lhs, rhs) =
+            BinaryTypeCoercer::new(&left_type, &op, &right_type).get_input_types()?;
 
         let left_expr = try_cast(left, schema, lhs)?;
         let right_expr = try_cast(right, schema, rhs)?;
@@ -856,7 +857,7 @@ mod tests {
             ]);
             let a = $A_ARRAY::from($A_VEC);
             let b = $B_ARRAY::from($B_VEC);
-            let (lhs, rhs) = get_input_types(&$A_TYPE, &$OP, &$B_TYPE)?;
+            let (lhs, rhs) = BinaryTypeCoercer::new(&$A_TYPE, &$OP, &$B_TYPE).get_input_types()?;
 
             let left = try_cast(col("a", &schema)?, &schema, lhs)?;
             let right = try_cast(col("b", &schema)?, &schema, rhs)?;

@@ -18,7 +18,7 @@
 //! Interval arithmetic library
 
 use crate::operator::Operator;
-use crate::type_coercion::binary::get_result_type;
+use crate::type_coercion::binary::BinaryTypeCoercer;
 use std::borrow::Borrow;
 use std::fmt::{self, Display, Formatter};
 use std::ops::{AddAssign, SubAssign};
@@ -518,7 +518,10 @@ impl Interval {
     ///       to an error.
     pub fn equal<T: Borrow<Self>>(&self, other: T) -> Result<Self> {
         let rhs = other.borrow();
-        if get_result_type(&self.data_type(), &Operator::Eq, &rhs.data_type()).is_err() {
+        if BinaryTypeCoercer::new(&self.data_type(), &Operator::Eq, &rhs.data_type())
+            .get_result_type()
+            .is_err()
+        {
             internal_err!(
                 "Interval data types must be compatible for equality checks, lhs:{}, rhs:{}",
                 self.data_type(),
@@ -689,7 +692,9 @@ impl Interval {
     /// choose single values arbitrarily from each of the operands.
     pub fn add<T: Borrow<Self>>(&self, other: T) -> Result<Self> {
         let rhs = other.borrow();
-        let dt = get_result_type(&self.data_type(), &Operator::Plus, &rhs.data_type())?;
+        let dt =
+            BinaryTypeCoercer::new(&self.data_type(), &Operator::Plus, &rhs.data_type())
+                .get_result_type()?;
 
         Ok(Self::new(
             add_bounds::<false>(&dt, &self.lower, &rhs.lower),
@@ -704,7 +709,9 @@ impl Interval {
     /// each of the operands.
     pub fn sub<T: Borrow<Interval>>(&self, other: T) -> Result<Self> {
         let rhs = other.borrow();
-        let dt = get_result_type(&self.data_type(), &Operator::Minus, &rhs.data_type())?;
+        let dt =
+            BinaryTypeCoercer::new(&self.data_type(), &Operator::Minus, &rhs.data_type())
+                .get_result_type()?;
 
         Ok(Self::new(
             sub_bounds::<false>(&dt, &self.lower, &rhs.upper),

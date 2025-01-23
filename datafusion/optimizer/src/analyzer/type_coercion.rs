@@ -19,6 +19,7 @@
 
 use std::sync::Arc;
 
+use datafusion_expr::binary::BinaryTypeCoercer;
 use itertools::izip;
 
 use arrow::datatypes::{DataType, Field, IntervalUnit, Schema};
@@ -38,9 +39,7 @@ use datafusion_expr::expr::{
 use datafusion_expr::expr_rewriter::coerce_plan_expr_for_schema;
 use datafusion_expr::expr_schema::cast_subquery;
 use datafusion_expr::logical_plan::Subquery;
-use datafusion_expr::type_coercion::binary::{
-    comparison_coercion, get_input_types, like_coercion,
-};
+use datafusion_expr::type_coercion::binary::{comparison_coercion, like_coercion};
 use datafusion_expr::type_coercion::functions::{
     data_types_with_aggregate_udf, data_types_with_scalar_udf,
 };
@@ -278,11 +277,12 @@ impl<'a> TypeCoercionRewriter<'a> {
         op: Operator,
         right: Expr,
     ) -> Result<(Expr, Expr)> {
-        let (left_type, right_type) = get_input_types(
+        let (left_type, right_type) = BinaryTypeCoercer::new(
             &left.get_type(self.schema)?,
             &op,
             &right.get_type(self.schema)?,
-        )?;
+        )
+        .get_input_types()?;
         Ok((
             left.cast_to(&left_type, self.schema)?,
             right.cast_to(&right_type, self.schema)?,
@@ -736,7 +736,8 @@ fn coerce_window_frame(
 // The above op will be rewrite to the binary op when creating the physical op.
 fn get_casted_expr_for_bool_op(expr: Expr, schema: &DFSchema) -> Result<Expr> {
     let left_type = expr.get_type(schema)?;
-    get_input_types(&left_type, &Operator::IsDistinctFrom, &DataType::Boolean)?;
+    BinaryTypeCoercer::new(&left_type, &Operator::IsDistinctFrom, &DataType::Boolean)
+        .get_input_types()?;
     expr.cast_to(&DataType::Boolean, schema)
 }
 

@@ -35,7 +35,7 @@ use datafusion_common::tree_node::{
     Transformed, TransformedResult, TreeNode, TreeNodeContainer, TreeNodeRecursion,
 };
 use datafusion_common::{
-    plan_err, Column, DFSchema, HashMap, Result, ScalarValue, TableReference,
+    plan_err, Column, DFSchema, HashMap, Result, ScalarValue, Spans, TableReference
 };
 use datafusion_functions_window_common::field::WindowUDFFieldArgs;
 use sqlparser::ast::{
@@ -1661,6 +1661,13 @@ impl Expr {
             | Expr::WindowFunction(..)
             | Expr::Literal(..)
             | Expr::Placeholder(..) => false,
+        }
+    }
+
+    pub fn spans(&self) -> Option<&Spans> {
+        match self {
+            Expr::Column(col) => Some(&col.spans),
+            _ => None,
         }
     }
 }

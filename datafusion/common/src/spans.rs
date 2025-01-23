@@ -29,6 +29,10 @@ impl Spans {
     pub fn add_span(&mut self, span: Span) {
         self.0.push(span);
     }
+
+    pub fn iter(&self) -> impl Iterator<Item = &Span> {
+        self.0.iter()
+    }
 }
 
 impl Default for Spans {
