@@ -108,6 +108,12 @@ fn pushdown_sorts_helper(
             // Make sure this `SortExec` satisfies parent requirements:
             let sort_reqs = requirements.data.ordering_requirement.unwrap_or_default();
             // It's possible current plan (`SortExec`) has a fetch value.
+            // And if both of them have fetch values, we should use the minimum one.
+            if let Some(fetch) = sort_fetch {
+                if let Some(requirement_fetch) = requirements.data.fetch {
+                    requirements.data.fetch = Some(fetch.min(requirement_fetch));
+                }
+            }
             let fetch = requirements.data.fetch.or(sort_fetch);
             requirements = requirements.children.swap_remove(0);
             requirements = add_sort_above(requirements, sort_reqs, fetch);
