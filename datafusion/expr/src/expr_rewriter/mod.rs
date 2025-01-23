@@ -178,7 +178,11 @@ pub fn create_col_from_scalar_expr(
             Some::<TableReference>(subqry_alias.into()),
             name,
         )),
-        Expr::Column(Column { relation: _, name, spans }) => Ok(Column::new(
+        Expr::Column(Column {
+            relation: _,
+            name,
+            spans,
+        }) => Ok(Column::new(
             Some::<TableReference>(subqry_alias.into()),
             name,
         )),

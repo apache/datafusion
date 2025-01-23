@@ -9,8 +9,8 @@ use std::hash::{Hash, Hasher};
 /// the column a that comes from SELECT 1 AS a UNION ALL SELECT 2 AS a you'll
 /// need two spans.
 #[derive(Debug, Clone)]
- // Store teh first [`Span`] on the stack because that is by far the most common
- // case. More will spill onto the heap.
+// Store teh first [`Span`] on the stack because that is by far the most common
+// case. More will spill onto the heap.
 pub struct Spans(pub SmallVec<[Span; 1]>);
 
 impl Spans {

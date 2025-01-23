@@ -35,7 +35,7 @@ use datafusion_common::tree_node::{
     Transformed, TransformedResult, TreeNode, TreeNodeContainer, TreeNodeRecursion,
 };
 use datafusion_common::{
-    plan_err, Column, DFSchema, HashMap, Result, ScalarValue, Spans, TableReference
+    plan_err, Column, DFSchema, HashMap, Result, ScalarValue, Spans, TableReference,
 };
 use datafusion_functions_window_common::field::WindowUDFFieldArgs;
 use sqlparser::ast::{
@@ -1111,7 +1111,11 @@ impl Expr {
     /// output schema. We can use this qualified name to reference the field.
     pub fn qualified_name(&self) -> (Option<TableReference>, String) {
         match self {
-            Expr::Column(Column { relation, name, spans: _ }) => (relation.clone(), name.clone()),
+            Expr::Column(Column {
+                relation,
+                name,
+                spans: _,
+            }) => (relation.clone(), name.clone()),
             Expr::Alias(Alias { relation, name, .. }) => (relation.clone(), name.clone()),
             _ => (None, self.schema_name().to_string()),
         }

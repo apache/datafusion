@@ -124,7 +124,7 @@ fn expand_exprlist(input: &LogicalPlan, expr: Vec<Expr>) -> Result<Vec<Expr>> {
                 ref relation,
                 ref name,
                 // TODO Should we use these spans?
-                spans: _
+                spans: _,
             }) => {
                 if name.eq("*") {
                     if let Some(qualifier) = relation {

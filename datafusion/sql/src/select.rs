@@ -21,7 +21,8 @@ use std::sync::Arc;
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 use crate::utils::{
     check_columns_satisfy_exprs, extract_aliases, rebase_expr, resolve_aliases_to_exprs,
-    resolve_columns, resolve_positions_to_exprs, rewrite_recursive_unnests_bottom_up, CheckColumnsSatisfyExprsPurpose,
+    resolve_columns, resolve_positions_to_exprs, rewrite_recursive_unnests_bottom_up,
+    CheckColumnsSatisfyExprsPurpose,
 };
 
 use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
@@ -41,7 +42,8 @@ use datafusion_expr::{
 
 use indexmap::IndexMap;
 use sqlparser::ast::{
-    Distinct, Expr as SQLExpr, GroupByExpr, NamedWindowExpr, OrderByExpr, Spanned, WildcardAdditionalOptions, WindowType
+    Distinct, Expr as SQLExpr, GroupByExpr, NamedWindowExpr, OrderByExpr, Spanned,
+    WildcardAdditionalOptions, WindowType,
 };
 use sqlparser::ast::{NamedWindowDefinition, Select, SelectItem, TableWithJoins};
 

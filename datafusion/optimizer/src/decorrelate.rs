@@ -533,7 +533,11 @@ fn proj_exprs_evaluation_result_on_empty_batch(
             let result_expr = simplifier.simplify(result_expr)?;
             let expr_name = match expr {
                 Expr::Alias(Alias { name, .. }) => name.to_string(),
-                Expr::Column(Column { relation: _, name, spans: _ }) => name.to_string(),
+                Expr::Column(Column {
+                    relation: _,
+                    name,
+                    spans: _,
+                }) => name.to_string(),
                 _ => expr.schema_name().to_string(),
             };
             expr_result_map_for_count_bug.insert(expr_name, result_expr);

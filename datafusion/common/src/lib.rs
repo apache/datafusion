@@ -33,6 +33,7 @@ pub mod alias;
 pub mod cast;
 pub mod config;
 pub mod cse;
+pub mod diagnostic;
 pub mod display;
 pub mod error;
 pub mod file_options;
@@ -42,13 +43,12 @@ pub mod instant;
 pub mod parsers;
 pub mod rounding;
 pub mod scalar;
+pub mod spans;
 pub mod stats;
 pub mod test_util;
 pub mod tree_node;
 pub mod types;
 pub mod utils;
-pub mod diagnostic;
-pub mod spans;
 
 /// Reexport arrow crate
 pub use arrow;
@@ -56,6 +56,7 @@ pub use column::Column;
 pub use dfschema::{
     qualified_name, DFSchema, DFSchemaRef, ExprSchema, SchemaExt, ToDFSchema,
 };
+pub use diagnostic::{Diagnostic, DiagnosticEntry, DiagnosticEntryKind};
 pub use error::{
     field_not_found, unqualified_field_not_found, DataFusionError, Result, SchemaError,
     SharedResult,
@@ -74,12 +75,11 @@ pub use join_type::{JoinConstraint, JoinSide, JoinType};
 pub use param_value::ParamValues;
 pub use scalar::{ScalarType, ScalarValue};
 pub use schema_reference::SchemaReference;
+pub use spans::Spans;
 pub use stats::{ColumnStatistics, Statistics};
 pub use table_reference::{ResolvedTableReference, TableReference};
 pub use unnest::{RecursionUnnestOption, UnnestOptions};
 pub use utils::project_schema;
-pub use diagnostic::{Diagnostic, DiagnosticEntry, DiagnosticEntryKind};
-pub use spans::Spans;
 
 // These are hidden from docs purely to avoid polluting the public view of what this crate exports.
 // These are just re-exports of macros by the same name, which gets around the 'cannot refer to
