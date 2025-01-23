@@ -313,12 +313,15 @@ impl ExecutionPlan for PartialSortExec {
         self: Arc<Self>,
         _node_id: usize,
     ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
-        let mut new_plan = PartialSortExec::new(
-            self.expr.clone(),
-            self.input.clone(),
-            self.common_prefix_length,
-        )
-        .with_fetch(self.fetch());
+        let mut new_plan = PartialSortExec {
+            expr: self.expr.clone(),
+            input: Arc::clone(&self.input),
+            common_prefix_length: self.common_prefix_length,
+            metrics_set: self.metrics_set.clone(),
+            preserve_partitioning: self.preserve_partitioning,
+            fetch: self.fetch,
+            cache: self.cache.clone(),
+        };
         let new_props = new_plan.cache.clone().with_node_id(_node_id);
         new_plan.cache = new_props;
         Ok(Some(Arc::new(new_plan)))

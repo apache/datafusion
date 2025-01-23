@@ -274,9 +274,10 @@ impl<'a, 'b> ExecutionPlanVisitor for IndentVisitor<'a, 'b> {
         write!(self.f, "{:indent$}", "", indent = self.indent * 2)?;
         plan.fmt_as(self.t, self.f)?;
 
-        if let Some(node_id) = plan.properties().node_id() {
-            write!(self.f, ", node_id={}", node_id)?;
-        }
+        // MAX: disable this for now since we don't need it displayed + it fails many DF tests
+        //if let Some(node_id) = plan.properties().node_id() {
+        //   write!(self.f, ", node_id={}", node_id)?;
+        //}
 
         match self.show_metrics {
             ShowMetrics::None => {}
@@ -398,19 +399,11 @@ impl ExecutionPlanVisitor for GraphvizVisitor<'_, '_> {
             ""
         };
 
-        let node_id = plan
-            .properties()
-            .node_id()
-            .map_or("node_id=None".to_string(), |id| format!("node_id={}", id));
-
         self.graphviz_builder.add_node(
             self.f,
             id,
             &label,
-            Some(&format!(
-                "{}{}{}{}",
-                metrics, delimiter, statistics, node_id
-            )),
+            Some(&format!("{}{}{}", metrics, delimiter, statistics)),
         )?;
 
         if let Some(parent_node_id) = self.parents.last() {

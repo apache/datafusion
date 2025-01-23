@@ -878,15 +878,21 @@ impl ExecutionPlan for AggregateExec {
         self: Arc<Self>,
         _node_id: usize,
     ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
-        let mut new_plan = AggregateExec::try_new_with_schema(
-            self.mode,
-            self.group_by.clone(),
-            self.aggr_expr.clone(),
-            self.filter_expr.clone(),
-            self.input().clone(),
-            Arc::clone(&self.input_schema),
-            Arc::clone(&self.schema),
-        )?;
+        let mut new_plan = AggregateExec {
+            mode: self.mode,
+            group_by: self.group_by.clone(),
+            aggr_expr: self.aggr_expr.clone(),
+            filter_expr: self.filter_expr.clone(),
+            input_order_mode: self.input_order_mode.clone(),
+            input: Arc::clone(&self.input),
+            input_schema: Arc::clone(&self.input_schema),
+            schema: Arc::clone(&self.schema),
+            cache: self.cache.clone(),
+            limit: self.limit,
+            required_input_ordering: self.required_input_ordering.clone(),
+            metrics: self.metrics.clone(),
+        };
+
         let new_props: PlanProperties = new_plan.cache.clone().with_node_id(_node_id);
         new_plan.cache = new_props;
         Ok(Some(Arc::new(new_plan)))
