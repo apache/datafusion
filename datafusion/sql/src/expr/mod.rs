@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-
 use arrow_schema::DataType;
 use arrow_schema::TimeUnit;
 use datafusion_expr::planner::{
