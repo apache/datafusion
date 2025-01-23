@@ -152,14 +152,9 @@ mod tests {
     use crate::aggregate_statistics::AggregateStatistics;
     use crate::PhysicalOptimizerRule;
     use datafusion_common::config::ConfigOptions;
-    use datafusion_common::utils::expr::COUNT_STAR_EXPANSION;
     use datafusion_execution::TaskContext;
-    use datafusion_functions_aggregate::count::count_udaf;
-    use datafusion_physical_expr::aggregate::AggregateExprBuilder;
-    use datafusion_physical_expr::PhysicalExpr;
     use datafusion_physical_plan::aggregates::AggregateExec;
     use datafusion_physical_plan::projection::ProjectionExec;
-    use datafusion_physical_plan::udaf::AggregateFunctionExpr;
     use datafusion_physical_plan::ExecutionPlan;
     use std::sync::Arc;
 
@@ -173,6 +168,7 @@ mod tests {
     use datafusion_physical_plan::memory::MemorySourceConfig;
     use datafusion_physical_plan::source::DataSourceExec;
 
+    use crate::test_utils::TestAggregate;
     use arrow::array::Int32Array;
     use arrow::datatypes::{DataType, Field, Schema};
     use arrow::record_batch::RecordBatch;
@@ -180,62 +176,8 @@ mod tests {
     use datafusion_physical_expr::expressions::{self, cast};
     use datafusion_physical_plan::aggregates::AggregateMode;
 
-    /// Describe the type of aggregate being tested
-    pub enum TestAggregate {
-        /// Testing COUNT(*) type aggregates
-        CountStar,
-
-        /// Testing for COUNT(column) aggregate
-        ColumnA(Arc<Schema>),
-    }
-
-    impl TestAggregate {
-        /// Create a new COUNT(*) aggregate
-        pub fn new_count_star() -> Self {
-            Self::CountStar
-        }
-
-        /// Create a new COUNT(column) aggregate
-        pub fn new_count_column(schema: &Arc<Schema>) -> Self {
-            Self::ColumnA(Arc::clone(schema))
-        }
-
-        /// Return appropriate expr depending if COUNT is for col or table (*)
-        pub fn count_expr(&self, schema: &Schema) -> AggregateFunctionExpr {
-            AggregateExprBuilder::new(count_udaf(), vec![self.column()])
-                .schema(Arc::new(schema.clone()))
-                .alias(self.column_name())
-                .build()
-                .unwrap()
-        }
-
-        /// what argument would this aggregate need in the plan?
-        fn column(&self) -> Arc<dyn PhysicalExpr> {
-            match self {
-                Self::CountStar => expressions::lit(COUNT_STAR_EXPANSION),
-                Self::ColumnA(s) => expressions::col("a", s).unwrap(),
-            }
-        }
-
-        /// What name would this aggregate produce in a plan?
-        pub fn column_name(&self) -> &'static str {
-            match self {
-                Self::CountStar => "COUNT(*)",
-                Self::ColumnA(_) => "COUNT(a)",
-            }
-        }
-
-        /// What is the expected count?
-        pub fn expected_count(&self) -> i64 {
-            match self {
-                TestAggregate::CountStar => 3,
-                TestAggregate::ColumnA(_) => 2,
-            }
-        }
-    }
-
-    /// Mock data using a DataSourceExec which has an exact count statistic
-    fn mock_data() -> Result<Arc<DataSourceExec>> {
+    /// Mock data using a MemoryExec which has an exact count statistic
+    fn mock_data() -> Result<Arc<MemoryExec>> {
         let schema = Arc::new(Schema::new(vec![
             Field::new("a", DataType::Int32, true),
             Field::new("b", DataType::Int32, true),
