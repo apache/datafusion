@@ -19,6 +19,9 @@
 
 mod engines;
 
+pub use engines::convert_batches;
+pub use engines::DFColumnType;
+pub use engines::DFOutput;
 pub use engines::DataFusion;
 
 #[cfg(feature = "postgres")]

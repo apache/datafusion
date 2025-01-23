@@ -20,7 +20,10 @@ mod conversion;
 mod datafusion_engine;
 mod output;
 
+pub use datafusion_engine::convert_batches;
 pub use datafusion_engine::DataFusion;
+pub use output::DFColumnType;
+pub use output::DFOutput;
 
 #[cfg(feature = "postgres")]
 mod postgres_engine;

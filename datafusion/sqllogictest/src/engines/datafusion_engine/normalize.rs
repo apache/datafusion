@@ -28,8 +28,8 @@ use std::sync::OnceLock;
 use super::super::conversion::*;
 use super::error::{DFSqlLogicTestError, Result};
 
-/// Converts `batches` to a result as expected by sqllogicteset.
-pub(crate) fn convert_batches(batches: Vec<RecordBatch>) -> Result<Vec<Vec<String>>> {
+/// Converts `batches` to a result as expected by sqllogictest.
+pub fn convert_batches(batches: Vec<RecordBatch>) -> Result<Vec<Vec<String>>> {
     if batches.is_empty() {
         Ok(vec![])
     } else {
