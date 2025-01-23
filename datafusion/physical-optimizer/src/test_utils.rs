@@ -15,163 +15,84 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Collection of testing utility functions that are leveraged by the query optimizer rules
+//! Test utilities for physical optimizer tests
 
-#![allow(missing_docs)]
-
+use crate::limited_distinct_aggregation::LimitedDistinctAggregation;
+use crate::PhysicalOptimizerRule;
+use arrow::array::Int32Array;
+use arrow::record_batch::RecordBatch;
+use arrow_schema::{DataType, Field, Schema, SchemaRef, SortOptions};
+use datafusion_common::config::ConfigOptions;
+use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
+use datafusion_common::utils::expr::COUNT_STAR_EXPANSION;
+use datafusion_common::{JoinType, Result};
+use datafusion_execution::{SendableRecordBatchStream, TaskContext};
+use datafusion_expr::{WindowFrame, WindowFunctionDefinition};
+use datafusion_functions_aggregate::count::count_udaf;
+use datafusion_physical_expr::aggregate::{AggregateExprBuilder, AggregateFunctionExpr};
+use datafusion_physical_expr::expressions::col;
+use datafusion_physical_expr::{expressions, PhysicalExpr};
+use datafusion_physical_expr_common::sort_expr::LexRequirement;
+use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
+use datafusion_physical_plan::aggregates::{
+    AggregateExec, AggregateMode, PhysicalGroupBy,
+};
+use datafusion_physical_plan::coalesce_batches::CoalesceBatchesExec;
+use datafusion_physical_plan::coalesce_partitions::CoalescePartitionsExec;
+use datafusion_physical_plan::filter::FilterExec;
+use datafusion_physical_plan::joins::utils::{JoinFilter, JoinOn};
+use datafusion_physical_plan::joins::{HashJoinExec, PartitionMode, SortMergeJoinExec};
+use datafusion_physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
+use datafusion_physical_plan::memory::MemoryExec;
+use datafusion_physical_plan::repartition::RepartitionExec;
+use datafusion_physical_plan::sorts::sort::SortExec;
+use datafusion_physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
+use datafusion_physical_plan::streaming::{PartitionStream, StreamingTableExec};
+use datafusion_physical_plan::tree_node::PlanContext;
+use datafusion_physical_plan::union::UnionExec;
+use datafusion_physical_plan::windows::{create_window_expr, BoundedWindowAggExec};
+use datafusion_physical_plan::ExecutionPlan;
+use datafusion_physical_plan::{
+    displayable, DisplayAs, DisplayFormatType, PlanProperties,
+};
+use datafusion_physical_plan::{InputOrderMode, Partitioning};
 use std::any::Any;
 use std::fmt::Formatter;
 use std::sync::Arc;
 
-use crate::datasource::listing::PartitionedFile;
-use crate::datasource::physical_plan::{FileScanConfig, ParquetExec};
-use crate::datasource::stream::{FileStreamProvider, StreamConfig, StreamTable};
-use crate::error::Result;
-use crate::physical_plan::aggregates::{AggregateExec, AggregateMode, PhysicalGroupBy};
-use crate::physical_plan::coalesce_batches::CoalesceBatchesExec;
-use crate::physical_plan::coalesce_partitions::CoalescePartitionsExec;
-use crate::physical_plan::filter::FilterExec;
-use crate::physical_plan::joins::utils::{JoinFilter, JoinOn};
-use crate::physical_plan::joins::{HashJoinExec, PartitionMode, SortMergeJoinExec};
-use crate::physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
-use crate::physical_plan::memory::MemoryExec;
-use crate::physical_plan::repartition::RepartitionExec;
-use crate::physical_plan::sorts::sort::SortExec;
-use crate::physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
-use crate::physical_plan::union::UnionExec;
-use crate::physical_plan::windows::create_window_expr;
-use crate::physical_plan::{ExecutionPlan, InputOrderMode, Partitioning};
-use crate::prelude::{CsvReadOptions, SessionContext};
-
-use arrow_schema::{Schema, SchemaRef, SortOptions};
-use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
-use datafusion_common::JoinType;
-use datafusion_execution::object_store::ObjectStoreUrl;
-use datafusion_expr::{WindowFrame, WindowFunctionDefinition};
-use datafusion_functions_aggregate::count::count_udaf;
-use datafusion_physical_expr::expressions::col;
-use datafusion_physical_expr::{PhysicalExpr, PhysicalSortExpr};
-use datafusion_physical_plan::tree_node::PlanContext;
-use datafusion_physical_plan::{
-    displayable, DisplayAs, DisplayFormatType, PlanProperties,
-};
-
-use async_trait::async_trait;
-use datafusion_execution::{SendableRecordBatchStream, TaskContext};
-use datafusion_physical_expr_common::sort_expr::{LexOrdering, LexRequirement};
-
-async fn register_current_csv(
-    ctx: &SessionContext,
-    table_name: &str,
-    infinite: bool,
-) -> Result<()> {
-    let testdata = crate::test_util::arrow_test_data();
-    let schema = crate::test_util::aggr_test_schema();
-    let path = format!("{testdata}/csv/aggregate_test_100.csv");
-
-    match infinite {
-        true => {
-            let source = FileStreamProvider::new_file(schema, path.into());
-            let config = StreamConfig::new(Arc::new(source));
-            ctx.register_table(table_name, Arc::new(StreamTable::new(Arc::new(config))))?;
-        }
-        false => {
-            ctx.register_csv(table_name, &path, CsvReadOptions::new().schema(&schema))
-                .await?;
-        }
-    }
-
-    Ok(())
+pub fn schema() -> SchemaRef {
+    Arc::new(Schema::new(vec![
+        Field::new("a", DataType::Int64, true),
+        Field::new("b", DataType::Int64, true),
+        Field::new("c", DataType::Int64, true),
+        Field::new("d", DataType::Int32, true),
+        Field::new("e", DataType::Boolean, true),
+    ]))
 }
 
-#[derive(Eq, PartialEq, Debug)]
-pub enum SourceType {
-    Unbounded,
-    Bounded,
+pub fn create_test_schema() -> Result<SchemaRef> {
+    let nullable_column = Field::new("nullable_col", DataType::Int32, true);
+    let non_nullable_column = Field::new("non_nullable_col", DataType::Int32, false);
+    let schema = Arc::new(Schema::new(vec![nullable_column, non_nullable_column]));
+    Ok(schema)
 }
 
-#[async_trait]
-pub trait SqlTestCase {
-    async fn register_table(&self, ctx: &SessionContext) -> Result<()>;
-    fn expect_fail(&self) -> bool;
+pub fn create_test_schema2() -> Result<SchemaRef> {
+    let col_a = Field::new("col_a", DataType::Int32, true);
+    let col_b = Field::new("col_b", DataType::Int32, true);
+    let schema = Arc::new(Schema::new(vec![col_a, col_b]));
+    Ok(schema)
 }
 
-/// [UnaryTestCase] is designed for single input [ExecutionPlan]s.
-pub struct UnaryTestCase {
-    pub(crate) source_type: SourceType,
-    pub(crate) expect_fail: bool,
-}
-
-#[async_trait]
-impl SqlTestCase for UnaryTestCase {
-    async fn register_table(&self, ctx: &SessionContext) -> Result<()> {
-        let table_is_infinite = self.source_type == SourceType::Unbounded;
-        register_current_csv(ctx, "test", table_is_infinite).await?;
-        Ok(())
-    }
-
-    fn expect_fail(&self) -> bool {
-        self.expect_fail
-    }
-}
-/// [BinaryTestCase] is designed for binary input [ExecutionPlan]s.
-pub struct BinaryTestCase {
-    pub(crate) source_types: (SourceType, SourceType),
-    pub(crate) expect_fail: bool,
-}
-
-#[async_trait]
-impl SqlTestCase for BinaryTestCase {
-    async fn register_table(&self, ctx: &SessionContext) -> Result<()> {
-        let left_table_is_infinite = self.source_types.0 == SourceType::Unbounded;
-        let right_table_is_infinite = self.source_types.1 == SourceType::Unbounded;
-        register_current_csv(ctx, "left", left_table_is_infinite).await?;
-        register_current_csv(ctx, "right", right_table_is_infinite).await?;
-        Ok(())
-    }
-
-    fn expect_fail(&self) -> bool {
-        self.expect_fail
-    }
-}
-
-pub struct QueryCase {
-    pub(crate) sql: String,
-    pub(crate) cases: Vec<Arc<dyn SqlTestCase>>,
-    pub(crate) error_operator: String,
-}
-
-impl QueryCase {
-    /// Run the test cases
-    pub(crate) async fn run(&self) -> Result<()> {
-        for case in &self.cases {
-            let ctx = SessionContext::new();
-            case.register_table(&ctx).await?;
-            let error = if case.expect_fail() {
-                Some(&self.error_operator)
-            } else {
-                None
-            };
-            self.run_case(ctx, error).await?;
-        }
-        Ok(())
-    }
-    async fn run_case(&self, ctx: SessionContext, error: Option<&String>) -> Result<()> {
-        let dataframe = ctx.sql(self.sql.as_str()).await?;
-        let plan = dataframe.create_physical_plan().await;
-        if let Some(error) = error {
-            let plan_error = plan.unwrap_err();
-            assert!(
-                plan_error.to_string().contains(error.as_str()),
-                "plan_error: {:?} doesn't contain message: {:?}",
-                plan_error,
-                error.as_str()
-            );
-        } else {
-            assert!(plan.is_ok())
-        }
-        Ok(())
-    }
+// Generate a schema which consists of 5 columns (a, b, c, d, e)
+pub fn create_test_schema3() -> Result<SchemaRef> {
+    let a = Field::new("a", DataType::Int32, true);
+    let b = Field::new("b", DataType::Int32, false);
+    let c = Field::new("c", DataType::Int32, true);
+    let d = Field::new("d", DataType::Int32, false);
+    let e = Field::new("e", DataType::Int32, false);
+    let schema = Arc::new(Schema::new(vec![a, b, c, d, e]));
+    Ok(schema)
 }
 
 pub fn sort_merge_join_exec(
@@ -215,8 +136,8 @@ pub fn coalesce_partitions_exec(input: Arc<dyn ExecutionPlan>) -> Arc<dyn Execut
     Arc::new(CoalescePartitionsExec::new(input))
 }
 
-pub(crate) fn memory_exec(schema: &SchemaRef) -> Arc<dyn ExecutionPlan> {
-    Arc::new(MemoryExec::try_new(&[vec![]], schema.clone(), None).unwrap())
+pub fn memory_exec(schema: &SchemaRef) -> Arc<dyn ExecutionPlan> {
+    Arc::new(MemoryExec::try_new(&[vec![]], Arc::clone(schema), None).unwrap())
 }
 
 pub fn hash_join_exec(
@@ -247,7 +168,7 @@ pub fn bounded_window_exec(
     let schema = input.schema();
 
     Arc::new(
-        crate::physical_plan::windows::BoundedWindowAggExec::try_new(
+        BoundedWindowAggExec::try_new(
             vec![create_window_expr(
                 &WindowFunctionDefinition::AggregateUDF(count_udaf()),
                 "count".to_owned(),
@@ -259,7 +180,7 @@ pub fn bounded_window_exec(
                 false,
             )
             .unwrap()],
-            input.clone(),
+            Arc::clone(&input),
             vec![],
             InputOrderMode::Sorted,
         )
@@ -280,30 +201,6 @@ pub fn sort_preserving_merge_exec(
 ) -> Arc<dyn ExecutionPlan> {
     let sort_exprs = sort_exprs.into_iter().collect();
     Arc::new(SortPreservingMergeExec::new(sort_exprs, input))
-}
-
-/// Create a non sorted parquet exec
-pub fn parquet_exec(schema: &SchemaRef) -> Arc<ParquetExec> {
-    ParquetExec::builder(
-        FileScanConfig::new(ObjectStoreUrl::parse("test:///").unwrap(), schema.clone())
-            .with_file(PartitionedFile::new("x".to_string(), 100)),
-    )
-    .build_arc()
-}
-
-// Created a sorted parquet exec
-pub fn parquet_exec_sorted(
-    schema: &SchemaRef,
-    sort_exprs: impl IntoIterator<Item = PhysicalSortExpr>,
-) -> Arc<dyn ExecutionPlan> {
-    let sort_exprs = sort_exprs.into_iter().collect();
-
-    ParquetExec::builder(
-        FileScanConfig::new(ObjectStoreUrl::parse("test:///").unwrap(), schema.clone())
-            .with_file(PartitionedFile::new("x".to_string(), 100))
-            .with_output_ordering(vec![sort_exprs]),
-    )
-    .build_arc()
 }
 
 pub fn union_exec(input: Vec<Arc<dyn ExecutionPlan>>) -> Arc<dyn ExecutionPlan> {
@@ -393,7 +290,7 @@ impl RequirementsTestExec {
         self
     }
 
-    /// returns this ExecutionPlan as an Arc<dyn ExecutionPlan>
+    /// returns this ExecutionPlan as an `Arc<dyn ExecutionPlan>`
     pub fn into_arc(self) -> Arc<dyn ExecutionPlan> {
         Arc::new(self)
     }
@@ -436,7 +333,7 @@ impl ExecutionPlan for RequirementsTestExec {
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         assert_eq!(children.len(), 1);
-        Ok(RequirementsTestExec::new(children[0].clone())
+        Ok(RequirementsTestExec::new(Arc::clone(&children[0]))
             .with_required_input_ordering(self.required_input_ordering.clone())
             .with_maintains_input_order(self.maintains_input_order)
             .into_arc())
@@ -475,4 +372,190 @@ pub fn check_integrity<T: Clone>(context: PlanContext<T>) -> Result<PlanContext<
             Ok(Transformed::no(node))
         })
         .data()
+}
+
+pub fn trim_plan_display(plan: &str) -> Vec<&str> {
+    plan.split('\n')
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+        .collect()
+}
+
+// construct a stream partition for test purposes
+#[derive(Debug)]
+pub(crate) struct TestStreamPartition {
+    pub schema: SchemaRef,
+}
+
+impl PartitionStream for TestStreamPartition {
+    fn schema(&self) -> &SchemaRef {
+        &self.schema
+    }
+    fn execute(&self, _ctx: Arc<TaskContext>) -> SendableRecordBatchStream {
+        unreachable!()
+    }
+}
+
+/// Create an unbounded stream exec
+pub fn stream_exec_ordered(
+    schema: &SchemaRef,
+    sort_exprs: impl IntoIterator<Item = PhysicalSortExpr>,
+) -> Arc<dyn ExecutionPlan> {
+    let sort_exprs = sort_exprs.into_iter().collect();
+
+    Arc::new(
+        StreamingTableExec::try_new(
+            Arc::clone(schema),
+            vec![Arc::new(TestStreamPartition {
+                schema: Arc::clone(schema),
+            }) as _],
+            None,
+            vec![sort_exprs],
+            true,
+            None,
+        )
+        .unwrap(),
+    )
+}
+
+// Creates a stream exec source for the test purposes
+pub fn stream_exec_ordered_with_projection(
+    schema: &SchemaRef,
+    sort_exprs: impl IntoIterator<Item = PhysicalSortExpr>,
+) -> Arc<dyn ExecutionPlan> {
+    let sort_exprs = sort_exprs.into_iter().collect();
+    let projection: Vec<usize> = vec![0, 2, 3];
+
+    Arc::new(
+        StreamingTableExec::try_new(
+            Arc::clone(schema),
+            vec![Arc::new(TestStreamPartition {
+                schema: Arc::clone(schema),
+            }) as _],
+            Some(&projection),
+            vec![sort_exprs],
+            true,
+            None,
+        )
+        .unwrap(),
+    )
+}
+
+pub fn mock_data() -> Result<Arc<MemoryExec>> {
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("a", DataType::Int32, true),
+        Field::new("b", DataType::Int32, true),
+    ]));
+
+    let batch = RecordBatch::try_new(
+        Arc::clone(&schema),
+        vec![
+            Arc::new(Int32Array::from(vec![
+                Some(1),
+                Some(2),
+                None,
+                Some(1),
+                Some(4),
+                Some(5),
+            ])),
+            Arc::new(Int32Array::from(vec![
+                Some(1),
+                None,
+                Some(6),
+                Some(2),
+                Some(8),
+                Some(9),
+            ])),
+        ],
+    )?;
+
+    Ok(Arc::new(MemoryExec::try_new(
+        &[vec![batch]],
+        Arc::clone(&schema),
+        None,
+    )?))
+}
+
+pub fn build_group_by(input_schema: &SchemaRef, columns: Vec<String>) -> PhysicalGroupBy {
+    let mut group_by_expr: Vec<(Arc<dyn PhysicalExpr>, String)> = vec![];
+    for column in columns.iter() {
+        group_by_expr.push((col(column, input_schema).unwrap(), column.to_string()));
+    }
+    PhysicalGroupBy::new_single(group_by_expr.clone())
+}
+
+pub fn assert_plan_matches_expected(
+    plan: &Arc<dyn ExecutionPlan>,
+    expected: &[&str],
+) -> Result<()> {
+    let expected_lines: Vec<&str> = expected.to_vec();
+    let config = ConfigOptions::new();
+
+    let optimized =
+        LimitedDistinctAggregation::new().optimize(Arc::clone(plan), &config)?;
+
+    let optimized_result = displayable(optimized.as_ref()).indent(true).to_string();
+    let actual_lines = trim_plan_display(&optimized_result);
+
+    assert_eq!(
+        &expected_lines, &actual_lines,
+        "\n\nexpected:\n\n{:#?}\nactual:\n\n{:#?}\n\n",
+        expected_lines, actual_lines
+    );
+
+    Ok(())
+}
+
+/// Describe the type of aggregate being tested
+pub enum TestAggregate {
+    /// Testing COUNT(*) type aggregates
+    CountStar,
+
+    /// Testing for COUNT(column) aggregate
+    ColumnA(Arc<Schema>),
+}
+
+impl TestAggregate {
+    /// Create a new COUNT(*) aggregate
+    pub fn new_count_star() -> Self {
+        Self::CountStar
+    }
+
+    /// Create a new COUNT(column) aggregate
+    pub fn new_count_column(schema: &Arc<Schema>) -> Self {
+        Self::ColumnA(Arc::clone(schema))
+    }
+
+    /// Return appropriate expr depending if COUNT is for col or table (*)
+    pub fn count_expr(&self, schema: &Schema) -> AggregateFunctionExpr {
+        AggregateExprBuilder::new(count_udaf(), vec![self.column()])
+            .schema(Arc::new(schema.clone()))
+            .alias(self.column_name())
+            .build()
+            .unwrap()
+    }
+
+    /// what argument would this aggregate need in the plan?
+    fn column(&self) -> Arc<dyn PhysicalExpr> {
+        match self {
+            Self::CountStar => expressions::lit(COUNT_STAR_EXPANSION),
+            Self::ColumnA(s) => col("a", s).unwrap(),
+        }
+    }
+
+    /// What name would this aggregate produce in a plan?
+    pub fn column_name(&self) -> &'static str {
+        match self {
+            Self::CountStar => "COUNT(*)",
+            Self::ColumnA(_) => "COUNT(a)",
+        }
+    }
+
+    /// What is the expected count?
+    pub fn expected_count(&self) -> i64 {
+        match self {
+            TestAggregate::CountStar => 3,
+            TestAggregate::ColumnA(_) => 2,
+        }
+    }
 }

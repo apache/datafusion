@@ -1379,6 +1379,29 @@ impl SessionContext {
         Ok(())
     }
 
+    fn register_type_check<P: DataFilePaths>(
+        &self,
+        table_paths: P,
+        extension: impl AsRef<str>,
+    ) -> Result<()> {
+        let table_paths = table_paths.to_urls()?;
+        if table_paths.is_empty() {
+            return exec_err!("No table paths were provided");
+        }
+
+        // check if the file extension matches the expected extension
+        let extension = extension.as_ref();
+        for path in &table_paths {
+            let file_path = path.as_str();
+            if !file_path.ends_with(extension) && !path.is_collection() {
+                return exec_err!(
+                    "File path '{file_path}' does not match the expected extension '{extension}'"
+                );
+            }
+        }
+        Ok(())
+    }
+
     /// Registers an Arrow file as a table that can be referenced from
     /// SQL statements executed against this context.
     pub async fn register_arrow(

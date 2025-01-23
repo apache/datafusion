@@ -207,7 +207,7 @@ impl OrderingEquivalenceClass {
             for idx in 0..n_ordering {
                 // Calculate cross product index
                 let idx = outer_idx * n_ordering + idx;
-                self.orderings[idx].inner.extend(ordering.iter().cloned());
+                self.orderings[idx].extend(ordering.iter().cloned());
             }
         }
         self
@@ -217,9 +217,9 @@ impl OrderingEquivalenceClass {
     /// ordering equivalence class.
     pub fn add_offset(&mut self, offset: usize) {
         for ordering in self.orderings.iter_mut() {
-            for sort_expr in ordering.inner.iter_mut() {
+            ordering.transform(|sort_expr| {
                 sort_expr.expr = add_offset_to_expr(Arc::clone(&sort_expr.expr), offset);
-            }
+            })
         }
     }
 
@@ -274,11 +274,14 @@ mod tests {
     };
     use crate::expressions::{col, BinaryExpr, Column};
     use crate::utils::tests::TestScalarUDF;
-    use crate::{AcrossPartitions, ConstExpr, PhysicalExpr, PhysicalSortExpr};
+    use crate::{
+        AcrossPartitions, ConstExpr, PhysicalExpr, PhysicalExprRef, PhysicalSortExpr,
+        ScalarFunctionExpr,
+    };
 
     use arrow::datatypes::{DataType, Field, Schema};
     use arrow_schema::SortOptions;
-    use datafusion_common::{DFSchema, Result};
+    use datafusion_common::Result;
     use datafusion_expr::{Operator, ScalarUDF};
     use datafusion_physical_expr_common::sort_expr::LexOrdering;
 
@@ -327,28 +330,24 @@ mod tests {
         let col_d = &col("d", &test_schema)?;
         let col_e = &col("e", &test_schema)?;
         let col_f = &col("f", &test_schema)?;
-        let test_fun = ScalarUDF::new_from_impl(TestScalarUDF::new());
-        let floor_a = &crate::udf::create_physical_expr(
-            &test_fun,
-            &[col("a", &test_schema)?],
+        let test_fun = Arc::new(ScalarUDF::new_from_impl(TestScalarUDF::new()));
+
+        let floor_a = Arc::new(ScalarFunctionExpr::try_new(
+            Arc::clone(&test_fun),
+            vec![Arc::clone(col_a)],
             &test_schema,
-            &[],
-            &DFSchema::empty(),
-        )?;
-        let floor_f = &crate::udf::create_physical_expr(
-            &test_fun,
-            &[col("f", &test_schema)?],
+        )?) as PhysicalExprRef;
+        let floor_f = Arc::new(ScalarFunctionExpr::try_new(
+            Arc::clone(&test_fun),
+            vec![Arc::clone(col_f)],
             &test_schema,
-            &[],
-            &DFSchema::empty(),
-        )?;
-        let exp_a = &crate::udf::create_physical_expr(
-            &test_fun,
-            &[col("a", &test_schema)?],
+        )?) as PhysicalExprRef;
+        let exp_a = Arc::new(ScalarFunctionExpr::try_new(
+            Arc::clone(&test_fun),
+            vec![Arc::clone(col_a)],
             &test_schema,
-            &[],
-            &DFSchema::empty(),
-        )?;
+        )?) as PhysicalExprRef;
+
         let a_plus_b = Arc::new(BinaryExpr::new(
             Arc::clone(col_a),
             Operator::Plus,
@@ -392,7 +391,7 @@ mod tests {
                 // constants
                 vec![col_e],
                 // requirement [floor(a) ASC],
-                vec![(floor_a, options)],
+                vec![(&floor_a, options)],
                 // expected: requirement is satisfied.
                 true,
             ),
@@ -410,7 +409,7 @@ mod tests {
                 // constants
                 vec![col_e],
                 // requirement [floor(f) ASC], (Please note that a=f)
-                vec![(floor_f, options)],
+                vec![(&floor_f, options)],
                 // expected: requirement is satisfied.
                 true,
             ),
@@ -449,7 +448,7 @@ mod tests {
                 // constants
                 vec![col_e],
                 // requirement [floor(a) ASC, a+b ASC],
-                vec![(floor_a, options), (&a_plus_b, options)],
+                vec![(&floor_a, options), (&a_plus_b, options)],
                 // expected: requirement is satisfied.
                 false,
             ),
@@ -470,7 +469,7 @@ mod tests {
                 // constants
                 vec![col_e],
                 // requirement [exp(a) ASC, a+b ASC],
-                vec![(exp_a, options), (&a_plus_b, options)],
+                vec![(&exp_a, options), (&a_plus_b, options)],
                 // expected: requirement is not satisfied.
                 // TODO: If we know that exp function is 1-to-1 function.
                 //  we could have deduced that above requirement is satisfied.
@@ -490,7 +489,7 @@ mod tests {
                 // constants
                 vec![col_e],
                 // requirement [a ASC, d ASC, floor(a) ASC],
-                vec![(col_a, options), (col_d, options), (floor_a, options)],
+                vec![(col_a, options), (col_d, options), (&floor_a, options)],
                 // expected: requirement is satisfied.
                 true,
             ),
@@ -508,7 +507,7 @@ mod tests {
                 // constants
                 vec![col_e],
                 // requirement [a ASC, floor(a) ASC, a + b ASC],
-                vec![(col_a, options), (floor_a, options), (&a_plus_b, options)],
+                vec![(col_a, options), (&floor_a, options), (&a_plus_b, options)],
                 // expected: requirement is not satisfied.
                 false,
             ),
@@ -529,7 +528,7 @@ mod tests {
                 vec![
                     (col_a, options),
                     (col_c, options),
-                    (floor_a, options),
+                    (&floor_a, options),
                     (&a_plus_b, options),
                 ],
                 // expected: requirement is not satisfied.
@@ -556,7 +555,7 @@ mod tests {
                     (col_a, options),
                     (col_b, options),
                     (col_c, options),
-                    (floor_a, options),
+                    (&floor_a, options),
                 ],
                 // expected: requirement is satisfied.
                 true,

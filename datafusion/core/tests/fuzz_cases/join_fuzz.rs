@@ -86,7 +86,7 @@ fn col_lt_col_filter(schema1: Arc<Schema>, schema2: Arc<Schema>) -> JoinFilter {
             .with_nullable(true),
     ]);
 
-    JoinFilter::new(less_filter, column_indices, intermediate_schema)
+    JoinFilter::new(less_filter, column_indices, Arc::new(intermediate_schema))
 }
 
 #[tokio::test]
@@ -327,7 +327,7 @@ impl JoinFuzzTestCase {
     /// on-condition schema
     fn intermediate_schema(&self) -> Schema {
         let filter_schema = if let Some(filter) = self.join_filter() {
-            filter.schema().to_owned()
+            filter.schema().as_ref().to_owned()
         } else {
             Schema::empty()
         };
@@ -483,10 +483,11 @@ impl JoinFuzzTestCase {
         let intermediate_schema = self.intermediate_schema();
         let expression = self.composite_filter_expression();
 
-        let filter = JoinFilter::new(expression, column_indices, intermediate_schema);
+        let filter =
+            JoinFilter::new(expression, column_indices, Arc::new(intermediate_schema));
 
         Arc::new(
-            NestedLoopJoinExec::try_new(left, right, Some(filter), &self.join_type)
+            NestedLoopJoinExec::try_new(left, right, Some(filter), &self.join_type, None)
                 .unwrap(),
         )
     }
