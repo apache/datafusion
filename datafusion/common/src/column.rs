@@ -21,7 +21,7 @@ use arrow_schema::{Field, FieldRef};
 
 use crate::error::_schema_err;
 use crate::utils::{parse_identifiers_normalized, quote_identifier};
-use crate::{DFSchema, Result, SchemaError, Spans, TableReference};
+use crate::{DFSchema, Diagnostic, Result, SchemaError, Spans, TableReference};
 use std::collections::HashSet;
 use std::convert::Infallible;
 use std::fmt;
@@ -103,7 +103,11 @@ impl Column {
             // identifiers will be treated as an unqualified column name
             _ => return None,
         };
-        Some(Self { relation, name, spans: Spans::new() })
+        Some(Self {
+            relation,
+            name,
+            spans: Spans::new(),
+        })
     }
 
     /// Deserialize a fully qualified name string into a column
@@ -245,7 +249,14 @@ impl Column {
 
                     // If not due to USING columns then due to ambiguous column name
                     return _schema_err!(SchemaError::AmbiguousReference {
-                        field: Column::new_unqualified(self.name),
+                        field: Column::new_unqualified(&self.name),
+                    })
+                    .map_err(|err| {
+                        let diagnostic = Diagnostic::new().with_error(
+                            format!("column '{}' is ambiguous", &self.name),
+                            self.spans().first_or_empty(),
+                        );
+                        err.with_diagnostic(diagnostic)
                     });
                 }
             }
