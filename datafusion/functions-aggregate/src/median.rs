@@ -441,7 +441,6 @@ impl<T: ArrowNumericType + Send> GroupsAccumulator for MedianGroupsAccumulator<T
 
         // `offsets` in `ListArray`, each row as a list element
         let offsets = (0..=input_array.len() as i32)
-            .into_iter()
             .collect::<Vec<_>>();
         let offsets = OffsetBuffer::new(ScalarBuffer::from(offsets));
 
