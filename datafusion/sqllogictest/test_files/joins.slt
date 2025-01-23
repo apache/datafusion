@@ -4225,7 +4225,7 @@ query IIIIB
 SELECT * FROM t0 FULL JOIN t1 ON t0.c2 >= t1.c2 LIMIT 2;
 ----
 2 2 2 2 true
-3 3 2 2 true
+2 2 2 2 false
 
 query IIIIB
 SELECT * FROM t0 FULL JOIN t1 ON t0.c1 = t1.c1 AND t0.c2 >= t1.c2 LIMIT 2;
@@ -4247,8 +4247,10 @@ logical_plan
 physical_plan
 01)CoalesceBatchesExec: target_batch_size=3, fetch=2
 02)--HashJoinExec: mode=CollectLeft, join_type=Full, on=[(c1@0, c1@0)]
-03)----MemoryExec: partitions=1, partition_sizes=[1]
-04)----MemoryExec: partitions=1, partition_sizes=[1]
+03)----GlobalLimitExec: skip=0, fetch=2
+04)------MemoryExec: partitions=1, partition_sizes=[1]
+05)----GlobalLimitExec: skip=0, fetch=2
+06)------MemoryExec: partitions=1, partition_sizes=[1]
 
 ## Test join.on.is_empty() && join.filter.is_some()
 query TT
@@ -4264,8 +4266,10 @@ logical_plan
 physical_plan
 01)GlobalLimitExec: skip=0, fetch=2
 02)--NestedLoopJoinExec: join_type=Full, filter=c2@0 >= c2@1
-03)----MemoryExec: partitions=1, partition_sizes=[1]
-04)----MemoryExec: partitions=1, partition_sizes=[1]
+03)----GlobalLimitExec: skip=0, fetch=2
+04)------MemoryExec: partitions=1, partition_sizes=[1]
+05)----GlobalLimitExec: skip=0, fetch=2
+06)------MemoryExec: partitions=1, partition_sizes=[1]
 
 ## Test !join.on.is_empty() && join.filter.is_some()
 query TT
@@ -4281,8 +4285,10 @@ logical_plan
 physical_plan
 01)CoalesceBatchesExec: target_batch_size=3, fetch=2
 02)--HashJoinExec: mode=CollectLeft, join_type=Full, on=[(c1@0, c1@0)], filter=c2@0 >= c2@1
-03)----MemoryExec: partitions=1, partition_sizes=[1]
-04)----MemoryExec: partitions=1, partition_sizes=[1]
+03)----GlobalLimitExec: skip=0, fetch=2
+04)------MemoryExec: partitions=1, partition_sizes=[1]
+05)----GlobalLimitExec: skip=0, fetch=2
+06)------MemoryExec: partitions=1, partition_sizes=[1]
 
 # Test Utf8View as Join Key
 # Issue: https://github.com/apache/datafusion/issues/12468

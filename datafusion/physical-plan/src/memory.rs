@@ -62,8 +62,6 @@ pub struct MemoryExec {
     cache: PlanProperties,
     /// if partition sizes should be displayed
     show_sizes: bool,
-    /// it is a flag used by limit pushdown logic, but we don't use limit value until now
-    limit: Option<usize>,
 }
 
 impl fmt::Debug for MemoryExec {
@@ -168,13 +166,6 @@ impl ExecutionPlan for MemoryExec {
             self.projection.clone(),
         ))
     }
-
-    /// This logic is used by limit pushdown, but we don't use limit until now
-    fn with_fetch(&self, limit: Option<usize>) -> Option<Arc<dyn ExecutionPlan>> {
-        let mut new_self = self.clone();
-        new_self.limit = limit;
-        Some(Arc::new(new_self))
-    }
 }
 
 impl MemoryExec {
@@ -201,7 +192,6 @@ impl MemoryExec {
             sort_information: vec![],
             cache,
             show_sizes: true,
-            limit: None,
         })
     }
 
@@ -297,7 +287,6 @@ impl MemoryExec {
             sort_information: vec![],
             cache,
             show_sizes: true,
-            limit: None,
         })
     }
 

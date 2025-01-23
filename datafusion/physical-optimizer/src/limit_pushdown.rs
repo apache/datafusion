@@ -246,7 +246,6 @@ pub fn pushdown_limit_helper(
             }
         } else {
             // Add fetch or a `LimitExec`:
-
             // If the plan's children have limit, we shouldn't change the global state to true,
             // because the children limit will be overridden if the global state is changed.
             if pushdown_plan.children().iter().any(|child| {
