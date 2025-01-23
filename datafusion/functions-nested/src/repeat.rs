@@ -161,11 +161,11 @@ pub fn array_repeat_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
 
     let count_array = match count_array.data_type() {
         DataType::Int64 => &cast(count_array, &DataType::UInt64)?,
-        DataType::UInt64 => &count_array,
+        DataType::UInt64 => count_array,
         _ => return exec_err!("count must be an integer type"),
     };
 
-    let count_array = as_uint64_array(&count_array)?;
+    let count_array = as_uint64_array(count_array)?;
 
     match element.data_type() {
         List(_) => {
