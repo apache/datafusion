@@ -440,8 +440,7 @@ impl<T: ArrowNumericType + Send> GroupsAccumulator for MedianGroupsAccumulator<T
         let values = PrimitiveArray::<T>::new(input_array.values().clone(), None);
 
         // `offsets` in `ListArray`, each row as a list element
-        let offsets = (0..=input_array.len() as i32)
-            .collect::<Vec<_>>();
+        let offsets = (0..=input_array.len() as i32).collect::<Vec<_>>();
         let offsets = OffsetBuffer::new(ScalarBuffer::from(offsets));
 
         // `nulls` for converted `ListArray`
