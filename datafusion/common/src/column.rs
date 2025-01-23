@@ -18,6 +18,7 @@
 //! Column
 
 use arrow_schema::{Field, FieldRef};
+use sqlparser::tokenizer::Span;
 
 use crate::error::_schema_err;
 use crate::utils::{parse_identifiers_normalized, quote_identifier};
@@ -252,10 +253,26 @@ impl Column {
                         field: Column::new_unqualified(&self.name),
                     })
                     .map_err(|err| {
-                        let diagnostic = Diagnostic::new().with_error(
+                        let mut diagnostic = Diagnostic::new().with_error(
                             format!("column '{}' is ambiguous", &self.name),
                             self.spans().first_or_empty(),
                         );
+                        // TODO If [`DFSchema`] had spans, we could show the
+                        // user which columns are candidates, or which table
+                        // they come from. For now, let's list the table names
+                        // only.
+                        for qualified_field in qualified_fields {
+                            let (Some(table), _) = qualified_field else {
+                                continue;
+                            };
+                            diagnostic.add_note(
+                                format!(
+                                    "possible reference to '{}' in table '{}'",
+                                    &self.name, table
+                                ),
+                                Span::empty(),
+                            );
+                        }
                         err.with_diagnostic(diagnostic)
                     });
                 }
