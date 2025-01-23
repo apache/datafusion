@@ -17,8 +17,13 @@
 
 //! Test utilities for physical optimizer tests
 
+use std::any::Any;
+use std::fmt::Formatter;
+use std::sync::Arc;
+
 use crate::limited_distinct_aggregation::LimitedDistinctAggregation;
 use crate::PhysicalOptimizerRule;
+
 use arrow::array::Int32Array;
 use arrow::record_batch::RecordBatch;
 use arrow_schema::{DataType, Field, Schema, SchemaRef, SortOptions};
@@ -27,8 +32,11 @@ use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::utils::expr::COUNT_STAR_EXPANSION;
 use datafusion_common::{JoinType, Result};
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
-use datafusion_expr::test::function_stub::{avg_udaf, count_udaf};
+use datafusion_expr::test::function_stub::{
+    avg_udaf as avg_stub, count_udaf as count_stub,
+};
 use datafusion_expr::{WindowFrame, WindowFunctionDefinition};
+use datafusion_functions_aggregate::count::count_udaf;
 use datafusion_physical_expr::aggregate::{AggregateExprBuilder, AggregateFunctionExpr};
 use datafusion_physical_expr::expressions::col;
 use datafusion_physical_expr::{expressions, PhysicalExpr};
@@ -56,9 +64,6 @@ use datafusion_physical_plan::{
     displayable, DisplayAs, DisplayFormatType, PlanProperties,
 };
 use datafusion_physical_plan::{InputOrderMode, Partitioning};
-use std::any::Any;
-use std::fmt::Formatter;
-use std::sync::Arc;
 
 pub fn schema() -> SchemaRef {
     Arc::new(Schema::new(vec![
@@ -188,7 +193,7 @@ pub fn bounded_window_exec_with_partition(
     let sort_exprs: LexOrdering = sort_exprs.into_iter().collect();
     let schema = input.schema();
     let mut window_expr = create_window_expr(
-        &WindowFunctionDefinition::AggregateUDF(count_udaf()),
+        &WindowFunctionDefinition::AggregateUDF(count_stub()),
         "count".to_owned(),
         &[col(col_name, &schema).unwrap()],
         partition_by,
@@ -224,7 +229,7 @@ pub fn bounded_window_exec_non_monotonic(
     Arc::new(
         BoundedWindowAggExec::try_new(
             vec![create_window_expr(
-                &WindowFunctionDefinition::AggregateUDF(avg_udaf()),
+                &WindowFunctionDefinition::AggregateUDF(avg_stub()),
                 "avg".to_owned(),
                 &[col(col_name, &schema).unwrap()],
                 &[],
@@ -313,7 +318,7 @@ pub fn aggregate_exec_monotonic(input: Arc<dyn ExecutionPlan>) -> Arc<dyn Execut
         ];
     Arc::new(
         AggregateExec::try_new(
-            AggregateMode::Final,
+            AggregateMode::Single,
             PhysicalGroupBy::default(),
             aggregate_expr,
             vec![None],
@@ -330,7 +335,7 @@ pub fn aggregate_exec_non_monotonic(
     let schema = input.schema();
     let aggregate_expr =
         vec![
-            AggregateExprBuilder::new(avg_udaf(), vec![col("d", &schema).unwrap()])
+            AggregateExprBuilder::new(avg_stub(), vec![col("d", &schema).unwrap()])
                 .schema(Arc::clone(&schema))
                 .alias("avg")
                 .build()
@@ -339,7 +344,7 @@ pub fn aggregate_exec_non_monotonic(
         ];
     Arc::new(
         AggregateExec::try_new(
-            AggregateMode::Final,
+            AggregateMode::Single,
             PhysicalGroupBy::default(),
             aggregate_expr,
             vec![None],

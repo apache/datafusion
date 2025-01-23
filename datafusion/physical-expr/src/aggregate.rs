@@ -550,11 +550,13 @@ impl AggregateFunctionExpr {
     }
 
     /// Returns PhysicalSortExpr based on monotonicity of the function
-    pub fn natural_sort_expr(&self, schema: &SchemaRef) -> Option<PhysicalSortExpr> {
+    pub fn natural_sort_expr(
+        &self,
+        window_expr_index: usize,
+    ) -> Option<PhysicalSortExpr> {
         // If the aggregate expressions are monotonic, the output data is naturally ordered with it.
         let is_ascending = self.is_monotonic()?;
-        let idx = schema.index_of(self.name()).unwrap_or(0);
-        let expr = Arc::new(Column::new(self.name(), idx));
+        let expr = Arc::new(Column::new(self.name(), window_expr_index));
 
         let options = SortOptions::new(!is_ascending, false);
         Some(PhysicalSortExpr { expr, options })

@@ -336,25 +336,29 @@ pub(crate) fn get_partition_by_sort_exprs(
 pub(crate) fn window_equivalence_properties(
     schema: &SchemaRef,
     input: &Arc<dyn ExecutionPlan>,
-    window_expr: &[Arc<dyn WindowExpr>],
+    window_exprs: &[Arc<dyn WindowExpr>],
+    window_expr_indices: Vec<usize>,
 ) -> EquivalenceProperties {
     // We need to update the schema, so we can not directly use
     // `input.equivalence_properties()`.
     let mut window_eq_properties = EquivalenceProperties::new(Arc::clone(schema))
         .extend(input.equivalence_properties().clone());
 
-    for expr in window_expr {
+    for (i, expr) in window_exprs.iter().enumerate() {
+        let window_expr_index = window_expr_indices[i];
         if let Some(udf_window_expr) = expr.as_any().downcast_ref::<StandardWindowExpr>()
         {
             udf_window_expr.add_equal_orderings(&mut window_eq_properties);
         } else if let Some(aggregate_udf_window_expr) =
             expr.as_any().downcast_ref::<PlainAggregateWindowExpr>()
         {
-            aggregate_udf_window_expr.add_equal_orderings(&mut window_eq_properties);
+            aggregate_udf_window_expr
+                .add_equal_orderings(&mut window_eq_properties, window_expr_index);
         } else if let Some(aggregate_udf_window_expr) =
             expr.as_any().downcast_ref::<SlidingAggregateWindowExpr>()
         {
-            aggregate_udf_window_expr.add_equal_orderings(&mut window_eq_properties);
+            aggregate_udf_window_expr
+                .add_equal_orderings(&mut window_eq_properties, window_expr_index);
         }
     }
     window_eq_properties

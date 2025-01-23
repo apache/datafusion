@@ -68,10 +68,14 @@ impl PlainAggregateWindowExpr {
         &self.aggregate
     }
 
-    pub fn add_equal_orderings(&self, eq_properties: &mut EquivalenceProperties) {
+    pub fn add_equal_orderings(
+        &self,
+        eq_properties: &mut EquivalenceProperties,
+        window_expr_index: usize,
+    ) {
         let Some(expr) = self
             .get_aggregate_expr()
-            .natural_sort_expr(eq_properties.schema())
+            .natural_sort_expr(window_expr_index)
         else {
             return;
         };

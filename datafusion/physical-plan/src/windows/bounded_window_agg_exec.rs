@@ -67,6 +67,7 @@ use futures::stream::Stream;
 use futures::{ready, StreamExt};
 use hashbrown::hash_table::HashTable;
 use indexmap::IndexMap;
+use itertools::Itertools;
 use log::debug;
 
 /// Window execution plan
@@ -103,8 +104,11 @@ impl BoundedWindowAggExec {
         partition_keys: Vec<Arc<dyn PhysicalExpr>>,
         input_order_mode: InputOrderMode,
     ) -> Result<Self> {
+        let old_fields_latest_index = input.schema().fields.len().saturating_sub(1);
         let schema = create_schema(&input.schema(), &window_expr)?;
         let schema = Arc::new(schema);
+        let window_expr_indices =
+            (old_fields_latest_index..schema.fields.len()).collect_vec();
         let partition_by_exprs = window_expr[0].partition_by();
         let ordered_partition_by_indices = match &input_order_mode {
             InputOrderMode::Sorted => {
@@ -123,7 +127,8 @@ impl BoundedWindowAggExec {
                 vec![]
             }
         };
-        let cache = Self::compute_properties(&input, &schema, &window_expr);
+        let cache =
+            Self::compute_properties(&input, &schema, &window_expr, window_expr_indices);
         Ok(Self {
             input,
             window_expr,
@@ -190,10 +195,16 @@ impl BoundedWindowAggExec {
     fn compute_properties(
         input: &Arc<dyn ExecutionPlan>,
         schema: &SchemaRef,
-        window_expr: &[Arc<dyn WindowExpr>],
+        window_exprs: &[Arc<dyn WindowExpr>],
+        window_expr_indices: Vec<usize>,
     ) -> PlanProperties {
         // Calculate equivalence properties:
-        let eq_properties = window_equivalence_properties(schema, input, window_expr);
+        let eq_properties = window_equivalence_properties(
+            schema,
+            input,
+            window_exprs,
+            window_expr_indices,
+        );
 
         // As we can have repartitioning using the partition keys, this can
         // be either one or more than one, depending on the presence of

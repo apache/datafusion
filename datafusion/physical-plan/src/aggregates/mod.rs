@@ -505,6 +505,10 @@ impl AggregateExec {
 
         let required_input_ordering =
             (!new_requirement.is_empty()).then_some(new_requirement);
+        let input_fields_latest_index = input_schema.fields.len().saturating_sub(1);
+        let aggr_expr_indices = (input_fields_latest_index
+            ..(input_fields_latest_index + aggr_expr.len()))
+            .collect_vec();
 
         let cache = Self::compute_properties(
             &input,
@@ -513,6 +517,7 @@ impl AggregateExec {
             &mode,
             &input_order_mode,
             aggr_expr.clone(),
+            aggr_expr_indices,
         );
 
         Ok(AggregateExec {
@@ -650,6 +655,7 @@ impl AggregateExec {
         mode: &AggregateMode,
         input_order_mode: &InputOrderMode,
         aggr_exprs: Vec<Arc<AggregateFunctionExpr>>,
+        aggr_expr_indices: Vec<usize>,
     ) -> PlanProperties {
         // Construct equivalence properties:
         let mut eq_properties = input
@@ -694,8 +700,9 @@ impl AggregateExec {
             input.pipeline_behavior()
         };
 
-        for aggr_expr in aggr_exprs {
-            if let Some(expr) = aggr_expr.natural_sort_expr(eq_properties.schema()) {
+        for (i, aggr_expr) in aggr_exprs.iter().enumerate() {
+            let aggr_expr_index = aggr_expr_indices[i];
+            if let Some(expr) = aggr_expr.natural_sort_expr(aggr_expr_index) {
                 eq_properties.add_new_ordering(LexOrdering::new(vec![expr]));
             }
         }
