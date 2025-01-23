@@ -196,7 +196,6 @@ impl ScalarUDF {
     /// Return the datatype this function returns given the input argument types.
     ///
     /// See [`ScalarUDFImpl::return_type_from_args`] for more details.
-
     pub fn return_type_from_args(&self, args: ReturnTypeArgs) -> Result<ReturnInfo> {
         self.inner.return_type_from_args(args)
     }
