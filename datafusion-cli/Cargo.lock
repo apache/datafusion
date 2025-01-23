@@ -1592,6 +1592,7 @@ dependencies = [
  "datafusion-execution",
  "datafusion-expr",
  "datafusion-expr-common",
+ "datafusion-functions-aggregate",
  "datafusion-physical-expr",
  "datafusion-physical-expr-common",
  "datafusion-physical-plan",
@@ -1599,6 +1600,7 @@ dependencies = [
  "itertools 0.14.0",
  "log",
  "recursive",
+ "url",
 ]
 
 [[package]]
