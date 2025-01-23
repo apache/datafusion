@@ -364,11 +364,13 @@ mod tests {
         let column = ColumnarValue::from(ScalarValue::from("foo"));
         assert_eq!(
             column.to_string(),
-            "+----------------------------+\n\
-| ColumnarValue(ScalarValue) |\n\
-+----------------------------+\n\
-| foo                        |\n\
-+----------------------------+"
+            concat!(
+                "+----------------------------+\n",
+                "| ColumnarValue(ScalarValue) |\n",
+                "+----------------------------+\n",
+                "| foo                        |\n",
+                "+----------------------------+"
+            )
         );
     }
 
@@ -378,13 +380,15 @@ mod tests {
         let column = ColumnarValue::from(array);
         assert_eq!(
             column.to_string(),
-            "+-------------------------+\n\
-| ColumnarValue(ArrayRef) |\n\
-+-------------------------+\n\
-| 1                       |\n\
-| 2                       |\n\
-| 3                       |\n\
-+-------------------------+"
+            concat!(
+                "+-------------------------+\n",
+                "| ColumnarValue(ArrayRef) |\n",
+                "+-------------------------+\n",
+                "| 1                       |\n",
+                "| 2                       |\n",
+                "| 3                       |\n",
+                "+-------------------------+"
+            )
         );
     }
 }
