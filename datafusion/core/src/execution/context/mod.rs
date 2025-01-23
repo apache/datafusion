@@ -1580,6 +1580,10 @@ impl FunctionRegistry for SessionContext {
         self.state.read().udaf(name)
     }
 
+    fn ordered_set_udaf(&self, name: &str) -> Result<Arc<AggregateUDF>> {
+        self.state.read().ordered_set_udaf(name)
+    }
+
     fn udwf(&self, name: &str) -> Result<Arc<WindowUDF>> {
         self.state.read().udwf(name)
     }
@@ -1593,6 +1597,15 @@ impl FunctionRegistry for SessionContext {
         udaf: Arc<AggregateUDF>,
     ) -> Result<Option<Arc<AggregateUDF>>> {
         self.state.write().register_udaf(udaf)
+    }
+
+    fn register_ordered_set_udaf(
+        &mut self,
+        ordered_set_udaf: Arc<AggregateUDF>,
+    ) -> Result<Option<Arc<AggregateUDF>>> {
+        self.state
+            .write()
+            .register_ordered_set_udaf(ordered_set_udaf)
     }
 
     fn register_udwf(&mut self, udwf: Arc<WindowUDF>) -> Result<Option<Arc<WindowUDF>>> {

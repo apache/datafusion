@@ -133,6 +133,17 @@ impl Serializeable for Expr {
                 )))
             }
 
+            fn ordered_set_udaf(&self, name: &str) -> Result<Arc<AggregateUDF>> {
+                Ok(Arc::new(create_udaf(
+                    name,
+                    vec![arrow::datatypes::DataType::Null],
+                    Arc::new(arrow::datatypes::DataType::Null),
+                    Volatility::Immutable,
+                    Arc::new(|_| unimplemented!()),
+                    Arc::new(vec![]),
+                )))
+            }
+
             fn udwf(&self, name: &str) -> Result<Arc<WindowUDF>> {
                 Ok(Arc::new(create_udwf(
                     name,
@@ -148,6 +159,14 @@ impl Serializeable for Expr {
             ) -> Result<Option<Arc<AggregateUDF>>> {
                 datafusion_common::internal_err!(
                     "register_udaf called in Placeholder Registry!"
+                )
+            }
+            fn register_ordered_set_udaf(
+                &mut self,
+                _udaf: Arc<AggregateUDF>,
+            ) -> Result<Option<Arc<AggregateUDF>>> {
+                datafusion_common::internal_err!(
+                    "register_ordered_set_udaf called in Placeholder Registry!"
                 )
             }
             fn register_udf(

@@ -202,6 +202,10 @@ impl ContextProvider for MyContextProvider {
         None
     }
 
+    fn get_ordered_set_aggregate_meta(&self, _name: &str) -> Option<Arc<AggregateUDF>> {
+        None
+    }
+
     fn get_variable_type(&self, _variable_names: &[String]) -> Option<DataType> {
         None
     }

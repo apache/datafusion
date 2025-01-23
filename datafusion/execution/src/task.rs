@@ -46,6 +46,10 @@ pub struct TaskContext {
     scalar_functions: HashMap<String, Arc<ScalarUDF>>,
     /// Aggregate functions associated with this task context
     aggregate_functions: HashMap<String, Arc<AggregateUDF>>,
+    /// Ordered set aggregate functions associated with this task context
+    ///
+    /// Note : ordered_set_aggregate_functions are a subset of aggregate_functions.
+    ordered_set_aggregate_functions: HashMap<String, Arc<AggregateUDF>>,
     /// Window functions associated with this task context
     window_functions: HashMap<String, Arc<WindowUDF>>,
     /// Runtime environment associated with this task context
@@ -65,6 +69,7 @@ impl Default for TaskContext {
             session_config: SessionConfig::new(),
             scalar_functions: HashMap::new(),
             aggregate_functions: HashMap::new(),
+            ordered_set_aggregate_functions: HashMap::new(),
             window_functions: HashMap::new(),
             runtime,
         }
@@ -83,6 +88,7 @@ impl TaskContext {
         session_config: SessionConfig,
         scalar_functions: HashMap<String, Arc<ScalarUDF>>,
         aggregate_functions: HashMap<String, Arc<AggregateUDF>>,
+        ordered_set_aggregate_functions: HashMap<String, Arc<AggregateUDF>>,
         window_functions: HashMap<String, Arc<WindowUDF>>,
         runtime: Arc<RuntimeEnv>,
     ) -> Self {
@@ -92,6 +98,7 @@ impl TaskContext {
             session_config,
             scalar_functions,
             aggregate_functions,
+            ordered_set_aggregate_functions,
             window_functions,
             runtime,
         }
@@ -128,6 +135,10 @@ impl TaskContext {
 
     pub fn aggregate_functions(&self) -> &HashMap<String, Arc<AggregateUDF>> {
         &self.aggregate_functions
+    }
+
+    pub fn ordered_set_aggregate_functions(&self) -> &HashMap<String, Arc<AggregateUDF>> {
+        &self.ordered_set_aggregate_functions
     }
 
     pub fn window_functions(&self) -> &HashMap<String, Arc<WindowUDF>> {
@@ -168,6 +179,14 @@ impl FunctionRegistry for TaskContext {
         })
     }
 
+    fn ordered_set_udaf(&self, name: &str) -> Result<Arc<AggregateUDF>> {
+        let result = self.ordered_set_aggregate_functions.get(name);
+
+        result.cloned().ok_or_else(|| {
+            plan_datafusion_err!("There is no ordered set UDAF named \"{name}\" in the TaskContext")
+        })
+    }
+
     fn udwf(&self, name: &str) -> Result<Arc<WindowUDF>> {
         let result = self.window_functions.get(name);
 
@@ -186,6 +205,18 @@ impl FunctionRegistry for TaskContext {
                 .insert(alias.clone(), Arc::clone(&udaf));
         });
         Ok(self.aggregate_functions.insert(udaf.name().into(), udaf))
+    }
+    fn register_ordered_set_udaf(
+        &mut self,
+        ordered_set_udaf: Arc<AggregateUDF>,
+    ) -> Result<Option<Arc<AggregateUDF>>> {
+        ordered_set_udaf.aliases().iter().for_each(|alias| {
+            self.ordered_set_aggregate_functions
+                .insert(alias.clone(), Arc::clone(&ordered_set_udaf));
+        });
+        Ok(self
+            .ordered_set_aggregate_functions
+            .insert(ordered_set_udaf.name().into(), ordered_set_udaf))
     }
     fn register_udwf(&mut self, udwf: Arc<WindowUDF>) -> Result<Option<Arc<WindowUDF>>> {
         udwf.aliases().iter().for_each(|alias| {
@@ -239,6 +270,7 @@ mod tests {
             Some("task_id".to_string()),
             "session_id".to_string(),
             session_config,
+            HashMap::default(),
             HashMap::default(),
             HashMap::default(),
             HashMap::default(),

@@ -38,6 +38,12 @@ pub trait FunctionRegistry {
     /// `name`.
     fn udaf(&self, name: &str) -> Result<Arc<AggregateUDF>>;
 
+    /// Returns a reference to the user defined ordered set aggregate function (udaf) named
+    /// `name`.
+    ///
+    /// Note : ordered_set_aggregate_functions are a subset of aggregate_functions.
+    fn ordered_set_udaf(&self, name: &str) -> Result<Arc<AggregateUDF>>;
+
     /// Returns a reference to the user defined window function (udwf) named
     /// `name`.
     fn udwf(&self, name: &str) -> Result<Arc<WindowUDF>>;
@@ -61,6 +67,21 @@ pub trait FunctionRegistry {
     ) -> Result<Option<Arc<AggregateUDF>>> {
         not_impl_err!("Registering AggregateUDF")
     }
+
+    /// Registers a new ordered-set [`AggregateUDF`], returning any previously registered
+    /// implementation.
+    ///
+    /// Returns an error (the default) if the function can not be registered,
+    /// for example if the registry is read only.
+    ///
+    /// Note : ordered_set_udaf is a subset of udaf.
+    fn register_ordered_set_udaf(
+        &mut self,
+        _udaf: Arc<AggregateUDF>,
+    ) -> Result<Option<Arc<AggregateUDF>>> {
+        not_impl_err!("Registering ordered-set AggregateUDF")
+    }
+
     /// Registers a new [`WindowUDF`], returning any previously registered
     /// implementation.
     ///
@@ -86,6 +107,20 @@ pub trait FunctionRegistry {
     /// for example if the registry is read only.
     fn deregister_udaf(&mut self, _name: &str) -> Result<Option<Arc<AggregateUDF>>> {
         not_impl_err!("Deregistering AggregateUDF")
+    }
+
+    /// Deregisters a ordered set [`AggregateUDF`], returning the implementation that was
+    /// deregistered.
+    ///
+    /// Returns an error (the default) if the function can not be deregistered,
+    /// for example if the registry is read only.
+    ///
+    /// Note : ordered_set_udaf is a subset of udaf.
+    fn deregister_ordered_set_udaf(
+        &mut self,
+        _name: &str,
+    ) -> Result<Option<Arc<AggregateUDF>>> {
+        not_impl_err!("Deregistering ordered set AggregateUDF")
     }
 
     /// Deregisters a [`WindowUDF`], returning the implementation that was
@@ -148,6 +183,10 @@ pub struct MemoryFunctionRegistry {
     udfs: HashMap<String, Arc<ScalarUDF>>,
     /// Aggregate Functions
     udafs: HashMap<String, Arc<AggregateUDF>>,
+    /// Ordered Set Aggregate Functions
+    ///
+    /// Note : ordered_set_udafs are a subset of udafs.
+    ordered_set_udafs: HashMap<String, Arc<AggregateUDF>>,
     /// Window Functions
     udwfs: HashMap<String, Arc<WindowUDF>>,
 }
@@ -177,6 +216,13 @@ impl FunctionRegistry for MemoryFunctionRegistry {
             .ok_or_else(|| plan_datafusion_err!("Aggregate Function {name} not found"))
     }
 
+    fn ordered_set_udaf(&self, name: &str) -> Result<Arc<AggregateUDF>> {
+        self.ordered_set_udafs
+            .get(name)
+            .cloned()
+            .ok_or_else(|| plan_datafusion_err!("Ordered Set Aggregate Function {name} not found"))
+    }
+
     fn udwf(&self, name: &str) -> Result<Arc<WindowUDF>> {
         self.udwfs
             .get(name)
@@ -192,6 +238,13 @@ impl FunctionRegistry for MemoryFunctionRegistry {
         udaf: Arc<AggregateUDF>,
     ) -> Result<Option<Arc<AggregateUDF>>> {
         Ok(self.udafs.insert(udaf.name().into(), udaf))
+    }
+    fn register_ordered_set_udaf(
+        &mut self,
+        ordered_set_udaf: Arc<AggregateUDF>,
+    ) -> Result<Option<Arc<AggregateUDF>>> {
+        Ok(self.ordered_set_udafs
+            .insert(ordered_set_udaf.name().into(), ordered_set_udaf))
     }
     fn register_udwf(&mut self, udaf: Arc<WindowUDF>) -> Result<Option<Arc<WindowUDF>>> {
         Ok(self.udwfs.insert(udaf.name().into(), udaf))

@@ -144,6 +144,10 @@ pub struct SessionState {
     scalar_functions: HashMap<String, Arc<ScalarUDF>>,
     /// Aggregate functions registered in the context
     aggregate_functions: HashMap<String, Arc<AggregateUDF>>,
+    /// Ordered-set aggregate functions registered in the context
+    ///
+    /// Note : ordered_set_aggregate_functions are a subset of aggregate_functions.
+    ordered_set_aggregate_functions: HashMap<String, Arc<AggregateUDF>>,
     /// Window functions registered in the context
     window_functions: HashMap<String, Arc<WindowUDF>>,
     /// Deserializer registry for extensions.
@@ -202,6 +206,7 @@ impl Debug for SessionState {
             .field("table_functions", &self.table_functions)
             .field("scalar_functions", &self.scalar_functions)
             .field("aggregate_functions", &self.aggregate_functions)
+            .field("ordered_set_aggregate_functions", &self.ordered_set_aggregate_functions)
             .field("window_functions", &self.window_functions)
             .field("prepared_plans", &self.prepared_plans)
             .finish()
@@ -239,6 +244,10 @@ impl Session for SessionState {
 
     fn aggregate_functions(&self) -> &HashMap<String, Arc<AggregateUDF>> {
         &self.aggregate_functions
+    }
+
+    fn ordered_set_aggregate_functions(&self) -> &HashMap<String, Arc<AggregateUDF>> {
+        &self.ordered_set_aggregate_functions
     }
 
     fn window_functions(&self) -> &HashMap<String, Arc<WindowUDF>> {
@@ -880,6 +889,13 @@ impl SessionState {
         &self.aggregate_functions
     }
 
+    /// Return reference to ordered_set_aggregate_functions
+    ///
+    /// Note : ordered_set_aggregate_functions are a subset of aggregate_functions.
+    pub fn ordered_set_aggregate_functions(&self) -> &HashMap<String, Arc<AggregateUDF>> {
+        &self.ordered_set_aggregate_functions
+    }
+
     /// Return reference to window functions
     pub fn window_functions(&self) -> &HashMap<String, Arc<WindowUDF>> {
         &self.window_functions
@@ -968,6 +984,7 @@ pub struct SessionStateBuilder {
     table_functions: Option<HashMap<String, Arc<TableFunction>>>,
     scalar_functions: Option<Vec<Arc<ScalarUDF>>>,
     aggregate_functions: Option<Vec<Arc<AggregateUDF>>>,
+    ordered_set_aggregate_functions: Option<Vec<Arc<AggregateUDF>>>,
     window_functions: Option<Vec<Arc<WindowUDF>>>,
     serializer_registry: Option<Arc<dyn SerializerRegistry>>,
     file_formats: Option<Vec<Arc<dyn FileFormatFactory>>>,
@@ -998,6 +1015,7 @@ impl SessionStateBuilder {
             table_functions: None,
             scalar_functions: None,
             aggregate_functions: None,
+            ordered_set_aggregate_functions: None,
             window_functions: None,
             serializer_registry: None,
             file_formats: None,
@@ -1048,6 +1066,9 @@ impl SessionStateBuilder {
             aggregate_functions: Some(
                 existing.aggregate_functions.into_values().collect_vec(),
             ),
+            ordered_set_aggregate_functions: Some(
+                existing.ordered_set_aggregate_functions.into_values().collect_vec(),
+            ),
             window_functions: Some(existing.window_functions.into_values().collect_vec()),
             serializer_registry: Some(existing.serializer_registry),
             file_formats: Some(existing.file_formats.into_values().collect_vec()),
@@ -1073,6 +1094,7 @@ impl SessionStateBuilder {
             .with_expr_planners(SessionStateDefaults::default_expr_planners())
             .with_scalar_functions(SessionStateDefaults::default_scalar_functions())
             .with_aggregate_functions(SessionStateDefaults::default_aggregate_functions())
+            .with_ordered_set_aggregate_functions(SessionStateDefaults::default_ordered_set_aggregate_functions())
             .with_window_functions(SessionStateDefaults::default_window_functions())
     }
 
@@ -1203,6 +1225,17 @@ impl SessionStateBuilder {
         aggregate_functions: Vec<Arc<AggregateUDF>>,
     ) -> Self {
         self.aggregate_functions = Some(aggregate_functions);
+        self
+    }
+
+    /// Set the map of ordered-set [`AggregateUDF`]s
+    ///
+    /// Note : ordered_set_aggregate_functions are a subset of aggregate_functions.
+    pub fn with_ordered_set_aggregate_functions(
+        mut self,
+        ordered_set_aggregate_functions: Vec<Arc<AggregateUDF>>,
+    ) -> Self {
+        self.ordered_set_aggregate_functions = Some(ordered_set_aggregate_functions);
         self
     }
 
@@ -1340,6 +1373,7 @@ impl SessionStateBuilder {
             table_functions,
             scalar_functions,
             aggregate_functions,
+            ordered_set_aggregate_functions,
             window_functions,
             serializer_registry,
             file_formats,
@@ -1371,6 +1405,7 @@ impl SessionStateBuilder {
             table_functions: table_functions.unwrap_or_default(),
             scalar_functions: HashMap::new(),
             aggregate_functions: HashMap::new(),
+            ordered_set_aggregate_functions: HashMap::new(),
             window_functions: HashMap::new(),
             serializer_registry: serializer_registry
                 .unwrap_or(Arc::new(EmptySerializerRegistry)),
@@ -1409,6 +1444,20 @@ impl SessionStateBuilder {
                     debug!("Overwrote an existing UDF: {}", existing_udf.name());
                 }
             });
+        }
+
+        if let Some(ordered_set_aggregate_functions) = ordered_set_aggregate_functions {
+            ordered_set_aggregate_functions
+                .into_iter()
+                .for_each(|udaf| {
+                    let existing_ordered_set_udf = state.register_ordered_set_udaf(udaf);
+                    if let Ok(Some(existing_ordered_set_udf)) = existing_ordered_set_udf {
+                        debug!(
+                            "Overwrote an ordered set existing UDF: {}",
+                            existing_ordered_set_udf.name()
+                        );
+                    }
+                });
         }
 
         if let Some(window_functions) = window_functions {
@@ -1610,6 +1659,7 @@ impl Debug for SessionStateBuilder {
             .field("table_functions", &self.table_functions)
             .field("scalar_functions", &self.scalar_functions)
             .field("aggregate_functions", &self.aggregate_functions)
+            .field("ordered_set_aggregate_functions", &self.ordered_set_aggregate_functions)
             .field("window_functions", &self.window_functions)
             .finish()
     }
@@ -1696,6 +1746,13 @@ impl<'a> ContextProvider for SessionContextProvider<'a> {
         self.state.aggregate_functions().get(name).cloned()
     }
 
+    fn get_ordered_set_aggregate_meta(&self, name: &str) -> Option<Arc<AggregateUDF>> {
+        self.state
+            .ordered_set_aggregate_functions()
+            .get(name)
+            .cloned()
+    }
+
     fn get_window_meta(&self, name: &str) -> Option<Arc<WindowUDF>> {
         self.state.window_functions().get(name).cloned()
     }
@@ -1766,6 +1823,17 @@ impl FunctionRegistry for SessionState {
         })
     }
 
+    fn ordered_set_udaf(
+        &self,
+        name: &str,
+    ) -> datafusion_common::Result<Arc<AggregateUDF>> {
+        let result = self.ordered_set_aggregate_functions.get(name);
+
+        result.cloned().ok_or_else(|| {
+            plan_datafusion_err!("There is no ordered set UDAF named \"{name}\" in the registry")
+        })
+    }
+
     fn udwf(&self, name: &str) -> datafusion_common::Result<Arc<WindowUDF>> {
         let result = self.window_functions.get(name);
 
@@ -1794,6 +1862,18 @@ impl FunctionRegistry for SessionState {
                 .insert(alias.clone(), Arc::clone(&udaf));
         });
         Ok(self.aggregate_functions.insert(udaf.name().into(), udaf))
+    }
+
+    fn register_ordered_set_udaf(
+        &mut self,
+        ordered_set_udaf: Arc<AggregateUDF>,
+    ) -> datafusion_common::Result<Option<Arc<AggregateUDF>>> {
+        ordered_set_udaf.aliases().iter().for_each(|alias| {
+            self.ordered_set_aggregate_functions
+                .insert(alias.clone(), Arc::clone(&ordered_set_udaf));
+        });
+        Ok(self.ordered_set_aggregate_functions
+            .insert(ordered_set_udaf.name().into(), ordered_set_udaf))
     }
 
     fn register_udwf(
@@ -1831,6 +1911,19 @@ impl FunctionRegistry for SessionState {
             }
         }
         Ok(udaf)
+    }
+
+    fn deregister_ordered_set_udaf(
+        &mut self,
+        name: &str,
+    ) -> datafusion_common::Result<Option<Arc<AggregateUDF>>> {
+        let ordered_set_udaf = self.ordered_set_aggregate_functions.remove(name);
+        if let Some(ordered_set_udaf) = &ordered_set_udaf {
+            for alias in ordered_set_udaf.aliases() {
+                self.ordered_set_aggregate_functions.remove(alias);
+            }
+        }
+        Ok(ordered_set_udaf)
     }
 
     fn deregister_udwf(
@@ -1895,6 +1988,7 @@ impl From<&SessionState> for TaskContext {
             state.config.clone(),
             state.scalar_functions.clone(),
             state.aggregate_functions.clone(),
+            state.ordered_set_aggregate_functions.clone(),
             state.window_functions.clone(),
             Arc::clone(&state.runtime_env),
         )

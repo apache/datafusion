@@ -110,6 +110,11 @@ pub trait Session: Send + Sync {
     /// Return reference to aggregate_functions
     fn aggregate_functions(&self) -> &HashMap<String, Arc<AggregateUDF>>;
 
+    /// Return reference to ordered_set_aggregate_functions
+    ///
+    /// Note : ordered_set_aggregate_functions are a subset of aggregate_functions.
+    fn ordered_set_aggregate_functions(&self) -> &HashMap<String, Arc<AggregateUDF>>;
+
     /// Return reference to window functions
     fn window_functions(&self) -> &HashMap<String, Arc<WindowUDF>>;
 
@@ -132,6 +137,7 @@ impl From<&dyn Session> for TaskContext {
             state.config().clone(),
             state.scalar_functions().clone(),
             state.aggregate_functions().clone(),
+            state.ordered_set_aggregate_functions().clone(),
             state.window_functions().clone(),
             state.runtime_env().clone(),
         )

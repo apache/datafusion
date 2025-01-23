@@ -114,6 +114,13 @@ impl SessionStateDefaults {
         functions_aggregate::all_default_aggregate_functions()
     }
 
+    /// returns the list of default ordered-set [`AggregateUDF']'s
+    ///
+    /// Note : default_ordered_set_aggregate_functions are a subset of default_aggregate_functions.
+    pub fn default_ordered_set_aggregate_functions() -> Vec<Arc<AggregateUDF>> {
+        functions_aggregate::all_default_ordered_set_aggregate_functions()
+    }
+
     /// returns the list of default [`WindowUDF']'s
     pub fn default_window_functions() -> Vec<Arc<WindowUDF>> {
         functions_window::all_default_window_functions()
