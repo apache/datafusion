@@ -577,21 +577,33 @@ impl LogicalPlanBuilder {
     ) -> Result<LogicalPlan> {
         let inputs = curr_plan.inputs();
         let mut exprs = curr_plan.expressions();
+        let is_distinct = is_distinct || matches!(curr_plan, LogicalPlan::Distinct(_));
         for input in inputs {
-            if missing_cols.iter().all(|c| input.schema().has_column(c)) {
-                let mut missing_exprs = missing_cols
-                    .iter()
-                    .map(|c| normalize_col(Expr::Column(c.clone()), input))
-                    .collect::<Result<Vec<_>>>()?;
+            if let LogicalPlan::Projection(Projection {
+                input,
+                expr: _,
+                schema: _,
+            }) = input
+            {
+                if missing_cols.iter().all(|c| input.schema().has_column(c)) {
+                    let mut missing_exprs = missing_cols
+                        .iter()
+                        .map(|c| normalize_col(Expr::Column(c.clone()), input))
+                        .collect::<Result<Vec<_>>>()?;
 
-                // Do not let duplicate columns to be added, some of the
-                // missing_cols may be already present but without the new
-                // projected alias.
-                missing_exprs.retain(|e| !exprs.contains(e));
-                if is_distinct {
-                    Self::ambiguous_distinct_check(&missing_exprs, missing_cols, &exprs)?;
+                    // Do not let duplicate columns to be added, some of the
+                    // missing_cols may be already present but without the new
+                    // projected alias.
+                    missing_exprs.retain(|e| !exprs.contains(e));
+                    if is_distinct {
+                        Self::ambiguous_distinct_check(
+                            &missing_exprs,
+                            missing_cols,
+                            &exprs,
+                        )?;
+                    }
+                    exprs.extend(missing_exprs);
                 }
-                exprs.extend(missing_exprs);
             }
         }
         let inputs = curr_plan
@@ -602,7 +614,7 @@ impl LogicalPlanBuilder {
         curr_plan.with_new_exprs(exprs, inputs)
     }
 
-    fn ambiguous_distinct_check(
+    pub fn ambiguous_distinct_check(
         missing_exprs: &[Expr],
         missing_cols: &IndexSet<Column>,
         projection_exprs: &[Expr],

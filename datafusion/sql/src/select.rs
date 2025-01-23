@@ -25,7 +25,7 @@ use crate::utils::{
 };
 
 use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
-use datafusion_common::{not_impl_err, plan_err, Result};
+use datafusion_common::{not_impl_err, plan_err, Column, Result};
 use datafusion_common::{RecursionUnnestOption, UnnestOptions};
 use datafusion_expr::expr::{Alias, PlannedReplaceSelectItem, WildcardOptions};
 use datafusion_expr::expr_rewriter::{
@@ -36,10 +36,10 @@ use datafusion_expr::utils::{
 };
 use datafusion_expr::{
     qualified_wildcard_with_options, wildcard_with_options, Aggregate, Expr, Filter,
-    GroupingSet, LogicalPlan, LogicalPlanBuilder, Partitioning,
+    GroupingSet, LogicalPlan, LogicalPlanBuilder, Partitioning, Projection,
 };
 
-use indexmap::IndexMap;
+use indexmap::{IndexMap, IndexSet};
 use sqlparser::ast::{
     Distinct, Expr as SQLExpr, GroupByExpr, NamedWindowExpr, OrderByExpr,
     WildcardAdditionalOptions, WindowType,
@@ -264,6 +264,10 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             }
         }?;
 
+        if let LogicalPlan::Distinct(_) = &plan {
+            Self::ambiguous_distinct_project_check(&plan, &order_by_rex)?;
+        }
+
         // DISTRIBUTE BY
         let plan = if !select.distribute_by.is_empty() {
             let x = select
@@ -285,6 +289,90 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         };
 
         self.order_by(plan, order_by_rex)
+    }
+
+    /// Adding a new column is not correct if there is a `Distinct`
+    /// node, which produces only distinct values of its
+    /// inputs. Adding a new column to its input will result in
+    /// potentially different results than with the original column.
+    ///
+    /// For example, if the input is like:
+    ///
+    /// Distinct(A, B)
+    ///
+    /// If the input looks like
+    ///
+    /// a | b | c
+    /// --+---+---
+    /// 1 | 2 | 3
+    /// 1 | 2 | 4
+    ///
+    /// Distinct (A, B) --> (1,2)
+    ///
+    /// But Distinct (A, B, C) --> (1, 2, 3), (1, 2, 4)
+    ///  (which will appear as a (1, 2), (1, 2) if a and b are projected
+    ///
+    /// See <https://github.com/apache/datafusion/issues/5065> for more details
+    fn ambiguous_distinct_project_check(
+        plan: &LogicalPlan,
+        order_by: &[datafusion_expr::expr::Sort],
+    ) -> Result<()> {
+        let schema = plan.schema();
+        // Collect sort columns that are missing in the input plan's schema
+        let mut missing_cols: IndexSet<Column> = IndexSet::new();
+        order_by.iter().try_for_each::<_, Result<()>>(|sort| {
+            let columns = sort.expr.column_refs();
+
+            missing_cols.extend(
+                columns
+                    .into_iter()
+                    .filter(|c| !schema.has_column(c))
+                    .cloned(),
+            );
+
+            Ok(())
+        })?;
+
+        if missing_cols.is_empty() {
+            return Ok(());
+        }
+        Self::do_ambiguous_distinct_project_check(plan, &missing_cols)
+    }
+
+    fn do_ambiguous_distinct_project_check(
+        plan: &LogicalPlan,
+        missing_cols: &IndexSet<Column>,
+    ) -> Result<()> {
+        for input in plan.inputs() {
+            if let LogicalPlan::Projection(Projection {
+                input,
+                expr,
+                schema: _,
+                ..
+            }) = input
+            {
+                if missing_cols.iter().all(|c| input.schema().has_column(c)) {
+                    let mut missing_exprs = missing_cols
+                        .iter()
+                        .map(|c| normalize_col(Expr::Column(c.clone()), input))
+                        .collect::<Result<Vec<_>>>()?;
+
+                    // Do not let duplicate columns to be added, some of the
+                    // missing_cols may be already present but without the new
+                    // projected alias.
+                    missing_exprs.retain(|e| !expr.contains(e));
+                    LogicalPlanBuilder::ambiguous_distinct_check(
+                        &missing_exprs,
+                        missing_cols,
+                        expr,
+                    )?;
+                }
+            } else {
+                Self::do_ambiguous_distinct_project_check(input, missing_cols)?;
+            }
+        }
+
+        Ok(())
     }
 
     /// Try converting Expr(Unnest(Expr)) to Projection/Unnest/Projection
