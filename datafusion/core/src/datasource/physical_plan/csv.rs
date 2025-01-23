@@ -45,9 +45,8 @@ use datafusion_execution::TaskContext;
 use datafusion_physical_expr::{EquivalenceProperties, LexOrdering};
 
 use datafusion_physical_plan::execution_plan::{Boundedness, EmissionType};
-use datafusion_physical_plan::projection::ProjectionExec;
-use datafusion_physical_plan::projection_utils::{
-    all_alias_free_columns, new_projections_for_columns,
+use datafusion_physical_plan::projection::{
+    all_alias_free_columns, new_projections_for_columns, ProjectionExec,
 };
 use futures::{StreamExt, TryStreamExt};
 use object_store::buffered::BufWriter;

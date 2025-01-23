@@ -24,7 +24,6 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::error::Result;
-use crate::physical_plan::projection::ProjectionExec;
 use crate::physical_plan::ExecutionPlan;
 
 use datafusion_common::config::ConfigOptions;
@@ -35,7 +34,7 @@ use datafusion_physical_expr::expressions::{Column, Literal};
 use datafusion_physical_expr::PhysicalExpr;
 
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
-use datafusion_physical_plan::projection_utils::update_expr;
+use datafusion_physical_plan::projection::{update_expr, ProjectionExec};
 
 /// This rule inspects [`ProjectionExec`]'s in the given physical plan and tries to
 /// remove or swap with its child.

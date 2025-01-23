@@ -32,8 +32,7 @@ use super::{
 use crate::execution_plan::CardinalityEffect;
 use crate::hash_utils::create_hashes;
 use crate::metrics::BaselineMetrics;
-use crate::projection::ProjectionExec;
-use crate::projection_utils::{all_columns, make_with_child, update_expr};
+use crate::projection::{all_columns, make_with_child, update_expr, ProjectionExec};
 use crate::repartition::distributor_channels::{
     channels, partition_aware_channels, DistributionReceiver, DistributionSender,
 };

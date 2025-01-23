@@ -36,8 +36,7 @@ use crate::execution_plan::{
     boundedness_from_children, emission_type_from_children, InvariantLevel,
 };
 use crate::metrics::BaselineMetrics;
-use crate::projection::ProjectionExec;
-use crate::projection_utils::make_with_child;
+use crate::projection::{make_with_child, ProjectionExec};
 use crate::stream::ObservedStream;
 
 use arrow::datatypes::{Field, Schema, SchemaRef};

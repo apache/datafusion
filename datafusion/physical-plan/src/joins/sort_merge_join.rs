@@ -62,9 +62,9 @@ use crate::joins::utils::{
     JoinOnRef,
 };
 use crate::metrics::{Count, ExecutionPlanMetricsSet, MetricBuilder, MetricsSet};
-use crate::projection_utils::{
+use crate::projection::{
     join_allows_pushdown, join_table_borders, new_join_children,
-    physical_to_column_exprs, update_join_on,
+    physical_to_column_exprs, update_join_on, ProjectionExec,
 };
 use crate::spill::spill_record_batches;
 use crate::{
@@ -514,7 +514,7 @@ impl ExecutionPlan for SortMergeJoinExec {
     /// Otherwise, it returns None.
     fn try_swapping_with_projection(
         &self,
-        projection: &crate::projection::ProjectionExec,
+        projection: &ProjectionExec,
     ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
         // Convert projected PhysicalExpr's to columns. If not possible, we cannot proceed.
         let Some(projection_as_columns) = physical_to_column_exprs(projection.expr())

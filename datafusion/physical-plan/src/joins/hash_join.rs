@@ -33,8 +33,9 @@ use super::{
     PartitionMode, SharedBitmapBuilder,
 };
 use crate::execution_plan::{boundedness_from_children, EmissionType};
-use crate::projection_utils::{
+use crate::projection::{
     try_embed_projection, try_pushdown_through_join, EmbeddedProjection, JoinData,
+    ProjectionExec,
 };
 use crate::ExecutionPlanProperties;
 use crate::{
@@ -873,7 +874,7 @@ impl ExecutionPlan for HashJoinExec {
     /// as its children. Otherwise, returns `None`.
     fn try_swapping_with_projection(
         &self,
-        projection: &crate::projection::ProjectionExec,
+        projection: &ProjectionExec,
     ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
         // TODO: currently if there is projection in HashJoinExec, we can't push down projection to left or right input. Maybe we can pushdown the mixed projection later.
         if self.contains_projection() {

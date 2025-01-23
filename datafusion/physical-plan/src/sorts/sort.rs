@@ -31,8 +31,7 @@ use crate::limit::LimitStream;
 use crate::metrics::{
     BaselineMetrics, Count, ExecutionPlanMetricsSet, MetricBuilder, MetricsSet,
 };
-use crate::projection::ProjectionExec;
-use crate::projection_utils::{make_with_child, update_expr};
+use crate::projection::{make_with_child, update_expr, ProjectionExec};
 use crate::sorts::streaming_merge::StreamingMergeBuilder;
 use crate::spill::{
     get_record_batch_memory_size, read_spill_as_stream, spill_record_batches,

@@ -26,8 +26,9 @@ use super::utils::{
 use crate::coalesce_partitions::CoalescePartitionsExec;
 use crate::execution_plan::{boundedness_from_children, EmissionType};
 use crate::metrics::{ExecutionPlanMetricsSet, MetricsSet};
-use crate::projection_utils::{
-    join_allows_pushdown, join_table_borders, new_join_children, physical_to_column_exprs,
+use crate::projection::{
+    join_allows_pushdown, join_table_borders, new_join_children,
+    physical_to_column_exprs, ProjectionExec,
 };
 use crate::{
     handle_state, ColumnStatistics, DisplayAs, DisplayFormatType, Distribution,
@@ -344,7 +345,7 @@ impl ExecutionPlan for CrossJoinExec {
     /// Otherwise, it returns None.
     fn try_swapping_with_projection(
         &self,
-        projection: &crate::projection::ProjectionExec,
+        projection: &ProjectionExec,
     ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
         // Convert projected PhysicalExpr's to columns. If not possible, we cannot proceed.
         let Some(projection_as_columns) = physical_to_column_exprs(projection.expr())

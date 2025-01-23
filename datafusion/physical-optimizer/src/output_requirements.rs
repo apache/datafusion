@@ -25,7 +25,9 @@
 use std::sync::Arc;
 
 use datafusion_execution::TaskContext;
-use datafusion_physical_plan::projection_utils::{make_with_child, update_expr};
+use datafusion_physical_plan::projection::{
+    make_with_child, update_expr, ProjectionExec,
+};
 use datafusion_physical_plan::sorts::sort::SortExec;
 use datafusion_physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, SendableRecordBatchStream,
@@ -196,7 +198,7 @@ impl ExecutionPlan for OutputRequirementExec {
 
     fn try_swapping_with_projection(
         &self,
-        projection: &datafusion_physical_plan::projection::ProjectionExec,
+        projection: &ProjectionExec,
     ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
         // If the projection does not narrow the schema, we should not try to push it down:
         if projection.expr().len() >= projection.input().schema().fields().len() {

@@ -37,8 +37,9 @@ use crate::joins::utils::{
     BuildProbeJoinMetrics, ColumnIndex, JoinFilter, OnceAsync, OnceFut,
 };
 use crate::metrics::{ExecutionPlanMetricsSet, MetricsSet};
-use crate::projection_utils::{
+use crate::projection::{
     try_embed_projection, try_pushdown_through_join, EmbeddedProjection, JoinData,
+    ProjectionExec,
 };
 use crate::{
     handle_state, DisplayAs, DisplayFormatType, Distribution, ExecutionPlan,
@@ -564,7 +565,7 @@ impl ExecutionPlan for NestedLoopJoinExec {
     /// as its children. Otherwise, returns `None`.
     fn try_swapping_with_projection(
         &self,
-        projection: &crate::projection::ProjectionExec,
+        projection: &ProjectionExec,
     ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
         // TODO: currently if there is projection in NestedLoopJoinExec, we can't push down projection to left or right input. Maybe we can pushdown the mixed projection later.
         if self.contains_projection() {

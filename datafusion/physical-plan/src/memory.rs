@@ -29,8 +29,9 @@ use super::{
     Statistics,
 };
 use crate::execution_plan::{Boundedness, EmissionType};
-use crate::projection::ProjectionExec;
-use crate::projection_utils::{all_alias_free_columns, new_projections_for_columns};
+use crate::projection::{
+    all_alias_free_columns, new_projections_for_columns, ProjectionExec,
+};
 
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
