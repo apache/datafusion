@@ -221,24 +221,26 @@ impl ColumnarValue {
 }
 
 // Implement Display trait for ColumnarValue
-//
-// # Panics
-//
-// Panics if there is an error when creating a visual representation via `arrow::util::pretty::pretty_format_columns`
 impl fmt::Display for ColumnarValue {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         let formatted = match self {
             ColumnarValue::Array(array) => {
                 pretty_format_columns("ColumnarValue(ArrayRef)", &[Arc::clone(array)])
-                    .unwrap()
             }
-            ColumnarValue::Scalar(_) => pretty_format_columns(
-                "ColumnarValue(ScalarValue)",
-                &[self.to_array(1).unwrap()],
-            )
-            .unwrap(),
+            ColumnarValue::Scalar(_) => {
+                if let Ok(array) = self.to_array(1) {
+                    pretty_format_columns("ColumnarValue(ScalarValue)", &[array])
+                } else {
+                    return write!(f, "Error formatting columnar value");
+                }
+            }
         };
-        write!(f, "{}", formatted)
+
+        if let Ok(formatted) = formatted {
+            write!(f, "{}", formatted)
+        } else {
+            write!(f, "Error formatting columnar value")
+        }
     }
 }
 
