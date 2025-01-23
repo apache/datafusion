@@ -22,13 +22,13 @@ use arrow::array::{Capacities, MutableArrayData};
 use arrow::compute;
 use arrow::compute::cast;
 use arrow_array::{
-    new_null_array, Array, ArrayRef, GenericListArray, Int64Array, ListArray,
-    OffsetSizeTrait,
+    new_null_array, Array, ArrayRef, GenericListArray, ListArray, OffsetSizeTrait,
+    UInt64Array,
 };
 use arrow_buffer::OffsetBuffer;
 use arrow_schema::DataType::{LargeList, List};
 use arrow_schema::{DataType, Field};
-use datafusion_common::cast::{as_int64_array, as_large_list_array, as_list_array};
+use datafusion_common::cast::{as_large_list_array, as_list_array, as_uint64_array};
 use datafusion_common::{exec_err, Result};
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
@@ -87,7 +87,7 @@ impl Default for ArrayRepeat {
 impl ArrayRepeat {
     pub fn new() -> Self {
         Self {
-            signature: Signature::variadic_any(Volatility::Immutable),
+            signature: Signature::user_defined(Volatility::Immutable),
             aliases: vec![String::from("list_repeat")],
         }
     }
@@ -125,6 +125,30 @@ impl ScalarUDFImpl for ArrayRepeat {
         &self.aliases
     }
 
+    fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
+        if arg_types.len() != 2 {
+            return exec_err!("array_repeat expects two arguments");
+        }
+
+        let element_type = &arg_types[0];
+        let first = element_type.clone();
+
+        let count_type = &arg_types[1];
+
+        // Coerce the second argument to Int64/UInt64 if it's a numeric type
+        let second = match count_type {
+            DataType::Int8 | DataType::Int16 | DataType::Int32 | DataType::Int64 => {
+                DataType::Int64
+            }
+            DataType::UInt8 | DataType::UInt16 | DataType::UInt32 | DataType::UInt64 => {
+                DataType::UInt64
+            }
+            _ => return exec_err!("count must be an integer type"),
+        };
+
+        Ok(vec![first, second])
+    }
+
     fn documentation(&self) -> Option<&Documentation> {
         self.doc()
     }
@@ -132,22 +156,16 @@ impl ScalarUDFImpl for ArrayRepeat {
 
 /// Array_repeat SQL function
 pub fn array_repeat_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
-    if args.len() != 2 {
-        return exec_err!("array_repeat expects two arguments");
-    }
-
     let element = &args[0];
     let count_array = &args[1];
 
     let count_array = match count_array.data_type() {
-        DataType::Int8 | DataType::Int16 | DataType::Int32 => {
-            &cast(count_array, &DataType::Int64)?
-        }
-        DataType::Int64 => count_array,
+        DataType::Int64 => &cast(count_array, &DataType::UInt64)?,
+        DataType::UInt64 => &count_array,
         _ => return exec_err!("count must be an integer type"),
     };
 
-    let count_array = as_int64_array(&count_array)?;
+    let count_array = as_uint64_array(&count_array)?;
 
     match element.data_type() {
         List(_) => {
@@ -176,7 +194,7 @@ pub fn array_repeat_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
 /// ```
 fn general_repeat<O: OffsetSizeTrait>(
     array: &ArrayRef,
-    count_array: &Int64Array,
+    count_array: &UInt64Array,
 ) -> Result<ArrayRef> {
     let data_type = array.data_type();
     let mut new_values = vec![];
@@ -230,7 +248,7 @@ fn general_repeat<O: OffsetSizeTrait>(
 /// ```
 fn general_list_repeat<O: OffsetSizeTrait>(
     list_array: &GenericListArray<O>,
-    count_array: &Int64Array,
+    count_array: &UInt64Array,
 ) -> Result<ArrayRef> {
     let data_type = list_array.data_type();
     let value_type = list_array.value_type();
