@@ -83,6 +83,7 @@ external_aggr:          External aggregation benchmark
 h2o_small:              h2oai benchmark with small dataset (1e7 rows),  default file format is csv
 h2o_medium:             h2oai benchmark with medium dataset (1e8 rows), default file format is csv
 h2o_big:                h2oai benchmark with large dataset (1e9 rows),  default file format is csv
+imdb:                   Join Order Benchmark (JOB) using the IMDB dataset converted to parquet
 
 **********
 * Supported Configuration (Environment Variables)
@@ -575,13 +576,13 @@ data_imdb() {
             echo "Downloading IMDB dataset ${expected_size} expected)..."
             # Download the dataset
             curl -o "${imdb_temp_gz}" "${imdb_url}"
+        fi
 
         # Extract the dataset
         tar -xzvf "${imdb_temp_gz}" -C "${imdb_dir}"
         $CARGO_COMMAND --bin imdb -- convert --input ${imdb_dir} --output ${imdb_dir} --format parquet
         echo "IMDB dataset downloaded and extracted."
-    fi
-    
+
     else
         echo "IMDB dataset already exists and contains required parquet files."
     fi
