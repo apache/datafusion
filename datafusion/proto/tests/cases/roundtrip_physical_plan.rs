@@ -94,7 +94,7 @@ use datafusion_common::file_options::json_writer::JsonWriterOptions;
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::stats::Precision;
 use datafusion_common::{
-    internal_err, not_impl_err, DataFusionError, Result, UnnestOptions,
+    internal_err, not_impl_err, Constraints, DataFusionError, Result, UnnestOptions,
 };
 use datafusion_expr::{
     Accumulator, AccumulatorFactoryFunction, AggregateUDF, ColumnarValue, ScalarUDF,
@@ -270,6 +270,7 @@ fn roundtrip_nested_loop_join() -> Result<()> {
             Arc::new(EmptyExec::new(schema_right.clone())),
             None,
             join_type,
+            Some(vec![0]),
         )?))?;
     }
     Ok(())
@@ -331,15 +332,13 @@ fn roundtrip_window() -> Result<()> {
     let udwf_expr = Arc::new(StandardWindowExpr::new(
         nth_value_window,
         &[col("b", &schema)?],
-        &LexOrdering {
-            inner: vec![PhysicalSortExpr {
-                expr: col("a", &schema)?,
-                options: SortOptions {
-                    descending: false,
-                    nulls_first: false,
-                },
-            }],
-        },
+        &LexOrdering::new(vec![PhysicalSortExpr {
+            expr: col("a", &schema)?,
+            options: SortOptions {
+                descending: false,
+                nulls_first: false,
+            },
+        }]),
         Arc::new(window_frame),
     ));
 
@@ -712,6 +711,7 @@ fn roundtrip_parquet_exec_with_pruning_predicate() -> Result<()> {
             "/path/to/file.parquet".to_string(),
             1024,
         )]],
+        constraints: Constraints::empty(),
         statistics: Statistics {
             num_rows: Precision::Inexact(100),
             total_byte_size: Precision::Inexact(1024),
@@ -748,6 +748,7 @@ async fn roundtrip_parquet_exec_with_table_partition_cols() -> Result<()> {
     let scan_config = FileScanConfig {
         object_store_url: ObjectStoreUrl::local_filesystem(),
         file_groups: vec![vec![file_group]],
+        constraints: Constraints::empty(),
         statistics: Statistics::new_unknown(&schema),
         file_schema: schema,
         projection: Some(vec![0, 1]),
@@ -776,6 +777,7 @@ fn roundtrip_parquet_exec_with_custom_predicate_expr() -> Result<()> {
             "/path/to/file.parquet".to_string(),
             1024,
         )]],
+        constraints: Constraints::empty(),
         statistics: Statistics {
             num_rows: Precision::Inexact(100),
             total_byte_size: Precision::Inexact(1024),
@@ -1130,15 +1132,13 @@ fn roundtrip_udwf_extension_codec() -> Result<()> {
     let udwf_expr = Arc::new(StandardWindowExpr::new(
         udwf,
         &[col("b", &schema)?],
-        &LexOrdering {
-            inner: vec![PhysicalSortExpr {
-                expr: col("a", &schema)?,
-                options: SortOptions {
-                    descending: false,
-                    nulls_first: false,
-                },
-            }],
-        },
+        &LexOrdering::new(vec![PhysicalSortExpr {
+            expr: col("a", &schema)?,
+            options: SortOptions {
+                descending: false,
+                nulls_first: false,
+            },
+        }]),
         Arc::new(window_frame),
     ));
 

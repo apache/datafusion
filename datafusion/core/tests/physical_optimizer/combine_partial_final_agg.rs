@@ -19,14 +19,15 @@
 //!
 //! Note these tests are not in the same module as the optimizer pass because
 //! they rely on `ParquetExec` which is in the core crate.
+
 use std::sync::Arc;
 
+use crate::physical_optimizer::parquet_exec;
+
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
-use datafusion::datasource::listing::PartitionedFile;
-use datafusion::datasource::physical_plan::{FileScanConfig, ParquetExec};
 use datafusion::physical_optimizer::combine_partial_final_agg::CombinePartialFinalAggregate;
+use datafusion::physical_optimizer::test_utils::trim_plan_display;
 use datafusion_common::config::ConfigOptions;
-use datafusion_execution::object_store::ObjectStoreUrl;
 use datafusion_functions_aggregate::count::count_udaf;
 use datafusion_functions_aggregate::sum::sum_udaf;
 use datafusion_physical_expr::aggregate::{AggregateExprBuilder, AggregateFunctionExpr};
@@ -62,27 +63,12 @@ macro_rules! assert_optimized {
     };
 }
 
-fn trim_plan_display(plan: &str) -> Vec<&str> {
-    plan.split('\n')
-        .map(|s| s.trim())
-        .filter(|s| !s.is_empty())
-        .collect()
-}
-
 fn schema() -> SchemaRef {
     Arc::new(Schema::new(vec![
         Field::new("a", DataType::Int64, true),
         Field::new("b", DataType::Int64, true),
         Field::new("c", DataType::Int64, true),
     ]))
-}
-
-fn parquet_exec(schema: &SchemaRef) -> Arc<ParquetExec> {
-    ParquetExec::builder(
-        FileScanConfig::new(ObjectStoreUrl::parse("test:///").unwrap(), schema.clone())
-            .with_file(PartitionedFile::new("x".to_string(), 100)),
-    )
-    .build_arc()
 }
 
 fn partial_aggregate_exec(

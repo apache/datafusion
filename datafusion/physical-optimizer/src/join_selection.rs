@@ -716,7 +716,7 @@ mod tests_statistical {
         Some(JoinFilter::new(
             expression,
             column_indices,
-            intermediate_schema,
+            Arc::new(intermediate_schema),
         ))
     }
 
@@ -1055,6 +1055,7 @@ mod tests_statistical {
                 Arc::clone(&small),
                 nl_join_filter(),
                 &join_type,
+                None,
             )
             .unwrap(),
         );
@@ -1123,6 +1124,7 @@ mod tests_statistical {
                 Arc::clone(&small),
                 nl_join_filter(),
                 &join_type,
+                None,
             )
             .unwrap(),
         );

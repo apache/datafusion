@@ -32,14 +32,16 @@ use super::{
     ExecutionPlanProperties, Partitioning, PlanProperties, RecordBatchStream,
     SendableRecordBatchStream, Statistics,
 };
-use crate::execution_plan::{boundedness_from_children, emission_type_from_children};
+use crate::execution_plan::{
+    boundedness_from_children, emission_type_from_children, InvariantLevel,
+};
 use crate::metrics::BaselineMetrics;
 use crate::stream::ObservedStream;
 
 use arrow::datatypes::{Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::stats::Precision;
-use datafusion_common::{exec_err, internal_err, Result};
+use datafusion_common::{exec_err, internal_err, DataFusionError, Result};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::{calculate_union, EquivalenceProperties};
 
@@ -170,6 +172,14 @@ impl ExecutionPlan for UnionExec {
 
     fn properties(&self) -> &PlanProperties {
         &self.cache
+    }
+
+    fn check_invariants(&self, _check: InvariantLevel) -> Result<()> {
+        (self.inputs().len() >= 2)
+            .then_some(())
+            .ok_or(DataFusionError::Internal(
+                "UnionExec should have at least 2 children".into(),
+            ))
     }
 
     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {

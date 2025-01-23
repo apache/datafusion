@@ -33,7 +33,9 @@ use arrow::datatypes::{ArrowNativeType, UInt16Type};
 use arrow_array::{ArrayRef, DictionaryArray, RecordBatch, RecordBatchOptions};
 use arrow_schema::{DataType, Field, Schema, SchemaRef};
 use datafusion_common::stats::Precision;
-use datafusion_common::{exec_err, ColumnStatistics, DataFusionError, Statistics};
+use datafusion_common::{
+    exec_err, ColumnStatistics, Constraints, DataFusionError, Statistics,
+};
 use datafusion_physical_expr::LexOrdering;
 
 use log::warn;
@@ -114,6 +116,8 @@ pub struct FileScanConfig {
     /// concurrently, however files *within* a partition will be read
     /// sequentially, one after the next.
     pub file_groups: Vec<Vec<PartitionedFile>>,
+    /// Table constraints
+    pub constraints: Constraints,
     /// Estimated overall statistics of the files, taking `filters` into account.
     /// Defaults to [`Statistics::new_unknown`].
     pub statistics: Statistics,
@@ -146,12 +150,19 @@ impl FileScanConfig {
             object_store_url,
             file_schema,
             file_groups: vec![],
+            constraints: Constraints::empty(),
             statistics,
             projection: None,
             limit: None,
             table_partition_cols: vec![],
             output_ordering: vec![],
         }
+    }
+
+    /// Set the table constraints of the files
+    pub fn with_constraints(mut self, constraints: Constraints) -> Self {
+        self.constraints = constraints;
+        self
     }
 
     /// Set the statistics of the files
@@ -210,30 +221,31 @@ impl FileScanConfig {
         self
     }
 
-    /// Project the schema and the statistics on the given column indices
-    pub fn project(&self) -> (SchemaRef, Statistics, Vec<LexOrdering>) {
+    /// Project the schema, constraints, and the statistics on the given column indices
+    pub fn project(&self) -> (SchemaRef, Constraints, Statistics, Vec<LexOrdering>) {
         if self.projection.is_none() && self.table_partition_cols.is_empty() {
             return (
                 Arc::clone(&self.file_schema),
+                self.constraints.clone(),
                 self.statistics.clone(),
                 self.output_ordering.clone(),
             );
         }
 
-        let proj_iter: Box<dyn Iterator<Item = usize>> = match &self.projection {
-            Some(proj) => Box::new(proj.iter().copied()),
-            None => Box::new(
-                0..(self.file_schema.fields().len() + self.table_partition_cols.len()),
-            ),
+        let proj_indices = if let Some(proj) = &self.projection {
+            proj
+        } else {
+            let len = self.file_schema.fields().len() + self.table_partition_cols.len();
+            &(0..len).collect::<Vec<_>>()
         };
 
         let mut table_fields = vec![];
         let mut table_cols_stats = vec![];
-        for idx in proj_iter {
-            if idx < self.file_schema.fields().len() {
-                let field = self.file_schema.field(idx);
+        for idx in proj_indices {
+            if *idx < self.file_schema.fields().len() {
+                let field = self.file_schema.field(*idx);
                 table_fields.push(field.clone());
-                table_cols_stats.push(self.statistics.column_statistics[idx].clone())
+                table_cols_stats.push(self.statistics.column_statistics[*idx].clone())
             } else {
                 let partition_idx = idx - self.file_schema.fields().len();
                 table_fields.push(self.table_partition_cols[partition_idx].to_owned());
@@ -254,10 +266,20 @@ impl FileScanConfig {
             self.file_schema.metadata().clone(),
         ));
 
+        let projected_constraints = self
+            .constraints
+            .project(proj_indices)
+            .unwrap_or_else(Constraints::empty);
+
         let projected_output_ordering =
             get_projected_output_ordering(self, &projected_schema);
 
-        (projected_schema, table_stats, projected_output_ordering)
+        (
+            projected_schema,
+            projected_constraints,
+            table_stats,
+            projected_output_ordering,
+        )
     }
 
     #[cfg_attr(not(feature = "avro"), allow(unused))] // Only used by avro
@@ -635,7 +657,7 @@ mod tests {
             )]),
         );
 
-        let (proj_schema, proj_statistics, _) = conf.project();
+        let (proj_schema, _, proj_statistics, _) = conf.project();
         assert_eq!(proj_schema.fields().len(), file_schema.fields().len() + 1);
         assert_eq!(
             proj_schema.field(file_schema.fields().len()).name(),
@@ -675,7 +697,7 @@ mod tests {
         );
 
         // verify the proj_schema includes the last column and exactly the same the field it is defined
-        let (proj_schema, _proj_statistics, _) = conf.project();
+        let (proj_schema, _, _, _) = conf.project();
         assert_eq!(proj_schema.fields().len(), file_schema.fields().len() + 1);
         assert_eq!(
             *proj_schema.field(file_schema.fields().len()),
@@ -708,7 +730,7 @@ mod tests {
             )]),
         );
 
-        let (proj_schema, proj_statistics, _) = conf.project();
+        let (proj_schema, _, proj_statistics, _) = conf.project();
         assert_eq!(
             columns(&proj_schema),
             vec!["date".to_owned(), "c1".to_owned()]
@@ -1112,9 +1134,8 @@ mod tests {
                     ))))
                     .collect::<Vec<_>>(),
             ));
-            let sort_order = LexOrdering {
-                inner: case
-                    .sort
+            let sort_order = LexOrdering::from(
+                case.sort
                     .into_iter()
                     .map(|expr| {
                         crate::physical_planner::create_physical_sort_expr(
@@ -1124,7 +1145,7 @@ mod tests {
                         )
                     })
                     .collect::<Result<Vec<_>>>()?,
-            };
+            );
 
             let partitioned_files =
                 case.files.into_iter().map(From::from).collect::<Vec<_>>();
