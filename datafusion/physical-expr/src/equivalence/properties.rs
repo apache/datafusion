@@ -1222,7 +1222,10 @@ impl EquivalenceProperties {
     ///
     /// Returns `true` if the expression is constant across all partitions according
     /// to equivalence group, `false` otherwise
-    #[deprecated(since = "45.0.0", note = "Use [`is_expr_constant_across_partitions`] instead")]
+    #[deprecated(
+        since = "45.0.0",
+        note = "Use [`is_expr_constant_across_partitions`] instead"
+    )]
     pub fn is_expr_constant_accross_partitions(
         &self,
         expr: &Arc<dyn PhysicalExpr>,
