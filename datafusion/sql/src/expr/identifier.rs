@@ -22,7 +22,7 @@ use datafusion_common::{
 };
 use datafusion_expr::planner::PlannerResult;
 use datafusion_expr::{Case, Expr};
-use sqlparser::ast::{Expr as SQLExpr, Ident, Spanned};
+use sqlparser::ast::{Expr as SQLExpr, Ident};
 use sqlparser::tokenizer::Span;
 
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};

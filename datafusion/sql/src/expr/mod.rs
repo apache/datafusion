@@ -15,21 +15,12 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::ops::ControlFlow;
 
 use arrow_schema::DataType;
 use arrow_schema::TimeUnit;
-use datafusion_common::Column;
-use datafusion_common::DataFusionError;
-use datafusion_common::Diagnostic;
-use datafusion_common::SchemaError;
 use datafusion_expr::planner::{
     PlannerResult, RawBinaryExpr, RawDictionaryExpr, RawFieldAccessExpr,
 };
-use datafusion_expr::utils::find_column_exprs;
-use sqlparser::ast::Spanned;
-use sqlparser::ast::Visit;
-use sqlparser::ast::Visitor;
 use sqlparser::ast::{
     BinaryOperator, CastFormat, CastKind, DataType as SQLDataType, DictionaryField,
     Expr as SQLExpr, ExprWithAlias as SQLExprWithAlias, MapEntry, StructField, Subscript,
@@ -46,9 +37,7 @@ use datafusion_expr::{
     lit, Between, BinaryExpr, Cast, Expr, ExprSchemable, GetFieldAccess, Like, Literal,
     Operator, TryCast,
 };
-use sqlparser::tokenizer::Span;
 
-use crate::planner::IdentNormalizer;
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 
 mod binary_op;

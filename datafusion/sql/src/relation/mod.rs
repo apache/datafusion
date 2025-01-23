@@ -21,7 +21,7 @@ use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 
 use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::{
-    not_impl_err, plan_err, DFSchema, Diagnostic, DiagnosticEntry, DiagnosticEntryKind,
+    not_impl_err, plan_err, DFSchema, Diagnostic,
     Result, TableReference,
 };
 use datafusion_expr::builder::subquery_alias;

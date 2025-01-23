@@ -32,7 +32,7 @@ use sqlparser::ast::{DataType as SQLDataType, Ident, ObjectName, TableAlias};
 
 use datafusion_common::TableReference;
 use datafusion_common::{
-    not_impl_err, plan_err, unqualified_field_not_found, DFSchema, DataFusionError,
+    not_impl_err, plan_err, DFSchema, DataFusionError,
     Result,
 };
 use datafusion_expr::logical_plan::{LogicalPlan, LogicalPlanBuilder};
