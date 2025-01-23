@@ -356,36 +356,42 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             .iter()
             .try_for_each(|col| match col {
                 Expr::Column(col) => match &col.relation {
-                    Some(r) => {
-                        schema.field_with_qualified_name(r, &col.name)?;
-                        Ok(())
-                    }
+                    Some(r) => schema.field_with_qualified_name(r, &col.name).map(|_| ()),
                     None => {
                         if !schema.fields_with_unqualified_name(&col.name).is_empty() {
                             Ok(())
                         } else {
-                            Err(unqualified_field_not_found(col.name.as_str(), schema))
+                            Err(field_not_found(
+                                col.relation.clone(),
+                                col.name.as_str(),
+                                schema,
+                            ))
                         }
                     }
                 }
-                .map_err(|_: DataFusionError| {
-                    let diagnostic = if let Some(relation) = &col.relation {
-                        Diagnostic::new().with_error(
-                            format!(
-                                "column '{}' not found in '{}'",
-                                &col.name,
-                                relation.to_string()
-                            ),
-                            col.spans().first_or_empty(),
-                        )
-                    } else {
-                        Diagnostic::new().with_error(
-                            format!("column '{}' not found", &col.name),
-                            col.spans().first_or_empty(),
-                        )
-                    };
-                    field_not_found(col.relation.clone(), col.name.as_str(), schema)
-                        .with_diagnostic(diagnostic)
+                .map_err(|err: DataFusionError| match &err {
+                    DataFusionError::SchemaError(
+                        SchemaError::FieldNotFound { .. },
+                        _,
+                    ) => {
+                        let diagnostic = if let Some(relation) = &col.relation {
+                            Diagnostic::new().with_error(
+                                format!(
+                                    "column '{}' not found in '{}'",
+                                    &col.name,
+                                    relation.to_string()
+                                ),
+                                col.spans().first_or_empty(),
+                            )
+                        } else {
+                            Diagnostic::new().with_error(
+                                format!("column '{}' not found", &col.name),
+                                col.spans().first_or_empty(),
+                            )
+                        };
+                        err.with_diagnostic(diagnostic)
+                    }
+                    _ => err,
                 }),
                 _ => internal_err!("Not a column"),
             })
