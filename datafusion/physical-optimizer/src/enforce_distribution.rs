@@ -932,6 +932,7 @@ fn add_hash_on_top(
 /// # Arguments
 ///
 /// * `input`: Current node.
+/// * `fetch`: Possible fetch value
 ///
 /// # Returns
 ///
