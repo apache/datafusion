@@ -3903,7 +3903,10 @@ mod tests {
         let result = handle_overflow::<true>(&dt, op, &lhs, &rhs);
         assert_eq!(result, ScalarValue::Decimal128(None, 38, 35));
         let result = handle_overflow::<false>(&dt, op, &lhs, &rhs);
-        assert_eq!(result, ScalarValue::Decimal128(Some(i128::MAX), 38, 35));
+        assert_eq!(
+            result,
+            ScalarValue::Decimal128(Some(99999999999999999999999999999999999999), 38, 35)
+        );
 
         Ok(())
     }
