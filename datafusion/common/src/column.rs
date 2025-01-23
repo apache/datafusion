@@ -296,6 +296,11 @@ impl Column {
     pub fn spans_mut(&mut self) -> &mut Spans {
         &mut self.spans
     }
+
+    pub fn with_spans(mut self, spans: Spans) -> Self {
+        self.spans = spans;
+        self
+    }
 }
 
 impl From<&str> for Column {
