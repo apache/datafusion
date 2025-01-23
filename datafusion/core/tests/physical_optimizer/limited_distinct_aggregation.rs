@@ -30,8 +30,6 @@ use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use datafusion_physical_optimizer::test_utils::{
     assert_plan_matches_expected, build_group_by, mock_data, schema,
 };
-use datafusion_physical_plan::memory::MemorySourceConfig;
-use datafusion_physical_plan::source::DataSourceExec;
 use datafusion_physical_plan::{
     aggregates::{AggregateExec, AggregateMode},
     collect,
@@ -260,7 +258,7 @@ fn test_has_order_by() -> Result<()> {
     let expected = [
         "LocalLimitExec: fetch=10",
         "AggregateExec: mode=Single, gby=[a@0 as a], aggr=[], ordering_mode=Sorted",
-        "DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[a@0 ASC]",
+        "DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[a@0 ASC], file_type=parquet",
     ];
     let plan: Arc<dyn ExecutionPlan> = Arc::new(limit_exec);
     assert_plan_matches_expected(&plan, &expected)?;

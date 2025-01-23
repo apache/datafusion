@@ -25,9 +25,6 @@ use std::sync::Arc;
 use crate::physical_optimizer::parquet_exec;
 
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
-use datafusion::datasource::data_source::FileSourceConfig;
-use datafusion::datasource::listing::PartitionedFile;
-use datafusion::datasource::physical_plan::{FileScanConfig, ParquetConfig};
 use datafusion::physical_optimizer::combine_partial_final_agg::CombinePartialFinalAggregate;
 use datafusion::physical_optimizer::test_utils::trim_plan_display;
 use datafusion_common::config::ConfigOptions;
@@ -43,7 +40,6 @@ use datafusion_physical_plan::aggregates::{
 };
 use datafusion_physical_plan::displayable;
 use datafusion_physical_plan::repartition::RepartitionExec;
-use datafusion_physical_plan::source::DataSourceExec;
 use datafusion_physical_plan::ExecutionPlan;
 
 /// Runs the CombinePartialFinalAggregate optimizer and asserts the plan against the expected

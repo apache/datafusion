@@ -176,8 +176,8 @@ mod tests {
     use datafusion_physical_expr::expressions::{self, cast};
     use datafusion_physical_plan::aggregates::AggregateMode;
 
-    /// Mock data using a MemoryExec which has an exact count statistic
-    fn mock_data() -> Result<Arc<MemoryExec>> {
+    /// Mock data using a MemorySourceConfig which has an exact count statistic
+    fn mock_data() -> Result<Arc<DataSourceExec>> {
         let schema = Arc::new(Schema::new(vec![
             Field::new("a", DataType::Int32, true),
             Field::new("b", DataType::Int32, true),

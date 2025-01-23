@@ -47,6 +47,7 @@ use datafusion_physical_plan::memory::MemorySourceConfig;
 use datafusion_physical_plan::repartition::RepartitionExec;
 use datafusion_physical_plan::sorts::sort::SortExec;
 use datafusion_physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
+use datafusion_physical_plan::source::DataSourceExec;
 use datafusion_physical_plan::streaming::{PartitionStream, StreamingTableExec};
 use datafusion_physical_plan::tree_node::PlanContext;
 use datafusion_physical_plan::union::UnionExec;
@@ -441,7 +442,7 @@ pub fn stream_exec_ordered_with_projection(
     )
 }
 
-pub fn mock_data() -> Result<Arc<MemoryExec>> {
+pub fn mock_data() -> Result<Arc<DataSourceExec>> {
     let schema = Arc::new(Schema::new(vec![
         Field::new("a", DataType::Int32, true),
         Field::new("b", DataType::Int32, true),
@@ -469,11 +470,7 @@ pub fn mock_data() -> Result<Arc<MemoryExec>> {
         ],
     )?;
 
-    Ok(Arc::new(MemoryExec::try_new(
-        &[vec![batch]],
-        Arc::clone(&schema),
-        None,
-    )?))
+    MemorySourceConfig::try_new_exec(&[vec![batch]], Arc::clone(&schema), None)
 }
 
 pub fn build_group_by(input_schema: &SchemaRef, columns: Vec<String>) -> PhysicalGroupBy {
