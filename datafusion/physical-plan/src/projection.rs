@@ -29,7 +29,7 @@ use std::task::{Context, Poll};
 use super::expressions::{CastExpr, Column, Literal};
 use super::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
 use super::{
-    DisplayAs, ExecutionPlanProperties, PlanProperties, RecordBatchStream,
+    displayable, DisplayAs, ExecutionPlanProperties, PlanProperties, RecordBatchStream,
     SendableRecordBatchStream, Statistics,
 };
 
@@ -38,7 +38,9 @@ use crate::joins::utils::{ColumnIndex, JoinFilter};
 use crate::{ColumnStatistics, DisplayFormatType, ExecutionPlan, PhysicalExpr};
 
 use datafusion_common::stats::Precision;
-use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
+use datafusion_common::tree_node::{
+    Transformed, TransformedResult, TreeNode, TreeNodeRecursion,
+};
 use datafusion_common::{internal_err, JoinSide, Result};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::equivalence::ProjectionMapping;
@@ -245,6 +247,19 @@ impl ExecutionPlan for ProjectionExec {
 
     fn cardinality_effect(&self) -> CardinalityEffect {
         CardinalityEffect::Equal
+    }
+
+    fn try_swapping_with_projection(
+        &self,
+        projection: &ProjectionExec,
+    ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+        let maybe_unified = try_unifying_projections(projection, self)?;
+        if let Some(new_plan) = maybe_unified {
+            // To unify 3 or more sequential projections:
+            remove_unnecessary_projections(new_plan).data().map(Some)
+        } else {
+            Ok(Some(Arc::new(projection.clone())))
+        }
     }
 }
 
@@ -845,20 +860,6 @@ fn new_indices_for_join_filter(
         .collect()
 }
 
-/// Compare the inputs and outputs of the projection. All expressions must be
-/// columns without alias, and projection does not change the order of fields.
-/// For example, if the input schema is `a, b`, `SELECT a, b` is removable,
-/// but `SELECT b, a` and `SELECT a+1, b` and `SELECT a AS c, b` are not.
-fn is_projection_removable(projection: &ProjectionExec) -> bool {
-    let exprs = projection.expr();
-    exprs.iter().enumerate().all(|(idx, (expr, alias))| {
-        let Some(col) = expr.as_any().downcast_ref::<Column>() else {
-            return false;
-        };
-        col.name() == alias && col.index() == idx
-    }) && exprs.len() == projection.input().schema().fields().len()
-}
-
 /// This function generates a new set of columns to be used in a hash join
 /// operation based on a set of equi-join conditions (`hash_join_on`) and a
 /// list of projection expressions (`projection_exprs`).
@@ -908,6 +909,93 @@ fn new_columns_for_join_on(
         })
         .collect::<Vec<_>>();
     (new_columns.len() == hash_join_on.len()).then_some(new_columns)
+}
+
+/// Unifies `projection` with its input (which is also a [`ProjectionExec`]).
+fn try_unifying_projections(
+    projection: &ProjectionExec,
+    child: &ProjectionExec,
+) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+    let mut projected_exprs = vec![];
+    let mut column_ref_map: HashMap<Column, usize> = HashMap::new();
+
+    // Collect the column references usage in the outer projection.
+    projection.expr().iter().for_each(|(expr, _)| {
+        expr.apply(|expr| {
+            Ok({
+                if let Some(column) = expr.as_any().downcast_ref::<Column>() {
+                    *column_ref_map.entry(column.clone()).or_default() += 1;
+                }
+                TreeNodeRecursion::Continue
+            })
+        })
+        .unwrap();
+    });
+    // Merging these projections is not beneficial, e.g
+    // If an expression is not trivial and it is referred more than 1, unifies projections will be
+    // beneficial as caching mechanism for non-trivial computations.
+    // See discussion in: https://github.com/apache/datafusion/issues/8296
+    if column_ref_map.iter().any(|(column, count)| {
+        *count > 1 && !is_expr_trivial(&Arc::clone(&child.expr()[column.index()].0))
+    }) {
+        return Ok(None);
+    }
+    for (expr, alias) in projection.expr() {
+        // If there is no match in the input projection, we cannot unify these
+        // projections. This case will arise if the projection expression contains
+        // a `PhysicalExpr` variant `update_expr` doesn't support.
+        let Some(expr) = update_expr(expr, child.expr(), true)? else {
+            return Ok(None);
+        };
+        projected_exprs.push((expr, alias.clone()));
+    }
+    ProjectionExec::try_new(projected_exprs, Arc::clone(child.input()))
+        .map(|e| Some(Arc::new(e) as _))
+}
+
+/// Checks if the given expression is trivial.
+/// An expression is considered trivial if it is either a `Column` or a `Literal`.
+fn is_expr_trivial(expr: &Arc<dyn PhysicalExpr>) -> bool {
+    expr.as_any().downcast_ref::<Column>().is_some()
+        || expr.as_any().downcast_ref::<Literal>().is_some()
+}
+
+/// This function checks if `plan` is a [`ProjectionExec`], and inspects its
+/// input(s) to test whether it can push `plan` under its input(s). This function
+/// will operate on the entire tree and may ultimately remove `plan` entirely
+/// by leveraging source providers with built-in projection capabilities.
+pub fn remove_unnecessary_projections(
+    plan: Arc<dyn ExecutionPlan>,
+) -> Result<Transformed<Arc<dyn ExecutionPlan>>> {
+    let maybe_modified =
+        if let Some(projection) = plan.as_any().downcast_ref::<ProjectionExec>() {
+            // If the projection does not cause any change on the input, we can
+            // safely remove it:
+            if is_projection_removable(projection) {
+                return Ok(Transformed::yes(Arc::clone(projection.input())));
+            }
+            // If it does, check if we can push it under its child(ren):
+            projection
+                .input()
+                .try_swapping_with_projection(projection)?
+        } else {
+            return Ok(Transformed::no(plan));
+        };
+    Ok(maybe_modified.map_or(Transformed::no(plan), Transformed::yes))
+}
+
+/// Compare the inputs and outputs of the projection. All expressions must be
+/// columns without alias, and projection does not change the order of fields.
+/// For example, if the input schema is `a, b`, `SELECT a, b` is removable,
+/// but `SELECT b, a` and `SELECT a+1, b` and `SELECT a AS c, b` are not.
+fn is_projection_removable(projection: &ProjectionExec) -> bool {
+    let exprs = projection.expr();
+    exprs.iter().enumerate().all(|(idx, (expr, alias))| {
+        let Some(col) = expr.as_any().downcast_ref::<Column>() else {
+            return false;
+        };
+        col.name() == alias && col.index() == idx
+    }) && exprs.len() == projection.input().schema().fields().len()
 }
 
 #[cfg(test)]
