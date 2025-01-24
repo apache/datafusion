@@ -423,12 +423,14 @@ fn collect_new_statistics(
             )| {
                 let (lower, upper) = match interval {
                     Some(interval) => interval.into_bounds(),
-                    // If the interval is None, we can say that there are no rows 
-                    None => return ColumnStatistics {
-                        null_count: Precision::Exact(0),
-                        max_value: Precision::Exact(ScalarValue::Int32(Some(0))),
-                        min_value: Precision::Exact(ScalarValue::Int32(Some(0))),
-                        distinct_count: Precision::Exact(0),
+                    // If the interval is None, we can say that there are no rows
+                    None => {
+                        return ColumnStatistics {
+                            null_count: Precision::Exact(0),
+                            max_value: Precision::Exact(ScalarValue::Int32(Some(0))),
+                            min_value: Precision::Exact(ScalarValue::Int32(Some(0))),
+                            distinct_count: Precision::Exact(0),
+                        }
                     }
                 };
                 let (min_value, max_value) = if lower.eq(&upper) {

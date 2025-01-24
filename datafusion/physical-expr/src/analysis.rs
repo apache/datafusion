@@ -179,10 +179,17 @@ pub fn analyze(
                 expr.as_any()
                     .downcast_ref::<Column>()
                     .filter(|expr_column| bound.column.eq(*expr_column))
-                    .map(|_| (*i, match bound.interval.clone() {
-                        Some(interval) => interval,
-                        None => unreachable!("Boundaries should be initialized for all columns"),
-                    }))
+                    .map(|_| {
+                        (
+                            *i,
+                            match bound.interval.clone() {
+                                Some(interval) => interval,
+                                None => unreachable!(
+                                    "Boundaries should be initialized for all columns"
+                                ),
+                            },
+                        )
+                    })
             })
         })
         .collect::<Vec<_>>();
@@ -195,13 +202,17 @@ pub fn analyze(
         }
         PropagationResult::Infeasible => {
             // If the propagation result is infeasible, map target boundary intervals to None
-            Ok(AnalysisContext::new(target_boundaries.iter().map(
-                |bound| ExprBoundaries {
-                    column: bound.column.clone(),
-                    interval: None,
-                    distinct_count: bound.distinct_count,
-                },
-            ).collect()).with_selectivity(0.0))
+            Ok(AnalysisContext::new(
+                target_boundaries
+                    .iter()
+                    .map(|bound| ExprBoundaries {
+                        column: bound.column.clone(),
+                        interval: None,
+                        distinct_count: bound.distinct_count,
+                    })
+                    .collect(),
+            )
+            .with_selectivity(0.0))
         }
         PropagationResult::CannotPropagate => {
             Ok(AnalysisContext::new(target_boundaries).with_selectivity(1.0))
@@ -263,7 +274,7 @@ fn calculate_selectivity(
             acc *= cardinality_ratio(&initial_interval, &target_interval);
         });
 
-        Ok(acc)
+    Ok(acc)
 }
 
 #[cfg(test)]
@@ -355,7 +366,6 @@ mod tests {
         }
     }
 
-
     #[test]
     fn test_analyze_empty_set_boundary_exprs() {
         let schema = Arc::new(Schema::new(vec![make_field("a", DataType::Int32)]));
@@ -366,14 +376,14 @@ mod tests {
             // a > 5 AND (a < 20 OR a > 20)
             // a > 10 AND a < 20
             // (a > 10 AND a < 20) AND (a > 20 AND a < 30)
-                col("a")
-                    .gt(lit(10))
-                    .and(col("a").lt(lit(20)))
-                    .and(col("a").gt(lit(20)))
-                    .and(col("a").lt(lit(30))),
+            col("a")
+                .gt(lit(10))
+                .and(col("a").lt(lit(20)))
+                .and(col("a").gt(lit(20)))
+                .and(col("a").lt(lit(30))),
         ];
 
-        for expr  in test_cases {
+        for expr in test_cases {
             let boundaries = ExprBoundaries::try_new_unbounded(&schema).unwrap();
             let df_schema = DFSchema::try_from(Arc::clone(&schema)).unwrap();
             let physical_expr =
@@ -384,7 +394,7 @@ mod tests {
                 df_schema.as_ref(),
             )
             .unwrap();
-                        
+
             analysis_result.boundaries.iter().for_each(|bound| {
                 assert_eq!(bound.interval, None);
             });
