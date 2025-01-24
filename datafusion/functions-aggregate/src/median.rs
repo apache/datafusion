@@ -393,7 +393,8 @@ impl<T: ArrowNumericType + Send> GroupsAccumulator for MedianGroupsAccumulator<T
         let flatten_group_values =
             emit_group_values.into_iter().flatten().collect::<Vec<_>>();
         let group_values_array =
-            PrimitiveArray::<T>::new(ScalarBuffer::from(flatten_group_values), None);
+            PrimitiveArray::<T>::new(ScalarBuffer::from(flatten_group_values), None)
+                .with_data_type(self.data_type.clone());
 
         // Build the result list array
         let result_list_array = ListArray::new(
@@ -411,7 +412,8 @@ impl<T: ArrowNumericType + Send> GroupsAccumulator for MedianGroupsAccumulator<T
         let emit_group_values = emit_to.take_needed(&mut self.group_values);
 
         // Calculate median for each group
-        let mut evaluate_result_builder = PrimitiveBuilder::<T>::new();
+        let mut evaluate_result_builder =
+            PrimitiveBuilder::<T>::new().with_data_type(self.data_type.clone());
         for values in emit_group_values {
             let median = calculate_median::<T>(values);
             evaluate_result_builder.append_option(median);
@@ -437,7 +439,8 @@ impl<T: ArrowNumericType + Send> GroupsAccumulator for MedianGroupsAccumulator<T
         // to null.
 
         // Reuse values buffer in `input_array` to build `values` in `ListArray`
-        let values = PrimitiveArray::<T>::new(input_array.values().clone(), None);
+        let values = PrimitiveArray::<T>::new(input_array.values().clone(), None)
+            .with_data_type(self.data_type.clone());
 
         // `offsets` in `ListArray`, each row as a list element
         let offsets = (0..=input_array.len() as i32).collect::<Vec<_>>();
