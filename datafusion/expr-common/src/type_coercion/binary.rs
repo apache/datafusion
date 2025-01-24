@@ -928,9 +928,6 @@ fn coerce_numeric_type_to_decimal(numeric_type: &DataType) -> Option<DataType> {
         Int16 | UInt16 => Some(Decimal128(5, 0)),
         Int32 | UInt32 => Some(Decimal128(10, 0)),
         Int64 | UInt64 => Some(Decimal128(20, 0)),
-        // TODO if we convert the floating-point data to the decimal type, it maybe overflow.
-        Float32 => Some(Decimal128(14, 7)),
-        Float64 => Some(Decimal128(30, 15)),
         _ => None,
     }
 }
@@ -946,9 +943,6 @@ fn coerce_numeric_type_to_decimal256(numeric_type: &DataType) -> Option<DataType
         Int16 | UInt16 => Some(Decimal256(5, 0)),
         Int32 | UInt32 => Some(Decimal256(10, 0)),
         Int64 | UInt64 => Some(Decimal256(20, 0)),
-        // TODO if we convert the floating-point data to the decimal type, it maybe overflow.
-        Float32 => Some(Decimal256(14, 7)),
-        Float64 => Some(Decimal256(30, 15)),
         _ => None,
     }
 }
@@ -1494,8 +1488,8 @@ mod tests {
             DataType::Decimal128(20, 3),
             DataType::Decimal128(20, 3),
             DataType::Decimal128(23, 3),
-            DataType::Decimal128(24, 7),
-            DataType::Decimal128(32, 15),
+            DataType::Float32,
+            DataType::Float64,
             DataType::Decimal128(38, 10),
             DataType::Decimal128(25, 8),
             DataType::Decimal128(20, 3),
@@ -1541,14 +1535,8 @@ mod tests {
             coerce_numeric_type_to_decimal(&DataType::Int64).unwrap(),
             DataType::Decimal128(20, 0)
         );
-        assert_eq!(
-            coerce_numeric_type_to_decimal(&DataType::Float32).unwrap(),
-            DataType::Decimal128(14, 7)
-        );
-        assert_eq!(
-            coerce_numeric_type_to_decimal(&DataType::Float64).unwrap(),
-            DataType::Decimal128(30, 15)
-        );
+        assert_eq!(coerce_numeric_type_to_decimal(&DataType::Float32), None);
+        assert_eq!(coerce_numeric_type_to_decimal(&DataType::Float64), None);
     }
 
     #[test]
@@ -2013,7 +2001,7 @@ mod tests {
             DataType::Float64,
             DataType::Decimal128(10, 3),
             Operator::Gt,
-            DataType::Decimal128(30, 15)
+            DataType::Float64
         );
         test_coercion_binary_rule!(
             DataType::Int64,

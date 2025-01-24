@@ -836,3 +836,18 @@ physical_plan
 # Clean up after the test
 statement ok
 drop table aggregate_test_100;
+
+query T
+SELECT DISTINCT arrow_typeof(a) FROM (SELECT '1'::float UNION ALL SELECT '1'::decimal(10)) t(a)
+----
+Float32
+
+query T
+SELECT DISTINCT arrow_typeof(a) FROM (SELECT '1'::decimal(10) UNION ALL SELECT '1'::float ) t(a)
+----
+Float32
+
+query T
+SELECT DISTINCT arrow_typeof(a) FROM (SELECT '1'::decimal(10) UNION ALL SELECT '1'::double) t(a)
+----
+Float64

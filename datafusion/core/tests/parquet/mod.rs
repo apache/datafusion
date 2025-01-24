@@ -184,7 +184,13 @@ impl TestOutput {
 /// and the appropriate scenario
 impl ContextWithParquet {
     async fn new(scenario: Scenario, unit: Unit) -> Self {
-        Self::with_config(scenario, unit, SessionConfig::new()).await
+        let mut session_config = SessionConfig::new();
+        // TODO (https://github.com/apache/datafusion/issues/12817) once this is the default behavior, remove from here
+        session_config
+            .options_mut()
+            .sql_parser
+            .parse_float_as_decimal = true;
+        Self::with_config(scenario, unit, session_config).await
     }
 
     async fn with_config(

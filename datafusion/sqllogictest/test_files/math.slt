@@ -694,3 +694,9 @@ select FACTORIAL(350943270);
 
 statement ok
 drop table signed_integers
+
+# Should not fail. The operands should coerce to float
+query B
+SELECT '1'::decimal(10,0) = '1e40'::double;
+----
+false
