@@ -36,7 +36,7 @@ aws-config = "=1.5.10"
 ## 1.53.0 requires a higher MSRV 1.81 so lock until DataFusion MSRV catches up
 aws-sdk-sso = "=1.50.0"
 ## 1.54.0 requires a higher MSRV 1.81 so lock until DataFusion MSRV catches up
-aws-sdk-ssooidc = "=1.51.0"
+aws-sdk-ssooidc = "=1.57.0"
 ## 1.54.1 requires a higher MSRV 1.81 so lock until DataFusion MSRV catches up
 aws-sdk-sts = "=1.51.0"
 # end pin aws-sdk crates
