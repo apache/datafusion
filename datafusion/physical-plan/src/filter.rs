@@ -36,7 +36,7 @@ use arrow::record_batch::RecordBatch;
 use datafusion_common::cast::as_boolean_array;
 use datafusion_common::stats::Precision;
 use datafusion_common::{
-    internal_err, plan_err, project_schema, DataFusionError, Result,
+    internal_err, plan_err, project_schema, DataFusionError, Result, ScalarValue,
 };
 use datafusion_execution::TaskContext;
 use datafusion_expr::Operator;
@@ -421,7 +421,16 @@ fn collect_new_statistics(
                     ..
                 },
             )| {
-                let (lower, upper) = interval.into_bounds();
+                let (lower, upper) = match interval {
+                    Some(interval) => interval.into_bounds(),
+                    // If the interval is None, we can say that there are no rows 
+                    None => return ColumnStatistics {
+                        null_count: Precision::Exact(0),
+                        max_value: Precision::Exact(ScalarValue::Int32(Some(0))),
+                        min_value: Precision::Exact(ScalarValue::Int32(Some(0))),
+                        distinct_count: Precision::Exact(0),
+                    }
+                };
                 let (min_value, max_value) = if lower.eq(&upper) {
                     (Precision::Exact(lower), Precision::Exact(upper))
                 } else {

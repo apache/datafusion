@@ -82,7 +82,7 @@ impl AnalysisContext {
 pub struct ExprBoundaries {
     pub column: Column,
     /// Minimum and maximum values this expression can have.
-    pub interval: Interval,
+    pub interval: Option<Interval>,
     /// Maximum number of distinct values this expression can produce, if known.
     pub distinct_count: Precision<usize>,
 }
@@ -118,7 +118,7 @@ impl ExprBoundaries {
         let column = Column::new(field.name(), col_index);
         Ok(ExprBoundaries {
             column,
-            interval,
+            interval: Some(interval),
             distinct_count: col_stats.distinct_count,
         })
     }
@@ -133,7 +133,7 @@ impl ExprBoundaries {
             .map(|(i, field)| {
                 Ok(Self {
                     column: Column::new(field.name(), i),
-                    interval: Interval::make_unbounded(field.data_type())?,
+                    interval: Some(Interval::make_unbounded(field.data_type())?),
                     distinct_count: Precision::Absent,
                 })
             })
@@ -179,7 +179,10 @@ pub fn analyze(
                 expr.as_any()
                     .downcast_ref::<Column>()
                     .filter(|expr_column| bound.column.eq(*expr_column))
-                    .map(|_| (*i, bound.interval.clone()))
+                    .map(|_| (*i, match bound.interval.clone() {
+                        Some(interval) => interval,
+                        None => unreachable!("Boundaries should be initialized for all columns"),
+                    }))
             })
         })
         .collect::<Vec<_>>();
@@ -191,7 +194,14 @@ pub fn analyze(
             shrink_boundaries(graph, target_boundaries, target_expr_and_indices)
         }
         PropagationResult::Infeasible => {
-            Ok(AnalysisContext::new(target_boundaries).with_selectivity(0.0))
+            // If the propagation result is infeasible, map target boundary intervals to None
+            Ok(AnalysisContext::new(target_boundaries.iter().map(
+                |bound| ExprBoundaries {
+                    column: bound.column.clone(),
+                    interval: None,
+                    distinct_count: bound.distinct_count,
+                },
+            ).collect()).with_selectivity(0.0))
         }
         PropagationResult::CannotPropagate => {
             Ok(AnalysisContext::new(target_boundaries).with_selectivity(1.0))
@@ -215,12 +225,12 @@ fn shrink_boundaries(
                 .iter_mut()
                 .find(|bound| bound.column.eq(column))
             {
-                bound.interval = graph.get_interval(*i);
+                bound.interval = Some(graph.get_interval(*i));
             };
         }
     });
 
-    let selectivity = calculate_selectivity(&target_boundaries, &initial_boundaries);
+    let selectivity = calculate_selectivity(&target_boundaries, &initial_boundaries)?;
 
     if !(0.0..=1.0).contains(&selectivity) {
         return internal_err!("Selectivity is out of limit: {}", selectivity);
@@ -235,16 +245,25 @@ fn shrink_boundaries(
 fn calculate_selectivity(
     target_boundaries: &[ExprBoundaries],
     initial_boundaries: &[ExprBoundaries],
-) -> f64 {
+) -> Result<f64> {
     // Since the intervals are assumed uniform and the values
     // are not correlated, we need to multiply the selectivities
     // of multiple columns to get the overall selectivity.
+    let mut acc: f64 = 1.0;
     initial_boundaries
         .iter()
         .zip(target_boundaries.iter())
-        .fold(1.0, |acc, (initial, target)| {
-            acc * cardinality_ratio(&initial.interval, &target.interval)
-        })
+        .for_each(|(initial, target)| {
+            let Some(initial_interval) = initial.interval.clone() else {
+                unreachable!("Interval should be initialized for all columns");
+            };
+            let Some(target_interval) = target.interval.clone() else {
+                unreachable!("Interval should be initialized for all columns");
+            };
+            acc *= cardinality_ratio(&initial_interval, &target_interval);
+        });
+
+        Ok(acc)
 }
 
 #[cfg(test)]
@@ -313,16 +332,6 @@ mod tests {
                 Some(16),
                 Some(19),
             ),
-            // (a > 10 AND a < 20) AND (a > 20 AND a < 30)
-            (
-                col("a")
-                    .gt(lit(10))
-                    .and(col("a").lt(lit(20)))
-                    .and(col("a").gt(lit(20)))
-                    .and(col("a").lt(lit(30))),
-                None,
-                None,
-            ),
         ];
         for (expr, lower, upper) in test_cases {
             let boundaries = ExprBoundaries::try_new_unbounded(&schema).unwrap();
@@ -335,12 +344,50 @@ mod tests {
                 df_schema.as_ref(),
             )
             .unwrap();
-            let actual = &analysis_result.boundaries[0].interval;
+            let Some(actual) = &analysis_result.boundaries[0].interval else {
+                panic!("Interval should be initialized for all columns");
+            };
             let expected = Interval::make(lower, upper).unwrap();
             assert_eq!(
                 &expected, actual,
                 "did not get correct interval for SQL expression: {expr:?}"
             );
+        }
+    }
+
+
+    #[test]
+    fn test_analyze_empty_set_boundary_exprs() {
+        let schema = Arc::new(Schema::new(vec![make_field("a", DataType::Int32)]));
+
+        let test_cases: Vec<Expr> = vec![
+            // a > 10 AND a < 10
+            col("a").gt(lit(10)).and(col("a").lt(lit(10))),
+            // a > 5 AND (a < 20 OR a > 20)
+            // a > 10 AND a < 20
+            // (a > 10 AND a < 20) AND (a > 20 AND a < 30)
+                col("a")
+                    .gt(lit(10))
+                    .and(col("a").lt(lit(20)))
+                    .and(col("a").gt(lit(20)))
+                    .and(col("a").lt(lit(30))),
+        ];
+
+        for expr  in test_cases {
+            let boundaries = ExprBoundaries::try_new_unbounded(&schema).unwrap();
+            let df_schema = DFSchema::try_from(Arc::clone(&schema)).unwrap();
+            let physical_expr =
+                create_physical_expr(&expr, &df_schema, &ExecutionProps::new()).unwrap();
+            let analysis_result = analyze(
+                &physical_expr,
+                AnalysisContext::new(boundaries),
+                df_schema.as_ref(),
+            )
+            .unwrap();
+                        
+            analysis_result.boundaries.iter().for_each(|bound| {
+                assert_eq!(bound.interval, None);
+            });
         }
     }
 
