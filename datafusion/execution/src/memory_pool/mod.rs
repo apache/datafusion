@@ -110,7 +110,7 @@ pub use pool::*;
 ///   to all spilling operators fairly
 ///
 /// * [`TrackConsumersPool`]: Wraps another [`MemoryPool`] and tracks consumers,
-/// providing better error messages on the largest memory users.
+///   providing better error messages on the largest memory users.
 pub trait MemoryPool: Send + Sync + std::fmt::Debug {
     /// Registers a new [`MemoryConsumer`]
     ///
