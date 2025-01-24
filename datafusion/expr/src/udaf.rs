@@ -660,10 +660,6 @@ pub trait AggregateUDFImpl: Debug + Send + Sync {
     /// function is monotonically increasing if its value increases as its argument grows
     /// (as a set). Formally, `f` is a monotonically increasing set function if `f(S) >= f(T)`
     /// whenever `S` is a superset of `T`.
-    ///
-    /// Returns None if the function is not monotonic.
-    /// If the function is monotonically decreasing returns Some(false) e.g. Min
-    /// If the function is monotonically increasing returns Some(true) e.g. Max
     fn monotonicity(&self, _data_type: &DataType) -> AggregateExprMonotonicity {
         AggregateExprMonotonicity::NotMonotonic
     }
