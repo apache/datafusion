@@ -45,7 +45,7 @@ Orchestrates running benchmarks against DataFusion checkouts
 Usage:
 $0 data [benchmark]
 $0 run [benchmark]
-$0 compare <branch1> <branch2>
+$0 compare <baseline> <branch1> <branch2> <...>
 $0 venv
 
 **********
