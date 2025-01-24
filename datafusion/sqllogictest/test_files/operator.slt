@@ -1,0 +1,114 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+
+#   http://www.apache.org/licenses/LICENSE-2.0
+
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+# Validate arithmetic operator output type
+
+statement ok
+create table numeric_types as
+SELECT
+    arrow_cast(1, 'Int8') as int8,
+    arrow_cast(1, 'Int16') as int16,
+    arrow_cast(1, 'Int32') as int32,
+    arrow_cast(1, 'Int64') as int64,
+    arrow_cast(1, 'UInt8') as uint8,
+    arrow_cast(1, 'UInt16') as uint16,
+    arrow_cast(1, 'UInt32') as uint32,
+    arrow_cast(1, 'UInt64') as uint64,
+    arrow_cast(1.23, 'Float32') as float32,
+    arrow_cast(1.23, 'Float64') as float64,
+    arrow_cast(1.25, 'Decimal128(5, 2)') as decimal
+;
+
+# Plus with the same operand type, expect the same output type
+# except for decimal which is  promoted to the highest precision
+query TTTTTTTTTTT
+select
+    arrow_typeof(int8 + int8),
+    arrow_typeof(int16 + int16),
+    arrow_typeof(int32 + int32),
+    arrow_typeof(int64 + int64),
+    arrow_typeof(uint8 + uint8),
+    arrow_typeof(uint16 + uint16),
+    arrow_typeof(uint32 + uint32),
+    arrow_typeof(uint64 + uint64),
+    arrow_typeof(float32 + float32),
+    arrow_typeof(float64 + float64),
+    arrow_typeof(decimal + decimal)
+from numeric_types;
+----
+Int8 Int16 Int32 Int64 UInt8 UInt16 UInt32 UInt64 Float32 Float64 Decimal128(6, 2)
+
+
+# Minus with the same operand type, expect the same output type
+# except for decimal which is promoted to the highest precision
+query TTTTTTTTTTT
+select
+    arrow_typeof(int8 - int8),
+    arrow_typeof(int16 - int16),
+    arrow_typeof(int32 - int32),
+    arrow_typeof(int64 - int64),
+    arrow_typeof(uint8 - uint8),
+    arrow_typeof(uint16 - uint16),
+    arrow_typeof(uint32 - uint32),
+    arrow_typeof(uint64 - uint64),
+    arrow_typeof(float32 - float32),
+    arrow_typeof(float64 - float64),
+    arrow_typeof(decimal - decimal)
+from numeric_types;
+----
+Int8 Int16 Int32 Int64 UInt8 UInt16 UInt32 UInt64 Float32 Float64 Decimal128(6, 2)
+
+# Multiply with the same operand type, expect the same output type
+# except for decimal which is promoted to the highest precision
+query TTTTTTTTTTT
+select
+    arrow_typeof(int8 * int8),
+    arrow_typeof(int16 * int16),
+    arrow_typeof(int32 * int32),
+    arrow_typeof(int64 * int64),
+    arrow_typeof(uint8 * uint8),
+    arrow_typeof(uint16 * uint16),
+    arrow_typeof(uint32 * uint32),
+    arrow_typeof(uint64 * uint64),
+    arrow_typeof(float32 * float32),
+    arrow_typeof(float64 * float64),
+    arrow_typeof(decimal * decimal)
+from numeric_types;
+----
+Int8 Int16 Int32 Int64 UInt8 UInt16 UInt32 UInt64 Float32 Float64 Decimal128(11, 4)
+
+# Divide with the same operand type, expect the same output type
+# except for decimal which is promoted to the highest precision
+query TTTTTTTTTTT
+select
+    arrow_typeof(int8 / int8),
+    arrow_typeof(int16 / int16),
+    arrow_typeof(int32 / int32),
+    arrow_typeof(int64 / int64),
+    arrow_typeof(uint8 / uint8),
+    arrow_typeof(uint16 / uint16),
+    arrow_typeof(uint32 / uint32),
+    arrow_typeof(uint64 / uint64),
+    arrow_typeof(float32 / float32),
+    arrow_typeof(float64 / float64),
+    arrow_typeof(decimal / decimal)
+from numeric_types;
+----
+Int8 Int16 Int32 Int64 UInt8 UInt16 UInt32 UInt64 Float32 Float64 Decimal128(11, 6)
+
+statement ok
+drop table numeric_types

@@ -1070,7 +1070,7 @@ impl EquivalenceProperties {
             if self.is_expr_constant(source)
                 && !const_exprs_contains(&projected_constants, target)
             {
-                if self.is_expr_constant_accross_partitions(source) {
+                if self.is_expr_constant_across_partitions(source) {
                     projected_constants.push(
                         ConstExpr::from(target)
                             .with_across_partitions(self.get_expr_constant_value(source)),
@@ -1245,8 +1245,31 @@ impl EquivalenceProperties {
     /// # Returns
     ///
     /// Returns `true` if the expression is constant across all partitions according
-    /// to equivalence group, `false` otherwise.
+    /// to equivalence group, `false` otherwise
+    #[deprecated(
+        since = "45.0.0",
+        note = "Use [`is_expr_constant_across_partitions`] instead"
+    )]
     pub fn is_expr_constant_accross_partitions(
+        &self,
+        expr: &Arc<dyn PhysicalExpr>,
+    ) -> bool {
+        self.is_expr_constant_across_partitions(expr)
+    }
+
+    /// This function determines whether the provided expression is constant
+    /// across partitions based on the known constants.
+    ///
+    /// # Parameters
+    ///
+    /// - `expr`: A reference to a `Arc<dyn PhysicalExpr>` representing the
+    ///   expression to be checked.
+    ///
+    /// # Returns
+    ///
+    /// Returns `true` if the expression is constant across all partitions according
+    /// to equivalence group, `false` otherwise.
+    pub fn is_expr_constant_across_partitions(
         &self,
         expr: &Arc<dyn PhysicalExpr>,
     ) -> bool {
