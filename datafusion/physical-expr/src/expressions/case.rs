@@ -156,8 +156,8 @@ impl CaseExpr {
                 && else_expr.as_ref().unwrap().as_any().is::<Literal>()
             {
                 EvalMethod::ScalarOrScalar
-            // } else if when_then_expr.len() == 1 && else_expr.is_some() {
-            //     EvalMethod::ExpressionOrExpression
+            } else if when_then_expr.len() == 1 && else_expr.is_some() {
+                EvalMethod::ExpressionOrExpression
             } else {
                 EvalMethod::NoExpression
             };
