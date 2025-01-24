@@ -498,7 +498,7 @@ impl Signature {
         }
     }
 
-    /// A specified number of numeric arguments
+    /// A specified number of string arguments
     pub fn string(arg_count: usize, volatility: Volatility) -> Self {
         Self {
             type_signature: TypeSignature::String(arg_count),
