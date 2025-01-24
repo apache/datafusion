@@ -2998,12 +2998,22 @@ physical_plan
 05)--------RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
 06)----------MemoryExec: partitions=1, partition_sizes=[1]
 
+query RP
+select amount, ts from sales_global;
+----
+30 2022-01-01T06:00:00
+50 2022-01-01T08:00:00
+75 2022-01-01T11:30:00
+200 2022-01-02T12:00:00
+100 2022-01-03T10:00:00
+80 2022-01-03T10:00:00
+
 query RR
 SELECT FIRST_VALUE(amount ORDER BY ts ASC) AS fv1,
   LAST_VALUE(amount ORDER BY ts ASC) AS fv2
   FROM sales_global
 ----
-30 100
+30 80
 
 # Conversion in between FIRST_VALUE and LAST_VALUE to resolve
 # contradictory requirements should work in multi partitions.
