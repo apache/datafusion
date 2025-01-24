@@ -184,6 +184,10 @@ name = "filter_query_sql"
 
 [[bench]]
 harness = false
+name = "struct_query_sql"
+
+[[bench]]
+harness = false
 name = "window_query_sql"
 
 [[bench]]
