@@ -27,11 +27,10 @@ use super::{
     DisplayAs, ExecutionPlanProperties, PlanProperties, SendableRecordBatchStream,
     Statistics,
 };
-
+use crate::execution_plan::CardinalityEffect;
 use crate::projection::{make_with_child, ProjectionExec};
 use crate::{DisplayFormatType, ExecutionPlan, Partitioning};
 
-use crate::execution_plan::CardinalityEffect;
 use datafusion_common::{internal_err, Result};
 use datafusion_execution::TaskContext;
 

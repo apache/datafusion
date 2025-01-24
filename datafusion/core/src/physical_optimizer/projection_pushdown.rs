@@ -70,9 +70,9 @@ impl PhysicalOptimizerRule for ProjectionPushdown {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::any::Any;
 
+    use super::*;
     use crate::datasource::physical_plan::CsvExec;
     use crate::physical_plan::memory::MemoryExec;
     use crate::physical_plan::repartition::RepartitionExec;
