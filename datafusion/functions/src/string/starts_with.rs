@@ -25,9 +25,10 @@ use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyInfo};
 use crate::utils::make_scalar_function;
 use datafusion_common::types::logical_string;
 use datafusion_common::{internal_err, Result, ScalarValue};
-use datafusion_expr::{ColumnarValue, Documentation, Expr, Like};
-use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
-use datafusion_expr_common::signature::TypeSignatureClass;
+use datafusion_expr::{
+    ColumnarValue, Documentation, Expr, Like, ScalarUDFImpl, Signature, TypeSignature,
+    TypeSignatureClass, Volatility,
+};
 use datafusion_macros::user_doc;
 
 /// Returns true if string starts with prefix.
@@ -66,10 +67,13 @@ impl Default for StartsWithFunc {
 impl StartsWithFunc {
     pub fn new() -> Self {
         Self {
-            signature: Signature::coercible(
+            signature: Signature::one_of(
                 vec![
-                    TypeSignatureClass::Native(logical_string()),
-                    TypeSignatureClass::Native(logical_string()),
+                    TypeSignature::String(2),
+                    TypeSignature::Coercible(vec![
+                        TypeSignatureClass::Native(logical_string()),
+                        TypeSignatureClass::Native(logical_string()),
+                    ]),
                 ],
                 Volatility::Immutable,
             ),

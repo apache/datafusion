@@ -21,9 +21,10 @@ use arrow::datatypes::DataType;
 use arrow::error::ArrowError;
 use datafusion_common::types::logical_string;
 use datafusion_common::{internal_err, Result};
-use datafusion_expr::{ColumnarValue, Documentation};
-use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
-use datafusion_expr_common::signature::TypeSignatureClass;
+use datafusion_expr::{
+    ColumnarValue, Documentation, ScalarUDFImpl, Signature, TypeSignature,
+    TypeSignatureClass, Volatility,
+};
 use datafusion_macros::user_doc;
 use std::any::Any;
 use std::sync::Arc;
@@ -63,8 +64,13 @@ impl Default for AsciiFunc {
 impl AsciiFunc {
     pub fn new() -> Self {
         Self {
-            signature: Signature::coercible(
-                vec![TypeSignatureClass::Native(logical_string())],
+            signature: Signature::one_of(
+                vec![
+                    TypeSignature::String(1),
+                    TypeSignature::Coercible(vec![TypeSignatureClass::Native(
+                        logical_string(),
+                    )]),
+                ],
                 Volatility::Immutable,
             ),
         }

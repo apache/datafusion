@@ -24,9 +24,10 @@ use arrow::datatypes::DataType;
 use crate::utils::make_scalar_function;
 use datafusion_common::types::logical_string;
 use datafusion_common::{internal_err, Result};
-use datafusion_expr::{ColumnarValue, Documentation, Volatility};
-use datafusion_expr::{ScalarUDFImpl, Signature};
-use datafusion_expr_common::signature::TypeSignatureClass;
+use datafusion_expr::{
+    ColumnarValue, Documentation, ScalarUDFImpl, Signature, TypeSignature,
+    TypeSignatureClass, Volatility,
+};
 use datafusion_macros::user_doc;
 
 #[user_doc(
@@ -64,10 +65,13 @@ impl Default for EndsWithFunc {
 impl EndsWithFunc {
     pub fn new() -> Self {
         Self {
-            signature: Signature::coercible(
+            signature: Signature::one_of(
                 vec![
-                    TypeSignatureClass::Native(logical_string()),
-                    TypeSignatureClass::Native(logical_string()),
+                    TypeSignature::String(2),
+                    TypeSignature::Coercible(vec![
+                        TypeSignatureClass::Native(logical_string()),
+                        TypeSignatureClass::Native(logical_string()),
+                    ]),
                 ],
                 Volatility::Immutable,
             ),

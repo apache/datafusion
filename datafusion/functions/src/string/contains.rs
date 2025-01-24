@@ -25,9 +25,9 @@ use datafusion_common::types::logical_string;
 use datafusion_common::DataFusionError;
 use datafusion_common::Result;
 use datafusion_expr::{
-    ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
+    ColumnarValue, Documentation, ScalarUDFImpl, Signature, TypeSignature,
+    TypeSignatureClass, Volatility,
 };
-use datafusion_expr_common::signature::TypeSignatureClass;
 use datafusion_macros::user_doc;
 use std::any::Any;
 use std::sync::Arc;
@@ -61,10 +61,13 @@ impl Default for ContainsFunc {
 impl ContainsFunc {
     pub fn new() -> Self {
         Self {
-            signature: Signature::coercible(
+            signature: Signature::one_of(
                 vec![
-                    TypeSignatureClass::Native(logical_string()),
-                    TypeSignatureClass::Native(logical_string()),
+                    TypeSignature::String(2),
+                    TypeSignature::Coercible(vec![
+                        TypeSignatureClass::Native(logical_string()),
+                        TypeSignatureClass::Native(logical_string()),
+                    ]),
                 ],
                 Volatility::Immutable,
             ),
