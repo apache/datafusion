@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! [`MemoryPool`] for memory management during query execution, [`proxy]` for
+//! [`MemoryPool`] for memory management during query execution, [`proxy`] for
 //! help with allocation accounting.
 
 use datafusion_common::{internal_err, Result};
@@ -108,6 +108,9 @@ pub use pool::*;
 ///
 /// * [`FairSpillPool`]: Limits memory usage to a fixed size, allocating memory
 ///   to all spilling operators fairly
+///
+/// * [`TrackConsumersPool`]: Wraps another [`MemoryPool`] and tracks consumers,
+/// providing better error messages on the largest memory users.
 pub trait MemoryPool: Send + Sync + std::fmt::Debug {
     /// Registers a new [`MemoryConsumer`]
     ///
@@ -140,9 +143,9 @@ pub trait MemoryPool: Send + Sync + std::fmt::Debug {
 /// [`MemoryReservation`] in a [`MemoryPool`]. All allocations are registered to
 /// a particular `MemoryConsumer`;
 ///
-/// For help with allocation accounting, see the [proxy] module.
+/// For help with allocation accounting, see the [`proxy`] module.
 ///
-/// [proxy]: crate::memory_pool::proxy
+/// [proxy]: datafusion_common::utils::proxy
 #[derive(Debug, PartialEq, Eq, Hash, Clone)]
 pub struct MemoryConsumer {
     name: String,
