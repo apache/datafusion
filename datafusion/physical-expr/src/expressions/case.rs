@@ -421,6 +421,8 @@ impl CaseExpr {
             )
         })?;
 
+        let current_value = new_null_array(&return_type, batch.num_rows());
+
         // Treat 'NULL' as false value
         let when_value = match when_value.null_count() {
             0 => Cow::Borrowed(when_value),
@@ -429,8 +431,20 @@ impl CaseExpr {
 
         let then_value = self.when_then_expr[0]
             .1
-            .evaluate_selection(batch, &when_value)?
-            .into_array(batch.num_rows())?;
+            .evaluate_selection(batch, &when_value)?;
+
+        let then_value = match then_value {
+            ColumnarValue::Scalar(ScalarValue::Null) => {
+                nullif(current_value.as_ref(), &when_value)?
+            }
+            ColumnarValue::Scalar(then_value) => {
+                zip(&when_value, &then_value.to_scalar()?, &current_value)?
+            }
+            ColumnarValue::Array(then_value) => {
+                zip(&when_value, &then_value, &current_value)?
+            }
+        };
+        let then_value = zip(&when_value, &then_value, &current_value)?;
 
         // evaluate else expression on the values not covered by when_value
         let remainder = not(&when_value)?;
