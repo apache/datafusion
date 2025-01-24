@@ -41,7 +41,7 @@ aws-sdk-ssooidc = "=1.51.0"
 aws-sdk-sts = "=1.51.0"
 # end pin aws-sdk crates
 aws-credential-types = "1.2.0"
-clap = { version = "4.5.16", features = ["derive", "cargo"] }
+clap = { version = "4.5.27", features = ["derive", "cargo"] }
 datafusion = { path = "../datafusion/core", version = "44.0.0", features = [
     "avro",
     "crypto_expressions",
