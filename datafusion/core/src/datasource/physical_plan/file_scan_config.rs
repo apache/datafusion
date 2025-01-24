@@ -18,7 +18,10 @@
 //! [`FileScanConfig`] to configure scanning of possibly partitioned
 //! file sources.
 
-use super::{get_projected_output_ordering, statistics::MinMaxStatistics, FileGroupPartitioner, FileGroupsDisplay, FileStream};
+use super::{
+    get_projected_output_ordering, statistics::MinMaxStatistics, FileGroupPartitioner,
+    FileGroupsDisplay, FileStream,
+};
 use crate::datasource::file_format::file_compression_type::FileCompressionType;
 use crate::datasource::{listing::PartitionedFile, object_store::ObjectStoreUrl};
 use crate::{error::Result, scalar::ScalarValue};
@@ -42,11 +45,11 @@ use datafusion_physical_expr::{EquivalenceProperties, LexOrdering, Partitioning}
 
 use crate::datasource::data_source::FileSource;
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
+use datafusion_physical_plan::display::{display_orderings, ProjectSchemaDisplay};
 use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
 use datafusion_physical_plan::source::{DataSource, DataSourceExec};
 use datafusion_physical_plan::{DisplayAs, DisplayFormatType};
 use log::warn;
-use datafusion_physical_plan::display::{display_orderings, ProjectSchemaDisplay};
 
 /// Convert type to a type suitable for use as a [`ListingTable`]
 /// partition column. Returns `Dictionary(UInt16, val_type)`, which is

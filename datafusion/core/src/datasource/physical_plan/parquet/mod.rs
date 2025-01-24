@@ -1408,7 +1408,12 @@ mod tests {
             RoundTripResult {
                 batches: collect(parquet_exec.clone(), task_ctx).await,
                 parquet_exec,
-                parquet_source: base_config.file_source().as_any().downcast_ref::<ParquetSource>().unwrap().clone(),
+                parquet_source: base_config
+                    .file_source()
+                    .as_any()
+                    .downcast_ref::<ParquetSource>()
+                    .unwrap()
+                    .clone(),
             }
         }
     }
