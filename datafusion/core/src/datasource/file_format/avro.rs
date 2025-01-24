@@ -27,7 +27,7 @@ use super::FileFormat;
 use super::FileFormatFactory;
 use crate::datasource::avro_to_arrow::read_avro_schema_from_reader;
 use crate::datasource::data_source::FileSourceConfig;
-use crate::datasource::physical_plan::{AvroConfig, FileScanConfig};
+use crate::datasource::physical_plan::{AvroSource, FileScanConfig};
 use crate::error::Result;
 use crate::execution::context::SessionState;
 use crate::physical_plan::ExecutionPlan;
@@ -153,7 +153,7 @@ impl FileFormat for AvroFormat {
     ) -> Result<Arc<dyn ExecutionPlan>> {
         Ok(FileSourceConfig::new_exec(
             conf,
-            Arc::new(AvroConfig::new()),
+            Arc::new(AvroSource::new()),
         ))
     }
 }

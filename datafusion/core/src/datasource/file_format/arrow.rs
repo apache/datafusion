@@ -33,7 +33,7 @@ use crate::datasource::data_source::FileSourceConfig;
 use crate::datasource::file_format::write::get_writer_schema;
 use crate::datasource::file_format::FileFormat;
 use crate::datasource::physical_plan::{
-    ArrowConfig, FileGroupDisplay, FileScanConfig, FileSink, FileSinkConfig,
+    ArrowSource, FileGroupDisplay, FileScanConfig, FileSink, FileSinkConfig,
 };
 use crate::error::Result;
 use crate::execution::context::SessionState;
@@ -175,7 +175,7 @@ impl FileFormat for ArrowFormat {
     ) -> Result<Arc<dyn ExecutionPlan>> {
         Ok(FileSourceConfig::new_exec(
             conf,
-            Arc::new(ArrowConfig::default()),
+            Arc::new(ArrowSource::default()),
         ))
     }
 

@@ -31,7 +31,7 @@ use crate::datasource::file_format::file_compression_type::FileCompressionType;
 use crate::datasource::file_format::FileFormat;
 use crate::datasource::listing::PartitionedFile;
 use crate::datasource::object_store::ObjectStoreUrl;
-use crate::datasource::physical_plan::{CsvConfig, FileScanConfig};
+use crate::datasource::physical_plan::{CsvSource, FileScanConfig};
 use crate::datasource::{MemTable, TableProvider};
 use crate::error::Result;
 use crate::logical_expr::LogicalPlan;
@@ -92,7 +92,7 @@ pub fn scan_partitioned_csv(
     )?;
     let config = partitioned_csv_config(schema, file_groups)
         .with_file_compression_type(FileCompressionType::UNCOMPRESSED);
-    let source_config = Arc::new(CsvConfig::new(true, b'"', b'"'));
+    let source_config = Arc::new(CsvSource::new(true, b'"', b'"'));
     Ok(FileSourceConfig::new_exec(config, source_config))
 }
 

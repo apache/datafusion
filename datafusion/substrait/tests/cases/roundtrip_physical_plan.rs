@@ -23,7 +23,7 @@ use datafusion::dataframe::DataFrame;
 use datafusion::datasource::data_source::FileSourceConfig;
 use datafusion::datasource::listing::PartitionedFile;
 use datafusion::datasource::object_store::ObjectStoreUrl;
-use datafusion::datasource::physical_plan::{FileScanConfig, ParquetConfig};
+use datafusion::datasource::physical_plan::{FileScanConfig, ParquetSource};
 use datafusion::error::Result;
 use datafusion::physical_plan::{displayable, ExecutionPlan};
 use datafusion::prelude::{ParquetReadOptions, SessionContext};
@@ -47,7 +47,7 @@ async fn parquet_exec() -> Result<()> {
             123,
         )],
     ]);
-    let source_config = Arc::new(ParquetConfig::default());
+    let source_config = Arc::new(ParquetSource::default());
     let parquet_exec: Arc<dyn ExecutionPlan> =
         FileSourceConfig::new_exec(scan_config, source_config);
 

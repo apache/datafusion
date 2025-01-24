@@ -25,7 +25,7 @@ use datafusion::{
         file_format::file_compression_type::FileCompressionType,
         listing::PartitionedFile,
         object_store::ObjectStoreUrl,
-        physical_plan::{CsvConfig, FileScanConfig, FileStream, JsonOpener},
+        physical_plan::{CsvSource, FileScanConfig, FileStream, JsonOpener},
     },
     error::Result,
     physical_plan::metrics::ExecutionPlanMetricsSet,
@@ -61,7 +61,7 @@ async fn csv_opener() -> Result<()> {
             .with_limit(Some(5))
             .with_file(PartitionedFile::new(path.display().to_string(), 10));
 
-    let config = CsvConfig::new(true, b',', b'"')
+    let config = CsvSource::new(true, b',', b'"')
         .with_comment(Some(b'#'))
         .with_schema(schema)
         .with_batch_size(8192)

@@ -272,22 +272,22 @@ impl JsonOpener {
     }
 }
 
-/// JsonConfig holds the extra configuration that is necessary for [`JsonOpener`]
+/// JsonSource holds the extra configuration that is necessary for [`JsonOpener`]
 #[derive(Clone, Default)]
-pub struct JsonConfig {
+pub struct JsonSource {
     batch_size: Option<usize>,
     metrics: ExecutionPlanMetricsSet,
     projected_statistics: Option<Statistics>,
 }
 
-impl JsonConfig {
-    /// Initialize a JsonConfig with default values
+impl JsonSource {
+    /// Initialize a JsonSource with default values
     pub fn new() -> Self {
         Self::default()
     }
 }
 
-impl FileSource for JsonConfig {
+impl FileSource for JsonSource {
     fn create_file_opener(
         &self,
         object_store: Result<Arc<dyn ObjectStore>>,
@@ -613,7 +613,7 @@ mod tests {
             .with_file_groups(file_groups)
             .with_limit(Some(3))
             .with_file_compression_type(file_compression_type.to_owned());
-        let source_config = Arc::new(JsonConfig::new());
+        let source_config = Arc::new(JsonSource::new());
         let exec = FileSourceConfig::new_exec(conf, source_config);
 
         // TODO: this is not where schema inference should be tested
@@ -684,7 +684,7 @@ mod tests {
             .with_file_groups(file_groups)
             .with_limit(Some(3))
             .with_file_compression_type(file_compression_type.to_owned());
-        let source_config = Arc::new(JsonConfig::new());
+        let source_config = Arc::new(JsonSource::new());
         let exec = FileSourceConfig::new_exec(conf, source_config);
 
         let mut it = exec.execute(0, task_ctx)?;
@@ -724,7 +724,7 @@ mod tests {
             .with_file_groups(file_groups)
             .with_projection(Some(vec![0, 2]))
             .with_file_compression_type(file_compression_type.to_owned());
-        let source_config = Arc::new(JsonConfig::new());
+        let source_config = Arc::new(JsonSource::new());
         let exec = FileSourceConfig::new_exec(conf, source_config);
         let inferred_schema = exec.schema();
         assert_eq!(inferred_schema.fields().len(), 2);
@@ -769,7 +769,7 @@ mod tests {
             .with_file_groups(file_groups)
             .with_projection(Some(vec![3, 0, 2]))
             .with_file_compression_type(file_compression_type.to_owned());
-        let source_config = Arc::new(JsonConfig::new());
+        let source_config = Arc::new(JsonSource::new());
         let exec = FileSourceConfig::new_exec(conf, source_config);
         let inferred_schema = exec.schema();
         assert_eq!(inferred_schema.fields().len(), 3);

@@ -37,7 +37,7 @@ use crate::datasource::file_format::file_compression_type::FileCompressionType;
 use crate::datasource::file_format::write::get_writer_schema;
 use crate::datasource::physical_plan::parquet::can_expr_be_pushed_down_with_schemas;
 use crate::datasource::physical_plan::{
-    FileGroupDisplay, FileSink, FileSinkConfig, ParquetConfig,
+    FileGroupDisplay, FileSink, FileSinkConfig, ParquetSource,
 };
 use crate::datasource::statistics::{create_max_min_accs, get_col_stats};
 use crate::error::Result;
@@ -415,7 +415,7 @@ impl FileFormat for ParquetFormat {
             metadata_size_hint = Some(metadata);
         }
 
-        let source_config = Arc::new(ParquetConfig::new(
+        let source_config = Arc::new(ParquetSource::new(
             Arc::clone(&conf.file_schema),
             predicate,
             metadata_size_hint,

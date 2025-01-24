@@ -27,7 +27,7 @@ use datafusion::datasource::data_source::FileSourceConfig;
 use datafusion::datasource::file_format::file_compression_type::FileCompressionType;
 use datafusion::datasource::listing::PartitionedFile;
 use datafusion::datasource::object_store::ObjectStoreUrl;
-use datafusion::datasource::physical_plan::{CsvConfig, FileScanConfig, ParquetConfig};
+use datafusion::datasource::physical_plan::{CsvSource, FileScanConfig, ParquetSource};
 use datafusion_common::error::Result;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::ScalarValue;
@@ -182,7 +182,7 @@ fn parquet_exec_multiple_sorted(
                 vec![PartitionedFile::new("y".to_string(), 100)],
             ])
             .with_output_ordering(output_ordering),
-        Arc::new(ParquetConfig::default()),
+        Arc::new(ParquetSource::default()),
     )
 }
 
@@ -195,7 +195,7 @@ fn csv_exec_with_sort(output_ordering: Vec<LexOrdering>) -> Arc<DataSourceExec> 
         FileScanConfig::new(ObjectStoreUrl::parse("test:///").unwrap(), schema())
             .with_file(PartitionedFile::new("x".to_string(), 100))
             .with_output_ordering(output_ordering),
-        Arc::new(CsvConfig::new(false, b',', b'"')),
+        Arc::new(CsvSource::new(false, b',', b'"')),
     )
 }
 
@@ -212,7 +212,7 @@ fn csv_exec_multiple_sorted(output_ordering: Vec<LexOrdering>) -> Arc<DataSource
                 vec![PartitionedFile::new("y".to_string(), 100)],
             ])
             .with_output_ordering(output_ordering),
-        Arc::new(CsvConfig::new(false, b',', b'"')),
+        Arc::new(CsvSource::new(false, b',', b'"')),
     )
 }
 
@@ -2405,7 +2405,7 @@ fn parallelization_compressed_csv() -> Result<()> {
                 FileScanConfig::new(ObjectStoreUrl::parse("test:///").unwrap(), schema())
                     .with_file(PartitionedFile::new("x".to_string(), 100))
                     .with_file_compression_type(compression_type),
-                Arc::new(CsvConfig::new(false, b',', b'"')),
+                Arc::new(CsvSource::new(false, b',', b'"')),
             ),
             vec![("a".to_string(), "a".to_string())],
         );

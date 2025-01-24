@@ -112,7 +112,7 @@ impl FileType {
 
 /// Holds generic file configuration, and common behaviors for file sources.
 /// Can be initialized with a `FileScanConfig`
-/// and a `dyn FileSource` type such as `CsvConfig`, `ParquetConfig`, `AvroConfig`, etc.
+/// and a `dyn FileSource` type such as `CsvSource`, `ParquetSource`, `AvroSource`, etc.
 #[derive(Clone)]
 pub struct FileSourceConfig {
     source: Arc<dyn FileSource>,

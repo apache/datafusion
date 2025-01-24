@@ -26,7 +26,7 @@ use async_trait::async_trait;
 use datafusion::catalog::Session;
 use datafusion::datasource::data_source::FileSourceConfig;
 use datafusion::datasource::listing::PartitionedFile;
-use datafusion::datasource::physical_plan::{FileScanConfig, ParquetConfig};
+use datafusion::datasource::physical_plan::{FileScanConfig, ParquetSource};
 use datafusion::datasource::TableProvider;
 use datafusion::execution::object_store::ObjectStoreUrl;
 use datafusion::parquet::arrow::arrow_reader::statistics::StatisticsConverter;
@@ -257,7 +257,7 @@ impl TableProvider for IndexTableProvider {
                 file_size,
             ));
         }
-        let source_config = Arc::new(ParquetConfig::new(
+        let source_config = Arc::new(ParquetSource::new(
             Arc::clone(&file_scan_config.file_schema),
             Some(predicate),
             None,

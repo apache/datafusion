@@ -197,7 +197,7 @@ In this case, DataFusion actually ran the query, but discarded any results, and
 instead returned an annotated plan with a new field, `metrics=[...]`
 
 Most operators have the common metrics `output_rows` and `elapsed_compute` and
-some have operator specific metrics such as `DataSourceExec` with `ParquetConfig` which has
+some have operator specific metrics such as `DataSourceExec` with `ParquetSource` which has
 `bytes_scanned=3703192723`. Note that times and counters are reported across all
 cores, so if you have 16 cores, the time reported is the sum of the time taken
 by all 16 cores.
@@ -223,7 +223,7 @@ Again, reading from bottom up:
 - `SortPreservingMergeExec`
   - `output_rows=5`, `elapsed_compute=2.375µs`: Produced the final 5 rows in 2.375µs (microseconds)
 
-When predicate pushdown is enabled, `DataSourceExec` with `ParquetConfig` gains the following metrics:
+When predicate pushdown is enabled, `DataSourceExec` with `ParquetSource` gains the following metrics:
 
 - `page_index_rows_matched`: number of rows in pages that were tested by a page index filter, and passed
 - `page_index_rows_pruned`: number of rows in pages that were tested by a page index filter, and did not pass

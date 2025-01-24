@@ -25,7 +25,7 @@ use datafusion::datasource::file_format::parquet::ParquetFormat;
 use datafusion::datasource::file_format::FileFormat;
 use datafusion::datasource::listing::PartitionedFile;
 use datafusion::datasource::object_store::ObjectStoreUrl;
-use datafusion::datasource::physical_plan::{FileScanConfig, ParquetConfig};
+use datafusion::datasource::physical_plan::{FileScanConfig, ParquetSource};
 use datafusion::execution::context::SessionState;
 use datafusion::physical_plan::metrics::MetricValue;
 use datafusion::physical_plan::ExecutionPlan;
@@ -79,7 +79,7 @@ async fn get_parquet_exec(state: &SessionState, filter: Expr) -> DataSourceExec 
     let base_config =
         FileScanConfig::new(object_store_url, schema).with_file(partitioned_file);
     let source_config = Arc::new(
-        ParquetConfig::new(
+        ParquetSource::new(
             Arc::clone(&base_config.file_schema),
             Some(predicate),
             None,

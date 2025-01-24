@@ -229,7 +229,7 @@ impl SchemaAdapterFactory for DefaultSchemaAdapterFactory {
 #[derive(Clone, Debug)]
 pub(crate) struct DefaultSchemaAdapter {
     /// The schema for the table, projected to include only the fields being output (projected) by the
-    /// associated ParquetConfig
+    /// associated ParquetSource
     projected_table_schema: SchemaRef,
     /// The entire table schema for the table we're using this to adapt.
     ///
@@ -315,7 +315,7 @@ impl SchemaAdapter for DefaultSchemaAdapter {
 /// can be used for Parquet predicate pushdown, meaning that it may contain
 /// fields which are not in the projected schema (as the fields that parquet
 /// pushdown filters operate can be completely distinct from the fields that are
-/// projected (output) out of the ParquetConfig). `map_partial_batch` thus uses
+/// projected (output) out of the ParquetSource). `map_partial_batch` thus uses
 /// `table_schema` to create the resulting RecordBatch (as it could be operating
 /// on any fields in the schema).
 ///
@@ -444,7 +444,7 @@ mod tests {
     use crate::datasource::data_source::FileSourceConfig;
     use crate::datasource::listing::PartitionedFile;
     use crate::datasource::object_store::ObjectStoreUrl;
-    use crate::datasource::physical_plan::{FileScanConfig, ParquetConfig};
+    use crate::datasource::physical_plan::{FileScanConfig, ParquetSource};
     use crate::datasource::schema_adapter::{
         DefaultSchemaAdapterFactory, SchemaAdapter, SchemaAdapterFactory, SchemaMapper,
     };
@@ -505,7 +505,7 @@ mod tests {
             .with_file(partitioned_file);
 
         let source_config = Arc::new(
-            ParquetConfig::default()
+            ParquetSource::default()
                 .with_schema_adapter_factory(Arc::new(TestSchemaAdapterFactory {})),
         );
 

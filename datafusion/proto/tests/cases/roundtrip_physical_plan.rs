@@ -49,7 +49,7 @@ use datafusion::datasource::listing::{ListingTableUrl, PartitionedFile};
 use datafusion::datasource::object_store::ObjectStoreUrl;
 use datafusion::datasource::physical_plan::{
     wrap_partition_type_in_dict, wrap_partition_value_in_dict, FileScanConfig,
-    FileSinkConfig, ParquetConfig,
+    FileSinkConfig, ParquetSource,
 };
 use datafusion::execution::FunctionRegistry;
 use datafusion::functions_aggregate::sum::sum_udaf;
@@ -734,7 +734,7 @@ fn roundtrip_parquet_exec_with_pruning_predicate() -> Result<()> {
         Operator::Eq,
         lit("1"),
     ));
-    let source_config = Arc::new(ParquetConfig::new(
+    let source_config = Arc::new(ParquetSource::new(
         Arc::clone(&scan_config.file_schema),
         Some(predicate),
         None,
@@ -768,7 +768,7 @@ async fn roundtrip_parquet_exec_with_table_partition_cols() -> Result<()> {
         file_compression_type: FileCompressionType::UNCOMPRESSED,
         new_lines_in_values: false,
     };
-    let source_config = Arc::new(ParquetConfig::default());
+    let source_config = Arc::new(ParquetSource::default());
 
     roundtrip_test(FileSourceConfig::new_exec(scan_config, source_config))
 }
@@ -911,7 +911,7 @@ fn roundtrip_parquet_exec_with_custom_predicate_expr() -> Result<()> {
         inner: Arc::new(Column::new("col", 1)),
     });
 
-    let source_config = Arc::new(ParquetConfig::new(
+    let source_config = Arc::new(ParquetSource::new(
         Arc::clone(&scan_config.file_schema),
         Some(custom_predicate_expr),
         None,

@@ -31,8 +31,8 @@ use datafusion::datasource::file_format::json::JsonSink;
 #[cfg(feature = "parquet")]
 use datafusion::datasource::file_format::parquet::ParquetSink;
 #[cfg(feature = "parquet")]
-use datafusion::datasource::physical_plan::ParquetConfig;
-use datafusion::datasource::physical_plan::{AvroConfig, CsvConfig};
+use datafusion::datasource::physical_plan::ParquetSource;
+use datafusion::datasource::physical_plan::{AvroSource, CsvSource};
 use datafusion::execution::runtime_env::RuntimeEnv;
 use datafusion::execution::FunctionRegistry;
 use datafusion::physical_expr::aggregate::AggregateFunctionExpr;
@@ -234,7 +234,7 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                 };
 
                 let source_config = Arc::new(
-                    CsvConfig::new(
+                    CsvSource::new(
                         scan.has_header,
                         str_to_byte(&scan.delimiter, "delimiter")?,
                         0,
@@ -265,7 +265,7 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                             )
                         })
                         .transpose()?;
-                    let source_config = Arc::new(ParquetConfig::new(
+                    let source_config = Arc::new(ParquetSource::new(
                         Arc::clone(&base_config.file_schema),
                         predicate,
                         None,
@@ -282,7 +282,7 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                     registry,
                     extension_codec,
                 )?;
-                let source_config = Arc::new(AvroConfig::new());
+                let source_config = Arc::new(AvroSource::new());
                 Ok(FileSourceConfig::new_exec(conf, source_config))
             }
             PhysicalPlanType::CoalesceBatches(coalesce_batches) => {
@@ -1625,7 +1625,7 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
             let source = exec.source();
             if let Some(maybe_csv) = source.as_any().downcast_ref::<FileSourceConfig>() {
                 let source = maybe_csv.file_source();
-                if let Some(csv_config) = source.as_any().downcast_ref::<CsvConfig>() {
+                if let Some(csv_config) = source.as_any().downcast_ref::<CsvSource>() {
                     return Ok(protobuf::PhysicalPlanNode {
                         physical_plan_type: Some(PhysicalPlanType::CsvScan(
                             protobuf::CsvScanExecNode {
@@ -1675,7 +1675,7 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                 source.as_any().downcast_ref::<FileSourceConfig>()
             {
                 let source = maybe_parquet.file_source();
-                if let Some(conf) = source.as_any().downcast_ref::<ParquetConfig>() {
+                if let Some(conf) = source.as_any().downcast_ref::<ParquetSource>() {
                     let predicate = conf
                         .predicate()
                         .map(|pred| serialize_physical_expr(pred, extension_codec))
@@ -1699,7 +1699,7 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
             let source = exec.source();
             if let Some(maybe_avro) = source.as_any().downcast_ref::<FileSourceConfig>() {
                 let source = maybe_avro.file_source();
-                if source.as_any().downcast_ref::<AvroConfig>().is_some() {
+                if source.as_any().downcast_ref::<AvroSource>().is_some() {
                     return Ok(protobuf::PhysicalPlanNode {
                         physical_plan_type: Some(PhysicalPlanType::AvroScan(
                             protobuf::AvroScanExecNode {

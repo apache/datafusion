@@ -30,7 +30,7 @@ use datafusion::datasource::data_source::FileSourceConfig;
 use datafusion::datasource::listing::PartitionedFile;
 use datafusion::datasource::physical_plan::parquet::ParquetAccessPlan;
 use datafusion::datasource::physical_plan::{
-    parquet::ParquetFileReaderFactory, FileMeta, FileScanConfig, ParquetConfig,
+    parquet::ParquetFileReaderFactory, FileMeta, FileScanConfig, ParquetSource,
 };
 use datafusion::datasource::TableProvider;
 use datafusion::execution::object_store::ObjectStoreUrl;
@@ -84,8 +84,8 @@ use url::Url;
 /// Specifically, this example illustrates how to:
 /// 1. Use [`ParquetFileReaderFactory`] to avoid re-reading parquet metadata on each query
 /// 2. Use [`PruningPredicate`] for predicate analysis
-/// 3. Pass a row group selection to [`ParquetConfig`]
-/// 4. Pass a row selection (within a row group) to [`ParquetConfig`]
+/// 3. Pass a row group selection to [`ParquetSource`]
+/// 4. Pass a row selection (within a row group) to [`ParquetSource`]
 ///
 /// Note this is a *VERY* low level example for people who want to build their
 /// own custom indexes (e.g. for low latency queries). Most users should use
@@ -95,7 +95,7 @@ use url::Url;
 ///
 /// # Diagram
 ///
-/// This diagram shows how the `DataSourceExec` with `ParquetConfig` is configured to do only a single
+/// This diagram shows how the `DataSourceExec` with `ParquetSource` is configured to do only a single
 /// (range) read from a parquet file, for the data that is needed. It does
 /// not read the file footer or any of the row groups that are not needed.
 ///
@@ -120,13 +120,13 @@ use url::Url;
 ///         │ ╔═══════════════════╗ │              └──────────────────────┘
 ///         │ ║  Thrift metadata  ║ │
 ///         │ ╚═══════════════════╝ │      1. With cached ParquetMetadata, so
-///         └───────────────────────┘      the ParquetConfig does not re-read /
+///         └───────────────────────┘      the ParquetSource does not re-read /
 ///          Parquet File                  decode the thrift footer
 ///
 /// ```
 ///
 /// Within a Row Group, Column Chunks store data in DataPages. This example also
-/// shows how to configure the ParquetConfig to read a `RowSelection` (row ranges)
+/// shows how to configure the ParquetSource to read a `RowSelection` (row ranges)
 /// which will skip unneeded data pages. This requires that the Parquet file has
 /// a [Page Index].
 ///
@@ -497,7 +497,7 @@ impl TableProvider for IndexTableProvider {
                 .with_file(indexed_file);
 
         let source_config = Arc::new(
-            ParquetConfig::new(
+            ParquetSource::new(
                 Arc::clone(&file_scan_config.file_schema),
                 // provide the predicate so the DataSourceExec can try and prune
                 // row groups internally

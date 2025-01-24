@@ -34,7 +34,7 @@ use crate::datasource::file_format::file_compression_type::FileCompressionType;
 use crate::datasource::file_format::write::demux::DemuxedStreamReceiver;
 use crate::datasource::file_format::write::BatchSerializer;
 use crate::datasource::physical_plan::{
-    FileGroupDisplay, FileSink, FileSinkConfig, JsonConfig,
+    FileGroupDisplay, FileSink, FileSinkConfig, JsonSource,
 };
 use crate::error::Result;
 use crate::execution::context::SessionState;
@@ -251,7 +251,7 @@ impl FileFormat for JsonFormat {
         mut conf: FileScanConfig,
         _filters: Option<&Arc<dyn PhysicalExpr>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let source_config = Arc::new(JsonConfig::new());
+        let source_config = Arc::new(JsonSource::new());
         conf.file_compression_type = FileCompressionType::from(self.options.compression);
 
         Ok(FileSourceConfig::new_exec(conf, source_config))

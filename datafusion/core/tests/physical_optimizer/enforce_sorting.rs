@@ -38,7 +38,7 @@ use datafusion_physical_plan::{get_plan_string, ExecutionPlan};
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{TreeNode, TransformedResult};
 use datafusion_physical_optimizer::test_utils::{check_integrity,bounded_window_exec, coalesce_partitions_exec, create_test_schema, create_test_schema2, create_test_schema3, filter_exec, global_limit_exec, hash_join_exec, limit_exec, local_limit_exec, memory_exec, repartition_exec, sort_exec, sort_expr, sort_expr_options, sort_merge_join_exec, sort_preserving_merge_exec, spr_repartition_exec, stream_exec_ordered, union_exec};
-use datafusion::datasource::physical_plan::{CsvConfig, FileScanConfig, ParquetConfig};
+use datafusion::datasource::physical_plan::{CsvSource, FileScanConfig, ParquetSource};
 use datafusion::datasource::data_source::FileSourceConfig;
 use datafusion_execution::object_store::ObjectStoreUrl;
 use datafusion::datasource::listing::PartitionedFile;
@@ -56,7 +56,7 @@ fn csv_exec_ordered(
         FileScanConfig::new(ObjectStoreUrl::parse("test:///").unwrap(), schema.clone())
             .with_file(PartitionedFile::new("file_path".to_string(), 100))
             .with_output_ordering(vec![sort_exprs]),
-        Arc::new(CsvConfig::new(true, 0, b'"')),
+        Arc::new(CsvSource::new(true, 0, b'"')),
     )
 }
 
@@ -71,7 +71,7 @@ pub fn parquet_exec_sorted(
         FileScanConfig::new(ObjectStoreUrl::parse("test:///").unwrap(), schema.clone())
             .with_file(PartitionedFile::new("x".to_string(), 100))
             .with_output_ordering(vec![sort_exprs]);
-    let source_config = Arc::new(ParquetConfig::default());
+    let source_config = Arc::new(ParquetSource::default());
     FileSourceConfig::new_exec(base_config, source_config)
 }
 
@@ -86,7 +86,7 @@ fn csv_exec_sorted(
         FileScanConfig::new(ObjectStoreUrl::parse("test:///").unwrap(), schema.clone())
             .with_file(PartitionedFile::new("x".to_string(), 100))
             .with_output_ordering(vec![sort_exprs]),
-        Arc::new(CsvConfig::new(false, 0, 0)),
+        Arc::new(CsvSource::new(false, 0, 0)),
     )
 }
 

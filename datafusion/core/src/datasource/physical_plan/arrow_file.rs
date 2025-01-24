@@ -229,12 +229,12 @@ impl ExecutionPlan for ArrowExec {
 /// Arrow configuration struct that is given to DataSourceExec
 /// Does not hold anything special, since [`FileScanConfig`] is sufficient for arrow
 #[derive(Clone, Default)]
-pub struct ArrowConfig {
+pub struct ArrowSource {
     metrics: ExecutionPlanMetricsSet,
     projected_statistics: Option<Statistics>,
 }
 
-impl FileSource for ArrowConfig {
+impl FileSource for ArrowSource {
     fn create_file_opener(
         &self,
         object_store: Result<Arc<dyn ObjectStore>>,

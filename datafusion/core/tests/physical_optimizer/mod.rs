@@ -29,7 +29,7 @@ use std::sync::Arc;
 use arrow_schema::SchemaRef;
 use datafusion::datasource::data_source::FileSourceConfig;
 use datafusion::datasource::listing::PartitionedFile;
-use datafusion::datasource::physical_plan::{FileScanConfig, ParquetConfig};
+use datafusion::datasource::physical_plan::{FileScanConfig, ParquetSource};
 use datafusion_execution::object_store::ObjectStoreUrl;
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use datafusion_physical_optimizer::test_utils::schema;
@@ -40,7 +40,7 @@ pub fn parquet_exec(schema: &SchemaRef) -> Arc<DataSourceExec> {
     FileSourceConfig::new_exec(
         FileScanConfig::new(ObjectStoreUrl::parse("test:///").unwrap(), schema.clone())
             .with_file(PartitionedFile::new("x".to_string(), 100)),
-        Arc::new(ParquetConfig::default()),
+        Arc::new(ParquetSource::default()),
     )
 }
 
@@ -52,6 +52,6 @@ pub(crate) fn parquet_exec_with_sort(
         FileScanConfig::new(ObjectStoreUrl::parse("test:///").unwrap(), schema())
             .with_file(PartitionedFile::new("x".to_string(), 100))
             .with_output_ordering(output_ordering),
-        Arc::new(ParquetConfig::default()),
+        Arc::new(ParquetSource::default()),
     )
 }

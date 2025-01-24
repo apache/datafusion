@@ -32,7 +32,7 @@ use crate::datasource::file_format::file_compression_type::FileCompressionType;
 use crate::datasource::file_format::write::demux::DemuxedStreamReceiver;
 use crate::datasource::file_format::write::BatchSerializer;
 use crate::datasource::physical_plan::{
-    CsvConfig, FileGroupDisplay, FileScanConfig, FileSink, FileSinkConfig,
+    CsvSource, FileGroupDisplay, FileScanConfig, FileSink, FileSinkConfig,
 };
 use crate::error::Result;
 use crate::execution::context::SessionState;
@@ -427,7 +427,7 @@ impl FileFormat for CsvFormat {
         conf.new_lines_in_values = newlines_in_values;
 
         let source_config = Arc::new(
-            CsvConfig::new(has_header, self.options.delimiter, self.options.quote)
+            CsvSource::new(has_header, self.options.delimiter, self.options.quote)
                 .with_escape(self.options.escape)
                 .with_terminator(self.options.terminator)
                 .with_comment(self.options.comment),

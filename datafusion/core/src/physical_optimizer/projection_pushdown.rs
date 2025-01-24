@@ -24,7 +24,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use super::output_requirements::OutputRequirementExec;
-use crate::datasource::physical_plan::CsvConfig;
+use crate::datasource::physical_plan::CsvSource;
 use crate::error::Result;
 use crate::physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use crate::physical_plan::filter::FilterExec;
@@ -118,7 +118,7 @@ pub fn remove_unnecessary_projections(
                         file_config
                             .file_source()
                             .as_any()
-                            .downcast_ref::<CsvConfig>()
+                            .downcast_ref::<CsvSource>()
                             .map(|_| true)
                     })
             })
@@ -1779,7 +1779,7 @@ mod tests {
                 .with_newlines_in_values(false)
                 .with_file_compression_type(FileCompressionType::UNCOMPRESSED);
 
-        let source_config = Arc::new(CsvConfig::new(false, 0, 0));
+        let source_config = Arc::new(CsvSource::new(false, 0, 0));
         FileSourceConfig::new_exec(conf, source_config)
     }
 
@@ -1797,7 +1797,7 @@ mod tests {
                 .with_newlines_in_values(false)
                 .with_file_compression_type(FileCompressionType::UNCOMPRESSED);
 
-        let source_config = Arc::new(CsvConfig::new(false, 0, 0));
+        let source_config = Arc::new(CsvSource::new(false, 0, 0));
         FileSourceConfig::new_exec(conf, source_config)
     }
 

@@ -23,7 +23,7 @@ use datafusion::common::{not_impl_err, substrait_err};
 use datafusion::datasource::data_source::FileSourceConfig;
 use datafusion::datasource::listing::PartitionedFile;
 use datafusion::datasource::object_store::ObjectStoreUrl;
-use datafusion::datasource::physical_plan::{FileScanConfig, ParquetConfig};
+use datafusion::datasource::physical_plan::{FileScanConfig, ParquetSource};
 use datafusion::error::{DataFusionError, Result};
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::prelude::SessionContext;
@@ -151,7 +151,7 @@ pub async fn from_substrait_rel(
                         }
                     }
 
-                    let source_config = Arc::new(ParquetConfig::default());
+                    let source_config = Arc::new(ParquetSource::default());
                     Ok(FileSourceConfig::new_exec(base_config, source_config)
                         as Arc<dyn ExecutionPlan>)
                 }

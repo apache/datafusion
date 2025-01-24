@@ -199,9 +199,9 @@ impl ExecutionPlan for AvroExec {
     }
 }
 
-/// AvroConfig holds the extra configuration that is necessary for opening avro files
+/// AvroSource holds the extra configuration that is necessary for opening avro files
 #[derive(Clone, Default)]
-pub struct AvroConfig {
+pub struct AvroSource {
     schema: Option<SchemaRef>,
     batch_size: Option<usize>,
     projection: Option<Vec<String>>,
@@ -209,8 +209,8 @@ pub struct AvroConfig {
     projected_statistics: Option<Statistics>,
 }
 
-impl AvroConfig {
-    /// Initialize an AvroConfig with default values
+impl AvroSource {
+    /// Initialize an AvroSource with default values
     pub fn new() -> Self {
         Self::default()
     }
@@ -226,7 +226,7 @@ impl AvroConfig {
     }
 }
 
-impl FileSource for AvroConfig {
+impl FileSource for AvroSource {
     #[cfg(feature = "avro")]
     fn create_file_opener(
         &self,
@@ -345,7 +345,7 @@ mod private {
     }
 
     pub struct AvroOpener {
-        pub config: Arc<AvroConfig>,
+        pub config: Arc<AvroSource>,
         pub object_store: Arc<dyn ObjectStore>,
     }
 
@@ -429,7 +429,7 @@ mod tests {
             .with_file(meta.into())
             .with_projection(Some(vec![0, 1, 2]));
 
-        let source_config = Arc::new(AvroConfig::new());
+        let source_config = Arc::new(AvroSource::new());
         let source_exec = FileSourceConfig::new_exec(conf, source_config);
         assert_eq!(
             source_exec
@@ -502,7 +502,7 @@ mod tests {
             .with_file(meta.into())
             .with_projection(projection);
 
-        let source_config = Arc::new(AvroConfig::new());
+        let source_config = Arc::new(AvroSource::new());
         let source_exec = FileSourceConfig::new_exec(conf, source_config);
         assert_eq!(
             source_exec
@@ -576,7 +576,7 @@ mod tests {
             .with_file(partitioned_file)
             .with_table_partition_cols(vec![Field::new("date", DataType::Utf8, false)]);
 
-        let source_config = Arc::new(AvroConfig::new());
+        let source_config = Arc::new(AvroSource::new());
         let source_exec = FileSourceConfig::new_exec(conf, source_config);
 
         assert_eq!(

@@ -24,7 +24,7 @@ use datafusion::{
     datasource::{
         data_source::FileSourceConfig,
         listing::PartitionedFile,
-        physical_plan::{FileScanConfig, ParquetConfig},
+        physical_plan::{FileScanConfig, ParquetSource},
     },
     prelude::*,
 };
@@ -319,14 +319,14 @@ async fn execute_with_predicate(
                     .collect(),
             );
     let parquet_conf = if prune_stats {
-        ParquetConfig::new(
+        ParquetSource::new(
             Arc::clone(&scan.file_schema),
             Some(predicate.clone()),
             None,
             TableParquetOptions::default(),
         )
     } else {
-        ParquetConfig::new(
+        ParquetSource::new(
             Arc::clone(&scan.file_schema),
             None,
             None,

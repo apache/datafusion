@@ -31,18 +31,18 @@ mod statistics;
 pub(crate) use self::csv::plan_to_csv;
 pub(crate) use self::json::plan_to_json;
 #[cfg(feature = "parquet")]
-pub use self::parquet::{ParquetConfig, ParquetFileMetrics, ParquetFileReaderFactory};
+pub use self::parquet::{ParquetFileMetrics, ParquetFileReaderFactory, ParquetSource};
 
-pub use arrow_file::ArrowConfig;
-pub use avro::AvroConfig;
-pub use csv::{CsvConfig, CsvOpener};
+pub use arrow_file::ArrowSource;
+pub use avro::AvroSource;
+pub use csv::{CsvOpener, CsvSource};
 use datafusion_expr::dml::InsertOp;
 pub use file_groups::FileGroupPartitioner;
 pub use file_scan_config::{
     wrap_partition_type_in_dict, wrap_partition_value_in_dict, FileScanConfig,
 };
 pub use file_stream::{FileOpenFuture, FileOpener, FileStream, OnError};
-pub use json::{JsonConfig, JsonOpener};
+pub use json::{JsonOpener, JsonSource};
 
 use std::{
     fmt::{Debug, Formatter, Result as FmtResult},

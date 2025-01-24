@@ -26,7 +26,7 @@ use crate::common::ToDFSchema;
 use crate::config::ConfigOptions;
 use crate::datasource::listing::{ListingTableUrl, PartitionedFile};
 use crate::datasource::object_store::ObjectStoreUrl;
-use crate::datasource::physical_plan::{FileScanConfig, ParquetConfig};
+use crate::datasource::physical_plan::{FileScanConfig, ParquetSource};
 use crate::error::Result;
 use crate::logical_expr::execution_props::ExecutionProps;
 use crate::logical_expr::simplify::SimplifyContext;
@@ -178,7 +178,7 @@ impl TestParquetFile {
             let physical_filter_expr =
                 create_physical_expr(&filter, &df_schema, &ExecutionProps::default())?;
 
-            let source_config = Arc::new(ParquetConfig::new(
+            let source_config = Arc::new(ParquetSource::new(
                 Arc::clone(&scan_config.file_schema),
                 Some(Arc::clone(&physical_filter_expr)),
                 None,
@@ -190,7 +190,7 @@ impl TestParquetFile {
             Ok(exec)
         } else {
             let source_config =
-                Arc::new(ParquetConfig::new_with_options(parquet_options));
+                Arc::new(ParquetSource::new_with_options(parquet_options));
             Ok(FileSourceConfig::new_exec(scan_config, source_config))
         }
     }

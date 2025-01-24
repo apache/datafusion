@@ -29,7 +29,7 @@ use datafusion::datasource::file_format::parquet::fetch_parquet_metadata;
 use datafusion::datasource::listing::PartitionedFile;
 use datafusion::datasource::object_store::ObjectStoreUrl;
 use datafusion::datasource::physical_plan::{
-    FileMeta, FileScanConfig, ParquetConfig, ParquetFileMetrics, ParquetFileReaderFactory,
+    FileMeta, FileScanConfig, ParquetFileMetrics, ParquetFileReaderFactory, ParquetSource,
 };
 use datafusion::physical_plan::collect;
 use datafusion::physical_plan::metrics::ExecutionPlanMetricsSet;
@@ -83,7 +83,7 @@ async fn route_data_access_ops_to_parquet_file_reader_factory() {
     )
     .with_file_group(file_group);
     let source_config = Arc::new(
-        ParquetConfig::default()
+        ParquetSource::default()
             // prepare the scan
             .with_parquet_file_reader_factory(Arc::new(
                 InMemoryParquetFileReaderFactory(Arc::clone(&in_memory_object_store)),

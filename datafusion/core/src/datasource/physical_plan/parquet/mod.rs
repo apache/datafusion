@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! [`ParquetConfig`] FileSourceConfig for reading Parquet files
+//! [`ParquetSource`] FileSourceConfig for reading Parquet files
 
 use std::any::Any;
 use std::fmt::Formatter;
@@ -423,7 +423,7 @@ impl ParquetExec {
     fn bloom_filter_on_read(&self) -> bool {
         self.table_parquet_options.global.bloom_filter_on_read
     }
-    /// Return the value described in [`ParquetConfig::with_enable_page_index`]
+    /// Return the value described in [`ParquetSource::with_enable_page_index`]
     fn enable_page_index(&self) -> bool {
         self.table_parquet_options.global.enable_page_index
     }
@@ -679,7 +679,7 @@ impl ExecutionPlan for ParquetExec {
 /// # use std::sync::Arc;
 /// # use arrow::datatypes::Schema;
 /// # use datafusion::datasource::data_source::FileSourceConfig;
-/// # use datafusion::datasource::physical_plan::{FileScanConfig, ParquetConfig};
+/// # use datafusion::datasource::physical_plan::{FileScanConfig, ParquetSource};
 /// # use datafusion::datasource::listing::PartitionedFile;
 /// # use datafusion_execution::object_store::ObjectStoreUrl;
 /// # use datafusion_physical_expr::expressions::lit;
@@ -693,7 +693,7 @@ impl ExecutionPlan for ParquetExec {
 /// let file_scan_config = FileScanConfig::new(object_store_url, file_schema)
 ///    .with_file(PartitionedFile::new("file1.parquet", 100*1024*1024));
 /// let source_config = Arc::new(
-///     ParquetConfig::new(
+///     ParquetSource::new(
 ///         Arc::clone(&file_scan_config.file_schema),
 ///         Some(predicate),
 ///         None,
@@ -728,7 +728,7 @@ impl ExecutionPlan for ParquetExec {
 /// * metadata_size_hint: controls the number of bytes read from the end of the
 ///   file in the initial I/O when the default [`ParquetFileReaderFactory`]. If a
 ///   custom reader is used, it supplies the metadata directly and this parameter
-///   is ignored. [`ParquetConfig::with_metadata_size_hint`] for more details.
+///   is ignored. [`ParquetSource::with_metadata_size_hint`] for more details.
 ///
 /// * User provided  [`ParquetAccessPlan`]s to skip row groups and/or pages
 ///   based on external information. See "Implementing External Indexes" below
@@ -758,7 +758,7 @@ impl ExecutionPlan for ParquetExec {
 ///
 /// # Example: rewriting `DataSourceExec`
 ///
-/// You can modify a `DataSourceExec` using [`ParquetConfig`], for example
+/// You can modify a `DataSourceExec` using [`ParquetSource`], for example
 /// to change files or add a predicate.
 ///
 /// ```no_run
@@ -808,7 +808,7 @@ impl ExecutionPlan for ParquetExec {
 /// # use datafusion::datasource::listing::PartitionedFile;
 /// # use datafusion::datasource::data_source::FileSourceConfig;
 /// # use datafusion::datasource::physical_plan::parquet::ParquetAccessPlan;
-/// # use datafusion::datasource::physical_plan::{FileScanConfig, ParquetConfig};
+/// # use datafusion::datasource::physical_plan::{FileScanConfig, ParquetSource};
 /// # use datafusion_execution::object_store::ObjectStoreUrl;
 /// # use datafusion_physical_plan::source::DataSourceExec;
 ///
@@ -826,7 +826,7 @@ impl ExecutionPlan for ParquetExec {
 /// let file_scan_config = FileScanConfig::new(ObjectStoreUrl::local_filesystem(), schema())
 ///     .with_file(partitioned_file);
 /// // create a ParguetConfig for file opener configurations
-/// let source_config = Arc::new(ParquetConfig::default());
+/// let source_config = Arc::new(ParquetSource::default());
 /// // this parquet DataSourceExec will not even try to read row groups 2 and 4. Additional
 /// // pruning based on predicates may also happen
 /// let exec = FileSourceConfig::new_exec(file_scan_config, source_config);
@@ -861,7 +861,7 @@ impl ExecutionPlan for ParquetExec {
 /// [`SchemaAdapter`]: crate::datasource::schema_adapter::SchemaAdapter
 /// [`ParquetMetadata`]: parquet::file::metadata::ParquetMetaData
 #[derive(Clone, Default, Debug)]
-pub struct ParquetConfig {
+pub struct ParquetSource {
     /// Options for reading Parquet files
     table_parquet_options: TableParquetOptions,
     /// Optional metrics
@@ -883,8 +883,8 @@ pub struct ParquetConfig {
     projected_statistics: Option<Statistics>,
 }
 
-impl ParquetConfig {
-    /// Initialize a ParquetConfig, if default values are going to be used,
+impl ParquetSource {
+    /// Initialize a ParquetSource, if default values are going to be used,
     /// use `ParguetConfig::default()` instead
     pub fn new(
         file_schema: Arc<Schema>,
@@ -892,13 +892,13 @@ impl ParquetConfig {
         metadata_size_hint: Option<usize>,
         table_parquet_options: TableParquetOptions,
     ) -> Self {
-        debug!("Creating ParquetConfig, schema: {:?}, predicate: {:?}, metadata_size_hint: {:?}", file_schema, predicate, metadata_size_hint);
+        debug!("Creating ParquetSource, schema: {:?}, predicate: {:?}, metadata_size_hint: {:?}", file_schema, predicate, metadata_size_hint);
 
         let metrics = ExecutionPlanMetricsSet::new();
         let predicate_creation_errors =
             MetricBuilder::new(&metrics).global_counter("num_predicate_creation_errors");
 
-        let mut conf = ParquetConfig::new_with_options(table_parquet_options);
+        let mut conf = ParquetSource::new_with_options(table_parquet_options);
         conf.with_metrics(metrics);
         if let Some(predicate) = predicate.clone() {
             conf = conf.with_predicate(predicate);
@@ -952,7 +952,7 @@ impl ParquetConfig {
     ///
     /// This value determines how many bytes at the end of the file the default
     /// [`ParquetFileReaderFactory`] will request in the initial IO. If this is
-    /// too small, the ParquetConfig will need to make additional IO requests to
+    /// too small, the ParquetSource will need to make additional IO requests to
     /// read the footer.
     pub fn with_metadata_size_hint(mut self, metadata_size_hint: usize) -> Self {
         self.metadata_size_hint = Some(metadata_size_hint);
@@ -1108,7 +1108,7 @@ impl ParquetConfig {
     }
 }
 
-impl FileSource for ParquetConfig {
+impl FileSource for ParquetSource {
     fn create_file_opener(
         &self,
         object_store: Result<Arc<dyn ObjectStore>>,
@@ -1304,7 +1304,7 @@ mod tests {
         /// The physical plan that was created (that has statistics, etc)
         parquet_exec: Arc<DataSourceExec>,
         /// The configuration that is used in plan
-        parquet_config: ParquetConfig,
+        parquet_config: ParquetSource,
     }
 
     /// round-trip record batches by writing each individual RecordBatch to
@@ -1390,7 +1390,7 @@ mod tests {
                     .with_file_group(file_group)
                     .with_projection(projection);
 
-            let mut source_config = ParquetConfig::new(
+            let mut source_config = ParquetSource::new(
                 Arc::clone(&base_config.file_schema),
                 predicate,
                 None,
@@ -2048,7 +2048,7 @@ mod tests {
             let parquet_exec = FileSourceConfig::new_exec(
                 FileScanConfig::new(ObjectStoreUrl::local_filesystem(), file_schema)
                     .with_file_groups(file_groups),
-                Arc::new(ParquetConfig::default()),
+                Arc::new(ParquetSource::default()),
             );
             assert_eq!(
                 parquet_exec
@@ -2146,7 +2146,7 @@ mod tests {
             ),
         ]);
 
-        let source_config = Arc::new(ParquetConfig::default());
+        let source_config = Arc::new(ParquetSource::default());
         let parquet_exec = FileSourceConfig::new_exec(
             FileScanConfig::new(object_store_url, schema.clone())
                 .with_file(partitioned_file)
@@ -2225,7 +2225,7 @@ mod tests {
         let parquet_exec = FileSourceConfig::new_exec(
             FileScanConfig::new(ObjectStoreUrl::local_filesystem(), file_schema)
                 .with_file(partitioned_file),
-            Arc::new(ParquetConfig::default()),
+            Arc::new(ParquetSource::default()),
         );
 
         let mut results = parquet_exec.execute(0, state.task_ctx())?;
@@ -2847,7 +2847,7 @@ mod tests {
         let size_hint_calls = reader_factory.metadata_size_hint_calls.clone();
 
         let source_config = Arc::new(
-            ParquetConfig::default()
+            ParquetSource::default()
                 .with_parquet_file_reader_factory(reader_factory)
                 .with_metadata_size_hint(456),
         );
