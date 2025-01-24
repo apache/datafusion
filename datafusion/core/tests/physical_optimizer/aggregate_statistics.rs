@@ -15,34 +15,33 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use datafusion_common::config::ConfigOptions;
-use datafusion_execution::TaskContext;
-use datafusion_physical_optimizer::aggregate_statistics::AggregateStatistics;
-use datafusion_physical_optimizer::PhysicalOptimizerRule;
-use datafusion_physical_plan::aggregates::AggregateExec;
-use datafusion_physical_plan::projection::ProjectionExec;
-use datafusion_physical_plan::ExecutionPlan;
 use std::sync::Arc;
-
-use datafusion_common::Result;
-
-use datafusion_physical_plan::aggregates::PhysicalGroupBy;
-use datafusion_physical_plan::coalesce_partitions::CoalescePartitionsExec;
-use datafusion_physical_plan::common;
-use datafusion_physical_plan::filter::FilterExec;
-use datafusion_physical_plan::memory::MemoryExec;
 
 use arrow::array::Int32Array;
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::cast::as_int64_array;
+use datafusion_common::config::ConfigOptions;
+use datafusion_common::Result;
+use datafusion_execution::TaskContext;
 use datafusion_expr::Operator;
 use datafusion_physical_expr::expressions::{self, cast};
+use datafusion_physical_optimizer::aggregate_statistics::AggregateStatistics;
 use datafusion_physical_optimizer::test_utils::TestAggregate;
+use datafusion_physical_optimizer::PhysicalOptimizerRule;
+use datafusion_physical_plan::aggregates::AggregateExec;
 use datafusion_physical_plan::aggregates::AggregateMode;
+use datafusion_physical_plan::aggregates::PhysicalGroupBy;
+use datafusion_physical_plan::coalesce_partitions::CoalescePartitionsExec;
+use datafusion_physical_plan::common;
+use datafusion_physical_plan::filter::FilterExec;
+use datafusion_physical_plan::memory::MemorySourceConfig;
+use datafusion_physical_plan::projection::ProjectionExec;
+use datafusion_physical_plan::source::DataSourceExec;
+use datafusion_physical_plan::ExecutionPlan;
 
-/// Mock data using a MemoryExec which has an exact count statistic
-fn mock_data() -> Result<Arc<MemoryExec>> {
+/// Mock data using a MemorySourceConfig which has an exact count statistic
+fn mock_data() -> Result<Arc<DataSourceExec>> {
     let schema = Arc::new(Schema::new(vec![
         Field::new("a", DataType::Int32, true),
         Field::new("b", DataType::Int32, true),
@@ -56,11 +55,7 @@ fn mock_data() -> Result<Arc<MemoryExec>> {
         ],
     )?;
 
-    Ok(Arc::new(MemoryExec::try_new(
-        &[vec![batch]],
-        Arc::clone(&schema),
-        None,
-    )?))
+    MemorySourceConfig::try_new_exec(&[vec![batch]], Arc::clone(&schema), None)
 }
 
 /// Checks that the count optimization was applied and we still get the right result

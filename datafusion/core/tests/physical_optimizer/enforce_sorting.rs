@@ -1312,11 +1312,11 @@ async fn test_remove_unnecessary_sort() -> Result<()> {
     let expected_input = [
         "SortExec: expr=[nullable_col@0 ASC], preserve_partitioning=[false]",
         "  SortExec: expr=[non_nullable_col@1 ASC], preserve_partitioning=[false]",
-        "    MemoryExec: partitions=1, partition_sizes=[0]",
+        "    DataSourceExec: partitions=1, partition_sizes=[0]",
     ];
     let expected_optimized = [
         "SortExec: expr=[nullable_col@0 ASC], preserve_partitioning=[false]",
-        "  MemoryExec: partitions=1, partition_sizes=[0]",
+        "  DataSourceExec: partitions=1, partition_sizes=[0]",
     ];
     assert_optimized!(expected_input, expected_optimized, physical_plan, true);
 
@@ -1370,14 +1370,14 @@ async fn test_remove_unnecessary_sort_window_multilayer() -> Result<()> {
         "      BoundedWindowAggExec: wdw=[count: Ok(Field { name: \"count\", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(NULL), end_bound: CurrentRow, is_causal: false }], mode=[Sorted]",
         "        CoalesceBatchesExec: target_batch_size=128",
         "          SortExec: expr=[non_nullable_col@1 DESC], preserve_partitioning=[false]",
-        "            MemoryExec: partitions=1, partition_sizes=[0]"];
+        "            DataSourceExec: partitions=1, partition_sizes=[0]"];
 
     let expected_optimized = ["WindowAggExec: wdw=[count: Ok(Field { name: \"count\", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: CurrentRow, end_bound: Following(NULL), is_causal: false }]",
         "  FilterExec: NOT non_nullable_col@1",
         "    BoundedWindowAggExec: wdw=[count: Ok(Field { name: \"count\", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(NULL), end_bound: CurrentRow, is_causal: false }], mode=[Sorted]",
         "      CoalesceBatchesExec: target_batch_size=128",
         "        SortExec: expr=[non_nullable_col@1 DESC], preserve_partitioning=[false]",
-        "          MemoryExec: partitions=1, partition_sizes=[0]"];
+        "          DataSourceExec: partitions=1, partition_sizes=[0]"];
     assert_optimized!(expected_input, expected_optimized, physical_plan, true);
 
     Ok(())
@@ -1394,11 +1394,11 @@ async fn test_add_required_sort() -> Result<()> {
 
     let expected_input = [
         "SortPreservingMergeExec: [nullable_col@0 ASC]",
-        "  MemoryExec: partitions=1, partition_sizes=[0]",
+        "  DataSourceExec: partitions=1, partition_sizes=[0]",
     ];
     let expected_optimized = [
         "SortExec: expr=[nullable_col@0 ASC], preserve_partitioning=[false]",
-        "  MemoryExec: partitions=1, partition_sizes=[0]",
+        "  DataSourceExec: partitions=1, partition_sizes=[0]",
     ];
     assert_optimized!(expected_input, expected_optimized, physical_plan, true);
 
@@ -1421,11 +1421,11 @@ async fn test_remove_unnecessary_sort1() -> Result<()> {
         "  SortExec: expr=[nullable_col@0 ASC], preserve_partitioning=[false]",
         "    SortPreservingMergeExec: [nullable_col@0 ASC]",
         "      SortExec: expr=[nullable_col@0 ASC], preserve_partitioning=[false]",
-        "        MemoryExec: partitions=1, partition_sizes=[0]",
+        "        DataSourceExec: partitions=1, partition_sizes=[0]",
     ];
     let expected_optimized = [
         "SortExec: expr=[nullable_col@0 ASC], preserve_partitioning=[false]",
-        "  MemoryExec: partitions=1, partition_sizes=[0]",
+        "  DataSourceExec: partitions=1, partition_sizes=[0]",
     ];
     assert_optimized!(expected_input, expected_optimized, physical_plan, true);
 
@@ -1459,13 +1459,13 @@ async fn test_remove_unnecessary_sort2() -> Result<()> {
         "        SortExec: expr=[nullable_col@0 ASC, non_nullable_col@1 ASC], preserve_partitioning=[false]",
         "          SortPreservingMergeExec: [non_nullable_col@1 ASC]",
         "            SortExec: expr=[non_nullable_col@1 ASC], preserve_partitioning=[false]",
-        "              MemoryExec: partitions=1, partition_sizes=[0]",
+        "              DataSourceExec: partitions=1, partition_sizes=[0]",
     ];
 
     let expected_optimized = [
         "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=10",
         "  RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
-        "    MemoryExec: partitions=1, partition_sizes=[0]",
+        "    DataSourceExec: partitions=1, partition_sizes=[0]",
     ];
     assert_optimized!(expected_input, expected_optimized, physical_plan, true);
 
@@ -1503,14 +1503,14 @@ async fn test_remove_unnecessary_sort3() -> Result<()> {
         "      RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
         "        SortPreservingMergeExec: [non_nullable_col@1 ASC]",
         "          SortExec: expr=[non_nullable_col@1 ASC], preserve_partitioning=[false]",
-        "            MemoryExec: partitions=1, partition_sizes=[0]",
+        "            DataSourceExec: partitions=1, partition_sizes=[0]",
     ];
 
     let expected_optimized = [
         "AggregateExec: mode=Final, gby=[], aggr=[]",
         "  CoalescePartitionsExec",
         "    RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
-        "      MemoryExec: partitions=1, partition_sizes=[0]",
+        "      DataSourceExec: partitions=1, partition_sizes=[0]",
     ];
     assert_optimized!(expected_input, expected_optimized, physical_plan, true);
 
@@ -1554,18 +1554,18 @@ async fn test_remove_unnecessary_sort4() -> Result<()> {
         "      SortExec: expr=[non_nullable_col@1 ASC], preserve_partitioning=[true]",
         "        UnionExec",
         "          RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
-        "            MemoryExec: partitions=1, partition_sizes=[0]",
+        "            DataSourceExec: partitions=1, partition_sizes=[0]",
         "          RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
-        "            MemoryExec: partitions=1, partition_sizes=[0]"];
+        "            DataSourceExec: partitions=1, partition_sizes=[0]"];
 
     let expected_optimized = ["SortPreservingMergeExec: [nullable_col@0 ASC, non_nullable_col@1 ASC]",
         "  SortExec: expr=[nullable_col@0 ASC, non_nullable_col@1 ASC], preserve_partitioning=[true]",
         "    FilterExec: NOT non_nullable_col@1",
         "      UnionExec",
         "        RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
-        "          MemoryExec: partitions=1, partition_sizes=[0]",
+        "          DataSourceExec: partitions=1, partition_sizes=[0]",
         "        RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
-        "          MemoryExec: partitions=1, partition_sizes=[0]"];
+        "          DataSourceExec: partitions=1, partition_sizes=[0]"];
     assert_optimized!(expected_input, expected_optimized, physical_plan, true);
 
     Ok(())
@@ -1593,11 +1593,11 @@ async fn test_remove_unnecessary_sort6() -> Result<()> {
     let expected_input = [
         "SortExec: expr=[non_nullable_col@1 ASC, nullable_col@0 ASC], preserve_partitioning=[false]",
         "  SortExec: TopK(fetch=2), expr=[non_nullable_col@1 ASC], preserve_partitioning=[false]",
-        "    MemoryExec: partitions=1, partition_sizes=[0]",
+        "    DataSourceExec: partitions=1, partition_sizes=[0]",
     ];
     let expected_optimized = [
         "SortExec: TopK(fetch=2), expr=[non_nullable_col@1 ASC, nullable_col@0 ASC], preserve_partitioning=[false]",
-        "  MemoryExec: partitions=1, partition_sizes=[0]",
+        "  DataSourceExec: partitions=1, partition_sizes=[0]",
     ];
     assert_optimized!(expected_input, expected_optimized, physical_plan, true);
 
@@ -1627,12 +1627,12 @@ async fn test_remove_unnecessary_sort7() -> Result<()> {
     let expected_input = [
         "SortExec: TopK(fetch=2), expr=[non_nullable_col@1 ASC], preserve_partitioning=[false]",
         "  SortExec: expr=[non_nullable_col@1 ASC, nullable_col@0 ASC], preserve_partitioning=[false]",
-        "    MemoryExec: partitions=1, partition_sizes=[0]",
+        "    DataSourceExec: partitions=1, partition_sizes=[0]",
     ];
     let expected_optimized = [
         "GlobalLimitExec: skip=0, fetch=2",
         "  SortExec: expr=[non_nullable_col@1 ASC, nullable_col@0 ASC], preserve_partitioning=[false]",
-        "    MemoryExec: partitions=1, partition_sizes=[0]",
+        "    DataSourceExec: partitions=1, partition_sizes=[0]",
     ];
     assert_optimized!(expected_input, expected_optimized, physical_plan, true);
 
@@ -1660,12 +1660,12 @@ async fn test_remove_unnecessary_sort8() -> Result<()> {
         "SortExec: expr=[non_nullable_col@1 ASC, nullable_col@0 ASC], preserve_partitioning=[false]",
         "  LocalLimitExec: fetch=2",
         "    SortExec: expr=[non_nullable_col@1 ASC], preserve_partitioning=[false]",
-        "      MemoryExec: partitions=1, partition_sizes=[0]",
+        "      DataSourceExec: partitions=1, partition_sizes=[0]",
     ];
     let expected_optimized = [
         "LocalLimitExec: fetch=2",
         "  SortExec: TopK(fetch=2), expr=[non_nullable_col@1 ASC, nullable_col@0 ASC], preserve_partitioning=[false]",
-        "    MemoryExec: partitions=1, partition_sizes=[0]",
+        "    DataSourceExec: partitions=1, partition_sizes=[0]",
     ];
     assert_optimized!(expected_input, expected_optimized, physical_plan, true);
 
@@ -1688,13 +1688,13 @@ async fn test_do_not_pushdown_through_limit() -> Result<()> {
         "SortExec: expr=[nullable_col@0 ASC], preserve_partitioning=[false]",
         "  GlobalLimitExec: skip=0, fetch=5",
         "    SortExec: expr=[non_nullable_col@1 ASC], preserve_partitioning=[false]",
-        "      MemoryExec: partitions=1, partition_sizes=[0]",
+        "      DataSourceExec: partitions=1, partition_sizes=[0]",
     ];
     let expected_optimized = [
         "SortExec: expr=[nullable_col@0 ASC], preserve_partitioning=[false]",
         "  GlobalLimitExec: skip=0, fetch=5",
         "    SortExec: expr=[non_nullable_col@1 ASC], preserve_partitioning=[false]",
-        "      MemoryExec: partitions=1, partition_sizes=[0]",
+        "      DataSourceExec: partitions=1, partition_sizes=[0]",
     ];
     assert_optimized!(expected_input, expected_optimized, physical_plan, true);
 
@@ -1716,11 +1716,11 @@ async fn test_remove_unnecessary_spm1() -> Result<()> {
         "SortPreservingMergeExec: [nullable_col@0 ASC]",
         "  SortPreservingMergeExec: [non_nullable_col@1 ASC]",
         "    SortPreservingMergeExec: [non_nullable_col@1 ASC]",
-        "      MemoryExec: partitions=1, partition_sizes=[0]",
+        "      DataSourceExec: partitions=1, partition_sizes=[0]",
     ];
     let expected_optimized = [
         "SortExec: expr=[nullable_col@0 ASC], preserve_partitioning=[false]",
-        "  MemoryExec: partitions=1, partition_sizes=[0]",
+        "  DataSourceExec: partitions=1, partition_sizes=[0]",
     ];
     assert_optimized!(expected_input, expected_optimized, physical_plan, true);
 
@@ -1740,11 +1740,11 @@ async fn test_change_wrong_sorting() -> Result<()> {
     let expected_input = [
         "SortPreservingMergeExec: [nullable_col@0 ASC, non_nullable_col@1 ASC]",
         "  SortExec: expr=[nullable_col@0 ASC], preserve_partitioning=[false]",
-        "    MemoryExec: partitions=1, partition_sizes=[0]",
+        "    DataSourceExec: partitions=1, partition_sizes=[0]",
     ];
     let expected_optimized = [
         "SortExec: expr=[nullable_col@0 ASC, non_nullable_col@1 ASC], preserve_partitioning=[false]",
-        "  MemoryExec: partitions=1, partition_sizes=[0]",
+        "  DataSourceExec: partitions=1, partition_sizes=[0]",
     ];
     assert_optimized!(expected_input, expected_optimized, physical_plan, true);
 
@@ -1767,11 +1767,11 @@ async fn test_change_wrong_sorting2() -> Result<()> {
         "SortPreservingMergeExec: [non_nullable_col@1 ASC]",
         "  SortExec: expr=[nullable_col@0 ASC], preserve_partitioning=[false]",
         "    SortPreservingMergeExec: [nullable_col@0 ASC, non_nullable_col@1 ASC]",
-        "      MemoryExec: partitions=1, partition_sizes=[0]",
+        "      DataSourceExec: partitions=1, partition_sizes=[0]",
     ];
     let expected_optimized = [
         "SortExec: expr=[non_nullable_col@1 ASC], preserve_partitioning=[false]",
-        "  MemoryExec: partitions=1, partition_sizes=[0]",
+        "  DataSourceExec: partitions=1, partition_sizes=[0]",
     ];
     assert_optimized!(expected_input, expected_optimized, physical_plan, true);
 
@@ -1799,13 +1799,13 @@ async fn test_multiple_sort_window_exec() -> Result<()> {
         "  BoundedWindowAggExec: wdw=[count: Ok(Field { name: \"count\", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(NULL), end_bound: CurrentRow, is_causal: false }], mode=[Sorted]",
         "    BoundedWindowAggExec: wdw=[count: Ok(Field { name: \"count\", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(NULL), end_bound: CurrentRow, is_causal: false }], mode=[Sorted]",
         "      SortExec: expr=[nullable_col@0 ASC], preserve_partitioning=[false]",
-        "        MemoryExec: partitions=1, partition_sizes=[0]"];
+        "        DataSourceExec: partitions=1, partition_sizes=[0]"];
 
     let expected_optimized = ["BoundedWindowAggExec: wdw=[count: Ok(Field { name: \"count\", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(NULL), end_bound: CurrentRow, is_causal: false }], mode=[Sorted]",
         "  BoundedWindowAggExec: wdw=[count: Ok(Field { name: \"count\", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(NULL), end_bound: CurrentRow, is_causal: false }], mode=[Sorted]",
         "    BoundedWindowAggExec: wdw=[count: Ok(Field { name: \"count\", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(NULL), end_bound: CurrentRow, is_causal: false }], mode=[Sorted]",
         "      SortExec: expr=[nullable_col@0 ASC, non_nullable_col@1 ASC], preserve_partitioning=[false]",
-        "        MemoryExec: partitions=1, partition_sizes=[0]"];
+        "        DataSourceExec: partitions=1, partition_sizes=[0]"];
     assert_optimized!(expected_input, expected_optimized, physical_plan, true);
 
     Ok(())
@@ -1833,7 +1833,7 @@ async fn test_commutativity() -> Result<()> {
         "SortExec: expr=[nullable_col@0 ASC], preserve_partitioning=[false]",
         "  RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
         "    BoundedWindowAggExec: wdw=[count: Ok(Field { name: \"count\", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(NULL), end_bound: CurrentRow, is_causal: false }], mode=[Sorted]",
-        "      MemoryExec: partitions=1, partition_sizes=[0]",
+        "      DataSourceExec: partitions=1, partition_sizes=[0]",
     ];
     assert_eq!(
         expected_input, actual,
@@ -1890,13 +1890,13 @@ async fn test_coalesce_propagate() -> Result<()> {
         "      RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
         "        CoalescePartitionsExec",
         "          RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
-        "            MemoryExec: partitions=1, partition_sizes=[0]",
+        "            DataSourceExec: partitions=1, partition_sizes=[0]",
     ];
     let expected_optimized = [
         "SortPreservingMergeExec: [nullable_col@0 ASC]",
         "  SortExec: expr=[nullable_col@0 ASC], preserve_partitioning=[true]",
         "    RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
-        "      MemoryExec: partitions=1, partition_sizes=[0]",
+        "      DataSourceExec: partitions=1, partition_sizes=[0]",
     ];
     assert_optimized!(expected_input, expected_optimized, physical_plan, true);
 
@@ -1936,7 +1936,7 @@ async fn test_push_with_required_input_ordering_prohibited() -> Result<()> {
     // SortExec: expr=[b]            <-- can't push this down
     //  RequiredInputOrder expr=[a]  <-- this requires input sorted by a, and preserves the input order
     //    SortExec: expr=[a]
-    //      MemoryExec
+    //      DataSourceExec
     let schema = create_test_schema3()?;
     let sort_exprs_a = LexOrdering::new(vec![sort_expr("a", &schema)]);
     let sort_exprs_b = LexOrdering::new(vec![sort_expr("b", &schema)]);
@@ -1952,7 +1952,7 @@ async fn test_push_with_required_input_ordering_prohibited() -> Result<()> {
         "SortExec: expr=[b@1 ASC], preserve_partitioning=[false]",
         "  RequiredInputOrderingExec",
         "    SortExec: expr=[a@0 ASC], preserve_partitioning=[false]",
-        "      MemoryExec: partitions=1, partition_sizes=[0]",
+        "      DataSourceExec: partitions=1, partition_sizes=[0]",
     ];
     // should not be able to push shorts
     let expected_no_change = expected_input;
@@ -1966,7 +1966,7 @@ async fn test_push_with_required_input_ordering_allowed() -> Result<()> {
     // SortExec: expr=[a,b]          <-- can push this down (as it is compatible with the required input ordering)
     //  RequiredInputOrder expr=[a]  <-- this requires input sorted by a, and preserves the input order
     //    SortExec: expr=[a]
-    //      MemoryExec
+    //      DataSourceExec
     let schema = create_test_schema3()?;
     let sort_exprs_a = LexOrdering::new(vec![sort_expr("a", &schema)]);
     let sort_exprs_ab =
@@ -1983,13 +1983,13 @@ async fn test_push_with_required_input_ordering_allowed() -> Result<()> {
         "SortExec: expr=[a@0 ASC, b@1 ASC], preserve_partitioning=[false]",
         "  RequiredInputOrderingExec",
         "    SortExec: expr=[a@0 ASC], preserve_partitioning=[false]",
-        "      MemoryExec: partitions=1, partition_sizes=[0]",
+        "      DataSourceExec: partitions=1, partition_sizes=[0]",
     ];
     // should able to push shorts
     let expected = [
         "RequiredInputOrderingExec",
         "  SortExec: expr=[a@0 ASC, b@1 ASC], preserve_partitioning=[false]",
-        "    MemoryExec: partitions=1, partition_sizes=[0]",
+        "    DataSourceExec: partitions=1, partition_sizes=[0]",
     ];
     assert_optimized!(expected_input, expected, plan, true);
     Ok(())
