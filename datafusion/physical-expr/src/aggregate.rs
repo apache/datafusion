@@ -44,8 +44,8 @@ use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow_schema::SortOptions;
 use datafusion_common::ScalarValue;
 use datafusion_common::{internal_err, not_impl_err, Result};
-use datafusion_expr::AggregateUDF;
 use datafusion_expr::ReversedUDAF;
+use datafusion_expr::{AggregateExprMonotonicity, AggregateUDF};
 use datafusion_expr_common::accumulator::Accumulator;
 use datafusion_expr_common::groups_accumulator::GroupsAccumulator;
 use datafusion_expr_common::type_coercion::aggregates::check_arg_count;
@@ -545,8 +545,10 @@ impl AggregateFunctionExpr {
     /// Returns None if the function is not monotonic.
     /// If the function is monotonically decreasing returns Some(false) e.g. Min
     /// If the function is monotonically increasing returns Some(true) e.g. Max
-    pub fn is_monotonic(&self) -> Option<bool> {
-        self.fun.inner().is_monotonic()
+    pub fn monotonicity(&self) -> AggregateExprMonotonicity {
+        let field = self.field();
+        let data_type = field.data_type();
+        self.fun.inner().monotonicity(data_type)
     }
 
     /// Returns PhysicalSortExpr based on monotonicity of the function
@@ -555,10 +557,13 @@ impl AggregateFunctionExpr {
         window_expr_index: usize,
     ) -> Option<PhysicalSortExpr> {
         // If the aggregate expressions are monotonic, the output data is naturally ordered with it.
-        let is_ascending = self.is_monotonic()?;
+        let monotonicity = self.monotonicity();
+        if !monotonicity.is_monotonic() {
+            return None;
+        }
         let expr = Arc::new(Column::new(self.name(), window_expr_index));
 
-        let options = SortOptions::new(!is_ascending, false);
+        let options = SortOptions::new(monotonicity.is_descending(), false);
         Some(PhysicalSortExpr { expr, options })
     }
 }

@@ -38,8 +38,8 @@ use datafusion_expr::function::AccumulatorArgs;
 use datafusion_expr::function::StateFieldsArgs;
 use datafusion_expr::utils::format_state_name;
 use datafusion_expr::{
-    Accumulator, AggregateUDFImpl, Documentation, GroupsAccumulator, ReversedUDAF,
-    Signature, Volatility,
+    Accumulator, AggregateExprMonotonicity, AggregateUDFImpl, Documentation,
+    GroupsAccumulator, ReversedUDAF, Signature, Volatility,
 };
 use datafusion_functions_aggregate_common::aggregate::groups_accumulator::prim_op::PrimitiveGroupsAccumulator;
 use datafusion_functions_aggregate_common::utils::Hashable;
@@ -253,6 +253,17 @@ impl AggregateUDFImpl for Sum {
 
     fn documentation(&self) -> Option<&Documentation> {
         self.doc()
+    }
+
+    fn monotonicity(&self, data_type: &DataType) -> AggregateExprMonotonicity {
+        // Sum is only monotonic if its input is unsigned
+        match data_type {
+            DataType::UInt8 => AggregateExprMonotonicity::MonotonicallyAscending,
+            DataType::UInt16 => AggregateExprMonotonicity::MonotonicallyAscending,
+            DataType::UInt32 => AggregateExprMonotonicity::MonotonicallyAscending,
+            DataType::UInt64 => AggregateExprMonotonicity::MonotonicallyAscending,
+            _ => AggregateExprMonotonicity::NotMonotonic,
+        }
     }
 }
 

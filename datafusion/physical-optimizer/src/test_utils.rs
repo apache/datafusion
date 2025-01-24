@@ -106,7 +106,7 @@ pub fn create_test_schema4() -> Result<SchemaRef> {
     let b = Field::new("b", DataType::UInt64, false);
     let c = Field::new("c", DataType::UInt64, true);
     let d = Field::new("d", DataType::UInt64, false);
-    let e = Field::new("e", DataType::UInt64, false);
+    let e = Field::new("e", DataType::Int64, false);
     let schema = Arc::new(Schema::new(vec![a, b, c, d, e]));
     Ok(schema)
 }

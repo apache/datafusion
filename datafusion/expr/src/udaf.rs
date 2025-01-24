@@ -39,6 +39,26 @@ use crate::utils::AggregateOrderSensitivity;
 use crate::{Accumulator, Expr};
 use crate::{Documentation, Signature};
 
+/// Status of an Aggregate Expression's Monotonicity
+#[derive(Debug, Clone)]
+pub enum AggregateExprMonotonicity {
+    /// Ordering exists as ascending
+    MonotonicallyAscending,
+    /// Ordering exists as descending
+    MonotonicallyDescending,
+    /// No ordering
+    NotMonotonic,
+}
+
+impl AggregateExprMonotonicity {
+    pub fn is_descending(&self) -> bool {
+        matches!(self, Self::MonotonicallyDescending)
+    }
+    pub fn is_monotonic(&self) -> bool {
+        !matches!(self, Self::NotMonotonic)
+    }
+}
+
 /// Logical representation of a user-defined [aggregate function] (UDAF).
 ///
 /// An aggregate function combines the values from multiple input rows
@@ -644,8 +664,8 @@ pub trait AggregateUDFImpl: Debug + Send + Sync {
     /// Returns None if the function is not monotonic.
     /// If the function is monotonically decreasing returns Some(false) e.g. Min
     /// If the function is monotonically increasing returns Some(true) e.g. Max
-    fn is_monotonic(&self) -> Option<bool> {
-        None
+    fn monotonicity(&self, _data_type: &DataType) -> AggregateExprMonotonicity {
+        AggregateExprMonotonicity::NotMonotonic
     }
 }
 

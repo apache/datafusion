@@ -33,7 +33,8 @@ use crate::{
     expr::AggregateFunction,
     function::{AccumulatorArgs, StateFieldsArgs},
     utils::AggregateOrderSensitivity,
-    Accumulator, AggregateUDFImpl, Expr, GroupsAccumulator, ReversedUDAF, Signature,
+    Accumulator, AggregateExprMonotonicity, AggregateUDFImpl, Expr, GroupsAccumulator,
+    ReversedUDAF, Signature,
 };
 
 macro_rules! create_func {
@@ -203,6 +204,17 @@ impl AggregateUDFImpl for Sum {
     fn order_sensitivity(&self) -> AggregateOrderSensitivity {
         AggregateOrderSensitivity::Insensitive
     }
+
+    fn monotonicity(&self, data_type: &DataType) -> AggregateExprMonotonicity {
+        // Sum is only monotonic if its input is unsigned
+        match data_type {
+            DataType::UInt8 => AggregateExprMonotonicity::MonotonicallyAscending,
+            DataType::UInt16 => AggregateExprMonotonicity::MonotonicallyAscending,
+            DataType::UInt32 => AggregateExprMonotonicity::MonotonicallyAscending,
+            DataType::UInt64 => AggregateExprMonotonicity::MonotonicallyAscending,
+            _ => AggregateExprMonotonicity::NotMonotonic,
+        }
+    }
 }
 
 /// Testing stub implementation of COUNT aggregate
@@ -279,8 +291,8 @@ impl AggregateUDFImpl for Count {
         ReversedUDAF::Identical
     }
 
-    fn is_monotonic(&self) -> Option<bool> {
-        Some(true)
+    fn monotonicity(&self, _data_type: &DataType) -> AggregateExprMonotonicity {
+        AggregateExprMonotonicity::MonotonicallyAscending
     }
 }
 
@@ -367,8 +379,8 @@ impl AggregateUDFImpl for Min {
     fn is_descending(&self) -> Option<bool> {
         Some(false)
     }
-    fn is_monotonic(&self) -> Option<bool> {
-        Some(false)
+    fn monotonicity(&self, _data_type: &DataType) -> AggregateExprMonotonicity {
+        AggregateExprMonotonicity::MonotonicallyDescending
     }
 }
 
@@ -455,8 +467,8 @@ impl AggregateUDFImpl for Max {
     fn is_descending(&self) -> Option<bool> {
         Some(true)
     }
-    fn is_monotonic(&self) -> Option<bool> {
-        Some(true)
+    fn monotonicity(&self, _data_type: &DataType) -> AggregateExprMonotonicity {
+        AggregateExprMonotonicity::MonotonicallyAscending
     }
 }
 

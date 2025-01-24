@@ -104,11 +104,10 @@ impl BoundedWindowAggExec {
         partition_keys: Vec<Arc<dyn PhysicalExpr>>,
         input_order_mode: InputOrderMode,
     ) -> Result<Self> {
-        let old_fields_latest_index = input.schema().fields.len().saturating_sub(1);
+        let old_fields_len = input.schema().fields.len();
         let schema = create_schema(&input.schema(), &window_expr)?;
         let schema = Arc::new(schema);
-        let window_expr_indices =
-            (old_fields_latest_index..schema.fields.len()).collect_vec();
+        let window_expr_indices = (old_fields_len..schema.fields.len()).collect_vec();
         let partition_by_exprs = window_expr[0].partition_by();
         let ordered_partition_by_indices = match &input_order_mode {
             InputOrderMode::Sorted => {

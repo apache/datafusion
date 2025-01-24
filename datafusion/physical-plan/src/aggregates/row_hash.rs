@@ -506,7 +506,7 @@ impl GroupedHashAggregateStream {
         // Therefore, when we spill these intermediate states or pass them to another
         // aggregation operator, we must use a schema that includes both the group
         // columns **and** the partial-state columns.
-        let partial_agg_schema = create_schema(
+        let (partial_agg_schema, _) = create_schema(
             &agg.input().schema(),
             &agg_group_by,
             &aggregate_exprs,

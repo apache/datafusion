@@ -375,6 +375,7 @@ pub struct AggregateExec {
     /// Describes how the input is ordered relative to the group by columns
     input_order_mode: InputOrderMode,
     cache: PlanProperties,
+    aggr_expr_indices: Vec<usize>,
 }
 
 impl AggregateExec {
@@ -399,6 +400,7 @@ impl AggregateExec {
             input: Arc::clone(&self.input),
             schema: Arc::clone(&self.schema),
             input_schema: Arc::clone(&self.input_schema),
+            aggr_expr_indices: self.aggr_expr_indices.clone(),
         }
     }
 
@@ -415,7 +417,8 @@ impl AggregateExec {
         input: Arc<dyn ExecutionPlan>,
         input_schema: SchemaRef,
     ) -> Result<Self> {
-        let schema = create_schema(&input.schema(), &group_by, &aggr_expr, mode)?;
+        let (schema, aggr_exprs_indices) =
+            create_schema(&input.schema(), &group_by, &aggr_expr, mode)?;
 
         let schema = Arc::new(schema);
         AggregateExec::try_new_with_schema(
@@ -426,6 +429,7 @@ impl AggregateExec {
             input,
             input_schema,
             schema,
+            aggr_exprs_indices,
         )
     }
 
@@ -446,6 +450,7 @@ impl AggregateExec {
         input: Arc<dyn ExecutionPlan>,
         input_schema: SchemaRef,
         schema: SchemaRef,
+        aggr_expr_indices: Vec<usize>,
     ) -> Result<Self> {
         // Make sure arguments are consistent in size
         if aggr_expr.len() != filter_expr.len() {
@@ -505,10 +510,6 @@ impl AggregateExec {
 
         let required_input_ordering =
             (!new_requirement.is_empty()).then_some(new_requirement);
-        let input_fields_latest_index = input_schema.fields.len().saturating_sub(1);
-        let aggr_expr_indices = (input_fields_latest_index
-            ..(input_fields_latest_index + aggr_expr.len()))
-            .collect_vec();
 
         let cache = Self::compute_properties(
             &input,
@@ -517,7 +518,7 @@ impl AggregateExec {
             &mode,
             &input_order_mode,
             aggr_expr.clone(),
-            aggr_expr_indices,
+            aggr_expr_indices.clone(),
         );
 
         Ok(AggregateExec {
@@ -533,6 +534,7 @@ impl AggregateExec {
             limit: None,
             input_order_mode,
             cache,
+            aggr_expr_indices,
         })
     }
 
@@ -858,6 +860,7 @@ impl ExecutionPlan for AggregateExec {
             Arc::clone(&children[0]),
             Arc::clone(&self.input_schema),
             Arc::clone(&self.schema),
+            self.aggr_expr_indices.clone(),
         )?;
         me.limit = self.limit;
 
@@ -934,7 +937,8 @@ fn create_schema(
     group_by: &PhysicalGroupBy,
     aggr_expr: &[Arc<AggregateFunctionExpr>],
     mode: AggregateMode,
-) -> Result<Schema> {
+) -> Result<(Schema, Vec<usize>)> {
+    let mut aggr_exprs_indices = vec![];
     let mut fields = Vec::with_capacity(group_by.num_output_exprs() + aggr_expr.len());
     fields.extend(group_by.output_fields(input_schema)?);
 
@@ -942,7 +946,8 @@ fn create_schema(
         AggregateMode::Partial => {
             // in partial mode, the fields of the accumulator's state
             for expr in aggr_expr {
-                fields.extend(expr.state_fields()?.iter().cloned())
+                fields.extend(expr.state_fields()?.iter().cloned());
+                aggr_exprs_indices.push(fields.len() - 1);
             }
         }
         AggregateMode::Final
@@ -951,14 +956,15 @@ fn create_schema(
         | AggregateMode::SinglePartitioned => {
             // in final mode, the field with the final result of the accumulator
             for expr in aggr_expr {
-                fields.push(expr.field())
+                fields.push(expr.field());
+                aggr_exprs_indices.push(fields.len() - 1);
             }
         }
     }
 
-    Ok(Schema::new_with_metadata(
-        fields,
-        input_schema.metadata().clone(),
+    Ok((
+        Schema::new_with_metadata(fields, input_schema.metadata().clone()),
+        aggr_exprs_indices,
     ))
 }
 
@@ -2794,7 +2800,7 @@ mod tests {
                 vec![false, false], // (a,b)
             ],
         );
-        let aggr_schema = create_schema(
+        let (aggr_schema, _) = create_schema(
             &input_schema,
             &grouping_set,
             &aggr_expr,
