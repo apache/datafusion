@@ -400,6 +400,51 @@ mod tests {
     }
 
     #[test]
+    fn test_cast_decimal_to_decimal_overflow() -> Result<()> {
+        let array = vec![Some(123456789)];
+
+        let decimal_array = array
+            .clone()
+            .into_iter()
+            .collect::<Decimal128Array>()
+            .with_precision_and_scale(10, 3)?;
+
+        let schema = Schema::new(vec![Field::new("a", Decimal128(10, 3), false)]);
+        let batch = RecordBatch::try_new(
+            Arc::new(schema.clone()),
+            vec![Arc::new(decimal_array)],
+        )?;
+        let expression =
+            cast_with_options(col("a", &schema)?, &schema, Decimal128(6, 2), None)?;
+        let result = expression.evaluate(&batch);
+
+        match result {
+            Ok(_) => panic!("expected error"),
+            Err(e) => {
+                println!("{}", e.to_string());
+                assert!(e
+                    .to_string()
+                    .contains("Arrow error: Invalid argument error: 12345679 is too large to store in a Decimal128 of precision 6. Max is 999999"))
+            }
+        }
+
+        let expression_safe = cast_with_options(
+            col("a", &schema)?,
+            &schema,
+            Decimal128(6, 2),
+            Some(DEFAULT_SAFE_CAST_OPTIONS),
+        )?;
+        let result_safe = expression_safe
+            .evaluate(&batch)?
+            .into_array(batch.num_rows())
+            .expect("failed to convert to array");
+
+        assert!(result_safe.is_null(0));
+
+        Ok(())
+    }
+
+    #[test]
     fn test_cast_decimal_to_numeric() -> Result<()> {
         let array = vec![Some(1), Some(2), Some(3), Some(4), Some(5), None];
         // decimal to i8
