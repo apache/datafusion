@@ -29,16 +29,18 @@ use itertools::Itertools;
 use log::Level::{Info, Warn};
 use log::{info, log_enabled, warn};
 use sqllogictest::{
-    parse_file, strict_column_validator, AsyncDB, Condition, Normalizer, Record,
+    parse_file, strict_column_validator, update_record_with_output, AsyncDB,
+    ColumnTypeValidator, Condition, Injected, MakeConnection, Normalizer, Record, Runner,
     Validator,
 };
-
+// use datafusion_common::HashSet;
 #[cfg(feature = "postgres")]
 use crate::postgres_container::{
     initialize_postgres_container, terminate_postgres_container,
 };
 use std::ffi::OsStr;
 use std::fs;
+// use fs_err;
 use std::path::{Path, PathBuf};
 
 #[cfg(feature = "postgres")]
@@ -62,6 +64,171 @@ pub fn main() -> Result<()> {
 #[allow(clippy::ptr_arg)]
 fn value_normalizer(s: &String) -> String {
     s.trim_end().to_string()
+}
+
+struct CustomRunner<D: AsyncDB, M: MakeConnection> {
+    runner: Runner<D, M>,
+}
+
+impl<D: AsyncDB, M: MakeConnection<Conn = D>> CustomRunner<D, M> {
+    pub fn new(make_conn: M) -> Self {
+        CustomRunner {
+            runner: Runner::new(make_conn),
+        }
+    }
+
+    pub async fn update_test_file(
+        &mut self,
+        filename: impl AsRef<Path>,
+        col_separator: &str,
+        validator: Validator,
+        normalizer: Normalizer,
+        column_type_validator: ColumnTypeValidator<D::ColumnType>,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        use std::io::{Read, Seek, SeekFrom, Write};
+        use std::path::PathBuf;
+
+        use std::fs::{File, OpenOptions};
+
+        fn create_outfile(
+            filename: impl AsRef<Path>,
+        ) -> std::io::Result<(PathBuf, File)> {
+            let filename = filename.as_ref();
+            // let outfilename = format!(
+            //     "{}.{:016x}.temp",
+            //     filename.file_name().unwrap().to_str().unwrap(),
+            //     Instant::now().as_nanos()
+            // );
+            let outfilename = filename.file_name().unwrap().to_str().unwrap().to_owned()
+                + &format!("{:?}", Instant::now())
+                + ".temp";
+
+            let outfilename = filename.parent().unwrap().join(outfilename);
+            // create a temp file in read-write mode
+            let outfile = OpenOptions::new()
+                .write(true)
+                .create(true)
+                .truncate(true)
+                .read(true)
+                .open(&outfilename)?;
+            Ok((outfilename, outfile))
+        }
+
+        fn override_with_outfile(
+            filename: &String,
+            outfilename: &PathBuf,
+            outfile: &mut File,
+        ) -> std::io::Result<()> {
+            // check whether outfile ends with multiple newlines, which happens if
+            // - the last record is statement/query
+            // - the original file ends with multiple newlines
+
+            const N: usize = 8;
+            let mut buf = [0u8; N];
+            loop {
+                outfile.seek(SeekFrom::End(-(N as i64))).unwrap();
+                outfile.read_exact(&mut buf).unwrap();
+                let num_newlines = buf.iter().rev().take_while(|&&b| b == b'\n').count();
+                assert!(num_newlines > 0);
+
+                if num_newlines > 1 {
+                    // if so, remove the last ones
+                    outfile
+                        .set_len(
+                            outfile.metadata().unwrap().len() - num_newlines as u64 + 1,
+                        )
+                        .unwrap();
+                }
+
+                if num_newlines == 1 || num_newlines < N {
+                    break;
+                }
+            }
+
+            outfile.flush()?;
+            fs::rename(outfilename, filename)?;
+
+            Ok(())
+        }
+
+        struct Item {
+            filename: String,
+            outfilename: PathBuf,
+            outfile: File,
+            halt: bool,
+        }
+
+        let filename = filename.as_ref();
+        let records = parse_file(filename)?;
+
+        let (outfilename, outfile) = create_outfile(filename)?;
+        let mut stack = vec![Item {
+            filename: filename.to_string_lossy().to_string(),
+            outfilename,
+            outfile,
+            halt: false,
+        }];
+
+        for record in records {
+            let Item {
+                filename,
+                outfilename,
+                outfile,
+                halt,
+            } = stack.last_mut().unwrap();
+
+            match &record {
+                Record::Injected(Injected::BeginInclude(filename)) => {
+                    let (outfilename, outfile) = create_outfile(filename)?;
+                    stack.push(Item {
+                        filename: filename.clone(),
+                        outfilename,
+                        outfile,
+                        halt: false,
+                    });
+                }
+                Record::Injected(Injected::EndInclude(_)) => {
+                    override_with_outfile(filename, outfilename, outfile)?;
+                    stack.pop();
+                }
+                _ => {
+                    if *halt {
+                        writeln!(outfile, "{record}")?;
+                        continue;
+                    }
+                    if matches!(record, Record::Halt { .. }) {
+                        *halt = true;
+                        writeln!(outfile, "{record}")?;
+                        // tracing::info!(
+                        //     "halt record found, all following records will be written AS IS"
+                        // );
+                        continue;
+                    }
+                    let record_output = self.runner.apply_record(record.clone()).await;
+                    let record = update_record_with_output(
+                        &record,
+                        &record_output,
+                        col_separator,
+                        validator,
+                        normalizer,
+                        column_type_validator,
+                    )
+                    .unwrap_or(record);
+                    writeln!(outfile, "{record}")?;
+                }
+            }
+        }
+
+        let Item {
+            filename,
+            outfilename,
+            outfile,
+            halt: _,
+        } = stack.last_mut().unwrap();
+        override_with_outfile(filename, outfilename, outfile)?;
+
+        Ok(())
+    }
 }
 
 fn sqlite_value_validator(
@@ -183,7 +350,7 @@ async fn run_tests() -> Result<()> {
             } else {
                 df_value_validator
             };
-
+            println!("Running {}", test_file.relative_path.display());
             let m_clone = m.clone();
             let m_style_clone = m_style.clone();
 
@@ -276,13 +443,14 @@ async fn run_test_file(
     pb.set_style(mp_style);
     pb.set_message(format!("{:?}", &relative_path));
 
-    let mut runner = sqllogictest::Runner::new(|| async {
+    let customrunner = CustomRunner::new(|| async {
         Ok(DataFusion::new(
             test_ctx.session_ctx().clone(),
             relative_path.clone(),
             pb.clone(),
         ))
     });
+    let mut runner = customrunner.runner;
     runner.add_label("Datafusion");
     runner.with_column_validator(strict_column_validator);
     runner.with_normalizer(value_normalizer);
@@ -407,7 +575,7 @@ async fn run_complete_file(
     pb.set_style(mp_style);
     pb.set_message(format!("{:?}", &relative_path));
 
-    let mut runner = sqllogictest::Runner::new(|| async {
+    let mut customrunner = CustomRunner::new(|| async {
         Ok(DataFusion::new(
             test_ctx.session_ctx().clone(),
             relative_path.clone(),
@@ -416,7 +584,7 @@ async fn run_complete_file(
     });
 
     let col_separator = " ";
-    let res = runner
+    let res = customrunner
         .update_test_file(
             path,
             col_separator,
