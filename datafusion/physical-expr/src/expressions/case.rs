@@ -574,7 +574,7 @@ pub fn case(
 mod tests {
     use super::*;
 
-    use crate::expressions::{binary, cast, col, lit, BinaryExpr};
+    use crate::expressions::{binary, cast, col, lit, BinaryExpr, IsNullExpr};
     use arrow::buffer::Buffer;
     use arrow::datatypes::DataType::Float64;
     use arrow::datatypes::*;
@@ -791,6 +791,21 @@ mod tests {
     fn case_test_batch1() -> Result<RecordBatch> {
         let schema = Schema::new(vec![Field::new("a", DataType::Int32, true)]);
         let a = Int32Array::from(vec![Some(1), Some(0), None, Some(5)]);
+        let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(a)])?;
+        Ok(batch)
+    }
+
+    fn case_test_batch2() -> Result<RecordBatch> {
+        let schema = Schema::new(vec![Field::new(
+            "a",
+            DataType::List(Field::new("item", DataType::Int32, true).into()),
+            true,
+        )]);
+        let int_builder = Int32Builder::new();
+        let mut list_builder = ListBuilder::with_capacity(int_builder, 2);
+        list_builder.append_value(vec![Some(1), Some(2), Some(3)]);
+        list_builder.append_null();
+        let a = list_builder.finish();
         let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(a)])?;
         Ok(batch)
     }
@@ -1307,6 +1322,29 @@ mod tests {
 
         let expected = &Int32Array::from(vec![Some(2), Some(1), None, Some(4)]);
 
+        assert_eq!(expected, result);
+        Ok(())
+    }
+
+    /// Regression test for https://github.com/apache/datafusion/issues/14277
+    #[test]
+    fn issue_14277() -> Result<()> {
+        let batch = case_test_batch2()?;
+        let schema = batch.schema();
+        let when = Arc::new(IsNullExpr::new(col("a", &schema)?));
+        let then = Arc::new(Literal::new(ScalarValue::Null));
+        let else_expr = col("a", &schema)?;
+        let expr = CaseExpr::try_new(None, vec![(when, then)], Some(else_expr))?;
+        assert!(matches!(
+            expr.eval_method,
+            EvalMethod::ExpressionOrExpression
+        ));
+        let result = expr
+            .evaluate(&batch)?
+            .into_array(batch.num_rows())
+            .expect("Failed to convert to array");
+        let result = as_int32_array(&result).expect("failed to downcast to Int32Array");
+        let expected = &Int32Array::from(vec![Some(2), Some(1), None, Some(4)]);
         assert_eq!(expected, result);
         Ok(())
     }
