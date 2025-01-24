@@ -66,9 +66,9 @@ parquet = { workspace = true, optional = true, default-features = true }
 paste = "1.0.15"
 pyo3 = { version = "0.23.3", optional = true }
 recursive = { workspace = true, optional = true }
+smallvec = "1.13.2"
 sqlparser = { workspace = true }
 tokio = { workspace = true }
-smallvec = "1.13.2"
 
 [target.'cfg(target_family = "wasm")'.dependencies]
 web-time = "1.1.0"
