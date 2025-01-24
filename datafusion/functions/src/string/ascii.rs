@@ -201,7 +201,7 @@ mod tests {
         let physical_expr =
             SessionContext::new().create_physical_expr(expr, &df_schema)?;
         let result = match physical_expr
-            .evaluate(&RecordBatch::new_empty(df_schema.inner().clone()))?
+            .evaluate(&RecordBatch::new_empty(Arc::clone(df_schema.inner())))?
         {
             ColumnarValue::Scalar(result) => Ok(result),
             _ => datafusion_common::internal_err!("ascii"),

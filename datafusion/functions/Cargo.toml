@@ -89,9 +89,9 @@ unicode-segmentation = { version = "^1.7.1", optional = true }
 uuid = { version = "1.7", features = ["v4"], optional = true }
 
 [dev-dependencies]
-datafusion = { workspace = true, default-features = false }
 arrow = { workspace = true, features = ["test_utils"] }
 criterion = "0.5"
+datafusion = { workspace = true, default-features = false }
 rand = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt", "sync"] }
 
