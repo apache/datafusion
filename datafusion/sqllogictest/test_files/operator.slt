@@ -20,17 +20,17 @@
 statement ok
 create table numeric_types as
 SELECT
-    arrow_cast(10, 'Int8') as int8,
-    arrow_cast(10, 'Int16') as int16,
-    arrow_cast(10, 'Int32') as int32,
-    arrow_cast(10, 'Int64') as int64,
-    arrow_cast(10, 'UInt8') as uint8,
-    arrow_cast(10, 'UInt16') as uint16,
-    arrow_cast(10, 'UInt32') as uint32,
-    arrow_cast(10, 'UInt64') as uint64,
-    arrow_cast(10.23, 'Float32') as float32,
-    arrow_cast(10.23, 'Float64') as float64,
-    arrow_cast(10.25, 'Decimal128(5, 2)') as decimal
+    arrow_cast(1, 'Int8') as int8,
+    arrow_cast(1, 'Int16') as int16,
+    arrow_cast(1, 'Int32') as int32,
+    arrow_cast(1, 'Int64') as int64,
+    arrow_cast(1, 'UInt8') as uint8,
+    arrow_cast(1, 'UInt16') as uint16,
+    arrow_cast(1, 'UInt32') as uint32,
+    arrow_cast(1, 'UInt64') as uint64,
+    arrow_cast(1.23, 'Float32') as float32,
+    arrow_cast(1.23, 'Float64') as float64,
+    arrow_cast(1.25, 'Decimal128(5, 2)') as decimal
 ;
 
 # Plus with the same operand type, expect the same output type
