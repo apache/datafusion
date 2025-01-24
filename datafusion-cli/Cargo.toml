@@ -72,7 +72,7 @@ url = "2.5.4"
 assert_cmd = "2.0"
 ctor = "0.2.9"
 predicates = "3.0"
-rstest = "0.22"
+rstest = "0.24"
 
 [profile.ci]
 inherits = "dev"
