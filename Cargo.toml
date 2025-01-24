@@ -128,7 +128,7 @@ env_logger = "0.11"
 futures = "0.3"
 half = { version = "2.2.1", default-features = false }
 hashbrown = { version = "0.14.5", features = ["raw"] }
-indexmap = "2.0.0"
+indexmap = "2.7.1"
 itertools = "0.14"
 log = "^0.4"
 object_store = { version = "0.11.0", default-features = false }
