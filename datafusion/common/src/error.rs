@@ -135,7 +135,7 @@ pub enum DataFusionError {
     /// for end users, to help them understand what went wrong by providing
     /// human-readable messages, and locations in the source query that relate
     /// to the error in some way.
-    Diagnostic(Diagnostic, Box<DataFusionError>),
+    Diagnostic(Box<Diagnostic>, Box<DataFusionError>),
 }
 
 #[macro_export]
@@ -494,7 +494,7 @@ impl DataFusionError {
 
     /// Wraps the error with contextual information intended for end users
     pub fn with_diagnostic(self, diagnostic: Diagnostic) -> Self {
-        Self::Diagnostic(diagnostic, Box::new(self))
+        Self::Diagnostic(Box::new(diagnostic), Box::new(self))
     }
 
     /// Wraps the error with contextual information intended for end users.

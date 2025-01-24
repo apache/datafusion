@@ -376,7 +376,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                                 format!(
                                     "column '{}' not found in '{}'",
                                     &col.name,
-                                    relation.to_string()
+                                    relation
                                 ),
                                 col.spans().first_or_empty(),
                             )

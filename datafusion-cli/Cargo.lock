@@ -1340,7 +1340,6 @@ dependencies = [
  "parquet",
  "paste",
  "recursive",
- "smallvec",
  "sqlparser",
  "tokio",
  "web-time",

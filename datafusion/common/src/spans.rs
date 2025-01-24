@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use smallvec::SmallVec;
 use sqlparser::tokenizer::Span;
 use std::cmp::Ordering;
 use std::hash::{Hash, Hasher};
@@ -28,15 +27,15 @@ use std::hash::{Hash, Hasher};
 #[derive(Debug, Clone)]
 // Store teh first [`Span`] on the stack because that is by far the most common
 // case. More will spill onto the heap.
-pub struct Spans(pub SmallVec<[Span; 1]>);
+pub struct Spans(pub Vec<Span>);
 
 impl Spans {
     pub fn new() -> Self {
-        Spans(SmallVec::new())
+        Spans(Vec::new())
     }
 
     pub fn first_or_empty(&self) -> Span {
-        self.0.get(0).copied().unwrap_or(Span::empty())
+        self.0.first().copied().unwrap_or(Span::empty())
     }
 
     pub fn get_spans(&self) -> &[Span] {
@@ -76,8 +75,8 @@ impl Eq for Spans {}
 // interfere with the equality and ordering of the entities themselves, since
 // this is just diagnostics information for the end user.
 impl PartialOrd for Spans {
-    fn partial_cmp(&self, _other: &Self) -> Option<Ordering> {
-        Some(Ordering::Equal)
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
     }
 }
 
