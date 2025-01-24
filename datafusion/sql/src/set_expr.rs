@@ -90,23 +90,20 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         plan_err!("{} queries have different number of columns", op).map_err(|err| {
             err.with_diagnostic(
                 Diagnostic::new_error(
-                        format!("{} queries have different number of columns", op),
-                        set_expr_span,
-                    )
-                    .with_note(
-                        format!(
-                            "this side has {} fields",
-                            left_plan.schema().fields().len()
-                        ),
-                        left.span(),
-                    )
-                    .with_note(
-                        format!(
-                            "this side has {} fields",
-                            right_plan.schema().fields().len()
-                        ),
-                        right.span(),
+                    format!("{} queries have different number of columns", op),
+                    set_expr_span,
+                )
+                .with_note(
+                    format!("this side has {} fields", left_plan.schema().fields().len()),
+                    left.span(),
+                )
+                .with_note(
+                    format!(
+                        "this side has {} fields",
+                        right_plan.schema().fields().len()
                     ),
+                    right.span(),
+                ),
             )
         })
     }

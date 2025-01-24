@@ -3,17 +3,17 @@ use sqlparser::tokenizer::Span;
 /// Additional contextual information intended for end users, to help them
 /// understand what went wrong by providing human-readable messages, and
 /// locations in the source query that relate to the error in some way.
-/// 
+///
 /// You can think of a single [`Diagnostic`] as a single "block" of output from
 /// rustc. i.e. either an error or a warning, optionally with some notes and
 /// help messages.
-/// 
+///
 /// If the diagnostic, a note, or a help message doesn't need to point to a
 /// specific location in the original SQL query (or the [`Span`] is not
 /// available), use [`Span::empty`].
-/// 
+///
 /// Example:
-/// 
+///
 /// ```rust
 /// let diagnostic = Diagnostic::new_error("Something went wrong", span)
 ///     .with_help("Have you tried turning it on and off again?", Span::empty());
