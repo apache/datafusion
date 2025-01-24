@@ -18,16 +18,12 @@
 //! Defines the FIRST_VALUE/LAST_VALUE aggregations.
 
 use std::any::Any;
-use std::cmp::Ordering;
 use std::fmt::Debug;
 use std::mem::size_of_val;
-use std::num;
 use std::sync::Arc;
 
-use arrow::array::{ArrayRef, AsArray, BooleanArray, Int64Array, UInt64Array};
-use arrow::compute::{
-    self, lexsort_to_indices, take_arrays, LexicographicalComparator, SortColumn,
-};
+use arrow::array::{ArrayRef, AsArray, BooleanArray, UInt64Array};
+use arrow::compute::{self, lexsort_to_indices, take_arrays, SortColumn};
 use arrow::datatypes::{DataType, Field};
 use arrow_schema::SortOptions;
 use datafusion_common::utils::{compare_rows, get_row_at_idx};
@@ -578,7 +574,7 @@ impl LastValueAccumulator {
             .collect::<Vec<_>>();
 
         // Order by indices for cases where the values are the same, we expect the last index
-        let indices: UInt64Array = (0..num_rows).into_iter().map(|x| x as u64).collect();
+        let indices: UInt64Array = (0..num_rows).map(|x| x as u64).collect();
         sort_columns.push(SortColumn {
             values: Arc::new(indices),
             options: Some(!SortOptions::default()),
@@ -758,8 +754,12 @@ mod tests {
             Arc::new(Int64Array::from(vec![1, 1, 1])) as ArrayRef, // b
         ];
         last_accumulator.update_batch(&values)?;
+        let values = vec![
+            Arc::new(Int64Array::from(vec![4, 5, 6])) as ArrayRef, // a
+            Arc::new(Int64Array::from(vec![1, 1, 1])) as ArrayRef, // b
+        ];
         last_accumulator.update_batch(&values)?;
-        assert_eq!(last_accumulator.evaluate()?, ScalarValue::Int64(Some(3)));
+        assert_eq!(last_accumulator.evaluate()?, ScalarValue::Int64(Some(6)));
 
         let mut last_accumulator = create_acc(&schema, true)?;
         let values = vec![
