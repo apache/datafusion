@@ -18,13 +18,18 @@
 //! Defines the FIRST_VALUE/LAST_VALUE aggregations.
 
 use std::any::Any;
+use std::cmp::Ordering;
 use std::fmt::Debug;
 use std::mem::size_of_val;
+use std::num;
 use std::sync::Arc;
 
-use arrow::array::{ArrayRef, AsArray, BooleanArray};
-use arrow::compute::{self, lexsort_to_indices, take_arrays, SortColumn};
+use arrow::array::{ArrayRef, AsArray, BooleanArray, Int64Array, UInt64Array};
+use arrow::compute::{
+    self, lexsort_to_indices, take_arrays, LexicographicalComparator, SortColumn,
+};
 use arrow::datatypes::{DataType, Field};
+use arrow_schema::SortOptions;
 use datafusion_common::utils::{compare_rows, get_row_at_idx};
 use datafusion_common::{
     arrow_datafusion_err, internal_err, DataFusionError, Result, ScalarValue,
@@ -542,6 +547,9 @@ impl LastValueAccumulator {
         let [value, ordering_values @ ..] = values else {
             return internal_err!("Empty row in LAST_VALUE");
         };
+
+        let num_rows = value.len();
+
         if self.requirement_satisfied {
             // Get last entry according to the order of data:
             if self.ignore_nulls {
@@ -556,7 +564,7 @@ impl LastValueAccumulator {
                 return Ok((!value.is_empty()).then_some(value.len() - 1));
             }
         }
-        let sort_columns = ordering_values
+        let mut sort_columns = ordering_values
             .iter()
             .zip(self.ordering_req.iter())
             .map(|(values, req)| {
@@ -568,6 +576,15 @@ impl LastValueAccumulator {
                 }
             })
             .collect::<Vec<_>>();
+
+        // Order by indices for cases where the values are the same, we expect the last index
+        let indices: UInt64Array = (0..num_rows).into_iter().map(|x| x as u64).collect();
+        sort_columns.push(
+            SortColumn {
+                values: Arc::new(indices),
+                options: Some(!SortOptions::default()),
+            }
+        );
 
         if self.ignore_nulls {
             let indices = lexsort_to_indices(&sort_columns, None)?;
@@ -701,8 +718,51 @@ fn convert_to_sort_cols(arrs: &[ArrayRef], sort_exprs: &LexOrdering) -> Vec<Sort
 #[cfg(test)]
 mod tests {
     use arrow::array::Int64Array;
+    use arrow_schema::Schema;
+    use compute::{sort_to_indices, SortOptions};
+    use datafusion_physical_expr::{expressions::col, PhysicalSortExpr};
 
     use super::*;
+
+    #[test]
+    fn test_last_value_with_order_bys() -> Result<()> {
+        // TODO: Move this kind of test to slt, we don't have a nice way to define the batch size for each `update_batch`
+        // so there is no trivial way to test this in slt for now
+
+        // test query: select last_value(a order by b) from t1, where b has same value
+        let schema = Schema::new(vec![
+            Field::new("a", DataType::Int64, true),
+            Field::new("b", DataType::Int64, true),
+        ]);
+
+        let mut last_accumulator = LastValueAccumulator::try_new(
+            &DataType::Int64,
+            &[DataType::Int64],
+            LexOrdering::new(vec![PhysicalSortExpr::new(
+                col("b", &schema)?,
+                SortOptions::default(),
+            )]),
+            false,
+        )?;
+
+        let values = vec![
+            Arc::new(Int64Array::from(vec![1, 2, 3])) as ArrayRef, // a
+            Arc::new(Int64Array::from(vec![1, 1, 1])) as ArrayRef, // b
+        ];
+        last_accumulator.update_batch(&values)?;
+        last_accumulator.update_batch(&values)?;
+
+        assert_eq!(last_accumulator.evaluate()?, ScalarValue::Int64(Some(3)));
+
+        let values = vec![
+            Arc::new(Int64Array::from(vec![1, 2, 3, 4, 5, 6])) as ArrayRef, // a
+            Arc::new(Int64Array::from(vec![1, 1, 1, 2, 2, 2])) as ArrayRef, // b
+        ];
+        last_accumulator.update_batch(&values)?;
+        assert_eq!(last_accumulator.evaluate()?, ScalarValue::Int64(Some(6)));
+
+        Ok(())
+    }
 
     #[test]
     fn test_first_last_value_value() -> Result<()> {
