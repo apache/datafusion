@@ -850,3 +850,31 @@ drop table strings
 
 statement ok
 drop table dict_table
+
+#
+# regexp_extract tests
+#
+
+statement ok
+CREATE TABLE t_extract (val varchar, pat varchar, idx int) AS VALUES
+    ('100-200', '(\d+)-(\d+)', 1),
+    ('foo',     '(\d+)',      1),
+    ('aaaac',   '(a+)(b)?(c)', 2),
+    ('abc',     '(a)(b)(c)',   4),
+    ('xyz',     'abc',         0),
+    (NULL,      '(\d+)',       1);
+
+query T
+SELECT regexp_extract(val, pat, idx) 
+FROM t_extract
+ORDER BY val;
+----
+100
+(empty)
+(empty)
+(empty)
+(empty)
+NULL
+
+statement ok
+DROP TABLE t_extract;

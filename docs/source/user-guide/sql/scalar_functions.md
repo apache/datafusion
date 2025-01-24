@@ -1769,6 +1769,7 @@ The following regular expression functions are supported:
 - [regexp_like](#regexp_like)
 - [regexp_match](#regexp_match)
 - [regexp_replace](#regexp_replace)
+- [regexp_extract](#regexp_extract)
 
 ### `regexp_count`
 
@@ -1918,6 +1919,31 @@ SELECT regexp_replace('aBc', '(b|d)', 'Ab\\1a', 'i');
 ```
 
 Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/regexp.rs)
+
+### `regexp_extract`
+
+Extract a specific group matched by [regular expression](https://docs.rs/regex/latest/regex/#syntax). If the regex did not match, or the specified group did not match, an empty string is returned..
+
+```
+regexp_extract(str, regexp[, idx])
+```
+
+#### Arguments
+
+- **str**: String expression to operate on. Can be a constant, column, or function, and any combination of operators.
+- **regexp**: Regular expression to operate on. Can be a constant, column, or function, and any combination of operators.
+- **idx**: - Matched group index. Can be a constant, column, or function.
+
+#### Example
+
+```sql
+> select regexp_extract('100-200', '(\d+)-(\d+)', 1);
++---------------------------------------------------------------+
+| regexp_extract(Utf8("100-200"),Utf8("(\d+)-(\d+)"), Int64(1)) |
++---------------------------------------------------------------+
+| [100]                                                         |
++---------------------------------------------------------------+
+```
 
 ## Time and Date Functions
 
