@@ -99,7 +99,7 @@ macro_rules! get_extreme_value {
 
 /// The maximum `i128` value that can be stored in a `Decimal128` value of precision `p`.
 ///
-/// Remove this once https://github.com/apache/arrow-rs/pull/6992 is available
+/// Remove this once <https://github.com/apache/arrow-rs/pull/6992> is available
 const MAX_DECIMAL128_FOR_EACH_PRECISION: [i128; 39] = [
     0, // unused first element
     9,
@@ -144,7 +144,7 @@ const MAX_DECIMAL128_FOR_EACH_PRECISION: [i128; 39] = [
 
 /// The minimum `i128` value that can be stored in a `Decimal128` value of precision `p`.
 ///
-/// Remove this once https://github.com/apache/arrow-rs/pull/6992 is available
+/// Remove this once <https://github.com/apache/arrow-rs/pull/6992> is available
 const MIN_DECIMAL128_FOR_EACH_PRECISION: [i128; 39] = [
     0, // unused first element
     -9,
@@ -189,7 +189,7 @@ const MIN_DECIMAL128_FOR_EACH_PRECISION: [i128; 39] = [
 
 /// The maximum `i256` value that can be stored in a `Decimal256` value of precision `p`.
 ///
-/// Remove this once https://github.com/apache/arrow-rs/pull/6992 is available
+/// Remove this once <https://github.com/apache/arrow-rs/pull/6992> is available
 const MAX_DECIMAL256_FOR_EACH_PRECISION: [arrow::datatypes::i256; 77] = [
     arrow::datatypes::i256::from_i128(0_i128), // unused first element
     arrow::datatypes::i256::from_le_bytes([
@@ -500,7 +500,7 @@ const MAX_DECIMAL256_FOR_EACH_PRECISION: [arrow::datatypes::i256; 77] = [
 
 /// The minimum `i256` value that can be stored in a `Decimal256` value of precision `p`.
 ///
-/// Remove this once https://github.com/apache/arrow-rs/pull/6992 is available
+/// Remove this once <https://github.com/apache/arrow-rs/pull/6992> is available
 const MIN_DECIMAL256_FOR_EACH_PRECISION: [arrow::datatypes::i256; 77] = [
     arrow::datatypes::i256::from_i128(0_i128), // unused first element
     arrow::datatypes::i256::from_le_bytes([
