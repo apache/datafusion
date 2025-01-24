@@ -17,6 +17,7 @@
 
 //! Physical Optimizer integration tests
 
+mod aggregate_statistics;
 mod combine_partial_final_agg;
 mod enforce_distribution;
 mod enforce_sorting;
