@@ -104,11 +104,23 @@ impl<'a> BinaryTypeCoercer<'a> {
         self.rhs_spans = spans;
     }
 
+    fn span(&self) -> Span {
+        Span::union_iter(
+            [
+                self.lhs_spans.first_or_empty(),
+                self.rhs_spans.first_or_empty(),
+            ]
+            .iter()
+            .copied()
+            .filter(|span| span != &Span::empty()),
+        )
+    }
+
     /// Returns a [`Signature`] for applying `op` to arguments of type `lhs` and `rhs`
     fn signature(&'a self) -> Result<Signature> {
         use arrow::datatypes::DataType::*;
         use Operator::*;
-        match self.op {
+        let result = match self.op {
         Eq |
         NotEq |
         Lt |
@@ -228,21 +240,23 @@ impl<'a> BinaryTypeCoercer<'a> {
             } else {
                 plan_err!(
                     "Cannot coerce arithmetic expression {} {} {} to valid types", self.lhs, self.op, self.rhs
-                ).map_err(|err| {
-                    let binary_expr_span = Span::union_iter(
-                        [
-                            self.lhs_spans.first_or_empty(),
-                            self.rhs_spans.first_or_empty()
-                        ].iter().copied().filter(|span| span != &Span::empty())
-                    );
-                    let diagnostic = Diagnostic::new_error("expressions have incompatible types", binary_expr_span)
-                        .with_note(format!("has type {}", self.lhs), self.lhs_spans.first_or_empty())
-                        .with_note(format!("has type {}", self.rhs), self.rhs_spans.first_or_empty());
-                    err.with_diagnostic(diagnostic)
-                })
+                )
             }
         }
-    }
+    };
+        result.map_err(|err| {
+            let diagnostic =
+                Diagnostic::new_error("expressions have incompatible types", self.span())
+                    .with_note(
+                        format!("has type {}", self.lhs),
+                        self.lhs_spans.first_or_empty(),
+                    )
+                    .with_note(
+                        format!("has type {}", self.rhs),
+                        self.rhs_spans.first_or_empty(),
+                    );
+            err.with_diagnostic(diagnostic)
+        })
     }
 
     /// Returns the resulting type of a binary expression evaluating the `op` with the left and right hand types

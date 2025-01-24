@@ -87,11 +87,17 @@ impl Diagnostic {
     }
 
     pub fn add_note(&mut self, message: impl Into<String>, span: Span) {
-        self.notes.push(DiagnosticNote { message: message.into(), span });
+        self.notes.push(DiagnosticNote {
+            message: message.into(),
+            span,
+        });
     }
 
     pub fn add_help(&mut self, message: impl Into<String>, span: Span) {
-        self.helps.push(DiagnosticHelp { message: message.into(), span });
+        self.helps.push(DiagnosticHelp {
+            message: message.into(),
+            span,
+        });
     }
 
     pub fn with_note(mut self, message: impl Into<String>, span: Span) -> Self {

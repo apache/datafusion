@@ -375,8 +375,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                             Diagnostic::new_error(
                                 format!(
                                     "column '{}' not found in '{}'",
-                                    &col.name,
-                                    relation
+                                    &col.name, relation
                                 ),
                                 col.spans().first_or_empty(),
                             )
