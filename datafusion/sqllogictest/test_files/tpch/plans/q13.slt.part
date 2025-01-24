@@ -61,7 +61,7 @@ physical_plan
 03)----ProjectionExec: expr=[c_count@0 as c_count, count(*)@1 as custdist]
 04)------AggregateExec: mode=FinalPartitioned, gby=[c_count@0 as c_count], aggr=[count(*)], ordering_mode=Sorted
 05)--------CoalesceBatchesExec: target_batch_size=8192
-06)----------RepartitionExec: partitioning=Hash([c_count@0], 4), input_partitions=4, preserve_order=true, sort_exprs=c_count@0 ASC NULLS LAST, count(*)@0 ASC NULLS LAST
+06)----------RepartitionExec: partitioning=Hash([c_count@0], 4), input_partitions=4, preserve_order=true, sort_exprs=c_count@0 ASC NULLS LAST, count(*)@1 ASC NULLS LAST
 07)------------AggregateExec: mode=Partial, gby=[c_count@0 as c_count], aggr=[count(*)], ordering_mode=Sorted
 08)--------------ProjectionExec: expr=[count(orders.o_orderkey)@1 as c_count]
 09)----------------AggregateExec: mode=SinglePartitioned, gby=[c_custkey@0 as c_custkey], aggr=[count(orders.o_orderkey)]
