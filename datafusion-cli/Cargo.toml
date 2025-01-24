@@ -38,7 +38,7 @@ aws-sdk-sso = "=1.50.0"
 ## 1.54.0 requires a higher MSRV 1.81 so lock until DataFusion MSRV catches up
 aws-sdk-ssooidc = "=1.51.0"
 ## 1.54.1 requires a higher MSRV 1.81 so lock until DataFusion MSRV catches up
-aws-sdk-sts = "=1.51.0"
+aws-sdk-sts = "=1.57.0"
 # end pin aws-sdk crates
 aws-credential-types = "1.2.0"
 clap = { version = "4.5.27", features = ["derive", "cargo"] }
