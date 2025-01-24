@@ -620,7 +620,7 @@ statement ok
 drop table test_column_defaults
 
 # test invalid default value
-statement error DataFusion error: Error during planning: Column reference is not allowed in the DEFAULT expression : Schema error: No field named a.
+statement error DataFusion error: Schema error: No field named a\.
 CREATE EXTERNAL TABLE test_column_defaults(
   a int,
   b int default a+1
