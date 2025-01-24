@@ -508,7 +508,9 @@ impl DataFusionError {
         self.with_diagnostic(diagnostic)
     }
 
-    pub fn diagnostics(&self) -> impl Iterator<Item = &Diagnostic> + '_ {
+    /// Gets the [`Diagnostic`] associated with the error, if any. If there is
+    /// more than one, only the outermost [`Diagnostic`] is returned.
+    pub fn diagnostic(&self) -> Option<&Diagnostic> {
         struct DiagnosticsIterator<'a> {
             head: &'a DataFusionError,
         }
@@ -536,7 +538,7 @@ impl DataFusionError {
             }
         }
 
-        DiagnosticsIterator { head: self }
+        DiagnosticsIterator { head: self }.next()
     }
 }
 
