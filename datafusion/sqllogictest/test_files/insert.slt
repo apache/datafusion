@@ -433,3 +433,30 @@ drop table test_column_defaults
 
 statement error DataFusion error: Error during planning: Column reference is not allowed in the DEFAULT expression : Schema error: No field named a.
 create table test_column_defaults(a int, b int default a+1)
+
+
+# test inserting UInt64 and signed integers into a bigint unsigned column
+statement ok
+create table unsigned_bigint_test (v bigint unsigned)
+
+query I
+insert into unsigned_bigint_test values (10000000000000000000), (18446744073709551615)
+----
+2
+
+query I
+insert into unsigned_bigint_test values (10000000000000000001), (1), (10000000000000000002)
+----
+3
+
+query I rowsort
+select * from unsigned_bigint_test
+----
+1
+10000000000000000000
+10000000000000000001
+10000000000000000002
+18446744073709551615
+
+statement ok
+drop table unsigned_bigint_test

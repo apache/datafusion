@@ -29,7 +29,7 @@ use super::super::conversion::*;
 use super::error::{DFSqlLogicTestError, Result};
 
 /// Converts `batches` to a result as expected by sqllogictest.
-pub(crate) fn convert_batches(batches: Vec<RecordBatch>) -> Result<Vec<Vec<String>>> {
+pub fn convert_batches(batches: Vec<RecordBatch>) -> Result<Vec<Vec<String>>> {
     if batches.is_empty() {
         Ok(vec![])
     } else {

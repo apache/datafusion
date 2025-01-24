@@ -598,3 +598,34 @@ drop table cpu;
 
 statement ok
 drop table cpu_parquet;
+
+# Test for parquet predicate pruning with `starts_with` function
+query I
+copy (values ('foo'), ('bar'), ('baz')) TO 'test_files/scratch/parquet/foo.parquet'
+----
+3
+
+statement ok
+create external table foo
+stored as parquet
+location 'test_files/scratch/parquet/foo.parquet';
+
+
+# Expect that the pruning predicate contain a comparison on the min/max value of `column1):
+# column1_min@0 <= g AND f <= column1_max@1`
+# (the starts_with function is not supported in the parquet predicate pruning but DataFusion rewrites
+# it to a like which is then handled by the PruningPredicate)
+query TT
+explain select * from foo where starts_with(column1, 'f');
+----
+logical_plan
+01)Filter: foo.column1 LIKE Utf8View("f%")
+02)--TableScan: foo projection=[column1], partial_filters=[foo.column1 LIKE Utf8View("f%")]
+physical_plan
+01)CoalesceBatchesExec: target_batch_size=8192
+02)--FilterExec: column1@0 LIKE f%
+03)----RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
+04)------ParquetExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet/foo.parquet]]}, projection=[column1], predicate=column1@0 LIKE f%, pruning_predicate=column1_null_count@2 != column1_row_count@3 AND column1_min@0 <= g AND f <= column1_max@1, required_guarantees=[]
+
+statement ok
+drop table foo

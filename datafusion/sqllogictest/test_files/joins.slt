@@ -1828,7 +1828,7 @@ AS VALUES
 ('BB', 6, 1),
 ('BB', 6, 1);
 
-query TII
+query TIR
 select col1, col2, coalesce(sum_col3, 0) as sum_col3
 from (select distinct col2 from tbl) AS q1
 cross join (select distinct col1 from tbl) AS q2

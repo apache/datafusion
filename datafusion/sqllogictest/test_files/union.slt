@@ -413,23 +413,23 @@ explain SELECT c1, c9 FROM aggregate_test_100 UNION ALL SELECT c1, c3 FROM aggre
 logical_plan
 01)Sort: aggregate_test_100.c9 DESC NULLS FIRST, fetch=5
 02)--Union
-03)----Projection: aggregate_test_100.c1, CAST(aggregate_test_100.c9 AS Int64) AS c9
+03)----Projection: aggregate_test_100.c1, CAST(aggregate_test_100.c9 AS Decimal128(20, 0)) AS c9
 04)------TableScan: aggregate_test_100 projection=[c1, c9]
-05)----Projection: aggregate_test_100.c1, CAST(aggregate_test_100.c3 AS Int64) AS c9
+05)----Projection: aggregate_test_100.c1, CAST(aggregate_test_100.c3 AS Decimal128(20, 0)) AS c9
 06)------TableScan: aggregate_test_100 projection=[c1, c3]
 physical_plan
 01)SortPreservingMergeExec: [c9@1 DESC], fetch=5
 02)--UnionExec
 03)----SortExec: TopK(fetch=5), expr=[c9@1 DESC], preserve_partitioning=[true]
-04)------ProjectionExec: expr=[c1@0 as c1, CAST(c9@1 AS Int64) as c9]
+04)------ProjectionExec: expr=[c1@0 as c1, CAST(c9@1 AS Decimal128(20, 0)) as c9]
 05)--------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
 06)----------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c1, c9], file_type=csv, has_header=true
 07)----SortExec: TopK(fetch=5), expr=[c9@1 DESC], preserve_partitioning=[true]
-08)------ProjectionExec: expr=[c1@0 as c1, CAST(c3@1 AS Int64) as c9]
+08)------ProjectionExec: expr=[c1@0 as c1, CAST(c3@1 AS Decimal128(20, 0)) as c9]
 09)--------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
 10)----------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c1, c3], file_type=csv, has_header=true
 
-query TI
+query TR
 SELECT c1, c9 FROM aggregate_test_100 UNION ALL SELECT c1, c3 FROM aggregate_test_100 ORDER BY c9 DESC LIMIT 5
 ----
 c 4268716378
