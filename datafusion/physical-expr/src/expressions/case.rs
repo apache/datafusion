@@ -156,8 +156,8 @@ impl CaseExpr {
                 && else_expr.as_ref().unwrap().as_any().is::<Literal>()
             {
                 EvalMethod::ScalarOrScalar
-            } else if when_then_expr.len() == 1 && else_expr.is_some() {
-                EvalMethod::ExpressionOrExpression
+            // } else if when_then_expr.len() == 1 && else_expr.is_some() {
+            //     EvalMethod::ExpressionOrExpression
             } else {
                 EvalMethod::NoExpression
             };
@@ -411,7 +411,7 @@ impl CaseExpr {
     fn expr_or_expr(&self, batch: &RecordBatch) -> Result<ColumnarValue> {
         let return_type = self.data_type(&batch.schema())?;
 
-        // evalute when condition on batch
+        // evaluate when condition on batch
         let when_value = self.when_then_expr[0].0.evaluate(batch)?;
         let when_value = when_value.into_array(batch.num_rows())?;
         let when_value = as_boolean_array(&when_value).map_err(|e| {
@@ -1343,11 +1343,15 @@ mod tests {
             .evaluate(&batch)?
             .into_array(batch.num_rows())
             .expect("Failed to convert to array");
-
-        // TODO update assertions once we get past the query failing
-        // let result = as_int32_array(&result).expect("failed to downcast to Int32Array");
-        // let expected = &Int32Array::from(vec![Some(2), Some(1), None, Some(4)]);
-        // assert_eq!(expected, result);
+        let result = as_list_array(&result);
+        assert_eq!(2, result.len());
+        assert!(!result.is_null(0));
+        assert!(result.is_null(1));
+        let int32_array = result.value(0);
+        let int32_array =
+            as_int32_array(&int32_array).expect("failed to downcast to Int32Array");
+        let expected = &Int32Array::from(vec![Some(1), Some(2), Some(3)]);
+        assert_eq!(expected, int32_array);
         Ok(())
     }
 
