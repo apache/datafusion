@@ -19,10 +19,11 @@ use std::sync::Arc;
 
 use arrow::array::{Array, ArrayRef, AsArray, Int64Array};
 use arrow::compute::{concat_batches, SortOptions};
-use arrow::datatypes::DataType;
+use arrow::datatypes::{DataType, Decimal128Type};
 use arrow::record_batch::RecordBatch;
 use arrow::util::pretty::pretty_format_batches;
 use arrow_array::types::Int64Type;
+use arrow_ipc::Decimal;
 use arrow_schema::{
     IntervalUnit, TimeUnit, DECIMAL128_MAX_PRECISION, DECIMAL128_MAX_SCALE,
     DECIMAL256_MAX_PRECISION, DECIMAL256_MAX_SCALE,
@@ -139,6 +140,26 @@ async fn test_count() {
         .with_distinct_aggregate_function("count")
         // count work for all arguments
         .with_aggregate_arguments(data_gen_config.all_columns())
+        .set_group_by_columns(data_gen_config.all_columns());
+
+    AggregationFuzzerBuilder::from(data_gen_config)
+        .add_query_builder(query_builder)
+        .build()
+        .run()
+        .await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_median() {
+    let data_gen_config = baseline_config();
+
+    // Queries like SELECT median(a), median(distinct) FROM fuzz_table GROUP BY b
+    let query_builder = QueryBuilder::new()
+        .with_table_name("fuzz_table")
+        .with_aggregate_function("median")
+        .with_distinct_aggregate_function("median")
+        // median only works on numeric columns
+        .with_aggregate_arguments(data_gen_config.numeric_columns())
         .set_group_by_columns(data_gen_config.all_columns());
 
     AggregationFuzzerBuilder::from(data_gen_config)
