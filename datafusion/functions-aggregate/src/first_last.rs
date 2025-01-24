@@ -579,12 +579,10 @@ impl LastValueAccumulator {
 
         // Order by indices for cases where the values are the same, we expect the last index
         let indices: UInt64Array = (0..num_rows).into_iter().map(|x| x as u64).collect();
-        sort_columns.push(
-            SortColumn {
-                values: Arc::new(indices),
-                options: Some(!SortOptions::default()),
-            }
-        );
+        sort_columns.push(SortColumn {
+            values: Arc::new(indices),
+            options: Some(!SortOptions::default()),
+        });
 
         if self.ignore_nulls {
             let indices = lexsort_to_indices(&sort_columns, None)?;
@@ -624,6 +622,7 @@ impl Accumulator for LastValueAccumulator {
         } else if let Some(last_idx) = self.get_last_idx(values)? {
             let row = get_row_at_idx(values, last_idx)?;
             let orderings = &row[1..];
+
             // Update when there is a more recent entry
             if compare_rows(
                 &self.orderings,
@@ -719,7 +718,7 @@ fn convert_to_sort_cols(arrs: &[ArrayRef], sort_exprs: &LexOrdering) -> Vec<Sort
 mod tests {
     use arrow::array::Int64Array;
     use arrow_schema::Schema;
-    use compute::{sort_to_indices, SortOptions};
+    use compute::SortOptions;
     use datafusion_physical_expr::{expressions::col, PhysicalSortExpr};
 
     use super::*;
@@ -735,25 +734,34 @@ mod tests {
             Field::new("b", DataType::Int64, true),
         ]);
 
-        let mut last_accumulator = LastValueAccumulator::try_new(
-            &DataType::Int64,
-            &[DataType::Int64],
-            LexOrdering::new(vec![PhysicalSortExpr::new(
-                col("b", &schema)?,
-                SortOptions::default(),
-            )]),
-            false,
-        )?;
+        // TODO: Cleanup state in `evaluate` or introduce another method?
+        // We don't have cleanup method to reset the state, so create a new one each time
+        fn create_acc(schema: &Schema, asc: bool) -> Result<LastValueAccumulator> {
+            LastValueAccumulator::try_new(
+                &DataType::Int64,
+                &[DataType::Int64],
+                LexOrdering::new(vec![PhysicalSortExpr::new(
+                    col("b", schema)?,
+                    if asc {
+                        SortOptions::default()
+                    } else {
+                        SortOptions::default().desc()
+                    },
+                )]),
+                false,
+            )
+        }
 
+        let mut last_accumulator = create_acc(&schema, true)?;
         let values = vec![
             Arc::new(Int64Array::from(vec![1, 2, 3])) as ArrayRef, // a
             Arc::new(Int64Array::from(vec![1, 1, 1])) as ArrayRef, // b
         ];
         last_accumulator.update_batch(&values)?;
         last_accumulator.update_batch(&values)?;
-
         assert_eq!(last_accumulator.evaluate()?, ScalarValue::Int64(Some(3)));
 
+        let mut last_accumulator = create_acc(&schema, true)?;
         let values = vec![
             Arc::new(Int64Array::from(vec![1, 2, 3, 4, 5, 6])) as ArrayRef, // a
             Arc::new(Int64Array::from(vec![1, 1, 1, 2, 2, 2])) as ArrayRef, // b
@@ -761,6 +769,34 @@ mod tests {
         last_accumulator.update_batch(&values)?;
         assert_eq!(last_accumulator.evaluate()?, ScalarValue::Int64(Some(6)));
 
+        let mut last_accumulator = create_acc(&schema, true)?;
+        let values = vec![
+            Arc::new(Int64Array::from(vec![7, 8, 9])) as ArrayRef, // a
+            Arc::new(Int64Array::from(vec![2, 2, 2])) as ArrayRef, // b
+        ];
+        last_accumulator.update_batch(&values)?;
+        assert_eq!(last_accumulator.evaluate()?, ScalarValue::Int64(Some(9)));
+
+        let mut last_accumulator = create_acc(&schema, true)?;
+        let states = vec![
+            Arc::new(Int64Array::from(vec![1, 2, 3, 4, 5])) as ArrayRef, // a
+            Arc::new(Int64Array::from(vec![1, 2, 2, 1, 1])) as ArrayRef, // order by
+            Arc::new(BooleanArray::from(vec![true; 5])) as ArrayRef,     // is set
+        ];
+        last_accumulator.merge_batch(&states)?;
+        last_accumulator.merge_batch(&states)?;
+        assert_eq!(last_accumulator.evaluate()?, ScalarValue::Int64(Some(3)));
+
+        // desc
+        let mut last_accumulator = create_acc(&schema, false)?;
+        let states = vec![
+            Arc::new(Int64Array::from(vec![1, 2, 3, 4, 5])) as ArrayRef, // a
+            Arc::new(Int64Array::from(vec![1, 2, 2, 1, 1])) as ArrayRef, // order by
+            Arc::new(BooleanArray::from(vec![true; 5])) as ArrayRef,     // is set
+        ];
+        last_accumulator.merge_batch(&states)?;
+        last_accumulator.merge_batch(&states)?;
+        assert_eq!(last_accumulator.evaluate()?, ScalarValue::Int64(Some(5)));
         Ok(())
     }
 
