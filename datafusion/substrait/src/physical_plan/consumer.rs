@@ -20,7 +20,6 @@ use std::sync::Arc;
 
 use datafusion::arrow::datatypes::{DataType, Field, Schema};
 use datafusion::common::{not_impl_err, substrait_err};
-use datafusion::datasource::data_source::FileSourceConfig;
 use datafusion::datasource::listing::PartitionedFile;
 use datafusion::datasource::object_store::ObjectStoreUrl;
 use datafusion::datasource::physical_plan::{FileScanConfig, ParquetSource};
@@ -52,6 +51,7 @@ pub async fn from_substrait_rel(
 ) -> Result<Arc<dyn ExecutionPlan>> {
     let mut base_config;
 
+    let source = Arc::new(ParquetSource::default());
     match &rel.rel_type {
         Some(RelType::Read(read)) => {
             if read.filter.is_some() || read.best_effort_filter.is_some() {
@@ -81,6 +81,7 @@ pub async fn from_substrait_rel(
                     base_config = FileScanConfig::new(
                         ObjectStoreUrl::local_filesystem(),
                         Arc::new(Schema::new(fields)),
+                        source,
                     );
                 }
                 Err(e) => return Err(e),
@@ -151,9 +152,7 @@ pub async fn from_substrait_rel(
                         }
                     }
 
-                    let source_config = Arc::new(ParquetSource::default());
-                    Ok(FileSourceConfig::new_exec(base_config, source_config)
-                        as Arc<dyn ExecutionPlan>)
+                    Ok(base_config.new_exec() as Arc<dyn ExecutionPlan>)
                 }
                 _ => not_impl_err!(
                     "Only LocalFile reads are supported when parsing physical"

@@ -17,9 +17,9 @@
 
 use std::sync::Arc;
 
-use datafusion::datasource::data_source::FileSourceConfig;
 use datafusion::datasource::file_format::parquet::ParquetFormat;
 use datafusion::datasource::listing::{ListingOptions, PartitionedFile};
+use datafusion::datasource::physical_plan::FileScanConfig;
 use datafusion::execution::context::SessionContext;
 use datafusion::physical_plan::metrics::MetricValue;
 use datafusion::physical_plan::source::DataSourceExec;
@@ -98,11 +98,9 @@ impl ExecutionPlanVisitor for ParquetExecVisitor {
         // If needed match on a specific `ExecutionPlan` node type
         if let Some(data_source) = plan.as_any().downcast_ref::<DataSourceExec>() {
             let source = data_source.source();
-            if let Some(file_config) = source.as_any().downcast_ref::<FileSourceConfig>()
-            {
+            if let Some(file_config) = source.as_any().downcast_ref::<FileScanConfig>() {
                 if file_config.file_source().file_type().is_parquet() {
-                    self.file_groups =
-                        Some(file_config.base_config().file_groups.clone());
+                    self.file_groups = Some(file_config.file_groups.clone());
 
                     let metrics = match data_source.metrics() {
                         None => return Ok(true),

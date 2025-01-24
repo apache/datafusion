@@ -24,9 +24,8 @@ use std::ops::Range;
 use std::sync::Arc;
 
 use arrow::datatypes::DataType;
-use datafusion::datasource::data_source::FileSourceConfig;
 use datafusion::datasource::listing::ListingTableUrl;
-use datafusion::datasource::physical_plan::ParquetSource;
+use datafusion::datasource::physical_plan::{FileScanConfig, ParquetSource};
 use datafusion::{
     assert_batches_sorted_eq,
     datasource::{
@@ -88,7 +87,7 @@ async fn parquet_partition_pruning_filter() -> Result<()> {
     let exec = table.scan(&ctx.state(), None, &filters, None).await?;
     let data_source = exec.as_any().downcast_ref::<DataSourceExec>().unwrap();
     let source = data_source.source();
-    let file_source = source.as_any().downcast_ref::<FileSourceConfig>().unwrap();
+    let file_source = source.as_any().downcast_ref::<FileScanConfig>().unwrap();
     let parquet_config = file_source
         .file_source()
         .as_any()

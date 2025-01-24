@@ -24,7 +24,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use super::output_requirements::OutputRequirementExec;
-use crate::datasource::physical_plan::CsvSource;
+use crate::datasource::physical_plan::{CsvSource, FileScanConfig};
 use crate::error::Result;
 use crate::physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use crate::physical_plan::filter::FilterExec;
@@ -50,15 +50,14 @@ use datafusion_physical_expr::{
     utils::collect_columns, Partitioning, PhysicalExpr, PhysicalExprRef,
     PhysicalSortExpr, PhysicalSortRequirement,
 };
+use datafusion_physical_expr_common::sort_expr::{LexOrdering, LexRequirement};
+use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use datafusion_physical_plan::joins::utils::{JoinOn, JoinOnRef};
+use datafusion_physical_plan::memory::MemorySourceConfig;
+use datafusion_physical_plan::source::DataSourceExec;
 use datafusion_physical_plan::streaming::StreamingTableExec;
 use datafusion_physical_plan::union::UnionExec;
 
-use crate::datasource::data_source::FileSourceConfig;
-use datafusion_physical_expr_common::sort_expr::{LexOrdering, LexRequirement};
-use datafusion_physical_optimizer::PhysicalOptimizerRule;
-use datafusion_physical_plan::memory::MemorySourceConfig;
-use datafusion_physical_plan::source::DataSourceExec;
 use itertools::Itertools;
 
 /// This rule inspects [`ProjectionExec`]'s in the given physical plan and tries to
@@ -113,7 +112,7 @@ pub fn remove_unnecessary_projections(
             .and_then(|exec| {
                 exec.source()
                     .as_any()
-                    .downcast_ref::<FileSourceConfig>()
+                    .downcast_ref::<FileScanConfig>()
                     .and_then(|file_config| {
                         file_config
                             .file_source()
@@ -212,8 +211,8 @@ fn try_swapping_with_csv(
     // This process can be moved into DataSourceExec, but it would be an overlap of their responsibility.
     all_alias_free_columns(projection.expr()).then(|| {
         let source = csv.source();
-        let csv_config = source.as_any().downcast_ref::<FileSourceConfig>().unwrap();
-        let mut file_scan = csv_config.base_config().clone();
+        let csv_config = source.as_any().downcast_ref::<FileScanConfig>().unwrap();
+        let mut file_scan = csv_config.clone();
         let new_projections = new_projections_for_columns(
             projection,
             &file_scan
@@ -221,7 +220,7 @@ fn try_swapping_with_csv(
                 .unwrap_or((0..csv.schema().fields().len()).collect()),
         );
         file_scan.projection = Some(new_projections);
-        FileSourceConfig::new_exec(file_scan, Arc::clone(csv_config.file_source())) as _
+        file_scan.new_exec() as _
     })
 }
 
@@ -1772,15 +1771,18 @@ mod tests {
             Field::new("d", DataType::Int32, true),
             Field::new("e", DataType::Int32, true),
         ]));
-        let conf =
-            FileScanConfig::new(ObjectStoreUrl::parse("test:///").unwrap(), schema)
-                .with_file(PartitionedFile::new("x".to_string(), 100))
-                .with_projection(Some(vec![0, 1, 2, 3, 4]))
-                .with_newlines_in_values(false)
-                .with_file_compression_type(FileCompressionType::UNCOMPRESSED);
+        let source = Arc::new(CsvSource::new(false, 0, 0));
+        let conf = FileScanConfig::new(
+            ObjectStoreUrl::parse("test:///").unwrap(),
+            schema,
+            source,
+        )
+        .with_file(PartitionedFile::new("x".to_string(), 100))
+        .with_projection(Some(vec![0, 1, 2, 3, 4]))
+        .with_newlines_in_values(false)
+        .with_file_compression_type(FileCompressionType::UNCOMPRESSED);
 
-        let source_config = Arc::new(CsvSource::new(false, 0, 0));
-        FileSourceConfig::new_exec(conf, source_config)
+        conf.new_exec()
     }
 
     fn create_projecting_csv_exec() -> Arc<dyn ExecutionPlan> {
@@ -1790,15 +1792,18 @@ mod tests {
             Field::new("c", DataType::Int32, true),
             Field::new("d", DataType::Int32, true),
         ]));
-        let conf =
-            FileScanConfig::new(ObjectStoreUrl::parse("test:///").unwrap(), schema)
-                .with_file(PartitionedFile::new("x".to_string(), 100))
-                .with_projection(Some(vec![3, 2, 1]))
-                .with_newlines_in_values(false)
-                .with_file_compression_type(FileCompressionType::UNCOMPRESSED);
+        let source = Arc::new(CsvSource::new(false, 0, 0));
+        let conf = FileScanConfig::new(
+            ObjectStoreUrl::parse("test:///").unwrap(),
+            schema,
+            source,
+        )
+        .with_file(PartitionedFile::new("x".to_string(), 100))
+        .with_projection(Some(vec![3, 2, 1]))
+        .with_newlines_in_values(false)
+        .with_file_compression_type(FileCompressionType::UNCOMPRESSED);
 
-        let source_config = Arc::new(CsvSource::new(false, 0, 0));
-        FileSourceConfig::new_exec(conf, source_config)
+        conf.new_exec()
     }
 
     fn create_projecting_memory_exec() -> Arc<dyn ExecutionPlan> {

@@ -37,7 +37,6 @@ use crate::physical_plan::metrics::MetricsSet;
 use crate::physical_plan::ExecutionPlan;
 use crate::prelude::{Expr, SessionConfig, SessionContext};
 
-use crate::datasource::data_source::FileSourceConfig;
 use datafusion_physical_plan::source::DataSourceExec;
 use object_store::path::Path;
 use object_store::ObjectMeta;
@@ -155,43 +154,46 @@ impl TestParquetFile {
         ctx: &SessionContext,
         maybe_filter: Option<Expr>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let scan_config =
-            FileScanConfig::new(self.object_store_url.clone(), Arc::clone(&self.schema))
-                .with_file(PartitionedFile {
-                    object_meta: self.object_meta.clone(),
-                    partition_values: vec![],
-                    range: None,
-                    statistics: None,
-                    extensions: None,
-                    metadata_size_hint: None,
-                });
+        let parquet_options = ctx.copied_table_options().parquet;
+        let source = Arc::new(ParquetSource::new_with_options(parquet_options.clone()));
+        let mut scan_config = FileScanConfig::new(
+            self.object_store_url.clone(),
+            Arc::clone(&self.schema),
+            source,
+        )
+        .with_file(PartitionedFile {
+            object_meta: self.object_meta.clone(),
+            partition_values: vec![],
+            range: None,
+            statistics: None,
+            extensions: None,
+            metadata_size_hint: None,
+        });
 
         let df_schema = Arc::clone(&self.schema).to_dfschema_ref()?;
 
         // run coercion on the filters to coerce types etc.
         let props = ExecutionProps::new();
         let context = SimplifyContext::new(&props).with_schema(Arc::clone(&df_schema));
-        let parquet_options = ctx.copied_table_options().parquet;
         if let Some(filter) = maybe_filter {
             let simplifier = ExprSimplifier::new(context);
             let filter = simplifier.coerce(filter, &df_schema).unwrap();
             let physical_filter_expr =
                 create_physical_expr(&filter, &df_schema, &ExecutionProps::default())?;
 
-            let source_config = Arc::new(ParquetSource::new(
+            let source = Arc::new(ParquetSource::new(
                 Arc::clone(&scan_config.file_schema),
                 Some(Arc::clone(&physical_filter_expr)),
                 None,
                 parquet_options,
             ));
-            let parquet_exec = FileSourceConfig::new_exec(scan_config, source_config);
+            scan_config = scan_config.with_source(source);
+            let parquet_exec = scan_config.new_exec();
 
             let exec = Arc::new(FilterExec::try_new(physical_filter_expr, parquet_exec)?);
             Ok(exec)
         } else {
-            let source_config =
-                Arc::new(ParquetSource::new_with_options(parquet_options));
-            Ok(FileSourceConfig::new_exec(scan_config, source_config))
+            Ok(scan_config.new_exec())
         }
     }
 
@@ -202,8 +204,7 @@ impl TestParquetFile {
     pub fn parquet_metrics(plan: &Arc<dyn ExecutionPlan>) -> Option<MetricsSet> {
         if let Some(maybe_file) = plan.as_any().downcast_ref::<DataSourceExec>() {
             let source = maybe_file.source();
-            if let Some(maybe_parquet) =
-                source.as_any().downcast_ref::<FileSourceConfig>()
+            if let Some(maybe_parquet) = source.as_any().downcast_ref::<FileScanConfig>()
             {
                 if maybe_parquet.file_source().file_type().is_parquet() {
                     return maybe_file.metrics();

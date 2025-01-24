@@ -472,7 +472,6 @@ mod tests {
 
     use super::*;
     use crate::dataframe::DataFrameWriteOptions;
-    use crate::datasource::data_source::FileSourceConfig;
     use crate::datasource::file_format::{json::JsonFormat, FileFormat};
     use crate::datasource::listing::PartitionedFile;
     use crate::datasource::object_store::ObjectStoreUrl;
@@ -609,12 +608,12 @@ mod tests {
         let (object_store_url, file_groups, file_schema) =
             prepare_store(&state, file_compression_type.to_owned(), tmp_dir.path()).await;
 
-        let conf = FileScanConfig::new(object_store_url, file_schema)
+        let source = Arc::new(JsonSource::new());
+        let conf = FileScanConfig::new(object_store_url, file_schema, source)
             .with_file_groups(file_groups)
             .with_limit(Some(3))
             .with_file_compression_type(file_compression_type.to_owned());
-        let source_config = Arc::new(JsonSource::new());
-        let exec = FileSourceConfig::new_exec(conf, source_config);
+        let exec = conf.new_exec();
 
         // TODO: this is not where schema inference should be tested
 
@@ -680,12 +679,12 @@ mod tests {
         let file_schema = Arc::new(builder.finish());
         let missing_field_idx = file_schema.fields.len() - 1;
 
-        let conf = FileScanConfig::new(object_store_url, file_schema)
+        let source = Arc::new(JsonSource::new());
+        let conf = FileScanConfig::new(object_store_url, file_schema, source)
             .with_file_groups(file_groups)
             .with_limit(Some(3))
             .with_file_compression_type(file_compression_type.to_owned());
-        let source_config = Arc::new(JsonSource::new());
-        let exec = FileSourceConfig::new_exec(conf, source_config);
+        let exec = conf.new_exec();
 
         let mut it = exec.execute(0, task_ctx)?;
         let batch = it.next().await.unwrap()?;
@@ -720,12 +719,12 @@ mod tests {
         let (object_store_url, file_groups, file_schema) =
             prepare_store(&state, file_compression_type.to_owned(), tmp_dir.path()).await;
 
-        let conf = FileScanConfig::new(object_store_url, file_schema)
+        let source = Arc::new(JsonSource::new());
+        let conf = FileScanConfig::new(object_store_url, file_schema, source)
             .with_file_groups(file_groups)
             .with_projection(Some(vec![0, 2]))
             .with_file_compression_type(file_compression_type.to_owned());
-        let source_config = Arc::new(JsonSource::new());
-        let exec = FileSourceConfig::new_exec(conf, source_config);
+        let exec = conf.new_exec();
         let inferred_schema = exec.schema();
         assert_eq!(inferred_schema.fields().len(), 2);
 
@@ -765,12 +764,12 @@ mod tests {
         let (object_store_url, file_groups, file_schema) =
             prepare_store(&state, file_compression_type.to_owned(), tmp_dir.path()).await;
 
-        let conf = FileScanConfig::new(object_store_url, file_schema)
+        let source = Arc::new(JsonSource::new());
+        let conf = FileScanConfig::new(object_store_url, file_schema, source)
             .with_file_groups(file_groups)
             .with_projection(Some(vec![3, 0, 2]))
             .with_file_compression_type(file_compression_type.to_owned());
-        let source_config = Arc::new(JsonSource::new());
-        let exec = FileSourceConfig::new_exec(conf, source_config);
+        let exec = conf.new_exec();
         let inferred_schema = exec.schema();
         assert_eq!(inferred_schema.fields().len(), 3);
 

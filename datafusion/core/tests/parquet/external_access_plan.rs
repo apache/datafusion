@@ -26,7 +26,6 @@ use crate::parquet::{create_data_batch, Scenario};
 use arrow::util::pretty::pretty_format_batches;
 use arrow_schema::SchemaRef;
 use datafusion::common::Result;
-use datafusion::datasource::data_source::FileSourceConfig;
 use datafusion::datasource::listing::PartitionedFile;
 use datafusion::datasource::physical_plan::parquet::{ParquetAccessPlan, RowGroupAccess};
 use datafusion::datasource::physical_plan::{FileScanConfig, ParquetSource};
@@ -342,15 +341,12 @@ impl TestFull {
 
         // Create a DataSourceExec to read the file
         let object_store_url = ObjectStoreUrl::local_filesystem();
-        let config = FileScanConfig::new(object_store_url, schema.clone())
-            .with_file(partitioned_file);
-
         // add the predicate, if requested
-        let source_config = if let Some(predicate) = predicate {
+        let source = if let Some(predicate) = predicate {
             let df_schema = DFSchema::try_from(schema.clone())?;
             let predicate = ctx.create_physical_expr(predicate, &df_schema)?;
             Arc::new(ParquetSource::new(
-                Arc::clone(&config.file_schema),
+                Arc::clone(&schema),
                 Some(predicate),
                 None,
                 TableParquetOptions::default(),
@@ -358,9 +354,10 @@ impl TestFull {
         } else {
             Arc::new(ParquetSource::default())
         };
+        let config = FileScanConfig::new(object_store_url, schema.clone(), source)
+            .with_file(partitioned_file);
 
-        let plan: Arc<dyn ExecutionPlan> =
-            FileSourceConfig::new_exec(config, source_config);
+        let plan: Arc<dyn ExecutionPlan> = config.new_exec();
 
         // run the DataSourceExec and collect the results
         let results =

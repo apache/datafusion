@@ -29,7 +29,6 @@ use super::{
     Decoder, DecoderDeserializer, FileFormat, FileFormatFactory, FileScanConfig,
     DEFAULT_SCHEMA_INFER_MAX_RECORD,
 };
-use crate::datasource::data_source::FileSourceConfig;
 use crate::datasource::file_format::file_compression_type::FileCompressionType;
 use crate::datasource::file_format::write::demux::DemuxedStreamReceiver;
 use crate::datasource::file_format::write::BatchSerializer;
@@ -58,6 +57,7 @@ use datafusion_expr::dml::InsertOp;
 use datafusion_physical_expr::PhysicalExpr;
 use datafusion_physical_plan::ExecutionPlan;
 
+use crate::datasource::data_source::FileSource;
 use async_trait::async_trait;
 use bytes::{Buf, Bytes};
 use datafusion_physical_expr_common::sort_expr::LexRequirement;
@@ -251,10 +251,11 @@ impl FileFormat for JsonFormat {
         mut conf: FileScanConfig,
         _filters: Option<&Arc<dyn PhysicalExpr>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let source_config = Arc::new(JsonSource::new());
+        let source = Arc::new(JsonSource::new());
         conf.file_compression_type = FileCompressionType::from(self.options.compression);
+        conf = conf.with_source(source);
 
-        Ok(FileSourceConfig::new_exec(conf, source_config))
+        Ok(conf.new_exec())
     }
 
     async fn create_writer_physical_plan(
@@ -273,6 +274,10 @@ impl FileFormat for JsonFormat {
         let sink = Arc::new(JsonSink::new(conf, writer_options));
 
         Ok(Arc::new(DataSinkExec::new(input, sink, order_requirements)) as _)
+    }
+
+    fn file_source(&self) -> Arc<dyn FileSource> {
+        Arc::new(JsonSource::default())
     }
 }
 

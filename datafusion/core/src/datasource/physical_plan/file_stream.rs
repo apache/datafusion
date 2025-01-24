@@ -525,6 +525,7 @@ mod tests {
     use crate::prelude::SessionContext;
     use crate::test::{make_partition, object_store::register_test_store};
 
+    use crate::datasource::physical_plan::CsvSource;
     use arrow_schema::Schema;
     use datafusion_common::internal_err;
 
@@ -648,6 +649,7 @@ mod tests {
             let config = FileScanConfig::new(
                 ObjectStoreUrl::parse("test:///").unwrap(),
                 file_schema,
+                Arc::new(CsvSource::default()),
             )
             .with_file_group(file_group)
             .with_limit(self.limit);

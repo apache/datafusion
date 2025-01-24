@@ -26,6 +26,7 @@ use object_store::path::Path;
 use object_store::ObjectMeta;
 
 use datafusion::arrow::datatypes::Schema;
+use datafusion::datasource::data_source::FileSource;
 use datafusion::datasource::file_format::csv::CsvSink;
 use datafusion::datasource::file_format::file_compression_type::FileCompressionType;
 use datafusion::datasource::file_format::json::JsonSink;
@@ -470,12 +471,19 @@ pub fn parse_protobuf_partitioning(
     }
 }
 
+pub fn parse_protobuf_file_scan_schema(
+    proto: &protobuf::FileScanExecConf,
+) -> Result<Arc<Schema>> {
+    Ok(Arc::new(convert_required!(proto.schema)?))
+}
+
 pub fn parse_protobuf_file_scan_config(
     proto: &protobuf::FileScanExecConf,
     registry: &dyn FunctionRegistry,
     codec: &dyn PhysicalExtensionCodec,
+    source: Arc<dyn FileSource>,
 ) -> Result<FileScanConfig> {
-    let schema: Arc<Schema> = Arc::new(convert_required!(proto.schema)?);
+    let schema: Arc<Schema> = parse_protobuf_file_scan_schema(proto)?;
     let projection = proto
         .projection
         .iter()
@@ -543,6 +551,7 @@ pub fn parse_protobuf_file_scan_config(
         output_ordering,
         file_compression_type: FileCompressionType::UNCOMPRESSED,
         new_lines_in_values: false,
+        source,
     })
 }
 

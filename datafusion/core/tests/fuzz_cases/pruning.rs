@@ -22,7 +22,6 @@ use arrow_schema::{DataType, Field, Schema};
 use bytes::{BufMut, Bytes, BytesMut};
 use datafusion::{
     datasource::{
-        data_source::FileSourceConfig,
         listing::PartitionedFile,
         physical_plan::{FileScanConfig, ParquetSource},
     },
@@ -305,35 +304,35 @@ async fn execute_with_predicate(
     schema: Arc<Schema>,
     ctx: &SessionContext,
 ) -> Vec<String> {
-    let scan =
-        FileScanConfig::new(ObjectStoreUrl::parse("memory://").unwrap(), schema.clone())
-            .with_file_group(
-                files
-                    .iter()
-                    .map(|test_file| {
-                        PartitionedFile::new(
-                            test_file.path.clone(),
-                            test_file.size as u64,
-                        )
-                    })
-                    .collect(),
-            );
-    let parquet_conf = if prune_stats {
+    let parquet_source = if prune_stats {
         ParquetSource::new(
-            Arc::clone(&scan.file_schema),
+            Arc::clone(&schema),
             Some(predicate.clone()),
             None,
             TableParquetOptions::default(),
         )
     } else {
         ParquetSource::new(
-            Arc::clone(&scan.file_schema),
+            Arc::clone(&schema),
             None,
             None,
             TableParquetOptions::default(),
         )
     };
-    let exec = FileSourceConfig::new_exec(scan, Arc::new(parquet_conf));
+    let scan = FileScanConfig::new(
+        ObjectStoreUrl::parse("memory://").unwrap(),
+        schema.clone(),
+        Arc::new(parquet_source),
+    )
+    .with_file_group(
+        files
+            .iter()
+            .map(|test_file| {
+                PartitionedFile::new(test_file.path.clone(), test_file.size as u64)
+            })
+            .collect(),
+    );
+    let exec = scan.new_exec();
     let exec =
         Arc::new(FilterExec::try_new(predicate, exec).unwrap()) as Arc<dyn ExecutionPlan>;
 

@@ -22,6 +22,7 @@ use arrow::{
     datatypes::UInt64Type,
 };
 use arrow_schema::{DataType, Field, Schema, SchemaRef};
+use datafusion::datasource::data_source::FileSource;
 use datafusion::execution::session_state::SessionStateBuilder;
 use datafusion::physical_expr::LexRequirement;
 use datafusion::{
@@ -126,6 +127,10 @@ impl FileFormat for TSVFileFormat {
         self.csv_file_format
             .create_writer_physical_plan(input, state, conf, order_requirements)
             .await
+    }
+
+    fn file_source(&self) -> Arc<dyn FileSource> {
+        self.csv_file_format.file_source()
     }
 }
 

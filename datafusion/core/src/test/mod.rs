@@ -25,7 +25,7 @@ use std::io::{BufReader, BufWriter};
 use std::path::Path;
 use std::sync::Arc;
 
-use crate::datasource::data_source::FileSourceConfig;
+use crate::datasource::data_source::FileSource;
 use crate::datasource::file_format::csv::CsvFormat;
 use crate::datasource::file_format::file_compression_type::FileCompressionType;
 use crate::datasource::file_format::FileFormat;
@@ -90,10 +90,10 @@ pub fn scan_partitioned_csv(
         FileCompressionType::UNCOMPRESSED,
         work_dir,
     )?;
-    let config = partitioned_csv_config(schema, file_groups)
+    let source = Arc::new(CsvSource::new(true, b'"', b'"'));
+    let config = partitioned_csv_config(schema, file_groups, source)
         .with_file_compression_type(FileCompressionType::UNCOMPRESSED);
-    let source_config = Arc::new(CsvSource::new(true, b'"', b'"'));
-    Ok(FileSourceConfig::new_exec(config, source_config))
+    Ok(config.new_exec())
 }
 
 /// Auto finish the wrapped BzEncoder on drop
@@ -212,8 +212,9 @@ pub fn partitioned_file_groups(
 pub fn partitioned_csv_config(
     schema: SchemaRef,
     file_groups: Vec<Vec<PartitionedFile>>,
+    source: Arc<dyn FileSource>,
 ) -> FileScanConfig {
-    FileScanConfig::new(ObjectStoreUrl::local_filesystem(), schema)
+    FileScanConfig::new(ObjectStoreUrl::local_filesystem(), schema, source)
         .with_file_groups(file_groups)
 }
 

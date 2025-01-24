@@ -24,7 +24,6 @@ use arrow::util::pretty::pretty_format_batches;
 use arrow_schema::SchemaRef;
 use async_trait::async_trait;
 use datafusion::catalog::Session;
-use datafusion::datasource::data_source::FileSourceConfig;
 use datafusion::datasource::listing::PartitionedFile;
 use datafusion::datasource::physical_plan::{FileScanConfig, ParquetSource};
 use datafusion::datasource::TableProvider;
@@ -243,9 +242,16 @@ impl TableProvider for IndexTableProvider {
         let files = self.index.get_files(predicate.clone())?;
 
         let object_store_url = ObjectStoreUrl::parse("file://")?;
-        let mut file_scan_config = FileScanConfig::new(object_store_url, self.schema())
-            .with_projection(projection.cloned())
-            .with_limit(limit);
+        let source = Arc::new(ParquetSource::new(
+            self.schema(),
+            Some(predicate),
+            None,
+            TableParquetOptions::default(),
+        ));
+        let mut file_scan_config =
+            FileScanConfig::new(object_store_url, self.schema(), source)
+                .with_projection(projection.cloned())
+                .with_limit(limit);
 
         // Transform to the format needed to pass to DataSourceExec
         // Create one file group per file (default to scanning them all in parallel)
@@ -257,13 +263,7 @@ impl TableProvider for IndexTableProvider {
                 file_size,
             ));
         }
-        let source_config = Arc::new(ParquetSource::new(
-            Arc::clone(&file_scan_config.file_schema),
-            Some(predicate),
-            None,
-            TableParquetOptions::default(),
-        ));
-        Ok(FileSourceConfig::new_exec(file_scan_config, source_config))
+        Ok(file_scan_config.new_exec())
     }
 
     /// Tell DataFusion to push filters down to the scan method

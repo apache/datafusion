@@ -376,7 +376,6 @@ mod private {
 mod tests {
     use super::*;
     use crate::arrow::datatypes::{DataType, Field, SchemaBuilder};
-    use crate::datasource::data_source::FileSourceConfig;
     use crate::datasource::file_format::{avro::AvroFormat, FileFormat};
     use crate::datasource::listing::PartitionedFile;
     use crate::datasource::object_store::ObjectStoreUrl;
@@ -425,12 +424,13 @@ mod tests {
             .infer_schema(&state, &store, std::slice::from_ref(&meta))
             .await?;
 
-        let conf = FileScanConfig::new(ObjectStoreUrl::local_filesystem(), file_schema)
-            .with_file(meta.into())
-            .with_projection(Some(vec![0, 1, 2]));
+        let source = Arc::new(AvroSource::new());
+        let conf =
+            FileScanConfig::new(ObjectStoreUrl::local_filesystem(), file_schema, source)
+                .with_file(meta.into())
+                .with_projection(Some(vec![0, 1, 2]));
 
-        let source_config = Arc::new(AvroSource::new());
-        let source_exec = FileSourceConfig::new_exec(conf, source_config);
+        let source_exec = conf.new_exec();
         assert_eq!(
             source_exec
                 .properties()
@@ -498,12 +498,12 @@ mod tests {
         // Include the missing column in the projection
         let projection = Some(vec![0, 1, 2, actual_schema.fields().len()]);
 
-        let conf = FileScanConfig::new(object_store_url, file_schema)
+        let source = Arc::new(AvroSource::new());
+        let conf = FileScanConfig::new(object_store_url, file_schema, source)
             .with_file(meta.into())
             .with_projection(projection);
 
-        let source_config = Arc::new(AvroSource::new());
-        let source_exec = FileSourceConfig::new_exec(conf, source_config);
+        let source_exec = conf.new_exec();
         assert_eq!(
             source_exec
                 .properties()
@@ -569,15 +569,15 @@ mod tests {
         partitioned_file.partition_values = vec![ScalarValue::from("2021-10-26")];
 
         let projection = Some(vec![0, 1, file_schema.fields().len(), 2]);
-        let conf = FileScanConfig::new(object_store_url, file_schema)
+        let source = Arc::new(AvroSource::new());
+        let conf = FileScanConfig::new(object_store_url, file_schema, source)
             // select specific columns of the files as well as the partitioning
             // column which is supposed to be the last column in the table schema.
             .with_projection(projection)
             .with_file(partitioned_file)
             .with_table_partition_cols(vec![Field::new("date", DataType::Utf8, false)]);
 
-        let source_config = Arc::new(AvroSource::new());
-        let source_exec = FileSourceConfig::new_exec(conf, source_config);
+        let source_exec = conf.new_exec();
 
         assert_eq!(
             source_exec

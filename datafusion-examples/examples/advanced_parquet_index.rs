@@ -26,7 +26,6 @@ use std::sync::Arc;
 use arrow::array::{ArrayRef, Int32Array, RecordBatch, StringArray};
 use arrow_schema::SchemaRef;
 use datafusion::catalog::Session;
-use datafusion::datasource::data_source::FileSourceConfig;
 use datafusion::datasource::listing::PartitionedFile;
 use datafusion::datasource::physical_plan::parquet::ParquetAccessPlan;
 use datafusion::datasource::physical_plan::{
@@ -486,19 +485,15 @@ impl TableProvider for IndexTableProvider {
         // Prepare for scanning
         let schema = self.schema();
         let object_store_url = ObjectStoreUrl::parse("file://")?;
-        let file_scan_config = FileScanConfig::new(object_store_url, schema)
-            .with_limit(limit)
-            .with_projection(projection.cloned())
-            .with_file(partitioned_file);
 
         // Configure a factory interface to avoid re-reading the metadata for each file
         let reader_factory =
             CachedParquetFileReaderFactory::new(Arc::clone(&self.object_store))
                 .with_file(indexed_file);
 
-        let source_config = Arc::new(
+        let file_source = Arc::new(
             ParquetSource::new(
-                Arc::clone(&file_scan_config.file_schema),
+                Arc::clone(&schema),
                 // provide the predicate so the DataSourceExec can try and prune
                 // row groups internally
                 Some(predicate),
@@ -508,8 +503,13 @@ impl TableProvider for IndexTableProvider {
             // provide the factory to create parquet reader without re-reading metadata
             .with_parquet_file_reader_factory(Arc::new(reader_factory)),
         );
+        let file_scan_config = FileScanConfig::new(object_store_url, schema, file_source)
+            .with_limit(limit)
+            .with_projection(projection.cloned())
+            .with_file(partitioned_file);
+
         // Finally, put it all together into a DataSourceExec
-        Ok(FileSourceConfig::new_exec(file_scan_config, source_config))
+        Ok(file_scan_config.new_exec())
     }
 
     /// Tell DataFusion to push filters down to the scan method

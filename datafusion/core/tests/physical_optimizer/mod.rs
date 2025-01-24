@@ -28,7 +28,6 @@ mod sanity_checker;
 use std::sync::Arc;
 
 use arrow_schema::SchemaRef;
-use datafusion::datasource::data_source::FileSourceConfig;
 use datafusion::datasource::listing::PartitionedFile;
 use datafusion::datasource::physical_plan::{FileScanConfig, ParquetSource};
 use datafusion_execution::object_store::ObjectStoreUrl;
@@ -38,21 +37,25 @@ use datafusion_physical_plan::source::DataSourceExec;
 
 /// Create a non sorted parquet exec
 pub fn parquet_exec(schema: &SchemaRef) -> Arc<DataSourceExec> {
-    FileSourceConfig::new_exec(
-        FileScanConfig::new(ObjectStoreUrl::parse("test:///").unwrap(), schema.clone())
-            .with_file(PartitionedFile::new("x".to_string(), 100)),
+    FileScanConfig::new(
+        ObjectStoreUrl::parse("test:///").unwrap(),
+        schema.clone(),
         Arc::new(ParquetSource::default()),
     )
+    .with_file(PartitionedFile::new("x".to_string(), 100))
+    .new_exec()
 }
 
 /// Create a single parquet file that is sorted
 pub(crate) fn parquet_exec_with_sort(
     output_ordering: Vec<LexOrdering>,
 ) -> Arc<DataSourceExec> {
-    FileSourceConfig::new_exec(
-        FileScanConfig::new(ObjectStoreUrl::parse("test:///").unwrap(), schema())
-            .with_file(PartitionedFile::new("x".to_string(), 100))
-            .with_output_ordering(output_ordering),
+    FileScanConfig::new(
+        ObjectStoreUrl::parse("test:///").unwrap(),
+        schema(),
         Arc::new(ParquetSource::default()),
     )
+    .with_file(PartitionedFile::new("x".to_string(), 100))
+    .with_output_ordering(output_ordering)
+    .new_exec()
 }

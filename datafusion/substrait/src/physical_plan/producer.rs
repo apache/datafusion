@@ -23,11 +23,11 @@ use crate::variation_const::{
 };
 
 use datafusion::arrow::datatypes::DataType;
-use datafusion::datasource::data_source::FileSourceConfig;
 use datafusion::error::{DataFusionError, Result};
 use datafusion::physical_plan::source::DataSourceExec;
 use datafusion::physical_plan::{displayable, ExecutionPlan};
 
+use datafusion::datasource::physical_plan::FileScanConfig;
 use substrait::proto::expression::mask_expression::{StructItem, StructSelect};
 use substrait::proto::expression::MaskExpression;
 use substrait::proto::r#type::{
@@ -53,12 +53,11 @@ pub fn to_substrait_rel(
 ) -> Result<Box<Rel>> {
     if let Some(data_source) = plan.as_any().downcast_ref::<DataSourceExec>() {
         let source = data_source.source();
-        if let Some(file_config) = source.as_any().downcast_ref::<FileSourceConfig>() {
+        if let Some(file_config) = source.as_any().downcast_ref::<FileScanConfig>() {
             let is_parquet = file_config.file_source().file_type().is_parquet();
             if is_parquet {
-                let base_config = file_config.base_config();
                 let mut substrait_files = vec![];
-                for (partition_index, files) in base_config.file_groups.iter().enumerate()
+                for (partition_index, files) in file_config.file_groups.iter().enumerate()
                 {
                     for file in files {
                         substrait_files.push(FileOrFiles {
@@ -76,7 +75,7 @@ pub fn to_substrait_rel(
                 let mut names = vec![];
                 let mut types = vec![];
 
-                for field in base_config.file_schema.fields.iter() {
+                for field in file_config.file_schema.fields.iter() {
                     match to_substrait_type(field.data_type(), field.is_nullable()) {
                         Ok(t) => {
                             names.push(field.name().clone());
@@ -95,7 +94,7 @@ pub fn to_substrait_rel(
                 };
 
                 let mut select_struct = None;
-                if let Some(projection) = base_config.projection.as_ref() {
+                if let Some(projection) = file_config.projection.as_ref() {
                     let struct_items = projection
                         .iter()
                         .map(|index| StructItem {

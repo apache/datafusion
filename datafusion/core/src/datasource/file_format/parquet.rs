@@ -32,7 +32,6 @@ use super::{
 };
 use crate::arrow::array::RecordBatch;
 use crate::arrow::datatypes::{Fields, Schema, SchemaRef};
-use crate::datasource::data_source::FileSourceConfig;
 use crate::datasource::file_format::file_compression_type::FileCompressionType;
 use crate::datasource::file_format::write::get_writer_schema;
 use crate::datasource::physical_plan::parquet::can_expr_be_pushed_down_with_schemas;
@@ -66,6 +65,7 @@ use datafusion_functions_aggregate::min_max::{MaxAccumulator, MinAccumulator};
 use datafusion_physical_expr::PhysicalExpr;
 use datafusion_physical_expr_common::sort_expr::LexRequirement;
 
+use crate::datasource::data_source::FileSource;
 use async_trait::async_trait;
 use bytes::Bytes;
 use futures::future::BoxFuture;
@@ -397,7 +397,7 @@ impl FileFormat for ParquetFormat {
     async fn create_physical_plan(
         &self,
         _state: &SessionState,
-        conf: FileScanConfig,
+        mut conf: FileScanConfig,
         filters: Option<&Arc<dyn PhysicalExpr>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let mut predicate = None;
@@ -415,13 +415,14 @@ impl FileFormat for ParquetFormat {
             metadata_size_hint = Some(metadata);
         }
 
-        let source_config = Arc::new(ParquetSource::new(
+        let source = Arc::new(ParquetSource::new(
             Arc::clone(&conf.file_schema),
             predicate,
             metadata_size_hint,
             self.options.clone(),
         ));
-        Ok(FileSourceConfig::new_exec(conf, source_config))
+        conf = conf.with_source(source);
+        Ok(conf.new_exec())
     }
 
     async fn create_writer_physical_plan(
@@ -459,6 +460,10 @@ impl FileFormat for ParquetFormat {
         } else {
             FilePushdownSupport::NotSupportedForFilter
         })
+    }
+
+    fn file_source(&self) -> Arc<dyn FileSource> {
+        Arc::new(ParquetSource::default())
     }
 }
 

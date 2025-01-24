@@ -23,7 +23,6 @@ use arrow_array::types::Int32Type;
 use arrow_array::{ArrayRef, DictionaryArray, Float32Array, Int64Array, StringArray};
 use arrow_schema::DataType;
 use datafusion::assert_batches_sorted_eq;
-use datafusion::datasource::data_source::FileSourceConfig;
 use datafusion::datasource::physical_plan::{FileScanConfig, ParquetSource};
 use datafusion::physical_plan::collect;
 use datafusion::prelude::SessionContext;
@@ -60,13 +59,12 @@ async fn multi_parquet_coercion() {
         Field::new("c2", DataType::Int32, true),
         Field::new("c3", DataType::Float64, true),
     ]));
-    let source_config = Arc::new(ParquetSource::default());
+    let source = Arc::new(ParquetSource::default());
+    let conf =
+        FileScanConfig::new(ObjectStoreUrl::local_filesystem(), file_schema, source)
+            .with_file_group(file_group);
 
-    let parquet_exec = FileSourceConfig::new_exec(
-        FileScanConfig::new(ObjectStoreUrl::local_filesystem(), file_schema)
-            .with_file_group(file_group),
-        source_config,
-    );
+    let parquet_exec = conf.new_exec();
 
     let session_ctx = SessionContext::new();
     let task_ctx = session_ctx.task_ctx();
@@ -116,12 +114,14 @@ async fn multi_parquet_coercion_projection() {
         Field::new("c2", DataType::Int32, true),
         Field::new("c3", DataType::Float64, true),
     ]));
-    let parquet_exec = FileSourceConfig::new_exec(
-        FileScanConfig::new(ObjectStoreUrl::local_filesystem(), file_schema)
-            .with_file_group(file_group)
-            .with_projection(Some(vec![1, 0, 2])),
+    let parquet_exec = FileScanConfig::new(
+        ObjectStoreUrl::local_filesystem(),
+        file_schema,
         Arc::new(ParquetSource::default()),
-    );
+    )
+    .with_file_group(file_group)
+    .with_projection(Some(vec![1, 0, 2]))
+    .new_exec();
 
     let session_ctx = SessionContext::new();
     let task_ctx = session_ctx.task_ctx();

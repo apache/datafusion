@@ -18,7 +18,6 @@
 use std::fs;
 use std::sync::Arc;
 
-use datafusion::datasource::data_source::FileSourceConfig;
 use datafusion::datasource::file_format::parquet::ParquetFormat;
 use datafusion::datasource::listing::{
     ListingOptions, ListingTable, ListingTableConfig, ListingTableUrl,
@@ -37,6 +36,7 @@ use datafusion_execution::runtime_env::RuntimeEnvBuilder;
 use datafusion_expr::{col, lit, Expr};
 use datafusion_physical_plan::source::DataSourceExec;
 
+use datafusion::datasource::physical_plan::FileScanConfig;
 use tempfile::tempdir;
 
 #[tokio::test]
@@ -152,10 +152,10 @@ async fn list_files_with_session_level_cache() {
     let exec1 = table1.scan(&state1, None, &[], None).await.unwrap();
     let data_source = exec1.as_any().downcast_ref::<DataSourceExec>().unwrap();
     let source = data_source.source();
-    let parquet1 = source.as_any().downcast_ref::<FileSourceConfig>().unwrap();
+    let parquet1 = source.as_any().downcast_ref::<FileScanConfig>().unwrap();
 
     assert_eq!(get_list_file_cache_size(&state1), 1);
-    let fg = &parquet1.base_config().file_groups;
+    let fg = &parquet1.file_groups;
     assert_eq!(fg.len(), 1);
     assert_eq!(fg.first().unwrap().len(), 1);
 
@@ -165,10 +165,10 @@ async fn list_files_with_session_level_cache() {
     let exec2 = table2.scan(&state2, None, &[], None).await.unwrap();
     let data_source = exec2.as_any().downcast_ref::<DataSourceExec>().unwrap();
     let source = data_source.source();
-    let parquet2 = source.as_any().downcast_ref::<FileSourceConfig>().unwrap();
+    let parquet2 = source.as_any().downcast_ref::<FileScanConfig>().unwrap();
 
     assert_eq!(get_list_file_cache_size(&state2), 1);
-    let fg2 = &parquet2.base_config().file_groups;
+    let fg2 = &parquet2.file_groups;
     assert_eq!(fg2.len(), 1);
     assert_eq!(fg2.first().unwrap().len(), 1);
 
@@ -178,10 +178,10 @@ async fn list_files_with_session_level_cache() {
     let exec3 = table1.scan(&state1, None, &[], None).await.unwrap();
     let data_source = exec3.as_any().downcast_ref::<DataSourceExec>().unwrap();
     let source = data_source.source();
-    let parquet3 = source.as_any().downcast_ref::<FileSourceConfig>().unwrap();
+    let parquet3 = source.as_any().downcast_ref::<FileScanConfig>().unwrap();
 
     assert_eq!(get_list_file_cache_size(&state1), 1);
-    let fg = &parquet3.base_config().file_groups;
+    let fg = &parquet3.file_groups;
     assert_eq!(fg.len(), 1);
     assert_eq!(fg.first().unwrap().len(), 1);
     // List same file no increase

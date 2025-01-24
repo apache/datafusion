@@ -75,7 +75,7 @@ pub struct CsvExec {
 ///
 /// See example on [`CsvExec`].
 #[derive(Debug, Clone)]
-#[deprecated(since = "46.0.0", note = "use FileSourceConfig instead")]
+#[deprecated(since = "46.0.0", note = "use FileScanConfig instead")]
 pub struct CsvExecBuilder {
     file_scan_config: FileScanConfig,
     file_compression_type: FileCompressionType,
@@ -454,26 +454,25 @@ impl ExecutionPlan for CsvExec {
 /// #     physical_plan::FileScanConfig,
 /// #     listing::PartitionedFile,
 /// # };
-/// use datafusion::datasource::data_source::FileSourceConfig;
 /// # use datafusion::datasource::physical_plan::CsvSource;
 /// # use datafusion_execution::object_store::ObjectStoreUrl;
 /// # use datafusion_physical_plan::source::DataSourceExec;
 ///
 /// # let object_store_url = ObjectStoreUrl::local_filesystem();
 /// # let file_schema = Arc::new(Schema::empty());
-/// // Create a DataSourceExec for reading the first 100MB of `file1.csv`
-/// let file_scan_config = FileScanConfig::new(object_store_url, file_schema)
-///     .with_file(PartitionedFile::new("file1.csv", 100*1024*1024))
-///     .with_newlines_in_values(true); // The file contains newlines in values;
 ///
-/// let source_config = Arc::new(CsvSource::new(
+/// let source = Arc::new(CsvSource::new(
 ///         true,
 ///         b',',
 ///         b'"',
 ///     )
 ///     .with_terminator(Some(b'#')
 /// ));
-/// let exec = FileSourceConfig::new_exec(file_scan_config, source_config);
+/// // Create a DataSourceExec for reading the first 100MB of `file1.csv`
+/// let file_scan_config = FileScanConfig::new(object_store_url, file_schema, source)
+///     .with_file(PartitionedFile::new("file1.csv", 100*1024*1024))
+///     .with_newlines_in_values(true); // The file contains newlines in values;
+/// let exec = file_scan_config.new_exec();
 /// ```
 #[derive(Debug, Clone, Default)]
 pub struct CsvSource {
@@ -833,7 +832,6 @@ mod tests {
 
     use super::*;
     use crate::dataframe::DataFrameWriteOptions;
-    use crate::datasource::data_source::FileSourceConfig;
     use crate::datasource::file_format::csv::CsvFormat;
     use crate::prelude::*;
     use crate::test::{partitioned_csv_config, partitioned_file_groups};
@@ -881,13 +879,13 @@ mod tests {
             tmp_dir.path(),
         )?;
 
-        let mut config = partitioned_csv_config(file_schema, file_groups)
+        let source = Arc::new(CsvSource::new(true, b',', b'"'));
+        let mut config = partitioned_csv_config(file_schema, file_groups, source)
             .with_file_compression_type(file_compression_type)
             .with_newlines_in_values(false);
         config.projection = Some(vec![0, 2, 4]);
 
-        let source_config = Arc::new(CsvSource::new(true, b',', b'"'));
-        let csv = FileSourceConfig::new_exec(config.clone(), source_config);
+        let csv = config.new_exec();
 
         assert_eq!(13, config.file_schema.fields().len());
         assert_eq!(3, csv.schema().fields().len());
@@ -946,12 +944,12 @@ mod tests {
             tmp_dir.path(),
         )?;
 
-        let mut config = partitioned_csv_config(file_schema, file_groups)
+        let source = Arc::new(CsvSource::new(true, b',', b'"'));
+        let mut config = partitioned_csv_config(file_schema, file_groups, source)
             .with_newlines_in_values(false)
             .with_file_compression_type(file_compression_type.to_owned());
         config.projection = Some(vec![4, 0, 2]);
-        let source_config = Arc::new(CsvSource::new(true, b',', b'"'));
-        let csv = FileSourceConfig::new_exec(config.clone(), source_config);
+        let csv = config.new_exec();
         assert_eq!(13, config.file_schema.fields().len());
         assert_eq!(3, csv.schema().fields().len());
 
@@ -1009,12 +1007,12 @@ mod tests {
             tmp_dir.path(),
         )?;
 
-        let mut config = partitioned_csv_config(file_schema, file_groups)
+        let source = Arc::new(CsvSource::new(true, b',', b'"'));
+        let mut config = partitioned_csv_config(file_schema, file_groups, source)
             .with_newlines_in_values(false)
             .with_file_compression_type(file_compression_type.to_owned());
         config.limit = Some(5);
-        let source_config = Arc::new(CsvSource::new(true, b',', b'"'));
-        let csv = FileSourceConfig::new_exec(config.clone(), source_config);
+        let csv = config.new_exec();
         assert_eq!(13, config.file_schema.fields().len());
         assert_eq!(13, csv.schema().fields().len());
 
@@ -1069,13 +1067,12 @@ mod tests {
             tmp_dir.path(),
         )?;
 
-        let mut config = partitioned_csv_config(file_schema, file_groups)
+        let source = Arc::new(CsvSource::new(true, b',', b'"'));
+        let mut config = partitioned_csv_config(file_schema, file_groups, source)
             .with_newlines_in_values(false)
             .with_file_compression_type(file_compression_type.to_owned());
         config.limit = Some(5);
-
-        let source_config = Arc::new(CsvSource::new(true, b',', b'"'));
-        let csv = FileSourceConfig::new_exec(config.clone(), source_config);
+        let csv = config.new_exec();
         assert_eq!(14, config.file_schema.fields().len());
         assert_eq!(14, csv.schema().fields().len());
 
@@ -1120,7 +1117,8 @@ mod tests {
             tmp_dir.path(),
         )?;
 
-        let mut config = partitioned_csv_config(file_schema, file_groups)
+        let source = Arc::new(CsvSource::new(true, b',', b'"'));
+        let mut config = partitioned_csv_config(file_schema, file_groups, source)
             .with_newlines_in_values(false)
             .with_file_compression_type(file_compression_type.to_owned());
 
@@ -1135,8 +1133,7 @@ mod tests {
         // we don't have `/date=xx/` in the path but that is ok because
         // partitions are resolved during scan anyway
 
-        let source_config = Arc::new(CsvSource::new(true, b',', b'"'));
-        let csv = FileSourceConfig::new_exec(config.clone(), source_config);
+        let csv = config.new_exec();
         assert_eq!(13, config.file_schema.fields().len());
         assert_eq!(2, csv.schema().fields().len());
 
@@ -1222,11 +1219,11 @@ mod tests {
         )
         .unwrap();
 
-        let config = partitioned_csv_config(file_schema, file_groups)
+        let source = Arc::new(CsvSource::new(true, b',', b'"'));
+        let config = partitioned_csv_config(file_schema, file_groups, source)
             .with_newlines_in_values(false)
             .with_file_compression_type(file_compression_type.to_owned());
-        let source_config = Arc::new(CsvSource::new(true, b',', b'"'));
-        let csv = FileSourceConfig::new_exec(config.clone(), source_config);
+        let csv = config.new_exec();
 
         let it = csv.execute(0, task_ctx).unwrap();
         let batches: Vec<_> = it.try_collect().await.unwrap();

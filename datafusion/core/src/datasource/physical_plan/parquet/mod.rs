@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! [`ParquetSource`] FileSourceConfig for reading Parquet files
+//! [`ParquetSource`] FileSource for reading Parquet files
 
 use std::any::Any;
 use std::fmt::Formatter;
@@ -72,7 +72,7 @@ pub use writer::plan_to_parquet;
 
 #[derive(Debug, Clone)]
 #[deprecated(since = "46.0.0", note = "use DataSourceExec instead")]
-/// Deprecated Execution plan replaced with FileSourceConfig and DataSourceExec
+/// Deprecated Execution plan replaced with DataSourceExec
 pub struct ParquetExec {
     /// Base configuration for this scan
     base_config: FileScanConfig,
@@ -678,7 +678,6 @@ impl ExecutionPlan for ParquetExec {
 /// ```
 /// # use std::sync::Arc;
 /// # use arrow::datatypes::Schema;
-/// # use datafusion::datasource::data_source::FileSourceConfig;
 /// # use datafusion::datasource::physical_plan::{FileScanConfig, ParquetSource};
 /// # use datafusion::datasource::listing::PartitionedFile;
 /// # use datafusion_execution::object_store::ObjectStoreUrl;
@@ -689,18 +688,18 @@ impl ExecutionPlan for ParquetExec {
 /// # let file_schema = Arc::new(Schema::empty());
 /// # let object_store_url = ObjectStoreUrl::local_filesystem();
 /// # let predicate = lit(true);
-/// // Create a DataSourceExec for reading `file1.parquet` with a file size of 100MB
-/// let file_scan_config = FileScanConfig::new(object_store_url, file_schema)
-///    .with_file(PartitionedFile::new("file1.parquet", 100*1024*1024));
-/// let source_config = Arc::new(
+/// let source = Arc::new(
 ///     ParquetSource::new(
-///         Arc::clone(&file_scan_config.file_schema),
+///         Arc::clone(&file_schema),
 ///         Some(predicate),
 ///         None,
 ///         TableParquetOptions::default()
 ///     )
 /// );
-/// let exec = FileSourceConfig::new_exec(file_scan_config, source_config);
+/// // Create a DataSourceExec for reading `file1.parquet` with a file size of 100MB
+/// let file_scan_config = FileScanConfig::new(object_store_url, file_schema, source)
+///    .with_file(PartitionedFile::new("file1.parquet", 100*1024*1024));
+/// let exec = file_scan_config.new_exec();
 /// ```
 ///
 /// # Features
@@ -764,17 +763,14 @@ impl ExecutionPlan for ParquetExec {
 /// ```no_run
 /// # use std::sync::Arc;
 /// # use arrow::datatypes::Schema;
-/// # use datafusion::datasource::data_source::FileSourceConfig;
-/// # use datafusion::datasource::physical_plan::{FileScanConfig};
+/// # use datafusion::datasource::physical_plan::FileScanConfig;
 /// # use datafusion::datasource::listing::PartitionedFile;
 /// # use datafusion_physical_plan::source::DataSourceExec;
 ///
 /// # fn parquet_exec() -> DataSourceExec { unimplemented!() }
 /// // Split a single DataSourceExec into multiple DataSourceExecs, one for each file
 /// let source = parquet_exec().source();
-/// let data_source = source.as_any().downcast_ref::<FileSourceConfig>().unwrap();
-/// let base_config = data_source.base_config();
-/// let file_source = data_source.file_source();
+/// let base_config = source.as_any().downcast_ref::<FileScanConfig>().unwrap();
 /// let existing_file_groups = &base_config.file_groups;
 /// let new_execs = existing_file_groups
 ///   .iter()
@@ -784,7 +780,7 @@ impl ExecutionPlan for ParquetExec {
 ///         .clone()
 ///        .with_file_groups(vec![file_group.clone()]);
 ///
-///     FileSourceConfig::new_exec(new_config, file_source.clone())
+///     new_config.new_exec()
 ///   })
 ///   .collect::<Vec<_>>();
 /// ```
@@ -806,7 +802,6 @@ impl ExecutionPlan for ParquetExec {
 /// # use std::sync::Arc;
 /// # use arrow_schema::{Schema, SchemaRef};
 /// # use datafusion::datasource::listing::PartitionedFile;
-/// # use datafusion::datasource::data_source::FileSourceConfig;
 /// # use datafusion::datasource::physical_plan::parquet::ParquetAccessPlan;
 /// # use datafusion::datasource::physical_plan::{FileScanConfig, ParquetSource};
 /// # use datafusion_execution::object_store::ObjectStoreUrl;
@@ -823,13 +818,11 @@ impl ExecutionPlan for ParquetExec {
 /// let partitioned_file = PartitionedFile::new("my_file.parquet", 1234)
 ///   .with_extensions(Arc::new(access_plan));
 /// // create a FileScanConfig to scan this file
-/// let file_scan_config = FileScanConfig::new(ObjectStoreUrl::local_filesystem(), schema())
+/// let file_scan_config = FileScanConfig::new(ObjectStoreUrl::local_filesystem(), schema(), Arc::new(ParquetSource::default()))
 ///     .with_file(partitioned_file);
-/// // create a ParguetConfig for file opener configurations
-/// let source_config = Arc::new(ParquetSource::default());
 /// // this parquet DataSourceExec will not even try to read row groups 2 and 4. Additional
 /// // pruning based on predicates may also happen
-/// let exec = FileSourceConfig::new_exec(file_scan_config, source_config);
+/// let exec = file_scan_config.new_exec();
 /// ```
 ///
 /// For a complete example, see the [`advanced_parquet_index` example]).
@@ -1257,7 +1250,6 @@ mod tests {
 
     use super::*;
     use crate::dataframe::DataFrameWriteOptions;
-    use crate::datasource::data_source::FileSourceConfig;
     use crate::datasource::file_format::options::CsvReadOptions;
     use crate::datasource::file_format::parquet::test_util::store_parquet;
     use crate::datasource::file_format::test_util::scan_format;
@@ -1303,8 +1295,8 @@ mod tests {
         batches: Result<Vec<RecordBatch>>,
         /// The physical plan that was created (that has statistics, etc)
         parquet_exec: Arc<DataSourceExec>,
-        /// The configuration that is used in plan
-        parquet_config: ParquetSource,
+        /// The ParquetSource that is used in plan
+        parquet_source: ParquetSource,
     }
 
     /// round-trip record batches by writing each individual RecordBatch to
@@ -1385,36 +1377,38 @@ mod tests {
             // set up predicate (this is normally done by a layer higher up)
             let predicate = predicate.map(|p| logical2physical(&p, &file_schema));
 
-            let base_config =
-                FileScanConfig::new(ObjectStoreUrl::local_filesystem(), file_schema)
-                    .with_file_group(file_group)
-                    .with_projection(projection);
-
-            let mut source_config = ParquetSource::new(
-                Arc::clone(&base_config.file_schema),
+            let mut source = ParquetSource::new(
+                Arc::clone(&file_schema),
                 predicate,
                 None,
                 TableParquetOptions::default(),
             );
 
             if pushdown_predicate {
-                source_config = source_config
+                source = source
                     .with_pushdown_filters(true)
                     .with_reorder_filters(true);
             }
 
             if page_index_predicate {
-                source_config = source_config.with_enable_page_index(true);
+                source = source.with_enable_page_index(true);
             }
+
+            let base_config = FileScanConfig::new(
+                ObjectStoreUrl::local_filesystem(),
+                file_schema,
+                Arc::new(source.clone()),
+            )
+            .with_file_group(file_group)
+            .with_projection(projection);
 
             let session_ctx = SessionContext::new();
             let task_ctx = session_ctx.task_ctx();
-            let parquet_exec =
-                FileSourceConfig::new_exec(base_config, Arc::new(source_config.clone()));
+            let parquet_exec = base_config.new_exec();
             RoundTripResult {
                 batches: collect(parquet_exec.clone(), task_ctx).await,
                 parquet_exec,
-                parquet_config: source_config,
+                parquet_source: base_config.file_source().as_any().downcast_ref::<ParquetSource>().unwrap().clone(),
             }
         }
     }
@@ -2045,11 +2039,13 @@ mod tests {
             expected_row_num: Option<usize>,
             file_schema: SchemaRef,
         ) -> Result<()> {
-            let parquet_exec = FileSourceConfig::new_exec(
-                FileScanConfig::new(ObjectStoreUrl::local_filesystem(), file_schema)
-                    .with_file_groups(file_groups),
+            let parquet_exec = FileScanConfig::new(
+                ObjectStoreUrl::local_filesystem(),
+                file_schema,
                 Arc::new(ParquetSource::default()),
-            );
+            )
+            .with_file_groups(file_groups)
+            .new_exec();
             assert_eq!(
                 parquet_exec
                     .properties()
@@ -2146,26 +2142,24 @@ mod tests {
             ),
         ]);
 
-        let source_config = Arc::new(ParquetSource::default());
-        let parquet_exec = FileSourceConfig::new_exec(
-            FileScanConfig::new(object_store_url, schema.clone())
-                .with_file(partitioned_file)
-                // file has 10 cols so index 12 should be month and 13 should be day
-                .with_projection(Some(vec![0, 1, 2, 12, 13]))
-                .with_table_partition_cols(vec![
-                    Field::new("year", DataType::Utf8, false),
-                    Field::new("month", DataType::UInt8, false),
-                    Field::new(
-                        "day",
-                        DataType::Dictionary(
-                            Box::new(DataType::UInt16),
-                            Box::new(DataType::Utf8),
-                        ),
-                        false,
+        let source = Arc::new(ParquetSource::default());
+        let parquet_exec = FileScanConfig::new(object_store_url, schema.clone(), source)
+            .with_file(partitioned_file)
+            // file has 10 cols so index 12 should be month and 13 should be day
+            .with_projection(Some(vec![0, 1, 2, 12, 13]))
+            .with_table_partition_cols(vec![
+                Field::new("year", DataType::Utf8, false),
+                Field::new("month", DataType::UInt8, false),
+                Field::new(
+                    "day",
+                    DataType::Dictionary(
+                        Box::new(DataType::UInt16),
+                        Box::new(DataType::Utf8),
                     ),
-                ]),
-            source_config,
-        );
+                    false,
+                ),
+            ])
+            .new_exec();
         let partition_count = parquet_exec
             .source()
             .output_partitioning()
@@ -2222,11 +2216,13 @@ mod tests {
         };
 
         let file_schema = Arc::new(Schema::empty());
-        let parquet_exec = FileSourceConfig::new_exec(
-            FileScanConfig::new(ObjectStoreUrl::local_filesystem(), file_schema)
-                .with_file(partitioned_file),
+        let parquet_exec = FileScanConfig::new(
+            ObjectStoreUrl::local_filesystem(),
+            file_schema,
             Arc::new(ParquetSource::default()),
-        );
+        )
+        .with_file(partitioned_file)
+        .new_exec();
 
         let mut results = parquet_exec.execute(0, state.task_ctx())?;
         let batch = results.next().await.unwrap();
@@ -2371,7 +2367,7 @@ mod tests {
             .await;
 
         // should have a pruning predicate
-        let pruning_predicate = &rt.parquet_config.pruning_predicate;
+        let pruning_predicate = &rt.parquet_source.pruning_predicate;
         assert!(pruning_predicate.is_some());
 
         // convert to explain plan form
@@ -2412,7 +2408,7 @@ mod tests {
                 .round_trip(vec![batches.clone()])
                 .await;
 
-            let pruning_predicate = &rt0.parquet_config.pruning_predicate;
+            let pruning_predicate = &rt0.parquet_source.pruning_predicate;
             assert!(pruning_predicate.is_some());
 
             let display0 = displayable(rt0.parquet_exec.as_ref())
@@ -2454,9 +2450,9 @@ mod tests {
             .await;
 
         // should have a pruning predicate
-        let pruning_predicate = &rt1.parquet_config.pruning_predicate;
+        let pruning_predicate = &rt1.parquet_source.pruning_predicate;
         assert!(pruning_predicate.is_some());
-        let pruning_predicate = &rt2.parquet_config.predicate;
+        let pruning_predicate = &rt2.parquet_source.predicate;
         assert!(pruning_predicate.is_some());
 
         // convert to explain plan form
@@ -2497,14 +2493,14 @@ mod tests {
             .await;
 
         // Should not contain a pruning predicate (since nothing can be pruned)
-        let pruning_predicate = &rt.parquet_config.pruning_predicate;
+        let pruning_predicate = &rt.parquet_source.pruning_predicate;
         assert!(
             pruning_predicate.is_none(),
             "Still had pruning predicate: {pruning_predicate:?}"
         );
 
         // but does still has a pushdown down predicate
-        let predicate = rt.parquet_config.predicate.as_ref();
+        let predicate = rt.parquet_source.predicate.as_ref();
         let filter_phys = logical2physical(&filter, rt.parquet_exec.schema().as_ref());
         assert_eq!(predicate.unwrap().to_string(), filter_phys.to_string());
     }
@@ -2532,7 +2528,7 @@ mod tests {
             .await;
 
         // Should have a pruning predicate
-        let pruning_predicate = &rt.parquet_config.pruning_predicate;
+        let pruning_predicate = &rt.parquet_source.pruning_predicate;
         assert!(pruning_predicate.is_some());
     }
 
@@ -2846,35 +2842,18 @@ mod tests {
 
         let size_hint_calls = reader_factory.metadata_size_hint_calls.clone();
 
-        let source_config = Arc::new(
+        let source = Arc::new(
             ParquetSource::default()
                 .with_parquet_file_reader_factory(reader_factory)
                 .with_metadata_size_hint(456),
         );
-        let exec = FileSourceConfig::new_exec(
-            FileScanConfig::new(store_url, schema)
-                .with_file(
-                    PartitionedFile {
-                        object_meta: ObjectMeta {
-                            location: Path::from(name_1),
-                            last_modified: Utc::now(),
-                            size: total_size_1,
-                            e_tag: None,
-                            version: None,
-                        },
-                        partition_values: vec![],
-                        range: None,
-                        statistics: None,
-                        extensions: None,
-                        metadata_size_hint: None,
-                    }
-                    .with_metadata_size_hint(123),
-                )
-                .with_file(PartitionedFile {
+        let exec = FileScanConfig::new(store_url, schema, source)
+            .with_file(
+                PartitionedFile {
                     object_meta: ObjectMeta {
-                        location: Path::from(name_2),
+                        location: Path::from(name_1),
                         last_modified: Utc::now(),
-                        size: total_size_2,
+                        size: total_size_1,
                         e_tag: None,
                         version: None,
                     },
@@ -2883,9 +2862,24 @@ mod tests {
                     statistics: None,
                     extensions: None,
                     metadata_size_hint: None,
-                }),
-            source_config,
-        );
+                }
+                .with_metadata_size_hint(123),
+            )
+            .with_file(PartitionedFile {
+                object_meta: ObjectMeta {
+                    location: Path::from(name_2),
+                    last_modified: Utc::now(),
+                    size: total_size_2,
+                    e_tag: None,
+                    version: None,
+                },
+                partition_values: vec![],
+                range: None,
+                statistics: None,
+                extensions: None,
+                metadata_size_hint: None,
+            })
+            .new_exec();
 
         let res = collect(exec, ctx.task_ctx()).await.unwrap();
         assert_eq!(res.len(), 2);

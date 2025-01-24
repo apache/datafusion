@@ -18,15 +18,19 @@
 //! [`FileScanConfig`] to configure scanning of possibly partitioned
 //! file sources.
 
-use std::{
-    borrow::Cow, collections::HashMap, fmt::Debug, marker::PhantomData, mem::size_of,
-    sync::Arc, vec,
+use super::{
+    get_projected_output_ordering, statistics::MinMaxStatistics, FileGroupPartitioner,
+    FileStream,
 };
-
-use super::{get_projected_output_ordering, statistics::MinMaxStatistics};
 use crate::datasource::file_format::file_compression_type::FileCompressionType;
 use crate::datasource::{listing::PartitionedFile, object_store::ObjectStoreUrl};
 use crate::{error::Result, scalar::ScalarValue};
+use std::any::Any;
+use std::fmt::Formatter;
+use std::{
+    borrow::Cow, collections::HashMap, fmt, fmt::Debug, marker::PhantomData,
+    mem::size_of, sync::Arc, vec,
+};
 
 use arrow::array::{ArrayData, BufferBuilder};
 use arrow::buffer::Buffer;
@@ -37,8 +41,13 @@ use datafusion_common::stats::Precision;
 use datafusion_common::{
     exec_err, ColumnStatistics, Constraints, DataFusionError, Statistics,
 };
-use datafusion_physical_expr::LexOrdering;
+use datafusion_physical_expr::{EquivalenceProperties, LexOrdering, Partitioning};
 
+use crate::datasource::data_source::FileSource;
+use datafusion_execution::{SendableRecordBatchStream, TaskContext};
+use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
+use datafusion_physical_plan::source::{DataSource, DataSourceExec};
+use datafusion_physical_plan::DisplayFormatType;
 use log::warn;
 
 /// Convert type to a type suitable for use as a [`ListingTable`]
@@ -74,10 +83,11 @@ pub fn wrap_partition_value_in_dict(val: ScalarValue) -> ScalarValue {
 /// use datafusion::datasource::listing::PartitionedFile;
 /// # use datafusion::datasource::physical_plan::FileScanConfig;
 /// # use datafusion_execution::object_store::ObjectStoreUrl;
+/// # use datafusion::datasource::physical_plan::ArrowSource;
 /// # let file_schema = Arc::new(Schema::empty());
 /// // create FileScan config for reading data from file://
 /// let object_store_url = ObjectStoreUrl::local_filesystem();
-/// let config = FileScanConfig::new(object_store_url, file_schema)
+/// let config = FileScanConfig::new(object_store_url, file_schema, Arc::new(ArrowSource::default()))
 ///   .with_limit(Some(1000))            // read only the first 1000 records
 ///   .with_projection(Some(vec![2, 3])) // project columns 2 and 3
 ///    // Read /tmp/file1.parquet with known size of 1234 bytes in a single group
@@ -136,6 +146,90 @@ pub struct FileScanConfig {
     pub file_compression_type: FileCompressionType,
     /// Are new lines in values supported for CSVOptions
     pub new_lines_in_values: bool,
+    /// File source such as `ParquetSource`, `CsvSource`, `JsonSource`, etc.
+    pub source: Arc<dyn FileSource>,
+}
+
+impl DataSource for FileScanConfig {
+    fn open(
+        &self,
+        partition: usize,
+        context: Arc<TaskContext>,
+    ) -> Result<SendableRecordBatchStream> {
+        let object_store = context.runtime_env().object_store(&self.object_store_url);
+
+        let source = self
+            .source
+            .with_batch_size(context.session_config().batch_size())
+            .with_schema(Arc::clone(&self.file_schema))
+            .with_projection(self);
+
+        let opener = source.create_file_opener(object_store, self, partition)?;
+
+        let stream = FileStream::new(self, partition, opener, source.metrics())?;
+        Ok(Box::pin(stream))
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn fmt_as(&self, t: DisplayFormatType, f: &mut Formatter) -> fmt::Result {
+        self.fmt(f)?;
+        self.fmt_file_source(t, f)
+    }
+
+    /// Redistribute files across partitions according to their size
+    /// See comments on [`FileGroupPartitioner`] for more detail.
+    fn repartitioned(
+        &self,
+        target_partitions: usize,
+        repartition_file_min_size: usize,
+        output_ordering: Option<LexOrdering>,
+    ) -> Result<Option<Arc<dyn DataSource>>> {
+        if !self.supports_repartition() {
+            return Ok(None);
+        }
+
+        let repartitioned_file_groups_option = FileGroupPartitioner::new()
+            .with_target_partitions(target_partitions)
+            .with_repartition_file_min_size(repartition_file_min_size)
+            .with_preserve_order_within_groups(output_ordering.is_some())
+            .repartition_file_groups(&self.file_groups);
+
+        if let Some(repartitioned_file_groups) = repartitioned_file_groups_option {
+            let source = self.clone().with_file_groups(repartitioned_file_groups);
+            return Ok(Some(Arc::new(source)));
+        }
+        Ok(None)
+    }
+
+    fn output_partitioning(&self) -> Partitioning {
+        Partitioning::UnknownPartitioning(self.file_groups.len())
+    }
+
+    fn eq_properties(&self) -> EquivalenceProperties {
+        let (schema, constraints, _, orderings) = self.project();
+        EquivalenceProperties::new_with_orderings(schema, orderings.as_slice())
+            .with_constraints(constraints)
+    }
+
+    fn statistics(&self) -> Result<Statistics> {
+        self.source.statistics()
+    }
+
+    fn with_fetch(&self, limit: Option<usize>) -> Option<Arc<dyn DataSource>> {
+        let source = self.clone();
+        Some(Arc::new(source.with_limit(limit)))
+    }
+
+    fn fetch(&self) -> Option<usize> {
+        self.limit
+    }
+
+    fn metrics(&self) -> ExecutionPlanMetricsSet {
+        self.source.metrics().clone()
+    }
 }
 
 impl FileScanConfig {
@@ -149,9 +243,14 @@ impl FileScanConfig {
     /// # Parameters:
     /// * `object_store_url`: See [`Self::object_store_url`]
     /// * `file_schema`: See [`Self::file_schema`]
-    pub fn new(object_store_url: ObjectStoreUrl, file_schema: SchemaRef) -> Self {
+    pub fn new(
+        object_store_url: ObjectStoreUrl,
+        file_schema: SchemaRef,
+        file_source: Arc<dyn FileSource>,
+    ) -> Self {
         let statistics = Statistics::new_unknown(&file_schema);
-        Self {
+
+        let mut config = Self {
             object_store_url,
             file_schema,
             file_groups: vec![],
@@ -163,7 +262,23 @@ impl FileScanConfig {
             output_ordering: vec![],
             file_compression_type: FileCompressionType::UNCOMPRESSED,
             new_lines_in_values: false,
-        }
+            source: Arc::clone(&file_source),
+        };
+
+        config = config.with_source(Arc::clone(&file_source));
+        config
+    }
+
+    /// Set the file source
+    pub fn with_source(mut self, source: Arc<dyn FileSource>) -> Self {
+        let (
+            _projected_schema,
+            _constraints,
+            projected_statistics,
+            _projected_output_ordering,
+        ) = self.project();
+        self.source = source.with_statistics(projected_statistics);
+        self
     }
 
     /// Set the table constraints of the files
@@ -420,6 +535,29 @@ impl FileScanConfig {
             })
             .collect())
     }
+
+    // TODO: This function should be moved into DataSourceExec once FileScanConfig moved out of datafusion/core
+    /// Returns a new [`DataSourceExec`] from file configurations
+    pub fn new_exec(&self) -> Arc<DataSourceExec> {
+        Arc::new(DataSourceExec::new(Arc::new(self.clone())))
+    }
+
+    /// Write the data_type based on file_source
+    fn fmt_file_source(&self, t: DisplayFormatType, f: &mut Formatter) -> fmt::Result {
+        write!(f, ", file_type={}", self.source.file_type().to_str())?;
+        self.source.fmt_extra(t, f)
+    }
+
+    /// Returns the file_source
+    pub fn file_source(&self) -> &Arc<dyn FileSource> {
+        &self.source
+    }
+
+    fn supports_repartition(&self) -> bool {
+        !(self.file_compression_type.is_compressed()
+            || self.new_lines_in_values
+            || self.source.file_type().is_avro())
+    }
 }
 
 /// A helper that projects partition columns into the file record batches.
@@ -675,6 +813,7 @@ mod tests {
     use arrow_array::Int32Array;
 
     use super::*;
+    use crate::datasource::physical_plan::ArrowSource;
     use crate::{test::columns, test_util::aggr_test_schema};
 
     #[test]
@@ -1276,10 +1415,14 @@ mod tests {
         statistics: Statistics,
         table_partition_cols: Vec<Field>,
     ) -> FileScanConfig {
-        FileScanConfig::new(ObjectStoreUrl::parse("test:///").unwrap(), file_schema)
-            .with_projection(projection)
-            .with_statistics(statistics)
-            .with_table_partition_cols(table_partition_cols)
+        FileScanConfig::new(
+            ObjectStoreUrl::parse("test:///").unwrap(),
+            file_schema,
+            Arc::new(ArrowSource::default()),
+        )
+        .with_projection(projection)
+        .with_statistics(statistics)
+        .with_table_partition_cols(table_partition_cols)
     }
 
     /// Convert partition columns from Vec<String DataType> to Vec<Field>

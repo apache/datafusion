@@ -441,7 +441,6 @@ mod tests {
     use object_store::path::Path;
     use object_store::ObjectMeta;
 
-    use crate::datasource::data_source::FileSourceConfig;
     use crate::datasource::listing::PartitionedFile;
     use crate::datasource::object_store::ObjectStoreUrl;
     use crate::datasource::physical_plan::{FileScanConfig, ParquetSource};
@@ -501,15 +500,15 @@ mod tests {
         let f2 = Field::new("extra_column", DataType::Utf8, true);
 
         let schema = Arc::new(Schema::new(vec![f1.clone(), f2.clone()]));
-        let base_conf = FileScanConfig::new(ObjectStoreUrl::local_filesystem(), schema)
-            .with_file(partitioned_file);
-
-        let source_config = Arc::new(
+        let source = Arc::new(
             ParquetSource::default()
                 .with_schema_adapter_factory(Arc::new(TestSchemaAdapterFactory {})),
         );
+        let base_conf =
+            FileScanConfig::new(ObjectStoreUrl::local_filesystem(), schema, source)
+                .with_file(partitioned_file);
 
-        let parquet_exec = FileSourceConfig::new_exec(base_conf, source_config);
+        let parquet_exec = base_conf.new_exec();
 
         let session_ctx = SessionContext::new();
         let task_ctx = session_ctx.task_ctx();

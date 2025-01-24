@@ -20,7 +20,6 @@ use std::sync::Arc;
 use crate::parquet::Unit::Page;
 use crate::parquet::{ContextWithParquet, Scenario};
 
-use datafusion::datasource::data_source::FileSourceConfig;
 use datafusion::datasource::file_format::parquet::ParquetFormat;
 use datafusion::datasource::file_format::FileFormat;
 use datafusion::datasource::listing::PartitionedFile;
@@ -76,19 +75,19 @@ async fn get_parquet_exec(state: &SessionState, filter: Expr) -> DataSourceExec 
     let execution_props = ExecutionProps::new();
     let predicate = create_physical_expr(&filter, &df_schema, &execution_props).unwrap();
 
-    let base_config =
-        FileScanConfig::new(object_store_url, schema).with_file(partitioned_file);
-    let source_config = Arc::new(
+    let source = Arc::new(
         ParquetSource::new(
-            Arc::clone(&base_config.file_schema),
+            Arc::clone(&schema),
             Some(predicate),
             None,
             TableParquetOptions::default(),
         )
         .with_enable_page_index(true),
     );
+    let base_config =
+        FileScanConfig::new(object_store_url, schema, source).with_file(partitioned_file);
 
-    DataSourceExec::new(Arc::new(FileSourceConfig::new(base_config, source_config)))
+    DataSourceExec::new(Arc::new(base_config))
 }
 
 #[tokio::test]
