@@ -280,7 +280,7 @@ impl<T: ArrowNumericType> Accumulator for MedianAccumulator<T> {
 ///
 /// For calculating the accurate medians of groups, we need to store all values
 /// of groups before final evaluation.
-/// So values in each group will be stored in a `Vec<T>`, so the total group values
+/// So values in each group will be stored in a `Vec<T>`, and the total group values
 /// will be actually organized as a `Vec<Vec<T>>`.
 ///
 #[derive(Debug)]
@@ -333,9 +333,9 @@ impl<T: ArrowNumericType + Send> GroupsAccumulator for MedianGroupsAccumulator<T
     ) -> Result<()> {
         assert_eq!(values.len(), 1, "one argument to merge_batch");
 
-        // The merged values should be organized like as a `ListArray` which is nullable,
-        // but `values` in it is `non-nullable`(`values` with nulls usually generated
-        // from `convert_to_state`).
+        // The merged values should be organized like as a `ListArray` which is nullable
+        // (input with nulls usually generated from `convert_to_state`), but `inner array` of
+        // `ListArray`  is `non-nullable`.
         //
         // Following is the possible and impossible input `values`:
         //
@@ -360,8 +360,8 @@ impl<T: ArrowNumericType + Send> GroupsAccumulator for MedianGroupsAccumulator<T
 
         // Extend values to related groups
         // TODO: avoid using iterator of the `ListArray`, this will lead to
-        // many calls of `slice` of its `values` array, and `slice` is not
-        // so efficient.
+        // many calls of `slice` of its ``inner array`, and `slice` is not
+        // so efficient(due to the calculation of `null_count` for each `slice`).
         group_indices
             .iter()
             .zip(input_group_values.iter())
