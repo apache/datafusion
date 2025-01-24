@@ -56,7 +56,7 @@ pub use column::Column;
 pub use dfschema::{
     qualified_name, DFSchema, DFSchemaRef, ExprSchema, SchemaExt, ToDFSchema,
 };
-pub use diagnostic::{Diagnostic, DiagnosticEntry, DiagnosticEntryKind};
+pub use diagnostic::Diagnostic;
 pub use error::{
     field_not_found, unqualified_field_not_found, DataFusionError, Result, SchemaError,
     SharedResult,

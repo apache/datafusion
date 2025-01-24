@@ -372,7 +372,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                         _,
                     ) => {
                         let diagnostic = if let Some(relation) = &col.relation {
-                            Diagnostic::new().with_error(
+                            Diagnostic::new_error(
                                 format!(
                                     "column '{}' not found in '{}'",
                                     &col.name,
@@ -381,7 +381,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                                 col.spans().first_or_empty(),
                             )
                         } else {
-                            Diagnostic::new().with_error(
+                            Diagnostic::new_error(
                                 format!("column '{}' not found", &col.name),
                                 col.spans().first_or_empty(),
                             )

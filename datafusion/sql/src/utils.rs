@@ -164,14 +164,13 @@ fn check_column_satisfies_expr(
             expr_vec_fmt!(columns)
         )
         .map_err(|err| {
-            let diagnostic = Diagnostic::new()
-                .with_error(
-                    purpose.diagnostic_message(expr),
-                    expr.spans()
-                        .map(|spans| spans.first_or_empty())
-                        .unwrap_or(Span::empty()),
-                )
-                .with_help(format!("add '{expr}' to GROUP BY clause"), Span::empty());
+            let diagnostic = Diagnostic::new_error(
+                purpose.diagnostic_message(expr),
+                expr.spans()
+                    .map(|spans| spans.first_or_empty())
+                    .unwrap_or(Span::empty()),
+            )
+            .with_help(format!("add '{expr}' to GROUP BY clause"), Span::empty());
             err.with_diagnostic(diagnostic)
         });
     }

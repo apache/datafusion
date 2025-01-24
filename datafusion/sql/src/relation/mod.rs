@@ -90,7 +90,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                             )?
                             .build(),
                             (None, Err(e)) => {
-                                let e = e.with_diagnostic(Diagnostic::new().with_error(
+                                let e = e.with_diagnostic(Diagnostic::new_error(
                                     format!("table '{}' not found", table_ref),
                                     relation_span,
                                 ));

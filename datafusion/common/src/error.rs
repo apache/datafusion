@@ -508,7 +508,7 @@ impl DataFusionError {
         self.with_diagnostic(diagnostic)
     }
 
-    pub fn get_diagnostics(&self) -> impl Iterator<Item = &Diagnostic> + '_ {
+    pub fn diagnostics(&self) -> impl Iterator<Item = &Diagnostic> + '_ {
         struct DiagnosticsIterator<'a> {
             head: &'a DataFusionError,
         }

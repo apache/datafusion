@@ -253,7 +253,7 @@ impl Column {
                         field: Column::new_unqualified(&self.name),
                     })
                     .map_err(|err| {
-                        let mut diagnostic = Diagnostic::new().with_error(
+                        let mut diagnostic = Diagnostic::new_error(
                             format!("column '{}' is ambiguous", &self.name),
                             self.spans().first_or_empty(),
                         );

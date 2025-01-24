@@ -235,8 +235,7 @@ impl<'a> BinaryTypeCoercer<'a> {
                             self.rhs_spans.first_or_empty()
                         ].iter().copied().filter(|span| span != &Span::empty())
                     );
-                    let diagnostic = Diagnostic::new()
-                        .with_error("expressions have incompatible types", binary_expr_span)
+                    let diagnostic = Diagnostic::new_error("expressions have incompatible types", binary_expr_span)
                         .with_note(format!("has type {}", self.lhs), self.lhs_spans.first_or_empty())
                         .with_note(format!("has type {}", self.rhs), self.rhs_spans.first_or_empty());
                     err.with_diagnostic(diagnostic)

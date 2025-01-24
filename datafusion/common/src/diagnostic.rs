@@ -1,103 +1,86 @@
 use sqlparser::tokenizer::Span;
 
+/// Additional contextual information intended for end users, to help them
+/// understand what went wrong by providing human-readable messages, and
+/// locations in the source query that relate to the error in some way.
+/// 
+/// You can think of a single [`Diagnostic`] as a single "block" of output from
+/// rustc. i.e. either an error or a warning, optionally with some notes and
+/// help messages.
+/// 
+/// If the diagnostic, a note, or a help message doesn't need to point to a
+/// specific location in the original SQL query (or the [`Span`] is not
+/// available), use [`Span::empty`].
+/// 
+/// Example:
+/// 
+/// ```rust
+/// let diagnostic = Diagnostic::new_error("Something went wrong", span)
+///     .with_help("Have you tried turning it on and off again?", Span::empty());
+/// ```
 #[derive(Debug, Clone)]
 pub struct Diagnostic {
-    pub entries: Vec<DiagnosticEntry>,
+    pub kind: DiagnosticKind,
+    pub message: String,
+    pub span: Span,
+    pub notes: Vec<DiagnosticNote>,
+    pub helps: Vec<DiagnosticHelp>,
 }
 
 #[derive(Debug, Clone)]
-pub struct DiagnosticEntry {
-    pub span: Span,
+pub struct DiagnosticNote {
     pub message: String,
-    pub kind: DiagnosticEntryKind,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone)]
+pub struct DiagnosticHelp {
+    pub message: String,
+    pub span: Span,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum DiagnosticEntryKind {
+pub enum DiagnosticKind {
     Error,
     Warning,
-    Note,
-    Help,
 }
 
 impl Diagnostic {
-    pub fn new() -> Self {
-        Default::default()
-    }
-}
-
-impl Default for Diagnostic {
-    fn default() -> Self {
-        Diagnostic {
-            entries: Vec::new(),
-        }
-    }
-}
-
-impl FromIterator<DiagnosticEntry> for Diagnostic {
-    fn from_iter<T: IntoIterator<Item = DiagnosticEntry>>(iter: T) -> Self {
-        Diagnostic {
-            entries: iter.into_iter().collect(),
-        }
-    }
-}
-
-macro_rules! with_kind {
-    ($name:ident, $kind:expr) => {
-        pub fn $name(mut self, message: impl Into<String>, span: Span) -> Self {
-            let entry = DiagnosticEntry {
-                span,
-                message: message.into(),
-                kind: $kind,
-            };
-            self.entries.push(entry);
-            self
-        }
-    };
-}
-
-macro_rules! add_kind {
-    ($name:ident, $kind:expr) => {
-        pub fn $name(&mut self, message: impl Into<String>, span: Span) {
-            let entry = DiagnosticEntry {
-                span,
-                message: message.into(),
-                kind: $kind,
-            };
-            self.entries.push(entry);
-        }
-    };
-}
-
-impl Diagnostic {
-    with_kind!(with_error, DiagnosticEntryKind::Error);
-    with_kind!(with_warning, DiagnosticEntryKind::Warning);
-    with_kind!(with_note, DiagnosticEntryKind::Note);
-    with_kind!(with_help, DiagnosticEntryKind::Help);
-
-    add_kind!(add_error, DiagnosticEntryKind::Error);
-    add_kind!(add_warning, DiagnosticEntryKind::Warning);
-    add_kind!(add_note, DiagnosticEntryKind::Note);
-    add_kind!(add_help, DiagnosticEntryKind::Help);
-}
-
-impl DiagnosticEntry {
-    pub fn new(
-        message: impl Into<String>,
-        kind: DiagnosticEntryKind,
-        span: Span,
-    ) -> Self {
-        DiagnosticEntry {
-            span,
+    pub fn new_error(message: impl Into<String>, span: Span) -> Self {
+        Self {
+            kind: DiagnosticKind::Error,
             message: message.into(),
-            kind,
+            span,
+            notes: Vec::new(),
+            helps: Vec::new(),
         }
     }
 
-    pub fn new_without_span(
-        message: impl Into<String>,
-        kind: DiagnosticEntryKind,
-    ) -> Self {
-        Self::new(message, kind, Span::empty())
+    pub fn new_warning(message: impl Into<String>, span: Span) -> Self {
+        Self {
+            kind: DiagnosticKind::Warning,
+            message: message.into(),
+            span,
+            notes: Vec::new(),
+            helps: Vec::new(),
+        }
+    }
+
+    pub fn add_note(&mut self, message: String, span: Span) {
+        self.notes.push(DiagnosticNote { message, span });
+    }
+
+    pub fn add_help(&mut self, message: String, span: Span) {
+        self.helps.push(DiagnosticHelp { message, span });
+    }
+
+    pub fn with_note(mut self, message: String, span: Span) -> Self {
+        self.add_note(message, span);
+        self
+    }
+
+    pub fn with_help(mut self, message: String, span: Span) -> Self {
+        self.add_help(message, span);
+        self
     }
 }
