@@ -32,6 +32,9 @@ use sqlparser::tokenizer::Span;
 /// Example:
 ///
 /// ```rust
+/// # use datafusion_common::Diagnostic;
+/// # use sqlparser::tokenizer::Span;
+/// # let span = Span::empty();
 /// let diagnostic = Diagnostic::new_error("Something went wrong", span)
 ///     .with_help("Have you tried turning it on and off again?", Span::empty());
 /// ```
@@ -83,21 +86,21 @@ impl Diagnostic {
         }
     }
 
-    pub fn add_note(&mut self, message: String, span: Span) {
-        self.notes.push(DiagnosticNote { message, span });
+    pub fn add_note(&mut self, message: impl Into<String>, span: Span) {
+        self.notes.push(DiagnosticNote { message: message.into(), span });
     }
 
-    pub fn add_help(&mut self, message: String, span: Span) {
-        self.helps.push(DiagnosticHelp { message, span });
+    pub fn add_help(&mut self, message: impl Into<String>, span: Span) {
+        self.helps.push(DiagnosticHelp { message: message.into(), span });
     }
 
-    pub fn with_note(mut self, message: String, span: Span) -> Self {
-        self.add_note(message, span);
+    pub fn with_note(mut self, message: impl Into<String>, span: Span) -> Self {
+        self.add_note(message.into(), span);
         self
     }
 
-    pub fn with_help(mut self, message: String, span: Span) -> Self {
-        self.add_help(message, span);
+    pub fn with_help(mut self, message: impl Into<String>, span: Span) -> Self {
+        self.add_help(message.into(), span);
         self
     }
 }
