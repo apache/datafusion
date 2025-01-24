@@ -27,7 +27,7 @@ use datafusion::sql::sqlparser::{
     keywords::Keyword,
     tokenizer::{Token, Tokenizer},
 };
-use rustyline::highlight::Highlighter;
+use rustyline::highlight::{CmdKind, Highlighter};
 
 /// The syntax highlighter.
 #[derive(Debug)]
@@ -73,7 +73,7 @@ impl Highlighter for SyntaxHighlighter {
         }
     }
 
-    fn highlight_char(&self, line: &str, _pos: usize, _forced: bool) -> bool {
+    fn highlight_char(&self, line: &str, _pos: usize, _cmd: CmdKind) -> bool {
         !line.is_empty()
     }
 }
