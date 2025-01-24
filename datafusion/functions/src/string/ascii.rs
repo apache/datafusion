@@ -135,20 +135,23 @@ pub fn ascii(args: &[ArrayRef]) -> Result<ArrayRef> {
             let string_array = args[0].as_string_view();
             Ok(calculate_ascii(string_array)?)
         }
-        _ => internal_err!("Unsupported data type"),
+        other => internal_err!("Unsupported data type for ascii: {:?}", other),
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use crate::expr_fn::ascii;
     use crate::string::ascii::AsciiFunc;
     use crate::utils::test::test_function;
-    use arrow::array::{Array, Int32Array};
+    use arrow::array::{Array, ArrayRef, Int32Array, RecordBatch, StringArray};
     use arrow::datatypes::DataType::Int32;
-    use datafusion_common::{Result, ScalarValue};
-    use datafusion_expr::{ColumnarValue, ScalarUDFImpl};
+    use datafusion::prelude::SessionContext;
+    use datafusion_common::{DFSchema, Result, ScalarValue};
+    use datafusion_expr::{col, lit, ColumnarValue, ScalarUDFImpl};
+    use std::sync::Arc;
 
-    macro_rules! test_ascii_string {
+    macro_rules! test_ascii_invoke {
         ($INPUT:expr, $EXPECTED:expr) => {
             test_function!(
                 AsciiFunc::new(),
@@ -179,91 +182,63 @@ mod tests {
         };
     }
 
-    macro_rules! test_ascii_int {
-        ($INPUT:expr, $EXPECTED:expr) => {
-            test_function!(
-                AsciiFunc::new(),
-                vec![ColumnarValue::Scalar(ScalarValue::Int8($INPUT))],
-                $EXPECTED,
-                i32,
-                Int32,
-                Int32Array
-            );
+    fn ascii_array(input: ArrayRef) -> Result<ArrayRef> {
+        let batch = RecordBatch::try_from_iter([("c0", input)])?;
+        let df_schema = DFSchema::try_from(batch.schema())?;
+        let expr = ascii(col("c0"));
+        let physical_expr =
+            SessionContext::new().create_physical_expr(expr, &df_schema)?;
+        let result = match physical_expr.evaluate(&batch)? {
+            ColumnarValue::Array(result) => Ok(result),
+            _ => datafusion_common::internal_err!("ascii"),
+        }?;
+        Ok(result)
+    }
 
-            test_function!(
-                AsciiFunc::new(),
-                vec![ColumnarValue::Scalar(ScalarValue::Int16($INPUT))],
-                $EXPECTED,
-                i32,
-                Int32,
-                Int32Array
-            );
-
-            test_function!(
-                AsciiFunc::new(),
-                vec![ColumnarValue::Scalar(ScalarValue::Int32($INPUT))],
-                $EXPECTED,
-                i32,
-                Int32,
-                Int32Array
-            );
-
-            test_function!(
-                AsciiFunc::new(),
-                vec![ColumnarValue::Scalar(ScalarValue::Int64($INPUT))],
-                $EXPECTED,
-                i32,
-                Int32,
-                Int32Array
-            );
-
-            test_function!(
-                AsciiFunc::new(),
-                vec![ColumnarValue::Scalar(ScalarValue::UInt8($INPUT))],
-                $EXPECTED,
-                i32,
-                Int32,
-                Int32Array
-            );
-
-            test_function!(
-                AsciiFunc::new(),
-                vec![ColumnarValue::Scalar(ScalarValue::UInt16($INPUT))],
-                $EXPECTED,
-                i32,
-                Int32,
-                Int32Array
-            );
-
-            test_function!(
-                AsciiFunc::new(),
-                vec![ColumnarValue::Scalar(ScalarValue::UInt32($INPUT))],
-                $EXPECTED,
-                i32,
-                Int32,
-                Int32Array
-            );
-
-            test_function!(
-                AsciiFunc::new(),
-                vec![ColumnarValue::Scalar(ScalarValue::UInt64($INPUT))],
-                $EXPECTED,
-                i32,
-                Int32,
-                Int32Array
-            );
-        };
+    fn ascii_scalar(input: ScalarValue) -> Result<ScalarValue> {
+        let df_schema = DFSchema::empty();
+        let expr = ascii(lit(input));
+        let physical_expr =
+            SessionContext::new().create_physical_expr(expr, &df_schema)?;
+        let result = match physical_expr
+            .evaluate(&RecordBatch::new_empty(df_schema.inner().clone()))?
+        {
+            ColumnarValue::Scalar(result) => Ok(result),
+            _ => datafusion_common::internal_err!("ascii"),
+        }?;
+        Ok(result)
     }
 
     #[test]
-    fn test_functions() -> Result<()> {
-        test_ascii_string!(Some(String::from("x")), Ok(Some(120)));
-        test_ascii_string!(Some(String::from("a")), Ok(Some(97)));
-        test_ascii_string!(Some(String::from("")), Ok(Some(0)));
-        test_ascii_string!(None, Ok(None));
+    fn test_ascii_invoke() -> Result<()> {
+        test_ascii_invoke!(Some(String::from("x")), Ok(Some(120)));
+        test_ascii_invoke!(Some(String::from("a")), Ok(Some(97)));
+        test_ascii_invoke!(Some(String::from("")), Ok(Some(0)));
+        test_ascii_invoke!(None, Ok(None));
+        Ok(())
+    }
 
-        test_ascii_int!(Some(2), Ok(Some(50)));
-        test_ascii_int!(None, Ok(None));
+    #[test]
+    fn test_ascii_expr() -> Result<()> {
+        let input = Arc::new(StringArray::from(vec![Some("x")])) as ArrayRef;
+        let expected = Arc::new(Int32Array::from(vec![Some(120)])) as ArrayRef;
+        let result = ascii_array(input)?;
+        assert_eq!(&expected, &result);
+
+        let input = ScalarValue::Utf8(Some(String::from("x")));
+        let expected = ScalarValue::Int32(Some(120));
+        let result = ascii_scalar(input)?;
+        assert_eq!(&expected, &result);
+
+        let input = Arc::new(Int32Array::from(vec![Some(2)])) as ArrayRef;
+        let expected = Arc::new(Int32Array::from(vec![Some(50)])) as ArrayRef;
+        let result = ascii_array(input)?;
+        assert_eq!(&expected, &result);
+
+        let input = ScalarValue::Int32(Some(2));
+        let expected = ScalarValue::Int32(Some(50));
+        let result = ascii_scalar(input)?;
+        assert_eq!(&expected, &result);
 
         Ok(())
     }

@@ -584,28 +584,21 @@ fn get_valid_types(
                 match target_type_class {
                     TypeSignatureClass::Native(native_type) => {
                         let target_type = native_type.native();
-                        if &logical_type == target_type {
-                            return target_type.default_cast_for(current_type);
-                        }
-
-                        if logical_type == NativeType::Null {
-                            return target_type.default_cast_for(current_type);
-                        }
-
-                        if target_type.is_integer() && logical_type.is_integer() {
-                            return target_type.default_cast_for(current_type);
-                        }
-
-                        if target_type == &NativeType::String && logical_type.is_integer()
-                        {
-                            return target_type.default_cast_for(current_type);
-                        }
-
-                        internal_err!(
-                            "Expect {} but received {}",
-                            target_type_class,
-                            current_type
-                        )
+                        target_type.default_cast_for(current_type)
+                        // if &logical_type == target_type {
+                        //     return target_type.default_cast_for(current_type);
+                        // }
+                        // if logical_type == NativeType::Null {
+                        //     return target_type.default_cast_for(current_type);
+                        // }
+                        // if target_type.is_integer() && logical_type.is_integer() {
+                        //     return target_type.default_cast_for(current_type);
+                        // }
+                        // internal_err!(
+                        //     "Expect {} but received {}",
+                        //     target_type_class,
+                        //     current_type
+                        // )
                     }
                     // Not consistent with Postgres and DuckDB but to avoid regression we implicit cast string to timestamp
                     TypeSignatureClass::Timestamp
