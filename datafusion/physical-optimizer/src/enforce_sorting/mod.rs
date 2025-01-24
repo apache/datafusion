@@ -656,3 +656,5 @@ fn get_sort_exprs(
         plan_err!("Given ExecutionPlan is not a SortExec or a SortPreservingMergeExec")
     }
 }
+
+// Tests are in tests/cases/enforce_sorting.rs
