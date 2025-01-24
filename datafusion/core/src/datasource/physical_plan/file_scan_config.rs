@@ -217,7 +217,8 @@ impl DataSource for FileScanConfig {
             .repartition_file_groups(&self.file_groups);
 
         if let Some(repartitioned_file_groups) = repartitioned_file_groups_option {
-            let source = self.clone().with_file_groups(repartitioned_file_groups);
+            let mut source = self.clone();
+            source.file_groups = repartitioned_file_groups;
             return Ok(Some(Arc::new(source)));
         }
         Ok(None)
