@@ -20,17 +20,17 @@
 statement ok
 create table numeric_types as
 SELECT
-    arrow_cast(1, 'Int8') as int8,
-    arrow_cast(1, 'Int16') as int16,
-    arrow_cast(1, 'Int32') as int32,
-    arrow_cast(1, 'Int64') as int64,
-    arrow_cast(1, 'UInt8') as uint8,
-    arrow_cast(1, 'UInt16') as uint16,
-    arrow_cast(1, 'UInt32') as uint32,
-    arrow_cast(1, 'UInt64') as uint64,
-    arrow_cast(1.23, 'Float32') as float32,
-    arrow_cast(1.23, 'Float64') as float64,
-    arrow_cast(1.25, 'Decimal128(5, 2)') as decimal
+    arrow_cast(10, 'Int8') as int8,
+    arrow_cast(10, 'Int16') as int16,
+    arrow_cast(10, 'Int32') as int32,
+    arrow_cast(10, 'Int64') as int64,
+    arrow_cast(10, 'UInt8') as uint8,
+    arrow_cast(10, 'UInt16') as uint16,
+    arrow_cast(10, 'UInt32') as uint32,
+    arrow_cast(10, 'UInt64') as uint64,
+    arrow_cast(10.23, 'Float32') as float32,
+    arrow_cast(10.23, 'Float64') as float64,
+    arrow_cast(10.25, 'Decimal128(5, 2)') as decimal
 ;
 
 # Plus with the same operand type, expect the same output type
@@ -52,6 +52,42 @@ from numeric_types;
 ----
 Int8 Int16 Int32 Int64 UInt8 UInt16 UInt32 UInt64 Float32 Float64 Decimal128(6, 2)
 
+# Plus with literal integer
+query TTTTTTTTTTT
+select
+    arrow_typeof(int8 + 2),
+    arrow_typeof(int16 + 2),
+    arrow_typeof(int32 + 2),
+    arrow_typeof(int64 + 2),
+    arrow_typeof(uint8 + 2),
+    arrow_typeof(uint16 + 2),
+    arrow_typeof(uint32 + 2),
+    arrow_typeof(uint64 + 2),
+    arrow_typeof(float32 + 2),
+    arrow_typeof(float64 + 2),
+    arrow_typeof(decimal + 2)
+from numeric_types;
+----
+Int64 Int64 Int64 Int64 Int64 Int64 Int64 Int64 Float32 Float64 Decimal128(23, 2)
+
+# Plus with literal decimal
+query TTTTTTTTTTT
+select
+    arrow_typeof(int8 + 2.0),
+    arrow_typeof(int16 + 2.0),
+    arrow_typeof(int32 + 2.0),
+    arrow_typeof(int64 + 2.0),
+    arrow_typeof(uint8 + 2.0),
+    arrow_typeof(uint16 + 2.0),
+    arrow_typeof(uint32 + 2.0),
+    arrow_typeof(uint64 + 2.0),
+    arrow_typeof(float32 + 2.0),
+    arrow_typeof(float64 + 2.0),
+    arrow_typeof(decimal + 2.0)
+from numeric_types;
+----
+Float64 Float64 Float64 Float64 Float64 Float64 Float64 Float64 Float64 Float64 Float64
+
 
 # Minus with the same operand type, expect the same output type
 # except for decimal which is promoted to the highest precision
@@ -72,6 +108,43 @@ from numeric_types;
 ----
 Int8 Int16 Int32 Int64 UInt8 UInt16 UInt32 UInt64 Float32 Float64 Decimal128(6, 2)
 
+# Minus with literal integer
+query TTTTTTTTTTT
+select
+    arrow_typeof(int8 - 2),
+    arrow_typeof(int16 - 2),
+    arrow_typeof(int32 - 2),
+    arrow_typeof(int64 - 2),
+    arrow_typeof(uint8 - 2),
+    arrow_typeof(uint16 - 2),
+    arrow_typeof(uint32 - 2),
+    arrow_typeof(uint64 - 2),
+    arrow_typeof(float32 - 2),
+    arrow_typeof(float64 - 2),
+    arrow_typeof(decimal - 2)
+from numeric_types;
+----
+Int64 Int64 Int64 Int64 Int64 Int64 Int64 Int64 Float32 Float64 Decimal128(23, 2)
+
+# Minus with literal decimal
+query TTTTTTTTTTT
+select
+    arrow_typeof(int8 - 2.0),
+    arrow_typeof(int16 - 2.0),
+    arrow_typeof(int32 - 2.0),
+    arrow_typeof(int64 - 2.0),
+    arrow_typeof(uint8 - 2.0),
+    arrow_typeof(uint16 - 2.0),
+    arrow_typeof(uint32 - 2.0),
+    arrow_typeof(uint64 - 2.0),
+    arrow_typeof(float32 - 2.0),
+    arrow_typeof(float64 - 2.0),
+    arrow_typeof(decimal - 2.0)
+from numeric_types;
+----
+Float64 Float64 Float64 Float64 Float64 Float64 Float64 Float64 Float64 Float64 Float64
+
+
 # Multiply with the same operand type, expect the same output type
 # except for decimal which is promoted to the highest precision
 query TTTTTTTTTTT
@@ -91,6 +164,43 @@ from numeric_types;
 ----
 Int8 Int16 Int32 Int64 UInt8 UInt16 UInt32 UInt64 Float32 Float64 Decimal128(11, 4)
 
+# Multiply with literal integer
+query TTTTTTTTTTT
+select
+    arrow_typeof(int8 * 2),
+    arrow_typeof(int16 * 2),
+    arrow_typeof(int32 * 2),
+    arrow_typeof(int64 * 2),
+    arrow_typeof(uint8 * 2),
+    arrow_typeof(uint16 * 2),
+    arrow_typeof(uint32 * 2),
+    arrow_typeof(uint64 * 2),
+    arrow_typeof(float32 * 2),
+    arrow_typeof(float64 * 2),
+    arrow_typeof(decimal * 2)
+from numeric_types;
+----
+Int64 Int64 Int64 Int64 Int64 Int64 Int64 Int64 Float32 Float64 Decimal128(26, 2)
+
+# Multiply with literal decimal
+query TTTTTTTTTTT
+select
+    arrow_typeof(int8 * 2.0),
+    arrow_typeof(int16 * 2.0),
+    arrow_typeof(int32 * 2.0),
+    arrow_typeof(int64 * 2.0),
+    arrow_typeof(uint8 * 2.0),
+    arrow_typeof(uint16 * 2.0),
+    arrow_typeof(uint32 * 2.0),
+    arrow_typeof(uint64 * 2.0),
+    arrow_typeof(float32 * 2.0),
+    arrow_typeof(float64 * 2.0),
+    arrow_typeof(decimal * 2.0)
+from numeric_types;
+----
+Float64 Float64 Float64 Float64 Float64 Float64 Float64 Float64 Float64 Float64 Float64
+
+
 # Divide with the same operand type, expect the same output type
 # except for decimal which is promoted to the highest precision
 query TTTTTTTTTTT
@@ -109,6 +219,43 @@ select
 from numeric_types;
 ----
 Int8 Int16 Int32 Int64 UInt8 UInt16 UInt32 UInt64 Float32 Float64 Decimal128(11, 6)
+
+# Divide with literal integer
+query TTTTTTTTTTT
+select
+    arrow_typeof(int8 / 2),
+    arrow_typeof(int16 / 2),
+    arrow_typeof(int32 / 2),
+    arrow_typeof(int64 / 2),
+    arrow_typeof(uint8 / 2),
+    arrow_typeof(uint16 / 2),
+    arrow_typeof(uint32 / 2),
+    arrow_typeof(uint64 / 2),
+    arrow_typeof(float32 / 2),
+    arrow_typeof(float64 / 2),
+    arrow_typeof(decimal / 2)
+from numeric_types;
+----
+Int64 Int64 Int64 Int64 Int64 Int64 Int64 Int64 Float32 Float64 Decimal128(9, 6)
+
+# Divide with literal decimal
+query TTTTTTTTTTT
+select
+    arrow_typeof(int8 / 2.0),
+    arrow_typeof(int16 / 2.0),
+    arrow_typeof(int32 / 2.0),
+    arrow_typeof(int64 / 2.0),
+    arrow_typeof(uint8 / 2.0),
+    arrow_typeof(uint16 / 2.0),
+    arrow_typeof(uint32 / 2.0),
+    arrow_typeof(uint64 / 2.0),
+    arrow_typeof(float32 / 2.0),
+    arrow_typeof(float64 / 2.0),
+    arrow_typeof(decimal / 2.0)
+from numeric_types;
+----
+Float64 Float64 Float64 Float64 Float64 Float64 Float64 Float64 Float64 Float64 Float64
+
 
 statement ok
 drop table numeric_types
