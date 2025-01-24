@@ -15,58 +15,139 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Tests for [`SanityCheckPlan`] physical optimizer rule
-//!
-//! Note these tests are not in the same module as the optimizer pass because
-//! they rely on `ParquetExec` which is in the core crate.
+use arrow_schema::{DataType, Field, Schema, SchemaRef, SortOptions};
+use datafusion::datasource::stream::{FileStreamProvider, StreamConfig, StreamTable};
+use datafusion::prelude::{CsvReadOptions, SessionContext};
+use datafusion_common::{JoinType, Result};
+use std::sync::Arc;
 
-use crate::physical_optimizer::test_util::{
-    BinaryTestCase, QueryCase, SourceType, UnaryTestCase,
-};
-use arrow::compute::SortOptions;
-use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+use async_trait::async_trait;
 use datafusion_common::config::ConfigOptions;
-use datafusion_common::Result;
-use datafusion_expr::JoinType;
 use datafusion_physical_expr::expressions::col;
 use datafusion_physical_expr::Partitioning;
+use datafusion_physical_optimizer::sanity_checker::SanityCheckPlan;
 use datafusion_physical_optimizer::test_utils::{
     bounded_window_exec, global_limit_exec, local_limit_exec, memory_exec,
     repartition_exec, sort_exec, sort_expr_options, sort_merge_join_exec,
 };
-use datafusion_physical_optimizer::{sanity_checker::*, PhysicalOptimizerRule};
-use datafusion_physical_plan::displayable;
+use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use datafusion_physical_plan::repartition::RepartitionExec;
-use datafusion_physical_plan::ExecutionPlan;
-use std::sync::Arc;
+use datafusion_physical_plan::{displayable, ExecutionPlan};
 
-fn create_test_schema() -> SchemaRef {
-    Arc::new(Schema::new(vec![Field::new("c9", DataType::Int32, true)]))
+async fn register_current_csv(
+    ctx: &SessionContext,
+    table_name: &str,
+    infinite: bool,
+) -> Result<()> {
+    let testdata = datafusion::test_util::arrow_test_data();
+    let schema = datafusion::test_util::aggr_test_schema();
+    let path = format!("{testdata}/csv/aggregate_test_100.csv");
+
+    match infinite {
+        true => {
+            let source = FileStreamProvider::new_file(schema, path.into());
+            let config = StreamConfig::new(Arc::new(source));
+            ctx.register_table(table_name, Arc::new(StreamTable::new(Arc::new(config))))?;
+        }
+        false => {
+            ctx.register_csv(table_name, &path, CsvReadOptions::new().schema(&schema))
+                .await?;
+        }
+    }
+
+    Ok(())
 }
 
-fn create_test_schema2() -> SchemaRef {
-    Arc::new(Schema::new(vec![
-        Field::new("a", DataType::Int32, true),
-        Field::new("b", DataType::Int32, true),
-    ]))
+#[derive(Eq, PartialEq, Debug)]
+pub enum SourceType {
+    Unbounded,
+    Bounded,
 }
 
-/// Check if sanity checker should accept or reject plans.
-fn assert_sanity_check(plan: &Arc<dyn ExecutionPlan>, is_sane: bool) {
-    let sanity_checker = SanityCheckPlan::new();
-    let opts = ConfigOptions::default();
-    assert_eq!(
-        sanity_checker.optimize(plan.clone(), &opts).is_ok(),
-        is_sane
-    );
+#[async_trait]
+pub trait SqlTestCase {
+    async fn register_table(&self, ctx: &SessionContext) -> Result<()>;
+    fn expect_fail(&self) -> bool;
 }
 
-/// Check if the plan we created is as expected by comparing the plan
-/// formatted as a string.
-fn assert_plan(plan: &dyn ExecutionPlan, expected_lines: Vec<&str>) {
-    let plan_str = displayable(plan).indent(true).to_string();
-    let actual_lines: Vec<&str> = plan_str.trim().lines().collect();
-    assert_eq!(actual_lines, expected_lines);
+/// [UnaryTestCase] is designed for single input [ExecutionPlan]s.
+pub struct UnaryTestCase {
+    pub source_type: SourceType,
+    pub expect_fail: bool,
+}
+
+#[async_trait]
+impl SqlTestCase for UnaryTestCase {
+    async fn register_table(&self, ctx: &SessionContext) -> Result<()> {
+        let table_is_infinite = self.source_type == SourceType::Unbounded;
+        register_current_csv(ctx, "test", table_is_infinite).await?;
+        Ok(())
+    }
+
+    fn expect_fail(&self) -> bool {
+        self.expect_fail
+    }
+}
+
+/// [BinaryTestCase] is designed for binary input [ExecutionPlan]s.
+pub struct BinaryTestCase {
+    pub source_types: (SourceType, SourceType),
+    pub expect_fail: bool,
+}
+
+#[async_trait]
+impl SqlTestCase for BinaryTestCase {
+    async fn register_table(&self, ctx: &SessionContext) -> Result<()> {
+        let left_table_is_infinite = self.source_types.0 == SourceType::Unbounded;
+        let right_table_is_infinite = self.source_types.1 == SourceType::Unbounded;
+        register_current_csv(ctx, "left", left_table_is_infinite).await?;
+        register_current_csv(ctx, "right", right_table_is_infinite).await?;
+        Ok(())
+    }
+
+    fn expect_fail(&self) -> bool {
+        self.expect_fail
+    }
+}
+
+pub struct QueryCase {
+    pub sql: String,
+    pub cases: Vec<Arc<dyn SqlTestCase>>,
+    pub error_operator: String,
+}
+
+impl QueryCase {
+    /// Run the test cases
+    pub async fn run(&self) -> Result<()> {
+        for case in &self.cases {
+            let ctx = SessionContext::new();
+            case.register_table(&ctx).await?;
+            let error = if case.expect_fail() {
+                Some(&self.error_operator)
+            } else {
+                None
+            };
+            self.run_case(ctx, error).await?;
+        }
+        Ok(())
+    }
+
+    async fn run_case(&self, ctx: SessionContext, error: Option<&String>) -> Result<()> {
+        let dataframe = ctx.sql(self.sql.as_str()).await?;
+        let plan = dataframe.create_physical_plan().await;
+        if let Some(error) = error {
+            let plan_error = plan.unwrap_err();
+            assert!(
+                plan_error.to_string().contains(error.as_str()),
+                "plan_error: {:?} doesn't contain message: {:?}",
+                plan_error,
+                error.as_str()
+            );
+        } else {
+            assert!(plan.is_ok())
+        }
+        Ok(())
+    }
 }
 
 #[tokio::test]
@@ -290,6 +371,35 @@ async fn test_analyzer() -> Result<()> {
 
     case.run().await?;
     Ok(())
+}
+
+fn create_test_schema() -> SchemaRef {
+    Arc::new(Schema::new(vec![Field::new("c9", DataType::Int32, true)]))
+}
+
+fn create_test_schema2() -> SchemaRef {
+    Arc::new(Schema::new(vec![
+        Field::new("a", DataType::Int32, true),
+        Field::new("b", DataType::Int32, true),
+    ]))
+}
+
+/// Check if sanity checker should accept or reject plans.
+fn assert_sanity_check(plan: &Arc<dyn ExecutionPlan>, is_sane: bool) {
+    let sanity_checker = SanityCheckPlan::new();
+    let opts = ConfigOptions::default();
+    assert_eq!(
+        sanity_checker.optimize(plan.clone(), &opts).is_ok(),
+        is_sane
+    );
+}
+
+/// Check if the plan we created is as expected by comparing the plan
+/// formatted as a string.
+fn assert_plan(plan: &dyn ExecutionPlan, expected_lines: Vec<&str>) {
+    let plan_str = displayable(plan).indent(true).to_string();
+    let actual_lines: Vec<&str> = plan_str.trim().lines().collect();
+    assert_eq!(actual_lines, expected_lines);
 }
 
 #[tokio::test]

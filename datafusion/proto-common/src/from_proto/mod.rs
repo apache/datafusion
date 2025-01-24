@@ -320,8 +320,9 @@ impl TryFrom<&protobuf::Field> for Field {
     type Error = Error;
     fn try_from(field: &protobuf::Field) -> Result<Self, Self::Error> {
         let datatype = field.arrow_type.as_deref().required("arrow_type")?;
-        Ok(Self::new(field.name.as_str(), datatype, field.nullable)
-            .with_metadata(field.metadata.clone()))
+        let field = Self::new(field.name.as_str(), datatype, field.nullable)
+            .with_metadata(field.metadata.clone());
+        Ok(field)
     }
 }
 

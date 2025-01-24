@@ -15,99 +15,30 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Tests for [`LimitedDistinctAggregation`] physical optimizer rule
-//!
-//! Note these tests are not in the same module as the optimizer pass because
-//! they rely on `ParquetExec` which is in the core crate.
-use super::test_util::{parquet_exec_with_sort, schema, trim_plan_display};
+//! Integration tests for [`LimitedDistinctAggregation`] physical optimizer rule
 
 use std::sync::Arc;
 
-use arrow::{
-    array::Int32Array,
-    compute::SortOptions,
-    datatypes::{DataType, Field, Schema},
-    record_batch::RecordBatch,
-    util::pretty::pretty_format_batches,
-};
-use arrow_schema::SchemaRef;
-use datafusion::{prelude::SessionContext, test_util::TestAggregate};
+use crate::physical_optimizer::parquet_exec_with_sort;
+
+use arrow::{compute::SortOptions, util::pretty::pretty_format_batches};
+use arrow_schema::DataType;
+use datafusion::prelude::SessionContext;
 use datafusion_common::Result;
 use datafusion_execution::config::SessionConfig;
 use datafusion_expr::Operator;
-use datafusion_physical_expr::{
-    expressions::{cast, col},
-    PhysicalExpr, PhysicalSortExpr,
-};
+use datafusion_physical_expr::expressions::cast;
+use datafusion_physical_expr::{expressions, expressions::col, PhysicalSortExpr};
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
-use datafusion_physical_optimizer::{
-    limited_distinct_aggregation::LimitedDistinctAggregation, PhysicalOptimizerRule,
+use datafusion_physical_optimizer::test_utils::{
+    assert_plan_matches_expected, build_group_by, mock_data, schema, TestAggregate,
 };
 use datafusion_physical_plan::{
-    aggregates::{AggregateExec, AggregateMode, PhysicalGroupBy},
-    collect, displayable, expressions,
+    aggregates::{AggregateExec, AggregateMode},
+    collect,
     limit::{GlobalLimitExec, LocalLimitExec},
-    memory::MemoryExec,
     ExecutionPlan,
 };
-
-fn mock_data() -> Result<Arc<MemoryExec>> {
-    let schema = Arc::new(Schema::new(vec![
-        Field::new("a", DataType::Int32, true),
-        Field::new("b", DataType::Int32, true),
-    ]));
-
-    let batch = RecordBatch::try_new(
-        Arc::clone(&schema),
-        vec![
-            Arc::new(Int32Array::from(vec![
-                Some(1),
-                Some(2),
-                None,
-                Some(1),
-                Some(4),
-                Some(5),
-            ])),
-            Arc::new(Int32Array::from(vec![
-                Some(1),
-                None,
-                Some(6),
-                Some(2),
-                Some(8),
-                Some(9),
-            ])),
-        ],
-    )?;
-
-    Ok(Arc::new(MemoryExec::try_new(
-        &[vec![batch]],
-        Arc::clone(&schema),
-        None,
-    )?))
-}
-
-fn assert_plan_matches_expected(
-    plan: &Arc<dyn ExecutionPlan>,
-    expected: &[&str],
-) -> Result<()> {
-    let expected_lines: Vec<&str> = expected.to_vec();
-    let session_ctx = SessionContext::new();
-    let state = session_ctx.state();
-
-    let optimized = LimitedDistinctAggregation::new()
-        .optimize(Arc::clone(plan), state.config_options())?;
-
-    let optimized_result = displayable(optimized.as_ref()).indent(true).to_string();
-    let actual_lines = trim_plan_display(&optimized_result);
-
-    assert_eq!(
-        &expected_lines, &actual_lines,
-        "\n\nexpected:\n\n{:#?}\nactual:\n\n{:#?}\n\n",
-        expected_lines, actual_lines
-    );
-
-    Ok(())
-}
 
 async fn assert_results_match_expected(
     plan: Arc<dyn ExecutionPlan>,
@@ -119,14 +50,6 @@ async fn assert_results_match_expected(
     let actual = format!("{}", pretty_format_batches(&batches)?);
     assert_eq!(actual, expected);
     Ok(())
-}
-
-pub fn build_group_by(input_schema: &SchemaRef, columns: Vec<String>) -> PhysicalGroupBy {
-    let mut group_by_expr: Vec<(Arc<dyn PhysicalExpr>, String)> = vec![];
-    for column in columns.iter() {
-        group_by_expr.push((col(column, input_schema).unwrap(), column.to_string()));
-    }
-    PhysicalGroupBy::new_single(group_by_expr.clone())
 }
 
 #[tokio::test]
@@ -312,6 +235,40 @@ async fn test_distinct_cols_different_than_group_by_cols() -> Result<()> {
 }
 
 #[test]
+fn test_has_order_by() -> Result<()> {
+    let sort_key = LexOrdering::new(vec![PhysicalSortExpr {
+        expr: col("a", &schema()).unwrap(),
+        options: SortOptions::default(),
+    }]);
+    let source = parquet_exec_with_sort(vec![sort_key]);
+    let schema = source.schema();
+
+    // `SELECT a FROM MemoryExec WHERE a > 1 GROUP BY a LIMIT 10;`, Single AggregateExec
+    // the `a > 1` filter is applied in the AggregateExec
+    let single_agg = AggregateExec::try_new(
+        AggregateMode::Single,
+        build_group_by(&schema, vec!["a".to_string()]),
+        vec![], /* aggr_expr */
+        vec![], /* filter_expr */
+        source, /* input */
+        schema, /* input_schema */
+    )?;
+    let limit_exec = LocalLimitExec::new(
+        Arc::new(single_agg),
+        10, // fetch
+    );
+    // expected not to push the limit to the AggregateExec
+    let expected = [
+        "LocalLimitExec: fetch=10",
+        "AggregateExec: mode=Single, gby=[a@0 as a], aggr=[], ordering_mode=Sorted",
+        "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[a@0 ASC]",
+    ];
+    let plan: Arc<dyn ExecutionPlan> = Arc::new(limit_exec);
+    assert_plan_matches_expected(&plan, &expected)?;
+    Ok(())
+}
+
+#[test]
 fn test_no_group_by() -> Result<()> {
     let source = mock_data()?;
     let schema = source.schema();
@@ -403,40 +360,6 @@ fn test_has_filter() -> Result<()> {
         "AggregateExec: mode=Single, gby=[a@0 as a], aggr=[COUNT(*)]",
         "MemoryExec: partitions=1, partition_sizes=[1]",
     ];
-    let plan: Arc<dyn ExecutionPlan> = Arc::new(limit_exec);
-    assert_plan_matches_expected(&plan, &expected)?;
-    Ok(())
-}
-
-#[test]
-fn test_has_order_by() -> Result<()> {
-    let sort_key = LexOrdering::new(vec![PhysicalSortExpr {
-        expr: col("a", &schema()).unwrap(),
-        options: SortOptions::default(),
-    }]);
-    let source = parquet_exec_with_sort(vec![sort_key]);
-    let schema = source.schema();
-
-    // `SELECT a FROM MemoryExec WHERE a > 1 GROUP BY a LIMIT 10;`, Single AggregateExec
-    // the `a > 1` filter is applied in the AggregateExec
-    let single_agg = AggregateExec::try_new(
-        AggregateMode::Single,
-        build_group_by(&schema, vec!["a".to_string()]),
-        vec![], /* aggr_expr */
-        vec![], /* filter_expr */
-        source, /* input */
-        schema, /* input_schema */
-    )?;
-    let limit_exec = LocalLimitExec::new(
-        Arc::new(single_agg),
-        10, // fetch
-    );
-    // expected not to push the limit to the AggregateExec
-    let expected = [
-            "LocalLimitExec: fetch=10",
-            "AggregateExec: mode=Single, gby=[a@0 as a], aggr=[], ordering_mode=Sorted",
-            "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[a@0 ASC]",
-        ];
     let plan: Arc<dyn ExecutionPlan> = Arc::new(limit_exec);
     assert_plan_matches_expected(&plan, &expected)?;
     Ok(())

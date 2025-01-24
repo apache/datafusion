@@ -105,13 +105,13 @@ select
 ----
 2 Int64
 
-# TODO: Got types (i64, u64), casting to decimal or double or even i128 if supported
-query IT
+# i64 and u64, cast to decimal128(20, 0)
+query RT
 select
   coalesce(2, arrow_cast(3, 'UInt64')),
   arrow_typeof(coalesce(2, arrow_cast(3, 'UInt64')));
 ----
-2 Int64
+2 Decimal128(20, 0)
 
 statement ok
 create table t1 (a bigint, b int, c int) as values (null, null, 1), (null, 2, null);

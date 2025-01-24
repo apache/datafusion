@@ -1494,20 +1494,6 @@ fn round_trip_scalar_values_and_data_types() {
                 Field::new("b", DataType::Boolean, false),
                 ScalarValue::from(false),
             )
-            .with_scalar(
-                Field::new(
-                    "c",
-                    DataType::Dictionary(
-                        Box::new(DataType::UInt16),
-                        Box::new(DataType::Utf8),
-                    ),
-                    false,
-                ),
-                ScalarValue::Dictionary(
-                    Box::new(DataType::UInt16),
-                    Box::new("value".into()),
-                ),
-            )
             .build()
             .unwrap(),
         ScalarValue::try_from(&DataType::Struct(Fields::from(vec![
@@ -1518,25 +1504,6 @@ fn round_trip_scalar_values_and_data_types() {
         ScalarValue::try_from(&DataType::Struct(Fields::from(vec![
             Field::new("a", DataType::Int32, true),
             Field::new("b", DataType::Boolean, false),
-            Field::new(
-                "c",
-                DataType::Dictionary(
-                    Box::new(DataType::UInt16),
-                    Box::new(DataType::Binary),
-                ),
-                false,
-            ),
-            Field::new(
-                "d",
-                DataType::new_list(
-                    DataType::Dictionary(
-                        Box::new(DataType::UInt16),
-                        Box::new(DataType::Binary),
-                    ),
-                    false,
-                ),
-                false,
-            ),
         ])))
         .unwrap(),
         ScalarValue::try_from(&DataType::Map(

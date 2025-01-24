@@ -64,13 +64,12 @@ cargo run --example dataframe
 - [`file_stream_provider.rs`](examples/file_stream_provider.rs): Run a query on `FileStreamProvider` which implements `StreamProvider` for reading and writing to arbitrary stream sources / sinks.
 - [`flight_sql_server.rs`](examples/flight/flight_sql_server.rs): Run DataFusion as a standalone process and execute SQL queries from JDBC clients
 - [`function_factory.rs`](examples/function_factory.rs): Register `CREATE FUNCTION` handler to implement SQL macros
-- [`make_date.rs`](examples/make_date.rs): Examples of using the make_date function
 - [`optimizer_rule.rs`](examples/optimizer_rule.rs): Use a custom OptimizerRule to replace certain predicates
 - [`parquet_index.rs`](examples/parquet_index.rs): Create an secondary index over several parquet files and use it to speed up queries
 - [`parquet_exec_visitor.rs`](examples/parquet_exec_visitor.rs): Extract statistics by visiting an ExecutionPlan after execution
 - [`parse_sql_expr.rs`](examples/parse_sql_expr.rs): Parse SQL text into DataFusion `Expr`.
 - [`plan_to_sql.rs`](examples/plan_to_sql.rs): Generate SQL from DataFusion `Expr` and `LogicalPlan`
-- [`planner_api.rs](examples/planner_api.rs): APIs to manipulate logical and physical plans
+- [`planner_api.rs`](examples/planner_api.rs) APIs to manipulate logical and physical plans
 - [`pruning.rs`](examples/pruning.rs): Use pruning to rule out files based on statistics
 - [`query-aws-s3.rs`](examples/external_dependency/query-aws-s3.rs): Configure `object_store` and run a query against files stored in AWS S3
 - [`query-http-csv.rs`](examples/query-http-csv.rs): Configure `object_store` and run a query against files vi HTTP
@@ -82,9 +81,8 @@ cargo run --example dataframe
 - [`sql_analysis.rs`](examples/sql_analysis.rs): Analyse SQL queries with DataFusion structures
 - [`sql_frontend.rs`](examples/sql_frontend.rs): Create LogicalPlans (only) from sql strings
 - [`sql_dialect.rs`](examples/sql_dialect.rs): Example of implementing a custom SQL dialect on top of `DFParser`
-- [`sql_query.rs`](examples/memtable.rs): Query data using SQL (in memory `RecordBatch`es, local Parquet files)q
-- [`to_char.rs`](examples/to_char.rs): Examples of using the to_char function
-- [`to_timestamp.rs`](examples/to_timestamp.rs): Examples of using to_timestamp functions
+- [`sql_query.rs`](examples/memtable.rs): Query data using SQL (in memory `RecordBatches`, local Parquet files)
+- [`date_time_function.rs`](examples/date_time_function.rs): Examples of date-time related functions and queries.
 
 ## Distributed
 

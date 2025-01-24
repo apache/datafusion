@@ -50,7 +50,7 @@ jobs:
 
   # Run extended tests (with feature 'extended_tests')
   linux-test-extended:
-    name: cargo test (amd64)
+    name: cargo test 'extended_tests' (amd64)
     needs: linux-build-lib
     runs-on: ubuntu-latest
     container:
