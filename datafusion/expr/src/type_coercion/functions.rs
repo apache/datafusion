@@ -596,6 +596,11 @@ fn get_valid_types(
                             return target_type.default_cast_for(current_type);
                         }
 
+                        if target_type == &NativeType::String && logical_type.is_integer()
+                        {
+                            return target_type.default_cast_for(current_type);
+                        }
+
                         internal_err!(
                             "Expect {} but received {}",
                             target_type_class,
