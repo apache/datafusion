@@ -22,9 +22,11 @@ use arrow::array::ArrayRef;
 use arrow::datatypes::DataType;
 
 use crate::utils::make_scalar_function;
+use datafusion_common::types::logical_string;
 use datafusion_common::{internal_err, Result};
 use datafusion_expr::{ColumnarValue, Documentation, Volatility};
 use datafusion_expr::{ScalarUDFImpl, Signature};
+use datafusion_expr_common::signature::TypeSignatureClass;
 use datafusion_macros::user_doc;
 
 #[user_doc(
@@ -62,7 +64,13 @@ impl Default for EndsWithFunc {
 impl EndsWithFunc {
     pub fn new() -> Self {
         Self {
-            signature: Signature::string(2, Volatility::Immutable),
+            signature: Signature::coercible(
+                vec![
+                    TypeSignatureClass::Native(logical_string()),
+                    TypeSignatureClass::Native(logical_string()),
+                ],
+                Volatility::Immutable,
+            ),
         }
     }
 }

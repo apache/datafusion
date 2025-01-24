@@ -21,11 +21,13 @@ use arrow::compute::contains as arrow_contains;
 use arrow::datatypes::DataType;
 use arrow::datatypes::DataType::{Boolean, LargeUtf8, Utf8, Utf8View};
 use datafusion_common::exec_err;
+use datafusion_common::types::logical_string;
 use datafusion_common::DataFusionError;
 use datafusion_common::Result;
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
 };
+use datafusion_expr_common::signature::TypeSignatureClass;
 use datafusion_macros::user_doc;
 use std::any::Any;
 use std::sync::Arc;
@@ -59,7 +61,13 @@ impl Default for ContainsFunc {
 impl ContainsFunc {
     pub fn new() -> Self {
         Self {
-            signature: Signature::string(2, Volatility::Immutable),
+            signature: Signature::coercible(
+                vec![
+                    TypeSignatureClass::Native(logical_string()),
+                    TypeSignatureClass::Native(logical_string()),
+                ],
+                Volatility::Immutable,
+            ),
         }
     }
 }

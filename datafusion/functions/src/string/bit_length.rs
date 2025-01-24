@@ -20,9 +20,11 @@ use arrow::datatypes::DataType;
 use std::any::Any;
 
 use crate::utils::utf8_to_int_type;
+use datafusion_common::types::logical_string;
 use datafusion_common::{exec_err, Result, ScalarValue};
 use datafusion_expr::{ColumnarValue, Documentation, Volatility};
 use datafusion_expr::{ScalarUDFImpl, Signature};
+use datafusion_expr_common::signature::TypeSignatureClass;
 use datafusion_macros::user_doc;
 
 #[user_doc(
@@ -55,7 +57,10 @@ impl Default for BitLengthFunc {
 impl BitLengthFunc {
     pub fn new() -> Self {
         Self {
-            signature: Signature::string(1, Volatility::Immutable),
+            signature: Signature::coercible(
+                vec![TypeSignatureClass::Native(logical_string())],
+                Volatility::Immutable,
+            ),
         }
     }
 }
