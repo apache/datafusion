@@ -34,7 +34,10 @@ use datafusion_execution::TaskContext;
 use datafusion_physical_expr::EquivalenceProperties;
 
 /// Execution plan for values list based relation (produces constant rows)
-#[deprecated(since = "45.0.0", note = "Use `MemoryExec::try_new_as_values` instead")]
+#[deprecated(
+    since = "45.0.0",
+    note = "Use `MemoryExec::try_new_as_values` or `MemoryExec::try_new_from_batches` instead"
+)]
 #[derive(Debug, Clone)]
 pub struct ValuesExec {
     /// The schema
