@@ -321,6 +321,7 @@ impl TryFrom<&protobuf::Field> for Field {
     fn try_from(field: &protobuf::Field) -> Result<Self, Self::Error> {
         let datatype = field.arrow_type.as_deref().required("arrow_type")?;
         let field = if field.dict_id != 0 {
+            // https://github.com/apache/datafusion/issues/14173
             #[allow(deprecated)]
             Self::new_dict(
                 field.name.as_str(),
@@ -436,6 +437,7 @@ impl TryFrom<&protobuf::ScalarValue> for ScalarValue {
                     let id = dict_batch.id();
 
                     let fields_using_this_dictionary = {
+                        // See https://github.com/apache/datafusion/issues/14173
                         #[allow(deprecated)]
                         schema.fields_with_dict_id(id)
                     };
@@ -934,6 +936,7 @@ impl TryFrom<&protobuf::ParquetOptions> for ParquetOptions {
     fn try_from(
         value: &protobuf::ParquetOptions,
     ) -> datafusion_common::Result<Self, Self::Error> {
+        #[allow(deprecated)] // max_statistics_size
         Ok(ParquetOptions {
             enable_page_index: value.enable_page_index,
             pruning: value.pruning,
@@ -1011,6 +1014,7 @@ impl TryFrom<&protobuf::ParquetColumnOptions> for ParquetColumnOptions {
     fn try_from(
         value: &protobuf::ParquetColumnOptions,
     ) -> datafusion_common::Result<Self, Self::Error> {
+        #[allow(deprecated)] // max_statistics_size
         Ok(ParquetColumnOptions {
             compression: value.compression_opt.clone().map(|opt| match opt {
                 protobuf::parquet_column_options::CompressionOpt::Compression(v) => Some(v),

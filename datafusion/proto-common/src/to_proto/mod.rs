@@ -98,6 +98,7 @@ impl TryFrom<&Field> for protobuf::Field {
             children: Vec::new(),
             metadata: field.metadata().clone(),
             #[allow(deprecated)]
+            // See https://github.com/apache/datafusion/issues/14173 to remove deprecated dict_id
             dict_id: field.dict_id().unwrap_or(0),
             dict_ordered: field.dict_is_ordered().unwrap_or(false),
         })
@@ -819,6 +820,7 @@ impl TryFrom<&ParquetOptions> for protobuf::ParquetOptions {
             dictionary_enabled_opt: value.dictionary_enabled.map(protobuf::parquet_options::DictionaryEnabledOpt::DictionaryEnabled),
             dictionary_page_size_limit: value.dictionary_page_size_limit as u64,
             statistics_enabled_opt: value.statistics_enabled.clone().map(protobuf::parquet_options::StatisticsEnabledOpt::StatisticsEnabled),
+            #[allow(deprecated)]
             max_statistics_size_opt: value.max_statistics_size.map(|v| protobuf::parquet_options::MaxStatisticsSizeOpt::MaxStatisticsSize(v as u64)),
             max_row_group_size: value.max_row_group_size as u64,
             created_by: value.created_by.clone(),
@@ -857,6 +859,7 @@ impl TryFrom<&ParquetColumnOptions> for protobuf::ParquetColumnOptions {
                 .statistics_enabled
                 .clone()
                 .map(protobuf::parquet_column_options::StatisticsEnabledOpt::StatisticsEnabled),
+            #[allow(deprecated)]
             max_statistics_size_opt: value.max_statistics_size.map(|v| {
                 protobuf::parquet_column_options::MaxStatisticsSizeOpt::MaxStatisticsSize(
                     v as u32,

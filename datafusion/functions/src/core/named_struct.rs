@@ -18,7 +18,7 @@
 use arrow::array::StructArray;
 use arrow::datatypes::{DataType, Field, Fields};
 use datafusion_common::{exec_err, internal_err, HashSet, Result, ScalarValue};
-use datafusion_expr::{ColumnarValue, Documentation, Expr, ExprSchemable};
+use datafusion_expr::{ColumnarValue, Documentation, ReturnInfo, ReturnTypeArgs};
 use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
 use datafusion_macros::user_doc;
 use std::any::Any;
@@ -44,11 +44,18 @@ fn named_struct_expr(args: &[ColumnarValue]) -> Result<ColumnarValue> {
         .chunks_exact(2)
         .enumerate()
         .map(|(i, chunk)| {
-
             let name_column = &chunk[0];
             let name = match name_column {
-                ColumnarValue::Scalar(ScalarValue::Utf8(Some(name_scalar))) => name_scalar,
-                _ => return exec_err!("named_struct even arguments must be string literals, got {name_column:?} instead at position {}", i * 2)
+                ColumnarValue::Scalar(ScalarValue::Utf8(Some(name_scalar))) => {
+                    name_scalar
+                }
+                // TODO: Implement Display for ColumnarValue
+                _ => {
+                    return exec_err!(
+                    "named_struct even arguments must be string literals at position {}",
+                    i * 2
+                )
+                }
             };
 
             Ok((name, chunk[1].clone()))
@@ -148,46 +155,52 @@ impl ScalarUDFImpl for NamedStructFunc {
     }
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        internal_err!(
-            "named_struct: return_type called instead of return_type_from_exprs"
-        )
+        internal_err!("named_struct: return_type called instead of return_type_from_args")
     }
 
-    fn return_type_from_exprs(
-        &self,
-        args: &[Expr],
-        schema: &dyn datafusion_common::ExprSchema,
-        _arg_types: &[DataType],
-    ) -> Result<DataType> {
+    fn return_type_from_args(&self, args: ReturnTypeArgs) -> Result<ReturnInfo> {
         // do not accept 0 arguments.
-        if args.is_empty() {
+        if args.scalar_arguments.is_empty() {
             return exec_err!(
                 "named_struct requires at least one pair of arguments, got 0 instead"
             );
         }
 
-        if args.len() % 2 != 0 {
+        if args.scalar_arguments.len() % 2 != 0 {
             return exec_err!(
                 "named_struct requires an even number of arguments, got {} instead",
-                args.len()
+                args.scalar_arguments.len()
             );
         }
 
-        let return_fields = args
-            .chunks_exact(2)
+        let names = args
+            .scalar_arguments
+            .iter()
             .enumerate()
-            .map(|(i, chunk)| {
-                let name = &chunk[0];
-                let value = &chunk[1];
+            .step_by(2)
+            .map(|(i, sv)|
+                sv.and_then(|sv| sv.try_as_str().flatten().filter(|s| !s.is_empty()))
+                .map_or_else(
+                    ||
+                        exec_err!(
+                    "{} requires {i}-th (0-indexed) field name as non-empty constant string",
+                    self.name()
+                ),
+                Ok
+                )
+            )
+            .collect::<Result<Vec<_>>>()?;
+        let types = args.arg_types.iter().skip(1).step_by(2).collect::<Vec<_>>();
 
-                if let Expr::Literal(ScalarValue::Utf8(Some(name))) = name {
-                    Ok(Field::new(name, value.get_type(schema)?, true))
-                } else {
-                    exec_err!("named_struct even arguments must be string literals, got {name} instead at position {}", i * 2)
-                }
-            })
+        let return_fields = names
+            .into_iter()
+            .zip(types.into_iter())
+            .map(|(name, data_type)| Ok(Field::new(name, data_type.to_owned(), true)))
             .collect::<Result<Vec<Field>>>()?;
-        Ok(DataType::Struct(Fields::from(return_fields)))
+
+        Ok(ReturnInfo::new_nullable(DataType::Struct(Fields::from(
+            return_fields,
+        ))))
     }
 
     fn invoke_batch(

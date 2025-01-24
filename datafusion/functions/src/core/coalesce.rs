@@ -19,9 +19,9 @@ use arrow::array::{new_null_array, BooleanArray};
 use arrow::compute::kernels::zip::zip;
 use arrow::compute::{and, is_not_null, is_null};
 use arrow::datatypes::DataType;
-use datafusion_common::{exec_err, ExprSchema, Result};
+use datafusion_common::{exec_err, internal_err, Result};
 use datafusion_expr::binary::try_type_union_resolution;
-use datafusion_expr::{ColumnarValue, Documentation, Expr, ExprSchemable};
+use datafusion_expr::{ColumnarValue, Documentation, ReturnInfo, ReturnTypeArgs};
 use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
 use datafusion_macros::user_doc;
 use itertools::Itertools;
@@ -76,17 +76,20 @@ impl ScalarUDFImpl for CoalesceFunc {
         &self.signature
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        Ok(arg_types
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        internal_err!("return_type_from_args should be called instead")
+    }
+
+    fn return_type_from_args(&self, args: ReturnTypeArgs) -> Result<ReturnInfo> {
+        // If any the arguments in coalesce is non-null, the result is non-null
+        let nullable = args.nullables.iter().all(|&nullable| nullable);
+        let return_type = args
+            .arg_types
             .iter()
             .find_or_first(|d| !d.is_null())
             .unwrap()
-            .clone())
-    }
-
-    // If any the arguments in coalesce is non-null, the result is non-null
-    fn is_nullable(&self, args: &[Expr], schema: &dyn ExprSchema) -> bool {
-        args.iter().all(|e| e.nullable(schema).ok().unwrap_or(true))
+            .clone();
+        Ok(ReturnInfo::new(return_type, nullable))
     }
 
     /// coalesce evaluates to the first value which is not NULL
@@ -163,41 +166,5 @@ impl ScalarUDFImpl for CoalesceFunc {
 
     fn documentation(&self) -> Option<&Documentation> {
         self.doc()
-    }
-}
-
-#[cfg(test)]
-mod test {
-    use arrow::datatypes::DataType;
-
-    use datafusion_expr::ScalarUDFImpl;
-
-    use crate::core;
-
-    #[test]
-    fn test_coalesce_return_types() {
-        let coalesce = core::coalesce::CoalesceFunc::new();
-        let return_type = coalesce
-            .return_type(&[DataType::Date32, DataType::Date32])
-            .unwrap();
-        assert_eq!(return_type, DataType::Date32);
-    }
-
-    #[test]
-    fn test_coalesce_return_types_with_nulls_first() {
-        let coalesce = core::coalesce::CoalesceFunc::new();
-        let return_type = coalesce
-            .return_type(&[DataType::Null, DataType::Date32])
-            .unwrap();
-        assert_eq!(return_type, DataType::Date32);
-    }
-
-    #[test]
-    fn test_coalesce_return_types_with_nulls_last() {
-        let coalesce = core::coalesce::CoalesceFunc::new();
-        let return_type = coalesce
-            .return_type(&[DataType::Int64, DataType::Null])
-            .unwrap();
-        assert_eq!(return_type, DataType::Int64);
     }
 }
