@@ -795,8 +795,13 @@ mod tests {
             Arc::new(BooleanArray::from(vec![true; 5])) as ArrayRef,     // is set
         ];
         last_accumulator.merge_batch(&states)?;
+        let states = vec![
+            Arc::new(Int64Array::from(vec![7, 8, 9])) as ArrayRef, // a
+            Arc::new(Int64Array::from(vec![1, 1, 1])) as ArrayRef, // order by
+            Arc::new(BooleanArray::from(vec![true; 3])) as ArrayRef, // is set
+        ];
         last_accumulator.merge_batch(&states)?;
-        assert_eq!(last_accumulator.evaluate()?, ScalarValue::Int64(Some(5)));
+        assert_eq!(last_accumulator.evaluate()?, ScalarValue::Int64(Some(9)));
         Ok(())
     }
 
