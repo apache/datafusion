@@ -27,13 +27,14 @@ use datafusion_functions_aggregate::array_agg::ArrayAggAccumulator;
 
 use arrow::util::test_util::seedable_rng;
 use arrow_buffer::{NullBufferBuilder, OffsetBuffer};
-use rand::Rng;
 use rand::distributions::{Distribution, Standard};
+use rand::Rng;
 
 fn merge_batch_bench(c: &mut Criterion, name: &str, values: ArrayRef) {
     let list_item_data_type = values.as_list::<i32>().values().data_type().clone();
     c.bench_function(name, |b| {
         b.iter(|| {
+            #[allow(clippy::unit_arg)]
             black_box(
                 ArrayAggAccumulator::try_new(&list_item_data_type)
                     .unwrap()
@@ -91,15 +92,22 @@ where
 }
 
 fn array_agg_benchmark(c: &mut Criterion) {
-
     let values = Arc::new(create_list_array::<Int64Type>(8192, 0.0, 0.0)) as ArrayRef;
     merge_batch_bench(c, "array_agg i64 merge_batch no nulls", values);
 
     let values = Arc::new(create_list_array::<Int64Type>(8192, 1.0, 0.0)) as ArrayRef;
-    merge_batch_bench(c, "array_agg i64 merge_batch all nulls, 100% of nulls point to a zero length array", values);
+    merge_batch_bench(
+        c,
+        "array_agg i64 merge_batch all nulls, 100% of nulls point to a zero length array",
+        values,
+    );
 
     let values = Arc::new(create_list_array::<Int64Type>(8192, 1.0, 0.1)) as ArrayRef;
-    merge_batch_bench(c, "array_agg i64 merge_batch all nulls, 90% of nulls point to a zero length array", values);
+    merge_batch_bench(
+        c,
+        "array_agg i64 merge_batch all nulls, 90% of nulls point to a zero length array",
+        values,
+    );
 
     // All nulls point to a 0 length array
 
