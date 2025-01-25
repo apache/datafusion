@@ -421,7 +421,6 @@ mod tests {
         match result {
             Ok(_) => panic!("expected error"),
             Err(e) => {
-                println!("{}", e.to_string());
                 assert!(e
                     .to_string()
                     .contains("Arrow error: Invalid argument error: 12345679 is too large to store in a Decimal128 of precision 6. Max is 999999"))
