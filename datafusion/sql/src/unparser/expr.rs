@@ -2714,8 +2714,8 @@ mod tests {
             let expr = Expr::WindowFunction(window_func);
             let ast = unparser.expr_to_sql(&expr)?;
 
-            let actual = format!("{ast}");
-            let expected = format!("{expected}");
+            let actual = ast.to_string();
+            let expected = expected.to_string();
 
             assert_eq!(actual, expected);
         }
