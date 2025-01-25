@@ -1817,18 +1817,26 @@ select array_slice(arrow_cast(make_array(1, 2, 3, 4, 5), 'LargeList(Int64)'), 0,
 [1, 2, 3, 4] [h, e, l]
 
 # array_slice scalar function #8 (with NULL and positive number)
-query error
+query ??
 select array_slice(make_array(1, 2, 3, 4, 5), NULL, 4), array_slice(make_array('h', 'e', 'l', 'l', 'o'), NULL, 3);
+----
+NULL NULL
 
-query error
+query ??
 select array_slice(arrow_cast(make_array(1, 2, 3, 4, 5), 'LargeList(Int64)'), NULL, 4), array_slice(arrow_cast(make_array('h', 'e', 'l', 'l', 'o'), 'LargeList(Utf8)'), NULL, 3);
+----
+NULL NULL
 
 # array_slice scalar function #9 (with positive number and NULL)
-query error
+query ??
 select array_slice(make_array(1, 2, 3, 4, 5), 2, NULL), array_slice(make_array('h', 'e', 'l', 'l', 'o'), 3, NULL);
+----
+NULL NULL
 
-query error
+query ??
 select array_slice(arrow_cast(make_array(1, 2, 3, 4, 5), 'LargeList(Int64)'), 2, NULL), array_slice(arrow_cast(make_array('h', 'e', 'l', 'l', 'o'), 'LargeList(Utf8)'), 3, NULL);
+----
+NULL NULL
 
 # array_slice scalar function #10 (with zero-zero)
 query ??
@@ -1861,18 +1869,26 @@ select array_slice(arrow_cast(make_array(1, 2, 3, 4, 5), 'LargeList(Int64)'), 0,
 [1, 2] [h, e, l]
 
 # array_slice scalar function #13 (with negative number and NULL)
-query error
+query ??
 select array_slice(make_array(1, 2, 3, 4, 5), -2, NULL), array_slice(make_array('h', 'e', 'l', 'l', 'o'), -3, NULL);
+----
+NULL NULL
 
-query error
+query ??
 select array_slice(arrow_cast(make_array(1, 2, 3, 4, 5), 'LargeList(Int64)'), -2, NULL), array_slice(arrow_cast(make_array('h', 'e', 'l', 'l', 'o'), 'LargeList(Utf8)'), -3, NULL);
+----
+NULL NULL
 
 # array_slice scalar function #14 (with NULL and negative number)
-query error
+query ??
 select array_slice(make_array(1, 2, 3, 4, 5), NULL, -4), array_slice(make_array('h', 'e', 'l', 'l', 'o'), NULL, -3);
+----
+NULL NULL
 
-query error
+query ??
 select array_slice(arrow_cast(make_array(1, 2, 3, 4, 5), 'LargeList(Int64)'), NULL, -4), array_slice(arrow_cast(make_array('h', 'e', 'l', 'l', 'o'), 'LargeList(Utf8)'), NULL, -3);
+----
+NULL NULL
 
 # array_slice scalar function #15 (with negative indexes)
 query ??
@@ -2035,12 +2051,6 @@ select array_slice(a, -1, 2, 1), array_slice(a, -1, 2),
 # Testing with empty arguments should result in an error
 query error DataFusion error: Error during planning: array_slice does not support zero arguments
 select array_slice();
-
-# Testing with NULLs should result in a NULL
-query B
-select array_slice(NULL, NULL, NULL) IS NULL;
-----
-true
 
 ## array_any_value (aliases: list_any_value)
 

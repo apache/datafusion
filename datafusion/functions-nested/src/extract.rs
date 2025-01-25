@@ -419,17 +419,24 @@ fn array_slice_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
         None
     };
 
-    let null_input = args.iter().find(|arg| arg.data_type().is_null());
+    let null_input = args.iter().any(|arg| arg.data_type().is_null());
     let array_data_type = args[0].data_type();
-    match (array_data_type, null_input) {
-        (List(_) | LargeList(_) | Null, Some(null)) => Ok(Arc::clone(null)),
-        (List(_), None) => {
+    match array_data_type {
+        Null => Ok(Arc::clone(&args[0])),
+        List(field_ref) if null_input => Ok(Arc::new(GenericListArray::<i32>::new_null(
+            field_ref.clone(),
+            1,
+        ))),
+        LargeList(field_ref) if null_input => Ok(Arc::new(
+            GenericListArray::<i64>::new_null(field_ref.clone(), 1),
+        )),
+        List(_) => {
             let array = as_list_array(&args[0])?;
             let from_array = as_int64_array(&args[1])?;
             let to_array = as_int64_array(&args[2])?;
             general_array_slice::<i32>(array, from_array, to_array, stride)
         }
-        (LargeList(_), None) => {
+        LargeList(_) => {
             let array = as_large_list_array(&args[0])?;
             let from_array = as_int64_array(&args[1])?;
             let to_array = as_int64_array(&args[2])?;
