@@ -53,14 +53,14 @@ pub fn data_types_with_scalar_udf(
     let type_signature = &signature.type_signature;
 
     if current_types.is_empty() {
-        if type_signature.supports_zero_argument() {
-            return Ok(vec![]);
+        return if type_signature.supports_zero_argument() {
+            Ok(vec![])
         } else if type_signature.used_to_support_zero_arguments() {
             // Special error to help during upgrade: https://github.com/apache/datafusion/issues/13763
-            return plan_err!("{} does not support zero arguments. Use TypeSignature::Nullary for zero arguments.", func.name());
+            plan_err!("{} does not support zero arguments. Use TypeSignature::Nullary for zero arguments.", func.name())
         } else {
-            return plan_err!("{} does not support zero arguments.", func.name());
-        }
+            plan_err!("{} does not support zero arguments.", func.name())
+        };
     }
 
     let valid_types =
@@ -91,14 +91,14 @@ pub fn data_types_with_aggregate_udf(
     let type_signature = &signature.type_signature;
 
     if current_types.is_empty() {
-        if type_signature.supports_zero_argument() {
-            return Ok(vec![]);
+        return if type_signature.supports_zero_argument() {
+            Ok(vec![])
         } else if type_signature.used_to_support_zero_arguments() {
             // Special error to help during upgrade: https://github.com/apache/datafusion/issues/13763
-            return plan_err!("{} does not support zero arguments. Use TypeSignature::Nullary for zero arguments.", func.name());
+            plan_err!("{} does not support zero arguments. Use TypeSignature::Nullary for zero arguments.", func.name())
         } else {
-            return plan_err!("{} does not support zero arguments.", func.name());
-        }
+            plan_err!("{} does not support zero arguments.", func.name())
+        };
     }
 
     let valid_types =
@@ -128,14 +128,14 @@ pub fn data_types_with_window_udf(
     let type_signature = &signature.type_signature;
 
     if current_types.is_empty() {
-        if type_signature.supports_zero_argument() {
-            return Ok(vec![]);
+        return if type_signature.supports_zero_argument() {
+            Ok(vec![])
         } else if type_signature.used_to_support_zero_arguments() {
             // Special error to help during upgrade: https://github.com/apache/datafusion/issues/13763
-            return plan_err!("{} does not support zero arguments. Use TypeSignature::Nullary for zero arguments.", func.name());
+            plan_err!("{} does not support zero arguments. Use TypeSignature::Nullary for zero arguments.", func.name())
         } else {
-            return plan_err!("{} does not support zero arguments.", func.name());
-        }
+            plan_err!("{} does not support zero arguments.", func.name())
+        };
     }
 
     let valid_types =
@@ -165,20 +165,20 @@ pub fn data_types(
     let type_signature = &signature.type_signature;
 
     if current_types.is_empty() {
-        if type_signature.supports_zero_argument() {
-            return Ok(vec![]);
+        return if type_signature.supports_zero_argument() {
+            Ok(vec![])
         } else if type_signature.used_to_support_zero_arguments() {
             // Special error to help during upgrade: https://github.com/apache/datafusion/issues/13763
-            return plan_err!(
+            plan_err!(
                 "signature {:?} does not support zero arguments. Use TypeSignature::Nullary for zero arguments.",
                 type_signature
-            );
+            )
         } else {
-            return plan_err!(
+            plan_err!(
                 "signature {:?} does not support zero arguments.",
                 type_signature
-            );
-        }
+            )
+        };
     }
 
     let valid_types = get_valid_types(type_signature, current_types)?;
@@ -879,7 +879,7 @@ fn coerced_from<'a>(
             Null | Timestamp(_, None) | Date32 | Utf8 | LargeUtf8,
         ) => Some(type_into.clone()),
         (Interval(_), Utf8 | LargeUtf8) => Some(type_into.clone()),
-        // We can go into a Utf8View from a Utf8 or LargeUtf8
+        // We can go into a Utf8View from an Utf8 or LargeUtf8
         (Utf8View, Utf8 | LargeUtf8 | Null) => Some(type_into.clone()),
         // Any type can be coerced into strings
         (Utf8 | LargeUtf8, _) => Some(type_into.clone()),
@@ -929,12 +929,17 @@ fn coerced_from<'a>(
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
 
-    use crate::Volatility;
-
-    use super::*;
-    use arrow::datatypes::Field;
-    use datafusion_common::assert_contains;
+    use crate::type_coercion::functions::{
+        can_coerce_from, coerced_from, data_types, get_valid_types, maybe_data_types,
+    };
+    use crate::TypeSignature;
+    use arrow::datatypes::{DataType, Field, TimeUnit};
+    use datafusion_common::{assert_contains, Result};
+    use datafusion_expr_common::signature::{
+        Signature, Volatility, FIXED_SIZE_LIST_WILDCARD,
+    };
 
     #[test]
     fn test_string_conversion() {
@@ -1122,7 +1127,7 @@ mod tests {
             Volatility::Stable,
         );
 
-        let coerced_data_types = data_types("test", &current_types, &signature).unwrap();
+        let coerced_data_types = data_types("test", &current_types, &signature)?;
         assert_eq!(coerced_data_types, current_types);
 
         // make sure it can't coerce to a different size
@@ -1138,7 +1143,7 @@ mod tests {
             vec![DataType::FixedSizeList(Arc::clone(&inner), 2)],
             Volatility::Stable,
         );
-        let coerced_data_types = data_types("test", &current_types, &signature).unwrap();
+        let coerced_data_types = data_types("test", &current_types, &signature)?;
         assert_eq!(coerced_data_types, current_types);
 
         Ok(())
