@@ -22,6 +22,7 @@ use std::sync::Arc;
 
 use crate::utils::scatter;
 
+use crate::stats::StatisticsV2;
 use arrow::array::BooleanArray;
 use arrow::compute::filter_record_batch;
 use arrow::datatypes::{DataType, Schema};
@@ -30,7 +31,6 @@ use datafusion_common::{internal_err, not_impl_err, Result};
 use datafusion_expr_common::columnar_value::ColumnarValue;
 use datafusion_expr_common::interval_arithmetic::Interval;
 use datafusion_expr_common::sort_properties::ExprProperties;
-use crate::stats::StatisticsV2;
 
 /// Shared [`PhysicalExpr`].
 pub type PhysicalExprRef = Arc<dyn PhysicalExpr>;
@@ -147,7 +147,7 @@ pub trait PhysicalExpr: Send + Sync + Display + Debug + DynEq + DynHash {
 
     /// Finds the final statistic of the expression by combining the input statistics
     /// in a post-order bottom-up manner (post-order DFS in statistics graph).
-    /// 
+    ///
     /// The part of [`StatisticsV2`] framework, work in progress.
     fn evaluate_statistics(&self, _stats: &[&StatisticsV2]) -> Result<StatisticsV2> {
         not_impl_err!("Not implemented for {self}")
@@ -155,7 +155,7 @@ pub trait PhysicalExpr: Send + Sync + Display + Debug + DynEq + DynHash {
 
     /// Updates children statistic, having a known parent statistic for this expression.
     /// This is used to propagate constraints down through an expression tree.
-    /// 
+    ///
     /// The part of [`StatisticsV2`] framework, work in progress.
     fn propagate_statistics(
         &self,

@@ -36,7 +36,9 @@ use datafusion_expr::{
     ColumnarValue,
 };
 use datafusion_physical_expr_common::stats::StatisticsV2;
-use datafusion_physical_expr_common::stats::StatisticsV2::{Bernoulli, Exponential, Gaussian, Uniform, Unknown};
+use datafusion_physical_expr_common::stats::StatisticsV2::{
+    Bernoulli, Exponential, Gaussian, Uniform, Unknown,
+};
 
 /// Negative expression
 #[derive(Debug, Eq)]
@@ -151,41 +153,40 @@ impl PhysicalExpr for NegativeExpr {
                 stats[0]);
         }
         match stats[0] {
-            Uniform { interval }  => {
-                Ok(Uniform {
-                    interval: self.evaluate_bounds(&[interval])?
-                })
-            },
+            Uniform { interval } => Ok(Uniform {
+                interval: self.evaluate_bounds(&[interval])?,
+            }),
             Unknown { range, .. } => {
-                if let (Some(mean), Some(median), Some(variance)
-                ) = (stats[0].mean()?, stats[0].median()?, stats[0].variance()?) {
+                if let (Some(mean), Some(median), Some(variance)) =
+                    (stats[0].mean()?, stats[0].median()?, stats[0].variance()?)
+                {
                     Ok(Unknown {
                         mean: Some(mean.arithmetic_negate()?),
                         median: Some(median.arithmetic_negate()?),
-                        variance: Some(median.arithmetic_negate()?),
-                        range: self.evaluate_bounds(&[range])?
+                        variance: Some(variance.arithmetic_negate()?),
+                        range: self.evaluate_bounds(&[range])?,
                     })
                 } else {
                     Ok(Unknown {
                         mean: None,
                         median: None,
                         variance: None,
-                        range: self.evaluate_bounds(&[range])?
+                        range: self.evaluate_bounds(&[range])?,
                     })
                 }
-            },
-            Bernoulli {p} => {
-                Ok(Bernoulli { p: ScalarValue::new_one(&DataType::Float64)?.sub_checked(p)? })
-            },
+            }
+            Bernoulli { p } => Ok(Bernoulli {
+                p: ScalarValue::new_one(&DataType::Float64)?.sub_checked(p)?,
+            }),
             Exponential { .. } | Gaussian { .. } => Ok(Unknown {
                 mean: None,
                 median: None,
                 variance: None,
-                range: Interval::UNCERTAIN
+                range: Interval::UNCERTAIN,
             }),
         }
     }
-    
+
     /// The ordering of a [`NegativeExpr`] is simply the reverse of its child.
     fn get_properties(&self, children: &[ExprProperties]) -> Result<ExprProperties> {
         Ok(ExprProperties {
@@ -278,7 +279,7 @@ mod tests {
         );
         Ok(())
     }
-    
+
     #[test]
     fn test_evaluate_statistics() -> Result<()> {
         let negative_expr = NegativeExpr::new(Arc::new(Column::new("a", 0)));
@@ -295,12 +296,13 @@ mod tests {
 
         // Bernoulli
         assert_eq!(
-            negative_expr.evaluate_statistics(
-                &[&Bernoulli { p: ScalarValue::Float64(Some(0.75)) }]
-            )?,
-            Bernoulli {p: ScalarValue::Float64(Some(0.25))}
+            negative_expr.evaluate_statistics(&[&Bernoulli {
+                p: ScalarValue::Float64(Some(0.75))
+            }])?,
+            Bernoulli {
+                p: ScalarValue::Float64(Some(0.25))
+            }
         );
-
 
         // Exponential
         assert_eq!(

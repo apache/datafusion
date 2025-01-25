@@ -24,7 +24,10 @@ use crate::intervals::cp_solver::{propagate_arithmetic, propagate_comparison};
 use crate::PhysicalExpr;
 
 use crate::expressions::binary::kernels::concat_elements_utf8view;
-use crate::utils::stats::{new_bernoulli_from_binary_expr, new_unknown_from_binary_expr, new_unknown_from_interval};
+use crate::utils::stats::{
+    new_bernoulli_from_binary_expr, new_unknown_from_binary_expr,
+    new_unknown_from_interval,
+};
 use arrow::array::*;
 use arrow::compute::kernels::boolean::{and_kleene, not, or_kleene};
 use arrow::compute::kernels::cmp::*;
@@ -41,7 +44,9 @@ use datafusion_expr::type_coercion::binary::get_result_type;
 use datafusion_expr::{ColumnarValue, Operator};
 use datafusion_physical_expr_common::datum::{apply, apply_cmp, apply_cmp_for_nested};
 use datafusion_physical_expr_common::stats::StatisticsV2;
-use datafusion_physical_expr_common::stats::StatisticsV2::{Bernoulli, Gaussian, Uniform, Unknown};
+use datafusion_physical_expr_common::stats::StatisticsV2::{
+    Bernoulli, Gaussian, Uniform, Unknown,
+};
 use kernels::{
     bitwise_and_dyn, bitwise_and_dyn_scalar, bitwise_or_dyn, bitwise_or_dyn_scalar,
     bitwise_shift_left_dyn, bitwise_shift_left_dyn_scalar, bitwise_shift_right_dyn,
@@ -506,19 +511,31 @@ impl PhysicalExpr for BinaryExpr {
         // TODO: move the data type check to the the higher levels, if possible.
         if (left_stat.data_type().is_none() || right_stat.data_type().is_none())
             || !left_stat.data_type().unwrap().is_numeric()
-            || !right_stat.data_type().unwrap().is_numeric() {
-            return Ok(StatisticsV2::new_unknown());
+            || !right_stat.data_type().unwrap().is_numeric()
+        {
+            return internal_err!(
+                "`evaluate_statistics` failed to evaluate statistics for operation '{}'",
+                self.op
+            );
         }
 
-
-        // TODO, to think: maybe, we can separate also Unknown + Unknown 
-        //  just for clarity and better reader understanding, how exactly 
+        // TODO, to think: maybe, we can separate also Unknown + Unknown
+        //  just for clarity and better reader understanding, how exactly
         //  mean, median, variance and range are computed, if it is possible.
         match &self.op {
             Operator::Plus | Operator::Minus | Operator::Multiply => {
                 match (left_stat, right_stat) {
-                    (Gaussian { mean: left_mean, variance: left_v, ..},
-                        Gaussian { mean: right_mean, variance: right_v}, ) => {
+                    (
+                        Gaussian {
+                            mean: left_mean,
+                            variance: left_v,
+                            ..
+                        },
+                        Gaussian {
+                            mean: right_mean,
+                            variance: right_v,
+                        },
+                    ) => {
                         if self.op.eq(&Operator::Plus) {
                             Ok(Gaussian {
                                 mean: left_mean.add(right_mean)?,
@@ -532,36 +549,51 @@ impl PhysicalExpr for BinaryExpr {
                         } else {
                             new_unknown_from_binary_expr(&self.op, left_stat, right_stat)
                         }
-                    },
-                    (_, _) => new_unknown_from_binary_expr(&self.op, left_stat, right_stat)
-                }
-            },
-            Operator::Divide => new_unknown_from_binary_expr(&self.op, left_stat, right_stat),
-            Operator::Eq | Operator::NotEq | Operator::LtEq | Operator::GtEq
-            | Operator::Lt | Operator::Gt => {
-                new_bernoulli_from_binary_expr(&self.op, left_stat, right_stat)
-            },
-            Operator::And => {
-                match (left_stat, right_stat) {
-                    (Bernoulli { p: p_left }, Bernoulli { p: p_right }, ) => {
-                        Ok(Bernoulli { p : p_left.mul_checked(p_right)? })
-                    },
-                    // TODO: complement with more cases
-                    (_, _) => new_unknown_from_binary_expr(&self.op, left_stat, right_stat)
-                }
-            },
-            Operator::Or => {
-                match (left_stat, right_stat) {
-                    (Bernoulli { p: p_left }, Bernoulli { p: p_right }, ) => {
-                        Ok(Bernoulli {
-                            p : ScalarValue::Float64(Some(1.)).sub(p_left.mul_checked(p_right)?)?
-                        })
-                    },
-                    // TODO: complement with more cases
-                    (_, _) => new_unknown_from_binary_expr(&self.op, left_stat, right_stat)
+                    }
+                    (_, _) => {
+                        new_unknown_from_binary_expr(&self.op, left_stat, right_stat)
+                    }
                 }
             }
-            _ => new_unknown_from_binary_expr(&self.op, left_stat, right_stat)
+            Operator::Divide => {
+                new_unknown_from_binary_expr(&self.op, left_stat, right_stat)
+            }
+            Operator::Eq
+            | Operator::NotEq
+            | Operator::LtEq
+            | Operator::GtEq
+            | Operator::Lt
+            | Operator::Gt => {
+                new_bernoulli_from_binary_expr(&self.op, left_stat, right_stat)
+            }
+            Operator::And => {
+                match (left_stat, right_stat) {
+                    (Bernoulli { p: p_left }, Bernoulli { p: p_right }) => {
+                        Ok(Bernoulli {
+                            p: p_left.mul_checked(p_right)?,
+                        })
+                    }
+                    // TODO: complement with more cases
+                    (_, _) => {
+                        new_unknown_from_binary_expr(&self.op, left_stat, right_stat)
+                    }
+                }
+            }
+            Operator::Or => {
+                match (left_stat, right_stat) {
+                    (Bernoulli { p: p_left }, Bernoulli { p: p_right }) => {
+                        Ok(Bernoulli {
+                            p: ScalarValue::Float64(Some(1.))
+                                .sub(p_left.mul_checked(p_right)?)?,
+                        })
+                    }
+                    // TODO: complement with more cases
+                    (_, _) => {
+                        new_unknown_from_binary_expr(&self.op, left_stat, right_stat)
+                    }
+                }
+            }
+            _ => new_unknown_from_binary_expr(&self.op, left_stat, right_stat),
         }
     }
 
@@ -571,28 +603,29 @@ impl PhysicalExpr for BinaryExpr {
         children_stat: &[&StatisticsV2],
     ) -> Result<Option<Vec<StatisticsV2>>> {
         let (left_stat, right_stat) = (children_stat[0], children_stat[1]);
-        match parent_stat { 
-            Uniform {interval} | Unknown {range: interval, ..} => {
-                match (left_stat, right_stat) {
-                    (Uniform { interval: left }, Uniform { interval: right })
-                    | (Uniform { interval: left }, Unknown { range: right, .. })
-                    | (Unknown { range: left, .. }, Uniform { interval: right })
-                    | (Unknown { range: left, .. }, Unknown { range: right, .. })
-                    => {
-                        let propagated = self.propagate_constraints(interval, &[left, right])?;
-                        if let Some(propagated) = propagated {
-                            Ok(Some(vec![
-                                new_unknown_from_interval(&propagated[0])?,
-                                new_unknown_from_interval(&propagated[1])?,
-                            ]))
-                        } else {
-                            Ok(None)
-                        }
-                    },
-                    (_, _) => Ok(None)
+        match parent_stat {
+            Uniform { interval }
+            | Unknown {
+                range: interval, ..
+            } => match (left_stat, right_stat) {
+                (Uniform { interval: left }, Uniform { interval: right })
+                | (Uniform { interval: left }, Unknown { range: right, .. })
+                | (Unknown { range: left, .. }, Uniform { interval: right })
+                | (Unknown { range: left, .. }, Unknown { range: right, .. }) => {
+                    let propagated =
+                        self.propagate_constraints(interval, &[left, right])?;
+                    if let Some(propagated) = propagated {
+                        Ok(Some(vec![
+                            new_unknown_from_interval(&propagated[0])?,
+                            new_unknown_from_interval(&propagated[1])?,
+                        ]))
+                    } else {
+                        Ok(None)
+                    }
                 }
-            }
-            _ => Ok(None)
+                (_, _) => Ok(None),
+            },
+            _ => Ok(None),
         }
     }
 
@@ -4499,39 +4532,89 @@ mod tests {
         right: Arc<dyn PhysicalExpr>,
         schema: &Schema,
     ) -> Result<BinaryExpr> {
-        Ok(binary_op(Arc::clone(&left), op, Arc::clone(&right), schema)?
-            .as_any().downcast_ref::<BinaryExpr>().unwrap().clone())
+        Ok(
+            binary_op(Arc::clone(&left), op, Arc::clone(&right), schema)?
+                .as_any()
+                .downcast_ref::<BinaryExpr>()
+                .unwrap()
+                .clone(),
+        )
     }
 
     // TODO: generate the test case(s) with the macros
     /// Test for Uniform-Uniform, Unknown-Uniform, Uniform-Unknown and Unknown-Unknown evaluation.
     #[test]
     fn test_evaluate_statistics_combination_of_range_holders() -> Result<()> {
-        let schema = &Schema::new(vec![
-            Field::new("a", DataType::Float64, false),
-        ]);
+        let schema = &Schema::new(vec![Field::new("a", DataType::Float64, false)]);
         let a: Arc<dyn PhysicalExpr> = Arc::new(Column::new("a", 0));
         let b = lit(ScalarValue::Float64(Some(12.0)));
 
         let left_interval = Interval::make(Some(0.0), Some(12.0))?;
         let right_interval = Interval::make(Some(12.0), Some(36.0))?;
-        let (left_mean, right_mean) = (ScalarValue::Float64(Some(6.0)), ScalarValue::Float64(Some(24.0)));
-        let (left_med, right_med) = (ScalarValue::Float64(Some(6.0)), ScalarValue::Float64(Some(24.0)));
+        let (left_mean, right_mean) = (
+            ScalarValue::Float64(Some(6.0)),
+            ScalarValue::Float64(Some(24.0)),
+        );
+        let (left_med, right_med) = (
+            ScalarValue::Float64(Some(6.0)),
+            ScalarValue::Float64(Some(24.0)),
+        );
 
-        for children in [vec![Uniform { interval: left_interval.clone() }, Uniform { interval: right_interval.clone() }],
-            vec![Unknown { mean: Some(left_mean.clone()), median: Some(left_med.clone()), variance: None, range: left_interval.clone()},
-                 Uniform { interval: right_interval.clone() }],
-            vec![Uniform { interval: right_interval.clone(), },
-                 Unknown { mean: Some(right_mean.clone()), median: Some(right_med.clone()), variance: None, range: right_interval.clone()}],
-            vec![Unknown { mean: Some(left_mean.clone()), median: Some(left_med.clone()), variance: None, range: left_interval.clone()},
-             Unknown { mean: Some(right_mean.clone()), median: Some(right_med.clone()), variance: None, range: right_interval.clone()}]] {
-
+        for children in [
+            vec![
+                Uniform {
+                    interval: left_interval.clone(),
+                },
+                Uniform {
+                    interval: right_interval.clone(),
+                },
+            ],
+            vec![
+                Unknown {
+                    mean: Some(left_mean.clone()),
+                    median: Some(left_med.clone()),
+                    variance: None,
+                    range: left_interval.clone(),
+                },
+                Uniform {
+                    interval: right_interval.clone(),
+                },
+            ],
+            vec![
+                Uniform {
+                    interval: right_interval.clone(),
+                },
+                Unknown {
+                    mean: Some(right_mean.clone()),
+                    median: Some(right_med.clone()),
+                    variance: None,
+                    range: right_interval.clone(),
+                },
+            ],
+            vec![
+                Unknown {
+                    mean: Some(left_mean.clone()),
+                    median: Some(left_med.clone()),
+                    variance: None,
+                    range: left_interval.clone(),
+                },
+                Unknown {
+                    mean: Some(right_mean.clone()),
+                    median: Some(right_med.clone()),
+                    variance: None,
+                    range: right_interval.clone(),
+                },
+            ],
+        ] {
             let ref_view: Vec<&StatisticsV2> = children.iter().collect();
 
             let ops = vec![
-                Operator::Plus, Operator::Minus, Operator::Multiply, Operator::Divide
+                Operator::Plus,
+                Operator::Minus,
+                Operator::Multiply,
+                Operator::Divide,
             ];
-           // Eq, NotEq, Gt, GtEq, Lt, LtEq];
+            // Eq, NotEq, Gt, GtEq, Lt, LtEq];
 
             for op in ops {
                 let expr = binary_expr(Arc::clone(&a), op, Arc::clone(&b), schema)?;
@@ -4546,31 +4629,36 @@ mod tests {
     }
 
     #[test]
-    fn test_propagate_statistics_uniform_uniform() -> Result<()> {
-        let schema = &Schema::new(vec![
-            Field::new("a", DataType::Float64, false),
-        ]);
+    fn test_propagate_statistics_uniform_uniform_arithmetic() -> Result<()> {
+        let schema = &Schema::new(vec![Field::new("a", DataType::Float64, false)]);
         let a: Arc<dyn PhysicalExpr> = Arc::new(Column::new("a", 0));
         let b = lit(ScalarValue::Float64(Some(12.0)));
 
         let left_interval = Interval::make(Some(0.0), Some(12.0))?;
         let right_interval = Interval::make(Some(12.0), Some(36.0))?;
 
-        let parent = Uniform { interval: Interval::CERTAINLY_TRUE};
+        let parent = Uniform {
+            interval: Interval::make(Some(-432.), Some(432.))?
+        };
         let children = &vec![
-            Uniform { interval: left_interval.clone() },
-            Uniform { interval: right_interval.clone() }
+            Uniform {
+                interval: left_interval.clone(),
+            },
+            Uniform {
+                interval: right_interval.clone(),
+            },
         ];
         let ref_view: Vec<&StatisticsV2> = children.iter().collect();
 
         let ops = vec![
-            Operator::Plus, Operator::Minus, Operator::Multiply, Operator::Divide
+            Operator::Plus,
+            Operator::Minus,
+            Operator::Multiply,
+            Operator::Divide,
         ];
-       // Eq, NotEq, Gt, GtEq, Lt, LtEq];
 
         for op in ops {
             let expr = binary_expr(Arc::clone(&a), op, Arc::clone(&b), schema)?;
-            // TODO: to think, if maybe we want to handcraft the expected value...
             assert_eq!(
                 expr.propagate_statistics(&parent, &ref_view)?,
                 Some(vec![
@@ -4578,6 +4666,45 @@ mod tests {
                     new_unknown_from_interval(&right_interval)?
                 ])
             );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_propagate_statistics_uniform_uniform_comparison() -> Result<()> {
+        let schema = &Schema::new(vec![Field::new("a", DataType::Float64, false)]);
+        let a: Arc<dyn PhysicalExpr> = Arc::new(Column::new("a", 0));
+        let b = lit(ScalarValue::Float64(Some(12.0)));
+
+        let left_interval = Interval::make(Some(0.0), Some(12.0))?;
+        let right_interval = Interval::make(Some(6.0), Some(18.0))?;
+
+        for parent_interval in [Interval::CERTAINLY_TRUE, Interval::CERTAINLY_FALSE] {
+            let parent = Uniform {
+                interval: Interval::CERTAINLY_TRUE
+            };
+            let children = &vec![
+                Uniform {
+                    interval: left_interval.clone(),
+                },
+                Uniform {
+                    interval: right_interval.clone(),
+                },
+            ];
+            let ref_view: Vec<&StatisticsV2> = children.iter().collect();
+
+            let ops = vec![
+                Operator::Eq,
+                Operator::Gt,
+                Operator::GtEq,
+                Operator::Lt,
+                Operator::LtEq
+            ];
+
+            for op in ops {
+                let expr = binary_expr(Arc::clone(&a), op, Arc::clone(&b), schema)?;
+                assert!(expr.propagate_statistics(&parent, &ref_view)?.is_some());
+            }
         }
         Ok(())
     }

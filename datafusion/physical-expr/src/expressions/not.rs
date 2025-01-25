@@ -130,9 +130,10 @@ impl PhysicalExpr for NotExpr {
                 stats[0]);
         }
         match stats[0] {
-            Uniform { interval }  => {
+            Uniform { interval } => {
                 if interval.lower().data_type().eq(&DataType::Boolean)
-                    && interval.lower().data_type().eq(&DataType::Boolean) {
+                    && interval.lower().data_type().eq(&DataType::Boolean)
+                {
                     Ok(Uniform {
                         interval: interval.not()?,
                     })
@@ -141,36 +142,37 @@ impl PhysicalExpr for NotExpr {
                         mean: None,
                         median: None,
                         variance: None,
-                        range: Interval::UNCERTAIN
+                        range: Interval::UNCERTAIN,
                     })
                 }
-            },
+            }
             Unknown { range, .. } => {
                 if range.lower().data_type().eq(&DataType::Boolean)
-                    && range.lower().data_type().eq(&DataType::Boolean) {
+                    && range.lower().data_type().eq(&DataType::Boolean)
+                {
                     Ok(Unknown {
                         mean: None,
                         median: None,
                         variance: None,
-                        range: range.not()?
+                        range: range.not()?,
                     })
                 } else {
                     Ok(Unknown {
                         mean: None,
                         median: None,
                         variance: None,
-                        range: Interval::UNCERTAIN
+                        range: Interval::UNCERTAIN,
                     })
                 }
             }
             // Note: NOT Exponential distribution is mirrored on X axis and in fact,
             //  it is a plot of logarithmic function, which is Unknown.
             // Note: NOT Gaussian distribution is mirrored on X axis and is Unknown
-            Exponential { .. } | Gaussian { .. } |  Bernoulli { .. } => Ok(Unknown {
+            Exponential { .. } | Gaussian { .. } | Bernoulli { .. } => Ok(Unknown {
                 mean: None,
                 median: None,
                 variance: None,
-                range: Interval::UNCERTAIN
+                range: Interval::UNCERTAIN,
             }),
         }
     }
@@ -250,26 +252,33 @@ mod tests {
 
     #[test]
     fn test_evaluate_statistics() -> Result<()> {
-        let _schema = &Schema::new(vec![
-            Field::new("a", DataType::Boolean, false),
-        ]);
+        let _schema = &Schema::new(vec![Field::new("a", DataType::Boolean, false)]);
         let a: Arc<dyn PhysicalExpr> = Arc::new(Column::new("a", 0));
         let expr = not(a)?;
 
         // Uniform with boolean bounds
         assert_eq!(
-            expr.evaluate_statistics(&[&Uniform {interval: Interval::CERTAINLY_FALSE}])?,
-            Uniform {interval: Interval::CERTAINLY_TRUE}
+            expr.evaluate_statistics(&[&Uniform {
+                interval: Interval::CERTAINLY_FALSE
+            }])?,
+            Uniform {
+                interval: Interval::CERTAINLY_TRUE
+            }
         );
         assert_eq!(
-            expr.evaluate_statistics(&[&Uniform {interval: Interval::CERTAINLY_FALSE}])?,
-            Uniform {interval: Interval::CERTAINLY_TRUE}
+            expr.evaluate_statistics(&[&Uniform {
+                interval: Interval::CERTAINLY_FALSE
+            }])?,
+            Uniform {
+                interval: Interval::CERTAINLY_TRUE
+            }
         );
 
         // Uniform with non-boolean bounds
         assert_eq!(
             expr.evaluate_statistics(&[&Uniform {
-                interval: Interval::make_unbounded(&DataType::Float64)?}])?,
+                interval: Interval::make_unbounded(&DataType::Float64)?
+            }])?,
             uncertain_unknown()
         );
 
@@ -293,7 +302,9 @@ mod tests {
 
         // Bernoulli
         assert_eq!(
-            expr.evaluate_statistics(&[&Bernoulli { p: ScalarValue::Float64(Some(0.25)) }])?,
+            expr.evaluate_statistics(&[&Bernoulli {
+                p: ScalarValue::Float64(Some(0.25))
+            }])?,
             uncertain_unknown()
         );
 
@@ -321,7 +332,7 @@ mod tests {
                 variance: None,
                 range: Interval::make_unbounded(&DataType::Float64)?
             }])?,
-           uncertain_unknown()
+            uncertain_unknown()
         );
 
         Ok(())
@@ -332,7 +343,7 @@ mod tests {
             mean: None,
             median: None,
             variance: None,
-            range: Interval::UNCERTAIN
+            range: Interval::UNCERTAIN,
         }
     }
 
