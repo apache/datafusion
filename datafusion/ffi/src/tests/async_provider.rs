@@ -15,6 +15,16 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! This is an example of an async table provider that will call functions on
+//! the tokio runtime of the library providing the function. Since we cannot
+//! share a tokio runtime across the ffi boundary and the producer and consumer
+//! may have different runtimes, we need to store a reference to the runtime
+//! and enter it during streaming calls. The entering of the runtime will
+//! occur by the datafusion_ffi crate during the streaming calls. This code
+//! serves as an integration test of this feature. If we do not correctly
+//! access the runtime, then you will get a panic when trying to do operations
+//! such as spawning a tokio task.
+
 use std::{any::Any, fmt::Debug, sync::Arc};
 
 use crate::table_provider::FFI_TableProvider;
@@ -45,7 +55,7 @@ pub struct AsyncTableProvider {
     _join_handle: Option<std::thread::JoinHandle<()>>,
 }
 
-fn async_table_provider_task(
+fn async_table_provider_thread(
     mut shutdown: mpsc::Receiver<bool>,
     mut batch_request: mpsc::Receiver<bool>,
     batch_sender: broadcast::Sender<Option<RecordBatch>>,
@@ -92,7 +102,7 @@ pub fn start_async_provider() -> (AsyncTableProvider, Arc<Runtime>) {
     // in datafusion-python and probably other places. This will let us test that
     // we do correctly enter the runtime of the foreign provider.
     let join_handle = Some(std::thread::spawn(move || {
-        async_table_provider_task(
+        async_table_provider_thread(
             shutdown_rx,
             batch_request_rx,
             record_batch_tx,
