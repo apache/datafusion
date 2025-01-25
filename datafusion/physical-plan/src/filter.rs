@@ -25,6 +25,7 @@ use super::{
     RecordBatchStream, SendableRecordBatchStream, Statistics,
 };
 use crate::common::can_project;
+use crate::execution_plan::CardinalityEffect;
 use crate::projection::{
     make_with_child, try_embed_projection, update_expr, EmbeddedProjection,
     ProjectionExec,
@@ -53,7 +54,6 @@ use datafusion_physical_expr::{
     ExprBoundaries, PhysicalExpr,
 };
 
-use crate::execution_plan::CardinalityEffect;
 use futures::stream::{Stream, StreamExt};
 use log::trace;
 

@@ -34,6 +34,25 @@ use std::sync::atomic::Ordering::Relaxed;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
+use crate::execution_plan::{boundedness_from_children, EmissionType};
+use crate::expressions::PhysicalSortExpr;
+use crate::joins::utils::{
+    build_join_schema, check_join_is_valid, estimate_join_statistics,
+    reorder_output_after_swap, symmetric_join_output_partitioning, JoinFilter, JoinOn,
+    JoinOnRef,
+};
+use crate::metrics::{Count, ExecutionPlanMetricsSet, MetricBuilder, MetricsSet};
+use crate::projection::{
+    join_allows_pushdown, join_table_borders, new_join_children,
+    physical_to_column_exprs, update_join_on, ProjectionExec,
+};
+use crate::spill::spill_record_batches;
+use crate::{
+    metrics, DisplayAs, DisplayFormatType, Distribution, ExecutionPlan,
+    ExecutionPlanProperties, PhysicalExpr, PlanProperties, RecordBatchStream,
+    SendableRecordBatchStream, Statistics,
+};
+
 use arrow::array::*;
 use arrow::compute::{
     self, concat_batches, filter_record_batch, is_not_null, take, SortOptions,
@@ -53,25 +72,6 @@ use datafusion_execution::TaskContext;
 use datafusion_physical_expr::equivalence::join_equivalence_properties;
 use datafusion_physical_expr::PhysicalExprRef;
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, LexRequirement};
-
-use crate::execution_plan::{boundedness_from_children, EmissionType};
-use crate::expressions::PhysicalSortExpr;
-use crate::joins::utils::{
-    build_join_schema, check_join_is_valid, estimate_join_statistics,
-    reorder_output_after_swap, symmetric_join_output_partitioning, JoinFilter, JoinOn,
-    JoinOnRef,
-};
-use crate::metrics::{Count, ExecutionPlanMetricsSet, MetricBuilder, MetricsSet};
-use crate::projection::{
-    join_allows_pushdown, join_table_borders, new_join_children,
-    physical_to_column_exprs, update_join_on, ProjectionExec,
-};
-use crate::spill::spill_record_batches;
-use crate::{
-    metrics, DisplayAs, DisplayFormatType, Distribution, ExecutionPlan,
-    ExecutionPlanProperties, PhysicalExpr, PlanProperties, RecordBatchStream,
-    SendableRecordBatchStream, Statistics,
-};
 
 use futures::{Stream, StreamExt};
 

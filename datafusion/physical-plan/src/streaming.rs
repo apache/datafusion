@@ -24,6 +24,8 @@ use std::sync::Arc;
 use super::{DisplayAs, DisplayFormatType, PlanProperties};
 use crate::display::{display_orderings, ProjectSchemaDisplay};
 use crate::execution_plan::{Boundedness, EmissionType};
+use crate::limit::LimitStream;
+use crate::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
 use crate::projection::{
     all_alias_free_columns, new_projections_for_columns, update_expr, ProjectionExec,
 };
@@ -36,8 +38,6 @@ use datafusion_common::{internal_err, plan_err, Result};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::{EquivalenceProperties, LexOrdering, PhysicalSortExpr};
 
-use crate::limit::LimitStream;
-use crate::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
 use async_trait::async_trait;
 use futures::stream::StreamExt;
 use log::debug;

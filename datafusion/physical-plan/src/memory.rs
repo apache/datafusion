@@ -17,7 +17,6 @@
 
 //! Execution plan for reading in-memory batches of data
 
-use parking_lot::RwLock;
 use std::any::Any;
 use std::fmt;
 use std::sync::Arc;
@@ -48,6 +47,7 @@ use datafusion_physical_expr::utils::collect_columns;
 use datafusion_physical_expr::{EquivalenceProperties, LexOrdering};
 
 use futures::Stream;
+use parking_lot::RwLock;
 
 /// Execution plan for reading in-memory batches of data
 #[derive(Clone)]

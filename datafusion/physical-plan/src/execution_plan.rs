@@ -441,7 +441,8 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
     /// `self_new <- projection <- source`, starting from `projection <- self <- source`.
     /// Otherwise, it returns the current `ExecutionPlan` as-is.
     ///
-    /// Returns `Ok(Some(...))` if pushdown is applied, `Ok(None)` if unsupported, or `Err` on failure.
+    /// Returns `Ok(Some(...))` if pushdown is applied, `Ok(None)` if it is not supported
+    /// or not possible, or `Err` on failure.
     fn try_swapping_with_projection(
         &self,
         _projection: &ProjectionExec,

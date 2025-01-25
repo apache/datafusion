@@ -32,11 +32,12 @@ use super::{
     DisplayAs, ExecutionPlanProperties, PlanProperties, RecordBatchStream,
     SendableRecordBatchStream, Statistics,
 };
-
 use crate::execution_plan::CardinalityEffect;
 use crate::joins::utils::{ColumnIndex, JoinFilter};
 use crate::{ColumnStatistics, DisplayFormatType, ExecutionPlan, PhysicalExpr};
 
+use arrow::datatypes::{Field, Schema, SchemaRef};
+use arrow::record_batch::{RecordBatch, RecordBatchOptions};
 use datafusion_common::stats::Precision;
 use datafusion_common::tree_node::{
     Transformed, TransformedResult, TreeNode, TreeNodeRecursion,
@@ -45,15 +46,11 @@ use datafusion_common::{internal_err, JoinSide, Result};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::equivalence::ProjectionMapping;
 use datafusion_physical_expr::utils::collect_columns;
-
-use arrow::datatypes::{Field, Schema, SchemaRef};
-use arrow::record_batch::{RecordBatch, RecordBatchOptions};
-
 use datafusion_physical_expr::PhysicalExprRef;
-use futures::stream::{Stream, StreamExt};
-use log::trace;
 
+use futures::stream::{Stream, StreamExt};
 use itertools::Itertools;
+use log::trace;
 
 /// Execution plan for a projection
 #[derive(Debug, Clone)]
@@ -375,6 +372,181 @@ impl RecordBatchStream for ProjectionStream {
     }
 }
 
+pub trait EmbeddedProjection: ExecutionPlan + Sized {
+    fn with_projection(&self, projection: Option<Vec<usize>>) -> Result<Self>;
+}
+
+/// Some projection can't be pushed down left input or right input of hash join because filter or on need may need some columns that won't be used in later.
+/// By embed those projection to hash join, we can reduce the cost of build_batch_from_indices in hash join (build_batch_from_indices need to can compute::take() for each column) and avoid unnecessary output creation.
+pub fn try_embed_projection<Exec: EmbeddedProjection + 'static>(
+    projection: &ProjectionExec,
+    execution_plan: &Exec,
+) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+    // Collect all column indices from the given projection expressions.
+    let projection_index = collect_column_indices(projection.expr());
+
+    if projection_index.is_empty() {
+        return Ok(None);
+    };
+
+    // If the projection indices is the same as the input columns, we don't need to embed the projection to hash join.
+    // Check the projection_index is 0..n-1 and the length of projection_index is the same as the length of execution_plan schema fields.
+    if projection_index.len() == projection_index.last().unwrap() + 1
+        && projection_index.len() == execution_plan.schema().fields().len()
+    {
+        return Ok(None);
+    }
+
+    let new_execution_plan =
+        Arc::new(execution_plan.with_projection(Some(projection_index.to_vec()))?);
+
+    // Build projection expressions for update_expr. Zip the projection_index with the new_execution_plan output schema fields.
+    let embed_project_exprs = projection_index
+        .iter()
+        .zip(new_execution_plan.schema().fields())
+        .map(|(index, field)| {
+            (
+                Arc::new(Column::new(field.name(), *index)) as Arc<dyn PhysicalExpr>,
+                field.name().to_owned(),
+            )
+        })
+        .collect::<Vec<_>>();
+
+    let mut new_projection_exprs = Vec::with_capacity(projection.expr().len());
+
+    for (expr, alias) in projection.expr() {
+        // update column index for projection expression since the input schema has been changed.
+        let Some(expr) = update_expr(expr, embed_project_exprs.as_slice(), false)? else {
+            return Ok(None);
+        };
+        new_projection_exprs.push((expr, alias.clone()));
+    }
+    // Old projection may contain some alias or expression such as `a + 1` and `CAST('true' AS BOOLEAN)`, but our projection_exprs in hash join just contain column, so we need to create the new projection to keep the original projection.
+    let new_projection = Arc::new(ProjectionExec::try_new(
+        new_projection_exprs,
+        Arc::clone(&new_execution_plan) as _,
+    )?);
+    if is_projection_removable(&new_projection) {
+        Ok(Some(new_execution_plan))
+    } else {
+        Ok(Some(new_projection))
+    }
+}
+
+/// The on clause of the join, as vector of (left, right) columns.
+pub type JoinOn = Vec<(PhysicalExprRef, PhysicalExprRef)>;
+/// Reference for JoinOn.
+pub type JoinOnRef<'a> = &'a [(PhysicalExprRef, PhysicalExprRef)];
+
+pub struct JoinData {
+    pub projected_left_child: ProjectionExec,
+    pub projected_right_child: ProjectionExec,
+    pub join_filter: Option<JoinFilter>,
+    pub join_on: JoinOn,
+}
+
+pub fn try_pushdown_through_join(
+    projection: &ProjectionExec,
+    join_left: &Arc<dyn ExecutionPlan>,
+    join_right: &Arc<dyn ExecutionPlan>,
+    join_on: JoinOnRef,
+    schema: SchemaRef,
+    filter: Option<&JoinFilter>,
+) -> Result<Option<JoinData>> {
+    // Convert projected expressions to columns. We can not proceed if this is not possible.
+    let Some(projection_as_columns) = physical_to_column_exprs(projection.expr()) else {
+        return Ok(None);
+    };
+
+    let (far_right_left_col_ind, far_left_right_col_ind) =
+        join_table_borders(join_left.schema().fields().len(), &projection_as_columns);
+
+    if !join_allows_pushdown(
+        &projection_as_columns,
+        &schema,
+        far_right_left_col_ind,
+        far_left_right_col_ind,
+    ) {
+        return Ok(None);
+    }
+
+    let new_filter = if let Some(filter) = filter {
+        match update_join_filter(
+            &projection_as_columns[0..=far_right_left_col_ind as _],
+            &projection_as_columns[far_left_right_col_ind as _..],
+            filter,
+            join_left.schema().fields().len(),
+        ) {
+            Some(updated_filter) => Some(updated_filter),
+            None => return Ok(None),
+        }
+    } else {
+        None
+    };
+
+    let Some(new_on) = update_join_on(
+        &projection_as_columns[0..=far_right_left_col_ind as _],
+        &projection_as_columns[far_left_right_col_ind as _..],
+        join_on,
+        join_left.schema().fields().len(),
+    ) else {
+        return Ok(None);
+    };
+
+    let (new_left, new_right) = new_join_children(
+        &projection_as_columns,
+        far_right_left_col_ind,
+        far_left_right_col_ind,
+        join_left,
+        join_right,
+    )?;
+
+    Ok(Some(JoinData {
+        projected_left_child: new_left,
+        projected_right_child: new_right,
+        join_filter: new_filter,
+        join_on: new_on,
+    }))
+}
+
+/// This function checks if `plan` is a [`ProjectionExec`], and inspects its
+/// input(s) to test whether it can push `plan` under its input(s). This function
+/// will operate on the entire tree and may ultimately remove `plan` entirely
+/// by leveraging source providers with built-in projection capabilities.
+pub fn remove_unnecessary_projections(
+    plan: Arc<dyn ExecutionPlan>,
+) -> Result<Transformed<Arc<dyn ExecutionPlan>>> {
+    let maybe_modified =
+        if let Some(projection) = plan.as_any().downcast_ref::<ProjectionExec>() {
+            // If the projection does not cause any change on the input, we can
+            // safely remove it:
+            if is_projection_removable(projection) {
+                return Ok(Transformed::yes(Arc::clone(projection.input())));
+            }
+            // If it does, check if we can push it under its child(ren):
+            projection
+                .input()
+                .try_swapping_with_projection(projection)?
+        } else {
+            return Ok(Transformed::no(plan));
+        };
+    Ok(maybe_modified.map_or(Transformed::no(plan), Transformed::yes))
+}
+
+/// Compare the inputs and outputs of the projection. All expressions must be
+/// columns without alias, and projection does not change the order of fields.
+/// For example, if the input schema is `a, b`, `SELECT a, b` is removable,
+/// but `SELECT b, a` and `SELECT a+1, b` and `SELECT a AS c, b` are not.
+fn is_projection_removable(projection: &ProjectionExec) -> bool {
+    let exprs = projection.expr();
+    exprs.iter().enumerate().all(|(idx, (expr, alias))| {
+        let Some(col) = expr.as_any().downcast_ref::<Column>() else {
+            return false;
+        };
+        col.name() == alias && col.index() == idx
+    }) && exprs.len() == projection.input().schema().fields().len()
+}
+
 /// Given the expression set of a projection, checks if the projection causes
 /// any renaming or constructs a non-`Column` physical expression.
 pub fn all_alias_free_columns(exprs: &[(Arc<dyn PhysicalExpr>, String)]) -> bool {
@@ -499,18 +671,6 @@ pub fn update_expr(
     new_expr.map(|e| (state == RewriteState::RewrittenValid).then_some(e))
 }
 
-/// The on clause of the join, as vector of (left, right) columns.
-pub type JoinOn = Vec<(PhysicalExprRef, PhysicalExprRef)>;
-/// Reference for JoinOn.
-pub type JoinOnRef<'a> = &'a [(PhysicalExprRef, PhysicalExprRef)];
-
-pub struct JoinData {
-    pub projected_left_child: ProjectionExec,
-    pub projected_right_child: ProjectionExec,
-    pub join_filter: Option<JoinFilter>,
-    pub join_on: JoinOn,
-}
-
 /// Downcasts all the expressions in `exprs` to `Column`s. If any of the given
 /// expressions is not a `Column`, returns `None`.
 pub fn physical_to_column_exprs(
@@ -524,127 +684,6 @@ pub fn physical_to_column_exprs(
                 .map(|col| (col.clone(), alias.clone()))
         })
         .collect()
-}
-
-/// Some projection can't be pushed down left input or right input of hash join because filter or on need may need some columns that won't be used in later.
-/// By embed those projection to hash join, we can reduce the cost of build_batch_from_indices in hash join (build_batch_from_indices need to can compute::take() for each column) and avoid unnecessary output creation.
-pub fn try_embed_projection<Exec: EmbeddedProjection + 'static>(
-    projection: &ProjectionExec,
-    execution_plan: &Exec,
-) -> Result<Option<Arc<dyn ExecutionPlan>>> {
-    // Collect all column indices from the given projection expressions.
-    let projection_index = collect_column_indices(projection.expr());
-
-    if projection_index.is_empty() {
-        return Ok(None);
-    };
-
-    // If the projection indices is the same as the input columns, we don't need to embed the projection to hash join.
-    // Check the projection_index is 0..n-1 and the length of projection_index is the same as the length of execution_plan schema fields.
-    if projection_index.len() == projection_index.last().unwrap() + 1
-        && projection_index.len() == execution_plan.schema().fields().len()
-    {
-        return Ok(None);
-    }
-
-    let new_execution_plan =
-        Arc::new(execution_plan.with_projection(Some(projection_index.to_vec()))?);
-
-    // Build projection expressions for update_expr. Zip the projection_index with the new_execution_plan output schema fields.
-    let embed_project_exprs = projection_index
-        .iter()
-        .zip(new_execution_plan.schema().fields())
-        .map(|(index, field)| {
-            (
-                Arc::new(Column::new(field.name(), *index)) as Arc<dyn PhysicalExpr>,
-                field.name().to_owned(),
-            )
-        })
-        .collect::<Vec<_>>();
-
-    let mut new_projection_exprs = Vec::with_capacity(projection.expr().len());
-
-    for (expr, alias) in projection.expr() {
-        // update column index for projection expression since the input schema has been changed.
-        let Some(expr) = update_expr(expr, embed_project_exprs.as_slice(), false)? else {
-            return Ok(None);
-        };
-        new_projection_exprs.push((expr, alias.clone()));
-    }
-    // Old projection may contain some alias or expression such as `a + 1` and `CAST('true' AS BOOLEAN)`, but our projection_exprs in hash join just contain column, so we need to create the new projection to keep the original projection.
-    let new_projection = Arc::new(ProjectionExec::try_new(
-        new_projection_exprs,
-        Arc::clone(&new_execution_plan) as _,
-    )?);
-    if is_projection_removable(&new_projection) {
-        Ok(Some(new_execution_plan))
-    } else {
-        Ok(Some(new_projection))
-    }
-}
-
-pub fn try_pushdown_through_join(
-    projection: &ProjectionExec,
-    join_left: &Arc<dyn ExecutionPlan>,
-    join_right: &Arc<dyn ExecutionPlan>,
-    join_on: JoinOnRef,
-    schema: SchemaRef,
-    filter: Option<&JoinFilter>,
-) -> Result<Option<JoinData>> {
-    // Convert projected expressions to columns. We can not proceed if this is not possible.
-    let Some(projection_as_columns) = physical_to_column_exprs(projection.expr()) else {
-        return Ok(None);
-    };
-
-    let (far_right_left_col_ind, far_left_right_col_ind) =
-        join_table_borders(join_left.schema().fields().len(), &projection_as_columns);
-
-    if !join_allows_pushdown(
-        &projection_as_columns,
-        &schema,
-        far_right_left_col_ind,
-        far_left_right_col_ind,
-    ) {
-        return Ok(None);
-    }
-
-    let new_filter = if let Some(filter) = filter {
-        match update_join_filter(
-            &projection_as_columns[0..=far_right_left_col_ind as _],
-            &projection_as_columns[far_left_right_col_ind as _..],
-            filter,
-            join_left.schema().fields().len(),
-        ) {
-            Some(updated_filter) => Some(updated_filter),
-            None => return Ok(None),
-        }
-    } else {
-        None
-    };
-
-    let Some(new_on) = update_join_on(
-        &projection_as_columns[0..=far_right_left_col_ind as _],
-        &projection_as_columns[far_left_right_col_ind as _..],
-        join_on,
-        join_left.schema().fields().len(),
-    ) else {
-        return Ok(None);
-    };
-
-    let (new_left, new_right) = new_join_children(
-        &projection_as_columns,
-        far_right_left_col_ind,
-        far_left_right_col_ind,
-        join_left,
-        join_right,
-    )?;
-
-    Ok(Some(JoinData {
-        projected_left_child: new_left,
-        projected_right_child: new_right,
-        join_filter: new_filter,
-        join_on: new_on,
-    }))
 }
 
 /// If pushing down the projection over this join's children seems possible,
@@ -817,8 +856,46 @@ pub fn update_join_filter(
     })
 }
 
-pub trait EmbeddedProjection: ExecutionPlan + Sized {
-    fn with_projection(&self, projection: Option<Vec<usize>>) -> Result<Self>;
+/// Unifies `projection` with its input (which is also a [`ProjectionExec`]).
+fn try_unifying_projections(
+    projection: &ProjectionExec,
+    child: &ProjectionExec,
+) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+    let mut projected_exprs = vec![];
+    let mut column_ref_map: HashMap<Column, usize> = HashMap::new();
+
+    // Collect the column references usage in the outer projection.
+    projection.expr().iter().for_each(|(expr, _)| {
+        expr.apply(|expr| {
+            Ok({
+                if let Some(column) = expr.as_any().downcast_ref::<Column>() {
+                    *column_ref_map.entry(column.clone()).or_default() += 1;
+                }
+                TreeNodeRecursion::Continue
+            })
+        })
+        .unwrap();
+    });
+    // Merging these projections is not beneficial, e.g
+    // If an expression is not trivial and it is referred more than 1, unifies projections will be
+    // beneficial as caching mechanism for non-trivial computations.
+    // See discussion in: https://github.com/apache/datafusion/issues/8296
+    if column_ref_map.iter().any(|(column, count)| {
+        *count > 1 && !is_expr_trivial(&Arc::clone(&child.expr()[column.index()].0))
+    }) {
+        return Ok(None);
+    }
+    for (expr, alias) in projection.expr() {
+        // If there is no match in the input projection, we cannot unify these
+        // projections. This case will arise if the projection expression contains
+        // a `PhysicalExpr` variant `update_expr` doesn't support.
+        let Some(expr) = update_expr(expr, child.expr(), true)? else {
+            return Ok(None);
+        };
+        projected_exprs.push((expr, alias.clone()));
+    }
+    ProjectionExec::try_new(projected_exprs, Arc::clone(child.input()))
+        .map(|e| Some(Arc::new(e) as _))
 }
 
 /// Collect all column indices from the given projection expressions.
@@ -911,91 +988,11 @@ fn new_columns_for_join_on(
     (new_columns.len() == hash_join_on.len()).then_some(new_columns)
 }
 
-/// Unifies `projection` with its input (which is also a [`ProjectionExec`]).
-fn try_unifying_projections(
-    projection: &ProjectionExec,
-    child: &ProjectionExec,
-) -> Result<Option<Arc<dyn ExecutionPlan>>> {
-    let mut projected_exprs = vec![];
-    let mut column_ref_map: HashMap<Column, usize> = HashMap::new();
-
-    // Collect the column references usage in the outer projection.
-    projection.expr().iter().for_each(|(expr, _)| {
-        expr.apply(|expr| {
-            Ok({
-                if let Some(column) = expr.as_any().downcast_ref::<Column>() {
-                    *column_ref_map.entry(column.clone()).or_default() += 1;
-                }
-                TreeNodeRecursion::Continue
-            })
-        })
-        .unwrap();
-    });
-    // Merging these projections is not beneficial, e.g
-    // If an expression is not trivial and it is referred more than 1, unifies projections will be
-    // beneficial as caching mechanism for non-trivial computations.
-    // See discussion in: https://github.com/apache/datafusion/issues/8296
-    if column_ref_map.iter().any(|(column, count)| {
-        *count > 1 && !is_expr_trivial(&Arc::clone(&child.expr()[column.index()].0))
-    }) {
-        return Ok(None);
-    }
-    for (expr, alias) in projection.expr() {
-        // If there is no match in the input projection, we cannot unify these
-        // projections. This case will arise if the projection expression contains
-        // a `PhysicalExpr` variant `update_expr` doesn't support.
-        let Some(expr) = update_expr(expr, child.expr(), true)? else {
-            return Ok(None);
-        };
-        projected_exprs.push((expr, alias.clone()));
-    }
-    ProjectionExec::try_new(projected_exprs, Arc::clone(child.input()))
-        .map(|e| Some(Arc::new(e) as _))
-}
-
 /// Checks if the given expression is trivial.
 /// An expression is considered trivial if it is either a `Column` or a `Literal`.
 fn is_expr_trivial(expr: &Arc<dyn PhysicalExpr>) -> bool {
     expr.as_any().downcast_ref::<Column>().is_some()
         || expr.as_any().downcast_ref::<Literal>().is_some()
-}
-
-/// This function checks if `plan` is a [`ProjectionExec`], and inspects its
-/// input(s) to test whether it can push `plan` under its input(s). This function
-/// will operate on the entire tree and may ultimately remove `plan` entirely
-/// by leveraging source providers with built-in projection capabilities.
-pub fn remove_unnecessary_projections(
-    plan: Arc<dyn ExecutionPlan>,
-) -> Result<Transformed<Arc<dyn ExecutionPlan>>> {
-    let maybe_modified =
-        if let Some(projection) = plan.as_any().downcast_ref::<ProjectionExec>() {
-            // If the projection does not cause any change on the input, we can
-            // safely remove it:
-            if is_projection_removable(projection) {
-                return Ok(Transformed::yes(Arc::clone(projection.input())));
-            }
-            // If it does, check if we can push it under its child(ren):
-            projection
-                .input()
-                .try_swapping_with_projection(projection)?
-        } else {
-            return Ok(Transformed::no(plan));
-        };
-    Ok(maybe_modified.map_or(Transformed::no(plan), Transformed::yes))
-}
-
-/// Compare the inputs and outputs of the projection. All expressions must be
-/// columns without alias, and projection does not change the order of fields.
-/// For example, if the input schema is `a, b`, `SELECT a, b` is removable,
-/// but `SELECT b, a` and `SELECT a+1, b` and `SELECT a AS c, b` are not.
-fn is_projection_removable(projection: &ProjectionExec) -> bool {
-    let exprs = projection.expr();
-    exprs.iter().enumerate().all(|(idx, (expr, alias))| {
-        let Some(col) = expr.as_any().downcast_ref::<Column>() else {
-            return false;
-        };
-        col.name() == alias && col.index() == idx
-    }) && exprs.len() == projection.input().schema().fields().len()
 }
 
 #[cfg(test)]

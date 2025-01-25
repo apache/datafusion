@@ -37,6 +37,7 @@ use crate::projection::{
     try_embed_projection, try_pushdown_through_join, EmbeddedProjection, JoinData,
     ProjectionExec,
 };
+use crate::spill::get_record_batch_memory_size;
 use crate::ExecutionPlanProperties;
 use crate::{
     coalesce_partitions::CoalescePartitionsExec,
@@ -73,15 +74,14 @@ use datafusion_common::{
 };
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_execution::TaskContext;
+use datafusion_expr::Operator;
 use datafusion_physical_expr::equivalence::{
     join_equivalence_properties, ProjectionMapping,
 };
 use datafusion_physical_expr::PhysicalExprRef;
-
-use crate::spill::get_record_batch_memory_size;
-use ahash::RandomState;
-use datafusion_expr::Operator;
 use datafusion_physical_expr_common::datum::compare_op_for_nested;
+
+use ahash::RandomState;
 use futures::{ready, Stream, StreamExt, TryStreamExt};
 use parking_lot::Mutex;
 

@@ -18,6 +18,8 @@
 //! Defines the cross join plan for loading the left side of the cross join
 //! and producing batches in parallel for the right partitions
 
+use std::{any::Any, sync::Arc, task::Poll};
+
 use super::utils::{
     adjust_right_output_partitioning, reorder_output_after_swap, BatchSplitter,
     BatchTransformer, BuildProbeJoinMetrics, NoopBatchTransformer, OnceAsync, OnceFut,
@@ -35,9 +37,8 @@ use crate::{
     ExecutionPlan, ExecutionPlanProperties, PlanProperties, RecordBatchStream,
     SendableRecordBatchStream, Statistics,
 };
-use arrow::compute::concat_batches;
-use std::{any::Any, sync::Arc, task::Poll};
 
+use arrow::compute::concat_batches;
 use arrow::datatypes::{Fields, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use arrow_array::RecordBatchOptions;

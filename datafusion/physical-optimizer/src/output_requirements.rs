@@ -24,23 +24,22 @@
 
 use std::sync::Arc;
 
-use datafusion_execution::TaskContext;
-use datafusion_physical_plan::projection::{
-    make_with_child, update_expr, ProjectionExec,
-};
-use datafusion_physical_plan::sorts::sort::SortExec;
-use datafusion_physical_plan::{
-    DisplayAs, DisplayFormatType, ExecutionPlan, SendableRecordBatchStream,
-};
+use crate::PhysicalOptimizerRule;
 
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::{Result, Statistics};
+use datafusion_execution::TaskContext;
 use datafusion_physical_expr::{Distribution, LexRequirement, PhysicalSortRequirement};
+use datafusion_physical_plan::projection::{
+    make_with_child, update_expr, ProjectionExec,
+};
+use datafusion_physical_plan::sorts::sort::SortExec;
 use datafusion_physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
+use datafusion_physical_plan::{
+    DisplayAs, DisplayFormatType, ExecutionPlan, SendableRecordBatchStream,
+};
 use datafusion_physical_plan::{ExecutionPlanProperties, PlanProperties};
-
-use crate::PhysicalOptimizerRule;
 
 /// This rule either adds or removes [`OutputRequirements`]s to/from the physical
 /// plan according to its `mode` attribute, which is set by the constructors

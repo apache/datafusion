@@ -36,6 +36,7 @@ use crate::joins::utils::{
     build_join_schema, check_join_is_valid, estimate_join_statistics,
     BuildProbeJoinMetrics, ColumnIndex, JoinFilter, OnceAsync, OnceFut,
 };
+use crate::joins::SharedBitmapBuilder;
 use crate::metrics::{ExecutionPlanMetricsSet, MetricsSet};
 use crate::projection::{
     try_embed_projection, try_pushdown_through_join, EmbeddedProjection, JoinData,
@@ -61,7 +62,6 @@ use datafusion_physical_expr::equivalence::{
     join_equivalence_properties, ProjectionMapping,
 };
 
-use crate::joins::SharedBitmapBuilder;
 use futures::{ready, Stream, StreamExt, TryStreamExt};
 use parking_lot::Mutex;
 
