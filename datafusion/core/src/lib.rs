@@ -677,7 +677,6 @@ pub mod dataframe;
 pub mod datasource;
 pub mod error;
 pub mod execution;
-pub mod physical_optimizer;
 pub mod physical_planner;
 pub mod prelude;
 pub mod scalar;
