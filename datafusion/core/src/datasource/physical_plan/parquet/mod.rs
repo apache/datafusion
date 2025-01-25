@@ -31,7 +31,6 @@ use crate::{
     config::{ConfigOptions, TableParquetOptions},
     error::Result,
     execution::context::TaskContext,
-    physical_optimizer::pruning::PruningPredicate,
     physical_plan::{
         metrics::{ExecutionPlanMetricsSet, MetricBuilder, MetricsSet},
         DisplayFormatType, ExecutionPlan, Partitioning, PlanProperties,
@@ -60,6 +59,7 @@ use crate::datasource::schema_adapter::{
     DefaultSchemaAdapterFactory, SchemaAdapterFactory,
 };
 pub use access_plan::{ParquetAccessPlan, RowGroupAccess};
+use datafusion_physical_optimizer::pruning::PruningPredicate;
 pub use metrics::ParquetFileMetrics;
 use opener::ParquetOpener;
 pub use reader::{DefaultParquetFileReaderFactory, ParquetFileReaderFactory};
