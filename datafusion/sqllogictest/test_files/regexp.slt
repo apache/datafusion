@@ -876,5 +876,17 @@ ORDER BY val;
 (empty)
 NULL
 
+query T
+SELECT regexp_extract(arrow_cast(val, 'Utf8View'), arrow_cast(pat, 'Utf8View'), idx)
+FROM t_extract
+ORDER BY arrow_cast(val, 'Utf8');
+----
+100
+(empty)
+(empty)
+(empty)
+(empty)
+NULL
+
 statement ok
 DROP TABLE t_extract;

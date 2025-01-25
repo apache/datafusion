@@ -34,7 +34,7 @@ use regex::Regex;
 #[user_doc(
     doc_section(label = "Regular Expression Functions"),
     description = "Extract a specific group matched by [regular expression](https://docs.rs/regex/latest/regex/#syntax). If the regex did not match, or the specified group did not match, an empty string is returned..",
-    syntax_example = "regexp_extract(str, regexp[, idx])",
+    syntax_example = "regexp_extract(str, regexp, idx)",
     sql_example = r#"```sql
             > select regexp_extract('100-200', '(\d+)-(\d+)', 1);
             +---------------------------------------------------------------+
@@ -102,9 +102,9 @@ impl ScalarUDFImpl for RegexpExtractFunc {
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
         use DataType::*;
         Ok(match &arg_types[0] {
-            LargeUtf8 | LargeBinary => LargeUtf8,
-            Utf8 | Binary => Utf8,
-            Utf8View | BinaryView => Utf8View,
+            LargeUtf8 => LargeUtf8,
+            Utf8 => Utf8,
+            Utf8View => Utf8View,
             Null => Null,
             other => {
                 return plan_err!(
@@ -201,7 +201,7 @@ mod tests {
     use std::sync::Arc;
 
     #[test]
-    fn test_pyspark_cases() {
+    fn test_regexp_extract_basic_cases() {
         let target_arr = StringArray::from(vec![
             Some("100-200"),   // 0
             Some("foo"),       // 1
