@@ -272,7 +272,10 @@ impl Accumulator for ArrayAggAccumulator {
 
         match Self::get_optional_values_to_merge_as_is(list_arr) {
             Some(values) => {
-                self.values.push(values);
+                // Make sure we don't insert empty lists
+                if values.len() > 0 {
+                    self.values.push(values);
+                }
             }
             None => {
                 for arr in list_arr.iter().flatten() {
