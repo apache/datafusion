@@ -202,7 +202,7 @@ impl ArrayAggAccumulator {
         }
 
         // According to the Arrow spec, null values can point to non empty lists
-        // So this will check if all null values starting from the first  point to a 0 length list so we can just use the values as is
+        // So this will check if all null values starting from the first valid value to the last one point to a 0 length list so we can just slice the underlying value
 
         // Unwrapping is safe as we just checked if there is a null value
         let nulls = list_array.nulls().unwrap();
