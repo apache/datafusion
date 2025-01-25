@@ -17,10 +17,10 @@
 
 use std::sync::Arc;
 
+use crate::table_provider::FFI_TableProvider;
 use datafusion::datasource::MemTable;
-use datafusion_ffi::table_provider::FFI_TableProvider;
 
-use crate::{create_record_batch, create_test_schema};
+use super::{create_record_batch, create_test_schema};
 
 pub(crate) fn create_sync_table_provider() -> FFI_TableProvider {
     let schema = create_test_schema();

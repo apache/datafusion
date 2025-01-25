@@ -17,6 +17,7 @@
 
 use std::{any::Any, fmt::Debug, sync::Arc};
 
+use crate::table_provider::FFI_TableProvider;
 use arrow_array::RecordBatch;
 use arrow_schema::Schema;
 use async_trait::async_trait;
@@ -28,14 +29,13 @@ use datafusion::{
     physical_plan::{ExecutionPlan, Partitioning},
     prelude::Expr,
 };
-use datafusion_ffi::table_provider::FFI_TableProvider;
 use futures::Stream;
 use tokio::{
     runtime::Runtime,
     sync::{broadcast, mpsc},
 };
 
-use crate::create_record_batch;
+use super::create_record_batch;
 
 #[derive(Debug)]
 pub struct AsyncTableProvider {

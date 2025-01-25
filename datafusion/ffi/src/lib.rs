@@ -26,6 +26,9 @@ pub mod session_config;
 pub mod table_provider;
 pub mod table_source;
 
+#[cfg(feature = "integration-tests")]
+pub mod tests;
+
 /// Returns the major version of the FFI implementation. If the API evolves,
 /// we use the major version to identify compatibility over the unsafe
 /// boundary.

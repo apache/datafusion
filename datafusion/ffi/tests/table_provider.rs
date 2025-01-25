@@ -19,9 +19,7 @@ use abi_stable::library::RootModule;
 use datafusion::error::{DataFusionError, Result};
 use datafusion::prelude::SessionContext;
 use datafusion_ffi::table_provider::ForeignTableProvider;
-#[allow(clippy::single_component_path_imports)]
-use datafusion_ffi_test;
-use datafusion_ffi_test::TableProviderModuleRef;
+use datafusion_ffi::tests::TableProviderModuleRef;
 use std::path::Path;
 use std::sync::Arc;
 
@@ -113,9 +111,9 @@ async fn test_table_provider(synchronous: bool) -> Result<()> {
     let results = df.collect().await?;
 
     assert_eq!(results.len(), 3);
-    assert_eq!(results[0], datafusion_ffi_test::create_record_batch(1, 5));
-    assert_eq!(results[1], datafusion_ffi_test::create_record_batch(6, 1));
-    assert_eq!(results[2], datafusion_ffi_test::create_record_batch(7, 5));
+    assert_eq!(results[0], datafusion_ffi::tests::create_record_batch(1, 5));
+    assert_eq!(results[1], datafusion_ffi::tests::create_record_batch(6, 1));
+    assert_eq!(results[2], datafusion_ffi::tests::create_record_batch(7, 5));
 
     Ok(())
 }

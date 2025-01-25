@@ -26,13 +26,13 @@ use abi_stable::{
     StableAbi,
 };
 
+use super::table_provider::FFI_TableProvider;
 use arrow_array::RecordBatch;
 use async_provider::create_async_table_provider;
 use datafusion::{
     arrow::datatypes::{DataType, Field, Schema},
     common::record_batch,
 };
-use datafusion_ffi::table_provider::FFI_TableProvider;
 use sync_provider::create_sync_table_provider;
 
 mod async_provider;
@@ -55,8 +55,8 @@ pub struct TableProviderModule {
 
 impl RootModule for TableProviderModuleRef {
     declare_root_module_statics! {TableProviderModuleRef}
-    const BASE_NAME: &'static str = "datafusion_ffi_test";
-    const NAME: &'static str = "datafusion_ffi_test";
+    const BASE_NAME: &'static str = "datafusion_ffi";
+    const NAME: &'static str = "datafusion_ffi";
     const VERSION_STRINGS: VersionStrings = package_version_strings!();
 
     fn initialization(self) -> Result<Self, LibraryError> {
@@ -93,7 +93,7 @@ extern "C" fn construct_table_provider(synchronous: bool) -> FFI_TableProvider {
 pub fn get_simple_memory_table() -> TableProviderModuleRef {
     TableProviderModule {
         create_table: construct_table_provider,
-        version: datafusion_ffi::version,
+        version: super::version,
     }
     .leak_into_prefix()
 }
