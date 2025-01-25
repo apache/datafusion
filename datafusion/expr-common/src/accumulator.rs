@@ -115,7 +115,7 @@ pub trait Accumulator: Send + Sync + Debug {
     ///              │                                │
     ///              │                                │
     /// ┌─────────────────────────┐      ┌─────────────────────────┐
-    /// │        GroubyBy         │      │        GroubyBy         │
+    /// │         GroupBy         │      │         GroupBy         │
     /// │(AggregateMode::Partial) │      │(AggregateMode::Partial) │
     /// └─────────────────────────┘      └─────────────────────────┘
     ///              ▲                                ▲
