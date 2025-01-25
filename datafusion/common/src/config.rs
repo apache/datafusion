@@ -108,38 +108,51 @@ use crate::{DataFusionError, Result};
 /// ```
 ///
 /// NB: Misplaced commas may result in nonsensical errors
-#[macro_export]
 macro_rules! config_namespace {
     (
-     $(#[doc = $struct_d:tt])*
-     $vis:vis struct $struct_name:ident {
-        $(
-        $(#[doc = $d:tt])*
-        $field_vis:vis $field_name:ident : $field_type:ty, $(warn = $warn: expr,)? $(transform = $transform:expr,)? default = $default:expr
-        )*$(,)*
-    }
-    ) => {
-
-        $(#[doc = $struct_d])*
-        #[derive(Debug, Clone, PartialEq)]
-        $vis struct $struct_name{
+        $(#[doc = $struct_d:tt])* // Struct-level documentation attributes
+        $(#[deprecated($($struct_depr:tt)*)])? // Optional struct-level deprecated attribute
+        $(#[allow($($struct_de:tt)*)])?
+        $vis:vis struct $struct_name:ident {
             $(
-            $(#[doc = $d])*
-            $field_vis $field_name : $field_type,
+                $(#[doc = $d:tt])* // Field-level documentation attributes
+                $(#[deprecated($($field_depr:tt)*)])? // Optional field-level deprecated attribute
+                $(#[allow($($field_de:tt)*)])?
+                $field_vis:vis $field_name:ident : $field_type:ty,
+                $(warn = $warn:expr,)?
+                $(transform = $transform:expr,)?
+                default = $default:expr
+            )*$(,)*
+        }
+    ) => {
+        $(#[doc = $struct_d])* // Apply struct documentation
+        $(#[deprecated($($struct_depr)*)])? // Apply struct deprecation
+        $(#[allow($($struct_de)*)])?
+        #[derive(Debug, Clone, PartialEq)]
+        $vis struct $struct_name {
+            $(
+                $(#[doc = $d])* // Apply field documentation
+                $(#[deprecated($($field_depr)*)])? // Apply field deprecation
+                $(#[allow($($field_de)*)])?
+                $field_vis $field_name: $field_type,
             )*
         }
 
         impl ConfigField for $struct_name {
             fn set(&mut self, key: &str, value: &str) -> Result<()> {
                 let (key, rem) = key.split_once('.').unwrap_or((key, ""));
-
                 match key {
                     $(
-                       stringify!($field_name) => {
-                           $(let value = $transform(value);)?
-                           $(log::warn!($warn);)?
-                           self.$field_name.set(rem, value.as_ref())
-                       },
+                        stringify!($field_name) => {
+                            // Safely apply deprecated attribute if present
+                            // $(#[allow(deprecated)])?
+                            {
+                                $(let value = $transform(value);)? // Apply transformation if specified
+                                $(log::warn!($warn);)? // Log warning if specified
+                                #[allow(deprecated)]
+                                self.$field_name.set(rem, value.as_ref())
+                            }
+                        },
                     )*
                     _ => return _config_err!(
                         "Config value \"{}\" not found on {}", key, stringify!($struct_name)
@@ -149,15 +162,16 @@ macro_rules! config_namespace {
 
             fn visit<V: Visit>(&self, v: &mut V, key_prefix: &str, _description: &'static str) {
                 $(
-                let key = format!(concat!("{}.", stringify!($field_name)), key_prefix);
-                let desc = concat!($($d),*).trim();
-                self.$field_name.visit(v, key.as_str(), desc);
+                    let key = format!(concat!("{}.", stringify!($field_name)), key_prefix);
+                    let desc = concat!($($d),*).trim();
+                    #[allow(deprecated)]
+                    self.$field_name.visit(v, key.as_str(), desc);
                 )*
             }
         }
-
         impl Default for $struct_name {
             fn default() -> Self {
+                #[allow(deprecated)]
                 Self {
                     $($field_name: $default),*
                 }
@@ -467,6 +481,9 @@ config_namespace! {
 
         /// (writing) Sets max statistics size for any column. If NULL, uses
         /// default parquet writer setting
+        /// max_statistics_size is deprecated, currently it is not being used
+        // TODO: remove once deprecated
+        #[deprecated(since = "45.0.0", note = "Setting does not do anything")]
         pub max_statistics_size: Option<usize>, default = Some(4096)
 
         /// (writing) Target maximum number of rows in each row group (defaults to 1M
@@ -1598,19 +1615,23 @@ impl ConfigField for TableParquetOptions {
 macro_rules! config_namespace_with_hashmap {
     (
      $(#[doc = $struct_d:tt])*
+     $(#[deprecated($($struct_depr:tt)*)])?  // Optional struct-level deprecated attribute
      $vis:vis struct $struct_name:ident {
         $(
         $(#[doc = $d:tt])*
+        $(#[deprecated($($field_depr:tt)*)])? // Optional field-level deprecated attribute
         $field_vis:vis $field_name:ident : $field_type:ty, $(transform = $transform:expr,)? default = $default:expr
         )*$(,)*
     }
     ) => {
 
         $(#[doc = $struct_d])*
+        $(#[deprecated($($struct_depr)*)])?  // Apply struct deprecation
         #[derive(Debug, Clone, PartialEq)]
         $vis struct $struct_name{
             $(
             $(#[doc = $d])*
+            $(#[deprecated($($field_depr)*)])? // Apply field deprecation
             $field_vis $field_name : $field_type,
             )*
         }
@@ -1621,6 +1642,8 @@ macro_rules! config_namespace_with_hashmap {
                 match key {
                     $(
                        stringify!($field_name) => {
+                           // Handle deprecated fields
+                           #[allow(deprecated)] // Allow deprecated fields
                            $(let value = $transform(value);)?
                            self.$field_name.set(rem, value.as_ref())
                        },
@@ -1635,6 +1658,8 @@ macro_rules! config_namespace_with_hashmap {
                 $(
                 let key = format!(concat!("{}.", stringify!($field_name)), key_prefix);
                 let desc = concat!($($d),*).trim();
+                // Handle deprecated fields
+                #[allow(deprecated)]
                 self.$field_name.visit(v, key.as_str(), desc);
                 )*
             }
@@ -1642,6 +1667,7 @@ macro_rules! config_namespace_with_hashmap {
 
         impl Default for $struct_name {
             fn default() -> Self {
+                #[allow(deprecated)]
                 Self {
                     $($field_name: $default),*
                 }
@@ -1653,7 +1679,7 @@ macro_rules! config_namespace_with_hashmap {
                 let parts: Vec<&str> = key.splitn(2, "::").collect();
                 match parts.as_slice() {
                     [inner_key, hashmap_key] => {
-                        // Get or create the ColumnOptions for the specified column
+                        // Get or create the struct for the specified key
                         let inner_value = self
                             .entry((*hashmap_key).to_owned())
                             .or_insert_with($struct_name::default);
@@ -1669,6 +1695,7 @@ macro_rules! config_namespace_with_hashmap {
                     $(
                     let key = format!("{}.{field}::{}", key_prefix, column_name, field = stringify!($field_name));
                     let desc = concat!($($d),*).trim();
+                    #[allow(deprecated)]
                     col_options.$field_name.visit(v, key.as_str(), desc);
                     )*
                 }
@@ -1720,6 +1747,9 @@ config_namespace_with_hashmap! {
 
         /// Sets max statistics size for the column path. If NULL, uses
         /// default parquet options
+        /// max_statistics_size is deprecated, currently it is not being used
+        // TODO: remove once deprecated
+        #[deprecated(since = "45.0.0", note = "Setting does not do anything")]
         pub max_statistics_size: Option<usize>, default = None
     }
 }
