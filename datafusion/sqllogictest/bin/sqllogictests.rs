@@ -15,8 +15,32 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use clap::Parser;
+use datafusion_common::instant::Instant;
+use datafusion_common::utils::get_available_parallelism;
+use datafusion_common::{exec_err, DataFusionError, Result};
+use datafusion_common_runtime::SpawnedTask;
+use datafusion_sqllogictest::{
+    df_value_validator, read_dir_recursive, setup_scratch_dir, value_normalizer,
+    DataFusion, TestContext,
+};
+use futures::stream::StreamExt;
+use indicatif::{
+    HumanDuration, MultiProgress, ProgressBar, ProgressDrawTarget, ProgressStyle,
+};
+use itertools::Itertools;
+use log::Level::Info;
+use log::{info, log_enabled};
+use sqllogictest::{
+    parse_file, strict_column_validator, AsyncDB, Condition, Normalizer, Record,
+    Validator,
+};
+
+#[cfg(feature = "postgres")]
+use crate::postgres_container::{
+    initialize_postgres_container, terminate_postgres_container,
+};
 use std::ffi::OsStr;
-use std::fs;
 use std::path::{Path, PathBuf};
 
 use clap::Parser;
@@ -40,39 +64,33 @@ pub fn main() -> Result<()> {
         .block_on(run_tests())
 }
 
-fn value_validator(actual: &[Vec<String>], expected: &[String]) -> bool {
-    let expected = expected
+fn sqlite_value_validator(
+    normalizer: Normalizer,
+    actual: &[Vec<String>],
+    expected: &[String],
+) -> bool {
+    let normalized_expected = expected.iter().map(normalizer).collect::<Vec<_>>();
+    let normalized_actual = actual
         .iter()
-        // Trailing whitespace from lines in SLT will typically be removed, but do not fail if it is not
-        // If particular test wants to cover trailing whitespace on a value,
-        // it should project additional non-whitespace column on the right.
-        .map(|s| s.trim_end().to_owned())
-        .collect::<Vec<_>>();
-    let actual = actual
-        .iter()
-        .map(|strs| strs.iter().join(" "))
-        // Editors do not preserve trailing whitespace, so expected may or may not lack it included
-        .map(|s| s.trim_end().to_owned())
-        .collect::<Vec<_>>();
-    actual == expected
-}
+        .map(|strs| strs.iter().map(normalizer).join(" "))
+        .collect_vec();
 
-/// Sets up an empty directory at test_files/scratch/<name>
-/// creating it if needed and clearing any file contents if it exists
-/// This allows tests for inserting to external tables or copy to
-/// to persist data to disk and have consistent state when running
-/// a new test
-fn setup_scratch_dir(name: &Path) -> Result<()> {
-    // go from copy.slt --> copy
-    let file_stem = name.file_stem().expect("File should have a stem");
-    let path = PathBuf::from("test_files").join("scratch").join(file_stem);
-
-    info!("Creating scratch dir in {path:?}");
-    if path.exists() {
-        fs::remove_dir_all(&path)?;
+    if log_enabled!(Info) && normalized_actual != normalized_expected {
+        info!("sqlite validation failed. actual vs expected:");
+        for i in 0..normalized_actual.len() {
+            info!("[{i}] {}<eol>", normalized_actual[i]);
+            info!(
+                "[{i}] {}<eol>",
+                if normalized_expected.len() >= i {
+                    &normalized_expected[i]
+                } else {
+                    "No more results"
+                }
+            );
+        }
     }
-    fs::create_dir_all(&path)?;
-    Ok(())
+
+    normalized_actual == normalized_expected
 }
 
 async fn run_tests() -> Result<()> {
@@ -273,33 +291,6 @@ fn read_test_files<'a>(
             .filter(|f| f.check_tpch(options))
             .filter(|f| options.check_pg_compat_file(f.path.as_path())),
     ))
-}
-
-fn read_dir_recursive<P: AsRef<Path>>(path: P) -> Result<Vec<PathBuf>> {
-    let mut dst = vec![];
-    read_dir_recursive_impl(&mut dst, path.as_ref())?;
-    Ok(dst)
-}
-
-/// Append all paths recursively to dst
-fn read_dir_recursive_impl(dst: &mut Vec<PathBuf>, path: &Path) -> Result<()> {
-    let entries = fs::read_dir(path)
-        .map_err(|e| exec_datafusion_err!("Error reading directory {path:?}: {e}"))?;
-    for entry in entries {
-        let path = entry
-            .map_err(|e| {
-                exec_datafusion_err!("Error reading entry in directory {path:?}: {e}")
-            })?
-            .path();
-
-        if path.is_dir() {
-            read_dir_recursive_impl(dst, &path)?;
-        } else {
-            dst.push(path);
-        }
-    }
-
-    Ok(())
 }
 
 /// Parsed command line options
