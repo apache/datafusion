@@ -190,9 +190,10 @@ impl ArrayAggAccumulator {
         // This is ok as the state is a ListArray rather than a ListViewArray so all the values are consecutive
         if null_count == 0 {
             // According to Arrow specification, the first offset can be non-zero
-            let list_values = list_array
-                .values()
-                .slice(initial_offset as usize, offsets[offsets.len() - 1] as usize);
+            let list_values = list_array.values().slice(
+                initial_offset as usize,
+                (offsets[offsets.len() - 1] - initial_offset) as usize,
+            );
             return Some(list_values);
         }
 
@@ -232,7 +233,7 @@ impl ArrayAggAccumulator {
 
         let consecutive_valid_values = list_array.values().slice(
             start_offset as usize,
-            end_offset_of_last_valid_value as usize,
+            (end_offset_of_last_valid_value - start_offset) as usize,
         );
 
         Some(consecutive_valid_values)
