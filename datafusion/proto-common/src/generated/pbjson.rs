@@ -3115,7 +3115,6 @@ impl serde::Serialize for Field {
     }
 }
 impl<'de> serde::Deserialize<'de> for Field {
-    #[allow(deprecated)]
     fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
     where
         D: serde::Deserializer<'de>,
@@ -3127,7 +3126,6 @@ impl<'de> serde::Deserialize<'de> for Field {
             "nullable",
             "children",
             "metadata",
-            "dictId",
             "dict_ordered",
             "dictOrdered",
         ];
@@ -3139,7 +3137,6 @@ impl<'de> serde::Deserialize<'de> for Field {
             Nullable,
             Children,
             Metadata,
-            DictId,
             DictOrdered,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
