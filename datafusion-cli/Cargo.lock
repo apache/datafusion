@@ -1400,6 +1400,7 @@ dependencies = [
  "arrow",
  "datafusion-common",
  "itertools 0.14.0",
+ "paste",
 ]
 
 [[package]]
