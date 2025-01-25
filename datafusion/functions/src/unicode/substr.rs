@@ -19,10 +19,9 @@ use std::any::Any;
 use std::sync::Arc;
 
 use crate::strings::make_and_append_view;
-use crate::utils::{make_scalar_function, utf8_to_str_type};
+use crate::utils::make_scalar_function;
 use arrow::array::{
-    Array, ArrayIter, ArrayRef, AsArray, GenericStringBuilder, Int64Array,
-    OffsetSizeTrait, StringArrayType, StringViewArray,
+    Array, ArrayIter, ArrayRef, AsArray, Int64Array, OffsetSizeTrait, StringArrayType, StringViewArray, StringViewBuilder
 };
 use arrow::datatypes::DataType;
 use arrow_buffer::{NullBufferBuilder, ScalarBuffer};
@@ -90,12 +89,8 @@ impl ScalarUDFImpl for SubstrFunc {
         &self.signature
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        if arg_types[0] == DataType::Utf8View {
-            Ok(DataType::Utf8View)
-        } else {
-            utf8_to_str_type(&arg_types[0], "substr")
-        }
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        Ok(DataType::Utf8View)
     }
 
     fn invoke_batch(
@@ -186,7 +181,7 @@ impl ScalarUDFImpl for SubstrFunc {
 /// substr('alphabet', 3, 2) = 'ph'
 /// The implementation uses UTF-8 code points as characters
 pub fn substr(args: &[ArrayRef]) -> Result<ArrayRef> {
-    match args[0].data_type() {
+     match args[0].data_type() {
         DataType::Utf8 => {
             let string_array = args[0].as_string::<i32>();
             string_substr::<_, i32>(string_array, &args[1..])
@@ -447,7 +442,7 @@ where
     match args.len() {
         1 => {
             let iter = ArrayIter::new(string_array);
-            let mut result_builder = GenericStringBuilder::<T>::new();
+            let mut result_builder = StringViewBuilder::new();
             for (string, start) in iter.zip(start_array.iter()) {
                 match (string, start) {
                     (Some(string), Some(start)) => {
@@ -470,7 +465,7 @@ where
         2 => {
             let iter = ArrayIter::new(string_array);
             let count_array = count_array_opt.unwrap();
-            let mut result_builder = GenericStringBuilder::<T>::new();
+            let mut result_builder = StringViewBuilder::new();
 
             for ((string, start), count) in
                 iter.zip(start_array.iter()).zip(count_array.iter())
@@ -512,8 +507,8 @@ where
 
 #[cfg(test)]
 mod tests {
-    use arrow::array::{Array, StringArray, StringViewArray};
-    use arrow::datatypes::DataType::{Utf8, Utf8View};
+    use arrow::array::{Array, StringViewArray};
+    use arrow::datatypes::DataType::Utf8View;
 
     use datafusion_common::{exec_err, Result, ScalarValue};
     use datafusion_expr::{ColumnarValue, ScalarUDFImpl};
@@ -623,8 +618,8 @@ mod tests {
             ],
             Ok(Some("alphabet")),
             &str,
-            Utf8,
-            StringArray
+            Utf8View,
+            StringViewArray
         );
         test_function!(
             SubstrFunc::new(),
@@ -634,8 +629,8 @@ mod tests {
             ],
             Ok(Some("ésoj")),
             &str,
-            Utf8,
-            StringArray
+            Utf8View,
+            StringViewArray
         );
         test_function!(
             SubstrFunc::new(),
@@ -645,8 +640,8 @@ mod tests {
             ],
             Ok(Some("joséésoj")),
             &str,
-            Utf8,
-            StringArray
+            Utf8View,
+            StringViewArray
         );
         test_function!(
             SubstrFunc::new(),
@@ -656,8 +651,8 @@ mod tests {
             ],
             Ok(Some("alphabet")),
             &str,
-            Utf8,
-            StringArray
+            Utf8View,
+            StringViewArray
         );
         test_function!(
             SubstrFunc::new(),
@@ -667,8 +662,8 @@ mod tests {
             ],
             Ok(Some("lphabet")),
             &str,
-            Utf8,
-            StringArray
+            Utf8View,
+            StringViewArray
         );
         test_function!(
             SubstrFunc::new(),
@@ -678,8 +673,8 @@ mod tests {
             ],
             Ok(Some("phabet")),
             &str,
-            Utf8,
-            StringArray
+            Utf8View,
+            StringViewArray
         );
         test_function!(
             SubstrFunc::new(),
@@ -689,8 +684,8 @@ mod tests {
             ],
             Ok(Some("alphabet")),
             &str,
-            Utf8,
-            StringArray
+            Utf8View,
+            StringViewArray
         );
         test_function!(
             SubstrFunc::new(),
@@ -700,8 +695,8 @@ mod tests {
             ],
             Ok(Some("")),
             &str,
-            Utf8,
-            StringArray
+            Utf8View,
+            StringViewArray
         );
         test_function!(
             SubstrFunc::new(),
@@ -711,8 +706,8 @@ mod tests {
             ],
             Ok(None),
             &str,
-            Utf8,
-            StringArray
+            Utf8View,
+            StringViewArray
         );
         test_function!(
             SubstrFunc::new(),
@@ -723,8 +718,8 @@ mod tests {
             ],
             Ok(Some("ph")),
             &str,
-            Utf8,
-            StringArray
+            Utf8View,
+            StringViewArray
         );
         test_function!(
             SubstrFunc::new(),
@@ -735,8 +730,8 @@ mod tests {
             ],
             Ok(Some("phabet")),
             &str,
-            Utf8,
-            StringArray
+            Utf8View,
+            StringViewArray
         );
         test_function!(
             SubstrFunc::new(),
@@ -747,8 +742,8 @@ mod tests {
             ],
             Ok(Some("alph")),
             &str,
-            Utf8,
-            StringArray
+            Utf8View,
+            StringViewArray
         );
         // starting from 5 (10 + -5)
         test_function!(
@@ -760,8 +755,8 @@ mod tests {
             ],
             Ok(Some("alph")),
             &str,
-            Utf8,
-            StringArray
+            Utf8View,
+            StringViewArray
         );
         // starting from -1 (4 + -5)
         test_function!(
@@ -773,8 +768,8 @@ mod tests {
             ],
             Ok(Some("")),
             &str,
-            Utf8,
-            StringArray
+            Utf8View,
+            StringViewArray
         );
         // starting from 0 (5 + -5)
         test_function!(
@@ -786,8 +781,8 @@ mod tests {
             ],
             Ok(Some("")),
             &str,
-            Utf8,
-            StringArray
+            Utf8View,
+            StringViewArray
         );
         test_function!(
             SubstrFunc::new(),
@@ -798,8 +793,8 @@ mod tests {
             ],
             Ok(None),
             &str,
-            Utf8,
-            StringArray
+            Utf8View,
+            StringViewArray
         );
         test_function!(
             SubstrFunc::new(),
@@ -810,8 +805,8 @@ mod tests {
             ],
             Ok(None),
             &str,
-            Utf8,
-            StringArray
+            Utf8View,
+            StringViewArray
         );
         test_function!(
             SubstrFunc::new(),
@@ -822,8 +817,8 @@ mod tests {
             ],
             exec_err!("negative substring length not allowed: substr(<str>, 1, -1)"),
             &str,
-            Utf8,
-            StringArray
+            Utf8View,
+            StringViewArray
         );
         test_function!(
             SubstrFunc::new(),
@@ -834,8 +829,8 @@ mod tests {
             ],
             Ok(Some("és")),
             &str,
-            Utf8,
-            StringArray
+            Utf8View,
+            StringViewArray
         );
         #[cfg(not(feature = "unicode_expressions"))]
         test_function!(
@@ -848,8 +843,8 @@ mod tests {
                 "function substr requires compilation with feature flag: unicode_expressions."
             ),
             &str,
-            Utf8,
-            StringArray
+            Utf8View,
+            StringViewArray
         );
         test_function!(
             SubstrFunc::new(),
@@ -859,8 +854,8 @@ mod tests {
             ],
             Ok(Some("abc")),
             &str,
-            Utf8,
-            StringArray
+            Utf8View,
+            StringViewArray
         );
         test_function!(
             SubstrFunc::new(),
@@ -871,8 +866,8 @@ mod tests {
             ],
             exec_err!("negative overflow when calculating skip value"),
             &str,
-            Utf8,
-            StringArray
+            Utf8View,
+            StringViewArray
         );
 
         Ok(())
