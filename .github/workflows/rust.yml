@@ -253,7 +253,7 @@ jobs:
           rust-version: stable
       - name: Run doctests
         run: |
-          cargo test --profile ci --doc --features avro,json
+          cargo test --profile ci --doc --features avro,json,integration-tests
           cd datafusion-cli
           cargo test --profile ci --doc --all-features
       - name: Verify Working Directory Clean
@@ -417,7 +417,7 @@ jobs:
       - name: Run tests (excluding doctests)
         shell: bash
         run: |
-          cargo test --profile ci --lib --tests --bins --features avro,json,backtrace
+          cargo test --profile ci --lib --tests --bins --features avro,json,backtrace,integration-tests
           cd datafusion-cli
           cargo test --profile ci --lib --tests --bins --all-features
 
