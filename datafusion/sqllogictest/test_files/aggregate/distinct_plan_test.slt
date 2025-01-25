@@ -29,7 +29,19 @@ logical_plan
 02)--Aggregate: groupBy=[[aggregate_test_100.c3, min(aggregate_test_100.c1)]], aggr=[[]]
 03)----Aggregate: groupBy=[[aggregate_test_100.c3]], aggr=[[min(aggregate_test_100.c1)]]
 04)------TableScan: aggregate_test_100 projection=[c1, c3]
-physical_plan_error Object Store error: Object at location /WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv not found: No such file or directory (os error 2)
+physical_plan
+01)GlobalLimitExec: skip=0, fetch=5
+02)--CoalescePartitionsExec
+03)----AggregateExec: mode=FinalPartitioned, gby=[c3@0 as c3, min(aggregate_test_100.c1)@1 as min(aggregate_test_100.c1)], aggr=[], lim=[5]
+04)------CoalesceBatchesExec: target_batch_size=8192
+05)--------RepartitionExec: partitioning=Hash([c3@0, min(aggregate_test_100.c1)@1], 4), input_partitions=4
+06)----------AggregateExec: mode=Partial, gby=[c3@0 as c3, min(aggregate_test_100.c1)@1 as min(aggregate_test_100.c1)], aggr=[], lim=[5]
+07)------------AggregateExec: mode=FinalPartitioned, gby=[c3@0 as c3], aggr=[min(aggregate_test_100.c1)]
+08)--------------CoalesceBatchesExec: target_batch_size=8192
+09)----------------RepartitionExec: partitioning=Hash([c3@0], 4), input_partitions=4
+10)------------------AggregateExec: mode=Partial, gby=[c3@1 as c3], aggr=[min(aggregate_test_100.c1)]
+11)--------------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+12)----------------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c1, c3], has_header=true
 
 
 #
@@ -48,10 +60,22 @@ logical_plan
 01)Limit: skip=0, fetch=5
 02)--Aggregate: groupBy=[[aggregate_test_100.c3]], aggr=[[]]
 03)----TableScan: aggregate_test_100 projection=[c3]
-physical_plan_error Object Store error: Object at location /WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv not found: No such file or directory (os error 2)
+physical_plan
+01)GlobalLimitExec: skip=0, fetch=5
+02)--AggregateExec: mode=Final, gby=[c3@0 as c3], aggr=[], lim=[5]
+03)----CoalescePartitionsExec
+04)------AggregateExec: mode=Partial, gby=[c3@0 as c3], aggr=[], lim=[5]
+05)--------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+06)----------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c3], has_header=true
 
-query error DataFusion error: Object Store error: Object at location /home/logan/dev/datafusion/testing/data/csv/aggregate_test_100\.csv not found: No such file or directory \(os error 2\)
+query I
 SELECT DISTINCT c3 FROM aggregate_test_100 group by c3 limit 5;
+----
+1
+-40
+29
+-85
+-82
 
 query TT
 EXPLAIN SELECT c2, c3 FROM aggregate_test_100 group by c2, c3 limit 5 offset 4;
@@ -60,10 +84,22 @@ logical_plan
 01)Limit: skip=4, fetch=5
 02)--Aggregate: groupBy=[[aggregate_test_100.c2, aggregate_test_100.c3]], aggr=[[]]
 03)----TableScan: aggregate_test_100 projection=[c2, c3]
-physical_plan_error Object Store error: Object at location /WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv not found: No such file or directory (os error 2)
+physical_plan
+01)GlobalLimitExec: skip=4, fetch=5
+02)--AggregateExec: mode=Final, gby=[c2@0 as c2, c3@1 as c3], aggr=[], lim=[9]
+03)----CoalescePartitionsExec
+04)------AggregateExec: mode=Partial, gby=[c2@0 as c2, c3@1 as c3], aggr=[], lim=[9]
+05)--------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+06)----------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c2, c3], has_header=true
 
-query error DataFusion error: Object Store error: Object at location /home/logan/dev/datafusion/testing/data/csv/aggregate_test_100\.csv not found: No such file or directory \(os error 2\)
+query II
 SELECT c2, c3 FROM aggregate_test_100 group by c2, c3 limit 5 offset 4;
+----
+5 -82
+4 -111
+3 104
+3 13
+1 38
 
 # The limit should only apply to the aggregations which group by c3
 query TT
@@ -76,10 +112,28 @@ logical_plan
 04)------Aggregate: groupBy=[[aggregate_test_100.c2, aggregate_test_100.c3]], aggr=[[]]
 05)--------Filter: aggregate_test_100.c3 >= Int16(10) AND aggregate_test_100.c3 <= Int16(20)
 06)----------TableScan: aggregate_test_100 projection=[c2, c3], partial_filters=[aggregate_test_100.c3 >= Int16(10), aggregate_test_100.c3 <= Int16(20)]
-physical_plan_error Object Store error: Object at location /WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv not found: No such file or directory (os error 2)
+physical_plan
+01)GlobalLimitExec: skip=0, fetch=4
+02)--AggregateExec: mode=Final, gby=[c3@0 as c3], aggr=[], lim=[4]
+03)----CoalescePartitionsExec
+04)------AggregateExec: mode=Partial, gby=[c3@0 as c3], aggr=[], lim=[4]
+05)--------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+06)----------ProjectionExec: expr=[c3@1 as c3]
+07)------------AggregateExec: mode=Final, gby=[c2@0 as c2, c3@1 as c3], aggr=[]
+08)--------------CoalescePartitionsExec
+09)----------------AggregateExec: mode=Partial, gby=[c2@0 as c2, c3@1 as c3], aggr=[]
+10)------------------CoalesceBatchesExec: target_batch_size=8192
+11)--------------------FilterExec: c3@1 >= 10 AND c3@1 <= 20
+12)----------------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+13)------------------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c2, c3], has_header=true
 
-query error DataFusion error: Object Store error: Object at location /home/logan/dev/datafusion/testing/data/csv/aggregate_test_100\.csv not found: No such file or directory \(os error 2\)
+query I
 SELECT DISTINCT c3 FROM aggregate_test_100 WHERE c3 between 10 and 20 group by c2, c3 limit 4;
+----
+13
+17
+12
+14
 
 # An aggregate expression causes the limit to not be pushed to the aggregation
 query TT
@@ -90,7 +144,14 @@ logical_plan
 02)--Limit: skip=0, fetch=5
 03)----Aggregate: groupBy=[[aggregate_test_100.c2, aggregate_test_100.c3]], aggr=[[max(aggregate_test_100.c1)]]
 04)------TableScan: aggregate_test_100 projection=[c1, c2, c3]
-physical_plan_error Object Store error: Object at location /WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv not found: No such file or directory (os error 2)
+physical_plan
+01)ProjectionExec: expr=[max(aggregate_test_100.c1)@2 as max(aggregate_test_100.c1), c2@0 as c2, c3@1 as c3]
+02)--GlobalLimitExec: skip=0, fetch=5
+03)----AggregateExec: mode=Final, gby=[c2@0 as c2, c3@1 as c3], aggr=[max(aggregate_test_100.c1)]
+04)------CoalescePartitionsExec
+05)--------AggregateExec: mode=Partial, gby=[c2@1 as c2, c3@2 as c3], aggr=[max(aggregate_test_100.c1)]
+06)----------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+07)------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c1, c2, c3], has_header=true
 
 # TODO(msirek): Extend checking in LimitedDistinctAggregation equal groupings to ignore the order of columns
 # in the group-by column lists, so the limit could be pushed to the lowest AggregateExec in this case
@@ -103,10 +164,25 @@ logical_plan
 03)----Projection: aggregate_test_100.c3, aggregate_test_100.c2
 04)------Aggregate: groupBy=[[aggregate_test_100.c2, aggregate_test_100.c3]], aggr=[[]]
 05)--------TableScan: aggregate_test_100 projection=[c2, c3]
-physical_plan_error Object Store error: Object at location /WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv not found: No such file or directory (os error 2)
+physical_plan
+01)GlobalLimitExec: skip=10, fetch=3
+02)--AggregateExec: mode=Final, gby=[c3@0 as c3, c2@1 as c2], aggr=[], lim=[13]
+03)----CoalescePartitionsExec
+04)------AggregateExec: mode=Partial, gby=[c3@0 as c3, c2@1 as c2], aggr=[], lim=[13]
+05)--------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+06)----------ProjectionExec: expr=[c3@1 as c3, c2@0 as c2]
+07)------------AggregateExec: mode=Final, gby=[c2@0 as c2, c3@1 as c3], aggr=[]
+08)--------------CoalescePartitionsExec
+09)----------------AggregateExec: mode=Partial, gby=[c2@0 as c2, c3@1 as c3], aggr=[]
+10)------------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+11)--------------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c2, c3], has_header=true
 
-query error DataFusion error: Object Store error: Object at location /home/logan/dev/datafusion/testing/data/csv/aggregate_test_100\.csv not found: No such file or directory \(os error 2\)
+query II
 SELECT DISTINCT c3, c2 FROM aggregate_test_100 group by c2, c3 limit 3 offset 10;
+----
+57 1
+-54 4
+112 3
 
 query TT
 EXPLAIN SELECT c2, c3 FROM aggregate_test_100 group by rollup(c2, c3) limit 3;
@@ -116,10 +192,21 @@ logical_plan
 02)--Limit: skip=0, fetch=3
 03)----Aggregate: groupBy=[[ROLLUP (aggregate_test_100.c2, aggregate_test_100.c3)]], aggr=[[]]
 04)------TableScan: aggregate_test_100 projection=[c2, c3]
-physical_plan_error Object Store error: Object at location /WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv not found: No such file or directory (os error 2)
+physical_plan
+01)ProjectionExec: expr=[c2@0 as c2, c3@1 as c3]
+02)--GlobalLimitExec: skip=0, fetch=3
+03)----AggregateExec: mode=Final, gby=[c2@0 as c2, c3@1 as c3, __grouping_id@2 as __grouping_id], aggr=[], lim=[3]
+04)------CoalescePartitionsExec
+05)--------AggregateExec: mode=Partial, gby=[(NULL as c2, NULL as c3), (c2@0 as c2, NULL as c3), (c2@0 as c2, c3@1 as c3)], aggr=[]
+06)----------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+07)------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c2, c3], has_header=true
 
-query error DataFusion error: Object Store error: Object at location /home/logan/dev/datafusion/testing/data/csv/aggregate_test_100\.csv not found: No such file or directory \(os error 2\)
+query II
 SELECT c2, c3 FROM aggregate_test_100 group by rollup(c2, c3) limit 3;
+----
+NULL NULL
+2 NULL
+5 NULL
 
 
 statement ok
@@ -133,7 +220,13 @@ logical_plan
 01)Limit: skip=0, fetch=5
 02)--Aggregate: groupBy=[[aggregate_test_100.c3]], aggr=[[]]
 03)----TableScan: aggregate_test_100 projection=[c3]
-physical_plan_error Object Store error: Object at location /WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv not found: No such file or directory (os error 2)
+physical_plan
+01)GlobalLimitExec: skip=0, fetch=5
+02)--AggregateExec: mode=Final, gby=[c3@0 as c3], aggr=[]
+03)----CoalescePartitionsExec
+04)------AggregateExec: mode=Partial, gby=[c3@0 as c3], aggr=[]
+05)--------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+06)----------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c3], has_header=true
 
 statement ok
 set datafusion.optimizer.enable_distinct_aggregation_soft_limit = true;

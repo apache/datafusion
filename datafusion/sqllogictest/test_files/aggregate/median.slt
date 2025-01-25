@@ -18,16 +18,22 @@
 include ./init.slt.part
 
 # csv_query_approx_median_1
-query error DataFusion error: Object Store error: Object at location /home/logan/dev/datafusion/testing/data/csv/aggregate_test_100\.csv not found: No such file or directory \(os error 2\)
+query I
 SELECT approx_median(c2) FROM aggregate_test_100
+----
+3
 
 # csv_query_approx_median_2
-query error DataFusion error: Object Store error: Object at location /home/logan/dev/datafusion/testing/data/csv/aggregate_test_100\.csv not found: No such file or directory \(os error 2\)
+query I
 SELECT approx_median(c6) FROM aggregate_test_100
+----
+1146409980542786560
 
 # csv_query_approx_median_3
-query error DataFusion error: Object Store error: Object at location /home/logan/dev/datafusion/testing/data/csv/aggregate_test_100\.csv not found: No such file or directory \(os error 2\)
+query R
 SELECT approx_median(c12) FROM aggregate_test_100
+----
+0.555006541052
 
 # csv_query_approx_median_4
 # test with string, approx median only supports numeric
@@ -35,16 +41,22 @@ statement error
 SELECT approx_median(c1) FROM aggregate_test_100
 
 # csv_query_median_1
-query error DataFusion error: Object Store error: Object at location /home/logan/dev/datafusion/testing/data/csv/aggregate_test_100\.csv not found: No such file or directory \(os error 2\)
+query I
 SELECT median(c2) FROM aggregate_test_100
+----
+3
 
 # csv_query_median_2
-query error DataFusion error: Object Store error: Object at location /home/logan/dev/datafusion/testing/data/csv/aggregate_test_100\.csv not found: No such file or directory \(os error 2\)
+query I
 SELECT median(c6) FROM aggregate_test_100
+----
+1125553990140691277
 
 # csv_query_median_3
-query error DataFusion error: Object Store error: Object at location /home/logan/dev/datafusion/testing/data/csv/aggregate_test_100\.csv not found: No such file or directory \(os error 2\)
+query R
 SELECT median(c12) FROM aggregate_test_100
+----
+0.551390054439
 
 # median_i8
 query I

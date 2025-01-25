@@ -19,13 +19,15 @@ include ./init.slt.part
 
 
 # array agg can use order by
-query error DataFusion error: Object Store error: Object at location /home/logan/dev/datafusion/testing/data/csv/aggregate_test_100\.csv not found: No such file or directory \(os error 2\)
+query ?
 SELECT array_agg(c13 ORDER BY c13)
 FROM
   (SELECT *
   FROM aggregate_test_100
   ORDER BY c13
   LIMIT 5) as t1
+----
+[0VVIHzxWtNOFLtnhjHEKjXaJOSLJfm, 0keZ5G8BffGwgF2RwQD59TFzMStxCB, 0og6hSkhbX8AC1ktFS4kounvTzy8Vo, 1aOcrEGd0cOqZe2I5XBOm0nDcwtBZO, 2T3wSlHdEmASmO0xcXHnndkKEt6bz8]
 
 statement ok
 CREATE EXTERNAL TABLE agg_order (
@@ -184,8 +186,10 @@ physical_plan
 
 
 # csv_query_array_agg
-query error DataFusion error: Object Store error: Object at location /home/logan/dev/datafusion/testing/data/csv/aggregate_test_100\.csv not found: No such file or directory \(os error 2\)
+query ?
 SELECT array_agg(c13) FROM (SELECT * FROM aggregate_test_100 ORDER BY c13 LIMIT 2) test
+----
+[0VVIHzxWtNOFLtnhjHEKjXaJOSLJfm, 0keZ5G8BffGwgF2RwQD59TFzMStxCB]
 
 # csv_query_array_agg_empty
 query ?
@@ -194,21 +198,68 @@ SELECT array_agg(c13) FROM (SELECT * FROM aggregate_test_100 LIMIT 0) test
 NULL
 
 # csv_query_array_agg_one
-query error DataFusion error: Object Store error: Object at location /home/logan/dev/datafusion/testing/data/csv/aggregate_test_100\.csv not found: No such file or directory \(os error 2\)
+query ?
 SELECT array_agg(c13) FROM (SELECT * FROM aggregate_test_100 ORDER BY c13 LIMIT 1) test
+----
+[0VVIHzxWtNOFLtnhjHEKjXaJOSLJfm]
 
 # csv_query_array_agg_with_overflow
-query error DataFusion error: Object Store error: Object at location /home/logan/dev/datafusion/testing/data/csv/aggregate_test_100\.csv not found: No such file or directory \(os error 2\)
+query IIRIII
 select c2, sum(c3) sum_c3, avg(c3) avg_c3, max(c3) max_c3, min(c3) min_c3, count(c3) count_c3 from aggregate_test_100 group by c2 order by c2
+----
+1 367 16.681818181818 125 -99 22
+2 184 8.363636363636 122 -117 22
+3 395 20.789473684211 123 -101 19
+4 29 1.260869565217 123 -117 23
+5 -194 -13.857142857143 118 -101 14
 
 # csv_query_array_cube_agg_with_overflow
-query error DataFusion error: Object Store error: Object at location /home/logan/dev/datafusion/testing/data/csv/aggregate_test_100\.csv not found: No such file or directory \(os error 2\)
+query TIIRIII
 select c1, c2, sum(c3) sum_c3, avg(c3) avg_c3, max(c3) max_c3, min(c3) min_c3, count(c3) count_c3 from aggregate_test_100 group by CUBE (c1,c2) order by c1, c2
+----
+a 1 -88 -17.6 83 -85 5
+a 2 -46 -15.333333333333 45 -48 3
+a 3 -27 -4.5 17 -72 6
+a 4 -128 -32 65 -101 4
+a 5 -96 -32 36 -101 3
+a NULL -385 -18.333333333333 83 -101 21
+b 1 95 31.666666666667 54 12 3
+b 2 102 25.5 68 -60 4
+b 3 -84 -42 17 -101 2
+b 4 -223 -44.6 47 -117 5
+b 5 -1 -0.2 68 -82 5
+b NULL -111 -5.842105263158 68 -117 19
+c 1 190 47.5 103 -24 4
+c 2 -389 -55.571428571429 29 -117 7
+c 3 190 47.5 97 -2 4
+c 4 -43 -10.75 123 -90 4
+c 5 24 12 118 -94 2
+c NULL -28 -1.333333333333 123 -117 21
+d 1 -57 -8.142857142857 125 -99 7
+d 2 328 109.333333333333 122 93 3
+d 3 124 41.333333333333 123 -76 3
+d 4 162 54 102 5 3
+d 5 -99 -49.5 -40 -59 2
+d NULL 458 25.444444444444 125 -99 18
+e 1 227 75.666666666667 120 36 3
+e 2 189 37.8 97 -61 5
+e 3 192 48 112 -95 4
+e 4 261 37.285714285714 97 -56 7
+e 5 -22 -11 64 -86 2
+e NULL 847 40.333333333333 120 -95 21
+NULL 1 367 16.681818181818 125 -99 22
+NULL 2 184 8.363636363636 122 -117 22
+NULL 3 395 20.789473684211 123 -101 19
+NULL 4 29 1.260869565217 123 -117 23
+NULL 5 -194 -13.857142857143 118 -101 14
+NULL NULL 781 7.81 125 -117 100
 
 # select with count to forces array_agg_distinct function, since single distinct expression is converted to group by by optimizer
 # csv_query_array_agg_distinct
-query error DataFusion error: Object Store error: Object at location /home/logan/dev/datafusion/testing/data/csv/aggregate_test_100\.csv not found: No such file or directory \(os error 2\)
+query ?I
 SELECT array_sort(array_agg(distinct c2)), count(1) FROM aggregate_test_100
+----
+[1, 2, 3, 4, 5] 100
 
 
 # array_agg_zero
@@ -358,15 +409,17 @@ drop table t;
 
 
 # array agg can use order by
-query error DataFusion error: Object Store error: Object at location /home/logan/dev/datafusion/testing/data/csv/aggregate_test_100\.csv not found: No such file or directory \(os error 2\)
+query ?
 SELECT array_agg(c13 ORDER BY c13)
 FROM
   (SELECT *
   FROM aggregate_test_100
   ORDER BY c13
   LIMIT 5) as t1
+----
+[0VVIHzxWtNOFLtnhjHEKjXaJOSLJfm, 0keZ5G8BffGwgF2RwQD59TFzMStxCB, 0og6hSkhbX8AC1ktFS4kounvTzy8Vo, 1aOcrEGd0cOqZe2I5XBOm0nDcwtBZO, 2T3wSlHdEmASmO0xcXHnndkKEt6bz8]
 
-statement error DataFusion error: Execution error: Table 'agg_order' already exists
+statement ok
 CREATE EXTERNAL TABLE agg_order (
 c1 INT NOT NULL,
 c2 INT NOT NULL,

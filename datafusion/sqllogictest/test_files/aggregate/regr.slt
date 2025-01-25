@@ -95,7 +95,7 @@ from (values (1,2), (2,4), (3,6));
 ----
 2 0 3 1 2 4 2 8 4
 
-query error DataFusion error: Object Store error: Object at location /home/logan/dev/datafusion/testing/data/csv/aggregate_test_100\.csv not found: No such file or directory \(os error 2\)
+query RRIRRRRRR
 select 
     regr_slope(c12, c11),
     regr_intercept(c12, c11),
@@ -107,6 +107,8 @@ select
     regr_syy(c12, c11),
     regr_sxy(c12, c11)
 from aggregate_test_100;
+----
+0.051534002628 0.48427355347 100 0.001929150558 0.479274948239 0.508972509913 6.707779292571 9.234223721582 0.345678715695
 
 
 
@@ -181,7 +183,7 @@ c NULL NULL 1 NULL 1 10 0 0 0
 statement ok
 set datafusion.execution.batch_size = 1;
 
-query error DataFusion error: Object Store error: Object at location /home/logan/dev/datafusion/testing/data/csv/aggregate_test_100\.csv not found: No such file or directory \(os error 2\)
+query RRIRRRRRR
 select 
     regr_slope(c12, c11),
     regr_intercept(c12, c11),
@@ -193,11 +195,13 @@ select
     regr_syy(c12, c11),
     regr_sxy(c12, c11)
 from aggregate_test_100;
+----
+0.051534002628 0.48427355347 100 0.001929150558 0.479274948239 0.508972509913 6.707779292571 9.234223721582 0.345678715695
 
 statement ok
 set datafusion.execution.batch_size = 2;
 
-query error DataFusion error: Object Store error: Object at location /home/logan/dev/datafusion/testing/data/csv/aggregate_test_100\.csv not found: No such file or directory \(os error 2\)
+query RRIRRRRRR
 select 
     regr_slope(c12, c11),
     regr_intercept(c12, c11),
@@ -209,11 +213,13 @@ select
     regr_syy(c12, c11),
     regr_sxy(c12, c11)
 from aggregate_test_100;
+----
+0.051534002628 0.48427355347 100 0.001929150558 0.479274948239 0.508972509913 6.707779292571 9.234223721582 0.345678715695
 
 statement ok
 set datafusion.execution.batch_size = 3;
 
-query error DataFusion error: Object Store error: Object at location /home/logan/dev/datafusion/testing/data/csv/aggregate_test_100\.csv not found: No such file or directory \(os error 2\)
+query RRIRRRRRR
 select 
     regr_slope(c12, c11),
     regr_intercept(c12, c11),
@@ -225,6 +231,8 @@ select
     regr_syy(c12, c11),
     regr_sxy(c12, c11)
 from aggregate_test_100;
+----
+0.051534002628 0.48427355347 100 0.001929150558 0.479274948239 0.508972509913 6.707779292571 9.234223721582 0.345678715695
 
 statement ok
 set datafusion.execution.batch_size = 8192;
