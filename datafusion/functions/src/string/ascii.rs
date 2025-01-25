@@ -144,10 +144,9 @@ pub fn ascii(args: &[ArrayRef]) -> Result<ArrayRef> {
 mod tests {
     use crate::expr_fn::ascii;
     use crate::string::ascii::AsciiFunc;
-    use crate::utils::test::test_function;
+    use crate::utils::test::{create_physical_expr_with_type_coercion, test_function};
     use arrow::array::{Array, ArrayRef, Int32Array, RecordBatch, StringArray};
     use arrow::datatypes::DataType::Int32;
-    use datafusion::prelude::SessionContext;
     use datafusion_common::{DFSchema, Result, ScalarValue};
     use datafusion_expr::{col, lit, ColumnarValue, ScalarUDFImpl};
     use std::sync::Arc;
@@ -187,8 +186,7 @@ mod tests {
         let batch = RecordBatch::try_from_iter([("c0", input)])?;
         let df_schema = DFSchema::try_from(batch.schema())?;
         let expr = ascii(col("c0"));
-        let physical_expr =
-            SessionContext::new().create_physical_expr(expr, &df_schema)?;
+        let physical_expr = create_physical_expr_with_type_coercion(expr, &df_schema)?;
         let result = match physical_expr.evaluate(&batch)? {
             ColumnarValue::Array(result) => Ok(result),
             _ => datafusion_common::internal_err!("ascii"),
@@ -199,8 +197,7 @@ mod tests {
     fn ascii_scalar(input: ScalarValue) -> Result<ScalarValue> {
         let df_schema = DFSchema::empty();
         let expr = ascii(lit(input));
-        let physical_expr =
-            SessionContext::new().create_physical_expr(expr, &df_schema)?;
+        let physical_expr = create_physical_expr_with_type_coercion(expr, &df_schema)?;
         let result = match physical_expr
             .evaluate(&RecordBatch::new_empty(Arc::clone(df_schema.inner())))?
         {

@@ -91,7 +91,8 @@ uuid = { version = "1.7", features = ["v4"], optional = true }
 [dev-dependencies]
 arrow = { workspace = true, features = ["test_utils"] }
 criterion = "0.5"
-datafusion = { workspace = true, default-features = false }
+datafusion-optimizer = { workspace = true, default-features = true }
+datafusion-physical-expr = { workspace = true, default-features = true }
 rand = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt", "sync"] }
 
