@@ -411,23 +411,23 @@ impl ExecutionPlan for FilterExec {
         projection: &ProjectionExec,
     ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
         // If the projection does not narrow the schema, we should not try to push it down:
-        if projection.expr().len() >= projection.input().schema().fields().len() {
-            return Ok(None);
+        if projection.expr().len() < projection.input().schema().fields().len() {
+            // Each column in the predicate expression must exist after the projection.
+            if let Some(new_predicate) =
+                update_expr(self.predicate(), projection.expr(), false)?
+            {
+                return FilterExec::try_new(
+                    new_predicate,
+                    make_with_child(projection, self.input())?,
+                )
+                .and_then(|e| {
+                    let selectivity = self.default_selectivity();
+                    e.with_default_selectivity(selectivity)
+                })
+                .map(|e| Some(Arc::new(e) as _));
+            }
         }
-        // Each column in the predicate expression must exist after the projection.
-        let Some(new_predicate) =
-            update_expr(self.predicate(), projection.expr(), false)?
-        else {
-            return Ok(None);
-        };
-
-        FilterExec::try_new(new_predicate, make_with_child(projection, self.input())?)
-            .and_then(|e| {
-                let selectivity = self.default_selectivity();
-                e.with_default_selectivity(selectivity)
-            })
-            .map(|e| Some(Arc::new(e) as _))?
-            .map_or_else(|| try_embed_projection(projection, self), |e| Ok(Some(e)))
+        try_embed_projection(projection, self)
     }
 }
 

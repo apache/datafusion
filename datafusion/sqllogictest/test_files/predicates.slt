@@ -770,14 +770,13 @@ physical_plan
 09)----------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/tpch-csv/lineitem.csv]]}, projection=[l_partkey, l_extendedprice, l_discount], has_header=true
 10)----------CoalesceBatchesExec: target_batch_size=8192
 11)------------RepartitionExec: partitioning=Hash([p_partkey@0], 4), input_partitions=4
-12)--------------ProjectionExec: expr=[p_partkey@0 as p_partkey]
-13)----------------CoalesceBatchesExec: target_batch_size=8192
-14)------------------FilterExec: p_brand@1 = Brand#12 OR p_brand@1 = Brand#23
-15)--------------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-16)----------------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/tpch-csv/part.csv]]}, projection=[p_partkey, p_brand], has_header=true
-17)------CoalesceBatchesExec: target_batch_size=8192
-18)--------RepartitionExec: partitioning=Hash([ps_partkey@0], 4), input_partitions=1
-19)----------MemoryExec: partitions=1, partition_sizes=[1]
+12)--------------CoalesceBatchesExec: target_batch_size=8192
+13)----------------FilterExec: p_brand@1 = Brand#12 OR p_brand@1 = Brand#23, projection=[p_partkey@0]
+14)------------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+15)--------------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/tpch-csv/part.csv]]}, projection=[p_partkey, p_brand], has_header=true
+16)------CoalesceBatchesExec: target_batch_size=8192
+17)--------RepartitionExec: partitioning=Hash([ps_partkey@0], 4), input_partitions=1
+18)----------MemoryExec: partitions=1, partition_sizes=[1]
 
 # Inlist simplification
 
