@@ -584,7 +584,7 @@ fn get_valid_types(
                 match target_type_class {
                     TypeSignatureClass::Native(native_type) => {
                         let target_type = native_type.native();
-                        // if &logical_type == target_type && logical_type == NativeType::String {
+                        // if target_type == &NativeType::String {
                         //     ...
                         // } else {
                         //     target_type.default_cast_for(current_type)

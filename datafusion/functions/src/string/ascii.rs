@@ -142,14 +142,12 @@ pub fn ascii(args: &[ArrayRef]) -> Result<ArrayRef> {
 
 #[cfg(test)]
 mod tests {
-    use crate::expr_fn::ascii;
     use crate::string::ascii::AsciiFunc;
-    use crate::utils::test::{create_physical_expr_with_type_coercion, test_function};
-    use arrow::array::{Array, ArrayRef, Int32Array, RecordBatch, StringArray};
+    use crate::utils::test::test_function;
+    use arrow::array::{Array, Int32Array};
     use arrow::datatypes::DataType::Int32;
-    use datafusion_common::{DFSchema, Result, ScalarValue};
-    use datafusion_expr::{col, lit, ColumnarValue, ScalarUDFImpl};
-    use std::sync::Arc;
+    use datafusion_common::{Result, ScalarValue};
+    use datafusion_expr::{ColumnarValue, ScalarUDFImpl};
 
     macro_rules! test_ascii_invoke {
         ($INPUT:expr, $EXPECTED:expr) => {
@@ -182,62 +180,12 @@ mod tests {
         };
     }
 
-    fn ascii_array(input: ArrayRef) -> Result<ArrayRef> {
-        let batch = RecordBatch::try_from_iter([("c0", input)])?;
-        let df_schema = DFSchema::try_from(batch.schema())?;
-        let expr = ascii(col("c0"));
-        let physical_expr = create_physical_expr_with_type_coercion(expr, &df_schema)?;
-        let result = match physical_expr.evaluate(&batch)? {
-            ColumnarValue::Array(result) => Ok(result),
-            _ => datafusion_common::internal_err!("ascii"),
-        }?;
-        Ok(result)
-    }
-
-    fn ascii_scalar(input: ScalarValue) -> Result<ScalarValue> {
-        let df_schema = DFSchema::empty();
-        let expr = ascii(lit(input));
-        let physical_expr = create_physical_expr_with_type_coercion(expr, &df_schema)?;
-        let result = match physical_expr
-            .evaluate(&RecordBatch::new_empty(Arc::clone(df_schema.inner())))?
-        {
-            ColumnarValue::Scalar(result) => Ok(result),
-            _ => datafusion_common::internal_err!("ascii"),
-        }?;
-        Ok(result)
-    }
-
     #[test]
     fn test_ascii_invoke() -> Result<()> {
         test_ascii_invoke!(Some(String::from("x")), Ok(Some(120)));
         test_ascii_invoke!(Some(String::from("a")), Ok(Some(97)));
         test_ascii_invoke!(Some(String::from("")), Ok(Some(0)));
         test_ascii_invoke!(None, Ok(None));
-        Ok(())
-    }
-
-    #[test]
-    fn test_ascii_expr() -> Result<()> {
-        let input = Arc::new(StringArray::from(vec![Some("x")])) as ArrayRef;
-        let expected = Arc::new(Int32Array::from(vec![Some(120)])) as ArrayRef;
-        let result = ascii_array(input)?;
-        assert_eq!(&expected, &result);
-
-        let input = ScalarValue::Utf8(Some(String::from("x")));
-        let expected = ScalarValue::Int32(Some(120));
-        let result = ascii_scalar(input)?;
-        assert_eq!(&expected, &result);
-
-        let input = Arc::new(Int32Array::from(vec![Some(2)])) as ArrayRef;
-        let expected = Arc::new(Int32Array::from(vec![Some(50)])) as ArrayRef;
-        let result = ascii_array(input)?;
-        assert_eq!(&expected, &result);
-
-        let input = ScalarValue::Int32(Some(2));
-        let expected = ScalarValue::Int32(Some(50));
-        let result = ascii_scalar(input)?;
-        assert_eq!(&expected, &result);
-
         Ok(())
     }
 }

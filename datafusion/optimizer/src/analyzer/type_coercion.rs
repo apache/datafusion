@@ -86,10 +86,6 @@ fn coerce_output(plan: LogicalPlan, config: &ConfigOptions) -> Result<LogicalPla
 }
 
 impl AnalyzerRule for TypeCoercion {
-    fn name(&self) -> &str {
-        "type_coercion"
-    }
-
     fn analyze(&self, plan: LogicalPlan, config: &ConfigOptions) -> Result<LogicalPlan> {
         let empty_schema = DFSchema::empty();
 
@@ -100,6 +96,10 @@ impl AnalyzerRule for TypeCoercion {
 
         // finish
         coerce_output(transformed_plan, config)
+    }
+
+    fn name(&self) -> &str {
+        "type_coercion"
     }
 }
 
@@ -578,7 +578,7 @@ fn transform_schema_to_nonview(dfschema: &DFSchemaRef) -> Option<Result<DFSchema
                 DataType::Utf8View => {
                     transformed = true;
                     (
-                        qualifier.cloned() as Option<TableReference>,
+                        qualifier.cloned(),
                         Arc::new(Field::new(
                             field.name(),
                             DataType::LargeUtf8,
@@ -589,7 +589,7 @@ fn transform_schema_to_nonview(dfschema: &DFSchemaRef) -> Option<Result<DFSchema
                 DataType::BinaryView => {
                     transformed = true;
                     (
-                        qualifier.cloned() as Option<TableReference>,
+                        qualifier.cloned(),
                         Arc::new(Field::new(
                             field.name(),
                             DataType::LargeBinary,
@@ -597,10 +597,7 @@ fn transform_schema_to_nonview(dfschema: &DFSchemaRef) -> Option<Result<DFSchema
                         )),
                     )
                 }
-                _ => (
-                    qualifier.cloned() as Option<TableReference>,
-                    Arc::clone(field),
-                ),
+                _ => (qualifier.cloned(), Arc::clone(field)),
             })
             .unzip();
 
@@ -1015,11 +1012,11 @@ fn project_with_column_index(
 
 #[cfg(test)]
 mod test {
-    use std::any::Any;
-    use std::sync::Arc;
-
+    use arrow::array::{ArrayRef, Int32Array, RecordBatch, StringArray};
     use arrow::datatypes::DataType::Utf8;
     use arrow::datatypes::{DataType, Field, TimeUnit};
+    use std::any::Any;
+    use std::sync::Arc;
 
     use crate::analyzer::type_coercion::{
         coerce_case_expression, TypeCoercion, TypeCoercionRewriter,
@@ -1028,6 +1025,7 @@ mod test {
     use datafusion_common::config::ConfigOptions;
     use datafusion_common::tree_node::{TransformedResult, TreeNode};
     use datafusion_common::{DFSchema, DFSchemaRef, Result, ScalarValue};
+    use datafusion_expr::execution_props::ExecutionProps;
     use datafusion_expr::expr::{self, InSubquery, Like, ScalarFunction};
     use datafusion_expr::logical_plan::{EmptyRelation, Projection, Sort};
     use datafusion_expr::test::function_stub::avg_udaf;
@@ -1037,7 +1035,9 @@ mod test {
         Operator, ScalarUDF, ScalarUDFImpl, Signature, SimpleAggregateUDF, Subquery,
         Volatility,
     };
+    use datafusion_functions::expr_fn::ascii;
     use datafusion_functions_aggregate::average::AvgAccumulator;
+    use datafusion_physical_expr::PhysicalExpr;
 
     fn empty() -> Arc<LogicalPlan> {
         Arc::new(LogicalPlan::EmptyRelation(EmptyRelation {
@@ -2131,6 +2131,79 @@ mod test {
         \n      EmptyRelation\
         \n  EmptyRelation";
         assert_analyzed_plan_eq(Arc::new(TypeCoercion::new()), plan, expected)?;
+        Ok(())
+    }
+
+    /// Create a [`PhysicalExpr`] from an [`Expr`] after applying type coercion.
+    fn create_physical_expr_with_type_coercion(
+        expr: Expr,
+        df_schema: &DFSchema,
+    ) -> Result<Arc<dyn PhysicalExpr>> {
+        let props = ExecutionProps::default();
+        let coerced_expr = expr
+            .rewrite(&mut TypeCoercionRewriter::new(df_schema))?
+            .data;
+        let physical_expr = datafusion_physical_expr::create_physical_expr(
+            &coerced_expr,
+            df_schema,
+            &props,
+        )?;
+        Ok(physical_expr)
+    }
+
+    fn evaluate_expr_with_array(
+        expr: Expr,
+        batch: RecordBatch,
+        df_schema: &DFSchema,
+    ) -> Result<ArrayRef> {
+        let physical_expr = create_physical_expr_with_type_coercion(expr, df_schema)?;
+        match physical_expr.evaluate(&batch)? {
+            ColumnarValue::Array(result) => Ok(result),
+            _ => datafusion_common::internal_err!(
+                "Expected array result in evaluate_expr_with_array"
+            ),
+        }
+    }
+
+    fn evaluate_expr_with_scalar(expr: Expr) -> Result<ScalarValue> {
+        let df_schema = DFSchema::empty();
+        let physical_expr = create_physical_expr_with_type_coercion(expr, &df_schema)?;
+        match physical_expr
+            .evaluate(&RecordBatch::new_empty(Arc::clone(df_schema.inner())))?
+        {
+            ColumnarValue::Scalar(result) => Ok(result),
+            _ => datafusion_common::internal_err!(
+                "Expected scalar result in evaluate_expr_with_scalar"
+            ),
+        }
+    }
+
+    #[test]
+    fn test_ascii_expr() -> Result<()> {
+        let input = Arc::new(StringArray::from(vec![Some("x")])) as ArrayRef;
+        let batch = RecordBatch::try_from_iter([("c0", input)])?;
+        let df_schema = DFSchema::try_from(batch.schema())?;
+        let expected = Arc::new(Int32Array::from(vec![Some(120)])) as ArrayRef;
+        let result = evaluate_expr_with_array(ascii(col("c0")), batch, &df_schema)?;
+        assert_eq!(&expected, &result);
+
+        let input = ScalarValue::Utf8(Some(String::from("x")));
+        let expected = ScalarValue::Int32(Some(120));
+        let result = evaluate_expr_with_scalar(ascii(lit(input)))?;
+        assert_eq!(&expected, &result);
+
+        let input = Arc::new(Int32Array::from(vec![Some(2)])) as ArrayRef;
+        let batch = RecordBatch::try_from_iter([("c0", input)])?;
+        let df_schema = DFSchema::try_from(batch.schema())?;
+        let expected = Arc::new(Int32Array::from(vec![Some(50)])) as ArrayRef;
+        let result = evaluate_expr_with_array(ascii(col("c0")), batch, &df_schema)?;
+        assert_eq!(&expected, &result);
+
+        let input = ScalarValue::Int32(Some(2));
+        let expected = ScalarValue::Int32(Some(50));
+        let result = evaluate_expr_with_scalar(ascii(lit(input)))?;
+        assert_eq!(&expected, &result);
+
         Ok(())
     }
 }
