@@ -425,8 +425,8 @@ fn collect_new_statistics(
                     // If the interval is `None`, we can say that there are no rows:
                     return ColumnStatistics {
                         null_count: Precision::Exact(0),
-                        max_value: Precision::Exact(ScalarValue::Int32(Some(0))),
-                        min_value: Precision::Exact(ScalarValue::Int32(Some(0))),
+                        max_value: Precision::Exact(ScalarValue::Null),
+                        min_value: Precision::Exact(ScalarValue::Null),
                         distinct_count: Precision::Exact(0),
                     };
                 };
@@ -1051,14 +1051,16 @@ mod tests {
             statistics.column_statistics,
             vec![
                 ColumnStatistics {
-                    min_value: Precision::Inexact(ScalarValue::Int32(Some(1))),
-                    max_value: Precision::Inexact(ScalarValue::Int32(Some(100))),
-                    ..Default::default()
+                    min_value: Precision::Exact(ScalarValue::Null),
+                    max_value: Precision::Exact(ScalarValue::Null),
+                    distinct_count: Precision::Exact(0),
+                    null_count: Precision::Exact(0),
                 },
                 ColumnStatistics {
-                    min_value: Precision::Inexact(ScalarValue::Int32(Some(1))),
-                    max_value: Precision::Inexact(ScalarValue::Int32(Some(3))),
-                    ..Default::default()
+                    min_value: Precision::Exact(ScalarValue::Null),
+                    max_value: Precision::Exact(ScalarValue::Null),
+                    distinct_count: Precision::Exact(0),
+                    null_count: Precision::Exact(0),
                 },
             ]
         );
