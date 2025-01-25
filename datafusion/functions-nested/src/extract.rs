@@ -424,11 +424,11 @@ fn array_slice_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
     match array_data_type {
         Null => Ok(Arc::clone(&args[0])),
         List(field_ref) if null_input => Ok(Arc::new(GenericListArray::<i32>::new_null(
-            field_ref.clone(),
+            Arc::clone(field_ref),
             1,
         ))),
         LargeList(field_ref) if null_input => Ok(Arc::new(
-            GenericListArray::<i64>::new_null(field_ref.clone(), 1),
+            GenericListArray::<i64>::new_null(Arc::clone(field_ref), 1),
         )),
         List(_) => {
             let array = as_list_array(&args[0])?;
