@@ -67,6 +67,7 @@ pub fn sum(expr: Expr) -> Expr {
         None,
         None,
         None,
+        None,
     ))
 }
 
@@ -80,6 +81,7 @@ pub fn count(expr: Expr) -> Expr {
         None,
         None,
         None,
+        None,
     ))
 }
 
@@ -90,6 +92,7 @@ pub fn avg(expr: Expr) -> Expr {
         avg_udaf(),
         vec![expr],
         false,
+        None,
         None,
         None,
         None,
@@ -291,6 +294,7 @@ pub fn min(expr: Expr) -> Expr {
         None,
         None,
         None,
+        None,
     ))
 }
 
@@ -373,6 +377,7 @@ pub fn max(expr: Expr) -> Expr {
         max_udaf(),
         vec![expr],
         false,
+        None,
         None,
         None,
         None,

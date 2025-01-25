@@ -100,6 +100,7 @@ impl AggregateUDFImpl for BetterAvgUdaf {
                 aggregate_function.filter,
                 aggregate_function.order_by,
                 aggregate_function.null_treatment,
+                aggregate_function.within_group,
             )))
         };
 

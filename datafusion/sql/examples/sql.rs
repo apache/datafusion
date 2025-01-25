@@ -70,6 +70,7 @@ struct MyContextProvider {
     options: ConfigOptions,
     tables: HashMap<String, Arc<dyn TableSource>>,
     udafs: HashMap<String, Arc<AggregateUDF>>,
+    ordered_set_udafs: HashMap<String, Arc<AggregateUDF>>,
     expr_planners: Vec<Arc<dyn ExprPlanner>>,
 }
 
@@ -116,6 +117,7 @@ impl MyContextProvider {
             tables,
             options: Default::default(),
             udafs: Default::default(),
+            ordered_set_udafs: Default::default(),
             expr_planners: vec![],
         }
     }
@@ -141,6 +143,10 @@ impl ContextProvider for MyContextProvider {
 
     fn get_aggregate_meta(&self, name: &str) -> Option<Arc<AggregateUDF>> {
         self.udafs.get(name).cloned()
+    }
+
+    fn get_ordered_set_aggregate_meta(&self, name: &str) -> Option<Arc<AggregateUDF>> {
+        self.ordered_set_udafs.get(name).cloned()
     }
 
     fn get_variable_type(&self, _variable_names: &[String]) -> Option<DataType> {

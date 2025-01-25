@@ -163,6 +163,7 @@ impl ExprPlanner for FieldAccessPlanner {
                                 agg_func.filter,
                                 agg_func.order_by,
                                 agg_func.null_treatment,
+                                agg_func.within_group,
                             ),
                         )))
                     }

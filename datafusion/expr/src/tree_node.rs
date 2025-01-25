@@ -247,18 +247,38 @@ impl TreeNode for Expr {
                 filter,
                 order_by,
                 null_treatment,
-            }) => (args, filter, order_by).map_elements(f)?.map_data(
-                |(new_args, new_filter, new_order_by)| {
-                    Ok(Expr::AggregateFunction(AggregateFunction::new_udf(
-                        func,
-                        new_args,
-                        distinct,
-                        new_filter,
-                        new_order_by,
-                        null_treatment,
-                    )))
-                },
-            )?,
+                within_group,
+            }) => {
+                if within_group.is_some() {
+                    (args, filter, within_group).map_elements(f)?.map_data(
+                        |(new_args, new_filter, new_within_group)| {
+                            Ok(Expr::AggregateFunction(AggregateFunction::new_udf(
+                                func,
+                                new_args,
+                                distinct,
+                                new_filter,
+                                order_by,
+                                null_treatment,
+                                new_within_group,
+                            )))
+                        },
+                    )?
+                } else {
+                    (args, filter, order_by).map_elements(f)?.map_data(
+                        |(new_args, new_filter, new_order_by)| {
+                            Ok(Expr::AggregateFunction(AggregateFunction::new_udf(
+                                func,
+                                new_args,
+                                distinct,
+                                new_filter,
+                                new_order_by,
+                                null_treatment,
+                                within_group,
+                            )))
+                        },
+                    )?
+                }
+            },
             Expr::GroupingSet(grouping_set) => match grouping_set {
                 GroupingSet::Rollup(exprs) => exprs
                     .map_elements(f)?
