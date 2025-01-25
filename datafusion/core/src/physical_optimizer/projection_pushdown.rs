@@ -31,7 +31,7 @@ use datafusion_common::tree_node::{TransformedResult, TreeNode};
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use datafusion_physical_plan::projection::remove_unnecessary_projections;
 
-/// This rule inspects [`ProjectionExec`]'s in the given physical plan and tries to
+/// This rule inspects `ProjectionExec`'s in the given physical plan and tries to
 /// remove or swap with its child.
 #[derive(Default, Debug)]
 pub struct ProjectionPushdown {}
@@ -90,10 +90,6 @@ mod tests {
         binary, col, BinaryExpr, CaseExpr, CastExpr, Column, Literal, NegativeExpr,
     };
     use datafusion_physical_expr::ScalarFunctionExpr;
-    use datafusion_physical_expr::{
-        Distribution, Partitioning, PhysicalExpr, PhysicalSortExpr,
-        PhysicalSortRequirement,
-    };
     use datafusion_physical_expr::{
         Distribution, Partitioning, PhysicalExpr, PhysicalSortExpr,
         PhysicalSortRequirement,
