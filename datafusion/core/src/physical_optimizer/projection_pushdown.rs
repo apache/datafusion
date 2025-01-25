@@ -20,23 +20,16 @@
 //! projections one by one if the operator below is amenable to this. If a
 //! projection reaches a source, it can even disappear from the plan entirely.
 
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::error::Result;
 use crate::physical_plan::ExecutionPlan;
 
 use datafusion_common::config::ConfigOptions;
-use datafusion_common::tree_node::{
-    Transformed, TransformedResult, TreeNode, TreeNodeRecursion,
-};
-use datafusion_physical_expr::expressions::{Column, Literal};
-use datafusion_physical_expr::PhysicalExpr;
+use datafusion_common::tree_node::{TransformedResult, TreeNode};
 
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
-use datafusion_physical_plan::projection::{
-    remove_unnecessary_projections, update_expr, ProjectionExec,
-};
+use datafusion_physical_plan::projection::remove_unnecessary_projections;
 
 /// This rule inspects [`ProjectionExec`]'s in the given physical plan and tries to
 /// remove or swap with its child.
@@ -73,30 +66,18 @@ mod tests {
     use std::any::Any;
 
     use super::*;
-    use crate::datasource::physical_plan::CsvExec;
-    use crate::physical_plan::memory::MemoryExec;
-    use crate::physical_plan::repartition::RepartitionExec;
-    use crate::physical_plan::sorts::sort::SortExec;
-    use crate::physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
-    use datafusion_physical_expr::{
-        Distribution, Partitioning, PhysicalExpr, PhysicalSortExpr,
-        PhysicalSortRequirement,
-    };
-    use datafusion_physical_expr_common::sort_expr::{LexOrdering, LexRequirement};
-    use datafusion_physical_optimizer::output_requirements::OutputRequirementExec;
-    use datafusion_physical_plan::coalesce_partitions::CoalescePartitionsExec;
-    use datafusion_physical_plan::filter::FilterExec;
-    use datafusion_physical_plan::joins::utils::{ColumnIndex, JoinFilter};
-    use datafusion_physical_plan::streaming::StreamingTableExec;
-    use datafusion_physical_plan::union::UnionExec;
-
     use crate::datasource::file_format::file_compression_type::FileCompressionType;
     use crate::datasource::listing::PartitionedFile;
+    use crate::datasource::physical_plan::CsvExec;
     use crate::datasource::physical_plan::FileScanConfig;
     use crate::physical_plan::get_plan_string;
     use crate::physical_plan::joins::{
         HashJoinExec, NestedLoopJoinExec, StreamJoinPartitionMode, SymmetricHashJoinExec,
     };
+    use crate::physical_plan::memory::MemoryExec;
+    use crate::physical_plan::repartition::RepartitionExec;
+    use crate::physical_plan::sorts::sort::SortExec;
+    use crate::physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
 
     use arrow_schema::{DataType, Field, Schema, SchemaRef, SortOptions};
     use datafusion_common::{JoinSide, JoinType, ScalarValue};
@@ -106,11 +87,27 @@ mod tests {
         ColumnarValue, Operator, ScalarUDF, ScalarUDFImpl, Signature, Volatility,
     };
     use datafusion_physical_expr::expressions::{
-        binary, col, BinaryExpr, CaseExpr, CastExpr, NegativeExpr,
+        binary, col, BinaryExpr, CaseExpr, CastExpr, Column, Literal, NegativeExpr,
     };
     use datafusion_physical_expr::ScalarFunctionExpr;
+    use datafusion_physical_expr::{
+        Distribution, Partitioning, PhysicalExpr, PhysicalSortExpr,
+        PhysicalSortRequirement,
+    };
+    use datafusion_physical_expr::{
+        Distribution, Partitioning, PhysicalExpr, PhysicalSortExpr,
+        PhysicalSortRequirement,
+    };
+    use datafusion_physical_expr_common::sort_expr::{LexOrdering, LexRequirement};
+    use datafusion_physical_optimizer::output_requirements::OutputRequirementExec;
+    use datafusion_physical_plan::coalesce_partitions::CoalescePartitionsExec;
+    use datafusion_physical_plan::filter::FilterExec;
+    use datafusion_physical_plan::joins::utils::{ColumnIndex, JoinFilter};
     use datafusion_physical_plan::joins::PartitionMode;
+    use datafusion_physical_plan::projection::{update_expr, ProjectionExec};
     use datafusion_physical_plan::streaming::PartitionStream;
+    use datafusion_physical_plan::streaming::StreamingTableExec;
+    use datafusion_physical_plan::union::UnionExec;
 
     use itertools::Itertools;
 
