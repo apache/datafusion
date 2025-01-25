@@ -2036,6 +2036,12 @@ select array_slice(a, -1, 2, 1), array_slice(a, -1, 2),
 query error DataFusion error: Error during planning: array_slice does not support zero arguments
 select array_slice();
 
+# Testing with NULLs should result in a NULL
+query B
+select array_slice(NULL, NULL, NULL) IS NULL;
+----
+true
+
 ## array_any_value (aliases: list_any_value)
 
 # Testing with empty arguments should result in an error

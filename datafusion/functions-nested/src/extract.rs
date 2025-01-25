@@ -27,7 +27,7 @@ use arrow::array::MutableArrayData;
 use arrow::array::OffsetSizeTrait;
 use arrow::buffer::OffsetBuffer;
 use arrow::datatypes::DataType;
-use arrow_schema::DataType::{FixedSizeList, LargeList, List};
+use arrow_schema::DataType::{FixedSizeList, LargeList, List, Null};
 use arrow_schema::Field;
 use datafusion_common::cast::as_int64_array;
 use datafusion_common::cast::as_large_list_array;
@@ -419,16 +419,17 @@ fn array_slice_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
         None
     };
 
-    let from_array = as_int64_array(&args[1])?;
-    let to_array = as_int64_array(&args[2])?;
-
+    let null_input = args.iter().find(|arg| arg.data_type().is_null());
     let array_data_type = args[0].data_type();
-    match array_data_type {
-        List(_) => {
+    match (array_data_type, null_input) {
+        (List(_) | LargeList(_) | Null, Some(null)) => Ok(Arc::clone(null)),
+        (List(_), None) => {
             let array = as_list_array(&args[0])?;
+            let from_array = as_int64_array(&args[1])?;
+            let to_array = as_int64_array(&args[2])?;
             general_array_slice::<i32>(array, from_array, to_array, stride)
         }
-        LargeList(_) => {
+        (LargeList(_), None) => {
             let array = as_large_list_array(&args[0])?;
             let from_array = as_int64_array(&args[1])?;
             let to_array = as_int64_array(&args[2])?;
