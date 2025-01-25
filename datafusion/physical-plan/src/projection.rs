@@ -29,7 +29,7 @@ use std::task::{Context, Poll};
 use super::expressions::{CastExpr, Column, Literal};
 use super::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
 use super::{
-    displayable, DisplayAs, ExecutionPlanProperties, PlanProperties, RecordBatchStream,
+    DisplayAs, ExecutionPlanProperties, PlanProperties, RecordBatchStream,
     SendableRecordBatchStream, Statistics,
 };
 
