@@ -207,6 +207,7 @@
 //! [`QueryPlanner`]: execution::context::QueryPlanner
 //! [`OptimizerRule`]: datafusion_optimizer::optimizer::OptimizerRule
 //! [`AnalyzerRule`]:  datafusion_optimizer::analyzer::AnalyzerRule
+//! [`PhysicalOptimizerRule`]: datafusion_physical_optimizer::PhysicalOptimizerRule
 //!
 //! ## Query Planning and Execution Overview
 //!
