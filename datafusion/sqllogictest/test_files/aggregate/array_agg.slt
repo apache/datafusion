@@ -1,0 +1,522 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+
+#   http://www.apache.org/licenses/LICENSE-2.0
+
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+include ./init.slt.part
+
+
+# array agg can use order by
+query error DataFusion error: Object Store error: Object at location /home/logan/dev/datafusion/testing/data/csv/aggregate_test_100\.csv not found: No such file or directory \(os error 2\)
+SELECT array_agg(c13 ORDER BY c13)
+FROM
+  (SELECT *
+  FROM aggregate_test_100
+  ORDER BY c13
+  LIMIT 5) as t1
+
+statement ok
+CREATE EXTERNAL TABLE agg_order (
+c1 INT NOT NULL,
+c2 INT NOT NULL,
+c3 INT NOT NULL
+)
+STORED AS CSV
+LOCATION '../core/tests/data/aggregate_agg_multi_order.csv'
+OPTIONS ('format.has_header' 'true');
+
+# test array_agg with order by multiple columns
+query ?
+select array_agg(c1 order by c2 desc, c3) from agg_order;
+----
+[5, 6, 7, 8, 9, 1, 2, 3, 4, 10]
+
+query TT
+explain select array_agg(c1 order by c2 desc, c3) from agg_order;
+----
+logical_plan
+01)Aggregate: groupBy=[[]], aggr=[[array_agg(agg_order.c1) ORDER BY [agg_order.c2 DESC NULLS FIRST, agg_order.c3 ASC NULLS LAST]]]
+02)--TableScan: agg_order projection=[c1, c2, c3]
+physical_plan
+01)AggregateExec: mode=Final, gby=[], aggr=[array_agg(agg_order.c1) ORDER BY [agg_order.c2 DESC NULLS FIRST, agg_order.c3 ASC NULLS LAST]]
+02)--CoalescePartitionsExec
+03)----AggregateExec: mode=Partial, gby=[], aggr=[array_agg(agg_order.c1) ORDER BY [agg_order.c2 DESC NULLS FIRST, agg_order.c3 ASC NULLS LAST]]
+04)------SortExec: expr=[c2@1 DESC, c3@2 ASC NULLS LAST], preserve_partitioning=[true]
+05)--------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+06)----------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/aggregate_agg_multi_order.csv]]}, projection=[c1, c2, c3], has_header=true
+
+# test array_agg_order with list data type
+statement ok
+CREATE TABLE array_agg_order_list_table AS VALUES
+  ('w', 2, [1,2,3], 10),
+  ('w', 1, [9,5,2], 20),
+  ('w', 1, [3,2,5], 30),
+  ('b', 2, [4,5,6], 20),
+  ('b', 1, [7,8,9], 30)
+;
+
+query T? rowsort
+select column1, array_agg(column3 order by column2, column4 desc) from array_agg_order_list_table group by column1;
+----
+b [[7, 8, 9], [4, 5, 6]]
+w [[3, 2, 5], [9, 5, 2], [1, 2, 3]]
+
+query T?? rowsort
+select column1, first_value(column3 order by column2, column4 desc), last_value(column3 order by column2, column4 desc) from array_agg_order_list_table group by column1;
+----
+b [7, 8, 9] [4, 5, 6]
+w [3, 2, 5] [1, 2, 3]
+
+query T? rowsort
+select column1, nth_value(column3, 2 order by column2, column4 desc) from array_agg_order_list_table group by column1;
+----
+b [4, 5, 6]
+w [9, 5, 2]
+
+statement ok
+drop table array_agg_order_list_table;
+
+# test array_agg_distinct with list data type
+statement ok
+CREATE TABLE array_agg_distinct_list_table AS VALUES
+  ('w', [0,1]),
+  ('w', [0,1]),
+  ('w', [1,0]),
+  ('b', [1,0]),
+  ('b', [1,0]),
+  ('b', [1,0]),
+  ('b', [0,1])
+;
+
+# Apply array_sort to have deterministic result, higher dimension nested array also works but not for array sort,
+# so they are covered in `datafusion/functions-aggregate/src/array_agg.rs`
+query ??
+select array_sort(c1), array_sort(c2) from (
+  select array_agg(distinct column1) as c1, array_agg(distinct column2) as c2 from array_agg_distinct_list_table
+);
+----
+[b, w] [[0, 1], [1, 0]]
+
+statement ok
+drop table array_agg_distinct_list_table;
+
+statement error This feature is not implemented: Calling array_agg: LIMIT not supported in function arguments: 1
+SELECT array_agg(c13 LIMIT 1) FROM aggregate_test_100
+
+
+# Test distinct aggregate function with merge batch
+query II
+with A as (
+    select 1 as id, 2 as foo
+    UNION ALL
+    select 1, null
+    UNION ALL
+    select 1, null
+    UNION ALL
+    select 1, 3
+    UNION ALL
+    select 1, 2
+    ---- The order is non-deterministic, verify with length
+) select array_length(array_agg(distinct a.foo)), sum(distinct 1) from A a group by a.id;
+----
+3 1
+
+# It has only AggregateExec with FinalPartitioned mode, so `merge_batch` is used
+# If the plan is changed, whether the `merge_batch` is used should be verified to ensure the test coverage
+query TT
+explain with A as (
+    select 1 as id, 2 as foo
+    UNION ALL
+    select 1, null
+    UNION ALL
+    select 1, null
+    UNION ALL
+    select 1, 3
+    UNION ALL
+    select 1, 2
+) select array_length(array_agg(distinct a.foo)), sum(distinct 1) from A a group by a.id;
+----
+logical_plan
+01)Projection: array_length(array_agg(DISTINCT a.foo)), sum(DISTINCT Int64(1))
+02)--Aggregate: groupBy=[[a.id]], aggr=[[array_agg(DISTINCT a.foo), sum(DISTINCT Int64(1))]]
+03)----SubqueryAlias: a
+04)------SubqueryAlias: a
+05)--------Union
+06)----------Projection: Int64(1) AS id, Int64(2) AS foo
+07)------------EmptyRelation
+08)----------Projection: Int64(1) AS id, Int64(NULL) AS foo
+09)------------EmptyRelation
+10)----------Projection: Int64(1) AS id, Int64(NULL) AS foo
+11)------------EmptyRelation
+12)----------Projection: Int64(1) AS id, Int64(3) AS foo
+13)------------EmptyRelation
+14)----------Projection: Int64(1) AS id, Int64(2) AS foo
+15)------------EmptyRelation
+physical_plan
+01)ProjectionExec: expr=[array_length(array_agg(DISTINCT a.foo)@1) as array_length(array_agg(DISTINCT a.foo)), sum(DISTINCT Int64(1))@2 as sum(DISTINCT Int64(1))]
+02)--AggregateExec: mode=FinalPartitioned, gby=[id@0 as id], aggr=[array_agg(DISTINCT a.foo), sum(DISTINCT Int64(1))], ordering_mode=Sorted
+03)----CoalesceBatchesExec: target_batch_size=8192
+04)------RepartitionExec: partitioning=Hash([id@0], 4), input_partitions=5
+05)--------AggregateExec: mode=Partial, gby=[id@0 as id], aggr=[array_agg(DISTINCT a.foo), sum(DISTINCT Int64(1))], ordering_mode=Sorted
+06)----------UnionExec
+07)------------ProjectionExec: expr=[1 as id, 2 as foo]
+08)--------------PlaceholderRowExec
+09)------------ProjectionExec: expr=[1 as id, NULL as foo]
+10)--------------PlaceholderRowExec
+11)------------ProjectionExec: expr=[1 as id, NULL as foo]
+12)--------------PlaceholderRowExec
+13)------------ProjectionExec: expr=[1 as id, 3 as foo]
+14)--------------PlaceholderRowExec
+15)------------ProjectionExec: expr=[1 as id, 2 as foo]
+16)--------------PlaceholderRowExec
+
+
+# csv_query_array_agg
+query error DataFusion error: Object Store error: Object at location /home/logan/dev/datafusion/testing/data/csv/aggregate_test_100\.csv not found: No such file or directory \(os error 2\)
+SELECT array_agg(c13) FROM (SELECT * FROM aggregate_test_100 ORDER BY c13 LIMIT 2) test
+
+# csv_query_array_agg_empty
+query ?
+SELECT array_agg(c13) FROM (SELECT * FROM aggregate_test_100 LIMIT 0) test
+----
+NULL
+
+# csv_query_array_agg_one
+query error DataFusion error: Object Store error: Object at location /home/logan/dev/datafusion/testing/data/csv/aggregate_test_100\.csv not found: No such file or directory \(os error 2\)
+SELECT array_agg(c13) FROM (SELECT * FROM aggregate_test_100 ORDER BY c13 LIMIT 1) test
+
+# csv_query_array_agg_with_overflow
+query error DataFusion error: Object Store error: Object at location /home/logan/dev/datafusion/testing/data/csv/aggregate_test_100\.csv not found: No such file or directory \(os error 2\)
+select c2, sum(c3) sum_c3, avg(c3) avg_c3, max(c3) max_c3, min(c3) min_c3, count(c3) count_c3 from aggregate_test_100 group by c2 order by c2
+
+# csv_query_array_cube_agg_with_overflow
+query error DataFusion error: Object Store error: Object at location /home/logan/dev/datafusion/testing/data/csv/aggregate_test_100\.csv not found: No such file or directory \(os error 2\)
+select c1, c2, sum(c3) sum_c3, avg(c3) avg_c3, max(c3) max_c3, min(c3) min_c3, count(c3) count_c3 from aggregate_test_100 group by CUBE (c1,c2) order by c1, c2
+
+# select with count to forces array_agg_distinct function, since single distinct expression is converted to group by by optimizer
+# csv_query_array_agg_distinct
+query error DataFusion error: Object Store error: Object at location /home/logan/dev/datafusion/testing/data/csv/aggregate_test_100\.csv not found: No such file or directory \(os error 2\)
+SELECT array_sort(array_agg(distinct c2)), count(1) FROM aggregate_test_100
+
+
+# array_agg_zero
+query ?
+SELECT ARRAY_AGG([])
+----
+[[]]
+
+# array_agg_one
+query ?
+SELECT ARRAY_AGG([1])
+----
+[[1]]
+
+# test array_agg with no row qualified
+statement ok
+create table t(a int, b float, c bigint) as values (1, 1.2, 2);
+
+# returns NULL, follows DuckDB's behaviour
+query ?
+select array_agg(a) from t where a > 2;
+----
+NULL
+
+query ?
+select array_agg(b) from t where b > 3.1;
+----
+NULL
+
+query ?
+select array_agg(c) from t where c > 3;
+----
+NULL
+
+query ?I
+select array_agg(c), count(1) from t where c > 3;
+----
+NULL 0
+
+# returns 0 rows if group by is applied, follows DuckDB's behaviour
+query ?
+select array_agg(a) from t where a > 3 group by a;
+----
+
+query ?I
+select array_agg(a), count(1) from t where a > 3 group by a;
+----
+
+# returns NULL, follows DuckDB's behaviour
+query ?
+select array_agg(distinct a) from t where a > 3;
+----
+NULL
+
+query ?I
+select array_agg(distinct a), count(1) from t where a > 3;
+----
+NULL 0
+
+# returns 0 rows if group by is applied, follows DuckDB's behaviour
+query ?
+select array_agg(distinct a) from t where a > 3 group by a;
+----
+
+query ?I
+select array_agg(distinct a), count(1) from t where a > 3 group by a;
+----
+
+# test order sensitive array agg
+query ?
+select array_agg(a order by a) from t where a > 3;
+----
+NULL
+
+query ?
+select array_agg(a order by a) from t where a > 3 group by a;
+----
+
+query ?I
+select array_agg(a order by a), count(1) from t where a > 3 group by a;
+----
+
+statement ok
+drop table t;
+
+# test with no values
+statement ok
+create table t(a int, b float, c bigint);
+
+query ?
+select array_agg(a) from t;
+----
+NULL
+
+query ?
+select array_agg(b) from t;
+----
+NULL
+
+query ?
+select array_agg(c) from t;
+----
+NULL
+
+query ?I
+select array_agg(distinct a), count(1) from t;
+----
+NULL 0
+
+query ?I
+select array_agg(distinct b), count(1) from t;
+----
+NULL 0
+
+query ?I
+select array_agg(distinct b), count(1) from t;
+----
+NULL 0
+
+statement ok
+drop table t;
+
+
+# array_agg_i32
+statement ok
+create table t (c1 int) as values (1), (2), (3), (4), (5);
+
+query ?
+select array_agg(c1) from t;
+----
+[1, 2, 3, 4, 5]
+
+statement ok
+drop table t;
+
+# array_agg_nested
+statement ok
+create table t as values (make_array([1, 2, 3], [4, 5])), (make_array([6], [7, 8])), (make_array([9]));
+
+query ?
+select array_agg(column1) from t;
+----
+[[[1, 2, 3], [4, 5]], [[6], [7, 8]], [[9]]]
+
+statement ok
+drop table t;
+
+
+# array agg can use order by
+query error DataFusion error: Object Store error: Object at location /home/logan/dev/datafusion/testing/data/csv/aggregate_test_100\.csv not found: No such file or directory \(os error 2\)
+SELECT array_agg(c13 ORDER BY c13)
+FROM
+  (SELECT *
+  FROM aggregate_test_100
+  ORDER BY c13
+  LIMIT 5) as t1
+
+statement error DataFusion error: Execution error: Table 'agg_order' already exists
+CREATE EXTERNAL TABLE agg_order (
+c1 INT NOT NULL,
+c2 INT NOT NULL,
+c3 INT NOT NULL
+)
+STORED AS CSV
+LOCATION '../core/tests/data/aggregate_agg_multi_order.csv'
+OPTIONS ('format.has_header' 'true');
+
+# test array_agg with order by multiple columns
+query ?
+select array_agg(c1 order by c2 desc, c3) from agg_order;
+----
+[5, 6, 7, 8, 9, 1, 2, 3, 4, 10]
+
+query TT
+explain select array_agg(c1 order by c2 desc, c3) from agg_order;
+----
+logical_plan
+01)Aggregate: groupBy=[[]], aggr=[[array_agg(agg_order.c1) ORDER BY [agg_order.c2 DESC NULLS FIRST, agg_order.c3 ASC NULLS LAST]]]
+02)--TableScan: agg_order projection=[c1, c2, c3]
+physical_plan
+01)AggregateExec: mode=Final, gby=[], aggr=[array_agg(agg_order.c1) ORDER BY [agg_order.c2 DESC NULLS FIRST, agg_order.c3 ASC NULLS LAST]]
+02)--CoalescePartitionsExec
+03)----AggregateExec: mode=Partial, gby=[], aggr=[array_agg(agg_order.c1) ORDER BY [agg_order.c2 DESC NULLS FIRST, agg_order.c3 ASC NULLS LAST]]
+04)------SortExec: expr=[c2@1 DESC, c3@2 ASC NULLS LAST], preserve_partitioning=[true]
+05)--------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+06)----------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/aggregate_agg_multi_order.csv]]}, projection=[c1, c2, c3], has_header=true
+
+# test array_agg_order with list data type
+statement ok
+CREATE TABLE array_agg_order_list_table AS VALUES
+  ('w', 2, [1,2,3], 10),
+  ('w', 1, [9,5,2], 20),
+  ('w', 1, [3,2,5], 30),
+  ('b', 2, [4,5,6], 20),
+  ('b', 1, [7,8,9], 30)
+;
+
+query T? rowsort
+select column1, array_agg(column3 order by column2, column4 desc) from array_agg_order_list_table group by column1;
+----
+b [[7, 8, 9], [4, 5, 6]]
+w [[3, 2, 5], [9, 5, 2], [1, 2, 3]]
+
+query T?? rowsort
+select column1, first_value(column3 order by column2, column4 desc), last_value(column3 order by column2, column4 desc) from array_agg_order_list_table group by column1;
+----
+b [7, 8, 9] [4, 5, 6]
+w [3, 2, 5] [1, 2, 3]
+
+query T? rowsort
+select column1, nth_value(column3, 2 order by column2, column4 desc) from array_agg_order_list_table group by column1;
+----
+b [4, 5, 6]
+w [9, 5, 2]
+
+statement ok
+drop table array_agg_order_list_table;
+
+# test array_agg_distinct with list data type
+statement ok
+CREATE TABLE array_agg_distinct_list_table AS VALUES
+  ('w', [0,1]),
+  ('w', [0,1]),
+  ('w', [1,0]),
+  ('b', [1,0]),
+  ('b', [1,0]),
+  ('b', [1,0]),
+  ('b', [0,1])
+;
+
+# Apply array_sort to have deterministic result, higher dimension nested array also works but not for array sort,
+# so they are covered in `datafusion/functions-aggregate/src/array_agg.rs`
+query ??
+select array_sort(c1), array_sort(c2) from (
+  select array_agg(distinct column1) as c1, array_agg(distinct column2) as c2 from array_agg_distinct_list_table
+);
+----
+[b, w] [[0, 1], [1, 0]]
+
+statement ok
+drop table array_agg_distinct_list_table;
+
+statement error This feature is not implemented: Calling array_agg: LIMIT not supported in function arguments: 1
+SELECT array_agg(c13 LIMIT 1) FROM aggregate_test_100
+
+
+# Test distinct aggregate function with merge batch
+query II
+with A as (
+    select 1 as id, 2 as foo
+    UNION ALL
+    select 1, null
+    UNION ALL
+    select 1, null
+    UNION ALL
+    select 1, 3
+    UNION ALL
+    select 1, 2
+    ---- The order is non-deterministic, verify with length
+) select array_length(array_agg(distinct a.foo)), sum(distinct 1) from A a group by a.id;
+----
+3 1
+
+# It has only AggregateExec with FinalPartitioned mode, so `merge_batch` is used
+# If the plan is changed, whether the `merge_batch` is used should be verified to ensure the test coverage
+query TT
+explain with A as (
+    select 1 as id, 2 as foo
+    UNION ALL
+    select 1, null
+    UNION ALL
+    select 1, null
+    UNION ALL
+    select 1, 3
+    UNION ALL
+    select 1, 2
+) select array_length(array_agg(distinct a.foo)), sum(distinct 1) from A a group by a.id;
+----
+logical_plan
+01)Projection: array_length(array_agg(DISTINCT a.foo)), sum(DISTINCT Int64(1))
+02)--Aggregate: groupBy=[[a.id]], aggr=[[array_agg(DISTINCT a.foo), sum(DISTINCT Int64(1))]]
+03)----SubqueryAlias: a
+04)------SubqueryAlias: a
+05)--------Union
+06)----------Projection: Int64(1) AS id, Int64(2) AS foo
+07)------------EmptyRelation
+08)----------Projection: Int64(1) AS id, Int64(NULL) AS foo
+09)------------EmptyRelation
+10)----------Projection: Int64(1) AS id, Int64(NULL) AS foo
+11)------------EmptyRelation
+12)----------Projection: Int64(1) AS id, Int64(3) AS foo
+13)------------EmptyRelation
+14)----------Projection: Int64(1) AS id, Int64(2) AS foo
+15)------------EmptyRelation
+physical_plan
+01)ProjectionExec: expr=[array_length(array_agg(DISTINCT a.foo)@1) as array_length(array_agg(DISTINCT a.foo)), sum(DISTINCT Int64(1))@2 as sum(DISTINCT Int64(1))]
+02)--AggregateExec: mode=FinalPartitioned, gby=[id@0 as id], aggr=[array_agg(DISTINCT a.foo), sum(DISTINCT Int64(1))], ordering_mode=Sorted
+03)----CoalesceBatchesExec: target_batch_size=8192
+04)------RepartitionExec: partitioning=Hash([id@0], 4), input_partitions=5
+05)--------AggregateExec: mode=Partial, gby=[id@0 as id], aggr=[array_agg(DISTINCT a.foo), sum(DISTINCT Int64(1))], ordering_mode=Sorted
+06)----------UnionExec
+07)------------ProjectionExec: expr=[1 as id, 2 as foo]
+08)--------------PlaceholderRowExec
+09)------------ProjectionExec: expr=[1 as id, NULL as foo]
+10)--------------PlaceholderRowExec
+11)------------ProjectionExec: expr=[1 as id, NULL as foo]
+12)--------------PlaceholderRowExec
+13)------------ProjectionExec: expr=[1 as id, 3 as foo]
+14)--------------PlaceholderRowExec
+15)------------ProjectionExec: expr=[1 as id, 2 as foo]
+16)--------------PlaceholderRowExec

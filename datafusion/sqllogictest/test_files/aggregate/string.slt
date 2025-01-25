@@ -1,0 +1,120 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+
+#   http://www.apache.org/licenses/LICENSE-2.0
+
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+statement error
+SELECT STRING_AGG()
+
+statement error
+SELECT STRING_AGG(1,2,3)
+
+statement error
+SELECT STRING_AGG(STRING_AGG('a', ','))
+
+query T
+SELECT STRING_AGG('a', ',')
+----
+a
+
+query TTTT
+SELECT STRING_AGG('a',','), STRING_AGG('a', NULL), STRING_AGG(NULL, ','), STRING_AGG(NULL, NULL)
+----
+a a NULL NULL
+
+query TT
+select string_agg('', '|'), string_agg('a', '');
+----
+(empty) a
+
+query T
+SELECT STRING_AGG(column1, '|') FROM (values (''), (null), (''));
+----
+|
+
+statement ok
+CREATE TABLE strings(g INTEGER, x VARCHAR, y VARCHAR)
+
+query I
+INSERT INTO strings VALUES (1,'a','/'), (1,'b','-'), (2,'i','/'), (2,NULL,'-'), (2,'j','+'), (3,'p','/'), (4,'x','/'), (4,'y','-'), (4,'z','+')
+----
+9
+
+query IT
+SELECT g, STRING_AGG(x,'|') FROM strings GROUP BY g ORDER BY g
+----
+1 a|b
+2 i|j
+3 p
+4 x|y|z
+
+query T
+SELECT STRING_AGG(x,',') FROM strings WHERE g > 100
+----
+NULL
+
+statement ok
+drop table strings
+
+query T
+WITH my_data as (
+SELECT 'text1'::varchar(1000) as my_column union all
+SELECT 'text1'::varchar(1000) as my_column union all
+SELECT 'text1'::varchar(1000) as my_column
+)
+SELECT string_agg(my_column,', ') as my_string_agg
+FROM my_data
+----
+text1, text1, text1
+
+query T
+WITH my_data as (
+SELECT 1 as dummy,  'text1'::varchar(1000) as my_column union all
+SELECT 1 as dummy,  'text1'::varchar(1000) as my_column union all
+SELECT 1 as dummy,  'text1'::varchar(1000) as my_column
+)
+SELECT string_agg(my_column,', ') as my_string_agg
+FROM my_data
+GROUP BY dummy
+----
+text1, text1, text1
+
+# Tests for aggregating with NaN values
+statement ok
+CREATE TABLE float_table (
+    col_f32 FLOAT,
+    col_f32_nan FLOAT,
+    col_f64 DOUBLE,
+    col_f64_nan DOUBLE
+) as VALUES
+( -128.2,  -128.2,                      -128.2,  -128.2 ),
+( 32768.3, arrow_cast('NAN','Float32'), 32768.3, 32768.3 ),
+( 27.3,    27.3,                        27.3,    arrow_cast('NAN','Float64') );
+
+# Test string_agg with largeutf8
+statement ok
+create table string_agg_large_utf8 (c string) as values 
+  (arrow_cast('a', 'LargeUtf8')),
+  (arrow_cast('b', 'LargeUtf8')),
+  (arrow_cast('c', 'LargeUtf8'))
+;
+
+query T
+SELECT STRING_AGG(c, ',') FROM string_agg_large_utf8;
+----
+a,b,c
+
+statement ok
+drop table string_agg_large_utf8;

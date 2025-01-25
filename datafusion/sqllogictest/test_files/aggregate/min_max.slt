@@ -1,0 +1,652 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+
+#   http://www.apache.org/licenses/LICENSE-2.0
+
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+#################
+# Min_Max Begin #
+#################
+# min_decimal, max_decimal
+statement ok
+CREATE TABLE decimals (value DECIMAL(10, 2));
+
+statement ok
+INSERT INTO decimals VALUES (123.0001), (124.00);
+
+query RR
+SELECT MIN(value), MAX(value) FROM decimals;
+----
+123 124
+
+statement ok
+DROP TABLE decimals;
+
+statement ok
+CREATE TABLE decimals_batch (value DECIMAL(10, 0));
+
+statement ok
+INSERT INTO decimals_batch VALUES (1), (2), (3), (4), (5);
+
+query RR
+SELECT MIN(value), MAX(value) FROM decimals_batch;
+----
+1 5
+
+statement ok
+DROP TABLE decimals_batch;
+
+statement ok
+CREATE TABLE decimals_empty (value DECIMAL(10, 0));
+
+query RR
+SELECT MIN(value), MAX(value) FROM decimals_empty;
+----
+NULL NULL
+
+statement ok
+DROP TABLE decimals_empty;
+
+# min_decimal_all_nulls, max_decimal_all_nulls
+statement ok
+CREATE TABLE decimals_all_nulls (value DECIMAL(10, 0));
+
+statement ok
+INSERT INTO decimals_all_nulls VALUES (NULL), (NULL), (NULL), (NULL), (NULL), (NULL);
+
+query RR
+SELECT MIN(value), MAX(value) FROM decimals_all_nulls;
+----
+NULL NULL
+
+statement ok
+DROP TABLE decimals_all_nulls;
+
+# min_decimal_with_nulls, max_decimal_with_nulls
+statement ok
+CREATE TABLE decimals_with_nulls (value DECIMAL(10, 0));
+
+statement ok
+INSERT INTO decimals_with_nulls VALUES (1), (NULL), (3), (4), (5);
+
+query RR
+SELECT MIN(value), MAX(value) FROM decimals_with_nulls;
+----
+1 5
+
+statement ok
+DROP TABLE decimals_with_nulls;
+
+statement ok
+CREATE TABLE decimals_error (value DECIMAL(10, 2));
+
+statement ok
+INSERT INTO decimals_error VALUES (123.00), (arrow_cast(124.001, 'Decimal128(10, 3)'));
+
+query RR
+SELECT MIN(value), MAX(value) FROM decimals_error;
+----
+123 124
+
+statement ok
+DROP TABLE decimals_error;
+
+statement ok
+CREATE TABLE decimals_agg (value DECIMAL(10, 0));
+
+statement ok
+INSERT INTO decimals_agg VALUES (1), (2), (3), (4), (5);
+
+query RR
+SELECT MIN(value), MAX(value) FROM decimals_agg;
+----
+1 5
+
+statement ok
+DROP TABLE decimals_agg;
+
+# min_i32, max_i32
+statement ok
+CREATE TABLE integers (value INT);
+
+statement ok
+INSERT INTO integers VALUES (1), (2), (3), (4), (5);
+
+query II
+SELECT MIN(value), MAX(value) FROM integers
+----
+1 5
+
+statement ok
+DROP TABLE integers;
+
+# min_utf8, max_utf8
+statement ok
+CREATE TABLE strings (value TEXT);
+
+statement ok
+INSERT INTO strings VALUES ('d'), ('a'), ('c'), ('b');
+
+query TT
+SELECT MIN(value), MAX(value) FROM strings
+----
+a d
+
+statement ok
+DROP TABLE strings;
+
+# min_i32_with_nulls, max_i32_with_nulls
+statement ok
+CREATE TABLE integers_with_nulls (value INT);
+
+statement ok
+INSERT INTO integers_with_nulls VALUES (1), (NULL), (3), (4), (5);
+
+query II
+SELECT MIN(value), MAX(value) FROM integers_with_nulls
+----
+1 5
+
+# grouping_sets with null values
+query II rowsort
+SELECT value, min(value) FROM integers_with_nulls GROUP BY CUBE(value)
+----
+1 1
+3 3
+4 4
+5 5
+NULL 1
+NULL NULL
+
+
+statement ok
+DROP TABLE integers_with_nulls;
+
+# min_i32_all_nulls, max_i32_all_nulls
+statement ok
+CREATE TABLE integers_all_nulls (value INT);
+
+query II
+SELECT MIN(value), MAX(value) FROM integers_all_nulls
+----
+NULL NULL
+
+statement ok
+DROP TABLE integers_all_nulls;
+
+# min_u32, max_u32
+statement ok
+CREATE TABLE uintegers (value INT UNSIGNED);
+
+statement ok
+INSERT INTO uintegers VALUES (1), (2), (3), (4), (5);
+
+query II
+SELECT MIN(value), MAX(value) FROM uintegers
+----
+1 5
+
+statement ok
+DROP TABLE uintegers;
+
+# min_f32, max_f32
+statement ok
+CREATE TABLE floats (value FLOAT);
+
+statement ok
+INSERT INTO floats VALUES (1.0), (2.0), (3.0), (4.0), (5.0);
+
+query RR
+SELECT MIN(value), MAX(value) FROM floats
+----
+1 5
+
+statement ok
+DROP TABLE floats;
+
+# min_f64, max_f64
+statement ok
+CREATE TABLE doubles (value DOUBLE);
+
+statement ok
+INSERT INTO doubles VALUES (1.0), (2.0), (3.0), (4.0), (5.0);
+
+query RR
+SELECT MIN(value), MAX(value) FROM doubles
+----
+1 5
+
+statement ok
+DROP TABLE doubles;
+
+# min_date, max_date
+statement ok
+CREATE TABLE dates (value DATE);
+
+statement ok
+INSERT INTO dates VALUES ('1970-01-02'), ('1970-01-03'), ('1970-01-04'), ('1970-01-05'), ('1970-01-06');
+
+query DD
+SELECT MIN(value), MAX(value) FROM dates
+----
+1970-01-02 1970-01-06
+
+statement ok
+DROP TABLE dates;
+
+# min_seconds, max_seconds
+statement ok
+CREATE TABLE times (value TIME);
+
+statement ok
+INSERT INTO times VALUES ('00:00:01'), ('00:00:02'), ('00:00:03'), ('00:00:04'), ('00:00:05');
+
+query DD
+SELECT MIN(value), MAX(value) FROM times
+----
+00:00:01 00:00:05
+
+statement ok
+DROP TABLE times;
+
+# min_milliseconds, max_milliseconds
+statement ok
+CREATE TABLE time32millisecond (value TIME);
+
+statement ok
+INSERT INTO time32millisecond VALUES ('00:00:00.001'), ('00:00:00.002'), ('00:00:00.003'), ('00:00:00.004'), ('00:00:00.005');
+
+query DD
+SELECT MIN(value), MAX(value) FROM time32millisecond
+----
+00:00:00.001 00:00:00.005
+
+statement ok
+DROP TABLE time32millisecond;
+
+# min_microseconds, max_microseconds
+statement ok
+CREATE TABLE time64microsecond (value TIME);
+
+statement ok
+INSERT INTO time64microsecond VALUES ('00:00:00.000001'), ('00:00:00.000002'), ('00:00:00.000003'), ('00:00:00.000004'), ('00:00:00.000005');
+
+query DD
+SELECT MIN(value), MAX(value) FROM time64microsecond
+----
+00:00:00.000001 00:00:00.000005
+
+statement ok
+DROP TABLE time64microsecond;
+
+# min_nanoseconds, max_nanoseconds
+statement ok
+CREATE TABLE time64nanosecond (value TIME);
+
+statement ok
+INSERT INTO time64nanosecond VALUES ('00:00:00.000000001'), ('00:00:00.000000002'), ('00:00:00.000000003'), ('00:00:00.000000004'), ('00:00:00.000000005');
+
+query DD
+SELECT MIN(value), MAX(value) FROM time64nanosecond
+----
+00:00:00.000000001 00:00:00.000000005
+
+statement ok
+DROP TABLE time64nanosecond;
+
+# min_timestamp, max_timestamp
+statement ok
+CREATE TABLE timestampmicrosecond (value TIMESTAMP);
+
+statement ok
+INSERT INTO timestampmicrosecond VALUES ('1970-01-01 00:00:00.000001'), ('1970-01-01 00:00:00.000002'), ('1970-01-01 00:00:00.000003'), ('1970-01-01 00:00:00.000004'), ('1970-01-01 00:00:00.000005');
+
+query PP
+SELECT MIN(value), MAX(value) FROM timestampmicrosecond
+----
+1970-01-01T00:00:00.000001 1970-01-01T00:00:00.000005
+
+statement ok
+DROP TABLE timestampmicrosecond;
+
+# max_bool
+statement ok
+CREATE TABLE max_bool (value BOOLEAN);
+
+statement ok
+INSERT INTO max_bool VALUES (false), (false);
+
+query B
+SELECT MAX(value) FROM max_bool
+----
+false
+
+statement ok
+DROP TABLE max_bool;
+
+statement ok
+CREATE TABLE max_bool (value BOOLEAN);
+
+statement ok
+INSERT INTO max_bool VALUES (true), (true);
+
+query B
+SELECT MAX(value) FROM max_bool
+----
+true
+
+statement ok
+DROP TABLE max_bool;
+
+statement ok
+CREATE TABLE max_bool (value BOOLEAN);
+
+statement ok
+INSERT INTO max_bool VALUES (false), (true), (false);
+
+query B
+SELECT MAX(value) FROM max_bool
+----
+true
+
+statement ok
+DROP TABLE max_bool;
+
+statement ok
+CREATE TABLE max_bool (value BOOLEAN);
+
+statement ok
+INSERT INTO max_bool VALUES (true), (false), (true);
+
+query B
+SELECT MAX(value) FROM max_bool
+----
+true
+
+statement ok
+DROP TABLE max_bool;
+
+# min_bool
+statement ok
+CREATE TABLE min_bool (value BOOLEAN);
+
+statement ok
+INSERT INTO min_bool VALUES (false), (false);
+
+query B
+SELECT MIN(value) FROM min_bool
+----
+false
+
+statement ok
+DROP TABLE min_bool;
+
+statement ok
+CREATE TABLE min_bool (value BOOLEAN);
+
+statement ok
+INSERT INTO min_bool VALUES (true), (true);
+
+query B
+SELECT MIN(value) FROM min_bool
+----
+true
+
+statement ok
+DROP TABLE min_bool;
+
+statement ok
+CREATE TABLE min_bool (value BOOLEAN);
+
+statement ok
+INSERT INTO min_bool VALUES (false), (true), (false);
+
+query B
+SELECT MIN(value) FROM min_bool
+----
+false
+
+statement ok
+DROP TABLE min_bool;
+
+statement ok
+CREATE TABLE min_bool (value BOOLEAN);
+
+statement ok
+INSERT INTO min_bool VALUES (true), (false), (true);
+
+query B
+SELECT MIN(value) FROM min_bool
+----
+false
+
+statement ok
+DROP TABLE min_bool;
+
+#################
+# Min_Max End #
+#################
+
+
+
+#################
+# min_max on strings/binary with null values and groups
+#################
+
+statement ok
+CREATE TABLE strings (value TEXT, id int);
+
+statement ok
+INSERT INTO strings VALUES
+ ('c', 1),
+ ('d', 1),
+ ('a', 3),
+ ('c', 1),
+ ('b', 1),
+ (NULL, 1),
+ (NULL, 4),
+ ('d', 1),
+ ('z', 2),
+ ('c', 1),
+ ('a', 2);
+
+############ Utf8 ############
+
+query IT
+SELECT id, MIN(value) FROM strings GROUP BY id ORDER BY id;
+----
+1 b
+2 a
+3 a
+4 NULL
+
+query IT
+SELECT id, MAX(value) FROM strings GROUP BY id ORDER BY id;
+----
+1 d
+2 z
+3 a
+4 NULL
+
+############ LargeUtf8 ############
+
+statement ok
+CREATE VIEW large_strings AS SELECT id, arrow_cast(value, 'LargeUtf8') as value FROM strings;
+
+
+query IT
+SELECT id, MIN(value) FROM large_strings GROUP BY id ORDER BY id;
+----
+1 b
+2 a
+3 a
+4 NULL
+
+query IT
+SELECT id, MAX(value) FROM large_strings GROUP BY id ORDER BY id;
+----
+1 d
+2 z
+3 a
+4 NULL
+
+statement ok
+DROP VIEW large_strings
+
+############ Utf8View ############
+
+statement ok
+CREATE VIEW string_views AS SELECT id, arrow_cast(value, 'Utf8View') as value FROM strings;
+
+
+query IT
+SELECT id, MIN(value) FROM string_views GROUP BY id ORDER BY id;
+----
+1 b
+2 a
+3 a
+4 NULL
+
+query IT
+SELECT id, MAX(value) FROM string_views GROUP BY id ORDER BY id;
+----
+1 d
+2 z
+3 a
+4 NULL
+
+statement ok
+DROP VIEW string_views
+
+############ Binary ############
+
+statement ok
+CREATE VIEW binary AS SELECT id, arrow_cast(value, 'Binary') as value FROM strings;
+
+
+query I?
+SELECT id, MIN(value) FROM binary GROUP BY id ORDER BY id;
+----
+1 62
+2 61
+3 61
+4 NULL
+
+query I?
+SELECT id, MAX(value) FROM binary GROUP BY id ORDER BY id;
+----
+1 64
+2 7a
+3 61
+4 NULL
+
+statement ok
+DROP VIEW binary
+
+############ LargeBinary ############
+
+statement ok
+CREATE VIEW large_binary AS SELECT id, arrow_cast(value, 'LargeBinary') as value FROM strings;
+
+
+query I?
+SELECT id, MIN(value) FROM large_binary GROUP BY id ORDER BY id;
+----
+1 62
+2 61
+3 61
+4 NULL
+
+query I?
+SELECT id, MAX(value) FROM large_binary GROUP BY id ORDER BY id;
+----
+1 64
+2 7a
+3 61
+4 NULL
+
+statement ok
+DROP VIEW large_binary
+
+############ BinaryView ############
+
+statement ok
+CREATE VIEW binary_views AS SELECT id, arrow_cast(value, 'BinaryView') as value FROM strings;
+
+
+query I?
+SELECT id, MIN(value) FROM binary_views GROUP BY id ORDER BY id;
+----
+1 62
+2 61
+3 61
+4 NULL
+
+query I?
+SELECT id, MAX(value) FROM binary_views GROUP BY id ORDER BY id;
+----
+1 64
+2 7a
+3 61
+4 NULL
+
+statement ok
+DROP VIEW binary_views
+
+statement ok
+DROP TABLE strings;
+
+#################
+# End min_max on strings/binary with null values and groups
+#################
+
+# aggregate_time_min_and_max
+query TT
+select min(t), max(t) from  (select '00:00:00' as t union select '00:00:01' union select '00:00:02')
+----
+00:00:00 00:00:02
+
+# aggregate Interval(MonthDayNano) min/max
+query T??
+select
+  arrow_typeof(min(column1)), min(column1), max(column1)
+from values
+  (interval '1 month'),
+  (interval '2 months'),
+  (interval '2 month 15 days'),
+  (interval '-2 month')
+----
+Interval(MonthDayNano) -2 mons 2 mons 15 days
+
+# aggregate Interval(DayTime) min/max
+query T??
+select
+  arrow_typeof(min(column1)), min(column1), max(column1)
+from values
+  (arrow_cast('60 minutes', 'Interval(DayTime)')),
+  (arrow_cast('-3 minutes', 'Interval(DayTime)')),
+  (arrow_cast('30 minutes', 'Interval(DayTime)'));
+----
+Interval(DayTime) -3 mins 1 hours
+
+# aggregate Interval(YearMonth) min/max
+query T??
+select
+  arrow_typeof(min(column1)), min(column1), max(column1)
+from values
+  (arrow_cast('-1 year', 'Interval(YearMonth)')),
+  (arrow_cast('13 months', 'Interval(YearMonth)')),
+  (arrow_cast('1 year', 'Interval(YearMonth)'));
+----
+Interval(YearMonth) -1 years 0 mons 1 years 1 mons

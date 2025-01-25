@@ -1,0 +1,142 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+
+#   http://www.apache.org/licenses/LICENSE-2.0
+
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+include ./init.slt.part
+
+#
+# Add valid distinct case as aggregation plan test
+#
+
+query TT
+EXPLAIN SELECT DISTINCT c3, min(c1) FROM aggregate_test_100 group by c3 limit 5;
+----
+logical_plan
+01)Limit: skip=0, fetch=5
+02)--Aggregate: groupBy=[[aggregate_test_100.c3, min(aggregate_test_100.c1)]], aggr=[[]]
+03)----Aggregate: groupBy=[[aggregate_test_100.c3]], aggr=[[min(aggregate_test_100.c1)]]
+04)------TableScan: aggregate_test_100 projection=[c1, c3]
+physical_plan_error Object Store error: Object at location /WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv not found: No such file or directory (os error 2)
+
+
+#
+# Push limit into distinct group-by aggregation tests
+#
+
+# Make results deterministic
+statement ok
+set datafusion.optimizer.repartition_aggregations = false;
+
+#
+query TT
+EXPLAIN SELECT DISTINCT c3 FROM aggregate_test_100 group by c3 limit 5;
+----
+logical_plan
+01)Limit: skip=0, fetch=5
+02)--Aggregate: groupBy=[[aggregate_test_100.c3]], aggr=[[]]
+03)----TableScan: aggregate_test_100 projection=[c3]
+physical_plan_error Object Store error: Object at location /WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv not found: No such file or directory (os error 2)
+
+query error DataFusion error: Object Store error: Object at location /home/logan/dev/datafusion/testing/data/csv/aggregate_test_100\.csv not found: No such file or directory \(os error 2\)
+SELECT DISTINCT c3 FROM aggregate_test_100 group by c3 limit 5;
+
+query TT
+EXPLAIN SELECT c2, c3 FROM aggregate_test_100 group by c2, c3 limit 5 offset 4;
+----
+logical_plan
+01)Limit: skip=4, fetch=5
+02)--Aggregate: groupBy=[[aggregate_test_100.c2, aggregate_test_100.c3]], aggr=[[]]
+03)----TableScan: aggregate_test_100 projection=[c2, c3]
+physical_plan_error Object Store error: Object at location /WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv not found: No such file or directory (os error 2)
+
+query error DataFusion error: Object Store error: Object at location /home/logan/dev/datafusion/testing/data/csv/aggregate_test_100\.csv not found: No such file or directory \(os error 2\)
+SELECT c2, c3 FROM aggregate_test_100 group by c2, c3 limit 5 offset 4;
+
+# The limit should only apply to the aggregations which group by c3
+query TT
+EXPLAIN SELECT DISTINCT c3 FROM aggregate_test_100 WHERE c3 between 10 and 20 group by c2, c3 limit 4;
+----
+logical_plan
+01)Limit: skip=0, fetch=4
+02)--Aggregate: groupBy=[[aggregate_test_100.c3]], aggr=[[]]
+03)----Projection: aggregate_test_100.c3
+04)------Aggregate: groupBy=[[aggregate_test_100.c2, aggregate_test_100.c3]], aggr=[[]]
+05)--------Filter: aggregate_test_100.c3 >= Int16(10) AND aggregate_test_100.c3 <= Int16(20)
+06)----------TableScan: aggregate_test_100 projection=[c2, c3], partial_filters=[aggregate_test_100.c3 >= Int16(10), aggregate_test_100.c3 <= Int16(20)]
+physical_plan_error Object Store error: Object at location /WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv not found: No such file or directory (os error 2)
+
+query error DataFusion error: Object Store error: Object at location /home/logan/dev/datafusion/testing/data/csv/aggregate_test_100\.csv not found: No such file or directory \(os error 2\)
+SELECT DISTINCT c3 FROM aggregate_test_100 WHERE c3 between 10 and 20 group by c2, c3 limit 4;
+
+# An aggregate expression causes the limit to not be pushed to the aggregation
+query TT
+EXPLAIN SELECT max(c1), c2, c3 FROM aggregate_test_100 group by c2, c3 limit 5;
+----
+logical_plan
+01)Projection: max(aggregate_test_100.c1), aggregate_test_100.c2, aggregate_test_100.c3
+02)--Limit: skip=0, fetch=5
+03)----Aggregate: groupBy=[[aggregate_test_100.c2, aggregate_test_100.c3]], aggr=[[max(aggregate_test_100.c1)]]
+04)------TableScan: aggregate_test_100 projection=[c1, c2, c3]
+physical_plan_error Object Store error: Object at location /WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv not found: No such file or directory (os error 2)
+
+# TODO(msirek): Extend checking in LimitedDistinctAggregation equal groupings to ignore the order of columns
+# in the group-by column lists, so the limit could be pushed to the lowest AggregateExec in this case
+query TT
+EXPLAIN SELECT DISTINCT c3, c2 FROM aggregate_test_100 group by c2, c3 limit 3 offset 10;
+----
+logical_plan
+01)Limit: skip=10, fetch=3
+02)--Aggregate: groupBy=[[aggregate_test_100.c3, aggregate_test_100.c2]], aggr=[[]]
+03)----Projection: aggregate_test_100.c3, aggregate_test_100.c2
+04)------Aggregate: groupBy=[[aggregate_test_100.c2, aggregate_test_100.c3]], aggr=[[]]
+05)--------TableScan: aggregate_test_100 projection=[c2, c3]
+physical_plan_error Object Store error: Object at location /WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv not found: No such file or directory (os error 2)
+
+query error DataFusion error: Object Store error: Object at location /home/logan/dev/datafusion/testing/data/csv/aggregate_test_100\.csv not found: No such file or directory \(os error 2\)
+SELECT DISTINCT c3, c2 FROM aggregate_test_100 group by c2, c3 limit 3 offset 10;
+
+query TT
+EXPLAIN SELECT c2, c3 FROM aggregate_test_100 group by rollup(c2, c3) limit 3;
+----
+logical_plan
+01)Projection: aggregate_test_100.c2, aggregate_test_100.c3
+02)--Limit: skip=0, fetch=3
+03)----Aggregate: groupBy=[[ROLLUP (aggregate_test_100.c2, aggregate_test_100.c3)]], aggr=[[]]
+04)------TableScan: aggregate_test_100 projection=[c2, c3]
+physical_plan_error Object Store error: Object at location /WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv not found: No such file or directory (os error 2)
+
+query error DataFusion error: Object Store error: Object at location /home/logan/dev/datafusion/testing/data/csv/aggregate_test_100\.csv not found: No such file or directory \(os error 2\)
+SELECT c2, c3 FROM aggregate_test_100 group by rollup(c2, c3) limit 3;
+
+
+statement ok
+set datafusion.optimizer.enable_distinct_aggregation_soft_limit = false;
+
+# The limit should not be pushed into the aggregations
+query TT
+EXPLAIN SELECT DISTINCT c3 FROM aggregate_test_100 group by c3 limit 5;
+----
+logical_plan
+01)Limit: skip=0, fetch=5
+02)--Aggregate: groupBy=[[aggregate_test_100.c3]], aggr=[[]]
+03)----TableScan: aggregate_test_100 projection=[c3]
+physical_plan_error Object Store error: Object at location /WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv not found: No such file or directory (os error 2)
+
+statement ok
+set datafusion.optimizer.enable_distinct_aggregation_soft_limit = true;
+
+statement ok
+set datafusion.optimizer.repartition_aggregations = true;

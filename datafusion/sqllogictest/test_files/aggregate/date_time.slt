@@ -1,0 +1,323 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+
+#   http://www.apache.org/licenses/LICENSE-2.0
+
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+# All supported timestamp types
+
+# "nanos" --> TimestampNanosecondArray
+# "micros" --> TimestampMicrosecondArray
+# "millis" --> TimestampMillisecondArray
+# "secs" --> TimestampSecondArray
+# "names" --> StringArray
+
+statement ok
+create table t_source
+as values
+ ('2018-11-13T17:11:10.011375885995', 'Row 0', 'X'),
+ ('2011-12-13T11:13:10.12345',        'Row 1', 'X'),
+ (null,                               'Row 2', 'Y'),
+ ('2021-01-01T05:11:10.432',          'Row 3', 'Y');
+
+statement ok
+create table t as
+select
+  arrow_cast(column1, 'Timestamp(Nanosecond, None)') as nanos,
+  arrow_cast(column1, 'Timestamp(Microsecond, None)') as micros,
+  arrow_cast(column1, 'Timestamp(Millisecond, None)') as millis,
+  arrow_cast(column1, 'Timestamp(Second, None)') as secs,
+  arrow_cast(column1, 'Timestamp(Nanosecond, Some("UTC"))') as nanos_utc,
+  arrow_cast(column1, 'Timestamp(Microsecond, Some("UTC"))') as micros_utc,
+  arrow_cast(column1, 'Timestamp(Millisecond, Some("UTC"))') as millis_utc,
+  arrow_cast(column1, 'Timestamp(Second, Some("UTC"))') as secs_utc,
+  column2 as names,
+  column3 as tag
+from t_source;
+
+# Demonstrate the contents
+query PPPPPPPPTT
+select * from t;
+----
+2018-11-13T17:11:10.011375885 2018-11-13T17:11:10.011375 2018-11-13T17:11:10.011 2018-11-13T17:11:10 2018-11-13T17:11:10.011375885Z 2018-11-13T17:11:10.011375Z 2018-11-13T17:11:10.011Z 2018-11-13T17:11:10Z Row 0 X
+2011-12-13T11:13:10.123450 2011-12-13T11:13:10.123450 2011-12-13T11:13:10.123 2011-12-13T11:13:10 2011-12-13T11:13:10.123450Z 2011-12-13T11:13:10.123450Z 2011-12-13T11:13:10.123Z 2011-12-13T11:13:10Z Row 1 X
+NULL NULL NULL NULL NULL NULL NULL NULL Row 2 Y
+2021-01-01T05:11:10.432 2021-01-01T05:11:10.432 2021-01-01T05:11:10.432 2021-01-01T05:11:10 2021-01-01T05:11:10.432Z 2021-01-01T05:11:10.432Z 2021-01-01T05:11:10.432Z 2021-01-01T05:11:10Z Row 3 Y
+
+
+# aggregate_timestamps_sum
+query error
+SELECT sum(nanos), sum(micros), sum(millis), sum(secs) FROM t;
+
+query error
+SELECT tag, sum(nanos), sum(micros), sum(millis), sum(secs) FROM t GROUP BY tag ORDER BY tag;
+
+# aggregate_timestamps_count
+query IIII
+SELECT count(nanos), count(micros), count(millis), count(secs) FROM t;
+----
+3 3 3 3
+
+query TIIII
+SELECT tag, count(nanos), count(micros), count(millis), count(secs) FROM t GROUP BY tag ORDER BY tag;
+----
+X 2 2 2 2
+Y 1 1 1 1
+
+# aggregate_timestamps_min
+query PPPP
+SELECT min(nanos), min(micros), min(millis), min(secs) FROM t;
+----
+2011-12-13T11:13:10.123450 2011-12-13T11:13:10.123450 2011-12-13T11:13:10.123 2011-12-13T11:13:10
+
+query TPPPP
+SELECT tag, min(nanos), min(micros), min(millis), min(secs) FROM t GROUP BY tag ORDER BY tag;
+----
+X 2011-12-13T11:13:10.123450 2011-12-13T11:13:10.123450 2011-12-13T11:13:10.123 2011-12-13T11:13:10
+Y 2021-01-01T05:11:10.432 2021-01-01T05:11:10.432 2021-01-01T05:11:10.432 2021-01-01T05:11:10
+
+# aggregate_timestamps_max
+query PPPP
+SELECT max(nanos), max(micros), max(millis), max(secs) FROM t;
+----
+2021-01-01T05:11:10.432 2021-01-01T05:11:10.432 2021-01-01T05:11:10.432 2021-01-01T05:11:10
+
+query TPPPP
+SELECT tag, max(nanos), max(micros), max(millis), max(secs) FROM t GROUP BY tag ORDER BY tag
+----
+X 2018-11-13T17:11:10.011375885 2018-11-13T17:11:10.011375 2018-11-13T17:11:10.011 2018-11-13T17:11:10
+Y 2021-01-01T05:11:10.432 2021-01-01T05:11:10.432 2021-01-01T05:11:10.432 2021-01-01T05:11:10
+
+# aggregate_timestamps_count_distinct_with_tz
+query IIII
+SELECT count(DISTINCT nanos_utc), count(DISTINCT micros_utc), count(DISTINCT millis_utc), count(DISTINCT secs_utc) FROM t;
+----
+3 3 3 3
+
+query TIIII
+SELECT tag, count(DISTINCT nanos_utc), count(DISTINCT micros_utc), count(DISTINCT millis_utc), count(DISTINCT secs_utc) FROM t GROUP BY tag ORDER BY tag;
+----
+X 2 2 2 2
+Y 1 1 1 1
+
+# aggregate_timestamps_avg
+query error
+SELECT avg(nanos), avg(micros), avg(millis), avg(secs) FROM t
+
+query error
+SELECT tag, avg(nanos), avg(micros), avg(millis), avg(secs) FROM t GROUP BY tag ORDER BY tag;
+
+# aggregate_duration_array_agg
+query T?
+SELECT tag, array_agg(millis - arrow_cast(secs, 'Timestamp(Millisecond, None)')) FROM t GROUP BY tag ORDER BY tag;
+----
+X [0 days 0 hours 0 mins 0.011 secs, 0 days 0 hours 0 mins 0.123 secs]
+Y [NULL, 0 days 0 hours 0 mins 0.432 secs]
+
+statement ok
+drop table t_source;
+
+statement ok
+drop table t;
+
+
+# All supported Date tpes
+
+# "date32" --> Date32Array
+# "date64" --> Date64Array
+# "names" --> StringArray
+
+statement ok
+create table t_source
+as values
+ ('2018-11-13', 'Row 0', 'X'),
+ ('2011-12-13', 'Row 1', 'X'),
+ (null,         'Row 2', 'Y'),
+ ('2021-01-01', 'Row 3', 'Y');
+
+statement ok
+create table t as
+select
+  arrow_cast(column1, 'Date32') as date32,
+  -- Workaround https://github.com/apache/arrow-rs/issues/4512 is fixed, can use this
+  -- arrow_cast(column1, 'Date64') as date64,
+  arrow_cast(arrow_cast(column1, 'Date32'), 'Date64') as date64,
+  column2 as names,
+  column3 as tag
+from t_source;
+
+# Demonstrate the contents
+query DDTT
+select * from t;
+----
+2018-11-13 2018-11-13T00:00:00 Row 0 X
+2011-12-13 2011-12-13T00:00:00 Row 1 X
+NULL NULL Row 2 Y
+2021-01-01 2021-01-01T00:00:00 Row 3 Y
+
+
+# aggregate_timestamps_sum
+query error
+SELECT sum(date32), sum(date64) FROM t;
+
+query error
+SELECT tag, sum(date32), sum(date64) FROM t GROUP BY tag ORDER BY tag;
+
+# aggregate_timestamps_count
+query II
+SELECT count(date32), count(date64) FROM t;
+----
+3 3
+
+query TII
+SELECT tag, count(date32), count(date64) FROM t GROUP BY tag ORDER BY tag;
+----
+X 2 2
+Y 1 1
+
+# aggregate_timestamps_min
+query DD
+SELECT min(date32), min(date64) FROM t;
+----
+2011-12-13 2011-12-13T00:00:00
+
+query TDD
+SELECT tag, min(date32), min(date64) FROM t GROUP BY tag ORDER BY tag;
+----
+X 2011-12-13 2011-12-13T00:00:00
+Y 2021-01-01 2021-01-01T00:00:00
+
+# aggregate_timestamps_max
+query DD
+SELECT max(date32), max(date64) FROM t;
+----
+2021-01-01 2021-01-01T00:00:00
+
+query TDD
+SELECT tag, max(date32), max(date64) FROM t GROUP BY tag ORDER BY tag
+----
+X 2018-11-13 2018-11-13T00:00:00
+Y 2021-01-01 2021-01-01T00:00:00
+
+
+# aggregate_timestamps_avg
+query error
+SELECT avg(date32), avg(date64) FROM t
+
+query error
+SELECT tag, avg(date32), avg(date64) FROM t GROUP BY tag ORDER BY tag;
+
+
+statement ok
+drop table t_source;
+
+statement ok
+drop table t;
+
+
+# All supported time types
+
+# Columns are named:
+# "nanos" --> Time64NanosecondArray
+# "micros" --> Time64MicrosecondArray
+# "millis" --> Time32MillisecondArray
+# "secs" --> Time32SecondArray
+# "names" --> StringArray
+
+statement ok
+create table t_source
+as values
+ ('18:06:30.243620451', 'Row 0', 'A'),
+ ('20:08:28.161121654', 'Row 1', 'A'),
+ ('19:11:04.156423842', 'Row 2', 'B'),
+ ('21:06:28.247821084', 'Row 3', 'B');
+
+
+statement ok
+create table t as
+select
+  arrow_cast(column1, 'Time64(Nanosecond)') as nanos,
+  arrow_cast(column1, 'Time64(Microsecond)') as micros,
+  arrow_cast(column1, 'Time32(Millisecond)') as millis,
+  arrow_cast(column1, 'Time32(Second)') as secs,
+  column2 as names,
+  column3 as tag
+from t_source;
+
+# Demonstrate the contents
+query DDDDTT
+select * from t;
+----
+18:06:30.243620451 18:06:30.243620 18:06:30.243 18:06:30 Row 0 A
+20:08:28.161121654 20:08:28.161121 20:08:28.161 20:08:28 Row 1 A
+19:11:04.156423842 19:11:04.156423 19:11:04.156 19:11:04 Row 2 B
+21:06:28.247821084 21:06:28.247821 21:06:28.247 21:06:28 Row 3 B
+
+# aggregate_times_sum
+query error
+SELECT sum(nanos), sum(micros), sum(millis), sum(secs) FROM t
+
+query error
+SELECT tag, sum(nanos), sum(micros), sum(millis), sum(secs) FROM t GROUP BY tag ORDER BY tag
+
+# aggregate_times_count
+query IIII
+SELECT count(nanos), count(micros), count(millis), count(secs) FROM t
+----
+4 4 4 4
+
+query TIIII
+SELECT tag, count(nanos), count(micros), count(millis), count(secs) FROM t GROUP BY tag ORDER BY tag
+----
+A 2 2 2 2
+B 2 2 2 2
+
+
+# aggregate_times_min
+query DDDD
+SELECT min(nanos), min(micros), min(millis), min(secs) FROM t
+----
+18:06:30.243620451 18:06:30.243620 18:06:30.243 18:06:30
+
+query TDDDD
+SELECT tag, min(nanos), min(micros), min(millis), min(secs) FROM t GROUP BY tag ORDER BY tag
+----
+A 18:06:30.243620451 18:06:30.243620 18:06:30.243 18:06:30
+B 19:11:04.156423842 19:11:04.156423 19:11:04.156 19:11:04
+
+# aggregate_times_max
+query DDDD
+SELECT max(nanos), max(micros), max(millis), max(secs) FROM t
+----
+21:06:28.247821084 21:06:28.247821 21:06:28.247 21:06:28
+
+query TDDDD
+SELECT tag, max(nanos), max(micros), max(millis), max(secs) FROM t GROUP BY tag ORDER BY tag
+----
+A 20:08:28.161121654 20:08:28.161121 20:08:28.161 20:08:28
+B 21:06:28.247821084 21:06:28.247821 21:06:28.247 21:06:28
+
+
+# aggregate_times_avg
+query error
+SELECT avg(nanos), avg(micros), avg(millis), avg(secs) FROM t
+
+query error
+SELECT tag, avg(nanos), avg(micros), avg(millis), avg(secs) FROM t GROUP BY tag ORDER BY tag;
+
+statement ok
+drop table t_source;
+
+statement ok
+drop table t;

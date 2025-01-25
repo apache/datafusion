@@ -1,0 +1,271 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+
+#   http://www.apache.org/licenses/LICENSE-2.0
+
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+include ./init.slt.part
+
+#######
+# Error tests
+#######
+
+# https://github.com/apache/datafusion/issues/3353
+statement error DataFusion error: Schema error: Schema contains duplicate unqualified field name "approx_distinct\(aggregate_test_100\.c9\)"
+SELECT approx_distinct(c9) count_c9, approx_distinct(cast(c9 as varchar)) count_c9_str FROM aggregate_test_100
+
+# csv_query_approx_percentile_cont_with_weight
+statement error DataFusion error: Error during planning: Failed to coerce arguments to satisfy a call to approx_percentile_cont_with_weight function: coercion from \[Utf8, Int8, Float64\] to the signature OneOf(.*) failed(.|\n)*
+SELECT approx_percentile_cont_with_weight(c1, c2, 0.95) FROM aggregate_test_100
+
+statement error DataFusion error: Error during planning: Failed to coerce arguments to satisfy a call to approx_percentile_cont_with_weight function: coercion from \[Int16, Utf8, Float64\] to the signature OneOf(.*) failed(.|\n)*
+SELECT approx_percentile_cont_with_weight(c3, c1, 0.95) FROM aggregate_test_100
+
+statement error DataFusion error: Error during planning: Failed to coerce arguments to satisfy a call to approx_percentile_cont_with_weight function: coercion from \[Int16, Int8, Utf8\] to the signature OneOf(.*) failed(.|\n)*
+SELECT approx_percentile_cont_with_weight(c3, c2, c1) FROM aggregate_test_100
+
+# csv_query_approx_percentile_cont_with_histogram_bins
+statement error DataFusion error: Object Store error: Object at location /home/logan/dev/datafusion/testing/data/csv/aggregate_test_100\.csv not found: No such file or directory \(os error 2\)
+SELECT c1, approx_percentile_cont(c3, 0.95, -1000) AS c3_p95 FROM aggregate_test_100 GROUP BY 1 ORDER BY 1
+
+statement error DataFusion error: Error during planning: Failed to coerce arguments to satisfy a call to approx_percentile_cont function: coercion from \[Int16, Float64, Utf8\] to the signature OneOf(.*) failed(.|\n)*
+SELECT approx_percentile_cont(c3, 0.95, c1) FROM aggregate_test_100
+
+statement error DataFusion error: Error during planning: Failed to coerce arguments to satisfy a call to approx_percentile_cont function: coercion from \[Int16, Float64, Float64\] to the signature OneOf(.*) failed(.|\n)*
+SELECT approx_percentile_cont(c3, 0.95, 111.1) FROM aggregate_test_100
+
+statement error DataFusion error: Error during planning: Failed to coerce arguments to satisfy a call to approx_percentile_cont function: coercion from \[Float64, Float64, Float64\] to the signature OneOf(.*) failed(.|\n)*
+SELECT approx_percentile_cont(c12, 0.95, 111.1) FROM aggregate_test_100
+
+statement error DataFusion error: Object Store error: Object at location /home/logan/dev/datafusion/testing/data/csv/aggregate_test_100\.csv not found: No such file or directory \(os error 2\)
+SELECT approx_percentile_cont(c12, c12) FROM aggregate_test_100
+
+statement error DataFusion error: Object Store error: Object at location /home/logan/dev/datafusion/testing/data/csv/aggregate_test_100\.csv not found: No such file or directory \(os error 2\)
+SELECT approx_percentile_cont(c12, 0.95, c5) FROM aggregate_test_100
+
+# Not supported over sliding windows
+query error DataFusion error: Object Store error: Object at location /home/logan/dev/datafusion/testing/data/csv/aggregate_test_100\.csv not found: No such file or directory \(os error 2\)
+SELECT approx_percentile_cont(c3, 0.5) OVER (ROWS BETWEEN 4 PRECEDING AND CURRENT ROW) 
+FROM aggregate_test_100
+
+## This test executes the APPROX_PERCENTILE_CONT aggregation against the test
+## data, asserting the estimated quantiles are ±5% their actual values.
+##
+## Actual quantiles calculated with:
+##
+## ```r
+## read_csv("./testing/data/csv/aggregate_test_100.csv") |>
+##     select_if(is.numeric) |>
+##     summarise_all(~ quantile(., c(0.1, 0.5, 0.9)))
+## ```
+##
+## Giving:
+##
+## ```text
+##      c2    c3      c4           c5       c6    c7     c8          c9     c10   c11    c12
+##   <dbl> <dbl>   <dbl>        <dbl>    <dbl> <dbl>  <dbl>       <dbl>   <dbl> <dbl>  <dbl>
+## 1     1 -95.3 -22925. -1882606710  -7.25e18  18.9  2671.  472608672. 1.83e18 0.109 0.0714
+## 2     3  15.5   4599    377164262   1.13e18 134.  30634  2365817608. 9.30e18 0.491 0.551
+## 3     5 102.   25334.  1991374996.  7.37e18 231   57518. 3776538487. 1.61e19 0.834 0.946
+## ```
+##
+## Column `c12` is omitted due to a large relative error (~10%) due to the small
+## float values.
+
+#csv_query_approx_percentile_cont (c2)
+query error DataFusion error: Object Store error: Object at location /home/logan/dev/datafusion/testing/data/csv/aggregate_test_100\.csv not found: No such file or directory \(os error 2\)
+SELECT (ABS(1 - CAST(approx_percentile_cont(c2, 0.1) AS DOUBLE) / 1.0) < 0.05) AS q FROM aggregate_test_100
+
+query error DataFusion error: Object Store error: Object at location /home/logan/dev/datafusion/testing/data/csv/aggregate_test_100\.csv not found: No such file or directory \(os error 2\)
+SELECT (ABS(1 - CAST(approx_percentile_cont(c2, 0.5) AS DOUBLE) / 3.0) < 0.05) AS q FROM aggregate_test_100
+
+query error DataFusion error: Object Store error: Object at location /home/logan/dev/datafusion/testing/data/csv/aggregate_test_100\.csv not found: No such file or directory \(os error 2\)
+SELECT (ABS(1 - CAST(approx_percentile_cont(c2, 0.9) AS DOUBLE) / 5.0) < 0.05) AS q FROM aggregate_test_100
+
+# csv_query_approx_percentile_cont (c3)
+query error DataFusion error: Object Store error: Object at location /home/logan/dev/datafusion/testing/data/csv/aggregate_test_100\.csv not found: No such file or directory \(os error 2\)
+SELECT (ABS(1 - CAST(approx_percentile_cont(c3, 0.1) AS DOUBLE) / -95.3) < 0.05) AS q FROM aggregate_test_100
+
+query error DataFusion error: Object Store error: Object at location /home/logan/dev/datafusion/testing/data/csv/aggregate_test_100\.csv not found: No such file or directory \(os error 2\)
+SELECT (ABS(1 - CAST(approx_percentile_cont(c3, 0.5) AS DOUBLE) / 15.5) < 0.05) AS q FROM aggregate_test_100
+
+query error DataFusion error: Object Store error: Object at location /home/logan/dev/datafusion/testing/data/csv/aggregate_test_100\.csv not found: No such file or directory \(os error 2\)
+SELECT (ABS(1 - CAST(approx_percentile_cont(c3, 0.9) AS DOUBLE) / 102.0) < 0.05) AS q FROM aggregate_test_100
+
+# csv_query_approx_percentile_cont (c4)
+query error DataFusion error: Object Store error: Object at location /home/logan/dev/datafusion/testing/data/csv/aggregate_test_100\.csv not found: No such file or directory \(os error 2\)
+SELECT (ABS(1 - CAST(approx_percentile_cont(c4, 0.1) AS DOUBLE) / -22925.0) < 0.05) AS q FROM aggregate_test_100
+
+query error DataFusion error: Object Store error: Object at location /home/logan/dev/datafusion/testing/data/csv/aggregate_test_100\.csv not found: No such file or directory \(os error 2\)
+SELECT (ABS(1 - CAST(approx_percentile_cont(c4, 0.5) AS DOUBLE) / 4599.0) < 0.05) AS q FROM aggregate_test_100
+
+query error DataFusion error: Object Store error: Object at location /home/logan/dev/datafusion/testing/data/csv/aggregate_test_100\.csv not found: No such file or directory \(os error 2\)
+SELECT (ABS(1 - CAST(approx_percentile_cont(c4, 0.9) AS DOUBLE) / 25334.0) < 0.05) AS q FROM aggregate_test_100
+
+# csv_query_approx_percentile_cont (c5)
+query error DataFusion error: Object Store error: Object at location /home/logan/dev/datafusion/testing/data/csv/aggregate_test_100\.csv not found: No such file or directory \(os error 2\)
+SELECT (ABS(1 - CAST(approx_percentile_cont(c5, 0.1) AS DOUBLE) / -1882606710.0) < 0.05) AS q FROM aggregate_test_100
+
+query error DataFusion error: Object Store error: Object at location /home/logan/dev/datafusion/testing/data/csv/aggregate_test_100\.csv not found: No such file or directory \(os error 2\)
+SELECT (ABS(1 - CAST(approx_percentile_cont(c5, 0.5) AS DOUBLE) / 377164262.0) < 0.05) AS q FROM aggregate_test_100
+
+query error DataFusion error: Object Store error: Object at location /home/logan/dev/datafusion/testing/data/csv/aggregate_test_100\.csv not found: No such file or directory \(os error 2\)
+SELECT (ABS(1 - CAST(approx_percentile_cont(c5, 0.9) AS DOUBLE) / 1991374996.0) < 0.05) AS q FROM aggregate_test_100
+
+# csv_query_approx_percentile_cont (c6)
+query error DataFusion error: Object Store error: Object at location /home/logan/dev/datafusion/testing/data/csv/aggregate_test_100\.csv not found: No such file or directory \(os error 2\)
+SELECT (ABS(1 - CAST(approx_percentile_cont(c6, 0.1) AS DOUBLE) / -7250000000000000000) < 0.05) AS q FROM aggregate_test_100
+
+query error DataFusion error: Object Store error: Object at location /home/logan/dev/datafusion/testing/data/csv/aggregate_test_100\.csv not found: No such file or directory \(os error 2\)
+SELECT (ABS(1 - CAST(approx_percentile_cont(c6, 0.5) AS DOUBLE) / 1130000000000000000) < 0.05) AS q FROM aggregate_test_100
+
+query error DataFusion error: Object Store error: Object at location /home/logan/dev/datafusion/testing/data/csv/aggregate_test_100\.csv not found: No such file or directory \(os error 2\)
+SELECT (ABS(1 - CAST(approx_percentile_cont(c6, 0.9) AS DOUBLE) / 7370000000000000000) < 0.05) AS q FROM aggregate_test_100
+
+# csv_query_approx_percentile_cont (c7)
+query error DataFusion error: Object Store error: Object at location /home/logan/dev/datafusion/testing/data/csv/aggregate_test_100\.csv not found: No such file or directory \(os error 2\)
+SELECT (ABS(1 - CAST(approx_percentile_cont(c7, 0.1) AS DOUBLE) / 18.9) < 0.05) AS q FROM aggregate_test_100
+
+query error DataFusion error: Object Store error: Object at location /home/logan/dev/datafusion/testing/data/csv/aggregate_test_100\.csv not found: No such file or directory \(os error 2\)
+SELECT (ABS(1 - CAST(approx_percentile_cont(c7, 0.5) AS DOUBLE) / 134.0) < 0.05) AS q FROM aggregate_test_100
+
+query error DataFusion error: Object Store error: Object at location /home/logan/dev/datafusion/testing/data/csv/aggregate_test_100\.csv not found: No such file or directory \(os error 2\)
+SELECT (ABS(1 - CAST(approx_percentile_cont(c7, 0.9) AS DOUBLE) / 231.0) < 0.05) AS q FROM aggregate_test_100
+
+# csv_query_approx_percentile_cont (c8)
+query error DataFusion error: Object Store error: Object at location /home/logan/dev/datafusion/testing/data/csv/aggregate_test_100\.csv not found: No such file or directory \(os error 2\)
+SELECT (ABS(1 - CAST(approx_percentile_cont(c8, 0.1) AS DOUBLE) / 2671.0) < 0.05) AS q FROM aggregate_test_100
+
+query error DataFusion error: Object Store error: Object at location /home/logan/dev/datafusion/testing/data/csv/aggregate_test_100\.csv not found: No such file or directory \(os error 2\)
+SELECT (ABS(1 - CAST(approx_percentile_cont(c8, 0.5) AS DOUBLE) / 30634.0) < 0.05) AS q FROM aggregate_test_100
+
+query error DataFusion error: Object Store error: Object at location /home/logan/dev/datafusion/testing/data/csv/aggregate_test_100\.csv not found: No such file or directory \(os error 2\)
+SELECT (ABS(1 - CAST(approx_percentile_cont(c8, 0.9) AS DOUBLE) / 57518.0) < 0.05) AS q FROM aggregate_test_100
+
+# csv_query_approx_percentile_cont (c9)
+query error DataFusion error: Object Store error: Object at location /home/logan/dev/datafusion/testing/data/csv/aggregate_test_100\.csv not found: No such file or directory \(os error 2\)
+SELECT (ABS(1 - CAST(approx_percentile_cont(c9, 0.1) AS DOUBLE) / 472608672.0) < 0.05) AS q FROM aggregate_test_100
+
+query error DataFusion error: Object Store error: Object at location /home/logan/dev/datafusion/testing/data/csv/aggregate_test_100\.csv not found: No such file or directory \(os error 2\)
+SELECT (ABS(1 - CAST(approx_percentile_cont(c9, 0.5) AS DOUBLE) / 2365817608.0) < 0.05) AS q FROM aggregate_test_100
+
+query error DataFusion error: Object Store error: Object at location /home/logan/dev/datafusion/testing/data/csv/aggregate_test_100\.csv not found: No such file or directory \(os error 2\)
+SELECT (ABS(1 - CAST(approx_percentile_cont(c9, 0.9) AS DOUBLE) / 3776538487.0) < 0.05) AS q FROM aggregate_test_100
+
+# csv_query_approx_percentile_cont (c10)
+query error DataFusion error: Object Store error: Object at location /home/logan/dev/datafusion/testing/data/csv/aggregate_test_100\.csv not found: No such file or directory \(os error 2\)
+SELECT (ABS(1 - CAST(approx_percentile_cont(c10, 0.1) AS DOUBLE) / 1830000000000000000) < 0.05) AS q FROM aggregate_test_100
+
+query error DataFusion error: Object Store error: Object at location /home/logan/dev/datafusion/testing/data/csv/aggregate_test_100\.csv not found: No such file or directory \(os error 2\)
+SELECT (ABS(1 - CAST(approx_percentile_cont(c10, 0.5) AS DOUBLE) / 9300000000000000000) < 0.05) AS q FROM aggregate_test_100
+
+query error DataFusion error: Object Store error: Object at location /home/logan/dev/datafusion/testing/data/csv/aggregate_test_100\.csv not found: No such file or directory \(os error 2\)
+SELECT (ABS(1 - CAST(approx_percentile_cont(c10, 0.9) AS DOUBLE) / 16100000000000000000) < 0.05) AS q FROM aggregate_test_100
+
+# csv_query_approx_percentile_cont (c11)
+query error DataFusion error: Object Store error: Object at location /home/logan/dev/datafusion/testing/data/csv/aggregate_test_100\.csv not found: No such file or directory \(os error 2\)
+SELECT (ABS(1 - CAST(approx_percentile_cont(c11, 0.1) AS DOUBLE) /  0.109) < 0.05) AS q FROM aggregate_test_100
+
+query error DataFusion error: Object Store error: Object at location /home/logan/dev/datafusion/testing/data/csv/aggregate_test_100\.csv not found: No such file or directory \(os error 2\)
+SELECT (ABS(1 - CAST(approx_percentile_cont(c11, 0.5) AS DOUBLE) / 0.491) < 0.05) AS q FROM aggregate_test_100
+
+query error DataFusion error: Object Store error: Object at location /home/logan/dev/datafusion/testing/data/csv/aggregate_test_100\.csv not found: No such file or directory \(os error 2\)
+SELECT (ABS(1 - CAST(approx_percentile_cont(c11, 0.9) AS DOUBLE) / 0.834) < 0.05) AS q FROM aggregate_test_100
+
+# percentile_cont_with_nulls
+query I
+SELECT APPROX_PERCENTILE_CONT(v, 0.5) FROM (VALUES (1), (2), (3), (NULL), (NULL), (NULL)) as t (v);
+----
+2
+
+# percentile_cont_with_nulls_only
+query I
+SELECT APPROX_PERCENTILE_CONT(v, 0.5) FROM (VALUES (CAST(NULL as INT))) as t (v);
+----
+NULL
+
+#
+# percentile_cont edge cases
+#
+
+statement ok
+CREATE TABLE tmp_percentile_cont(v1 INT, v2 DOUBLE);
+
+statement ok
+INSERT INTO tmp_percentile_cont VALUES (1, 'NaN'::Double), (2, 'NaN'::Double), (3, 'NaN'::Double);
+
+# ISSUE: https://github.com/apache/datafusion/issues/11871
+# Note `approx_median()` is using the same implementation as `approx_percentile_cont()`
+query R
+select APPROX_MEDIAN(v2) from tmp_percentile_cont WHERE v1 = 1;
+----
+NaN
+
+# ISSUE: https://github.com/apache/datafusion/issues/11870
+query R
+select APPROX_PERCENTILE_CONT(v2, 0.8) from tmp_percentile_cont;
+----
+NaN
+
+# ISSUE: https://github.com/apache/datafusion/issues/11869
+# Note: `approx_percentile_cont_with_weight()` uses the same implementation as `approx_percentile_cont()`
+query R
+SELECT APPROX_PERCENTILE_CONT_WITH_WEIGHT(
+    v2,
+    '+Inf'::Double,
+    0.9
+)
+FROM tmp_percentile_cont;
+----
+NaN
+
+statement ok
+DROP TABLE tmp_percentile_cont;
+
+# Test for issue where approx_percentile_cont_with_weight
+
+statement ok
+CREATE TABLE t1(v1 BOOL);
+
+statement ok
+INSERT INTO t1 VALUES (TRUE);
+
+# ISSUE: https://github.com/apache/datafusion/issues/12716
+# This test verifies that approx_percentile_cont_with_weight does not panic when given 'NaN' and returns 'inf'
+query R
+SELECT approx_percentile_cont_with_weight('NaN'::DOUBLE, 0, 0) FROM t1 WHERE t1.v1;
+----
+Infinity
+
+statement ok
+DROP TABLE t1;
+
+# csv_query_approx_percentile_cont_with_weight
+query error DataFusion error: Object Store error: Object at location /home/logan/dev/datafusion/testing/data/csv/aggregate_test_100\.csv not found: No such file or directory \(os error 2\)
+SELECT c1, approx_percentile_cont(c3, 0.95) AS c3_p95 FROM aggregate_test_100 GROUP BY 1 ORDER BY 1
+
+# csv_query_approx_percentile_cont_with_weight (2)
+query error DataFusion error: Object Store error: Object at location /home/logan/dev/datafusion/testing/data/csv/aggregate_test_100\.csv not found: No such file or directory \(os error 2\)
+SELECT c1, approx_percentile_cont_with_weight(c3, 1, 0.95) AS c3_p95 FROM aggregate_test_100 GROUP BY 1 ORDER BY 1
+
+# csv_query_approx_percentile_cont_with_histogram_bins
+query error DataFusion error: Object Store error: Object at location /home/logan/dev/datafusion/testing/data/csv/aggregate_test_100\.csv not found: No such file or directory \(os error 2\)
+SELECT c1, approx_percentile_cont(c3, 0.95, 200) AS c3_p95 FROM aggregate_test_100 GROUP BY 1 ORDER BY 1
+
+query error DataFusion error: Object Store error: Object at location /home/logan/dev/datafusion/testing/data/csv/aggregate_test_100\.csv not found: No such file or directory \(os error 2\)
+SELECT c1, approx_percentile_cont_with_weight(c3, c2, 0.95) AS c3_p95 FROM aggregate_test_100 GROUP BY 1 ORDER BY 1
+
+# test_approx_percentile_cont_decimal_support
+query error DataFusion error: Object Store error: Object at location /home/logan/dev/datafusion/testing/data/csv/aggregate_test_100\.csv not found: No such file or directory \(os error 2\)
+SELECT c1, approx_percentile_cont(c2, cast(0.85 as decimal(10,2))) apc FROM aggregate_test_100 GROUP BY 1 ORDER BY 1
