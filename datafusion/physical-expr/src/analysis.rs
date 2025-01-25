@@ -81,7 +81,8 @@ impl AnalysisContext {
 #[derive(Clone, Debug, PartialEq)]
 pub struct ExprBoundaries {
     pub column: Column,
-    /// Minimum and maximum values this expression can have.
+    /// Minimum and maximum values this expression can have. A `None` value
+    /// represents an infeasible expression.
     pub interval: Option<Interval>,
     /// Maximum number of distinct values this expression can produce, if known.
     pub distinct_count: Precision<usize>,
@@ -356,7 +357,7 @@ mod tests {
             )
             .unwrap();
             let Some(actual) = &analysis_result.boundaries[0].interval else {
-                panic!("Interval should be initialized for all columns");
+                panic!("The analysis result should contain non-empty intervals for all columns");
             };
             let expected = Interval::make(lower, upper).unwrap();
             assert_eq!(
