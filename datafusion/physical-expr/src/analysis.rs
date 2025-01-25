@@ -162,7 +162,7 @@ pub fn analyze(
     context: AnalysisContext,
     schema: &Schema,
 ) -> Result<AnalysisContext> {
-    let target_boundaries = context.boundaries;
+    let mut target_boundaries = context.boundaries;
 
     let mut graph = ExprIntervalGraph::try_new(Arc::clone(expr), schema)?;
 
@@ -172,28 +172,20 @@ pub fn analyze(
         .collect::<Vec<_>>();
 
     let target_expr_and_indices = graph.gather_node_indices(columns.as_slice());
-
-    let mut target_indices_and_boundaries = target_expr_and_indices
-        .iter()
-        .filter_map(|(expr, i)| {
-            target_boundaries.iter().find_map(|bound| {
-                expr.as_any()
-                    .downcast_ref::<Column>()
-                    .filter(|expr_column| bound.column.eq(*expr_column))
-                    .map(|_| {
-                        (
-                            *i,
-                            match bound.interval.clone() {
-                                Some(interval) => interval,
-                                None => unreachable!(
-                                    "Boundaries should be initialized for all columns"
-                                ),
-                            },
-                        )
-                    })
-            })
-        })
-        .collect::<Vec<_>>();
+    let mut target_indices_and_boundaries = Vec::new();
+    for (expr, index) in &target_expr_and_indices {
+        if let Some(column) = expr.as_any().downcast_ref::<Column>() {
+            if let Some(bound) = target_boundaries.iter().find(|b| b.column == *column) {
+                if let Some(interval) = &bound.interval {
+                    target_indices_and_boundaries.push((*index, interval.clone()));
+                } else {
+                    return Err(internal_datafusion_err!(
+                        "Columns should have an interval in the boundary"
+                    ));
+                }
+            }
+        }
+    }
 
     match graph
         .update_ranges(&mut target_indices_and_boundaries, Interval::CERTAINLY_TRUE)?
@@ -202,18 +194,11 @@ pub fn analyze(
             shrink_boundaries(graph, target_boundaries, target_expr_and_indices)
         }
         PropagationResult::Infeasible => {
-            // If the propagation result is infeasible, map target boundary intervals to None
-            Ok(AnalysisContext::new(
-                target_boundaries
-                    .iter()
-                    .map(|bound| ExprBoundaries {
-                        column: bound.column.clone(),
-                        interval: None,
-                        distinct_count: bound.distinct_count,
-                    })
-                    .collect(),
-            )
-            .with_selectivity(0.0))
+            // If the propagation result is infeasible, set intervals to None
+            target_boundaries
+                .iter_mut()
+                .for_each(|bound| bound.interval = None);
+            Ok(AnalysisContext::new(target_boundaries).with_selectivity(0.0))
         }
         PropagationResult::CannotPropagate => {
             Ok(AnalysisContext::new(target_boundaries).with_selectivity(1.0))
@@ -261,19 +246,24 @@ fn calculate_selectivity(
     // Since the intervals are assumed uniform and the values
     // are not correlated, we need to multiply the selectivities
     // of multiple columns to get the overall selectivity.
+    if target_boundaries.len() != initial_boundaries.len() {
+        return Err(internal_datafusion_err!(
+            "The number of columns in the initial and target boundaries should be the same"
+        ));
+    }
     let mut acc: f64 = 1.0;
-    initial_boundaries
-        .iter()
-        .zip(target_boundaries.iter())
-        .for_each(|(initial, target)| {
-            let Some(initial_interval) = initial.interval.clone() else {
-                unreachable!("Interval should be initialized for all columns");
-            };
-            let Some(target_interval) = target.interval.clone() else {
-                unreachable!("Interval should be initialized for all columns");
-            };
-            acc *= cardinality_ratio(&initial_interval, &target_interval);
-        });
+    for i in 0..initial_boundaries.len() {
+        let initial_interval =
+            &initial_boundaries[i].interval.as_ref().ok_or_else(|| {
+                internal_datafusion_err!("Boundary should have an interval")
+            })?;
+        let target_interval =
+            &target_boundaries[i].interval.as_ref().ok_or_else(|| {
+                internal_datafusion_err!("Boundary should have an interval")
+            })?;
+
+        acc *= cardinality_ratio(initial_interval, target_interval);
+    }
 
     Ok(acc)
 }
@@ -396,9 +386,9 @@ mod tests {
             )
             .unwrap();
 
-            analysis_result.boundaries.iter().for_each(|bound| {
-                assert_eq!(bound.interval, None);
-            });
+            for boundary in analysis_result.boundaries {
+                assert_eq!(boundary.interval, None);
+            }
         }
     }
 
