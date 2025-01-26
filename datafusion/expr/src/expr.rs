@@ -2281,6 +2281,11 @@ impl Display for SchemaDisplay<'_> {
                 Ok(())
             }
             // Expr is not shown since it is aliased
+            Expr::Alias(Alias {
+                name,
+                relation: Some(relation),
+                ..
+            }) => write!(f, "{relation}.{name}"),
             Expr::Alias(Alias { name, .. }) => write!(f, "{name}"),
             Expr::Between(Between {
                 expr,
@@ -3021,6 +3026,30 @@ mod test {
             ),
             "* RENAME (c1 AS a1)"
         )
+    }
+
+    #[test]
+    fn test_schema_display_alias_with_relation() {
+        assert_eq!(
+            format!(
+                "{}",
+                SchemaDisplay(
+                    &lit(1).alias_qualified("table_name".into(), "column_name")
+                )
+            ),
+            "table_name.column_name"
+        );
+    }
+
+    #[test]
+    fn test_schema_display_alias_without_relation() {
+        assert_eq!(
+            format!(
+                "{}",
+                SchemaDisplay(&lit(1).alias_qualified(None::<&str>, "column_name"))
+            ),
+            "column_name"
+        );
     }
 
     fn wildcard_options(
