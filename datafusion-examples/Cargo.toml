@@ -55,8 +55,8 @@ path = "examples/external_dependency/query-aws-s3.rs"
 [dev-dependencies]
 arrow = { workspace = true }
 # arrow_schema is required for record_batch! macro :sad:
-arrow-schema = { workspace = true }
 arrow-flight = { workspace = true }
+arrow-schema = { workspace = true }
 async-trait = { workspace = true }
 bytes = { workspace = true }
 dashmap = { workspace = true }
