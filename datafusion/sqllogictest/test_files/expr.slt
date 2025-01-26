@@ -601,8 +601,10 @@ select repeat('-1.2', arrow_cast(3, 'Int32'));
 ----
 -1.2-1.2-1.2
 
-query error DataFusion error: Error during planning: Internal error: Expect TypeSignatureClass::Native\(LogicalType\(Native\(Int64\), Int64\)\) but received Float64
+query T
 select repeat('-1.2', 3.2);
+----
+-1.2-1.2-1.2
 
 query T
 SELECT replace('abcdefabcdef', 'cd', 'XX')
