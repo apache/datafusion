@@ -17,7 +17,14 @@
 
 use std::sync::Arc;
 
-use crate::physical_optimizer::parquet_exec;
+use crate::physical_optimizer::test_utils::{
+    aggregate_exec, bounded_window_exec, check_integrity, coalesce_batches_exec,
+    coalesce_partitions_exec, create_test_schema, create_test_schema2,
+    create_test_schema3, filter_exec, global_limit_exec, hash_join_exec, limit_exec,
+    local_limit_exec, memory_exec, parquet_exec, repartition_exec, sort_exec, sort_expr,
+    sort_expr_options, sort_merge_join_exec, sort_preserving_merge_exec,
+    spr_repartition_exec, stream_exec_ordered, union_exec, RequirementsTestExec,
+};
 
 use datafusion_physical_plan::displayable;
 use arrow::compute::SortOptions;
@@ -37,15 +44,14 @@ use datafusion_physical_plan::sorts::sort_preserving_merge::SortPreservingMergeE
 use datafusion_physical_plan::{get_plan_string, ExecutionPlan};
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{TreeNode, TransformedResult};
-use datafusion_physical_optimizer::test_utils::{check_integrity, bounded_window_exec, coalesce_partitions_exec, create_test_schema, create_test_schema2, create_test_schema3, filter_exec, global_limit_exec, hash_join_exec, limit_exec, local_limit_exec, memory_exec, repartition_exec, sort_exec, sort_expr, sort_expr_options, sort_merge_join_exec, sort_preserving_merge_exec, spr_repartition_exec, stream_exec_ordered, union_exec, coalesce_batches_exec, aggregate_exec, RequirementsTestExec};
 use datafusion::datasource::physical_plan::{CsvExec, FileScanConfig, ParquetExec};
 use datafusion_execution::object_store::ObjectStoreUrl;
 use datafusion::datasource::listing::PartitionedFile;
 use datafusion::datasource::file_format::file_compression_type::FileCompressionType;
-
 use datafusion_physical_optimizer::enforce_distribution::EnforceDistribution;
 use datafusion_physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
 use datafusion_physical_plan::sorts::sort::SortExec;
+
 use rstest::rstest;
 
 /// Create a csv exec for tests

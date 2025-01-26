@@ -32,6 +32,6 @@ pub mod pruning;
 pub mod sanity_checker;
 pub mod topk_aggregation;
 pub mod update_aggr_exprs;
-pub use optimizer::PhysicalOptimizerRule;
-pub mod test_utils;
 pub mod utils;
+
+pub use optimizer::PhysicalOptimizerRule;
