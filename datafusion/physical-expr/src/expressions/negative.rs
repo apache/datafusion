@@ -23,6 +23,7 @@ use std::sync::Arc;
 
 use crate::PhysicalExpr;
 
+use crate::utils::stats::new_unknown_from_interval;
 use arrow::{
     compute::kernels::numeric::neg_wrapping,
     datatypes::{DataType, Schema},
@@ -184,6 +185,42 @@ impl PhysicalExpr for NegativeExpr {
                 variance: None,
                 range: Interval::UNCERTAIN,
             }),
+        }
+    }
+
+    fn propagate_statistics(
+        &self,
+        parent_stat: &StatisticsV2,
+        children_stat: &[&StatisticsV2],
+    ) -> Result<Option<Vec<StatisticsV2>>> {
+        assert_eq!(
+            children_stat.len(),
+            1,
+            "NegativeExpr should have only one child"
+        );
+        match parent_stat {
+            Uniform {
+                interval: parent_interval,
+            } => match children_stat[0] {
+                Uniform {
+                    interval: child_interval,
+                }
+                | Unknown {
+                    range: child_interval,
+                    ..
+                } => {
+                    let propagated =
+                        self.propagate_constraints(parent_interval, &[child_interval])?;
+
+                    if let Some(propagated) = propagated {
+                        Ok(Some(vec![new_unknown_from_interval(&propagated[0])?]))
+                    } else {
+                        Ok(None)
+                    }
+                }
+                _ => Ok(None),
+            },
+            _ => Ok(None),
         }
     }
 
@@ -364,6 +401,38 @@ mod tests {
             )?,
             after_propagation
         );
+        Ok(())
+    }
+
+    #[test]
+    fn test_propagate_statistics_range_holders() -> Result<()> {
+        let negative_expr = NegativeExpr::new(Arc::new(Column::new("a", 0)));
+        let original_child_interval = Interval::make(Some(-2), Some(3))?;
+        let after_propagation = Interval::make(Some(-2), Some(0))?;
+
+        let parent = Uniform {
+            interval: Interval::make(Some(0), Some(4))?,
+        };
+        let children: Vec<Vec<StatisticsV2>> = vec![
+            vec![Uniform {
+                interval: original_child_interval.clone(),
+            }],
+            vec![Unknown {
+                mean: Some(ScalarValue::Float64(Some(0.5))),
+                median: Some(ScalarValue::Float64(Some(0.5))),
+                variance: None,
+                range: original_child_interval.clone(),
+            }],
+        ];
+
+        for child_view in children {
+            let ref_view: Vec<&StatisticsV2> = child_view.iter().collect();
+            assert_eq!(
+                negative_expr.propagate_statistics(&parent, &ref_view)?,
+                Some(vec![new_unknown_from_interval(&after_propagation)?])
+            );
+        }
+
         Ok(())
     }
 

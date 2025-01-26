@@ -16,7 +16,6 @@
 // under the License.
 
 mod guarantee;
-// #[cfg(feature = "stats_v2")]
 pub mod stats;
 
 pub use guarantee::{Guarantee, LiteralGuarantee};

@@ -236,7 +236,6 @@ impl StatisticsV2 {
 }
 
 #[cfg(test)]
-// #[cfg(all(test, feature = "stats_v2"))]
 mod tests {
     use crate::stats::StatisticsV2;
     use arrow::datatypes::DataType;

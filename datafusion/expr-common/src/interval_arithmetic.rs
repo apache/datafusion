@@ -1149,7 +1149,7 @@ fn next_value_helper<const INC: bool>(value: ScalarValue) -> ScalarValue {
 
 /// Returns the greater of the given interval bounds. Assumes that a `NULL`
 /// value represents `NEG_INF`.
-fn max_of_bounds(first: &ScalarValue, second: &ScalarValue) -> ScalarValue {
+pub fn max_of_bounds(first: &ScalarValue, second: &ScalarValue) -> ScalarValue {
     if !first.is_null() && (second.is_null() || first >= second) {
         first.clone()
     } else {
@@ -1159,7 +1159,7 @@ fn max_of_bounds(first: &ScalarValue, second: &ScalarValue) -> ScalarValue {
 
 /// Returns the lesser of the given interval bounds. Assumes that a `NULL`
 /// value represents `INF`.
-fn min_of_bounds(first: &ScalarValue, second: &ScalarValue) -> ScalarValue {
+pub fn min_of_bounds(first: &ScalarValue, second: &ScalarValue) -> ScalarValue {
     if !first.is_null() && (second.is_null() || first <= second) {
         first.clone()
     } else {

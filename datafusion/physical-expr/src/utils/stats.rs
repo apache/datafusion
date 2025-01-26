@@ -2,9 +2,11 @@ use crate::expressions::Literal;
 use crate::physical_expr::PhysicalExpr;
 use crate::utils::{build_dag, ExprTreeNode};
 use arrow::datatypes::{DataType, Schema};
-use datafusion_common::ScalarValue;
 use datafusion_common::ScalarValue::Float64;
-use datafusion_expr_common::interval_arithmetic::{apply_operator, Interval};
+use datafusion_common::{internal_err, ScalarValue};
+use datafusion_expr_common::interval_arithmetic::{
+    apply_operator, max_of_bounds, min_of_bounds, Interval,
+};
 use datafusion_expr_common::operator::Operator;
 use datafusion_physical_expr_common::stats::StatisticsV2;
 use datafusion_physical_expr_common::stats::StatisticsV2::{
@@ -213,16 +215,52 @@ pub fn new_unknown_from_binary_expr(
     })
 }
 
-/// Creates a new [`Bernoulli`] distribution, and tries to compute the result probability.
-/// TODO: implement properly, temporarily always returns 1.
+//noinspection DuplicatedCode
+/// Tries to create a new [`Bernoulli`] distribution, by computing the result probability,
+/// specifically, for Eq and NotEq operators with range-contained distributions.
+/// If not being able to compute a probability, returns an [`Unknown`] distribution.
 pub fn new_bernoulli_from_binary_expr(
-    _op: &Operator,
-    _left: &StatisticsV2,
-    _right: &StatisticsV2,
+    op: &Operator,
+    left: &StatisticsV2,
+    right: &StatisticsV2,
 ) -> datafusion_common::Result<StatisticsV2> {
-    Ok(Bernoulli {
-        p: Float64(Some(1.)),
-    })
+    match op {
+        Operator::Eq | Operator::NotEq => match (left, right) {
+            (Uniform { interval: li }, Uniform { interval: ri })
+            | (Uniform { interval: li }, Unknown { range: ri, .. })
+            | (Unknown { range: li, .. }, Uniform { interval: ri })
+            | (Unknown { range: li, .. }, Unknown { range: ri, .. }) => {
+                // Note: unbounded intervals will be caught in `intersect` method.
+                if let Some(intersection) = li.intersect(ri)? {
+                    if li.data_type().is_numeric() {
+                        let overall_spread = max_of_bounds(li.upper(), ri.upper())
+                            .sub_checked(min_of_bounds(li.lower(), ri.lower()))?;
+                        let intersection_spread =
+                            intersection.upper().sub_checked(intersection.lower())?;
+
+                        let p = intersection_spread
+                            .cast_to(&DataType::Float64)?
+                            .div(overall_spread.cast_to(&DataType::Float64)?)?;
+
+                        if op == &Operator::Eq {
+                            Ok(Bernoulli { p })
+                        } else {
+                            Ok(Bernoulli {
+                                p: Float64(Some(1.)).sub(p)?,
+                            })
+                        }
+                    } else {
+                        internal_err!("Cannot compute non-numeric probability")
+                    }
+                } else {
+                    new_unknown_from_binary_expr(op, left, right)
+                }
+            }
+            // TODO: handle inequalities, temporarily returns [`Unknown`]
+            _ => new_unknown_from_binary_expr(op, left, right),
+        },
+        _ => new_unknown_from_binary_expr(op, left, right),
+    }
 }
 
 /// Computes a mean value for a given binary operator and two statistics.
@@ -390,6 +428,15 @@ pub fn compute_range(
             | Operator::GtEq
             | Operator::Lt
             | Operator::LtEq => apply_operator(op, l, r),
+            Operator::Eq => {
+                if let Some(intersection) = l.intersect(r)? {
+                    Ok(intersection)
+                } else if let Some(data_type) = left_stat.data_type() {
+                    Interval::make_zero(&data_type)
+                } else {
+                    internal_err!("Invariant violation: data_type cannot be None here")
+                }
+            }
             _ => Interval::make_unbounded(&DataType::Float64),
         },
         (_, _) => Interval::make_unbounded(&DataType::Float64),
@@ -397,21 +444,44 @@ pub fn compute_range(
 }
 
 #[cfg(test)]
-// #[cfg(all(test, feature = "stats_v2"))]
 mod tests {
+    use crate::expressions::{binary, try_cast, BinaryExpr, Column};
     use crate::utils::stats::{
-        compute_mean, compute_median, compute_range, compute_variance,
+        compute_mean, compute_median, compute_range, compute_variance, ExprStatisticGraph,
     };
+    use arrow_schema::{DataType, Field, Schema};
     use datafusion_common::ScalarValue;
     use datafusion_common::ScalarValue::Float64;
     use datafusion_expr_common::interval_arithmetic::{apply_operator, Interval};
+    use datafusion_expr_common::operator::Operator;
     use datafusion_expr_common::operator::Operator::{
-        Gt, GtEq, Lt, LtEq, Minus, Multiply, Plus,
+        Eq, Gt, GtEq, Lt, LtEq, Minus, Multiply, Plus,
     };
-    use datafusion_physical_expr_common::stats::StatisticsV2::{Uniform, Unknown};
+    use datafusion_expr_common::type_coercion::binary::get_input_types;
+    use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
+    use datafusion_physical_expr_common::stats::StatisticsV2::{
+        Bernoulli, Uniform, Unknown,
+    };
+    use std::sync::Arc;
 
     type Actual = Option<ScalarValue>;
     type Expected = Option<ScalarValue>;
+
+    pub fn binary_expr(
+        left: Arc<dyn PhysicalExpr>,
+        op: Operator,
+        right: Arc<dyn PhysicalExpr>,
+        schema: &Schema,
+    ) -> datafusion_common::Result<BinaryExpr> {
+        let left_type = left.data_type(schema)?;
+        let right_type = right.data_type(schema)?;
+        let (lhs, rhs) = get_input_types(&left_type, &op, &right_type)?;
+
+        let left_expr = try_cast(left, schema, lhs)?;
+        let right_expr = try_cast(right, schema, rhs)?;
+        let b = binary(left_expr, op, right_expr, schema);
+        Ok(b?.as_any().downcast_ref::<BinaryExpr>().unwrap().clone())
+    }
 
     // Expected test results were calculated in Wolfram Mathematica, by using
     // *METHOD_NAME*[TransformedDistribution[x op y, {x ~ *DISTRIBUTION_X*[..], y ~ *DISTRIBUTION_Y*[..]}]]
@@ -526,12 +596,94 @@ mod tests {
                 assert_eq!(
                     compute_range(&op, &stat_a, &stat_b)?,
                     apply_operator(&op, a, b)?,
-                    "{}",
-                    format!("Failed for {:?} {op} {:?}", stat_a, stat_b),
+                    "Failed for {:?} {op} {:?}",
+                    stat_a,
+                    stat_b
                 );
             }
+
+            assert_eq!(
+                compute_range(&Eq, &stat_a, &stat_b)?,
+                Interval::make(Some(0.0), Some(12.0))?,
+            );
         }
 
         Ok(())
     }
+
+    #[test]
+    fn test_stats_v2_integration() -> datafusion_common::Result<()> {
+        let schema = &Schema::new(vec![
+            Field::new("a", DataType::Float64, false),
+            Field::new("b", DataType::Float64, false),
+            Field::new("c", DataType::Float64, false),
+            Field::new("d", DataType::Float64, false),
+        ]);
+
+        let a: Arc<dyn PhysicalExpr> = Arc::new(Column::new("a", 0));
+        let b: Arc<dyn PhysicalExpr> = Arc::new(Column::new("b", 1));
+        let c: Arc<dyn PhysicalExpr> = Arc::new(Column::new("c", 2));
+        let d: Arc<dyn PhysicalExpr> = Arc::new(Column::new("d", 3));
+
+        let left: Arc<dyn PhysicalExpr> =
+            Arc::new(binary_expr(Arc::clone(&a), Plus, Arc::clone(&b), schema)?);
+        let right: Arc<dyn PhysicalExpr> =
+            Arc::new(binary_expr(Arc::clone(&c), Minus, Arc::clone(&d), schema)?);
+        let expr: Arc<dyn PhysicalExpr> = Arc::new(binary_expr(
+            Arc::clone(&left),
+            Eq,
+            Arc::clone(&right),
+            schema,
+        )?);
+
+        let mut graph = ExprStatisticGraph::try_new(expr, schema)?;
+        // 2, 5 and 6 are BinaryExpr
+        graph.assign_statistics(&[
+            (
+                0usize,
+                Uniform {
+                    interval: Interval::make(Some(0), Some(1))?,
+                },
+            ),
+            (
+                1usize,
+                Uniform {
+                    interval: Interval::make(Some(0), Some(2))?,
+                },
+            ),
+            (
+                3usize,
+                Uniform {
+                    interval: Interval::make(Some(1), Some(3))?,
+                },
+            ),
+            (
+                4usize,
+                Uniform {
+                    interval: Interval::make(Some(1), Some(5))?,
+                },
+            ),
+        ]);
+        let ev_stats = graph.evaluate()?;
+        assert_eq!(
+            ev_stats,
+            &Bernoulli {
+                p: Float64(Some(0.5))
+            }
+        );
+
+        Ok(())
+    }
 }
+
+/*
+StableGraph { Ty: "Directed", node_count: 7, edge_count: 6, edges: (2, 0), (2, 1), (5, 3), (5, 4), (6, 2), (6, 5), node weights: {
+0: ExprStatisticGraphNode { expr: Column { name: "a", index: 0 }, statistics: Unknown { mean: None, median: None, variance: None, range: Interval { lower: Float64(NULL), upper: Float64(NULL) } } },
+1: ExprStatisticGraphNode { expr: Column { name: "b", index: 1 }, statistics: Unknown { mean: None, median: None, variance: None, range: Interval { lower: Float64(NULL), upper: Float64(NULL) } } },
+2: ExprStatisticGraphNode { expr: BinaryExpr { left: Column { name: "a", index: 0 }, op: Plus, right: Column { name: "b", index: 1 }, fail_on_overflow: false }, statistics: Unknown { mean: None, median: None, variance: None, range: Interval { lower: Float64(NULL), upper: Float64(NULL) } } },
+3: ExprStatisticGraphNode { expr: Column { name: "c", index: 2 }, statistics: Unknown { mean: None, median: None, variance: None, range: Interval { lower: Float64(NULL), upper: Float64(NULL) } } },
+4: ExprStatisticGraphNode { expr: Column { name: "d", index: 3 }, statistics: Unknown { mean: None, median: None, variance: None, range: Interval { lower: Float64(NULL), upper: Float64(NULL) } } },
+5: ExprStatisticGraphNode { expr: BinaryExpr { left: Column { name: "c", index: 2 }, op: Minus, right: Column { name: "d", index: 3 }, fail_on_overflow: false }, statistics: Unknown { mean: None, median: None, variance: None, range: Interval { lower: Float64(NULL), upper: Float64(NULL) } } },
+6: ExprStatisticGraphNode { expr: BinaryExpr { left: BinaryExpr { left: Column { name: "a", index: 0 }, op: Plus, right: Column { name: "b", index: 1 }, fail_on_overflow: false }, op: Eq, right: BinaryExpr { left: Column { name: "c", index: 2 }, op: Minus, right: Column { name: "d", index: 3 }, fail_on_overflow: false }, fail_on_overflow: false }, statistics: Unknown { mean: None, median: None, variance: None, range: Interval { lower: Boolean(false), upper: Boolean(true) } } }}, edge weights: {0: 0, 1: 0, 2: 0, 3: 0, 4: 0, 5: 0}, free_node: NodeIndex(4294967295), free_edge: EdgeIndex(4294967295) }
+
+ */

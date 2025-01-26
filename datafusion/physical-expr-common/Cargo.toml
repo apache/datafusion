@@ -28,9 +28,6 @@ license = { workspace = true }
 authors = { workspace = true }
 rust-version = { workspace = true }
 
-[features]
-stats_v2 = []
-
 [lints]
 workspace = true
 
