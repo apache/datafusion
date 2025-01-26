@@ -207,7 +207,7 @@
 //! [`QueryPlanner`]: execution::context::QueryPlanner
 //! [`OptimizerRule`]: datafusion_optimizer::optimizer::OptimizerRule
 //! [`AnalyzerRule`]:  datafusion_optimizer::analyzer::AnalyzerRule
-//! [`PhysicalOptimizerRule`]: crate::physical_optimizer::PhysicalOptimizerRule
+//! [`PhysicalOptimizerRule`]: datafusion_physical_optimizer::PhysicalOptimizerRule
 //!
 //! ## Query Planning and Execution Overview
 //!
@@ -349,7 +349,7 @@
 //! filtering can never be `true` using additional statistical information.
 //!
 //! [cp_solver]: crate::physical_expr::intervals::cp_solver
-//! [`PruningPredicate`]: crate::physical_optimizer::pruning::PruningPredicate
+//! [`PruningPredicate`]: datafusion_physical_optimizer::pruning::PruningPredicate
 //! [`PhysicalExpr`]: crate::physical_plan::PhysicalExpr
 //!
 //! ## Execution
@@ -659,7 +659,7 @@
 //! [`OptimizerRule`]: optimizer::optimizer::OptimizerRule
 //! [`ExecutionPlan`]: physical_plan::ExecutionPlan
 //! [`PhysicalPlanner`]: physical_planner::PhysicalPlanner
-//! [`PhysicalOptimizerRule`]: datafusion::physical_optimizer::optimizer::PhysicalOptimizerRule
+//! [`PhysicalOptimizerRule`]: datafusion_physical_optimizer::PhysicalOptimizerRule
 //! [`Schema`]: arrow::datatypes::Schema
 //! [`PhysicalExpr`]: physical_plan::PhysicalExpr
 //! [`RecordBatch`]: arrow::record_batch::RecordBatch
@@ -677,7 +677,6 @@ pub mod dataframe;
 pub mod datasource;
 pub mod error;
 pub mod execution;
-pub mod physical_optimizer;
 pub mod physical_planner;
 pub mod prelude;
 pub mod scalar;

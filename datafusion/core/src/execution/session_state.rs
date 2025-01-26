@@ -17,6 +17,12 @@
 
 //! [`SessionState`]: information required to run queries in a session
 
+use std::any::Any;
+use std::collections::hash_map::Entry;
+use std::collections::{HashMap, HashSet};
+use std::fmt::Debug;
+use std::sync::Arc;
+
 use crate::catalog::{CatalogProviderList, SchemaProvider, TableProviderFactory};
 use crate::catalog_common::information_schema::{
     InformationSchemaProvider, INFORMATION_SCHEMA,
@@ -27,11 +33,9 @@ use crate::datasource::file_format::{format_as_file_type, FileFormatFactory};
 use crate::datasource::provider_as_source;
 use crate::execution::context::{EmptySerializerRegistry, FunctionFactory, QueryPlanner};
 use crate::execution::SessionStateDefaults;
-use crate::physical_optimizer::optimizer::PhysicalOptimizer;
 use crate::physical_planner::{DefaultPhysicalPlanner, PhysicalPlanner};
+
 use arrow_schema::{DataType, SchemaRef};
-use async_trait::async_trait;
-use chrono::{DateTime, Utc};
 use datafusion_catalog::{Session, TableFunction, TableFunctionImpl};
 use datafusion_common::alias::AliasGenerator;
 use datafusion_common::config::{ConfigExtension, ConfigOptions, TableOptions};
@@ -61,20 +65,19 @@ use datafusion_optimizer::{
 };
 use datafusion_physical_expr::create_physical_expr;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
+use datafusion_physical_optimizer::optimizer::PhysicalOptimizer;
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use datafusion_physical_plan::ExecutionPlan;
 use datafusion_sql::parser::{DFParser, Statement};
 use datafusion_sql::planner::{ContextProvider, ParserOptions, PlannerContext, SqlToRel};
+
+use async_trait::async_trait;
+use chrono::{DateTime, Utc};
 use itertools::Itertools;
 use log::{debug, info};
 use object_store::ObjectStore;
 use sqlparser::ast::{Expr as SQLExpr, ExprWithAlias as SQLExprWithAlias};
 use sqlparser::dialect::dialect_from_str;
-use std::any::Any;
-use std::collections::hash_map::Entry;
-use std::collections::{HashMap, HashSet};
-use std::fmt::Debug;
-use std::sync::Arc;
 use url::Url;
 use uuid::Uuid;
 
