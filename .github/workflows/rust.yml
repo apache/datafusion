@@ -420,7 +420,7 @@ jobs:
           cargo test --profile ci --lib --tests --bins --features avro,json,backtrace,integration-tests
           cd datafusion-cli
           cargo test --profile ci --lib --tests --bins --all-features
-q
+
   test-datafusion-pyarrow:
     name: cargo test pyarrow (amd64)
     needs: linux-build-lib
