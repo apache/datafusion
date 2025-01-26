@@ -47,7 +47,7 @@ use std::sync::Arc;
 | 128640            |
 +-------------------+
 ```"#,
-    standard_argument(name = "str", prefix = "String"),
+    standard_argument(name = "str", prefix = "Coercible String"),
     related_udf(name = "chr")
 )]
 #[derive(Debug)]

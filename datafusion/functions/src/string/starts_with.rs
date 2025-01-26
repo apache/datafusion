@@ -26,7 +26,7 @@ use crate::utils::make_scalar_function;
 use datafusion_common::types::logical_string;
 use datafusion_common::{internal_err, Result, ScalarValue};
 use datafusion_expr::{
-    ColumnarValue, Documentation, Expr, Like, ScalarUDFImpl, Signature, TypeSignature,
+    ColumnarValue, Documentation, Expr, Like, ScalarUDFImpl, Signature,
     TypeSignatureClass, Volatility,
 };
 use datafusion_macros::user_doc;
@@ -50,8 +50,8 @@ pub fn starts_with(args: &[ArrayRef]) -> Result<ArrayRef> {
 | true                                         |
 +----------------------------------------------+
 ```"#,
-    standard_argument(name = "str", prefix = "String"),
-    argument(name = "substr", description = "Substring to test for.")
+    standard_argument(name = "str", prefix = "Coercible String"),
+    argument(name = "substr", description = "Coercible substring to test for.")
 )]
 #[derive(Debug)]
 pub struct StartsWithFunc {
@@ -67,13 +67,10 @@ impl Default for StartsWithFunc {
 impl StartsWithFunc {
     pub fn new() -> Self {
         Self {
-            signature: Signature::one_of(
+            signature: Signature::coercible(
                 vec![
-                    TypeSignature::String(2),
-                    TypeSignature::Coercible(vec![
-                        TypeSignatureClass::Native(logical_string()),
-                        TypeSignatureClass::Native(logical_string()),
-                    ]),
+                    TypeSignatureClass::Native(logical_string()),
+                    TypeSignatureClass::Native(logical_string()),
                 ],
                 Volatility::Immutable,
             ),

@@ -25,8 +25,8 @@ use datafusion_common::types::logical_string;
 use datafusion_common::DataFusionError;
 use datafusion_common::Result;
 use datafusion_expr::{
-    ColumnarValue, Documentation, ScalarUDFImpl, Signature, TypeSignature,
-    TypeSignatureClass, Volatility,
+    ColumnarValue, Documentation, ScalarUDFImpl, Signature, TypeSignatureClass,
+    Volatility,
 };
 use datafusion_macros::user_doc;
 use std::any::Any;
@@ -44,8 +44,11 @@ use std::sync::Arc;
 | true                                              |
 +---------------------------------------------------+
 ```"#,
-    standard_argument(name = "str", prefix = "String"),
-    argument(name = "search_str", description = "The string to search for in str.")
+    standard_argument(name = "str", prefix = "Coercible String"),
+    argument(
+        name = "search_str",
+        description = "The coercible string to search for in str."
+    )
 )]
 #[derive(Debug)]
 pub struct ContainsFunc {
@@ -61,13 +64,10 @@ impl Default for ContainsFunc {
 impl ContainsFunc {
     pub fn new() -> Self {
         Self {
-            signature: Signature::one_of(
+            signature: Signature::coercible(
                 vec![
-                    TypeSignature::String(2),
-                    TypeSignature::Coercible(vec![
-                        TypeSignatureClass::Native(logical_string()),
-                        TypeSignatureClass::Native(logical_string()),
-                    ]),
+                    TypeSignatureClass::Native(logical_string()),
+                    TypeSignatureClass::Native(logical_string()),
                 ],
                 Volatility::Immutable,
             ),

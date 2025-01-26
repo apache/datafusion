@@ -25,8 +25,8 @@ use crate::utils::make_scalar_function;
 use datafusion_common::types::logical_string;
 use datafusion_common::{internal_err, Result};
 use datafusion_expr::{
-    ColumnarValue, Documentation, ScalarUDFImpl, Signature, TypeSignature,
-    TypeSignatureClass, Volatility,
+    ColumnarValue, Documentation, ScalarUDFImpl, Signature, TypeSignatureClass,
+    Volatility,
 };
 use datafusion_macros::user_doc;
 
@@ -48,8 +48,8 @@ use datafusion_macros::user_doc;
 | true                                       |
 +--------------------------------------------+
 ```"#,
-    standard_argument(name = "str", prefix = "String"),
-    argument(name = "substr", description = "Substring to test for.")
+    standard_argument(name = "str", prefix = "Coercible String"),
+    argument(name = "substr", description = "Coercible substring to test for.")
 )]
 #[derive(Debug)]
 pub struct EndsWithFunc {
@@ -65,13 +65,10 @@ impl Default for EndsWithFunc {
 impl EndsWithFunc {
     pub fn new() -> Self {
         Self {
-            signature: Signature::one_of(
+            signature: Signature::coercible(
                 vec![
-                    TypeSignature::String(2),
-                    TypeSignature::Coercible(vec![
-                        TypeSignatureClass::Native(logical_string()),
-                        TypeSignatureClass::Native(logical_string()),
-                    ]),
+                    TypeSignatureClass::Native(logical_string()),
+                    TypeSignatureClass::Native(logical_string()),
                 ],
                 Volatility::Immutable,
             ),

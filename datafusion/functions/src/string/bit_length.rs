@@ -40,7 +40,7 @@ use datafusion_macros::user_doc;
 | 80                             |
 +--------------------------------+
 ```"#,
-    standard_argument(name = "str", prefix = "String"),
+    standard_argument(name = "str", prefix = "Coercible String"),
     related_udf(name = "length"),
     related_udf(name = "octet_length")
 )]
