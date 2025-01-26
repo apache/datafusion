@@ -345,6 +345,16 @@ SELECT ascii('💯a')
 128175
 
 query I
+SELECT ascii('222')
+----
+50
+
+query I
+SELECT ascii(2)
+----
+50
+
+query I
 SELECT bit_length('')
 ----
 0
@@ -368,6 +378,16 @@ query I
 SELECT bit_length(arrow_cast('jonathan', 'Utf8View'));
 ----
 64
+
+query I
+SELECT bit_length('Spark SQL');
+----
+72
+
+query I
+SELECT bit_length(X'537061726b2053514c');
+----
+72
 
 query T
 SELECT btrim(' xyxtrimyyx ', NULL)
@@ -546,6 +566,16 @@ SELECT octet_length(NULL)
 ----
 NULL
 
+query I
+SELECT octet_length('Spark SQL')
+----
+9
+
+query I
+SELECT octet_length(X'537061726b2053514c')
+----
+9
+
 query T
 SELECT repeat('Pg', 4)
 ----
@@ -676,6 +706,56 @@ query B
 SELECT starts_with('alphabet', NULL)
 ----
 NULL
+
+query B
+SELECT starts_with('Spark SQL', 'SQL')
+----
+false
+
+query B
+SELECT starts_with('Spark SQL', 'Spark')
+----
+true
+
+query B
+SELECT starts_with('Spark SQL', NULL)
+----
+NULL
+
+query B
+SELECT starts_with(X'537061726b2053514c', X'53514c')
+----
+false
+
+query B
+SELECT starts_with(X'537061726b2053514c', X'537061726b')
+----
+true
+
+query B
+SELECT ends_with('Spark SQL', 'SQL')
+----
+true
+
+query B
+SELECT ends_with('Spark SQL', 'Spark')
+----
+false
+
+query B
+SELECT ends_with('Spark SQL', NULL)
+----
+NULL
+
+query B
+SELECT ends_with(X'537061726b2053514c', X'53514c')
+----
+true
+
+query B
+SELECT ends_with(X'537061726b2053514c', X'537061726b')
+----
+false
 
 query T
 SELECT to_hex(2147483647)

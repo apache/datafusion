@@ -718,7 +718,7 @@ fn validate_and_collect_string_types(data_types: &[DataType]) -> Result<Vec<Data
                 NativeType::String => Ok(data_type.to_owned()),
                 // TODO: Switch to Utf8View if all the string functions supports Utf8View
                 NativeType::Null => Ok(DataType::Utf8),
-                _ => plan_err!("The signature expected expected NativeType::String but received {logical_type}"),
+                _ => plan_err!("The signature expected NativeType::String but received {logical_type}"),
             }
         })
         .collect()
