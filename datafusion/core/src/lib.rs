@@ -637,7 +637,7 @@
 //! [`datafusion_substrait`]: https://crates.io/crates/datafusion-substrait
 //! [`datafusion_sqllogictest`]: https://crates.io/crates/datafusion-sqllogictest
 //!
-//! DataFusion is internally split into multiple sub crates crates to
+//! DataFusion is internally split into multiple sub crates to
 //! enforce modularity and improve compilation times. See the
 //! [list of modules](#modules) for all available sub-crates. Major ones are
 //!
