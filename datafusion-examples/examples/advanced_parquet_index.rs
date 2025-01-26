@@ -15,6 +15,14 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::any::Any;
+use std::collections::{HashMap, HashSet};
+use std::fs::File;
+use std::ops::Range;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+
 use arrow::array::{ArrayRef, Int32Array, RecordBatch, StringArray};
 use arrow::datatypes::SchemaRef;
 use async_trait::async_trait;
@@ -51,13 +59,6 @@ use datafusion::prelude::*;
 use futures::future::BoxFuture;
 use futures::FutureExt;
 use object_store::ObjectStore;
-use std::any::Any;
-use std::collections::{HashMap, HashSet};
-use std::fs::File;
-use std::ops::Range;
-use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
 use tempfile::TempDir;
 use url::Url;
 

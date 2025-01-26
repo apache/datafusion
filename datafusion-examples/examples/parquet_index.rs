@@ -44,13 +44,12 @@ use datafusion::prelude::*;
 use std::any::Any;
 use std::collections::HashSet;
 use std::fmt::Display;
-use std::fs::{self, DirEntry, File};
+use std::fs;
+use std::fs::{DirEntry, File};
 use std::ops::Range;
 use std::path::{Path, PathBuf};
-use std::sync::{
-    atomic::{AtomicUsize, Ordering},
-    Arc,
-};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
 use tempfile::TempDir;
 use url::Url;
 
