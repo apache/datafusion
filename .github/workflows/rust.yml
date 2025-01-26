@@ -185,7 +185,7 @@ jobs:
         with:
           rust-version: stable
       - name: Run tests (excluding doctests)
-        run: cargo test --profile ci --exclude datafusion-examples --exclude datafusion-benchmarks --workspace --lib --tests --bins --features avro,json,backtrace,integration-tests
+        run: cargo test --profile ci --exclude datafusion-examples,ffi_example_table_provider --exclude datafusion-benchmarks --workspace --lib --tests --bins --features avro,json,backtrace,integration-tests
       - name: Verify Working Directory Clean
         run: git diff --exit-code
 
@@ -253,7 +253,7 @@ jobs:
           rust-version: stable
       - name: Run doctests
         run: |
-          cargo test --profile ci --doc --features avro,json,integration-tests
+          cargo test --profile ci --doc --features avro,json,integration-tests --exclude ffi_example_table_provider
           cd datafusion-cli
           cargo test --profile ci --doc --all-features
       - name: Verify Working Directory Clean
@@ -420,7 +420,7 @@ jobs:
           cargo test --profile ci --lib --tests --bins --features avro,json,backtrace,integration-tests
           cd datafusion-cli
           cargo test --profile ci --lib --tests --bins --all-features
-
+q
   test-datafusion-pyarrow:
     name: cargo test pyarrow (amd64)
     needs: linux-build-lib
