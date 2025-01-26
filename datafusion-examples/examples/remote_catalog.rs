@@ -30,18 +30,18 @@
 /// [Unity]: https://github.com/unitycatalog/unitycatalog
 /// [Hive]: https://hive.apache.org/
 use arrow::array::record_batch;
-use arrow_schema::{Field, Fields, Schema, SchemaRef};
+use arrow::datatypes::{Field, Fields, Schema, SchemaRef};
 use async_trait::async_trait;
 use datafusion::catalog::TableProvider;
+use datafusion::catalog::{AsyncSchemaProvider, Session};
 use datafusion::common::Result;
+use datafusion::common::{assert_batches_eq, internal_datafusion_err, plan_err};
 use datafusion::execution::SendableRecordBatchStream;
+use datafusion::logical_expr::{Expr, TableType};
 use datafusion::physical_plan::memory::MemoryExec;
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::prelude::{DataFrame, SessionContext};
-use datafusion_catalog::{AsyncSchemaProvider, Session};
-use datafusion_common::{assert_batches_eq, internal_datafusion_err, plan_err};
-use datafusion_expr::{Expr, TableType};
 use futures::TryStreamExt;
 use std::any::Any;
 use std::sync::Arc;
