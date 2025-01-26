@@ -39,7 +39,7 @@ use crate::PhysicalExpr;
 
 use arrow::datatypes::{DataType, Schema};
 use arrow::record_batch::RecordBatch;
-use arrow_array::{Array, LargeListArray, ListArray};
+use arrow_array::Array;
 use datafusion_common::{internal_err, DFSchema, Result, ScalarValue};
 use datafusion_expr::interval_arithmetic::Interval;
 use datafusion_expr::sort_properties::ExprProperties;
@@ -188,51 +188,7 @@ impl PhysicalExpr for ScalarFunctionExpr {
 
         if self.fun.signature().strict && args.iter().any(|arg| arg.data_type().is_null())
         {
-            let null_value = match &self.return_type {
-                DataType::Null => ScalarValue::Null,
-                DataType::Boolean => ScalarValue::Boolean(None),
-                DataType::Int8 => ScalarValue::Int8(None),
-                DataType::Int16 => ScalarValue::Int16(None),
-                DataType::Int32 => ScalarValue::Int32(None),
-                DataType::Int64 => ScalarValue::Int64(None),
-                DataType::UInt8 => ScalarValue::UInt8(None),
-                DataType::UInt16 => ScalarValue::UInt16(None),
-                DataType::UInt32 => ScalarValue::UInt32(None),
-                DataType::UInt64 => ScalarValue::UInt64(None),
-                DataType::Float16 => ScalarValue::Float16(None),
-                DataType::Float32 => ScalarValue::Float32(None),
-                DataType::Float64 => ScalarValue::Float64(None),
-                DataType::Timestamp(_, _) => todo!(),
-                DataType::Date32 => todo!(),
-                DataType::Date64 => todo!(),
-                DataType::Time32(_) => todo!(),
-                DataType::Time64(_) => todo!(),
-                DataType::Duration(_) => todo!(),
-                DataType::Interval(_) => todo!(),
-                DataType::Binary => todo!(),
-                DataType::FixedSizeBinary(_) => todo!(),
-                DataType::LargeBinary => todo!(),
-                DataType::BinaryView => todo!(),
-                DataType::Utf8 => todo!(),
-                DataType::LargeUtf8 => todo!(),
-                DataType::Utf8View => todo!(),
-                DataType::List(field_ref) => ScalarValue::List(Arc::new(
-                    ListArray::new_null(Arc::clone(field_ref), 1),
-                )),
-                DataType::ListView(_) => todo!(),
-                DataType::FixedSizeList(_, _) => todo!(),
-                DataType::LargeList(field_ref) => ScalarValue::LargeList(Arc::new(
-                    LargeListArray::new_null(Arc::clone(field_ref), 1),
-                )),
-                DataType::LargeListView(_) => todo!(),
-                DataType::Struct(_) => todo!(),
-                DataType::Union(_, _) => todo!(),
-                DataType::Dictionary(_, _) => todo!(),
-                DataType::Decimal128(_, _) => todo!(),
-                DataType::Decimal256(_, _) => todo!(),
-                DataType::Map(_, _) => todo!(),
-                DataType::RunEndEncoded(_, _) => todo!(),
-            };
+            let null_value = ScalarValue::try_from(&self.return_type)?;
             return Ok(ColumnarValue::Scalar(null_value));
         }
 
