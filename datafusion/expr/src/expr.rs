@@ -2774,10 +2774,10 @@ fn fmt_function(
 /// The name of the column (field) that this `Expr` will produce in the physical plan.
 /// The difference from [Expr::schema_name] is that top-level columns are unqualified.
 pub fn physical_name(expr: &Expr) -> Result<String> {
-    if let Expr::Column(col) = expr {
-        Ok(col.name.clone())
-    } else {
-        Ok(expr.schema_name().to_string())
+    match expr {
+        Expr::Column(col) => Ok(col.name.clone()),
+        Expr::Alias(alias) => Ok(alias.name.clone()),
+        _ => Ok(expr.schema_name().to_string()),
     }
 }
 
