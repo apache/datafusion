@@ -453,62 +453,22 @@ fn get_valid_types(
             .collect(),
         TypeSignature::String(number) => {
             function_length_check(current_types.len(), *number)?;
-
-            let mut new_types = Vec::with_capacity(current_types.len());
-            for data_type in current_types.iter() {
-                let logical_data_type: NativeType = data_type.into();
-                if logical_data_type == NativeType::String {
-                    new_types.push(data_type.to_owned());
-                } else if logical_data_type == NativeType::Null {
-                    // TODO: Switch to Utf8View if all the string functions supports Utf8View
-                    new_types.push(DataType::Utf8);
-                } else {
-                    return plan_err!(
-                        "The signature expected NativeType::String but received {logical_data_type}"
-                    );
-                }
-            }
-
-            // Find the common string type for the given types
-            fn find_common_type(
-                lhs_type: &DataType,
-                rhs_type: &DataType,
-            ) -> Result<DataType> {
-                match (lhs_type, rhs_type) {
-                    (DataType::Dictionary(_, lhs), DataType::Dictionary(_, rhs)) => {
-                        find_common_type(lhs, rhs)
-                    }
-                    (DataType::Dictionary(_, v), other)
-                    | (other, DataType::Dictionary(_, v)) => find_common_type(v, other),
-                    _ => {
-                        if let Some(coerced_type) = string_coercion(lhs_type, rhs_type) {
-                            Ok(coerced_type)
-                        } else {
-                            plan_err!(
-                                "{} and {} are not coercible to a common string type",
-                                lhs_type,
-                                rhs_type
-                            )
-                        }
-                    }
-                }
-            }
-
-            // Length checked above, safe to unwrap
-            let mut coerced_type = new_types.first().unwrap().to_owned();
+            let new_types = validate_and_collect_string_types(current_types)?;
+            let mut coerced_type = new_types
+                .first()
+                .ok_or_else(|| {
+                    internal_datafusion_err!(
+                        "Expected at least one type in the list of types"
+                    )
+                })?
+                .to_owned();
             for t in new_types.iter().skip(1) {
-                coerced_type = find_common_type(&coerced_type, t)?;
+                coerced_type = find_common_string_type(&coerced_type, t)?;
             }
-
-            fn base_type_or_default_type(data_type: &DataType) -> DataType {
-                if let DataType::Dictionary(_, v) = data_type {
-                    base_type_or_default_type(v)
-                } else {
-                    data_type.to_owned()
-                }
-            }
-
-            vec![vec![base_type_or_default_type(&coerced_type); *number]]
+            vec![vec![
+                base_dictionary_type_or_default_type(&coerced_type);
+                *number
+            ]]
         }
         TypeSignature::Numeric(number) => {
             function_length_check(current_types.len(), *number)?;
@@ -584,11 +544,6 @@ fn get_valid_types(
                 match target_type_class {
                     TypeSignatureClass::Native(native_type) => {
                         let target_type = native_type.native();
-                        // if target_type == &NativeType::String {
-                        //     ...
-                        // } else {
-                        //     target_type.default_cast_for(current_type)
-                        // }
                         target_type.default_cast_for(current_type)
                     }
                     // Not consistent with Postgres and DuckDB but to avoid regression we implicit cast string to timestamp
@@ -624,6 +579,24 @@ fn get_valid_types(
             {
                 let target_type = can_coerce_to(current_type, target_type_class)?;
                 new_types.push(target_type);
+            }
+
+            // Following the behavior of `TypeSignature::String`, we find the common string type.
+            let string_indices: Vec<_> = target_types.iter().enumerate()
+                .filter(|(_, t)| {
+                    matches!(t, TypeSignatureClass::Native(n) if n.native() == &NativeType::String)
+                })
+                .map(|(i, _)| i)
+                .collect();
+            if !string_indices.is_empty() {
+                let mut coerced_string_type = new_types[string_indices[0]].to_owned();
+                for &i in string_indices.iter().skip(1) {
+                    coerced_string_type =
+                        find_common_string_type(&coerced_string_type, &new_types[i])?;
+                }
+                for i in string_indices {
+                    new_types[i] = coerced_string_type.clone();
+                }
             }
 
             vec![new_types]
@@ -731,6 +704,57 @@ fn get_valid_types(
     };
 
     Ok(valid_types)
+}
+
+/// Validates that all data types are either [`NativeType::String`] or [`NativeType::Null`].
+/// For [`NativeType::Null`], returns [`DataType::Utf8`] as the default string type.
+/// Returns error if any type is neither [`NativeType::String`] nor [`NativeType::Null`].
+fn validate_and_collect_string_types(data_types: &[DataType]) -> Result<Vec<DataType>> {
+    data_types
+        .iter()
+        .map(|data_type| {
+            let logical_type: NativeType = data_type.into();
+            match logical_type {
+                NativeType::String => Ok(data_type.to_owned()),
+                // TODO: Switch to Utf8View if all the string functions supports Utf8View
+                NativeType::Null => Ok(DataType::Utf8),
+                _ => plan_err!("Expected NativeType::String but received {logical_type}"),
+            }
+        })
+        .collect()
+}
+
+/// Returns a common string [`DataType`] that both input types can be coerced to.
+/// Handles [`DataType::Dictionary`] by recursively finding common type of their value [`DataType`].
+/// Returns error if types cannot be coerced to a common string [`DataType`].
+fn find_common_string_type(lhs_type: &DataType, rhs_type: &DataType) -> Result<DataType> {
+    match (lhs_type, rhs_type) {
+        (DataType::Dictionary(_, lhs), DataType::Dictionary(_, rhs)) => {
+            find_common_string_type(lhs, rhs)
+        }
+        (DataType::Dictionary(_, v), other) | (other, DataType::Dictionary(_, v)) => {
+            find_common_string_type(v, other)
+        }
+        _ => {
+            if let Some(coerced_type) = string_coercion(lhs_type, rhs_type) {
+                Ok(coerced_type)
+            } else {
+                plan_err!(
+                    "{lhs_type} and {rhs_type} are not coercible to a common string type"
+                )
+            }
+        }
+    }
+}
+
+/// Recursively traverses [`DataType::Dictionary`] to get the underlying value [`DataType`].
+/// For non-dictionary types, returns the default [`DataType`].
+fn base_dictionary_type_or_default_type(data_type: &DataType) -> DataType {
+    if let DataType::Dictionary(_, v) = data_type {
+        base_dictionary_type_or_default_type(v)
+    } else {
+        data_type.to_owned()
+    }
 }
 
 /// Try to coerce the current argument types to match the given `valid_types`.
