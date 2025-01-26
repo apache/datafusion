@@ -80,6 +80,7 @@ impl Flatten {
                     ArrayFunctionSignature::RecursiveArray,
                 ),
                 volatility: Volatility::Immutable,
+                strict: false,
             },
             aliases: vec![],
         }

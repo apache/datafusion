@@ -27,7 +27,7 @@ use arrow::array::MutableArrayData;
 use arrow::array::OffsetSizeTrait;
 use arrow::buffer::OffsetBuffer;
 use arrow::datatypes::DataType;
-use arrow_schema::DataType::{FixedSizeList, LargeList, List, Null};
+use arrow_schema::DataType::{FixedSizeList, LargeList, List};
 use arrow_schema::Field;
 use datafusion_common::cast::as_int64_array;
 use datafusion_common::cast::as_large_list_array;
@@ -330,7 +330,8 @@ pub(super) struct ArraySlice {
 impl ArraySlice {
     pub fn new() -> Self {
         Self {
-            signature: Signature::variadic_any(Volatility::Immutable),
+            // TODO: This signature should use the actual accepted types, not variadic_any.
+            signature: Signature::variadic_any(Volatility::Immutable).with_strict(),
             aliases: vec![String::from("list_slice")],
         }
     }
@@ -419,27 +420,17 @@ fn array_slice_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
         None
     };
 
-    let null_input = args.iter().any(|arg| arg.data_type().is_null());
+    let from_array = as_int64_array(&args[1])?;
+    let to_array = as_int64_array(&args[2])?;
+
     let array_data_type = args[0].data_type();
     match array_data_type {
-        Null => Ok(Arc::clone(&args[0])),
-        List(field_ref) if null_input => Ok(Arc::new(GenericListArray::<i32>::new_null(
-            Arc::clone(field_ref),
-            1,
-        ))),
-        LargeList(field_ref) if null_input => Ok(Arc::new(
-            GenericListArray::<i64>::new_null(Arc::clone(field_ref), 1),
-        )),
         List(_) => {
             let array = as_list_array(&args[0])?;
-            let from_array = as_int64_array(&args[1])?;
-            let to_array = as_int64_array(&args[2])?;
             general_array_slice::<i32>(array, from_array, to_array, stride)
         }
         LargeList(_) => {
             let array = as_large_list_array(&args[0])?;
-            let from_array = as_int64_array(&args[1])?;
-            let to_array = as_int64_array(&args[2])?;
             general_array_slice::<i64>(array, from_array, to_array, stride)
         }
         _ => exec_err!("array_slice does not support type: {:?}", array_data_type),

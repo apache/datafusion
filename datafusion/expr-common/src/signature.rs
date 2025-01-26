@@ -465,6 +465,8 @@ pub struct Signature {
     pub type_signature: TypeSignature,
     /// The volatility of the function. See [Volatility] for more information.
     pub volatility: Volatility,
+    /// When true, the function always returns null whenever any of its arguments are null.
+    pub strict: bool,
 }
 
 impl Signature {
@@ -473,6 +475,7 @@ impl Signature {
         Signature {
             type_signature,
             volatility,
+            strict: false,
         }
     }
     /// An arbitrary number of arguments with the same type, from those listed in `common_types`.
@@ -480,6 +483,7 @@ impl Signature {
         Self {
             type_signature: TypeSignature::Variadic(common_types),
             volatility,
+            strict: false,
         }
     }
     /// User-defined coercion rules for the function.
@@ -487,6 +491,7 @@ impl Signature {
         Self {
             type_signature: TypeSignature::UserDefined,
             volatility,
+            strict: false,
         }
     }
 
@@ -495,6 +500,7 @@ impl Signature {
         Self {
             type_signature: TypeSignature::Numeric(arg_count),
             volatility,
+            strict: false,
         }
     }
 
@@ -503,6 +509,7 @@ impl Signature {
         Self {
             type_signature: TypeSignature::String(arg_count),
             volatility,
+            strict: false,
         }
     }
 
@@ -511,6 +518,7 @@ impl Signature {
         Self {
             type_signature: TypeSignature::VariadicAny,
             volatility,
+            strict: false,
         }
     }
     /// A fixed number of arguments of the same type, from those listed in `valid_types`.
@@ -522,6 +530,7 @@ impl Signature {
         Self {
             type_signature: TypeSignature::Uniform(arg_count, valid_types),
             volatility,
+            strict: false,
         }
     }
     /// Exactly matches the types in `exact_types`, in order.
@@ -529,6 +538,7 @@ impl Signature {
         Signature {
             type_signature: TypeSignature::Exact(exact_types),
             volatility,
+            strict: false,
         }
     }
     /// Target coerce types in order
@@ -539,6 +549,7 @@ impl Signature {
         Self {
             type_signature: TypeSignature::Coercible(target_types),
             volatility,
+            strict: false,
         }
     }
 
@@ -547,6 +558,7 @@ impl Signature {
         Self {
             type_signature: TypeSignature::Comparable(arg_count),
             volatility,
+            strict: false,
         }
     }
 
@@ -554,6 +566,7 @@ impl Signature {
         Signature {
             type_signature: TypeSignature::Nullary,
             volatility,
+            strict: false,
         }
     }
 
@@ -562,6 +575,7 @@ impl Signature {
         Signature {
             type_signature: TypeSignature::Any(arg_count),
             volatility,
+            strict: false,
         }
     }
     /// Any one of a list of [TypeSignature]s.
@@ -569,6 +583,7 @@ impl Signature {
         Signature {
             type_signature: TypeSignature::OneOf(type_signatures),
             volatility,
+            strict: false,
         }
     }
     /// Specialized Signature for ArrayAppend and similar functions
@@ -578,6 +593,7 @@ impl Signature {
                 ArrayFunctionSignature::ArrayAndElement,
             ),
             volatility,
+            strict: false,
         }
     }
     /// Specialized Signature for Array functions with an optional index
@@ -587,6 +603,7 @@ impl Signature {
                 ArrayFunctionSignature::ArrayAndElementAndOptionalIndex,
             ),
             volatility,
+            strict: false,
         }
     }
     /// Specialized Signature for ArrayPrepend and similar functions
@@ -596,6 +613,7 @@ impl Signature {
                 ArrayFunctionSignature::ElementAndArray,
             ),
             volatility,
+            strict: false,
         }
     }
     /// Specialized Signature for ArrayElement and similar functions
@@ -605,6 +623,7 @@ impl Signature {
                 ArrayFunctionSignature::ArrayAndIndex,
             ),
             volatility,
+            strict: false,
         }
     }
     /// Specialized Signature for ArrayEmpty and similar functions
@@ -612,7 +631,14 @@ impl Signature {
         Signature {
             type_signature: TypeSignature::ArraySignature(ArrayFunctionSignature::Array),
             volatility,
+            strict: false,
         }
+    }
+
+    /// Returns an equivalent Signature, with strict set to true.
+    pub fn with_strict(mut self) -> Self {
+        self.strict = true;
+        self
     }
 }
 
