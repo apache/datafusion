@@ -15,10 +15,16 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::any::Any;
+use std::collections::{HashMap, HashSet};
+use std::fs::File;
+use std::ops::Range;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+
 use arrow::array::{ArrayRef, Int32Array, RecordBatch, StringArray};
 use arrow_schema::SchemaRef;
-use async_trait::async_trait;
-use bytes::Bytes;
 use datafusion::catalog::Session;
 use datafusion::datasource::listing::PartitionedFile;
 use datafusion::datasource::physical_plan::parquet::{
@@ -38,7 +44,6 @@ use datafusion::parquet::file::metadata::ParquetMetaData;
 use datafusion::parquet::file::properties::{EnabledStatistics, WriterProperties};
 use datafusion::parquet::schema::types::ColumnPath;
 use datafusion::physical_expr::PhysicalExpr;
-use datafusion::physical_optimizer::pruning::PruningPredicate;
 use datafusion::physical_plan::metrics::ExecutionPlanMetricsSet;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::prelude::*;
@@ -48,16 +53,13 @@ use datafusion_common::{
 use datafusion_expr::utils::conjunction;
 use datafusion_expr::{TableProviderFilterPushDown, TableType};
 use datafusion_physical_expr::utils::{Guarantee, LiteralGuarantee};
+use datafusion_physical_optimizer::pruning::PruningPredicate;
+
+use async_trait::async_trait;
+use bytes::Bytes;
 use futures::future::BoxFuture;
 use futures::FutureExt;
 use object_store::ObjectStore;
-use std::any::Any;
-use std::collections::{HashMap, HashSet};
-use std::fs::File;
-use std::ops::Range;
-use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
 use tempfile::TempDir;
 use url::Url;
 

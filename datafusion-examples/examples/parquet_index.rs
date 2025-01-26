@@ -15,31 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::array::{
-    Array, ArrayRef, AsArray, BooleanArray, Int32Array, RecordBatch, StringArray,
-    UInt64Array,
-};
-use arrow::datatypes::Int32Type;
-use arrow::util::pretty::pretty_format_batches;
-use arrow_schema::SchemaRef;
-use async_trait::async_trait;
-use datafusion::catalog::Session;
-use datafusion::datasource::listing::PartitionedFile;
-use datafusion::datasource::physical_plan::{FileScanConfig, ParquetExec};
-use datafusion::datasource::TableProvider;
-use datafusion::execution::object_store::ObjectStoreUrl;
-use datafusion::parquet::arrow::arrow_reader::statistics::StatisticsConverter;
-use datafusion::parquet::arrow::{
-    arrow_reader::ParquetRecordBatchReaderBuilder, ArrowWriter,
-};
-use datafusion::physical_optimizer::pruning::{PruningPredicate, PruningStatistics};
-use datafusion::physical_plan::ExecutionPlan;
-use datafusion::prelude::*;
-use datafusion_common::{
-    internal_datafusion_err, DFSchema, DataFusionError, Result, ScalarValue,
-};
-use datafusion_expr::{utils::conjunction, TableProviderFilterPushDown, TableType};
-use datafusion_physical_expr::PhysicalExpr;
 use std::any::Any;
 use std::collections::HashSet;
 use std::fmt::Display;
@@ -50,6 +25,33 @@ use std::sync::{
     atomic::{AtomicUsize, Ordering},
     Arc,
 };
+
+use arrow::array::{
+    Array, ArrayRef, AsArray, BooleanArray, Int32Array, RecordBatch, StringArray,
+    UInt64Array,
+};
+use arrow::datatypes::Int32Type;
+use arrow::util::pretty::pretty_format_batches;
+use arrow_schema::SchemaRef;
+use datafusion::catalog::Session;
+use datafusion::datasource::listing::PartitionedFile;
+use datafusion::datasource::physical_plan::{FileScanConfig, ParquetExec};
+use datafusion::datasource::TableProvider;
+use datafusion::execution::object_store::ObjectStoreUrl;
+use datafusion::parquet::arrow::arrow_reader::statistics::StatisticsConverter;
+use datafusion::parquet::arrow::{
+    arrow_reader::ParquetRecordBatchReaderBuilder, ArrowWriter,
+};
+use datafusion::physical_plan::ExecutionPlan;
+use datafusion::prelude::*;
+use datafusion_common::{
+    internal_datafusion_err, DFSchema, DataFusionError, Result, ScalarValue,
+};
+use datafusion_expr::{utils::conjunction, TableProviderFilterPushDown, TableType};
+use datafusion_physical_expr::PhysicalExpr;
+use datafusion_physical_optimizer::pruning::{PruningPredicate, PruningStatistics};
+
+use async_trait::async_trait;
 use tempfile::TempDir;
 use url::Url;
 

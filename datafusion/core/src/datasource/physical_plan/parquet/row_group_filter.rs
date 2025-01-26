@@ -15,11 +15,17 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
+
+use super::{ParquetAccessPlan, ParquetFileMetrics};
 use crate::datasource::listing::FileRange;
-use crate::physical_optimizer::pruning::{PruningPredicate, PruningStatistics};
+
 use arrow::{array::ArrayRef, datatypes::Schema};
 use arrow_array::BooleanArray;
 use datafusion_common::{Column, Result, ScalarValue};
+use datafusion_physical_optimizer::pruning::{PruningPredicate, PruningStatistics};
+
 use parquet::arrow::arrow_reader::statistics::StatisticsConverter;
 use parquet::arrow::parquet_column;
 use parquet::basic::Type;
@@ -30,10 +36,6 @@ use parquet::{
     bloom_filter::Sbbf,
     file::metadata::RowGroupMetaData,
 };
-use std::collections::{HashMap, HashSet};
-use std::sync::Arc;
-
-use super::{ParquetAccessPlan, ParquetFileMetrics};
 
 /// Reduces the [`ParquetAccessPlan`] based on row group level metadata.
 ///
