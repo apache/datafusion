@@ -252,7 +252,7 @@ mod tests {
     use std::sync::Arc;
 
     use arrow_schema::{DataType, Field, Schema};
-    use datafusion_common::{assert_contains, DFSchema};
+    use datafusion_common::{assert_contains, ColumnStatistics, DFSchema};
     use datafusion_expr::{
         col, execution_props::ExecutionProps, interval_arithmetic::Interval, lit, Expr,
     };
@@ -360,5 +360,38 @@ mod tests {
         )
         .unwrap_err();
         assert_contains!(analysis_error.to_string(), expected_error);
+    }
+
+    #[test]
+    fn test_analysis_on_select_columns() {
+        // create a schema with two columns:
+        let schema = Arc::new(Schema::new(vec![
+            make_field("a", DataType::Int32),
+            make_field("b", DataType::Utf8View),
+        ]));
+        // create an expression that provides bounds on both columns, and specifically, where the
+        // boundaries specified for column "b" use a different RHS literal type (Utf8) than the "b"
+        // column type (Utf8View):
+        let expr = col("a").lt(lit(10)).and(col("b").gt(lit("aaa")));
+        // create expression boundaries only on column "a", since that is the one we are interested
+        // in doing the boudns analysis on:
+        let boundaries =
+            ExprBoundaries::try_from_column(&schema, &ColumnStatistics::default(), 0)
+                .unwrap();
+        let df_schema = DFSchema::try_from(Arc::clone(&schema)).unwrap();
+        let physical_expr =
+            create_physical_expr(&expr, &df_schema, &ExecutionProps::default()).unwrap();
+        // perform the analysis, with only the expression boundaries for column "a" as input; the
+        // expectation is that this should succeed, but it doesn't, with the error:
+        //
+        // Internal("Only intervals with the same data type are comparable, lhs:Utf8View, rhs:Utf8")
+        //
+        let analysis_result = analyze(
+            &physical_expr,
+            AnalysisContext::new(vec![boundaries]),
+            df_schema.as_ref(),
+        )
+        .unwrap();
+        dbg!(analysis_result);
     }
 }
