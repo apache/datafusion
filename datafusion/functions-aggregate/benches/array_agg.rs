@@ -45,12 +45,12 @@ fn merge_batch_bench(c: &mut Criterion, name: &str, values: ArrayRef) {
     });
 }
 
-/// Create List array with the given item data type, null density, null locations and non zero length lists density
+/// Create List array with the given item data type, null density, null locations and zero length lists density
 /// Creates an random (but fixed-seeded) array of a given size and null density
 pub fn create_list_array<T>(
     size: usize,
     null_density: f32,
-    non_zero_length_lists_probability: f32,
+    zero_length_lists_probability: f32,
 ) -> ListArray
 where
     T: ArrowPrimitiveType,
@@ -67,7 +67,7 @@ where
         if is_null {
             nulls_builder.append_null();
 
-            if rng.gen::<f32>() > non_zero_length_lists_probability {
+            if rng.gen::<f32>() <= zero_length_lists_probability {
                 length = 0;
             }
         } else {
@@ -92,17 +92,17 @@ where
 }
 
 fn array_agg_benchmark(c: &mut Criterion) {
-    let values = Arc::new(create_list_array::<Int64Type>(8192, 0.0, 0.0)) as ArrayRef;
+    let values = Arc::new(create_list_array::<Int64Type>(8192, 0.0, 1.0)) as ArrayRef;
     merge_batch_bench(c, "array_agg i64 merge_batch no nulls", values);
 
-    let values = Arc::new(create_list_array::<Int64Type>(8192, 1.0, 0.0)) as ArrayRef;
+    let values = Arc::new(create_list_array::<Int64Type>(8192, 1.0, 1.0)) as ArrayRef;
     merge_batch_bench(
         c,
         "array_agg i64 merge_batch all nulls, 100% of nulls point to a zero length array",
         values,
     );
 
-    let values = Arc::new(create_list_array::<Int64Type>(8192, 1.0, 0.1)) as ArrayRef;
+    let values = Arc::new(create_list_array::<Int64Type>(8192, 1.0, 0.9)) as ArrayRef;
     merge_batch_bench(
         c,
         "array_agg i64 merge_batch all nulls, 90% of nulls point to a zero length array",
@@ -111,42 +111,42 @@ fn array_agg_benchmark(c: &mut Criterion) {
 
     // All nulls point to a 0 length array
 
-    let values = Arc::new(create_list_array::<Int64Type>(8192, 0.3, 0.0)) as ArrayRef;
+    let values = Arc::new(create_list_array::<Int64Type>(8192, 0.3, 1.0)) as ArrayRef;
     merge_batch_bench(
         c,
         "array_agg i64 merge_batch 30% nulls, 100% of nulls point to a zero length array",
         values,
     );
 
-    let values = Arc::new(create_list_array::<Int64Type>(8192, 0.7, 0.0)) as ArrayRef;
+    let values = Arc::new(create_list_array::<Int64Type>(8192, 0.7, 1.0)) as ArrayRef;
     merge_batch_bench(
         c,
         "array_agg i64 merge_batch 70% nulls, 100% of nulls point to a zero length array",
         values,
     );
 
-    let values = Arc::new(create_list_array::<Int64Type>(8192, 0.3, 0.01)) as ArrayRef;
+    let values = Arc::new(create_list_array::<Int64Type>(8192, 0.3, 0.99)) as ArrayRef;
     merge_batch_bench(
         c,
         "array_agg i64 merge_batch 30% nulls, 99% of nulls point to a zero length array",
         values,
     );
 
-    let values = Arc::new(create_list_array::<Int64Type>(8192, 0.7, 0.01)) as ArrayRef;
+    let values = Arc::new(create_list_array::<Int64Type>(8192, 0.7, 0.99)) as ArrayRef;
     merge_batch_bench(
         c,
         "array_agg i64 merge_batch 70% nulls, 99% of nulls point to a zero length array",
         values,
     );
 
-    let values = Arc::new(create_list_array::<Int64Type>(8192, 0.3, 0.10)) as ArrayRef;
+    let values = Arc::new(create_list_array::<Int64Type>(8192, 0.3, 0.9)) as ArrayRef;
     merge_batch_bench(
         c,
         "array_agg i64 merge_batch 30% nulls, 90% of nulls point to a zero length array",
         values,
     );
 
-    let values = Arc::new(create_list_array::<Int64Type>(8192, 0.7, 0.10)) as ArrayRef;
+    let values = Arc::new(create_list_array::<Int64Type>(8192, 0.7, 0.9)) as ArrayRef;
     merge_batch_bench(
         c,
         "array_agg i64 merge_batch 70% nulls, 90% of nulls point to a zero length array",
@@ -167,14 +167,14 @@ fn array_agg_benchmark(c: &mut Criterion) {
         values,
     );
 
-    let values = Arc::new(create_list_array::<Int64Type>(8192, 0.3, 1.0)) as ArrayRef;
+    let values = Arc::new(create_list_array::<Int64Type>(8192, 0.3, 0.0)) as ArrayRef;
     merge_batch_bench(
         c,
         "array_agg i64 merge_batch 30% nulls, 0% of nulls point to a zero length array",
         values,
     );
 
-    let values = Arc::new(create_list_array::<Int64Type>(8192, 0.7, 1.0)) as ArrayRef;
+    let values = Arc::new(create_list_array::<Int64Type>(8192, 0.7, 0.0)) as ArrayRef;
     merge_batch_bench(
         c,
         "array_agg i64 merge_batch 70% nulls, 0% of nulls point to a zero length array",
