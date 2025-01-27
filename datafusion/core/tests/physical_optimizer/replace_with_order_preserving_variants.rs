@@ -17,6 +17,10 @@
 
 use std::sync::Arc;
 
+use crate::physical_optimizer::test_utils::{
+    check_integrity, stream_exec_ordered_with_projection,
+};
+
 use datafusion::prelude::SessionContext;
 use arrow::array::{ArrayRef, Int32Array};
 use arrow::compute::SortOptions;
@@ -40,7 +44,6 @@ use datafusion_common::Result;
 use datafusion_expr::{JoinType, Operator};
 use datafusion_physical_expr::expressions::{self, col, Column};
 use datafusion_physical_expr::PhysicalSortExpr;
-use datafusion_physical_optimizer::test_utils::{check_integrity, stream_exec_ordered_with_projection};
 use datafusion_physical_optimizer::enforce_sorting::replace_with_order_preserving_variants::{replace_with_order_preserving_variants, OrderPreservationContext};
 use datafusion_common::config::ConfigOptions;
 

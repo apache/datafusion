@@ -36,6 +36,7 @@ use crate::execution_plan::{
     boundedness_from_children, emission_type_from_children, InvariantLevel,
 };
 use crate::metrics::BaselineMetrics;
+use crate::projection::{make_with_child, ProjectionExec};
 use crate::stream::ObservedStream;
 
 use arrow::datatypes::{Field, Schema, SchemaRef};
@@ -270,6 +271,27 @@ impl ExecutionPlan for UnionExec {
 
     fn supports_limit_pushdown(&self) -> bool {
         true
+    }
+
+    /// Tries to push `projection` down through `union`. If possible, performs the
+    /// pushdown and returns a new [`UnionExec`] as the top plan which has projections
+    /// as its children. Otherwise, returns `None`.
+    fn try_swapping_with_projection(
+        &self,
+        projection: &ProjectionExec,
+    ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+        // If the projection doesn't narrow the schema, we shouldn't try to push it down.
+        if projection.expr().len() >= projection.input().schema().fields().len() {
+            return Ok(None);
+        }
+
+        let new_children = self
+            .children()
+            .into_iter()
+            .map(|child| make_with_child(projection, child))
+            .collect::<Result<Vec<_>>>()?;
+
+        Ok(Some(Arc::new(UnionExec::new(new_children))))
     }
 }
 
