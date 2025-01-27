@@ -44,7 +44,9 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 let (left_plan, right_plan) = match (left_plan, right_plan) {
                     (Ok(left_plan), Ok(right_plan)) => (left_plan, right_plan),
                     (Err(left_err), Err(right_err)) => {
-                        return Err(DataFusionError::Collection(vec![left_err, right_err]));
+                        return Err(DataFusionError::Collection(vec![
+                            left_err, right_err,
+                        ]));
                     }
                     (Err(err), _) | (_, Err(err)) => {
                         return Err(err);

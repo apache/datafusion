@@ -23,9 +23,9 @@ use std::borrow::Cow;
 use std::collections::VecDeque;
 use std::error::Error;
 use std::fmt::{Display, Formatter};
+use std::io;
 use std::result;
 use std::sync::Arc;
-use std::io;
 
 use crate::utils::quote_identifier;
 use crate::{Column, DFSchema, Diagnostic, TableReference};
@@ -940,7 +940,7 @@ mod test {
             DataFusionError::Collection(vec![
                 DataFusionError::Plan("b".to_string()),
                 DataFusionError::Plan("c".to_string()),
-            ])
+            ]),
         ]);
         let errs = err.iter().collect::<Vec<_>>();
         assert_eq!(errs.len(), 3);

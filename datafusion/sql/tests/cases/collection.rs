@@ -15,13 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
-
-use std::collections::HashMap;
-
-use datafusion_common::{DataFusionError, Diagnostic, Result};
-use datafusion_sql::planner::{ParserOptions, SqlToRel};
-use regex::Regex;
-use sqlparser::{dialect::GenericDialect, parser::Parser, tokenizer::{Location, Span}};
+use datafusion_common::DataFusionError;
+use datafusion_sql::planner::SqlToRel;
+use sqlparser::{dialect::GenericDialect, parser::Parser};
 
 use crate::{MockContextProvider, MockSessionState};
 
@@ -35,7 +31,9 @@ fn do_query(sql: &'static str) -> DataFusionError {
     let state = MockSessionState::default();
     let context = MockContextProvider { state };
     let sql_to_rel = SqlToRel::new(&context);
-    sql_to_rel.sql_statement_to_plan(statement).expect_err("expected error")
+    sql_to_rel
+        .sql_statement_to_plan(statement)
+        .expect_err("expected error")
 }
 
 #[test]
@@ -44,7 +42,9 @@ fn test_collect_select_items() {
     let error = do_query(query);
     let errors = error.iter().collect::<Vec<_>>();
     assert_eq!(errors.len(), 2);
-    assert!(errors[0].to_string().contains("No field named first_namex."));
+    assert!(errors[0]
+        .to_string()
+        .contains("No field named first_namex."));
     assert!(errors[1].to_string().contains("No field named last_namex."));
 }
 
@@ -54,6 +54,8 @@ fn test_collect_set_exprs() {
     let error = do_query(query);
     let errors = error.iter().collect::<Vec<_>>();
     assert_eq!(errors.len(), 2);
-    assert!(errors[0].to_string().contains("No field named first_namex."));
+    assert!(errors[0]
+        .to_string()
+        .contains("No field named first_namex."));
     assert!(errors[1].to_string().contains("No field named last_namex."));
 }

@@ -577,7 +577,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         let mut prepared_select_exprs = vec![];
         let mut errors = vec![];
         for expr in projection {
-            match self.sql_select_to_rex(expr, plan, empty_from, planner_context)  {
+            match self.sql_select_to_rex(expr, plan, empty_from, planner_context) {
                 Ok(expr) => prepared_select_exprs.push(expr),
                 Err(err) => errors.push(err),
             }
