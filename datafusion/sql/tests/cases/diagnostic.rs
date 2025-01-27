@@ -17,32 +17,34 @@
 
 use std::collections::HashMap;
 
-use arrow_schema::{DataType, Field, Schema};
-use datafusion::error::Result;
-use datafusion::prelude::*;
-use datafusion_common::Diagnostic;
+use datafusion_common::{Diagnostic, Result};
+use datafusion_sql::planner::{ParserOptions, SqlToRel};
 use regex::Regex;
-use sqlparser::tokenizer::{Location, Span};
+use sqlparser::{dialect::GenericDialect, parser::Parser, tokenizer::{Location, Span}};
 
-async fn cars_query(sql: &'static str) -> Diagnostic {
-    let config =
-        SessionConfig::new().set_bool("datafusion.sql_parser.collect_spans", true);
-    let ctx = SessionContext::new_with_config(config);
-    let csv_path = "../../datafusion/core/tests/data/cars.csv".to_string();
-    let schema = Schema::new(vec![
-        Field::new("car", DataType::Utf8, false),
-        Field::new("speed", DataType::Float32, false),
-        Field::new("time", DataType::Utf8, false),
-    ]);
-    let read_options = CsvReadOptions::default().has_header(true).schema(&schema);
-    ctx.register_csv("cars", &csv_path, read_options)
-        .await
-        .expect("error registering cars.csv");
-    match ctx.sql(sql).await {
+use crate::{MockContextProvider, MockSessionState};
+
+fn do_query(sql: &'static str) -> Diagnostic {
+    let dialect = GenericDialect {};
+    let statement = Parser::new(&dialect)
+        .try_with_sql(sql)
+        .expect("unable to create parser")
+        .parse_statement()
+        .expect("unable to parse query");
+    let options = ParserOptions {
+        collect_spans: true,
+        ..ParserOptions::default()
+    };
+    let state = MockSessionState::default();
+    let context = MockContextProvider { state };
+    let sql_to_rel = SqlToRel::new_with_options(&context, options);
+    match sql_to_rel.sql_statement_to_plan(statement) {
         Ok(_) => panic!("expected error"),
-        Err(err) => match err.diagnostic() {
-            Some(diag) => diag.clone(),
-            None => panic!("expected diagnostic"),
+        Err(err) => {
+            match err.diagnostic() {
+                Some(diag) => diag.clone(),
+                None => panic!("expected diagnostic"),
+            }
         },
     }
 }
@@ -129,45 +131,41 @@ fn get_spans(query: &'static str) -> HashMap<String, Span> {
     spans
 }
 
-#[cfg(test)]
-#[tokio::test]
-pub async fn test_table_not_found() -> Result<()> {
-    let query = "SELECT * FROM /*a*/carz/*a*/";
+#[test]
+fn test_table_not_found() -> Result<()> {
+    let query = "SELECT * FROM /*a*/personx/*a*/";
     let spans = get_spans(query);
-    let diag = cars_query(query).await;
-    assert_eq!(diag.message, "table 'carz' not found");
+    let diag = do_query(query);
+    assert_eq!(diag.message, "table 'personx' not found");
     assert_eq!(diag.span, spans["a"]);
     Ok(())
 }
 
-#[cfg(test)]
-#[tokio::test]
-pub async fn test_unqualified_column_not_found() -> Result<()> {
-    let query = "SELECT /*a*/speedz/*a*/ FROM cars";
+#[test]
+fn test_unqualified_column_not_found() -> Result<()> {
+    let query = "SELECT /*a*/first_namex/*a*/ FROM person";
     let spans = get_spans(query);
-    let diag = cars_query(query).await;
-    assert_eq!(diag.message, "column 'speedz' not found");
+    let diag = do_query(query);
+    assert_eq!(diag.message, "column 'first_namex' not found");
     assert_eq!(diag.span, spans["a"]);
     Ok(())
 }
 
-#[cfg(test)]
-#[tokio::test]
-pub async fn test_qualified_column_not_found() -> Result<()> {
-    let query = "SELECT /*a*/cars.speedz/*a*/ FROM cars";
+#[test]
+fn test_qualified_column_not_found() -> Result<()> {
+    let query = "SELECT /*a*/person.first_namex/*a*/ FROM person";
     let spans = get_spans(query);
-    let diag = cars_query(query).await;
-    assert_eq!(diag.message, "column 'speedz' not found in 'cars'");
+    let diag = do_query(query);
+    assert_eq!(diag.message, "column 'first_namex' not found in 'person'");
     assert_eq!(diag.span, spans["a"]);
     Ok(())
 }
 
-#[cfg(test)]
-#[tokio::test]
-pub async fn test_union_wrong_number_of_columns() -> Result<()> {
-    let query = "/*whole+left*/SELECT speed FROM cars/*left*/ UNION ALL /*right*/SELECT speed, time FROM cars/*right+whole*/";
+#[test]
+fn test_union_wrong_number_of_columns() -> Result<()> {
+    let query = "/*whole+left*/SELECT first_name FROM person/*left*/ UNION ALL /*right*/SELECT first_name, last_name FROM person/*right+whole*/";
     let spans = get_spans(query);
-    let diag = cars_query(query).await;
+    let diag = do_query(query);
     assert_eq!(
         diag.message,
         "UNION queries have different number of columns"
@@ -180,52 +178,49 @@ pub async fn test_union_wrong_number_of_columns() -> Result<()> {
     Ok(())
 }
 
-#[cfg(test)]
-#[tokio::test]
-pub async fn test_missing_non_aggregate_in_group_by() -> Result<()> {
-    let query = "SELECT car, /*a*/speed/*a*/ FROM cars GROUP BY car";
+#[test]
+fn test_missing_non_aggregate_in_group_by() -> Result<()> {
+    let query = "SELECT id, /*a*/first_name/*a*/ FROM person GROUP BY id";
     let spans = get_spans(query);
-    let diag = cars_query(query).await;
+    let diag = do_query(query);
     assert_eq!(
         diag.message,
-        "'cars.speed' must appear in GROUP BY clause because it's not an aggregate expression"
+        "'person.first_name' must appear in GROUP BY clause because it's not an aggregate expression"
     );
     assert_eq!(diag.span, spans["a"]);
-    assert_eq!(diag.helps[0].message, "add 'cars.speed' to GROUP BY clause");
+    assert_eq!(diag.helps[0].message, "add 'person.first_name' to GROUP BY clause");
     Ok(())
 }
 
-#[cfg(test)]
-#[tokio::test]
-pub async fn test_ambiguous_reference() -> Result<()> {
-    let query = "SELECT /*a*/car/*a*/ FROM cars a, cars b";
+#[test]
+fn test_ambiguous_reference() -> Result<()> {
+    let query = "SELECT /*a*/first_name/*a*/ FROM person a, person b";
     let spans = get_spans(query);
-    let diag = cars_query(query).await;
-    assert_eq!(diag.message, "column 'car' is ambiguous");
+    let diag = do_query(query);
+    assert_eq!(diag.message, "column 'first_name' is ambiguous");
     assert_eq!(diag.span, spans["a"]);
     assert_eq!(
         diag.notes[0].message,
-        "possible reference to 'car' in table 'a'"
+        "possible reference to 'first_name' in table 'a'"
     );
     assert_eq!(
         diag.notes[1].message,
-        "possible reference to 'car' in table 'b'"
+        "possible reference to 'first_name' in table 'b'"
     );
     Ok(())
 }
 
-#[cfg(test)]
-#[tokio::test]
-pub async fn test_incompatible_types_binary_arithmetic() -> Result<()> {
+#[test]
+fn test_incompatible_types_binary_arithmetic() -> Result<()> {
     let query =
-        "SELECT /*whole+left*/car/*left*/ + /*right*/speed/*right+whole*/ FROM cars";
+        "SELECT /*whole+left*/id/*left*/ + /*right*/first_name/*right+whole*/ FROM person";
     let spans = get_spans(query);
-    let diag = cars_query(query).await;
+    let diag = do_query(query);
     assert_eq!(diag.message, "expressions have incompatible types");
     assert_eq!(diag.span, spans["whole"]);
-    assert_eq!(diag.notes[0].message, "has type Utf8");
+    assert_eq!(diag.notes[0].message, "has type UInt32");
     assert_eq!(diag.notes[0].span, spans["left"]);
-    assert_eq!(diag.notes[1].message, "has type Float32");
+    assert_eq!(diag.notes[1].message, "has type Utf8");
     assert_eq!(diag.notes[1].span, spans["right"]);
     Ok(())
 }

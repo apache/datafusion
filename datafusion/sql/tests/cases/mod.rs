@@ -16,3 +16,4 @@
 // under the License.
 
 mod plan_to_sql;
+mod diagnostic;
