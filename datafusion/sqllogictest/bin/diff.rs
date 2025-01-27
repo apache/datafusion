@@ -36,39 +36,61 @@ pub fn main() -> Result<(), Box<dyn Error>> {
     let path1 = Path::new(&args[1]);
     let path2 = Path::new(&args[2]);
 
-    println!("File 1: {:?}", path1);
-    println!("File 2: {:?}", path2);
-
-    // Parse the records from the first file
-    let records1: Vec<Record<DefaultColumnType>> = parse_file(path1)?;
-
-    let records2: Vec<Record<DefaultColumnType>>;
-
-    if path2.is_dir() {
-        // If the second path is a directory, parse all files in that directory
-        records2 = parse_files_in_directory(path2)?;
-    } else {
-        // If the second path is a file, just parse that file
-        records2 = parse_file(path2)?;
-    }
-
-    // Check if each record in file 1 is contained in any record in file 2
-    for record1 in &records1 {
-        let found;
-        if !check_type(record1) {
-            found = false;
-        } else {
-            found = records2
-                .iter()
-                .any(|record2| check_equality(record1, record2));
-        }
-        if check_equality(record1, record1) && !found {
-            println!("{:?}", record1);
-        }
-    }
+    let result = diff(path1, path2);
+    assert!(result.is_ok(), "Expected no error, but got {:?}", result);
     Ok(())
 }
 
+pub fn diff(path1: &Path, path2: &Path) -> Result<(), Box<dyn Error>> {
+    println!("Needles: {:?}", path1);
+    println!("Haystack: {:?}", path2);
+
+    // Parse the records from the first file
+    let records1 = parse_file(path1)?;
+
+    // let records2;
+
+    let records2 = if path2.is_dir() {
+        // If the second path is a directory, parse all files in that directory
+        parse_files_in_directory(path2)?
+    } else {
+        // If the second path is a file, just parse that file
+        parse_file(path2)?
+    };
+    let mut errors = Vec::new();
+
+    // Check if each record in file 1 is contained in any record in file 2
+    for record1 in &records1 {
+        // let found;
+        let found = if !check_type(record1) {
+            false
+        } else {
+            records2
+                .iter()
+                .any(|record2| check_equality(record1, record2))
+        };
+        if check_equality(record1, record1) && !found {
+            errors.push(format!(
+                "Record from Needles not found in Haystack: {:?}",
+                get_sql(record1)
+            ));
+        }
+    }
+    // If we have collected any errors, return them all at once
+    if !errors.is_empty() {
+        return Err(errors.join("\n").into());
+    }
+    println!("All records from Needles are present in Haystack.");
+    Ok(())
+}
+
+fn get_sql(record: &Record<DefaultColumnType>) -> String {
+    match record {
+        Query { sql, .. } => sql.clone(),
+        Statement { sql, .. } => sql.clone(),
+        _ => String::new(),
+    }
+}
 pub fn check_type(record1: &Record<DefaultColumnType>) -> bool {
     // the type which is acceptable by check_equality(Query and Statement)
     check_equality(record1, record1)
@@ -138,4 +160,30 @@ fn parse_files_in_directory(
     }
 
     Ok(all_records)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_files_aggregate_diff_archived() {
+        // Create two test files
+        let path1 = Path::new("./archive/complete_aggregate.slt");
+        let path2 = Path::new("./test_files/aggregate");
+        let result = diff(path1, path2);
+        if !result.is_ok() {
+            panic!("Expected no error, but got {:?}", result.err());
+        }
+    }
+    #[test]
+    fn test_files_aggregate_diff_base() {
+        // Create two test files
+        let path1 = Path::new("./test_files/aggregate/base_aggregate.slt");
+        let path2 = Path::new("./archive/complete_aggregate.slt");
+        let result = diff(path1, path2);
+        if !result.is_ok() {
+            panic!("Expected no error, but got {:?}", result.err());
+        }
+    }
 }
