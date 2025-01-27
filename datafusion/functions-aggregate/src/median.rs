@@ -468,6 +468,8 @@ impl<T: ArrowNumericType + Send> GroupsAccumulator for MedianGroupsAccumulator<T
             .iter()
             .map(|values| values.capacity() * size_of::<T>())
             .sum::<usize>()
+            // account for size of self.grou_values too
+            + self.group_values.capacity() * size_of::<Vec<T>>()
     }
 }
 
