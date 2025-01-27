@@ -103,6 +103,7 @@ Here are some active projects using DataFusion:
 - [Dask SQL](https://github.com/dask-contrib/dask-sql) Distributed SQL query engine in Python
 - [delta-rs](https://github.com/delta-io/delta-rs) Native Rust implementation of Delta Lake
 - [Exon](https://github.com/wheretrue/exon) Analysis toolkit for life-science applications
+- [Funnel](https://funnel.io/) Data Platform powering Marketing Intelligence applications.
 - [GlareDB](https://github.com/GlareDB/glaredb) Fast SQL database for querying and analyzing distributed data.
 - [GreptimeDB](https://github.com/GreptimeTeam/greptimedb) Open Source & Cloud Native Distributed Time Series Database
 - [HoraeDB](https://github.com/apache/incubator-horaedb) Distributed Time-Series Database
