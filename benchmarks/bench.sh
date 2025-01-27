@@ -83,6 +83,7 @@ external_aggr:          External aggregation benchmark
 h2o_small:              h2oai benchmark with small dataset (1e7 rows),  default file format is csv
 h2o_medium:             h2oai benchmark with medium dataset (1e8 rows), default file format is csv
 h2o_big:                h2oai benchmark with large dataset (1e9 rows),  default file format is csv
+imdb:                   Join Order Benchmark (JOB) using the IMDB dataset converted to parquet
 
 **********
 * Supported Configuration (Environment Variables)
@@ -536,23 +537,52 @@ data_imdb() {
     done
 
     if [ "$convert_needed" = true ]; then
-        if [ ! -f "${imdb_dir}/imdb.tgz" ]; then
-            echo "Downloading IMDB dataset..."
+        # Expected size of the dataset
+        expected_size="1263193115" # 1.18 GB
+        
+        echo -n "Looking for imdb.tgz... "
+        if [ -f "${imdb_temp_gz}" ]; then
+            echo "found"
+            echo -n "Checking size... "
+            OUTPUT_SIZE=$(wc -c "${imdb_temp_gz}" 2>/dev/null | awk '{print $1}' || true)
             
+            #Checking the size of the existing file
+            if [ "${OUTPUT_SIZE}" = "${expected_size}" ]; then
+                # Existing file is of the expected size, no need for download
+                echo "OK ${OUTPUT_SIZE}"
+            else
+                # Existing file is partially installed, remove it and initiate a new download
+                echo "MISMATCH"
+                echo "Size less than expected: ${OUTPUT_SIZE} found, ${expected_size} required"
+                echo "Downloading IMDB dataset..."
+                rm -f "${imdb_temp_gz}"
+
+                # Download the dataset
+                curl -o "${imdb_temp_gz}" "${imdb_url}"
+                
+                # Size check of the installed file
+                DOWNLOADED_SIZE=$(wc -c "${imdb_temp_gz}" | awk '{print $1}')
+                if [ "${DOWNLOADED_SIZE}" != "${expected_size}" ]; then
+                    echo "Error: Download size mismatch"
+                    echo "Expected: ${expected_size}"
+                    echo "Got: ${DOWNLADED_SIZE}"
+                    echo "Please re-initiate the download"
+                    return 1
+                fi
+            fi
+        else
+            # No existing file found, initiate a new download
+            echo "not found"
+            echo "Downloading IMDB dataset ${expected_size} expected)..."
             # Download the dataset
             curl -o "${imdb_temp_gz}" "${imdb_url}"
-            
-            # Extract the dataset
-            tar -xzvf "${imdb_temp_gz}" -C "${imdb_dir}"
-            $CARGO_COMMAND --bin imdb -- convert --input ${imdb_dir} --output ${imdb_dir} --format parquet
-        else 
-            echo "IMDB.tgz already exists."
-
-            # Extract the dataset
-            tar -xzvf "${imdb_temp_gz}" -C "${imdb_dir}"
-            $CARGO_COMMAND --bin imdb -- convert --input ${imdb_dir} --output ${imdb_dir} --format parquet
         fi
+
+        # Extract the dataset
+        tar -xzvf "${imdb_temp_gz}" -C "${imdb_dir}"
+        $CARGO_COMMAND --bin imdb -- convert --input ${imdb_dir} --output ${imdb_dir} --format parquet
         echo "IMDB dataset downloaded and extracted."
+
     else
         echo "IMDB dataset already exists and contains required parquet files."
     fi

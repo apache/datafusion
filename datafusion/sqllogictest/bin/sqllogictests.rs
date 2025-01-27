@@ -18,16 +18,19 @@
 use clap::Parser;
 use datafusion_common::instant::Instant;
 use datafusion_common::utils::get_available_parallelism;
-use datafusion_common::{exec_datafusion_err, exec_err, DataFusionError, Result};
+use datafusion_common::{exec_err, DataFusionError, Result};
 use datafusion_common_runtime::SpawnedTask;
-use datafusion_sqllogictest::{DataFusion, TestContext};
+use datafusion_sqllogictest::{
+    df_value_validator, read_dir_recursive, setup_scratch_dir, value_normalizer,
+    DataFusion, TestContext,
+};
 use futures::stream::StreamExt;
 use indicatif::{
     HumanDuration, MultiProgress, ProgressBar, ProgressDrawTarget, ProgressStyle,
 };
 use itertools::Itertools;
-use log::Level::{Info, Warn};
-use log::{info, log_enabled, warn};
+use log::Level::Info;
+use log::{info, log_enabled};
 use sqllogictest::{
     parse_file, strict_column_validator, update_record_with_output, AsyncDB,
     ColumnTypeValidator, Condition, Injected, MakeConnection, Normalizer, Record, Runner,
@@ -39,8 +42,6 @@ use crate::postgres_container::{
     initialize_postgres_container, terminate_postgres_container,
 };
 use std::ffi::OsStr;
-use std::fs;
-// use fs_err;
 use std::path::{Path, PathBuf};
 
 #[cfg(feature = "postgres")]
@@ -56,179 +57,6 @@ pub fn main() -> Result<()> {
         .enable_all()
         .build()?
         .block_on(run_tests())
-}
-
-// Trailing whitespace from lines in SLT will typically be removed, but do not fail if it is not
-// If particular test wants to cover trailing whitespace on a value,
-// it should project additional non-whitespace column on the right.
-#[allow(clippy::ptr_arg)]
-fn value_normalizer(s: &String) -> String {
-    s.trim_end().to_string()
-}
-
-struct CustomRunner<D: AsyncDB, M: MakeConnection> {
-    runner: Runner<D, M>,
-}
-
-impl<D: AsyncDB, M: MakeConnection<Conn = D>> CustomRunner<D, M> {
-    pub fn new(make_conn: M) -> Self {
-        CustomRunner {
-            runner: Runner::new(make_conn),
-        }
-    }
-
-    pub async fn update_test_file(
-        &mut self,
-        filename: impl AsRef<Path>,
-        col_separator: &str,
-        validator: Validator,
-        normalizer: Normalizer,
-        column_type_validator: ColumnTypeValidator<D::ColumnType>,
-    ) -> Result<(), Box<dyn std::error::Error>> {
-        use std::io::{Read, Seek, SeekFrom, Write};
-        use std::path::PathBuf;
-
-        use std::fs::{File, OpenOptions};
-
-        fn create_outfile(
-            filename: impl AsRef<Path>,
-        ) -> std::io::Result<(PathBuf, File)> {
-            let filename = filename.as_ref();
-            // let outfilename = format!(
-            //     "{}.{:016x}.temp",
-            //     filename.file_name().unwrap().to_str().unwrap(),
-            //     Instant::now().as_nanos()
-            // );
-            let outfilename = filename.file_name().unwrap().to_str().unwrap().to_owned()
-                + &format!("{:?}", Instant::now())
-                + ".temp";
-
-            let outfilename = filename.parent().unwrap().join(outfilename);
-            // create a temp file in read-write mode
-            let outfile = OpenOptions::new()
-                .write(true)
-                .create(true)
-                .truncate(true)
-                .read(true)
-                .open(&outfilename)?;
-            Ok((outfilename, outfile))
-        }
-
-        fn override_with_outfile(
-            filename: &String,
-            outfilename: &PathBuf,
-            outfile: &mut File,
-        ) -> std::io::Result<()> {
-            // check whether outfile ends with multiple newlines, which happens if
-            // - the last record is statement/query
-            // - the original file ends with multiple newlines
-
-            const N: usize = 8;
-            let mut buf = [0u8; N];
-            loop {
-                outfile.seek(SeekFrom::End(-(N as i64))).unwrap();
-                outfile.read_exact(&mut buf).unwrap();
-                let num_newlines = buf.iter().rev().take_while(|&&b| b == b'\n').count();
-                assert!(num_newlines > 0);
-
-                if num_newlines > 1 {
-                    // if so, remove the last ones
-                    outfile
-                        .set_len(
-                            outfile.metadata().unwrap().len() - num_newlines as u64 + 1,
-                        )
-                        .unwrap();
-                }
-
-                if num_newlines == 1 || num_newlines < N {
-                    break;
-                }
-            }
-
-            outfile.flush()?;
-            fs::rename(outfilename, filename)?;
-
-            Ok(())
-        }
-
-        struct Item {
-            filename: String,
-            outfilename: PathBuf,
-            outfile: File,
-            halt: bool,
-        }
-
-        let filename = filename.as_ref();
-        let records = parse_file(filename)?;
-
-        let (outfilename, outfile) = create_outfile(filename)?;
-        let mut stack = vec![Item {
-            filename: filename.to_string_lossy().to_string(),
-            outfilename,
-            outfile,
-            halt: false,
-        }];
-
-        for record in records {
-            let Item {
-                filename,
-                outfilename,
-                outfile,
-                halt,
-            } = stack.last_mut().unwrap();
-
-            match &record {
-                Record::Injected(Injected::BeginInclude(filename)) => {
-                    let (outfilename, outfile) = create_outfile(filename)?;
-                    stack.push(Item {
-                        filename: filename.clone(),
-                        outfilename,
-                        outfile,
-                        halt: false,
-                    });
-                }
-                Record::Injected(Injected::EndInclude(_)) => {
-                    override_with_outfile(filename, outfilename, outfile)?;
-                    stack.pop();
-                }
-                _ => {
-                    if *halt {
-                        writeln!(outfile, "{record}")?;
-                        continue;
-                    }
-                    if matches!(record, Record::Halt { .. }) {
-                        *halt = true;
-                        writeln!(outfile, "{record}")?;
-                        // tracing::info!(
-                        //     "halt record found, all following records will be written AS IS"
-                        // );
-                        continue;
-                    }
-                    let record_output = self.runner.apply_record(record.clone()).await;
-                    let record = update_record_with_output(
-                        &record,
-                        &record_output,
-                        col_separator,
-                        validator,
-                        normalizer,
-                        column_type_validator,
-                    )
-                    .unwrap_or(record);
-                    writeln!(outfile, "{record}")?;
-                }
-            }
-        }
-
-        let Item {
-            filename,
-            outfilename,
-            outfile,
-            halt: _,
-        } = stack.last_mut().unwrap();
-        override_with_outfile(filename, outfilename, outfile)?;
-
-        Ok(())
-    }
 }
 
 fn sqlite_value_validator(
@@ -258,54 +86,6 @@ fn sqlite_value_validator(
     }
 
     normalized_actual == normalized_expected
-}
-
-fn df_value_validator(
-    normalizer: Normalizer,
-    actual: &[Vec<String>],
-    expected: &[String],
-) -> bool {
-    let normalized_expected = expected.iter().map(normalizer).collect::<Vec<_>>();
-    let normalized_actual = actual
-        .iter()
-        .map(|strs| strs.iter().join(" "))
-        .map(|str| str.trim_end().to_string())
-        .collect_vec();
-
-    if log_enabled!(Warn) && normalized_actual != normalized_expected {
-        warn!("df validation failed. actual vs expected:");
-        for i in 0..normalized_actual.len() {
-            warn!("[{i}] {}<eol>", normalized_actual[i]);
-            warn!(
-                "[{i}] {}<eol>",
-                if normalized_expected.len() >= i {
-                    &normalized_expected[i]
-                } else {
-                    "No more results"
-                }
-            );
-        }
-    }
-
-    normalized_actual == normalized_expected
-}
-
-/// Sets up an empty directory at test_files/scratch/<name>
-/// creating it if needed and clearing any file contents if it exists
-/// This allows tests for inserting to external tables or copy to
-/// persist data to disk and have consistent state when running
-/// a new test
-fn setup_scratch_dir(name: &Path) -> Result<()> {
-    // go from copy.slt --> copy
-    let file_stem = name.file_stem().expect("File should have a stem");
-    let path = PathBuf::from("test_files").join("scratch").join(file_stem);
-
-    info!("Creating scratch dir in {path:?}");
-    if path.exists() {
-        fs::remove_dir_all(&path)?;
-    }
-    fs::create_dir_all(&path)?;
-    Ok(())
 }
 
 async fn run_tests() -> Result<()> {
@@ -739,33 +519,6 @@ fn read_test_files<'a>(
     }
 
     Ok(Box::new(paths.into_iter()))
-}
-
-fn read_dir_recursive<P: AsRef<Path>>(path: P) -> Result<Vec<PathBuf>> {
-    let mut dst = vec![];
-    read_dir_recursive_impl(&mut dst, path.as_ref())?;
-    Ok(dst)
-}
-
-/// Append all paths recursively to dst
-fn read_dir_recursive_impl(dst: &mut Vec<PathBuf>, path: &Path) -> Result<()> {
-    let entries = fs::read_dir(path)
-        .map_err(|e| exec_datafusion_err!("Error reading directory {path:?}: {e}"))?;
-    for entry in entries {
-        let path = entry
-            .map_err(|e| {
-                exec_datafusion_err!("Error reading entry in directory {path:?}: {e}")
-            })?
-            .path();
-
-        if path.is_dir() {
-            read_dir_recursive_impl(dst, &path)?;
-        } else {
-            dst.push(path);
-        }
-    }
-
-    Ok(())
 }
 
 /// Parsed command line options

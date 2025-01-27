@@ -344,9 +344,51 @@ EXPLAIN SELECT
 FROM test;
 ----
 logical_plan
-01)Projection: starts_with(test.column1_utf8view, Utf8View("äöüß")) AS c1, starts_with(test.column1_utf8view, Utf8View("")) AS c2, starts_with(test.column1_utf8view, Utf8View(NULL)) AS c3, starts_with(Utf8View(NULL), test.column1_utf8view) AS c4
+01)Projection: test.column1_utf8view LIKE Utf8View("äöüß%") AS c1, CASE test.column1_utf8view IS NOT NULL WHEN Boolean(true) THEN Boolean(true) END AS c2, starts_with(test.column1_utf8view, Utf8View(NULL)) AS c3, starts_with(Utf8View(NULL), test.column1_utf8view) AS c4
 02)--TableScan: test projection=[column1_utf8view]
 
+## Test STARTS_WITH is rewitten to LIKE when the pattern is a constant
+query TT
+EXPLAIN SELECT
+  STARTS_WITH(column1_utf8, 'foo%') as c1,
+  STARTS_WITH(column1_large_utf8, 'foo%') as c2,
+  STARTS_WITH(column1_utf8view, 'foo%') as c3,
+  STARTS_WITH(column1_utf8, 'f_o') as c4,
+  STARTS_WITH(column1_large_utf8, 'f_o') as c5,
+  STARTS_WITH(column1_utf8view, 'f_o') as c6
+FROM test;
+----
+logical_plan
+01)Projection: test.column1_utf8 LIKE Utf8("foo\%%") AS c1, test.column1_large_utf8 LIKE LargeUtf8("foo\%%") AS c2, test.column1_utf8view LIKE Utf8View("foo\%%") AS c3, test.column1_utf8 LIKE Utf8("f_o%") AS c4, test.column1_large_utf8 LIKE LargeUtf8("f_o%") AS c5, test.column1_utf8view LIKE Utf8View("f_o%") AS c6
+02)--TableScan: test projection=[column1_utf8, column1_large_utf8, column1_utf8view]
+
+## Test STARTS_WITH works with column arguments
+query TT
+EXPLAIN SELECT
+  STARTS_WITH(column1_utf8, substr(column1_utf8, 1, 2)) as c1,
+  STARTS_WITH(column1_large_utf8, substr(column1_large_utf8, 1, 2)) as c2,
+  STARTS_WITH(column1_utf8view, substr(column1_utf8view, 1, 2)) as c3
+FROM test;
+----
+logical_plan
+01)Projection: starts_with(test.column1_utf8, substr(test.column1_utf8, Int64(1), Int64(2))) AS c1, starts_with(test.column1_large_utf8, substr(test.column1_large_utf8, Int64(1), Int64(2))) AS c2, starts_with(test.column1_utf8view, substr(test.column1_utf8view, Int64(1), Int64(2))) AS c3
+02)--TableScan: test projection=[column1_utf8, column1_large_utf8, column1_utf8view]
+
+query BBB
+SELECT
+  STARTS_WITH(column1_utf8, substr(column1_utf8, 1, 2)) as c1,
+  STARTS_WITH(column1_large_utf8, substr(column1_large_utf8, 1, 2)) as c2,
+  STARTS_WITH(column1_utf8view, substr(column1_utf8view, 1, 2)) as c3
+FROM test;
+----
+true true true
+true true true
+true true true
+true true true
+NULL NULL NULL
+
+
+# Ensure that INIT cap works with utf8view
 query TT
 EXPLAIN SELECT
   INITCAP(column1_utf8view) as c
@@ -887,7 +929,7 @@ EXPLAIN SELECT
 FROM test;
 ----
 logical_plan
-01)Projection: starts_with(test.column1_utf8view, Utf8View("foo")) AS c, starts_with(test.column1_utf8view, test.column2_utf8view) AS c2
+01)Projection: test.column1_utf8view LIKE Utf8View("foo%") AS c, starts_with(test.column1_utf8view, test.column2_utf8view) AS c2
 02)--TableScan: test projection=[column1_utf8view, column2_utf8view]
 
 ## Ensure no casts for TRANSLATE
