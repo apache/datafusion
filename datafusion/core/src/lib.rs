@@ -624,18 +624,40 @@
 //!
 //! ## Crate Organization
 //!
-//! DataFusion is organized into multiple crates to enforce modularity
-//! and improve compilation times. The crates are:
+//! Most users interact with DataFusion via this crate (`datafusion`), which re-exports
+//! all functionality needed to build and execute queries.
+//!
+//! There are three other crates that provide additional functionality that
+//! must be used directly:
+//! * [`datafusion_proto`]: Plan serialization and deserialization
+//! * [`datafusion_substrait`]: Support for the substrait plan serialization format
+//! * [`datafusion_sqllogictest`] : The DataFusion SQL logic test runner
+//!
+//! [`datafusion_proto`]: https://crates.io/crates/datafusion-proto
+//! [`datafusion_substrait`]: https://crates.io/crates/datafusion-substrait
+//! [`datafusion_sqllogictest`]: https://crates.io/crates/datafusion-sqllogictest
+//!
+//! DataFusion is internally split into multiple sub crates to
+//! enforce modularity and improve compilation times. See the
+//! [list of modules](#modules) for all available sub-crates. Major ones are
 //!
 //! * [datafusion_common]: Common traits and types
+//! * [datafusion_catalog]: Catalog APIs such as [`SchemaProvider`] and [`CatalogProvider`]
 //! * [datafusion_execution]: State and structures needed for execution
-//! * [datafusion_expr]: [`LogicalPlan`],  [`Expr`] and related logical planning structure
+//! * [datafusion_expr]: [`LogicalPlan`], [`Expr`] and related logical planning structure
 //! * [datafusion_functions]: Scalar function packages
+//! * [datafusion_functions_aggregate]: Aggregate functions such as `MIN`, `MAX`, `SUM`, etc
 //! * [datafusion_functions_nested]: Scalar function packages for `ARRAY`s, `MAP`s and `STRUCT`s
+//! * [datafusion_functions_table]: Table Functions such as `GENERATE_SERIES`
+//! * [datafusion_functions_window]: Window functions such as `ROW_NUMBER`, `RANK`, etc
 //! * [datafusion_optimizer]: [`OptimizerRule`]s and [`AnalyzerRule`]s
 //! * [datafusion_physical_expr]: [`PhysicalExpr`] and related expressions
 //! * [datafusion_physical_plan]: [`ExecutionPlan`] and related expressions
+//! * [datafusion_physical_optimizer]: [`ExecutionPlan`] and related expressions
 //! * [datafusion_sql]: SQL planner ([`SqlToRel`])
+//!
+//! [`SchemaProvider`]: datafusion_catalog::SchemaProvider
+//! [`CatalogProvider`]: datafusion_catalog::CatalogProvider
 //!
 //! ## Citing DataFusion in Academic Papers
 //!
