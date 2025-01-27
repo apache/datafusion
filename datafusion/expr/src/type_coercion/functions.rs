@@ -21,7 +21,7 @@ use arrow::{
     compute::can_cast_types,
     datatypes::{DataType, TimeUnit},
 };
-use datafusion_common::utils::coerced_fixed_size_list_to_list;
+use datafusion_common::utils::{base_type, coerced_fixed_size_list_to_list};
 use datafusion_common::{
     exec_err, internal_datafusion_err, internal_err, not_impl_err, plan_err,
     types::{LogicalType, NativeType},
@@ -466,7 +466,7 @@ fn get_valid_types(
                 coerced_type = find_common_string_type(&coerced_type, t)?;
             }
             vec![vec![
-                base_dictionary_type_or_default_type(&coerced_type);
+                base_type(&coerced_type);
                 *number
             ]]
         }
@@ -744,16 +744,6 @@ fn find_common_string_type(lhs_type: &DataType, rhs_type: &DataType) -> Result<D
                 )
             }
         }
-    }
-}
-
-/// Recursively traverses [`DataType::Dictionary`] to get the underlying value [`DataType`].
-/// For non-dictionary types, returns the default [`DataType`].
-fn base_dictionary_type_or_default_type(data_type: &DataType) -> DataType {
-    if let DataType::Dictionary(_, v) = data_type {
-        base_dictionary_type_or_default_type(v)
-    } else {
-        data_type.to_owned()
     }
 }
 
