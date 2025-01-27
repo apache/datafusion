@@ -172,7 +172,7 @@ mod tests {
         let path1 = Path::new("./archive/complete_aggregate.slt");
         let path2 = Path::new("./test_files/aggregate");
         let result = diff(path1, path2);
-        if !result.is_ok() {
+        if result.is_err() {
             panic!("Expected no error, but got {:?}", result.err());
         }
     }
@@ -182,7 +182,7 @@ mod tests {
         let path1 = Path::new("./test_files/aggregate/base_aggregate.slt");
         let path2 = Path::new("./archive/complete_aggregate.slt");
         let result = diff(path1, path2);
-        if !result.is_ok() {
+        if result.is_err() {
             panic!("Expected no error, but got {:?}", result.err());
         }
     }
