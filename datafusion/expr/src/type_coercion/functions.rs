@@ -465,10 +465,7 @@ fn get_valid_types(
             for t in new_types.iter().skip(1) {
                 coerced_type = find_common_string_type(&coerced_type, t)?;
             }
-            vec![vec![
-                base_type(&coerced_type);
-                *number
-            ]]
+            vec![vec![base_type(&coerced_type); *number]]
         }
         TypeSignature::Numeric(number) => {
             function_length_check(current_types.len(), *number)?;
