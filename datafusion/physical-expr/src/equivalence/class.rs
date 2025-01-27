@@ -584,12 +584,18 @@ impl EquivalenceGroup {
                 .collect::<Vec<_>>();
             (new_class.len() > 1).then_some(EquivalenceClass::new(new_class))
         });
+
         // the key is the source expression and the value is the EquivalenceClass that contains the target expression of the source expression.
         let mut new_classes: IndexMap<Arc<dyn PhysicalExpr>, EquivalenceClass> =
             IndexMap::new();
         mapping.iter().for_each(|(source, target)| {
+            // We need to find equivalent projected expressions.
+            // e.g. table with columns [a,b,c] and a == b, projection: [a+c, b+c].
+            // To conclude that a + c == b + c we firsty normalize all source expressions
+            // in the mapping, then merge all equivalent expressions into the classes.
+            let normalized_expr = self.normalize_expr(Arc::clone(source));
             new_classes
-                .entry(Arc::clone(source))
+                .entry(normalized_expr)
                 .or_insert_with(EquivalenceClass::new_empty)
                 .push(Arc::clone(target));
         });
@@ -752,8 +758,9 @@ mod tests {
 
     use super::*;
     use crate::equivalence::tests::create_test_params;
-    use crate::expressions::{lit, BinaryExpr, Literal};
+    use crate::expressions::{binary, col, lit, BinaryExpr, Literal};
 
+    use arrow_schema::{DataType, Field, Schema};
     use datafusion_common::{Result, ScalarValue};
     use datafusion_expr::Operator;
 
@@ -1035,6 +1042,59 @@ mod tests {
                 description, left, right, expected, actual
             );
         }
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_project_classes() -> Result<()> {
+        // - columns: [a, b, c].
+        // - "a" and "b" in the same equivalence class.
+        // - then after a+c, b+c projection col(0) and col(1) must be
+        // in the same class too.
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Int32, false),
+            Field::new("c", DataType::Int32, false),
+        ]));
+        let mut group = EquivalenceGroup::empty();
+        group.add_equal_conditions(&col("a", &schema)?, &col("b", &schema)?);
+
+        let projected_schema = Arc::new(Schema::new(vec![
+            Field::new("a+c", DataType::Int32, false),
+            Field::new("b+c", DataType::Int32, false),
+        ]));
+
+        let mapping = ProjectionMapping {
+            map: vec![
+                (
+                    binary(
+                        col("a", &schema)?,
+                        Operator::Plus,
+                        col("c", &schema)?,
+                        &schema,
+                    )?,
+                    col("a+c", &projected_schema)?,
+                ),
+                (
+                    binary(
+                        col("b", &schema)?,
+                        Operator::Plus,
+                        col("c", &schema)?,
+                        &schema,
+                    )?,
+                    col("b+c", &projected_schema)?,
+                ),
+            ],
+        };
+
+        let projected = group.project(&mapping);
+
+        assert!(!projected.is_empty());
+        let first_normalized = projected.normalize_expr(col("a+c", &projected_schema)?);
+        let second_normalized = projected.normalize_expr(col("b+c", &projected_schema)?);
+
+        assert!(first_normalized.eq(&second_normalized));
 
         Ok(())
     }
