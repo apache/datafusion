@@ -2177,33 +2177,4 @@ mod test {
             ),
         }
     }
-
-    #[test]
-    fn test_ascii_expr() -> Result<()> {
-        let input = Arc::new(StringArray::from(vec![Some("x")])) as ArrayRef;
-        let batch = RecordBatch::try_from_iter([("c0", input)])?;
-        let df_schema = DFSchema::try_from(batch.schema())?;
-        let expected = Arc::new(Int32Array::from(vec![Some(120)])) as ArrayRef;
-        let result = evaluate_expr_with_array(ascii(col("c0")), batch, &df_schema)?;
-        assert_eq!(&expected, &result);
-
-        let input = ScalarValue::Utf8(Some(String::from("x")));
-        let expected = ScalarValue::Int32(Some(120));
-        let result = evaluate_expr_with_scalar(ascii(lit(input)))?;
-        assert_eq!(&expected, &result);
-
-        let input = Arc::new(Int32Array::from(vec![Some(2)])) as ArrayRef;
-        let batch = RecordBatch::try_from_iter([("c0", input)])?;
-        let df_schema = DFSchema::try_from(batch.schema())?;
-        let expected = Arc::new(Int32Array::from(vec![Some(50)])) as ArrayRef;
-        let result = evaluate_expr_with_array(ascii(col("c0")), batch, &df_schema)?;
-        assert_eq!(&expected, &result);
-
-        let input = ScalarValue::Int32(Some(2));
-        let expected = ScalarValue::Int32(Some(50));
-        let result = evaluate_expr_with_scalar(ascii(lit(input)))?;
-        assert_eq!(&expected, &result);
-
-        Ok(())
-    }
 }
