@@ -20,7 +20,11 @@ use std::collections::HashMap;
 use datafusion_common::{Diagnostic, Result};
 use datafusion_sql::planner::{ParserOptions, SqlToRel};
 use regex::Regex;
-use sqlparser::{dialect::GenericDialect, parser::Parser, tokenizer::{Location, Span}};
+use sqlparser::{
+    dialect::GenericDialect,
+    parser::Parser,
+    tokenizer::{Location, Span},
+};
 
 use crate::{MockContextProvider, MockSessionState};
 
@@ -40,11 +44,9 @@ fn do_query(sql: &'static str) -> Diagnostic {
     let sql_to_rel = SqlToRel::new_with_options(&context, options);
     match sql_to_rel.sql_statement_to_plan(statement) {
         Ok(_) => panic!("expected error"),
-        Err(err) => {
-            match err.diagnostic() {
-                Some(diag) => diag.clone(),
-                None => panic!("expected diagnostic"),
-            }
+        Err(err) => match err.diagnostic() {
+            Some(diag) => diag.clone(),
+            None => panic!("expected diagnostic"),
         },
     }
 }
@@ -188,7 +190,10 @@ fn test_missing_non_aggregate_in_group_by() -> Result<()> {
         "'person.first_name' must appear in GROUP BY clause because it's not an aggregate expression"
     );
     assert_eq!(diag.span, spans["a"]);
-    assert_eq!(diag.helps[0].message, "add 'person.first_name' to GROUP BY clause");
+    assert_eq!(
+        diag.helps[0].message,
+        "add 'person.first_name' to GROUP BY clause"
+    );
     Ok(())
 }
 
