@@ -40,5 +40,5 @@ path = "src/lib.rs"
 arrow = { workspace = true }
 datafusion-common = { workspace = true }
 itertools = { workspace = true }
-sqlparser = { workspace = true }
 paste = "^1.0"
+sqlparser = { workspace = true }
