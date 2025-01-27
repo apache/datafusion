@@ -82,3 +82,7 @@ tokio = { workspace = true, features = ["rt-multi-thread"] }
 harness = false
 name = "sqllogictests"
 path = "bin/sqllogictests.rs"
+
+[[bin]]
+name = "diff"
+path = "bin/diff.rs"
