@@ -382,7 +382,7 @@ impl<T: ArrowNumericType + Send> GroupsAccumulator for MedianGroupsAccumulator<T
         // Build offsets
         let mut offsets = Vec::with_capacity(self.group_values.len() + 1);
         offsets.push(0);
-        let mut cur_len = 0;
+        let mut cur_len = 0_i32;
         for group_value in &emit_group_values {
             cur_len += group_value.len() as i32;
             offsets.push(cur_len);
@@ -443,8 +443,10 @@ impl<T: ArrowNumericType + Send> GroupsAccumulator for MedianGroupsAccumulator<T
             .with_data_type(self.data_type.clone());
 
         // `offsets` in `ListArray`, each row as a list element
+        assert!(input_array.len() <= i32::MAX as usize);
         let offsets = (0..=input_array.len() as i32).collect::<Vec<_>>();
-        let offsets = OffsetBuffer::new(ScalarBuffer::from(offsets));
+        // Safety: all checks in `OffsetBuffer::new` are ensured to pass
+        let offsets = unsafe { OffsetBuffer::new_unchecked(ScalarBuffer::from(offsets)) };
 
         // `nulls` for converted `ListArray`
         let nulls = filtered_null_mask(opt_filter, input_array);
