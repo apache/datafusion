@@ -944,8 +944,8 @@ mod tests {
                 ),
                 (Err(e1), Err(e2)) => {
                     assert_eq!(
-                        e1.to_string(),
-                        e2.to_string(),
+                        e1.strip_backtrace().to_string(),
+                        e2.strip_backtrace().to_string(),
                         "Test '{}' failed: got {:?}, expected {:?}",
                         tcase.name,
                         e1,
