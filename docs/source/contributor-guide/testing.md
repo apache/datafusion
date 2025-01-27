@@ -56,6 +56,15 @@ DataFusion's SQL implementation is tested using [sqllogictest](https://github.co
 
 Like similar systems such as [DuckDB](https://duckdb.org/dev/testing), DataFusion has chosen to trade off a slightly higher barrier to contribution for longer term maintainability.
 
+## Extended Tests
+
+In addition to the standard CI test suite that is run on all PRs prior to merge,
+DataFusion has "extended" tests that are run as part of the CI pipeline and
+defined in [extended.yml]. They run on each commit to `main` as they rarely
+fail but take significantly longer to run.
+
+[extended.yml]: https://github.com/apache/datafusion/blob/main/.github/workflows/extended.yml
+
 ## Rust Integration Tests
 
 There are several tests of the public interface of the DataFusion library in the [tests](https://github.com/apache/datafusion/tree/main/datafusion/core/tests) directory.
