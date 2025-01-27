@@ -242,6 +242,7 @@ mod tests {
         },
         datatypes::*,
     };
+    use datafusion_common::assert_contains;
 
     // runs an end-to-end test of physical type cast
     // 1. construct a record batch with a column "a" of type A
@@ -416,10 +417,11 @@ mod tests {
         )?;
         let expression =
             cast_with_options(col("a", &schema)?, &schema, Decimal128(6, 2), None)?;
-        let result = expression.evaluate(&batch);
-
-        let result = result.unwrap_err(); // panics on OK
-        assert_contains!(e.to_string(), "Arrow error: Invalid argument error: 12345679 is too large to store in a Decimal128 of precision 6. Max is 999999"));
+        let e = expression.evaluate(&batch).unwrap_err(); // panics on OK
+        assert_contains!(
+            e.to_string(),
+            "Arrow error: Invalid argument error: 12345679 is too large to store in a Decimal128 of precision 6. Max is 999999"
+        );
 
         let expression_safe = cast_with_options(
             col("a", &schema)?,
