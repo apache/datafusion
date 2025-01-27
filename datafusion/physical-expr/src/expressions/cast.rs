@@ -418,14 +418,8 @@ mod tests {
             cast_with_options(col("a", &schema)?, &schema, Decimal128(6, 2), None)?;
         let result = expression.evaluate(&batch);
 
-        match result {
-            Ok(_) => panic!("expected error"),
-            Err(e) => {
-                assert!(e
-                    .to_string()
-                    .contains("Arrow error: Invalid argument error: 12345679 is too large to store in a Decimal128 of precision 6. Max is 999999"))
-            }
-        }
+        let result = result.unwrap_err(); // panics on OK
+        assert_contains!(e.to_string(), "Arrow error: Invalid argument error: 12345679 is too large to store in a Decimal128 of precision 6. Max is 999999"));
 
         let expression_safe = cast_with_options(
             col("a", &schema)?,
