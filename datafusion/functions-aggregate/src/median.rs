@@ -387,6 +387,13 @@ impl<T: ArrowNumericType + Send> GroupsAccumulator for MedianGroupsAccumulator<T
             cur_len += group_value.len() as i32;
             offsets.push(cur_len);
         }
+        // TODO: maybe we can use `OffsetBuffer::new_unchecked` like what in `convert_to_state`,
+        // but safety should be considered more carefully here(and I am not sure if it can get
+        // performance improvement when we introduce checks to keep the safety...).
+        //
+        // Can see more details in:
+        // https://github.com/apache/datafusion/pull/13681#discussion_r1931209791
+        //
         let offsets = OffsetBuffer::new(ScalarBuffer::from(offsets));
 
         // Build inner array
