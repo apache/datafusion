@@ -32,11 +32,10 @@ use itertools::Itertools;
 use log::Level::Info;
 use log::{info, log_enabled};
 use sqllogictest::{
-    parse_file, strict_column_validator, update_record_with_output, AsyncDB,
-    ColumnTypeValidator, Condition, Injected, MakeConnection, Normalizer, Record, Runner,
+    parse_file, strict_column_validator, AsyncDB, Condition, Normalizer, Record,
     Validator,
 };
-// use datafusion_common::HashSet;
+
 #[cfg(feature = "postgres")]
 use crate::postgres_container::{
     initialize_postgres_container, terminate_postgres_container,
@@ -130,7 +129,7 @@ async fn run_tests() -> Result<()> {
             } else {
                 df_value_validator
             };
-            println!("Running {}", test_file.relative_path.display());
+
             let m_clone = m.clone();
             let m_style_clone = m_style.clone();
 
@@ -223,14 +222,13 @@ async fn run_test_file(
     pb.set_style(mp_style);
     pb.set_message(format!("{:?}", &relative_path));
 
-    let customrunner = CustomRunner::new(|| async {
+    let mut runner = sqllogictest::Runner::new(|| async {
         Ok(DataFusion::new(
             test_ctx.session_ctx().clone(),
             relative_path.clone(),
             pb.clone(),
         ))
     });
-    let mut runner = customrunner.runner;
     runner.add_label("Datafusion");
     runner.with_column_validator(strict_column_validator);
     runner.with_normalizer(value_normalizer);
@@ -355,7 +353,7 @@ async fn run_complete_file(
     pb.set_style(mp_style);
     pb.set_message(format!("{:?}", &relative_path));
 
-    let mut customrunner = CustomRunner::new(|| async {
+    let mut runner = sqllogictest::Runner::new(|| async {
         Ok(DataFusion::new(
             test_ctx.session_ctx().clone(),
             relative_path.clone(),
@@ -364,7 +362,7 @@ async fn run_complete_file(
     });
 
     let col_separator = " ";
-    let res = customrunner
+    let res = runner
         .update_test_file(
             path,
             col_separator,
