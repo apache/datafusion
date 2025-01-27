@@ -22,9 +22,9 @@ use datafusion::arrow::array::StringArray;
 use datafusion::arrow::datatypes::{DataType, Field, Schema};
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::assert_batches_eq;
+use datafusion::common::assert_contains;
 use datafusion::error::Result;
 use datafusion::prelude::*;
-use datafusion_common::assert_contains;
 
 #[tokio::main]
 async fn main() -> Result<()> {
