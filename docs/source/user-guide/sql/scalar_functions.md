@@ -1769,6 +1769,7 @@ The following regular expression functions are supported:
 - [regexp_like](#regexp_like)
 - [regexp_match](#regexp_match)
 - [regexp_replace](#regexp_replace)
+- [regexp_substr](#regexp_substr)
 
 ### `regexp_count`
 
@@ -1918,6 +1919,50 @@ SELECT regexp_replace('aBc', '(b|d)', 'Ab\\1a', 'i');
 ```
 
 Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/regexp.rs)
+
+### `regexp_substr`
+
+Returns the substring that matches a [regular expression](https://docs.rs/regex/latest/regex/#syntax) within a string.
+
+```
+regexp_substr(str, regexp[, position[, occurrence[, flags[, group_num]]]])
+```
+
+#### Arguments
+
+- **str**: String expression to operate on. Can be a constant, column, or function, and any combination of operators.
+- **regexp**: Regular expression to match against.
+  Can be a constant, column, or function.
+- **position**: Number of characters from the beginning of the string where the function starts searching for matches. Default: 1
+- **occurrence**: Specifies the first occurrence of the pattern from which to start returning matches.. Default: 1
+- **flags**: Optional regular expression flags that control the behavior of the regular expression. The following flags are supported:
+  - **i**: case-insensitive: letters match both upper and lower case
+  - **c**: case-sensitive: letters match upper or lower case. Default flag
+  - **m**: multi-line mode: ^ and $ match begin/end of line
+  - **s**: allow . to match \n
+  - **e**: extract submatches (for Snowflake compatibility)
+  - **R**: enables CRLF mode: when multi-line mode is enabled, \r\n is used
+  - **U**: swap the meaning of x* and x*?
+- **group_num**: Specifies which group to extract. Groups are specified by using parentheses in the regular expression.
+
+#### Example
+
+```sql
+            > select regexp_substr('Köln', '[a-zA-Z]ö[a-zA-Z]{2}');
+            +---------------------------------------------------------+
+            | regexp_substr(Utf8("Köln"),Utf8("[a-zA-Z]ö[a-zA-Z]{2}")) |
+            +---------------------------------------------------------+
+            | Köln                                                    |
+            +---------------------------------------------------------+
+            SELECT regexp_substr('aBc', '(b|d)', 1, 1, 'i');
+            +---------------------------------------------------+
+            | regexp_substr(Utf8("aBc"),Utf8("(b|d)"), Int32(1), Int32(1), Utf8("i")) |
+            +---------------------------------------------------+
+            | B                                                 |
+            +---------------------------------------------------+
+```
+
+Additional examples can be found [here](https://docs.snowflake.com/en/sql-reference/functions/regexp_substr#examples)
 
 ## Time and Date Functions
 
