@@ -614,10 +614,7 @@ mod tests {
                     descending: false,
                     nulls_first: false,
                 }),
-                // Should Err: "Input range of ACOS contains out-of-domain values"
-                expected: Err(datafusion_common::DataFusionError::Execution(
-                    "Input range of ACOS contains out-of-domain values".to_string(),
-                )),
+                expected: exec_err!("Input range of ACOS contains out-of-domain values"),
             },
             MonotonicityTestCase {
                 name: "acosh_order within domain",
@@ -642,9 +639,7 @@ mod tests {
                     descending: true,
                     nulls_first: false,
                 }),
-                expected: Err(datafusion_common::DataFusionError::Execution(
-                    "Input range of ACOSH contains out-of-domain values".to_string(),
-                )),
+                expected: exec_err!("Input range of ACOSH contains out-of-domain values"),
             },
             MonotonicityTestCase {
                 name: "asin_order within domain",
@@ -669,10 +664,7 @@ mod tests {
                     descending: false,
                     nulls_first: false,
                 }),
-                // Should Err: "Input range of ASIN contains out-of-domain values"
-                expected: Err(datafusion_common::DataFusionError::Execution(
-                    "Input range of ASIN contains out-of-domain values".to_string(),
-                )),
+                expected: exec_err!("Input range of ASIN contains out-of-domain values"),
             },
             MonotonicityTestCase {
                 name: "asinh_order within domain",
@@ -753,9 +745,7 @@ mod tests {
                     descending: false,
                     nulls_first: false,
                 }),
-                expected: Err(datafusion_common::DataFusionError::Execution(
-                    "Input range of ATANH contains out-of-domain values".to_string(),
-                )),
+                expected: exec_err!("Input range of ATANH contains out-of-domain values"),
             },
             MonotonicityTestCase {
                 name: "cbrt_order within domain",
@@ -939,10 +929,7 @@ mod tests {
                     descending: false,
                     nulls_first: false,
                 }),
-                // Should Err: "Input range of LN contains out-of-domain values"
-                expected: Err(datafusion_common::DataFusionError::Execution(
-                    "Input range of LN contains out-of-domain values".to_string(),
-                )),
+                expected: exec_err!("Input range of LN contains out-of-domain values"),
             },
         ];
 
