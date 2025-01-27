@@ -19,7 +19,11 @@ use std::fmt::Debug;
 use std::ops::Deref;
 use std::sync::Arc;
 
-use crate::physical_optimizer::parquet_exec_with_sort;
+use crate::physical_optimizer::test_utils::{
+    check_integrity, coalesce_partitions_exec, repartition_exec, schema,
+    sort_merge_join_exec, sort_preserving_merge_exec,
+};
+use crate::physical_optimizer::test_utils::{parquet_exec_with_sort, trim_plan_display};
 
 use arrow::compute::SortOptions;
 use datafusion::config::ConfigOptions;
@@ -40,11 +44,6 @@ use datafusion_physical_expr_common::sort_expr::LexRequirement;
 use datafusion_physical_optimizer::enforce_distribution::*;
 use datafusion_physical_optimizer::enforce_sorting::EnforceSorting;
 use datafusion_physical_optimizer::output_requirements::OutputRequirements;
-use datafusion_physical_optimizer::test_utils::trim_plan_display;
-use datafusion_physical_optimizer::test_utils::{
-    check_integrity, coalesce_partitions_exec, repartition_exec, schema,
-    sort_merge_join_exec, sort_preserving_merge_exec,
-};
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use datafusion_physical_plan::aggregates::{
     AggregateExec, AggregateMode, PhysicalGroupBy,
@@ -293,7 +292,7 @@ fn hash_join_exec(
     join_on: &JoinOn,
     join_type: &JoinType,
 ) -> Arc<dyn ExecutionPlan> {
-    datafusion_physical_optimizer::test_utils::hash_join_exec(
+    crate::physical_optimizer::test_utils::hash_join_exec(
         left,
         right,
         join_on.clone(),
