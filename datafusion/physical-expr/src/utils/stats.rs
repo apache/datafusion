@@ -672,6 +672,13 @@ mod tests {
             }
         );
 
+        graph.assign_statistic(
+            6,
+            Uniform {
+                interval: Interval::CERTAINLY_TRUE,
+            },
+        );
+        assert!(graph.propagate()?);
         Ok(())
     }
 }

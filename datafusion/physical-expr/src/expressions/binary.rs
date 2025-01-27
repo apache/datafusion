@@ -519,11 +519,6 @@ impl PhysicalExpr for BinaryExpr {
             );
         }
 
-        println!(
-            "evaluate_statistics: {:?} {:?} {:?}",
-            left_stat, self.op, right_stat
-        );
-
         // TODO, to think: maybe, we can separate also Unknown + Unknown
         //  just for clarity and better reader understanding.
         match &self.op {
