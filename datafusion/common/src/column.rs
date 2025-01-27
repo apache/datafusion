@@ -75,7 +75,7 @@ impl Column {
     ///
     /// For example, `foo.bar` would be represented as a two element vector
     /// `["foo", "bar"]`
-    pub fn from_idents(mut idents: Vec<String>) -> Option<Self> {
+    fn from_idents(mut idents: Vec<String>) -> Option<Self> {
         let (relation, name) = match idents.len() {
             1 => (None, idents.remove(0)),
             2 => (

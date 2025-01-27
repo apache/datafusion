@@ -16,9 +16,11 @@
 // under the License.
 
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
-use datafusion_common::{not_impl_datafusion_err, not_impl_err, Column, Result};
+use datafusion_common::{not_impl_err, Column, Result};
 use datafusion_expr::{JoinType, LogicalPlan, LogicalPlanBuilder};
-use sqlparser::ast::{Join, JoinConstraint, JoinOperator, TableFactor, TableWithJoins};
+use sqlparser::ast::{
+    Join, JoinConstraint, JoinOperator, ObjectName, TableFactor, TableWithJoins,
+};
 use std::collections::HashSet;
 
 impl<S: ContextProvider> SqlToRel<'_, S> {
@@ -127,14 +129,15 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 let keys = object_names
                     .into_iter()
                     .map(|object_name| {
-                        let idents = object_name
-                            .0
-                            .into_iter()
-                            .map(|id| self.ident_normalizer.normalize(id))
-                            .collect::<Vec<_>>();
-                        Column::from_idents(idents).ok_or_else(|| {
-                            not_impl_datafusion_err!("Invalid identifier in USING clause")
-                        })
+                        let ObjectName(mut object_names) = object_name;
+                        if object_names.len() != 1 {
+                            not_impl_err!(
+                                "Invalid identifier in USING clause. Expected single identifier, got {}", ObjectName(object_names)
+                            )
+                        } else {
+                            let id = object_names.swap_remove(0);
+                            Ok(self.ident_normalizer.normalize(id))
+                        }
                     })
                     .collect::<Result<Vec<_>>>()?;
 
