@@ -24,8 +24,13 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use arrow::array::{ArrayRef, Int32Array, RecordBatch, StringArray};
-use arrow_schema::SchemaRef;
+use arrow::datatypes::SchemaRef;
+use async_trait::async_trait;
+use bytes::Bytes;
 use datafusion::catalog::Session;
+use datafusion::common::{
+    internal_datafusion_err, DFSchema, DataFusionError, Result, ScalarValue,
+};
 use datafusion::datasource::listing::PartitionedFile;
 use datafusion::datasource::physical_plan::parquet::{
     ParquetAccessPlan, ParquetExecBuilder,
@@ -35,6 +40,8 @@ use datafusion::datasource::physical_plan::{
 };
 use datafusion::datasource::TableProvider;
 use datafusion::execution::object_store::ObjectStoreUrl;
+use datafusion::logical_expr::utils::conjunction;
+use datafusion::logical_expr::{TableProviderFilterPushDown, TableType};
 use datafusion::parquet::arrow::arrow_reader::{
     ArrowReaderOptions, ParquetRecordBatchReaderBuilder, RowSelection, RowSelector,
 };
@@ -43,20 +50,12 @@ use datafusion::parquet::arrow::ArrowWriter;
 use datafusion::parquet::file::metadata::ParquetMetaData;
 use datafusion::parquet::file::properties::{EnabledStatistics, WriterProperties};
 use datafusion::parquet::schema::types::ColumnPath;
+use datafusion::physical_expr::utils::{Guarantee, LiteralGuarantee};
 use datafusion::physical_expr::PhysicalExpr;
+use datafusion::physical_optimizer::pruning::PruningPredicate;
 use datafusion::physical_plan::metrics::ExecutionPlanMetricsSet;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::prelude::*;
-use datafusion_common::{
-    internal_datafusion_err, DFSchema, DataFusionError, Result, ScalarValue,
-};
-use datafusion_expr::utils::conjunction;
-use datafusion_expr::{TableProviderFilterPushDown, TableType};
-use datafusion_physical_expr::utils::{Guarantee, LiteralGuarantee};
-use datafusion_physical_optimizer::pruning::PruningPredicate;
-
-use async_trait::async_trait;
-use bytes::Bytes;
 use futures::future::BoxFuture;
 use futures::FutureExt;
 use object_store::ObjectStore;
@@ -284,7 +283,7 @@ impl IndexTableProvider {
             .transpose()?
             // if there are no filters, use a literal true to have a predicate
             // that always evaluates to true we can pass to the index
-            .unwrap_or_else(|| datafusion_physical_expr::expressions::lit(true));
+            .unwrap_or_else(|| datafusion::physical_expr::expressions::lit(true));
 
         Ok(predicate)
     }
