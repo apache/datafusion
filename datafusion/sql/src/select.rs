@@ -26,7 +26,7 @@ use crate::utils::{
 };
 
 use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
-use datafusion_common::{not_impl_err, plan_err, Result};
+use datafusion_common::{not_impl_err, plan_err, DataFusionError, Result};
 use datafusion_common::{RecursionUnnestOption, UnnestOptions};
 use datafusion_expr::expr::{Alias, PlannedReplaceSelectItem, WildcardOptions};
 use datafusion_expr::expr_rewriter::{
@@ -574,10 +574,19 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         empty_from: bool,
         planner_context: &mut PlannerContext,
     ) -> Result<Vec<Expr>> {
-        projection
-            .into_iter()
-            .map(|expr| self.sql_select_to_rex(expr, plan, empty_from, planner_context))
-            .collect::<Result<Vec<Expr>>>()
+        let mut prepared_select_exprs = vec![];
+        let mut errors = vec![];
+        for expr in projection {
+            match self.sql_select_to_rex(expr, plan, empty_from, planner_context)  {
+                Ok(expr) => prepared_select_exprs.push(expr),
+                Err(err) => errors.push(err),
+            }
+        }
+        if !errors.is_empty() {
+            Err(DataFusionError::Collection(errors))
+        } else {
+            Ok(prepared_select_exprs)
+        }
     }
 
     /// Generate a relational expression from a select SQL expression

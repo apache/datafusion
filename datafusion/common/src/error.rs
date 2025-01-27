@@ -20,11 +20,12 @@
 use std::backtrace::{Backtrace, BacktraceStatus};
 
 use std::borrow::Cow;
+use std::collections::VecDeque;
 use std::error::Error;
 use std::fmt::{Display, Formatter};
-use std::io;
 use std::result;
 use std::sync::Arc;
+use std::io;
 
 use crate::utils::quote_identifier;
 use crate::{Column, DFSchema, Diagnostic, TableReference};
@@ -136,6 +137,14 @@ pub enum DataFusionError {
     /// human-readable messages, and locations in the source query that relate
     /// to the error in some way.
     Diagnostic(Box<Diagnostic>, Box<DataFusionError>),
+
+    /// A collection of one or more [`DataFusionError`]. Useful in cases where
+    /// DataFusion can recover from an erroneous state, and produce more errors
+    /// before terminating. e.g. when planning a SELECT clause, DataFusion can
+    /// synchronize to the next `SelectItem` if the previous one had errors. The
+    /// end result is that the user can see errors about all `SelectItem`,
+    /// instead of just the first one.
+    Collection(Vec<DataFusionError>),
 }
 
 #[macro_export]
@@ -334,6 +343,7 @@ impl Error for DataFusionError {
             DataFusionError::Context(_, e) => Some(e.as_ref()),
             DataFusionError::Substrait(_) => None,
             DataFusionError::Diagnostic(_, e) => Some(e.as_ref()),
+            DataFusionError::Collection(errs) => errs.first().map(|e| e as &dyn Error),
         }
     }
 }
@@ -425,29 +435,38 @@ impl DataFusionError {
         "".to_owned()
     }
 
-    fn error_prefix(&self) -> &'static str {
+    fn error_prefix(&self) -> Cow<str> {
         match self {
-            DataFusionError::ArrowError(_, _) => "Arrow error: ",
+            DataFusionError::ArrowError(_, _) => Cow::Borrowed("Arrow error: "),
             #[cfg(feature = "parquet")]
-            DataFusionError::ParquetError(_) => "Parquet error: ",
+            DataFusionError::ParquetError(_) => Cow::Borrowed("Parquet error: "),
             #[cfg(feature = "avro")]
-            DataFusionError::AvroError(_) => "Avro error: ",
+            DataFusionError::AvroError(_) => Cow::Borrowed("Avro error: "),
             #[cfg(feature = "object_store")]
-            DataFusionError::ObjectStore(_) => "Object Store error: ",
-            DataFusionError::IoError(_) => "IO error: ",
-            DataFusionError::SQL(_, _) => "SQL error: ",
-            DataFusionError::NotImplemented(_) => "This feature is not implemented: ",
-            DataFusionError::Internal(_) => "Internal error: ",
-            DataFusionError::Plan(_) => "Error during planning: ",
-            DataFusionError::Configuration(_) => "Invalid or Unsupported Configuration: ",
-            DataFusionError::SchemaError(_, _) => "Schema error: ",
-            DataFusionError::Execution(_) => "Execution error: ",
-            DataFusionError::ExecutionJoin(_) => "ExecutionJoin error: ",
-            DataFusionError::ResourcesExhausted(_) => "Resources exhausted: ",
-            DataFusionError::External(_) => "External error: ",
-            DataFusionError::Context(_, _) => "",
-            DataFusionError::Substrait(_) => "Substrait error: ",
-            DataFusionError::Diagnostic(_, _) => "",
+            DataFusionError::ObjectStore(_) => Cow::Borrowed("Object Store error: "),
+            DataFusionError::IoError(_) => Cow::Borrowed("IO error: "),
+            DataFusionError::SQL(_, _) => Cow::Borrowed("SQL error: "),
+            DataFusionError::NotImplemented(_) => {
+                Cow::Borrowed("This feature is not implemented: ")
+            }
+            DataFusionError::Internal(_) => Cow::Borrowed("Internal error: "),
+            DataFusionError::Plan(_) => Cow::Borrowed("Error during planning: "),
+            DataFusionError::Configuration(_) => {
+                Cow::Borrowed("Invalid or Unsupported Configuration: ")
+            }
+            DataFusionError::SchemaError(_, _) => Cow::Borrowed("Schema error: "),
+            DataFusionError::Execution(_) => Cow::Borrowed("Execution error: "),
+            DataFusionError::ExecutionJoin(_) => Cow::Borrowed("ExecutionJoin error: "),
+            DataFusionError::ResourcesExhausted(_) => {
+                Cow::Borrowed("Resources exhausted: ")
+            }
+            DataFusionError::External(_) => Cow::Borrowed("External error: "),
+            DataFusionError::Context(_, _) => Cow::Borrowed(""),
+            DataFusionError::Substrait(_) => Cow::Borrowed("Substrait error: "),
+            DataFusionError::Diagnostic(_, _) => Cow::Borrowed(""),
+            DataFusionError::Collection(errs) => {
+                Cow::Owned(format!("{} errors, first error: ", errs.len()))
+            }
         }
     }
 
@@ -489,6 +508,7 @@ impl DataFusionError {
             }
             DataFusionError::Substrait(ref desc) => Cow::Owned(desc.to_string()),
             DataFusionError::Diagnostic(_, ref err) => Cow::Owned(err.to_string()),
+            DataFusionError::Collection(ref errs) => errs.first().expect("cannot construct DataFusionError::Collection with 0 errors, but got one such case").message(),
         }
     }
 
@@ -539,6 +559,30 @@ impl DataFusionError {
         }
 
         DiagnosticsIterator { head: self }.next()
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = &DataFusionError> {
+        struct ErrorIterator<'a> {
+            queue: VecDeque<&'a DataFusionError>,
+        }
+
+        impl<'a> Iterator for ErrorIterator<'a> {
+            type Item = &'a DataFusionError;
+
+            fn next(&mut self) -> Option<Self::Item> {
+                loop {
+                    let popped = self.queue.pop_front()?;
+                    match popped {
+                        DataFusionError::Collection(errs) => self.queue.extend(errs),
+                        _ => return Some(popped),
+                    }
+                }
+            }
+        }
+
+        let mut queue = VecDeque::new();
+        queue.push_back(self);
+        ErrorIterator { queue }
     }
 }
 
@@ -887,5 +931,21 @@ mod test {
         // DataFusionError does not implement Eq, so we use a string comparison + some cheap "same variant" test instead
         assert_eq!(e.strip_backtrace(), exp.strip_backtrace());
         assert_eq!(std::mem::discriminant(e), std::mem::discriminant(&exp),)
+    }
+
+    #[test]
+    fn test_iter() {
+        let err = DataFusionError::Collection(vec![
+            DataFusionError::Plan("a".to_string()),
+            DataFusionError::Collection(vec![
+                DataFusionError::Plan("b".to_string()),
+                DataFusionError::Plan("c".to_string()),
+            ])
+        ]);
+        let errs = err.iter().collect::<Vec<_>>();
+        assert_eq!(errs.len(), 3);
+        assert_eq!(errs[0].strip_backtrace(), "Error during planning: a");
+        assert_eq!(errs[1].strip_backtrace(), "Error during planning: b");
+        assert_eq!(errs[2].strip_backtrace(), "Error during planning: c");
     }
 }
