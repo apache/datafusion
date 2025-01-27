@@ -742,6 +742,11 @@ pub mod optimizer {
     pub use datafusion_optimizer::*;
 }
 
+/// re-export of [`datafusion_physical_optimizer`] crate
+pub mod physical_optimizer {
+    pub use datafusion_physical_optimizer::*;
+}
+
 /// re-export of [`datafusion_physical_expr`] crate
 pub mod physical_expr_common {
     pub use datafusion_physical_expr_common::*;
