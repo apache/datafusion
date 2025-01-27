@@ -15,9 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::array::{Array, StringArray, UInt32Array, UInt64Array};
+use arrow::array::{Array, StringArray, Int32Array, Int64Array, UInt32Array, UInt64Array};
 use arrow::datatypes::DataType;
-use datafusion_common::Result;
+use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
 };
@@ -64,6 +64,24 @@ impl XxHash64Func {
             ),
         }
     }
+
+    pub fn hash_scalar(&self, value: &ColumnarValue) -> Result<String> {
+        let mut hasher = XxHash64::default();
+        let value_str = match value {
+            ColumnarValue::Scalar(scalar) => match scalar {
+                ScalarValue::Utf8(Some(v)) => v.clone(),
+                ScalarValue::Int32(Some(v)) => v.to_string(),
+                ScalarValue::Int64(Some(v)) => v.to_string(),
+                ScalarValue::UInt32(Some(v)) => v.to_string(),
+                ScalarValue::UInt64(Some(v)) => v.to_string(),
+                _ => return Err(DataFusionError::Internal("Unsupported scalar type".to_string())),
+            },
+            _ => return Err(DataFusionError::Internal("Expected a scalar value".to_string())),
+        };
+        hasher.write(value_str.as_bytes());
+        let hash: u64 = hasher.finish() as u64;
+        Ok(hex::encode(hash.to_be_bytes()))
+    }
 }
 impl ScalarUDFImpl for XxHash64Func {
     fn as_any(&self) -> &dyn Any {
@@ -90,34 +108,57 @@ impl ScalarUDFImpl for XxHash64Func {
             // Assuming that the argument is either a StringArray or BinaryArray
             let input_data = &args[0];
     
-            // Collect the output hash results
-            let result = match input_data {
-                ColumnarValue::Array(array) => {
-                    // Check if the array is a StringArray (or another type you expect)
-                    if let Some(string_array) = array.as_any().downcast_ref::<StringArray>() {
-                        let mut hash_results: Vec<String> = Vec::with_capacity(string_array.len());
-                        for i in 0..string_array.len() {
-                            if !string_array.is_null(i) {
-                                let value = string_array.value(i); // returns &str
-                                let mut hasher = XxHash64::default();
-                                hasher.write(value.as_bytes()); // as_bytes() on &str returns &[u8]
-                                let hash = hasher.finish();
-                                let hash_hex = hex::encode(hash.to_be_bytes());
-                                hash_results.push(hash_hex);
-                            } else {
-                                hash_results.push(String::from("00000000")); // or handle null values differently
-                            }
-                        }
-    
-                        // Create an UInt64Array from the hash results
-                        let hash_array = StringArray::from(hash_results);
-                        Arc::new(hash_array) as Arc<dyn Array>
-                    } else {
-                        return Err(DataFusionError::Internal("Unsupported array type".to_string()));
+        // Collect the output hash results
+        let result = match input_data {
+            ColumnarValue::Array(array) => {
+                let mut hash_results: Vec<String> = Vec::with_capacity(array.len());
+                for i in 0..array.len() {
+                    if array.is_null(i) {
+                        hash_results.push(String::from("00000000")); // or handle null values differently
+                        continue;
                     }
-                },
-                _ => return Err(DataFusionError::Internal("Unsupported input type".to_string())),
-            };
+
+                    let mut hasher = XxHash64::default();
+                    let value_str = match array.data_type() {
+                        DataType::Utf8 => {
+                            let string_array = array.as_any().downcast_ref::<StringArray>().unwrap();
+                            string_array.value(i).to_string()
+                        }
+                        DataType::Int32 => {
+                            let int_array = array.as_any().downcast_ref::<Int32Array>().unwrap();
+                            int_array.value(i).to_string()
+                        }
+                        DataType::Int64 => {
+                            let int_array = array.as_any().downcast_ref::<Int64Array>().unwrap();
+                            int_array.value(i).to_string()
+                        }
+                        DataType::UInt32 => {
+                            let uint_array = array.as_any().downcast_ref::<UInt32Array>().unwrap();
+                            uint_array.value(i).to_string()
+                        }
+                        DataType::UInt64 => {
+                            let uint_array = array.as_any().downcast_ref::<UInt64Array>().unwrap();
+                            uint_array.value(i).to_string()
+                        }
+                        _ => return Err(DataFusionError::Internal("Unsupported array type".to_string())),
+                    };
+                    hasher.write(value_str.as_bytes());
+                    let hash: u64 = hasher.finish() as u64;
+                    let hash_hex = hex::encode(hash.to_be_bytes());
+                    hash_results.push(hash_hex);
+                }
+
+                // Create a StringArray from the hash results
+                let hash_array = StringArray::from(hash_results);
+                Arc::new(hash_array) as Arc<dyn Array>
+            },
+            ColumnarValue::Scalar(scalar) => {
+                let hash_result = self.hash_scalar(&ColumnarValue::Scalar(scalar.clone()))?;
+                let hash_array = StringArray::from(vec![hash_result]);
+                Arc::new(hash_array) as Arc<dyn Array>
+            },
+            _ => return Err(DataFusionError::Internal("Unsupported input type".to_string())),
+        };
     
             Ok(ColumnarValue::Array(result))
         }
@@ -163,7 +204,27 @@ impl XxHash32Func {
             ),
         }
     }
+    
+    pub fn hash_scalar(&self, value: &ColumnarValue) -> Result<String> {
+        let mut hasher = XxHash32::default();
+        let value_str = match value {
+            ColumnarValue::Scalar(scalar) => match scalar {
+                ScalarValue::Utf8(Some(v)) => v.clone(),
+                ScalarValue::Int32(Some(v)) => v.to_string(),
+                ScalarValue::Int64(Some(v)) => v.to_string(),
+                ScalarValue::UInt32(Some(v)) => v.to_string(),
+                ScalarValue::UInt64(Some(v)) => v.to_string(),
+                _ => return Err(DataFusionError::Internal("Unsupported scalar type".to_string())),
+            },
+            _ => return Err(DataFusionError::Internal("Expected a scalar value".to_string())),
+        };
+        hasher.write(value_str.as_bytes());
+        let hash: u32 = hasher.finish() as u32;
+        Ok(hex::encode(hash.to_be_bytes()))
+    }
 }
+
+
 impl ScalarUDFImpl for XxHash32Func {
     fn as_any(&self) -> &dyn Any {
         self
@@ -181,45 +242,67 @@ impl ScalarUDFImpl for XxHash32Func {
         Ok(DataType::Utf8)
     }
 
-        fn invoke_batch(
-            &self,
-            args: &[ColumnarValue],
-            _number_rows: usize,
-        ) -> Result<ColumnarValue> {
-            // Assuming that the argument is either a StringArray or BinaryArray
-            let input_data = &args[0];
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
+        let input_data = &args[0];
 
-            // Collect the output hash results
-            let result = match input_data {
-                ColumnarValue::Array(array) => {
-                    // Check if the array is a StringArray (or another type you expect)
-                    if let Some(string_array) = array.as_any().downcast_ref::<StringArray>() {
-                        let mut hash_results: Vec<String> = Vec::with_capacity(string_array.len());
-                        for i in 0..string_array.len() {
-                            if !string_array.is_null(i) {
-                                let value = string_array.value(i); // returns &str
-                                let mut hasher = XxHash32::default();
-                                hasher.write(value.as_bytes()); // as_bytes() on &str returns &[u8]
-                                let hash: u32 = hasher.finish() as u32;
-                                let hash_hex = hex::encode(hash.to_be_bytes());
-                                hash_results.push(hash_hex);
-                            } else {
-                                hash_results.push(String::from("00000000")); // or handle null values differently
-                            }
-                        }
-
-                        // Create a StringArray from the hash results
-                        let hash_array = StringArray::from(hash_results);
-                        Arc::new(hash_array) as Arc<dyn Array>
-                    } else {
-                        return Err(DataFusionError::Internal("Unsupported array type".to_string()));
+        // Collect the output hash results
+        let result = match input_data {
+            ColumnarValue::Array(array) => {
+                let mut hash_results: Vec<String> = Vec::with_capacity(array.len());
+                for i in 0..array.len() {
+                    if array.is_null(i) {
+                        hash_results.push(String::from("00000000")); // or handle null values differently
+                        continue;
                     }
-                },
-                _ => return Err(DataFusionError::Internal("Unsupported input type".to_string())),
-            };
-    
-            Ok(ColumnarValue::Array(result))
-        }
+
+                    let mut hasher = XxHash32::default();
+                    let value_str = match array.data_type() {
+                        DataType::Utf8 => {
+                            let string_array = array.as_any().downcast_ref::<StringArray>().unwrap();
+                            string_array.value(i).to_string()
+                        }
+                        DataType::Int32 => {
+                            let int_array = array.as_any().downcast_ref::<Int32Array>().unwrap();
+                            int_array.value(i).to_string()
+                        }
+                        DataType::Int64 => {
+                            let int_array = array.as_any().downcast_ref::<Int64Array>().unwrap();
+                            int_array.value(i).to_string()
+                        }
+                        DataType::UInt32 => {
+                            let uint_array = array.as_any().downcast_ref::<UInt32Array>().unwrap();
+                            uint_array.value(i).to_string()
+                        }
+                        DataType::UInt64 => {
+                            let uint_array = array.as_any().downcast_ref::<UInt64Array>().unwrap();
+                            uint_array.value(i).to_string()
+                        }
+                        _ => return Err(DataFusionError::Internal("Unsupported array type".to_string())),
+                    };
+                    hasher.write(value_str.as_bytes());
+                    let hash: u32 = hasher.finish() as u32;
+                    let hash_hex = hex::encode(hash.to_be_bytes());
+                    hash_results.push(hash_hex);
+                }
+
+                // Create a StringArray from the hash results
+                let hash_array = StringArray::from(hash_results);
+                Arc::new(hash_array) as Arc<dyn Array>
+            },
+            ColumnarValue::Scalar(scalar) => {
+                let hash_result = self.hash_scalar(&ColumnarValue::Scalar(scalar.clone()))?;
+                let hash_array = StringArray::from(vec![hash_result]);
+                Arc::new(hash_array) as Arc<dyn Array>
+            },
+            _ => return Err(DataFusionError::Internal("Unsupported input type".to_string())),
+        };
+
+        Ok(ColumnarValue::Array(result))
+    }
 
     fn documentation(&self) -> Option<&Documentation> {
         self.doc()
