@@ -133,7 +133,7 @@ fn get_approx_median_doc() -> &'static Documentation {
         Documentation::builder()
             .with_doc_section(DOC_SECTION_APPROXIMATE)
             .with_description(
-                "Returns the approximate median (50th percentile) of input values. It is an alias of `approx_percentile_cont(x, 0.5)`.",
+                "Returns the approximate median (50th percentile) of input values. It is an alias of `approx_percentile_cont(0.5) WITHIN GROUP (ORDER BY x)`.",
             )
             .with_syntax_example("approx_median(expression)")
             .with_sql_example(r#"```sql

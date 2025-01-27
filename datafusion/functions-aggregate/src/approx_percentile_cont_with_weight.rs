@@ -174,14 +174,14 @@ fn get_approx_percentile_cont_with_weight_doc() -> &'static Documentation {
             .with_description(
                 "Returns the weighted approximate percentile of input values using the t-digest algorithm.",
             )
-            .with_syntax_example("approx_percentile_cont_with_weight(expression, weight, percentile)")
+            .with_syntax_example("approx_percentile_cont_with_weight(weight, percentile) WITHIN GROUP (ORDER BY expression)")
             .with_sql_example(r#"```sql
-> SELECT approx_percentile_cont_with_weight(column_name, weight_column, 0.90) FROM table_name;
-+----------------------------------------------------------------------+
-| approx_percentile_cont_with_weight(column_name, weight_column, 0.90) |
-+----------------------------------------------------------------------+
-| 78.5                                                                 |
-+----------------------------------------------------------------------+
+> SELECT approx_percentile_cont_with_weight(weight_column, 0.90) WITHIN GROUP (ORDER BY column_name) FROM table_name;
++---------------------------------------------------------------------------------------------+
+| approx_percentile_cont_with_weight(weight_column, 0.90) WITHIN GROUP (ORDER BY column_name) |
++---------------------------------------------------------------------------------------------+
+| 78.5                                                                                        |
++---------------------------------------------------------------------------------------------+
 ```"#,
             )
             .with_standard_argument("expression", None)

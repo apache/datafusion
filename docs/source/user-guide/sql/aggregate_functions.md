@@ -787,7 +787,7 @@ approx_distinct(expression)
 
 ### `approx_median`
 
-Returns the approximate median (50th percentile) of input values. It is an alias of `approx_percentile_cont(x, 0.5)`.
+Returns the approximate median (50th percentile) of input values. It is an alias of `approx_percentile_cont(0.5) WITHIN GROUP (ORDER BY x)`.
 
 ```
 approx_median(expression)
@@ -813,24 +813,24 @@ approx_median(expression)
 Returns the approximate percentile of input values using the t-digest algorithm.
 
 ```
-approx_percentile_cont(expression, percentile, centroids)
+approx_percentile_cont(percentile, centroids) WITHIN GROUP (expression [ORDER BY expression])
 ```
 
 #### Arguments
 
-- **expression**: The expression to operate on. Can be a constant, column, or function, and any combination of operators.
 - **percentile**: Percentile to compute. Must be a float value between 0 and 1 (inclusive).
 - **centroids**: Number of centroids to use in the t-digest algorithm. _Default is 100_. A higher number results in more accurate approximation but requires more memory.
+- **expression**: The expression to operate on. Can be a constant, column, or function, and any combination of operators.
 
 #### Example
 
 ```sql
-> SELECT approx_percentile_cont(column_name, 0.75, 100) FROM table_name;
-+-------------------------------------------------+
-| approx_percentile_cont(column_name, 0.75, 100)  |
-+-------------------------------------------------+
-| 65.0                                            |
-+-------------------------------------------------+
+> SELECT approx_percentile_cont(0.75, 100) WITHIN GROUP (ORDER BY column_name) FROM table_name;
++-----------------------------------------------------------------------+
+| approx_percentile_cont(0.75, 100) WITHIN GROUP (ORDER BY column_name) |
++-----------------------------------------------------------------------+
+| 65.0                                                                  |
++-----------------------------------------------------------------------+
 ```
 
 ### `approx_percentile_cont_with_weight`
@@ -838,22 +838,22 @@ approx_percentile_cont(expression, percentile, centroids)
 Returns the weighted approximate percentile of input values using the t-digest algorithm.
 
 ```
-approx_percentile_cont_with_weight(expression, weight, percentile)
+approx_percentile_cont_with_weight(weight, percentile) WITHIN GROUP (expression [ORDER BY expression]) 
 ```
 
 #### Arguments
 
-- **expression**: The expression to operate on. Can be a constant, column, or function, and any combination of operators.
 - **weight**: Expression to use as weight. Can be a constant, column, or function, and any combination of arithmetic operators.
 - **percentile**: Percentile to compute. Must be a float value between 0 and 1 (inclusive).
+- **expression**: The expression to operate on. Can be a constant, column, or function, and any combination of operators.
 
 #### Example
 
 ```sql
-> SELECT approx_percentile_cont_with_weight(column_name, weight_column, 0.90) FROM table_name;
-+----------------------------------------------------------------------+
-| approx_percentile_cont_with_weight(column_name, weight_column, 0.90) |
-+----------------------------------------------------------------------+
-| 78.5                                                                 |
-+----------------------------------------------------------------------+
+> SELECT approx_percentile_cont_with_weight(weight_column, 0.90) WITHIN GROUP (ORDER BY column_name) FROM table_name;
++---------------------------------------------------------------------------------------------+
+| approx_percentile_cont_with_weight(weight_column, 0.90) WITHIN GROUP (ORDER BY column_name) |
++---------------------------------------------------------------------------------------------+
+| 78.5                                                                                        |
++---------------------------------------------------------------------------------------------+
 ```

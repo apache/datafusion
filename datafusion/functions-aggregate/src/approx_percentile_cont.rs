@@ -317,14 +317,14 @@ fn get_approx_percentile_cont_doc() -> &'static Documentation {
             .with_description(
                 "Returns the approximate percentile of input values using the t-digest algorithm.",
             )
-            .with_syntax_example("approx_percentile_cont(expression, percentile, centroids)")
+            .with_syntax_example("approx_percentile_cont(percentile, centroids) WITHIN GROUP (ORDER BY expression)")
             .with_sql_example(r#"```sql
-> SELECT approx_percentile_cont(column_name, 0.75, 100) FROM table_name;
-+-------------------------------------------------+
-| approx_percentile_cont(column_name, 0.75, 100)  |
-+-------------------------------------------------+
-| 65.0                                            |
-+-------------------------------------------------+
+> SELECT approx_percentile_cont(0.75, 100) WITHIN GROUP (ORDER BY column_name) FROM table_name;
++-----------------------------------------------------------------------+
+| approx_percentile_cont(0.75, 100) WITHIN GROUP (ORDER BY column_name) |
++-----------------------------------------------------------------------+
+| 65.0                                                                  |
++-----------------------------------------------------------------------+
 ```"#)
             .with_standard_argument("expression", None)
             .with_argument("percentile", "Percentile to compute. Must be a float value between 0 and 1 (inclusive).")

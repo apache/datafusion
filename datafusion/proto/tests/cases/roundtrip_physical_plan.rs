@@ -476,7 +476,7 @@ fn rountrip_aggregate_with_approx_pencentile_cont() -> Result<()> {
         vec![col("b", &schema)?, lit(0.5)],
     )
     .schema(Arc::clone(&schema))
-    .alias("APPROX_PERCENTILE_CONT(b, 0.5)")
+    .alias("APPROX_PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY b)")
     .build()
     .map(Arc::new)?];
 

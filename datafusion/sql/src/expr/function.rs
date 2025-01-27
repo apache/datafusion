@@ -176,11 +176,11 @@ impl FunctionArgs {
         }
 
         if !within_group.is_empty() && order_by.is_some() {
-            return plan_err!("ORDER BY clause is only permitted in WITHIN GROUP clause when a WITHIN GROUP is used.");
+            return plan_err!("ORDER BY clause is only permitted in WITHIN GROUP clause when a WITHIN GROUP is used");
         }
 
         if within_group.len() > 1 {
-            return not_impl_err!("Multiple column ordering in WITHIN GROUP clause is not supported: {within_group:?}");
+            return not_impl_err!("Multiple column ordering in WITHIN GROUP clause is not supported");
         }
 
         let order_by = order_by.unwrap_or_default();
@@ -334,13 +334,13 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             if let Some(fm) = self.context_provider.get_aggregate_meta(&name) {
                 if let Some(fm) = self.context_provider.get_ordered_set_aggregate_meta(&name) {
                     if within_group.is_empty() {
-                        return plan_err!("WITHIN GROUP clause is required when calling ordered set aggregate function({}).", fm.name());
+                        return plan_err!("WITHIN GROUP clause is required when calling ordered set aggregate function({})", fm.name());
                     }
                 }
 
                 if null_treatment.is_some() &&
                     !fm.supports_null_handling_clause().unwrap_or(true) {
-                    return plan_err!("[IGNORE | RESPECT] NULLS are not permitted for {}.", fm.name());
+                    return plan_err!("[IGNORE | RESPECT] NULLS are not permitted for {}", fm.name());
                 }
 
                 let order_by = self.order_by_to_sort_expr(
