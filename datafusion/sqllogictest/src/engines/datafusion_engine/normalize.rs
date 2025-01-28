@@ -250,7 +250,7 @@ pub fn cell_to_string(col: &ArrayRef, row: usize) -> Result<String> {
 }
 
 /// Converts columns to a result as expected by sqllogicteset.
-pub(crate) fn convert_schema_to_types(columns: &Fields) -> Vec<DFColumnType> {
+pub fn convert_schema_to_types(columns: &Fields) -> Vec<DFColumnType> {
     columns
         .iter()
         .map(|f| f.data_type())

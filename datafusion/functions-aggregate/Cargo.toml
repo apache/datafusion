@@ -66,3 +66,7 @@ harness = false
 [[bench]]
 name = "sum"
 harness = false
+
+[[bench]]
+name = "array_agg"
+harness = false
