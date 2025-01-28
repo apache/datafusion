@@ -824,6 +824,7 @@ select * from t1 FULL JOIN t2 ON t1.a = t2.b;
 
 # the output of this query should be two rows from the previous query
 # there should be no nulls
+# Reproducer for https://github.com/apache/datafusion/issues/14335
 query II
 select * from t1 FULL JOIN t2 ON t1.a = t2.b LIMIT 2;
 ----
