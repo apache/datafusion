@@ -147,7 +147,7 @@ doc-comment = { workspace = true }
 env_logger = { workspace = true }
 paste = "^1.0"
 rand = { workspace = true, features = ["small_rng"] }
-rand_distr = "0.4.3"
+rand_distr = "0.5.0"
 regex = { workspace = true }
 rstest = { workspace = true }
 serde_json = { workspace = true }
