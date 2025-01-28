@@ -82,7 +82,10 @@ impl AnalysisContext {
 pub struct ExprBoundaries {
     pub column: Column,
     /// Minimum and maximum values this expression can have. A `None` value
-    /// represents an infeasible expression.
+    /// indicates that evaluating the given column results in an empty set.
+    /// For example, if the column `a` has values in the range [10, 20],
+    /// and there is a filter asserting that `a > 50`, then the resulting interval
+    /// range of `a` will be `None`.
     pub interval: Option<Interval>,
     /// Maximum number of distinct values this expression can produce, if known.
     pub distinct_count: Precision<usize>,
@@ -171,8 +174,9 @@ pub fn analyze(
         .map(|c| Arc::new(c) as _)
         .collect::<Vec<_>>();
 
+    let mut target_indices_and_boundaries = vec![];
     let target_expr_and_indices = graph.gather_node_indices(columns.as_slice());
-    let mut target_indices_and_boundaries = Vec::new();
+
     for (expr, index) in &target_expr_and_indices {
         if let Some(column) = expr.as_any().downcast_ref::<Column>() {
             if let Some(bound) = target_boundaries.iter().find(|b| b.column == *column) {
@@ -180,7 +184,7 @@ pub fn analyze(
                     target_indices_and_boundaries.push((*index, interval.clone()));
                 } else {
                     return Err(internal_datafusion_err!(
-                        "Columns should have an interval in the boundary"
+                        "AnalysisContext object must contain ExprBoundaries' having valid (not None) intervals to be analyzed"
                     ));
                 }
             }
@@ -252,17 +256,18 @@ fn calculate_selectivity(
         ));
     }
     let mut acc: f64 = 1.0;
-    for i in 0..initial_boundaries.len() {
-        let initial_interval =
-            &initial_boundaries[i].interval.as_ref().ok_or_else(|| {
-                internal_datafusion_err!("Boundary should have an interval")
-            })?;
-        let target_interval =
-            &target_boundaries[i].interval.as_ref().ok_or_else(|| {
-                internal_datafusion_err!("Boundary should have an interval")
-            })?;
-
-        acc *= cardinality_ratio(initial_interval, target_interval);
+    for (initial, target) in initial_boundaries.iter().zip(target_boundaries) {
+        match (initial.interval.as_ref(), target.interval.as_ref()) {
+            (Some(initial), Some(target)) => {
+                acc *= cardinality_ratio(initial, target);
+            }
+            (None, Some(_)) => {
+                return internal_err!(
+                "Initial boundary cannot be None while having a Some() target boundary"
+            );
+            }
+            _ => return Ok(0.0),
+        }
     }
 
     Ok(acc)
@@ -387,7 +392,7 @@ mod tests {
             .unwrap();
 
             for boundary in analysis_result.boundaries {
-                assert_eq!(boundary.interval, None);
+                assert!(boundary.interval.is_none());
             }
         }
     }
