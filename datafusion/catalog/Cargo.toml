@@ -30,14 +30,13 @@ version.workspace = true
 [dependencies]
 arrow-schema = { workspace = true }
 async-trait = { workspace = true }
+dashmap = { workspace = true }
 datafusion-common = { workspace = true }
 datafusion-execution = { workspace = true }
 datafusion-expr = { workspace = true }
 datafusion-physical-plan = { workspace = true }
-parking_lot = { workspace = true }
-dashmap = { workspace = true }
 itertools = { workspace = true }
-
+parking_lot = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true }

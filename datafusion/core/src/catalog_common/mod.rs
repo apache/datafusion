@@ -18,13 +18,11 @@
 //! Interfaces and default implementations of catalogs and schemas.
 //!
 //! Implementations
-//! * Simple memory based catalog: [`MemoryCatalogProviderList`], [`MemoryCatalogProvider`], [`MemorySchemaProvider`]
 //! * Information schema: [`information_schema`]
 //! * Listing schema: [`listing_schema`]
 
 pub mod information_schema;
 pub mod listing_schema;
-
 pub use crate::catalog::{CatalogProvider, CatalogProviderList, SchemaProvider};
 
 pub use datafusion_sql::{ResolvedTableReference, TableReference};
