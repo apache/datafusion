@@ -62,10 +62,11 @@ In addition to the standard CI test suite that is run on all PRs prior to merge,
 DataFusion has "extended" tests (defined in [extended.yml]) that are run on each
 commit to `main`. These tests rarely fail but take significantly longer to run
 than the standard test suite and add important test coverage such as that the
-code works when there are hash collisions as well as running the entire [sqlite
-test suite](https://www.sqlite.org/sqllogictest/dir?ci=tip).
+code works when there are hash collisions as well as running the relevant
+portions of the entire [sqlite test suite].
 
 [extended.yml]: https://github.com/apache/datafusion/blob/main/.github/workflows/extended.yml
+[sqlite test suite]: https://www.sqlite.org/sqllogictest/dir?ci=tip
 
 ## Rust Integration Tests
 
