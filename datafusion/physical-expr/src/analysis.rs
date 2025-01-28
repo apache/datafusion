@@ -165,47 +165,71 @@ pub fn analyze(
     context: AnalysisContext,
     schema: &Schema,
 ) -> Result<AnalysisContext> {
-    let mut target_boundaries = context.boundaries;
+    let initial_boundaries = &context.boundaries;
+    if initial_boundaries
+        .iter()
+        .all(|bound| bound.interval.is_none())
+    {
+        if initial_boundaries
+            .iter()
+            .any(|bound| bound.distinct_count != Precision::Exact(0))
+        {
+            return internal_err!(
+                "ExprBoundaries has a non-zero distinct count although it represents an empty table"
+            );
+        }
+        if context.selectivity != Some(0.0) {
+            return internal_err!(
+                "AnalysisContext has a non-zero selectivity although it represents an empty table"
+            );
+        }
+        Ok(context)
+    } else if initial_boundaries
+        .iter()
+        .any(|bound| bound.interval.is_none())
+    {
+        internal_err!(
+                "AnalysisContext is an inconsistent state. Some columns represent empty table while others don't"
+            )
+    } else {
+        let mut target_boundaries = context.boundaries;
+        let mut graph = ExprIntervalGraph::try_new(Arc::clone(expr), schema)?;
+        let columns = collect_columns(expr)
+            .into_iter()
+            .map(|c| Arc::new(c) as _)
+            .collect::<Vec<_>>();
 
-    let mut graph = ExprIntervalGraph::try_new(Arc::clone(expr), schema)?;
+        let mut target_indices_and_boundaries = vec![];
+        let target_expr_and_indices = graph.gather_node_indices(columns.as_slice());
 
-    let columns = collect_columns(expr)
-        .into_iter()
-        .map(|c| Arc::new(c) as _)
-        .collect::<Vec<_>>();
-
-    let mut target_indices_and_boundaries = vec![];
-    let target_expr_and_indices = graph.gather_node_indices(columns.as_slice());
-
-    for (expr, index) in &target_expr_and_indices {
-        if let Some(column) = expr.as_any().downcast_ref::<Column>() {
-            if let Some(bound) = target_boundaries.iter().find(|b| b.column == *column) {
-                if let Some(interval) = &bound.interval {
-                    target_indices_and_boundaries.push((*index, interval.clone()));
-                } else {
-                    return Err(internal_datafusion_err!(
-                        "AnalysisContext object must contain ExprBoundaries' having valid (not None) intervals to be analyzed"
-                    ));
+        for (expr, index) in &target_expr_and_indices {
+            if let Some(column) = expr.as_any().downcast_ref::<Column>() {
+                if let Some(bound) =
+                    target_boundaries.iter().find(|b| b.column == *column)
+                {
+                    // Now, it's safe to unwrap
+                    target_indices_and_boundaries
+                        .push((*index, bound.interval.as_ref().unwrap().clone()));
                 }
             }
         }
-    }
 
-    match graph
-        .update_ranges(&mut target_indices_and_boundaries, Interval::CERTAINLY_TRUE)?
-    {
-        PropagationResult::Success => {
-            shrink_boundaries(graph, target_boundaries, target_expr_and_indices)
-        }
-        PropagationResult::Infeasible => {
-            // If the propagation result is infeasible, set intervals to None
-            target_boundaries
-                .iter_mut()
-                .for_each(|bound| bound.interval = None);
-            Ok(AnalysisContext::new(target_boundaries).with_selectivity(0.0))
-        }
-        PropagationResult::CannotPropagate => {
-            Ok(AnalysisContext::new(target_boundaries).with_selectivity(1.0))
+        match graph
+            .update_ranges(&mut target_indices_and_boundaries, Interval::CERTAINLY_TRUE)?
+        {
+            PropagationResult::Success => {
+                shrink_boundaries(graph, target_boundaries, target_expr_and_indices)
+            }
+            PropagationResult::Infeasible => {
+                // If the propagation result is infeasible, set intervals to None
+                target_boundaries
+                    .iter_mut()
+                    .for_each(|bound| bound.interval = None);
+                Ok(AnalysisContext::new(target_boundaries).with_selectivity(0.0))
+            }
+            PropagationResult::CannotPropagate => {
+                Ok(AnalysisContext::new(target_boundaries).with_selectivity(1.0))
+            }
         }
     }
 }
