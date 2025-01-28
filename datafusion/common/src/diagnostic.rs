@@ -25,10 +25,6 @@ use crate::Span;
 /// rustc. i.e. either an error or a warning, optionally with some notes and
 /// help messages.
 ///
-/// If the diagnostic, a note, or a help message doesn't need to point to a
-/// specific location in the original SQL query (or the [`Span`] is not
-/// available), use [`Span::empty`].
-///
 /// Example:
 ///
 /// ```rust
