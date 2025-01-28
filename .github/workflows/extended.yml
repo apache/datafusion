@@ -33,6 +33,11 @@ on:
   push:
     branches:
       - main
+  issue_comment:
+    types: [created]
+
+permissions:
+  pull-requests: write
 
 jobs:
   # Check issue comment and notify that extended tests are running
