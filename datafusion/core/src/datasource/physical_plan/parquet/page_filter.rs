@@ -17,14 +17,19 @@
 
 //! Contains code to filter entire pages
 
+use std::collections::HashSet;
+use std::sync::Arc;
+
 use super::metrics::ParquetFileMetrics;
 use crate::datasource::physical_plan::parquet::ParquetAccessPlan;
-use crate::physical_optimizer::pruning::{PruningPredicate, PruningStatistics};
+
 use arrow::array::BooleanArray;
 use arrow::{array::ArrayRef, datatypes::SchemaRef};
 use arrow_schema::Schema;
 use datafusion_common::ScalarValue;
 use datafusion_physical_expr::{split_conjunction, PhysicalExpr};
+use datafusion_physical_optimizer::pruning::{PruningPredicate, PruningStatistics};
+
 use log::{debug, trace};
 use parquet::arrow::arrow_reader::statistics::StatisticsConverter;
 use parquet::file::metadata::{ParquetColumnIndex, ParquetOffsetIndex};
@@ -34,8 +39,6 @@ use parquet::{
     arrow::arrow_reader::{RowSelection, RowSelector},
     file::metadata::{ParquetMetaData, RowGroupMetaData},
 };
-use std::collections::HashSet;
-use std::sync::Arc;
 
 /// Filters a [`ParquetAccessPlan`] based on the [Parquet PageIndex], if present
 ///

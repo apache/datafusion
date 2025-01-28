@@ -16,16 +16,16 @@
 // under the License.
 
 use arrow::array::{ArrayRef, Int32Array, RecordBatch, StringArray};
-use arrow_schema::DataType;
-use datafusion::prelude::SessionContext;
-use datafusion_common::tree_node::{Transformed, TreeNode};
-use datafusion_common::{assert_batches_eq, Result, ScalarValue};
-use datafusion_expr::{
+use arrow::datatypes::DataType;
+use datafusion::common::tree_node::{Transformed, TreeNode};
+use datafusion::common::{assert_batches_eq, Result, ScalarValue};
+use datafusion::logical_expr::{
     BinaryExpr, ColumnarValue, Expr, LogicalPlan, Operator, ScalarUDF, ScalarUDFImpl,
     Signature, Volatility,
 };
-use datafusion_optimizer::optimizer::ApplyOrder;
-use datafusion_optimizer::{OptimizerConfig, OptimizerRule};
+use datafusion::optimizer::ApplyOrder;
+use datafusion::optimizer::{OptimizerConfig, OptimizerRule};
+use datafusion::prelude::SessionContext;
 use std::any::Any;
 use std::sync::Arc;
 

@@ -15,27 +15,25 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow_schema::{Field, Schema};
+use arrow::datatypes::{Field, Schema};
+use datafusion::physical_expr::NullState;
 use datafusion::{arrow::datatypes::DataType, logical_expr::Volatility};
-use datafusion_physical_expr::NullState;
 use std::{any::Any, sync::Arc};
 
-use arrow::{
-    array::{
-        ArrayRef, AsArray, Float32Array, PrimitiveArray, PrimitiveBuilder, UInt32Array,
-    },
-    datatypes::{ArrowNativeTypeOp, ArrowPrimitiveType, Float64Type, UInt32Type},
-    record_batch::RecordBatch,
+use arrow::array::{
+    ArrayRef, AsArray, Float32Array, PrimitiveArray, PrimitiveBuilder, UInt32Array,
 };
+use arrow::datatypes::{ArrowNativeTypeOp, ArrowPrimitiveType, Float64Type, UInt32Type};
+use arrow::record_batch::RecordBatch;
+use datafusion::common::{cast::as_float64_array, ScalarValue};
 use datafusion::error::Result;
-use datafusion::prelude::*;
-use datafusion_common::{cast::as_float64_array, ScalarValue};
-use datafusion_expr::{
+use datafusion::logical_expr::{
     expr::AggregateFunction,
     function::{AccumulatorArgs, AggregateFunctionSimplification, StateFieldsArgs},
     simplify::SimplifyInfo,
-    Accumulator, AggregateUDF, AggregateUDFImpl, GroupsAccumulator, Signature,
+    Accumulator, AggregateUDF, AggregateUDFImpl, EmitTo, GroupsAccumulator, Signature,
 };
+use datafusion::prelude::*;
 
 /// This example shows how to use the full AggregateUDFImpl API to implement a user
 /// defined aggregate function. As in the `simple_udaf.rs` example, this struct implements
@@ -308,7 +306,7 @@ impl GroupsAccumulator for GeometricMeanGroupsAccumulator {
     }
 
     /// Generate output, as specified by `emit_to` and update the intermediate state
-    fn evaluate(&mut self, emit_to: datafusion_expr::EmitTo) -> Result<ArrayRef> {
+    fn evaluate(&mut self, emit_to: EmitTo) -> Result<ArrayRef> {
         let counts = emit_to.take_needed(&mut self.counts);
         let prods = emit_to.take_needed(&mut self.prods);
         let nulls = self.null_state.build(emit_to);
@@ -344,7 +342,7 @@ impl GroupsAccumulator for GeometricMeanGroupsAccumulator {
     }
 
     // return arrays for counts and prods
-    fn state(&mut self, emit_to: datafusion_expr::EmitTo) -> Result<Vec<ArrayRef>> {
+    fn state(&mut self, emit_to: EmitTo) -> Result<Vec<ArrayRef>> {
         let nulls = self.null_state.build(emit_to);
         let nulls = Some(nulls);
 

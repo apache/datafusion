@@ -16,9 +16,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use datafusion::common::{assert_batches_eq, assert_contains};
 use datafusion::error::Result;
 use datafusion::prelude::*;
-use datafusion_common::{assert_batches_eq, assert_contains};
 
 /// This example demonstrates how to use the regexp_* functions
 ///
