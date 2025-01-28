@@ -270,7 +270,7 @@ fn range_analysis_demo() -> Result<()> {
     // In this case, we can see that, as expected, `analyze` has figured out
     // that in this case,  `date` must be in the range `['2020-09-01', '2020-10-01']`
     let expected_range = Interval::try_new(september_1, october_1)?;
-    assert_eq!(analysis_result.boundaries[0].interval, expected_range);
+    assert_eq!(analysis_result.boundaries[0].interval, Some(expected_range));
 
     Ok(())
 }
