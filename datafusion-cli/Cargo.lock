@@ -1280,10 +1280,12 @@ version = "44.0.0"
 dependencies = [
  "arrow-schema",
  "async-trait",
+ "dashmap",
  "datafusion-common",
  "datafusion-execution",
  "datafusion-expr",
  "datafusion-physical-plan",
+ "itertools 0.14.0",
  "parking_lot",
 ]
 

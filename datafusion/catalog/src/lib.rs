@@ -28,3 +28,7 @@ pub use r#async::*;
 pub use schema::*;
 pub use session::*;
 pub use table::*;
+pub mod memory;
+pub use memory::{
+    MemoryCatalogProvider, MemoryCatalogProviderList, MemorySchemaProvider,
+};
