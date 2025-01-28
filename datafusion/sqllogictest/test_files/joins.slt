@@ -4279,6 +4279,9 @@ physical_plan
 04)----MemoryExec: partitions=1, partition_sizes=[1]
 
 ## Add more test cases for join limit pushdown
+statement ok
+drop table t1
+
 ## Test limit pushdown through OUTER JOIN including left/right and full outer join cases
 statement ok
 set datafusion.execution.target_partitions = 1;
