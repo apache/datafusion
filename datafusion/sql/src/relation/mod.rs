@@ -21,7 +21,7 @@ use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 
 use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::{
-    not_impl_err, plan_err, DFSchema, Diagnostic, Result, TableReference,
+    not_impl_err, plan_err, DFSchema, Diagnostic, Result, Span, TableReference,
 };
 use datafusion_expr::builder::subquery_alias;
 use datafusion_expr::{expr::Unnest, Expr, LogicalPlan, LogicalPlanBuilder};
@@ -92,7 +92,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                             (None, Err(e)) => {
                                 let e = e.with_diagnostic(Diagnostic::new_error(
                                     format!("table '{}' not found", table_ref),
-                                    relation_span,
+                                    Span::try_from_sqlparser_span(relation_span),
                                 ));
                                 Err(e)
                             }

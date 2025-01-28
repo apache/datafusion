@@ -18,12 +18,11 @@
 use arrow_schema::Field;
 use datafusion_common::{
     internal_err, not_impl_err, plan_datafusion_err, plan_err, Column, DFSchema,
-    DataFusionError, Result, TableReference,
+    DataFusionError, Result, Span, TableReference,
 };
 use datafusion_expr::planner::PlannerResult;
 use datafusion_expr::{Case, Expr};
 use sqlparser::ast::{Expr as SQLExpr, Ident};
-use sqlparser::tokenizer::Span;
 
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 use datafusion_expr::UNNAMED_TABLE;
@@ -62,7 +61,9 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     normalize_ident,
                 );
                 if self.options.collect_spans {
-                    column.spans_mut().add_span(id_span);
+                    if let Some(span) = Span::try_from_sqlparser_span(id_span) {
+                        column.spans_mut().add_span(span);
+                    }
                 }
                 return Ok(Expr::Column(column));
             }
@@ -83,7 +84,9 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             // Default case
             let mut column = Column::new_unqualified(normalize_ident);
             if self.options.collect_spans {
-                column.spans_mut().add_span(id_span);
+                if let Some(span) = Span::try_from_sqlparser_span(id_span) {
+                    column.spans_mut().add_span(span);
+                }
             }
             Ok(Expr::Column(column))
         }
@@ -99,7 +102,10 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             return internal_err!("Not a compound identifier: {ids:?}");
         }
 
-        let ids_span = Span::union_iter(ids.iter().map(|id| id.span));
+        let ids_span = Span::union_iter(
+            ids.iter()
+                .filter_map(|id| Span::try_from_sqlparser_span(id.span)),
+        );
 
         if ids[0].value.starts_with('@') {
             let var_names: Vec<_> = ids
@@ -146,7 +152,9 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 Some((field, qualifier, _nested_names)) => {
                     let mut column = Column::from((qualifier, field));
                     if self.options.collect_spans {
-                        column.spans_mut().add_span(ids_span);
+                        if let Some(span) = ids_span {
+                            column.spans_mut().add_span(span);
+                        }
                     }
                     Ok(Expr::Column(column))
                 }
@@ -193,7 +201,9 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                             let (relation, column_name) = form_identifier(s).unwrap();
                             let mut column = Column::new(relation, column_name);
                             if self.options.collect_spans {
-                                column.spans_mut().add_span(ids_span);
+                                if let Some(span) = ids_span {
+                                    column.spans_mut().add_span(span);
+                                }
                             }
                             Ok(Expr::Column(column))
                         }

@@ -16,12 +16,9 @@
 // under the License.
 
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
-use datafusion_common::{not_impl_err, plan_err, Diagnostic, Result};
+use datafusion_common::{not_impl_err, plan_err, Diagnostic, Result, Span};
 use datafusion_expr::{LogicalPlan, LogicalPlanBuilder};
-use sqlparser::{
-    ast::{SetExpr, SetOperator, SetQuantifier, Spanned},
-    tokenizer::Span,
-};
+use sqlparser::ast::{SetExpr, SetOperator, SetQuantifier, Spanned};
 
 impl<S: ContextProvider> SqlToRel<'_, S> {
     #[cfg_attr(feature = "recursive_protection", recursive::recursive)]
@@ -30,7 +27,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         set_expr: SetExpr,
         planner_context: &mut PlannerContext,
     ) -> Result<LogicalPlan> {
-        let set_expr_span = set_expr.span();
+        let set_expr_span = Span::try_from_sqlparser_span(set_expr.span());
         match set_expr {
             SetExpr::Select(s) => self.select_to_plan(*s, vec![], planner_context),
             SetExpr::Values(v) => self.sql_values_to_plan(v, planner_context),
@@ -40,13 +37,14 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 right,
                 set_quantifier,
             } => {
-                let left_plan = self.set_expr_to_plan(*left.clone(), planner_context)?;
-                let right_plan =
-                    self.set_expr_to_plan(*right.clone(), planner_context)?;
+                let left_span = Span::try_from_sqlparser_span(left.span());
+                let right_span = Span::try_from_sqlparser_span(right.span());
+                let left_plan = self.set_expr_to_plan(*left, planner_context)?;
+                let right_plan = self.set_expr_to_plan(*right, planner_context)?;
                 self.validate_set_expr_num_of_columns(
                     op,
-                    &left,
-                    &right,
+                    left_span,
+                    right_span,
                     &left_plan,
                     &right_plan,
                     set_expr_span,
@@ -77,11 +75,11 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
     fn validate_set_expr_num_of_columns(
         &self,
         op: SetOperator,
-        left: &SetExpr,
-        right: &SetExpr,
+        left_span: Option<Span>,
+        right_span: Option<Span>,
         left_plan: &LogicalPlan,
         right_plan: &LogicalPlan,
-        set_expr_span: Span,
+        set_expr_span: Option<Span>,
     ) -> Result<()> {
         if left_plan.schema().fields().len() == right_plan.schema().fields().len() {
             return Ok(());
@@ -95,14 +93,14 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 )
                 .with_note(
                     format!("this side has {} fields", left_plan.schema().fields().len()),
-                    left.span(),
+                    left_span,
                 )
                 .with_note(
                     format!(
                         "this side has {} fields",
                         right_plan.schema().fields().len()
                     ),
-                    right.span(),
+                    right_span,
                 ),
             )
         })

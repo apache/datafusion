@@ -75,7 +75,7 @@ pub use join_type::{JoinConstraint, JoinSide, JoinType};
 pub use param_value::ParamValues;
 pub use scalar::{ScalarType, ScalarValue};
 pub use schema_reference::SchemaReference;
-pub use spans::Spans;
+pub use spans::{Location, Span, Spans};
 pub use stats::{ColumnStatistics, Statistics};
 pub use table_reference::{ResolvedTableReference, TableReference};
 pub use unnest::{RecursionUnnestOption, UnnestOptions};

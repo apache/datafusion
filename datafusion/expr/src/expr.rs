@@ -1668,6 +1668,9 @@ impl Expr {
         }
     }
 
+    /// Returns a reference to the set of locations in the SQL query where this
+    /// expression appears, if known. [`None`] is returned if the expression
+    /// type doesn't support tracking locations yet.
     pub fn spans(&self) -> Option<&Spans> {
         match self {
             Expr::Column(col) => Some(&col.spans),

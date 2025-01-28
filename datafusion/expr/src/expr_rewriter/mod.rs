@@ -178,14 +178,7 @@ pub fn create_col_from_scalar_expr(
             Some::<TableReference>(subqry_alias.into()),
             name,
         )),
-        Expr::Column(Column {
-            relation: _,
-            name,
-            spans,
-        }) => Ok(
-            Column::new(Some::<TableReference>(subqry_alias.into()), name)
-                .with_spans(spans.clone()),
-        ),
+        Expr::Column(col) => Ok(col.with_relation(subqry_alias.into())),
         _ => {
             let scalar_column = scalar_expr.schema_name().to_string();
             Ok(Column::new(

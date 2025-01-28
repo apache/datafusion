@@ -31,10 +31,9 @@ use arrow::datatypes::{
 use datafusion_common::types::NativeType;
 use datafusion_common::{
     exec_datafusion_err, exec_err, internal_err, plan_datafusion_err, plan_err,
-    Diagnostic, Result, Spans,
+    Diagnostic, Result, Span, Spans,
 };
 use itertools::Itertools;
-use sqlparser::tokenizer::Span;
 
 /// The type signature of an instantiation of binary operator expression such as
 /// `lhs + rhs`
@@ -70,6 +69,8 @@ impl Signature {
     }
 }
 
+/// Provides type information about a binary expression, coercing different
+/// input types into a sensible output type.
 pub struct BinaryTypeCoercer<'a> {
     lhs: &'a DataType,
     op: &'a Operator,
@@ -81,6 +82,8 @@ pub struct BinaryTypeCoercer<'a> {
 }
 
 impl<'a> BinaryTypeCoercer<'a> {
+    /// Creates a new [`BinaryTypeCoercer`], for reasoning about the input
+    /// and output types of a binary expression.
     pub fn new(lhs: &'a DataType, op: &'a Operator, rhs: &'a DataType) -> Self {
         Self {
             lhs,
@@ -92,27 +95,30 @@ impl<'a> BinaryTypeCoercer<'a> {
         }
     }
 
+    /// Sets the spans information for the left side of the binary expression,
+    /// so better diagnostics can be provided in case of errors.
     pub fn set_lhs_spans(&mut self, spans: Spans) {
         self.lhs_spans = spans;
     }
 
+    /// Sets the spans information for the operator of the binary expression, so
+    /// better diagnostics can be provided in case of errors.
     pub fn set_op_spans(&mut self, spans: Spans) {
         self.op_spans = spans;
     }
 
+    /// Sets the spans information for the right side of the binary expression,
+    /// so better diagnostics can be provided in case of errors.
     pub fn set_rhs_spans(&mut self, spans: Spans) {
         self.rhs_spans = spans;
     }
 
-    fn span(&self) -> Span {
+    fn span(&self) -> Option<Span> {
         Span::union_iter(
-            [
-                self.lhs_spans.first_or_empty(),
-                self.rhs_spans.first_or_empty(),
-            ]
-            .iter()
-            .copied()
-            .filter(|span| span != &Span::empty()),
+            [self.lhs_spans.first(), self.rhs_spans.first()]
+                .iter()
+                .copied()
+                .flatten(),
         )
     }
 
@@ -247,14 +253,8 @@ impl<'a> BinaryTypeCoercer<'a> {
         result.map_err(|err| {
             let diagnostic =
                 Diagnostic::new_error("expressions have incompatible types", self.span())
-                    .with_note(
-                        format!("has type {}", self.lhs),
-                        self.lhs_spans.first_or_empty(),
-                    )
-                    .with_note(
-                        format!("has type {}", self.rhs),
-                        self.rhs_spans.first_or_empty(),
-                    );
+                    .with_note(format!("has type {}", self.lhs), self.lhs_spans.first())
+                    .with_note(format!("has type {}", self.rhs), self.rhs_spans.first());
             err.with_diagnostic(diagnostic)
         })
     }

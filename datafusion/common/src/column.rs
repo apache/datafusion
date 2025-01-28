@@ -17,25 +17,33 @@
 
 //! Column
 
-use arrow_schema::{Field, FieldRef};
-use sqlparser::tokenizer::Span;
-
 use crate::error::_schema_err;
 use crate::utils::{parse_identifiers_normalized, quote_identifier};
 use crate::{DFSchema, Diagnostic, Result, SchemaError, Spans, TableReference};
+use arrow_schema::{Field, FieldRef};
 use std::collections::HashSet;
 use std::convert::Infallible;
 use std::fmt;
 use std::str::FromStr;
 
 /// A named reference to a qualified field in a schema.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct Column {
     /// relation/table reference.
     pub relation: Option<TableReference>,
     /// field/column name.
     pub name: String,
+    /// Original source code location, if known
     pub spans: Spans,
+}
+
+impl fmt::Debug for Column {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Column")
+            .field("relation", &self.relation)
+            .field("name", &self.name)
+            .finish()
+    }
 }
 
 impl Column {
@@ -255,7 +263,7 @@ impl Column {
                     .map_err(|err| {
                         let mut diagnostic = Diagnostic::new_error(
                             format!("column '{}' is ambiguous", &self.name),
-                            self.spans().first_or_empty(),
+                            self.spans().first(),
                         );
                         // TODO If [`DFSchema`] had spans, we could show the
                         // user which columns are candidates, or which table
@@ -270,7 +278,7 @@ impl Column {
                                     "possible reference to '{}' in table '{}'",
                                     &self.name, table
                                 ),
-                                Span::empty(),
+                                None,
                             );
                         }
                         err.with_diagnostic(diagnostic)
@@ -289,17 +297,31 @@ impl Column {
         })
     }
 
+    /// Returns a reference to the set of locations in the SQL query where this
+    /// column appears, if known.
     pub fn spans(&self) -> &Spans {
         &self.spans
     }
 
+    /// Returns a mutable reference to the set of locations in the SQL query
+    /// where this column appears, if known.
     pub fn spans_mut(&mut self) -> &mut Spans {
         &mut self.spans
     }
 
+    /// Replaces the set of locations in the SQL query where this column
+    /// appears, if known.
     pub fn with_spans(mut self, spans: Spans) -> Self {
         self.spans = spans;
         self
+    }
+
+    /// Qualifies the column with the given table reference.
+    pub fn with_relation(&self, relation: TableReference) -> Self {
+        Self {
+            relation: Some(relation),
+            ..self.clone()
+        }
     }
 }
 

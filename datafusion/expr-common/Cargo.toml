@@ -41,4 +41,3 @@ arrow = { workspace = true }
 datafusion-common = { workspace = true }
 itertools = { workspace = true }
 paste = "^1.0"
-sqlparser = { workspace = true }

@@ -17,14 +17,10 @@
 
 use std::collections::HashMap;
 
-use datafusion_common::{Diagnostic, Result};
+use datafusion_common::{Diagnostic, Location, Result, Span};
 use datafusion_sql::planner::{ParserOptions, SqlToRel};
 use regex::Regex;
-use sqlparser::{
-    dialect::GenericDialect,
-    parser::Parser,
-    tokenizer::{Location, Span},
-};
+use sqlparser::{dialect::GenericDialect, parser::Parser};
 
 use crate::{MockContextProvider, MockSessionState};
 
@@ -139,7 +135,7 @@ fn test_table_not_found() -> Result<()> {
     let spans = get_spans(query);
     let diag = do_query(query);
     assert_eq!(diag.message, "table 'personx' not found");
-    assert_eq!(diag.span, spans["a"]);
+    assert_eq!(diag.span, Some(spans["a"]));
     Ok(())
 }
 
@@ -149,7 +145,7 @@ fn test_unqualified_column_not_found() -> Result<()> {
     let spans = get_spans(query);
     let diag = do_query(query);
     assert_eq!(diag.message, "column 'first_namex' not found");
-    assert_eq!(diag.span, spans["a"]);
+    assert_eq!(diag.span, Some(spans["a"]));
     Ok(())
 }
 
@@ -159,7 +155,7 @@ fn test_qualified_column_not_found() -> Result<()> {
     let spans = get_spans(query);
     let diag = do_query(query);
     assert_eq!(diag.message, "column 'first_namex' not found in 'person'");
-    assert_eq!(diag.span, spans["a"]);
+    assert_eq!(diag.span, Some(spans["a"]));
     Ok(())
 }
 
@@ -172,11 +168,11 @@ fn test_union_wrong_number_of_columns() -> Result<()> {
         diag.message,
         "UNION queries have different number of columns"
     );
-    assert_eq!(diag.span, spans["whole"]);
+    assert_eq!(diag.span, Some(spans["whole"]));
     assert_eq!(diag.notes[0].message, "this side has 1 fields");
-    assert_eq!(diag.notes[0].span, spans["left"]);
+    assert_eq!(diag.notes[0].span, Some(spans["left"]));
     assert_eq!(diag.notes[1].message, "this side has 2 fields");
-    assert_eq!(diag.notes[1].span, spans["right"]);
+    assert_eq!(diag.notes[1].span, Some(spans["right"]));
     Ok(())
 }
 
@@ -189,7 +185,7 @@ fn test_missing_non_aggregate_in_group_by() -> Result<()> {
         diag.message,
         "'person.first_name' must appear in GROUP BY clause because it's not an aggregate expression"
     );
-    assert_eq!(diag.span, spans["a"]);
+    assert_eq!(diag.span, Some(spans["a"]));
     assert_eq!(
         diag.helps[0].message,
         "add 'person.first_name' to GROUP BY clause"
@@ -203,7 +199,7 @@ fn test_ambiguous_reference() -> Result<()> {
     let spans = get_spans(query);
     let diag = do_query(query);
     assert_eq!(diag.message, "column 'first_name' is ambiguous");
-    assert_eq!(diag.span, spans["a"]);
+    assert_eq!(diag.span, Some(spans["a"]));
     assert_eq!(
         diag.notes[0].message,
         "possible reference to 'first_name' in table 'a'"
@@ -222,10 +218,10 @@ fn test_incompatible_types_binary_arithmetic() -> Result<()> {
     let spans = get_spans(query);
     let diag = do_query(query);
     assert_eq!(diag.message, "expressions have incompatible types");
-    assert_eq!(diag.span, spans["whole"]);
+    assert_eq!(diag.span, Some(spans["whole"]));
     assert_eq!(diag.notes[0].message, "has type UInt32");
-    assert_eq!(diag.notes[0].span, spans["left"]);
+    assert_eq!(diag.notes[0].span, Some(spans["left"]));
     assert_eq!(diag.notes[1].message, "has type Utf8");
-    assert_eq!(diag.notes[1].span, spans["right"]);
+    assert_eq!(diag.notes[1].span, Some(spans["right"]));
     Ok(())
 }

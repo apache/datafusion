@@ -38,7 +38,6 @@ use datafusion_expr::{
 
 use indexmap::IndexMap;
 use sqlparser::ast::{Ident, Value};
-use sqlparser::tokenizer::Span;
 
 /// Make a best-effort attempt at resolving all columns in the expression tree
 pub(crate) fn resolve_columns(expr: &Expr, plan: &LogicalPlan) -> Result<Expr> {
@@ -166,11 +165,9 @@ fn check_column_satisfies_expr(
         .map_err(|err| {
             let diagnostic = Diagnostic::new_error(
                 purpose.diagnostic_message(expr),
-                expr.spans()
-                    .map(|spans| spans.first_or_empty())
-                    .unwrap_or(Span::empty()),
+                expr.spans().and_then(|spans| spans.first()),
             )
-            .with_help(format!("add '{expr}' to GROUP BY clause"), Span::empty());
+            .with_help(format!("add '{expr}' to GROUP BY clause"), None);
             err.with_diagnostic(diagnostic)
         });
     }
