@@ -261,15 +261,15 @@ mod sp_repartition_fuzz_tests {
 
             for ordering in eq_properties.oeq_class().iter() {
                 let err_msg = format!("error in eq properties: {:?}", eq_properties);
-                let sort_solumns = ordering
+                let sort_columns = ordering
                     .iter()
                     .map(|sort_expr| sort_expr.evaluate_to_sort_column(&res))
                     .collect::<Result<Vec<_>>>()?;
-                let orig_columns = sort_solumns
+                let orig_columns = sort_columns
                     .iter()
                     .map(|sort_column| sort_column.values.clone())
                     .collect::<Vec<_>>();
-                let sorted_columns = lexsort(&sort_solumns, None)?;
+                let sorted_columns = lexsort(&sort_columns, None)?;
 
                 // Make sure after merging ordering is still valid.
                 assert_eq!(orig_columns.len(), sorted_columns.len(), "{}", err_msg);

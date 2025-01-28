@@ -163,12 +163,18 @@ impl ContextProvider for MockContextProvider {
             "array" => Ok(Schema::new(vec![
                 Field::new(
                     "left",
-                    DataType::List(Arc::new(Field::new("item", DataType::Int64, true))),
+                    DataType::List(Arc::new(Field::new_list_field(
+                        DataType::Int64,
+                        true,
+                    ))),
                     false,
                 ),
                 Field::new(
                     "right",
-                    DataType::List(Arc::new(Field::new("item", DataType::Int64, true))),
+                    DataType::List(Arc::new(Field::new_list_field(
+                        DataType::Int64,
+                        true,
+                    ))),
                     false,
                 ),
             ])),
@@ -199,7 +205,10 @@ impl ContextProvider for MockContextProvider {
             "unnest_table" => Ok(Schema::new(vec![
                 Field::new(
                     "array_col",
-                    DataType::List(Arc::new(Field::new("item", DataType::Int64, true))),
+                    DataType::List(Arc::new(Field::new_list_field(
+                        DataType::Int64,
+                        true,
+                    ))),
                     false,
                 ),
                 Field::new(

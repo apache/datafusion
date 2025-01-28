@@ -43,12 +43,12 @@ use datafusion_expr::{
     utils::{iter_conjunction, iter_conjunction_owned},
 };
 use datafusion_physical_expr::{create_physical_expr, execution_props::ExecutionProps};
-use indexmap::IndexSet;
 
 use crate::analyzer::type_coercion::TypeCoercionRewriter;
 use crate::simplify_expressions::guarantees::GuaranteeRewriter;
 use crate::simplify_expressions::regex::simplify_regex_expr;
 use crate::simplify_expressions::SimplifyInfo;
+use indexmap::IndexSet;
 use regex::Regex;
 
 use super::inlist_simplifier::ShortenInListSimplifier;
@@ -489,7 +489,7 @@ enum ConstSimplifyResult {
     SimplifyRuntimeError(DataFusionError, Expr),
 }
 
-impl<'a> TreeNodeRewriter for ConstEvaluator<'a> {
+impl TreeNodeRewriter for ConstEvaluator<'_> {
     type Node = Expr;
 
     fn f_down(&mut self, expr: Expr) -> Result<Transformed<Expr>> {
@@ -710,7 +710,7 @@ impl<'a, S> Simplifier<'a, S> {
     }
 }
 
-impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
+impl<S: SimplifyInfo> TreeNodeRewriter for Simplifier<'_, S> {
     type Node = Expr;
 
     /// rewrite the expression simplifying any constant expressions
@@ -3661,7 +3661,7 @@ mod tests {
     }
 
     #[test]
-    fn test_like_and_ilke() {
+    fn test_like_and_ilike() {
         let null = lit(ScalarValue::Utf8(None));
 
         // expr [NOT] [I]LIKE NULL
@@ -3931,7 +3931,7 @@ mod tests {
     }
 
     #[test]
-    fn simplify_common_factor_conjuction_in_disjunction() {
+    fn simplify_common_factor_conjunction_in_disjunction() {
         let props = ExecutionProps::new();
         let schema = boolean_test_schema();
         let simplifier =

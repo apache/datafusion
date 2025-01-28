@@ -20,8 +20,10 @@
 use arrow::array::{Array, ArrayRef, NullArray};
 use arrow::compute::{kernels, CastOptions};
 use arrow::datatypes::DataType;
+use arrow::util::pretty::pretty_format_columns;
 use datafusion_common::format::DEFAULT_CAST_OPTIONS;
 use datafusion_common::{internal_err, Result, ScalarValue};
+use std::fmt;
 use std::sync::Arc;
 
 /// The result of evaluating an expression.
@@ -129,6 +131,24 @@ impl ColumnarValue {
         })
     }
 
+    /// Convert a columnar value into an Arrow [`ArrayRef`] with the specified
+    /// number of rows. [`Self::Scalar`] is converted by repeating the same
+    /// scalar multiple times which is not as efficient as handling the scalar
+    /// directly.
+    ///
+    /// See [`Self::values_to_arrays`] to convert multiple columnar values into
+    /// arrays of the same length.
+    ///
+    /// # Errors
+    ///
+    /// Errors if `self` is a Scalar that fails to be converted into an array of size
+    pub fn to_array(&self, num_rows: usize) -> Result<ArrayRef> {
+        Ok(match self {
+            ColumnarValue::Array(array) => Arc::clone(array),
+            ColumnarValue::Scalar(scalar) => scalar.to_array_of_size(num_rows)?,
+        })
+    }
+
     /// Null columnar values are implemented as a null array in order to pass batch
     /// num_rows
     pub fn create_null_array(num_rows: usize) -> Self {
@@ -176,7 +196,7 @@ impl ColumnarValue {
 
         let args = args
             .iter()
-            .map(|arg| arg.clone().into_array(inferred_length))
+            .map(|arg| arg.to_array(inferred_length))
             .collect::<Result<Vec<_>>>()?;
 
         Ok(args)
@@ -200,9 +220,34 @@ impl ColumnarValue {
     }
 }
 
+// Implement Display trait for ColumnarValue
+impl fmt::Display for ColumnarValue {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        let formatted = match self {
+            ColumnarValue::Array(array) => {
+                pretty_format_columns("ColumnarValue(ArrayRef)", &[Arc::clone(array)])
+            }
+            ColumnarValue::Scalar(_) => {
+                if let Ok(array) = self.to_array(1) {
+                    pretty_format_columns("ColumnarValue(ScalarValue)", &[array])
+                } else {
+                    return write!(f, "Error formatting columnar value");
+                }
+            }
+        };
+
+        if let Ok(formatted) = formatted {
+            write!(f, "{}", formatted)
+        } else {
+            write!(f, "Error formatting columnar value")
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use arrow::array::Int32Array;
 
     #[test]
     fn values_to_arrays() {
@@ -311,6 +356,39 @@ mod tests {
 
     /// Makes an array of length `len` with all elements set to `val`
     fn make_array(val: i32, len: usize) -> ArrayRef {
-        Arc::new(arrow::array::Int32Array::from(vec![val; len]))
+        Arc::new(Int32Array::from(vec![val; len]))
+    }
+
+    #[test]
+    fn test_display_scalar() {
+        let column = ColumnarValue::from(ScalarValue::from("foo"));
+        assert_eq!(
+            column.to_string(),
+            concat!(
+                "+----------------------------+\n",
+                "| ColumnarValue(ScalarValue) |\n",
+                "+----------------------------+\n",
+                "| foo                        |\n",
+                "+----------------------------+"
+            )
+        );
+    }
+
+    #[test]
+    fn test_display_array() {
+        let array: ArrayRef = Arc::new(Int32Array::from_iter_values(vec![1, 2, 3]));
+        let column = ColumnarValue::from(array);
+        assert_eq!(
+            column.to_string(),
+            concat!(
+                "+-------------------------+\n",
+                "| ColumnarValue(ArrayRef) |\n",
+                "+-------------------------+\n",
+                "| 1                       |\n",
+                "| 2                       |\n",
+                "| 3                       |\n",
+                "+-------------------------+"
+            )
+        );
     }
 }

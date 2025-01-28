@@ -22,6 +22,7 @@ use std::fmt::Debug;
 use std::sync::Arc;
 
 use crate::PhysicalOptimizerRule;
+
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::error::Result;
 use datafusion_common::tree_node::{Transformed, TreeNodeRecursion};

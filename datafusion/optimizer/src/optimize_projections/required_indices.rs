@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! [`RequiredIndicies`] helper for OptimizeProjection
+//! [`RequiredIndices`] helper for OptimizeProjection
 
 use crate::optimize_projections::outer_columns;
 use datafusion_common::tree_node::TreeNodeRecursion;
@@ -33,9 +33,9 @@ use datafusion_expr::{Expr, LogicalPlan};
 ///
 /// Indices are always in order and without duplicates. For example, if these
 /// indices were added `[3, 2, 4, 3, 6, 1]`,  the instance would be represented
-/// by  `[1, 2, 3, 6]`.
+/// by  `[1, 2, 3, 4, 6]`.
 #[derive(Debug, Clone, Default)]
-pub(super) struct RequiredIndicies {
+pub(super) struct RequiredIndices {
     /// The indices of the required columns in the
     indices: Vec<usize>,
     /// If putting a projection above children is beneficial for the parent.
@@ -43,7 +43,7 @@ pub(super) struct RequiredIndicies {
     projection_beneficial: bool,
 }
 
-impl RequiredIndicies {
+impl RequiredIndices {
     /// Create a new, empty instance
     pub fn new() -> Self {
         Self::default()

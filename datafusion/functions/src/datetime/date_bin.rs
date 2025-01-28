@@ -16,7 +16,7 @@
 // under the License.
 
 use std::any::Any;
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
 use arrow::array::temporal_conversions::NANOSECONDS;
 use arrow::array::types::{
@@ -37,10 +37,64 @@ use datafusion_expr::TypeSignature::Exact;
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility, TIMEZONE_WILDCARD,
 };
+use datafusion_macros::user_doc;
 
 use chrono::{DateTime, Datelike, Duration, Months, TimeDelta, Utc};
-use datafusion_expr::scalar_doc_sections::DOC_SECTION_DATETIME;
 
+#[user_doc(
+    doc_section(label = "Time and Date Functions"),
+    description = r#"
+Calculates time intervals and returns the start of the interval nearest to the specified timestamp. Use `date_bin` to downsample time series data by grouping rows into time-based "bins" or "windows" and applying an aggregate or selector function to each window.
+
+For example, if you "bin" or "window" data into 15 minute intervals, an input timestamp of `2023-01-01T18:18:18Z` will be updated to the start time of the 15 minute bin it is in: `2023-01-01T18:15:00Z`.
+"#,
+    syntax_example = "date_bin(interval, expression, origin-timestamp)",
+    sql_example = r#"```sql
+-- Bin the timestamp into 1 day intervals
+> SELECT date_bin(interval '1 day', time) as bin
+FROM VALUES ('2023-01-01T18:18:18Z'), ('2023-01-03T19:00:03Z')  t(time);
++---------------------+
+| bin                 |
++---------------------+
+| 2023-01-01T00:00:00 |
+| 2023-01-03T00:00:00 |
++---------------------+
+2 row(s) fetched.
+
+-- Bin the timestamp into 1 day intervals starting at 3AM on  2023-01-01
+> SELECT date_bin(interval '1 day', time,  '2023-01-01T03:00:00') as bin
+FROM VALUES ('2023-01-01T18:18:18Z'), ('2023-01-03T19:00:03Z')  t(time);
++---------------------+
+| bin                 |
++---------------------+
+| 2023-01-01T03:00:00 |
+| 2023-01-03T03:00:00 |
++---------------------+
+2 row(s) fetched.
+```"#,
+    argument(name = "interval", description = "Bin interval."),
+    argument(
+        name = "expression",
+        description = "Time expression to operate on. Can be a constant, column, or function."
+    ),
+    argument(
+        name = "origin-timestamp",
+        description = r#"Optional. Starting point used to determine bin boundaries. If not specified defaults 1970-01-01T00:00:00Z (the UNIX epoch in UTC). The following intervals are supported:
+
+    - nanoseconds
+    - microseconds
+    - milliseconds
+    - seconds
+    - minutes
+    - hours
+    - days
+    - weeks
+    - months
+    - years
+    - century
+"#
+    )
+)]
 #[derive(Debug)]
 pub struct DateBinFunc {
     signature: Signature,
@@ -133,7 +187,11 @@ impl ScalarUDFImpl for DateBinFunc {
         }
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         if args.len() == 2 {
             // Default to unix EPOCH
             let origin = ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(
@@ -165,67 +223,8 @@ impl ScalarUDFImpl for DateBinFunc {
         }
     }
     fn documentation(&self) -> Option<&Documentation> {
-        Some(get_date_bin_doc())
+        self.doc()
     }
-}
-
-static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
-
-fn get_date_bin_doc() -> &'static Documentation {
-    DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_DATETIME)
-            .with_description(r#"
-Calculates time intervals and returns the start of the interval nearest to the specified timestamp. Use `date_bin` to downsample time series data by grouping rows into time-based "bins" or "windows" and applying an aggregate or selector function to each window.
-
-For example, if you "bin" or "window" data into 15 minute intervals, an input timestamp of `2023-01-01T18:18:18Z` will be updated to the start time of the 15 minute bin it is in: `2023-01-01T18:15:00Z`.
-"#)
-            .with_syntax_example("date_bin(interval, expression, origin-timestamp)")
-            .with_sql_example(r#"```sql
--- Bin the timestamp into 1 day intervals
-> SELECT date_bin(interval '1 day', time) as bin
-FROM VALUES ('2023-01-01T18:18:18Z'), ('2023-01-03T19:00:03Z')  t(time);
-+---------------------+
-| bin                 |
-+---------------------+
-| 2023-01-01T00:00:00 |
-| 2023-01-03T00:00:00 |
-+---------------------+
-2 row(s) fetched.
-
--- Bin the timestamp into 1 day intervals starting at 3AM on  2023-01-01
-> SELECT date_bin(interval '1 day', time,  '2023-01-01T03:00:00') as bin
-FROM VALUES ('2023-01-01T18:18:18Z'), ('2023-01-03T19:00:03Z')  t(time);
-+---------------------+
-| bin                 |
-+---------------------+
-| 2023-01-01T03:00:00 |
-| 2023-01-03T03:00:00 |
-+---------------------+
-2 row(s) fetched.
-```
-"#)
-            .with_argument("interval", "Bin interval.")
-            .with_argument("expression", "Time expression to operate on. Can be a constant, column, or function.")
-            .with_argument("origin-timestamp", "Optional. Starting point used to determine bin boundaries. If not specified defaults 1970-01-01T00:00:00Z (the UNIX epoch in UTC).
-
-The following intervals are supported:
-
-- nanoseconds
-- microseconds
-- milliseconds
-- seconds
-- minutes
-- hours
-- days
-- weeks
-- months
-- years
-- century
-")
-            .build()
-            .unwrap()
-    })
 }
 
 enum Interval {
@@ -315,7 +314,7 @@ fn to_utc_date_time(nanos: i64) -> DateTime<Utc> {
 // Supported intervals:
 //  1. IntervalDayTime: this means that the stride is in days, hours, minutes, seconds and milliseconds
 //     We will assume month interval won't be converted into this type
-//     TODO (my next PR): without `INTERVAL` keyword, the stride was converted into ScalarValue::IntervalDayTime somwhere
+//     TODO (my next PR): without `INTERVAL` keyword, the stride was converted into ScalarValue::IntervalDayTime somewhere
 //             for month interval. I need to find that and make it ScalarValue::IntervalMonthDayNano instead
 // 2. IntervalMonthDayNano
 fn date_bin_impl(
@@ -515,6 +514,7 @@ mod tests {
     use chrono::TimeDelta;
 
     #[test]
+    #[allow(deprecated)] // TODO migrate UDF invoke from invoke_batch
     fn test_date_bin() {
         let res = DateBinFunc::new().invoke_batch(
             &[
@@ -532,7 +532,7 @@ mod tests {
         assert!(res.is_ok());
 
         let timestamps = Arc::new((1..6).map(Some).collect::<TimestampNanosecondArray>());
-        let batch_size = timestamps.len();
+        let batch_len = timestamps.len();
         let res = DateBinFunc::new().invoke_batch(
             &[
                 ColumnarValue::Scalar(ScalarValue::IntervalDayTime(Some(
@@ -544,7 +544,7 @@ mod tests {
                 ColumnarValue::Array(timestamps),
                 ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
             ],
-            batch_size,
+            batch_len,
         );
         assert!(res.is_ok());
 
@@ -720,14 +720,13 @@ mod tests {
                 })
                 .collect::<IntervalDayTimeArray>(),
         );
-        let batch_size = intervals.len();
         let res = DateBinFunc::new().invoke_batch(
             &[
                 ColumnarValue::Array(intervals),
                 ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
                 ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
             ],
-            batch_size,
+            1,
         );
         assert_eq!(
             res.err().unwrap().strip_backtrace(),
@@ -736,7 +735,7 @@ mod tests {
 
         // unsupported array type for origin
         let timestamps = Arc::new((1..6).map(Some).collect::<TimestampNanosecondArray>());
-        let batch_size = timestamps.len();
+        let batch_len = timestamps.len();
         let res = DateBinFunc::new().invoke_batch(
             &[
                 ColumnarValue::Scalar(ScalarValue::IntervalDayTime(Some(
@@ -748,7 +747,7 @@ mod tests {
                 ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
                 ColumnarValue::Array(timestamps),
             ],
-            batch_size,
+            batch_len,
         );
         assert_eq!(
             res.err().unwrap().strip_backtrace(),
@@ -864,7 +863,8 @@ mod tests {
                     .map(|s| Some(string_to_timestamp_nanos(s).unwrap()))
                     .collect::<TimestampNanosecondArray>()
                     .with_timezone_opt(tz_opt.clone());
-                let batch_size = input.len();
+                let batch_len = input.len();
+                #[allow(deprecated)] // TODO migrate UDF invoke to invoke_batch
                 let result = DateBinFunc::new()
                     .invoke_batch(
                         &[
@@ -875,7 +875,7 @@ mod tests {
                                 tz_opt.clone(),
                             )),
                         ],
-                        batch_size,
+                        batch_len,
                     )
                     .unwrap();
                 if let ColumnarValue::Array(result) = result {

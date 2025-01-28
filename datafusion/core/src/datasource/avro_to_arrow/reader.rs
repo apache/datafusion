@@ -128,7 +128,7 @@ pub struct Reader<'a, R: Read> {
     batch_size: usize,
 }
 
-impl<'a, R: Read> Reader<'a, R> {
+impl<R: Read> Reader<'_, R> {
     /// Create a new Avro Reader from any value that implements the `Read` trait.
     ///
     /// If reading a `File`, you can customise the Reader, such as to enable schema
@@ -157,7 +157,7 @@ impl<'a, R: Read> Reader<'a, R> {
     }
 }
 
-impl<'a, R: Read> Iterator for Reader<'a, R> {
+impl<R: Read> Iterator for Reader<'_, R> {
     type Item = ArrowResult<RecordBatch>;
 
     /// Returns the next batch of results (defined by `self.batch_size`), or `None` if there

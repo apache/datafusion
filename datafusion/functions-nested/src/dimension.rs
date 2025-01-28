@@ -29,11 +29,11 @@ use datafusion_common::{exec_err, plan_err, Result};
 use crate::utils::{compute_array_dims, make_scalar_function};
 use arrow_schema::DataType::{FixedSizeList, LargeList, List, UInt64};
 use arrow_schema::Field;
-use datafusion_expr::scalar_doc_sections::DOC_SECTION_ARRAY;
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
 };
-use std::sync::{Arc, OnceLock};
+use datafusion_macros::user_doc;
+use std::sync::Arc;
 
 make_udf_expr_and_func!(
     ArrayDims,
@@ -43,10 +43,33 @@ make_udf_expr_and_func!(
     array_dims_udf
 );
 
+#[user_doc(
+    doc_section(label = "Array Functions"),
+    description = "Returns an array of the array's dimensions.",
+    syntax_example = "array_dims(array)",
+    sql_example = r#"```sql
+> select array_dims([[1, 2, 3], [4, 5, 6]]);
++---------------------------------+
+| array_dims(List([1,2,3,4,5,6])) |
++---------------------------------+
+| [2, 3]                          |
++---------------------------------+
+```"#,
+    argument(
+        name = "array",
+        description = "Array expression. Can be a constant, column, or function, and any combination of array operators."
+    )
+)]
 #[derive(Debug)]
-pub(super) struct ArrayDims {
+pub struct ArrayDims {
     signature: Signature,
     aliases: Vec<String>,
+}
+
+impl Default for ArrayDims {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl ArrayDims {
@@ -73,7 +96,7 @@ impl ScalarUDFImpl for ArrayDims {
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
         Ok(match arg_types[0] {
             List(_) | LargeList(_) | FixedSizeList(_, _) => {
-                List(Arc::new(Field::new("item", UInt64, true)))
+                List(Arc::new(Field::new_list_field(UInt64, true)))
             }
             _ => {
                 return plan_err!("The array_dims function can only accept List/LargeList/FixedSizeList.");
@@ -81,7 +104,11 @@ impl ScalarUDFImpl for ArrayDims {
         })
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         make_scalar_function(array_dims_inner)(args)
     }
 
@@ -90,37 +117,8 @@ impl ScalarUDFImpl for ArrayDims {
     }
 
     fn documentation(&self) -> Option<&Documentation> {
-        Some(get_array_dims_doc())
+        self.doc()
     }
-}
-
-static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
-
-fn get_array_dims_doc() -> &'static Documentation {
-    DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_ARRAY)
-            .with_description(
-                "Returns an array of the array's dimensions.",
-            )
-            .with_syntax_example("array_dims(array)")
-            .with_sql_example(
-                r#"```sql
-> select array_dims([[1, 2, 3], [4, 5, 6]]);
-+---------------------------------+
-| array_dims(List([1,2,3,4,5,6])) |
-+---------------------------------+
-| [2, 3]                          |
-+---------------------------------+
-```"#,
-            )
-            .with_argument(
-                "array",
-                "Array expression. Can be a constant, column, or function, and any combination of array operators.",
-            )
-            .build()
-            .unwrap()
-    })
 }
 
 make_udf_expr_and_func!(
@@ -131,6 +129,24 @@ make_udf_expr_and_func!(
     array_ndims_udf
 );
 
+#[user_doc(
+    doc_section(label = "Array Functions"),
+    description = "Returns the number of dimensions of the array.",
+    syntax_example = "array_ndims(array, element)",
+    sql_example = r#"```sql
+> select array_ndims([[1, 2, 3], [4, 5, 6]]);
++----------------------------------+
+| array_ndims(List([1,2,3,4,5,6])) |
++----------------------------------+
+| 2                                |
++----------------------------------+
+```"#,
+    argument(
+        name = "array",
+        description = "Array expression. Can be a constant, column, or function, and any combination of array operators."
+    ),
+    argument(name = "element", description = "Array element.")
+)]
 #[derive(Debug)]
 pub(super) struct ArrayNdims {
     signature: Signature,
@@ -166,7 +182,11 @@ impl ScalarUDFImpl for ArrayNdims {
         })
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         make_scalar_function(array_ndims_inner)(args)
     }
 
@@ -175,39 +195,8 @@ impl ScalarUDFImpl for ArrayNdims {
     }
 
     fn documentation(&self) -> Option<&Documentation> {
-        Some(get_array_ndims_doc())
+        self.doc()
     }
-}
-
-fn get_array_ndims_doc() -> &'static Documentation {
-    DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_ARRAY)
-            .with_description(
-                "Returns the number of dimensions of the array.",
-            )
-            .with_syntax_example("array_ndims(array, element)")
-            .with_sql_example(
-                r#"```sql
-> select array_ndims([[1, 2, 3], [4, 5, 6]]);
-+----------------------------------+
-| array_ndims(List([1,2,3,4,5,6])) |
-+----------------------------------+
-| 2                                |
-+----------------------------------+
-```"#,
-            )
-            .with_argument(
-                "array",
-                "Array expression. Can be a constant, column, or function, and any combination of array operators.",
-            )
-            .with_argument(
-                "element",
-                "Array element.",
-            )
-            .build()
-            .unwrap()
-    })
 }
 
 /// Array_dims SQL function

@@ -75,7 +75,7 @@ fn criterion_benchmark(c: &mut Criterion) {
 
     c.bench_function("map_1000", |b| {
         let mut rng = rand::thread_rng();
-        let field = Arc::new(Field::new("item", DataType::Utf8, true));
+        let field = Arc::new(Field::new_list_field(DataType::Utf8, true));
         let offsets = OffsetBuffer::new(ScalarBuffer::from(vec![0, 1000]));
         let key_list = ListArray::new(
             field,
@@ -83,7 +83,7 @@ fn criterion_benchmark(c: &mut Criterion) {
             Arc::new(StringArray::from(keys(&mut rng))),
             None,
         );
-        let field = Arc::new(Field::new("item", DataType::Int32, true));
+        let field = Arc::new(Field::new_list_field(DataType::Int32, true));
         let offsets = OffsetBuffer::new(ScalarBuffer::from(vec![0, 1000]));
         let value_list = ListArray::new(
             field,
@@ -96,9 +96,9 @@ fn criterion_benchmark(c: &mut Criterion) {
 
         b.iter(|| {
             black_box(
-                #[allow(deprecated)] // TODO use invoke_batch
+                // TODO use invoke_with_args
                 map_udf()
-                    .invoke(&[keys.clone(), values.clone()])
+                    .invoke_batch(&[keys.clone(), values.clone()], 1)
                     .expect("map should work on valid values"),
             );
         });

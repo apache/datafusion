@@ -139,13 +139,13 @@ static BIT_AND_DOC: OnceLock<Documentation> = OnceLock::new();
 
 fn get_bit_and_doc() -> &'static Documentation {
     BIT_AND_DOC.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_GENERAL)
-            .with_description("Computes the bitwise AND of all non-null input values.")
-            .with_syntax_example("bit_and(expression)")
-            .with_standard_argument("expression", Some("Integer"))
-            .build()
-            .unwrap()
+        Documentation::builder(
+            DOC_SECTION_GENERAL,
+            "Computes the bitwise AND of all non-null input values.",
+            "bit_and(expression)",
+        )
+        .with_standard_argument("expression", Some("Integer"))
+        .build()
     })
 }
 
@@ -153,13 +153,13 @@ static BIT_OR_DOC: OnceLock<Documentation> = OnceLock::new();
 
 fn get_bit_or_doc() -> &'static Documentation {
     BIT_OR_DOC.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_GENERAL)
-            .with_description("Computes the bitwise OR of all non-null input values.")
-            .with_syntax_example("bit_or(expression)")
-            .with_standard_argument("expression", Some("Integer"))
-            .build()
-            .unwrap()
+        Documentation::builder(
+            DOC_SECTION_GENERAL,
+            "Computes the bitwise OR of all non-null input values.",
+            "bit_or(expression)",
+        )
+        .with_standard_argument("expression", Some("Integer"))
+        .build()
     })
 }
 
@@ -167,15 +167,13 @@ static BIT_XOR_DOC: OnceLock<Documentation> = OnceLock::new();
 
 fn get_bit_xor_doc() -> &'static Documentation {
     BIT_XOR_DOC.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_GENERAL)
-            .with_description(
-                "Computes the bitwise exclusive OR of all non-null input values.",
-            )
-            .with_syntax_example("bit_xor(expression)")
-            .with_standard_argument("expression", Some("Integer"))
-            .build()
-            .unwrap()
+        Documentation::builder(
+            DOC_SECTION_GENERAL,
+            "Computes the bitwise exclusive OR of all non-null input values.",
+            "bit_xor(expression)",
+        )
+        .with_standard_argument("expression", Some("Integer"))
+        .build()
     })
 }
 
@@ -274,7 +272,7 @@ impl AggregateUDFImpl for BitwiseOperation {
                     format!("{} distinct", self.name()).as_str(),
                 ),
                 // See COMMENTS.md to understand why nullable is set to true
-                Field::new("item", args.return_type.clone(), true),
+                Field::new_list_field(args.return_type.clone(), true),
                 false,
             )])
         } else {

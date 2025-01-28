@@ -226,6 +226,20 @@ OPTIONS (
         has_header false,
         compression gzip);
 
+# Verify that some options are case insensitive
+statement ok
+CREATE EXTERNAL TABLE IF NOT EXISTS region (
+        r_regionkey BIGINT,
+        r_name VARCHAR,
+        r_comment VARCHAR,
+        r_rev VARCHAR,
+) STORED AS CSV LOCATION 'test_files/tpch/data/region.tbl'
+OPTIONS (
+        format.delimiter '|',
+        has_header FALSE,
+        compression GZIP);
+
+
 # Create an external parquet table and infer schema to order by
 
 # query should succeed

@@ -23,11 +23,12 @@ use std::fmt::Debug;
 use std::sync::Arc;
 
 use super::{
-    execute_input_stream, DisplayAs, DisplayFormatType, ExecutionPlan,
-    ExecutionPlanProperties, Partitioning, PlanProperties, SendableRecordBatchStream,
+    execute_input_stream, DisplayAs, DisplayFormatType, ExecutionPlan, Partitioning,
+    PlanProperties, SendableRecordBatchStream,
 };
 use crate::metrics::MetricsSet;
 use crate::stream::RecordBatchStreamAdapter;
+use crate::ExecutionPlanProperties;
 
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
@@ -56,7 +57,12 @@ pub trait DataSink: DisplayAs + Debug + Send + Sync {
     /// [DataSink].
     ///
     /// See [ExecutionPlan::metrics()] for more details
-    fn metrics(&self) -> Option<MetricsSet>;
+    fn metrics(&self) -> Option<MetricsSet> {
+        None
+    }
+
+    /// Returns the sink schema
+    fn schema(&self) -> &SchemaRef;
 
     // TODO add desired input ordering
     // How does this sink want its input ordered?
@@ -82,8 +88,6 @@ pub struct DataSinkExec {
     input: Arc<dyn ExecutionPlan>,
     /// Sink to which to write
     sink: Arc<dyn DataSink>,
-    /// Schema of the sink for validating the input data
-    sink_schema: SchemaRef,
     /// Schema describing the structure of the output data.
     count_schema: SchemaRef,
     /// Optional required sort order for output data.
@@ -102,7 +106,6 @@ impl DataSinkExec {
     pub fn new(
         input: Arc<dyn ExecutionPlan>,
         sink: Arc<dyn DataSink>,
-        sink_schema: SchemaRef,
         sort_order: Option<LexRequirement>,
     ) -> Self {
         let count_schema = make_count_schema();
@@ -110,7 +113,6 @@ impl DataSinkExec {
         Self {
             input,
             sink,
-            sink_schema,
             count_schema: make_count_schema(),
             sort_order,
             cache,
@@ -140,7 +142,8 @@ impl DataSinkExec {
         PlanProperties::new(
             eq_properties,
             Partitioning::UnknownPartitioning(1),
-            input.execution_mode(),
+            input.pipeline_behavior(),
+            input.boundedness(),
         )
     }
 }
@@ -207,7 +210,6 @@ impl ExecutionPlan for DataSinkExec {
         Ok(Arc::new(Self::new(
             Arc::clone(&children[0]),
             Arc::clone(&self.sink),
-            Arc::clone(&self.sink_schema),
             self.sort_order.clone(),
         )))
     }
@@ -224,7 +226,7 @@ impl ExecutionPlan for DataSinkExec {
         }
         let data = execute_input_stream(
             Arc::clone(&self.input),
-            Arc::clone(&self.sink_schema),
+            Arc::clone(self.sink.schema()),
             0,
             Arc::clone(&context),
         )?;

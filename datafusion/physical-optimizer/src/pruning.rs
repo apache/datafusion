@@ -287,7 +287,12 @@ pub trait PruningStatistics {
 ///   predicate can never possibly be true). The container can be pruned (skipped)
 ///   entirely.
 ///
-/// Note that in order to be correct, `PruningPredicate` must return false
+/// While `PruningPredicate` will never return a `NULL` value, the
+/// rewritten predicate (as returned by `build_predicate_expression` and used internally
+/// by `PruningPredicate`) may evaluate to `NULL` when some of the min/max values
+/// or null / row counts are not known.
+///
+/// In order to be correct, `PruningPredicate` must return false
 /// **only** if it can determine that for all rows in the container, the
 /// predicate could never evaluate to `true` (always evaluates to either `NULL`
 /// or `false`).
@@ -327,12 +332,12 @@ pub trait PruningStatistics {
 ///
 /// Original Predicate | Rewritten Predicate
 /// ------------------ | --------------------
-/// `x = 5` | `CASE WHEN x_null_count = x_row_count THEN false ELSE x_min <= 5 AND 5 <= x_max END`
-/// `x < 5` | `CASE WHEN x_null_count = x_row_count THEN false ELSE x_max < 5 END`
-/// `x = 5 AND y = 10` | `CASE WHEN x_null_count = x_row_count THEN false ELSE x_min <= 5 AND 5 <= x_max END AND CASE WHEN y_null_count = y_row_count THEN false ELSE y_min <= 10 AND 10 <= y_max END`
+/// `x = 5` | `x_null_count != x_row_count AND (x_min <= 5 AND 5 <= x_max)`
+/// `x < 5` | `x_null_count != x_row_count THEN false (x_max < 5)`
+/// `x = 5 AND y = 10` | `x_null_count != x_row_count AND (x_min <= 5 AND 5 <= x_max) AND y_null_count != y_row_count (y_min <= 10 AND 10 <= y_max)`
 /// `x IS NULL`  | `x_null_count > 0`
 /// `x IS NOT NULL`  | `x_null_count != row_count`
-/// `CAST(x as int) = 5` | `CASE WHEN x_null_count = x_row_count THEN false ELSE CAST(x_min as int) <= 5 AND 5 <= CAST(x_max as int) END`
+/// `CAST(x as int) = 5` | `x_null_count != x_row_count (CAST(x_min as int) <= 5 AND 5 <= CAST(x_max as int))`
 ///
 /// ## Predicate Evaluation
 /// The PruningPredicate works in two passes
@@ -352,15 +357,9 @@ pub trait PruningStatistics {
 /// Given the predicate, `x = 5 AND y = 10`, the rewritten predicate would look like:
 ///
 /// ```sql
-/// CASE
-///     WHEN x_null_count = x_row_count THEN false
-///     ELSE x_min <= 5 AND 5 <= x_max
-/// END
+/// x_null_count != x_row_count AND (x_min <= 5 AND 5 <= x_max)
 /// AND
-/// CASE
-///     WHEN y_null_count = y_row_count THEN false
-///     ELSE y_min <= 10 AND 10 <= y_max
-/// END
+/// y_null_count != y_row_count AND (y_min <= 10 AND 10 <= y_max)
 /// ```
 ///
 /// If we know that for a given container, `x` is between `1 and 100` and we know that
@@ -381,15 +380,21 @@ pub trait PruningStatistics {
 /// When these statistics values are substituted in to the rewritten predicate and
 /// simplified, the result is `false`:
 ///
-/// * `CASE WHEN null = null THEN false ELSE 1 <= 5 AND 5 <= 100 END AND CASE WHEN null = null THEN false ELSE 4 <= 10 AND 10 <= 7 END`
-/// * `null = null` is `null` which is not true, so the `CASE` expression will use the `ELSE` clause
-/// * `1 <= 5 AND 5 <= 100 AND 4 <= 10 AND 10 <= 7`
-/// * `true AND true AND true AND false`
+/// * `null != null AND (1 <= 5 AND 5 <= 100) AND null != null AND (4 <= 10 AND 10 <= 7)`
+/// * `null = null` is `null` which is not true, so the AND moves on to the next clause
+/// * `null and (1 <= 5 AND 5 <= 100) AND null AND (4 <= 10 AND 10 <= 7)`
+/// * evaluating the clauses further we get:
+/// * `null and true and null and false`
+/// * `null and false`
 /// * `false`
 ///
 /// Returning `false` means the container can be pruned, which matches the
 /// intuition that  `x = 5 AND y = 10` can’t be true for any row if all values of `y`
 /// are `7` or less.
+///
+/// Note that if we had ended up with `null AND true AND null AND true` the result
+/// would have been `null`.
+/// `null` is treated the same as`true`, because we can't prove that the predicate is `false.`
 ///
 /// If, for some other container, we knew `y` was between the values `4` and
 /// `15`, then the rewritten predicate evaluates to `true` (verifying this is
@@ -405,15 +410,9 @@ pub trait PruningStatistics {
 /// look like the same as example 1:
 ///
 /// ```sql
-/// CASE
-///   WHEN x_null_count = x_row_count THEN false
-///   ELSE x_min <= 5 AND 5 <= x_max
-/// END
+/// x_null_count != x_row_count AND (x_min <= 5 AND 5 <= x_max)
 /// AND
-/// CASE
-///   WHEN y_null_count = y_row_count THEN false
-///  ELSE y_min <= 10 AND 10 <= y_max
-/// END
+/// y_null_count != y_row_count AND (y_min <= 10 AND 10 <= y_max)
 /// ```
 ///
 /// If we know that for another given container, `x_min` is NULL and `x_max` is
@@ -435,14 +434,13 @@ pub trait PruningStatistics {
 /// When these statistics values are substituted in to the rewritten predicate and
 /// simplified, the result is `false`:
 ///
-/// * `CASE WHEN 100 = 100 THEN false ELSE null <= 5 AND 5 <= null END AND CASE WHEN null = null THEN false ELSE 4 <= 10 AND 10 <= 7 END`
-/// * Since `100 = 100` is `true`, the `CASE` expression will use the `THEN` clause, i.e. `false`
-/// * The other `CASE` expression will use the `ELSE` clause, i.e. `4 <= 10 AND 10 <= 7`
-/// * `false AND true`
+/// * `100 != 100 AND (null <= 5 AND 5 <= null) AND null = null AND (4 <= 10 AND 10 <= 7)`
+/// * `false AND null AND null AND false`
+/// * `false AND false`
 /// * `false`
 ///
 /// Returning `false` means the container can be pruned, which matches the
-/// intuition that  `x = 5 AND y = 10` can’t be true for all values in `x`
+/// intuition that  `x = 5 AND y = 10` can’t be true because all values in `x`
 /// are known to be NULL.
 ///
 /// # Related Work
@@ -1192,6 +1190,8 @@ fn is_compare_op(op: Operator) -> bool {
             | Operator::LtEq
             | Operator::Gt
             | Operator::GtEq
+            | Operator::LikeMatch
+            | Operator::NotLikeMatch
     )
 }
 
@@ -1484,6 +1484,21 @@ fn build_predicate_expression(
                 *bin_expr.op(),
                 Arc::clone(bin_expr.right()),
             )
+        } else if let Some(like_expr) = expr_any.downcast_ref::<phys_expr::LikeExpr>() {
+            if like_expr.case_insensitive() {
+                return unhandled_hook.handle(expr);
+            }
+            let op = match (like_expr.negated(), like_expr.case_insensitive()) {
+                (false, false) => Operator::LikeMatch,
+                (true, false) => Operator::NotLikeMatch,
+                (false, true) => Operator::ILikeMatch,
+                (true, true) => Operator::NotILikeMatch,
+            };
+            (
+                Arc::clone(like_expr.expr()),
+                op,
+                Arc::clone(like_expr.pattern()),
+            )
         } else {
             return unhandled_hook.handle(expr);
         }
@@ -1564,6 +1579,11 @@ fn build_statistics_expr(
                 )),
             ))
         }
+        Operator::LikeMatch => build_like_match(expr_builder).ok_or_else(|| {
+            plan_datafusion_err!(
+                "LIKE expression with wildcard at the beginning is not supported"
+            )
+        })?,
         Operator::Gt => {
             // column > literal => (min, max) > literal => max > literal
             Arc::new(phys_expr::BinaryExpr::new(
@@ -1603,13 +1623,134 @@ fn build_statistics_expr(
             );
         }
     };
-    let statistics_expr = wrap_case_expr(statistics_expr, expr_builder)?;
+    let statistics_expr = wrap_null_count_check_expr(statistics_expr, expr_builder)?;
     Ok(statistics_expr)
 }
 
-/// Wrap the statistics expression in a case expression.
-/// This is necessary to handle the case where the column is known
-/// to be all nulls.
+/// Convert `column LIKE literal` where P is a constant prefix of the literal
+/// to a range check on the column: `P <= column && column < P'`, where P' is the
+/// lowest string after all P* strings.
+fn build_like_match(
+    expr_builder: &mut PruningExpressionBuilder,
+) -> Option<Arc<dyn PhysicalExpr>> {
+    // column LIKE literal => (min, max) LIKE literal split at % => min <= split literal && split literal <= max
+    // column LIKE 'foo%' => min <= 'foo' && 'foo' <= max
+    // column LIKE '%foo' => min <= '' && '' <= max => true
+    // column LIKE '%foo%' => min <= '' && '' <= max => true
+    // column LIKE 'foo' => min <= 'foo' && 'foo' <= max
+
+    /// returns the string literal of the scalar value if it is a string
+    fn unpack_string(s: &ScalarValue) -> Option<&str> {
+        s.try_as_str().flatten()
+    }
+
+    fn extract_string_literal(expr: &Arc<dyn PhysicalExpr>) -> Option<&str> {
+        if let Some(lit) = expr.as_any().downcast_ref::<phys_expr::Literal>() {
+            let s = unpack_string(lit.value())?;
+            return Some(s);
+        }
+        None
+    }
+
+    // TODO Handle ILIKE perhaps by making the min lowercase and max uppercase
+    //  this may involve building the physical expressions that call lower() and upper()
+    let min_column_expr = expr_builder.min_column_expr().ok()?;
+    let max_column_expr = expr_builder.max_column_expr().ok()?;
+    let scalar_expr = expr_builder.scalar_expr();
+    // check that the scalar is a string literal
+    let s = extract_string_literal(scalar_expr)?;
+    // ANSI SQL specifies two wildcards: % and _. % matches zero or more characters, _ matches exactly one character.
+    let first_wildcard_index = s.find(['%', '_']);
+    if first_wildcard_index == Some(0) {
+        // there's no filtering we could possibly do, return an error and have this be handled by the unhandled hook
+        return None;
+    }
+    let (lower_bound, upper_bound) = if let Some(wildcard_index) = first_wildcard_index {
+        let prefix = &s[..wildcard_index];
+        let lower_bound_lit = Arc::new(phys_expr::Literal::new(ScalarValue::Utf8(Some(
+            prefix.to_string(),
+        ))));
+        let upper_bound_lit = Arc::new(phys_expr::Literal::new(ScalarValue::Utf8(Some(
+            increment_utf8(prefix)?,
+        ))));
+        (lower_bound_lit, upper_bound_lit)
+    } else {
+        // the like expression is a literal and can be converted into a comparison
+        let bound = Arc::new(phys_expr::Literal::new(ScalarValue::Utf8(Some(
+            s.to_string(),
+        ))));
+        (Arc::clone(&bound), bound)
+    };
+    let lower_bound_expr = Arc::new(phys_expr::BinaryExpr::new(
+        lower_bound,
+        Operator::LtEq,
+        Arc::clone(&max_column_expr),
+    ));
+    let upper_bound_expr = Arc::new(phys_expr::BinaryExpr::new(
+        Arc::clone(&min_column_expr),
+        Operator::LtEq,
+        upper_bound,
+    ));
+    let combined = Arc::new(phys_expr::BinaryExpr::new(
+        upper_bound_expr,
+        Operator::And,
+        lower_bound_expr,
+    ));
+    Some(combined)
+}
+
+/// Increment a UTF8 string by one, returning `None` if it can't be incremented.
+/// This makes it so that the returned string will always compare greater than the input string
+/// or any other string with the same prefix.
+/// This is necessary since the statistics may have been truncated: if we have a min statistic
+/// of "fo" that may have originally been "foz" or anything else with the prefix "fo".
+/// E.g. `increment_utf8("foo") >= "foo"` and `increment_utf8("foo") >= "fooz"`
+/// In this example `increment_utf8("foo") == "fop"
+fn increment_utf8(data: &str) -> Option<String> {
+    // Helper function to check if a character is valid to use
+    fn is_valid_unicode(c: char) -> bool {
+        let cp = c as u32;
+
+        // Filter out non-characters (https://www.unicode.org/versions/corrigendum9.html)
+        if [0xFFFE, 0xFFFF].contains(&cp) || (0xFDD0..=0xFDEF).contains(&cp) {
+            return false;
+        }
+
+        // Filter out private use area
+        if cp >= 0x110000 {
+            return false;
+        }
+
+        true
+    }
+
+    // Convert string to vector of code points
+    let mut code_points: Vec<char> = data.chars().collect();
+
+    // Work backwards through code points
+    for idx in (0..code_points.len()).rev() {
+        let original = code_points[idx] as u32;
+
+        // Try incrementing the code point
+        if let Some(next_char) = char::from_u32(original + 1) {
+            if is_valid_unicode(next_char) {
+                code_points[idx] = next_char;
+                // truncate the string to the current index
+                code_points.truncate(idx + 1);
+                return Some(code_points.into_iter().collect());
+            }
+        }
+    }
+
+    None
+}
+
+/// Wrap the statistics expression in a check that skips the expression if the column is all nulls.
+///
+/// This is important not only as an optimization but also because statistics may not be
+/// accurate for columns that are all nulls.
+/// For example, for an `int` column `x` with all nulls, the min/max/null_count statistics
+/// might be set to 0 and evaluating `x = 0` would incorrectly include the column.
 ///
 /// For example:
 ///
@@ -1618,33 +1759,29 @@ fn build_statistics_expr(
 /// will become
 ///
 /// ```sql
-/// CASE
-///  WHEN x_null_count = x_row_count THEN false
-///  ELSE x_min <= 10 AND 10 <= x_max
-/// END
+/// x_null_count != x_row_count AND (x_min <= 10 AND 10 <= x_max)
 /// ````
 ///
 /// If the column is known to be all nulls, then the expression
 /// `x_null_count = x_row_count` will be true, which will cause the
-/// case expression to return false. Therefore, prune out the container.
-fn wrap_case_expr(
+/// boolean expression to return false. Therefore, prune out the container.
+fn wrap_null_count_check_expr(
     statistics_expr: Arc<dyn PhysicalExpr>,
     expr_builder: &mut PruningExpressionBuilder,
 ) -> Result<Arc<dyn PhysicalExpr>> {
-    // x_null_count = x_row_count
-    let when_null_count_eq_row_count = Arc::new(phys_expr::BinaryExpr::new(
+    // x_null_count != x_row_count
+    let not_when_null_count_eq_row_count = Arc::new(phys_expr::BinaryExpr::new(
         expr_builder.null_count_column_expr()?,
-        Operator::Eq,
+        Operator::NotEq,
         expr_builder.row_count_column_expr()?,
     ));
-    let then = Arc::new(phys_expr::Literal::new(ScalarValue::Boolean(Some(false))));
 
-    // CASE WHEN x_null_count = x_row_count THEN false ELSE <statistics_expr> END
-    Ok(Arc::new(phys_expr::CaseExpr::try_new(
-        None,
-        vec![(when_null_count_eq_row_count, then)],
-        Some(statistics_expr),
-    )?))
+    // (x_null_count != x_row_count) AND (<statistics_expr>)
+    Ok(Arc::new(phys_expr::BinaryExpr::new(
+        not_when_null_count_eq_row_count,
+        Operator::And,
+        statistics_expr,
+    )))
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
@@ -2053,6 +2190,110 @@ mod tests {
     }
 
     #[test]
+    fn prune_all_rows_null_counts() {
+        // if null_count = row_count then we should prune the container for i = 0
+        // regardless of the statistics
+        let schema = Arc::new(Schema::new(vec![Field::new("i", DataType::Int32, true)]));
+        let statistics = TestStatistics::new().with(
+            "i",
+            ContainerStats::new_i32(
+                vec![Some(0)], // min
+                vec![Some(0)], // max
+            )
+            .with_null_counts(vec![Some(1)])
+            .with_row_counts(vec![Some(1)]),
+        );
+        let expected_ret = &[false];
+        prune_with_expr(col("i").eq(lit(0)), &schema, &statistics, expected_ret);
+
+        // this should be true even if the container stats are missing
+        let schema = Arc::new(Schema::new(vec![Field::new("i", DataType::Int32, true)]));
+        let container_stats = ContainerStats {
+            min: Some(Arc::new(Int32Array::from(vec![None]))),
+            max: Some(Arc::new(Int32Array::from(vec![None]))),
+            null_counts: Some(Arc::new(UInt64Array::from(vec![Some(1)]))),
+            row_counts: Some(Arc::new(UInt64Array::from(vec![Some(1)]))),
+            ..ContainerStats::default()
+        };
+        let statistics = TestStatistics::new().with("i", container_stats);
+        let expected_ret = &[false];
+        prune_with_expr(col("i").eq(lit(0)), &schema, &statistics, expected_ret);
+
+        // If the null counts themselves are missing we should be able to fall back to the stats
+        let schema = Arc::new(Schema::new(vec![Field::new("i", DataType::Int32, true)]));
+        let container_stats = ContainerStats {
+            min: Some(Arc::new(Int32Array::from(vec![Some(0)]))),
+            max: Some(Arc::new(Int32Array::from(vec![Some(0)]))),
+            null_counts: Some(Arc::new(UInt64Array::from(vec![None]))),
+            row_counts: Some(Arc::new(UInt64Array::from(vec![Some(1)]))),
+            ..ContainerStats::default()
+        };
+        let statistics = TestStatistics::new().with("i", container_stats);
+        let expected_ret = &[true];
+        prune_with_expr(col("i").eq(lit(0)), &schema, &statistics, expected_ret);
+        let expected_ret = &[false];
+        prune_with_expr(col("i").gt(lit(0)), &schema, &statistics, expected_ret);
+
+        // Same for the row counts
+        let schema = Arc::new(Schema::new(vec![Field::new("i", DataType::Int32, true)]));
+        let container_stats = ContainerStats {
+            min: Some(Arc::new(Int32Array::from(vec![Some(0)]))),
+            max: Some(Arc::new(Int32Array::from(vec![Some(0)]))),
+            null_counts: Some(Arc::new(UInt64Array::from(vec![Some(1)]))),
+            row_counts: Some(Arc::new(UInt64Array::from(vec![None]))),
+            ..ContainerStats::default()
+        };
+        let statistics = TestStatistics::new().with("i", container_stats);
+        let expected_ret = &[true];
+        prune_with_expr(col("i").eq(lit(0)), &schema, &statistics, expected_ret);
+        let expected_ret = &[false];
+        prune_with_expr(col("i").gt(lit(0)), &schema, &statistics, expected_ret);
+    }
+
+    #[test]
+    fn prune_missing_statistics() {
+        // If the min or max stats are missing we should not prune
+        // (unless we know all rows are null, see `prune_all_rows_null_counts`)
+        let schema = Arc::new(Schema::new(vec![Field::new("i", DataType::Int32, true)]));
+        let container_stats = ContainerStats {
+            min: Some(Arc::new(Int32Array::from(vec![None, Some(0)]))),
+            max: Some(Arc::new(Int32Array::from(vec![Some(0), None]))),
+            null_counts: Some(Arc::new(UInt64Array::from(vec![Some(0), Some(0)]))),
+            row_counts: Some(Arc::new(UInt64Array::from(vec![Some(1), Some(1)]))),
+            ..ContainerStats::default()
+        };
+        let statistics = TestStatistics::new().with("i", container_stats);
+        let expected_ret = &[true, true];
+        prune_with_expr(col("i").eq(lit(0)), &schema, &statistics, expected_ret);
+        let expected_ret = &[false, true];
+        prune_with_expr(col("i").gt(lit(0)), &schema, &statistics, expected_ret);
+        let expected_ret = &[true, false];
+        prune_with_expr(col("i").lt(lit(0)), &schema, &statistics, expected_ret);
+    }
+
+    #[test]
+    fn prune_null_stats() {
+        // if null_count = row_count then we should prune the container for i = 0
+        // regardless of the statistics
+        let schema = Arc::new(Schema::new(vec![Field::new("i", DataType::Int32, true)]));
+
+        let statistics = TestStatistics::new().with(
+            "i",
+            ContainerStats::new_i32(
+                vec![Some(0)], // min
+                vec![Some(0)], // max
+            )
+            .with_null_counts(vec![Some(1)])
+            .with_row_counts(vec![Some(1)]),
+        );
+
+        let expected_ret = &[false];
+
+        // i = 0
+        prune_with_expr(col("i").eq(lit(0)), &schema, &statistics, expected_ret);
+    }
+
+    #[test]
     fn test_build_statistics_record_batch() {
         // Request a record batch with of s1_min, s2_max, s3_max, s3_min
         let required_columns = RequiredColumns::from(vec![
@@ -2233,7 +2474,8 @@ mod tests {
     #[test]
     fn row_group_predicate_eq() -> Result<()> {
         let schema = Schema::new(vec![Field::new("c1", DataType::Int32, false)]);
-        let expected_expr = "CASE WHEN c1_null_count@2 = c1_row_count@3 THEN false ELSE c1_min@0 <= 1 AND 1 <= c1_max@1 END";
+        let expected_expr =
+            "c1_null_count@2 != c1_row_count@3 AND c1_min@0 <= 1 AND 1 <= c1_max@1";
 
         // test column on the left
         let expr = col("c1").eq(lit(1));
@@ -2253,7 +2495,8 @@ mod tests {
     #[test]
     fn row_group_predicate_not_eq() -> Result<()> {
         let schema = Schema::new(vec![Field::new("c1", DataType::Int32, false)]);
-        let expected_expr = "CASE WHEN c1_null_count@2 = c1_row_count@3 THEN false ELSE c1_min@0 != 1 OR 1 != c1_max@1 END";
+        let expected_expr =
+            "c1_null_count@2 != c1_row_count@3 AND (c1_min@0 != 1 OR 1 != c1_max@1)";
 
         // test column on the left
         let expr = col("c1").not_eq(lit(1));
@@ -2273,8 +2516,7 @@ mod tests {
     #[test]
     fn row_group_predicate_gt() -> Result<()> {
         let schema = Schema::new(vec![Field::new("c1", DataType::Int32, false)]);
-        let expected_expr =
-            "CASE WHEN c1_null_count@1 = c1_row_count@2 THEN false ELSE c1_max@0 > 1 END";
+        let expected_expr = "c1_null_count@1 != c1_row_count@2 AND c1_max@0 > 1";
 
         // test column on the left
         let expr = col("c1").gt(lit(1));
@@ -2294,7 +2536,7 @@ mod tests {
     #[test]
     fn row_group_predicate_gt_eq() -> Result<()> {
         let schema = Schema::new(vec![Field::new("c1", DataType::Int32, false)]);
-        let expected_expr = "CASE WHEN c1_null_count@1 = c1_row_count@2 THEN false ELSE c1_max@0 >= 1 END";
+        let expected_expr = "c1_null_count@1 != c1_row_count@2 AND c1_max@0 >= 1";
 
         // test column on the left
         let expr = col("c1").gt_eq(lit(1));
@@ -2313,8 +2555,7 @@ mod tests {
     #[test]
     fn row_group_predicate_lt() -> Result<()> {
         let schema = Schema::new(vec![Field::new("c1", DataType::Int32, false)]);
-        let expected_expr =
-            "CASE WHEN c1_null_count@1 = c1_row_count@2 THEN false ELSE c1_min@0 < 1 END";
+        let expected_expr = "c1_null_count@1 != c1_row_count@2 AND c1_min@0 < 1";
 
         // test column on the left
         let expr = col("c1").lt(lit(1));
@@ -2334,7 +2575,7 @@ mod tests {
     #[test]
     fn row_group_predicate_lt_eq() -> Result<()> {
         let schema = Schema::new(vec![Field::new("c1", DataType::Int32, false)]);
-        let expected_expr = "CASE WHEN c1_null_count@1 = c1_row_count@2 THEN false ELSE c1_min@0 <= 1 END";
+        let expected_expr = "c1_null_count@1 != c1_row_count@2 AND c1_min@0 <= 1";
 
         // test column on the left
         let expr = col("c1").lt_eq(lit(1));
@@ -2359,8 +2600,7 @@ mod tests {
         ]);
         // test AND operator joining supported c1 < 1 expression and unsupported c2 > c3 expression
         let expr = col("c1").lt(lit(1)).and(col("c2").lt(col("c3")));
-        let expected_expr =
-            "CASE WHEN c1_null_count@1 = c1_row_count@2 THEN false ELSE c1_min@0 < 1 END";
+        let expected_expr = "c1_null_count@1 != c1_row_count@2 AND c1_min@0 < 1";
         let predicate_expr =
             test_build_predicate_expression(&expr, &schema, &mut RequiredColumns::new());
         assert_eq!(predicate_expr.to_string(), expected_expr);
@@ -2426,7 +2666,7 @@ mod tests {
     #[test]
     fn row_group_predicate_lt_bool() -> Result<()> {
         let schema = Schema::new(vec![Field::new("c1", DataType::Boolean, false)]);
-        let expected_expr = "CASE WHEN c1_null_count@1 = c1_row_count@2 THEN false ELSE c1_min@0 < true END";
+        let expected_expr = "c1_null_count@1 != c1_row_count@2 AND c1_min@0 < true";
 
         // DF doesn't support arithmetic on boolean columns so
         // this predicate will error when evaluated
@@ -2449,20 +2689,11 @@ mod tests {
         let expr = col("c1")
             .lt(lit(1))
             .and(col("c2").eq(lit(2)).or(col("c2").eq(lit(3))));
-        let expected_expr = "\
-            CASE \
-                WHEN c1_null_count@1 = c1_row_count@2 THEN false \
-                ELSE c1_min@0 < 1 \
-            END \
-        AND (\
-                CASE \
-                    WHEN c2_null_count@5 = c2_row_count@6 THEN false \
-                    ELSE c2_min@3 <= 2 AND 2 <= c2_max@4 \
-                END \
-            OR CASE \
-                    WHEN c2_null_count@5 = c2_row_count@6 THEN false \
-                    ELSE c2_min@3 <= 3 AND 3 <= c2_max@4 \
-                END\
+        let expected_expr = "c1_null_count@1 != c1_row_count@2 \
+            AND c1_min@0 < 1 AND (\
+                c2_null_count@5 != c2_row_count@6 \
+                AND c2_min@3 <= 2 AND 2 <= c2_max@4 OR \
+                c2_null_count@5 != c2_row_count@6 AND c2_min@3 <= 3 AND 3 <= c2_max@4\
             )";
         let predicate_expr =
             test_build_predicate_expression(&expr, &schema, &mut required_columns);
@@ -2554,18 +2785,7 @@ mod tests {
             vec![lit(1), lit(2), lit(3)],
             false,
         ));
-        let expected_expr = "CASE \
-                WHEN c1_null_count@2 = c1_row_count@3 THEN false \
-                ELSE c1_min@0 <= 1 AND 1 <= c1_max@1 \
-            END \
-        OR CASE \
-                WHEN c1_null_count@2 = c1_row_count@3 THEN false \
-                ELSE c1_min@0 <= 2 AND 2 <= c1_max@1 \
-            END \
-        OR CASE \
-                WHEN c1_null_count@2 = c1_row_count@3 THEN false \
-                ELSE c1_min@0 <= 3 AND 3 <= c1_max@1 \
-            END";
+        let expected_expr = "c1_null_count@2 != c1_row_count@3 AND c1_min@0 <= 1 AND 1 <= c1_max@1 OR c1_null_count@2 != c1_row_count@3 AND c1_min@0 <= 2 AND 2 <= c1_max@1 OR c1_null_count@2 != c1_row_count@3 AND c1_min@0 <= 3 AND 3 <= c1_max@1";
         let predicate_expr =
             test_build_predicate_expression(&expr, &schema, &mut RequiredColumns::new());
         assert_eq!(predicate_expr.to_string(), expected_expr);
@@ -2601,19 +2821,7 @@ mod tests {
             vec![lit(1), lit(2), lit(3)],
             true,
         ));
-        let expected_expr = "\
-            CASE \
-                WHEN c1_null_count@2 = c1_row_count@3 THEN false \
-                ELSE c1_min@0 != 1 OR 1 != c1_max@1 \
-            END \
-        AND CASE \
-                WHEN c1_null_count@2 = c1_row_count@3 THEN false \
-                ELSE c1_min@0 != 2 OR 2 != c1_max@1 \
-            END \
-        AND CASE \
-                WHEN c1_null_count@2 = c1_row_count@3 THEN false \
-                ELSE c1_min@0 != 3 OR 3 != c1_max@1 \
-            END";
+        let expected_expr = "c1_null_count@2 != c1_row_count@3 AND (c1_min@0 != 1 OR 1 != c1_max@1) AND c1_null_count@2 != c1_row_count@3 AND (c1_min@0 != 2 OR 2 != c1_max@1) AND c1_null_count@2 != c1_row_count@3 AND (c1_min@0 != 3 OR 3 != c1_max@1)";
         let predicate_expr =
             test_build_predicate_expression(&expr, &schema, &mut RequiredColumns::new());
         assert_eq!(predicate_expr.to_string(), expected_expr);
@@ -2659,24 +2867,7 @@ mod tests {
         // test c1 in(1, 2) and c2 BETWEEN 4 AND 5
         let expr3 = expr1.and(expr2);
 
-        let expected_expr = "\
-        (\
-            CASE \
-                WHEN c1_null_count@2 = c1_row_count@3 THEN false \
-                ELSE c1_min@0 <= 1 AND 1 <= c1_max@1 \
-            END \
-        OR CASE \
-                WHEN c1_null_count@2 = c1_row_count@3 THEN false \
-                ELSE c1_min@0 <= 2 AND 2 <= c1_max@1 \
-            END\
-        ) AND CASE \
-                WHEN c2_null_count@5 = c2_row_count@6 THEN false \
-                ELSE c2_max@4 >= 4 \
-            END \
-        AND CASE \
-                WHEN c2_null_count@5 = c2_row_count@6 THEN false \
-                ELSE c2_min@7 <= 5 \
-            END";
+        let expected_expr = "(c1_null_count@2 != c1_row_count@3 AND c1_min@0 <= 1 AND 1 <= c1_max@1 OR c1_null_count@2 != c1_row_count@3 AND c1_min@0 <= 2 AND 2 <= c1_max@1) AND c2_null_count@5 != c2_row_count@6 AND c2_max@4 >= 4 AND c2_null_count@5 != c2_row_count@6 AND c2_min@7 <= 5";
         let predicate_expr =
             test_build_predicate_expression(&expr3, &schema, &mut RequiredColumns::new());
         assert_eq!(predicate_expr.to_string(), expected_expr);
@@ -2703,10 +2894,7 @@ mod tests {
     #[test]
     fn row_group_predicate_cast() -> Result<()> {
         let schema = Schema::new(vec![Field::new("c1", DataType::Int32, false)]);
-        let expected_expr = "CASE \
-                WHEN c1_null_count@2 = c1_row_count@3 THEN false \
-                ELSE CAST(c1_min@0 AS Int64) <= 1 AND 1 <= CAST(c1_max@1 AS Int64) \
-            END";
+        let expected_expr = "c1_null_count@2 != c1_row_count@3 AND CAST(c1_min@0 AS Int64) <= 1 AND 1 <= CAST(c1_max@1 AS Int64)";
 
         // test cast(c1 as int64) = 1
         // test column on the left
@@ -2721,10 +2909,8 @@ mod tests {
             test_build_predicate_expression(&expr, &schema, &mut RequiredColumns::new());
         assert_eq!(predicate_expr.to_string(), expected_expr);
 
-        let expected_expr = "CASE \
-                WHEN c1_null_count@1 = c1_row_count@2 THEN false \
-                ELSE TRY_CAST(c1_max@0 AS Int64) > 1 \
-            END";
+        let expected_expr =
+            "c1_null_count@1 != c1_row_count@2 AND TRY_CAST(c1_max@0 AS Int64) > 1";
 
         // test column on the left
         let expr =
@@ -2756,18 +2942,7 @@ mod tests {
             ],
             false,
         ));
-        let expected_expr = "CASE \
-                WHEN c1_null_count@2 = c1_row_count@3 THEN false \
-                ELSE CAST(c1_min@0 AS Int64) <= 1 AND 1 <= CAST(c1_max@1 AS Int64) \
-            END \
-        OR CASE \
-                WHEN c1_null_count@2 = c1_row_count@3 THEN false \
-                ELSE CAST(c1_min@0 AS Int64) <= 2 AND 2 <= CAST(c1_max@1 AS Int64) \
-            END \
-        OR CASE \
-                WHEN c1_null_count@2 = c1_row_count@3 THEN false \
-                ELSE CAST(c1_min@0 AS Int64) <= 3 AND 3 <= CAST(c1_max@1 AS Int64) \
-            END";
+        let expected_expr = "c1_null_count@2 != c1_row_count@3 AND CAST(c1_min@0 AS Int64) <= 1 AND 1 <= CAST(c1_max@1 AS Int64) OR c1_null_count@2 != c1_row_count@3 AND CAST(c1_min@0 AS Int64) <= 2 AND 2 <= CAST(c1_max@1 AS Int64) OR c1_null_count@2 != c1_row_count@3 AND CAST(c1_min@0 AS Int64) <= 3 AND 3 <= CAST(c1_max@1 AS Int64)";
         let predicate_expr =
             test_build_predicate_expression(&expr, &schema, &mut RequiredColumns::new());
         assert_eq!(predicate_expr.to_string(), expected_expr);
@@ -2781,18 +2956,7 @@ mod tests {
             ],
             true,
         ));
-        let expected_expr = "CASE \
-                WHEN c1_null_count@2 = c1_row_count@3 THEN false \
-                ELSE CAST(c1_min@0 AS Int64) != 1 OR 1 != CAST(c1_max@1 AS Int64) \
-            END \
-        AND CASE \
-                WHEN c1_null_count@2 = c1_row_count@3 THEN false \
-                ELSE CAST(c1_min@0 AS Int64) != 2 OR 2 != CAST(c1_max@1 AS Int64) \
-            END \
-        AND CASE \
-                WHEN c1_null_count@2 = c1_row_count@3 THEN false \
-                ELSE CAST(c1_min@0 AS Int64) != 3 OR 3 != CAST(c1_max@1 AS Int64) \
-            END";
+        let expected_expr = "c1_null_count@2 != c1_row_count@3 AND (CAST(c1_min@0 AS Int64) != 1 OR 1 != CAST(c1_max@1 AS Int64)) AND c1_null_count@2 != c1_row_count@3 AND (CAST(c1_min@0 AS Int64) != 2 OR 2 != CAST(c1_max@1 AS Int64)) AND c1_null_count@2 != c1_row_count@3 AND (CAST(c1_min@0 AS Int64) != 3 OR 3 != CAST(c1_max@1 AS Int64))";
         let predicate_expr =
             test_build_predicate_expression(&expr, &schema, &mut RequiredColumns::new());
         assert_eq!(predicate_expr.to_string(), expected_expr);
@@ -3437,6 +3601,425 @@ mod tests {
             &statistics,
             expected_ret,
         );
+    }
+
+    #[test]
+    fn test_increment_utf8() {
+        // Basic ASCII
+        assert_eq!(increment_utf8("abc").unwrap(), "abd");
+        assert_eq!(increment_utf8("abz").unwrap(), "ab{");
+
+        // Test around ASCII 127 (DEL)
+        assert_eq!(increment_utf8("~").unwrap(), "\u{7f}"); // 126 -> 127
+        assert_eq!(increment_utf8("\u{7f}").unwrap(), "\u{80}"); // 127 -> 128
+
+        // Test 2-byte UTF-8 sequences
+        assert_eq!(increment_utf8("ß").unwrap(), "à"); // U+00DF -> U+00E0
+
+        // Test 3-byte UTF-8 sequences
+        assert_eq!(increment_utf8("℣").unwrap(), "ℤ"); // U+2123 -> U+2124
+
+        // Test at UTF-8 boundaries
+        assert_eq!(increment_utf8("\u{7FF}").unwrap(), "\u{800}"); // 2-byte to 3-byte boundary
+        assert_eq!(increment_utf8("\u{FFFF}").unwrap(), "\u{10000}"); // 3-byte to 4-byte boundary
+
+        // Test that if we can't increment we return None
+        assert!(increment_utf8("").is_none());
+        assert!(increment_utf8("\u{10FFFF}").is_none()); // U+10FFFF is the max code point
+
+        // Test that if we can't increment the last character we do the previous one and truncate
+        assert_eq!(increment_utf8("a\u{10FFFF}").unwrap(), "b");
+
+        // Test surrogate pair range (0xD800..=0xDFFF)
+        assert_eq!(increment_utf8("a\u{D7FF}").unwrap(), "b");
+        assert!(increment_utf8("\u{D7FF}").is_none());
+
+        // Test non-characters range (0xFDD0..=0xFDEF)
+        assert_eq!(increment_utf8("a\u{FDCF}").unwrap(), "b");
+        assert!(increment_utf8("\u{FDCF}").is_none());
+
+        // Test private use area limit (>= 0x110000)
+        assert_eq!(increment_utf8("a\u{10FFFF}").unwrap(), "b");
+        assert!(increment_utf8("\u{10FFFF}").is_none()); // Can't increment past max valid codepoint
+    }
+
+    /// Creates a setup for chunk pruning, modeling a utf8 column "s1"
+    /// with 5 different containers (e.g. RowGroups). They have [min,
+    /// max]:
+    /// s1 ["A", "Z"]
+    /// s1 ["A", "L"]
+    /// s1 ["N", "Z"]
+    /// s1 [NULL, NULL]
+    /// s1 ["A", NULL]
+    /// s1 ["", "A"]
+    /// s1 ["", ""]
+    /// s1 ["AB", "A\u{10ffff}"]
+    /// s1 ["A\u{10ffff}\u{10ffff}\u{10ffff}", "A\u{10ffff}\u{10ffff}"]
+    fn utf8_setup() -> (SchemaRef, TestStatistics) {
+        let schema = Arc::new(Schema::new(vec![Field::new("s1", DataType::Utf8, true)]));
+
+        let statistics = TestStatistics::new().with(
+            "s1",
+            ContainerStats::new_utf8(
+                vec![
+                    Some("A"),
+                    Some("A"),
+                    Some("N"),
+                    Some("M"),
+                    None,
+                    Some("A"),
+                    Some(""),
+                    Some(""),
+                    Some("AB"),
+                    Some("A\u{10ffff}\u{10ffff}"),
+                ], // min
+                vec![
+                    Some("Z"),
+                    Some("L"),
+                    Some("Z"),
+                    Some("M"),
+                    None,
+                    None,
+                    Some("A"),
+                    Some(""),
+                    Some("A\u{10ffff}\u{10ffff}\u{10ffff}"),
+                    Some("A\u{10ffff}\u{10ffff}"),
+                ], // max
+            ),
+        );
+        (schema, statistics)
+    }
+
+    #[test]
+    fn prune_utf8_eq() {
+        let (schema, statistics) = utf8_setup();
+
+        let expr = col("s1").eq(lit("A"));
+        #[rustfmt::skip]
+        let expected_ret = &[
+            // s1 ["A", "Z"] ==> some rows could pass (must keep)
+            true,
+            // s1 ["A", "L"] ==> some rows could pass (must keep)
+            true,
+            // s1 ["N", "Z"] ==> no rows can pass (not keep)
+            false,
+            // s1 ["M", "M"] ==> no rows can pass (not keep)
+            false,
+            // s1 [NULL, NULL]  ==> unknown (must keep)
+            true,
+            // s1 ["A", NULL]  ==> unknown (must keep)
+            true,
+            // s1 ["", "A"]  ==> some rows could pass (must keep)
+            true,
+            // s1 ["", ""]  ==> no rows can pass (not keep)
+            false,
+            // s1 ["AB", "A\u{10ffff}\u{10ffff}\u{10ffff}"]  ==> no rows can pass (not keep)
+            false,
+            // s1 ["A\u{10ffff}\u{10ffff}", "A\u{10ffff}\u{10ffff}"]  ==> no rows can pass (not keep)
+            false,
+        ];
+        prune_with_expr(expr, &schema, &statistics, expected_ret);
+
+        let expr = col("s1").eq(lit(""));
+        #[rustfmt::skip]
+        let expected_ret = &[
+            // s1 ["A", "Z"] ==> no rows can pass (not keep)
+            false,
+            // s1 ["A", "L"] ==> no rows can pass (not keep)
+            false,
+            // s1 ["N", "Z"] ==> no rows can pass (not keep)
+            false,
+            // s1 ["M", "M"] ==> no rows can pass (not keep)
+            false,
+            // s1 [NULL, NULL]  ==> unknown (must keep)
+            true,
+            // s1 ["A", NULL]  ==> no rows can pass (not keep)
+            false,
+            // s1 ["", "A"]  ==> some rows could pass (must keep)
+            true,
+            // s1 ["", ""]  ==> all rows must pass (must keep)
+            true,
+            // s1 ["AB", "A\u{10ffff}\u{10ffff}\u{10ffff}"]  ==> no rows can pass (not keep)
+            false,
+            // s1 ["A\u{10ffff}\u{10ffff}", "A\u{10ffff}\u{10ffff}"]  ==> no rows can pass (not keep)
+            false,
+        ];
+        prune_with_expr(expr, &schema, &statistics, expected_ret);
+    }
+
+    #[test]
+    fn prune_utf8_not_eq() {
+        let (schema, statistics) = utf8_setup();
+
+        let expr = col("s1").not_eq(lit("A"));
+        #[rustfmt::skip]
+        let expected_ret = &[
+            // s1 ["A", "Z"] ==> some rows could pass (must keep)
+            true,
+            // s1 ["A", "L"] ==> some rows could pass (must keep)
+            true,
+            // s1 ["N", "Z"] ==> all rows must pass (must keep)
+            true,
+            // s1 ["M", "M"] ==> all rows must pass (must keep)
+            true,
+            // s1 [NULL, NULL]  ==> unknown (must keep)
+            true,
+            // s1 ["A", NULL]  ==> unknown (must keep)
+            true,
+            // s1 ["", "A"]  ==> some rows could pass (must keep)
+            true,
+            // s1 ["", ""]  ==> all rows must pass (must keep)
+            true,
+            // s1 ["AB", "A\u{10ffff}\u{10ffff}"]  ==> all rows must pass (must keep)
+            true,
+            // s1 ["A\u{10ffff}\u{10ffff}", "A\u{10ffff}\u{10ffff}"]  ==> all rows must pass (must keep)
+            true,
+        ];
+        prune_with_expr(expr, &schema, &statistics, expected_ret);
+
+        let expr = col("s1").not_eq(lit(""));
+        #[rustfmt::skip]
+        let expected_ret = &[
+            // s1 ["A", "Z"] ==> all rows must pass (must keep)
+            true,
+            // s1 ["A", "L"] ==> all rows must pass (must keep)
+            true,
+            // s1 ["N", "Z"] ==> all rows must pass (must keep)
+            true,
+            // s1 ["M", "M"] ==> all rows must pass (must keep)
+            true,
+            // s1 [NULL, NULL]  ==> unknown (must keep)
+            true,
+            // s1 ["A", NULL]  ==> unknown (must keep)
+            true,
+            // s1 ["", "A"]  ==> some rows could pass (must keep)
+            true,
+            // s1 ["", ""]  ==> no rows can pass (not keep)
+            false,
+            // s1 ["AB", "A\u{10ffff}\u{10ffff}\u{10ffff}"]  ==> all rows must pass (must keep)
+            true,
+            // s1 ["A\u{10ffff}\u{10ffff}", "A\u{10ffff}\u{10ffff}"]  ==> all rows must pass (must keep)
+            true,
+        ];
+        prune_with_expr(expr, &schema, &statistics, expected_ret);
+    }
+
+    #[test]
+    fn prune_utf8_like_one() {
+        let (schema, statistics) = utf8_setup();
+
+        let expr = col("s1").like(lit("A_"));
+        #[rustfmt::skip]
+        let expected_ret = &[
+            // s1 ["A", "Z"] ==> some rows could pass (must keep)
+            true,
+            // s1 ["A", "L"] ==> some rows could pass (must keep)
+            true,
+            // s1 ["N", "Z"] ==> no rows can pass (not keep)
+            false,
+            // s1 ["M", "M"] ==> no rows can pass (not keep)
+            false,
+            // s1 [NULL, NULL]  ==> unknown (must keep)
+            true,
+            // s1 ["A", NULL]  ==> unknown (must keep)
+            true,
+            // s1 ["", "A"]  ==> some rows could pass (must keep)
+            true,
+            // s1 ["", ""]  ==> no rows can pass (not keep)
+            false,
+            // s1 ["AB", "A\u{10ffff}\u{10ffff}\u{10ffff}"]  ==> some rows could pass (must keep)
+            true,
+            // s1 ["A\u{10ffff}\u{10ffff}", "A\u{10ffff}\u{10ffff}"]  ==> some rows could pass (must keep)
+            true,
+        ];
+        prune_with_expr(expr, &schema, &statistics, expected_ret);
+
+        let expr = col("s1").like(lit("_A_"));
+        #[rustfmt::skip]
+        let expected_ret = &[
+            // s1 ["A", "Z"] ==> some rows could pass (must keep)
+            true,
+            // s1 ["A", "L"] ==> some rows could pass (must keep)
+            true,
+            // s1 ["N", "Z"] ==> some rows could pass (must keep)
+            true,
+            // s1 ["M", "M"] ==> some rows could pass (must keep)
+            true,
+            // s1 [NULL, NULL]  ==> unknown (must keep)
+            true,
+            // s1 ["A", NULL]  ==> unknown (must keep)
+            true,
+            // s1 ["", "A"]  ==> some rows could pass (must keep)
+            true,
+            // s1 ["", ""]  ==> some rows could pass (must keep)
+            true,
+            // s1 ["AB", "A\u{10ffff}\u{10ffff}\u{10ffff}"]  ==> some rows could pass (must keep)
+            true,
+            // s1 ["A\u{10ffff}\u{10ffff}", "A\u{10ffff}\u{10ffff}"]  ==> some rows could pass (must keep)
+            true,
+        ];
+        prune_with_expr(expr, &schema, &statistics, expected_ret);
+
+        let expr = col("s1").like(lit("_"));
+        #[rustfmt::skip]
+        let expected_ret = &[
+            // s1 ["A", "Z"] ==> all rows must pass (must keep)
+            true,
+            // s1 ["A", "L"] ==> all rows must pass (must keep)
+            true,
+            // s1 ["N", "Z"] ==> all rows must pass (must keep)
+            true,
+            // s1 ["M", "M"] ==> all rows must pass (must keep)
+            true,
+            // s1 [NULL, NULL]  ==> unknown (must keep)
+            true,
+            // s1 ["A", NULL]  ==> unknown (must keep)
+            true,
+            // s1 ["", "A"]  ==> all rows must pass (must keep)
+            true,
+            // s1 ["", ""]  ==> all rows must pass (must keep)
+            true,
+            // s1 ["AB", "A\u{10ffff}\u{10ffff}\u{10ffff}"]  ==> all rows must pass (must keep)
+            true,
+            // s1 ["A\u{10ffff}\u{10ffff}", "A\u{10ffff}\u{10ffff}"]  ==> all rows must pass (must keep)
+            true,
+        ];
+        prune_with_expr(expr, &schema, &statistics, expected_ret);
+
+        let expr = col("s1").like(lit(""));
+        #[rustfmt::skip]
+        let expected_ret = &[
+            // s1 ["A", "Z"] ==> no rows can pass (not keep)
+            false,
+            // s1 ["A", "L"] ==> no rows can pass (not keep)
+            false,
+            // s1 ["N", "Z"] ==> no rows can pass (not keep)
+            false,
+            // s1 ["M", "M"] ==> no rows can pass (not keep)
+            false,
+            // s1 [NULL, NULL]  ==> unknown (must keep)
+            true,
+            // s1 ["A", NULL]  ==> no rows can pass (not keep)
+            false,
+            // s1 ["", "A"]  ==> some rows could pass (must keep)
+            true,
+            // s1 ["", ""]  ==> all rows must pass (must keep)
+            true,
+            // s1 ["AB", "A\u{10ffff}\u{10ffff}\u{10ffff}"]  ==> no rows can pass (not keep)
+            false,
+            // s1 ["A\u{10ffff}\u{10ffff}", "A\u{10ffff}\u{10ffff}"]  ==> no rows can pass (not keep)
+            false,
+        ];
+        prune_with_expr(expr, &schema, &statistics, expected_ret);
+    }
+
+    #[test]
+    fn prune_utf8_like_many() {
+        let (schema, statistics) = utf8_setup();
+
+        let expr = col("s1").like(lit("A%"));
+        #[rustfmt::skip]
+        let expected_ret = &[
+            // s1 ["A", "Z"] ==> some rows could pass (must keep)
+            true,
+            // s1 ["A", "L"] ==> some rows could pass (must keep)
+            true,
+            // s1 ["N", "Z"] ==> no rows can pass (not keep)
+            false,
+            // s1 ["M", "M"] ==> no rows can pass (not keep)
+            false,
+            // s1 [NULL, NULL]  ==> unknown (must keep)
+            true,
+            // s1 ["A", NULL]  ==> unknown (must keep)
+            true,
+            // s1 ["", "A"]  ==> some rows could pass (must keep)
+            true,
+            // s1 ["", ""]  ==> no rows can pass (not keep)
+            false,
+            // s1 ["AB", "A\u{10ffff}\u{10ffff}\u{10ffff}"]  ==> some rows could pass (must keep)
+            true,
+            // s1 ["A\u{10ffff}\u{10ffff}", "A\u{10ffff}\u{10ffff}"]  ==> some rows could pass (must keep)
+            true,
+        ];
+        prune_with_expr(expr, &schema, &statistics, expected_ret);
+
+        let expr = col("s1").like(lit("%A%"));
+        #[rustfmt::skip]
+        let expected_ret = &[
+            // s1 ["A", "Z"] ==> some rows could pass (must keep)
+            true,
+            // s1 ["A", "L"] ==> some rows could pass (must keep)
+            true,
+            // s1 ["N", "Z"] ==> some rows could pass (must keep)
+            true,
+            // s1 ["M", "M"] ==> some rows could pass (must keep)
+            true,
+            // s1 [NULL, NULL]  ==> unknown (must keep)
+            true,
+            // s1 ["A", NULL]  ==> unknown (must keep)
+            true,
+            // s1 ["", "A"]  ==> some rows could pass (must keep)
+            true,
+            // s1 ["", ""]  ==> some rows could pass (must keep)
+            true,
+            // s1 ["AB", "A\u{10ffff}\u{10ffff}\u{10ffff}"]  ==> some rows could pass (must keep)
+            true,
+            // s1 ["A\u{10ffff}\u{10ffff}", "A\u{10ffff}\u{10ffff}"]  ==> some rows could pass (must keep)
+            true,
+        ];
+        prune_with_expr(expr, &schema, &statistics, expected_ret);
+
+        let expr = col("s1").like(lit("%"));
+        #[rustfmt::skip]
+        let expected_ret = &[
+            // s1 ["A", "Z"] ==> all rows must pass (must keep)
+            true,
+            // s1 ["A", "L"] ==> all rows must pass (must keep)
+            true,
+            // s1 ["N", "Z"] ==> all rows must pass (must keep)
+            true,
+            // s1 ["M", "M"] ==> all rows must pass (must keep)
+            true,
+            // s1 [NULL, NULL]  ==> unknown (must keep)
+            true,
+            // s1 ["A", NULL]  ==> unknown (must keep)
+            true,
+            // s1 ["", "A"]  ==> all rows must pass (must keep)
+            true,
+            // s1 ["", ""]  ==> all rows must pass (must keep)
+            true,
+            // s1 ["AB", "A\u{10ffff}\u{10ffff}\u{10ffff}"]  ==> all rows must pass (must keep)
+            true,
+            // s1 ["A\u{10ffff}\u{10ffff}", "A\u{10ffff}\u{10ffff}"]  ==> all rows must pass (must keep)
+            true,
+        ];
+        prune_with_expr(expr, &schema, &statistics, expected_ret);
+
+        let expr = col("s1").like(lit(""));
+        #[rustfmt::skip]
+        let expected_ret = &[
+            // s1 ["A", "Z"] ==> no rows can pass (not keep)
+            false,
+            // s1 ["A", "L"] ==> no rows can pass (not keep)
+            false,
+            // s1 ["N", "Z"] ==> no rows can pass (not keep)
+            false,
+            // s1 ["M", "M"] ==> no rows can pass (not keep)
+            false,
+            // s1 [NULL, NULL]  ==> unknown (must keep)
+            true,
+            // s1 ["A", NULL]  ==> no rows can pass (not keep)
+            false,
+            // s1 ["", "A"]  ==> some rows could pass (must keep)
+            true,
+            // s1 ["", ""]  ==> all rows must pass (must keep)
+            true,
+            // s1 ["AB", "A\u{10ffff}\u{10ffff}\u{10ffff}"]  ==> no rows can pass (not keep)
+            false,
+            // s1 ["A\u{10ffff}\u{10ffff}", "A\u{10ffff}\u{10ffff}"]  ==> no rows can pass (not keep)
+            false,
+        ];
+        prune_with_expr(expr, &schema, &statistics, expected_ret);
     }
 
     #[test]

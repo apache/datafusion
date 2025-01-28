@@ -97,6 +97,8 @@ impl TryFrom<&Field> for protobuf::Field {
             nullable: field.is_nullable(),
             children: Vec::new(),
             metadata: field.metadata().clone(),
+            #[allow(deprecated)]
+            // See https://github.com/apache/datafusion/issues/14173 to remove deprecated dict_id
             dict_id: field.dict_id().unwrap_or(0),
             dict_ordered: field.dict_is_ordered().unwrap_or(false),
         })
@@ -818,6 +820,7 @@ impl TryFrom<&ParquetOptions> for protobuf::ParquetOptions {
             dictionary_enabled_opt: value.dictionary_enabled.map(protobuf::parquet_options::DictionaryEnabledOpt::DictionaryEnabled),
             dictionary_page_size_limit: value.dictionary_page_size_limit as u64,
             statistics_enabled_opt: value.statistics_enabled.clone().map(protobuf::parquet_options::StatisticsEnabledOpt::StatisticsEnabled),
+            #[allow(deprecated)]
             max_statistics_size_opt: value.max_statistics_size.map(|v| protobuf::parquet_options::MaxStatisticsSizeOpt::MaxStatisticsSize(v as u64)),
             max_row_group_size: value.max_row_group_size as u64,
             created_by: value.created_by.clone(),
@@ -833,6 +836,7 @@ impl TryFrom<&ParquetOptions> for protobuf::ParquetOptions {
             maximum_buffered_record_batches_per_stream: value.maximum_buffered_record_batches_per_stream as u64,
             schema_force_view_types: value.schema_force_view_types,
             binary_as_string: value.binary_as_string,
+            skip_arrow_metadata: value.skip_arrow_metadata,
         })
     }
 }
@@ -855,6 +859,7 @@ impl TryFrom<&ParquetColumnOptions> for protobuf::ParquetColumnOptions {
                 .statistics_enabled
                 .clone()
                 .map(protobuf::parquet_column_options::StatisticsEnabledOpt::StatisticsEnabled),
+            #[allow(deprecated)]
             max_statistics_size_opt: value.max_statistics_size.map(|v| {
                 protobuf::parquet_column_options::MaxStatisticsSizeOpt::MaxStatisticsSize(
                     v as u32,
@@ -928,6 +933,7 @@ impl TryFrom<&CsvOptions> for protobuf::CsvOptions {
             timestamp_tz_format: opts.timestamp_tz_format.clone().unwrap_or_default(),
             time_format: opts.time_format.clone().unwrap_or_default(),
             null_value: opts.null_value.clone().unwrap_or_default(),
+            null_regex: opts.null_regex.clone().unwrap_or_default(),
             comment: opts.comment.map_or_else(Vec::new, |h| vec![h]),
         })
     }

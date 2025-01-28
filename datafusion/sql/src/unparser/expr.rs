@@ -43,6 +43,8 @@ use datafusion_expr::{
     expr::{Alias, Exists, InList, ScalarFunction, Sort, WindowFunction},
     Between, BinaryExpr, Case, Cast, Expr, GroupingSet, Like, Operator, TryCast,
 };
+use sqlparser::ast::helpers::attached_token::AttachedToken;
+use sqlparser::tokenizer::Span;
 
 /// Convert a DataFusion [`Expr`] to [`ast::Expr`]
 ///
@@ -233,6 +235,7 @@ impl Unparser<'_> {
                     name: ObjectName(vec![Ident {
                         value: func_name.to_string(),
                         quote_style: None,
+                        span: Span::empty(),
                     }]),
                     args: ast::FunctionArguments::List(ast::FunctionArgumentList {
                         duplicate_treatment: None,
@@ -244,6 +247,7 @@ impl Unparser<'_> {
                     over,
                     within_group: vec![],
                     parameters: ast::FunctionArguments::None,
+                    uses_odbc_syntax: false,
                 }))
             }
             Expr::SimilarTo(Like {
@@ -286,6 +290,7 @@ impl Unparser<'_> {
                     name: ObjectName(vec![Ident {
                         value: func_name.to_string(),
                         quote_style: None,
+                        span: Span::empty(),
                     }]),
                     args: ast::FunctionArguments::List(ast::FunctionArgumentList {
                         duplicate_treatment: agg
@@ -299,6 +304,7 @@ impl Unparser<'_> {
                     over: None,
                     within_group,
                     parameters: ast::FunctionArguments::None,
+                    uses_odbc_syntax: false,
                 }))
             }
             Expr::ScalarSubquery(subq) => {
@@ -412,12 +418,16 @@ impl Unparser<'_> {
             }
             // TODO: unparsing wildcard addition options
             Expr::Wildcard { qualifier, .. } => {
+                let attached_token = AttachedToken::empty();
                 if let Some(qualifier) = qualifier {
                     let idents: Vec<Ident> =
                         qualifier.to_vec().into_iter().map(Ident::new).collect();
-                    Ok(ast::Expr::QualifiedWildcard(ObjectName(idents)))
+                    Ok(ast::Expr::QualifiedWildcard(
+                        ObjectName(idents),
+                        attached_token,
+                    ))
                 } else {
-                    Ok(ast::Expr::Wildcard)
+                    Ok(ast::Expr::Wildcard(attached_token))
                 }
             }
             Expr::GroupingSet(grouping_set) => match grouping_set {
@@ -470,7 +480,10 @@ impl Unparser<'_> {
         match func_name {
             "make_array" => self.make_array_to_sql(args),
             "array_element" => self.array_element_to_sql(args),
-            // TODO: support for the construct and access functions of the `map` and `struct` types
+            "named_struct" => self.named_struct_to_sql(args),
+            "get_field" => self.get_field_to_sql(args),
+            "map" => self.map_to_sql(args),
+            // TODO: support for the construct and access functions of the `map` type
             _ => self.scalar_function_to_sql_internal(func_name, args),
         }
     }
@@ -485,6 +498,7 @@ impl Unparser<'_> {
             name: ObjectName(vec![Ident {
                 value: func_name.to_string(),
                 quote_style: None,
+                span: Span::empty(),
             }]),
             args: ast::FunctionArguments::List(ast::FunctionArgumentList {
                 duplicate_treatment: None,
@@ -496,6 +510,7 @@ impl Unparser<'_> {
             over: None,
             within_group: vec![],
             parameters: ast::FunctionArguments::None,
+            uses_odbc_syntax: false,
         }))
     }
 
@@ -520,6 +535,90 @@ impl Unparser<'_> {
             expr: Box::new(array),
             subscript: Box::new(Subscript::Index { index }),
         })
+    }
+
+    fn named_struct_to_sql(&self, args: &[Expr]) -> Result<ast::Expr> {
+        if args.len() % 2 != 0 {
+            return internal_err!("named_struct must have an even number of arguments");
+        }
+
+        let args = args
+            .chunks_exact(2)
+            .map(|chunk| {
+                let key = match &chunk[0] {
+                    Expr::Literal(ScalarValue::Utf8(Some(s))) => self.new_ident_quoted_if_needs(s.to_string()),
+                    _ => return internal_err!("named_struct expects even arguments to be strings, but received: {:?}", &chunk[0])
+                };
+
+                Ok(ast::DictionaryField {
+                    key,
+                    value: Box::new(self.expr_to_sql(&chunk[1])?),
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+
+        Ok(ast::Expr::Dictionary(args))
+    }
+
+    fn get_field_to_sql(&self, args: &[Expr]) -> Result<ast::Expr> {
+        if args.len() != 2 {
+            return internal_err!("get_field must have exactly 2 arguments");
+        }
+
+        let mut id = match &args[0] {
+            Expr::Column(col) => match self.col_to_sql(col)? {
+                ast::Expr::Identifier(ident) => vec![ident],
+                ast::Expr::CompoundIdentifier(idents) => idents,
+                other => return internal_err!("expected col_to_sql to return an Identifier or CompoundIdentifier, but received: {:?}", other),
+            },
+            _ => return internal_err!("get_field expects first argument to be column, but received: {:?}", &args[0]),
+        };
+
+        let field = match &args[1] {
+            Expr::Literal(lit) => self.new_ident_quoted_if_needs(lit.to_string()),
+            _ => {
+                return internal_err!(
+                "get_field expects second argument to be a string, but received: {:?}",
+                &args[0]
+            )
+            }
+        };
+        id.push(field);
+
+        Ok(ast::Expr::CompoundIdentifier(id))
+    }
+
+    fn map_to_sql(&self, args: &[Expr]) -> Result<ast::Expr> {
+        if args.len() != 2 {
+            return internal_err!("map must have exactly 2 arguments");
+        }
+
+        let ast::Expr::Array(Array { elem: keys, .. }) = self.expr_to_sql(&args[0])?
+        else {
+            return internal_err!(
+                "map expects first argument to be an array, but received: {:?}",
+                &args[0]
+            );
+        };
+
+        let ast::Expr::Array(Array { elem: values, .. }) = self.expr_to_sql(&args[1])?
+        else {
+            return internal_err!(
+                "map expects second argument to be an array, but received: {:?}",
+                &args[1]
+            );
+        };
+
+        let entries = keys
+            .into_iter()
+            .zip(values)
+            .map(|(key, value)| ast::MapEntry {
+                key: Box::new(key),
+                value: Box::new(value),
+            })
+            .collect();
+
+        Ok(ast::Expr::Map(ast::Map { entries }))
     }
 
     pub fn sort_to_sql(&self, sort: &Sort) -> Result<ast::OrderByExpr> {
@@ -630,6 +729,7 @@ impl Unparser<'_> {
         Ident {
             value: ident,
             quote_style,
+            span: Span::empty(),
         }
     }
 
@@ -637,6 +737,7 @@ impl Unparser<'_> {
         Ident {
             value: str,
             quote_style: None,
+            span: Span::empty(),
         }
     }
 
@@ -654,7 +755,7 @@ impl Unparser<'_> {
     }
 
     /// Given an expression of the form `((a + b) * (c * d))`,
-    /// the parenthesing is redundant if the precedence of the nested expression is already higher
+    /// the parenthesis is redundant if the precedence of the nested expression is already higher
     /// than the surrounding operators' precedence. The above expression would become
     /// `(a + b) * c * d`.
     ///
@@ -803,7 +904,7 @@ impl Unparser<'_> {
             Operator::Plus => Ok(BinaryOperator::Plus),
             Operator::Minus => Ok(BinaryOperator::Minus),
             Operator::Multiply => Ok(BinaryOperator::Multiply),
-            Operator::Divide => Ok(BinaryOperator::Divide),
+            Operator::Divide => Ok(self.dialect.division_operator()),
             Operator::Modulo => Ok(BinaryOperator::Modulo),
             Operator::And => Ok(BinaryOperator::And),
             Operator::Or => Ok(BinaryOperator::Or),
@@ -1153,7 +1254,7 @@ impl Unparser<'_> {
     /// MySQL requires INTERVAL sql to be in the format: INTERVAL 1 YEAR + INTERVAL 1 MONTH + INTERVAL 1 DAY etc
     /// `<https://dev.mysql.com/doc/refman/8.4/en/expressions.html#temporal-intervals>`
     /// Interval sequence can't be wrapped in brackets - (INTERVAL 1 YEAR + INTERVAL 1 MONTH ...) so we need to generate
-    /// a single INTERVAL expression so it works correct for interval substraction cases
+    /// a single INTERVAL expression so it works correct for interval subtraction cases
     /// MySQL supports the DAY_MICROSECOND unit type (format is DAYS HOURS:MINUTES:SECONDS.MICROSECONDS), but it is not supported by sqlparser
     /// so we calculate the best single interval to represent the provided duration
     fn interval_to_mysql_expr(
@@ -1402,6 +1503,7 @@ impl Unparser<'_> {
             name: ObjectName(vec![Ident {
                 value: "UNNEST".to_string(),
                 quote_style: None,
+                span: Span::empty(),
             }]),
             args: ast::FunctionArguments::List(ast::FunctionArgumentList {
                 duplicate_treatment: None,
@@ -1413,6 +1515,7 @@ impl Unparser<'_> {
             over: None,
             within_group: vec![],
             parameters: ast::FunctionArguments::None,
+            uses_odbc_syntax: false,
         }))
     }
 
@@ -1532,14 +1635,16 @@ mod tests {
         Signature, Volatility, WindowFrame, WindowFunctionDefinition,
     };
     use datafusion_expr::{interval_month_day_nano_lit, ExprFunctionExt};
+    use datafusion_functions::expr_fn::{get_field, named_struct};
     use datafusion_functions_aggregate::count::count_udaf;
     use datafusion_functions_aggregate::expr_fn::sum;
     use datafusion_functions_nested::expr_fn::{array_element, make_array};
+    use datafusion_functions_nested::map::map;
     use datafusion_functions_window::row_number::row_number_udwf;
 
     use crate::unparser::dialect::{
         CharacterLengthStyle, CustomDialect, CustomDialectBuilder, DateFieldExtractStyle,
-        Dialect, PostgreSqlDialect,
+        Dialect, DuckDBDialect, PostgreSqlDialect, ScalarFnToSqlHandler,
     };
 
     use super::*;
@@ -1575,7 +1680,11 @@ mod tests {
             Ok(DataType::Int32)
         }
 
-        fn invoke(&self, _args: &[ColumnarValue]) -> Result<ColumnarValue> {
+        fn invoke_batch(
+            &self,
+            _args: &[ColumnarValue],
+            _number_rows: usize,
+        ) -> Result<ColumnarValue> {
             unimplemented!("DummyUDF::invoke")
         }
     }
@@ -1587,7 +1696,7 @@ mod tests {
         let dummy_logical_plan = table_scan(Some("t"), &dummy_schema, None)?
             .project(vec![Expr::Wildcard {
                 qualifier: None,
-                options: WildcardOptions::default(),
+                options: Box::new(WildcardOptions::default()),
             }])?
             .filter(col("a").eq(lit(1)))?
             .build()?;
@@ -1779,10 +1888,7 @@ mod tests {
             (sum(col("a")), r#"sum(a)"#),
             (
                 count_udaf()
-                    .call(vec![Expr::Wildcard {
-                        qualifier: None,
-                        options: WildcardOptions::default(),
-                    }])
+                    .call(vec![wildcard()])
                     .distinct()
                     .build()
                     .unwrap(),
@@ -1790,10 +1896,7 @@ mod tests {
             ),
             (
                 count_udaf()
-                    .call(vec![Expr::Wildcard {
-                        qualifier: None,
-                        options: WildcardOptions::default(),
-                    }])
+                    .call(vec![wildcard()])
                     .filter(lit(true))
                     .build()
                     .unwrap(),
@@ -1944,6 +2047,15 @@ mod tests {
             (
                 array_element(make_array(vec![lit(1), lit(2), lit(3)]), lit(1)),
                 "[1, 2, 3][1]",
+            ),
+            (
+                named_struct(vec![lit("a"), lit("1"), lit("b"), lit(2)]),
+                "{a: '1', b: 2}",
+            ),
+            (get_field(col("a.b"), "c"), "a.b.c"),
+            (
+                map(vec![lit("a"), lit("b")], vec![lit(1), lit(2)]),
+                "MAP {'a': 1, 'b': 2}",
             ),
         ];
 
@@ -2491,6 +2603,32 @@ mod tests {
     }
 
     #[test]
+    fn custom_dialect_division_operator() -> Result<()> {
+        let default_dialect = CustomDialectBuilder::new().build();
+        let duckdb_dialect = CustomDialectBuilder::new()
+            .with_division_operator(BinaryOperator::DuckIntegerDivide)
+            .build();
+
+        for (dialect, expected) in
+            [(default_dialect, "(a / b)"), (duckdb_dialect, "(a // b)")]
+        {
+            let unparser = Unparser::new(&dialect);
+            let expr = Expr::BinaryExpr(BinaryExpr {
+                left: Box::new(col("a")),
+                op: Operator::Divide,
+                right: Box::new(col("b")),
+            });
+            let ast = unparser.expr_to_sql(&expr)?;
+
+            let actual = format!("{}", ast);
+            let expected = expected.to_string();
+
+            assert_eq!(actual, expected);
+        }
+        Ok(())
+    }
+
+    #[test]
     fn test_cast_value_to_dict_expr() {
         let tests = [(
             Expr::Cast(Cast {
@@ -2589,6 +2727,30 @@ mod tests {
         let expected = r#"a IS NULL"#.to_string();
 
         assert_eq!(actual, expected);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_custom_scalar_overrides_duckdb() -> Result<()> {
+        let duckdb_default = DuckDBDialect::new();
+        let duckdb_extended = DuckDBDialect::new().with_custom_scalar_overrides(vec![(
+            "dummy_udf",
+            Box::new(|unparser: &Unparser, args: &[Expr]| {
+                unparser.scalar_function_to_sql("smart_udf", args).map(Some)
+            }) as ScalarFnToSqlHandler,
+        )]);
+
+        for (dialect, expected) in [
+            (duckdb_default, r#"dummy_udf("a", "b")"#),
+            (duckdb_extended, r#"smart_udf("a", "b")"#),
+        ] {
+            let unparser = Unparser::new(&dialect);
+            let expr =
+                ScalarUDF::new_from_impl(DummyUDF::new()).call(vec![col("a"), col("b")]);
+            let actual = format!("{}", unparser.expr_to_sql(&expr)?);
+            assert_eq!(actual, expected);
+        }
 
         Ok(())
     }

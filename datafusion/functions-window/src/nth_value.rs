@@ -131,16 +131,14 @@ static FIRST_VALUE_DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
 
 fn get_first_value_doc() -> &'static Documentation {
     FIRST_VALUE_DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_ANALYTICAL)
-            .with_description(
-                "Returns value evaluated at the row that is the first row of the window \
+        Documentation::builder(
+            DOC_SECTION_ANALYTICAL,
+            "Returns value evaluated at the row that is the first row of the window \
                 frame.",
-            )
-            .with_syntax_example("first_value(expression)")
-            .with_argument("expression", "Expression to operate on")
-            .build()
-            .unwrap()
+            "first_value(expression)",
+        )
+        .with_argument("expression", "Expression to operate on")
+        .build()
     })
 }
 
@@ -148,16 +146,14 @@ static LAST_VALUE_DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
 
 fn get_last_value_doc() -> &'static Documentation {
     LAST_VALUE_DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_ANALYTICAL)
-            .with_description(
-                "Returns value evaluated at the row that is the last row of the window \
+        Documentation::builder(
+            DOC_SECTION_ANALYTICAL,
+            "Returns value evaluated at the row that is the last row of the window \
                 frame.",
-            )
-            .with_syntax_example("last_value(expression)")
-            .with_argument("expression", "Expression to operate on")
-            .build()
-            .unwrap()
+            "last_value(expression)",
+        )
+        .with_argument("expression", "Expression to operate on")
+        .build()
     })
 }
 
@@ -165,21 +161,19 @@ static NTH_VALUE_DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
 
 fn get_nth_value_doc() -> &'static Documentation {
     NTH_VALUE_DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_ANALYTICAL)
-            .with_description(
-                "Returns value evaluated at the row that is the nth row of the window \
+        Documentation::builder(
+            DOC_SECTION_ANALYTICAL,
+            "Returns value evaluated at the row that is the nth row of the window \
                 frame (counting from 1); null if no such row.",
-            )
-            .with_syntax_example("nth_value(expression, n)")
-            .with_argument(
-                "expression",
-                "The name the column of which nth \
+            "nth_value(expression, n)",
+        )
+        .with_argument(
+            "expression",
+            "The name the column of which nth \
             value to retrieve",
-            )
-            .with_argument("n", "Integer. Specifies the n in nth")
-            .build()
-            .unwrap()
+        )
+        .with_argument("n", "Integer. Specifies the n in nth")
+        .build()
     })
 }
 
@@ -351,24 +345,27 @@ impl PartitionEvaluator for NthValueEvaluator {
                 return ScalarValue::try_from(arr.data_type());
             }
 
-            // Extract valid indices if ignoring nulls.
+            // If null values exist and need to be ignored, extract the valid indices.
             let valid_indices = if self.ignore_nulls {
-                // Calculate valid indices, inside the window frame boundaries
+                // Calculate valid indices, inside the window frame boundaries.
                 let slice = arr.slice(range.start, n_range);
-                let valid_indices = slice
-                    .nulls()
-                    .map(|nulls| {
-                        nulls
+                match slice.nulls() {
+                    Some(nulls) => {
+                        let valid_indices = nulls
                             .valid_indices()
-                            // Add offset `range.start` to valid indices, to point correct index in the original arr.
-                            .map(|idx| idx + range.start)
-                            .collect::<Vec<_>>()
-                    })
-                    .unwrap_or_default();
-                if valid_indices.is_empty() {
-                    return ScalarValue::try_from(arr.data_type());
+                            .map(|idx| {
+                                // Add offset `range.start` to valid indices, to point correct index in the original arr.
+                                idx + range.start
+                            })
+                            .collect::<Vec<_>>();
+                        if valid_indices.is_empty() {
+                            // If all values are null, return directly.
+                            return ScalarValue::try_from(arr.data_type());
+                        }
+                        Some(valid_indices)
+                    }
+                    None => None,
                 }
-                Some(valid_indices)
             } else {
                 None
             };

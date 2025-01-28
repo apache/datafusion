@@ -593,17 +593,20 @@ pub struct CsvOptions {
     /// Optional representation of null value
     #[prost(string, tag = "12")]
     pub null_value: ::prost::alloc::string::String,
+    /// Optional representation of null loading regex
+    #[prost(string, tag = "13")]
+    pub null_regex: ::prost::alloc::string::String,
     /// Optional comment character as a byte
-    #[prost(bytes = "vec", tag = "13")]
+    #[prost(bytes = "vec", tag = "14")]
     pub comment: ::prost::alloc::vec::Vec<u8>,
     /// Indicates if quotes are doubled
-    #[prost(bytes = "vec", tag = "14")]
+    #[prost(bytes = "vec", tag = "15")]
     pub double_quote: ::prost::alloc::vec::Vec<u8>,
     /// Indicates if newlines are supported in values
-    #[prost(bytes = "vec", tag = "15")]
+    #[prost(bytes = "vec", tag = "16")]
     pub newlines_in_values: ::prost::alloc::vec::Vec<u8>,
     /// Optional terminator character as a byte
-    #[prost(bytes = "vec", tag = "16")]
+    #[prost(bytes = "vec", tag = "17")]
     pub terminator: ::prost::alloc::vec::Vec<u8>,
 }
 /// Options controlling CSV format
@@ -760,6 +763,9 @@ pub struct ParquetOptions {
     /// default = false
     #[prost(bool, tag = "29")]
     pub binary_as_string: bool,
+    /// default = false
+    #[prost(bool, tag = "30")]
+    pub skip_arrow_metadata: bool,
     #[prost(uint64, tag = "12")]
     pub dictionary_page_size_limit: u64,
     #[prost(uint64, tag = "18")]

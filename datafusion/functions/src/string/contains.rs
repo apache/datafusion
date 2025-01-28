@@ -23,13 +23,28 @@ use arrow::datatypes::DataType::{Boolean, LargeUtf8, Utf8, Utf8View};
 use datafusion_common::exec_err;
 use datafusion_common::DataFusionError;
 use datafusion_common::Result;
-use datafusion_expr::scalar_doc_sections::DOC_SECTION_STRING;
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
 };
+use datafusion_macros::user_doc;
 use std::any::Any;
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
+#[user_doc(
+    doc_section(label = "String Functions"),
+    description = "Return true if search_str is found within string (case-sensitive).",
+    syntax_example = "contains(str, search_str)",
+    sql_example = r#"```sql
+> select contains('the quick brown fox', 'row');
++---------------------------------------------------+
+| contains(Utf8("the quick brown fox"),Utf8("row")) |
++---------------------------------------------------+
+| true                                              |
++---------------------------------------------------+
+```"#,
+    standard_argument(name = "str", prefix = "String"),
+    argument(name = "search_str", description = "The string to search for in str.")
+)]
 #[derive(Debug)]
 pub struct ContainsFunc {
     signature: Signature,
@@ -66,40 +81,17 @@ impl ScalarUDFImpl for ContainsFunc {
         Ok(Boolean)
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         make_scalar_function(contains, vec![])(args)
     }
 
     fn documentation(&self) -> Option<&Documentation> {
-        Some(get_contains_doc())
+        self.doc()
     }
-}
-
-static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
-
-fn get_contains_doc() -> &'static Documentation {
-    DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_STRING)
-            .with_description(
-                "Return true if search_str is found within string (case-sensitive).",
-            )
-            .with_syntax_example("contains(str, search_str)")
-            .with_sql_example(
-                r#"```sql
-> select contains('the quick brown fox', 'row');
-+---------------------------------------------------+
-| contains(Utf8("the quick brown fox"),Utf8("row")) |
-+---------------------------------------------------+
-| true                                              |
-+---------------------------------------------------+
-```"#,
-            )
-            .with_standard_argument("str", Some("String"))
-            .with_argument("search_str", "The string to search for in str.")
-            .build()
-            .unwrap()
-    })
 }
 
 /// use `arrow::compute::contains` to do the calculation for contains
@@ -145,6 +137,7 @@ mod test {
             Some("yyy?()"),
         ])));
         let scalar = ColumnarValue::Scalar(ScalarValue::Utf8(Some("x?(".to_string())));
+        #[allow(deprecated)] // TODO migrate UDF to invoke
         let actual = udf.invoke_batch(&[array, scalar], 2).unwrap();
         let expect = ColumnarValue::Array(Arc::new(BooleanArray::from(vec![
             Some(true),

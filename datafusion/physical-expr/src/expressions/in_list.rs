@@ -244,7 +244,7 @@ trait IsEqual: HashValue {
     fn is_equal(&self, other: &Self) -> bool;
 }
 
-impl<'a, T: IsEqual + ?Sized> IsEqual for &'a T {
+impl<T: IsEqual + ?Sized> IsEqual for &T {
     fn is_equal(&self, other: &Self) -> bool {
         T::is_equal(self, other)
     }

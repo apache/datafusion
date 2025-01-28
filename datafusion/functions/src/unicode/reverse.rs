@@ -16,21 +16,34 @@
 // under the License.
 
 use std::any::Any;
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
 use crate::utils::{make_scalar_function, utf8_to_str_type};
 use arrow::array::{
-    Array, ArrayAccessor, ArrayIter, ArrayRef, AsArray, GenericStringArray,
-    OffsetSizeTrait,
+    Array, ArrayRef, AsArray, GenericStringBuilder, OffsetSizeTrait, StringArrayType,
 };
 use arrow::datatypes::DataType;
 use datafusion_common::{exec_err, Result};
-use datafusion_expr::scalar_doc_sections::DOC_SECTION_STRING;
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
 };
+use datafusion_macros::user_doc;
 use DataType::{LargeUtf8, Utf8, Utf8View};
 
+#[user_doc(
+    doc_section(label = "String Functions"),
+    description = "Reverses the character order of a string.",
+    syntax_example = "reverse(str)",
+    sql_example = r#"```sql
+> select reverse('datafusion');
++-----------------------------+
+| reverse(Utf8("datafusion")) |
++-----------------------------+
+| noisufatad                  |
++-----------------------------+
+```"#,
+    standard_argument(name = "str", prefix = "String")
+)]
 #[derive(Debug)]
 pub struct ReverseFunc {
     signature: Signature,
@@ -72,7 +85,11 @@ impl ScalarUDFImpl for ReverseFunc {
         utf8_to_str_type(&arg_types[0], "reverse")
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         match args[0].data_type() {
             Utf8 | Utf8View => make_scalar_function(reverse::<i32>, vec![])(args),
             LargeUtf8 => make_scalar_function(reverse::<i64>, vec![])(args),
@@ -83,36 +100,11 @@ impl ScalarUDFImpl for ReverseFunc {
     }
 
     fn documentation(&self) -> Option<&Documentation> {
-        Some(get_reverse_doc())
+        self.doc()
     }
 }
 
-static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
-
-fn get_reverse_doc() -> &'static Documentation {
-    DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_STRING)
-            .with_description("Reverses the character order of a string.")
-            .with_syntax_example("reverse(str)")
-            .with_sql_example(
-                r#"```sql
-> select reverse('datafusion');
-+-----------------------------+
-| reverse(Utf8("datafusion")) |
-+-----------------------------+
-| noisufatad                  |
-+-----------------------------+
-```"#,
-            )
-            .with_standard_argument("str", Some("String"))
-            .build()
-            .unwrap()
-    })
-}
-
-/// Reverses the order of the characters in the string.
-/// reverse('abcde') = 'edcba'
+/// Reverses the order of the characters in the string `reverse('abcde') = 'edcba'`.
 /// The implementation uses UTF-8 code points as characters
 pub fn reverse<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
     if args[0].data_type() == &Utf8View {
@@ -122,14 +114,34 @@ pub fn reverse<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
     }
 }
 
-fn reverse_impl<'a, T: OffsetSizeTrait, V: ArrayAccessor<Item = &'a str>>(
+fn reverse_impl<'a, T: OffsetSizeTrait, V: StringArrayType<'a>>(
     string_array: V,
 ) -> Result<ArrayRef> {
-    let result = ArrayIter::new(string_array)
-        .map(|string| string.map(|string: &str| string.chars().rev().collect::<String>()))
-        .collect::<GenericStringArray<T>>();
+    let mut builder = GenericStringBuilder::<T>::with_capacity(string_array.len(), 1024);
 
-    Ok(Arc::new(result) as ArrayRef)
+    let mut string_buf = String::new();
+    let mut byte_buf = Vec::<u8>::new();
+    for string in string_array.iter() {
+        if let Some(s) = string {
+            if s.is_ascii() {
+                // reverse bytes directly since ASCII characters are single bytes
+                byte_buf.extend(s.as_bytes());
+                byte_buf.reverse();
+                // SAFETY: Since the original string was ASCII, reversing the bytes still results in valid UTF-8.
+                let reversed = unsafe { std::str::from_utf8_unchecked(&byte_buf) };
+                builder.append_value(reversed);
+                byte_buf.clear();
+            } else {
+                string_buf.extend(s.chars().rev());
+                builder.append_value(&string_buf);
+                string_buf.clear();
+            }
+        } else {
+            builder.append_null();
+        }
+    }
+
+    Ok(Arc::new(builder.finish()) as ArrayRef)
 }
 
 #[cfg(test)]
@@ -147,7 +159,7 @@ mod tests {
         ($INPUT:expr, $EXPECTED:expr) => {
             test_function!(
                 ReverseFunc::new(),
-                &[ColumnarValue::Scalar(ScalarValue::Utf8($INPUT))],
+                vec![ColumnarValue::Scalar(ScalarValue::Utf8($INPUT))],
                 $EXPECTED,
                 &str,
                 Utf8,
@@ -156,7 +168,7 @@ mod tests {
 
             test_function!(
                 ReverseFunc::new(),
-                &[ColumnarValue::Scalar(ScalarValue::LargeUtf8($INPUT))],
+                vec![ColumnarValue::Scalar(ScalarValue::LargeUtf8($INPUT))],
                 $EXPECTED,
                 &str,
                 LargeUtf8,
@@ -165,7 +177,7 @@ mod tests {
 
             test_function!(
                 ReverseFunc::new(),
-                &[ColumnarValue::Scalar(ScalarValue::Utf8View($INPUT))],
+                vec![ColumnarValue::Scalar(ScalarValue::Utf8View($INPUT))],
                 $EXPECTED,
                 &str,
                 Utf8,

@@ -28,6 +28,7 @@ use arrow::datatypes::{
     DataType, Field, FieldRef, Fields, TimeUnit, DECIMAL128_MAX_PRECISION,
     DECIMAL128_MAX_SCALE, DECIMAL256_MAX_PRECISION, DECIMAL256_MAX_SCALE,
 };
+use datafusion_common::types::NativeType;
 use datafusion_common::{
     exec_datafusion_err, exec_err, internal_err, plan_datafusion_err, plan_err, Result,
 };
@@ -624,6 +625,19 @@ pub fn try_type_union_resolution_with_struct(
 /// data type. However, users can write queries where the two arguments are
 /// different data types. In such cases, the data types are automatically cast
 /// (coerced) to a single data type to pass to the kernels.
+///
+/// # Numeric comparisons
+///
+/// When comparing numeric values, the lower precision type is coerced to the
+/// higher precision type to avoid losing data. For example when comparing
+/// `Int32` to `Int64` the coerced type is `Int64` so the `Int32` argument will
+/// be cast.
+///
+/// # Numeric / String comparisons
+///
+/// When comparing numeric values and strings, both values will be coerced to
+/// strings.  For example when comparing `'2' > 1`,  the arguments will be
+/// coerced to `Utf8` for comparison
 pub fn comparison_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
     if lhs_type == rhs_type {
         // same type => equality is possible
@@ -641,6 +655,28 @@ pub fn comparison_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<D
         .or_else(|| struct_coercion(lhs_type, rhs_type))
 }
 
+/// Similar to [`comparison_coercion`] but prefers numeric if compares with
+/// numeric and string
+///
+/// # Numeric comparisons
+///
+/// When comparing numeric values and strings, the values will be coerced to the
+/// numeric type.  For example, `'2' > 1` if `1` is an `Int32`, the arguments
+/// will be coerced to `Int32`.
+pub fn comparison_coercion_numeric(
+    lhs_type: &DataType,
+    rhs_type: &DataType,
+) -> Option<DataType> {
+    if lhs_type == rhs_type {
+        // same type => equality is possible
+        return Some(lhs_type.clone());
+    }
+    binary_numeric_coercion(lhs_type, rhs_type)
+        .or_else(|| string_coercion(lhs_type, rhs_type))
+        .or_else(|| null_coercion(lhs_type, rhs_type))
+        .or_else(|| string_numeric_coercion_as_numeric(lhs_type, rhs_type))
+}
+
 /// Coerce `lhs_type` and `rhs_type` to a common type for the purposes of a comparison operation
 /// where one is numeric and one is `Utf8`/`LargeUtf8`.
 fn string_numeric_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
@@ -652,6 +688,24 @@ fn string_numeric_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<D
         (_, LargeUtf8) if lhs_type.is_numeric() => Some(LargeUtf8),
         _ => None,
     }
+}
+
+/// Coerce `lhs_type` and `rhs_type` to a common type for the purposes of a comparison operation
+/// where one is numeric and one is `Utf8`/`LargeUtf8`.
+fn string_numeric_coercion_as_numeric(
+    lhs_type: &DataType,
+    rhs_type: &DataType,
+) -> Option<DataType> {
+    let lhs_logical_type = NativeType::from(lhs_type);
+    let rhs_logical_type = NativeType::from(rhs_type);
+    if lhs_logical_type.is_numeric() && rhs_logical_type == NativeType::String {
+        return Some(lhs_type.to_owned());
+    }
+    if rhs_logical_type.is_numeric() && lhs_logical_type == NativeType::String {
+        return Some(rhs_type.to_owned());
+    }
+
+    None
 }
 
 /// Coerce `lhs_type` and `rhs_type` to a common type for the purposes of a comparison operation
@@ -723,29 +777,19 @@ pub fn binary_numeric_coercion(
         (_, Float32) | (Float32, _) => Some(Float32),
         // The following match arms encode the following logic: Given the two
         // integral types, we choose the narrowest possible integral type that
-        // accommodates all values of both types. Note that some information
-        // loss is inevitable when we have a signed type and a `UInt64`, in
-        // which case we use `Int64`;i.e. the widest signed integral type.
-
-        // TODO: For i64 and u64, we can use decimal or float64
-        // Postgres has no unsigned type :(
-        // DuckDB v.0.10.0 has double (double precision floating-point number (8 bytes))
-        // for largest signed (signed sixteen-byte integer) and unsigned integer (unsigned sixteen-byte integer)
+        // accommodates all values of both types. Note that to avoid information
+        // loss when combining UInt64 with signed integers we use Decimal128(20, 0).
+        (UInt64, Int64 | Int32 | Int16 | Int8)
+        | (Int64 | Int32 | Int16 | Int8, UInt64) => Some(Decimal128(20, 0)),
+        (UInt64, _) | (_, UInt64) => Some(UInt64),
         (Int64, _)
         | (_, Int64)
-        | (UInt64, Int8)
-        | (Int8, UInt64)
-        | (UInt64, Int16)
-        | (Int16, UInt64)
-        | (UInt64, Int32)
-        | (Int32, UInt64)
         | (UInt32, Int8)
         | (Int8, UInt32)
         | (UInt32, Int16)
         | (Int16, UInt32)
         | (UInt32, Int32)
         | (Int32, UInt32) => Some(Int64),
-        (UInt64, _) | (_, UInt64) => Some(UInt64),
         (Int32, _)
         | (_, Int32)
         | (UInt16, Int16)
@@ -874,16 +918,16 @@ pub fn get_wider_type(lhs: &DataType, rhs: &DataType) -> Result<DataType> {
 }
 
 /// Convert the numeric data type to the decimal data type.
-/// Now, we just support the signed integer type and floating-point type.
+/// We support signed and unsigned integer types and floating-point type.
 fn coerce_numeric_type_to_decimal(numeric_type: &DataType) -> Option<DataType> {
     use arrow::datatypes::DataType::*;
     // This conversion rule is from spark
     // https://github.com/apache/spark/blob/1c81ad20296d34f137238dadd67cc6ae405944eb/sql/catalyst/src/main/scala/org/apache/spark/sql/types/DecimalType.scala#L127
     match numeric_type {
-        Int8 => Some(Decimal128(3, 0)),
-        Int16 => Some(Decimal128(5, 0)),
-        Int32 => Some(Decimal128(10, 0)),
-        Int64 => Some(Decimal128(20, 0)),
+        Int8 | UInt8 => Some(Decimal128(3, 0)),
+        Int16 | UInt16 => Some(Decimal128(5, 0)),
+        Int32 | UInt32 => Some(Decimal128(10, 0)),
+        Int64 | UInt64 => Some(Decimal128(20, 0)),
         // TODO if we convert the floating-point data to the decimal type, it maybe overflow.
         Float32 => Some(Decimal128(14, 7)),
         Float64 => Some(Decimal128(30, 15)),
@@ -892,16 +936,16 @@ fn coerce_numeric_type_to_decimal(numeric_type: &DataType) -> Option<DataType> {
 }
 
 /// Convert the numeric data type to the decimal data type.
-/// Now, we just support the signed integer type and floating-point type.
+/// We support signed and unsigned integer types and floating-point type.
 fn coerce_numeric_type_to_decimal256(numeric_type: &DataType) -> Option<DataType> {
     use arrow::datatypes::DataType::*;
     // This conversion rule is from spark
     // https://github.com/apache/spark/blob/1c81ad20296d34f137238dadd67cc6ae405944eb/sql/catalyst/src/main/scala/org/apache/spark/sql/types/DecimalType.scala#L127
     match numeric_type {
-        Int8 => Some(Decimal256(3, 0)),
-        Int16 => Some(Decimal256(5, 0)),
-        Int32 => Some(Decimal256(10, 0)),
-        Int64 => Some(Decimal256(20, 0)),
+        Int8 | UInt8 => Some(Decimal256(3, 0)),
+        Int16 | UInt16 => Some(Decimal256(5, 0)),
+        Int32 | UInt32 => Some(Decimal256(10, 0)),
+        Int64 | UInt64 => Some(Decimal256(20, 0)),
         // TODO if we convert the floating-point data to the decimal type, it maybe overflow.
         Float32 => Some(Decimal256(14, 7)),
         Float64 => Some(Decimal256(30, 15)),
@@ -1940,6 +1984,18 @@ mod tests {
             Operator::Gt,
             DataType::UInt32
         );
+        test_coercion_binary_rule!(
+            DataType::UInt64,
+            DataType::UInt8,
+            Operator::Eq,
+            DataType::UInt64
+        );
+        test_coercion_binary_rule!(
+            DataType::UInt64,
+            DataType::Int64,
+            Operator::Eq,
+            DataType::Decimal128(20, 0)
+        );
         // numeric/decimal
         test_coercion_binary_rule!(
             DataType::Int64,
@@ -1970,6 +2026,12 @@ mod tests {
             DataType::Decimal128(10, 3),
             Operator::GtEq,
             DataType::Decimal128(15, 3)
+        );
+        test_coercion_binary_rule!(
+            DataType::UInt64,
+            DataType::Decimal128(20, 0),
+            Operator::Eq,
+            DataType::Decimal128(20, 0)
         );
 
         // Binary
@@ -2064,7 +2126,7 @@ mod tests {
         );
 
         // list
-        let inner_field = Arc::new(Field::new("item", DataType::Int64, true));
+        let inner_field = Arc::new(Field::new_list_field(DataType::Int64, true));
         test_coercion_binary_rule!(
             DataType::List(Arc::clone(&inner_field)),
             DataType::List(Arc::clone(&inner_field)),
@@ -2121,8 +2183,7 @@ mod tests {
         );
 
         // Negative test: inner_timestamp_field and inner_field are not compatible because their inner types are not compatible
-        let inner_timestamp_field = Arc::new(Field::new(
-            "item",
+        let inner_timestamp_field = Arc::new(Field::new_list_field(
             DataType::Timestamp(TimeUnit::Microsecond, None),
             true,
         ));

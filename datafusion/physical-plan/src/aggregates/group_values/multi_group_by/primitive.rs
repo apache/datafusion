@@ -20,6 +20,7 @@ use crate::aggregates::group_values::null_builder::MaybeNullBufferBuilder;
 use arrow::buffer::ScalarBuffer;
 use arrow_array::cast::AsArray;
 use arrow_array::{Array, ArrayRef, ArrowPrimitiveType, PrimitiveArray};
+use arrow_schema::DataType;
 use datafusion_execution::memory_pool::proxy::VecAllocExt;
 use itertools::izip;
 use std::iter;
@@ -35,6 +36,7 @@ use std::sync::Arc;
 /// `NULLABLE`: if the data can contain any nulls
 #[derive(Debug)]
 pub struct PrimitiveGroupValueBuilder<T: ArrowPrimitiveType, const NULLABLE: bool> {
+    data_type: DataType,
     group_values: Vec<T::Native>,
     nulls: MaybeNullBufferBuilder,
 }
@@ -44,8 +46,9 @@ where
     T: ArrowPrimitiveType,
 {
     /// Create a new `PrimitiveGroupValueBuilder`
-    pub fn new() -> Self {
+    pub fn new(data_type: DataType) -> Self {
         Self {
+            data_type,
             group_values: vec![],
             nulls: MaybeNullBufferBuilder::new(),
         }
@@ -177,6 +180,7 @@ impl<T: ArrowPrimitiveType, const NULLABLE: bool> GroupColumn
 
     fn build(self: Box<Self>) -> ArrayRef {
         let Self {
+            data_type,
             group_values,
             nulls,
         } = *self;
@@ -186,10 +190,9 @@ impl<T: ArrowPrimitiveType, const NULLABLE: bool> GroupColumn
             assert!(nulls.is_none(), "unexpected nulls in non nullable input");
         }
 
-        Arc::new(PrimitiveArray::<T>::new(
-            ScalarBuffer::from(group_values),
-            nulls,
-        ))
+        let arr = PrimitiveArray::<T>::new(ScalarBuffer::from(group_values), nulls);
+        // Set timezone information for timestamp
+        Arc::new(arr.with_data_type(data_type))
     }
 
     fn take_n(&mut self, n: usize) -> ArrayRef {
@@ -197,10 +200,10 @@ impl<T: ArrowPrimitiveType, const NULLABLE: bool> GroupColumn
 
         let first_n_nulls = if NULLABLE { self.nulls.take_n(n) } else { None };
 
-        Arc::new(PrimitiveArray::<T>::new(
-            ScalarBuffer::from(first_n),
-            first_n_nulls,
-        ))
+        Arc::new(
+            PrimitiveArray::<T>::new(ScalarBuffer::from(first_n), first_n_nulls)
+                .with_data_type(self.data_type.clone()),
+        )
     }
 }
 
@@ -211,7 +214,8 @@ mod tests {
     use crate::aggregates::group_values::multi_group_by::primitive::PrimitiveGroupValueBuilder;
     use arrow::datatypes::Int64Type;
     use arrow_array::{ArrayRef, Int64Array};
-    use arrow_buffer::{BooleanBufferBuilder, NullBuffer};
+    use arrow_buffer::NullBufferBuilder;
+    use arrow_schema::DataType;
 
     use super::GroupColumn;
 
@@ -283,7 +287,8 @@ mod tests {
         //   - exist not null, input not null; values equal
 
         // Define PrimitiveGroupValueBuilder
-        let mut builder = PrimitiveGroupValueBuilder::<Int64Type, true>::new();
+        let mut builder =
+            PrimitiveGroupValueBuilder::<Int64Type, true>::new(DataType::Int64);
         let builder_array = Arc::new(Int64Array::from(vec![
             None,
             None,
@@ -299,16 +304,15 @@ mod tests {
             Int64Array::from(vec![Some(1), Some(2), None, None, Some(1), Some(3)])
                 .into_parts();
 
-        // explicitly build a boolean buffer where one of the null values also happens to match
-        let mut boolean_buffer_builder = BooleanBufferBuilder::new(6);
-        boolean_buffer_builder.append(true);
-        boolean_buffer_builder.append(false); // this sets Some(2) to null above
-        boolean_buffer_builder.append(false);
-        boolean_buffer_builder.append(false);
-        boolean_buffer_builder.append(true);
-        boolean_buffer_builder.append(true);
-        let nulls = NullBuffer::new(boolean_buffer_builder.finish());
-        let input_array = Arc::new(Int64Array::new(values, Some(nulls))) as ArrayRef;
+        // explicitly build a null buffer where one of the null values also happens to match
+        let mut nulls = NullBufferBuilder::new(6);
+        nulls.append_non_null();
+        nulls.append_null(); // this sets Some(2) to null above
+        nulls.append_null();
+        nulls.append_null();
+        nulls.append_non_null();
+        nulls.append_non_null();
+        let input_array = Arc::new(Int64Array::new(values, nulls.finish())) as ArrayRef;
 
         // Check
         let mut equal_to_results = vec![true; builder.len()];
@@ -392,7 +396,8 @@ mod tests {
         //   - values not equal
 
         // Define PrimitiveGroupValueBuilder
-        let mut builder = PrimitiveGroupValueBuilder::<Int64Type, false>::new();
+        let mut builder =
+            PrimitiveGroupValueBuilder::<Int64Type, false>::new(DataType::Int64);
         let builder_array =
             Arc::new(Int64Array::from(vec![Some(0), Some(1)])) as ArrayRef;
         append(&mut builder, &builder_array, &[0, 1]);
@@ -419,7 +424,8 @@ mod tests {
         // Test the special `all nulls` or `not nulls` input array case
         // for vectorized append and equal to
 
-        let mut builder = PrimitiveGroupValueBuilder::<Int64Type, true>::new();
+        let mut builder =
+            PrimitiveGroupValueBuilder::<Int64Type, true>::new(DataType::Int64);
 
         // All nulls input array
         let all_nulls_input_array = Arc::new(Int64Array::from(vec![

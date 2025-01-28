@@ -33,6 +33,7 @@ use std::task::{Context, Poll};
 use std::vec;
 
 use crate::common::SharedMemoryReservation;
+use crate::execution_plan::{boundedness_from_children, emission_type_from_children};
 use crate::joins::hash_join::{equal_rows_arr, update_hash};
 use crate::joins::stream_join_utils::{
     calculate_filter_expr_intervals, combine_two_batches,
@@ -46,8 +47,11 @@ use crate::joins::utils::{
     BatchTransformer, ColumnIndex, JoinFilter, JoinHashMapType, JoinOn, JoinOnRef,
     NoopBatchTransformer, StatefulStreamResult,
 };
+use crate::projection::{
+    join_allows_pushdown, join_table_borders, new_join_children,
+    physical_to_column_exprs, update_join_filter, update_join_on, ProjectionExec,
+};
 use crate::{
-    execution_mode_from_children,
     joins::StreamJoinPartitionMode,
     metrics::{ExecutionPlanMetricsSet, MetricsSet},
     DisplayAs, DisplayFormatType, Distribution, ExecutionPlan, ExecutionPlanProperties,
@@ -71,9 +75,9 @@ use datafusion_expr::interval_arithmetic::Interval;
 use datafusion_physical_expr::equivalence::join_equivalence_properties;
 use datafusion_physical_expr::intervals::cp_solver::ExprIntervalGraph;
 use datafusion_physical_expr::PhysicalExprRef;
+use datafusion_physical_expr_common::sort_expr::{LexOrdering, LexRequirement};
 
 use ahash::RandomState;
-use datafusion_physical_expr_common::sort_expr::{LexOrdering, LexRequirement};
 use futures::{ready, Stream, StreamExt};
 use parking_lot::Mutex;
 
@@ -275,10 +279,12 @@ impl SymmetricHashJoinExec {
         let output_partitioning =
             symmetric_join_output_partitioning(left, right, &join_type);
 
-        // Determine execution mode:
-        let mode = execution_mode_from_children([left, right]);
-
-        PlanProperties::new(eq_properties, output_partitioning, mode)
+        PlanProperties::new(
+            eq_properties,
+            output_partitioning,
+            emission_type_from_children([left, right]),
+            boundedness_from_children([left, right]),
+        )
     }
 
     /// left stream
@@ -553,6 +559,81 @@ impl ExecutionPlan for SymmetricHashJoinExec {
                 batch_transformer: NoopBatchTransformer::new(),
             }))
         }
+    }
+
+    /// Tries to swap the projection with its input [`SymmetricHashJoinExec`]. If it can be done,
+    /// it returns the new swapped version having the [`SymmetricHashJoinExec`] as the top plan.
+    /// Otherwise, it returns None.
+    fn try_swapping_with_projection(
+        &self,
+        projection: &ProjectionExec,
+    ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+        // Convert projected PhysicalExpr's to columns. If not possible, we cannot proceed.
+        let Some(projection_as_columns) = physical_to_column_exprs(projection.expr())
+        else {
+            return Ok(None);
+        };
+
+        let (far_right_left_col_ind, far_left_right_col_ind) = join_table_borders(
+            self.left().schema().fields().len(),
+            &projection_as_columns,
+        );
+
+        if !join_allows_pushdown(
+            &projection_as_columns,
+            &self.schema(),
+            far_right_left_col_ind,
+            far_left_right_col_ind,
+        ) {
+            return Ok(None);
+        }
+
+        let Some(new_on) = update_join_on(
+            &projection_as_columns[0..=far_right_left_col_ind as _],
+            &projection_as_columns[far_left_right_col_ind as _..],
+            self.on(),
+            self.left().schema().fields().len(),
+        ) else {
+            return Ok(None);
+        };
+
+        let new_filter = if let Some(filter) = self.filter() {
+            match update_join_filter(
+                &projection_as_columns[0..=far_right_left_col_ind as _],
+                &projection_as_columns[far_left_right_col_ind as _..],
+                filter,
+                self.left().schema().fields().len(),
+            ) {
+                Some(updated_filter) => Some(updated_filter),
+                None => return Ok(None),
+            }
+        } else {
+            None
+        };
+
+        let (new_left, new_right) = new_join_children(
+            &projection_as_columns,
+            far_right_left_col_ind,
+            far_left_right_col_ind,
+            self.left(),
+            self.right(),
+        )?;
+
+        Ok(Some(Arc::new(SymmetricHashJoinExec::try_new(
+            Arc::new(new_left),
+            Arc::new(new_right),
+            new_on,
+            new_filter,
+            self.join_type(),
+            self.null_equals_null(),
+            self.right()
+                .output_ordering()
+                .map(|p| LexOrdering::new(p.to_vec())),
+            self.left()
+                .output_ordering()
+                .map(|p| LexOrdering::new(p.to_vec())),
+            self.partition_mode(),
+        )?)))
     }
 }
 
@@ -1797,7 +1878,8 @@ mod tests {
                 side: JoinSide::Right,
             },
         ];
-        let filter = JoinFilter::new(filter_expr, column_indices, intermediate_schema);
+        let filter =
+            JoinFilter::new(filter_expr, column_indices, Arc::new(intermediate_schema));
 
         experiment(left, right, Some(filter), join_type, on, task_ctx).await?;
         Ok(())
@@ -1862,7 +1944,8 @@ mod tests {
                 side: JoinSide::Right,
             },
         ];
-        let filter = JoinFilter::new(filter_expr, column_indices, intermediate_schema);
+        let filter =
+            JoinFilter::new(filter_expr, column_indices, Arc::new(intermediate_schema));
 
         experiment(left, right, Some(filter), join_type, on, task_ctx).await?;
         Ok(())
@@ -1914,7 +1997,8 @@ mod tests {
                 side: JoinSide::Right,
             },
         ];
-        let filter = JoinFilter::new(filter_expr, column_indices, intermediate_schema);
+        let filter =
+            JoinFilter::new(filter_expr, column_indices, Arc::new(intermediate_schema));
 
         experiment(left, right, Some(filter), join_type, on, task_ctx).await?;
         Ok(())
@@ -2011,7 +2095,8 @@ mod tests {
                 side: JoinSide::Right,
             },
         ];
-        let filter = JoinFilter::new(filter_expr, column_indices, intermediate_schema);
+        let filter =
+            JoinFilter::new(filter_expr, column_indices, Arc::new(intermediate_schema));
 
         experiment(left, right, Some(filter), join_type, on, task_ctx).await?;
         Ok(())
@@ -2069,7 +2154,8 @@ mod tests {
                 side: JoinSide::Right,
             },
         ];
-        let filter = JoinFilter::new(filter_expr, column_indices, intermediate_schema);
+        let filter =
+            JoinFilter::new(filter_expr, column_indices, Arc::new(intermediate_schema));
         experiment(left, right, Some(filter), join_type, on, task_ctx).await?;
         Ok(())
     }
@@ -2127,7 +2213,8 @@ mod tests {
                 side: JoinSide::Right,
             },
         ];
-        let filter = JoinFilter::new(filter_expr, column_indices, intermediate_schema);
+        let filter =
+            JoinFilter::new(filter_expr, column_indices, Arc::new(intermediate_schema));
 
         experiment(left, right, Some(filter), join_type, on, task_ctx).await?;
         Ok(())
@@ -2187,7 +2274,8 @@ mod tests {
                 side: JoinSide::Right,
             },
         ];
-        let filter = JoinFilter::new(filter_expr, column_indices, intermediate_schema);
+        let filter =
+            JoinFilter::new(filter_expr, column_indices, Arc::new(intermediate_schema));
 
         experiment(left, right, Some(filter), join_type, on, task_ctx).await?;
         Ok(())
@@ -2244,7 +2332,8 @@ mod tests {
                 side: JoinSide::Right,
             },
         ];
-        let filter = JoinFilter::new(filter_expr, column_indices, intermediate_schema);
+        let filter =
+            JoinFilter::new(filter_expr, column_indices, Arc::new(intermediate_schema));
 
         experiment(left, right, Some(filter), join_type, on, task_ctx).await?;
         Ok(())
@@ -2308,7 +2397,8 @@ mod tests {
                 side: JoinSide::Right,
             },
         ];
-        let filter = JoinFilter::new(filter_expr, column_indices, intermediate_schema);
+        let filter =
+            JoinFilter::new(filter_expr, column_indices, Arc::new(intermediate_schema));
 
         experiment(left, right, Some(filter), join_type, on, task_ctx).await?;
         Ok(())
@@ -2392,7 +2482,8 @@ mod tests {
                 side: JoinSide::Right,
             },
         ];
-        let filter = JoinFilter::new(filter_expr, column_indices, intermediate_schema);
+        let filter =
+            JoinFilter::new(filter_expr, column_indices, Arc::new(intermediate_schema));
         experiment(left, right, Some(filter), join_type, on, task_ctx).await?;
         Ok(())
     }
@@ -2466,7 +2557,8 @@ mod tests {
                 side: JoinSide::Right,
             },
         ];
-        let filter = JoinFilter::new(filter_expr, column_indices, intermediate_schema);
+        let filter =
+            JoinFilter::new(filter_expr, column_indices, Arc::new(intermediate_schema));
         experiment(left, right, Some(filter), join_type, on, task_ctx).await?;
 
         Ok(())
@@ -2537,7 +2629,8 @@ mod tests {
                 side: JoinSide::Right,
             },
         ];
-        let filter = JoinFilter::new(filter_expr, column_indices, intermediate_schema);
+        let filter =
+            JoinFilter::new(filter_expr, column_indices, Arc::new(intermediate_schema));
 
         experiment(left, right, Some(filter), join_type, on, task_ctx).await?;
         Ok(())

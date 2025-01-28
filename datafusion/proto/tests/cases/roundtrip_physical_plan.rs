@@ -39,6 +39,7 @@ use crate::cases::{
 use datafusion::arrow::array::ArrayRef;
 use datafusion::arrow::compute::kernels::sort::SortOptions;
 use datafusion::arrow::datatypes::{DataType, Field, IntervalUnit, Schema};
+use datafusion::datasource::empty::EmptyTable;
 use datafusion::datasource::file_format::csv::CsvSink;
 use datafusion::datasource::file_format::json::JsonSink;
 use datafusion::datasource::file_format::parquet::ParquetSink;
@@ -54,7 +55,7 @@ use datafusion::functions_window::nth_value::nth_value_udwf;
 use datafusion::functions_window::row_number::row_number_udwf;
 use datafusion::logical_expr::{create_udf, JoinType, Operator, Volatility};
 use datafusion::physical_expr::expressions::Literal;
-use datafusion::physical_expr::window::{BuiltInWindowExpr, SlidingAggregateWindowExpr};
+use datafusion::physical_expr::window::{SlidingAggregateWindowExpr, StandardWindowExpr};
 use datafusion::physical_expr::{
     LexOrdering, LexRequirement, PhysicalSortRequirement, ScalarFunctionExpr,
 };
@@ -83,7 +84,7 @@ use datafusion::physical_plan::windows::{
     WindowAggExec,
 };
 use datafusion::physical_plan::{
-    ExecutionPlan, InputOrderMode, Partitioning, PhysicalExpr, Statistics,
+    displayable, ExecutionPlan, InputOrderMode, Partitioning, PhysicalExpr, Statistics,
 };
 use datafusion::prelude::SessionContext;
 use datafusion::scalar::ScalarValue;
@@ -93,7 +94,7 @@ use datafusion_common::file_options::json_writer::JsonWriterOptions;
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::stats::Precision;
 use datafusion_common::{
-    internal_err, not_impl_err, DataFusionError, Result, UnnestOptions,
+    internal_err, not_impl_err, Constraints, DataFusionError, Result, UnnestOptions,
 };
 use datafusion_expr::{
     Accumulator, AccumulatorFactoryFunction, AggregateUDF, ColumnarValue, ScalarUDF,
@@ -106,6 +107,7 @@ use datafusion_proto::physical_plan::{
     AsExecutionPlan, DefaultPhysicalExtensionCodec, PhysicalExtensionCodec,
 };
 use datafusion_proto::protobuf;
+use datafusion_proto::protobuf::PhysicalPlanNode;
 
 /// Perform a serde roundtrip and assert that the string representation of the before and after plans
 /// are identical. Note that this often isn't sufficient to guarantee that no information is
@@ -268,6 +270,7 @@ fn roundtrip_nested_loop_join() -> Result<()> {
             Arc::new(EmptyExec::new(schema_right.clone())),
             None,
             join_type,
+            Some(vec![0]),
         )?))?;
     }
     Ok(())
@@ -279,7 +282,7 @@ fn roundtrip_udwf() -> Result<()> {
     let field_b = Field::new("b", DataType::Int64, false);
     let schema = Arc::new(Schema::new(vec![field_a, field_b]));
 
-    let udwf_expr = Arc::new(BuiltInWindowExpr::new(
+    let udwf_expr = Arc::new(StandardWindowExpr::new(
         create_udwf_window_expr(
             &row_number_udwf(),
             &[],
@@ -326,18 +329,16 @@ fn roundtrip_window() -> Result<()> {
             "NTH_VALUE(a, 2) PARTITION BY [b] ORDER BY [a ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW".to_string(),
             false,
         )?;
-    let udwf_expr = Arc::new(BuiltInWindowExpr::new(
+    let udwf_expr = Arc::new(StandardWindowExpr::new(
         nth_value_window,
         &[col("b", &schema)?],
-        &LexOrdering {
-            inner: vec![PhysicalSortExpr {
-                expr: col("a", &schema)?,
-                options: SortOptions {
-                    descending: false,
-                    nulls_first: false,
-                },
-            }],
-        },
+        &LexOrdering::new(vec![PhysicalSortExpr {
+            expr: col("a", &schema)?,
+            options: SortOptions {
+                descending: false,
+                nulls_first: false,
+            },
+        }]),
         Arc::new(window_frame),
     ));
 
@@ -710,6 +711,7 @@ fn roundtrip_parquet_exec_with_pruning_predicate() -> Result<()> {
             "/path/to/file.parquet".to_string(),
             1024,
         )]],
+        constraints: Constraints::empty(),
         statistics: Statistics {
             num_rows: Precision::Inexact(100),
             total_byte_size: Precision::Inexact(1024),
@@ -746,6 +748,7 @@ async fn roundtrip_parquet_exec_with_table_partition_cols() -> Result<()> {
     let scan_config = FileScanConfig {
         object_store_url: ObjectStoreUrl::local_filesystem(),
         file_groups: vec![vec![file_group]],
+        constraints: Constraints::empty(),
         statistics: Statistics::new_unknown(&schema),
         file_schema: schema,
         projection: Some(vec![0, 1]),
@@ -774,6 +777,7 @@ fn roundtrip_parquet_exec_with_custom_predicate_expr() -> Result<()> {
             "/path/to/file.parquet".to_string(),
             1024,
         )]],
+        constraints: Constraints::empty(),
         statistics: Statistics {
             num_rows: Precision::Inexact(100),
             total_byte_size: Precision::Inexact(1024),
@@ -1125,18 +1129,16 @@ fn roundtrip_udwf_extension_codec() -> Result<()> {
         WindowFrameBound::CurrentRow,
     );
 
-    let udwf_expr = Arc::new(BuiltInWindowExpr::new(
+    let udwf_expr = Arc::new(StandardWindowExpr::new(
         udwf,
         &[col("b", &schema)?],
-        &LexOrdering {
-            inner: vec![PhysicalSortExpr {
-                expr: col("a", &schema)?,
-                options: SortOptions {
-                    descending: false,
-                    nulls_first: false,
-                },
-            }],
-        },
+        &LexOrdering::new(vec![PhysicalSortExpr {
+            expr: col("a", &schema)?,
+            options: SortOptions {
+                descending: false,
+                nulls_first: false,
+            },
+        }]),
         Arc::new(window_frame),
     ));
 
@@ -1273,6 +1275,7 @@ fn roundtrip_json_sink() -> Result<()> {
         table_partition_cols: vec![("plan_type".to_string(), DataType::Utf8)],
         insert_op: InsertOp::Overwrite,
         keep_partition_by_columns: true,
+        file_extension: "json".into(),
     };
     let data_sink = Arc::new(JsonSink::new(
         file_sink_config,
@@ -1289,7 +1292,6 @@ fn roundtrip_json_sink() -> Result<()> {
     roundtrip_test(Arc::new(DataSinkExec::new(
         input,
         data_sink,
-        schema,
         Some(sort_order),
     )))
 }
@@ -1309,6 +1311,7 @@ fn roundtrip_csv_sink() -> Result<()> {
         table_partition_cols: vec![("plan_type".to_string(), DataType::Utf8)],
         insert_op: InsertOp::Overwrite,
         keep_partition_by_columns: true,
+        file_extension: "csv".into(),
     };
     let data_sink = Arc::new(CsvSink::new(
         file_sink_config,
@@ -1325,12 +1328,7 @@ fn roundtrip_csv_sink() -> Result<()> {
     let ctx = SessionContext::new();
     let codec = DefaultPhysicalExtensionCodec {};
     let roundtrip_plan = roundtrip_test_and_return(
-        Arc::new(DataSinkExec::new(
-            input,
-            data_sink,
-            schema,
-            Some(sort_order),
-        )),
+        Arc::new(DataSinkExec::new(input, data_sink, Some(sort_order))),
         &ctx,
         &codec,
     )
@@ -1368,6 +1366,7 @@ fn roundtrip_parquet_sink() -> Result<()> {
         table_partition_cols: vec![("plan_type".to_string(), DataType::Utf8)],
         insert_op: InsertOp::Overwrite,
         keep_partition_by_columns: true,
+        file_extension: "parquet".into(),
     };
     let data_sink = Arc::new(ParquetSink::new(
         file_sink_config,
@@ -1384,7 +1383,6 @@ fn roundtrip_parquet_sink() -> Result<()> {
     roundtrip_test(Arc::new(DataSinkExec::new(
         input,
         data_sink,
-        schema,
         Some(sort_order),
     )))
 }
@@ -1524,4 +1522,43 @@ fn roundtrip_unnest() -> Result<()> {
         options,
     );
     roundtrip_test(Arc::new(unnest))
+}
+
+#[tokio::test]
+async fn roundtrip_coalesce() -> Result<()> {
+    let ctx = SessionContext::new();
+    ctx.register_table(
+        "t",
+        Arc::new(EmptyTable::new(Arc::new(Schema::new(Fields::from([
+            Arc::new(Field::new("f", DataType::Int64, false)),
+        ]))))),
+    )?;
+    let df = ctx.sql("select coalesce(f) as f from t").await?;
+    let plan = df.create_physical_plan().await?;
+
+    let node = PhysicalPlanNode::try_from_physical_plan(
+        plan.clone(),
+        &DefaultPhysicalExtensionCodec {},
+    )?;
+    let node = PhysicalPlanNode::decode(node.encode_to_vec().as_slice())
+        .map_err(|e| DataFusionError::External(Box::new(e)))?;
+    let restored = node.try_into_physical_plan(
+        &ctx,
+        ctx.runtime_env().as_ref(),
+        &DefaultPhysicalExtensionCodec {},
+    )?;
+
+    assert_eq!(
+        plan.schema(),
+        restored.schema(),
+        "Schema mismatch for plans:\n>> initial:\n{}>> final: \n{}",
+        displayable(plan.as_ref())
+            .set_show_schema(true)
+            .indent(true),
+        displayable(restored.as_ref())
+            .set_show_schema(true)
+            .indent(true),
+    );
+
+    Ok(())
 }

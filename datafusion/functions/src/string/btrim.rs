@@ -21,12 +21,11 @@ use arrow::array::{ArrayRef, OffsetSizeTrait};
 use arrow::datatypes::DataType;
 use datafusion_common::{exec_err, Result};
 use datafusion_expr::function::Hint;
-use datafusion_expr::scalar_doc_sections::DOC_SECTION_STRING;
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarUDFImpl, Signature, TypeSignature, Volatility,
 };
+use datafusion_macros::user_doc;
 use std::any::Any;
-use std::sync::OnceLock;
 
 /// Returns the longest string with leading and trailing characters removed. If the characters are not specified, whitespace is removed.
 /// btrim('xyxtrimyyx', 'xyz') = 'trim'
@@ -35,6 +34,28 @@ fn btrim<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
     general_trim::<T>(args, TrimType::Both, use_string_view)
 }
 
+#[user_doc(
+    doc_section(label = "String Functions"),
+    description = "Trims the specified trim string from the start and end of a string. If no trim string is provided, all whitespace is removed from the start and end of the input string.",
+    syntax_example = "btrim(str[, trim_str])",
+    sql_example = r#"```sql
+> select btrim('__datafusion____', '_');
++-------------------------------------------+
+| btrim(Utf8("__datafusion____"),Utf8("_")) |
++-------------------------------------------+
+| datafusion                                |
++-------------------------------------------+
+```"#,
+    standard_argument(name = "str", prefix = "String"),
+    argument(
+        name = "trim_str",
+        description = r"String expression to operate on. Can be a constant, column, or function, and any combination of operators. _Default is whitespace characters._"
+    ),
+    alternative_syntax = "trim(BOTH trim_str FROM str)",
+    alternative_syntax = "trim(trim_str FROM str)",
+    related_udf(name = "ltrim"),
+    related_udf(name = "rtrim")
+)]
 #[derive(Debug)]
 pub struct BTrimFunc {
     signature: Signature,
@@ -80,7 +101,11 @@ impl ScalarUDFImpl for BTrimFunc {
         }
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         match args[0].data_type() {
             DataType::Utf8 | DataType::Utf8View => make_scalar_function(
                 btrim::<i32>,
@@ -102,35 +127,8 @@ impl ScalarUDFImpl for BTrimFunc {
     }
 
     fn documentation(&self) -> Option<&Documentation> {
-        Some(get_btrim_doc())
+        self.doc()
     }
-}
-
-static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
-
-fn get_btrim_doc() -> &'static Documentation {
-    DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_STRING)
-            .with_description("Trims the specified trim string from the start and end of a string. If no trim string is provided, all whitespace is removed from the start and end of the input string.")
-            .with_syntax_example("btrim(str[, trim_str])")
-            .with_sql_example(r#"```sql
-> select btrim('__datafusion____', '_');
-+-------------------------------------------+
-| btrim(Utf8("__datafusion____"),Utf8("_")) |
-+-------------------------------------------+
-| datafusion                                |
-+-------------------------------------------+
-```"#)
-            .with_standard_argument("str", Some("String"))
-            .with_argument("trim_str", "String expression to operate on. Can be a constant, column, or function, and any combination of operators. _Default is whitespace characters._")
-            .with_alternative_syntax("trim(BOTH trim_str FROM str)")
-            .with_alternative_syntax("trim(trim_str FROM str)")
-            .with_related_udf("ltrim")
-            .with_related_udf("rtrim")
-            .build()
-            .unwrap()
-    })
 }
 
 #[cfg(test)]
@@ -149,9 +147,9 @@ mod tests {
         // String view cases for checking normal logic
         test_function!(
             BTrimFunc::new(),
-            &[ColumnarValue::Scalar(ScalarValue::Utf8View(Some(
+            vec![ColumnarValue::Scalar(ScalarValue::Utf8View(Some(
                 String::from("alphabet  ")
-            ))),],
+            )))],
             Ok(Some("alphabet")),
             &str,
             Utf8View,
@@ -159,7 +157,7 @@ mod tests {
         );
         test_function!(
             BTrimFunc::new(),
-            &[ColumnarValue::Scalar(ScalarValue::Utf8View(Some(
+            vec![ColumnarValue::Scalar(ScalarValue::Utf8View(Some(
                 String::from("  alphabet  ")
             ))),],
             Ok(Some("alphabet")),
@@ -169,7 +167,7 @@ mod tests {
         );
         test_function!(
             BTrimFunc::new(),
-            &[
+            vec![
                 ColumnarValue::Scalar(ScalarValue::Utf8View(Some(String::from(
                     "alphabet"
                 )))),
@@ -182,7 +180,7 @@ mod tests {
         );
         test_function!(
             BTrimFunc::new(),
-            &[
+            vec![
                 ColumnarValue::Scalar(ScalarValue::Utf8View(Some(String::from(
                     "alphabet"
                 )))),
@@ -197,7 +195,7 @@ mod tests {
         );
         test_function!(
             BTrimFunc::new(),
-            &[
+            vec![
                 ColumnarValue::Scalar(ScalarValue::Utf8View(Some(String::from(
                     "alphabet"
                 )))),
@@ -211,7 +209,7 @@ mod tests {
         // Special string view case for checking unlined output(len > 12)
         test_function!(
             BTrimFunc::new(),
-            &[
+            vec![
                 ColumnarValue::Scalar(ScalarValue::Utf8View(Some(String::from(
                     "xxxalphabetalphabetxxx"
                 )))),
@@ -225,7 +223,7 @@ mod tests {
         // String cases
         test_function!(
             BTrimFunc::new(),
-            &[ColumnarValue::Scalar(ScalarValue::Utf8(Some(
+            vec![ColumnarValue::Scalar(ScalarValue::Utf8(Some(
                 String::from("alphabet  ")
             ))),],
             Ok(Some("alphabet")),
@@ -235,7 +233,7 @@ mod tests {
         );
         test_function!(
             BTrimFunc::new(),
-            &[ColumnarValue::Scalar(ScalarValue::Utf8(Some(
+            vec![ColumnarValue::Scalar(ScalarValue::Utf8(Some(
                 String::from("alphabet  ")
             ))),],
             Ok(Some("alphabet")),
@@ -245,7 +243,7 @@ mod tests {
         );
         test_function!(
             BTrimFunc::new(),
-            &[
+            vec![
                 ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from("alphabet")))),
                 ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from("t")))),
             ],
@@ -256,7 +254,7 @@ mod tests {
         );
         test_function!(
             BTrimFunc::new(),
-            &[
+            vec![
                 ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from("alphabet")))),
                 ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from("alphabe")))),
             ],
@@ -267,7 +265,7 @@ mod tests {
         );
         test_function!(
             BTrimFunc::new(),
-            &[
+            vec![
                 ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from("alphabet")))),
                 ColumnarValue::Scalar(ScalarValue::Utf8(None)),
             ],

@@ -16,7 +16,7 @@
 // under the License.
 
 use std::any::Any;
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
 use arrow::array::builder::PrimitiveBuilder;
 use arrow::array::cast::AsArray;
@@ -27,11 +27,45 @@ use arrow::datatypes::DataType::{Date32, Int32, Int64, UInt32, UInt64, Utf8, Utf
 use chrono::prelude::*;
 
 use datafusion_common::{exec_err, Result, ScalarValue};
-use datafusion_expr::scalar_doc_sections::DOC_SECTION_DATETIME;
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
 };
+use datafusion_macros::user_doc;
 
+#[user_doc(
+    doc_section(label = "Time and Date Functions"),
+    description = "Make a date from year/month/day component parts.",
+    syntax_example = "make_date(year, month, day)",
+    sql_example = r#"```sql
+> select make_date(2023, 1, 31);
++-------------------------------------------+
+| make_date(Int64(2023),Int64(1),Int64(31)) |
++-------------------------------------------+
+| 2023-01-31                                |
++-------------------------------------------+
+> select make_date('2023', '01', '31');
++-----------------------------------------------+
+| make_date(Utf8("2023"),Utf8("01"),Utf8("31")) |
++-----------------------------------------------+
+| 2023-01-31                                    |
++-----------------------------------------------+
+```
+
+Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/make_date.rs)
+"#,
+    argument(
+        name = "year",
+        description = "Year to use when making the date. Can be a constant, column or function, and any combination of arithmetic operators."
+    ),
+    argument(
+        name = "month",
+        description = "Month to use when making the date. Can be a constant, column or function, and any combination of arithmetic operators."
+    ),
+    argument(
+        name = "day",
+        description = "Day to use when making the date. Can be a constant, column or function, and any combination of arithmetic operators."
+    )
+)]
 #[derive(Debug)]
 pub struct MakeDateFunc {
     signature: Signature,
@@ -72,7 +106,11 @@ impl ScalarUDFImpl for MakeDateFunc {
         Ok(Date32)
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         if args.len() != 3 {
             return exec_err!(
                 "make_date function requires 3 arguments, got {}",
@@ -152,46 +190,8 @@ impl ScalarUDFImpl for MakeDateFunc {
         Ok(value)
     }
     fn documentation(&self) -> Option<&Documentation> {
-        Some(get_make_date_doc())
+        self.doc()
     }
-}
-
-static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
-
-fn get_make_date_doc() -> &'static Documentation {
-    DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_DATETIME)
-            .with_description("Make a date from year/month/day component parts.")
-            .with_syntax_example("make_date(year, month, day)")
-            .with_argument(
-                "year",
-                " Year to use when making the date. Can be a constant, column or function, and any combination of arithmetic operators.", )
-            .with_argument(
-                "month",
-                "Month to use when making the date. Can be a constant, column or function, and any combination of arithmetic operators.",
-            )
-            .with_argument("day", "Day to use when making the date. Can be a constant, column or function, and any combination of arithmetic operators.")
-            .with_sql_example(r#"```sql
-> select make_date(2023, 1, 31);
-+-------------------------------------------+
-| make_date(Int64(2023),Int64(1),Int64(31)) |
-+-------------------------------------------+
-| 2023-01-31                                |
-+-------------------------------------------+
-> select make_date('2023', '01', '31');
-+-----------------------------------------------+
-| make_date(Utf8("2023"),Utf8("01"),Utf8("31")) |
-+-----------------------------------------------+
-| 2023-01-31                                    |
-+-----------------------------------------------+
-```
-
-Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/make_date.rs)
-"#)
-            .build()
-            .unwrap()
-    })
 }
 
 /// Converts the year/month/day fields to an `i32` representing the days from
@@ -234,6 +234,7 @@ mod tests {
 
     #[test]
     fn test_make_date() {
+        #[allow(deprecated)] // TODO migrate UDF to invoke from invoke_batch
         let res = MakeDateFunc::new()
             .invoke_batch(
                 &[
@@ -251,6 +252,7 @@ mod tests {
             panic!("Expected a scalar value")
         }
 
+        #[allow(deprecated)] // TODO migrate UDF to invoke from invoke_batch
         let res = MakeDateFunc::new()
             .invoke_batch(
                 &[
@@ -268,6 +270,7 @@ mod tests {
             panic!("Expected a scalar value")
         }
 
+        #[allow(deprecated)] // TODO migrate UDF to invoke from invoke_batch
         let res = MakeDateFunc::new()
             .invoke_batch(
                 &[
@@ -288,7 +291,8 @@ mod tests {
         let years = Arc::new((2021..2025).map(Some).collect::<Int64Array>());
         let months = Arc::new((1..5).map(Some).collect::<Int32Array>());
         let days = Arc::new((11..15).map(Some).collect::<UInt32Array>());
-        let batch_size = years.len();
+        let batch_len = years.len();
+        #[allow(deprecated)] // TODO migrate UDF to invoke from invoke_batch
         let res = MakeDateFunc::new()
             .invoke_batch(
                 &[
@@ -296,7 +300,7 @@ mod tests {
                     ColumnarValue::Array(months),
                     ColumnarValue::Array(days),
                 ],
-                batch_size,
+                batch_len,
             )
             .expect("that make_date parsed values without error");
 
@@ -317,6 +321,7 @@ mod tests {
         //
 
         // invalid number of arguments
+        #[allow(deprecated)] // TODO migrate UDF to invoke from invoke_batch
         let res = MakeDateFunc::new()
             .invoke_batch(&[ColumnarValue::Scalar(ScalarValue::Int32(Some(1)))], 1);
         assert_eq!(
@@ -325,6 +330,7 @@ mod tests {
         );
 
         // invalid type
+        #[allow(deprecated)] // TODO migrate UDF to invoke from invoke_batch
         let res = MakeDateFunc::new().invoke_batch(
             &[
                 ColumnarValue::Scalar(ScalarValue::IntervalYearMonth(Some(1))),
@@ -339,6 +345,7 @@ mod tests {
         );
 
         // overflow of month
+        #[allow(deprecated)] // TODO migrate UDF to invoke from invoke_batch
         let res = MakeDateFunc::new().invoke_batch(
             &[
                 ColumnarValue::Scalar(ScalarValue::Int32(Some(2023))),
@@ -353,6 +360,7 @@ mod tests {
         );
 
         // overflow of day
+        #[allow(deprecated)] // TODO migrate UDF to invoke from invoke_batch
         let res = MakeDateFunc::new().invoke_batch(
             &[
                 ColumnarValue::Scalar(ScalarValue::Int32(Some(2023))),

@@ -29,6 +29,8 @@ use crate::metrics::{self, ExecutionPlanMetricsSet, MetricBuilder};
 use crate::{
     ColumnStatistics, ExecutionPlan, ExecutionPlanProperties, Partitioning, Statistics,
 };
+// compatibility
+pub use super::join_filter::JoinFilter;
 
 use arrow::array::{
     downcast_array, new_null_array, Array, BooleanBufferBuilder, UInt32Array,
@@ -54,6 +56,8 @@ use datafusion_physical_expr::{
     LexOrdering, PhysicalExpr, PhysicalExprRef, PhysicalSortExpr,
 };
 
+use crate::joins::SharedBitmapBuilder;
+use crate::projection::ProjectionExec;
 use futures::future::{BoxFuture, Shared};
 use futures::{ready, FutureExt};
 use hashbrown::raw::RawTable;
@@ -452,7 +456,7 @@ fn replace_on_columns_of_right_ordering(
     right_ordering: &mut LexOrdering,
 ) -> Result<()> {
     for (left_col, right_col) in on_columns {
-        for item in right_ordering.inner.iter_mut() {
+        right_ordering.transform(|item| {
             let new_expr = Arc::clone(&item.expr)
                 .transform(|e| {
                     if e.eq(right_col) {
@@ -461,9 +465,10 @@ fn replace_on_columns_of_right_ordering(
                         Ok(Transformed::no(e))
                     }
                 })
-                .data()?;
+                .data()
+                .expect("closure is infallible");
             item.expr = new_expr;
-        }
+        });
     }
     Ok(())
 }
@@ -547,66 +552,6 @@ pub struct ColumnIndex {
     pub index: usize,
     /// Whether the column is at the left or right side
     pub side: JoinSide,
-}
-
-/// Filter applied before join output. Fields are crate-public to allow
-/// downstream implementations to experiment with custom joins.
-#[derive(Debug, Clone)]
-pub struct JoinFilter {
-    /// Filter expression
-    pub(crate) expression: Arc<dyn PhysicalExpr>,
-    /// Column indices required to construct intermediate batch for filtering
-    pub(crate) column_indices: Vec<ColumnIndex>,
-    /// Physical schema of intermediate batch
-    pub(crate) schema: Schema,
-}
-
-impl JoinFilter {
-    /// Creates new JoinFilter
-    pub fn new(
-        expression: Arc<dyn PhysicalExpr>,
-        column_indices: Vec<ColumnIndex>,
-        schema: Schema,
-    ) -> JoinFilter {
-        JoinFilter {
-            expression,
-            column_indices,
-            schema,
-        }
-    }
-
-    /// Helper for building ColumnIndex vector from left and right indices
-    pub fn build_column_indices(
-        left_indices: Vec<usize>,
-        right_indices: Vec<usize>,
-    ) -> Vec<ColumnIndex> {
-        left_indices
-            .into_iter()
-            .map(|i| ColumnIndex {
-                index: i,
-                side: JoinSide::Left,
-            })
-            .chain(right_indices.into_iter().map(|i| ColumnIndex {
-                index: i,
-                side: JoinSide::Right,
-            }))
-            .collect()
-    }
-
-    /// Filter expression
-    pub fn expression(&self) -> &Arc<dyn PhysicalExpr> {
-        &self.expression
-    }
-
-    /// Column indices for intermediate batch creation
-    pub fn column_indices(&self) -> &[ColumnIndex] {
-        &self.column_indices
-    }
-
-    /// Intermediate batch schema
-    pub fn schema(&self) -> &Schema {
-        &self.schema
-    }
 }
 
 /// Returns the output field given the input field. Outer joins may
@@ -1169,6 +1114,14 @@ pub(crate) fn need_produce_result_in_final(join_type: JoinType) -> bool {
     )
 }
 
+pub(crate) fn get_final_indices_from_shared_bitmap(
+    shared_bitmap: &SharedBitmapBuilder,
+    join_type: JoinType,
+) -> (UInt64Array, UInt32Array) {
+    let bitmap = shared_bitmap.lock();
+    get_final_indices_from_bit_map(&bitmap, join_type)
+}
+
 /// In the end of join execution, need to use bit map of the matched
 /// indices to generate the final left and right indices.
 ///
@@ -1645,7 +1598,7 @@ macro_rules! handle_state {
 
 /// Represents the result of a stateful operation.
 ///
-/// This enumueration indicates whether the state produced a result that is
+/// This enumeration indicates whether the state produced a result that is
 /// ready for use (`Ready`) or if the operation requires continuation (`Continue`).
 ///
 /// Variants:
@@ -1785,6 +1738,83 @@ impl BatchTransformer for BatchSplitter {
         }
 
         Some((sliced_batch, last))
+    }
+}
+
+/// When the order of the join inputs are changed, the output order of columns
+/// must remain the same.
+///
+/// Joins output columns from their left input followed by their right input.
+/// Thus if the inputs are reordered, the output columns must be reordered to
+/// match the original order.
+pub(crate) fn reorder_output_after_swap(
+    plan: Arc<dyn ExecutionPlan>,
+    left_schema: &Schema,
+    right_schema: &Schema,
+) -> Result<Arc<dyn ExecutionPlan>> {
+    let proj = ProjectionExec::try_new(
+        swap_reverting_projection(left_schema, right_schema),
+        plan,
+    )?;
+    Ok(Arc::new(proj))
+}
+
+/// When the order of the join is changed, the output order of columns must
+/// remain the same.
+///
+/// Returns the expressions that will allow to swap back the values from the
+/// original left as the first columns and those on the right next.
+fn swap_reverting_projection(
+    left_schema: &Schema,
+    right_schema: &Schema,
+) -> Vec<(Arc<dyn PhysicalExpr>, String)> {
+    let right_cols = right_schema.fields().iter().enumerate().map(|(i, f)| {
+        (
+            Arc::new(Column::new(f.name(), i)) as Arc<dyn PhysicalExpr>,
+            f.name().to_owned(),
+        )
+    });
+    let right_len = right_cols.len();
+    let left_cols = left_schema.fields().iter().enumerate().map(|(i, f)| {
+        (
+            Arc::new(Column::new(f.name(), right_len + i)) as Arc<dyn PhysicalExpr>,
+            f.name().to_owned(),
+        )
+    });
+
+    left_cols.chain(right_cols).collect()
+}
+
+/// This function swaps the given join's projection.
+pub(super) fn swap_join_projection(
+    left_schema_len: usize,
+    right_schema_len: usize,
+    projection: Option<&Vec<usize>>,
+    join_type: &JoinType,
+) -> Option<Vec<usize>> {
+    match join_type {
+        // For Anti/Semi join types, projection should remain unmodified,
+        // since these joins output schema remains the same after swap
+        JoinType::LeftAnti
+        | JoinType::LeftSemi
+        | JoinType::RightAnti
+        | JoinType::RightSemi => projection.cloned(),
+
+        _ => projection.map(|p| {
+            p.iter()
+                .map(|i| {
+                    // If the index is less than the left schema length, it is from
+                    // the left schema, so we add the right schema length to it.
+                    // Otherwise, it is from the right schema, so we subtract the left
+                    // schema length from it.
+                    if *i < left_schema_len {
+                        *i + right_schema_len
+                    } else {
+                        *i - left_schema_len
+                    }
+                })
+                .collect()
+        }),
     }
 }
 
@@ -2753,5 +2783,40 @@ mod tests {
 
         assert!(splitter.next().is_none());
         assert_split_batches(batches, batch_size, num_rows);
+    }
+
+    #[tokio::test]
+    async fn test_swap_reverting_projection() {
+        let left_schema = Schema::new(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Int32, false),
+        ]);
+
+        let right_schema = Schema::new(vec![Field::new("c", DataType::Int32, false)]);
+
+        let proj = swap_reverting_projection(&left_schema, &right_schema);
+
+        assert_eq!(proj.len(), 3);
+
+        let (col, name) = &proj[0];
+        assert_eq!(name, "a");
+        assert_col_expr(col, "a", 1);
+
+        let (col, name) = &proj[1];
+        assert_eq!(name, "b");
+        assert_col_expr(col, "b", 2);
+
+        let (col, name) = &proj[2];
+        assert_eq!(name, "c");
+        assert_col_expr(col, "c", 0);
+    }
+
+    fn assert_col_expr(expr: &Arc<dyn PhysicalExpr>, name: &str, index: usize) {
+        let col = expr
+            .as_any()
+            .downcast_ref::<Column>()
+            .expect("Projection items should be Column expression");
+        assert_eq!(col.name(), name);
+        assert_eq!(col.index(), index);
     }
 }

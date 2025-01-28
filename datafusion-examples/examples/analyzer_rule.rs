@@ -16,12 +16,12 @@
 // under the License.
 
 use arrow::array::{ArrayRef, Int32Array, RecordBatch, StringArray};
+use datafusion::common::config::ConfigOptions;
+use datafusion::common::tree_node::{Transformed, TreeNode};
+use datafusion::common::Result;
+use datafusion::logical_expr::{col, lit, Expr, LogicalPlan, LogicalPlanBuilder};
+use datafusion::optimizer::analyzer::AnalyzerRule;
 use datafusion::prelude::SessionContext;
-use datafusion_common::config::ConfigOptions;
-use datafusion_common::tree_node::{Transformed, TreeNode};
-use datafusion_common::Result;
-use datafusion_expr::{col, lit, Expr, LogicalPlan, LogicalPlanBuilder};
-use datafusion_optimizer::analyzer::AnalyzerRule;
 use std::sync::{Arc, Mutex};
 
 /// This example demonstrates how to add your own [`AnalyzerRule`] to
@@ -138,7 +138,7 @@ impl AnalyzerRule for RowLevelAccessControl {
     fn analyze(&self, plan: LogicalPlan, _config: &ConfigOptions) -> Result<LogicalPlan> {
         // use the TreeNode API to recursively walk the LogicalPlan tree
         // and all of its children (inputs)
-        let transfomed_plan = plan.transform(|plan| {
+        let transformed_plan = plan.transform(|plan| {
             // This closure is called for each LogicalPlan node
             // if it is a Scan node, add a filter to remove all managers
             if is_employee_table_scan(&plan) {
@@ -166,7 +166,7 @@ impl AnalyzerRule for RowLevelAccessControl {
         //
         // This example does not need the value of either flag, so simply
         // extract the LogicalPlan "data"
-        Ok(transfomed_plan.data)
+        Ok(transformed_plan.data)
     }
 
     fn name(&self) -> &str {

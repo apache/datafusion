@@ -17,6 +17,15 @@
 
 //! [`ParquetExec`] Execution plan for reading Parquet files
 
+mod access_plan;
+mod metrics;
+mod opener;
+mod page_filter;
+mod reader;
+mod row_filter;
+mod row_group_filter;
+mod writer;
+
 use std::any::Any;
 use std::fmt::Debug;
 use std::sync::Arc;
@@ -27,42 +36,34 @@ use crate::datasource::physical_plan::{
     parquet::page_filter::PagePruningAccessPlanFilter, DisplayAs, FileGroupPartitioner,
     FileScanConfig,
 };
+use crate::datasource::schema_adapter::{
+    DefaultSchemaAdapterFactory, SchemaAdapterFactory,
+};
 use crate::{
     config::{ConfigOptions, TableParquetOptions},
     error::Result,
     execution::context::TaskContext,
-    physical_optimizer::pruning::PruningPredicate,
     physical_plan::{
         metrics::{ExecutionPlanMetricsSet, MetricBuilder, MetricsSet},
-        DisplayFormatType, ExecutionMode, ExecutionPlan, Partitioning, PlanProperties,
+        DisplayFormatType, ExecutionPlan, Partitioning, PlanProperties,
         SendableRecordBatchStream, Statistics,
     },
 };
 
-use arrow::datatypes::SchemaRef;
-use datafusion_physical_expr::{EquivalenceProperties, LexOrdering, PhysicalExpr};
-
-use itertools::Itertools;
-use log::debug;
-
-mod access_plan;
-mod metrics;
-mod opener;
-mod page_filter;
-mod reader;
-mod row_filter;
-mod row_group_filter;
-mod writer;
-
-use crate::datasource::schema_adapter::{
-    DefaultSchemaAdapterFactory, SchemaAdapterFactory,
-};
 pub use access_plan::{ParquetAccessPlan, RowGroupAccess};
+use arrow::datatypes::SchemaRef;
+use datafusion_common::Constraints;
+use datafusion_physical_expr::{EquivalenceProperties, LexOrdering, PhysicalExpr};
+use datafusion_physical_optimizer::pruning::PruningPredicate;
+use datafusion_physical_plan::execution_plan::{Boundedness, EmissionType};
 pub use metrics::ParquetFileMetrics;
 use opener::ParquetOpener;
 pub use reader::{DefaultParquetFileReaderFactory, ParquetFileReaderFactory};
 pub use row_filter::can_expr_be_pushed_down_with_schemas;
 pub use writer::plan_to_parquet;
+
+use itertools::Itertools;
+use log::debug;
 
 /// Execution plan for reading one or more Parquet files.
 ///
@@ -332,7 +333,7 @@ impl ParquetExecBuilder {
 
     /// Set the filter predicate when reading.
     ///
-    /// See the "Predicate Pushdown" section of the [`ParquetExec`] documenation
+    /// See the "Predicate Pushdown" section of the [`ParquetExec`] documentation
     /// for more details.
     pub fn with_predicate(mut self, predicate: Arc<dyn PhysicalExpr>) -> Self {
         self.predicate = Some(predicate);
@@ -443,12 +444,17 @@ impl ParquetExecBuilder {
             })
             .map(Arc::new);
 
-        let (projected_schema, projected_statistics, projected_output_ordering) =
-            base_config.project();
+        let (
+            projected_schema,
+            projected_constraints,
+            projected_statistics,
+            projected_output_ordering,
+        ) = base_config.project();
 
         let cache = ParquetExec::compute_properties(
             projected_schema,
             &projected_output_ordering,
+            projected_constraints,
             &base_config,
         );
         ParquetExec {
@@ -610,7 +616,7 @@ impl ParquetExec {
     }
 
     /// If enabled, the reader will read the page index
-    /// This is used to optimise filter pushdown
+    /// This is used to optimize filter pushdown
     /// via `RowSelector` and `RowFilter` by
     /// eliminating unnecessary IO and decoding
     pub fn with_enable_page_index(mut self, enable_page_index: bool) -> Self {
@@ -652,15 +658,15 @@ impl ParquetExec {
     fn compute_properties(
         schema: SchemaRef,
         orderings: &[LexOrdering],
+        constraints: Constraints,
         file_config: &FileScanConfig,
     ) -> PlanProperties {
-        // Equivalence Properties
-        let eq_properties = EquivalenceProperties::new_with_orderings(schema, orderings);
-
         PlanProperties::new(
-            eq_properties,
+            EquivalenceProperties::new_with_orderings(schema, orderings)
+                .with_constraints(constraints),
             Self::output_partitioning_helper(file_config), // Output Partitioning
-            ExecutionMode::Bounded,                        // Execution Mode
+            EmissionType::Incremental,
+            Boundedness::Bounded,
         )
     }
 
@@ -1702,7 +1708,7 @@ mod tests {
 
         let store = Arc::new(LocalFileSystem::new()) as _;
         let file_schema = ParquetFormat::default()
-            .infer_schema(&state, &store, &[meta.clone()])
+            .infer_schema(&state, &store, std::slice::from_ref(&meta))
             .await?;
 
         let group_empty = vec![vec![file_range(&meta, 0, 2)]];
@@ -1734,7 +1740,7 @@ mod tests {
         let meta = local_unpartitioned_file(filename);
 
         let schema = ParquetFormat::default()
-            .infer_schema(&state, &store, &[meta.clone()])
+            .infer_schema(&state, &store, std::slice::from_ref(&meta))
             .await
             .unwrap();
 
@@ -2002,7 +2008,7 @@ mod tests {
 
         assert_contains!(
             &display,
-            "pruning_predicate=CASE WHEN c1_null_count@2 = c1_row_count@3 THEN false ELSE c1_min@0 != bar OR bar != c1_max@1 END"
+            "pruning_predicate=c1_null_count@2 != c1_row_count@3 AND (c1_min@0 != bar OR bar != c1_max@1)"
         );
 
         assert_contains!(&display, r#"predicate=c1@0 != bar"#);

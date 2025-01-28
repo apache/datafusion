@@ -294,19 +294,19 @@ pub fn coerce_avg_type(func_name: &str, arg_types: &[DataType]) -> Result<Vec<Da
     // Supported types smallint, int, bigint, real, double precision, decimal, or interval
     // Refer to https://www.postgresql.org/docs/8.2/functions-aggregate.html doc
     fn coerced_type(func_name: &str, data_type: &DataType) -> Result<DataType> {
-        return match &data_type {
+        match &data_type {
             DataType::Decimal128(p, s) => Ok(DataType::Decimal128(*p, *s)),
             DataType::Decimal256(p, s) => Ok(DataType::Decimal256(*p, *s)),
             d if d.is_numeric() => Ok(DataType::Float64),
-            DataType::Dictionary(_, v) => return coerced_type(func_name, v.as_ref()),
+            DataType::Dictionary(_, v) => coerced_type(func_name, v.as_ref()),
             _ => {
-                return plan_err!(
+                plan_err!(
                     "The function {:?} does not support inputs of type {:?}.",
                     func_name,
                     data_type
                 )
             }
-        };
+        }
     }
     Ok(vec![coerced_type(func_name, &arg_types[0])?])
 }

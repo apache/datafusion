@@ -26,12 +26,12 @@ use arrow_buffer::OffsetBuffer;
 use arrow_schema::Field;
 
 use datafusion_common::{cast::as_map_array, exec_err, Result};
-use datafusion_expr::scalar_doc_sections::DOC_SECTION_MAP;
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
 };
+use datafusion_macros::user_doc;
 use std::any::Any;
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 use std::vec;
 
 use crate::utils::{get_map_entry_field, make_scalar_function};
@@ -45,10 +45,42 @@ make_udf_expr_and_func!(
     map_extract_udf
 );
 
+#[user_doc(
+    doc_section(label = "Map Functions"),
+    description = "Returns a list containing the value for the given key or an empty list if the key is not present in the map.",
+    syntax_example = "map_extract(map, key)",
+    sql_example = r#"```sql
+SELECT map_extract(MAP {'a': 1, 'b': NULL, 'c': 3}, 'a');
+----
+[1]
+
+SELECT map_extract(MAP {1: 'one', 2: 'two'}, 2);
+----
+['two']
+
+SELECT map_extract(MAP {'x': 10, 'y': NULL, 'z': 30}, 'y');
+----
+[]
+```"#,
+    argument(
+        name = "map",
+        description = "Map expression. Can be a constant, column, or function, and any combination of map operators."
+    ),
+    argument(
+        name = "key",
+        description = "Key to extract from the map. Can be a constant, column, or function, any combination of arithmetic or string operators, or a named expression of the previously listed."
+    )
+)]
 #[derive(Debug)]
-pub(super) struct MapExtract {
+pub struct MapExtract {
     signature: Signature,
     aliases: Vec<String>,
+}
+
+impl Default for MapExtract {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl MapExtract {
@@ -78,14 +110,17 @@ impl ScalarUDFImpl for MapExtract {
         }
         let map_type = &arg_types[0];
         let map_fields = get_map_entry_field(map_type)?;
-        Ok(DataType::List(Arc::new(Field::new(
-            "item",
+        Ok(DataType::List(Arc::new(Field::new_list_field(
             map_fields.last().unwrap().data_type().clone(),
             true,
         ))))
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         make_scalar_function(map_extract_inner)(args)
     }
 
@@ -106,46 +141,8 @@ impl ScalarUDFImpl for MapExtract {
     }
 
     fn documentation(&self) -> Option<&Documentation> {
-        Some(get_map_extract_doc())
+        self.doc()
     }
-}
-
-static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
-
-fn get_map_extract_doc() -> &'static Documentation {
-    DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_MAP)
-            .with_description(
-                "Returns a list containing the value for the given key or an empty list if the key is not present in the map.",
-            )
-            .with_syntax_example("map_extract(map, key)")
-            .with_sql_example(
-                r#"```sql
-SELECT map_extract(MAP {'a': 1, 'b': NULL, 'c': 3}, 'a');
-----
-[1]
-
-SELECT map_extract(MAP {1: 'one', 2: 'two'}, 2);
-----
-['two']
-
-SELECT map_extract(MAP {'x': 10, 'y': NULL, 'z': 30}, 'y');
-----
-[]
-```"#,
-            )
-            .with_argument(
-                "map",
-                "Map expression. Can be a constant, column, or function, and any combination of map operators.",
-            )
-            .with_argument(
-                "key",
-                "Key to extract from the map. Can be a constant, column, or function, any combination of arithmetic or string operators, or a named expression of the previously listed.",
-            )
-            .build()
-            .unwrap()
-    })
 }
 
 fn general_map_extract_inner(
@@ -186,7 +183,7 @@ fn general_map_extract_inner(
     let data = mutable.freeze();
 
     Ok(Arc::new(ListArray::new(
-        Arc::new(Field::new("item", map_array.value_type().clone(), true)),
+        Arc::new(Field::new_list_field(map_array.value_type().clone(), true)),
         OffsetBuffer::<i32>::new(offsets.into()),
         Arc::new(make_array(data)),
         None,

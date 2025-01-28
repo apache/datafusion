@@ -28,7 +28,7 @@ use arrow::array::{
 use arrow::buffer::{NullBuffer, OffsetBuffer, ScalarBuffer};
 use arrow::datatypes::DataType;
 use datafusion_common::hash_utils::create_hashes;
-use datafusion_common::utils::proxy::{RawTableAllocExt, VecAllocExt};
+use datafusion_common::utils::proxy::{HashTableAllocExt, VecAllocExt};
 use std::any::type_name;
 use std::fmt::Debug;
 use std::mem::{size_of, swap};
@@ -215,7 +215,7 @@ where
     /// Should the output be String or Binary?
     output_type: OutputType,
     /// Underlying hash set for each distinct value
-    map: hashbrown::raw::RawTable<Entry<O, V>>,
+    map: hashbrown::hash_table::HashTable<Entry<O, V>>,
     /// Total size of the map in bytes
     map_size: usize,
     /// In progress arrow `Buffer` containing all values
@@ -246,7 +246,7 @@ where
     pub fn new(output_type: OutputType) -> Self {
         Self {
             output_type,
-            map: hashbrown::raw::RawTable::with_capacity(INITIAL_MAP_CAPACITY),
+            map: hashbrown::hash_table::HashTable::with_capacity(INITIAL_MAP_CAPACITY),
             map_size: 0,
             buffer: BufferBuilder::new(INITIAL_BUFFER_CAPACITY),
             offsets: vec![O::default()], // first offset is always 0
@@ -387,7 +387,7 @@ where
                 let inline = value.iter().fold(0usize, |acc, &x| acc << 8 | x as usize);
 
                 // is value is already present in the set?
-                let entry = self.map.get_mut(hash, |header| {
+                let entry = self.map.find_mut(hash, |header| {
                     // compare value if hashes match
                     if header.len != value_len {
                         return false;
@@ -425,7 +425,7 @@ where
             // value is not "small"
             else {
                 // Check if the value is already present in the set
-                let entry = self.map.get_mut(hash, |header| {
+                let entry = self.map.find_mut(hash, |header| {
                     // compare value if hashes match
                     if header.len != value_len {
                         return false;

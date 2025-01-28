@@ -18,9 +18,10 @@
 //! [`ScalarUDFImpl`] definitions for `make_array` function.
 
 use std::any::Any;
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 use std::vec;
 
+use crate::utils::make_scalar_function;
 use arrow::array::{ArrayData, Capacities, MutableArrayData};
 use arrow_array::{
     new_null_array, Array, ArrayRef, GenericListArray, NullArray, OffsetSizeTrait,
@@ -28,17 +29,16 @@ use arrow_array::{
 use arrow_buffer::OffsetBuffer;
 use arrow_schema::DataType::{List, Null};
 use arrow_schema::{DataType, Field};
-use datafusion_common::{plan_err, utils::array_into_list_array_nullable, Result};
+use datafusion_common::utils::SingleRowListArrayBuilder;
+use datafusion_common::{plan_err, Result};
 use datafusion_expr::binary::{
     try_type_union_resolution_with_struct, type_union_resolution,
 };
-use datafusion_expr::scalar_doc_sections::DOC_SECTION_ARRAY;
 use datafusion_expr::TypeSignature;
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
 };
-
-use crate::utils::make_scalar_function;
+use datafusion_macros::user_doc;
 
 make_udf_expr_and_func!(
     MakeArray,
@@ -47,6 +47,23 @@ make_udf_expr_and_func!(
     make_array_udf
 );
 
+#[user_doc(
+    doc_section(label = "Array Functions"),
+    description = "Returns an array using the specified input expressions.",
+    syntax_example = "make_array(expression1[, ..., expression_n])",
+    sql_example = r#"```sql
+> select make_array(1, 2, 3, 4, 5);
++----------------------------------------------------------+
+| make_array(Int64(1),Int64(2),Int64(3),Int64(4),Int64(5)) |
++----------------------------------------------------------+
+| [1, 2, 3, 4, 5]                                          |
++----------------------------------------------------------+
+```"#,
+    argument(
+        name = "expression_n",
+        description = "Expression to include in the output array. Can be a constant, column, or function, and any combination of arithmetic or string operators."
+    )
+)]
 #[derive(Debug)]
 pub struct MakeArray {
     signature: Signature,
@@ -63,7 +80,7 @@ impl MakeArray {
     pub fn new() -> Self {
         Self {
             signature: Signature::one_of(
-                vec![TypeSignature::NullAry, TypeSignature::UserDefined],
+                vec![TypeSignature::Nullary, TypeSignature::UserDefined],
                 Volatility::Immutable,
             ),
             aliases: vec![String::from("make_list")],
@@ -89,8 +106,7 @@ impl ScalarUDFImpl for MakeArray {
             0 => Ok(empty_array_type()),
             _ => {
                 // At this point, all the type in array should be coerced to the same one
-                Ok(List(Arc::new(Field::new(
-                    "item",
+                Ok(List(Arc::new(Field::new_list_field(
                     arg_types[0].to_owned(),
                     true,
                 ))))
@@ -139,42 +155,13 @@ impl ScalarUDFImpl for MakeArray {
     }
 
     fn documentation(&self) -> Option<&Documentation> {
-        Some(get_make_array_doc())
+        self.doc()
     }
-}
-
-static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
-
-fn get_make_array_doc() -> &'static Documentation {
-    DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_ARRAY)
-            .with_description(
-                "Returns an array using the specified input expressions.",
-            )
-            .with_syntax_example("make_array(expression1[, ..., expression_n])")
-            .with_sql_example(
-                r#"```sql
-> select make_array(1, 2, 3, 4, 5);
-+----------------------------------------------------------+
-| make_array(Int64(1),Int64(2),Int64(3),Int64(4),Int64(5)) |
-+----------------------------------------------------------+
-| [1, 2, 3, 4, 5]                                          |
-+----------------------------------------------------------+
-```"#,
-            )
-            .with_argument(
-                "expression_n",
-                "Expression to include in the output array. Can be a constant, column, or function, and any combination of arithmetic or string operators.",
-            )
-            .build()
-            .unwrap()
-    })
 }
 
 // Empty array is a special case that is useful for many other array functions
 pub(super) fn empty_array_type() -> DataType {
-    List(Arc::new(Field::new("item", DataType::Int64, true)))
+    List(Arc::new(Field::new_list_field(DataType::Int64, true)))
 }
 
 /// `make_array_inner` is the implementation of the `make_array` function.
@@ -196,7 +183,9 @@ pub(crate) fn make_array_inner(arrays: &[ArrayRef]) -> Result<ArrayRef> {
             let length = arrays.iter().map(|a| a.len()).sum();
             // By default Int64
             let array = new_null_array(&DataType::Int64, length);
-            Ok(Arc::new(array_into_list_array_nullable(array)))
+            Ok(Arc::new(
+                SingleRowListArrayBuilder::new(array).build_list_array(),
+            ))
         }
         _ => array_array::<i32>(arrays, data_type),
     }
@@ -287,7 +276,7 @@ fn array_array<O: OffsetSizeTrait>(
     let data = mutable.freeze();
 
     Ok(Arc::new(GenericListArray::<O>::try_new(
-        Arc::new(Field::new("item", data_type, true)),
+        Arc::new(Field::new_list_field(data_type, true)),
         OffsetBuffer::new(offsets.into()),
         arrow_array::make_array(data),
         None,

@@ -18,7 +18,7 @@
 use std::any::Any;
 use std::ops::{Add, Sub};
 use std::str::FromStr;
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
 use arrow::array::temporal_conversions::{
     as_datetime_with_timezone, timestamp_ns_to_datetime,
@@ -38,12 +38,35 @@ use datafusion_expr::TypeSignature::Exact;
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility, TIMEZONE_WILDCARD,
 };
+use datafusion_macros::user_doc;
 
 use chrono::{
     DateTime, Datelike, Duration, LocalResult, NaiveDateTime, Offset, TimeDelta, Timelike,
 };
-use datafusion_expr::scalar_doc_sections::DOC_SECTION_DATETIME;
 
+#[user_doc(
+    doc_section(label = "Time and Date Functions"),
+    description = "Truncates a timestamp value to a specified precision.",
+    syntax_example = "date_trunc(precision, expression)",
+    argument(
+        name = "precision",
+        description = r#"Time precision to truncate to. The following precisions are supported:
+
+    - year / YEAR
+    - quarter / QUARTER
+    - month / MONTH
+    - week / WEEK
+    - day / DAY
+    - hour / HOUR
+    - minute / MINUTE
+    - second / SECOND
+"#
+    ),
+    argument(
+        name = "expression",
+        description = "Time expression to operate on. Can be a constant, column, or function."
+    )
+)]
 #[derive(Debug)]
 pub struct DateTruncFunc {
     signature: Signature,
@@ -137,7 +160,11 @@ impl ScalarUDFImpl for DateTruncFunc {
         }
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         let (granularity, array) = (&args[0], &args[1]);
 
         let granularity = if let ColumnarValue::Scalar(ScalarValue::Utf8(Some(v))) =
@@ -243,39 +270,8 @@ impl ScalarUDFImpl for DateTruncFunc {
         }
     }
     fn documentation(&self) -> Option<&Documentation> {
-        Some(get_date_trunc_doc())
+        self.doc()
     }
-}
-
-static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
-
-fn get_date_trunc_doc() -> &'static Documentation {
-    DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_DATETIME)
-            .with_description("Truncates a timestamp value to a specified precision.")
-            .with_syntax_example("date_trunc(precision, expression)")
-            .with_argument(
-                "precision",
-                r#"Time precision to truncate to. The following precisions are supported:
-
-    - year / YEAR
-    - quarter / QUARTER
-    - month / MONTH
-    - week / WEEK
-    - day / DAY
-    - hour / HOUR
-    - minute / MINUTE
-    - second / SECOND
-"#,
-            )
-            .with_argument(
-                "expression",
-                "Time expression to operate on. Can be a constant, column, or function.",
-            )
-            .build()
-            .unwrap()
-    })
 }
 
 fn _date_trunc_coarse<T>(granularity: &str, value: Option<T>) -> Result<Option<T>>
@@ -724,14 +720,15 @@ mod tests {
                 .map(|s| Some(string_to_timestamp_nanos(s).unwrap()))
                 .collect::<TimestampNanosecondArray>()
                 .with_timezone_opt(tz_opt.clone());
-            let batch_size = input.len();
+            let batch_len = input.len();
+            #[allow(deprecated)] // TODO migrate UDF invoke to invoke_batch
             let result = DateTruncFunc::new()
                 .invoke_batch(
                     &[
                         ColumnarValue::Scalar(ScalarValue::from("day")),
                         ColumnarValue::Array(Arc::new(input)),
                     ],
-                    batch_size,
+                    batch_len,
                 )
                 .unwrap();
             if let ColumnarValue::Array(result) = result {
@@ -886,14 +883,15 @@ mod tests {
                 .map(|s| Some(string_to_timestamp_nanos(s).unwrap()))
                 .collect::<TimestampNanosecondArray>()
                 .with_timezone_opt(tz_opt.clone());
-            let batch_size = input.len();
+            let batch_len = input.len();
+            #[allow(deprecated)] // TODO migrate UDF invoke to invoke_batch
             let result = DateTruncFunc::new()
                 .invoke_batch(
                     &[
                         ColumnarValue::Scalar(ScalarValue::from("hour")),
                         ColumnarValue::Array(Arc::new(input)),
                     ],
-                    batch_size,
+                    batch_len,
                 )
                 .unwrap();
             if let ColumnarValue::Array(result) = result {

@@ -19,12 +19,12 @@ use std::collections::HashMap;
 use std::env;
 use std::path::Path;
 use std::process::ExitCode;
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, LazyLock};
 
 use datafusion::error::{DataFusionError, Result};
 use datafusion::execution::context::SessionConfig;
-use datafusion::execution::memory_pool::{FairSpillPool, GreedyMemoryPool};
-use datafusion::execution::runtime_env::{RuntimeConfig, RuntimeEnv};
+use datafusion::execution::memory_pool::{FairSpillPool, GreedyMemoryPool, MemoryPool};
+use datafusion::execution::runtime_env::RuntimeEnvBuilder;
 use datafusion::prelude::SessionContext;
 use datafusion_cli::catalog::DynamicObjectStoreCatalog;
 use datafusion_cli::functions::ParquetMetadataFunc;
@@ -156,27 +156,22 @@ async fn main_inner() -> Result<()> {
         session_config = session_config.with_batch_size(batch_size);
     };
 
-    let rt_config = RuntimeConfig::new();
-    let rt_config =
-        // set memory pool size
-        if let Some(memory_limit) = args.memory_limit {
-            // set memory pool type
-            match args.mem_pool_type {
-                PoolType::Fair => rt_config
-                    .with_memory_pool(Arc::new(FairSpillPool::new(memory_limit))),
-                PoolType::Greedy => rt_config
-                    .with_memory_pool(Arc::new(GreedyMemoryPool::new(memory_limit)))
-            }
-        } else {
-            rt_config
+    let mut rt_builder = RuntimeEnvBuilder::new();
+    // set memory pool size
+    if let Some(memory_limit) = args.memory_limit {
+        // set memory pool type
+        let pool: Arc<dyn MemoryPool> = match args.mem_pool_type {
+            PoolType::Fair => Arc::new(FairSpillPool::new(memory_limit)),
+            PoolType::Greedy => Arc::new(GreedyMemoryPool::new(memory_limit)),
         };
+        rt_builder = rt_builder.with_memory_pool(pool)
+    }
 
-    let runtime_env = create_runtime_env(rt_config.clone())?;
+    let runtime_env = rt_builder.build_arc()?;
 
     // enable dynamic file query
-    let ctx =
-        SessionContext::new_with_config_rt(session_config.clone(), Arc::new(runtime_env))
-            .enable_url_table();
+    let ctx = SessionContext::new_with_config_rt(session_config, runtime_env)
+        .enable_url_table();
     ctx.refresh_catalogs().await?;
     // install dynamic catalog provider that can register required object stores
     ctx.register_catalog_list(Arc::new(DynamicObjectStoreCatalog::new(
@@ -229,10 +224,6 @@ async fn main_inner() -> Result<()> {
     }
 
     Ok(())
-}
-
-fn create_runtime_env(rn_config: RuntimeConfig) -> Result<RuntimeEnv> {
-    RuntimeEnv::try_new(rn_config)
 }
 
 fn parse_valid_file(dir: &str) -> Result<String, String> {
@@ -288,9 +279,8 @@ impl ByteUnit {
 }
 
 fn extract_memory_pool_size(size: &str) -> Result<usize, String> {
-    fn byte_suffixes() -> &'static HashMap<&'static str, ByteUnit> {
-        static BYTE_SUFFIXES: OnceLock<HashMap<&'static str, ByteUnit>> = OnceLock::new();
-        BYTE_SUFFIXES.get_or_init(|| {
+    static BYTE_SUFFIXES: LazyLock<HashMap<&'static str, ByteUnit>> =
+        LazyLock::new(|| {
             let mut m = HashMap::new();
             m.insert("b", ByteUnit::Byte);
             m.insert("k", ByteUnit::KiB);
@@ -302,23 +292,20 @@ fn extract_memory_pool_size(size: &str) -> Result<usize, String> {
             m.insert("t", ByteUnit::TiB);
             m.insert("tb", ByteUnit::TiB);
             m
-        })
-    }
+        });
 
-    fn suffix_re() -> &'static regex::Regex {
-        static SUFFIX_REGEX: OnceLock<regex::Regex> = OnceLock::new();
-        SUFFIX_REGEX.get_or_init(|| regex::Regex::new(r"^(-?[0-9]+)([a-z]+)?$").unwrap())
-    }
+    static SUFFIX_REGEX: LazyLock<regex::Regex> =
+        LazyLock::new(|| regex::Regex::new(r"^(-?[0-9]+)([a-z]+)?$").unwrap());
 
     let lower = size.to_lowercase();
-    if let Some(caps) = suffix_re().captures(&lower) {
+    if let Some(caps) = SUFFIX_REGEX.captures(&lower) {
         let num_str = caps.get(1).unwrap().as_str();
         let num = num_str.parse::<usize>().map_err(|_| {
             format!("Invalid numeric value in memory pool size '{}'", size)
         })?;
 
         let suffix = caps.get(2).map(|m| m.as_str()).unwrap_or("b");
-        let unit = byte_suffixes()
+        let unit = &BYTE_SUFFIXES
             .get(suffix)
             .ok_or_else(|| format!("Invalid memory pool size '{}'", size))?;
         let memory_pool_size = usize::try_from(unit.multiplier())

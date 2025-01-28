@@ -26,7 +26,8 @@ use super::{
     work_table::{ReservedBatches, WorkTable, WorkTableExec},
     PlanProperties, RecordBatchStream, SendableRecordBatchStream, Statistics,
 };
-use crate::{DisplayAs, DisplayFormatType, ExecutionMode, ExecutionPlan};
+use crate::execution_plan::{Boundedness, EmissionType};
+use crate::{DisplayAs, DisplayFormatType, ExecutionPlan};
 
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
@@ -122,7 +123,8 @@ impl RecursiveQueryExec {
         PlanProperties::new(
             eq_properties,
             Partitioning::UnknownPartitioning(1),
-            ExecutionMode::Bounded,
+            EmissionType::Incremental,
+            Boundedness::Bounded,
         )
     }
 }
@@ -145,7 +147,7 @@ impl ExecutionPlan for RecursiveQueryExec {
     }
 
     // TODO: control these hints and see whether we can
-    // infer some from the child plans (static/recurisve terms).
+    // infer some from the child plans (static/recursive terms).
     fn maintains_input_order(&self) -> Vec<bool> {
         vec![false, false]
     }

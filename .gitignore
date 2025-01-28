@@ -64,6 +64,12 @@ datafusion/sqllogictests/test_files/tpch/data/*
 # Scratch temp dir for sqllogictests
 datafusion/sqllogictest/test_files/scratch*
 
+# temp file for core
+datafusion/core/*.parquet
+
+# Generated core benchmark data
+datafusion/core/benches/data/*
+
 # rat
 filtered_rat.txt
 rat.txt

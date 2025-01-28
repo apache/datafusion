@@ -261,7 +261,7 @@ pub fn can_project(
             if columns
                 .iter()
                 .max()
-                .map_or(false, |&i| i >= schema.fields().len())
+                .is_some_and(|&i| i >= schema.fields().len())
             {
                 Err(arrow_schema::ArrowError::SchemaError(format!(
                     "project index {} out of bounds, max field {}",

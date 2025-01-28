@@ -58,7 +58,7 @@ unable to make progress you should unassign the issue by using the `unassign me`
 link at the top of the issue page (and ask for help if are stuck) so that
 someone else can get involved in the work.
 
-### File Tickets to Discuss New Features
+### Discussing New Features
 
 If you plan to work on a new feature that doesn't have an existing ticket, it is
 a good idea to open a ticket to discuss the feature. Advanced discussion often
@@ -70,15 +70,39 @@ line PR.
 If you open a ticket and it doesn't get any response, you can try `@`-mentioning
 recently active community members in the ticket to get their attention.
 
-### What Features are Good Fits for DataFusion?
+### What Contributions are Good Fits?
 
-DataFusion is designed to highly extensible, and many features can be implemented
-as extensions without changing the core of DataFusion.
+DataFusion is designed to be highly extensible, and many features can be
+implemented as extensions without changes or additions to the core. Support for
+new functions, data formats, and similar functionality can be added using those
+extension APIs, and there are already many existing community supported
+extensions listed in the [extensions list].
 
-We are [working on criteria for what features are good fits for DataFusion], and
-will update this section when we have more to share.
+Query engines are complex pieces of software to develop and maintain. Given our
+limited maintenance bandwidth, we try to keep the DataFusion core as simple and
+focused as possible, while still satisfying the [design goal] of an easy to
+start initial experience.
 
-[working on criteria for what features are good fits for datafusion]: https://github.com/apache/datafusion/issues/12357
+With that in mind, contributions that meet the following criteria are more likely
+to be accepted:
+
+1. Bug fixes for existing features
+2. Test coverage for existing features
+3. Documentation improvements / examples
+4. Performance improvements to existing features (with benchmarks)
+5. "Small" functional improvements to existing features (if they don't change existing behavior)
+6. Additional APIs for extending DataFusion's capabilities
+7. CI improvements
+
+Contributions that will likely involve more discussion (see Discussing New
+Features above) prior to acceptance include:
+
+1. Major new functionality (even if it is part of the "standard SQL")
+2. New functions, especially if they aren't part of "standard SQL"
+3. New data sources (e.g. support for Apache ORC)
+
+[extensions list]: ../library-user-guide/extensions.md
+[design goal]: https://docs.rs/datafusion/latest/datafusion/index.html#design-goals
 
 # Developer's guide
 

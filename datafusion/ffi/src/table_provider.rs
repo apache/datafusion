@@ -66,7 +66,7 @@ use datafusion::error::Result;
 /// calls defined on the `FFI_` structs. The second purpose of the `Foreign`
 /// structs is to contain additional data that may be needed by the traits that
 /// are implemented on them. Some of these traits require borrowing data which
-/// can be far more convienent to be locally stored.
+/// can be far more convenient to be locally stored.
 ///
 /// For example, we have a struct `FFI_TableProvider` to give access to the
 /// `TableProvider` functions like `table_type()` and `scan()`. If we write a
@@ -318,7 +318,7 @@ impl FFI_TableProvider {
     }
 }
 
-/// This wrapper struct exists on the reciever side of the FFI interface, so it has
+/// This wrapper struct exists on the receiver side of the FFI interface, so it has
 /// no guarantees about being able to access the data in `private_data`. Any functions
 /// defined on this struct must only use the stable functions provided in
 /// FFI_TableProvider to interact with the foreign table provider.
@@ -397,7 +397,7 @@ impl TableProvider for ForeignTableProvider {
     }
 
     /// Tests whether the table provider can make use of a filter expression
-    /// to optimise data retrieval.
+    /// to optimize data retrieval.
     fn supports_filters_pushdown(
         &self,
         filters: &[&Expr],

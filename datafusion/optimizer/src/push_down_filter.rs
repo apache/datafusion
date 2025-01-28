@@ -17,10 +17,10 @@
 
 //! [`PushDownFilter`] applies filters as early as possible
 
-use indexmap::IndexSet;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
+use indexmap::IndexSet;
 use itertools::Itertools;
 
 use datafusion_common::tree_node::{
@@ -29,6 +29,7 @@ use datafusion_common::tree_node::{
 use datafusion_common::{
     internal_err, plan_err, qualified_name, Column, DFSchema, Result,
 };
+use datafusion_expr::expr::WindowFunction;
 use datafusion_expr::expr_rewriter::replace_col;
 use datafusion_expr::logical_plan::{Join, JoinType, LogicalPlan, TableScan, Union};
 use datafusion_expr::utils::{
@@ -985,25 +986,127 @@ impl OptimizerRule for PushDownFilter {
                         }
                     })
             }
+            // Tries to push filters based on the partition key(s) of the window function(s) used.
+            // Example:
+            //   Before:
+            //     Filter: (a > 1) and (b > 1) and (c > 1)
+            //      Window: func() PARTITION BY [a] ...
+            //   ---
+            //   After:
+            //     Filter: (b > 1) and (c > 1)
+            //      Window: func() PARTITION BY [a] ...
+            //        Filter: (a > 1)
+            LogicalPlan::Window(window) => {
+                // Retrieve the set of potential partition keys where we can push filters by.
+                // Unlike aggregations, where there is only one statement per SELECT, there can be
+                // multiple window functions, each with potentially different partition keys.
+                // Therefore, we need to ensure that any potential partition key returned is used in
+                // ALL window functions. Otherwise, filters cannot be pushed by through that column.
+                let extract_partition_keys = |func: &WindowFunction| {
+                    func.partition_by
+                        .iter()
+                        .map(|c| Column::from_qualified_name(c.schema_name().to_string()))
+                        .collect::<HashSet<_>>()
+                };
+                let potential_partition_keys = window
+                    .window_expr
+                    .iter()
+                    .map(|e| {
+                        match e {
+                            Expr::WindowFunction(window_func) => {
+                                extract_partition_keys(window_func)
+                            }
+                            Expr::Alias(alias) => {
+                                if let Expr::WindowFunction(window_func) =
+                                    alias.expr.as_ref()
+                                {
+                                    extract_partition_keys(window_func)
+                                } else {
+                                    // window functions expressions are only Expr::WindowFunction
+                                    unreachable!()
+                                }
+                            }
+                            _ => {
+                                // window functions expressions are only Expr::WindowFunction
+                                unreachable!()
+                            }
+                        }
+                    })
+                    // performs the set intersection of the partition keys of all window functions,
+                    // returning only the common ones
+                    .reduce(|a, b| &a & &b)
+                    .unwrap_or_default();
+
+                let predicates = split_conjunction_owned(filter.predicate);
+                let mut keep_predicates = vec![];
+                let mut push_predicates = vec![];
+                for expr in predicates {
+                    let cols = expr.column_refs();
+                    if cols.iter().all(|c| potential_partition_keys.contains(c)) {
+                        push_predicates.push(expr);
+                    } else {
+                        keep_predicates.push(expr);
+                    }
+                }
+
+                // Unlike with aggregations, there are no cases where we have to replace, e.g.,
+                // `a+b` with Column(a)+Column(b). This is because partition expressions are not
+                // available as standalone columns to the user. For example, while an aggregation on
+                // `a+b` becomes Column(a + b), in a window partition it becomes
+                // `func() PARTITION BY [a + b] ...`. Thus, filters on expressions always remain in
+                // place, so we can use `push_predicates` directly. This is consistent with other
+                // optimizers, such as the one used by Postgres.
+
+                let window_input = Arc::clone(&window.input);
+                Transformed::yes(LogicalPlan::Window(window))
+                    .transform_data(|new_plan| {
+                        // If we have a filter to push, we push it down to the input of the window
+                        if let Some(predicate) = conjunction(push_predicates) {
+                            let new_filter = make_filter(predicate, window_input)?;
+                            insert_below(new_plan, new_filter)
+                        } else {
+                            Ok(Transformed::no(new_plan))
+                        }
+                    })?
+                    .map_data(|child_plan| {
+                        // if there are any remaining predicates we can't push, add them
+                        // back as a filter
+                        if let Some(predicate) = conjunction(keep_predicates) {
+                            make_filter(predicate, Arc::new(child_plan))
+                        } else {
+                            Ok(child_plan)
+                        }
+                    })
+            }
             LogicalPlan::Join(join) => push_down_join(join, Some(&filter.predicate)),
             LogicalPlan::TableScan(scan) => {
                 let filter_predicates = split_conjunction(&filter.predicate);
-                let results = scan
+
+                let (volatile_filters, non_volatile_filters): (Vec<&Expr>, Vec<&Expr>) =
+                    filter_predicates
+                        .into_iter()
+                        .partition(|pred| pred.is_volatile());
+
+                // Check which non-volatile filters are supported by source
+                let supported_filters = scan
                     .source
-                    .supports_filters_pushdown(filter_predicates.as_slice())?;
-                if filter_predicates.len() != results.len() {
+                    .supports_filters_pushdown(non_volatile_filters.as_slice())?;
+                if non_volatile_filters.len() != supported_filters.len() {
                     return internal_err!(
                         "Vec returned length: {} from supports_filters_pushdown is not the same size as the filters passed, which length is: {}",
-                        results.len(),
-                        filter_predicates.len());
+                        supported_filters.len(),
+                        non_volatile_filters.len());
                 }
 
-                let zip = filter_predicates.into_iter().zip(results);
+                // Compose scan filters from non-volatile filters of `Exact` or `Inexact` pushdown type
+                let zip = non_volatile_filters.into_iter().zip(supported_filters);
 
                 let new_scan_filters = zip
                     .clone()
                     .filter(|(_, res)| res != &TableProviderFilterPushDown::Unsupported)
                     .map(|(pred, _)| pred);
+
+                // Add new scan filters
                 let new_scan_filters: Vec<Expr> = scan
                     .filters
                     .iter()
@@ -1011,9 +1114,13 @@ impl OptimizerRule for PushDownFilter {
                     .unique()
                     .cloned()
                     .collect();
+
+                // Compose predicates to be of `Unsupported` or `Inexact` pushdown type, and also include volatile filters
                 let new_predicate: Vec<Expr> = zip
                     .filter(|(_, res)| res != &TableProviderFilterPushDown::Exact)
-                    .map(|(pred, _)| pred.clone())
+                    .map(|(pred, _)| pred)
+                    .chain(volatile_filters)
+                    .cloned()
                     .collect();
 
                 let new_scan = LogicalPlan::TableScan(TableScan {
@@ -1275,12 +1382,12 @@ mod tests {
     use async_trait::async_trait;
 
     use datafusion_common::{DFSchemaRef, ScalarValue};
-    use datafusion_expr::expr::ScalarFunction;
+    use datafusion_expr::expr::{ScalarFunction, WindowFunction};
     use datafusion_expr::logical_plan::table_scan;
     use datafusion_expr::{
-        col, in_list, in_subquery, lit, ColumnarValue, Extension, LogicalPlanBuilder,
-        ScalarUDF, ScalarUDFImpl, Signature, TableSource, TableType,
-        UserDefinedLogicalNodeCore, Volatility,
+        col, in_list, in_subquery, lit, ColumnarValue, ExprFunctionExt, Extension,
+        LogicalPlanBuilder, ScalarUDF, ScalarUDFImpl, Signature, TableSource, TableType,
+        UserDefinedLogicalNodeCore, Volatility, WindowFunctionDefinition,
     };
 
     use crate::optimizer::Optimizer;
@@ -1424,6 +1531,227 @@ mod tests {
         let expected = "\
             Filter: b > Int64(10)\
             \n  Aggregate: groupBy=[[test.a]], aggr=[[sum(test.b) AS b]]\
+            \n    TableScan: test";
+        assert_optimized_plan_eq(plan, expected)
+    }
+
+    /// verifies that when partitioning by 'a' and 'b', and filtering by 'b', 'b' is pushed
+    #[test]
+    fn filter_move_window() -> Result<()> {
+        let table_scan = test_table_scan()?;
+
+        let window = Expr::WindowFunction(WindowFunction::new(
+            WindowFunctionDefinition::WindowUDF(
+                datafusion_functions_window::rank::rank_udwf(),
+            ),
+            vec![],
+        ))
+        .partition_by(vec![col("a"), col("b")])
+        .order_by(vec![col("c").sort(true, true)])
+        .build()
+        .unwrap();
+
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .window(vec![window])?
+            .filter(col("b").gt(lit(10i64)))?
+            .build()?;
+
+        let expected = "\
+        WindowAggr: windowExpr=[[rank() PARTITION BY [test.a, test.b] ORDER BY [test.c ASC NULLS FIRST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]\
+        \n  TableScan: test, full_filters=[test.b > Int64(10)]";
+        assert_optimized_plan_eq(plan, expected)
+    }
+
+    /// verifies that when partitioning by 'a' and 'b', and filtering by 'a' and 'b', both 'a' and
+    /// 'b' are pushed
+    #[test]
+    fn filter_move_complex_window() -> Result<()> {
+        let table_scan = test_table_scan()?;
+
+        let window = Expr::WindowFunction(WindowFunction::new(
+            WindowFunctionDefinition::WindowUDF(
+                datafusion_functions_window::rank::rank_udwf(),
+            ),
+            vec![],
+        ))
+        .partition_by(vec![col("a"), col("b")])
+        .order_by(vec![col("c").sort(true, true)])
+        .build()
+        .unwrap();
+
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .window(vec![window])?
+            .filter(and(col("a").gt(lit(10i64)), col("b").eq(lit(1i64))))?
+            .build()?;
+
+        let expected = "\
+            WindowAggr: windowExpr=[[rank() PARTITION BY [test.a, test.b] ORDER BY [test.c ASC NULLS FIRST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]\
+            \n  TableScan: test, full_filters=[test.a > Int64(10), test.b = Int64(1)]";
+        assert_optimized_plan_eq(plan, expected)
+    }
+
+    /// verifies that when partitioning by 'a' and filtering by 'a' and 'b', only 'a' is pushed
+    #[test]
+    fn filter_move_partial_window() -> Result<()> {
+        let table_scan = test_table_scan()?;
+
+        let window = Expr::WindowFunction(WindowFunction::new(
+            WindowFunctionDefinition::WindowUDF(
+                datafusion_functions_window::rank::rank_udwf(),
+            ),
+            vec![],
+        ))
+        .partition_by(vec![col("a")])
+        .order_by(vec![col("c").sort(true, true)])
+        .build()
+        .unwrap();
+
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .window(vec![window])?
+            .filter(and(col("a").gt(lit(10i64)), col("b").eq(lit(1i64))))?
+            .build()?;
+
+        let expected = "\
+        Filter: test.b = Int64(1)\
+        \n  WindowAggr: windowExpr=[[rank() PARTITION BY [test.a] ORDER BY [test.c ASC NULLS FIRST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]\
+        \n    TableScan: test, full_filters=[test.a > Int64(10)]";
+        assert_optimized_plan_eq(plan, expected)
+    }
+
+    /// verifies that filters on partition expressions are not pushed, as the single expression
+    /// column is not available to the user, unlike with aggregations
+    #[test]
+    fn filter_expression_keep_window() -> Result<()> {
+        let table_scan = test_table_scan()?;
+
+        let window = Expr::WindowFunction(WindowFunction::new(
+            WindowFunctionDefinition::WindowUDF(
+                datafusion_functions_window::rank::rank_udwf(),
+            ),
+            vec![],
+        ))
+        .partition_by(vec![add(col("a"), col("b"))]) // PARTITION BY a + b
+        .order_by(vec![col("c").sort(true, true)])
+        .build()
+        .unwrap();
+
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .window(vec![window])?
+            // unlike with aggregations, single partition column "test.a + test.b" is not available
+            // to the plan, so we use multiple columns when filtering
+            .filter(add(col("a"), col("b")).gt(lit(10i64)))?
+            .build()?;
+
+        let expected = "\
+        Filter: test.a + test.b > Int64(10)\
+        \n  WindowAggr: windowExpr=[[rank() PARTITION BY [test.a + test.b] ORDER BY [test.c ASC NULLS FIRST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]\
+        \n    TableScan: test";
+        assert_optimized_plan_eq(plan, expected)
+    }
+
+    /// verifies that filters are not pushed on order by columns (that are not used in partitioning)
+    #[test]
+    fn filter_order_keep_window() -> Result<()> {
+        let table_scan = test_table_scan()?;
+
+        let window = Expr::WindowFunction(WindowFunction::new(
+            WindowFunctionDefinition::WindowUDF(
+                datafusion_functions_window::rank::rank_udwf(),
+            ),
+            vec![],
+        ))
+        .partition_by(vec![col("a")])
+        .order_by(vec![col("c").sort(true, true)])
+        .build()
+        .unwrap();
+
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .window(vec![window])?
+            .filter(col("c").gt(lit(10i64)))?
+            .build()?;
+
+        let expected = "\
+        Filter: test.c > Int64(10)\
+        \n  WindowAggr: windowExpr=[[rank() PARTITION BY [test.a] ORDER BY [test.c ASC NULLS FIRST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]\
+        \n    TableScan: test";
+        assert_optimized_plan_eq(plan, expected)
+    }
+
+    /// verifies that when we use multiple window functions with a common partition key, the filter
+    /// on that key is pushed
+    #[test]
+    fn filter_multiple_windows_common_partitions() -> Result<()> {
+        let table_scan = test_table_scan()?;
+
+        let window1 = Expr::WindowFunction(WindowFunction::new(
+            WindowFunctionDefinition::WindowUDF(
+                datafusion_functions_window::rank::rank_udwf(),
+            ),
+            vec![],
+        ))
+        .partition_by(vec![col("a")])
+        .order_by(vec![col("c").sort(true, true)])
+        .build()
+        .unwrap();
+
+        let window2 = Expr::WindowFunction(WindowFunction::new(
+            WindowFunctionDefinition::WindowUDF(
+                datafusion_functions_window::rank::rank_udwf(),
+            ),
+            vec![],
+        ))
+        .partition_by(vec![col("b"), col("a")])
+        .order_by(vec![col("c").sort(true, true)])
+        .build()
+        .unwrap();
+
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .window(vec![window1, window2])?
+            .filter(col("a").gt(lit(10i64)))? // a appears in both window functions
+            .build()?;
+
+        let expected = "\
+            WindowAggr: windowExpr=[[rank() PARTITION BY [test.a] ORDER BY [test.c ASC NULLS FIRST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW, rank() PARTITION BY [test.b, test.a] ORDER BY [test.c ASC NULLS FIRST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]\
+            \n  TableScan: test, full_filters=[test.a > Int64(10)]";
+        assert_optimized_plan_eq(plan, expected)
+    }
+
+    /// verifies that when we use multiple window functions with different partitions keys, the
+    /// filter cannot be pushed
+    #[test]
+    fn filter_multiple_windows_disjoint_partitions() -> Result<()> {
+        let table_scan = test_table_scan()?;
+
+        let window1 = Expr::WindowFunction(WindowFunction::new(
+            WindowFunctionDefinition::WindowUDF(
+                datafusion_functions_window::rank::rank_udwf(),
+            ),
+            vec![],
+        ))
+        .partition_by(vec![col("a")])
+        .order_by(vec![col("c").sort(true, true)])
+        .build()
+        .unwrap();
+
+        let window2 = Expr::WindowFunction(WindowFunction::new(
+            WindowFunctionDefinition::WindowUDF(
+                datafusion_functions_window::rank::rank_udwf(),
+            ),
+            vec![],
+        ))
+        .partition_by(vec![col("b"), col("a")])
+        .order_by(vec![col("c").sort(true, true)])
+        .build()
+        .unwrap();
+
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .window(vec![window1, window2])?
+            .filter(col("b").gt(lit(10i64)))? // b only appears in one window function
+            .build()?;
+
+        let expected = "\
+            Filter: test.b > Int64(10)\
+            \n  WindowAggr: windowExpr=[[rank() PARTITION BY [test.a] ORDER BY [test.c ASC NULLS FIRST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW, rank() PARTITION BY [test.b, test.a] ORDER BY [test.c ASC NULLS FIRST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]\
             \n    TableScan: test";
         assert_optimized_plan_eq(plan, expected)
     }
@@ -2515,23 +2843,31 @@ mod tests {
         }
     }
 
-    fn table_scan_with_pushdown_provider(
+    fn table_scan_with_pushdown_provider_builder(
         filter_support: TableProviderFilterPushDown,
-    ) -> Result<LogicalPlan> {
+        filters: Vec<Expr>,
+        projection: Option<Vec<usize>>,
+    ) -> Result<LogicalPlanBuilder> {
         let test_provider = PushDownProvider { filter_support };
 
         let table_scan = LogicalPlan::TableScan(TableScan {
             table_name: "test".into(),
-            filters: vec![],
+            filters,
             projected_schema: Arc::new(DFSchema::try_from(
                 (*test_provider.schema()).clone(),
             )?),
-            projection: None,
+            projection,
             source: Arc::new(test_provider),
             fetch: None,
         });
 
-        LogicalPlanBuilder::from(table_scan)
+        Ok(LogicalPlanBuilder::from(table_scan))
+    }
+
+    fn table_scan_with_pushdown_provider(
+        filter_support: TableProviderFilterPushDown,
+    ) -> Result<LogicalPlan> {
+        table_scan_with_pushdown_provider_builder(filter_support, vec![], None)?
             .filter(col("a").eq(lit(1i64)))?
             .build()
     }
@@ -2588,25 +2924,14 @@ mod tests {
 
     #[test]
     fn multi_combined_filter() -> Result<()> {
-        let test_provider = PushDownProvider {
-            filter_support: TableProviderFilterPushDown::Inexact,
-        };
-
-        let table_scan = LogicalPlan::TableScan(TableScan {
-            table_name: "test".into(),
-            filters: vec![col("a").eq(lit(10i64)), col("b").gt(lit(11i64))],
-            projected_schema: Arc::new(DFSchema::try_from(
-                (*test_provider.schema()).clone(),
-            )?),
-            projection: Some(vec![0]),
-            source: Arc::new(test_provider),
-            fetch: None,
-        });
-
-        let plan = LogicalPlanBuilder::from(table_scan)
-            .filter(and(col("a").eq(lit(10i64)), col("b").gt(lit(11i64))))?
-            .project(vec![col("a"), col("b")])?
-            .build()?;
+        let plan = table_scan_with_pushdown_provider_builder(
+            TableProviderFilterPushDown::Inexact,
+            vec![col("a").eq(lit(10i64)), col("b").gt(lit(11i64))],
+            Some(vec![0]),
+        )?
+        .filter(and(col("a").eq(lit(10i64)), col("b").gt(lit(11i64))))?
+        .project(vec![col("a"), col("b")])?
+        .build()?;
 
         let expected = "Projection: a, b\
             \n  Filter: a = Int64(10) AND b > Int64(11)\
@@ -2617,25 +2942,14 @@ mod tests {
 
     #[test]
     fn multi_combined_filter_exact() -> Result<()> {
-        let test_provider = PushDownProvider {
-            filter_support: TableProviderFilterPushDown::Exact,
-        };
-
-        let table_scan = LogicalPlan::TableScan(TableScan {
-            table_name: "test".into(),
-            filters: vec![],
-            projected_schema: Arc::new(DFSchema::try_from(
-                (*test_provider.schema()).clone(),
-            )?),
-            projection: Some(vec![0]),
-            source: Arc::new(test_provider),
-            fetch: None,
-        });
-
-        let plan = LogicalPlanBuilder::from(table_scan)
-            .filter(and(col("a").eq(lit(10i64)), col("b").gt(lit(11i64))))?
-            .project(vec![col("a"), col("b")])?
-            .build()?;
+        let plan = table_scan_with_pushdown_provider_builder(
+            TableProviderFilterPushDown::Exact,
+            vec![],
+            Some(vec![0]),
+        )?
+        .filter(and(col("a").eq(lit(10i64)), col("b").gt(lit(11i64))))?
+        .project(vec![col("a"), col("b")])?
+        .build()?;
 
         let expected = r#"
 Projection: a, b
@@ -3301,7 +3615,11 @@ Projection: a, b
             Ok(DataType::Int32)
         }
 
-        fn invoke(&self, _args: &[ColumnarValue]) -> Result<ColumnarValue> {
+        fn invoke_batch(
+            &self,
+            _args: &[ColumnarValue],
+            _number_rows: usize,
+        ) -> Result<ColumnarValue> {
             Ok(ColumnarValue::Scalar(ScalarValue::from(1)))
         }
     }
@@ -3384,5 +3702,88 @@ Projection: a, b
         \n          TableScan: test1\
         \n          TableScan: test2";
         assert_optimized_plan_eq(plan, expected)
+    }
+
+    #[test]
+    fn test_push_down_volatile_table_scan() -> Result<()> {
+        // SELECT test.a, test.b FROM test as t WHERE TestScalarUDF() > 0.1;
+        let table_scan = test_table_scan()?;
+        let fun = ScalarUDF::new_from_impl(TestScalarUDF {
+            signature: Signature::exact(vec![], Volatility::Volatile),
+        });
+        let expr = Expr::ScalarFunction(ScalarFunction::new_udf(Arc::new(fun), vec![]));
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .project(vec![col("a"), col("b")])?
+            .filter(expr.gt(lit(0.1)))?
+            .build()?;
+
+        let expected_before = "Filter: TestScalarUDF() > Float64(0.1)\
+        \n  Projection: test.a, test.b\
+        \n    TableScan: test";
+        assert_eq!(format!("{plan}"), expected_before);
+
+        let expected_after = "Projection: test.a, test.b\
+        \n  Filter: TestScalarUDF() > Float64(0.1)\
+        \n    TableScan: test";
+        assert_optimized_plan_eq(plan, expected_after)
+    }
+
+    #[test]
+    fn test_push_down_volatile_mixed_table_scan() -> Result<()> {
+        // SELECT test.a, test.b FROM test as t WHERE TestScalarUDF() > 0.1 and test.a > 5 and test.b > 10;
+        let table_scan = test_table_scan()?;
+        let fun = ScalarUDF::new_from_impl(TestScalarUDF {
+            signature: Signature::exact(vec![], Volatility::Volatile),
+        });
+        let expr = Expr::ScalarFunction(ScalarFunction::new_udf(Arc::new(fun), vec![]));
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .project(vec![col("a"), col("b")])?
+            .filter(
+                expr.gt(lit(0.1))
+                    .and(col("t.a").gt(lit(5)))
+                    .and(col("t.b").gt(lit(10))),
+            )?
+            .build()?;
+
+        let expected_before = "Filter: TestScalarUDF() > Float64(0.1) AND t.a > Int32(5) AND t.b > Int32(10)\
+        \n  Projection: test.a, test.b\
+        \n    TableScan: test";
+        assert_eq!(format!("{plan}"), expected_before);
+
+        let expected_after = "Projection: test.a, test.b\
+        \n  Filter: TestScalarUDF() > Float64(0.1)\
+        \n    TableScan: test, full_filters=[t.a > Int32(5), t.b > Int32(10)]";
+        assert_optimized_plan_eq(plan, expected_after)
+    }
+
+    #[test]
+    fn test_push_down_volatile_mixed_unsupported_table_scan() -> Result<()> {
+        // SELECT test.a, test.b FROM test as t WHERE TestScalarUDF() > 0.1 and test.a > 5 and test.b > 10;
+        let fun = ScalarUDF::new_from_impl(TestScalarUDF {
+            signature: Signature::exact(vec![], Volatility::Volatile),
+        });
+        let expr = Expr::ScalarFunction(ScalarFunction::new_udf(Arc::new(fun), vec![]));
+        let plan = table_scan_with_pushdown_provider_builder(
+            TableProviderFilterPushDown::Unsupported,
+            vec![],
+            None,
+        )?
+        .project(vec![col("a"), col("b")])?
+        .filter(
+            expr.gt(lit(0.1))
+                .and(col("t.a").gt(lit(5)))
+                .and(col("t.b").gt(lit(10))),
+        )?
+        .build()?;
+
+        let expected_before = "Filter: TestScalarUDF() > Float64(0.1) AND t.a > Int32(5) AND t.b > Int32(10)\
+        \n  Projection: a, b\
+        \n    TableScan: test";
+        assert_eq!(format!("{plan}"), expected_before);
+
+        let expected_after = "Projection: a, b\
+        \n  Filter: t.a > Int32(5) AND t.b > Int32(10) AND TestScalarUDF() > Float64(0.1)\
+        \n    TableScan: test";
+        assert_optimized_plan_eq(plan, expected_after)
     }
 }

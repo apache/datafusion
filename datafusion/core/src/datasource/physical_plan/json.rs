@@ -33,14 +33,16 @@ use crate::datasource::physical_plan::FileMeta;
 use crate::error::{DataFusionError, Result};
 use crate::physical_plan::metrics::{ExecutionPlanMetricsSet, MetricsSet};
 use crate::physical_plan::{
-    DisplayAs, DisplayFormatType, ExecutionMode, ExecutionPlan, ExecutionPlanProperties,
-    Partitioning, PlanProperties, SendableRecordBatchStream, Statistics,
+    DisplayAs, DisplayFormatType, ExecutionPlan, ExecutionPlanProperties, Partitioning,
+    PlanProperties, SendableRecordBatchStream, Statistics,
 };
 
 use arrow::json::ReaderBuilder;
 use arrow::{datatypes::SchemaRef, json};
+use datafusion_common::Constraints;
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::{EquivalenceProperties, LexOrdering};
+use datafusion_physical_plan::execution_plan::{Boundedness, EmissionType};
 
 use futures::{StreamExt, TryStreamExt};
 use object_store::buffered::BufWriter;
@@ -65,11 +67,16 @@ impl NdJsonExec {
         base_config: FileScanConfig,
         file_compression_type: FileCompressionType,
     ) -> Self {
-        let (projected_schema, projected_statistics, projected_output_ordering) =
-            base_config.project();
+        let (
+            projected_schema,
+            projected_constraints,
+            projected_statistics,
+            projected_output_ordering,
+        ) = base_config.project();
         let cache = Self::compute_properties(
             projected_schema,
             &projected_output_ordering,
+            projected_constraints,
             &base_config,
         );
         Self {
@@ -99,15 +106,18 @@ impl NdJsonExec {
     fn compute_properties(
         schema: SchemaRef,
         orderings: &[LexOrdering],
+        constraints: Constraints,
         file_scan_config: &FileScanConfig,
     ) -> PlanProperties {
         // Equivalence Properties
-        let eq_properties = EquivalenceProperties::new_with_orderings(schema, orderings);
+        let eq_properties = EquivalenceProperties::new_with_orderings(schema, orderings)
+            .with_constraints(constraints);
 
         PlanProperties::new(
             eq_properties,
             Self::output_partitioning_helper(file_scan_config), // Output Partitioning
-            ExecutionMode::Bounded,                             // Execution Mode
+            EmissionType::Incremental,
+            Boundedness::Bounded,
         )
     }
 
@@ -273,7 +283,7 @@ impl FileOpener for JsonOpener {
         let file_compression_type = self.file_compression_type.to_owned();
 
         Ok(Box::pin(async move {
-            let calculated_range = calculate_range(&file_meta, &store).await?;
+            let calculated_range = calculate_range(&file_meta, &store, None).await?;
 
             let range = match calculated_range {
                 RangeCalculation::Range(None) => None,
@@ -430,7 +440,7 @@ mod tests {
             .object_meta;
         let schema = JsonFormat::default()
             .with_file_compression_type(file_compression_type.to_owned())
-            .infer_schema(state, &store, &[meta.clone()])
+            .infer_schema(state, &store, std::slice::from_ref(&meta))
             .await
             .unwrap();
 
@@ -868,7 +878,7 @@ mod tests {
     )]
     #[cfg(feature = "compression")]
     #[tokio::test]
-    async fn test_json_with_repartitioing(
+    async fn test_json_with_repartitioning(
         file_compression_type: FileCompressionType,
     ) -> Result<()> {
         let config = SessionConfig::new()

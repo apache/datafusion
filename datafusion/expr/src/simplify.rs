@@ -71,7 +71,7 @@ impl<'a> SimplifyContext<'a> {
     }
 }
 
-impl<'a> SimplifyInfo for SimplifyContext<'a> {
+impl SimplifyInfo for SimplifyContext<'_> {
     /// Returns true if this Expr has boolean type
     fn is_boolean_type(&self, expr: &Expr) -> Result<bool> {
         if let Some(schema) = &self.schema {

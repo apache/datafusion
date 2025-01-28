@@ -352,7 +352,7 @@ where
         let null_buffer = self.nulls.take_n(n);
         let first_remaining_offset = O::as_usize(self.offsets[n]);
 
-        // Given offests like [0, 2, 4, 5] and n = 1, we expect to get
+        // Given offsets like [0, 2, 4, 5] and n = 1, we expect to get
         // offsets [0, 2, 3]. We first create two offsets for first_n as [0, 2] and the remaining as [2, 4, 5].
         // And we shift the offset starting from 0 for the remaining one, [2, 4, 5] -> [0, 2, 3].
         let mut first_n_offsets = self.offsets.drain(0..n).collect::<Vec<_>>();
@@ -405,7 +405,7 @@ mod tests {
 
     use crate::aggregates::group_values::multi_group_by::bytes::ByteGroupValueBuilder;
     use arrow_array::{ArrayRef, StringArray};
-    use arrow_buffer::{BooleanBufferBuilder, NullBuffer};
+    use arrow_buffer::NullBufferBuilder;
     use datafusion_physical_expr::binary_map::OutputType;
 
     use super::GroupColumn;
@@ -602,16 +602,15 @@ mod tests {
         .into_parts();
 
         // explicitly build a boolean buffer where one of the null values also happens to match
-        let mut boolean_buffer_builder = BooleanBufferBuilder::new(6);
-        boolean_buffer_builder.append(true);
-        boolean_buffer_builder.append(false); // this sets Some("bar") to null above
-        boolean_buffer_builder.append(false);
-        boolean_buffer_builder.append(false);
-        boolean_buffer_builder.append(true);
-        boolean_buffer_builder.append(true);
-        let nulls = NullBuffer::new(boolean_buffer_builder.finish());
+        let mut nulls = NullBufferBuilder::new(6);
+        nulls.append_non_null();
+        nulls.append_null(); // this sets Some("bar") to null above
+        nulls.append_null();
+        nulls.append_null();
+        nulls.append_non_null();
+        nulls.append_non_null();
         let input_array =
-            Arc::new(StringArray::new(offsets, buffer, Some(nulls))) as ArrayRef;
+            Arc::new(StringArray::new(offsets, buffer, nulls.finish())) as ArrayRef;
 
         // Check
         let mut equal_to_results = vec![true; builder.len()];

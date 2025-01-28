@@ -32,7 +32,7 @@ use aws_credential_types::provider::ProvideCredentials;
 use object_store::aws::{AmazonS3Builder, AwsCredential};
 use object_store::gcp::GoogleCloudStorageBuilder;
 use object_store::http::HttpBuilder;
-use object_store::{CredentialProvider, ObjectStore};
+use object_store::{ClientOptions, CredentialProvider, ObjectStore};
 use url::Url;
 
 pub async fn get_s3_object_store_builder(
@@ -437,6 +437,7 @@ pub(crate) async fn get_object_store(
         }
         "http" | "https" => Arc::new(
             HttpBuilder::new()
+                .with_client_options(ClientOptions::new().with_allow_http(true))
                 .with_url(url.origin().ascii_serialization())
                 .build()?,
         ),
@@ -471,12 +472,13 @@ mod tests {
 
     #[tokio::test]
     async fn s3_object_store_builder() -> Result<()> {
-        let access_key_id = "fake_access_key_id";
-        let secret_access_key = "fake_secret_access_key";
+        // "fake" is uppercase to ensure the values are not lowercased when parsed
+        let access_key_id = "FAKE_access_key_id";
+        let secret_access_key = "FAKE_secret_access_key";
         let region = "fake_us-east-2";
         let endpoint = "endpoint33";
-        let session_token = "fake_session_token";
-        let location = "s3://bucket/path/file.parquet";
+        let session_token = "FAKE_session_token";
+        let location = "s3://bucket/path/FAKE/file.parquet";
 
         let table_url = ListingTableUrl::parse(location)?;
         let scheme = table_url.scheme();

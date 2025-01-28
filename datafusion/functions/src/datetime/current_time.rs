@@ -19,15 +19,23 @@ use arrow::datatypes::DataType;
 use arrow::datatypes::DataType::Time64;
 use arrow::datatypes::TimeUnit::Nanosecond;
 use std::any::Any;
-use std::sync::OnceLock;
 
 use datafusion_common::{internal_err, Result, ScalarValue};
-use datafusion_expr::scalar_doc_sections::DOC_SECTION_DATETIME;
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyInfo};
 use datafusion_expr::{
     ColumnarValue, Documentation, Expr, ScalarUDFImpl, Signature, Volatility,
 };
+use datafusion_macros::user_doc;
 
+#[user_doc(
+    doc_section(label = "Time and Date Functions"),
+    description = r#"
+Returns the current UTC time.
+
+The `current_time()` return value is determined at query time and will return the same time, no matter when in the query plan the function executes.
+"#,
+    syntax_example = "current_time()"
+)]
 #[derive(Debug)]
 pub struct CurrentTimeFunc {
     signature: Signature,
@@ -70,7 +78,11 @@ impl ScalarUDFImpl for CurrentTimeFunc {
         Ok(Time64(Nanosecond))
     }
 
-    fn invoke(&self, _args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        _args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         internal_err!(
             "invoke should not be called on a simplified current_time() function"
         )
@@ -89,23 +101,6 @@ impl ScalarUDFImpl for CurrentTimeFunc {
     }
 
     fn documentation(&self) -> Option<&Documentation> {
-        Some(get_current_time_doc())
+        self.doc()
     }
-}
-
-static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
-
-fn get_current_time_doc() -> &'static Documentation {
-    DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_DATETIME)
-            .with_description(r#"
-Returns the current UTC time.
-
-The `current_time()` return value is determined at query time and will return the same time, no matter when in the query plan the function executes.
-"#)
-            .with_syntax_example("current_time()")
-            .build()
-            .unwrap()
-    })
 }

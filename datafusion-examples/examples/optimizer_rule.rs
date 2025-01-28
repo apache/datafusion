@@ -16,16 +16,16 @@
 // under the License.
 
 use arrow::array::{ArrayRef, Int32Array, RecordBatch, StringArray};
-use arrow_schema::DataType;
-use datafusion::prelude::SessionContext;
-use datafusion_common::tree_node::{Transformed, TreeNode};
-use datafusion_common::{assert_batches_eq, Result, ScalarValue};
-use datafusion_expr::{
+use arrow::datatypes::DataType;
+use datafusion::common::tree_node::{Transformed, TreeNode};
+use datafusion::common::{assert_batches_eq, Result, ScalarValue};
+use datafusion::logical_expr::{
     BinaryExpr, ColumnarValue, Expr, LogicalPlan, Operator, ScalarUDF, ScalarUDFImpl,
     Signature, Volatility,
 };
-use datafusion_optimizer::optimizer::ApplyOrder;
-use datafusion_optimizer::{OptimizerConfig, OptimizerRule};
+use datafusion::optimizer::ApplyOrder;
+use datafusion::optimizer::{OptimizerConfig, OptimizerRule};
+use datafusion::prelude::SessionContext;
 use std::any::Any;
 use std::sync::Arc;
 
@@ -146,7 +146,7 @@ impl MyOptimizerRule {
             // Closure called for each sub tree
             match expr {
                 Expr::BinaryExpr(binary_expr) if is_binary_eq(&binary_expr) => {
-                    // destruture the expression
+                    // destructure the expression
                     let BinaryExpr { left, op: _, right } = binary_expr;
                     // rewrite to `my_eq(left, right)`
                     let udf = ScalarUDF::new_from_impl(MyEq::new());
@@ -205,7 +205,11 @@ impl ScalarUDFImpl for MyEq {
         Ok(DataType::Boolean)
     }
 
-    fn invoke(&self, _args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        _args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         // this example simply returns "true" which is not what a real
         // implementation would do.
         Ok(ColumnarValue::Scalar(ScalarValue::from(true)))

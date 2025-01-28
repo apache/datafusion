@@ -18,7 +18,7 @@
 //! Math function: `log()`.
 
 use std::any::Any;
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
 use super::power::PowerFunc;
 
@@ -28,14 +28,22 @@ use datafusion_common::{
     exec_err, internal_err, plan_datafusion_err, plan_err, Result, ScalarValue,
 };
 use datafusion_expr::expr::ScalarFunction;
-use datafusion_expr::scalar_doc_sections::DOC_SECTION_MATH;
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyInfo};
 use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
 use datafusion_expr::{
     lit, ColumnarValue, Documentation, Expr, ScalarUDF, TypeSignature::*,
 };
 use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
+use datafusion_macros::user_doc;
 
+#[user_doc(
+    doc_section(label = "Math Functions"),
+    description = "Returns the base-x logarithm of a number. Can either provide a specified base, or if omitted then takes the base-10 of a number.",
+    syntax_example = r#"log(base, numeric_expression)
+log(numeric_expression)"#,
+    standard_argument(name = "base", prefix = "Base numeric"),
+    standard_argument(name = "numeric_expression", prefix = "Numeric")
+)]
 #[derive(Debug)]
 pub struct LogFunc {
     signature: Signature,
@@ -45,22 +53,6 @@ impl Default for LogFunc {
     fn default() -> Self {
         Self::new()
     }
-}
-
-static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
-
-fn get_log_doc() -> &'static Documentation {
-    DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_MATH)
-            .with_description("Returns the base-x logarithm of a number. Can either provide a specified base, or if omitted then takes the base-10 of a number.")
-            .with_syntax_example(r#"log(base, numeric_expression)
-log(numeric_expression)"#)
-            .with_standard_argument("base", Some("Base numeric"))
-            .with_standard_argument("numeric_expression", Some("Numeric"))
-            .build()
-            .unwrap()
-    })
 }
 
 impl LogFunc {
@@ -125,7 +117,11 @@ impl ScalarUDFImpl for LogFunc {
     }
 
     // Support overloaded log(base, x) and log(x) which defaults to log(10, x)
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         let args = ColumnarValue::values_to_arrays(args)?;
 
         let mut base = ColumnarValue::Scalar(ScalarValue::Float32(Some(10.0)));
@@ -186,7 +182,7 @@ impl ScalarUDFImpl for LogFunc {
     }
 
     fn documentation(&self) -> Option<&Documentation> {
-        Some(get_log_doc())
+        self.doc()
     }
 
     /// Simplify the `log` function by the relevant rules:
@@ -277,7 +273,7 @@ mod tests {
             ]))), // num
             ColumnarValue::Array(Arc::new(Int64Array::from(vec![5, 10, 15, 20]))),
         ];
-
+        #[allow(deprecated)] // TODO: migrate to invoke_with_args
         let _ = LogFunc::new().invoke_batch(&args, 4);
     }
 
@@ -286,7 +282,7 @@ mod tests {
         let args = [
             ColumnarValue::Array(Arc::new(Int64Array::from(vec![10]))), // num
         ];
-
+        #[allow(deprecated)] // TODO: migrate to invoke_with_args
         let result = LogFunc::new().invoke_batch(&args, 1);
         result.expect_err("expected error");
     }
@@ -296,7 +292,7 @@ mod tests {
         let args = [
             ColumnarValue::Scalar(ScalarValue::Float32(Some(10.0))), // num
         ];
-
+        #[allow(deprecated)] // TODO: migrate to invoke_with_args
         let result = LogFunc::new()
             .invoke_batch(&args, 1)
             .expect("failed to initialize function log");
@@ -320,7 +316,7 @@ mod tests {
         let args = [
             ColumnarValue::Scalar(ScalarValue::Float64(Some(10.0))), // num
         ];
-
+        #[allow(deprecated)] // TODO: migrate to invoke_with_args
         let result = LogFunc::new()
             .invoke_batch(&args, 1)
             .expect("failed to initialize function log");
@@ -345,7 +341,7 @@ mod tests {
             ColumnarValue::Scalar(ScalarValue::Float32(Some(2.0))), // num
             ColumnarValue::Scalar(ScalarValue::Float32(Some(32.0))), // num
         ];
-
+        #[allow(deprecated)] // TODO: migrate to invoke_with_args
         let result = LogFunc::new()
             .invoke_batch(&args, 1)
             .expect("failed to initialize function log");
@@ -370,7 +366,7 @@ mod tests {
             ColumnarValue::Scalar(ScalarValue::Float64(Some(2.0))), // num
             ColumnarValue::Scalar(ScalarValue::Float64(Some(64.0))), // num
         ];
-
+        #[allow(deprecated)] // TODO: migrate to invoke_with_args
         let result = LogFunc::new()
             .invoke_batch(&args, 1)
             .expect("failed to initialize function log");
@@ -396,7 +392,7 @@ mod tests {
                 10.0, 100.0, 1000.0, 10000.0,
             ]))), // num
         ];
-
+        #[allow(deprecated)] // TODO: migrate to invoke_with_args
         let result = LogFunc::new()
             .invoke_batch(&args, 4)
             .expect("failed to initialize function log");
@@ -425,7 +421,7 @@ mod tests {
                 10.0, 100.0, 1000.0, 10000.0,
             ]))), // num
         ];
-
+        #[allow(deprecated)] // TODO: migrate to invoke_with_args
         let result = LogFunc::new()
             .invoke_batch(&args, 4)
             .expect("failed to initialize function log");
@@ -455,7 +451,7 @@ mod tests {
                 8.0, 4.0, 81.0, 625.0,
             ]))), // num
         ];
-
+        #[allow(deprecated)] // TODO: migrate to invoke_with_args
         let result = LogFunc::new()
             .invoke_batch(&args, 4)
             .expect("failed to initialize function log");
@@ -485,7 +481,7 @@ mod tests {
                 8.0, 4.0, 81.0, 625.0,
             ]))), // num
         ];
-
+        #[allow(deprecated)] // TODO: migrate to invoke_with_args
         let result = LogFunc::new()
             .invoke_batch(&args, 4)
             .expect("failed to initialize function log");

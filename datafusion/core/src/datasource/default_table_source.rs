@@ -67,7 +67,7 @@ impl TableSource for DefaultTableSource {
     }
 
     /// Tests whether the table provider can make use of any or all filter expressions
-    /// to optimise data retrieval.
+    /// to optimize data retrieval.
     fn supports_filters_pushdown(
         &self,
         filter: &[&Expr],

@@ -25,11 +25,13 @@ use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
 
 use crate::common::spawn_buffered;
+use crate::execution_plan::{Boundedness, CardinalityEffect, EmissionType};
 use crate::expressions::PhysicalSortExpr;
 use crate::limit::LimitStream;
 use crate::metrics::{
     BaselineMetrics, Count, ExecutionPlanMetricsSet, MetricBuilder, MetricsSet,
 };
+use crate::projection::{make_with_child, update_expr, ProjectionExec};
 use crate::sorts::streaming_merge::StreamingMergeBuilder;
 use crate::spill::{
     get_record_batch_memory_size, read_spill_as_stream, spill_record_batches,
@@ -37,9 +39,9 @@ use crate::spill::{
 use crate::stream::RecordBatchStreamAdapter;
 use crate::topk::TopK;
 use crate::{
-    DisplayAs, DisplayFormatType, Distribution, EmptyRecordBatchStream, ExecutionMode,
-    ExecutionPlan, ExecutionPlanProperties, Partitioning, PlanProperties,
-    SendableRecordBatchStream, Statistics,
+    DisplayAs, DisplayFormatType, Distribution, EmptyRecordBatchStream, ExecutionPlan,
+    ExecutionPlanProperties, Partitioning, PlanProperties, SendableRecordBatchStream,
+    Statistics,
 };
 
 use arrow::compute::{concat_batches, lexsort_to_indices, take_arrays, SortColumn};
@@ -56,7 +58,6 @@ use datafusion_execution::TaskContext;
 use datafusion_physical_expr::LexOrdering;
 use datafusion_physical_expr_common::sort_expr::LexRequirement;
 
-use crate::execution_plan::CardinalityEffect;
 use futures::{StreamExt, TryStreamExt};
 use log::{debug, trace};
 
@@ -282,7 +283,7 @@ impl ExternalSorter {
             in_mem_batches: vec![],
             in_mem_batches_sorted: true,
             spills: vec![],
-            expr: expr.inner.into(),
+            expr: expr.into(),
             metrics,
             fetch,
             reservation,
@@ -598,7 +599,7 @@ impl ExternalSorter {
     }
 
     /// If this sort may spill, pre-allocates
-    /// `sort_spill_reservation_bytes` of memory to gurarantee memory
+    /// `sort_spill_reservation_bytes` of memory to guarantee memory
     /// left for the in memory sort/merge.
     fn reserve_memory_for_merge(&mut self) -> Result<()> {
         // Reserve headroom for next merge sort
@@ -763,11 +764,15 @@ impl SortExec {
     /// can be dropped.
     pub fn with_fetch(&self, fetch: Option<usize>) -> Self {
         let mut cache = self.cache.clone();
-        if fetch.is_some() && self.cache.execution_mode == ExecutionMode::Unbounded {
-            // When a theoretically unnecessary sort becomes a top-K (which
-            // sometimes arises as an intermediate state before full removal),
-            // its execution mode should become `Bounded`.
-            cache.execution_mode = ExecutionMode::Bounded;
+        // If the SortExec can emit incrementally (that means the sort requirements
+        // and properties of the input match), the SortExec can generate its result
+        // without scanning the entire input when a fetch value exists.
+        let is_pipeline_friendly = matches!(
+            self.cache.emission_type,
+            EmissionType::Incremental | EmissionType::Both
+        );
+        if fetch.is_some() && is_pipeline_friendly {
+            cache = cache.with_boundedness(Boundedness::Bounded);
         }
         SortExec {
             input: Arc::clone(&self.input),
@@ -817,10 +822,30 @@ impl SortExec {
         let sort_satisfied = input
             .equivalence_properties()
             .ordering_satisfy_requirement(&requirement);
-        let mode = match input.execution_mode() {
-            ExecutionMode::Unbounded if sort_satisfied => ExecutionMode::Unbounded,
-            ExecutionMode::Bounded => ExecutionMode::Bounded,
-            _ => ExecutionMode::PipelineBreaking,
+
+        // The emission type depends on whether the input is already sorted:
+        // - If already sorted, we can emit results in the same way as the input
+        // - If not sorted, we must wait until all data is processed to emit results (Final)
+        let emission_type = if sort_satisfied {
+            input.pipeline_behavior()
+        } else {
+            EmissionType::Final
+        };
+
+        // The boundedness depends on whether the input is already sorted:
+        // - If already sorted, we have the same property as the input
+        // - If not sorted and input is unbounded, we require infinite memory and generates
+        //   unbounded data (not practical).
+        // - If not sorted and input is bounded, then the SortExec is bounded, too.
+        let boundedness = if sort_satisfied {
+            input.boundedness()
+        } else {
+            match input.boundedness() {
+                Boundedness::Unbounded { .. } => Boundedness::Unbounded {
+                    requires_infinite_memory: true,
+                },
+                bounded => bounded,
+            }
         };
 
         // Calculate equivalence properties; i.e. reset the ordering equivalence
@@ -835,7 +860,12 @@ impl SortExec {
         let output_partitioning =
             Self::output_partitioning_helper(input, preserve_partitioning);
 
-        PlanProperties::new(eq_properties, output_partitioning, mode)
+        PlanProperties::new(
+            eq_properties,
+            output_partitioning,
+            emission_type,
+            boundedness,
+        )
     }
 }
 
@@ -995,6 +1025,37 @@ impl ExecutionPlan for SortExec {
             CardinalityEffect::LowerEqual
         }
     }
+
+    /// Tries to swap the projection with its input [`SortExec`]. If it can be done,
+    /// it returns the new swapped version having the [`SortExec`] as the top plan.
+    /// Otherwise, it returns None.
+    fn try_swapping_with_projection(
+        &self,
+        projection: &ProjectionExec,
+    ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+        // If the projection does not narrow the schema, we should not try to push it down.
+        if projection.expr().len() >= projection.input().schema().fields().len() {
+            return Ok(None);
+        }
+
+        let mut updated_exprs = LexOrdering::default();
+        for sort in self.expr() {
+            let Some(new_expr) = update_expr(&sort.expr, projection.expr(), false)?
+            else {
+                return Ok(None);
+            };
+            updated_exprs.push(PhysicalSortExpr {
+                expr: new_expr,
+                options: sort.options,
+            });
+        }
+
+        Ok(Some(Arc::new(
+            SortExec::new(updated_exprs, make_with_child(projection, self.input())?)
+                .with_fetch(self.fetch())
+                .with_preserve_partitioning(self.preserve_partitioning()),
+        )))
+    }
 }
 
 #[cfg(test)]
@@ -1006,6 +1067,7 @@ mod tests {
     use super::*;
     use crate::coalesce_partitions::CoalescePartitionsExec;
     use crate::collect;
+    use crate::execution_plan::Boundedness;
     use crate::expressions::col;
     use crate::memory::MemoryExec;
     use crate::test;
@@ -1049,8 +1111,14 @@ mod tests {
             eq_properties.add_new_orderings(vec![LexOrdering::new(vec![
                 PhysicalSortExpr::new_default(Arc::new(Column::new("c1", 0))),
             ])]);
-            let mode = ExecutionMode::Unbounded;
-            PlanProperties::new(eq_properties, Partitioning::UnknownPartitioning(1), mode)
+            PlanProperties::new(
+                eq_properties,
+                Partitioning::UnknownPartitioning(1),
+                EmissionType::Final,
+                Boundedness::Unbounded {
+                    requires_infinite_memory: false,
+                },
+            )
         }
     }
 
@@ -1330,7 +1398,7 @@ mod tests {
         // Data is correct
         assert_eq!(&vec![expected_batch], &result);
 
-        // explicitlty ensure the metadata is present
+        // explicitly ensure the metadata is present
         assert_eq!(result[0].schema().fields()[0].metadata(), &field_metadata);
         assert_eq!(result[0].schema().metadata(), &schema_metadata);
 
@@ -1344,7 +1412,7 @@ mod tests {
             Field::new("a", DataType::Int32, true),
             Field::new(
                 "b",
-                DataType::List(Arc::new(Field::new("item", DataType::Int32, true))),
+                DataType::List(Arc::new(Field::new_list_field(DataType::Int32, true))),
                 true,
             ),
         ]));
@@ -1389,7 +1457,7 @@ mod tests {
 
         assert_eq!(DataType::Int32, *sort_exec.schema().field(0).data_type());
         assert_eq!(
-            DataType::List(Arc::new(Field::new("item", DataType::Int32, true))),
+            DataType::List(Arc::new(Field::new_list_field(DataType::Int32, true))),
             *sort_exec.schema().field(1).data_type()
         );
 

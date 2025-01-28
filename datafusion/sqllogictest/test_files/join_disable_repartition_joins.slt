@@ -23,7 +23,7 @@
 statement ok
 set datafusion.optimizer.repartition_joins = false;
 
-include ./join.slt
+include ./join.slt.part
 
 statement ok
 CREATE EXTERNAL TABLE annotated_data (

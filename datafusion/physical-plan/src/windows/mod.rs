@@ -32,10 +32,9 @@ use datafusion_expr::{
     PartitionEvaluator, ReversedUDWF, WindowFrame, WindowFunctionDefinition, WindowUDF,
 };
 use datafusion_physical_expr::aggregate::{AggregateExprBuilder, AggregateFunctionExpr};
-use datafusion_physical_expr::equivalence::collapse_lex_req;
 use datafusion_physical_expr::{
     reverse_order_bys,
-    window::{BuiltInWindowFunctionExpr, SlidingAggregateWindowExpr},
+    window::{SlidingAggregateWindowExpr, StandardWindowFunctionExpr},
     ConstExpr, EquivalenceProperties, LexOrdering, PhysicalSortRequirement,
 };
 use itertools::Itertools;
@@ -50,7 +49,7 @@ use datafusion_functions_window_common::field::WindowUDFFieldArgs;
 use datafusion_functions_window_common::partition::PartitionEvaluatorArgs;
 use datafusion_physical_expr::expressions::Column;
 pub use datafusion_physical_expr::window::{
-    BuiltInWindowExpr, PlainAggregateWindowExpr, WindowExpr,
+    PlainAggregateWindowExpr, StandardWindowExpr, WindowExpr,
 };
 use datafusion_physical_expr_common::sort_expr::LexRequirement;
 pub use window_agg_exec::WindowAggExec;
@@ -117,7 +116,7 @@ pub fn create_window_expr(
                 aggregate,
             )
         }
-        WindowFunctionDefinition::WindowUDF(fun) => Arc::new(BuiltInWindowExpr::new(
+        WindowFunctionDefinition::WindowUDF(fun) => Arc::new(StandardWindowExpr::new(
             create_udwf_window_expr(fun, args, input_schema, name, ignore_nulls)?,
             partition_by,
             order_by,
@@ -153,14 +152,14 @@ fn window_expr_from_aggregate_expr(
     }
 }
 
-/// Creates a `BuiltInWindowFunctionExpr` suitable for a user defined window function
+/// Creates a `StandardWindowFunctionExpr` suitable for a user defined window function
 pub fn create_udwf_window_expr(
     fun: &Arc<WindowUDF>,
     args: &[Arc<dyn PhysicalExpr>],
     input_schema: &Schema,
     name: String,
     ignore_nulls: bool,
-) -> Result<Arc<dyn BuiltInWindowFunctionExpr>> {
+) -> Result<Arc<dyn StandardWindowFunctionExpr>> {
     // need to get the types into an owned vec for some reason
     let input_types: Vec<_> = args
         .iter()
@@ -192,7 +191,7 @@ pub fn create_udwf_window_expr(
     Ok(udwf_expr)
 }
 
-/// Implements [`BuiltInWindowFunctionExpr`] for [`WindowUDF`]
+/// Implements [`StandardWindowFunctionExpr`] for [`WindowUDF`]
 #[derive(Clone, Debug)]
 pub struct WindowUDFExpr {
     fun: Arc<WindowUDF>,
@@ -215,7 +214,7 @@ impl WindowUDFExpr {
     }
 }
 
-impl BuiltInWindowFunctionExpr for WindowUDFExpr {
+impl StandardWindowFunctionExpr for WindowUDFExpr {
     fn as_any(&self) -> &dyn std::any::Any {
         self
     }
@@ -244,7 +243,7 @@ impl BuiltInWindowFunctionExpr for WindowUDFExpr {
         &self.name
     }
 
-    fn reverse_expr(&self) -> Option<Arc<dyn BuiltInWindowFunctionExpr>> {
+    fn reverse_expr(&self) -> Option<Arc<dyn StandardWindowFunctionExpr>> {
         match self.fun.reverse_expr() {
             ReversedUDWF::Identical => Some(Arc::new(self.clone())),
             ReversedUDWF::NotSupported => None,
@@ -345,10 +344,9 @@ pub(crate) fn window_equivalence_properties(
         .extend(input.equivalence_properties().clone());
 
     for expr in window_expr {
-        if let Some(builtin_window_expr) =
-            expr.as_any().downcast_ref::<BuiltInWindowExpr>()
+        if let Some(udf_window_expr) = expr.as_any().downcast_ref::<StandardWindowExpr>()
         {
-            builtin_window_expr.add_equal_orderings(&mut window_eq_properties);
+            udf_window_expr.add_equal_orderings(&mut window_eq_properties);
         }
     }
     window_eq_properties
@@ -384,7 +382,7 @@ pub fn get_best_fitting_window(
         } else {
             return Ok(None);
         };
-    let is_unbounded = input.execution_mode().is_unbounded();
+    let is_unbounded = input.boundedness().is_unbounded();
     if !is_unbounded && input_order_mode != InputOrderMode::Sorted {
         // Executor has bounded input and `input_order_mode` is not `InputOrderMode::Sorted`
         // in this case removing the sort is not helpful, return:
@@ -470,8 +468,8 @@ pub fn get_window_mode(
     {
         let req = LexRequirement::new(
             [partition_by_reqs.inner.clone(), order_by_reqs.inner].concat(),
-        );
-        let req = collapse_lex_req(req);
+        )
+        .collapse();
         if partition_by_eqs.ordering_satisfy_requirement(&req) {
             // Window can be run with existing ordering
             let mode = if indices.len() == partitionby_exprs.len() {

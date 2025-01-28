@@ -16,7 +16,7 @@
 // under the License.
 
 use std::any::Any;
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
 use arrow::array::cast::AsArray;
 use arrow::array::{new_null_array, Array, ArrayRef, StringArray};
@@ -29,12 +29,40 @@ use arrow::error::ArrowError;
 use arrow::util::display::{ArrayFormatter, DurationFormat, FormatOptions};
 
 use datafusion_common::{exec_err, Result, ScalarValue};
-use datafusion_expr::scalar_doc_sections::DOC_SECTION_DATETIME;
 use datafusion_expr::TypeSignature::Exact;
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility, TIMEZONE_WILDCARD,
 };
+use datafusion_macros::user_doc;
 
+#[user_doc(
+    doc_section(label = "Time and Date Functions"),
+    description = "Returns a string representation of a date, time, timestamp or duration based on a [Chrono format](https://docs.rs/chrono/latest/chrono/format/strftime/index.html). Unlike the PostgreSQL equivalent of this function numerical formatting is not supported.",
+    syntax_example = "to_char(expression, format)",
+    sql_example = r#"```sql
+> select to_char('2023-03-01'::date, '%d-%m-%Y');
++----------------------------------------------+
+| to_char(Utf8("2023-03-01"),Utf8("%d-%m-%Y")) |
++----------------------------------------------+
+| 01-03-2023                                   |
++----------------------------------------------+
+```
+
+Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/to_char.rs)
+"#,
+    argument(
+        name = "expression",
+        description = "Expression to operate on. Can be a constant, column, or function that results in a date, time, timestamp or duration."
+    ),
+    argument(
+        name = "format",
+        description = "A [Chrono format](https://docs.rs/chrono/latest/chrono/format/strftime/index.html) string to use to convert the expression."
+    ),
+    argument(
+        name = "day",
+        description = "Day to use when making the date. Can be a constant, column or function, and any combination of arithmetic operators."
+    )
+)]
 #[derive(Debug)]
 pub struct ToCharFunc {
     signature: Signature,
@@ -107,7 +135,11 @@ impl ScalarUDFImpl for ToCharFunc {
         Ok(Utf8)
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         if args.len() != 2 {
             return exec_err!(
                 "to_char function requires 2 arguments, got {}",
@@ -139,41 +171,8 @@ impl ScalarUDFImpl for ToCharFunc {
         &self.aliases
     }
     fn documentation(&self) -> Option<&Documentation> {
-        Some(get_to_char_doc())
+        self.doc()
     }
-}
-
-static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
-
-fn get_to_char_doc() -> &'static Documentation {
-    DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_DATETIME)
-            .with_description("Returns a string representation of a date, time, timestamp or duration based on a [Chrono format](https://docs.rs/chrono/latest/chrono/format/strftime/index.html). Unlike the PostgreSQL equivalent of this function numerical formatting is not supported.")
-            .with_syntax_example("to_char(expression, format)")
-            .with_argument(
-                "expression",
-                " Expression to operate on. Can be a constant, column, or function that results in a date, time, timestamp or duration."
-            )
-            .with_argument(
-                "format",
-                "A [Chrono format](https://docs.rs/chrono/latest/chrono/format/strftime/index.html) string to use to convert the expression.",
-            )
-            .with_argument("day", "Day to use when making the date. Can be a constant, column or function, and any combination of arithmetic operators.")
-            .with_sql_example(r#"```sql
-> select to_char('2023-03-01'::date, '%d-%m-%Y');
-+----------------------------------------------+
-| to_char(Utf8("2023-03-01"),Utf8("%d-%m-%Y")) |
-+----------------------------------------------+
-| 01-03-2023                                   |
-+----------------------------------------------+
-```
-
-Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/to_char.rs)
-"#)
-            .build()
-            .unwrap()
-    })
 }
 
 fn _build_format_options<'a>(
@@ -384,6 +383,7 @@ mod tests {
         ];
 
         for (value, format, expected) in scalar_data {
+            #[allow(deprecated)] // TODO migrate UDF to invoke from invoke_batch
             let result = ToCharFunc::new()
                 .invoke_batch(
                     &[ColumnarValue::Scalar(value), ColumnarValue::Scalar(format)],
@@ -461,14 +461,15 @@ mod tests {
         ];
 
         for (value, format, expected) in scalar_array_data {
-            let batch_size = format.len();
+            let batch_len = format.len();
+            #[allow(deprecated)] // TODO migrate UDF to invoke from invoke_batch
             let result = ToCharFunc::new()
                 .invoke_batch(
                     &[
                         ColumnarValue::Scalar(value),
                         ColumnarValue::Array(Arc::new(format) as ArrayRef),
                     ],
-                    batch_size,
+                    batch_len,
                 )
                 .expect("that to_char parsed values without error");
 
@@ -590,14 +591,15 @@ mod tests {
         ];
 
         for (value, format, expected) in array_scalar_data {
-            let batch_size = value.len();
+            let batch_len = value.len();
+            #[allow(deprecated)] // TODO migrate UDF to invoke from invoke_batch
             let result = ToCharFunc::new()
                 .invoke_batch(
                     &[
                         ColumnarValue::Array(value as ArrayRef),
                         ColumnarValue::Scalar(format),
                     ],
-                    batch_size,
+                    batch_len,
                 )
                 .expect("that to_char parsed values without error");
 
@@ -610,14 +612,15 @@ mod tests {
         }
 
         for (value, format, expected) in array_array_data {
-            let batch_size = value.len();
+            let batch_len = value.len();
+            #[allow(deprecated)] // TODO migrate UDF to invoke from invoke_batch
             let result = ToCharFunc::new()
                 .invoke_batch(
                     &[
                         ColumnarValue::Array(value),
                         ColumnarValue::Array(Arc::new(format) as ArrayRef),
                     ],
-                    batch_size,
+                    batch_len,
                 )
                 .expect("that to_char parsed values without error");
 
@@ -634,6 +637,7 @@ mod tests {
         //
 
         // invalid number of arguments
+        #[allow(deprecated)] // TODO migrate UDF to invoke from invoke_batch
         let result = ToCharFunc::new()
             .invoke_batch(&[ColumnarValue::Scalar(ScalarValue::Int32(Some(1)))], 1);
         assert_eq!(
@@ -642,6 +646,7 @@ mod tests {
         );
 
         // invalid type
+        #[allow(deprecated)] // TODO migrate UDF to invoke from invoke_batch
         let result = ToCharFunc::new().invoke_batch(
             &[
                 ColumnarValue::Scalar(ScalarValue::Int32(Some(1))),

@@ -27,19 +27,22 @@ use std::task::{Context, Poll};
 use std::{any::Any, sync::Arc};
 
 use super::{
-    execution_mode_from_children,
     metrics::{ExecutionPlanMetricsSet, MetricsSet},
     ColumnStatistics, DisplayAs, DisplayFormatType, ExecutionPlan,
     ExecutionPlanProperties, Partitioning, PlanProperties, RecordBatchStream,
     SendableRecordBatchStream, Statistics,
 };
+use crate::execution_plan::{
+    boundedness_from_children, emission_type_from_children, InvariantLevel,
+};
 use crate::metrics::BaselineMetrics;
+use crate::projection::{make_with_child, ProjectionExec};
 use crate::stream::ObservedStream;
 
 use arrow::datatypes::{Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::stats::Precision;
-use datafusion_common::{exec_err, internal_err, Result};
+use datafusion_common::{exec_err, internal_err, DataFusionError, Result};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::{calculate_union, EquivalenceProperties};
 
@@ -135,14 +138,11 @@ impl UnionExec {
             .map(|plan| plan.output_partitioning().partition_count())
             .sum();
         let output_partitioning = Partitioning::UnknownPartitioning(num_partitions);
-
-        // Determine execution mode:
-        let mode = execution_mode_from_children(inputs.iter());
-
         Ok(PlanProperties::new(
             eq_properties,
             output_partitioning,
-            mode,
+            emission_type_from_children(inputs),
+            boundedness_from_children(inputs),
         ))
     }
 }
@@ -173,6 +173,14 @@ impl ExecutionPlan for UnionExec {
 
     fn properties(&self) -> &PlanProperties {
         &self.cache
+    }
+
+    fn check_invariants(&self, _check: InvariantLevel) -> Result<()> {
+        (self.inputs().len() >= 2)
+            .then_some(())
+            .ok_or(DataFusionError::Internal(
+                "UnionExec should have at least 2 children".into(),
+            ))
     }
 
     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
@@ -264,6 +272,27 @@ impl ExecutionPlan for UnionExec {
     fn supports_limit_pushdown(&self) -> bool {
         true
     }
+
+    /// Tries to push `projection` down through `union`. If possible, performs the
+    /// pushdown and returns a new [`UnionExec`] as the top plan which has projections
+    /// as its children. Otherwise, returns `None`.
+    fn try_swapping_with_projection(
+        &self,
+        projection: &ProjectionExec,
+    ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+        // If the projection doesn't narrow the schema, we shouldn't try to push it down.
+        if projection.expr().len() >= projection.input().schema().fields().len() {
+            return Ok(None);
+        }
+
+        let new_children = self
+            .children()
+            .into_iter()
+            .map(|child| make_with_child(projection, child))
+            .collect::<Result<Vec<_>>>()?;
+
+        Ok(Some(Arc::new(UnionExec::new(new_children))))
+    }
 }
 
 /// Combines multiple input streams by interleaving them.
@@ -335,10 +364,12 @@ impl InterleaveExec {
         let eq_properties = EquivalenceProperties::new(schema);
         // Get output partitioning:
         let output_partitioning = inputs[0].output_partitioning().clone();
-        // Determine execution mode:
-        let mode = execution_mode_from_children(inputs.iter());
-
-        PlanProperties::new(eq_properties, output_partitioning, mode)
+        PlanProperties::new(
+            eq_properties,
+            output_partitioning,
+            emission_type_from_children(inputs),
+            boundedness_from_children(inputs),
+        )
     }
 }
 
@@ -844,9 +875,9 @@ mod tests {
     ) {
         // Check whether orderings are same.
         let lhs_orderings = lhs.oeq_class();
-        let rhs_orderings = &rhs.oeq_class.orderings;
+        let rhs_orderings = rhs.oeq_class();
         assert_eq!(lhs_orderings.len(), rhs_orderings.len(), "{}", err_msg);
-        for rhs_ordering in rhs_orderings {
+        for rhs_ordering in rhs_orderings.iter() {
             assert!(lhs_orderings.contains(rhs_ordering), "{}", err_msg);
         }
     }

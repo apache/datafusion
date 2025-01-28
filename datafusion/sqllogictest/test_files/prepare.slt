@@ -53,10 +53,6 @@ PREPARE my_plan(INT, INT) AS SELECT 1 + $1;
 statement error SQL error: ParserError
 PREPARE my_plan(INT) AS SELECT id, age  FROM person WHERE age is $1;
 
-# TODO: allow prepare without specifying data types
-statement error Placeholder type could not be resolved
-PREPARE my_plan AS SELECT $1;
-
 # #######################
 # Test prepare and execute statements
 
@@ -67,6 +63,40 @@ EXECUTE my_plan('Foo', 'Bar');
 # deallocate a non-existing plan
 statement error Prepared statement \'my_plan\' does not exist
 DEALLOCATE my_plan;
+
+# Allow prepare without specifying data types
+statement ok
+PREPARE my_plan AS SELECT $1;
+
+query T
+EXECUTE my_plan('Foo');
+----
+Foo
+
+statement ok
+DEALLOCATE my_plan
+
+# Allow prepare col LIKE $1
+statement ok
+PREPARE my_plan AS SELECT * FROM person WHERE first_name LIKE $1;
+
+query ITTITRPI rowsort
+EXECUTE my_plan('j%');
+----
+1 jane smith 20 MA 100000.45 2000-11-12T00:00:00 99
+
+statement ok
+DEALLOCATE my_plan
+
+# Check for missing parameters
+statement ok
+PREPARE my_plan AS SELECT * FROM person WHERE id < $1;
+
+statement error No value found for placeholder with id \$1
+EXECUTE my_plan
+
+statement ok
+DEALLOCATE my_plan
 
 statement ok
 PREPARE my_plan(STRING, STRING) AS SELECT * FROM (VALUES(1, $1), (2, $2)) AS t (num, letter);

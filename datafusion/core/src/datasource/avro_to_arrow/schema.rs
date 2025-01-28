@@ -73,11 +73,15 @@ fn schema_to_field_with_props(
         AvroSchema::Bytes => DataType::Binary,
         AvroSchema::String => DataType::Utf8,
         AvroSchema::Array(item_schema) => DataType::List(Arc::new(
-            schema_to_field_with_props(item_schema, Some("element"), false, None)?,
+            schema_to_field_with_props(&item_schema.items, Some("element"), false, None)?,
         )),
         AvroSchema::Map(value_schema) => {
-            let value_field =
-                schema_to_field_with_props(value_schema, Some("value"), false, None)?;
+            let value_field = schema_to_field_with_props(
+                &value_schema.types,
+                Some("value"),
+                false,
+                None,
+            )?;
             DataType::Dictionary(
                 Box::new(DataType::Utf8),
                 Box::new(value_field.data_type().clone()),
@@ -144,14 +148,17 @@ fn schema_to_field_with_props(
         AvroSchema::Decimal(DecimalSchema {
             precision, scale, ..
         }) => DataType::Decimal128(*precision as u8, *scale as i8),
+        AvroSchema::BigDecimal => DataType::LargeBinary,
         AvroSchema::Uuid => DataType::FixedSizeBinary(16),
         AvroSchema::Date => DataType::Date32,
         AvroSchema::TimeMillis => DataType::Time32(TimeUnit::Millisecond),
         AvroSchema::TimeMicros => DataType::Time64(TimeUnit::Microsecond),
         AvroSchema::TimestampMillis => DataType::Timestamp(TimeUnit::Millisecond, None),
         AvroSchema::TimestampMicros => DataType::Timestamp(TimeUnit::Microsecond, None),
+        AvroSchema::TimestampNanos => DataType::Timestamp(TimeUnit::Nanosecond, None),
         AvroSchema::LocalTimestampMillis => todo!(),
         AvroSchema::LocalTimestampMicros => todo!(),
+        AvroSchema::LocalTimestampNanos => todo!(),
         AvroSchema::Duration => DataType::Duration(TimeUnit::Millisecond),
     };
 
@@ -371,6 +378,7 @@ mod test {
             aliases: Some(vec![alias("foofixed"), alias("barfixed")]),
             size: 1,
             doc: None,
+            default: None,
             attributes: Default::default(),
         });
         let props = external_props(&fixed_schema);

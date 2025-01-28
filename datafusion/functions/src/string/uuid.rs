@@ -16,7 +16,7 @@
 // under the License.
 
 use std::any::Any;
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
 use arrow::array::GenericStringArray;
 use arrow::datatypes::DataType;
@@ -24,10 +24,23 @@ use arrow::datatypes::DataType::Utf8;
 use uuid::Uuid;
 
 use datafusion_common::{internal_err, Result};
-use datafusion_expr::scalar_doc_sections::DOC_SECTION_STRING;
 use datafusion_expr::{ColumnarValue, Documentation, Volatility};
 use datafusion_expr::{ScalarUDFImpl, Signature};
+use datafusion_macros::user_doc;
 
+#[user_doc(
+    doc_section(label = "String Functions"),
+    description = "Returns [`UUID v4`](https://en.wikipedia.org/wiki/Universally_unique_identifier#Version_4_(random)) string value which is unique per row.",
+    syntax_example = "uuid()",
+    sql_example = r#"```sql
+> select uuid();
++--------------------------------------+
+| uuid()                               |
++--------------------------------------+
+| 6ec17ef8-1934-41cc-8d59-d0c8f9eea1f0 |
++--------------------------------------+
+```"#
+)]
 #[derive(Debug)]
 pub struct UuidFunc {
     signature: Signature,
@@ -80,27 +93,6 @@ impl ScalarUDFImpl for UuidFunc {
     }
 
     fn documentation(&self) -> Option<&Documentation> {
-        Some(get_uuid_doc())
+        self.doc()
     }
-}
-
-static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
-
-fn get_uuid_doc() -> &'static Documentation {
-    DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_STRING)
-            .with_description("Returns [`UUID v4`](https://en.wikipedia.org/wiki/Universally_unique_identifier#Version_4_(random)) string value which is unique per row.")
-            .with_syntax_example("uuid()")
-            .with_sql_example(r#"```sql
-> select uuid();
-+--------------------------------------+
-| uuid()                               |
-+--------------------------------------+
-| 6ec17ef8-1934-41cc-8d59-d0c8f9eea1f0 |
-+--------------------------------------+
-```"#)
-            .build()
-            .unwrap()
-    })
 }

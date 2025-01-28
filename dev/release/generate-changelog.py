@@ -44,6 +44,7 @@ def generate_changelog(repo, repo_name, tag1, tag2, version):
     unique_pulls = []
     all_pulls = []
     for commit in comparison.commits:
+        print(".", file=sys.stderr, end=" ", flush=True) # progress indicator
         pulls = commit.get_pulls()
         for pull in pulls:
             # there can be multiple commits per PR if squash merge is not being used and

@@ -25,13 +25,27 @@ use arrow_schema::SchemaRef;
 use async_trait::async_trait;
 use datafusion_common::Result;
 use datafusion_common::{not_impl_err, Constraints, Statistics};
+use datafusion_expr::Expr;
+
 use datafusion_expr::dml::InsertOp;
 use datafusion_expr::{
-    CreateExternalTable, Expr, LogicalPlan, TableProviderFilterPushDown, TableType,
+    CreateExternalTable, LogicalPlan, TableProviderFilterPushDown, TableType,
 };
 use datafusion_physical_plan::ExecutionPlan;
 
-/// Source table
+/// A named table which can be queried.
+///
+/// Please see [`CatalogProvider`] for details of implementing a custom catalog.
+///
+/// [`TableProvider`] represents a source of data which can provide data as
+/// Apache Arrow `RecordBatch`es. Implementations of this trait provide
+/// important information for planning such as:
+///
+/// 1. [`Self::schema`]: The schema (columns and their types) of the table
+/// 2. [`Self::supports_filters_pushdown`]: Should filters be pushed into this scan
+/// 2. [`Self::scan`]: An [`ExecutionPlan`] that can read data
+///
+/// [`CatalogProvider`]: super::CatalogProvider
 #[async_trait]
 pub trait TableProvider: Debug + Sync + Send {
     /// Returns the table provider as [`Any`](std::any::Any) so that it can be
@@ -296,4 +310,41 @@ pub trait TableProviderFactory: Debug + Sync + Send {
         state: &dyn Session,
         cmd: &CreateExternalTable,
     ) -> Result<Arc<dyn TableProvider>>;
+}
+
+/// A trait for table function implementations
+pub trait TableFunctionImpl: Debug + Sync + Send {
+    /// Create a table provider
+    fn call(&self, args: &[Expr]) -> Result<Arc<dyn TableProvider>>;
+}
+
+/// A table that uses a function to generate data
+#[derive(Debug)]
+pub struct TableFunction {
+    /// Name of the table function
+    name: String,
+    /// Function implementation
+    fun: Arc<dyn TableFunctionImpl>,
+}
+
+impl TableFunction {
+    /// Create a new table function
+    pub fn new(name: String, fun: Arc<dyn TableFunctionImpl>) -> Self {
+        Self { name, fun }
+    }
+
+    /// Get the name of the table function
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    /// Get the implementation of the table function
+    pub fn function(&self) -> &Arc<dyn TableFunctionImpl> {
+        &self.fun
+    }
+
+    /// Get the function implementation and generate a table
+    pub fn create_table_provider(&self, args: &[Expr]) -> Result<Arc<dyn TableProvider>> {
+        self.fun.call(args)
+    }
 }

@@ -24,13 +24,15 @@ use super::FileScanConfig;
 use crate::error::Result;
 use crate::physical_plan::metrics::{ExecutionPlanMetricsSet, MetricsSet};
 use crate::physical_plan::{
-    DisplayAs, DisplayFormatType, ExecutionMode, ExecutionPlan, Partitioning,
-    PlanProperties, SendableRecordBatchStream, Statistics,
+    DisplayAs, DisplayFormatType, ExecutionPlan, Partitioning, PlanProperties,
+    SendableRecordBatchStream, Statistics,
 };
 
 use arrow::datatypes::SchemaRef;
+use datafusion_common::Constraints;
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::{EquivalenceProperties, LexOrdering};
+use datafusion_physical_plan::execution_plan::{Boundedness, EmissionType};
 
 /// Execution plan for scanning Avro data source
 #[derive(Debug, Clone)]
@@ -47,11 +49,16 @@ pub struct AvroExec {
 impl AvroExec {
     /// Create a new Avro reader execution plan provided base configurations
     pub fn new(base_config: FileScanConfig) -> Self {
-        let (projected_schema, projected_statistics, projected_output_ordering) =
-            base_config.project();
+        let (
+            projected_schema,
+            projected_constraints,
+            projected_statistics,
+            projected_output_ordering,
+        ) = base_config.project();
         let cache = Self::compute_properties(
             Arc::clone(&projected_schema),
             &projected_output_ordering,
+            projected_constraints,
             &base_config,
         );
         Self {
@@ -72,16 +79,19 @@ impl AvroExec {
     fn compute_properties(
         schema: SchemaRef,
         orderings: &[LexOrdering],
+        constraints: Constraints,
         file_scan_config: &FileScanConfig,
     ) -> PlanProperties {
         // Equivalence Properties
-        let eq_properties = EquivalenceProperties::new_with_orderings(schema, orderings);
+        let eq_properties = EquivalenceProperties::new_with_orderings(schema, orderings)
+            .with_constraints(constraints);
         let n_partitions = file_scan_config.file_groups.len();
 
         PlanProperties::new(
             eq_properties,
             Partitioning::UnknownPartitioning(n_partitions), // Output Partitioning
-            ExecutionMode::Bounded,                          // Execution Mode
+            EmissionType::Incremental,
+            Boundedness::Bounded,
         )
     }
 }
@@ -284,7 +294,7 @@ mod tests {
         let meta = local_unpartitioned_file(filename);
 
         let file_schema = AvroFormat {}
-            .infer_schema(&state, &store, &[meta.clone()])
+            .infer_schema(&state, &store, std::slice::from_ref(&meta))
             .await?;
 
         let avro_exec = AvroExec::new(
@@ -349,7 +359,7 @@ mod tests {
         let object_store_url = ObjectStoreUrl::local_filesystem();
         let meta = local_unpartitioned_file(filename);
         let actual_schema = AvroFormat {}
-            .infer_schema(&state, &object_store, &[meta.clone()])
+            .infer_schema(&state, &object_store, std::slice::from_ref(&meta))
             .await?;
 
         let mut builder = SchemaBuilder::from(actual_schema.fields());
@@ -422,7 +432,7 @@ mod tests {
         let object_store_url = ObjectStoreUrl::local_filesystem();
         let meta = local_unpartitioned_file(filename);
         let file_schema = AvroFormat {}
-            .infer_schema(&state, &object_store, &[meta.clone()])
+            .infer_schema(&state, &object_store, std::slice::from_ref(&meta))
             .await?;
 
         let mut partitioned_file = PartitionedFile::from(meta);

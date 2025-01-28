@@ -16,21 +16,29 @@
 // under the License.
 
 use std::any::Any;
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
 use arrow::array::{ArrayRef, AsArray};
 use arrow::datatypes::DataType::{Float32, Float64};
 use arrow::datatypes::{DataType, Float32Type, Float64Type};
 
 use datafusion_common::{exec_err, Result};
-use datafusion_expr::scalar_doc_sections::DOC_SECTION_MATH;
 use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
 };
+use datafusion_macros::user_doc;
 
 use crate::utils::make_scalar_function;
 
+#[user_doc(
+    doc_section(label = "Math Functions"),
+    description = r#"Returns the sign of a number.
+Negative numbers return `-1`.
+Zero and positive numbers return `1`."#,
+    syntax_example = "signum(numeric_expression)",
+    standard_argument(name = "numeric_expression", prefix = "Numeric")
+)]
 #[derive(Debug)]
 pub struct SignumFunc {
     signature: Signature,
@@ -80,31 +88,17 @@ impl ScalarUDFImpl for SignumFunc {
         Ok(input[0].sort_properties)
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         make_scalar_function(signum, vec![])(args)
     }
 
     fn documentation(&self) -> Option<&Documentation> {
-        Some(get_signum_doc())
+        self.doc()
     }
-}
-
-static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
-
-fn get_signum_doc() -> &'static Documentation {
-    DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_MATH)
-            .with_description(
-                r#"Returns the sign of a number.
-Negative numbers return `-1`.
-Zero and positive numbers return `1`."#,
-            )
-            .with_syntax_example("signum(numeric_expression)")
-            .with_standard_argument("numeric_expression", Some("Numeric"))
-            .build()
-            .unwrap()
-    })
 }
 
 /// signum SQL function
@@ -167,6 +161,7 @@ mod test {
             f32::NEG_INFINITY,
         ]));
         let batch_size = array.len();
+        #[allow(deprecated)] // TODO: migrate to invoke_with_args
         let result = SignumFunc::new()
             .invoke_batch(&[ColumnarValue::Array(array)], batch_size)
             .expect("failed to initialize function signum");
@@ -207,6 +202,7 @@ mod test {
             f64::NEG_INFINITY,
         ]));
         let batch_size = array.len();
+        #[allow(deprecated)] // TODO: migrate to invoke_with_args
         let result = SignumFunc::new()
             .invoke_batch(&[ColumnarValue::Array(array)], batch_size)
             .expect("failed to initialize function signum");

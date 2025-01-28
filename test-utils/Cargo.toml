@@ -30,5 +30,4 @@ arrow = { workspace = true }
 chrono-tz = { version = "0.10.0", default-features = false }
 datafusion-common = { workspace = true, default-features = true }
 env_logger = { workspace = true }
-paste = "1.0.15"
 rand = { workspace = true }

@@ -21,13 +21,13 @@ use crate::utils::{get_map_entry_field, make_scalar_function};
 use arrow_array::{Array, ArrayRef, ListArray};
 use arrow_schema::{DataType, Field};
 use datafusion_common::{cast::as_map_array, exec_err, Result};
-use datafusion_expr::scalar_doc_sections::DOC_SECTION_MAP;
 use datafusion_expr::{
     ArrayFunctionSignature, ColumnarValue, Documentation, ScalarUDFImpl, Signature,
     TypeSignature, Volatility,
 };
+use datafusion_macros::user_doc;
 use std::any::Any;
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
 make_udf_expr_and_func!(
     MapKeysFunc,
@@ -37,9 +37,33 @@ make_udf_expr_and_func!(
     map_keys_udf
 );
 
+#[user_doc(
+    doc_section(label = "Map Functions"),
+    description = "Returns a list of all keys in the map.",
+    syntax_example = "map_keys(map)",
+    sql_example = r#"```sql
+SELECT map_keys(MAP {'a': 1, 'b': NULL, 'c': 3});
+----
+[a, b, c]
+
+SELECT map_keys(map([100, 5], [42, 43]));
+----
+[100, 5]
+```"#,
+    argument(
+        name = "map",
+        description = "Map expression. Can be a constant, column, or function, and any combination of map operators."
+    )
+)]
 #[derive(Debug)]
-pub(crate) struct MapKeysFunc {
+pub struct MapKeysFunc {
     signature: Signature,
+}
+
+impl Default for MapKeysFunc {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl MapKeysFunc {
@@ -72,50 +96,23 @@ impl ScalarUDFImpl for MapKeysFunc {
         }
         let map_type = &arg_types[0];
         let map_fields = get_map_entry_field(map_type)?;
-        Ok(DataType::List(Arc::new(Field::new(
-            "item",
+        Ok(DataType::List(Arc::new(Field::new_list_field(
             map_fields.first().unwrap().data_type().clone(),
             false,
         ))))
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         make_scalar_function(map_keys_inner)(args)
     }
 
     fn documentation(&self) -> Option<&Documentation> {
-        Some(get_map_keys_doc())
+        self.doc()
     }
-}
-
-static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
-
-fn get_map_keys_doc() -> &'static Documentation {
-    DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_MAP)
-            .with_description(
-                "Returns a list of all keys in the map."
-            )
-            .with_syntax_example("map_keys(map)")
-            .with_sql_example(
-                r#"```sql
-SELECT map_keys(MAP {'a': 1, 'b': NULL, 'c': 3});
-----
-[a, b, c]
-
-SELECT map_keys(map([100, 5], [42, 43]));
-----
-[100, 5]
-```"#,
-            )
-            .with_argument(
-                "map",
-                "Map expression. Can be a constant, column, or function, and any combination of map operators."
-            )
-            .build()
-            .unwrap()
-    })
 }
 
 fn map_keys_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
@@ -129,7 +126,7 @@ fn map_keys_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
     };
 
     Ok(Arc::new(ListArray::new(
-        Arc::new(Field::new("item", map_array.key_type().clone(), false)),
+        Arc::new(Field::new_list_field(map_array.key_type().clone(), false)),
         map_array.offsets().clone(),
         Arc::clone(map_array.keys()),
         None,

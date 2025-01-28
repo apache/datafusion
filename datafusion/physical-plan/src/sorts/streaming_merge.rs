@@ -62,7 +62,7 @@ pub struct StreamingMergeBuilder<'a> {
     enable_round_robin_tie_breaker: bool,
 }
 
-impl<'a> Default for StreamingMergeBuilder<'a> {
+impl Default for StreamingMergeBuilder<'_> {
     fn default() -> Self {
         Self {
             streams: vec![],
@@ -120,6 +120,10 @@ impl<'a> StreamingMergeBuilder<'a> {
         self
     }
 
+    /// See [SortPreservingMergeExec::with_round_robin_repartition] for more
+    /// information.
+    ///
+    /// [SortPreservingMergeExec::with_round_robin_repartition]: crate::sorts::sort_preserving_merge::SortPreservingMergeExec::with_round_robin_repartition
     pub fn with_round_robin_tie_breaker(
         mut self,
         enable_round_robin_tie_breaker: bool,

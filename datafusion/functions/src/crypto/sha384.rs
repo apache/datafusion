@@ -19,13 +19,26 @@
 use super::basic::{sha384, utf8_or_binary_to_binary_type};
 use arrow::datatypes::DataType;
 use datafusion_common::Result;
-use datafusion_expr::scalar_doc_sections::DOC_SECTION_HASHING;
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
 };
+use datafusion_macros::user_doc;
 use std::any::Any;
-use std::sync::OnceLock;
 
+#[user_doc(
+    doc_section(label = "Hashing Functions"),
+    description = "Computes the SHA-384 hash of a binary string.",
+    syntax_example = "sha384(expression)",
+    sql_example = r#"```sql
+> select sha384('foo');
++-----------------------------------------+
+| sha384(Utf8("foo"))                     |
++-----------------------------------------+
+| <sha384_hash_result>                    |
++-----------------------------------------+
+```"#,
+    standard_argument(name = "expression", prefix = "String")
+)]
 #[derive(Debug)]
 pub struct SHA384Func {
     signature: Signature,
@@ -65,35 +78,15 @@ impl ScalarUDFImpl for SHA384Func {
         utf8_or_binary_to_binary_type(&arg_types[0], self.name())
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         sha384(args)
     }
 
     fn documentation(&self) -> Option<&Documentation> {
-        Some(get_sha384_doc())
+        self.doc()
     }
-}
-
-static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
-
-fn get_sha384_doc() -> &'static Documentation {
-    DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_HASHING)
-            .with_description("Computes the SHA-384 hash of a binary string.")
-            .with_syntax_example("sha384(expression)")
-            .with_sql_example(
-                r#"```sql
-> select sha384('foo');
-+-----------------------------------------+
-| sha384(Utf8("foo"))                     |
-+-----------------------------------------+
-| <sha384_hash_result>                    |
-+-----------------------------------------+
-```"#,
-            )
-            .with_standard_argument("expression", Some("String"))
-            .build()
-            .unwrap()
-    })
 }

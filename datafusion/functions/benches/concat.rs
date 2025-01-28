@@ -39,8 +39,8 @@ fn criterion_benchmark(c: &mut Criterion) {
         let mut group = c.benchmark_group("concat function");
         group.bench_function(BenchmarkId::new("concat", size), |b| {
             b.iter(|| {
-                #[allow(deprecated)] // TODO use invoke_batch
-                criterion::black_box(concat().invoke(&args).unwrap())
+                // TODO use invoke_with_args
+                criterion::black_box(concat().invoke_batch(&args, size).unwrap())
             })
         });
         group.finish();

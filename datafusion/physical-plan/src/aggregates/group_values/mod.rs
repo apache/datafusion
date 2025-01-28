@@ -19,7 +19,7 @@
 
 use arrow::record_batch::RecordBatch;
 use arrow_array::types::{
-    Date32Type, Date64Type, Time32MillisecondType, Time32SecondType,
+    Date32Type, Date64Type, Decimal128Type, Time32MillisecondType, Time32SecondType,
     Time64MicrosecondType, Time64NanosecondType, TimestampMicrosecondType,
     TimestampMillisecondType, TimestampNanosecondType, TimestampSecondType,
 };
@@ -164,12 +164,15 @@ pub(crate) fn new_group_values(
                 TimeUnit::Nanosecond => downcast_helper!(Time64NanosecondType, d),
                 _ => {}
             },
-            DataType::Timestamp(t, _) => match t {
+            DataType::Timestamp(t, _tz) => match t {
                 TimeUnit::Second => downcast_helper!(TimestampSecondType, d),
                 TimeUnit::Millisecond => downcast_helper!(TimestampMillisecondType, d),
                 TimeUnit::Microsecond => downcast_helper!(TimestampMicrosecondType, d),
                 TimeUnit::Nanosecond => downcast_helper!(TimestampNanosecondType, d),
             },
+            DataType::Decimal128(_, _) => {
+                downcast_helper!(Decimal128Type, d);
+            }
             DataType::Utf8 => {
                 return Ok(Box::new(GroupValuesByes::<i32>::new(OutputType::Utf8)));
             }

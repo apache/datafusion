@@ -724,7 +724,7 @@ impl Accumulator for FirstSelector {
     }
 
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
-        // cast argumets to the appropriate type (DataFusion will type
+        // cast arguments to the appropriate type (DataFusion will type
         // check these based on the declared allowed input types)
         let v = as_primitive_array::<Float64Type>(&values[0])?;
         let t = as_primitive_array::<TimestampNanosecondType>(&values[1])?;

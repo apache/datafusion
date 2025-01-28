@@ -28,7 +28,7 @@ use datafusion::physical_plan::sorts::sort::SortExec;
 use datafusion::prelude::{SessionConfig, SessionContext};
 use datafusion::test_util::parquet::TestParquetFile;
 use datafusion_common::instant::Instant;
-
+use datafusion_common::utils::get_available_parallelism;
 use structopt::StructOpt;
 
 /// Test performance of sorting large datasets
@@ -147,7 +147,9 @@ impl RunOpt {
             rundata.start_new_case(title);
             for i in 0..self.common.iterations {
                 let config = SessionConfig::new().with_target_partitions(
-                    self.common.partitions.unwrap_or(num_cpus::get()),
+                    self.common
+                        .partitions
+                        .unwrap_or(get_available_parallelism()),
                 );
                 let ctx = SessionContext::new_with_config(config);
                 let (rows, elapsed) =

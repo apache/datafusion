@@ -23,17 +23,16 @@ use datafusion_common::arrow::compute::SortOptions;
 use datafusion_common::arrow::datatypes::DataType;
 use datafusion_common::arrow::datatypes::Field;
 use datafusion_common::{Result, ScalarValue};
-use datafusion_expr::window_doc_sections::DOC_SECTION_RANKING;
 use datafusion_expr::{
     Documentation, PartitionEvaluator, Signature, Volatility, WindowUDFImpl,
 };
 use datafusion_functions_window_common::field;
 use datafusion_functions_window_common::partition::PartitionEvaluatorArgs;
+use datafusion_macros::user_doc;
 use field::WindowUDFFieldArgs;
 use std::any::Any;
 use std::fmt::Debug;
 use std::ops::Range;
-use std::sync::OnceLock;
 
 define_udwf_and_expr!(
     RowNumber,
@@ -42,6 +41,11 @@ define_udwf_and_expr!(
 );
 
 /// row_number expression
+#[user_doc(
+    doc_section(label = "Ranking Functions"),
+    description = "Number of the current row within its partition, counting from 1.",
+    syntax_example = "row_number()"
+)]
 #[derive(Debug)]
 pub struct RowNumber {
     signature: Signature,
@@ -60,21 +64,6 @@ impl Default for RowNumber {
     fn default() -> Self {
         Self::new()
     }
-}
-
-static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
-
-fn get_row_number_doc() -> &'static Documentation {
-    DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_RANKING)
-            .with_description(
-                "Number of the current row within its partition, counting from 1.",
-            )
-            .with_syntax_example("row_number()")
-            .build()
-            .unwrap()
-    })
 }
 
 impl WindowUDFImpl for RowNumber {
@@ -109,7 +98,7 @@ impl WindowUDFImpl for RowNumber {
     }
 
     fn documentation(&self) -> Option<&Documentation> {
-        Some(get_row_number_doc())
+        self.doc()
     }
 }
 

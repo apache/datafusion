@@ -17,7 +17,7 @@
 
 use std::any::Any;
 use std::collections::VecDeque;
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
 use arrow::array::ArrayData;
 use arrow_array::{Array, ArrayRef, MapArray, OffsetSizeTrait, StructArray};
@@ -27,10 +27,10 @@ use arrow_schema::{DataType, Field, SchemaBuilder};
 use datafusion_common::utils::{fixed_size_list_to_arrays, list_to_arrays};
 use datafusion_common::{exec_err, HashSet, Result, ScalarValue};
 use datafusion_expr::expr::ScalarFunction;
-use datafusion_expr::scalar_doc_sections::DOC_SECTION_MAP;
 use datafusion_expr::{
     ColumnarValue, Documentation, Expr, ScalarUDFImpl, Signature, Volatility,
 };
+use datafusion_macros::user_doc;
 
 use crate::make_array::make_array;
 
@@ -181,6 +181,50 @@ fn make_map_batch_internal(
     })
 }
 
+#[user_doc(
+    doc_section(label = "Map Functions"),
+    description = "Returns an Arrow map with the specified key-value pairs.\n\n\
+    The `make_map` function creates a map from two lists: one for keys and one for values. Each key must be unique and non-null.",
+    syntax_example = "map(key, value)\nmap(key: value)\nmake_map(['key1', 'key2'], ['value1', 'value2'])",
+    sql_example = r#"
+```sql
+-- Using map function
+SELECT MAP('type', 'test');
+----
+{type: test}
+
+SELECT MAP(['POST', 'HEAD', 'PATCH'], [41, 33, null]);
+----
+{POST: 41, HEAD: 33, PATCH: NULL}
+
+SELECT MAP([[1,2], [3,4]], ['a', 'b']);
+----
+{[1, 2]: a, [3, 4]: b}
+
+SELECT MAP { 'a': 1, 'b': 2 };
+----
+{a: 1, b: 2}
+
+-- Using make_map function
+SELECT MAKE_MAP(['POST', 'HEAD'], [41, 33]);
+----
+{POST: 41, HEAD: 33}
+
+SELECT MAKE_MAP(['key1', 'key2'], ['value1', null]);
+----
+{key1: value1, key2: }
+```"#,
+    argument(
+        name = "key",
+        description = "For `map`: Expression to be used for key. Can be a constant, column, function, or any combination of arithmetic or string operators.\n\
+                        For `make_map`: The list of keys to be used in the map. Each key must be unique and non-null."
+    ),
+    argument(
+        name = "value",
+        description = "For `map`: Expression to be used for value. Can be a constant, column, function, or any combination of arithmetic or string operators.\n\
+                        For `make_map`: The list of values to be mapped to the corresponding keys."
+    )
+)]
 #[derive(Debug)]
 pub struct MapFunc {
     signature: Signature,
@@ -214,9 +258,9 @@ impl ScalarUDFImpl for MapFunc {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        if arg_types.len() % 2 != 0 {
+        if arg_types.len() != 2 {
             return exec_err!(
-                "map requires an even number of arguments, got {} instead",
+                "map requires exactly 2 arguments, got {} instead",
                 arg_types.len()
             );
         }
@@ -238,71 +282,17 @@ impl ScalarUDFImpl for MapFunc {
         ))
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         make_map_batch(args)
     }
 
     fn documentation(&self) -> Option<&Documentation> {
-        Some(get_map_doc())
+        self.doc()
     }
-}
-
-static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
-
-fn get_map_doc() -> &'static Documentation {
-    DOCUMENTATION.get_or_init(|| {
-                Documentation::builder()
-                    .with_doc_section(DOC_SECTION_MAP)
-                    .with_description(
-                        "Returns an Arrow map with the specified key-value pairs.\n\n\
-                        The `make_map` function creates a map from two lists: one for keys and one for values. Each key must be unique and non-null."
-                    )
-                    .with_syntax_example(
-                        "map(key, value)\nmap(key: value)\nmake_map(['key1', 'key2'], ['value1', 'value2'])"
-                    )
-                    .with_sql_example(
-                        r#"
-```sql
--- Using map function
-SELECT MAP('type', 'test');
-----
-{type: test}
-
-SELECT MAP(['POST', 'HEAD', 'PATCH'], [41, 33, null]);
-----
-{POST: 41, HEAD: 33, PATCH: }
-
-SELECT MAP([[1,2], [3,4]], ['a', 'b']);
-----
-{[1, 2]: a, [3, 4]: b}
-
-SELECT MAP { 'a': 1, 'b': 2 };
-----
-{a: 1, b: 2}
-
--- Using make_map function
-SELECT MAKE_MAP(['POST', 'HEAD'], [41, 33]);
-----
-{POST: 41, HEAD: 33}
-
-SELECT MAKE_MAP(['key1', 'key2'], ['value1', null]);
-----
-{key1: value1, key2: }
-```"#,
-                    )
-                    .with_argument(
-                        "key",
-                        "For `map`: Expression to be used for key. Can be a constant, column, function, or any combination of arithmetic or string operators.\n\
-                        For `make_map`: The list of keys to be used in the map. Each key must be unique and non-null."
-                    )
-                    .with_argument(
-                        "value",
-                        "For `map`: Expression to be used for value. Can be a constant, column, function, or any combination of arithmetic or string operators.\n\
-                        For `make_map`: The list of values to be mapped to the corresponding keys."
-                    )
-                    .build()
-                    .unwrap()
-            })
 }
 
 fn get_element_type(data_type: &DataType) -> Result<&DataType> {
@@ -372,7 +362,6 @@ fn get_element_type(data_type: &DataType) -> Result<&DataType> {
 /// | +-------+ |      | +-------+ |
 /// +-----------+      +-----------+
 /// ```text
-
 fn make_map_array_internal<O: OffsetSizeTrait>(
     keys: ArrayRef,
     values: ArrayRef,

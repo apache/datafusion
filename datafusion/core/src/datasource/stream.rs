@@ -36,7 +36,6 @@ use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_expr::dml::InsertOp;
 use datafusion_expr::{CreateExternalTable, Expr, SortExpr, TableType};
 use datafusion_physical_plan::insert::{DataSink, DataSinkExec};
-use datafusion_physical_plan::metrics::MetricsSet;
 use datafusion_physical_plan::stream::RecordBatchReceiverStreamBuilder;
 use datafusion_physical_plan::streaming::{PartitionStream, StreamingTableExec};
 use datafusion_physical_plan::{DisplayAs, DisplayFormatType, ExecutionPlan};
@@ -62,7 +61,7 @@ impl TableProviderFactory for StreamTableFactory {
         let header = if let Ok(opt) = cmd
             .options
             .get("format.has_header")
-            .map(|has_header| bool::from_str(has_header))
+            .map(|has_header| bool::from_str(has_header.to_lowercase().as_str()))
             .transpose()
         {
             opt.unwrap_or(false)
@@ -101,7 +100,7 @@ impl FromStr for StreamEncoding {
         match s.to_ascii_lowercase().as_str() {
             "csv" => Ok(Self::Csv),
             "json" => Ok(Self::Json),
-            _ => plan_err!("Unrecognised StreamEncoding {}", s),
+            _ => plan_err!("Unrecognized StreamEncoding {}", s),
         }
     }
 }
@@ -366,7 +365,6 @@ impl TableProvider for StreamTable {
         Ok(Arc::new(DataSinkExec::new(
             input,
             Arc::new(StreamWrite(Arc::clone(&self.0))),
-            Arc::clone(self.0.source.schema()),
             ordering,
         )))
     }
@@ -413,8 +411,8 @@ impl DataSink for StreamWrite {
         self
     }
 
-    fn metrics(&self) -> Option<MetricsSet> {
-        None
+    fn schema(&self) -> &SchemaRef {
+        self.0.source.schema()
     }
 
     async fn write_all(

@@ -59,7 +59,7 @@ impl<'a, 'b> IndentVisitor<'a, 'b> {
     }
 }
 
-impl<'n, 'a, 'b> TreeNodeVisitor<'n> for IndentVisitor<'a, 'b> {
+impl<'n> TreeNodeVisitor<'n> for IndentVisitor<'_, '_> {
     type Node = LogicalPlan;
 
     fn f_down(
@@ -113,7 +113,7 @@ impl<'n, 'a, 'b> TreeNodeVisitor<'n> for IndentVisitor<'a, 'b> {
 pub fn display_schema(schema: &Schema) -> impl fmt::Display + '_ {
     struct Wrapper<'a>(&'a Schema);
 
-    impl<'a> fmt::Display for Wrapper<'a> {
+    impl fmt::Display for Wrapper<'_> {
         fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
             write!(f, "[")?;
             for (idx, field) in self.0.fields().iter().enumerate() {
@@ -181,7 +181,7 @@ impl<'a, 'b> GraphvizVisitor<'a, 'b> {
     }
 }
 
-impl<'n, 'a, 'b> TreeNodeVisitor<'n> for GraphvizVisitor<'a, 'b> {
+impl<'n> TreeNodeVisitor<'n> for GraphvizVisitor<'_, '_> {
     type Node = LogicalPlan;
 
     fn f_down(
@@ -654,7 +654,7 @@ impl<'a, 'b> PgJsonVisitor<'a, 'b> {
     }
 }
 
-impl<'n, 'a, 'b> TreeNodeVisitor<'n> for PgJsonVisitor<'a, 'b> {
+impl<'n> TreeNodeVisitor<'n> for PgJsonVisitor<'_, '_> {
     type Node = LogicalPlan;
 
     fn f_down(

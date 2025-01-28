@@ -69,9 +69,10 @@ impl ScalarUDFImpl for MyRegexUdf {
             plan_err!("regex_udf only accepts Utf8 arguments")
         }
     }
-    fn invoke(
+    fn invoke_batch(
         &self,
         _args: &[ColumnarValue],
+        _number_rows: usize,
     ) -> datafusion_common::Result<ColumnarValue> {
         unimplemented!()
     }

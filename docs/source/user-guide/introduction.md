@@ -103,6 +103,7 @@ Here are some active projects using DataFusion:
 - [Dask SQL](https://github.com/dask-contrib/dask-sql) Distributed SQL query engine in Python
 - [delta-rs](https://github.com/delta-io/delta-rs) Native Rust implementation of Delta Lake
 - [Exon](https://github.com/wheretrue/exon) Analysis toolkit for life-science applications
+- [Funnel](https://funnel.io/) Data Platform powering Marketing Intelligence applications.
 - [GlareDB](https://github.com/GlareDB/glaredb) Fast SQL database for querying and analyzing distributed data.
 - [GreptimeDB](https://github.com/GreptimeTeam/greptimedb) Open Source & Cloud Native Distributed Time Series Database
 - [HoraeDB](https://github.com/apache/incubator-horaedb) Distributed Time-Series Database
@@ -110,6 +111,7 @@ Here are some active projects using DataFusion:
 - [Kamu](https://github.com/kamu-data/kamu-cli/) Planet-scale streaming data pipeline
 - [LakeSoul](https://github.com/lakesoul-io/LakeSoul) Open source LakeHouse framework with native IO in Rust.
 - [Lance](https://github.com/lancedb/lance) Modern columnar data format for ML
+- [OpenObserve](https://github.com/openobserve/openobserve) Distributed cloud native observability platform
 - [ParadeDB](https://github.com/paradedb/paradedb) PostgreSQL for Search & Analytics
 - [Parseable](https://github.com/parseablehq/parseable) Log storage and observability platform
 - [qv](https://github.com/timvw/qv) Quickly view your data
@@ -120,7 +122,7 @@ Here are some active projects using DataFusion:
 - [Spice.ai](https://github.com/spiceai/spiceai) Unified SQL query interface & materialization engine
 - [Synnada](https://synnada.ai/) Streaming-first framework for data products
 - [VegaFusion](https://vegafusion.io/) Server-side acceleration for the [Vega](https://vega.github.io/) visualization grammar
-- [ZincObserve](https://github.com/zinclabs/zincobserve) Distributed cloud native observability platform
+- [Telemetry](https://telemetry.sh/) Structured logging made easy
 
 Here are some less active projects that used DataFusion:
 
@@ -143,6 +145,7 @@ Here are some less active projects that used DataFusion:
 [greptime db]: https://github.com/GreptimeTeam/greptimedb
 [horaedb]: https://github.com/apache/incubator-horaedb
 [influxdb]: https://github.com/influxdata/influxdb
+[openobserve]: https://github.com/openobserve/openobserve
 [parseable]: https://github.com/parseablehq/parseable
 [prql-query]: https://github.com/prql/prql-query
 [qv]: https://github.com/timvw/qv
@@ -151,8 +154,7 @@ Here are some less active projects that used DataFusion:
 [spice.ai]: https://github.com/spiceai/spiceai
 [synnada]: https://synnada.ai/
 [tensorbase]: https://github.com/tensorbase/tensorbase
-[vegafusion]: https://vegafusion.io/
-[zincobserve]: https://github.com/zinclabs/zincobserve "if you know of another project, please submit a PR to add a link!"
+[vegafusion]: https://vegafusion.io/ "if you know of another project, please submit a PR to add a link!"
 
 ## Integrations and Extensions
 

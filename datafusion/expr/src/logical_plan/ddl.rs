@@ -125,7 +125,7 @@ impl DdlStatement {
     /// See [crate::LogicalPlan::display] for an example
     pub fn display(&self) -> impl Display + '_ {
         struct Wrapper<'a>(&'a DdlStatement);
-        impl<'a> Display for Wrapper<'a> {
+        impl Display for Wrapper<'_> {
             fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
                 match self.0 {
                     DdlStatement::CreateExternalTable(CreateExternalTable {
@@ -133,14 +133,22 @@ impl DdlStatement {
                         constraints,
                         ..
                     }) => {
-                        write!(f, "CreateExternalTable: {name:?}{constraints}")
+                        if constraints.is_empty() {
+                            write!(f, "CreateExternalTable: {name:?}")
+                        } else {
+                            write!(f, "CreateExternalTable: {name:?} {constraints}")
+                        }
                     }
                     DdlStatement::CreateMemoryTable(CreateMemoryTable {
                         name,
                         constraints,
                         ..
                     }) => {
-                        write!(f, "CreateMemoryTable: {name:?}{constraints}")
+                        if constraints.is_empty() {
+                            write!(f, "CreateMemoryTable: {name:?}")
+                        } else {
+                            write!(f, "CreateMemoryTable: {name:?} {constraints}")
+                        }
                     }
                     DdlStatement::CreateView(CreateView { name, .. }) => {
                         write!(f, "CreateView: {name:?}")
@@ -303,7 +311,7 @@ pub struct CreateMemoryTable {
     pub or_replace: bool,
     /// Default values for columns
     pub column_defaults: Vec<(String, Expr)>,
-    /// Wheter the table is `TableType::Temporary`
+    /// Whether the table is `TableType::Temporary`
     pub temporary: bool,
 }
 
@@ -318,7 +326,7 @@ pub struct CreateView {
     pub or_replace: bool,
     /// SQL used to create the view, if available
     pub definition: Option<String>,
-    /// Wheter the view is ephemeral
+    /// Whether the view is ephemeral
     pub temporary: bool,
 }
 

@@ -217,8 +217,7 @@ impl FileGroupPartitioner {
             return None;
         }
 
-        let target_partition_size =
-            (total_size as usize + (target_partitions) - 1) / (target_partitions);
+        let target_partition_size = (total_size as usize).div_ceil(target_partitions);
 
         let current_partition_index: usize = 0;
         let current_partition_size: usize = 0;
@@ -782,7 +781,7 @@ mod test {
         assert_partitioned_files(expected, actual);
     }
 
-    /// Asserts that the two groups of `ParititonedFile` are the same
+    /// Asserts that the two groups of [`PartitionedFile`] are the same
     /// (PartitionedFile doesn't implement PartialEq)
     fn assert_partitioned_files(
         expected: Option<Vec<Vec<PartitionedFile>>>,

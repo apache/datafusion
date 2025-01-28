@@ -16,17 +16,21 @@
 // under the License.
 
 use std::any::Any;
-use std::sync::OnceLock;
 
 use arrow::datatypes::DataType;
 use arrow::datatypes::DataType::Float64;
-use datafusion_common::{internal_err, not_impl_err, Result, ScalarValue};
-use datafusion_expr::scalar_doc_sections::DOC_SECTION_MATH;
+use datafusion_common::{internal_err, Result, ScalarValue};
 use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
 };
+use datafusion_macros::user_doc;
 
+#[user_doc(
+    doc_section(label = "Math Functions"),
+    description = "Returns an approximate value of π.",
+    syntax_example = "pi()"
+)]
 #[derive(Debug)]
 pub struct PiFunc {
     signature: Signature,
@@ -63,10 +67,6 @@ impl ScalarUDFImpl for PiFunc {
         Ok(Float64)
     }
 
-    fn invoke(&self, _args: &[ColumnarValue]) -> Result<ColumnarValue> {
-        not_impl_err!("{} function does not accept arguments", self.name())
-    }
-
     fn invoke_batch(
         &self,
         args: &[ColumnarValue],
@@ -86,19 +86,6 @@ impl ScalarUDFImpl for PiFunc {
     }
 
     fn documentation(&self) -> Option<&Documentation> {
-        Some(get_pi_doc())
+        self.doc()
     }
-}
-
-static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
-
-fn get_pi_doc() -> &'static Documentation {
-    DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_MATH)
-            .with_description("Returns an approximate value of π.")
-            .with_syntax_example("pi()")
-            .build()
-            .unwrap()
-    })
 }
