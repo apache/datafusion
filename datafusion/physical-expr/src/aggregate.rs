@@ -45,7 +45,7 @@ use arrow_schema::SortOptions;
 use datafusion_common::ScalarValue;
 use datafusion_common::{internal_err, not_impl_err, Result};
 use datafusion_expr::ReversedUDAF;
-use datafusion_expr::{AggregateExprMonotonicity, AggregateUDF};
+use datafusion_expr::{AggregateExprSetMonotonicity, AggregateUDF};
 use datafusion_expr_common::accumulator::Accumulator;
 use datafusion_expr_common::groups_accumulator::GroupsAccumulator;
 use datafusion_expr_common::type_coercion::aggregates::check_arg_count;
@@ -541,24 +541,20 @@ impl AggregateFunctionExpr {
     /// function is monotonically increasing if its value increases as its argument grows
     /// (as a set). Formally, `f` is a monotonically increasing set function if `f(S) >= f(T)`
     /// whenever `S` is a superset of `T`.
-    pub fn monotonicity(&self) -> AggregateExprMonotonicity {
+    pub fn set_monotonicity(&self) -> AggregateExprSetMonotonicity {
         let field = self.field();
         let data_type = field.data_type();
-        self.fun.inner().monotonicity(data_type)
+        self.fun.inner().set_monotonicity(data_type)
     }
 
     /// Returns PhysicalSortExpr based on monotonicity of the function
-    pub fn natural_sort_expr(
-        &self,
-        window_expr_index: usize,
-    ) -> Option<PhysicalSortExpr> {
-        // If the aggregate expressions are monotonic, the output data is naturally ordered with it.
-        let monotonicity = self.monotonicity();
+    pub fn natural_sort_expr(&self, aggr_func_idx: usize) -> Option<PhysicalSortExpr> {
+        // If the aggregate expressions are set-monotonic, the output data is naturally ordered with it.
+        let monotonicity = self.set_monotonicity();
         if !monotonicity.is_monotonic() {
             return None;
         }
-        let expr = Arc::new(Column::new(self.name(), window_expr_index));
-
+        let expr = Arc::new(Column::new(self.name(), aggr_func_idx));
         let options = SortOptions::new(monotonicity.is_descending(), false);
         Some(PhysicalSortExpr { expr, options })
     }

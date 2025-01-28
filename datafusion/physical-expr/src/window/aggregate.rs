@@ -22,6 +22,7 @@ use std::ops::Range;
 use std::sync::Arc;
 
 use crate::aggregate::AggregateFunctionExpr;
+use crate::window::standard::add_new_ordering_expr_with_partition_by;
 use crate::window::window_expr::AggregateWindowExpr;
 use crate::window::{
     PartitionBatches, PartitionWindowAggStates, SlidingAggregateWindowExpr, WindowExpr,
@@ -79,7 +80,7 @@ impl PlainAggregateWindowExpr {
         else {
             return;
         };
-        eq_properties.add_new_ordering_expr_with_partition_by(expr, &self.partition_by);
+        add_new_ordering_expr_with_partition_by(eq_properties, expr, &self.partition_by);
     }
 }
 

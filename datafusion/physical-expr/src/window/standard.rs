@@ -33,7 +33,7 @@ use datafusion_common::utils::evaluate_partition_ranges;
 use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::window_state::{WindowAggState, WindowFrameContext};
 use datafusion_expr::WindowFrame;
-use datafusion_physical_expr_common::sort_expr::LexOrdering;
+use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
 
 /// A window expr that takes the form of a [`StandardWindowFunctionExpr`].
 #[derive(Debug)]
@@ -74,7 +74,8 @@ impl StandardWindowExpr {
     pub fn add_equal_orderings(&self, eq_properties: &mut EquivalenceProperties) {
         let schema = eq_properties.schema();
         if let Some(fn_res_ordering) = self.expr.get_result_ordering(schema) {
-            eq_properties.add_new_ordering_expr_with_partition_by(
+            add_new_ordering_expr_with_partition_by(
+                eq_properties,
                 fn_res_ordering,
                 &self.partition_by,
             );
@@ -266,6 +267,30 @@ impl WindowExpr for StandardWindowExpr {
                     || !self.window_frame.end_bound.is_unbounded())
         } else {
             false
+        }
+    }
+}
+
+/// Adds new ordering expression into the existing ordering equivalence class based on partition by information.
+pub(crate) fn add_new_ordering_expr_with_partition_by(
+    eqp: &mut EquivalenceProperties,
+    expr: PhysicalSortExpr,
+    partition_by: &Vec<Arc<dyn PhysicalExpr>>,
+) {
+    if partition_by.is_empty() {
+        // In the absence of a PARTITION BY, ordering of `self.expr` is global:
+        eqp.add_new_orderings([LexOrdering::new(vec![expr])]);
+    } else {
+        // If we have a PARTITION BY, standard functions can not introduce
+        // a global ordering unless the existing ordering is compatible
+        // with PARTITION BY expressions. To elaborate, when PARTITION BY
+        // expressions and existing ordering expressions are equal (w.r.t.
+        // set equality), we can prefix the ordering of `self.expr` with
+        // the existing ordering.
+        let (mut ordering, _) = eqp.find_longest_permutation(partition_by);
+        if ordering.len() == partition_by.len() {
+            ordering.push(expr);
+            eqp.add_new_orderings([ordering]);
         }
     }
 }

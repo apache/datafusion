@@ -39,26 +39,6 @@ use crate::utils::AggregateOrderSensitivity;
 use crate::{Accumulator, Expr};
 use crate::{Documentation, Signature};
 
-/// Status of an Aggregate Expression's Monotonicity
-#[derive(Debug, Clone)]
-pub enum AggregateExprMonotonicity {
-    /// Ordering exists as ascending
-    MonotonicallyAscending,
-    /// Ordering exists as descending
-    MonotonicallyDescending,
-    /// No ordering
-    NotMonotonic,
-}
-
-impl AggregateExprMonotonicity {
-    pub fn is_descending(&self) -> bool {
-        matches!(self, Self::MonotonicallyDescending)
-    }
-    pub fn is_monotonic(&self) -> bool {
-        !matches!(self, Self::NotMonotonic)
-    }
-}
-
 /// Logical representation of a user-defined [aggregate function] (UDAF).
 ///
 /// An aggregate function combines the values from multiple input rows
@@ -660,8 +640,8 @@ pub trait AggregateUDFImpl: Debug + Send + Sync {
     /// function is monotonically increasing if its value increases as its argument grows
     /// (as a set). Formally, `f` is a monotonically increasing set function if `f(S) >= f(T)`
     /// whenever `S` is a superset of `T`.
-    fn monotonicity(&self, _data_type: &DataType) -> AggregateExprMonotonicity {
-        AggregateExprMonotonicity::NotMonotonic
+    fn set_monotonicity(&self, _data_type: &DataType) -> AggregateExprSetMonotonicity {
+        AggregateExprSetMonotonicity::NotMonotonic
     }
 }
 
@@ -844,6 +824,26 @@ pub mod aggregate_doc_sections {
         label: "Approximate Functions",
         description: None,
     };
+}
+
+/// Status of an Aggregate Expression's Set Monotonicity
+#[derive(Debug, Clone)]
+pub enum AggregateExprSetMonotonicity {
+    /// Ordering exists as ascending
+    MonotonicallyAscending,
+    /// Ordering exists as descending
+    MonotonicallyDescending,
+    /// No ordering
+    NotMonotonic,
+}
+
+impl AggregateExprSetMonotonicity {
+    pub fn is_descending(&self) -> bool {
+        matches!(self, Self::MonotonicallyDescending)
+    }
+    pub fn is_monotonic(&self) -> bool {
+        !matches!(self, Self::NotMonotonic)
+    }
 }
 
 #[cfg(test)]

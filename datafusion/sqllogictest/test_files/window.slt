@@ -3127,9 +3127,9 @@ physical_plan
 04)------BoundedWindowAggExec: wdw=[row_number() ORDER BY [annotated_data_infinite2.a ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Ok(Field { name: "row_number() ORDER BY [annotated_data_infinite2.a ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW", data_type: UInt64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(Int32(NULL)), end_bound: CurrentRow, is_causal: false }], mode=[Sorted]
 05)--------StreamingTableExec: partition_sizes=1, projection=[a0, a, b, c, d], infinite_source=true, output_ordering=[a@1 ASC NULLS LAST, b@2 ASC NULLS LAST, c@3 ASC NULLS LAST]
 
-# this is a negative test for asserting that window functions (other than ROW_NUMBER)
-# are not added to ordering equivalence
-# physical plan should contain SortExec.
+# Top level sort is pushed down through BoundedWindowAggExec as its SUM result does already satisfy the required
+# global order. The existing sort is for the second-term lexicographical ordering requirement, which is being
+# preserved also at lexicographical level during the BoundedWindowAggExec.
 query TT
 EXPLAIN SELECT c9, sum1 FROM (SELECT c9,
                        SUM(c9) OVER(ORDER BY c9 DESC) as sum1

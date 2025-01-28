@@ -56,8 +56,8 @@ use arrow::datatypes::{
 use crate::min_max::min_max_bytes::MinMaxBytesAccumulator;
 use datafusion_common::ScalarValue;
 use datafusion_expr::{
-    function::AccumulatorArgs, Accumulator, AggregateExprMonotonicity, AggregateUDFImpl,
-    Documentation, Signature, Volatility,
+    function::AccumulatorArgs, Accumulator, AggregateExprSetMonotonicity,
+    AggregateUDFImpl, Documentation, Signature, Volatility,
 };
 use datafusion_expr::{GroupsAccumulator, StatisticsArgs};
 use datafusion_macros::user_doc;
@@ -362,8 +362,8 @@ impl AggregateUDFImpl for Max {
         self.doc()
     }
 
-    fn monotonicity(&self, _data_type: &DataType) -> AggregateExprMonotonicity {
-        AggregateExprMonotonicity::MonotonicallyAscending
+    fn set_monotonicity(&self, _data_type: &DataType) -> AggregateExprSetMonotonicity {
+        AggregateExprSetMonotonicity::MonotonicallyAscending
     }
 }
 
@@ -1188,8 +1188,8 @@ impl AggregateUDFImpl for Min {
         self.doc()
     }
 
-    fn monotonicity(&self, _data_type: &DataType) -> AggregateExprMonotonicity {
-        AggregateExprMonotonicity::MonotonicallyDescending
+    fn set_monotonicity(&self, _data_type: &DataType) -> AggregateExprSetMonotonicity {
+        AggregateExprSetMonotonicity::MonotonicallyDescending
     }
 }
 

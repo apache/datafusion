@@ -32,10 +32,8 @@ use datafusion_common::utils::expr::COUNT_STAR_EXPANSION;
 use datafusion_common::{JoinType, Result};
 use datafusion_execution::object_store::ObjectStoreUrl;
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
-use datafusion_expr::test::function_stub::{
-    avg_udaf as avg_stub, count_udaf as count_stub,
-};
 use datafusion_expr::{WindowFrame, WindowFunctionDefinition};
+use datafusion_functions_aggregate::average::avg_udaf;
 use datafusion_functions_aggregate::count::count_udaf;
 use datafusion_physical_expr::aggregate::{AggregateExprBuilder, AggregateFunctionExpr};
 use datafusion_physical_expr::expressions::col;
@@ -216,7 +214,7 @@ pub fn bounded_window_exec_with_partition(
     let sort_exprs: LexOrdering = sort_exprs.into_iter().collect();
     let schema = input.schema();
     let mut window_expr = create_window_expr(
-        &WindowFunctionDefinition::AggregateUDF(count_stub()),
+        &WindowFunctionDefinition::AggregateUDF(count_udaf()),
         "count".to_owned(),
         &[col(col_name, &schema).unwrap()],
         partition_by,
@@ -241,7 +239,7 @@ pub fn bounded_window_exec_with_partition(
     )
 }
 
-pub fn bounded_window_exec_non_monotonic(
+pub fn bounded_window_exec_non_set_monotonic(
     col_name: &str,
     sort_exprs: impl IntoIterator<Item = PhysicalSortExpr>,
     input: Arc<dyn ExecutionPlan>,
@@ -252,7 +250,7 @@ pub fn bounded_window_exec_non_monotonic(
     Arc::new(
         BoundedWindowAggExec::try_new(
             vec![create_window_expr(
-                &WindowFunctionDefinition::AggregateUDF(avg_stub()),
+                &WindowFunctionDefinition::AggregateUDF(avg_udaf()),
                 "avg".to_owned(),
                 &[col(col_name, &schema).unwrap()],
                 &[],
@@ -328,7 +326,10 @@ pub fn aggregate_exec(input: Arc<dyn ExecutionPlan>) -> Arc<dyn ExecutionPlan> {
     )
 }
 
-pub fn aggregate_exec_monotonic(input: Arc<dyn ExecutionPlan>) -> Arc<dyn ExecutionPlan> {
+pub fn aggregate_exec_set_monotonic(
+    input: Arc<dyn ExecutionPlan>,
+    group_by: Vec<(Arc<dyn PhysicalExpr>, String)>,
+) -> Arc<dyn ExecutionPlan> {
     let schema = input.schema();
     let aggregate_expr =
         vec![
@@ -342,7 +343,7 @@ pub fn aggregate_exec_monotonic(input: Arc<dyn ExecutionPlan>) -> Arc<dyn Execut
     Arc::new(
         AggregateExec::try_new(
             AggregateMode::Single,
-            PhysicalGroupBy::default(),
+            PhysicalGroupBy::new_single(group_by),
             aggregate_expr,
             vec![None],
             input,
@@ -352,13 +353,13 @@ pub fn aggregate_exec_monotonic(input: Arc<dyn ExecutionPlan>) -> Arc<dyn Execut
     )
 }
 
-pub fn aggregate_exec_non_monotonic(
+pub fn aggregate_exec_non_set_monotonic(
     input: Arc<dyn ExecutionPlan>,
 ) -> Arc<dyn ExecutionPlan> {
     let schema = input.schema();
     let aggregate_expr =
         vec![
-            AggregateExprBuilder::new(avg_stub(), vec![col("d", &schema).unwrap()])
+            AggregateExprBuilder::new(avg_udaf(), vec![col("d", &schema).unwrap()])
                 .schema(Arc::clone(&schema))
                 .alias("avg")
                 .build()

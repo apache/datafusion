@@ -18,12 +18,15 @@
 use std::sync::Arc;
 
 use crate::physical_optimizer::test_utils::{
-    aggregate_exec, bounded_window_exec, check_integrity, coalesce_batches_exec,
+    aggregate_exec, aggregate_exec_non_set_monotonic, aggregate_exec_set_monotonic,
+    bounded_window_exec, bounded_window_exec_non_set_monotonic,
+    bounded_window_exec_with_partition, check_integrity, coalesce_batches_exec,
     coalesce_partitions_exec, create_test_schema, create_test_schema2,
-    create_test_schema3, filter_exec, global_limit_exec, hash_join_exec, limit_exec,
-    local_limit_exec, memory_exec, parquet_exec, repartition_exec, sort_exec, sort_expr,
-    sort_expr_options, sort_merge_join_exec, sort_preserving_merge_exec,
-    spr_repartition_exec, stream_exec_ordered, union_exec, RequirementsTestExec,
+    create_test_schema3, create_test_schema4, filter_exec, global_limit_exec,
+    hash_join_exec, limit_exec, local_limit_exec, memory_exec, parquet_exec,
+    repartition_exec, sort_exec, sort_expr, sort_expr_options, sort_merge_join_exec,
+    sort_preserving_merge_exec, spr_repartition_exec, stream_exec_ordered, union_exec,
+    RequirementsTestExec,
 };
 
 use datafusion_physical_plan::displayable;
@@ -238,14 +241,14 @@ async fn test_remove_unnecessary_sort5() -> Result<()> {
     Ok(())
 }
 
-#[tokio::test]
-async fn test_aggregate_monotonic() -> Result<()> {
+#[test]
+fn test_aggregate_set_monotonic() -> Result<()> {
     let schema = create_test_schema4()?;
     let source = memory_exec(&schema);
     let sort_exprs = vec![sort_expr("a", &schema)];
     let sort = sort_exec(sort_exprs.clone(), source);
 
-    let aggregate = aggregate_exec_monotonic(sort);
+    let aggregate = aggregate_exec_set_monotonic(sort, vec![]);
     let sort_exprs = LexOrdering::new(vec![sort_expr("count", &aggregate.schema())]);
     let physical_plan: Arc<dyn ExecutionPlan> =
         Arc::new(SortExec::new(sort_exprs.clone(), aggregate)) as _;
@@ -266,14 +269,44 @@ async fn test_aggregate_monotonic() -> Result<()> {
     Ok(())
 }
 
-#[tokio::test]
-async fn test_aggregate_non_monotonic() -> Result<()> {
+#[test]
+fn test_aggregate_set_monotonic_with_groupby() -> Result<()> {
     let schema = create_test_schema4()?;
     let source = memory_exec(&schema);
     let sort_exprs = vec![sort_expr("a", &schema)];
     let sort = sort_exec(sort_exprs.clone(), source);
 
-    let aggregate = aggregate_exec_non_monotonic(sort);
+    let aggregate =
+        aggregate_exec_set_monotonic(sort, vec![(col("a", &schema)?, "a".to_string())]);
+    let sort_exprs = LexOrdering::new(vec![sort_expr("count", &aggregate.schema())]);
+    let physical_plan: Arc<dyn ExecutionPlan> =
+        Arc::new(SortExec::new(sort_exprs.clone(), aggregate)) as _;
+
+    let expected_input = [
+        "SortExec: expr=[count@1 ASC], preserve_partitioning=[false]",
+        "  AggregateExec: mode=Single, gby=[a@0 as a], aggr=[count], ordering_mode=Sorted",
+        "    SortExec: expr=[a@0 ASC], preserve_partitioning=[false]",
+        "      MemoryExec: partitions=1, partition_sizes=[0]",
+    ];
+
+    let expected_optimized = [
+        "AggregateExec: mode=Single, gby=[a@0 as a], aggr=[count], ordering_mode=Sorted",
+        "  SortExec: expr=[a@0 ASC], preserve_partitioning=[false]",
+        "    MemoryExec: partitions=1, partition_sizes=[0]",
+    ];
+    assert_optimized!(expected_input, expected_optimized, physical_plan, true);
+
+    Ok(())
+}
+
+#[test]
+fn test_aggregate_non_set_monotonic() -> Result<()> {
+    let schema = create_test_schema4()?;
+    let source = memory_exec(&schema);
+    let sort_exprs = vec![sort_expr("a", &schema)];
+    let sort = sort_exec(sort_exprs.clone(), source);
+
+    let aggregate = aggregate_exec_non_set_monotonic(sort);
     let sort_exprs = LexOrdering::new(vec![sort_expr("avg", &aggregate.schema())]);
     let physical_plan: Arc<dyn ExecutionPlan> =
         Arc::new(SortExec::new(sort_exprs.clone(), aggregate)) as _;
@@ -296,7 +329,7 @@ async fn test_aggregate_non_monotonic() -> Result<()> {
 }
 
 #[tokio::test]
-async fn test_bounded_window_monotonic_sort() -> Result<()> {
+async fn test_bounded_window_set_monotonic_sort() -> Result<()> {
     let schema = create_test_schema()?;
     let sort_exprs = vec![sort_expr_options(
         "nullable_col",
@@ -307,9 +340,11 @@ async fn test_bounded_window_monotonic_sort() -> Result<()> {
         },
     )];
     let source = parquet_exec_sorted(&schema, sort_exprs.clone());
+
     let sort = sort_exec(sort_exprs.clone(), source);
 
     let bounded_window = bounded_window_exec("nullable_col", sort_exprs.clone(), sort);
+
     let output_schema = bounded_window.schema();
     let sort_exprs2 = vec![sort_expr_options(
         "count",
@@ -337,7 +372,7 @@ async fn test_bounded_window_monotonic_sort() -> Result<()> {
 }
 
 #[tokio::test]
-async fn test_bounded_plain_window_monotonic_sort_with_partitions() -> Result<()> {
+async fn test_bounded_plain_window_set_monotonic_sort_with_partitions() -> Result<()> {
     let schema = create_test_schema()?;
     let sort_exprs = vec![sort_expr_options(
         "nullable_col",
@@ -348,9 +383,10 @@ async fn test_bounded_plain_window_monotonic_sort_with_partitions() -> Result<()
         },
     )];
     let source = parquet_exec_sorted(&schema, sort_exprs.clone());
-    let sort = sort_exec(sort_exprs.clone(), source);
-    let partition_bys = &[col("nullable_col", &schema)?];
 
+    let sort = sort_exec(sort_exprs.clone(), source);
+
+    let partition_bys = &[col("nullable_col", &schema)?];
     let bounded_window = bounded_window_exec_with_partition(
         "nullable_col",
         sort_exprs.clone(),
@@ -358,6 +394,7 @@ async fn test_bounded_plain_window_monotonic_sort_with_partitions() -> Result<()
         sort,
         false,
     );
+
     let output_schema = bounded_window.schema();
     let sort_exprs2 = vec![
         sort_expr_options(
@@ -395,7 +432,8 @@ async fn test_bounded_plain_window_monotonic_sort_with_partitions() -> Result<()
 }
 
 #[tokio::test]
-async fn test_bounded_sliding_window_monotonic_sort_with_partitions() -> Result<()> {
+async fn test_bounded_plain_window_reverse_set_monotonic_sort_with_partitions(
+) -> Result<()> {
     let schema = create_test_schema()?;
     let sort_exprs = vec![sort_expr_options(
         "nullable_col",
@@ -406,9 +444,10 @@ async fn test_bounded_sliding_window_monotonic_sort_with_partitions() -> Result<
         },
     )];
     let source = parquet_exec_sorted(&schema, sort_exprs.clone());
-    let sort = sort_exec(sort_exprs.clone(), source);
-    let partition_bys = &[col("nullable_col", &schema)?];
 
+    let sort = sort_exec(sort_exprs.clone(), source);
+
+    let partition_bys = &[col("nullable_col", &schema)?];
     let bounded_window = bounded_window_exec_with_partition(
         "nullable_col",
         sort_exprs.clone(),
@@ -416,6 +455,7 @@ async fn test_bounded_sliding_window_monotonic_sort_with_partitions() -> Result<
         sort,
         true,
     );
+
     let output_schema = bounded_window.schema();
     let sort_exprs2 = vec![
         sort_expr_options(
@@ -453,7 +493,7 @@ async fn test_bounded_sliding_window_monotonic_sort_with_partitions() -> Result<
 }
 
 #[tokio::test]
-async fn test_bounded_window_non_monotonic_sort() -> Result<()> {
+async fn test_bounded_window_non_set_monotonic_sort() -> Result<()> {
     let schema = create_test_schema4()?;
     let sort_exprs = vec![sort_expr_options(
         "a",
@@ -466,7 +506,8 @@ async fn test_bounded_window_non_monotonic_sort() -> Result<()> {
     let source = parquet_exec_sorted(&schema, sort_exprs.clone());
     let sort = sort_exec(sort_exprs.clone(), source);
 
-    let bounded_window = bounded_window_exec_non_monotonic("a", sort_exprs.clone(), sort);
+    let bounded_window =
+        bounded_window_exec_non_set_monotonic("a", sort_exprs.clone(), sort);
     let output_schema = bounded_window.schema();
     let sort_exprs2 = vec![sort_expr_options(
         "avg",

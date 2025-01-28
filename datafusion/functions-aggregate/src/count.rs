@@ -49,7 +49,7 @@ use datafusion_common::{
 use datafusion_expr::function::StateFieldsArgs;
 use datafusion_expr::{
     function::AccumulatorArgs, utils::format_state_name, Accumulator,
-    AggregateExprMonotonicity, AggregateUDFImpl, Documentation, EmitTo,
+    AggregateExprSetMonotonicity, AggregateUDFImpl, Documentation, EmitTo,
     GroupsAccumulator, Signature, Volatility,
 };
 use datafusion_expr::{Expr, ReversedUDAF, StatisticsArgs, TypeSignature};
@@ -353,8 +353,8 @@ impl AggregateUDFImpl for Count {
         self.doc()
     }
 
-    fn monotonicity(&self, _data_type: &DataType) -> AggregateExprMonotonicity {
-        AggregateExprMonotonicity::MonotonicallyAscending
+    fn set_monotonicity(&self, _data_type: &DataType) -> AggregateExprSetMonotonicity {
+        AggregateExprSetMonotonicity::MonotonicallyAscending
     }
 }
 
