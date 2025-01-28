@@ -1121,7 +1121,17 @@ impl Unparser<'_> {
             }
             ScalarValue::LargeBinary(None) => Ok(ast::Expr::Value(ast::Value::Null)),
             ScalarValue::FixedSizeList(_a) => not_impl_err!("Unsupported scalar: {v:?}"),
-            ScalarValue::List(_a) => not_impl_err!("Unsupported scalar: {v:?}"),
+            ScalarValue::List(a) => {
+                let array = a.values();
+
+                let mut elem = Vec::new();
+                for i in 0..array.len() {
+                    let value = ScalarValue::try_from_array(&array, i)?;
+                    elem.push(self.scalar_to_sql(&value)?);
+                }
+
+                Ok(ast::Expr::Array(Array { elem, named: true }))
+            },
             ScalarValue::LargeList(_a) => not_impl_err!("Unsupported scalar: {v:?}"),
             ScalarValue::Date32(Some(_)) => {
                 let date = v
@@ -1250,7 +1260,7 @@ impl Unparser<'_> {
             ScalarValue::Struct(_) => not_impl_err!("Unsupported scalar: {v:?}"),
             ScalarValue::Map(_) => not_impl_err!("Unsupported scalar: {v:?}"),
             ScalarValue::Union(..) => not_impl_err!("Unsupported scalar: {v:?}"),
-            ScalarValue::Dictionary(..) => not_impl_err!("Unsupported scalar: {v:?}"),
+            ScalarValue::Dictionary(_k, v) => self.scalar_to_sql(&v) 
         }
     }
 
