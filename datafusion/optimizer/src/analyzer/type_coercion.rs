@@ -1012,7 +1012,6 @@ fn project_with_column_index(
 
 #[cfg(test)]
 mod test {
-    use arrow::array::{ArrayRef, Int32Array, RecordBatch, StringArray};
     use arrow::datatypes::DataType::Utf8;
     use arrow::datatypes::{DataType, Field, TimeUnit};
     use std::any::Any;
@@ -1025,7 +1024,6 @@ mod test {
     use datafusion_common::config::ConfigOptions;
     use datafusion_common::tree_node::{TransformedResult, TreeNode};
     use datafusion_common::{DFSchema, DFSchemaRef, Result, ScalarValue};
-    use datafusion_expr::execution_props::ExecutionProps;
     use datafusion_expr::expr::{self, InSubquery, Like, ScalarFunction};
     use datafusion_expr::logical_plan::{EmptyRelation, Projection, Sort};
     use datafusion_expr::test::function_stub::avg_udaf;
@@ -1035,9 +1033,7 @@ mod test {
         Operator, ScalarUDF, ScalarUDFImpl, Signature, SimpleAggregateUDF, Subquery,
         Volatility,
     };
-    use datafusion_functions::expr_fn::ascii;
     use datafusion_functions_aggregate::average::AvgAccumulator;
-    use datafusion_physical_expr::PhysicalExpr;
 
     fn empty() -> Arc<LogicalPlan> {
         Arc::new(LogicalPlan::EmptyRelation(EmptyRelation {
@@ -2132,49 +2128,5 @@ mod test {
         \n  EmptyRelation";
         assert_analyzed_plan_eq(Arc::new(TypeCoercion::new()), plan, expected)?;
         Ok(())
-    }
-
-    /// Create a [`PhysicalExpr`] from an [`Expr`] after applying type coercion.
-    fn create_physical_expr_with_type_coercion(
-        expr: Expr,
-        df_schema: &DFSchema,
-    ) -> Result<Arc<dyn PhysicalExpr>> {
-        let props = ExecutionProps::default();
-        let coerced_expr = expr
-            .rewrite(&mut TypeCoercionRewriter::new(df_schema))?
-            .data;
-        let physical_expr = datafusion_physical_expr::create_physical_expr(
-            &coerced_expr,
-            df_schema,
-            &props,
-        )?;
-        Ok(physical_expr)
-    }
-
-    fn evaluate_expr_with_array(
-        expr: Expr,
-        batch: RecordBatch,
-        df_schema: &DFSchema,
-    ) -> Result<ArrayRef> {
-        let physical_expr = create_physical_expr_with_type_coercion(expr, df_schema)?;
-        match physical_expr.evaluate(&batch)? {
-            ColumnarValue::Array(result) => Ok(result),
-            _ => datafusion_common::internal_err!(
-                "Expected array result in evaluate_expr_with_array"
-            ),
-        }
-    }
-
-    fn evaluate_expr_with_scalar(expr: Expr) -> Result<ScalarValue> {
-        let df_schema = DFSchema::empty();
-        let physical_expr = create_physical_expr_with_type_coercion(expr, &df_schema)?;
-        match physical_expr
-            .evaluate(&RecordBatch::new_empty(Arc::clone(df_schema.inner())))?
-        {
-            ColumnarValue::Scalar(result) => Ok(result),
-            _ => datafusion_common::internal_err!(
-                "Expected scalar result in evaluate_expr_with_scalar"
-            ),
-        }
     }
 }

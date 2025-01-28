@@ -387,8 +387,8 @@ fn get_valid_types(
 
         // We need to find the coerced base type, mainly for cases like:
         // `array_append(List(null), i64)` -> `List(i64)`
-        let array_base_type = datafusion_common::utils::base_type(array_type);
-        let elem_base_type = datafusion_common::utils::base_type(elem_type);
+        let array_base_type = base_type(array_type);
+        let elem_base_type = base_type(elem_type);
         let new_base_type = comparison_coercion(&array_base_type, &elem_base_type);
 
         let new_base_type = new_base_type.ok_or_else(|| {
@@ -892,7 +892,7 @@ fn coerced_from<'a>(
         // Only accept list and largelist with the same number of dimensions unless the type is Null.
         // List or LargeList with different dimensions should be handled in TypeSignature or other places before this
         (List(_) | LargeList(_), _)
-            if datafusion_common::utils::base_type(type_from).eq(&Null)
+            if base_type(type_from).eq(&Null)
                 || list_ndims(type_from) == list_ndims(type_into) =>
         {
             Some(type_into.clone())
