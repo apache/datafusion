@@ -38,5 +38,3 @@ pub use r#async::*;
 pub use schema::*;
 pub use session::*;
 pub use table::*;
-
-
