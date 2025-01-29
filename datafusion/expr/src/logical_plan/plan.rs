@@ -1497,7 +1497,9 @@ impl LogicalPlan {
                             (_, Some(dt)) => {
                                 param_types.insert(id.clone(), Some(dt.clone()));
                             }
-                            _ => {}
+                            _ => {
+                                param_types.insert(id.clone(), None);
+                            }
                         }
                     }
                     Ok(TreeNodeRecursion::Continue)
@@ -4346,5 +4348,26 @@ digraph {
         let mut rewriter = ProjectJumpRewriter::new();
         plan.rewrite_with_subqueries(&mut rewriter).unwrap();
         assert!(!rewriter.filter_found);
+    }
+
+    #[test]
+    fn test_with_unresolved_placeholders() {
+        let field_name = "id";
+        let placeholder_value = "$1";
+        let schema = Schema::new(vec![Field::new(field_name, DataType::Int32, false)]);
+
+        let plan = table_scan(TableReference::none(), &schema, None)
+            .unwrap()
+            .filter(col(field_name).eq(placeholder(placeholder_value)))
+            .unwrap()
+            .build()
+            .unwrap();
+
+        // Check that the placeholder parameters have not received a DataType.
+        let params = plan.get_parameter_types().unwrap();
+        assert_eq!(params.len(), 1);
+
+        let parameter_type = params.clone().get(placeholder_value).unwrap().clone();
+        assert_eq!(parameter_type, None);
     }
 }
