@@ -20,9 +20,9 @@ use std::fmt::{Debug, Display, Formatter};
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
+use crate::stats::StatisticsV2;
 use crate::utils::scatter;
 
-use crate::stats::StatisticsV2;
 use arrow::array::BooleanArray;
 use arrow::compute::filter_record_batch;
 use arrow::datatypes::{DataType, Schema};

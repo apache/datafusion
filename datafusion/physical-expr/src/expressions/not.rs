@@ -124,7 +124,7 @@ impl PhysicalExpr for NotExpr {
     fn evaluate_statistics(&self, stats: &[&StatisticsV2]) -> Result<StatisticsV2> {
         assert_eq!(stats.len(), 1);
 
-        if !stats[0].is_valid() {
+        if !stats[0].is_valid()? {
             return internal_err!(
                 "Cannot evaluate statistics for NOT expression with invalid statistics: {:?}",
                 stats[0]);

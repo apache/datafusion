@@ -21,9 +21,9 @@ use std::any::Any;
 use std::hash::Hash;
 use std::sync::Arc;
 
+use crate::utils::stats::new_unknown_from_interval;
 use crate::PhysicalExpr;
 
-use crate::utils::stats::new_unknown_from_interval;
 use arrow::{
     compute::kernels::numeric::neg_wrapping,
     datatypes::{DataType, Schema},
@@ -148,7 +148,7 @@ impl PhysicalExpr for NegativeExpr {
     fn evaluate_statistics(&self, stats: &[&StatisticsV2]) -> Result<StatisticsV2> {
         assert_eq!(stats.len(), 1);
 
-        if !stats[0].is_valid() {
+        if !stats[0].is_valid()? {
             return internal_err!(
                 "Cannot evaluate statistics for negative expression with invalid statistics: {:?}",
                 stats[0]);

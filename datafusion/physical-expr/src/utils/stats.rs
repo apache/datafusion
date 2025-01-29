@@ -1,9 +1,12 @@
+use std::sync::Arc;
+
 use crate::expressions::Literal;
 use crate::physical_expr::PhysicalExpr;
 use crate::utils::{build_dag, ExprTreeNode};
+
 use arrow::datatypes::{DataType, Schema};
 use datafusion_common::ScalarValue::Float64;
-use datafusion_common::{internal_err, ScalarValue};
+use datafusion_common::{internal_err, Result, ScalarValue};
 use datafusion_expr_common::interval_arithmetic::{
     apply_operator, max_of_bounds, min_of_bounds, Interval,
 };
@@ -12,13 +15,13 @@ use datafusion_physical_expr_common::stats::StatisticsV2;
 use datafusion_physical_expr_common::stats::StatisticsV2::{
     Bernoulli, Exponential, Uniform, Unknown,
 };
+
 use log::debug;
 use petgraph::adj::DefaultIx;
 use petgraph::prelude::Bfs;
 use petgraph::stable_graph::{NodeIndex, StableGraph};
 use petgraph::visit::DfsPostOrder;
 use petgraph::Outgoing;
-use std::sync::Arc;
 
 #[derive(Clone, Debug)]
 pub struct ExprStatisticGraphNode {
@@ -30,10 +33,7 @@ impl ExprStatisticGraphNode {
     /// Creates a DAEG node from DataFusion's [`ExprTreeNode`] object. Literals are creating
     /// [`Uniform`] distribution kind of statistic with definite, singleton intervals.
     /// Otherwise, create [`Unknown`] statistic with an unbounded interval.
-    pub fn make_node(
-        node: &ExprTreeNode<NodeIndex>,
-        schema: &Schema,
-    ) -> datafusion_common::Result<Self> {
+    pub fn make_node(node: &ExprTreeNode<NodeIndex>, schema: &Schema) -> Result<Self> {
         let expr = Arc::clone(&node.expr);
         if let Some(literal) = expr.as_any().downcast_ref::<Literal>() {
             let value = literal.value();
@@ -72,10 +72,7 @@ impl ExprStatisticGraphNode {
     }
 
     /// Creates a new graph node with [`Unknown`] statistic.
-    fn new_unknown(
-        expr: Arc<dyn PhysicalExpr>,
-        dt: &DataType,
-    ) -> datafusion_common::Result<Self> {
+    fn new_unknown(expr: Arc<dyn PhysicalExpr>, dt: &DataType) -> Result<Self> {
         Ok(ExprStatisticGraphNode {
             expr,
             statistics: Unknown {
@@ -99,10 +96,7 @@ pub struct ExprStatisticGraph {
 }
 
 impl ExprStatisticGraph {
-    pub fn try_new(
-        expr: Arc<dyn PhysicalExpr>,
-        schema: &Schema,
-    ) -> datafusion_common::Result<Self> {
+    pub fn try_new(expr: Arc<dyn PhysicalExpr>, schema: &Schema) -> Result<Self> {
         // Build the full graph:
         let (root, graph) = build_dag(expr, &|node| {
             ExprStatisticGraphNode::make_node(node, schema)
@@ -123,7 +117,7 @@ impl ExprStatisticGraph {
 
     /// Runs a propagation mechanism in a top-down manner to define a statistics for a leaf nodes.
     /// Returns false, if propagation was infeasible, true otherwise.
-    pub fn propagate(&mut self) -> datafusion_common::Result<bool> {
+    pub fn propagate(&mut self) -> Result<bool> {
         let mut bfs = Bfs::new(&self.graph, self.root);
 
         while let Some(node) = bfs.next(&self.graph) {
@@ -159,7 +153,7 @@ impl ExprStatisticGraph {
     /// Runs a statistics evaluation mechanism in a bottom-up manner,
     /// to calculate a root expression statistic.
     /// Returns a calculated root expression statistic.
-    pub fn evaluate(&mut self) -> datafusion_common::Result<&StatisticsV2> {
+    pub fn evaluate(&mut self) -> Result<&StatisticsV2> {
         let mut dfs = DfsPostOrder::new(&self.graph, self.root);
 
         while let Some(idx) = dfs.next(&self.graph) {
@@ -183,9 +177,7 @@ impl ExprStatisticGraph {
 /// Creates a new [`Unknown`] statistics instance with a given range.
 /// It makes its best to infer mean, median and variance, if it is possible.
 /// This builder is moved here due to original package visibility limitations.
-pub fn new_unknown_from_interval(
-    range: &Interval,
-) -> datafusion_common::Result<StatisticsV2> {
+pub fn new_unknown_from_interval(range: &Interval) -> Result<StatisticsV2> {
     // Note: to avoid code duplication for mean/median/variance computation, we wrap
     // existing range in temporary uniform distribution and compute all these properties.
     let fake_uniform = Uniform {
@@ -206,7 +198,7 @@ pub fn new_unknown_from_binary_expr(
     op: &Operator,
     left: &StatisticsV2,
     right: &StatisticsV2,
-) -> datafusion_common::Result<StatisticsV2> {
+) -> Result<StatisticsV2> {
     Ok(Unknown {
         mean: compute_mean(op, left, right)?,
         median: compute_median(op, left, right)?,
@@ -223,7 +215,7 @@ pub fn new_bernoulli_from_binary_expr(
     op: &Operator,
     left: &StatisticsV2,
     right: &StatisticsV2,
-) -> datafusion_common::Result<StatisticsV2> {
+) -> Result<StatisticsV2> {
     match op {
         Operator::Eq | Operator::NotEq => match (left, right) {
             (Uniform { interval: li }, Uniform { interval: ri })
@@ -269,7 +261,7 @@ pub fn compute_mean(
     op: &Operator,
     left_stat: &StatisticsV2,
     right_stat: &StatisticsV2,
-) -> datafusion_common::Result<Option<ScalarValue>> {
+) -> Result<Option<ScalarValue>> {
     if let (Some(l_mean), Some(r_mean)) = (left_stat.mean()?, right_stat.mean()?) {
         match op {
             Operator::Plus => Ok(Some(l_mean.add_checked(r_mean)?)),
@@ -299,7 +291,7 @@ pub fn compute_median(
     op: &Operator,
     left_stat: &StatisticsV2,
     right_stat: &StatisticsV2,
-) -> datafusion_common::Result<Option<ScalarValue>> {
+) -> Result<Option<ScalarValue>> {
     match (left_stat, right_stat) {
         (Uniform { .. }, Uniform { .. }) => {
             if let (Some(l_median), Some(r_median)) =
@@ -321,12 +313,11 @@ pub fn compute_median(
 }
 
 /// Computes a variance value for a given binary operator and two statistics.
-///
 pub fn compute_variance(
     op: &Operator,
     left_stat: &StatisticsV2,
     right_stat: &StatisticsV2,
-) -> datafusion_common::Result<Option<ScalarValue>> {
+) -> Result<Option<ScalarValue>> {
     match (left_stat, right_stat) {
         (Uniform { .. }, Uniform { .. }) => {
             if let (Some(l_variance), Some(r_variance)) =
@@ -390,7 +381,7 @@ pub fn compute_variance(
                         let denominator = Float64(Some(12.))
                             .mul_checked(rate.mul(rate)?.cast_to(&DataType::Float64)?)?;
 
-                        Ok(Some(numerator.div(denominator)?))
+                        numerator.div(denominator).map(Some)
                     }
                     _ => {
                         // Note: mod and div are not supported for any distribution combination pair
@@ -412,8 +403,8 @@ pub fn compute_range(
     op: &Operator,
     left_stat: &StatisticsV2,
     right_stat: &StatisticsV2,
-) -> datafusion_common::Result<Interval> {
-    if !left_stat.is_valid() || !right_stat.is_valid() {
+) -> Result<Interval> {
+    if !left_stat.is_valid()? || !right_stat.is_valid()? {
         return Interval::make_unbounded(&DataType::Float64);
     }
     match (left_stat, right_stat) {
@@ -450,8 +441,8 @@ mod tests {
         compute_mean, compute_median, compute_range, compute_variance, ExprStatisticGraph,
     };
     use arrow_schema::{DataType, Field, Schema};
-    use datafusion_common::ScalarValue;
     use datafusion_common::ScalarValue::Float64;
+    use datafusion_common::{Result, ScalarValue};
     use datafusion_expr_common::interval_arithmetic::{apply_operator, Interval};
     use datafusion_expr_common::operator::Operator;
     use datafusion_expr_common::operator::Operator::{
@@ -472,7 +463,7 @@ mod tests {
         op: Operator,
         right: Arc<dyn PhysicalExpr>,
         schema: &Schema,
-    ) -> datafusion_common::Result<BinaryExpr> {
+    ) -> Result<BinaryExpr> {
         let left_type = left.data_type(schema)?;
         let right_type = right.data_type(schema)?;
         let (lhs, rhs) = get_input_types(&left_type, &op, &right_type)?;
@@ -486,7 +477,7 @@ mod tests {
     // Expected test results were calculated in Wolfram Mathematica, by using
     // *METHOD_NAME*[TransformedDistribution[x op y, {x ~ *DISTRIBUTION_X*[..], y ~ *DISTRIBUTION_Y*[..]}]]
     #[test]
-    fn test_unknown_properties_uniform_uniform() -> datafusion_common::Result<()> {
+    fn test_unknown_properties_uniform_uniform() -> Result<()> {
         let stat_a = Uniform {
             interval: Interval::make(Some(0.), Some(12.0))?,
         };
@@ -541,7 +532,7 @@ mod tests {
     /// Test for Uniform-Uniform, Uniform-Unknown, Unknown-Uniform, Unknown-Unknown pairs,
     /// where range is always present.
     #[test]
-    fn test_compute_range_where_present() -> datafusion_common::Result<()> {
+    fn test_compute_range_where_present() -> Result<()> {
         let a = &Interval::make(Some(0.), Some(12.0))?;
         let b = &Interval::make(Some(0.), Some(12.0))?;
         let _mean = Some(Float64(Some(6.0)));
@@ -612,7 +603,7 @@ mod tests {
     }
 
     #[test]
-    fn test_stats_v2_integration() -> datafusion_common::Result<()> {
+    fn test_stats_v2_integration() -> Result<()> {
         let schema = &Schema::new(vec![
             Field::new("a", DataType::Float64, false),
             Field::new("b", DataType::Float64, false),

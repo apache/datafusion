@@ -20,14 +20,14 @@ mod kernels;
 use std::hash::Hash;
 use std::{any::Any, sync::Arc};
 
-use crate::intervals::cp_solver::{propagate_arithmetic, propagate_comparison};
-use crate::PhysicalExpr;
-
 use crate::expressions::binary::kernels::concat_elements_utf8view;
+use crate::intervals::cp_solver::{propagate_arithmetic, propagate_comparison};
 use crate::utils::stats::{
     new_bernoulli_from_binary_expr, new_unknown_from_binary_expr,
     new_unknown_from_interval,
 };
+use crate::PhysicalExpr;
+
 use arrow::array::*;
 use arrow::compute::kernels::boolean::{and_kleene, not, or_kleene};
 use arrow::compute::kernels::cmp::*;
@@ -520,7 +520,7 @@ impl PhysicalExpr for BinaryExpr {
         }
 
         // TODO, to think: maybe, we can separate also Unknown + Unknown
-        //  just for clarity and better reader understanding.
+        // just for clarity and better reader understanding.
         match &self.op {
             Operator::Plus | Operator::Minus | Operator::Multiply => {
                 match (left_stat, right_stat) {
