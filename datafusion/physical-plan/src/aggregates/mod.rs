@@ -512,7 +512,7 @@ impl AggregateExec {
             &group_expr_mapping,
             &mode,
             &input_order_mode,
-            aggr_expr.clone(),
+            aggr_expr.as_slice(),
         );
 
         Ok(AggregateExec {
@@ -649,7 +649,7 @@ impl AggregateExec {
         group_expr_mapping: &ProjectionMapping,
         mode: &AggregateMode,
         input_order_mode: &InputOrderMode,
-        aggr_exprs: Vec<Arc<AggregateFunctionExpr>>,
+        aggr_exprs: &[Arc<AggregateFunctionExpr>],
     ) -> PlanProperties {
         // Construct equivalence properties:
         let mut eq_properties = input

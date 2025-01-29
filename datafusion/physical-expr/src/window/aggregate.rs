@@ -32,7 +32,7 @@ use crate::{reverse_order_bys, EquivalenceProperties, PhysicalExpr};
 use arrow::array::Array;
 use arrow::record_batch::RecordBatch;
 use arrow::{array::ArrayRef, datatypes::Field};
-use datafusion_common::{DataFusionError, ScalarValue, Result};
+use datafusion_common::{DataFusionError, Result, ScalarValue};
 use datafusion_expr::{Accumulator, WindowFrame};
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
 
