@@ -32,10 +32,10 @@ readme = "README.md"
 arrow = { version = "54.0.0" }
 async-trait = "0.1.73"
 aws-config = "1.5.15"
+aws-credential-types = "1.2.1"
 aws-sdk-sso = "1.56.0"
 aws-sdk-ssooidc = "1.57.0"
 aws-sdk-sts = "1.57.0"
-aws-credential-types = "1.2.1"
 clap = { version = "4.5.27", features = ["derive", "cargo"] }
 datafusion = { path = "../datafusion/core", version = "44.0.0", features = [
     "avro",
