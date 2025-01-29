@@ -664,6 +664,23 @@ impl AggregateExec {
             .equivalence_properties()
             .project(group_expr_mapping, schema);
 
+        // if the aggregate function is set monotonic, add it into equivalence properties
+        for (i, aggr_expr) in aggr_exprs.iter().enumerate() {
+            let aggr_expr_index = aggr_expr_indices[i];
+            if let Some(expr) = aggr_expr.natural_sort_expr(aggr_expr_index) {
+                if group_expr_mapping.map.is_empty() {
+                    eq_properties.add_new_ordering(LexOrdering::new(vec![expr]));
+                } else if *input_order_mode != InputOrderMode::Linear {
+                    if let Some(ordering) = eq_properties.output_ordering() {
+                        let mut existing_ordering = ordering.to_vec();
+                        existing_ordering.push(expr);
+                        eq_properties
+                            .add_new_ordering(LexOrdering::new(existing_ordering));
+                    }
+                }
+            }
+        }
+
         // Group by expression will be a distinct value after the aggregation.
         // Add it into the constraint set.
         let mut constraints = eq_properties.constraints().to_vec();
@@ -701,13 +718,6 @@ impl AggregateExec {
         } else {
             input.pipeline_behavior()
         };
-
-        for (i, aggr_expr) in aggr_exprs.iter().enumerate() {
-            let aggr_expr_index = aggr_expr_indices[i];
-            if let Some(expr) = aggr_expr.natural_sort_expr(aggr_expr_index) {
-                eq_properties.add_new_ordering(LexOrdering::new(vec![expr]));
-            }
-        }
 
         PlanProperties::new(
             eq_properties,
