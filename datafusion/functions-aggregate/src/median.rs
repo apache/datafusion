@@ -37,7 +37,9 @@ use arrow::array::Array;
 use arrow::array::ArrowNativeTypeOp;
 use arrow::datatypes::{ArrowNativeType, ArrowPrimitiveType};
 
-use datafusion_common::{internal_err, DataFusionError, HashSet, Result, ScalarValue};
+use datafusion_common::{
+    internal_datafusion_err, internal_err, DataFusionError, HashSet, Result, ScalarValue,
+};
 use datafusion_expr::function::StateFieldsArgs;
 use datafusion_expr::{
     function::AccumulatorArgs, utils::format_state_name, Accumulator, AggregateUDFImpl,
@@ -450,7 +452,11 @@ impl<T: ArrowNumericType + Send> GroupsAccumulator for MedianGroupsAccumulator<T
             .with_data_type(self.data_type.clone());
 
         // `offsets` in `ListArray`, each row as a list element
-        let offset_end = i32::try_from(input_array.len()).unwrap();
+        let offset_end = i32::try_from(input_array.len()).map_err(|e| {
+            internal_datafusion_err!(
+                "cast array_len to i32 failed in convert_to_state of group median, err:{e:?}"
+            )
+        })?;
         let offsets = (0..=offset_end).collect::<Vec<_>>();
         // Safety: all checks in `OffsetBuffer::new` are ensured to pass
         let offsets = unsafe { OffsetBuffer::new_unchecked(ScalarBuffer::from(offsets)) };
