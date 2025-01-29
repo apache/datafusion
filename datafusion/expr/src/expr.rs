@@ -3067,4 +3067,15 @@ mod test {
             rename: opt_rename,
         }
     }
+
+    #[test]
+    fn test_size_of_expr() {
+        // because Expr is such a widely used struct in DataFusion
+        // it is important to keep its size as small as possible
+        //
+        // If this test fails when you change `Expr`, please try
+        // `Box`ing the fields to make `Expr` smaller
+        // See https://github.com/apache/datafusion/issues/14256 for details
+        assert_eq!(size_of::<Expr>(), 272);
+    }
 }
