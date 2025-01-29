@@ -23,7 +23,9 @@ use datafusion_expr::Expr;
 use regex::Regex;
 use sqlparser::tokenizer::Span;
 use sqlparser::{
-    ast::{self, BinaryOperator, Function, Ident, ObjectName, TimezoneInfo},
+    ast::{
+        self, BinaryOperator, Function, Ident, ObjectName, TimezoneInfo, WindowFrameBound,
+    },
     keywords::ALL_KEYWORDS,
 };
 
@@ -151,6 +153,18 @@ pub trait Dialect: Send + Sync {
         _args: &[Expr],
     ) -> Result<Option<ast::Expr>> {
         Ok(None)
+    }
+
+    /// Allows the dialect to choose to omit window frame in unparsing
+    /// based on function name and window frame bound
+    /// Returns false if specific function name / window frame bound indicates no window frame is needed in unparsing
+    fn window_func_support_window_frame(
+        &self,
+        _func_name: &str,
+        _start_bound: &WindowFrameBound,
+        _end_bound: &WindowFrameBound,
+    ) -> bool {
+        true
     }
 
     /// Extends the dialect's default rules for unparsing scalar functions.
@@ -500,6 +514,7 @@ pub struct CustomDialect {
     supports_column_alias_in_table_alias: bool,
     requires_derived_table_alias: bool,
     division_operator: BinaryOperator,
+    window_func_support_window_frame: bool,
     full_qualified_col: bool,
     unnest_as_table_factor: bool,
 }
@@ -527,6 +542,7 @@ impl Default for CustomDialect {
             supports_column_alias_in_table_alias: true,
             requires_derived_table_alias: false,
             division_operator: BinaryOperator::Divide,
+            window_func_support_window_frame: true,
             full_qualified_col: false,
             unnest_as_table_factor: false,
         }
@@ -634,6 +650,15 @@ impl Dialect for CustomDialect {
         self.division_operator.clone()
     }
 
+    fn window_func_support_window_frame(
+        &self,
+        _func_name: &str,
+        _start_bound: &WindowFrameBound,
+        _end_bound: &WindowFrameBound,
+    ) -> bool {
+        self.window_func_support_window_frame
+    }
+
     fn full_qualified_col(&self) -> bool {
         self.full_qualified_col
     }
@@ -675,6 +700,7 @@ pub struct CustomDialectBuilder {
     supports_column_alias_in_table_alias: bool,
     requires_derived_table_alias: bool,
     division_operator: BinaryOperator,
+    window_func_support_window_frame: bool,
     full_qualified_col: bool,
     unnest_as_table_factor: bool,
 }
@@ -708,6 +734,7 @@ impl CustomDialectBuilder {
             supports_column_alias_in_table_alias: true,
             requires_derived_table_alias: false,
             division_operator: BinaryOperator::Divide,
+            window_func_support_window_frame: true,
             full_qualified_col: false,
             unnest_as_table_factor: false,
         }
@@ -733,6 +760,7 @@ impl CustomDialectBuilder {
                 .supports_column_alias_in_table_alias,
             requires_derived_table_alias: self.requires_derived_table_alias,
             division_operator: self.division_operator,
+            window_func_support_window_frame: self.window_func_support_window_frame,
             full_qualified_col: self.full_qualified_col,
             unnest_as_table_factor: self.unnest_as_table_factor,
         }
@@ -854,6 +882,14 @@ impl CustomDialectBuilder {
 
     pub fn with_division_operator(mut self, division_operator: BinaryOperator) -> Self {
         self.division_operator = division_operator;
+        self
+    }
+
+    pub fn with_window_func_support_window_frame(
+        mut self,
+        window_func_support_window_frame: bool,
+    ) -> Self {
+        self.window_func_support_window_frame = window_func_support_window_frame;
         self
     }
 

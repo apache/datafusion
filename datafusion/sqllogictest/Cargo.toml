@@ -42,6 +42,7 @@ bytes = { workspace = true, optional = true }
 chrono = { workspace = true, optional = true }
 clap = { version = "4.5.16", features = ["derive", "env"] }
 datafusion = { workspace = true, default-features = true, features = ["avro"] }
+datafusion-catalog = { workspace = true, default-features = true }
 datafusion-common = { workspace = true, default-features = true }
 datafusion-common-runtime = { workspace = true, default-features = true }
 futures = { workspace = true }
@@ -53,7 +54,7 @@ object_store = { workspace = true }
 postgres-protocol = { version = "0.6.7", optional = true }
 postgres-types = { version = "0.2.8", features = ["derive", "with-chrono-0_4"], optional = true }
 rust_decimal = { version = "1.36.0", features = ["tokio-pg"] }
-sqllogictest = "0.26.0"
+sqllogictest = "0.26.4"
 sqlparser = { workspace = true }
 tempfile = { workspace = true }
 testcontainers = { version = "0.23", features = ["default"], optional = true }
