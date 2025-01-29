@@ -47,7 +47,6 @@ use datafusion_execution::TaskContext;
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, LexRequirement};
 
 use futures::{ready, Stream, StreamExt};
-use itertools::Itertools;
 
 /// Window execution plan
 #[derive(Debug, Clone)]
@@ -76,19 +75,12 @@ impl WindowAggExec {
         input: Arc<dyn ExecutionPlan>,
         partition_keys: Vec<Arc<dyn PhysicalExpr>>,
     ) -> Result<Self> {
-        let old_fields_len = input.schema().fields.len();
         let schema = create_schema(&input.schema(), &window_expr)?;
         let schema = Arc::new(schema);
-        let window_expr_indices = (old_fields_len..schema.fields.len()).collect_vec();
 
         let ordered_partition_by_indices =
             get_ordered_partition_by_indices(window_expr[0].partition_by(), &input);
-        let cache = Self::compute_properties(
-            Arc::clone(&schema),
-            &input,
-            &window_expr,
-            window_expr_indices,
-        );
+        let cache = Self::compute_properties(Arc::clone(&schema), &input, &window_expr);
         Ok(Self {
             input,
             window_expr,
@@ -129,15 +121,9 @@ impl WindowAggExec {
         schema: SchemaRef,
         input: &Arc<dyn ExecutionPlan>,
         window_exprs: &[Arc<dyn WindowExpr>],
-        window_expr_indices: Vec<usize>,
     ) -> PlanProperties {
         // Calculate equivalence properties:
-        let eq_properties = window_equivalence_properties(
-            &schema,
-            input,
-            window_exprs,
-            window_expr_indices,
-        );
+        let eq_properties = window_equivalence_properties(&schema, input, window_exprs);
 
         // Get output partitioning:
         // Because we can have repartitioning using the partition keys this
