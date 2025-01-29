@@ -354,14 +354,12 @@ pub(crate) fn window_equivalence_properties(
         {
             aggregate_udf_window_expr
                 .add_equal_orderings(&mut window_eq_properties, window_expr_index);
-        } else if let Some(_) = expr.as_any().downcast_ref::<SlidingAggregateWindowExpr>()
-        {
-            // TODO: SlidingAggregateWindowExpr cannot introduce a new ordering yet
-            //       because we cannot determine whether the window's incoming elements
-            //       are greater than its outgoing elements. However, we do have
-            //       the necessary tools to support this, and we can extend support
-            //       for these cases in the future.
         }
+        // TODO: SlidingAggregateWindowExpr cannot introduce a new ordering yet
+        //       because we cannot determine whether the window's incoming elements
+        //       are greater than its outgoing elements. However, we do have
+        //       the necessary tools to support this, and we can extend support
+        //       for these cases in the future.
     }
     window_eq_properties
 }
