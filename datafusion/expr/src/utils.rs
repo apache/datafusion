@@ -770,7 +770,6 @@ pub fn exprlist_to_fields<'a>(
     // Look for exact match in plan's output schema
     let wildcard_schema = find_base_plan(plan).schema();
     let input_schema = plan.schema();
-    let exprs = exprs.into_iter().collect::<Vec<_>>();
     let result = exprs
         .into_iter()
         .map(|e| match e {
