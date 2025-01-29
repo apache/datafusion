@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::collections::HashMap;
+
 use super::*;
 use datafusion_common::ScalarValue;
 
@@ -349,4 +351,157 @@ async fn test_version_function() {
     assert_eq!(version.len(), 1);
 
     assert_eq!(version.value(0), expected_version);
+}
+
+#[tokio::test]
+async fn test_select_system_column() {
+    let batch = record_batch!(
+        ("id", UInt8, [1, 2, 3]),
+        ("bank_account", UInt64, [9000, 100, 1000]),
+        ("_rowid", UInt32, [0, 1, 2]),
+        ("_file", Utf8, ["file-0", "file-1", "file-2"])
+    ).unwrap();
+    let batch = batch.with_schema(
+        Arc::new(
+            Schema::new(vec![
+                Field::new("id", DataType::UInt8, true),
+                Field::new("bank_account", DataType::UInt64, true),
+                Field::new("_rowid", DataType::UInt32, true).with_metadata(HashMap::from_iter([
+                    ("datafusion.system_column".to_string(), "true".to_string()),
+                ])),
+                Field::new("_file", DataType::Utf8, true).with_metadata(HashMap::from_iter([
+                    ("datafusion.system_column".to_string(), "true".to_string()),
+                ])),
+            ])
+        )
+    ).unwrap();
+
+    let ctx = SessionContext::new_with_config(
+        SessionConfig::new().with_information_schema(true),
+    );
+    let _ = ctx.register_batch("test", batch);
+
+    let select0 = "SELECT * FROM test order by id";
+    let df = ctx.sql(select0).await.unwrap();
+    let batchs = df.collect().await.unwrap();
+    let expected = [
+        "+----+--------------+",
+        "| id | bank_account |",
+        "+----+--------------+",
+        "| 1  | 9000         |",
+        "| 2  | 100          |",
+        "| 3  | 1000         |",
+        "+----+--------------+",
+    ];
+    assert_batches_sorted_eq!(expected, &batchs);
+
+    let select1 = "SELECT _rowid FROM test order by _rowid";
+    let df = ctx.sql(select1).await.unwrap();
+    let batchs = df.collect().await.unwrap();
+    let expected = [
+        "+--------+",
+        "| _rowid |",
+        "+--------+",
+        "| 0      |",
+        "| 1      |",
+        "| 2      |",
+        "+--------+",
+    ];
+    assert_batches_sorted_eq!(expected, &batchs);
+
+    let select2 = "SELECT _rowid, id FROM test order by _rowid";
+    let df = ctx.sql(select2).await.unwrap();
+    let batchs = df.collect().await.unwrap();
+    let expected = [
+        "+--------+----+",
+        "| _rowid | id |",
+        "+--------+----+",
+        "| 0      | 1  |",
+        "| 1      | 2  |",
+        "| 2      | 3  |",
+        "+--------+----+",
+    ];
+    assert_batches_sorted_eq!(expected, &batchs);
+
+    let select3 = "SELECT _rowid, id FROM test WHERE _rowid = 0";
+    let df = ctx.sql(select3).await.unwrap();
+    let batchs = df.collect().await.unwrap();
+    let expected = [
+        "+--------+----+",
+        "| _rowid | id |",
+        "+--------+----+",
+        "| 0      | 1  |",
+        "+--------+----+",
+    ];
+    assert_batches_sorted_eq!(expected, &batchs);
+
+    let select4 = "SELECT _rowid FROM test LIMIT 1";
+    let df = ctx.sql(select4).await.unwrap();
+    let batchs = df.collect().await.unwrap();
+    let expected = [
+        "+--------+",
+        "| _rowid |",
+        "+--------+",
+        "| 0      |",
+        "+--------+",
+    ];
+    assert_batches_sorted_eq!(expected, &batchs);
+
+    let select5 = "SELECT _rowid, id FROM test WHERE _rowid % 2 = 1";
+    let df = ctx.sql(select5).await.unwrap();
+    let batchs = df.collect().await.unwrap();
+    let expected = [
+        "+--------+----+",
+        "| _rowid | id |",
+        "+--------+----+",
+        "| 1      | 2  |",
+        "+--------+----+",
+    ];
+    assert_batches_sorted_eq!(expected, &batchs);
+
+    let select6 = "SELECT _rowid, _file FROM test order by _rowid";
+    let df = ctx.sql(select6).await.unwrap();
+    let batchs = df.collect().await.unwrap();
+    let expected = [
+        "+--------+--------+",
+        "| _rowid | _file  |",
+        "+--------+--------+",
+        "| 0      | file-0 |",
+        "| 1      | file-1 |",
+        "| 2      | file-2 |",
+        "+--------+--------+",
+    ];
+    assert_batches_sorted_eq!(expected, &batchs);
+
+    let select6 = "SELECT id FROM test order by _rowid desc";
+    let df = ctx.sql(select6).await.unwrap();
+    let batchs = df.collect().await.unwrap();
+    let expected = [
+        "+----+",
+        "| id |",
+        "+----+",
+        "| 3  |",
+        "| 2  |",
+        "| 1  |",
+        "+----+",
+    ];
+    assert_batches_sorted_eq!(expected, &batchs);
+
+    let show_columns = "show columns from test;";
+    let df_columns = ctx.sql(show_columns).await.unwrap();
+    let batchs = df_columns
+        .select(vec![col("column_name"), col("data_type")])
+        .unwrap()
+        .collect()
+        .await
+        .unwrap();
+    let expected = [
+        "+--------------+-----------+",
+        "| column_name  | data_type |",
+        "+--------------+-----------+",
+        "| id           | UInt8     |",
+        "| bank_account | UInt64    |",
+        "+--------------+-----------+",
+    ];
+    assert_batches_sorted_eq!(expected, &batchs);
 }

@@ -357,6 +357,72 @@ fn get_excluded_columns(
     Ok(result)
 }
 
+
+/// Find system columns in the schema, if any.
+/// 
+/// System columns are columns which meant to be semi-public stores of the internal details of the table.
+/// For example, `ctid` in Postgres would be considered a metadata column
+/// (Postgres calls these "system columns", see [the Postgres docs](https://www.postgresql.org/docs/current/ddl-system-columns.html) for more information and examples.
+/// Spark has a `_metadata` column that it uses to include details about each file read in a query (see [Spark's docs](https://docs.databricks.com/en/ingestion/file-metadata-column.html)).
+///
+/// DataFusion allows fields to be declared as metadata columns by setting the `datafusion.system_column` key in the field's metadata
+/// to `true`.
+/// 
+/// As an example of how this works in practice, if you have the following Postgres table:
+/// 
+/// ```sql
+/// CREATE TABLE t (x int);
+/// INSERT INTO t VALUES (1);
+/// ```
+/// 
+/// And you do a `SELECT * FROM t`, you would get the following schema:
+/// 
+/// ```text
+/// +---+
+/// | x |
+/// +---+
+/// | 1 |
+/// +---+
+/// ```
+/// 
+/// But if you do `SELECT ctid, * FROM t`, you would get the following schema (ignore the meaning of the value of `ctid`, this is just an example):
+/// 
+/// ```text
+/// +-----+---+
+/// | ctid| x |
+/// +-----+---+
+/// | 0   | 1 |
+/// +-----+---+
+/// ```
+///
+/// Returns: A list of `Column`s that are system columns.
+fn get_system_columns(
+    schema: &DFSchema,
+    qualifier: Option<&TableReference>,
+) -> Result<Vec<Column>> {
+    let mut result = vec![];
+    // exclude columns with `datafusion.system_column` metadata set to true
+    if let Some(qualifier) = qualifier {
+        for field in schema.fields_with_qualified(qualifier) {
+            if let Some(v) = field.metadata().get("datafusion.system_column") {
+                if !v.is_empty() && v.to_lowercase().starts_with("t") {
+                    result.push(Column::new(Some(qualifier.clone()), field.name()));
+                }
+            }
+        }
+    } else {
+        for field in schema.fields() {
+            if let Some(v) = field.metadata().get("datafusion.system_column") {
+                if !v.is_empty() && v.to_lowercase().starts_with("t") {
+                    let (qualifier, field) = schema.qualified_field_with_unqualified_name(field.name())?;
+                    result.push(Column::new(qualifier.cloned(), field.name()));
+                }
+            }
+        }
+    }
+    Ok(result)
+}
+
 /// Returns all `Expr`s in the schema, except the `Column`s in the `columns_to_skip`
 fn get_exprs_except_skipped(
     schema: &DFSchema,
@@ -413,6 +479,7 @@ pub fn expand_wildcard(
     wildcard_options: Option<&WildcardOptions>,
 ) -> Result<Vec<Expr>> {
     let mut columns_to_skip = exclude_using_columns(plan)?;
+    columns_to_skip.extend(get_system_columns(schema, None)?);
     let excluded_columns = if let Some(WildcardOptions {
         exclude: opt_exclude,
         except: opt_except,
@@ -467,6 +534,7 @@ pub fn expand_qualified_wildcard(
     };
     // Add each excluded `Column` to columns_to_skip
     let mut columns_to_skip = HashSet::new();
+    columns_to_skip.extend(get_system_columns(schema, Some(qualifier))?);
     columns_to_skip.extend(excluded_columns);
     Ok(get_exprs_except_skipped(
         &qualified_dfschema,
@@ -706,6 +774,7 @@ pub fn exprlist_to_fields<'a>(
     // Look for exact match in plan's output schema
     let wildcard_schema = find_base_plan(plan).schema();
     let input_schema = plan.schema();
+    let exprs = exprs.into_iter().collect::<Vec<_>>();
     let result = exprs
         .into_iter()
         .map(|e| match e {
@@ -718,6 +787,7 @@ pub fn exprlist_to_fields<'a>(
                         wildcard_schema,
                         None,
                     )?);
+                    excluded.extend(get_system_columns(wildcard_schema, None)?);
                     Ok(wildcard_schema
                         .iter()
                         .filter(|(q, f)| {
@@ -727,7 +797,7 @@ pub fn exprlist_to_fields<'a>(
                         .collect::<Vec<_>>())
                 }
                 Some(qualifier) => {
-                    let excluded: Vec<String> = get_excluded_columns(
+                    let mut excluded: Vec<String> = get_excluded_columns(
                         options.exclude.as_ref(),
                         options.except.as_ref(),
                         wildcard_schema,
@@ -736,11 +806,12 @@ pub fn exprlist_to_fields<'a>(
                     .into_iter()
                     .map(|c| c.flat_name())
                     .collect();
+                    excluded.extend(get_system_columns(wildcard_schema, None)?.into_iter().map(|c| c.flat_name()));
                     Ok(wildcard_schema
                         .fields_with_qualified(qualifier)
                         .into_iter()
                         .filter_map(|field| {
-                            let flat_name = format!("{}.{}", qualifier, field.name());
+                            let flat_name = Column::new(Some(qualifier.clone()), field.name()).flat_name();
                             if excluded.contains(&flat_name) {
                                 None
                             } else {

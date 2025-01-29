@@ -75,6 +75,7 @@ tokio = { workspace = true, features = ["rt-multi-thread", "parking_lot"] }
 tonic = "0.12.1"
 url = { workspace = true }
 uuid = "1.7"
+itertools = { workspace = true }
 
 [target.'cfg(not(target_os = "windows"))'.dev-dependencies]
 nix = { version = "0.28.0", features = ["fs"] }

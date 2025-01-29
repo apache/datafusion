@@ -190,6 +190,11 @@ impl InformationSchemaConfig {
                                 for (field_position, field) in
                                     table.schema().fields().iter().enumerate()
                                 {
+                                    if let Some(v) = field.metadata().get("datafusion.system_column") {
+                                        if v.to_lowercase().starts_with("t") {
+                                            continue;
+                                        }
+                                    }
                                     builder.add_column(
                                         &catalog_name,
                                         &schema_name,
