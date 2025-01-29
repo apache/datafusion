@@ -33,6 +33,11 @@ use super::{
     PartitionMode, SharedBitmapBuilder,
 };
 use crate::execution_plan::{boundedness_from_children, EmissionType};
+use crate::projection::{
+    try_embed_projection, try_pushdown_through_join, EmbeddedProjection, JoinData,
+    ProjectionExec,
+};
+use crate::spill::get_record_batch_memory_size;
 use crate::ExecutionPlanProperties;
 use crate::{
     coalesce_partitions::CoalescePartitionsExec,
@@ -69,15 +74,14 @@ use datafusion_common::{
 };
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_execution::TaskContext;
+use datafusion_expr::Operator;
 use datafusion_physical_expr::equivalence::{
     join_equivalence_properties, ProjectionMapping,
 };
 use datafusion_physical_expr::PhysicalExprRef;
-
-use crate::spill::get_record_batch_memory_size;
-use ahash::RandomState;
-use datafusion_expr::Operator;
 use datafusion_physical_expr_common::datum::compare_op_for_nested;
+
+use ahash::RandomState;
 use futures::{ready, Stream, StreamExt, TryStreamExt};
 use parking_lot::Mutex;
 
@@ -864,6 +868,47 @@ impl ExecutionPlan for HashJoinExec {
         // Project statistics if there is a projection
         Ok(stats.project(self.projection.as_ref()))
     }
+
+    /// Tries to push `projection` down through `hash_join`. If possible, performs the
+    /// pushdown and returns a new [`HashJoinExec`] as the top plan which has projections
+    /// as its children. Otherwise, returns `None`.
+    fn try_swapping_with_projection(
+        &self,
+        projection: &ProjectionExec,
+    ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+        // TODO: currently if there is projection in HashJoinExec, we can't push down projection to left or right input. Maybe we can pushdown the mixed projection later.
+        if self.contains_projection() {
+            return Ok(None);
+        }
+
+        if let Some(JoinData {
+            projected_left_child,
+            projected_right_child,
+            join_filter,
+            join_on,
+        }) = try_pushdown_through_join(
+            projection,
+            self.left(),
+            self.right(),
+            self.on(),
+            self.schema(),
+            self.filter(),
+        )? {
+            Ok(Some(Arc::new(HashJoinExec::try_new(
+                Arc::new(projected_left_child),
+                Arc::new(projected_right_child),
+                join_on,
+                join_filter,
+                self.join_type(),
+                // Returned early if projection is not None
+                None,
+                *self.partition_mode(),
+                self.null_equals_null,
+            )?)))
+        } else {
+            try_embed_projection(projection, self)
+        }
+    }
 }
 
 /// Reads the left (build) side of the input, buffering it in memory, to build a
@@ -1581,6 +1626,12 @@ impl Stream for HashJoinStream {
         cx: &mut std::task::Context<'_>,
     ) -> Poll<Option<Self::Item>> {
         self.poll_next_impl(cx)
+    }
+}
+
+impl EmbeddedProjection for HashJoinExec {
+    fn with_projection(&self, projection: Option<Vec<usize>>) -> Result<Self> {
+        self.with_projection(projection)
     }
 }
 

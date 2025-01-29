@@ -18,7 +18,7 @@
 #[cfg(not(target_os = "windows"))]
 mod non_windows {
     use datafusion::assert_batches_eq;
-    use datafusion_common::instant::Instant;
+    use datafusion::common::instant::Instant;
     use std::fs::{File, OpenOptions};
     use std::io::Write;
     use std::path::PathBuf;
@@ -27,19 +27,18 @@ mod non_windows {
     use std::thread;
     use std::time::Duration;
 
-    use arrow::datatypes::{DataType, Field, Schema};
-    use arrow_schema::SchemaRef;
+    use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
     use futures::StreamExt;
     use nix::sys::stat;
     use nix::unistd;
     use tempfile::TempDir;
     use tokio::task::JoinSet;
 
+    use datafusion::common::{exec_err, Result};
     use datafusion::datasource::stream::{FileStreamProvider, StreamConfig, StreamTable};
     use datafusion::datasource::TableProvider;
+    use datafusion::logical_expr::SortExpr;
     use datafusion::prelude::{SessionConfig, SessionContext};
-    use datafusion_common::{exec_err, Result};
-    use datafusion_expr::SortExpr;
 
     // Number of lines written to FIFO
     const TEST_BATCH_SIZE: usize = 5;
@@ -157,7 +156,7 @@ mod non_windows {
         ]));
 
         // Specify the ordering:
-        let order = vec![vec![datafusion_expr::col("a1").sort(true, false)]];
+        let order = vec![vec![datafusion::logical_expr::col("a1").sort(true, false)]];
 
         let provider = fifo_table(schema.clone(), fifo_path, order.clone());
         ctx.register_table("fifo", provider)?;
@@ -189,7 +188,7 @@ mod non_windows {
 }
 
 #[tokio::main]
-async fn main() -> datafusion_common::Result<()> {
+async fn main() -> datafusion::error::Result<()> {
     #[cfg(target_os = "windows")]
     {
         println!("file_stream_provider example does not work on windows");

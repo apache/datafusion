@@ -17,15 +17,20 @@
 
 //! Test utilities for physical optimizer tests
 
-use crate::limited_distinct_aggregation::LimitedDistinctAggregation;
-use crate::PhysicalOptimizerRule;
+use std::any::Any;
+use std::fmt::Formatter;
+use std::sync::Arc;
+
 use arrow::array::Int32Array;
 use arrow::record_batch::RecordBatch;
 use arrow_schema::{DataType, Field, Schema, SchemaRef, SortOptions};
+use datafusion::datasource::listing::PartitionedFile;
+use datafusion::datasource::physical_plan::{FileScanConfig, ParquetExec};
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::utils::expr::COUNT_STAR_EXPANSION;
 use datafusion_common::{JoinType, Result};
+use datafusion_execution::object_store::ObjectStoreUrl;
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_expr::{WindowFrame, WindowFunctionDefinition};
 use datafusion_functions_aggregate::count::count_udaf;
@@ -34,6 +39,8 @@ use datafusion_physical_expr::expressions::col;
 use datafusion_physical_expr::{expressions, PhysicalExpr};
 use datafusion_physical_expr_common::sort_expr::LexRequirement;
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
+use datafusion_physical_optimizer::limited_distinct_aggregation::LimitedDistinctAggregation;
+use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use datafusion_physical_plan::aggregates::{
     AggregateExec, AggregateMode, PhysicalGroupBy,
 };
@@ -56,9 +63,27 @@ use datafusion_physical_plan::{
     displayable, DisplayAs, DisplayFormatType, PlanProperties,
 };
 use datafusion_physical_plan::{InputOrderMode, Partitioning};
-use std::any::Any;
-use std::fmt::Formatter;
-use std::sync::Arc;
+
+/// Create a non sorted parquet exec
+pub fn parquet_exec(schema: &SchemaRef) -> Arc<ParquetExec> {
+    ParquetExec::builder(
+        FileScanConfig::new(ObjectStoreUrl::parse("test:///").unwrap(), schema.clone())
+            .with_file(PartitionedFile::new("x".to_string(), 100)),
+    )
+    .build_arc()
+}
+
+/// Create a single parquet file that is sorted
+pub(crate) fn parquet_exec_with_sort(
+    output_ordering: Vec<LexOrdering>,
+) -> Arc<ParquetExec> {
+    ParquetExec::builder(
+        FileScanConfig::new(ObjectStoreUrl::parse("test:///").unwrap(), schema())
+            .with_file(PartitionedFile::new("x".to_string(), 100))
+            .with_output_ordering(output_ordering),
+    )
+    .build_arc()
+}
 
 pub fn schema() -> SchemaRef {
     Arc::new(Schema::new(vec![
@@ -383,7 +408,7 @@ pub fn trim_plan_display(plan: &str) -> Vec<&str> {
 
 // construct a stream partition for test purposes
 #[derive(Debug)]
-pub(crate) struct TestStreamPartition {
+pub struct TestStreamPartition {
     pub schema: SchemaRef,
 }
 
