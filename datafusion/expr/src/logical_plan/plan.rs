@@ -2671,7 +2671,7 @@ impl Union {
         }
         let first_schema = inputs[0].schema();
         let fields_count = first_schema.fields().len();
-        for input in inputs {
+        for input in inputs.iter().skip(1) {
             if fields_count != input.schema().fields().len() {
                 return plan_err!(
                     "UNION queries have different number of columns: \
