@@ -2570,4 +2570,48 @@ mod tests {
         assert_optimized!(expected_input, expected, plan, true);
         Ok(())
     }
+
+    #[tokio::test]
+    async fn test_wtf() -> Result<()> {
+        let schema = create_test_schema()?;
+
+        let plan = union_exec(vec![parquet_exec(&schema), parquet_exec(&schema)]);
+        let sort_exprs = vec![
+            sort_expr("nullable_col", &schema),
+            sort_expr("non_nullable_col", &schema),
+        ];
+
+        let plan = local_limit_exec(plan);
+        let plan = coalesce_partitions_exec(plan);
+        let plan = global_limit_exec(plan);
+        let plan = Arc::new(SortExec::new(sort_exprs, plan).with_fetch(Some(10)));
+
+        let expected_input = [
+            "SortExec: TopK(fetch=10), expr=[nullable_col@0 ASC,non_nullable_col@1 ASC], preserve_partitioning=[false]",
+            "  GlobalLimitExec: skip=0, fetch=100",
+            "    CoalescePartitionsExec",
+            "      LocalLimitExec: fetch=100",
+            "        ParquetExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col]",
+        ];
+
+        // I wouldn't expect anything to change here
+        let expected_optimized = [
+            "SortExec: TopK(fetch=10), expr=[nullable_col@0 ASC,non_nullable_col@1 ASC], preserve_partitioning=[false]",
+            "  GlobalLimitExec: skip=0, fetch=100",
+            "    CoalescePartitionsExec",
+            "      LocalLimitExec: fetch=100",
+            "        ParquetExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col]",
+        ];
+        // but this is what we actually get
+        let _wtf = [
+            "GlobalLimitExec: skip=0, fetch=100",
+            "  SortExec: TopK(fetch=100), expr=[nullable_col@0 ASC,non_nullable_col@1 ASC], preserve_partitioning=[false]",
+            "    CoalescePartitionsExec",
+            "      LocalLimitExec: fetch=100",
+            "        ParquetExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col]",
+        ];
+        assert_optimized!(expected_input, expected_optimized, plan, false);
+
+        Ok(())
+    }
 }

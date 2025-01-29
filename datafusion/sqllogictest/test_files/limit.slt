@@ -711,3 +711,64 @@ OFFSET 3 LIMIT 2;
 
 statement ok
 drop table ordered_table;
+
+# Test issue: https://github.com/apache/datafusion/issues/14204
+# Test limit pushdown with subquery
+statement ok
+create table testSubQueryLimit (a int, b int) as values (1,2), (2,3), (3,4);
+
+query IIII
+select * from testSubQueryLimit as t1 join (select * from testSubQueryLimit limit 1) limit 10;
+----
+1 2 1 2
+2 3 1 2
+3 4 1 2
+
+query TT
+explain select * from testSubQueryLimit as t1 join (select * from testSubQueryLimit limit 1) limit 10;
+----
+logical_plan
+01)Limit: skip=0, fetch=10
+02)--Cross Join: 
+03)----SubqueryAlias: t1
+04)------Limit: skip=0, fetch=10
+05)--------TableScan: testsubquerylimit projection=[a, b], fetch=10
+06)----Limit: skip=0, fetch=1
+07)------TableScan: testsubquerylimit projection=[a, b], fetch=1
+physical_plan
+01)ProjectionExec: expr=[a@2 as a, b@3 as b, a@0 as a, b@1 as b]
+02)--GlobalLimitExec: skip=0, fetch=10
+03)----CrossJoinExec
+04)------GlobalLimitExec: skip=0, fetch=1
+05)--------MemoryExec: partitions=1, partition_sizes=[1]
+06)------GlobalLimitExec: skip=0, fetch=10
+07)--------MemoryExec: partitions=1, partition_sizes=[1]
+
+
+query IIII
+select * from testSubQueryLimit as t1 join (select * from testSubQueryLimit limit 10) limit 2;
+----
+1 2 1 2
+1 2 2 3
+
+query TT
+explain select * from testSubQueryLimit as t1 join (select * from testSubQueryLimit limit 10) limit 2;
+----
+logical_plan
+01)Limit: skip=0, fetch=2
+02)--Cross Join: 
+03)----SubqueryAlias: t1
+04)------Limit: skip=0, fetch=2
+05)--------TableScan: testsubquerylimit projection=[a, b], fetch=2
+06)----Limit: skip=0, fetch=2
+07)------TableScan: testsubquerylimit projection=[a, b], fetch=2
+physical_plan
+01)GlobalLimitExec: skip=0, fetch=2
+02)--CrossJoinExec
+03)----GlobalLimitExec: skip=0, fetch=2
+04)------MemoryExec: partitions=1, partition_sizes=[1]
+05)----GlobalLimitExec: skip=0, fetch=2
+06)------MemoryExec: partitions=1, partition_sizes=[1]
+
+statement ok
+drop table testSubQueryLimit;
