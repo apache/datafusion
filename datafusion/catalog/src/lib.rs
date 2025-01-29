@@ -56,7 +56,7 @@ pub mod streaming;
 ///
 /// ```
 /// # use datafusion_sql::parser::DFParser;
-/// # use datafusion::catalog_common::resolve_table_references;
+/// # use datafusion_catalog::resolve_table_references;
 /// let query = "SELECT a FROM foo where x IN (SELECT y FROM bar)";
 /// let statement = DFParser::parse_sql(query).unwrap().pop_back().unwrap();
 /// let (table_refs, ctes) = resolve_table_references(&statement, true).unwrap();
@@ -70,7 +70,7 @@ pub mod streaming;
 ///  
 /// ```  
 /// # use datafusion_sql::parser::DFParser;  
-/// # use datafusion::catalog_common::resolve_table_references;
+/// # use datafusion_catalog::resolve_table_references;
 /// let query = "with my_cte as (values (1), (2)) SELECT * from my_cte;";  
 /// let statement = DFParser::parse_sql(query).unwrap().pop_back().unwrap();  
 /// let (table_refs, ctes) = resolve_table_references(&statement, true).unwrap();  
