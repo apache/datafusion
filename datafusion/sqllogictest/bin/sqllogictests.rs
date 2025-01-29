@@ -187,7 +187,7 @@ async fn run_tests() -> Result<()> {
         .await;
 
     m.println(format!(
-        "Completed {} tests in {}",
+        "Completed {} test files in {}",
         num_tests,
         HumanDuration(start.elapsed())
     ))?;
