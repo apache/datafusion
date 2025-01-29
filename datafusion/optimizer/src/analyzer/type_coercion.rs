@@ -517,14 +517,15 @@ impl TreeNodeRewriter for TypeCoercionRewriter<'_> {
                     ),
                 )))
             }
-            Expr::WindowFunction(WindowFunction {
-                fun,
-                args,
-                partition_by,
-                order_by,
-                window_frame,
-                null_treatment,
-            }) => {
+            Expr::WindowFunction(window_function) => {
+                let WindowFunction {
+                    fun,
+                    args,
+                    partition_by,
+                    order_by,
+                    window_frame,
+                    null_treatment,
+                } = *window_function;
                 let window_frame =
                     coerce_window_frame(window_frame, self.schema, &order_by)?;
 
@@ -540,7 +541,7 @@ impl TreeNodeRewriter for TypeCoercionRewriter<'_> {
                 };
 
                 Ok(Transformed::yes(
-                    Expr::WindowFunction(WindowFunction::new(fun, args))
+                    Expr::from(WindowFunction::new(fun, args))
                         .partition_by(partition_by)
                         .order_by(order_by)
                         .window_frame(window_frame)

@@ -2221,7 +2221,7 @@ pub async fn from_window_function(
 
     window_frame.regularize_order_bys(&mut order_by)?;
 
-    Ok(Expr::WindowFunction(expr::WindowFunction {
+    Ok(Expr::from(expr::WindowFunction {
         fun,
         args: from_substrait_func_args(consumer, &window.arguments, input_schema).await?,
         partition_by: from_substrait_rex_vec(consumer, &window.partitions, input_schema)

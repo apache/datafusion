@@ -219,7 +219,7 @@ mod tests {
         let table_scan = test_table_scan()?;
 
         let plan = LogicalPlanBuilder::from(table_scan)
-            .window(vec![Expr::WindowFunction(WindowFunction::new(
+            .window(vec![Expr::from(WindowFunction::new(
                 WindowFunctionDefinition::AggregateUDF(count_udaf()),
                 vec![wildcard()],
             ))

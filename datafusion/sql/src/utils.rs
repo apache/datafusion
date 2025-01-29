@@ -209,10 +209,13 @@ pub fn window_expr_common_partition_keys(window_exprs: &[Expr]) -> Result<&[Expr
     let all_partition_keys = window_exprs
         .iter()
         .map(|expr| match expr {
-            Expr::WindowFunction(WindowFunction { partition_by, .. }) => Ok(partition_by),
+            Expr::WindowFunction(window_func) => {
+                let WindowFunction { partition_by, .. } = window_func.as_ref();
+                Ok(partition_by)
+            }
             Expr::Alias(Alias { expr, .. }) => match expr.as_ref() {
-                Expr::WindowFunction(WindowFunction { partition_by, .. }) => {
-                    Ok(partition_by)
+                Expr::WindowFunction(window_function) => {
+                    Ok(window_function.partition_by())
                 }
                 expr => exec_err!("Impossibly got non-window expr {expr:?}"),
             },

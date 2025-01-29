@@ -2420,19 +2420,24 @@ impl Window {
             .iter()
             .enumerate()
             .filter_map(|(idx, expr)| {
-                if let Expr::WindowFunction(WindowFunction {
+                let Expr::WindowFunction(window_func) = expr else {
+                    return None;
+                };
+                let WindowFunction {
                     fun: WindowFunctionDefinition::WindowUDF(udwf),
                     partition_by,
                     ..
-                }) = expr
-                {
-                    // When there is no PARTITION BY, row number will be unique
-                    // across the entire table.
-                    if udwf.name() == "row_number" && partition_by.is_empty() {
-                        return Some(idx + input_len);
-                    }
+                } = window_func.as_ref()
+                else {
+                    return None;
+                };
+                // When there is no PARTITION BY, row number will be unique
+                // across the entire table.
+                if udwf.name() == "row_number" && partition_by.is_empty() {
+                    Some(idx + input_len)
+                } else {
+                    None
                 }
-                None
             })
             .map(|idx| {
                 FunctionalDependence::new(vec![idx], vec![], false)

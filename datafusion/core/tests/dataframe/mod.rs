@@ -888,7 +888,7 @@ async fn window_using_aggregates() -> Result<()> {
             vec![col("c3")],
         );
 
-        Expr::WindowFunction(w)
+        Expr::from(w)
             .null_treatment(NullTreatment::IgnoreNulls)
             .order_by(vec![col("c2").sort(true, true), col("c3").sort(true, true)])
             .window_frame(WindowFrame::new_bounds(
@@ -2519,7 +2519,7 @@ async fn test_count_wildcard_on_window() -> Result<()> {
     let df_results = ctx
         .table("t1")
         .await?
-        .select(vec![Expr::WindowFunction(WindowFunction::new(
+        .select(vec![Expr::from(WindowFunction::new(
             WindowFunctionDefinition::AggregateUDF(count_udaf()),
             vec![wildcard()],
         ))

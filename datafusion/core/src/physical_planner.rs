@@ -587,19 +587,17 @@ impl DefaultPhysicalPlanner {
                 };
 
                 let get_sort_keys = |expr: &Expr| match expr {
-                    Expr::WindowFunction(WindowFunction {
-                        ref partition_by,
-                        ref order_by,
-                        ..
-                    }) => generate_sort_key(partition_by, order_by),
+                    Expr::WindowFunction(window_function) => generate_sort_key(
+                        window_function.partition_by(),
+                        window_function.order_by(),
+                    ),
                     Expr::Alias(Alias { expr, .. }) => {
                         // Convert &Box<T> to &T
                         match &**expr {
-                            Expr::WindowFunction(WindowFunction {
-                                ref partition_by,
-                                ref order_by,
-                                ..
-                            }) => generate_sort_key(partition_by, order_by),
+                            Expr::WindowFunction(window_function) => generate_sort_key(
+                                window_function.partition_by(),
+                                window_function.order_by(),
+                            ),
                             _ => unreachable!(),
                         }
                     }
@@ -1520,14 +1518,15 @@ pub fn create_window_expr_with_name(
     let name = name.into();
     let physical_schema: &Schema = &logical_schema.into();
     match e {
-        Expr::WindowFunction(WindowFunction {
-            fun,
-            args,
-            partition_by,
-            order_by,
-            window_frame,
-            null_treatment,
-        }) => {
+        Expr::WindowFunction(window_function) => {
+            let WindowFunction {
+                fun,
+                args,
+                partition_by,
+                order_by,
+                window_frame,
+                null_treatment,
+            } = window_function.as_ref();
             let physical_args =
                 create_physical_exprs(args, logical_schema, execution_props)?;
             let partition_by =

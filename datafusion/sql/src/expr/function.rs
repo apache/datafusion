@@ -315,7 +315,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             };
 
             if let Ok(fun) = self.find_window_func(&name) {
-                return Expr::WindowFunction(expr::WindowFunction::new(
+                return Expr::from(expr::WindowFunction::new(
                     fun,
                     self.function_args_to_expr(args, schema, planner_context)?,
                 ))

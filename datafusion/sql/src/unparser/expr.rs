@@ -186,14 +186,16 @@ impl Unparser<'_> {
             }
             Expr::Literal(value) => Ok(self.scalar_to_sql(value)?),
             Expr::Alias(Alias { expr, name: _, .. }) => self.expr_to_sql_inner(expr),
-            Expr::WindowFunction(WindowFunction {
-                fun,
-                args,
-                partition_by,
-                order_by,
-                window_frame,
-                null_treatment: _,
-            }) => {
+            Expr::WindowFunction(window_func) => {
+                let WindowFunction {
+                    fun,
+                    args,
+                    partition_by,
+                    order_by,
+                    window_frame,
+                    null_treatment: _,
+                } = window_func.as_ref();
+
                 let func_name = fun.name();
 
                 let args = self.function_args_to_sql(args)?;
@@ -1907,7 +1909,7 @@ mod tests {
                 "count(*) FILTER (WHERE true)",
             ),
             (
-                Expr::WindowFunction(WindowFunction {
+                Expr::from(WindowFunction {
                     fun: WindowFunctionDefinition::WindowUDF(row_number_udwf()),
                     args: vec![col("col")],
                     partition_by: vec![],
@@ -1918,7 +1920,7 @@ mod tests {
                 r#"row_number(col) OVER (ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING)"#,
             ),
             (
-                Expr::WindowFunction(WindowFunction {
+                Expr::from(WindowFunction {
                     fun: WindowFunctionDefinition::AggregateUDF(count_udaf()),
                     args: vec![wildcard()],
                     partition_by: vec![],
@@ -2711,7 +2713,7 @@ mod tests {
             let func = WindowFunctionDefinition::WindowUDF(rank_udwf());
             let mut window_func = WindowFunction::new(func, vec![]);
             window_func.order_by = vec![Sort::new(col("a"), true, true)];
-            let expr = Expr::WindowFunction(window_func);
+            let expr = Expr::from(window_func);
             let ast = unparser.expr_to_sql(&expr)?;
 
             let actual = ast.to_string();

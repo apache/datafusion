@@ -29,6 +29,7 @@ use crate::utils::expr_to_columns;
 use crate::Volatility;
 use crate::{udaf, ExprSchemable, Operator, Signature, WindowFrame, WindowUDF};
 
+use crate::function::WindowFunctionSimplification;
 use arrow::datatypes::{DataType, FieldRef};
 use datafusion_common::cse::{HashNode, NormalizeEq, Normalizeable};
 use datafusion_common::tree_node::{
@@ -297,7 +298,7 @@ pub enum Expr {
     /// [`ExprFunctionExt`]: crate::expr_fn::ExprFunctionExt
     AggregateFunction(AggregateFunction),
     /// Represents the call of a window function with arguments.
-    WindowFunction(WindowFunction),
+    WindowFunction(Box<WindowFunction>), // Boxed as it is large (272 bytes)
     /// Returns whether the list contains the expr value.
     InList(InList),
     /// EXISTS subquery
@@ -338,6 +339,13 @@ impl Default for Expr {
 impl From<Column> for Expr {
     fn from(value: Column) -> Self {
         Expr::Column(value)
+    }
+}
+
+/// Create an [`Expr`] from a [`WindowFunction`]
+impl From<WindowFunction> for Expr {
+    fn from(value: WindowFunction) -> Self {
+        Expr::WindowFunction(Box::new(value))
     }
 }
 
@@ -774,6 +782,16 @@ impl WindowFunctionDefinition {
             WindowFunctionDefinition::AggregateUDF(fun) => fun.name(),
         }
     }
+
+    /// Return the the inner window simplification function, if any
+    ///
+    /// See [`WindowFunctionSimplification`] for more information
+    pub fn simplify(&self) -> Option<WindowFunctionSimplification> {
+        match self {
+            WindowFunctionDefinition::AggregateUDF(_) => None,
+            WindowFunctionDefinition::WindowUDF(udwf) => udwf.simplify(),
+        }
+    }
 }
 
 impl Display for WindowFunctionDefinition {
@@ -837,6 +855,23 @@ impl WindowFunction {
             window_frame: WindowFrame::new(None),
             null_treatment: None,
         }
+    }
+
+    /// return the partition by expressions
+    pub fn partition_by(&self) -> &Vec<Expr> {
+        &self.partition_by
+    }
+
+    /// return the order by expressions
+    pub fn order_by(&self) -> &Vec<Sort> {
+        &self.order_by
+    }
+
+    /// Return the the inner window simplification function, if any
+    ///
+    /// See [`WindowFunctionSimplification`] for more information
+    pub fn simplify(&self) -> Option<WindowFunctionSimplification> {
+        self.fun.simplify()
     }
 }
 
@@ -1893,24 +1928,24 @@ impl NormalizeEq for Expr {
                         _ => false,
                     }
             }
-            (
-                Expr::WindowFunction(WindowFunction {
+            (Expr::WindowFunction(left), Expr::WindowFunction(right)) => {
+                let WindowFunction {
                     fun: self_fun,
                     args: self_args,
                     partition_by: self_partition_by,
                     order_by: self_order_by,
                     window_frame: self_window_frame,
                     null_treatment: self_null_treatment,
-                }),
-                Expr::WindowFunction(WindowFunction {
+                } = left.as_ref();
+                let WindowFunction {
                     fun: other_fun,
                     args: other_args,
                     partition_by: other_partition_by,
                     order_by: other_order_by,
                     window_frame: other_window_frame,
                     null_treatment: other_null_treatment,
-                }),
-            ) => {
+                } = right.as_ref();
+
                 self_fun.name() == other_fun.name()
                     && self_window_frame == other_window_frame
                     && self_null_treatment == other_null_treatment
@@ -2150,14 +2185,15 @@ impl HashNode for Expr {
                 distinct.hash(state);
                 null_treatment.hash(state);
             }
-            Expr::WindowFunction(WindowFunction {
-                fun,
-                args: _args,
-                partition_by: _partition_by,
-                order_by: _order_by,
-                window_frame,
-                null_treatment,
-            }) => {
+            Expr::WindowFunction(window_func) => {
+                let WindowFunction {
+                    fun,
+                    args: _args,
+                    partition_by: _partition_by,
+                    order_by: _order_by,
+                    window_frame,
+                    null_treatment,
+                } = window_func.as_ref();
                 fun.hash(state);
                 window_frame.hash(state);
                 null_treatment.hash(state);
@@ -2458,14 +2494,15 @@ impl Display for SchemaDisplay<'_> {
 
                 Ok(())
             }
-            Expr::WindowFunction(WindowFunction {
-                fun,
-                args,
-                partition_by,
-                order_by,
-                window_frame,
-                null_treatment,
-            }) => {
+            Expr::WindowFunction(window_func) => {
+                let WindowFunction {
+                    fun,
+                    args,
+                    partition_by,
+                    order_by,
+                    window_frame,
+                    null_treatment,
+                } = window_func.as_ref();
                 write!(
                     f,
                     "{}({})",
@@ -2612,14 +2649,16 @@ impl Display for Expr {
             // Expr::ScalarFunction(ScalarFunction { func, args }) => {
             //     write!(f, "{}", func.display_name(args).unwrap())
             // }
-            Expr::WindowFunction(WindowFunction {
-                fun,
-                args,
-                partition_by,
-                order_by,
-                window_frame,
-                null_treatment,
-            }) => {
+            Expr::WindowFunction(window_func) => {
+                let WindowFunction {
+                    fun,
+                    args,
+                    partition_by,
+                    order_by,
+                    window_frame,
+                    null_treatment,
+                } = window_func.as_ref();
+
                 fmt_function(f, &fun.to_string(), false, args, true)?;
 
                 if let Some(nt) = null_treatment {
@@ -3076,6 +3115,10 @@ mod test {
         // If this test fails when you change `Expr`, please try
         // `Box`ing the fields to make `Expr` smaller
         // See https://github.com/apache/datafusion/issues/14256 for details
-        assert_eq!(size_of::<Expr>(), 272);
+        assert_eq!(size_of::<Expr>(), 112);
+        assert_eq!(size_of::<ScalarValue>(), 64);
+        assert_eq!(size_of::<DataType>(), 24); // 3 ptrs
+        assert_eq!(size_of::<Vec<Expr>>(), 24);
+        assert_eq!(size_of::<Arc<Expr>>(), 8);
     }
 }
