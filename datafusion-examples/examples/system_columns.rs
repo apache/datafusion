@@ -70,7 +70,7 @@ async fn main() {
         .with_schema(Arc::new(Schema::new(vec![
             Field::new("a", DataType::Int32, true),
             Field::new("b", DataType::Utf8, true),
-            Field::new("_row_num", DataType::UInt32, true).as_system_column(),
+            Field::new("_row_num", DataType::UInt32, true).to_system_column(),
         ])))
         .unwrap();
 

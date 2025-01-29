@@ -364,8 +364,8 @@ async fn test_select_system_column() {
         .with_schema(Arc::new(Schema::new(vec![
             Field::new("id", DataType::UInt8, true),
             Field::new("bank_account", DataType::UInt64, true),
-            Field::new("_rowid", DataType::UInt32, true).as_system_column(),
-            Field::new("_file", DataType::Utf8, true).as_system_column(),
+            Field::new("_rowid", DataType::UInt32, true).to_system_column(),
+            Field::new("_file", DataType::Utf8, true).to_system_column(),
         ])))
         .unwrap();
 

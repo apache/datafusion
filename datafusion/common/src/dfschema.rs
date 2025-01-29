@@ -1099,7 +1099,7 @@ pub trait FieldExt {
     /// Mark this field as a system column.
     ///
     /// See [`FieldExt::is_system_column`] for more information on what a system column is.
-    fn as_system_column(self) -> Self;
+    fn to_system_column(self) -> Self;
 }
 
 /// See [`FieldExt`].
@@ -1114,8 +1114,8 @@ impl FieldExt for Field {
     }
 
     /// Mark this field as a system column.
-    /// See [`FieldExt::as_system_column`] for more information on what a system column is.
-    fn as_system_column(mut self) -> Self {
+    /// See [`FieldExt::to_system_column`] for more information on what a system column is.
+    fn to_system_column(mut self) -> Self {
         let mut metadata = self.metadata().clone();
         metadata.insert("datafusion.system_column".to_string(), "true".to_string());
         self.set_metadata(metadata);
