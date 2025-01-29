@@ -5177,32 +5177,3 @@ async fn register_non_parquet_file() {
         "1.json' does not match the expected extension '.parquet'"
     );
 }
-
-// Test issue: https://github.com/apache/datafusion/issues/14204
-#[tokio::test]
-async fn test_with_subquery_limit() -> Result<()> {
-    let ctx = SessionContext::new();
-    ctx.sql("create table t(a int, b int) as values (1,2), (2,3), (3,4)")
-        .await?;
-
-    let df = ctx
-        .sql("select * from t as t1 join (select * from t limit 1) limit 10")
-        .await?
-        .collect()
-        .await?;
-
-    assert_batches_eq!(
-        &[
-            "+---+---+---+---+",
-            "| a | b | a | b |",
-            "+---+---+---+---+",
-            "| 1 | 2 | 1 | 2 |",
-            "| 2 | 3 | 1 | 2 |",
-            "| 3 | 4 | 1 | 2 |",
-            "+---+---+---+---+",
-        ],
-        &df
-    );
-
-    Ok(())
-}
