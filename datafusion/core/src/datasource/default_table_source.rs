@@ -56,6 +56,9 @@ impl TableSource for DefaultTableSource {
         self.table_provider.schema()
     }
 
+    /// Get a reference to the metadata columns for this table.
+    /// By default this delegate to the table provider, but can be overridden by the table source.
+    /// See [`TableProvider::metadata_columns`] for more information.
     fn metadata_columns(&self) -> Option<SchemaRef> {
         self.table_provider.metadata_columns()
     }

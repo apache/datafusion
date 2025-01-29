@@ -104,12 +104,36 @@ pub type DFSchemaRef = Arc<DFSchema>;
 /// let schema = Schema::from(df_schema);
 /// assert_eq!(schema.fields().len(), 1);
 /// ```
+/// 
+/// DFSchema also supports metadata columns.
+/// Metadata columns are columns which meant to be semi-public stores of the internal details of the table.
+/// For example, the [`ctid` column in Postgres](https://www.postgresql.org/docs/current/ddl-system-columns.html)
+/// or the [`_metadata` column that in Spark](https://docs.databricks.com/en/ingestion/file-metadata-column.html).
+/// 
+/// These columns are stored in a separate schema from the main schema, which can be accessed using [DFSchema::metadata_schema].
+/// To build a schema with metadata columns, use [DFSchema::new_with_metadata]:
+/// ```rust
+/// use datafusion_common::{DFSchema, Column, TableReference};
+/// use arrow_schema::{Field, Schema};
+/// use arrow::datatypes::DataType;
+/// use std::collections::HashMap;
+/// 
+/// let schema = Schema::new(vec![
+///   Field::new("c1", DataType::Int32, false),
+/// ]);
+/// let metadata_schema = Schema::new(vec![
+///  Field::new("file", DataType::Utf8, false),
+/// ]);
+/// 
+/// let df_schema = DFSchema::new_with_metadata(
+///  vec![(None, Field::new("c1", DataType::Int32, false).into())],
+/// 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DFSchema {
     inner: QualifiedSchema,
     /// Stores functional dependencies in the schema.
     functional_dependencies: FunctionalDependencies,
-    /// metadata columns are data columns for a table that are not in the table schema.
+    /// Metadata columns are data columns for a table that are not in the table schema.
     /// For example, a file source could expose a "file" column that contains the path of the file that contained each row.
     /// See Also: [Spark SupportsMetadataColumns]: <https://github.com/apache/spark/blob/master/sql/catalyst/src/main/java/org/apache/spark/sql/connector/catalog/SupportsMetadataColumns.java>
     metadata: Option<QualifiedSchema>,
@@ -121,8 +145,9 @@ pub struct DFSchema {
 pub const METADATA_OFFSET: usize = usize::MAX >> 1;
 
 /// QualifiedSchema wraps an Arrow schema and field qualifiers.
-/// Some fields may be qualified and some unqualified. A qualified field is a field that has a
-/// relation name associated with it.
+/// Some fields may be qualified and some unqualified.
+/// A qualified field is a field that has a relation name associated with it.
+/// For example, a qualified field would be `table_name.column_name` and an unqualified field would be just `column_name`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct QualifiedSchema {
     /// Inner Arrow schema reference.
@@ -132,7 +157,11 @@ pub struct QualifiedSchema {
     field_qualifiers: Vec<Option<TableReference>>,
 }
 
+/// A table schema that holds not just column names but also the name of the table they belong to.
+/// For example, consider `table_name.column_name` (qualified) vs. just `column_name` (unqualified).
 impl QualifiedSchema {
+
+    /// Creates an empty `QualifiedSchema`.
     pub fn empty() -> Self {
         Self {
             schema: Arc::new(Schema::new([])),
@@ -140,30 +169,67 @@ impl QualifiedSchema {
         }
     }
 
-    pub fn new(schema: SchemaRef, field_qualifiers: Vec<Option<TableReference>>) -> Self {
-        QualifiedSchema {
-            schema,
-            field_qualifiers,
+    /// Creates a new `QualifiedSchema` from an Arrow schema and a list of table references.
+    /// The table references must be of the same length as the fields in the schema and
+    /// follow the same order.
+    pub fn new(schema: SchemaRef, field_qualifiers: Vec<Option<TableReference>>) -> Result<Self> {
+        if schema.fields().len() != field_qualifiers.len() {
+            return _schema_err!(SchemaError::UnmatchedFieldQualifiers {
+                field_count: schema.fields().len(),
+                qualifier_count: field_qualifiers.len(),
+            });
         }
+        Ok(
+            QualifiedSchema {
+                schema,
+                field_qualifiers,
+            }
+        )
     }
 
+    /// Create a new `QualifiedSchema` from a list of Arrow [Field]s where they all share the same [TableReference].
+    /// 
+    /// For example, to create a schema for a table with all fields qualified by `table_name`:
+    /// ```rust
+    /// use datafusion_common::{QualifiedSchema, TableReference};
+    /// use arrow_schema::{Field, Schema};
+    /// use arrow::datatypes::DataType;
+    /// let schema = Schema::new(vec![
+    ///    Field::new("c1", DataType::Int32, false),
+    /// ]);
+    /// let table_name = TableReference::from("table_name");
+    /// let qualified_schema = QualifiedSchema::new_with_table(schema, &table_name);
+    /// ```
+    /// 
+    /// To create a schema where fields have different qualifiers, use [QualifiedSchema::new].
     pub fn new_with_table(schema: SchemaRef, table_name: &TableReference) -> Self {
         let field_qualifiers = schema
             .fields()
             .iter()
             .map(|_| Some(table_name.clone()))
             .collect();
-        Self::new(schema, field_qualifiers)
+        Self::new(schema, field_qualifiers).expect("field qualifier length should match schema")
     }
 
+    /// Checks if the schema is empty.
+    /// 
+    /// Returns:
+    /// - `true` if the schema has no fields
+    /// - `false` if it has any fields, qualified or unqualified
     pub fn is_empty(&self) -> bool {
         self.schema.fields.is_empty()
     }
 
+    /// Returns the number of fields in the schema, be they qualified or unqualified.
     pub fn len(&self) -> usize {
         self.schema.fields.len()
     }
 
+    /// Look up the field by it's unqualified name.
+    /// 
+    /// This returns a Vec of fields and their qualifier for any field that have the given unqualified name.
+    /// For example, given the fields `table1.a`, `table1.b` and `table2.a` if you search for `a` you will get `table1.a` and `table2.a`
+    /// as [(`table1`, `a`), (`table2`, `a`)].
     pub fn qualified_fields_with_unqualified_name(
         &self,
         name: &str,
@@ -174,7 +240,7 @@ impl QualifiedSchema {
             .collect()
     }
 
-    /// Iterate over the qualifiers and fields in the DFSchema
+    /// Iterate over the qualifiers and fields in the DFSchema.
     pub fn iter(&self) -> impl Iterator<Item = (Option<&TableReference>, &FieldRef)> {
         self.field_qualifiers
             .iter()
@@ -182,6 +248,7 @@ impl QualifiedSchema {
             .map(|(qualifier, field)| (qualifier.as_ref(), field))
     }
 
+    /// Similar to [Self::qualified_fields_with_unqualified_name] but discards the qualifier in the result.
     pub fn fields_with_unqualified_name(&self, name: &str) -> Vec<&Field> {
         self.fields()
             .iter()
@@ -201,12 +268,17 @@ impl QualifiedSchema {
         &self.schema.fields[i]
     }
 
-    /// Returns an immutable reference of a specific `Field` instance selected using an
+    /// Returns an immutable reference to a specific `Field` and it's qualifier using an
     /// offset within the internal `fields` vector and its qualifier
     pub fn qualified_field(&self, i: usize) -> (Option<&TableReference>, &Field) {
         (self.field_qualifiers[i].as_ref(), self.field(i))
     }
 
+    /// Search for a field using it's qualified name.
+    /// 
+    /// This will return the field if it exists, otherwise it will return `None`.
+    /// 
+    /// For example, given the fields `table1.a`, `table1.b` and `table2.a` if you search for (`table1`, `a`) you will get the [Field] for `a` back.
     pub fn field_with_qualified_name(
         &self,
         qualifier: &TableReference,
@@ -222,6 +294,10 @@ impl QualifiedSchema {
         matches.next()
     }
 
+    /// Get the internal index of a column using it's unqualified name.
+    /// If multiple columns have the same unqualified name, the index of the first one is returned.
+    /// If no column is found, `None` is returned.
+    /// This index can be used to access the column via [Self::field] or [Self::qualified_field].
     pub fn index_of_column_by_name(
         &self,
         qualifier: Option<&TableReference>,
@@ -244,13 +320,14 @@ impl QualifiedSchema {
         matches.next()
     }
 
+    /// Get only the qualifier of a field using it's internal index.
     pub fn field_qualifier(&self, i: usize) -> Option<&TableReference> {
         self.field_qualifiers[i].as_ref()
     }
 }
 
 impl DFSchema {
-    /// Creates an empty `DFSchema`
+    /// Creates an empty `DFSchema` with no fields and no metadata columns.
     pub fn empty() -> Self {
         Self {
             inner: QualifiedSchema::empty(),
@@ -259,10 +336,17 @@ impl DFSchema {
         }
     }
 
-    /// Return a reference to the qualified metadata schema
-    ///
-    /// Returns:
-    /// - `&None` for tables that do not have metadata columns.
+    /// Return a reference to the schema for metadata columns.  
+    /// 
+    /// Metadata columns are columns which meant to be semi-public stores of the internal details of the table.  
+    /// For example, the [`ctid` column in Postgres](https://www.postgresql.org/docs/current/ddl-system-columns.html)
+    /// or the [`_metadata` column that in Spark](https://docs.databricks.com/en/ingestion/file-metadata-column.html).
+    ///  
+    /// Implementers of [`datafusion::datasource::TableProvider`] can use this declare which columns in the table are "metadata" columns.
+    /// See also [`datafusion::datasource::TableProvider::metadata_columns`] for more information or `datafusion/core/tests/sql/metadata_columns.rs` for a full example.
+    ///  
+    /// Returns:  
+    /// - `&None` for tables that do not have metadata columns.  
     /// - `&Some(QualifiedSchema)` for tables having metadata columns.
     pub fn metadata_schema(&self) -> &Option<QualifiedSchema> {
         &self.metadata
@@ -282,7 +366,9 @@ impl DFSchema {
         &self.inner.schema
     }
 
-    /// Set metadata schema to provided value
+    /// Set the metadata schema for an existing [`DFSchema`].
+    /// Note that this is the schema for the metadata columns (see [DFSchema::metadata_schema]).
+    /// Not to be confused with the metadata of the schema itself (see [Schema::with_metadata]).
     pub fn with_metadata_schema(
         mut self,
         metadata_schema: Option<QualifiedSchema>,
@@ -291,7 +377,10 @@ impl DFSchema {
         self
     }
 
-    /// Create a `DFSchema` from an Arrow schema where all the fields have a given qualifier
+    /// Create a `DFSchema` from an Arrow schema where all the fields have a given qualifier and the schema has fixed metadata.
+    /// This is not to be confused with the _metadata schema_ or _metadata columns_ which are a completely different concept.
+    /// In this method `metadata` refers to the metadata of the schema itself, which is arbitrary key-value pairs.
+    /// See [Schema::with_metadata] for more information.
     pub fn new_with_metadata(
         qualified_fields: Vec<(Option<TableReference>, Arc<Field>)>,
         metadata: HashMap<String, String>,
@@ -302,7 +391,7 @@ impl DFSchema {
         let schema = Arc::new(Schema::new_with_metadata(fields, metadata));
 
         let dfschema = Self {
-            inner: QualifiedSchema::new(schema, qualifiers),
+            inner: QualifiedSchema::new(schema, qualifiers).expect("qualifiers and fields should have the same length, we just unzipped them"),
             functional_dependencies: FunctionalDependencies::empty(),
             metadata: None,
         };
@@ -331,7 +420,7 @@ impl DFSchema {
         let field_count = fields.len();
         let schema = Arc::new(Schema::new_with_metadata(fields, metadata));
         let dfschema = Self {
-            inner: QualifiedSchema::new(schema, vec![None; field_count]),
+            inner: QualifiedSchema::new(schema, vec![None; field_count]).expect("qualifiers length is hardcoded to be the same as fields length"),
             functional_dependencies: FunctionalDependencies::empty(),
             metadata: None,
         };
@@ -352,7 +441,7 @@ impl DFSchema {
             inner: QualifiedSchema::new(
                 schema.clone().into(),
                 vec![Some(qualifier); schema.fields.len()],
-            ),
+            ).expect("qualifiers and fields have the same length"),
             functional_dependencies: FunctionalDependencies::empty(),
             metadata: None,
         };
@@ -366,7 +455,7 @@ impl DFSchema {
         schema: &SchemaRef,
     ) -> Result<Self> {
         let dfschema = Self {
-            inner: QualifiedSchema::new(Arc::clone(schema), qualifiers),
+            inner: QualifiedSchema::new(Arc::clone(schema), qualifiers)?,
             functional_dependencies: FunctionalDependencies::empty(),
             metadata: None,
         };
@@ -442,7 +531,7 @@ impl DFSchema {
             inner: QualifiedSchema::new(
                 Arc::new(new_schema_with_metadata),
                 new_qualifiers,
-            ),
+            )?,
             functional_dependencies: FunctionalDependencies::empty(),
             metadata: None,
         };
@@ -517,6 +606,9 @@ impl DFSchema {
         self.inner.qualified_field(i)
     }
 
+    /// Get the internal index of a column using it's unqualified name and an optional qualifier.
+    /// If a non-metadata column is found, it's index is returned.
+    /// If a metadata column is found, it's index is returned with an offset of `METADATA_OFFSET`.
     pub fn index_of_column_by_name(
         &self,
         qualifier: Option<&TableReference>,
@@ -962,7 +1054,7 @@ impl DFSchema {
     pub fn strip_qualifiers(self) -> Self {
         let len = self.inner.len();
         DFSchema {
-            inner: QualifiedSchema::new(self.inner.schema, vec![None; len]),
+            inner: QualifiedSchema::new(self.inner.schema, vec![None; len]).expect("qualifier length is hardcoded to be the same as fields length"),
             functional_dependencies: self.functional_dependencies,
             metadata: self.metadata,
         }
@@ -973,7 +1065,7 @@ impl DFSchema {
         let qualifier = qualifier.into();
         let len = self.inner.len();
         DFSchema {
-            inner: QualifiedSchema::new(self.inner.schema, vec![Some(qualifier); len]),
+            inner: QualifiedSchema::new(self.inner.schema, vec![Some(qualifier); len]).expect("qualifier length is hardcoded to be the same as fields length"),
             functional_dependencies: self.functional_dependencies,
             metadata: self.metadata,
         }
@@ -1050,7 +1142,7 @@ impl TryFrom<SchemaRef> for DFSchema {
     fn try_from(schema: SchemaRef) -> Result<Self, Self::Error> {
         let field_count = schema.fields.len();
         let dfschema = Self {
-            inner: QualifiedSchema::new(schema, vec![None; field_count]),
+            inner: QualifiedSchema::new(schema, vec![None; field_count])?,
             functional_dependencies: FunctionalDependencies::empty(),
             metadata: None,
         };
@@ -1106,7 +1198,7 @@ impl ToDFSchema for Vec<Field> {
             metadata: HashMap::new(),
         };
         let dfschema = DFSchema {
-            inner: QualifiedSchema::new(schema.into(), vec![None; field_count]),
+            inner: QualifiedSchema::new(schema.into(), vec![None; field_count])?,
             functional_dependencies: FunctionalDependencies::empty(),
             metadata: None,
         };
@@ -1470,7 +1562,7 @@ mod tests {
             inner: QualifiedSchema::new(
                 Arc::clone(&arrow_schema_ref),
                 vec![None; arrow_schema_ref.fields.len()],
-            ),
+            ).unwrap(),
             functional_dependencies: FunctionalDependencies::empty(),
             metadata: None,
         };
@@ -1519,7 +1611,7 @@ mod tests {
             inner: QualifiedSchema::new(
                 Arc::clone(&schema),
                 vec![None; schema.fields.len()],
-            ),
+            ).unwrap(),
             functional_dependencies: FunctionalDependencies::empty(),
             metadata: None,
         };
