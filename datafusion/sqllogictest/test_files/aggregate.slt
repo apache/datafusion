@@ -4963,9 +4963,6 @@ false
 true
 NULL
 
-statement ok
-set datafusion.optimizer.prefer_existing_sort = true;
-
 #
 # Add valid distinct case as aggregation plan test
 #
@@ -4992,8 +4989,6 @@ physical_plan
 11)--------------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
 12)----------------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c1, c3], has_header=true
 
-statement ok
-set datafusion.optimizer.prefer_existing_sort = false;
 
 #
 # Push limit into distinct group-by aggregation tests

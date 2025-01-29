@@ -16,9 +16,6 @@
 # specific language governing permissions and limitations
 # under the License.
 
-statement ok
-set datafusion.optimizer.prefer_existing_sort = true;
-
 query TT
 explain select
     c_count,
@@ -76,6 +73,3 @@ physical_plan
 18)--------------------------CoalesceBatchesExec: target_batch_size=8192
 19)----------------------------FilterExec: o_comment@2 NOT LIKE %special%requests%, projection=[o_orderkey@0, o_custkey@1]
 20)------------------------------CsvExec: file_groups={4 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/orders.tbl:0..4223281], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/orders.tbl:4223281..8446562], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/orders.tbl:8446562..12669843], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/orders.tbl:12669843..16893122]]}, projection=[o_orderkey, o_custkey, o_comment], has_header=false
-
-statement ok
-set datafusion.optimizer.prefer_existing_sort = false;

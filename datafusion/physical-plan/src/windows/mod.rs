@@ -344,10 +344,8 @@ pub(crate) fn window_equivalence_properties(
         .extend(input.equivalence_properties().clone());
 
     let schema_len = schema.fields.len();
-    let window_expr_indices = (schema_len..(schema_len - window_exprs.len()))
-        .rev()
-        .collect::<Vec<_>>();
-
+    let window_expr_indices =
+        ((schema_len - window_exprs.len())..schema_len).collect::<Vec<_>>();
     for (i, expr) in window_exprs.iter().enumerate() {
         if let Some(udf_window_expr) = expr.as_any().downcast_ref::<StandardWindowExpr>()
         {
