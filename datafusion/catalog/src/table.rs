@@ -202,7 +202,7 @@ pub trait TableProvider: Debug + Sync + Send {
     /// ```rust
     /// # use std::any::Any;
     /// # use std::sync::Arc;
-    /// # use arrow_schema::SchemaRef;
+    /// # use arrow::datatypes::SchemaRef;
     /// # use async_trait::async_trait;
     /// # use datafusion_catalog::{TableProvider, Session};
     /// # use datafusion_common::Result;
