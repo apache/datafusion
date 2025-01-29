@@ -16,7 +16,7 @@
 // under the License.
 
 use super::*;
-use datafusion_common::ScalarValue;
+use datafusion_common::{FieldExt, ScalarValue};
 
 #[tokio::test]
 async fn test_list_query_parameters() -> Result<()> {
