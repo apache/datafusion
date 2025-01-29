@@ -418,7 +418,7 @@ async fn test_bounded_window_agg_sort_requirement() -> Result<()> {
     let sort = sort_exec(sort_exprs.clone(), source);
     let bw = bounded_window_exec("c9", sort_exprs, sort);
     assert_plan(bw.as_ref(), vec![
-        "BoundedWindowAggExec: wdw=[count: Ok(Field { name: \"count\", data_type: Int64, nullable: false, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(NULL), end_bound: CurrentRow, is_causal: false }], mode=[Sorted]",
+        "BoundedWindowAggExec: wdw=[count: Ok(Field { name: \"count\", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(NULL), end_bound: CurrentRow, is_causal: false }], mode=[Sorted]",
         "  SortExec: expr=[c9@0 ASC NULLS LAST], preserve_partitioning=[false]",
         "    MemoryExec: partitions=1, partition_sizes=[0]"
     ]);
