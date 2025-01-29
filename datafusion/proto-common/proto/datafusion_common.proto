@@ -570,6 +570,7 @@ message Statistics {
 message ColumnStats {
   Precision min_value = 1;
   Precision max_value = 2;
+  Precision sum_value = 5;
   Precision null_count = 3;
   Precision distinct_count = 4;
 }
