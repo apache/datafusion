@@ -13,7 +13,7 @@ use datafusion_expr_common::interval_arithmetic::{
 use datafusion_expr_common::operator::Operator;
 use datafusion_physical_expr_common::stats::StatisticsV2;
 use datafusion_physical_expr_common::stats::StatisticsV2::{
-    Bernoulli, Exponential, Uniform, Unknown,
+    Bernoulli, Exponential, Gaussian, Uniform, Unknown,
 };
 
 use log::debug;
