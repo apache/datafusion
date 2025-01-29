@@ -557,6 +557,7 @@ fn single_null_buffer(num_values: usize, null_index: usize) -> NullBuffer {
     null_builder.append_n_non_nulls(null_index);
     null_builder.append_null();
     null_builder.append_n_non_nulls(num_values - null_index - 1);
+    // SAFETY: inner builder must be constructed
     null_builder.finish().unwrap()
 }
 
