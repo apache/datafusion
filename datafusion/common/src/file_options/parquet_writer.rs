@@ -26,6 +26,7 @@ use crate::{
 };
 
 use arrow_schema::Schema;
+// TODO: handle once deprecated
 #[allow(deprecated)]
 use parquet::{
     arrow::ARROW_SCHEMA_META_KEY,
@@ -157,6 +158,9 @@ impl TryFrom<&TableParquetOptions> for WriterPropertiesBuilder {
                     builder.set_column_bloom_filter_ndv(path.clone(), bloom_filter_ndv);
             }
 
+            // max_statistics_size is deprecated, currently it is not being used
+            // TODO: remove once deprecated
+            #[allow(deprecated)]
             if let Some(max_statistics_size) = options.max_statistics_size {
                 builder = {
                     #[allow(deprecated)]
@@ -202,6 +206,7 @@ impl ParquetOptions {
     ///
     /// Note that this method does not include the key_value_metadata from [`TableParquetOptions`].
     pub fn into_writer_properties_builder(&self) -> Result<WriterPropertiesBuilder> {
+        #[allow(deprecated)]
         let ParquetOptions {
             data_pagesize_limit,
             write_batch_size,
@@ -452,6 +457,7 @@ mod tests {
     fn column_options_with_non_defaults(
         src_col_defaults: &ParquetOptions,
     ) -> ParquetColumnOptions {
+        #[allow(deprecated)] // max_statistics_size
         ParquetColumnOptions {
             compression: Some("zstd(22)".into()),
             dictionary_enabled: src_col_defaults.dictionary_enabled.map(|v| !v),
@@ -472,6 +478,7 @@ mod tests {
             "1.0"
         };
 
+        #[allow(deprecated)] // max_statistics_size
         ParquetOptions {
             data_pagesize_limit: 42,
             write_batch_size: 42,
@@ -515,6 +522,7 @@ mod tests {
     ) -> ParquetColumnOptions {
         let bloom_filter_default_props = props.bloom_filter_properties(&col);
 
+        #[allow(deprecated)] // max_statistics_size
         ParquetColumnOptions {
             bloom_filter_enabled: Some(bloom_filter_default_props.is_some()),
             encoding: props.encoding(&col).map(|s| s.to_string()),
@@ -535,7 +543,6 @@ mod tests {
             ),
             bloom_filter_fpp: bloom_filter_default_props.map(|p| p.fpp),
             bloom_filter_ndv: bloom_filter_default_props.map(|p| p.ndv),
-            #[allow(deprecated)]
             max_statistics_size: Some(props.max_statistics_size(&col)),
         }
     }
@@ -569,6 +576,7 @@ mod tests {
             HashMap::from([(COL_NAME.into(), configured_col_props)])
         };
 
+        #[allow(deprecated)] // max_statistics_size
         TableParquetOptions {
             global: ParquetOptions {
                 // global options

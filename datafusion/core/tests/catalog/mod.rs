@@ -15,6 +15,4 @@
 // specific language governing permissions and limitations
 // under the License.
 
-mod enforce_sorting;
-mod limited_distinct_aggregation;
-mod sanity_checker;
+mod memory;

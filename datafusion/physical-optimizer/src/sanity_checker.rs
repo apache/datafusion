@@ -166,3 +166,5 @@ pub fn check_plan_sanity(
 
     Ok(Transformed::no(plan))
 }
+
+// See tests in datafusion/core/tests/physical_optimizer

@@ -750,6 +750,7 @@ impl From<&ColumnStatistics> for protobuf::ColumnStats {
         protobuf::ColumnStats {
             min_value: Some(protobuf::Precision::from(&s.min_value)),
             max_value: Some(protobuf::Precision::from(&s.max_value)),
+            sum_value: Some(protobuf::Precision::from(&s.sum_value)),
             null_count: Some(protobuf::Precision::from(&s.null_count)),
             distinct_count: Some(protobuf::Precision::from(&s.distinct_count)),
         }
@@ -820,6 +821,7 @@ impl TryFrom<&ParquetOptions> for protobuf::ParquetOptions {
             dictionary_enabled_opt: value.dictionary_enabled.map(protobuf::parquet_options::DictionaryEnabledOpt::DictionaryEnabled),
             dictionary_page_size_limit: value.dictionary_page_size_limit as u64,
             statistics_enabled_opt: value.statistics_enabled.clone().map(protobuf::parquet_options::StatisticsEnabledOpt::StatisticsEnabled),
+            #[allow(deprecated)]
             max_statistics_size_opt: value.max_statistics_size.map(|v| protobuf::parquet_options::MaxStatisticsSizeOpt::MaxStatisticsSize(v as u64)),
             max_row_group_size: value.max_row_group_size as u64,
             created_by: value.created_by.clone(),
@@ -858,6 +860,7 @@ impl TryFrom<&ParquetColumnOptions> for protobuf::ParquetColumnOptions {
                 .statistics_enabled
                 .clone()
                 .map(protobuf::parquet_column_options::StatisticsEnabledOpt::StatisticsEnabled),
+            #[allow(deprecated)]
             max_statistics_size_opt: value.max_statistics_size.map(|v| {
                 protobuf::parquet_column_options::MaxStatisticsSizeOpt::MaxStatisticsSize(
                     v as u32,

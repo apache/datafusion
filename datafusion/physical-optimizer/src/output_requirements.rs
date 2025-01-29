@@ -24,20 +24,22 @@
 
 use std::sync::Arc;
 
-use datafusion_execution::TaskContext;
-use datafusion_physical_plan::sorts::sort::SortExec;
-use datafusion_physical_plan::{
-    DisplayAs, DisplayFormatType, ExecutionPlan, SendableRecordBatchStream,
-};
+use crate::PhysicalOptimizerRule;
 
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::{Result, Statistics};
-use datafusion_physical_expr::{Distribution, LexRequirement};
+use datafusion_execution::TaskContext;
+use datafusion_physical_expr::{Distribution, LexRequirement, PhysicalSortRequirement};
+use datafusion_physical_plan::projection::{
+    make_with_child, update_expr, ProjectionExec,
+};
+use datafusion_physical_plan::sorts::sort::SortExec;
 use datafusion_physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
+use datafusion_physical_plan::{
+    DisplayAs, DisplayFormatType, ExecutionPlan, SendableRecordBatchStream,
+};
 use datafusion_physical_plan::{ExecutionPlanProperties, PlanProperties};
-
-use crate::PhysicalOptimizerRule;
 
 /// This rule either adds or removes [`OutputRequirements`]s to/from the physical
 /// plan according to its `mode` attribute, which is set by the constructors
@@ -191,6 +193,56 @@ impl ExecutionPlan for OutputRequirementExec {
 
     fn statistics(&self) -> Result<Statistics> {
         self.input.statistics()
+    }
+
+    fn try_swapping_with_projection(
+        &self,
+        projection: &ProjectionExec,
+    ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+        // If the projection does not narrow the schema, we should not try to push it down:
+        if projection.expr().len() >= projection.input().schema().fields().len() {
+            return Ok(None);
+        }
+
+        let mut updated_sort_reqs = LexRequirement::new(vec![]);
+        // None or empty_vec can be treated in the same way.
+        if let Some(reqs) = &self.required_input_ordering()[0] {
+            for req in &reqs.inner {
+                let Some(new_expr) = update_expr(&req.expr, projection.expr(), false)?
+                else {
+                    return Ok(None);
+                };
+                updated_sort_reqs.push(PhysicalSortRequirement {
+                    expr: new_expr,
+                    options: req.options,
+                });
+            }
+        }
+
+        let dist_req = match &self.required_input_distribution()[0] {
+            Distribution::HashPartitioned(exprs) => {
+                let mut updated_exprs = vec![];
+                for expr in exprs {
+                    let Some(new_expr) = update_expr(expr, projection.expr(), false)?
+                    else {
+                        return Ok(None);
+                    };
+                    updated_exprs.push(new_expr);
+                }
+                Distribution::HashPartitioned(updated_exprs)
+            }
+            dist => dist.clone(),
+        };
+
+        make_with_child(projection, &self.input())
+            .map(|input| {
+                OutputRequirementExec::new(
+                    input,
+                    (!updated_sort_reqs.is_empty()).then_some(updated_sort_reqs),
+                    dist_req,
+                )
+            })
+            .map(|e| Some(Arc::new(e) as _))
     }
 }
 

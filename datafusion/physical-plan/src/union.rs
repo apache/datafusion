@@ -36,6 +36,7 @@ use crate::execution_plan::{
     boundedness_from_children, emission_type_from_children, InvariantLevel,
 };
 use crate::metrics::BaselineMetrics;
+use crate::projection::{make_with_child, ProjectionExec};
 use crate::stream::ObservedStream;
 
 use arrow::datatypes::{Field, Schema, SchemaRef};
@@ -270,6 +271,27 @@ impl ExecutionPlan for UnionExec {
 
     fn supports_limit_pushdown(&self) -> bool {
         true
+    }
+
+    /// Tries to push `projection` down through `union`. If possible, performs the
+    /// pushdown and returns a new [`UnionExec`] as the top plan which has projections
+    /// as its children. Otherwise, returns `None`.
+    fn try_swapping_with_projection(
+        &self,
+        projection: &ProjectionExec,
+    ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+        // If the projection doesn't narrow the schema, we shouldn't try to push it down.
+        if projection.expr().len() >= projection.input().schema().fields().len() {
+            return Ok(None);
+        }
+
+        let new_children = self
+            .children()
+            .into_iter()
+            .map(|child| make_with_child(projection, child))
+            .collect::<Result<Vec<_>>>()?;
+
+        Ok(Some(Arc::new(UnionExec::new(new_children))))
     }
 }
 
@@ -588,6 +610,7 @@ fn col_stats_union(
     left.distinct_count = Precision::Absent;
     left.min_value = left.min_value.min(&right.min_value);
     left.max_value = left.max_value.max(&right.max_value);
+    left.sum_value = left.sum_value.add(&right.sum_value);
     left.null_count = left.null_count.add(&right.null_count);
 
     left
@@ -680,18 +703,21 @@ mod tests {
                     distinct_count: Precision::Exact(5),
                     max_value: Precision::Exact(ScalarValue::Int64(Some(21))),
                     min_value: Precision::Exact(ScalarValue::Int64(Some(-4))),
+                    sum_value: Precision::Exact(ScalarValue::Int64(Some(42))),
                     null_count: Precision::Exact(0),
                 },
                 ColumnStatistics {
                     distinct_count: Precision::Exact(1),
                     max_value: Precision::Exact(ScalarValue::from("x")),
                     min_value: Precision::Exact(ScalarValue::from("a")),
+                    sum_value: Precision::Absent,
                     null_count: Precision::Exact(3),
                 },
                 ColumnStatistics {
                     distinct_count: Precision::Absent,
                     max_value: Precision::Exact(ScalarValue::Float32(Some(1.1))),
                     min_value: Precision::Exact(ScalarValue::Float32(Some(0.1))),
+                    sum_value: Precision::Exact(ScalarValue::Float32(Some(42.0))),
                     null_count: Precision::Absent,
                 },
             ],
@@ -705,18 +731,21 @@ mod tests {
                     distinct_count: Precision::Exact(3),
                     max_value: Precision::Exact(ScalarValue::Int64(Some(34))),
                     min_value: Precision::Exact(ScalarValue::Int64(Some(1))),
+                    sum_value: Precision::Exact(ScalarValue::Int64(Some(42))),
                     null_count: Precision::Exact(1),
                 },
                 ColumnStatistics {
                     distinct_count: Precision::Absent,
                     max_value: Precision::Exact(ScalarValue::from("c")),
                     min_value: Precision::Exact(ScalarValue::from("b")),
+                    sum_value: Precision::Absent,
                     null_count: Precision::Absent,
                 },
                 ColumnStatistics {
                     distinct_count: Precision::Absent,
                     max_value: Precision::Absent,
                     min_value: Precision::Absent,
+                    sum_value: Precision::Absent,
                     null_count: Precision::Absent,
                 },
             ],
@@ -731,18 +760,21 @@ mod tests {
                     distinct_count: Precision::Absent,
                     max_value: Precision::Exact(ScalarValue::Int64(Some(34))),
                     min_value: Precision::Exact(ScalarValue::Int64(Some(-4))),
+                    sum_value: Precision::Exact(ScalarValue::Int64(Some(84))),
                     null_count: Precision::Exact(1),
                 },
                 ColumnStatistics {
                     distinct_count: Precision::Absent,
                     max_value: Precision::Exact(ScalarValue::from("x")),
                     min_value: Precision::Exact(ScalarValue::from("a")),
+                    sum_value: Precision::Absent,
                     null_count: Precision::Absent,
                 },
                 ColumnStatistics {
                     distinct_count: Precision::Absent,
                     max_value: Precision::Absent,
                     min_value: Precision::Absent,
+                    sum_value: Precision::Absent,
                     null_count: Precision::Absent,
                 },
             ],
