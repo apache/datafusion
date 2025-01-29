@@ -54,8 +54,7 @@ use datafusion_common::file_options::file_type::FileType;
 use datafusion_common::{
     exec_err, get_target_functional_dependencies, internal_err, not_impl_err,
     plan_datafusion_err, plan_err, Column, DFSchema, DFSchemaRef, DataFusionError,
-    FunctionalDependencies, Result, ScalarValue, TableReference, ToDFSchema,
-    UnnestOptions,
+    Result, ScalarValue, TableReference, ToDFSchema, UnnestOptions,
 };
 use datafusion_expr_common::type_coercion::binary::type_union_resolution;
 
@@ -1518,27 +1517,10 @@ pub fn validate_unique_names<'a>(
 /// [`TypeCoercionRewriter::coerce_union`]: https://docs.rs/datafusion-optimizer/latest/datafusion_optimizer/analyzer/type_coercion/struct.TypeCoercionRewriter.html#method.coerce_union
 /// [`coerce_union_schema`]: https://docs.rs/datafusion-optimizer/latest/datafusion_optimizer/analyzer/type_coercion/fn.coerce_union_schema.html
 pub fn union(left_plan: LogicalPlan, right_plan: LogicalPlan) -> Result<LogicalPlan> {
-    if left_plan.schema().fields().len() != right_plan.schema().fields().len() {
-        return plan_err!(
-            "UNION queries have different number of columns: \
-            left has {} columns whereas right has {} columns",
-            left_plan.schema().fields().len(),
-            right_plan.schema().fields().len()
-        );
-    }
-
-    // Temporarily use the schema from the left input and later rely on the analyzer to
-    // coerce the two schemas into a common one.
-
-    // Functional Dependencies doesn't preserve after UNION operation
-    let schema = (**left_plan.schema()).clone();
-    let schema =
-        Arc::new(schema.with_functional_dependencies(FunctionalDependencies::empty())?);
-
-    Ok(LogicalPlan::Union(Union {
-        inputs: vec![Arc::new(left_plan), Arc::new(right_plan)],
-        schema,
-    }))
+    Ok(LogicalPlan::Union(Union::try_new_with_loose_types(vec![
+        Arc::new(left_plan),
+        Arc::new(right_plan),
+    ])?))
 }
 
 /// Create Projection
