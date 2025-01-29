@@ -42,10 +42,8 @@ use crate::expressions::Column;
 
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow_schema::SortOptions;
-use datafusion_common::ScalarValue;
-use datafusion_common::{internal_err, not_impl_err, Result};
-use datafusion_expr::ReversedUDAF;
-use datafusion_expr::{AggregateExprSetMonotonicity, AggregateUDF};
+use datafusion_common::{internal_err, not_impl_err, ScalarValue, Result};
+use datafusion_expr::{AggregateExprSetMonotonicity, AggregateUDF, ReversedUDAF};
 use datafusion_expr_common::accumulator::Accumulator;
 use datafusion_expr_common::groups_accumulator::GroupsAccumulator;
 use datafusion_expr_common::type_coercion::aggregates::check_arg_count;
@@ -547,7 +545,7 @@ impl AggregateFunctionExpr {
         self.fun.inner().set_monotonicity(data_type)
     }
 
-    /// Returns PhysicalSortExpr based on monotonicity of the function
+    /// Returns `PhysicalSortExpr` based on the set monotonicity of the function.
     pub fn get_result_ordering(&self, aggr_func_idx: usize) -> Option<PhysicalSortExpr> {
         // If the aggregate expressions are set-monotonic, the output data is
         // naturally ordered with it per group or partition.
