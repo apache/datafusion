@@ -497,7 +497,7 @@ fn read_test_files<'a>(
     let mut paths = read_dir_recursive(TEST_DIRECTORY)?
         .into_iter()
         .map(TestFile::new)
-        .filter(|f| options.check_test_file(&f.relative_path))
+        .filter(|f| options.check_test_file(&f.path))
         .filter(|f| f.is_slt_file())
         .filter(|f| f.check_tpch(options))
         .filter(|f| f.check_sqlite(options))
@@ -507,7 +507,7 @@ fn read_test_files<'a>(
         let mut sqlite_paths = read_dir_recursive(DATAFUSION_TESTING_TEST_DIRECTORY)?
             .into_iter()
             .map(TestFile::new)
-            .filter(|f| options.check_test_file(&f.relative_path))
+            .filter(|f| options.check_test_file(&f.path))
             .filter(|f| f.is_slt_file())
             .filter(|f| f.check_sqlite(options))
             .filter(|f| options.check_pg_compat_file(f.path.as_path()))
@@ -544,10 +544,7 @@ struct Options {
     #[clap(long, env = "INCLUDE_TPCH", help = "Include tpch files")]
     include_tpch: bool,
 
-    #[clap(
-        action,
-        help = "regex like arguments passed to the program which are treated as cargo test filter (substring match on filenames)"
-    )]
+    #[clap(action, help = "test filter (substring match on filenames)")]
     filters: Vec<String>,
 
     #[clap(
@@ -594,15 +591,16 @@ impl Options {
     /// To be compatible with this, treat the command line arguments as a
     /// filter and that does a substring match on each input.  returns
     /// true f this path should be run
-    fn check_test_file(&self, relative_path: &Path) -> bool {
+    fn check_test_file(&self, path: &Path) -> bool {
         if self.filters.is_empty() {
             return true;
         }
 
         // otherwise check if any filter matches
+        let path_string = path.to_string_lossy();
         self.filters
             .iter()
-            .any(|filter| relative_path.to_string_lossy().contains(filter))
+            .any(|filter| path_string.contains(filter))
     }
 
     /// Postgres runner executes only tests in files with specific names or in
