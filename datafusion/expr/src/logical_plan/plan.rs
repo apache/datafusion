@@ -2675,7 +2675,7 @@ impl Union {
             if fields_count != input.schema().fields().len() {
                 return plan_err!(
                     "UNION queries have different number of columns: \
-                left has {} columns whereas right has {} columns",
+                    left has {} columns whereas right has {} columns",
                     fields_count,
                     input.schema().fields().len()
                 );
