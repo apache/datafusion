@@ -186,7 +186,11 @@ async fn run_tests() -> Result<()> {
         .collect()
         .await;
 
-    m.println(format!("Completed {} tests in {}", num_tests, HumanDuration(start.elapsed())))?;
+    m.println(format!(
+        "Completed {} tests in {}",
+        num_tests,
+        HumanDuration(start.elapsed())
+    ))?;
 
     #[cfg(feature = "postgres")]
     terminate_postgres_container().await?;
@@ -493,9 +497,7 @@ impl TestFile {
     }
 }
 
-fn read_test_files(
-    options: &Options,
-) -> Result<Vec<TestFile>> {
+fn read_test_files(options: &Options) -> Result<Vec<TestFile>> {
     let mut paths = read_dir_recursive(TEST_DIRECTORY)?
         .into_iter()
         .map(TestFile::new)
