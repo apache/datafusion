@@ -21,7 +21,7 @@ use std::any::Any;
 use std::hash::Hash;
 use std::sync::Arc;
 
-use crate::utils::stats::new_unknown_from_interval;
+use crate::utils::stats_v2_graph::new_unknown_from_interval;
 use crate::PhysicalExpr;
 
 use arrow::{
@@ -29,15 +29,15 @@ use arrow::{
     datatypes::{DataType, Schema},
     record_batch::RecordBatch,
 };
-use datafusion_common::{internal_err, plan_err, Result, ScalarValue};
+use datafusion_common::{plan_err, Result, ScalarValue};
 use datafusion_expr::interval_arithmetic::Interval;
 use datafusion_expr::sort_properties::ExprProperties;
 use datafusion_expr::{
     type_coercion::{is_interval, is_null, is_signed_numeric, is_timestamp},
     ColumnarValue,
 };
-use datafusion_physical_expr_common::stats::StatisticsV2;
-use datafusion_physical_expr_common::stats::StatisticsV2::{
+use datafusion_physical_expr_common::stats_v2::StatisticsV2;
+use datafusion_physical_expr_common::stats_v2::StatisticsV2::{
     Bernoulli, Exponential, Gaussian, Uniform, Unknown,
 };
 
@@ -101,7 +101,7 @@ impl PhysicalExpr for NegativeExpr {
                 Ok(ColumnarValue::Array(result))
             }
             ColumnarValue::Scalar(scalar) => {
-                Ok(ColumnarValue::Scalar((scalar.arithmetic_negate())?))
+                Ok(ColumnarValue::Scalar(scalar.arithmetic_negate()?))
             }
         }
     }
@@ -147,44 +147,30 @@ impl PhysicalExpr for NegativeExpr {
 
     fn evaluate_statistics(&self, stats: &[&StatisticsV2]) -> Result<StatisticsV2> {
         assert_eq!(stats.len(), 1);
-
-        if !stats[0].is_valid()? {
-            return internal_err!(
-                "Cannot evaluate statistics for negative expression with invalid statistics: {:?}",
-                stats[0]);
-        }
         match stats[0] {
-            Uniform { interval } => Ok(Uniform {
-                interval: self.evaluate_bounds(&[interval])?,
-            }),
+            Uniform { interval } => {
+                StatisticsV2::new_uniform(self.evaluate_bounds(&[interval])?)
+            }
             Unknown { range, .. } => {
                 if let (Some(mean), Some(median), Some(variance)) =
                     (stats[0].mean()?, stats[0].median()?, stats[0].variance()?)
                 {
-                    Ok(Unknown {
-                        mean: Some(mean.arithmetic_negate()?),
-                        median: Some(median.arithmetic_negate()?),
-                        variance: Some(variance.arithmetic_negate()?),
-                        range: self.evaluate_bounds(&[range])?,
-                    })
+                    StatisticsV2::new_unknown(
+                        Some(mean.arithmetic_negate()?),
+                        Some(median.arithmetic_negate()?),
+                        Some(variance),
+                        self.evaluate_bounds(&[range])?,
+                    )
                 } else {
-                    Ok(Unknown {
-                        mean: None,
-                        median: None,
-                        variance: None,
-                        range: self.evaluate_bounds(&[range])?,
-                    })
+                    new_unknown_from_interval(&self.evaluate_bounds(&[range])?)
                 }
             }
-            Bernoulli { p } => Ok(Bernoulli {
-                p: ScalarValue::new_one(&DataType::Float64)?.sub_checked(p)?,
-            }),
-            Exponential { .. } | Gaussian { .. } => Ok(Unknown {
-                mean: None,
-                median: None,
-                variance: None,
-                range: Interval::UNCERTAIN,
-            }),
+            Bernoulli { p } => StatisticsV2::new_bernoulli(
+                ScalarValue::new_one(&DataType::Float64)?.sub_checked(p)?,
+            ),
+            Exponential { .. } | Gaussian { .. } => {
+                Ok(StatisticsV2::new_unknown_with_uncertain_range())
+            }
         }
     }
 
@@ -326,9 +312,7 @@ mod tests {
             negative_expr.evaluate_statistics(&[&Uniform {
                 interval: Interval::make(Some(-2.), Some(3.))?,
             }])?,
-            Uniform {
-                interval: Interval::make(Some(-3.), Some(2.))?,
-            }
+            StatisticsV2::new_uniform(Interval::make(Some(-3.), Some(2.))?)?
         );
 
         // Bernoulli
@@ -336,9 +320,7 @@ mod tests {
             negative_expr.evaluate_statistics(&[&Bernoulli {
                 p: ScalarValue::Float64(Some(0.75))
             }])?,
-            Bernoulli {
-                p: ScalarValue::Float64(Some(0.25))
-            }
+            StatisticsV2::new_bernoulli(ScalarValue::Float64(Some(0.25)))?
         );
 
         // Exponential
@@ -347,12 +329,7 @@ mod tests {
                 rate: ScalarValue::Float64(Some(1.)),
                 offset: ScalarValue::Float64(Some(1.)),
             }])?,
-            Unknown {
-                mean: None,
-                median: None,
-                variance: None,
-                range: Interval::UNCERTAIN
-            }
+            StatisticsV2::new_unknown_with_uncertain_range()
         );
 
         // Gaussian
@@ -361,28 +338,23 @@ mod tests {
                 mean: ScalarValue::Int32(Some(15)),
                 variance: ScalarValue::Int32(Some(225)),
             }])?,
-            Unknown {
-                mean: None,
-                median: None,
-                variance: None,
-                range: Interval::UNCERTAIN
-            }
+            StatisticsV2::new_unknown_with_uncertain_range()
         );
 
         // Unknown
         assert_eq!(
-            negative_expr.evaluate_statistics(&[&Unknown {
-                mean: Some(ScalarValue::Int32(Some(15))),
-                median: Some(ScalarValue::Int32(Some(15))),
-                variance: Some(ScalarValue::Int32(Some(15))),
-                range: Interval::make(Some(10), Some(20))?,
-            }])?,
-            Unknown {
-                mean: Some(ScalarValue::Int32(Some(-15))),
-                median: Some(ScalarValue::Int32(Some(-15))),
-                variance: Some(ScalarValue::Int32(Some(-15))),
-                range: Interval::make(Some(-20), Some(-10))?,
-            }
+            negative_expr.evaluate_statistics(&[&StatisticsV2::new_unknown(
+                Some(ScalarValue::Int32(Some(15))),
+                Some(ScalarValue::Int32(Some(15))),
+                Some(ScalarValue::Int32(Some(10))),
+                Interval::make(Some(10), Some(20))?
+            )?])?,
+            StatisticsV2::new_unknown(
+                Some(ScalarValue::Int32(Some(-15))),
+                Some(ScalarValue::Int32(Some(-15))),
+                Some(ScalarValue::Int32(Some(10))),
+                Interval::make(Some(-20), Some(-10))?
+            )?
         );
 
         Ok(())
@@ -407,12 +379,10 @@ mod tests {
     #[test]
     fn test_propagate_statistics_range_holders() -> Result<()> {
         let negative_expr = NegativeExpr::new(Arc::new(Column::new("a", 0)));
-        let original_child_interval = Interval::make(Some(-2), Some(3))?;
-        let after_propagation = Interval::make(Some(-2), Some(0))?;
+        let original_child_interval = Interval::make(Some(-2.), Some(3.))?;
+        let after_propagation = Interval::make(Some(-2.), Some(0.))?;
 
-        let parent = Uniform {
-            interval: Interval::make(Some(0), Some(4))?,
-        };
+        let parent = StatisticsV2::new_uniform(Interval::make(Some(0.), Some(4.))?)?;
         let children: Vec<Vec<StatisticsV2>> = vec![
             vec![Uniform {
                 interval: original_child_interval.clone(),

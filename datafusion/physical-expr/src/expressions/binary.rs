@@ -22,7 +22,7 @@ use std::{any::Any, sync::Arc};
 
 use crate::expressions::binary::kernels::concat_elements_utf8view;
 use crate::intervals::cp_solver::{propagate_arithmetic, propagate_comparison};
-use crate::utils::stats::{
+use crate::utils::stats_v2_graph::{
     new_bernoulli_from_binary_expr, new_unknown_from_binary_expr,
     new_unknown_from_interval,
 };
@@ -43,8 +43,8 @@ use datafusion_expr::sort_properties::ExprProperties;
 use datafusion_expr::type_coercion::binary::get_result_type;
 use datafusion_expr::{ColumnarValue, Operator};
 use datafusion_physical_expr_common::datum::{apply, apply_cmp, apply_cmp_for_nested};
-use datafusion_physical_expr_common::stats::StatisticsV2;
-use datafusion_physical_expr_common::stats::StatisticsV2::{
+use datafusion_physical_expr_common::stats_v2::StatisticsV2;
+use datafusion_physical_expr_common::stats_v2::StatisticsV2::{
     Bernoulli, Gaussian, Uniform, Unknown,
 };
 use kernels::{
@@ -119,6 +119,24 @@ impl BinaryExpr {
     /// Get the operator for this binary expression
     pub fn op(&self) -> &Operator {
         &self.op
+    }
+
+    fn evaluate_gaussian(
+        &self,
+        left_stat: &StatisticsV2,
+        right_stat: &StatisticsV2,
+        left_mean: &ScalarValue,
+        left_v: &ScalarValue,
+        right_mean: &ScalarValue,
+        right_v: &ScalarValue,
+    ) -> Result<StatisticsV2> {
+        if self.op.eq(&Operator::Plus) {
+            StatisticsV2::new_gaussian(left_mean.add(right_mean)?, left_v.add(right_v)?)
+        } else if self.op.eq(&Operator::Minus) {
+            StatisticsV2::new_gaussian(left_mean.sub(right_mean)?, left_v.add(right_v)?)
+        } else {
+            new_unknown_from_binary_expr(&self.op, left_stat, right_stat)
+        }
     }
 }
 
@@ -507,18 +525,6 @@ impl PhysicalExpr for BinaryExpr {
     ) -> Result<StatisticsV2> {
         let (left_stat, right_stat) = (children_stat[0], children_stat[1]);
 
-        // We can evaluate statistics only with numeric data types on stats.
-        // TODO: move the data type check to the the higher levels, if possible.
-        if (left_stat.data_type().is_none() || right_stat.data_type().is_none())
-            || !left_stat.data_type().unwrap().is_numeric()
-            || !right_stat.data_type().unwrap().is_numeric()
-        {
-            return internal_err!(
-                "`evaluate_statistics` failed to evaluate statistics for operation '{}'",
-                self.op
-            );
-        }
-
         // TODO, to think: maybe, we can separate also Unknown + Unknown
         // just for clarity and better reader understanding.
         match &self.op {
@@ -526,29 +532,17 @@ impl PhysicalExpr for BinaryExpr {
                 match (left_stat, right_stat) {
                     (
                         Gaussian {
-                            mean: left_mean,
-                            variance: left_v,
+                            mean: l_mean,
+                            variance: l_var,
                             ..
                         },
                         Gaussian {
-                            mean: right_mean,
-                            variance: right_v,
+                            mean: r_mean,
+                            variance: r_var,
                         },
-                    ) => {
-                        if self.op.eq(&Operator::Plus) {
-                            Ok(Gaussian {
-                                mean: left_mean.add(right_mean)?,
-                                variance: left_v.add(right_v)?,
-                            })
-                        } else if self.op.eq(&Operator::Minus) {
-                            Ok(Gaussian {
-                                mean: left_mean.sub(right_mean)?,
-                                variance: left_v.add(right_v)?,
-                            })
-                        } else {
-                            new_unknown_from_binary_expr(&self.op, left_stat, right_stat)
-                        }
-                    }
+                    ) => self.evaluate_gaussian(
+                        left_stat, right_stat, l_mean, l_var, r_mean, r_var,
+                    ),
                     (_, _) => {
                         new_unknown_from_binary_expr(&self.op, left_stat, right_stat)
                     }
@@ -565,32 +559,8 @@ impl PhysicalExpr for BinaryExpr {
             | Operator::Gt => {
                 new_bernoulli_from_binary_expr(&self.op, left_stat, right_stat)
             }
-            Operator::And => {
-                match (left_stat, right_stat) {
-                    (Bernoulli { p: p_left }, Bernoulli { p: p_right }) => {
-                        Ok(Bernoulli {
-                            p: p_left.mul_checked(p_right)?,
-                        })
-                    }
-                    // TODO: complement with more cases
-                    (_, _) => {
-                        new_unknown_from_binary_expr(&self.op, left_stat, right_stat)
-                    }
-                }
-            }
-            Operator::Or => {
-                match (left_stat, right_stat) {
-                    (Bernoulli { p: p_left }, Bernoulli { p: p_right }) => {
-                        Ok(Bernoulli {
-                            p: ScalarValue::Float64(Some(1.))
-                                .sub(p_left.mul_checked(p_right)?)?,
-                        })
-                    }
-                    // TODO: complement with more cases
-                    (_, _) => {
-                        new_unknown_from_binary_expr(&self.op, left_stat, right_stat)
-                    }
-                }
+            Operator::And | Operator::Or => {
+                handle_and_or_evaluation(&self.op, left_stat, right_stat)
             }
             _ => new_unknown_from_binary_expr(&self.op, left_stat, right_stat),
         }
@@ -676,6 +646,28 @@ impl PhysicalExpr for BinaryExpr {
             }),
             _ => Ok(ExprProperties::new_unknown()),
         }
+    }
+}
+
+fn handle_and_or_evaluation(
+    op: &Operator,
+    left_stat: &StatisticsV2,
+    right_stat: &StatisticsV2,
+) -> Result<StatisticsV2> {
+    match (left_stat, right_stat) {
+        (Bernoulli { p: p_left }, Bernoulli { p: p_right }) => {
+            if *op == Operator::And {
+                StatisticsV2::new_bernoulli(p_left.mul_checked(p_right)?)
+            } else if *op == Operator::Or {
+                StatisticsV2::new_bernoulli(
+                    ScalarValue::Float64(Some(1.)).sub(p_left.mul_checked(p_right)?)?,
+                )
+            } else {
+                unreachable!("Only AND and OR operator are handled here")
+            }
+        }
+        // TODO: complement with more cases
+        (_, _) => new_unknown_from_binary_expr(op, left_stat, right_stat),
     }
 }
 
@@ -876,7 +868,7 @@ mod tests {
     use crate::expressions::{col, lit, try_cast, Column, Literal};
     use datafusion_common::plan_datafusion_err;
     use datafusion_expr::type_coercion::binary::get_input_types;
-    use datafusion_physical_expr_common::stats::StatisticsV2::Uniform;
+    use datafusion_physical_expr_common::stats_v2::StatisticsV2::Uniform;
 
     /// Performs a binary operation, applying any type coercion necessary
     fn binary_op(

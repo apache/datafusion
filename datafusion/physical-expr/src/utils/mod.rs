@@ -16,7 +16,7 @@
 // under the License.
 
 mod guarantee;
-pub mod stats;
+pub mod stats_v2_graph;
 
 pub use guarantee::{Guarantee, LiteralGuarantee};
 

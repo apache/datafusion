@@ -25,11 +25,11 @@ use std::sync::Arc;
 use crate::PhysicalExpr;
 use arrow::datatypes::{DataType, Schema};
 use arrow::record_batch::RecordBatch;
-use datafusion_common::{cast::as_boolean_array, internal_err, Result, ScalarValue};
+use datafusion_common::{cast::as_boolean_array, Result, ScalarValue};
 use datafusion_expr::interval_arithmetic::Interval;
 use datafusion_expr::ColumnarValue;
-use datafusion_physical_expr_common::stats::StatisticsV2;
-use datafusion_physical_expr_common::stats::StatisticsV2::{
+use datafusion_physical_expr_common::stats_v2::StatisticsV2;
+use datafusion_physical_expr_common::stats_v2::StatisticsV2::{
     Bernoulli, Exponential, Gaussian, Uniform, Unknown,
 };
 
@@ -123,57 +123,31 @@ impl PhysicalExpr for NotExpr {
 
     fn evaluate_statistics(&self, stats: &[&StatisticsV2]) -> Result<StatisticsV2> {
         assert_eq!(stats.len(), 1);
-
-        if !stats[0].is_valid()? {
-            return internal_err!(
-                "Cannot evaluate statistics for NOT expression with invalid statistics: {:?}",
-                stats[0]);
-        }
         match stats[0] {
             Uniform { interval } => {
                 if interval.lower().data_type().eq(&DataType::Boolean)
                     && interval.lower().data_type().eq(&DataType::Boolean)
                 {
-                    Ok(Uniform {
-                        interval: interval.not()?,
-                    })
+                    StatisticsV2::new_uniform(interval.not()?)
                 } else {
-                    Ok(Unknown {
-                        mean: None,
-                        median: None,
-                        variance: None,
-                        range: Interval::UNCERTAIN,
-                    })
+                    Ok(StatisticsV2::new_unknown_with_uncertain_range())
                 }
             }
             Unknown { range, .. } => {
                 if range.lower().data_type().eq(&DataType::Boolean)
                     && range.lower().data_type().eq(&DataType::Boolean)
                 {
-                    Ok(Unknown {
-                        mean: None,
-                        median: None,
-                        variance: None,
-                        range: range.not()?,
-                    })
+                    StatisticsV2::new_unknown(None, None, None, range.not()?)
                 } else {
-                    Ok(Unknown {
-                        mean: None,
-                        median: None,
-                        variance: None,
-                        range: Interval::UNCERTAIN,
-                    })
+                    Ok(StatisticsV2::new_unknown_with_uncertain_range())
                 }
             }
             // Note: NOT Exponential distribution is mirrored on X axis and in fact,
             //  it is a plot of logarithmic function, which is Unknown.
             // Note: NOT Gaussian distribution is mirrored on X axis and is Unknown
-            Exponential { .. } | Gaussian { .. } | Bernoulli { .. } => Ok(Unknown {
-                mean: None,
-                median: None,
-                variance: None,
-                range: Interval::UNCERTAIN,
-            }),
+            Exponential { .. } | Gaussian { .. } | Bernoulli { .. } => {
+                Ok(StatisticsV2::new_unknown_with_uncertain_range())
+            }
         }
     }
 }

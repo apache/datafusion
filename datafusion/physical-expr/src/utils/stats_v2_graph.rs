@@ -11,9 +11,9 @@ use datafusion_expr_common::interval_arithmetic::{
     apply_operator, max_of_bounds, min_of_bounds, Interval,
 };
 use datafusion_expr_common::operator::Operator;
-use datafusion_physical_expr_common::stats::StatisticsV2;
-use datafusion_physical_expr_common::stats::StatisticsV2::{
-    Bernoulli, Exponential, Gaussian, Uniform, Unknown,
+use datafusion_physical_expr_common::stats_v2::StatisticsV2;
+use datafusion_physical_expr_common::stats_v2::StatisticsV2::{
+    Exponential, Uniform, Unknown,
 };
 
 use log::debug;
@@ -67,7 +67,7 @@ impl ExprStatisticGraphNode {
     fn new_uniform(expr: Arc<dyn PhysicalExpr>, interval: Interval) -> Self {
         ExprStatisticGraphNode {
             expr,
-            statistics: Uniform { interval },
+            statistics: StatisticsV2::new_uniform(interval).unwrap(),
         }
     }
 
@@ -75,12 +75,12 @@ impl ExprStatisticGraphNode {
     fn new_unknown(expr: Arc<dyn PhysicalExpr>, dt: &DataType) -> Result<Self> {
         Ok(ExprStatisticGraphNode {
             expr,
-            statistics: Unknown {
-                mean: None,
-                median: None,
-                variance: None,
-                range: Interval::make_unbounded(dt)?,
-            },
+            statistics: StatisticsV2::new_unknown(
+                None,
+                None,
+                None,
+                Interval::make_unbounded(dt)?,
+            )?,
         })
     }
 
@@ -180,16 +180,14 @@ impl ExprStatisticGraph {
 pub fn new_unknown_from_interval(range: &Interval) -> Result<StatisticsV2> {
     // Note: to avoid code duplication for mean/median/variance computation, we wrap
     // existing range in temporary uniform distribution and compute all these properties.
-    let fake_uniform = Uniform {
-        interval: range.clone(),
-    };
+    let fake_uniform = &StatisticsV2::new_uniform(range.clone())?;
 
-    Ok(Unknown {
-        mean: fake_uniform.mean()?,
-        median: fake_uniform.median()?,
-        variance: fake_uniform.variance()?,
-        range: range.clone(),
-    })
+    StatisticsV2::new_unknown(
+        fake_uniform.mean()?,
+        fake_uniform.median()?,
+        fake_uniform.variance()?,
+        range.clone(),
+    )
 }
 
 /// Creates a new [`Unknown`] distribution, and tries to compute
@@ -199,12 +197,12 @@ pub fn new_unknown_from_binary_expr(
     left: &StatisticsV2,
     right: &StatisticsV2,
 ) -> Result<StatisticsV2> {
-    Ok(Unknown {
-        mean: compute_mean(op, left, right)?,
-        median: compute_median(op, left, right)?,
-        variance: compute_variance(op, left, right)?,
-        range: compute_range(op, left, right)?,
-    })
+    StatisticsV2::new_unknown(
+        compute_mean(op, left, right)?,
+        compute_median(op, left, right)?,
+        compute_variance(op, left, right)?,
+        compute_range(op, left, right)?,
+    )
 }
 
 //noinspection DuplicatedCode
@@ -235,11 +233,9 @@ pub fn new_bernoulli_from_binary_expr(
                             .div(overall_spread.cast_to(&DataType::Float64)?)?;
 
                         if op == &Operator::Eq {
-                            Ok(Bernoulli { p })
+                            StatisticsV2::new_bernoulli(p)
                         } else {
-                            Ok(Bernoulli {
-                                p: Float64(Some(1.)).sub(p)?,
-                            })
+                            StatisticsV2::new_bernoulli(Float64(Some(1.)).sub(p)?)
                         }
                     } else {
                         internal_err!("Cannot compute non-numeric probability")
@@ -293,6 +289,7 @@ pub fn compute_median(
     right_stat: &StatisticsV2,
 ) -> Result<Option<ScalarValue>> {
     match (left_stat, right_stat) {
+        // TODO[sasha]: handle Gaussian!
         (Uniform { .. }, Uniform { .. }) => {
             if let (Some(l_median), Some(r_median)) =
                 (left_stat.median()?, right_stat.median()?)
@@ -404,9 +401,6 @@ pub fn compute_range(
     left_stat: &StatisticsV2,
     right_stat: &StatisticsV2,
 ) -> Result<Interval> {
-    if !left_stat.is_valid()? || !right_stat.is_valid()? {
-        return Interval::make_unbounded(&DataType::Float64);
-    }
     match (left_stat, right_stat) {
         (Uniform { interval: l }, Uniform { interval: r })
         | (Uniform { interval: l }, Unknown { range: r, .. })
@@ -437,7 +431,7 @@ pub fn compute_range(
 #[cfg(test)]
 mod tests {
     use crate::expressions::{binary, try_cast, BinaryExpr, Column};
-    use crate::utils::stats::{
+    use crate::utils::stats_v2_graph::{
         compute_mean, compute_median, compute_range, compute_variance, ExprStatisticGraph,
     };
     use arrow_schema::{DataType, Field, Schema};
@@ -450,7 +444,8 @@ mod tests {
     };
     use datafusion_expr_common::type_coercion::binary::get_input_types;
     use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
-    use datafusion_physical_expr_common::stats::StatisticsV2::{
+    use datafusion_physical_expr_common::stats_v2::StatisticsV2;
+    use datafusion_physical_expr_common::stats_v2::StatisticsV2::{
         Bernoulli, Uniform, Unknown,
     };
     use std::sync::Arc;
@@ -632,27 +627,19 @@ mod tests {
         graph.assign_statistics(&[
             (
                 0usize,
-                Uniform {
-                    interval: Interval::make(Some(0), Some(1))?,
-                },
+                StatisticsV2::new_uniform(Interval::make(Some(0.), Some(1.))?)?,
             ),
             (
                 1usize,
-                Uniform {
-                    interval: Interval::make(Some(0), Some(2))?,
-                },
+                StatisticsV2::new_uniform(Interval::make(Some(0.), Some(2.))?)?,
             ),
             (
                 3usize,
-                Uniform {
-                    interval: Interval::make(Some(1), Some(3))?,
-                },
+                StatisticsV2::new_uniform(Interval::make(Some(1.), Some(3.))?)?,
             ),
             (
                 4usize,
-                Uniform {
-                    interval: Interval::make(Some(1), Some(5))?,
-                },
+                StatisticsV2::new_uniform(Interval::make(Some(1.), Some(5.))?)?,
             ),
         ]);
         let ev_stats = graph.evaluate()?;
@@ -673,15 +660,3 @@ mod tests {
         Ok(())
     }
 }
-
-/*
-StableGraph { Ty: "Directed", node_count: 7, edge_count: 6, edges: (2, 0), (2, 1), (5, 3), (5, 4), (6, 2), (6, 5), node weights: {
-0: ExprStatisticGraphNode { expr: Column { name: "a", index: 0 }, statistics: Unknown { mean: None, median: None, variance: None, range: Interval { lower: Float64(NULL), upper: Float64(NULL) } } },
-1: ExprStatisticGraphNode { expr: Column { name: "b", index: 1 }, statistics: Unknown { mean: None, median: None, variance: None, range: Interval { lower: Float64(NULL), upper: Float64(NULL) } } },
-2: ExprStatisticGraphNode { expr: BinaryExpr { left: Column { name: "a", index: 0 }, op: Plus, right: Column { name: "b", index: 1 }, fail_on_overflow: false }, statistics: Unknown { mean: None, median: None, variance: None, range: Interval { lower: Float64(NULL), upper: Float64(NULL) } } },
-3: ExprStatisticGraphNode { expr: Column { name: "c", index: 2 }, statistics: Unknown { mean: None, median: None, variance: None, range: Interval { lower: Float64(NULL), upper: Float64(NULL) } } },
-4: ExprStatisticGraphNode { expr: Column { name: "d", index: 3 }, statistics: Unknown { mean: None, median: None, variance: None, range: Interval { lower: Float64(NULL), upper: Float64(NULL) } } },
-5: ExprStatisticGraphNode { expr: BinaryExpr { left: Column { name: "c", index: 2 }, op: Minus, right: Column { name: "d", index: 3 }, fail_on_overflow: false }, statistics: Unknown { mean: None, median: None, variance: None, range: Interval { lower: Float64(NULL), upper: Float64(NULL) } } },
-6: ExprStatisticGraphNode { expr: BinaryExpr { left: BinaryExpr { left: Column { name: "a", index: 0 }, op: Plus, right: Column { name: "b", index: 1 }, fail_on_overflow: false }, op: Eq, right: BinaryExpr { left: Column { name: "c", index: 2 }, op: Minus, right: Column { name: "d", index: 3 }, fail_on_overflow: false }, fail_on_overflow: false }, statistics: Unknown { mean: None, median: None, variance: None, range: Interval { lower: Boolean(false), upper: Boolean(true) } } }}, edge weights: {0: 0, 1: 0, 2: 0, 3: 0, 4: 0, 5: 0}, free_node: NodeIndex(4294967295), free_edge: EdgeIndex(4294967295) }
-
- */

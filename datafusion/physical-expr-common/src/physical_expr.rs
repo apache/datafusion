@@ -20,7 +20,7 @@ use std::fmt::{Debug, Display, Formatter};
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
-use crate::stats::StatisticsV2;
+use crate::stats_v2::StatisticsV2;
 use crate::utils::scatter;
 
 use arrow::array::BooleanArray;
