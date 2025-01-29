@@ -667,7 +667,7 @@ impl AggregateExec {
         // if the aggregate function is set monotonic, add it into equivalence properties
         for (i, aggr_expr) in aggr_exprs.iter().enumerate() {
             let aggr_expr_index = aggr_expr_indices[i];
-            if let Some(expr) = aggr_expr.natural_sort_expr(aggr_expr_index) {
+            if let Some(expr) = aggr_expr.get_result_ordering(aggr_expr_index) {
                 if group_expr_mapping.map.is_empty() {
                     eq_properties.add_new_ordering(LexOrdering::new(vec![expr]));
                 } else if *input_order_mode != InputOrderMode::Linear {

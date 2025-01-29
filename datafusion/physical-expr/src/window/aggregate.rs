@@ -74,13 +74,16 @@ impl PlainAggregateWindowExpr {
         eq_properties: &mut EquivalenceProperties,
         window_expr_index: usize,
     ) {
-        let Some(expr) = self
+        if let Some(expr) = self
             .get_aggregate_expr()
-            .natural_sort_expr(window_expr_index)
-        else {
-            return;
-        };
-        add_new_ordering_expr_with_partition_by(eq_properties, expr, &self.partition_by);
+            .get_result_ordering(window_expr_index)
+        {
+            add_new_ordering_expr_with_partition_by(
+                eq_properties,
+                expr,
+                &self.partition_by,
+            );
+        }
     }
 }
 

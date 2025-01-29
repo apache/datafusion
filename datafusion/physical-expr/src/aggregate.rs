@@ -548,8 +548,9 @@ impl AggregateFunctionExpr {
     }
 
     /// Returns PhysicalSortExpr based on monotonicity of the function
-    pub fn natural_sort_expr(&self, aggr_func_idx: usize) -> Option<PhysicalSortExpr> {
-        // If the aggregate expressions are set-monotonic, the output data is naturally ordered with it.
+    pub fn get_result_ordering(&self, aggr_func_idx: usize) -> Option<PhysicalSortExpr> {
+        // If the aggregate expressions are set-monotonic, the output data is
+        // naturally ordered with it per group or partition.
         let monotonicity = self.set_monotonicity();
         if !monotonicity.is_monotonic() {
             return None;
