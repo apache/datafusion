@@ -1278,8 +1278,6 @@ name = "datafusion-catalog"
 version = "44.0.0"
 dependencies = [
  "arrow",
- "arrow-array",
- "arrow-schema",
  "async-trait",
  "dashmap",
  "datafusion-common",
