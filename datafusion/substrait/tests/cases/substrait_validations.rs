@@ -22,10 +22,9 @@ mod tests {
     mod schema_compatibility {
         use crate::utils::test::read_json;
         use datafusion::arrow::datatypes::{DataType, Field};
-        use datafusion::common::{DFSchema, Result};
+        use datafusion::common::{DFSchema, Result, TableReference};
         use datafusion::datasource::empty::EmptyTable;
         use datafusion::prelude::SessionContext;
-        use datafusion_catalog::TableReference;
         use datafusion_substrait::logical_plan::consumer::from_substrait_plan;
         use std::collections::HashMap;
         use std::sync::Arc;

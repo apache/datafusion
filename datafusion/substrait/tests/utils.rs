@@ -17,12 +17,11 @@
 
 #[cfg(test)]
 pub mod test {
-    use datafusion::common::{substrait_datafusion_err, substrait_err};
+    use datafusion::common::{substrait_datafusion_err, substrait_err, TableReference};
     use datafusion::datasource::empty::EmptyTable;
     use datafusion::datasource::TableProvider;
     use datafusion::error::Result;
     use datafusion::prelude::SessionContext;
-    use datafusion_catalog::TableReference;
     use datafusion_substrait::extensions::Extensions;
     use datafusion_substrait::logical_plan::consumer::{
         from_substrait_named_struct, DefaultSubstraitConsumer, SubstraitConsumer,
