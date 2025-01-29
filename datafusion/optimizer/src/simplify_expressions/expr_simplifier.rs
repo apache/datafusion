@@ -1385,7 +1385,7 @@ impl<S: SimplifyInfo> TreeNodeRewriter for Simplifier<'_, S> {
                 when_then_expr,
                 else_expr,
             }) if !when_then_expr.is_empty()
-                && when_then_expr.len() < 3 // The rewrite is O(n!) so limit to small number
+                && when_then_expr.len() < 3 // The rewrite is O(n²) so limit to small number
                 && info.is_boolean_type(&when_then_expr[0].1)? =>
             {
                 // String disjunction of all the when predicates encountered so far. Not nullable.
