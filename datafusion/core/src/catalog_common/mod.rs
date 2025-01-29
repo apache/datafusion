@@ -25,8 +25,7 @@ pub mod information_schema;
 pub mod listing_schema;
 pub use crate::catalog::{CatalogProvider, CatalogProviderList, SchemaProvider};
 
-pub use datafusion_sql::{ResolvedTableReference, TableReference};
-
+use datafusion_common::TableReference;
 use std::collections::BTreeSet;
 use std::ops::ControlFlow;
 

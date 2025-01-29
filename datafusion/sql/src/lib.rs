@@ -50,6 +50,9 @@ pub mod unparser;
 pub mod utils;
 mod values;
 
-#[deprecated(since = "45.0.0", note = "use datafusion_common::{ResolvedTableReference, TableReference}")]
+#[deprecated(
+    since = "45.0.0",
+    note = "use datafusion_common::{ResolvedTableReference, TableReference}"
+)]
 pub use datafusion_common::{ResolvedTableReference, TableReference};
 pub use sqlparser;
