@@ -35,12 +35,13 @@ use datafusion_common::cast::as_list_array;
 use datafusion_common::{
     exec_err, internal_datafusion_err, plan_err, DataFusionError, Result,
 };
-use datafusion_expr::Expr;
+use datafusion_expr::{ArrayFunctionSignature, Expr, TypeSignature};
 use datafusion_expr::{
     ColumnarValue, Documentation, NullHandling, ScalarUDFImpl, Signature, Volatility,
 };
 use datafusion_macros::user_doc;
 use std::any::Any;
+use std::num::NonZeroUsize;
 use std::sync::Arc;
 
 use crate::utils::make_scalar_function;
@@ -330,9 +331,27 @@ pub(super) struct ArraySlice {
 impl ArraySlice {
     pub fn new() -> Self {
         Self {
-            // TODO: This signature should use the actual accepted types, not variadic_any.
-            signature: Signature::variadic_any(Volatility::Immutable)
-                .with_null_handling(NullHandling::Propagate),
+            signature: Signature::one_of(
+                vec![
+                    TypeSignature::ArraySignature(
+                        ArrayFunctionSignature::ArrayAndIndexes(
+                            NonZeroUsize::new(1).expect("1 is non-zero"),
+                        ),
+                    ),
+                    TypeSignature::ArraySignature(
+                        ArrayFunctionSignature::ArrayAndIndexes(
+                            NonZeroUsize::new(2).expect("2 is non-zero"),
+                        ),
+                    ),
+                    TypeSignature::ArraySignature(
+                        ArrayFunctionSignature::ArrayAndIndexes(
+                            NonZeroUsize::new(3).expect("3 is non-zero"),
+                        ),
+                    ),
+                ],
+                Volatility::Immutable,
+            )
+            .with_null_handling(NullHandling::Propagate),
             aliases: vec![String::from("list_slice")],
         }
     }

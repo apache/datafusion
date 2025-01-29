@@ -671,13 +671,20 @@ fn get_valid_types(
             ArrayFunctionSignature::ElementAndArray => {
                 array_append_or_prepend_valid_types(current_types, false)?
             }
-            ArrayFunctionSignature::ArrayAndIndex => {
-                if current_types.len() != 2 {
+            ArrayFunctionSignature::ArrayAndIndexes(count) => {
+                if current_types.len() != count.get() + 1 {
                     return Ok(vec![vec![]]);
                 }
                 array(&current_types[0]).map_or_else(
                     || vec![vec![]],
-                    |array_type| vec![vec![array_type, DataType::Int64]],
+                    |array_type| {
+                        let mut inner = Vec::with_capacity(count.get() + 1);
+                        inner.push(array_type);
+                        for _ in 0..count.get() {
+                            inner.push(DataType::Int64);
+                        }
+                        vec![inner]
+                    },
                 )
             }
             ArrayFunctionSignature::ArrayAndElementAndOptionalIndex => {

@@ -188,7 +188,9 @@ impl PhysicalExpr for ScalarFunctionExpr {
             .collect::<Result<Vec<_>>>()?;
 
         if self.fun.signature().null_handling == NullHandling::Propagate
-            && args.iter().any(|arg| arg.data_type().is_null())
+            && args.iter().any(
+                |arg| matches!(arg, ColumnarValue::Scalar(scalar) if scalar.is_null()),
+            )
         {
             let null_value = ScalarValue::try_from(&self.return_type)?;
             return Ok(ColumnarValue::Scalar(null_value));
