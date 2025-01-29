@@ -55,12 +55,47 @@ pub trait TableProvider: Debug + Sync + Send {
     /// Get a reference to the schema for this table
     fn schema(&self) -> SchemaRef;
 
-    /// Get metadata columns of this table.
-    /// See Also: [`datafusion_common::DFSchema::metadata`]
+    /// Return a reference to the schema for metadata columns.
+    /// 
+    /// Metadata columns are columns which meant to be semi-public stores of the internal details of the table.
+    /// For example, `ctid` in Postgres would be considered a metadata column
+    /// (Postgres calls these "system columns", see [the Postgres docs](https://www.postgresql.org/docs/current/ddl-system-columns.html) for more information and examples.
+    /// Spark has a `_metadata` column that it uses to include details about each file read in a query (see [Spark's docs](https://docs.databricks.com/en/ingestion/file-metadata-column.html)).
+    ///
+    /// You can use this method to declare which columns in the table are "metadata" columns.
+    /// See `datafusion/core/tests/sql/metadata_columns.rs` for an example of this in action.
+    /// 
+    /// As an example of how this works in practice, if you have the following Postgres table:
+    /// 
+    /// ```sql
+    /// CREATE TABLE t (x int);
+    /// INSERT INTO t VALUES (1);
+    /// ```
+    /// 
+    /// And you do a `SELECT * FROM t`, you would get the following schema:
+    /// 
+    /// ```text
+    /// +---+
+    /// | x |
+    /// +---+
+    /// | 1 |
+    /// +---+
+    /// ```
+    /// 
+    /// But if you do `SELECT ctid, * FROM t`, you would get the following schema (ignore the meaning of the value of `ctid`, this is just an example):
+    /// 
+    /// ```text
+    /// +-----+---+
+    /// | ctid| x |
+    /// +-----+---+
+    /// | 0   | 1 |
+    /// +-----+---+
+    /// ```
     ///
     /// Returns:
     /// - `None` for tables that do not have metadata columns.
     /// - `Some(SchemaRef)` for tables having metadata columns.
+    ///    The returned schema should be be the schema of _only_ the metadata columns, not the full schema.
     fn metadata_columns(&self) -> Option<SchemaRef> {
         None
     }
