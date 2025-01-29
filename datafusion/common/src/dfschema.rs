@@ -1056,6 +1056,73 @@ pub fn qualified_name(qualifier: Option<&TableReference>, name: &str) -> String 
     }
 }
 
+/// Extension trait to manage DataFusion specific metadata on Arrow fields.
+pub trait FieldExt {
+    /// Check if this field is a system columns.
+    ///
+    /// System columns are columns which meant to be semi-public stores of the internal details of the table.
+    /// For example, `ctid` in Postgres would be considered a metadata column
+    /// (Postgres calls these "system columns", see [the Postgres docs](https://www.postgresql.org/docs/current/ddl-system-columns.html) for more information and examples.
+    /// Spark has a `_metadata` column that it uses to include details about each file read in a query (see [Spark's docs](https://docs.databricks.com/en/ingestion/file-metadata-column.html)).
+    ///
+    /// DataFusion allows fields to be declared as metadata columns by setting the `datafusion.system_column` key in the field's metadata
+    /// to `true`.
+    ///
+    /// As an example of how this works in practice, if you have the following Postgres table:
+    ///
+    /// ```sql
+    /// CREATE TABLE t (x int);
+    /// INSERT INTO t VALUES (1);
+    /// ```
+    ///
+    /// And you do a `SELECT * FROM t`, you would get the following schema:
+    ///
+    /// ```text
+    /// +---+
+    /// | x |
+    /// +---+
+    /// | 1 |
+    /// +---+
+    /// ```
+    ///
+    /// But if you do `SELECT ctid, * FROM t`, you would get the following schema (ignore the meaning of the value of `ctid`, this is just an example):
+    ///
+    /// ```text
+    /// +-----+---+
+    /// | ctid| x |
+    /// +-----+---+
+    /// | 0   | 1 |
+    /// +-----+---+
+    /// ```
+    fn is_system_column(&self) -> bool;
+
+    /// Mark this field as a system column.
+    ///
+    /// See [`FieldExt::is_system_column`] for more information on what a system column is.
+    fn as_system_column(self) -> Self;
+}
+
+/// See [`FieldExt`].
+impl FieldExt for Field {
+    /// Check if this field is a system column.
+    /// See [`FieldExt::is_system_column`] for more information on what a system column is.
+    fn is_system_column(&self) -> bool {
+        self.metadata()
+            .get("datafusion.system_column")
+            .map(|v| v.to_lowercase().starts_with("t"))
+            .unwrap_or(false)
+    }
+
+    /// Mark this field as a system column.
+    /// See [`FieldExt::as_system_column`] for more information on what a system column is.
+    fn as_system_column(mut self) -> Self {
+        let mut metadata = self.metadata().clone();
+        metadata.insert("datafusion.system_column".to_string(), "true".to_string());
+        self.set_metadata(metadata);
+        self
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use crate::assert_contains;

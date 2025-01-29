@@ -32,6 +32,7 @@ use datafusion_common::config::{ConfigEntry, ConfigOptions};
 use datafusion_common::error::Result;
 use datafusion_common::DataFusionError;
 use datafusion_execution::TaskContext;
+use datafusion_common::FieldExt;
 use datafusion_expr::{AggregateUDF, ScalarUDF, Signature, TypeSignature, WindowUDF};
 use datafusion_expr::{TableType, Volatility};
 use datafusion_physical_plan::stream::RecordBatchStreamAdapter;
@@ -190,10 +191,8 @@ impl InformationSchemaConfig {
                                 for (field_position, field) in
                                     table.schema().fields().iter().enumerate()
                                 {
-                                    if let Some(v) = field.metadata().get("datafusion.system_column") {
-                                        if v.to_lowercase().starts_with("t") {
-                                            continue;
-                                        }
+                                    if field.is_system_column() {
+                                        continue;
                                     }
                                     builder.add_column(
                                         &catalog_name,

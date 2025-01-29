@@ -360,21 +360,23 @@ async fn test_select_system_column() {
         ("bank_account", UInt64, [9000, 100, 1000]),
         ("_rowid", UInt32, [0, 1, 2]),
         ("_file", Utf8, ["file-0", "file-1", "file-2"])
-    ).unwrap();
-    let batch = batch.with_schema(
-        Arc::new(
-            Schema::new(vec![
-                Field::new("id", DataType::UInt8, true),
-                Field::new("bank_account", DataType::UInt64, true),
-                Field::new("_rowid", DataType::UInt32, true).with_metadata(HashMap::from_iter([
-                    ("datafusion.system_column".to_string(), "true".to_string()),
-                ])),
-                Field::new("_file", DataType::Utf8, true).with_metadata(HashMap::from_iter([
-                    ("datafusion.system_column".to_string(), "true".to_string()),
-                ])),
-            ])
-        )
-    ).unwrap();
+    )
+    .unwrap();
+    let batch = batch
+        .with_schema(Arc::new(Schema::new(vec![
+            Field::new("id", DataType::UInt8, true),
+            Field::new("bank_account", DataType::UInt64, true),
+            Field::new("_rowid", DataType::UInt32, true).with_metadata(
+                HashMap::from_iter([(
+                    "datafusion.system_column".to_string(),
+                    "true".to_string(),
+                )]),
+            ),
+            Field::new("_file", DataType::Utf8, true).with_metadata(HashMap::from_iter(
+                [("datafusion.system_column".to_string(), "true".to_string())],
+            )),
+        ])))
+        .unwrap();
 
     let ctx = SessionContext::new_with_config(
         SessionConfig::new().with_information_schema(true),
@@ -477,13 +479,7 @@ async fn test_select_system_column() {
     let df = ctx.sql(select6).await.unwrap();
     let batchs = df.collect().await.unwrap();
     let expected = [
-        "+----+",
-        "| id |",
-        "+----+",
-        "| 3  |",
-        "| 2  |",
-        "| 1  |",
-        "+----+",
+        "+----+", "| id |", "+----+", "| 3  |", "| 2  |", "| 1  |", "+----+",
     ];
     assert_batches_sorted_eq!(expected, &batchs);
 

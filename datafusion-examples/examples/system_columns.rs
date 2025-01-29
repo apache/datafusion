@@ -15,12 +15,12 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use arrow::array::record_batch;
 use datafusion::arrow::datatypes::{DataType, Field, Schema};
 
+use datafusion::common::FieldExt;
 use datafusion::{assert_batches_eq, prelude::*};
 
 /// This example shows how to mark fields as system columns.
@@ -31,16 +31,16 @@ use datafusion::{assert_batches_eq, prelude::*};
 ///
 /// DataFusion allows fields to be declared as metadata columns by setting the `datafusion.system_column` key in the field's metadata
 /// to `true`.
-/// 
+///
 /// As an example of how this works in practice, if you have the following Postgres table:
-/// 
+///
 /// ```sql
 /// CREATE TABLE t (x int);
 /// INSERT INTO t VALUES (1);
 /// ```
-/// 
+///
 /// And you do a `SELECT * FROM t`, you would get the following schema:
-/// 
+///
 /// ```text
 /// +---+
 /// | x |
@@ -48,9 +48,9 @@ use datafusion::{assert_batches_eq, prelude::*};
 /// | 1 |
 /// +---+
 /// ```
-/// 
+///
 /// But if you do `SELECT ctid, * FROM t`, you would get the following schema (ignore the meaning of the value of `ctid`, this is just an example):
-/// 
+///
 /// ```text
 /// +-----+---+
 /// | ctid| x |
@@ -64,23 +64,26 @@ async fn main() {
         ("a", Int32, [1, 2, 3]),
         ("b", Utf8, ["foo", "bar", "baz"]),
         ("_row_num", UInt32, [1, 2, 3])
-    ).unwrap();
-    let batch = batch.with_schema(
-        Arc::new(
-            Schema::new(vec![
-                Field::new("a", DataType::Int32, true),
-                Field::new("b", DataType::Utf8, true),
-                Field::new("_row_num", DataType::UInt32, true).with_metadata(HashMap::from_iter([
-                    ("datafusion.system_column".to_string(), "true".to_string()),
-                ])),
-            ])
-        )
-    ).unwrap();
+    )
+    .unwrap();
+    let batch = batch
+        .with_schema(Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, true),
+            Field::new("b", DataType::Utf8, true),
+            Field::new("_row_num", DataType::UInt32, true).as_system_column(),
+        ])))
+        .unwrap();
 
     let ctx = SessionContext::new();
     let _ = ctx.register_batch("t", batch);
 
-    let res = ctx.sql("SELECT a, b FROM t").await.unwrap().collect().await.unwrap();
+    let res = ctx
+        .sql("SELECT a, b FROM t")
+        .await
+        .unwrap()
+        .collect()
+        .await
+        .unwrap();
     #[rustfmt::skip]
     let expected: Vec<&str> = vec![
         "+---+-----+",
@@ -93,7 +96,13 @@ async fn main() {
     ];
     assert_batches_eq!(expected, &res);
 
-    let res = ctx.sql("SELECT _row_num FROM t").await.unwrap().collect().await.unwrap();
+    let res = ctx
+        .sql("SELECT _row_num FROM t")
+        .await
+        .unwrap()
+        .collect()
+        .await
+        .unwrap();
     #[rustfmt::skip]
     let expected: Vec<&str> = vec![
         "+----------+",
@@ -106,7 +115,13 @@ async fn main() {
     ];
     assert_batches_eq!(expected, &res);
 
-    let res = ctx.sql("SELECT * FROM t").await.unwrap().collect().await.unwrap();
+    let res = ctx
+        .sql("SELECT * FROM t")
+        .await
+        .unwrap()
+        .collect()
+        .await
+        .unwrap();
     // does not include _row_num
     #[rustfmt::skip]
     let expected: Vec<&str> = vec![
@@ -120,7 +135,13 @@ async fn main() {
     ];
     assert_batches_eq!(expected, &res);
 
-    let res = ctx.sql("SELECT *, _row_num FROM t").await.unwrap().collect().await.unwrap();
+    let res = ctx
+        .sql("SELECT *, _row_num FROM t")
+        .await
+        .unwrap()
+        .collect()
+        .await
+        .unwrap();
     #[rustfmt::skip]
     let expected: Vec<&str> = vec![
         "+---+-----+----------+",
@@ -133,9 +154,13 @@ async fn main() {
     ];
     assert_batches_eq!(expected, &res);
 
-
-
-    let res = ctx.sql("SELECT t._row_num FROM t").await.unwrap().collect().await.unwrap();
+    let res = ctx
+        .sql("SELECT t._row_num FROM t")
+        .await
+        .unwrap()
+        .collect()
+        .await
+        .unwrap();
     #[rustfmt::skip]
     let expected: Vec<&str> = vec![
         "+----------+",
@@ -148,7 +173,13 @@ async fn main() {
     ];
     assert_batches_eq!(expected, &res);
 
-    let res = ctx.sql("SELECT t.* FROM t").await.unwrap().collect().await.unwrap();
+    let res = ctx
+        .sql("SELECT t.* FROM t")
+        .await
+        .unwrap()
+        .collect()
+        .await
+        .unwrap();
     // does not include _row_num
     #[rustfmt::skip]
     let expected: Vec<&str> = vec![
@@ -162,7 +193,13 @@ async fn main() {
     ];
     assert_batches_eq!(expected, &res);
 
-    let res = ctx.sql("SELECT t.*, _row_num FROM t").await.unwrap().collect().await.unwrap();
+    let res = ctx
+        .sql("SELECT t.*, _row_num FROM t")
+        .await
+        .unwrap()
+        .collect()
+        .await
+        .unwrap();
     #[rustfmt::skip]
     let expected: Vec<&str> = vec![
         "+---+-----+----------+",

@@ -52,7 +52,7 @@ pub mod utils;
 pub use arrow;
 pub use column::Column;
 pub use dfschema::{
-    qualified_name, DFSchema, DFSchemaRef, ExprSchema, SchemaExt, ToDFSchema,
+    qualified_name, DFSchema, DFSchemaRef, ExprSchema, FieldExt, SchemaExt, ToDFSchema,
 };
 pub use error::{
     field_not_found, unqualified_field_not_found, DataFusionError, Result, SchemaError,

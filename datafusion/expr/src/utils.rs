@@ -35,8 +35,8 @@ use datafusion_common::tree_node::{
 };
 use datafusion_common::utils::get_at_indices;
 use datafusion_common::{
-    internal_err, plan_datafusion_err, plan_err, Column, DFSchema, DFSchemaRef, HashMap,
-    Result, TableReference,
+    internal_err, plan_datafusion_err, plan_err, Column, DFSchema, DFSchemaRef, FieldExt,
+    HashMap, Result, TableReference,
 };
 
 use indexmap::IndexSet;
@@ -357,9 +357,8 @@ fn get_excluded_columns(
     Ok(result)
 }
 
-
 /// Find system columns in the schema, if any.
-/// 
+///
 /// System columns are columns which meant to be semi-public stores of the internal details of the table.
 /// For example, `ctid` in Postgres would be considered a metadata column
 /// (Postgres calls these "system columns", see [the Postgres docs](https://www.postgresql.org/docs/current/ddl-system-columns.html) for more information and examples.
@@ -367,16 +366,16 @@ fn get_excluded_columns(
 ///
 /// DataFusion allows fields to be declared as metadata columns by setting the `datafusion.system_column` key in the field's metadata
 /// to `true`.
-/// 
+///
 /// As an example of how this works in practice, if you have the following Postgres table:
-/// 
+///
 /// ```sql
 /// CREATE TABLE t (x int);
 /// INSERT INTO t VALUES (1);
 /// ```
-/// 
+///
 /// And you do a `SELECT * FROM t`, you would get the following schema:
-/// 
+///
 /// ```text
 /// +---+
 /// | x |
@@ -384,9 +383,9 @@ fn get_excluded_columns(
 /// | 1 |
 /// +---+
 /// ```
-/// 
+///
 /// But if you do `SELECT ctid, * FROM t`, you would get the following schema (ignore the meaning of the value of `ctid`, this is just an example):
-/// 
+///
 /// ```text
 /// +-----+---+
 /// | ctid| x |
@@ -404,19 +403,16 @@ fn get_system_columns(
     // exclude columns with `datafusion.system_column` metadata set to true
     if let Some(qualifier) = qualifier {
         for field in schema.fields_with_qualified(qualifier) {
-            if let Some(v) = field.metadata().get("datafusion.system_column") {
-                if !v.is_empty() && v.to_lowercase().starts_with("t") {
-                    result.push(Column::new(Some(qualifier.clone()), field.name()));
-                }
+            if field.is_system_column() {
+                result.push(Column::new(Some(qualifier.clone()), field.name()));
             }
         }
     } else {
         for field in schema.fields() {
-            if let Some(v) = field.metadata().get("datafusion.system_column") {
-                if !v.is_empty() && v.to_lowercase().starts_with("t") {
-                    let (qualifier, field) = schema.qualified_field_with_unqualified_name(field.name())?;
-                    result.push(Column::new(qualifier.cloned(), field.name()));
-                }
+            if field.is_system_column() {
+                let (qualifier, field) =
+                    schema.qualified_field_with_unqualified_name(field.name())?;
+                result.push(Column::new(qualifier.cloned(), field.name()));
             }
         }
     }
@@ -806,12 +802,18 @@ pub fn exprlist_to_fields<'a>(
                     .into_iter()
                     .map(|c| c.flat_name())
                     .collect();
-                    excluded.extend(get_system_columns(wildcard_schema, None)?.into_iter().map(|c| c.flat_name()));
+                    excluded.extend(
+                        get_system_columns(wildcard_schema, None)?
+                            .into_iter()
+                            .map(|c| c.flat_name()),
+                    );
                     Ok(wildcard_schema
                         .fields_with_qualified(qualifier)
                         .into_iter()
                         .filter_map(|field| {
-                            let flat_name = Column::new(Some(qualifier.clone()), field.name()).flat_name();
+                            let flat_name =
+                                Column::new(Some(qualifier.clone()), field.name())
+                                    .flat_name();
                             if excluded.contains(&flat_name) {
                                 None
                             } else {
