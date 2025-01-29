@@ -120,7 +120,9 @@ async fn run_tests() -> Result<()> {
 
     let start = Instant::now();
 
-    let errors: Vec<_> = futures::stream::iter(read_test_files(&options)?)
+    let test_files = read_test_files(&options)?;
+    let num_tests = test_files.len();
+    let errors: Vec<_> = futures::stream::iter(test_files)
         .map(|test_file| {
             let validator = if options.include_sqlite
                 && test_file.relative_path.starts_with(SQLITE_PREFIX)
@@ -184,7 +186,7 @@ async fn run_tests() -> Result<()> {
         .collect()
         .await;
 
-    m.println(format!("Completed in {}", HumanDuration(start.elapsed())))?;
+    m.println(format!("Completed {} tests in {}", num_tests, HumanDuration(start.elapsed())))?;
 
     #[cfg(feature = "postgres")]
     terminate_postgres_container().await?;
@@ -491,9 +493,9 @@ impl TestFile {
     }
 }
 
-fn read_test_files<'a>(
-    options: &'a Options,
-) -> Result<Box<dyn Iterator<Item = TestFile> + 'a>> {
+fn read_test_files(
+    options: &Options,
+) -> Result<Vec<TestFile>> {
     let mut paths = read_dir_recursive(TEST_DIRECTORY)?
         .into_iter()
         .map(TestFile::new)
@@ -516,7 +518,7 @@ fn read_test_files<'a>(
         paths.append(&mut sqlite_paths)
     }
 
-    Ok(Box::new(paths.into_iter()))
+    Ok(paths)
 }
 
 /// Parsed command line options
