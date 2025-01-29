@@ -15,26 +15,4 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Interfaces and default implementations of catalogs and schemas.
-//!
-//! Implementations
-//! * Simple memory based catalog: [`MemoryCatalogProviderList`], [`MemoryCatalogProvider`], [`MemorySchemaProvider`]
-
-pub mod memory;
-pub use memory::{
-    MemoryCatalogProvider, MemoryCatalogProviderList, MemorySchemaProvider,
-};
-
-mod r#async;
-mod catalog;
-mod dynamic_file;
-mod schema;
-mod session;
-mod table;
-
-pub use catalog::*;
-pub use dynamic_file::catalog::*;
-pub use r#async::*;
-pub use schema::*;
-pub use session::*;
-pub use table::*;
+mod memory;
