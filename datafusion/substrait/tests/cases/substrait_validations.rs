@@ -22,7 +22,7 @@ mod tests {
     mod schema_compatibility {
         use crate::utils::test::read_json;
         use datafusion::arrow::datatypes::{DataType, Field};
-        use datafusion::catalog_common::TableReference;
+        use datafusion_catalog::TableReference;
         use datafusion::common::{DFSchema, Result};
         use datafusion::datasource::empty::EmptyTable;
         use datafusion::prelude::SessionContext;

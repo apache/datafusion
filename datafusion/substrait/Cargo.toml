@@ -46,6 +46,7 @@ url = { workspace = true }
 
 [dev-dependencies]
 datafusion = { workspace = true, features = ["nested_expressions"] }
+datafusion-catalog = { workspace = true }
 datafusion-functions-aggregate = { workspace = true }
 serde_json = "1.0"
 tokio = { workspace = true }
