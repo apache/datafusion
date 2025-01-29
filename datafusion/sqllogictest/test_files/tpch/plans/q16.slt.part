@@ -97,4 +97,3 @@ physical_plan
 30)--------------------------------FilterExec: s_comment@1 LIKE %Customer%Complaints%, projection=[s_suppkey@0]
 31)----------------------------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
 32)------------------------------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/supplier.tbl]]}, projection=[s_suppkey, s_comment], has_header=false
-

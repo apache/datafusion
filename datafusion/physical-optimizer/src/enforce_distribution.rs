@@ -1405,3 +1405,5 @@ fn update_children(mut dist_context: DistributionContext) -> Result<Distribution
     dist_context.data = false;
     Ok(dist_context)
 }
+
+// See tests in datafusion/core/tests/physical_optimizer

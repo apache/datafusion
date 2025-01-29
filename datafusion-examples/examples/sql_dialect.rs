@@ -18,7 +18,7 @@
 use std::fmt::Display;
 
 use datafusion::error::Result;
-use datafusion_sql::{
+use datafusion::sql::{
     parser::{CopyToSource, CopyToStatement, DFParser, Statement},
     sqlparser::{keywords::Keyword, parser::ParserError, tokenizer::Token},
 };

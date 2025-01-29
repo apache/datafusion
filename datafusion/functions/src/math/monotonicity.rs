@@ -558,3 +558,405 @@ pub fn get_tanh_doc() -> &'static Documentation {
         .build()
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use arrow::compute::SortOptions;
+    use datafusion_common::Result;
+
+    use super::*;
+
+    #[derive(Debug)]
+    struct MonotonicityTestCase {
+        name: &'static str,
+        func: fn(&[ExprProperties]) -> Result<SortProperties>,
+        lower: f64,
+        upper: f64,
+        input_sort: SortProperties,
+        expected: Result<SortProperties>,
+    }
+
+    #[test]
+    fn test_monotonicity_table() {
+        fn create_ep(lower: f64, upper: f64, sp: SortProperties) -> ExprProperties {
+            ExprProperties {
+                range: Interval::try_new(
+                    ScalarValue::from(lower),
+                    ScalarValue::from(upper),
+                )
+                .unwrap(),
+                sort_properties: sp,
+                preserves_lex_ordering: false,
+            }
+        }
+
+        let test_cases = vec![
+            MonotonicityTestCase {
+                name: "acos_order within domain",
+                func: acos_order,
+                lower: -0.5,
+                upper: 0.5,
+                input_sort: SortProperties::Ordered(SortOptions {
+                    descending: false,
+                    nulls_first: false,
+                }),
+                expected: Ok(SortProperties::Ordered(SortOptions {
+                    descending: true,
+                    nulls_first: false,
+                })),
+            },
+            MonotonicityTestCase {
+                name: "acos_order out of domain",
+                func: acos_order,
+                lower: -2.0,
+                upper: 1.0,
+                input_sort: SortProperties::Ordered(SortOptions {
+                    descending: false,
+                    nulls_first: false,
+                }),
+                expected: exec_err!("Input range of ACOS contains out-of-domain values"),
+            },
+            MonotonicityTestCase {
+                name: "acosh_order within domain",
+                func: acosh_order,
+                lower: 2.0,
+                upper: 100.0,
+                input_sort: SortProperties::Ordered(SortOptions {
+                    descending: false,
+                    nulls_first: true,
+                }),
+                expected: Ok(SortProperties::Ordered(SortOptions {
+                    descending: false,
+                    nulls_first: true,
+                })),
+            },
+            MonotonicityTestCase {
+                name: "acosh_order out of domain",
+                func: acosh_order,
+                lower: 0.5,
+                upper: 1.0,
+                input_sort: SortProperties::Ordered(SortOptions {
+                    descending: true,
+                    nulls_first: false,
+                }),
+                expected: exec_err!("Input range of ACOSH contains out-of-domain values"),
+            },
+            MonotonicityTestCase {
+                name: "asin_order within domain",
+                func: asin_order,
+                lower: -0.5,
+                upper: 0.5,
+                input_sort: SortProperties::Ordered(SortOptions {
+                    descending: false,
+                    nulls_first: false,
+                }),
+                expected: Ok(SortProperties::Ordered(SortOptions {
+                    descending: false,
+                    nulls_first: false,
+                })),
+            },
+            MonotonicityTestCase {
+                name: "asin_order out of domain",
+                func: asin_order,
+                lower: -2.0,
+                upper: 1.0,
+                input_sort: SortProperties::Ordered(SortOptions {
+                    descending: false,
+                    nulls_first: false,
+                }),
+                expected: exec_err!("Input range of ASIN contains out-of-domain values"),
+            },
+            MonotonicityTestCase {
+                name: "asinh_order within domain",
+                func: asinh_order,
+                lower: -1.0,
+                upper: 1.0,
+                input_sort: SortProperties::Ordered(SortOptions {
+                    descending: false,
+                    nulls_first: false,
+                }),
+                expected: Ok(SortProperties::Ordered(SortOptions {
+                    descending: false,
+                    nulls_first: false,
+                })),
+            },
+            MonotonicityTestCase {
+                name: "asinh_order out of domain",
+                func: asinh_order,
+                lower: -2.0,
+                upper: 1.0,
+                input_sort: SortProperties::Ordered(SortOptions {
+                    descending: false,
+                    nulls_first: false,
+                }),
+                expected: Ok(SortProperties::Ordered(SortOptions {
+                    descending: false,
+                    nulls_first: false,
+                })),
+            },
+            MonotonicityTestCase {
+                name: "atan_order within domain",
+                func: atan_order,
+                lower: -1.0,
+                upper: 1.0,
+                input_sort: SortProperties::Ordered(SortOptions {
+                    descending: false,
+                    nulls_first: false,
+                }),
+                expected: Ok(SortProperties::Ordered(SortOptions {
+                    descending: false,
+                    nulls_first: false,
+                })),
+            },
+            MonotonicityTestCase {
+                name: "atan_order out of domain",
+                func: atan_order,
+                lower: -2.0,
+                upper: 1.0,
+                input_sort: SortProperties::Ordered(SortOptions {
+                    descending: false,
+                    nulls_first: false,
+                }),
+                expected: Ok(SortProperties::Ordered(SortOptions {
+                    descending: false,
+                    nulls_first: false,
+                })),
+            },
+            MonotonicityTestCase {
+                name: "atanh_order within domain",
+                func: atanh_order,
+                lower: -0.6,
+                upper: 0.6,
+                input_sort: SortProperties::Ordered(SortOptions {
+                    descending: false,
+                    nulls_first: false,
+                }),
+                expected: Ok(SortProperties::Ordered(SortOptions {
+                    descending: false,
+                    nulls_first: false,
+                })),
+            },
+            MonotonicityTestCase {
+                name: "atanh_order out of domain",
+                func: atanh_order,
+                lower: -2.0,
+                upper: 1.0,
+                input_sort: SortProperties::Ordered(SortOptions {
+                    descending: false,
+                    nulls_first: false,
+                }),
+                expected: exec_err!("Input range of ATANH contains out-of-domain values"),
+            },
+            MonotonicityTestCase {
+                name: "cbrt_order within domain",
+                func: cbrt_order,
+                lower: -1.0,
+                upper: 1.0,
+                input_sort: SortProperties::Ordered(SortOptions {
+                    descending: false,
+                    nulls_first: false,
+                }),
+                expected: Ok(SortProperties::Ordered(SortOptions {
+                    descending: false,
+                    nulls_first: false,
+                })),
+            },
+            MonotonicityTestCase {
+                name: "cbrt_order out of domain",
+                func: cbrt_order,
+                lower: -2.0,
+                upper: 1.0,
+                input_sort: SortProperties::Ordered(SortOptions {
+                    descending: false,
+                    nulls_first: false,
+                }),
+                expected: Ok(SortProperties::Ordered(SortOptions {
+                    descending: false,
+                    nulls_first: false,
+                })),
+            },
+            MonotonicityTestCase {
+                name: "ceil_order within domain",
+                func: ceil_order,
+                lower: -1.0,
+                upper: 1.0,
+                input_sort: SortProperties::Ordered(SortOptions {
+                    descending: false,
+                    nulls_first: false,
+                }),
+                expected: Ok(SortProperties::Ordered(SortOptions {
+                    descending: false,
+                    nulls_first: false,
+                })),
+            },
+            MonotonicityTestCase {
+                name: "ceil_order out of domain",
+                func: ceil_order,
+                lower: -2.0,
+                upper: 1.0,
+                input_sort: SortProperties::Ordered(SortOptions {
+                    descending: false,
+                    nulls_first: false,
+                }),
+                expected: Ok(SortProperties::Ordered(SortOptions {
+                    descending: false,
+                    nulls_first: false,
+                })),
+            },
+            MonotonicityTestCase {
+                name: "cos_order within domain",
+                func: cos_order,
+                lower: 0.0,
+                upper: 2.0 * std::f64::consts::PI,
+                input_sort: SortProperties::Ordered(SortOptions {
+                    descending: false,
+                    nulls_first: false,
+                }),
+                expected: Ok(SortProperties::Unordered),
+            },
+            MonotonicityTestCase {
+                name: "cos_order out of domain",
+                func: cos_order,
+                lower: -2.0,
+                upper: 1.0,
+                input_sort: SortProperties::Ordered(SortOptions {
+                    descending: false,
+                    nulls_first: false,
+                }),
+                expected: Ok(SortProperties::Unordered),
+            },
+            MonotonicityTestCase {
+                name: "cosh_order within domain positive",
+                func: cosh_order,
+                lower: 5.0,
+                upper: 100.0,
+                input_sort: SortProperties::Ordered(SortOptions {
+                    descending: false,
+                    nulls_first: false,
+                }),
+                expected: Ok(SortProperties::Ordered(SortOptions {
+                    descending: false,
+                    nulls_first: false,
+                })),
+            },
+            MonotonicityTestCase {
+                name: "cosh_order within domain negative",
+                func: cosh_order,
+                lower: -100.0,
+                upper: -5.0,
+                input_sort: SortProperties::Ordered(SortOptions {
+                    descending: false,
+                    nulls_first: false,
+                }),
+                expected: Ok(SortProperties::Ordered(SortOptions {
+                    descending: true,
+                    nulls_first: false,
+                })),
+            },
+            MonotonicityTestCase {
+                name: "cosh_order out of domain so unordered",
+                func: cosh_order,
+                lower: -1.0,
+                upper: 1.0,
+                input_sort: SortProperties::Ordered(SortOptions {
+                    descending: false,
+                    nulls_first: false,
+                }),
+                expected: Ok(SortProperties::Unordered),
+            },
+            MonotonicityTestCase {
+                name: "degrees_order",
+                func: degrees_order,
+                lower: -1.0,
+                upper: 1.0,
+                input_sort: SortProperties::Ordered(SortOptions {
+                    descending: true,
+                    nulls_first: true,
+                }),
+                expected: Ok(SortProperties::Ordered(SortOptions {
+                    descending: true,
+                    nulls_first: true,
+                })),
+            },
+            MonotonicityTestCase {
+                name: "exp_order",
+                func: exp_order,
+                lower: -1000.0,
+                upper: 1000.0,
+                input_sort: SortProperties::Ordered(SortOptions {
+                    descending: false,
+                    nulls_first: false,
+                }),
+                expected: Ok(SortProperties::Ordered(SortOptions {
+                    descending: false,
+                    nulls_first: false,
+                })),
+            },
+            MonotonicityTestCase {
+                name: "floor_order",
+                func: floor_order,
+                lower: -1.0,
+                upper: 1.0,
+                input_sort: SortProperties::Ordered(SortOptions {
+                    descending: true,
+                    nulls_first: true,
+                }),
+                expected: Ok(SortProperties::Ordered(SortOptions {
+                    descending: true,
+                    nulls_first: true,
+                })),
+            },
+            MonotonicityTestCase {
+                name: "ln_order within domain",
+                func: ln_order,
+                lower: 1.0,
+                upper: 2.0,
+                input_sort: SortProperties::Ordered(SortOptions {
+                    descending: false,
+                    nulls_first: false,
+                }),
+                expected: Ok(SortProperties::Ordered(SortOptions {
+                    descending: false,
+                    nulls_first: false,
+                })),
+            },
+            MonotonicityTestCase {
+                name: "ln_order out of domain",
+                func: ln_order,
+                lower: -5.0,
+                upper: -4.0,
+                input_sort: SortProperties::Ordered(SortOptions {
+                    descending: false,
+                    nulls_first: false,
+                }),
+                expected: exec_err!("Input range of LN contains out-of-domain values"),
+            },
+        ];
+
+        for tcase in test_cases {
+            let input = vec![create_ep(tcase.lower, tcase.upper, tcase.input_sort)];
+            let actual = (tcase.func)(&input);
+            match (&actual, &tcase.expected) {
+                (Ok(a), Ok(e)) => assert_eq!(
+                    a, e,
+                    "Test '{}' failed: got {:?}, expected {:?}",
+                    tcase.name, a, e
+                ),
+                (Err(e1), Err(e2)) => {
+                    assert_eq!(
+                        e1.strip_backtrace().to_string(),
+                        e2.strip_backtrace().to_string(),
+                        "Test '{}' failed: got {:?}, expected {:?}",
+                        tcase.name,
+                        e1,
+                        e2
+                    )
+                } // Both are errors, so it's fine
+                _ => panic!(
+                    "Test '{}' failed: got {:?}, expected {:?}",
+                    tcase.name, actual, tcase.expected
+                ),
+            }
+        }
+    }
+}
