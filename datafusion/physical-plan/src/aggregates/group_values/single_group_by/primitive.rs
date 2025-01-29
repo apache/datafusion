@@ -169,7 +169,7 @@ where
                 buffer.append_n_non_nulls(null_idx);
                 buffer.append_null();
                 buffer.append_n_non_nulls(values.len() - null_idx - 1);
-                // SAFETY: The inner builder must be constructed
+                // NOTE: The inner builder must be constructed as there is at least one null
                 buffer.finish().unwrap()
             });
             PrimitiveArray::<T>::new(values.into(), nulls)
