@@ -21,12 +21,12 @@
 
 use crate::streaming::StreamingTable;
 use crate::{CatalogProviderList, SchemaProvider, TableProvider};
+use arrow::array::builder::{BooleanBuilder, UInt8Builder};
 use arrow::{
     array::{StringBuilder, UInt64Builder},
     datatypes::{DataType, Field, Schema, SchemaRef},
     record_batch::RecordBatch,
 };
-use arrow_array::builder::{BooleanBuilder, UInt8Builder};
 use async_trait::async_trait;
 use datafusion_common::config::{ConfigEntry, ConfigOptions};
 use datafusion_common::error::Result;
