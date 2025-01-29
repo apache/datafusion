@@ -450,8 +450,8 @@ impl<T: ArrowNumericType + Send> GroupsAccumulator for MedianGroupsAccumulator<T
             .with_data_type(self.data_type.clone());
 
         // `offsets` in `ListArray`, each row as a list element
-        assert!(input_array.len() <= i32::MAX as usize);
-        let offsets = (0..=input_array.len() as i32).collect::<Vec<_>>();
+        let offset_end = i32::try_from(input_array.len()).unwrap();
+        let offsets = (0..=offset_end).collect::<Vec<_>>();
         // Safety: all checks in `OffsetBuffer::new` are ensured to pass
         let offsets = unsafe { OffsetBuffer::new_unchecked(ScalarBuffer::from(offsets)) };
 
