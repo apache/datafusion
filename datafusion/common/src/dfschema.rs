@@ -1146,7 +1146,7 @@ mod tests {
         let expected = "Field { name: \"c0\", data_type: Boolean, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, \
         Field { name: \"c1\", data_type: Boolean, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }";
         assert_eq!(expected, arrow_schema.to_string());
-        Ok(())  
+        Ok(())
     }
 
     #[test]
