@@ -26,10 +26,7 @@ use datafusion_common::cast::{
     as_generic_list_array, as_large_list_array, as_list_array,
 };
 use datafusion_common::{exec_err, Result};
-use datafusion_expr::{
-    ArrayFunctionSignature, ColumnarValue, Documentation, ScalarUDFImpl, Signature,
-    TypeSignature, Volatility,
-};
+use datafusion_expr::{ArrayFunctionSignature, ColumnarValue, Documentation, NullHandling, ScalarUDFImpl, Signature, TypeSignature, Volatility};
 use datafusion_macros::user_doc;
 use std::any::Any;
 use std::sync::Arc;
@@ -80,7 +77,7 @@ impl Flatten {
                     ArrayFunctionSignature::RecursiveArray,
                 ),
                 volatility: Volatility::Immutable,
-                strict: false,
+                null_handling: NullHandling::PassThrough,
             },
             aliases: vec![],
         }

@@ -47,6 +47,7 @@ use datafusion_expr::type_coercion::functions::data_types_with_scalar_udf;
 use datafusion_expr::{
     expr_vec_fmt, ColumnarValue, Expr, ReturnTypeArgs, ScalarFunctionArgs, ScalarUDF,
 };
+use datafusion_expr_common::signature::NullHandling;
 
 /// Physical expression of a scalar function
 #[derive(Eq, PartialEq, Hash)]
@@ -186,7 +187,8 @@ impl PhysicalExpr for ScalarFunctionExpr {
             .map(|e| e.evaluate(batch))
             .collect::<Result<Vec<_>>>()?;
 
-        if self.fun.signature().strict && args.iter().any(|arg| arg.data_type().is_null())
+        if self.fun.signature().null_handling == NullHandling::Propagate
+            && args.iter().any(|arg| arg.data_type().is_null())
         {
             let null_value = ScalarValue::try_from(&self.return_type)?;
             return Ok(ColumnarValue::Scalar(null_value));

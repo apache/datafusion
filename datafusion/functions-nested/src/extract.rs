@@ -37,7 +37,7 @@ use datafusion_common::{
 };
 use datafusion_expr::Expr;
 use datafusion_expr::{
-    ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
+    ColumnarValue, Documentation, NullHandling, ScalarUDFImpl, Signature, Volatility,
 };
 use datafusion_macros::user_doc;
 use std::any::Any;
@@ -331,7 +331,8 @@ impl ArraySlice {
     pub fn new() -> Self {
         Self {
             // TODO: This signature should use the actual accepted types, not variadic_any.
-            signature: Signature::variadic_any(Volatility::Immutable).with_strict(),
+            signature: Signature::variadic_any(Volatility::Immutable)
+                .with_null_handling(NullHandling::Propagate),
             aliases: vec![String::from("list_slice")],
         }
     }
