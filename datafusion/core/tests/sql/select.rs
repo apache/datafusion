@@ -15,8 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::collections::HashMap;
-
 use super::*;
 use datafusion_common::ScalarValue;
 
@@ -366,15 +364,8 @@ async fn test_select_system_column() {
         .with_schema(Arc::new(Schema::new(vec![
             Field::new("id", DataType::UInt8, true),
             Field::new("bank_account", DataType::UInt64, true),
-            Field::new("_rowid", DataType::UInt32, true).with_metadata(
-                HashMap::from_iter([(
-                    "datafusion.system_column".to_string(),
-                    "true".to_string(),
-                )]),
-            ),
-            Field::new("_file", DataType::Utf8, true).with_metadata(HashMap::from_iter(
-                [("datafusion.system_column".to_string(), "true".to_string())],
-            )),
+            Field::new("_rowid", DataType::UInt32, true).as_system_column(),
+            Field::new("_file", DataType::Utf8, true).as_system_column(),
         ])))
         .unwrap();
 
