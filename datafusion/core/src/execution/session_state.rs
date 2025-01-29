@@ -27,13 +27,13 @@ use crate::catalog::{CatalogProviderList, SchemaProvider, TableProviderFactory};
 use crate::catalog_common::information_schema::{
     InformationSchemaProvider, INFORMATION_SCHEMA,
 };
-use crate::catalog_common::MemoryCatalogProviderList;
 use crate::datasource::cte_worktable::CteWorkTable;
 use crate::datasource::file_format::{format_as_file_type, FileFormatFactory};
 use crate::datasource::provider_as_source;
 use crate::execution::context::{EmptySerializerRegistry, FunctionFactory, QueryPlanner};
 use crate::execution::SessionStateDefaults;
 use crate::physical_planner::{DefaultPhysicalPlanner, PhysicalPlanner};
+use datafusion_catalog::MemoryCatalogProviderList;
 
 use arrow_schema::{DataType, SchemaRef};
 use datafusion_catalog::{Session, TableFunction, TableFunctionImpl};
@@ -1987,11 +1987,11 @@ pub(crate) struct PreparedPlan {
 #[cfg(test)]
 mod tests {
     use super::{SessionContextProvider, SessionStateBuilder};
-    use crate::catalog_common::MemoryCatalogProviderList;
     use crate::datasource::MemTable;
     use crate::execution::context::SessionState;
     use arrow_array::{ArrayRef, Int32Array, RecordBatch, StringArray};
     use arrow_schema::{DataType, Field, Schema};
+    use datafusion_catalog::MemoryCatalogProviderList;
     use datafusion_common::DFSchema;
     use datafusion_common::Result;
     use datafusion_execution::config::SessionConfig;
