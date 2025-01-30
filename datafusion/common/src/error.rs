@@ -293,7 +293,14 @@ impl From<ParserError> for DataFusionError {
 
 impl From<GenericError> for DataFusionError {
     fn from(err: GenericError) -> Self {
-        DataFusionError::External(err)
+        // If the error is already a DataFusionError, not wrapping it.
+        if err.is::<DataFusionError>() {
+            if let Ok(e) = err.downcast::<DataFusionError>() {
+                *e
+            } else { unreachable!() }
+        } else {
+            DataFusionError::External(err)
+        }
     }
 }
 
@@ -656,7 +663,7 @@ pub fn unqualified_field_not_found(name: &str, schema: &DFSchema) -> DataFusionE
 mod test {
     use std::sync::Arc;
 
-    use crate::error::DataFusionError;
+    use crate::error::{DataFusionError, GenericError};
     use arrow::error::ArrowError;
 
     #[test]
@@ -809,6 +816,33 @@ mod test {
             "Error during planning: Err \"extra1\" \"extra2\""
         );
     }
+
+    #[test]
+    fn external_error() {
+        // assert not wrapping DataFusionError
+        let generic_error: GenericError = Box::new(DataFusionError::Plan("test".to_string()));
+        let datafusion_error: DataFusionError = generic_error.into();
+        println!("{}", datafusion_error.strip_backtrace());
+        assert_eq!(datafusion_error.strip_backtrace(), "Error during planning: test");
+
+        // assert wrapping other Error
+        let generic_error: GenericError = Box::new(std::io::Error::new(std::io::ErrorKind::Other, "io error"));
+        let datafusion_error: DataFusionError = generic_error.into();
+        println!("{}", datafusion_error.strip_backtrace());
+        assert_eq!(datafusion_error.strip_backtrace(), "External error: io error");
+    }
+
+    #[test]
+    fn external_error_no_recursive() {
+        let generic_error_1: GenericError = Box::new(std::io::Error::new(std::io::ErrorKind::Other, "io error"));
+        let external_error_1 : DataFusionError = generic_error_1.into();
+        let generic_error_2 : GenericError = Box::new(external_error_1);
+        let external_error_2: DataFusionError = generic_error_2.into();
+
+        println!("{}", external_error_2);
+        assert!(external_error_2.to_string().starts_with("External error: io error"));
+    }
+
 
     /// Model what happens when implementing SendableRecordBatchStream:
     /// DataFusion code needs to return an ArrowError
