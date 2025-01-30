@@ -1271,15 +1271,19 @@ dependencies = [
 name = "datafusion-catalog"
 version = "44.0.0"
 dependencies = [
- "arrow-schema",
+ "arrow",
  "async-trait",
  "dashmap",
  "datafusion-common",
  "datafusion-execution",
  "datafusion-expr",
  "datafusion-physical-plan",
+ "datafusion-sql",
+ "futures",
  "itertools 0.14.0",
+ "log",
  "parking_lot",
+ "sqlparser",
 ]
 
 [[package]]
