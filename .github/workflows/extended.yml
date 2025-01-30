@@ -35,26 +35,44 @@ on:
       - main
 
 jobs:
-  # Check crate compiles and base cargo check passes
+  # Check issue comment and notify that extended tests are running
+  check_issue_comment:
+    name: Check issue comment
+    runs-on: ubuntu-latest
+    if: github.event.issue.pull_request && github.event.comment.body == 'run extended tests'
+    steps:
+      - uses: actions/github-script@v7
+        with:
+          github-token: ${{secrets.GITHUB_TOKEN}}
+          script: |
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: "Running extended tests..."
+            })
+
   linux-build-lib:
     name: linux build test
     runs-on: ubuntu-latest
+    container:
+      image: amd64/rust
+    if: |
+      github.event_name == 'push' ||
+      (github.event_name == 'issue_comment' && github.event.issue.pull_request && github.event.comment.body == 'run extended tests')
     steps:
       - uses: actions/checkout@v4
         with:
+          # Check out the pull request branch if triggered by a comment
+          ref: ${{ github.event_name == 'issue_comment' && github.event.issue.pull_request.head.ref || github.ref }}
           submodules: true
           fetch-depth: 1
-      - name: Install Rust
-        run: |
-          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
-          source $HOME/.cargo/env
-          rustup default stable
-      - name: Install Protobuf Compiler
-        run: sudo apt-get install -y protobuf-compiler
+      - name: Setup Rust toolchain
+        uses: ./.github/actions/setup-builder
+        with:
+          rust-version: stable
       - name: Prepare cargo build
-        run: |
-          cargo check --profile ci --all-targets
-          cargo clean
+        run: cargo check --profile ci --all-targets
 
   # Run extended tests (with feature 'extended_tests')
   linux-test-extended:
@@ -64,6 +82,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
+          # Check out the pull request branch if triggered by a comment
+          ref: ${{ github.event_name == 'issue_comment' && github.event.issue.pull_request.head.ref || github.ref }}
           submodules: true
           fetch-depth: 1
       - name: Free Disk Space (Ubuntu)
@@ -97,6 +117,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
+          # Check out the pull request branch if triggered by a comment
+          ref: ${{ github.event_name == 'issue_comment' && github.event.issue.pull_request.head.ref || github.ref }}
           submodules: true
           fetch-depth: 1
       - name: Setup Rust toolchain
@@ -117,6 +139,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
+          # Check out the pull request branch if triggered by a comment
+          ref: ${{ github.event_name == 'issue_comment' && github.event.issue.pull_request.head.ref || github.ref }}
           submodules: true
           fetch-depth: 1
       - name: Setup Rust toolchain
