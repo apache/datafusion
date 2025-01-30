@@ -354,6 +354,8 @@ impl AggregateUDFImpl for Count {
     }
 
     fn set_monotonicity(&self, _data_type: &DataType) -> AggregateExprSetMonotonicity {
+        // `COUNT` is monotonically increasing as it always increases or stays
+        // the same as new values are seen.
         AggregateExprSetMonotonicity::Increasing
     }
 }

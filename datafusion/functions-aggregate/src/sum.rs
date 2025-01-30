@@ -256,8 +256,8 @@ impl AggregateUDFImpl for Sum {
     }
 
     fn set_monotonicity(&self, data_type: &DataType) -> AggregateExprSetMonotonicity {
-        // Sum is only monotonic if its input is unsigned
-        // TODO: Expand these utilizing statistics
+        // `SUM` is only monotonically increasing when its input is unsigned.
+        // TODO: Expand these utilizing statistics.
         match data_type {
             DataType::UInt8 => AggregateExprSetMonotonicity::Increasing,
             DataType::UInt16 => AggregateExprSetMonotonicity::Increasing,

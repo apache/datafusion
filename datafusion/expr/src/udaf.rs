@@ -636,16 +636,8 @@ pub trait AggregateUDFImpl: Debug + Send + Sync {
         None
     }
 
-    /// Indicates whether the aggregation function is monotonic as a set function. A set
-    /// function is monotonically increasing if its value increases as its argument grows
-    /// (as a set). Formally, `f` is a monotonically increasing set function if `f(S) >= f(T)`
-    /// whenever `S` is a superset of `T`.
-    ///
-    /// For example `count` and `max` are monotonically increasing as their values always
-    /// increase (or stay the same) as new values are seen.
-    ///
-    /// `min` is monotonically decreasing as its value always decreases or stays
-    /// the same as new values are seen.
+    /// Indicates whether the aggregation function is monotonic as a set
+    /// function. See [`AggregateExprSetMonotonicity`] for details.
     fn set_monotonicity(&self, _data_type: &DataType) -> AggregateExprSetMonotonicity {
         AggregateExprSetMonotonicity::NotMonotonic
     }
@@ -832,24 +824,25 @@ pub mod aggregate_doc_sections {
     };
 }
 
-/// Status of an Aggregate Expression's Set Monotonicity
-#[derive(Debug, Clone)]
+/// Indicates whether an aggregation function is monotonic as a set
+/// function. A set function is monotonically increasing if its value
+/// increases as its argument grows (as a set). Formally, `f` is a
+/// monotonically increasing set function if `f(S) >= f(T)` whenever `S`
+/// is a superset of `T`.
+///
+/// For example `COUNT` and `MAX` are monotonically increasing as their
+/// values always increase (or stay the same) as new values are seen. On
+/// the other hand, `MIN` is monotonically decreasing as its value always
+/// decreases or stays the same as new values are seen.
+#[derive(Debug, Clone, PartialEq)]
 pub enum AggregateExprSetMonotonicity {
-    /// Ordering exists as ascending
+    /// Aggregate value increases or stays the same as the input set grows.
     Increasing,
-    /// Ordering exists as descending
+    /// Aggregate value decreases or stays the same as the input set grows.
     Decreasing,
-    /// No ordering
+    /// Aggregate value may increase, decrease, or stay the same as the input
+    /// set grows.
     NotMonotonic,
-}
-
-impl AggregateExprSetMonotonicity {
-    pub fn is_decreasing(&self) -> bool {
-        matches!(self, Self::Decreasing)
-    }
-    pub fn is_monotonic(&self) -> bool {
-        !matches!(self, Self::NotMonotonic)
-    }
 }
 
 #[cfg(test)]

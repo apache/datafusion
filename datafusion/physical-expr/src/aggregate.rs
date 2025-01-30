@@ -47,8 +47,9 @@ use datafusion_expr::{AggregateExprSetMonotonicity, AggregateUDF, ReversedUDAF};
 use datafusion_expr_common::accumulator::Accumulator;
 use datafusion_expr_common::groups_accumulator::GroupsAccumulator;
 use datafusion_expr_common::type_coercion::aggregates::check_arg_count;
-use datafusion_functions_aggregate_common::accumulator::AccumulatorArgs;
-use datafusion_functions_aggregate_common::accumulator::StateFieldsArgs;
+use datafusion_functions_aggregate_common::accumulator::{
+    AccumulatorArgs, StateFieldsArgs,
+};
 use datafusion_functions_aggregate_common::order::AggregateOrderSensitivity;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
@@ -535,10 +536,8 @@ impl AggregateFunctionExpr {
         self.fun.default_value(data_type)
     }
 
-    /// Indicates whether the aggregation function is monotonic as a set function. A set
-    /// function is monotonically increasing if its value increases as its argument grows
-    /// (as a set). Formally, `f` is a monotonically increasing set function if `f(S) >= f(T)`
-    /// whenever `S` is a superset of `T`.
+    /// Indicates whether the aggregation function is monotonic as a set
+    /// function. See [`AggregateExprSetMonotonicity`] for details.
     pub fn set_monotonicity(&self) -> AggregateExprSetMonotonicity {
         let field = self.field();
         let data_type = field.data_type();
@@ -550,11 +549,14 @@ impl AggregateFunctionExpr {
         // If the aggregate expressions are set-monotonic, the output data is
         // naturally ordered with it per group or partition.
         let monotonicity = self.set_monotonicity();
-        if !monotonicity.is_monotonic() {
+        if monotonicity == AggregateExprSetMonotonicity::NotMonotonic {
             return None;
         }
         let expr = Arc::new(Column::new(self.name(), aggr_func_idx));
-        let options = SortOptions::new(monotonicity.is_decreasing(), false);
+        let options = SortOptions::new(
+            monotonicity == AggregateExprSetMonotonicity::Decreasing,
+            false,
+        );
         Some(PhysicalSortExpr { expr, options })
     }
 }
