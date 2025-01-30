@@ -3999,7 +3999,7 @@ NULL [baz] baz
 query T
 SELECT arrow_typeof(make_array(arrow_cast('a', 'Utf8View'), 'b', 'c', 'd'));
 ----
-List(Field { name: "item", data_type: Utf8View, nullable: true, dict_is_ordered: false, metadata: {} })
+List(Field { name: "item", data_type: Utf8View, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} })
 
 # expect a,b,c,d. make_array forces all types to be of a common type (see above)
 query T
