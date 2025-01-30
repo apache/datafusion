@@ -633,6 +633,10 @@ select * from table_without_values;
 ----
 10 20
 
+# Enable information_schema, so we can execute show create table
+statement ok
+set datafusion.catalog.information_schema = true;
+
 statement ok
 create table foo(x int);
 
