@@ -54,6 +54,7 @@ jobs:
               repo: context.repo.repo,
               body: "Running extended tests..."
             })
+
   # Check crate compiles and base cargo check passes
   linux-build-lib:
     name: linux build test
@@ -65,6 +66,11 @@ jobs:
       (github.event_name == 'issue_comment' && github.event.issue.pull_request && github.event.comment.body == 'run extended tests')
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Check out the pull request branch if triggered by a comment
+          ref: ${{ github.event_name == 'issue_comment' && github.event.issue.pull_request.head.ref || github.ref }}
+          submodules: true
+          fetch-depth: 1
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
         with:
@@ -85,6 +91,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
+          # Check out the pull request branch if triggered by a comment
+          ref: ${{ github.event_name == 'issue_comment' && github.event.issue.pull_request.head.ref || github.ref }}
           submodules: true
           fetch-depth: 1
       - name: Setup Rust toolchain
@@ -108,6 +116,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
+          # Check out the pull request branch if triggered by a comment
+          ref: ${{ github.event_name == 'issue_comment' && github.event.issue.pull_request.head.ref || github.ref }}
           submodules: true
           fetch-depth: 1
       - name: Setup Rust toolchain
@@ -130,6 +140,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
+          # Check out the pull request branch if triggered by a comment
+          ref: ${{ github.event_name == 'issue_comment' && github.event.issue.pull_request.head.ref || github.ref }}
           submodules: true
           fetch-depth: 1
       - name: Setup Rust toolchain
