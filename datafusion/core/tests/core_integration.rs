@@ -44,6 +44,8 @@ mod optimizer;
 
 mod physical_optimizer;
 
+mod catalog;
+
 #[cfg(test)]
 #[ctor::ctor]
 fn init() {

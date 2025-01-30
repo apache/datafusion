@@ -15,10 +15,4 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Interfaces and default implementations of catalogs and schemas.
-//!
-//! Implementations
-//! * Listing schema: [`listing_schema`]
-
-pub mod listing_schema;
-pub use crate::catalog::{CatalogProvider, CatalogProviderList, SchemaProvider};
+mod memory;

@@ -28,7 +28,6 @@ use arrow::record_batch::RecordBatch;
 use arrow_array::{ArrayRef, DictionaryArray};
 use arrow_schema::SortOptions;
 use datafusion::assert_batches_eq;
-use datafusion::datasource::streaming::StreamingTable;
 use datafusion::datasource::{MemTable, TableProvider};
 use datafusion::execution::disk_manager::DiskManagerConfig;
 use datafusion::execution::runtime_env::RuntimeEnvBuilder;
@@ -38,6 +37,7 @@ use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::streaming::PartitionStream;
 use datafusion::physical_plan::{ExecutionPlan, SendableRecordBatchStream};
 use datafusion::prelude::{SessionConfig, SessionContext};
+use datafusion_catalog::streaming::StreamingTable;
 use datafusion_catalog::Session;
 use datafusion_common::{assert_contains, Result};
 use datafusion_execution::memory_pool::{
