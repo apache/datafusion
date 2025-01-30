@@ -297,7 +297,9 @@ impl From<GenericError> for DataFusionError {
         if err.is::<DataFusionError>() {
             if let Ok(e) = err.downcast::<DataFusionError>() {
                 *e
-            } else { unreachable!() }
+            } else {
+                unreachable!()
+            }
         } else {
             DataFusionError::External(err)
         }
@@ -820,29 +822,39 @@ mod test {
     #[test]
     fn external_error() {
         // assert not wrapping DataFusionError
-        let generic_error: GenericError = Box::new(DataFusionError::Plan("test".to_string()));
+        let generic_error: GenericError =
+            Box::new(DataFusionError::Plan("test".to_string()));
         let datafusion_error: DataFusionError = generic_error.into();
         println!("{}", datafusion_error.strip_backtrace());
-        assert_eq!(datafusion_error.strip_backtrace(), "Error during planning: test");
+        assert_eq!(
+            datafusion_error.strip_backtrace(),
+            "Error during planning: test"
+        );
 
         // assert wrapping other Error
-        let generic_error: GenericError = Box::new(std::io::Error::new(std::io::ErrorKind::Other, "io error"));
+        let generic_error: GenericError =
+            Box::new(std::io::Error::new(std::io::ErrorKind::Other, "io error"));
         let datafusion_error: DataFusionError = generic_error.into();
         println!("{}", datafusion_error.strip_backtrace());
-        assert_eq!(datafusion_error.strip_backtrace(), "External error: io error");
+        assert_eq!(
+            datafusion_error.strip_backtrace(),
+            "External error: io error"
+        );
     }
 
     #[test]
     fn external_error_no_recursive() {
-        let generic_error_1: GenericError = Box::new(std::io::Error::new(std::io::ErrorKind::Other, "io error"));
-        let external_error_1 : DataFusionError = generic_error_1.into();
-        let generic_error_2 : GenericError = Box::new(external_error_1);
+        let generic_error_1: GenericError =
+            Box::new(std::io::Error::new(std::io::ErrorKind::Other, "io error"));
+        let external_error_1: DataFusionError = generic_error_1.into();
+        let generic_error_2: GenericError = Box::new(external_error_1);
         let external_error_2: DataFusionError = generic_error_2.into();
 
         println!("{}", external_error_2);
-        assert!(external_error_2.to_string().starts_with("External error: io error"));
+        assert!(external_error_2
+            .to_string()
+            .starts_with("External error: io error"));
     }
-
 
     /// Model what happens when implementing SendableRecordBatchStream:
     /// DataFusion code needs to return an ArrowError
