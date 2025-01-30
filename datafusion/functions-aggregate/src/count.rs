@@ -354,7 +354,7 @@ impl AggregateUDFImpl for Count {
     }
 
     fn set_monotonicity(&self, _data_type: &DataType) -> AggregateExprSetMonotonicity {
-        AggregateExprSetMonotonicity::MonotonicallyAscending
+        AggregateExprSetMonotonicity::Increasing
     }
 }
 

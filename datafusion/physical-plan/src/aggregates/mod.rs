@@ -512,7 +512,6 @@ impl AggregateExec {
             &group_expr_mapping,
             &mode,
             &input_order_mode,
-            aggr_expr.as_slice(),
         );
 
         Ok(AggregateExec {
@@ -649,32 +648,11 @@ impl AggregateExec {
         group_expr_mapping: &ProjectionMapping,
         mode: &AggregateMode,
         input_order_mode: &InputOrderMode,
-        aggr_exprs: &[Arc<AggregateFunctionExpr>],
     ) -> PlanProperties {
         // Construct equivalence properties:
         let mut eq_properties = input
             .equivalence_properties()
-            .project(group_expr_mapping, Arc::clone(&schema));
-
-        let schema_len = schema.fields.len();
-        let aggr_expr_indices =
-            ((schema_len - aggr_exprs.len())..schema_len).collect::<Vec<_>>();
-        // if the aggregate function is set monotonic, add it into equivalence properties
-        for (i, aggr_expr) in aggr_exprs.iter().enumerate() {
-            let aggr_expr_index = aggr_expr_indices[i];
-            if let Some(expr) = aggr_expr.get_result_ordering(aggr_expr_index) {
-                if group_expr_mapping.map.is_empty() {
-                    eq_properties.add_new_ordering(LexOrdering::new(vec![expr]));
-                } else if *input_order_mode != InputOrderMode::Linear {
-                    if let Some(ordering) = eq_properties.output_ordering() {
-                        let mut existing_ordering = ordering.to_vec();
-                        existing_ordering.push(expr);
-                        eq_properties
-                            .add_new_ordering(LexOrdering::new(existing_ordering));
-                    }
-                }
-            }
-        }
+            .project(group_expr_mapping, schema);
 
         // Group by expression will be a distinct value after the aggregation.
         // Add it into the constraint set.

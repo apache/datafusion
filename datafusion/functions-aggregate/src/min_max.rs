@@ -363,7 +363,9 @@ impl AggregateUDFImpl for Max {
     }
 
     fn set_monotonicity(&self, _data_type: &DataType) -> AggregateExprSetMonotonicity {
-        AggregateExprSetMonotonicity::MonotonicallyAscending
+        // max is monotonically increasing as it always increases or
+        // stays the same as new values are seen
+        AggregateExprSetMonotonicity::Increasing
     }
 }
 
@@ -1189,7 +1191,9 @@ impl AggregateUDFImpl for Min {
     }
 
     fn set_monotonicity(&self, _data_type: &DataType) -> AggregateExprSetMonotonicity {
-        AggregateExprSetMonotonicity::MonotonicallyDescending
+        // min is monotonically decreasing as it always decreases or
+        // stays the same as new values are seen
+        AggregateExprSetMonotonicity::Decreasing
     }
 }
 

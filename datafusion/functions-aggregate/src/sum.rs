@@ -259,10 +259,10 @@ impl AggregateUDFImpl for Sum {
         // Sum is only monotonic if its input is unsigned
         // TODO: Expand these utilizing statistics
         match data_type {
-            DataType::UInt8 => AggregateExprSetMonotonicity::MonotonicallyAscending,
-            DataType::UInt16 => AggregateExprSetMonotonicity::MonotonicallyAscending,
-            DataType::UInt32 => AggregateExprSetMonotonicity::MonotonicallyAscending,
-            DataType::UInt64 => AggregateExprSetMonotonicity::MonotonicallyAscending,
+            DataType::UInt8 => AggregateExprSetMonotonicity::Increasing,
+            DataType::UInt16 => AggregateExprSetMonotonicity::Increasing,
+            DataType::UInt32 => AggregateExprSetMonotonicity::Increasing,
+            DataType::UInt64 => AggregateExprSetMonotonicity::Increasing,
             _ => AggregateExprSetMonotonicity::NotMonotonic,
         }
     }
