@@ -988,6 +988,9 @@ fn is_datafusion_spark_compatible(
         return true;
     }
     match from_type {
+        DataType::Null => {
+            matches!(to_type, DataType::List(_))
+        }
         DataType::Boolean => matches!(
             to_type,
             DataType::Int8
