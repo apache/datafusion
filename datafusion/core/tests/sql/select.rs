@@ -491,4 +491,35 @@ async fn test_select_system_column() {
         "+--------------+-----------+",
     ];
     assert_batches_sorted_eq!(expected, &batchs);
+
+    let batch = record_batch!(
+        ("other_id", UInt8, [1, 2, 3]),
+        ("bank_account", UInt64, [9, 10, 11]),
+        ("_row_id", UInt32, [10, 11, 12])  // not a system column!
+    )
+    .unwrap();
+    let _ = ctx.register_batch("test2", batch);
+
+    // Normally _row_id would be a name conflict
+    // But when it's a conflict between a metadata column and a non-metadata column, the non metadata column should be used
+    let select7 =
+        "SELECT id, other_id, _row_id FROM test INNER JOIN test2 ON id = other_id";
+    let df = ctx.sql(select7).await.unwrap();
+    let batchs = df.collect().await.unwrap();
+    #[rustfmt::skip]
+    let expected = [
+        "+----+----------+---------+",
+        "| id | other_id | _row_id |",
+        "+----+----------+---------+",
+        "| 1  | 1        | 10      |",
+        "| 2  | 2        | 11      |",
+        "| 3  | 3        | 12      |",
+        "+----+----------+---------+",
+    ];
+    assert_batches_sorted_eq!(expected, &batchs);
+
+    // Demonstrate that for other columns we get a conflict
+    let select7 =
+        "SELECT id, other_id, bank_account FROM test INNER JOIN test2 ON id = other_id";
+    assert!(ctx.sql(select7).await.is_err());
 }
