@@ -2669,7 +2669,7 @@ impl Display for Expr {
                 filter,
                 order_by,
                 null_treatment,
-                ..
+                within_group,
             }) => {
                 fmt_function(f, func.name(), *distinct, args, true)?;
                 if let Some(nt) = null_treatment {
@@ -2680,6 +2680,9 @@ impl Display for Expr {
                 }
                 if let Some(ob) = order_by {
                     write!(f, " ORDER BY [{}]", expr_vec_fmt!(ob))?;
+                }
+                if let Some(wg) = within_group {
+                    write!(f, " WITHIN GROUP [{}]", expr_vec_fmt!(wg))?;
                 }
                 Ok(())
             }
