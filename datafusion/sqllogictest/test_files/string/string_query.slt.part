@@ -45,7 +45,7 @@ NULL R NULL 🔥
 # --------------------------------------
 
 query BB
-select ascii_1 = 1 as col1, ascii_1 = 1 as col2 from test_basic_operator;
+select ascii_1 = 1 as col1, 1 = ascii_1 as col2 from test_basic_operator;
 ----
 false false
 false false
@@ -60,7 +60,7 @@ NULL NULL
 NULL NULL
 
 query BB
-select ascii_1 <> 1 as col1, ascii_1 <> 1 as col2 from test_basic_operator;
+select ascii_1 <> 1 as col1, 1 <> ascii_1 as col2 from test_basic_operator;
 ----
 true true
 true true
