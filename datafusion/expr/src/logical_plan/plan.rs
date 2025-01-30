@@ -53,10 +53,10 @@ use datafusion_common::tree_node::{
     Transformed, TreeNode, TreeNodeContainer, TreeNodeRecursion,
 };
 use datafusion_common::{
-    aggregate_functional_dependencies, internal_err, plan_err, Column, Constraints,
-    DFSchema, DFSchemaRef, DataFusionError, Dependency, FunctionalDependence,
-    FunctionalDependencies, ParamValues, QualifiedSchema, Result, ScalarValue,
-    TableReference, UnnestOptions, METADATA_OFFSET,
+    aggregate_functional_dependencies, extract_field_index, internal_err, plan_err,
+    Column, Constraints, DFSchema, DFSchemaRef, DataFusionError, Dependency, FieldIndex,
+    FunctionalDependence, FunctionalDependencies, ParamValues, QualifiedSchema, Result,
+    ScalarValue, TableReference, UnnestOptions,
 };
 use indexmap::IndexSet;
 
@@ -2619,29 +2619,25 @@ impl TableScan {
             .map(|p| {
                 let projected_func_dependencies =
                     func_dependencies.project_functional_dependencies(p, p.len());
-                let qualified_fields: Result<Vec<_>, _> =
-                    p.iter()
-                        .map(|i| {
-                            if *i >= METADATA_OFFSET {
-                                if let Some(metadata) = &metadata {
-                                    return Ok((
-                                        Some(table_name.clone()),
-                                        Arc::new(
-                                            metadata.field(*i - METADATA_OFFSET).clone(),
-                                        ),
-                                    ));
-                                } else {
-                                    return plan_err!(
-                                        "table doesn't support metadata column"
-                                    );
-                                }
+                let qualified_fields: Result<Vec<_>, _> = p
+                    .iter()
+                    .map(|i| match extract_field_index(*i) {
+                        FieldIndex::MetadataIndex(i) => {
+                            if let Some(metadata) = &metadata {
+                                Ok((
+                                    Some(table_name.clone()),
+                                    Arc::new(metadata.field(i).clone()),
+                                ))
+                            } else {
+                                plan_err!("table doesn't support metadata column")
                             }
-                            Ok((
-                                Some(table_name.clone()),
-                                Arc::new(schema.field(*i).clone()),
-                            ))
-                        })
-                        .collect();
+                        }
+                        FieldIndex::NormalIndex(i) => Ok((
+                            Some(table_name.clone()),
+                            Arc::new(schema.field(i).clone()),
+                        )),
+                    })
+                    .collect();
                 let df_schema = DFSchema::new_with_metadata(
                     qualified_fields?,
                     schema.metadata.clone(),

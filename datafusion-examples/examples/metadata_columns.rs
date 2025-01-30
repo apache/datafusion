@@ -21,7 +21,6 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use arrow::array::{ArrayRef, StringArray, UInt64Array};
-use arrow_schema::SchemaBuilder;
 use async_trait::async_trait;
 use datafusion::arrow::array::{UInt64Builder, UInt8Builder};
 use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
@@ -33,14 +32,14 @@ use datafusion::physical_expr::EquivalenceProperties;
 use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
 use datafusion::physical_plan::memory::MemoryStream;
 use datafusion::physical_plan::{
-    project_schema, DisplayAs, DisplayFormatType, ExecutionPlan, Partitioning,
-    PlanProperties, SendableRecordBatchStream,
+    DisplayAs, DisplayFormatType, ExecutionPlan, Partitioning, PlanProperties,
+    SendableRecordBatchStream,
 };
 
 use datafusion::prelude::*;
 
 use datafusion::catalog::Session;
-use datafusion_common::METADATA_OFFSET;
+use datafusion_common::{extract_field_index, FieldIndex};
 use itertools::Itertools;
 use tokio::time::timeout;
 
@@ -120,9 +119,8 @@ impl CustomDataSource {
     pub(crate) async fn create_physical_plan(
         &self,
         projections: Option<&Vec<usize>>,
-        schema: SchemaRef,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        Ok(Arc::new(CustomExec::new(projections, schema, self.clone())))
+        Ok(Arc::new(CustomExec::new(projections, self.clone())))
     }
 
     pub(crate) fn populate_users(&self) {
@@ -189,33 +187,7 @@ impl TableProvider for CustomDataSource {
         _filters: &[Expr],
         _limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let mut schema = self.schema();
-        let size = schema.fields.len();
-        if let Some(metadata) = self.metadata_columns() {
-            let mut builder = SchemaBuilder::from(schema.as_ref());
-            for f in metadata.fields.iter() {
-                builder.try_merge(f)?;
-            }
-            schema = Arc::new(builder.finish());
-        }
-
-        let projection = match projection {
-            Some(projection) => {
-                let projection = projection
-                    .iter()
-                    .map(|idx| {
-                        if *idx >= METADATA_OFFSET {
-                            *idx - METADATA_OFFSET + size
-                        } else {
-                            *idx
-                        }
-                    })
-                    .collect_vec();
-                Some(projection)
-            }
-            None => None,
-        };
-        return self.create_physical_plan(projection.as_ref(), schema).await;
+        return self.create_physical_plan(projection).await;
     }
 }
 
@@ -227,12 +199,24 @@ struct CustomExec {
 }
 
 impl CustomExec {
-    fn new(
-        projections: Option<&Vec<usize>>,
-        schema: SchemaRef,
-        db: CustomDataSource,
-    ) -> Self {
-        let projected_schema = project_schema(&schema, projections).unwrap();
+    fn new(projections: Option<&Vec<usize>>, db: CustomDataSource) -> Self {
+        let schema = db.schema();
+        let metadata_schema = db.metadata_columns();
+        let projected_schema = match projections {
+            Some(projection) => {
+                let projection = projection
+                    .iter()
+                    .map(|idx| match extract_field_index(*idx) {
+                        FieldIndex::NormalIndex(i) => Arc::new(schema.field(i).clone()),
+                        FieldIndex::MetadataIndex(i) => {
+                            Arc::new(metadata_schema.as_ref().unwrap().field(i).clone())
+                        }
+                    })
+                    .collect_vec();
+                Arc::new(Schema::new(projection))
+            }
+            None => schema,
+        };
         let cache = Self::compute_properties(projected_schema.clone());
         Self {
             db,

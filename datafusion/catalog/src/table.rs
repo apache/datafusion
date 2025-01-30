@@ -56,7 +56,7 @@ pub trait TableProvider: Debug + Sync + Send {
     fn schema(&self) -> SchemaRef;
 
     /// Return a reference to the schema for metadata columns.
-    /// 
+    ///
     /// Metadata columns are columns which meant to be semi-public stores of the internal details of the table.
     /// For example, `ctid` in Postgres would be considered a metadata column
     /// (Postgres calls these "system columns", see [the Postgres docs](https://www.postgresql.org/docs/current/ddl-system-columns.html) for more information and examples.
@@ -64,16 +64,16 @@ pub trait TableProvider: Debug + Sync + Send {
     ///
     /// You can use this method to declare which columns in the table are "metadata" columns.
     /// See `datafusion/core/tests/sql/metadata_columns.rs` for an example of this in action.
-    /// 
+    ///
     /// As an example of how this works in practice, if you have the following Postgres table:
-    /// 
+    ///
     /// ```sql
     /// CREATE TABLE t (x int);
     /// INSERT INTO t VALUES (1);
     /// ```
-    /// 
+    ///
     /// And you do a `SELECT * FROM t`, you would get the following schema:
-    /// 
+    ///
     /// ```text
     /// +---+
     /// | x |
@@ -81,9 +81,9 @@ pub trait TableProvider: Debug + Sync + Send {
     /// | 1 |
     /// +---+
     /// ```
-    /// 
+    ///
     /// But if you do `SELECT ctid, * FROM t`, you would get the following schema (ignore the meaning of the value of `ctid`, this is just an example):
-    /// 
+    ///
     /// ```text
     /// +-----+---+
     /// | ctid| x |
